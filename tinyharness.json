@@ -1,0 +1,8 @@
+{
+  "endpoint": "https://example.invalid/v1",
+  "model": "tinyharness-smoke",
+  "apiKeyEnvironmentVariable": "TINYHARNESS_API_KEY",
+  "contextWindowTokens": 128000,
+  "reservedOutputTokens": 8000,
+  "maxAgentSteps": 40
+}
