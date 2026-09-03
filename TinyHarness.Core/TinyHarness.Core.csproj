@@ -1,13 +1,20 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-  <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <Nullable>enable</Nullable>
+	<PropertyGroup>
+		<TargetFramework>net10.0</TargetFramework>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<Nullable>enable</Nullable>
 
-    <!-- Trim for NativeAOT from the first slice onward. -->
-    <PublishTrimmed>true</PublishTrimmed>
-    <IsAotCompatible>true</IsAotCompatible>
-  </PropertyGroup>
+		<!-- Trim for NativeAOT from the first slice onward. -->
+		<PublishTrimmed>true</PublishTrimmed>
+		<IsAotCompatible>true</IsAotCompatible>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<!-- M2 transport decision (PLAN §5/§21): official OpenAI SDK 2.13.0 verified
+         against custom endpoint, streaming text, streaming tool-call deltas and
+         NativeAOT publish with zero trim/AOT warnings (experiment + AOT probe). -->
+		<PackageReference Include="OpenAI" Version="2.13.0" />
+	</ItemGroup>
 
 </Project>
