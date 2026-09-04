@@ -90,9 +90,7 @@ public sealed class AgentLoop(IChatCompletionClient model, ToolRegistry tools, A
 
     private ChatCompletionRequest BuildRequest()
     {
-        var tools1 = tools.Count == 0
-            ? null
-            : tools.Values.Select(ToDefinition).ToList();
+        var tools1 = tools.Count == 0 ? null : tools.Values.Select(t => t.Definition).ToList();
 
         return new ChatCompletionRequest
         {
@@ -101,13 +99,6 @@ public sealed class AgentLoop(IChatCompletionClient model, ToolRegistry tools, A
             Tools    = tools1,
         };
     }
-
-    private static ToolDefinition ToDefinition(ITool tool) => new()
-    {
-        Name        = tool.Name,
-        Description = tool.Description,
-        Parameters  = new System.Text.Json.Nodes.JsonObject(),
-    };
 
     private async Task<ChatMessage> RequestAssistantMessageAsync(ChatCompletionRequest request,
                                                                  CancellationToken     cancellationToken)

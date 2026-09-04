@@ -9,9 +9,12 @@ namespace TinyHarness.Tests;
 /// </summary>
 internal sealed class FakeTool(string name, string description = "Fake tool") : ITool
 {
-    public string Name { get; } = name;
-
-    public string Description { get; } = description;
+    public ToolDefinition Definition { get; } = new()
+    {
+        Name        = name,
+        Description = description,
+        Parameters  = new JsonObject { ["type"] = "object" },
+    };
 
     public int ExecuteCount { get; private set; }
 
@@ -26,11 +29,11 @@ internal sealed class FakeTool(string name, string description = "Fake tool") : 
 
         return new ToolPreparation
         {
-            ToolName   = Name,
+            ToolName   = Definition.Name,
             CallId     = call.Id,
             Arguments  = args,
-            Capability = $"test.{Name}",
-            Summary    = $"{Name}({args.ToJsonString()})",
+            Capability = $"test.{Definition.Name}",
+            Summary    = $"{Definition.Name}({args.ToJsonString()})",
         };
     }
 
@@ -39,9 +42,9 @@ internal sealed class FakeTool(string name, string description = "Fake tool") : 
         ExecuteCount++;
         if (ThrowOnExecute)
         {
-            return Task.FromResult(new ToolResult { Succeeded = false, Content = $"{Name} exploded" });
+            return Task.FromResult(new ToolResult { Succeeded = false, Content = $"{Definition.Name} exploded" });
         }
 
-        return Task.FromResult(new ToolResult { Succeeded = true, Content = $"{Name} ok" });
+        return Task.FromResult(new ToolResult { Succeeded = true, Content = $"{Definition.Name} ok" });
     }
 }

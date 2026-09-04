@@ -12,7 +12,7 @@ public sealed record ToolRegistry : IReadOnlyDictionary<string, ITool>
 
     public ToolRegistry(IEnumerable<ITool> tools)
     {
-        _tools = tools.ToDictionary(t => t.Name, t => t, StringComparer.Ordinal);
+        _tools = tools.ToDictionary(t => t.Definition.Name, t => t, StringComparer.Ordinal);
     }
 
     public IEnumerable<string> Keys => _tools.Keys;

@@ -9,9 +9,8 @@ namespace TinyHarness.Core.Tools;
 /// </summary>
 public interface ITool
 {
-    string Name { get; }
-
-    string Description { get; }
+    /// <summary>Schema of this tool as declared to the model (name, description, JSON Schema).</summary>
+    ToolDefinition Definition { get; }
 
     /// <summary>Pure, side-effect-free preparation of a single invocation.</summary>
     ToolPreparation Prepare(ChatToolCall call);
