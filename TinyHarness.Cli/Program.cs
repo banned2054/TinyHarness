@@ -1,6 +1,7 @@
 using TinyHarness.Core.Agent;
 using TinyHarness.Core.ChatCompletions;
 using TinyHarness.Core.Configuration;
+using TinyHarness.Core.Runtime;
 using TinyHarness.Core.Tools;
 
 namespace TinyHarness.Cli;
@@ -39,7 +40,7 @@ internal static class Program
 
     private static (List<string> PromptArgs, string? ConfigPath) ParseArgs(string[] args)
     {
-        var    promptArgs = new List<string>();
+        var     promptArgs = new List<string>();
         string? configPath = null;
         for (var i = 0; i < args.Length; i++)
         {
@@ -66,6 +67,7 @@ internal static class Program
         await Console.Out.WriteLineAsync($"  model     : {config.Model}");
         await Console.Out.WriteLineAsync($"  endpoint  : {config.Endpoint}");
         await Console.Out.WriteLineAsync($"  workspace : {config.WorkspaceRoot}");
+        await Console.Out.WriteLineAsync($"  tools     : list_files, search_text, read_file");
 
         if (string.IsNullOrWhiteSpace(config.Model))
         {
@@ -82,17 +84,18 @@ internal static class Program
         var apiKey = ReadApiKey(config.ApiKeyEnvironmentVariable);
         if (apiKey is null)
         {
-            await Console.Error.WriteLineAsync(
-                $"No API key found. Set the environment variable '{config.ApiKeyEnvironmentVariable}'" +
-                $" (configured as apiKeyEnvironmentVariable) before running.");
+            await Console.Error
+                         .WriteLineAsync($"No API key found. Set the environment variable '{config.ApiKeyEnvironmentVariable}'" +
+                                         $" (configured as apiKeyEnvironmentVariable) before running.");
             return 1;
         }
 
-        // M2: real transport backed by the official OpenAI SDK. No tools yet;
-        // the read-only tool loop arrives in milestone M3.
-        IChatCompletionClient model =
-            new OpenAiChatCompletionClient(config.Model, config.Endpoint, apiKey);
-        var tools   = new ToolRegistry([]);
+        // M3: read-only tool set over the real transport. Write tooling and the
+        // Permission Engine land in M4.
+        IChatCompletionClient model = new OpenAiChatCompletionClient(config.Model, config.Endpoint, apiKey);
+
+        var workspace = new Workspace(config.WorkspaceRoot);
+        var tools     = BuildReadOnlyTools(workspace);
         var options = new AgentOptions
         {
             Model                     = config.Model,
@@ -100,9 +103,11 @@ internal static class Program
             DefaultToolTimeoutSeconds = config.DefaultToolTimeoutSeconds,
         };
 
-        var loop         = new AgentLoop(model, tools, options);
+        var loop = new AgentLoop(model, tools, options);
         const string systemPrompt =
-            "You are TinyHarness, a local coding harness. Help inspect and fix the workspace.";
+            "You are TinyHarness, a local coding harness inspecting a read-only workspace. " +
+            "Use the tools (list_files, search_text, read_file) to inspect the repository. " +
+            "Tool paths are relative to the workspace root. You cannot modify files in this milestone.";
 
         var result = await loop.RunAsync(systemPrompt, prompt, cts.Token).ConfigureAwait(false);
 
@@ -121,6 +126,15 @@ internal static class Program
     }
 
     /// <summary>
+    /// M3 composition: the read-only tool set bound to a workspace. The
+    /// Permission Engine (M4) later authorizes between Prepare and Execute.
+    /// </summary>
+    private static ToolRegistry BuildReadOnlyTools(Workspace workspace)
+        => new ToolRegistry([
+            new ListFilesTool(workspace), new SearchTextTool(workspace), new ReadFileTool(workspace),
+        ]);
+
+    /// <summary>
     /// Reads the API key from the configured environment variable. Never logs or
     /// embeds the value; only its presence is reported.
     /// </summary>
@@ -135,16 +149,20 @@ internal static class Program
         return string.IsNullOrWhiteSpace(value) ? null : value;
     }
 
+    /// <summary>
+    /// Offline smoke path (M3): a scripted client drives the real read-only tools
+    /// through the Agent loop, so the published native artifact actually executes
+    /// list_files / search_text / read_file (toolExecs &gt; 0) with no network or
+    /// key. Fixture files live in a disposable temp workspace, never in the repo.
+    /// </summary>
     private static async Task<int> RunSmokeAsync(string? configPath)
     {
         using var cts = new CancellationTokenSource();
         var config = await ConfigurationLoader.LoadAsync(configPath ?? "tinyharness.json", cts.Token)
                                               .ConfigureAwait(false);
 
-        await Console.Out.WriteLineAsync($"TinyHarness smoke");
+        await Console.Out.WriteLineAsync("TinyHarness smoke");
         await Console.Out.WriteLineAsync($"  model        : {config.Model}");
-        await Console.Out.WriteLineAsync($"  workspace    : {config.WorkspaceRoot}");
-        await Console.Out.WriteLineAsync($"  contextWindow: {config.ContextWindowTokens}");
 
         if (string.IsNullOrWhiteSpace(config.Model))
         {
@@ -152,11 +170,13 @@ internal static class Program
             return 1;
         }
 
-        // Offline smoke path: a fake client that always replies with plain text,
-        // kept so the smoke verb needs no network or key. The real transport is
-        // OpenAiChatCompletionClient (see RunAsync).
-        var model = new OfflineTextClient();
-        var tools = new ToolRegistry([]);
+        using var fixture = await SmokeWorkspace.CreateAsync(cts.Token).ConfigureAwait(false);
+        await Console.Out.WriteLineAsync($"  fixtureWs    : {fixture.Root}");
+
+        var plan      = SmokeScript.Build();
+        var script    = new SmokeScriptClient(plan.Steps);
+        var workspace = new Workspace(fixture.Root);
+        var tools     = BuildReadOnlyTools(workspace);
         var options = new AgentOptions
         {
             Model                     = config.Model,
@@ -164,47 +184,32 @@ internal static class Program
             DefaultToolTimeoutSeconds = config.DefaultToolTimeoutSeconds,
         };
 
-        var loop         = new AgentLoop(model, tools, options);
-        var systemPrompt = "You are TinyHarness, a local coding harness. Help inspect and fix the workspace.";
-        var userPrompt   = "smoke: reply with a short confirmation.";
-
-        var result = await loop.RunAsync(systemPrompt, userPrompt, cts.Token).ConfigureAwait(false);
+        var loop = new AgentLoop(script, tools, options);
+        const string systemPrompt =
+            "You are TinyHarness, a local coding harness inspecting a read-only workspace. " +
+            "Use the tools (list_files, search_text, read_file) to inspect the repository. " +
+            "Tool paths are relative to the workspace root. You cannot modify files in this milestone.";
+        var result = await loop
+                          .RunAsync(systemPrompt, "smoke: inspect the fixture workspace with the read-only tools.",
+                                    cts.Token).ConfigureAwait(false);
 
         await Console.Out.WriteLineAsync($"  status       : {result.Status}");
         await Console.Out.WriteLineAsync($"  steps        : {result.Steps}");
         await Console.Out.WriteLineAsync($"  toolExecs    : {result.ToolExecutions}");
         await Console.Out.WriteLineAsync($"  finalMessage : {result.FinalMessage}");
-
-        return result.Status switch
+        if (!string.IsNullOrWhiteSpace(result.Error))
         {
-            AgentStatus.Completed => 0,
-            AgentStatus.Cancelled => 130,
-            _                     => 1,
-        };
-    }
-
-    /// <summary>
-    /// Offline fake model client for the smoke verb: returns a fixed plain-text
-    /// completion without network. The real transport is
-    /// <see cref="OpenAiChatCompletionClient"/>.
-    /// </summary>
-    private sealed class OfflineTextClient : IChatCompletionClient
-    {
-        public async IAsyncEnumerable<ChatStreamEvent> CompleteAsync(ChatCompletionRequest request,
-                                                                     [System.Runtime.CompilerServices.
-                                                                         EnumeratorCancellation]
-                                                                     CancellationToken cancellationToken)
-        {
-            const string reply = "Offline smoke ok: the Agent loop is running.";
-            foreach (var chunk in reply)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                yield return new ChatStreamEvent
-                    { Kind = ChatStreamEventKind.ContentDelta, ContentDelta = chunk.ToString() };
-                await Task.Yield();
-            }
-
-            yield return new ChatStreamEvent { Kind = ChatStreamEventKind.End };
+            await Console.Out.WriteLineAsync($"  error        : {result.Error}");
         }
+
+        if (result.Status != AgentStatus.Completed)
+        {
+            return 1;
+        }
+
+        // The scripted client throws on any closure or content mismatch, which the
+        // Agent loop surfaces as Failed above; a Completed run with the expected
+        // tool count means every tool really executed inside the native artifact.
+        return result.ToolExecutions == plan.ExpectedToolExecutions ? 0 : 1;
     }
 }
