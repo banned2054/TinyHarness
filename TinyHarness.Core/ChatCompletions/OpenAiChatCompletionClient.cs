@@ -6,19 +6,20 @@ using System.Runtime.CompilerServices;
 namespace TinyHarness.Core.ChatCompletions;
 
 /// <summary>
-/// M2 real transport: an <see cref="IChatCompletionClient"/> backed by the
-/// official OpenAI SDK (decision in PLAN §5/§21: SDK 2.13.0 verified against
-/// custom endpoint, streaming text, streaming tool-call deltas and NativeAOT
-/// publish with zero trim/AOT warnings).
+/// 基于 OpenAI SDK 的 Chat Completions 流式客户端。它把项目内部请求映射为 SDK 请求，
+/// 再将文本和工具调用增量转换回内部流事件。
 ///
-/// The SDK stays an implementation detail of the ChatCompletions module: the
-/// Agent Loop and the rest of the system keep depending only on the narrow
-/// protocol interface and the protocol DTOs in this namespace.
+/// Chat Completions streaming client backed by the OpenAI SDK. It maps internal
+/// requests to SDK requests and converts text and tool-call deltas back to internal events.
 /// </summary>
 public sealed class OpenAiChatCompletionClient : IChatCompletionClient
 {
     private readonly ChatClient _client;
 
+    /// <summary>
+    /// 验证模型、端点与密钥，并构造使用自定义基地址的 SDK 客户端。
+    /// Validates model, endpoint, and key, then creates the SDK client with the custom base URI.
+    /// </summary>
     public OpenAiChatCompletionClient(string model, string endpoint, string apiKey)
     {
         if (string.IsNullOrWhiteSpace(model))
@@ -51,6 +52,10 @@ public sealed class OpenAiChatCompletionClient : IChatCompletionClient
         _client = new ChatClient(model, new ApiKeyCredential(apiKey), sdkOptions);
     }
 
+    /// <summary>
+    /// 将内部请求转换为 SDK 请求，并把 SDK 的文本与工具调用增量映射为项目自己的流事件。
+    /// Converts the internal request to SDK input and maps SDK text/tool deltas back to project stream events.
+    /// </summary>
     public async IAsyncEnumerable<ChatStreamEvent> CompleteAsync(ChatCompletionRequest request,
                                                                  [EnumeratorCancellation]
                                                                  CancellationToken cancellationToken)
@@ -117,6 +122,8 @@ public sealed class OpenAiChatCompletionClient : IChatCompletionClient
     }
 
     /// <summary>
+    /// 把项目消息转换为 SDK 消息；含工具调用的 assistant 消息按 API 约束不携带文本内容。
+    ///
     /// Translates protocol messages into SDK message types. Note: the SDK cannot
     /// express an assistant message that carries both text content and tool
     /// calls (the official API leaves content empty when tool_calls are set), so
@@ -163,6 +170,10 @@ public sealed class OpenAiChatCompletionClient : IChatCompletionClient
         return result;
     }
 
+    /// <summary>
+    /// 将内部工具调用序列转换为 SDK 的函数调用对象。
+    /// Converts internal tool calls into SDK function-call objects.
+    /// </summary>
     private static IEnumerable<OpenAI.Chat.ChatToolCall> ToSdkToolCalls(IReadOnlyList<ChatToolCall> calls) =>
         calls.Select(call => OpenAI.Chat.ChatToolCall.CreateFunctionToolCall(call.Id, call.FunctionName,
                                                                              BinaryData

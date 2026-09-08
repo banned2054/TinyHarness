@@ -1,6 +1,9 @@
 namespace TinyHarness.Core.Runtime;
 
 /// <summary>
+/// 供只读文件工具使用的受限目录遍历器。结果排序稳定，并限制条目数、支持取消，
+/// 同时跳过常见构建目录与版本控制目录。重解析点只列出但不跟随，避免越过工作区边界。
+///
 /// Recursive workspace walk used by the read-only file tools. Produces
 /// deterministic (sorted) results with per-walk entry caps, cancellation and an
 /// exclusion list for well-known build/version-control directories.
@@ -30,15 +33,25 @@ internal static class DirectoryWalker
 
     public sealed record WalkResult(IReadOnlyList<string> Entries, bool Truncated);
 
-    /// <summary>Files only (used by search_text).</summary>
+    /// <summary>
+    /// 递归收集普通文件，供 search_text 使用。
+    /// Recursively collects files only for search_text.
+    /// </summary>
     public static WalkResult CollectFiles(string rootAbs, int cap, CancellationToken cancellationToken)
         => Collect(rootAbs, recursive: true, maxDepth: null, cap, includeDirectories: false, cancellationToken);
 
-    /// <summary>Files and directories (used by list_files).</summary>
+    /// <summary>
+    /// 按递归与深度设置收集文件和目录，供 list_files 使用。
+    /// Collects files and directories according to the recursion and depth settings for list_files.
+    /// </summary>
     public static WalkResult CollectEntries(string rootAbs, bool recursive, int? maxDepth, int cap,
                                             CancellationToken cancellationToken)
         => Collect(rootAbs, recursive, maxDepth, cap, includeDirectories: true, cancellationToken);
 
+    /// <summary>
+    /// 执行实际遍历，在条目上限内返回排序结果，并标记是否因上限提前停止。
+    /// Performs the bounded walk, returns sorted entries, and reports whether the cap stopped enumeration.
+    /// </summary>
     private static WalkResult Collect(string rootAbs, bool recursive, int? maxDepth, int cap,
                                       bool includeDirectories, CancellationToken cancellationToken)
     {
@@ -120,6 +133,10 @@ internal static class DirectoryWalker
         return new WalkResult(entries, truncated);
     }
 
+    /// <summary>
+    /// 判断路径是否为符号链接或 junction；无法读取属性时按重解析点处理以保持保守安全。
+    /// Detects symlinks/junctions and conservatively treats unreadable entries as reparse points.
+    /// </summary>
     private static bool IsReparsePoint(string path)
     {
         try

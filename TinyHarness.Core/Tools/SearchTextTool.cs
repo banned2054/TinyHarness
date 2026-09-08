@@ -6,6 +6,9 @@ using TinyHarness.Core.Runtime;
 namespace TinyHarness.Core.Tools;
 
 /// <summary>
+/// 在工作区文本文件中执行子字符串搜索。结果格式为“路径:行号: 内容”，会跳过二进制、
+/// 超大文件以及最终目标逃逸工作区的文件链接，并对扫描量和结果量设置上限。
+///
 /// search_text: substring search over workspace text files. Matches are reported
 /// as "path:line: text". Binary files, oversized files and file links whose
 /// final target escapes the workspace are skipped and counted. The walk is
@@ -63,6 +66,10 @@ public sealed class SearchTextTool(Workspace workspace) : ITool
         Parameters  = Schema,
     };
 
+    /// <summary>
+    /// 校验搜索模式、路径和结果上限，并把路径规范化到工作区内。
+    /// Validates the search pattern, path, and result cap, then normalizes the path inside the workspace.
+    /// </summary>
     public ToolPreparation Prepare(ChatToolCall call)
     {
         var args       = ToolArgs.ParseObject(call);
@@ -87,6 +94,10 @@ public sealed class SearchTextTool(Workspace workspace) : ITool
         };
     }
 
+    /// <summary>
+    /// 扫描单个文件或受限目录树，汇总匹配结果及各类跳过原因，并在达到上限时提前结束。
+    /// Scans one file or a bounded directory tree, reporting matches, skip reasons, and early result-cap termination.
+    /// </summary>
     public async Task<ToolResult> ExecuteAsync(ToolPreparation preparation, CancellationToken cancellationToken)
     {
         var absolute      = ToolArgs.ReadAbsolute(preparation, "path");
@@ -218,6 +229,8 @@ public sealed class SearchTextTool(Workspace workspace) : ITool
     }
 
     /// <summary>
+    /// 逐行扫描一个文件；文件像二进制或链接目标越界时返回跳过状态，否则返回匹配行和截断状态。
+    ///
     /// Scans one file line by line. Returns a skip outcome when the file looks
     /// binary or when it is a link whose final target escapes the workspace;
     /// otherwise the matched "path:line: text" lines and whether the scan had
@@ -228,8 +241,8 @@ public sealed class SearchTextTool(Workspace workspace) : ITool
                                                          CancellationToken cancellationToken)
     {
         // A file found by the walk can itself be a symlink/junction whose final
-        // target escapes the workspace even though the searched root does not
-        // (PLAN §11: re-check the resolved boundary before touching each file).
+        // target escapes the workspace even though the searched root does not;
+        // re-check the resolved boundary before touching each file.
         // Explicit single-file paths were already checked in ExecuteAsync, so
         // this only fires for walk-discovered links: skip them, never read.
         try
@@ -299,10 +312,16 @@ public sealed class SearchTextTool(Workspace workspace) : ITool
 
     private enum ScanSkipReason
     {
-        /// <summary>File content looks binary; not scanned further.</summary>
+        /// <summary>
+        /// 文件内容像二进制，不再扫描。
+        /// File content looks binary and is not scanned further.
+        /// </summary>
         Binary,
 
-        /// <summary>File link whose final target escapes the workspace.</summary>
+        /// <summary>
+        /// 文件链接的最终目标逃逸工作区。
+        /// File link whose final target escapes the workspace.
+        /// </summary>
         OutsideWorkspace,
     }
 }

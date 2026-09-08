@@ -5,6 +5,9 @@ using TinyHarness.Core.Runtime;
 namespace TinyHarness.Core.Tools;
 
 /// <summary>
+/// 列举工作区目录内容的只读工具。目录名以“/”结尾；递归时跳过常见构建与版本控制目录，
+/// 并通过统一遍历器限制数量和链接行为。
+///
 /// list_files: lists the entries of a workspace directory. Directory entries are
 /// suffixed with '/'; recursive walks omit and never descend into well-known
 /// build/version-control directories (see <see cref="DirectoryWalker"/>).
@@ -44,6 +47,10 @@ public sealed class ListFilesTool(Workspace workspace) : ITool
         Parameters = Schema,
     };
 
+    /// <summary>
+    /// 校验路径、递归和深度参数，并生成绑定到工作区绝对路径的只读计划。
+    /// Validates path, recursion, and depth arguments and creates a read-only plan bound to an absolute workspace path.
+    /// </summary>
     public ToolPreparation Prepare(ChatToolCall call)
     {
         var args      = ToolArgs.ParseObject(call);
@@ -75,6 +82,10 @@ public sealed class ListFilesTool(Workspace workspace) : ITool
         };
     }
 
+    /// <summary>
+    /// 重新确认最终路径边界后列举目录，返回稳定排序的相对路径并明确标注截断。
+    /// Rechecks the final path boundary, lists the directory, and returns sorted relative paths with explicit truncation.
+    /// </summary>
     public Task<ToolResult> ExecuteAsync(ToolPreparation preparation, CancellationToken cancellationToken)
     {
         var absolute = ToolArgs.ReadAbsolute(preparation, "path");

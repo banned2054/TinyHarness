@@ -1,7 +1,10 @@
 namespace TinyHarness.Core.Configuration;
 
 /// <summary>
-/// Strongly typed configuration document (PLAN §14). No endpoint, model, context
+/// TinyHarness 的强类型运行配置。端点、模型、上下文窗口和 API key 均来自配置或环境，
+/// 不在代码中硬编码。
+///
+/// Strongly typed TinyHarness runtime configuration. No endpoint, model, context
 /// window or API key is hardcoded; all values come from config plus environment.
 /// </summary>
 public sealed record TinyHarnessConfig
