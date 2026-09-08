@@ -48,6 +48,19 @@ public class WorkspaceTests
     }
 
     [Fact]
+    public void EnsureFinalTargetInside_RejectsLexicallyOutsidePath()
+    {
+        using var insideDir  = new TestTempDir();
+        using var outsideDir = new TestTempDir();
+        var       outside    = outsideDir.WriteFile("outside.txt", "outside");
+
+        var ex = Assert.Throws<InvalidDataException>(() =>
+            insideDir.Workspace.EnsureFinalTargetInside(outside, isDirectory : false, "File"));
+
+        Assert.Contains("is outside the workspace root", ex.Message);
+    }
+
+    [Fact]
     public void ToDisplay_UsesForwardSlashesAndDotForRoot()
     {
         using var dir = new TestTempDir();

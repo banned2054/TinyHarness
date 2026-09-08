@@ -1,7 +1,10 @@
 namespace TinyHarness.Core.Runtime;
 
 /// <summary>
-/// Root-relative path resolution for file tools (PLAN §11). Every path a model
+/// 为文件工具提供相对工作区根目录的路径解析与边界检查。Prepare 阶段做纯词法检查，
+/// Execute 阶段再解析符号链接与 junction，防止两阶段之间目标变化后逃逸工作区。
+///
+/// Root-relative path resolution for file tools. Every path a model
 /// passes to a tool is resolved against the configured workspace root and must
 /// stay inside it.
 ///
@@ -19,6 +22,10 @@ public sealed class Workspace
 {
     public string Root { get; }
 
+    /// <summary>
+    /// 验证并保存规范化的绝对工作区根目录。
+    /// Validates and stores the normalized absolute workspace root.
+    /// </summary>
     public Workspace(string root)
     {
         if (string.IsNullOrWhiteSpace(root))
@@ -30,6 +37,8 @@ public sealed class Workspace
     }
 
     /// <summary>
+    /// 将用户路径解析为工作区内的规范化绝对路径；拒绝“..”或外部绝对路径造成的词法逃逸。
+    ///
     /// Resolves a user-supplied path to a normalized absolute path that stays
     /// inside the workspace root. Throws <see cref="InvalidDataException"/> on
     /// lexical escapes ("..", an outside absolute path).
@@ -59,6 +68,8 @@ public sealed class Workspace
     }
 
     /// <summary>
+    /// 在真正访问前解析目标及各级祖先链接，确认最终位置仍位于工作区内。
+    ///
     /// Verifies at execution time that the final target of <paramref name="path"/>
     /// stays inside the workspace root. Checks the entry itself (when it is a
     /// symlink/junction) and every ancestor directory, because a junction can sit
@@ -69,6 +80,12 @@ public sealed class Workspace
     {
         var current     = Path.GetFullPath(path);
         var currentIsDir = isDirectory;
+        if (!IsInside(Root, current))
+        {
+            throw new InvalidDataException(
+                $"{what} '{path}' is outside the workspace root '{Root}'.");
+        }
+
         while (IsInside(Root, current))
         {
             var resolved = ResolveLinkTarget(current, currentIsDir);
@@ -90,6 +107,8 @@ public sealed class Workspace
     }
 
     /// <summary>
+    /// 把工作区内绝对路径转换为使用正斜杠的稳定显示路径。
+    ///
     /// Converts an absolute path inside the root to a workspace-relative display
     /// path using forward slashes (stable for the model and for logs).
     /// </summary>
@@ -100,6 +119,10 @@ public sealed class Workspace
         return display;
     }
 
+    /// <summary>
+    /// 按当前操作系统的大小写规则判断候选路径是否等于根目录或位于其后代目录中。
+    /// Tests whether a candidate equals or descends from a root using the current OS path-comparison rules.
+    /// </summary>
     public static bool IsInside(string root, string candidate)
     {
         var rootFull = Path.GetFullPath(root);
@@ -119,6 +142,8 @@ public sealed class Workspace
         OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
 
     /// <summary>
+    /// 解析符号链接或 junction 链至最终绝对路径，并用固定循环上限防止链接环。
+    ///
     /// Resolves symlink/junction chains to the final absolute path. Returns the
     /// input unchanged when it is not a link. A bounded loop guards against link
     /// cycles.

@@ -1,13 +1,22 @@
 using TinyHarness.Core.Agent;
 using TinyHarness.Core.ChatCompletions;
 using TinyHarness.Core.Configuration;
+using TinyHarness.Core.Permissions;
 using TinyHarness.Core.Runtime;
 using TinyHarness.Core.Tools;
 
 namespace TinyHarness.Cli;
 
+/// <summary>
+/// TinyHarness 命令行应用的组合根与入口调度器。
+/// Composition root and entry-point dispatcher for the TinyHarness command-line application.
+/// </summary>
 internal static class Program
 {
+    /// <summary>
+    /// CLI 入口。解析 smoke、run 或无动词调用方式，并把退出码交还操作系统。
+    /// CLI entry point that dispatches smoke, run, or verbless invocation forms and returns an OS exit code.
+    /// </summary>
     public static async Task<int> Main(string[] args)
     {
         if (args.Length == 0)
@@ -38,6 +47,10 @@ internal static class Program
         return await RunAsync(prompt, configPath2);
     }
 
+    /// <summary>
+    /// 从命令行参数中提取可选配置路径，其余片段保留为用户提示词。
+    /// Extracts the optional configuration path and keeps all remaining arguments as prompt fragments.
+    /// </summary>
     private static (List<string> PromptArgs, string? ConfigPath) ParseArgs(string[] args)
     {
         var     promptArgs = new List<string>();
@@ -57,6 +70,10 @@ internal static class Program
         return (promptArgs, configPath);
     }
 
+    /// <summary>
+    /// 加载真实运行配置、组装模型与工具权限依赖，运行一次 Agent 任务并输出摘要。
+    /// Loads live configuration, composes model/tool/permission dependencies, runs one agent task, and prints its summary.
+    /// </summary>
     private static async Task<int> RunAsync(string prompt, string? configPath)
     {
         using var cts = new CancellationTokenSource();
@@ -67,7 +84,7 @@ internal static class Program
         await Console.Out.WriteLineAsync($"  model     : {config.Model}");
         await Console.Out.WriteLineAsync($"  endpoint  : {config.Endpoint}");
         await Console.Out.WriteLineAsync($"  workspace : {config.WorkspaceRoot}");
-        await Console.Out.WriteLineAsync($"  tools     : list_files, search_text, read_file");
+        await Console.Out.WriteLineAsync($"  tools     : list_files, search_text, read_file, apply_patch");
 
         if (string.IsNullOrWhiteSpace(config.Model))
         {
@@ -90,12 +107,14 @@ internal static class Program
             return 1;
         }
 
-        // M3: read-only tool set over the real transport. Write tooling and the
-        // Permission Engine land in M4.
+        // Assemble the real model transport, workspace tools and interactive
+        // permission flow used by normal CLI runs.
         IChatCompletionClient model = new OpenAiChatCompletionClient(config.Model, config.Endpoint, apiKey);
 
-        var workspace = new Workspace(config.WorkspaceRoot);
-        var tools     = BuildReadOnlyTools(workspace);
+        var               workspace   = new Workspace(config.WorkspaceRoot);
+        var               tools       = BuildTools(workspace);
+        var               permissions = new PermissionEngine(config.WorkspaceRoot);
+        IApprovalProvider approver    = new ConsoleApprovalProvider();
         var options = new AgentOptions
         {
             Model                     = config.Model,
@@ -103,11 +122,14 @@ internal static class Program
             DefaultToolTimeoutSeconds = config.DefaultToolTimeoutSeconds,
         };
 
-        var loop = new AgentLoop(model, tools, options);
+        var loop = new AgentLoop(model, tools, options, permissions, approver);
         const string systemPrompt =
-            "You are TinyHarness, a local coding harness inspecting a read-only workspace. " +
-            "Use the tools (list_files, search_text, read_file) to inspect the repository. " +
-            "Tool paths are relative to the workspace root. You cannot modify files in this milestone.";
+            "You are TinyHarness, a local coding harness that inspects and modifies a workspace. "                 +
+            "Use list_files, search_text and read_file to inspect, and apply_patch to modify files. "              +
+            "Tool paths are relative to the workspace root. "                                                      +
+            "apply_patch takes a unified diff: '--- a/path' and '+++ b/path' headers, then '@@ -s[,c] +s[,c] @@' " +
+            "hunks with ' ' (context), '-' (remove) and '+' (add) line prefixes. New files use '--- /dev/null'. "  +
+            "Writes may require the user's approval before they are applied; a denial is returned to you so you can adjust.";
 
         var result = await loop.RunAsync(systemPrompt, prompt, cts.Token).ConfigureAwait(false);
 
@@ -126,15 +148,18 @@ internal static class Program
     }
 
     /// <summary>
-    /// M3 composition: the read-only tool set bound to a workspace. The
-    /// Permission Engine (M4) later authorizes between Prepare and Execute.
+    /// 把完整的只读与写入工具集合绑定到同一个工作区。
+    ///
+    /// Binds the complete read/write tool set to one workspace.
     /// </summary>
-    private static ToolRegistry BuildReadOnlyTools(Workspace workspace)
-        => new ToolRegistry([
-            new ListFilesTool(workspace), new SearchTextTool(workspace), new ReadFileTool(workspace),
-        ]);
+    private static ToolRegistry BuildTools(Workspace workspace) => new([
+        new ListFilesTool(workspace), new SearchTextTool(workspace), new ReadFileTool(workspace),
+        new ApplyPatchTool(workspace),
+    ]);
 
     /// <summary>
+    /// 只从配置指定的环境变量读取 API key；绝不记录或嵌入密钥值。
+    ///
     /// Reads the API key from the configured environment variable. Never logs or
     /// embeds the value; only its presence is reported.
     /// </summary>
@@ -150,10 +175,10 @@ internal static class Program
     }
 
     /// <summary>
-    /// Offline smoke path (M3): a scripted client drives the real read-only tools
-    /// through the Agent loop, so the published native artifact actually executes
-    /// list_files / search_text / read_file (toolExecs &gt; 0) with no network or
-    /// key. Fixture files live in a disposable temp workspace, never in the repo.
+    /// 使用脚本模型和临时工作区运行离线冒烟流程，检查读写工具闭环及审批流程。
+    ///
+    /// Runs an offline smoke flow with a scripted model and disposable workspace,
+    /// exercising the read/write tool loop and approval flow without network access.
     /// </summary>
     private static async Task<int> RunSmokeAsync(string? configPath)
     {
@@ -173,10 +198,12 @@ internal static class Program
         using var fixture = await SmokeWorkspace.CreateAsync(cts.Token).ConfigureAwait(false);
         await Console.Out.WriteLineAsync($"  fixtureWs    : {fixture.Root}");
 
-        var plan      = SmokeScript.Build();
-        var script    = new SmokeScriptClient(plan.Steps);
-        var workspace = new Workspace(fixture.Root);
-        var tools     = BuildReadOnlyTools(workspace);
+        var plan        = SmokeScript.Build();
+        var script      = new SmokeScriptClient(plan.Steps);
+        var workspace   = new Workspace(fixture.Root);
+        var tools       = BuildTools(workspace);
+        var permissions = new PermissionEngine(fixture.Root);
+        var approver    = new SmokeApprover();
         var options = new AgentOptions
         {
             Model                     = config.Model,
@@ -184,13 +211,14 @@ internal static class Program
             DefaultToolTimeoutSeconds = config.DefaultToolTimeoutSeconds,
         };
 
-        var loop = new AgentLoop(script, tools, options);
+        var loop = new AgentLoop(script, tools, options, permissions, approver);
         const string systemPrompt =
-            "You are TinyHarness, a local coding harness inspecting a read-only workspace. " +
-            "Use the tools (list_files, search_text, read_file) to inspect the repository. " +
-            "Tool paths are relative to the workspace root. You cannot modify files in this milestone.";
+            "You are TinyHarness, a local coding harness that inspects and modifies a workspace. "    +
+            "Use list_files, search_text and read_file to inspect, and apply_patch to modify files. " +
+            "Tool paths are relative to the workspace root. "                                         +
+            "Writes may require the user's approval before they are applied.";
         var result = await loop
-                          .RunAsync(systemPrompt, "smoke: inspect the fixture workspace with the read-only tools.",
+                          .RunAsync(systemPrompt, "smoke: inspect the fixture workspace and apply one patch.",
                                     cts.Token).ConfigureAwait(false);
 
         await Console.Out.WriteLineAsync($"  status       : {result.Status}");
@@ -209,7 +237,9 @@ internal static class Program
 
         // The scripted client throws on any closure or content mismatch, which the
         // Agent loop surfaces as Failed above; a Completed run with the expected
-        // tool count means every tool really executed inside the native artifact.
-        return result.ToolExecutions == plan.ExpectedToolExecutions ? 0 : 1;
+        // tool count and exactly one approval prompt (the apply_patch) means every
+        // tool really executed inside the native artifact through the permission
+        // flow.
+        return result.ToolExecutions == plan.ExpectedToolExecutions && approver.Prompts == 1 ? 0 : 1;
     }
 }

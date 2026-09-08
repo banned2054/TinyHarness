@@ -106,6 +106,7 @@ public class AgentLoopTests
         var result = await loop.RunAsync("sys", "go", CancellationToken.None);
 
         Assert.Equal(AgentStatus.Completed, result.Status);
+        Assert.Equal(0, result.ToolExecutions);
         Assert.Contains(loop.History, m => m.Role == ChatRole.Tool && m.Content.Contains("Unknown tool"));
     }
 

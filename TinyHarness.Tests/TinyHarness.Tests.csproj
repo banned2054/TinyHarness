@@ -19,6 +19,8 @@
 
 	<ItemGroup>
 		<ProjectReference Include="..\TinyHarness.Core\TinyHarness.Core.csproj" />
+		<!-- Compile the internal console adapter directly to test its text I/O without a native executable dependency. -->
+		<Compile Include="..\TinyHarness.Cli\ConsoleApprovalProvider.cs" Link="Cli\ConsoleApprovalProvider.cs" />
 	</ItemGroup>
 
 </Project>
