@@ -29,6 +29,13 @@ internal static class Program
         }
 
         var first = args[0];
+        if (string.Equals(first, "process-smoke-child", StringComparison.Ordinal))
+        {
+            await Console.Out.WriteLineAsync("process stdout");
+            await Console.Error.WriteLineAsync("process stderr");
+            return 0;
+        }
+
         if (string.Equals(first, "smoke", StringComparison.Ordinal))
         {
             var (_, configPath) = ParseArgs(args);
@@ -76,7 +83,8 @@ internal static class Program
     /// </summary>
     private static async Task<int> RunAsync(string prompt, string? configPath)
     {
-        using var cts = new CancellationTokenSource();
+        using var cts                = new CancellationTokenSource();
+        using var cancelRegistration = new ConsoleCancellation(cts);
         var config = await ConfigurationLoader.LoadAsync(configPath ?? "tinyharness.json", cts.Token)
                                               .ConfigureAwait(false);
 
@@ -84,7 +92,7 @@ internal static class Program
         await Console.Out.WriteLineAsync($"  model     : {config.Model}");
         await Console.Out.WriteLineAsync($"  endpoint  : {config.Endpoint}");
         await Console.Out.WriteLineAsync($"  workspace : {config.WorkspaceRoot}");
-        await Console.Out.WriteLineAsync($"  tools     : list_files, search_text, read_file, apply_patch");
+        await Console.Out.WriteLineAsync($"  tools     : list_files, search_text, read_file, apply_patch, shell");
 
         if (string.IsNullOrWhiteSpace(config.Model))
         {
@@ -112,8 +120,8 @@ internal static class Program
         IChatCompletionClient model = new OpenAiChatCompletionClient(config.Model, config.Endpoint, apiKey);
 
         var               workspace   = new Workspace(config.WorkspaceRoot);
-        var               tools       = BuildTools(workspace);
-        var               permissions = new PermissionEngine(config.WorkspaceRoot);
+        var               tools       = BuildTools(workspace, config, apiKey);
+        var               permissions = new PermissionEngine(config.WorkspaceRoot, config.CommandRules);
         IApprovalProvider approver    = new ConsoleApprovalProvider();
         var options = new AgentOptions
         {
@@ -125,11 +133,13 @@ internal static class Program
         var loop = new AgentLoop(model, tools, options, permissions, approver);
         const string systemPrompt =
             "You are TinyHarness, a local coding harness that inspects and modifies a workspace. "                 +
-            "Use list_files, search_text and read_file to inspect, and apply_patch to modify files. "              +
+            "Use list_files, search_text and read_file to inspect, apply_patch to modify files, and shell to run commands. " +
+            "For ordinary commands use shell mode 'direct' with executable and an arguments array. Use mode 'shell' "       +
+            "with a shell flavor and command string only when pipelines, redirection, or other shell syntax is required. " +
             "Tool paths are relative to the workspace root. "                                                      +
             "apply_patch takes a unified diff: '--- a/path' and '+++ b/path' headers, then '@@ -s[,c] +s[,c] @@' " +
             "hunks with ' ' (context), '-' (remove) and '+' (add) line prefixes. New files use '--- /dev/null'. "  +
-            "Writes may require the user's approval before they are applied; a denial is returned to you so you can adjust.";
+            "Writes and commands may require the user's approval before they run; a denial is returned to you so you can adjust.";
 
         var result = await loop.RunAsync(systemPrompt, prompt, cts.Token).ConfigureAwait(false);
 
@@ -152,10 +162,29 @@ internal static class Program
     ///
     /// Binds the complete read/write tool set to one workspace.
     /// </summary>
-    private static ToolRegistry BuildTools(Workspace workspace) => new([
-        new ListFilesTool(workspace), new SearchTextTool(workspace), new ReadFileTool(workspace),
-        new ApplyPatchTool(workspace),
-    ]);
+    private static ToolRegistry BuildTools(Workspace workspace, TinyHarnessConfig config, string? apiKey = null) =>
+        new([
+            new ListFilesTool(workspace), new SearchTextTool(workspace), new ReadFileTool(workspace),
+            new ApplyPatchTool(workspace), new ShellTool(workspace, config.DefaultToolTimeoutSeconds,
+                                                         KnownSecrets(config, apiKey)),
+        ]);
+
+    /// <summary>
+    /// 为进程环境清理与输出脱敏提供已知 secret；不记录 secret 值。
+    /// Supplies known secrets for child-environment removal and output redaction without logging their values.
+    /// </summary>
+    private static IReadOnlyDictionary<string, string> KnownSecrets(TinyHarnessConfig config, string? apiKey)
+    {
+        if (string.IsNullOrWhiteSpace(config.ApiKeyEnvironmentVariable) || string.IsNullOrEmpty(apiKey))
+        {
+            return new Dictionary<string, string>(StringComparer.Ordinal);
+        }
+
+        return new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            [config.ApiKeyEnvironmentVariable] = apiKey,
+        };
+    }
 
     /// <summary>
     /// 只从配置指定的环境变量读取 API key；绝不记录或嵌入密钥值。
@@ -182,7 +211,8 @@ internal static class Program
     /// </summary>
     private static async Task<int> RunSmokeAsync(string? configPath)
     {
-        using var cts = new CancellationTokenSource();
+        using var cts                = new CancellationTokenSource();
+        using var cancelRegistration = new ConsoleCancellation(cts);
         var config = await ConfigurationLoader.LoadAsync(configPath ?? "tinyharness.json", cts.Token)
                                               .ConfigureAwait(false);
 
@@ -198,10 +228,12 @@ internal static class Program
         using var fixture = await SmokeWorkspace.CreateAsync(cts.Token).ConfigureAwait(false);
         await Console.Out.WriteLineAsync($"  fixtureWs    : {fixture.Root}");
 
-        var plan        = SmokeScript.Build();
-        var script      = new SmokeScriptClient(plan.Steps);
-        var workspace   = new Workspace(fixture.Root);
-        var tools       = BuildTools(workspace);
+        var plan      = SmokeScript.Build(ProcessProbeCommand());
+        var script    = new SmokeScriptClient(plan.Steps);
+        var workspace = new Workspace(fixture.Root);
+        var tools     = BuildTools(workspace, config);
+        // Smoke intentionally uses the default policy so its two side-effect
+        // approvals remain deterministic regardless of the user's live rules.
         var permissions = new PermissionEngine(fixture.Root);
         var approver    = new SmokeApprover();
         var options = new AgentOptions
@@ -213,9 +245,10 @@ internal static class Program
 
         var loop = new AgentLoop(script, tools, options, permissions, approver);
         const string systemPrompt =
-            "You are TinyHarness, a local coding harness that inspects and modifies a workspace. "    +
-            "Use list_files, search_text and read_file to inspect, and apply_patch to modify files. " +
-            "Tool paths are relative to the workspace root. "                                         +
+            "You are TinyHarness, a local coding harness that inspects and modifies a workspace. " +
+            "Use list_files, search_text and read_file to inspect, apply_patch to modify files, and shell to run commands. " +
+            "Use shell mode 'direct' for executable/arguments and mode 'shell' only for shell syntax. " +
+            "Tool paths are relative to the workspace root. " +
             "Writes may require the user's approval before they are applied.";
         var result = await loop
                           .RunAsync(systemPrompt, "smoke: inspect the fixture workspace and apply one patch.",
@@ -237,9 +270,54 @@ internal static class Program
 
         // The scripted client throws on any closure or content mismatch, which the
         // Agent loop surfaces as Failed above; a Completed run with the expected
-        // tool count and exactly one approval prompt (the apply_patch) means every
+        // tool count and expected approval prompts (apply_patch, direct process,
+        // and explicit shell) mean every
         // tool really executed inside the native artifact through the permission
         // flow.
-        return result.ToolExecutions == plan.ExpectedToolExecutions && approver.Prompts == 1 ? 0 : 1;
+        return result.ToolExecutions == plan.ExpectedToolExecutions &&
+               approver.Prompts      == plan.ExpectedApprovalPrompts
+            ? 0
+            : 1;
+    }
+
+    /// <summary>
+    /// 构造调用当前 CLI 隐藏 probe 动词的结构化命令；兼容 framework-dependent 与原生发布入口。
+    /// Builds a structured invocation of this CLI's hidden probe verb for both framework-dependent and native hosts.
+    /// </summary>
+    private static ProcessProbe ProcessProbeCommand()
+    {
+        var executable = Environment.ProcessPath
+                      ?? throw new InvalidOperationException("Cannot determine the current process executable.");
+        var entryAssembly = Environment.GetCommandLineArgs()[0];
+        var isDotnetHost = string.Equals(Path.GetFileNameWithoutExtension(executable), "dotnet",
+                                         StringComparison.OrdinalIgnoreCase);
+        return isDotnetHost
+            ? new ProcessProbe(executable, [entryAssembly, "process-smoke-child"])
+            : new ProcessProbe(executable, ["process-smoke-child"]);
+    }
+
+    /// <summary>
+    /// 将 Ctrl+C 转换为任务取消，并在运行结束时可靠移除全局事件处理器。
+    /// Converts Ctrl+C into task cancellation and reliably detaches the global handler afterward.
+    /// </summary>
+    private sealed class ConsoleCancellation : IDisposable
+    {
+        private readonly CancellationTokenSource   _source;
+        private readonly ConsoleCancelEventHandler _handler;
+
+        public ConsoleCancellation(CancellationTokenSource source)
+        {
+            _source                =  source;
+            _handler               =  OnCancel;
+            Console.CancelKeyPress += _handler;
+        }
+
+        public void Dispose() => Console.CancelKeyPress -= _handler;
+
+        private void OnCancel(object? sender, ConsoleCancelEventArgs args)
+        {
+            args.Cancel = true;
+            _source.Cancel();
+        }
     }
 }

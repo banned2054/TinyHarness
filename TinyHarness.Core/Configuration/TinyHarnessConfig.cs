@@ -23,7 +23,9 @@ public sealed record TinyHarnessConfig
 
     public int MaxAgentSteps { get; init; } = 40;
 
-    public int? DefaultToolTimeoutSeconds { get; init; }
+    public int? DefaultToolTimeoutSeconds { get; init; } = 120;
 
     public string WorkspaceRoot { get; init; } = string.Empty;
+
+    public IReadOnlyList<CommandRule> CommandRules { get; init; } = [];
 }

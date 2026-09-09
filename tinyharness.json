@@ -4,5 +4,7 @@
   "apiKeyEnvironmentVariable": "TINYHARNESS_API_KEY",
   "contextWindowTokens": 128000,
   "reservedOutputTokens": 8000,
-  "maxAgentSteps": 40
+  "maxAgentSteps": 40,
+  "defaultToolTimeoutSeconds": 120,
+  "commandRules": []
 }

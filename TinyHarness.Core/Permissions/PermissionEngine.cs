@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using TinyHarness.Core.Configuration;
 using TinyHarness.Core.Runtime;
 using TinyHarness.Core.Tools;
 
@@ -21,6 +22,7 @@ namespace TinyHarness.Core.Permissions;
 /// the first time the covered invocation executes, see
 /// <see cref="TryConsumeOnce"/>);</item>
 /// <item>session grant — a user "allow session" for a capability + scope;</item>
+/// <item>configured command rule — a mode-specific direct-command pattern or exact shell-command/cwd match;</item>
 /// <item>default policy — read-only capabilities inside the workspace allow,
 /// write capabilities ask;</item>
 /// <item>ask — anything not otherwise allowed.</item>
@@ -40,16 +42,17 @@ public sealed class PermissionEngine
             ["filesystem.write"]  = PermissionDecision.Ask,
         };
 
-    private readonly string _workspaceRoot;
-    private readonly List<PermissionRule> _sessionGrants = [];
-    private readonly List<PermissionRule> _sessionDenies = [];
-    private readonly HashSet<string> _oneShotApprovals = new(StringComparer.Ordinal);
+    private readonly string                               _workspaceRoot;
+    private readonly IReadOnlyList<ConfiguredCommandRule> _commandRules;
+    private readonly List<PermissionRule>                 _sessionGrants    = [];
+    private readonly List<PermissionRule>                 _sessionDenies    = [];
+    private readonly HashSet<string>                      _oneShotApprovals = new(StringComparer.Ordinal);
 
     /// <summary>
     /// 为指定工作区建立独立的会话权限状态。
     /// Creates isolated session permission state for the specified workspace.
     /// </summary>
-    public PermissionEngine(string workspaceRoot)
+    public PermissionEngine(string workspaceRoot, IEnumerable<CommandRule>? commandRules = null)
     {
         if (string.IsNullOrWhiteSpace(workspaceRoot))
         {
@@ -57,6 +60,8 @@ public sealed class PermissionEngine
         }
 
         _workspaceRoot = Path.GetFullPath(workspaceRoot);
+        _commandRules = (commandRules ?? []).Select(rule => ConfiguredCommandRule.Create(rule, _workspaceRoot))
+                                            .ToArray();
     }
 
     /// <summary>
@@ -92,7 +97,16 @@ public sealed class PermissionEngine
             return PermissionDecision.Allow;
         }
 
-        // 5/6. Default policy, then ask.
+        // Precisely configured process rules are the only commands that bypass
+        // interactive approval. They match executable, each argument pattern,
+        // and one exact normalized working directory.
+        if (string.Equals(preparation.Capability, "process.execute", StringComparison.Ordinal) &&
+            _commandRules.Any(rule => rule.Matches(preparation)))
+        {
+            return PermissionDecision.Allow;
+        }
+
+        // 6/7. Default policy, then ask.
         return DefaultInsidePolicy.TryGetValue(preparation.Capability, out var decision)
             ? decision
             : PermissionDecision.Ask;
@@ -145,7 +159,7 @@ public sealed class PermissionEngine
     /// Creates a session rule from a prepared plan's capability and normalized targets.
     /// </summary>
     private static PermissionRule ToRule(ToolPreparation preparation)
-        => new(preparation.Capability, preparation.TargetPaths.ToArray());
+        => new(preparation.Capability, preparation.TargetPaths.ToArray(), preparation.SessionConstraint);
 
     /// <summary>
     /// 对工具名、能力、排序后的目标路径和规范化参数生成稳定 SHA-256 指纹，
@@ -158,11 +172,165 @@ public sealed class PermissionEngine
     private static string Fingerprint(ToolPreparation preparation)
     {
         var canonical =
-            preparation.ToolName + '\n' +
-            preparation.Capability + '\n' +
+            preparation.ToolName                                                               + '\n' +
+            preparation.Capability                                                             + '\n' +
             string.Join('\n', preparation.TargetPaths.OrderBy(x => x, StringComparer.Ordinal)) + '\n' +
+            preparation.SessionConstraint                                                      + '\n' +
             preparation.Arguments.ToJsonString();
 
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical)));
+    }
+
+    /// <summary>
+    /// 已规范化的命令允许规则。direct 参数 pattern 只在单个参数内支持 '*' 与 '?'；shell
+    /// 规则则精确匹配 flavor、完整命令文本和工作目录，不接受 wildcard。
+    /// </summary>
+    private sealed record ConfiguredCommandRule(
+        string                Mode,
+        string                Executable,
+        IReadOnlyList<string> ArgumentPatterns,
+        string                Shell,
+        string                Command,
+        string                WorkingDirectory)
+    {
+        private static readonly StringComparison ExecutableComparison =
+            OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+
+        public static ConfiguredCommandRule Create(CommandRule rule, string workspaceRoot)
+        {
+            ArgumentNullException.ThrowIfNull(rule);
+            if (rule.Mode is not "direct" and not "shell")
+            {
+                throw new InvalidDataException("Command rule mode must be 'direct' or 'shell'.");
+            }
+
+            if (rule.Mode == "direct" && string.IsNullOrWhiteSpace(rule.Executable))
+            {
+                throw new InvalidDataException("A direct command rule executable must be a non-empty string.");
+            }
+
+            if (rule.Mode == "direct" && (!string.IsNullOrEmpty(rule.Shell) || !string.IsNullOrEmpty(rule.Command)))
+            {
+                throw new InvalidDataException("A direct command rule cannot contain shell or command fields.");
+            }
+
+            if (rule.Mode == "shell" && (string.IsNullOrWhiteSpace(rule.Shell) || string.IsNullOrWhiteSpace(rule.Command)))
+            {
+                throw new InvalidDataException("A shell command rule requires a shell flavor and exact command.");
+            }
+
+            if (rule.Mode == "shell" && (!string.IsNullOrEmpty(rule.Executable) || rule.Arguments.Count != 0))
+            {
+                throw new InvalidDataException("A shell command rule cannot contain executable or arguments fields.");
+            }
+
+            var workspace = new Workspace(workspaceRoot);
+            var directory =
+                workspace.ResolveInside(string.IsNullOrWhiteSpace(rule.WorkingDirectory) ? "." : rule.WorkingDirectory,
+                                        "commandRules.workingDirectory");
+            var executable = rule.Mode == "direct"
+                ? NormalizeExecutable(rule.Executable.Trim(), directory, workspace)
+                : string.Empty;
+            return new ConfiguredCommandRule(rule.Mode, executable, rule.Arguments.ToArray(), rule.Shell,
+                                             rule.Command, directory);
+        }
+
+        public bool Matches(ToolPreparation preparation)
+        {
+            var args = preparation.Arguments;
+            var mode = args["mode"]?.GetValue<string>() ?? "direct";
+            var executable = args["executable"]?.GetValue<string>();
+            var directory = args["workingDirectory"]?.GetValue<string>();
+            var arguments = args["arguments"] as System.Text.Json.Nodes.JsonArray;
+            if (!string.Equals(Mode, mode, StringComparison.Ordinal) || directory is null ||
+                !string.Equals(WorkingDirectory, directory, ExecutableComparison))
+            {
+                return false;
+            }
+
+            if (Mode == "shell")
+            {
+                var shell   = args["shell"]?.GetValue<string>();
+                var command = args["command"]?.GetValue<string>();
+                return string.Equals(Shell, shell, StringComparison.Ordinal) &&
+                       string.Equals(Command, command, StringComparison.Ordinal);
+            }
+
+            if (executable is null || arguments is null ||
+                !string.Equals(Executable, executable, ExecutableComparison) ||
+                arguments.Count != ArgumentPatterns.Count)
+            {
+                return false;
+            }
+
+            for (var i = 0; i < arguments.Count; i++)
+            {
+                var argument = arguments[i]?.GetValue<string>();
+                if (argument is null || !WildcardMatch(ArgumentPatterns[i], argument))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        private static string NormalizeExecutable(string executable, string workingDirectory, Workspace workspace)
+        {
+            var pathLike = Path.IsPathRooted(executable) || executable.Contains(Path.DirectorySeparatorChar) ||
+                           executable.Contains(Path.AltDirectorySeparatorChar);
+            if (!pathLike)
+            {
+                return executable;
+            }
+
+            var full = Path.GetFullPath(Path.IsPathRooted(executable)
+                                            ? executable
+                                            : Path.Combine(workingDirectory, executable));
+            if (!Path.IsPathRooted(executable) && !Workspace.IsInside(workspace.Root, full))
+            {
+                throw new InvalidDataException("A command rule's relative executable escapes the workspace root.");
+            }
+
+            return full;
+        }
+
+        private static bool WildcardMatch(string pattern, string value)
+        {
+            var patternIndex = 0;
+            var valueIndex   = 0;
+            var starIndex    = -1;
+            var starValue    = -1;
+            while (valueIndex < value.Length)
+            {
+                if (patternIndex < pattern.Length &&
+                    (pattern[patternIndex] == '?' || pattern[patternIndex] == value[valueIndex]))
+                {
+                    patternIndex++;
+                    valueIndex++;
+                }
+                else if (patternIndex < pattern.Length && pattern[patternIndex] == '*')
+                {
+                    starIndex = patternIndex++;
+                    starValue = valueIndex;
+                }
+                else if (starIndex >= 0)
+                {
+                    patternIndex = starIndex + 1;
+                    valueIndex   = ++starValue;
+                }
+                else
+                {
+                    return false;
+                }
+            }
+
+            while (patternIndex < pattern.Length && pattern[patternIndex] == '*')
+            {
+                patternIndex++;
+            }
+
+            return patternIndex == pattern.Length;
+        }
     }
 }

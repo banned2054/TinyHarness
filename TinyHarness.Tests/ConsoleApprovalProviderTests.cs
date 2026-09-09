@@ -16,11 +16,11 @@ public class ConsoleApprovalProviderTests
     [InlineData("unknown", ApprovalAction.Deny)]
     public async Task Prompt_ShowsDiffAndScopeBeforeReadingDecision(string answer, ApprovalAction expected)
     {
-        using var dir = new TestTempDir();
+        using var    dir   = new TestTempDir();
         const string patch = "--- a/file.txt\n+++ b/file.txt\n@@ -1 +1 @@\n-old\n+new\n";
-        var tool = new ApplyPatchTool(dir.Workspace);
-        var preparation = tool.Prepare(new ChatToolCall("p", "apply_patch",
-            new JsonObject { ["patch"] = patch }.ToJsonString()));
+        var          tool  = new ApplyPatchTool(dir.Workspace);
+        var preparation =
+            tool.Prepare(new ChatToolCall("p", "apply_patch", new JsonObject { ["patch"] = patch }.ToJsonString()));
         using var output = new StringWriter();
         using var input = new InspectingReader(answer, () =>
         {
@@ -40,17 +40,54 @@ public class ConsoleApprovalProviderTests
     [Fact]
     public async Task Prompt_EscapesTerminalControlSequencesInPatch()
     {
-        using var dir = new TestTempDir();
+        using var    dir   = new TestTempDir();
         const string patch = "--- /dev/null\n+++ b/file.txt\n@@ -0,0 +1 @@\n+\u001b[2Jhidden\n";
         var preparation = new ApplyPatchTool(dir.Workspace).Prepare(new ChatToolCall("p", "apply_patch",
-            new JsonObject { ["patch"] = patch }.ToJsonString()));
+                                                                        new JsonObject { ["patch"] = patch }
+                                                                           .ToJsonString()));
         using var output = new StringWriter();
-        using var input = new StringReader("d");
+        using var input  = new StringReader("d");
 
         await new ConsoleApprovalProvider(input, output).PromptAsync(preparation, CancellationToken.None);
 
         Assert.DoesNotContain("\u001b", output.ToString(), StringComparison.Ordinal);
         Assert.Contains("+\\u001B[2Jhidden", output.ToString());
+    }
+
+    [Fact]
+    public async Task Prompt_ExplainsThatProcessSessionGrantKeepsCommandConstraint()
+    {
+        using var dir = new TestTempDir();
+        var preparation =
+            new ShellTool(dir.Workspace).Prepare(new ChatToolCall("shell", "shell",
+                                                                  """{"executable":"dotnet","arguments":["test"]}"""));
+        using var output = new StringWriter();
+        using var input  = new StringReader("d");
+
+        await new ConsoleApprovalProvider(input, output).PromptAsync(preparation, CancellationToken.None);
+
+        Assert.Contains("this exact executable/argument shape", output.ToString());
+        Assert.Contains("dotnet test", output.ToString());
+    }
+
+    [Fact]
+    public async Task Prompt_ShellModeShowsElevatedRiskAndExactSessionScope()
+    {
+        using var dir   = new TestTempDir();
+        var       shell = OperatingSystem.IsWindows() ? "powershell" : "sh";
+        var preparation = new ShellTool(dir.Workspace).Prepare(new ChatToolCall(
+            "shell", "shell", new JsonObject
+            {
+                ["mode"] = "shell", ["shell"] = shell, ["command"] = "echo one && echo two",
+            }.ToJsonString()));
+        using var output = new StringWriter();
+        using var input  = new StringReader("d");
+
+        await new ConsoleApprovalProvider(input, output).PromptAsync(preparation, CancellationToken.None);
+
+        Assert.Contains("RISK: elevated", output.ToString());
+        Assert.Contains("exact shell type, command text, and working directory", output.ToString());
+        Assert.Contains("echo one && echo two", output.ToString());
     }
 
     private sealed class InspectingReader(string answer, Action inspect) : StringReader(answer)

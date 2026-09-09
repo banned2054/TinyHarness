@@ -82,6 +82,43 @@ internal static class JsonArgs
     }
 
     /// <summary>
+    /// 读取可选字符串数组；缺失时返回空数组，元素类型错误或数量超限时拒绝参数。
+    /// Reads an optional string array, returning an empty array when absent and rejecting invalid elements or size.
+    /// </summary>
+    public static IReadOnlyList<string> OptionalStringArray(JsonObject args, string key, int maximumCount)
+    {
+        var node = args[key];
+        if (node is null)
+        {
+            return [];
+        }
+
+        if (node is not JsonArray array)
+        {
+            throw Error(args, key, "an array of strings", "is invalid");
+        }
+
+        if (array.Count > maximumCount)
+        {
+            throw new
+                InvalidDataException($"Tool argument '{key}' has {array.Count} entries; the limit is {maximumCount}.");
+        }
+
+        var values = new List<string>(array.Count);
+        for (var i = 0; i < array.Count; i++)
+        {
+            if (array[i] is not JsonValue value || !value.TryGetValue<string>(out var item) || item is null)
+            {
+                throw new InvalidDataException($"Tool argument '{key}[{i}]' must be a string.");
+            }
+
+            values.Add(item);
+        }
+
+        return values;
+    }
+
+    /// <summary>
     /// 尝试取得字符串节点，并将缺失、null 或类型不符统一视为失败。
     /// Attempts to read a string node, treating absence, null, and type mismatch uniformly as failure.
     /// </summary>

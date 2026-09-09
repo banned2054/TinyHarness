@@ -20,6 +20,48 @@ public sealed record ToolResult
     /// Text returned to the model, truncated to the result budget when necessary.
     /// </summary>
     public string Content { get; init; } = string.Empty;
+
+    /// <summary>
+    /// 进程工具的退出码；未启动或超时时可以为空。
+    /// Process exit code, when the tool represents a process that exited normally or was terminated.
+    /// </summary>
+    public int? ExitCode { get; init; }
+
+    /// <summary>
+    /// 进程工具是否因其执行时限而终止。
+    /// Whether a process tool was terminated by its execution timeout.
+    /// </summary>
+    public bool TimedOut { get; init; }
+
+    /// <summary>
+    /// 标准输出与标准错误的模型视图是否至少有一个被裁剪。
+    /// Whether at least one model-facing process stream was truncated.
+    /// </summary>
+    public bool OutputTruncated { get; init; }
+
+    /// <summary>
+    /// 返回模型的、有界标准输出视图。
+    /// Bounded stdout view returned to the model.
+    /// </summary>
+    public string Stdout { get; init; } = string.Empty;
+
+    /// <summary>
+    /// 返回模型的、有界标准错误视图。
+    /// Bounded stderr view returned to the model.
+    /// </summary>
+    public string Stderr { get; init; } = string.Empty;
+
+    /// <summary>
+    /// 标准输出被裁剪时保存完整（已脱敏）内容的本地临时 artifact。
+    /// Local temporary artifact containing full redacted stdout when its model view was truncated.
+    /// </summary>
+    public string? StdoutArtifactPath { get; init; }
+
+    /// <summary>
+    /// 标准错误被裁剪时保存完整（已脱敏）内容的本地临时 artifact。
+    /// Local temporary artifact containing full redacted stderr when its model view was truncated.
+    /// </summary>
+    public string? StderrArtifactPath { get; init; }
 }
 
 /// <summary>
@@ -33,6 +75,12 @@ public sealed class ToolPreparation
 {
     private JsonObject            _arguments   = new();
     private IReadOnlyList<string> _targetPaths = [];
+
+    /// <summary>
+    /// Tool-private immutable execution state. Untrusted JSON cannot select an
+    /// internal execution path after the prepared invocation is approved.
+    /// </summary>
+    internal object? ExecutionPlan { get; init; }
 
     public required string ToolName { get; init; }
 
@@ -66,6 +114,22 @@ public sealed class ToolPreparation
     /// Human-readable one-line summary shown during approval and audit.
     /// </summary>
     public required string Summary { get; init; }
+
+    /// <summary>
+    /// 向审批者展示的风险提示；权限结论仍由 Permission Engine 独立计算。
+    /// Risk hint shown to the approver; the Permission Engine still computes the decision independently.
+    /// </summary>
+    public ToolRiskLevel RiskLevel { get; init; }
+
+    /// <summary>
+    /// 可选的会话授权约束。权限引擎只会把同能力、同资源范围且约束完全相同的调用视为
+    /// 已被会话授权；进程工具用它绑定 executable 与 arguments，避免一次授权放行任意命令。
+    ///
+    /// Optional session-grant constraint. A session grant covers only later calls
+    /// with the same capability, resource scope, and exact constraint. Process
+    /// tools use this to bind a grant to the approved executable and arguments.
+    /// </summary>
+    public string? SessionConstraint { get; init; }
 
     /// <summary>
     /// 本次调用将访问的规范化绝对路径；权限规则以此匹配范围，Agent Loop 与 CLI 用于展示。

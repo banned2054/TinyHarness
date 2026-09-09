@@ -13,15 +13,29 @@ public class ConfigurationLoaderTests
         try
         {
             await File.WriteAllTextAsync(path, """
-                                      {
-                                        "endpoint": "https://example.test/v1",
-                                        "model": "model-x",
-                                        "contextWindowTokens": 64000,
-                                        "reservedOutputTokens": 2000,
-                                        "maxAgentSteps": 12,
-                                        "workspaceRoot": "sub"
-                                      }
-                                      """);
+                                         {
+                                           "endpoint": "https://example.test/v1",
+                                           "model": "model-x",
+                                           "contextWindowTokens": 64000,
+                                           "reservedOutputTokens": 2000,
+                                           "maxAgentSteps": 12,
+                                           "defaultToolTimeoutSeconds": 90,
+                                           "commandRules": [
+                                              {
+                                                "executable": "dotnet",
+                                                "arguments": ["test", "*"],
+                                                "workingDirectory": "sub"
+                                              },
+                                              {
+                                                "mode": "shell",
+                                                "shell": "powershell",
+                                                "command": "git status | Out-String",
+                                                "workingDirectory": "sub"
+                                              }
+                                           ],
+                                           "workspaceRoot": "sub"
+                                         }
+                                         """);
 
             var config = await ConfigurationLoader.LoadAsync(path, CancellationToken.None);
 
@@ -30,6 +44,16 @@ public class ConfigurationLoaderTests
             Assert.Equal(64000, config.ContextWindowTokens);
             Assert.Equal(2000, config.ReservedOutputTokens);
             Assert.Equal(12, config.MaxAgentSteps);
+            Assert.Equal(90, config.DefaultToolTimeoutSeconds);
+            Assert.Equal(2, config.CommandRules.Count);
+            var rule = config.CommandRules[0];
+            Assert.Equal("dotnet", rule.Executable);
+            Assert.Equal(["test", "*"], rule.Arguments);
+            Assert.Equal("sub", rule.WorkingDirectory);
+            var shellRule = config.CommandRules[1];
+            Assert.Equal("shell", shellRule.Mode);
+            Assert.Equal("powershell", shellRule.Shell);
+            Assert.Equal("git status | Out-String", shellRule.Command);
         }
         finally
         {
@@ -44,6 +68,8 @@ public class ConfigurationLoaderTests
 
         Assert.Equal(128_000, config.ContextWindowTokens);
         Assert.Equal(40, config.MaxAgentSteps);
+        Assert.Equal(120, config.DefaultToolTimeoutSeconds);
+        Assert.Empty(config.CommandRules);
         Assert.Equal(Path.GetFullPath(Environment.CurrentDirectory), config.WorkspaceRoot);
     }
 

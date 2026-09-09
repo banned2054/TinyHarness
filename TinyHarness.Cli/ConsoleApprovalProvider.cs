@@ -5,8 +5,8 @@ using TinyHarness.Core.Tools;
 namespace TinyHarness.Cli;
 
 /// <summary>
-/// 在终端显示已经准备好的补丁和权限范围，然后读取用户的审批选择。
-/// Displays the prepared patch and permission scope before reading the user's approval choice.
+/// 在终端显示已经准备好的副作用、权限范围与必要预览，然后读取用户的审批选择。
+/// Displays the prepared side effect, permission scope, and any required preview before reading the user's choice.
 /// </summary>
 internal sealed class ConsoleApprovalProvider(TextReader input, TextWriter output) : IApprovalProvider
 {
@@ -27,6 +27,12 @@ internal sealed class ConsoleApprovalProvider(TextReader input, TextWriter outpu
         cancellationToken.ThrowIfCancellationRequested();
         await output.WriteLineAsync();
         await output.WriteLineAsync("! Agent requests a side effect:");
+        if (preparation.RiskLevel == ToolRiskLevel.Elevated)
+        {
+            await
+                output.WriteLineAsync("  RISK: elevated — shell syntax can chain commands, redirect output, and expand variables.");
+        }
+
         await output.WriteLineAsync($"  {DisplayText(preparation.Summary)}");
         foreach (var target in preparation.TargetPaths)
         {
@@ -41,8 +47,14 @@ internal sealed class ConsoleApprovalProvider(TextReader input, TextWriter outpu
             await output.WriteLineAsync(DisplayText(patch));
         }
 
+        var sessionConstraint = preparation.SessionConstraint is null
+            ? "."
+            : preparation.Arguments["mode"]?.GetValue<string>() == "shell"
+                ? " and this exact shell type, command text, and working directory."
+                : " and this exact executable/argument shape.";
         await
-            output.WriteLineAsync($"  Session approval grants '{DisplayText(preparation.Capability)}' for the target paths above.");
+            output.WriteLineAsync($"  Session approval grants '{DisplayText(preparation.Capability)}' for the target paths above" +
+                                  sessionConstraint);
         await
             output.WriteLineAsync("  Directory scopes include descendants; later changes in this scope may run without asking.");
         await output.WriteAsync("  [a]llow once / [s]ession / [d]eny: ");

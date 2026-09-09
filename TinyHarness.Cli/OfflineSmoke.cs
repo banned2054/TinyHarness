@@ -7,11 +7,17 @@ using TinyHarness.Core.Tools;
 namespace TinyHarness.Cli;
 
 /// <summary>
-/// 离线冒烟测试的脚本审批器。会话级批准唯一的 apply_patch 调用，并记录提示次数，
+/// 离线 smoke 用来调用当前 CLI 子进程的结构化命令。
+/// Structured command used by the offline smoke to invoke the current CLI as a child process.
+/// </summary>
+internal sealed record ProcessProbe(string Executable, IReadOnlyList<string> Arguments);
+
+/// <summary>
+/// 离线冒烟测试的脚本审批器。会话级批准 apply_patch 与 shell 调用，并记录提示次数，
 /// 使冒烟流程可以确认权限链路确实运行。
 ///
 /// Scripted approval provider for the offline smoke: auto-approves the single
-/// apply_patch call as a session grant and counts how many times it was asked,
+/// apply_patch and shell calls as session grants and counts how many times it was asked,
 /// so the smoke can assert the permission flow really ran.
 /// </summary>
 internal sealed class SmokeApprover : IApprovalProvider
@@ -141,7 +147,7 @@ internal sealed class SmokeStep
             return
             [
                 Content("Smoke ok: the Agent loop ran "),
-                Content("list_files, search_text, read_file and apply_patch through the permission flow."),
+                Content("list_files, search_text, read_file, apply_patch, direct process and explicit shell modes through the permission flow."),
                 End(),
             ];
         }
@@ -262,7 +268,10 @@ internal sealed class SmokeScriptClient(IReadOnlyList<SmokeStep> steps) : IChatC
 /// 包含有序脚本步骤和预期工具执行次数的离线冒烟计划。
 /// Offline smoke plan containing ordered steps and the expected tool-execution count.
 /// </summary>
-internal sealed record SmokePlan(IReadOnlyList<SmokeStep> Steps, int ExpectedToolExecutions);
+internal sealed record SmokePlan(
+    IReadOnlyList<SmokeStep> Steps,
+    int                      ExpectedToolExecutions,
+    int                      ExpectedApprovalPrompts);
 
 /// <summary>
 /// 构造使用固定输入和预期结果的离线冒烟脚本。
@@ -272,10 +281,10 @@ internal sealed record SmokePlan(IReadOnlyList<SmokeStep> Steps, int ExpectedToo
 internal static class SmokeScript
 {
     /// <summary>
-    /// 按 list、search、read、patch、再读的顺序建立完整工具闭环。
-    /// Builds the full list/search/read/patch/read tool-closure sequence.
+    /// 按 list、search、read、patch、再读、direct、shell 的顺序建立完整工具闭环。
+    /// Builds the full list/search/read/patch/read/direct/explicit-shell tool-closure sequence.
     /// </summary>
-    public static SmokePlan Build()
+    public static SmokePlan Build(ProcessProbe processProbe)
     {
         var steps = new List<SmokeStep>
         {
@@ -310,10 +319,47 @@ internal static class SmokeScript
             }),
             Tool("read_file", """{"path":"src/fixme.cs"}""", content =>
                      RequireEqual(content, "line1\nline2-fixed\nline3", "read_file patched fixme.cs")),
+            Tool("shell", ShellArguments(processProbe.Executable, processProbe.Arguments), content =>
+            {
+                RequireContains(content, "Exit code: 0", "shell direct");
+                RequireContains(content, "process stdout", "shell direct stdout");
+                RequireContains(content, "process stderr", "shell direct stderr");
+            }),
+            Tool("shell", ExplicitShellArguments(), content =>
+            {
+                RequireContains(content, "Exit code: 0", "shell explicit");
+                RequireContains(content, "explicit-shell-stdout", "shell explicit stdout");
+            }),
             new() // Final plain-text turn; terminates the loop.
         };
 
-        return new SmokePlan(steps, steps.Count(s => s.IsTool));
+        return new SmokePlan(steps, steps.Count(s => s.IsTool), ExpectedApprovalPrompts : 3);
+    }
+
+    private static string ShellArguments(string executable, IReadOnlyList<string> arguments)
+    {
+        var array = new JsonArray();
+        foreach (var argument in arguments)
+        {
+            array.Add((JsonNode?)JsonValue.Create(argument));
+        }
+
+        return new JsonObject
+        {
+            ["mode"] = "direct", ["executable"] = executable, ["arguments"] = array,
+        }.ToJsonString();
+    }
+
+    private static string ExplicitShellArguments()
+    {
+        var shell   = OperatingSystem.IsWindows() ? "powershell" : "sh";
+        var command = OperatingSystem.IsWindows()
+            ? "Write-Output explicit-shell-stdout"
+            : "printf explicit-shell-stdout";
+        return new JsonObject
+        {
+            ["mode"] = "shell", ["shell"] = shell, ["command"] = command,
+        }.ToJsonString();
     }
 
     /// <summary>
