@@ -28,6 +28,12 @@ public sealed record AgentResult
     public int ToolExecutions { get; init; }
 
     /// <summary>
+    /// 本次运行成功执行的上下文压缩次数。
+    /// Total number of context compactions successfully applied during the run.
+    /// </summary>
+    public int Compactions { get; init; }
+
+    /// <summary>
     /// 运行失败或取消时的错误说明。
     /// Error detail set when the run failed or was cancelled.
     /// </summary>

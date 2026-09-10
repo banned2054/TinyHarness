@@ -11,9 +11,17 @@ internal sealed class FakeChatClient : IChatCompletionClient
 {
     private readonly Queue<IReadOnlyList<ChatStreamEvent>> _responses = new();
 
+    private readonly List<ChatCompletionRequest> _requestLog = [];
+
     public int Requests { get; private set; }
 
     public string? LastRequestModel { get; private set; }
+
+    /// <summary>
+    /// 每次 <see cref="CompleteAsync"/> 收到的请求快照（按调用顺序），供测试断言请求形状。
+    /// Every request observed by <see cref="CompleteAsync"/>, in call order, for shape assertions.
+    /// </summary>
+    public IReadOnlyList<ChatCompletionRequest> RequestLog => _requestLog;
 
     /// <summary>
     /// Optional callback invoked after the first event is yielded, so a test can
@@ -67,6 +75,27 @@ internal sealed class FakeChatClient : IChatCompletionClient
         return events;
     }
 
+    /// <summary>脚本化一个包含多个工具调用的 assistant 回合。</summary>
+    public static IReadOnlyList<ChatStreamEvent> ToolCalls(string name, int count, string idPrefix,
+                                                           string argumentsJson = "{}")
+    {
+        var events = new List<ChatStreamEvent>(count + 1);
+        for (var index = 1; index <= count; index++)
+        {
+            events.Add(new ChatStreamEvent
+            {
+                Kind                   = ChatStreamEventKind.ToolCallDelta,
+                ToolCallIndex          = index - 1,
+                ToolCallId             = $"{idPrefix}_{index}",
+                ToolCallFunctionName   = name,
+                ToolCallArgumentsDelta = argumentsJson,
+            });
+        }
+
+        events.Add(new ChatStreamEvent { Kind = ChatStreamEventKind.End });
+        return events;
+    }
+
     public void Enqueue(IReadOnlyList<ChatStreamEvent> response) => _responses.Enqueue(response);
 
     public async IAsyncEnumerable<ChatStreamEvent> CompleteAsync(ChatCompletionRequest request,
@@ -75,6 +104,7 @@ internal sealed class FakeChatClient : IChatCompletionClient
     {
         Requests++;
         LastRequestModel = request.Model;
+        _requestLog.Add(request);
 
         if (_responses.Count == 0)
         {

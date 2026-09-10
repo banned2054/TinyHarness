@@ -20,6 +20,14 @@ internal sealed class FakeTool(string name, string description = "Fake tool") : 
 
     public bool ThrowOnExecute { get; init; }
 
+    /// <summary>
+    /// 设置后作为固定结果内容返回（并追加按执行计数的 “#n” 后缀），用于模拟超出预算的
+    /// 大输出并让测试区分同一工具的多次调用结果。
+    /// When set, returned verbatim (with a per-execution "#n" suffix) to simulate
+    /// oversized output and let tests tell repeated calls to one tool apart.
+    /// </summary>
+    public string? ResultContent { get; init; }
+
     public ToolPreparation Prepare(ChatToolCall call)
     {
         var args = string.IsNullOrEmpty(call.ArgumentsJson)
@@ -45,6 +53,7 @@ internal sealed class FakeTool(string name, string description = "Fake tool") : 
             return Task.FromResult(new ToolResult { Succeeded = false, Content = $"{Definition.Name} exploded" });
         }
 
-        return Task.FromResult(new ToolResult { Succeeded = true, Content = $"{Definition.Name} ok" });
+        var content = ResultContent is null ? $"{Definition.Name} ok" : $"{ResultContent}#{ExecuteCount}";
+        return Task.FromResult(new ToolResult { Succeeded = true, Content = content });
     }
 }

@@ -1,4 +1,5 @@
 using TinyHarness.Core.ChatCompletions;
+using TinyHarness.Core.Context;
 using TinyHarness.Core.Permissions;
 using TinyHarness.Core.Tools;
 
@@ -6,25 +7,52 @@ namespace TinyHarness.Core.Agent;
 
 /// <summary>
 /// Agent 主循环。负责请求模型、消费流、组装工具调用、整轮准备与授权、顺序执行工具，
-/// 并将结果交还模型；当模型返回纯文本、达到步数限制或任务取消时结束。
+/// 并将结果交还模型；当模型返回纯文本、达到步数限制或任务取消时结束。每一步请求前，
+/// 主循环会检查 Context Manager：当预算超限且存在旧完整回合时，先以禁用工具的摘要调用
+/// 压缩旧历史，再发送模型视图。压缩只发生在两次模型请求之间，绝不会在等待审批或工具
+/// 执行期间进行。
 /// 未提供 <see cref="PermissionEngine"/> 时会跳过授权，仅用于测试或简单的只读流程。
 ///
 /// The Agent main loop. Request the model, consume the stream, assemble tool
 /// calls, prepare every call of the round, authorize and execute the approved
 /// ones, hand results back, and repeat until the model produces a plain-text
-/// turn, a limit is reached, or the run is cancelled.
+/// turn, a limit is reached, or the run is cancelled. Before each request the
+/// loop consults its Context Manager: when the budget is exceeded and old
+/// complete turns exist it first compacts them with a tools-disabled summary
+/// call, then sends the model view. Compaction only runs between two model
+/// requests, never while an approval is pending or a tool is executing.
 ///
 /// When no <see cref="PermissionEngine"/> is supplied (test/simple read-only
 /// scenarios), authorization is skipped and every prepared invocation executes.
 /// </summary>
-public sealed class AgentLoop(
-    IChatCompletionClient model,
-    ToolRegistry          tools,
-    AgentOptions          options,
-    PermissionEngine?     permissions,
-    IApprovalProvider?    approver)
+public sealed class AgentLoop
 {
-    private readonly List<ChatMessage> _history = [];
+    private readonly IChatCompletionClient _model;
+    private readonly ToolRegistry          _tools;
+    private readonly AgentOptions          _options;
+    private readonly PermissionEngine?     _permissions;
+    private readonly IApprovalProvider?    _approver;
+    private readonly ConversationContext   _context;
+
+    /// <summary>
+    /// 每次成功压缩后触发，携带压缩前后的视图估算 token 数（CLI 用于展示）。
+    /// Raised after every successful compaction with the view estimates before and after (shown by the CLI).
+    /// </summary>
+    public event Action<ContextChange>? ContextCompacted;
+
+    public AgentLoop(IChatCompletionClient model,       ToolRegistry       tools, AgentOptions options,
+                     PermissionEngine?     permissions, IApprovalProvider? approver)
+    {
+        ArgumentNullException.ThrowIfNull(model);
+        ArgumentNullException.ThrowIfNull(tools);
+        ArgumentNullException.ThrowIfNull(options);
+        _model       = model;
+        _tools       = tools;
+        _options     = options;
+        _permissions = permissions;
+        _approver    = approver;
+        _context     = new ConversationContext(options.Context);
+    }
 
     /// <summary>
     /// 创建不启用权限检查的主循环，仅供测试和只读流程使用；CLI 始终注入权限引擎。
@@ -37,7 +65,7 @@ public sealed class AgentLoop(
     {
     }
 
-    public IReadOnlyList<ChatMessage> History => _history;
+    public IReadOnlyList<ChatMessage> History => _context.Messages;
 
     /// <summary>
     /// 从系统提示和用户输入开始运行一次完整 Agent 任务，并返回终止状态、最终文本及执行统计。
@@ -46,24 +74,60 @@ public sealed class AgentLoop(
     /// </summary>
     public async Task<AgentResult> RunAsync(string systemPrompt, string userInput, CancellationToken cancellationToken)
     {
-        _history.Clear();
-        _history.Add(ChatMessage.System(systemPrompt));
-        _history.Add(ChatMessage.User(userInput));
+        _context.Reset();
+        _context.Append(ChatMessage.System(systemPrompt));
+        _context.Append(ChatMessage.User(userInput));
 
         var steps          = 0;
         var toolExecutions = 0;
+        var compactions    = 0;
 
         try
         {
-            while (steps < options.MaxAgentSteps)
+            while (steps < _options.MaxAgentSteps)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 steps++;
 
-                var request   = BuildRequest();
+                // Budget check between requests only: compaction never runs while
+                // an approval is pending or a tool is executing, because both only
+                // happen after the model request below has returned. One compaction
+                // pass may fold only part of the foldable history (the summarizer
+                // input is budgeted too), so the loop keeps compacting until the
+                // view fits the threshold or nothing foldable remains.
+                var definitions = CurrentToolDefinitions() ?? [];
+                while (await CompactIfNeededAsync(definitions, cancellationToken).ConfigureAwait(false))
+                {
+                    compactions++;
+                }
+
+                // Final budget guard before the request is sent: when the view still
+                // cannot fit the model window (a failed summary, nothing foldable, or
+                // a newest turn that alone exceeds the window), fail with an explicit
+                // error instead of silently sending an over-window request.
+                if (_options.Context is { } context)
+                {
+                    var total = _context.EstimateViewTokens()
+                              + TokenEstimator.EstimateToolDefinitions(definitions)
+                              + context.ReservedOutputTokens;
+                    if (total > context.ContextWindowTokens)
+                    {
+                        return new AgentResult
+                        {
+                            Status         = AgentStatus.Failed,
+                            Steps          = steps,
+                            ToolExecutions = toolExecutions,
+                            Compactions    = compactions,
+                            Error = $"The context still exceeds the model window after compaction " +
+                                    $"({total} > {context.ContextWindowTokens} tokens); the request was not sent.",
+                        };
+                    }
+                }
+
+                var request   = BuildRequest(definitions);
                 var assistant = await RequestAssistantMessageAsync(request, cancellationToken);
 
-                _history.Add(assistant);
+                _context.Append(assistant);
 
                 if (assistant.ToolCalls is null || assistant.ToolCalls.Count == 0)
                 {
@@ -73,6 +137,7 @@ public sealed class AgentLoop(
                         FinalMessage   = assistant.Content,
                         Steps          = steps,
                         ToolExecutions = toolExecutions,
+                        Compactions    = compactions,
                     };
                 }
 
@@ -83,14 +148,14 @@ public sealed class AgentLoop(
                 // never leave side effects from the valid ones behind. When the
                 // whole round prepares, each call is authorized and executed in
                 // order.
-                var round   = PrepareRound(tools, assistant.ToolCalls);
+                var round   = PrepareRound(_tools, assistant.ToolCalls);
                 var invalid = round.FirstOrDefault(item => item.Error is not null);
                 if (invalid is not null)
                 {
                     foreach (var item in round)
                     {
-                        _history.Add(ChatMessage.Tool(item.Call.FunctionName, item.Call.Id,
-                                                      item.Error ?? NotExecutedReason(invalid)));
+                        _context.Append(ChatMessage.Tool(item.Call.FunctionName, item.Call.Id,
+                                                         item.Error ?? NotExecutedReason(invalid)));
                     }
 
                     continue;
@@ -102,7 +167,7 @@ public sealed class AgentLoop(
                 var authorized = new List<AuthorizedRoundCall>(round.Count);
                 foreach (var item in round)
                 {
-                    var authorization = permissions is null
+                    var authorization = _permissions is null
                         ? AuthorizationOutcome.Granted
                         : await AuthorizeAsync(item.Preparation!, cancellationToken);
                     authorized.Add(new AuthorizedRoundCall(item, authorization));
@@ -112,16 +177,16 @@ public sealed class AgentLoop(
                 {
                     if (!item.Authorization.Allowed)
                     {
-                        _history.Add(ChatMessage.Tool(item.RoundCall.Call.FunctionName, item.RoundCall.Call.Id,
-                                                      item.Authorization.Reason));
+                        _context.Append(ChatMessage.Tool(item.RoundCall.Call.FunctionName, item.RoundCall.Call.Id,
+                                                         item.Authorization.Reason));
                         continue;
                     }
 
                     toolExecutions++;
                     var result = await ExecutePreparedAsync(item.RoundCall.Tool!, item.RoundCall.Preparation!,
                                                             cancellationToken);
-                    _history.Add(ChatMessage.Tool(item.RoundCall.Call.FunctionName, item.RoundCall.Call.Id,
-                                                  result.Content));
+                    _context.Append(ChatMessage.Tool(item.RoundCall.Call.FunctionName, item.RoundCall.Call.Id,
+                                                     result.Content));
                 }
             }
 
@@ -131,6 +196,7 @@ public sealed class AgentLoop(
                 FinalMessage   = string.Empty,
                 Steps          = steps,
                 ToolExecutions = toolExecutions,
+                Compactions    = compactions,
             };
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -140,6 +206,7 @@ public sealed class AgentLoop(
                 Status         = AgentStatus.Cancelled,
                 Steps          = steps,
                 ToolExecutions = toolExecutions,
+                Compactions    = compactions,
                 Error          = "Run cancelled",
             };
         }
@@ -150,25 +217,113 @@ public sealed class AgentLoop(
                 Status         = AgentStatus.Failed,
                 Steps          = steps,
                 ToolExecutions = toolExecutions,
+                Compactions    = compactions,
                 Error          = ex.Message,
             };
         }
     }
 
     /// <summary>
-    /// 用当前完整历史和已注册工具构造下一次模型请求。
-    /// Builds the next model request from the current history and registered tools.
+    /// 用当前模型视图（经 Context Manager 构建）和已注册工具构造下一次模型请求。
+    /// Builds the next model request from the current model view and registered tools.
     /// </summary>
-    private ChatCompletionRequest BuildRequest()
+    private ChatCompletionRequest BuildRequest(IReadOnlyList<ToolDefinition> definitions) => new()
     {
-        var tools1 = tools.Count == 0 ? null : tools.Values.Select(t => t.Definition).ToList();
+        Model    = _options.Model,
+        Messages = _context.BuildModelView(),
+        Tools    = definitions.Count == 0 ? null : definitions,
+    };
 
-        return new ChatCompletionRequest
+    /// <summary>
+    /// 返回随普通请求发送的工具定义；注册表为空时不发送 tools。
+    /// Returns the tool definitions sent with regular requests, or none when the registry is empty.
+    /// </summary>
+    private List<ToolDefinition>? CurrentToolDefinitions()
+    {
+        if (_tools.Count == 0)
         {
-            Model    = options.Model,
-            Messages = _history,
-            Tools    = tools1,
-        };
+            return null;
+        }
+
+        var definitions = new List<ToolDefinition>(_tools.Count);
+        foreach (var tool in _tools.Values)
+        {
+            definitions.Add(tool.Definition);
+        }
+
+        return definitions;
+    }
+
+    /// <summary>
+    /// 在预算超限且存在可折叠旧完整回合时执行一次上下文压缩：以禁用工具的摘要请求把最旧一批
+    /// 旧回合汇总为结构化状态。摘要失败或格式非法时回滚并锁定重试，绝不破坏本地完整历史。
+    /// 返回 <see langword="true"/> 表示本次压缩已应用；调用方应在预算仍超限时继续调用，直到
+    /// 返回 <see langword="false"/>（视图已容纳或没有更多可折叠内容）。
+    ///
+    /// Runs one compaction when the budget is exceeded and foldable complete turns exist:
+    /// a tools-disabled summary request folds the oldest batch of turns into structured
+    /// state. Failures and malformed summaries roll back and latch retries without ever
+    /// corrupting the retained full history. Returns <see langword="true"/> when one
+    /// compaction was applied; the caller keeps calling while the budget is still
+    /// exceeded, until <see langword="false"/> means the view fits or nothing foldable
+    /// is left.
+    /// </summary>
+    private async Task<bool> CompactIfNeededAsync(IReadOnlyList<ToolDefinition> definitions,
+                                                  CancellationToken             cancellationToken)
+    {
+        if (!_context.Enabled)
+        {
+            return false;
+        }
+
+        if (!_context.RequiresCompaction(definitions))
+        {
+            return false;
+        }
+
+        var before       = _context.EstimateViewTokens();
+        var foldMessages = _context.BuildCompactionMessages(definitions);
+        if (foldMessages.Count == 0)
+        {
+            return false;
+        }
+
+        ChatMessage summary;
+        try
+        {
+            // PLAN §13: 摘要调用禁用 tools。The summary call disables tools.
+            var summaryRequest = new ChatCompletionRequest
+            {
+                Model    = _options.Model,
+                Messages = foldMessages,
+                Tools    = null,
+            };
+            summary = await RequestAssistantMessageAsync(summaryRequest, cancellationToken).ConfigureAwait(false);
+            if (summary.ToolCalls is { Count: > 0 })
+            {
+                throw new InvalidOperationException("The compaction summary unexpectedly requested tools.");
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception)
+        {
+            // A failed summary call leaves the retained context untouched; latch
+            // the attempt so the loop does not retry before the conversation grows.
+            _context.MarkCompactionAttempted();
+            return false;
+        }
+
+        if (!_context.TryApplyCompaction(summary.Content))
+        {
+            return false;
+        }
+
+        var after = _context.EstimateViewTokens();
+        ContextCompacted?.Invoke(new ContextChange(before, after));
+        return true;
     }
 
     /// <summary>
@@ -180,7 +335,7 @@ public sealed class AgentLoop(
     {
         var accumulator = new StreamAccumulator();
 
-        await foreach (var @event in model.CompleteAsync(request, cancellationToken))
+        await foreach (var @event in _model.CompleteAsync(request, cancellationToken))
         {
             cancellationToken.ThrowIfCancellationRequested();
             accumulator.Append(@event);
@@ -265,21 +420,21 @@ public sealed class AgentLoop(
     private async Task<AuthorizationOutcome> AuthorizeAsync(ToolPreparation   preparation,
                                                             CancellationToken cancellationToken)
     {
-        var decision = permissions!.Decide(preparation);
+        var decision = _permissions!.Decide(preparation);
         switch (decision)
         {
             case PermissionDecision.Allow :
                 // A pre-authorized one-shot must be reserved during the
                 // authorization phase. Waiting until execution would let two
                 // identical calls in the same round reuse the same grant.
-                permissions.TryConsumeOnce(preparation);
+                _permissions.TryConsumeOnce(preparation);
                 return AuthorizationOutcome.Granted;
 
             case PermissionDecision.Deny :
                 return AuthorizationOutcome.Denied($"Permission denied: {preparation.Summary}");
 
             case PermissionDecision.Ask :
-                var approvalProvider = approver ?? throw new InvalidOperationException(
+                var approvalProvider = _approver ?? throw new InvalidOperationException(
                      "An approval provider is required when the permission engine returns Ask.");
                 var action = await approvalProvider.PromptAsync(preparation, cancellationToken);
                 switch (action)
@@ -293,7 +448,7 @@ public sealed class AgentLoop(
                         return AuthorizationOutcome.Granted;
 
                     case ApprovalAction.AllowSession :
-                        permissions.GrantSession(preparation);
+                        _permissions.GrantSession(preparation);
                         return AuthorizationOutcome.Granted;
 
                     default :

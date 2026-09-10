@@ -1,6 +1,7 @@
 using TinyHarness.Core.Agent;
 using TinyHarness.Core.ChatCompletions;
 using TinyHarness.Core.Configuration;
+using TinyHarness.Core.Context;
 using TinyHarness.Core.Permissions;
 using TinyHarness.Core.Runtime;
 using TinyHarness.Core.Tools;
@@ -128,17 +129,24 @@ internal static class Program
             Model                     = config.Model,
             MaxAgentSteps             = config.MaxAgentSteps,
             DefaultToolTimeoutSeconds = config.DefaultToolTimeoutSeconds,
+            Context = new ContextOptions
+            {
+                ContextWindowTokens       = config.ContextWindowTokens,
+                ReservedOutputTokens      = config.ReservedOutputTokens,
+                CompactionThresholdTokens = config.CompactionThreshold,
+            },
         };
 
         var loop = new AgentLoop(model, tools, options, permissions, approver);
+        loop.ContextCompacted += change => Console.Out.WriteLine($"Context: {change.BeforeTokens:N0} -> {change.AfterTokens:N0} tokens after compaction");
         const string systemPrompt =
-            "You are TinyHarness, a local coding harness that inspects and modifies a workspace. "                 +
+            "You are TinyHarness, a local coding harness that inspects and modifies a workspace. " +
             "Use list_files, search_text and read_file to inspect, apply_patch to modify files, and shell to run commands. " +
-            "For ordinary commands use shell mode 'direct' with executable and an arguments array. Use mode 'shell' "       +
+            "For ordinary commands use shell mode 'direct' with executable and an arguments array. Use mode 'shell' " +
             "with a shell flavor and command string only when pipelines, redirection, or other shell syntax is required. " +
-            "Tool paths are relative to the workspace root. "                                                      +
+            "Tool paths are relative to the workspace root. " +
             "apply_patch takes a unified diff: '--- a/path' and '+++ b/path' headers, then '@@ -s[,c] +s[,c] @@' " +
-            "hunks with ' ' (context), '-' (remove) and '+' (add) line prefixes. New files use '--- /dev/null'. "  +
+            "hunks with ' ' (context), '-' (remove) and '+' (add) line prefixes. New files use '--- /dev/null'. " +
             "Writes and commands may require the user's approval before they run; a denial is returned to you so you can adjust.";
 
         var result = await loop.RunAsync(systemPrompt, prompt, cts.Token).ConfigureAwait(false);
@@ -148,6 +156,10 @@ internal static class Program
         await Console.Out.WriteLineAsync($"steps      : {result.Steps}");
         await Console.Out.WriteLineAsync($"toolExecs  : {result.ToolExecutions}");
         await Console.Out.WriteLineAsync($"final      : {result.FinalMessage}");
+        if (!string.IsNullOrWhiteSpace(result.Error))
+        {
+            await Console.Out.WriteLineAsync($"error      : {result.Error}");
+        }
 
         return result.Status switch
         {
@@ -241,6 +253,12 @@ internal static class Program
             Model                     = config.Model,
             MaxAgentSteps             = config.MaxAgentSteps,
             DefaultToolTimeoutSeconds = config.DefaultToolTimeoutSeconds,
+            Context = new ContextOptions
+            {
+                ContextWindowTokens       = config.ContextWindowTokens,
+                ReservedOutputTokens      = config.ReservedOutputTokens,
+                CompactionThresholdTokens = config.CompactionThreshold,
+            },
         };
 
         var loop = new AgentLoop(script, tools, options, permissions, approver);
