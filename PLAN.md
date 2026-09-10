@@ -497,6 +497,11 @@ MVP 不追求复杂终端 UI。普通文本、稳定输入和可测试输出优�
 - stdout/stderr、exit code 和输出裁剪；
 - compaction 不拆分 tool-call 原子组；
 - compaction 后 Goal、Decisions、FilesModified 和 PendingWork 不丢失。
+- structured state 的保留边界必须可检查：Goal 非空时不得清空；FilesInspected、FilesModified、
+  CommandsAndResults 和已有 Decisions 是历史事实，摘要不得删除；Constraints 可替换；PendingWork
+  可用非空列表更新，但每个已有待办必须原样保留，或用对应的 `completed: <item>` 条目明确
+  关闭；不得静默变为空或被其他待办替换。该规则只防止关键状态的无理由丢失，不承诺消除所有
+  摘要语义失真。
 
 真实 API 测试必须显式 opt-in，不能成为默认 `dotnet test` 的必要条件。
 
