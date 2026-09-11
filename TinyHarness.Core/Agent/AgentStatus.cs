@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace TinyHarness.Core.Agent;
 
 /// <summary>
@@ -5,6 +7,7 @@ namespace TinyHarness.Core.Agent;
 ///
 /// Terminal or running state of an Agent loop.
 /// </summary>
+[JsonConverter(typeof(JsonStringEnumConverter<AgentStatus>))]
 public enum AgentStatus
 {
     Ready,

@@ -3,6 +3,7 @@ using TinyHarness.Core.ChatCompletions;
 using TinyHarness.Core.Configuration;
 using TinyHarness.Core.Context;
 using TinyHarness.Core.Permissions;
+using TinyHarness.Core.Persistence;
 using TinyHarness.Core.Runtime;
 using TinyHarness.Core.Tools;
 
@@ -19,6 +20,27 @@ internal static class Program
     /// CLI entry point that dispatches smoke, run, or verbless invocation forms and returns an OS exit code.
     /// </summary>
     public static async Task<int> Main(string[] args)
+    {
+        try
+        {
+            return await DispatchAsync(args).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            await Console.Error.WriteLineAsync("Run cancelled.");
+            return 130;
+        }
+        catch (Exception ex)
+        {
+            // Convert boundary failures (configuration, fixture setup, persistence
+            // construction, and similar startup errors) into normal CLI output so
+            // Windows never presents a CLR application-error dialog.
+            await Console.Error.WriteLineAsync($"TinyHarness failed: {ex.Message}");
+            return 1;
+        }
+    }
+
+    private static async Task<int> DispatchAsync(string[] args)
     {
         if (args.Length == 0)
         {
@@ -137,8 +159,10 @@ internal static class Program
             },
         };
 
-        var loop = new AgentLoop(model, tools, options, permissions, approver);
-        loop.ContextCompacted += change => Console.Out.WriteLine($"Context: {change.BeforeTokens:N0} -> {change.AfterTokens:N0} tokens after compaction");
+        var recorder = new FileRunRecorder(config.SessionDirectory, knownSecrets : KnownSecrets(config, apiKey));
+        var loop     = new AgentLoop(model, tools, options, permissions, approver, recorder);
+        loop.ContextCompacted += change =>
+            Console.Out.WriteLine($"Context: {change.BeforeTokens:N0} -> {change.AfterTokens:N0} tokens after compaction");
         const string systemPrompt =
             "You are TinyHarness, a local coding harness that inspects and modifies a workspace. " +
             "Use list_files, search_text and read_file to inspect, apply_patch to modify files, and shell to run commands. " +
@@ -156,6 +180,7 @@ internal static class Program
         await Console.Out.WriteLineAsync($"steps      : {result.Steps}");
         await Console.Out.WriteLineAsync($"toolExecs  : {result.ToolExecutions}");
         await Console.Out.WriteLineAsync($"final      : {result.FinalMessage}");
+        await WritePersistencePathsAsync(recorder).ConfigureAwait(false);
         if (!string.IsNullOrWhiteSpace(result.Error))
         {
             await Console.Out.WriteLineAsync($"error      : {result.Error}");
@@ -240,11 +265,11 @@ internal static class Program
         using var fixture = await SmokeWorkspace.CreateAsync(cts.Token).ConfigureAwait(false);
         await Console.Out.WriteLineAsync($"  fixtureWs    : {fixture.Root}");
 
-        var plan      = SmokeScript.Build(ProcessProbeCommand());
+        var plan      = SmokeScript.Build(ProcessProbeCommand(), fixture.Root);
         var script    = new SmokeScriptClient(plan.Steps);
         var workspace = new Workspace(fixture.Root);
         var tools     = BuildTools(workspace, config);
-        // Smoke intentionally uses the default policy so its two side-effect
+        // Smoke intentionally uses the default policy so its side-effect
         // approvals remain deterministic regardless of the user's live rules.
         var permissions = new PermissionEngine(fixture.Root);
         var approver    = new SmokeApprover();
@@ -261,7 +286,8 @@ internal static class Program
             },
         };
 
-        var loop = new AgentLoop(script, tools, options, permissions, approver);
+        var recorder = new FileRunRecorder(Path.Combine(Path.GetTempPath(), "tinyharness-smoke-runs"));
+        var loop = new AgentLoop(script, tools, options, permissions, approver, recorder);
         const string systemPrompt =
             "You are TinyHarness, a local coding harness that inspects and modifies a workspace. " +
             "Use list_files, search_text and read_file to inspect, apply_patch to modify files, and shell to run commands. " +
@@ -276,6 +302,7 @@ internal static class Program
         await Console.Out.WriteLineAsync($"  steps        : {result.Steps}");
         await Console.Out.WriteLineAsync($"  toolExecs    : {result.ToolExecutions}");
         await Console.Out.WriteLineAsync($"  finalMessage : {result.FinalMessage}");
+        await WritePersistencePathsAsync(recorder, "  ").ConfigureAwait(false);
         if (!string.IsNullOrWhiteSpace(result.Error))
         {
             await Console.Out.WriteLineAsync($"  error        : {result.Error}");
@@ -296,6 +323,23 @@ internal static class Program
                approver.Prompts      == plan.ExpectedApprovalPrompts
             ? 0
             : 1;
+    }
+
+    /// <summary>
+    /// 只报告实际存在的持久化产物，避免保存失败时把预期路径误报为已成功生成。
+    /// Reports only persistence artifacts that actually exist, so an expected path is never presented as saved.
+    /// </summary>
+    private static async Task WritePersistencePathsAsync(FileRunRecorder recorder, string prefix = "")
+    {
+        if (File.Exists(recorder.SessionPath))
+        {
+            await Console.Out.WriteLineAsync($"{prefix}session    : {recorder.SessionPath}");
+        }
+
+        if (File.Exists(recorder.AuditPath))
+        {
+            await Console.Out.WriteLineAsync($"{prefix}audit      : {recorder.AuditPath}");
+        }
     }
 
     /// <summary>

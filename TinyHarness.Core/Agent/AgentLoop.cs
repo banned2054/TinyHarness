@@ -1,6 +1,8 @@
+using System.Text.Json;
 using TinyHarness.Core.ChatCompletions;
 using TinyHarness.Core.Context;
 using TinyHarness.Core.Permissions;
+using TinyHarness.Core.Persistence;
 using TinyHarness.Core.Tools;
 
 namespace TinyHarness.Core.Agent;
@@ -33,6 +35,7 @@ public sealed class AgentLoop
     private readonly PermissionEngine?     _permissions;
     private readonly IApprovalProvider?    _approver;
     private readonly ConversationContext   _context;
+    private readonly IRunRecorder?         _recorder;
 
     /// <summary>
     /// 每次成功压缩后触发，携带压缩前后的视图估算 token 数（CLI 用于展示）。
@@ -41,7 +44,8 @@ public sealed class AgentLoop
     public event Action<ContextChange>? ContextCompacted;
 
     public AgentLoop(IChatCompletionClient model,       ToolRegistry       tools, AgentOptions options,
-                     PermissionEngine?     permissions, IApprovalProvider? approver)
+                     PermissionEngine?     permissions, IApprovalProvider? approver,
+                     IRunRecorder?         recorder = null)
     {
         ArgumentNullException.ThrowIfNull(model);
         ArgumentNullException.ThrowIfNull(tools);
@@ -51,6 +55,7 @@ public sealed class AgentLoop
         _options     = options;
         _permissions = permissions;
         _approver    = approver;
+        _recorder    = recorder;
         _context     = new ConversationContext(options.Context);
     }
 
@@ -84,6 +89,11 @@ public sealed class AgentLoop
 
         try
         {
+            if (_recorder is not null)
+            {
+                await _recorder.StartAsync(systemPrompt, userInput, cancellationToken).ConfigureAwait(false);
+            }
+
             while (steps < _options.MaxAgentSteps)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -112,7 +122,7 @@ public sealed class AgentLoop
                               + context.ReservedOutputTokens;
                     if (total > context.ContextWindowTokens)
                     {
-                        return new AgentResult
+                        return await FinishAsync(new AgentResult
                         {
                             Status         = AgentStatus.Failed,
                             Steps          = steps,
@@ -120,7 +130,7 @@ public sealed class AgentLoop
                             Compactions    = compactions,
                             Error = $"The context still exceeds the model window after compaction " +
                                     $"({total} > {context.ContextWindowTokens} tokens); the request was not sent.",
-                        };
+                        }).ConfigureAwait(false);
                     }
                 }
 
@@ -131,14 +141,14 @@ public sealed class AgentLoop
 
                 if (assistant.ToolCalls is null || assistant.ToolCalls.Count == 0)
                 {
-                    return new AgentResult
+                    return await FinishAsync(new AgentResult
                     {
                         Status         = AgentStatus.Completed,
                         FinalMessage   = assistant.Content,
                         Steps          = steps,
                         ToolExecutions = toolExecutions,
                         Compactions    = compactions,
-                    };
+                    }).ConfigureAwait(false);
                 }
 
                 // Prepare and validate every call of the round before any of
@@ -148,7 +158,19 @@ public sealed class AgentLoop
                 // never leave side effects from the valid ones behind. When the
                 // whole round prepares, each call is authorized and executed in
                 // order.
-                var round   = PrepareRound(_tools, assistant.ToolCalls);
+                var round = PrepareRound(_tools, assistant.ToolCalls);
+                if (_recorder is not null)
+                {
+                    foreach (var prepared in round)
+                    {
+                        if (prepared.Preparation is not null)
+                        {
+                            await _recorder.RecordPreparedAsync(prepared.Preparation, cancellationToken)
+                                           .ConfigureAwait(false);
+                        }
+                    }
+                }
+
                 var invalid = round.FirstOrDefault(item => item.Error is not null);
                 if (invalid is not null)
                 {
@@ -185,42 +207,75 @@ public sealed class AgentLoop
                     toolExecutions++;
                     var result = await ExecutePreparedAsync(item.RoundCall.Tool!, item.RoundCall.Preparation!,
                                                             cancellationToken);
+
+                    // The side effect already happened. Preserve its result in the
+                    // in-memory history before attempting fallible audit I/O so a
+                    // recorder failure cannot erase or cause a replay of the tool.
                     _context.Append(ChatMessage.Tool(item.RoundCall.Call.FunctionName, item.RoundCall.Call.Id,
                                                      result.Content));
+                    if (_recorder is not null)
+                    {
+                        await _recorder.RecordResultAsync(item.RoundCall.Preparation!, result, cancellationToken)
+                                       .ConfigureAwait(false);
+                    }
                 }
             }
 
-            return new AgentResult
+            return await FinishAsync(new AgentResult
             {
                 Status         = AgentStatus.StepLimitReached,
                 FinalMessage   = string.Empty,
                 Steps          = steps,
                 ToolExecutions = toolExecutions,
                 Compactions    = compactions,
-            };
+            }).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            return new AgentResult
+            return await FinishAsync(new AgentResult
             {
                 Status         = AgentStatus.Cancelled,
                 Steps          = steps,
                 ToolExecutions = toolExecutions,
                 Compactions    = compactions,
                 Error          = "Run cancelled",
-            };
+            }).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            return new AgentResult
+            return await FinishAsync(new AgentResult
             {
                 Status         = AgentStatus.Failed,
                 Steps          = steps,
                 ToolExecutions = toolExecutions,
                 Compactions    = compactions,
                 Error          = ex.Message,
-            };
+            }).ConfigureAwait(false);
         }
+    }
+
+    private async Task<AgentResult> FinishAsync(AgentResult result)
+    {
+        if (_recorder is not null)
+        {
+            try
+            {
+                await _recorder.CompleteAsync(result, _context.Messages, _context.State, CancellationToken.None)
+                               .ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+            {
+                return result with
+                {
+                    Status = AgentStatus.Failed,
+                    Error = string.IsNullOrWhiteSpace(result.Error)
+                        ? $"Run completed but persistence failed: {ex.Message}"
+                        : $"{result.Error}; persistence failed: {ex.Message}",
+                };
+            }
+        }
+
+        return result;
     }
 
     /// <summary>
@@ -321,8 +376,14 @@ public sealed class AgentLoop
             return false;
         }
 
-        var after = _context.EstimateViewTokens();
-        ContextCompacted?.Invoke(new ContextChange(before, after));
+        var after  = _context.EstimateViewTokens();
+        var change = new ContextChange(before, after);
+        ContextCompacted?.Invoke(change);
+        if (_recorder is not null)
+        {
+            await _recorder.RecordCompactionAsync(change, cancellationToken).ConfigureAwait(false);
+        }
+
         return true;
     }
 
@@ -365,7 +426,8 @@ public sealed class AgentLoop
 
             try
             {
-                round.Add(RoundCall.Ready(call, tool, tool.Prepare(call)));
+                var preparation = tool.Prepare(call);
+                round.Add(RoundCall.Ready(call, tool, preparation));
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -428,10 +490,14 @@ public sealed class AgentLoop
                 // authorization phase. Waiting until execution would let two
                 // identical calls in the same round reuse the same grant.
                 _permissions.TryConsumeOnce(preparation);
+                await RecordPermissionAsync(preparation, decision, "allow", cancellationToken).ConfigureAwait(false);
                 return AuthorizationOutcome.Granted;
 
             case PermissionDecision.Deny :
-                return AuthorizationOutcome.Denied($"Permission denied: {preparation.Summary}");
+                var policyDenied = AuthorizationOutcome.Denied($"Permission denied: {preparation.Summary}");
+                await RecordPermissionAsync(preparation, decision, policyDenied.Reason, cancellationToken)
+                   .ConfigureAwait(false);
+                return policyDenied;
 
             case PermissionDecision.Ask :
                 var approvalProvider = _approver ?? throw new InvalidOperationException(
@@ -445,18 +511,36 @@ public sealed class AgentLoop
                         // in the engine would let it outlive that execution and
                         // auto-approve an identical later call, so nothing is
                         // recorded here.
+                        await RecordPermissionAsync(preparation, decision, "allow once", cancellationToken)
+                           .ConfigureAwait(false);
                         return AuthorizationOutcome.Granted;
 
                     case ApprovalAction.AllowSession :
                         _permissions.GrantSession(preparation);
+                        await RecordPermissionAsync(preparation, decision, "allow session", cancellationToken)
+                           .ConfigureAwait(false);
                         return AuthorizationOutcome.Granted;
 
                     default :
-                        return AuthorizationOutcome.Denied($"Permission denied by user: {preparation.Summary}");
+                        var userDenied =
+                            AuthorizationOutcome.Denied($"Permission denied by user: {preparation.Summary}");
+                        await RecordPermissionAsync(preparation, decision, userDenied.Reason, cancellationToken)
+                           .ConfigureAwait(false);
+                        return userDenied;
                 }
 
             default :
                 throw new InvalidOperationException($"Unknown permission decision: {decision}");
+        }
+    }
+
+    private async Task RecordPermissionAsync(ToolPreparation   preparation, PermissionDecision decision, string outcome,
+                                             CancellationToken cancellationToken)
+    {
+        if (_recorder is not null)
+        {
+            await _recorder.RecordPermissionAsync(preparation, decision, outcome, cancellationToken)
+                           .ConfigureAwait(false);
         }
     }
 

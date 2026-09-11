@@ -51,6 +51,7 @@ public static class ConfigurationLoader
             MaxAgentSteps = ReadInt(root, "maxAgentSteps")                         ?? config.MaxAgentSteps,
             DefaultToolTimeoutSeconds = ReadInt(root, "defaultToolTimeoutSeconds") ?? config.DefaultToolTimeoutSeconds,
             WorkspaceRoot = ReadString(root, "workspaceRoot")                      ?? config.WorkspaceRoot,
+            SessionDirectory = ReadString(root, "sessionDirectory")                ?? config.SessionDirectory,
             CommandRules = ReadCommandRules(root, "commandRules")                  ?? config.CommandRules,
         };
 
@@ -69,7 +70,10 @@ public static class ConfigurationLoader
             ? Environment.CurrentDirectory
             : Path.GetFullPath(config.WorkspaceRoot);
 
-        return config with { WorkspaceRoot = workspace };
+        var sessionDirectory = Path.IsPathRooted(config.SessionDirectory)
+            ? config.SessionDirectory
+            : Path.GetFullPath(config.SessionDirectory);
+        return config with { WorkspaceRoot = workspace, SessionDirectory = sessionDirectory };
     }
 
     /// <summary>
@@ -131,30 +135,30 @@ public static class ConfigurationLoader
             }
 
             var executable = ReadString(item, "executable") ?? string.Empty;
-            var shell      = (ReadString(item, "shell")     ?? string.Empty).ToLowerInvariant();
-            var command    = ReadString(item, "command")    ?? string.Empty;
+            var shell      = (ReadString(item, "shell") ?? string.Empty).ToLowerInvariant();
+            var command    = ReadString(item, "command") ?? string.Empty;
             if (mode == "direct" && string.IsNullOrWhiteSpace(executable))
             {
                 throw new InvalidDataException(
-                    $"Config field '{property}[{i}].executable' is required for direct mode.");
+                                               $"Config field '{property}[{i}].executable' is required for direct mode.");
             }
 
             if (mode == "direct" && (!string.IsNullOrEmpty(shell) || !string.IsNullOrEmpty(command)))
             {
                 throw new InvalidDataException(
-                    $"Config fields '{property}[{i}].shell' and '.command' are valid only for shell mode.");
+                                               $"Config fields '{property}[{i}].shell' and '.command' are valid only for shell mode.");
             }
 
             if (mode == "shell" && (string.IsNullOrWhiteSpace(shell) || string.IsNullOrWhiteSpace(command)))
             {
                 throw new InvalidDataException(
-                    $"Config fields '{property}[{i}].shell' and '{property}[{i}].command' are required for shell mode.");
+                                               $"Config fields '{property}[{i}].shell' and '{property}[{i}].command' are required for shell mode.");
             }
 
             if (mode == "shell" && (!string.IsNullOrEmpty(executable) || item["arguments"] is not null))
             {
                 throw new InvalidDataException(
-                    $"Config fields '{property}[{i}].executable' and '.arguments' are valid only for direct mode.");
+                                               $"Config fields '{property}[{i}].executable' and '.arguments' are valid only for direct mode.");
             }
 
             var argumentsNode = item["arguments"];

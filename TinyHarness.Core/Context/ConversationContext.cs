@@ -36,19 +36,19 @@ public sealed class ConversationContext
     private const int NewStateTokenAssumption = 240;
 
     private const string CompactionInstruction =
-        "You maintain the working context of a coding-agent run. Below you receive the "           +
-        "current compacted state (if any) followed by earlier complete turns that must be "        +
-        "folded into it. Reply with ONLY one JSON object, no markdown and no commentary, "         +
-        "matching exactly this schema: {\"goal\":string,\"constraints\":string[],"                 +
-        "\"decisions\":string[],\"filesInspected\":string[],\"filesModified\":string[],"           +
-        "\"commandsAndResults\":string[],\"pendingWork\":string[]}. Preserve filesInspected, "     +
-        "filesInspected, filesModified, and commandsAndResults entries verbatim; preserve prior " +
-        "decisions; constraints and pendingWork describe current state and may be replaced only " +
-        "with an explicit non-empty update. Never silently omit prior decisions or pending work; " +
+        "You maintain the working context of a coding-agent run. Below you receive the "                  +
+        "current compacted state (if any) followed by earlier complete turns that must be "               +
+        "folded into it. Reply with ONLY one JSON object, no markdown and no commentary, "                +
+        "matching exactly this schema: {\"goal\":string,\"constraints\":string[],"                        +
+        "\"decisions\":string[],\"filesInspected\":string[],\"filesModified\":string[],"                  +
+        "\"commandsAndResults\":string[],\"pendingWork\":string[]}. Preserve filesInspected, "            +
+        "filesInspected, filesModified, and commandsAndResults entries verbatim; preserve prior "         +
+        "decisions; constraints and pendingWork describe current state and may be replaced only "         +
+        "with an explicit non-empty update. Never silently omit prior decisions or pending work; "        +
         "to close pending work, include a clear completion entry such as 'completed: ...'. Never invent " +
-        "completed work, and prefer brevity over detail. The "                                     +
-        "user messages above the turns carry the current compacted state (or 'No previous "        +
-        "summary.') and, on the first fold, the run's original task and constraints; use them "    +
+        "completed work, and prefer brevity over detail. The "                                            +
+        "user messages above the turns carry the current compacted state (or 'No previous "               +
+        "summary.') and, on the first fold, the run's original task and constraints; use them "           +
         "to fill goal, constraints and pendingWork accurately.";
 
     private readonly ContextOptions?   _options;
@@ -94,6 +94,8 @@ public sealed class ConversationContext
     /// The complete local history; compaction never removes messages from it.
     /// </summary>
     public IReadOnlyList<ChatMessage> Messages => _messages;
+
+    public StructuredState State => _state;
 
     /// <summary>
     /// 追加一条消息；任何追加都会解除上次压缩尝试的重试锁。

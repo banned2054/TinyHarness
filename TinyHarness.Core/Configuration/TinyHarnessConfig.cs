@@ -27,5 +27,7 @@ public sealed record TinyHarnessConfig
 
     public string WorkspaceRoot { get; init; } = string.Empty;
 
+    public string SessionDirectory { get; init; } = "artifacts/runs";
+
     public IReadOnlyList<CommandRule> CommandRules { get; init; } = [];
 }

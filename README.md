@@ -8,7 +8,7 @@ The project focuses on a small, complete, and explainable agent execution flow: 
 
 ## Current status
 
-M1–M6 are complete: the agent loop, live protocol integration, read-only tools, permissions and patches, process execution, and context management with compaction. M7 session/audit persistence and a repeatable “diagnose failing tests and fix them” demo are still pending.
+M7 persistence and demo foundations are implemented: runs now write an inspectable JSONL audit and a JSON session snapshot under `artifacts/runs` (or the configured `sessionDirectory`). The offline smoke command is the repeatable tool-flow demo path; real-model diagnosis remains opt-in.
 
 | Capability | Current implementation |
 |---|---|
@@ -19,6 +19,7 @@ M1–M6 are complete: the agent loop, live protocol integration, read-only tools
 | Permissions | `Allow` / `Ask` / `Deny`; one-time and session approvals, plus command allow rules |
 | Context | Token estimation, tool-result trimming, recent complete turns, structured summaries, and successive compaction batches |
 | Verification | Offline fake-client tests, local simulated SSE protocol tests, and a `win-x64` NativeAOT smoke test |
+| Persistence | Per-run `<runId>.audit.jsonl` and `<runId>.session.json`; configured known secret values and explicitly supported sensitive fields are redacted before persistence |
 
 Each CLI invocation runs one task and displays approvals, compaction notices, and the final result. Interactive multi-turn sessions, token-by-token terminal output, and session recovery are not yet available.
 
@@ -36,12 +37,14 @@ dotnet run --project TinyHarness.Cli -- smoke --config tinyharness.json
 
 The included [tinyharness.json](tinyharness.json) uses a placeholder endpoint and smoke model name. It works with the offline smoke test but must be changed before making real model requests.
 
-The smoke test creates a temporary workspace and uses a scripted model with an automatic-approval fixture to verify the complete tool flow: file listing, searching, reading, patching, direct processes, and explicit shell execution. Successful output includes:
+Each live run writes its audit and completed session snapshot to `sessionDirectory`. The audit is append-only during the run and records prepared tool summaries, permission outcomes, tool-result metadata, and terminal status. Its `run.completed` entry means Agent execution reached a terminal result; because it is written before the snapshot, it is not proof that both files were saved successfully. The CLI reports only persistence paths that actually exist. The snapshot preserves the full in-memory message history and structured state for inspection; it is not a recovery or replay mechanism.
+
+The smoke test creates a temporary package-free .NET 10 console fixture. Its fixed check program initially observes the broken `Calculator.Add` result `-1` and exits with `CHECK_FAIL`; the scripted model inspects and patches only `Calculator.cs`, rebuilds, then observes result `5` and `CHECK_PASS`. Fixture restore uses an empty package-source configuration and the installed .NET 10 SDK/targeting pack. Build and check commands use structured direct process mode (`dotnet build` and `dotnet <fixture.dll>`), while a separate step still covers explicit shell execution. Successful output includes:
 
 ```text
 status       : Completed
-steps        : 10
-toolExecs    : 9
+steps        : 17
+toolExecs    : 16
 ```
 
 This verifies the harness execution flow. A real model's ability to fix code and the quality of its summaries require separate validation. Offline tests cover compaction invariants and successive compaction batches.
@@ -99,6 +102,7 @@ Press `Ctrl+C` to cancel. Exit codes are `0` for completion, `1` for failure or 
 | `maxAgentSteps` | `40` | Maximum number of regular model requests; summary requests do not count toward this limit |
 | `defaultToolTimeoutSeconds` | `120` | Default tool timeout in seconds |
 | `workspaceRoot` | Current directory | Root for file-tool boundaries and command working directories |
+| `sessionDirectory` | `artifacts/runs` | Directory for per-run audit JSONL and session JSON files |
 | `commandRules` | `[]` | Explicit process allow rules |
 
 ## Permissions and execution boundaries
@@ -136,7 +140,7 @@ Only an explicitly configured matching rule or an existing approval lets a comma
 
 Rules for explicit `shell` mode use `shell`, `command`, and `workingDirectory`, matching the shell type, full command text, and directory exactly. Builds and tests execute repository code, so configure allow rules only for projects you trust.
 
-Processes capture stdout/stderr separately and trim model output using head + tail retention. When output is truncated, the full output is kept in a local artifact and its path is returned. Live runs remove the configured API key environment variable from child processes and redact known key values; this is not general-purpose sensitive-data detection.
+Processes capture stdout/stderr separately and trim model output using head + tail retention. When output is truncated, the full output is kept in a local artifact and its path is returned. Live runs remove the configured API key environment variable from child processes. Persistence redacts configured known secret values by exact replacement (longer overlapping values first) and explicitly supported sensitive assignment/JSON fields such as API keys, access tokens, tokens, passwords, and secrets. This is not general-purpose secret detection and does not guarantee recognition of arbitrary sensitive data.
 
 ## How context compaction works
 
@@ -160,7 +164,7 @@ StructuredState contains `Goal`, `Constraints`, `Decisions`, `FilesInspected`, `
 
 Later compaction follows “old summary + newly folded history → new summary.” The model rewrites the existing summary, and validation cannot guarantee complete initial fact extraction or lossless meaning across repeated summaries. Token counts use a character-based estimate; they are not currently calibrated against service-reported usage and are not guaranteed to be an upper bound on actual token counts.
 
-Original messages remain in process memory and are not deleted by compaction, although tools may already have trimmed their own output before returning results. Session/audit persistence and recovery are not yet implemented.
+Original messages remain in process memory and are not deleted by compaction, although tools may already have trimmed their own output before returning results. Completed runs persist that history and the committed structured state; session recovery and side-effect replay are deliberately not implemented.
 
 ## Tests and NativeAOT
 
@@ -178,13 +182,13 @@ The currently verified NativeAOT RID is **`win-x64`**. Native publishing on Wind
 Run from the repository root:
 
 ```powershell
-dotnet publish TinyHarness.Cli/TinyHarness.Cli.csproj -c Release -r win-x64 --self-contained true -o artifacts/m6-nativeaot
-./artifacts/m6-nativeaot/TinyHarness.exe smoke --config tinyharness.json
+dotnet publish TinyHarness.Cli/TinyHarness.Cli.csproj -c Release -r win-x64 --self-contained true -o artifacts/m7-nativeaot
+./artifacts/m7-nativeaot/TinyHarness.exe smoke --config tinyharness.json
 ```
 
 The published executable is named `TinyHarness.exe`. Use `run --config <path> "task"` to call a real service.
 
-M6 completion verification on 2026-09-10: **171/171 default tests passed**, NativeAOT publishing produced no trimming/AOT warnings, and the native executable passed the smoke test. See the [M6 NativeAOT verification record](docs/m6-nativeaot-smoke.md) for commands and results. This is a milestone record; verification of the current workspace depends on actual run output.
+M7 verification on 2026-09-11: **178/178 default tests passed**; managed smoke passed both from the repository root and from an external directory; isolated `win-x64` NativeAOT publishing produced no trimming/AOT warnings; and that run's newly published native executable passed the smoke test from an external directory. See the [M7 demo record](docs/m7-demo.md) for details.
 
 ### Provider and model verification scope
 

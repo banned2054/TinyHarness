@@ -1,3 +1,5 @@
+using System.ComponentModel;
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Text.Json.Nodes;
 using TinyHarness.Core.ChatCompletions;
@@ -16,8 +18,8 @@ internal sealed record ProcessProbe(string Executable, IReadOnlyList<string> Arg
 /// 离线冒烟测试的脚本审批器。会话级批准 apply_patch 与 shell 调用，并记录提示次数，
 /// 使冒烟流程可以确认权限链路确实运行。
 ///
-/// Scripted approval provider for the offline smoke: auto-approves the single
-/// apply_patch and shell calls as session grants and counts how many times it was asked,
+/// Scripted approval provider for the offline smoke: auto-approves apply_patch
+/// and shell calls as session grants and counts how many times it was asked,
 /// so the smoke can assert the permission flow really ran.
 /// </summary>
 internal sealed class SmokeApprover : IApprovalProvider
@@ -69,6 +71,42 @@ internal sealed class SmokeWorkspace : IDisposable
                            .ConfigureAwait(false);
             await workspace.WriteAsync("src/fixme.cs", "line1\nline2\nline3\n", cancellationToken)
                            .ConfigureAwait(false);
+            await workspace.WriteAsync("SmokeFixture.csproj", """
+                                       <Project Sdk="Microsoft.NET.Sdk">
+                                         <PropertyGroup>
+                                           <TargetFramework>net10.0</TargetFramework>
+                                           <OutputType>Exe</OutputType>
+                                           <ImplicitUsings>enable</ImplicitUsings>
+                                           <Nullable>enable</Nullable>
+                                           <AssemblyName>TinyHarness.SmokeFixture</AssemblyName>
+                                         </PropertyGroup>
+                                         <ItemGroup>
+                                           <Compile Remove="src/**/*.cs" />
+                                         </ItemGroup>
+                                       </Project>
+                                       """, cancellationToken).ConfigureAwait(false);
+            await workspace.WriteAsync("NuGet.Config", """
+                                       <configuration><packageSources><clear /></packageSources></configuration>
+                                       """, cancellationToken).ConfigureAwait(false);
+            await workspace.WriteAsync("Calculator.cs", """
+                                       public static class Calculator
+                                       {
+                                           public static int Add(int left, int right) => left - right;
+                                       }
+                                       """, cancellationToken).ConfigureAwait(false);
+            await workspace.WriteAsync("Program.cs", """
+                                       var actual = Calculator.Add(2, 3);
+                                       Console.WriteLine($"CHECK_RESULT={actual}");
+                                       if (actual == 5)
+                                       {
+                                           Console.WriteLine("CHECK_PASS");
+                                           return 0;
+                                       }
+
+                                       Console.WriteLine("CHECK_FAIL");
+                                       return 1;
+                                       """, cancellationToken).ConfigureAwait(false);
+            await workspace.RestoreFixtureAsync(cancellationToken).ConfigureAwait(false);
             return workspace;
         }
         catch
@@ -92,6 +130,92 @@ internal sealed class SmokeWorkspace : IDisposable
         }
 
         return File.WriteAllTextAsync(full, content, cancellationToken);
+    }
+
+    /// <summary>
+    /// 使用空包源配置正常还原无第三方依赖的 fixture。这样只依赖本机 .NET 10 SDK/targeting pack，
+    /// 不复制或伪造仓库中的 assets 文件。
+    ///
+    /// Restores the package-free fixture through the SDK with all package sources cleared, relying only on the
+    /// installed .NET 10 SDK/targeting pack instead of copying or fabricating repository assets.
+    /// </summary>
+    private async Task RestoreFixtureAsync(CancellationToken cancellationToken)
+    {
+        var projectPath   = Path.Combine(Root, "SmokeFixture.csproj");
+        var configPath    = Path.Combine(Root, "NuGet.Config");
+        var appDataPath   = Path.Combine(Root, ".appdata");
+        var cliHomePath   = Path.Combine(Root, ".dotnet-home");
+        var packagesPath  = Path.Combine(Root, ".nuget", "packages");
+        var httpCachePath = Path.Combine(Root, ".nuget", "http-cache");
+        Directory.CreateDirectory(appDataPath);
+        Directory.CreateDirectory(cliHomePath);
+        Directory.CreateDirectory(packagesPath);
+        Directory.CreateDirectory(httpCachePath);
+        var startInfo = new ProcessStartInfo
+        {
+            FileName               = "dotnet", WorkingDirectory  = Root, UseShellExecute = false, CreateNoWindow = true,
+            RedirectStandardOutput = true, RedirectStandardError = true,
+            Environment =
+            {
+                ["APPDATA"]                           = appDataPath,
+                ["DOTNET_CLI_HOME"]                   = cliHomePath,
+                ["DOTNET_SKIP_FIRST_TIME_EXPERIENCE"] = "1",
+                ["NUGET_PACKAGES"]                    = packagesPath,
+                ["NUGET_HTTP_CACHE_PATH"]             = httpCachePath
+            }
+        };
+        foreach (var argument in new[] { "restore", projectPath, "--configfile", configPath, "--nologo" })
+        {
+            startInfo.ArgumentList.Add(argument);
+        }
+
+        Process process;
+        try
+        {
+            process = Process.Start(startInfo)
+                   ?? throw new InvalidOperationException("dotnet did not start.");
+        }
+        catch (Exception ex) when (ex is Win32Exception or InvalidOperationException)
+        {
+            throw new
+                InvalidOperationException("Cannot restore the smoke fixture. Install the .NET 10 SDK and targeting pack.",
+                                          ex);
+        }
+
+        using (process)
+        {
+            var stdoutTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
+            var stderrTask = process.StandardError.ReadToEndAsync(cancellationToken);
+            try
+            {
+                await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                if (!process.HasExited)
+                {
+                    process.Kill(entireProcessTree : true);
+                    await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
+                }
+
+                throw;
+            }
+
+            var stdout = await stdoutTask.ConfigureAwait(false);
+            var stderr = await stderrTask.ConfigureAwait(false);
+            if (process.ExitCode != 0)
+            {
+                throw new
+                    InvalidOperationException("Smoke fixture restore failed. Ensure the .NET 10 SDK and targeting pack are installed. " +
+                                              BoundedProcessOutput(stdout, stderr));
+            }
+        }
+    }
+
+    private static string BoundedProcessOutput(string stdout, string stderr)
+    {
+        var output = $"stdout: {stdout.Trim()} stderr: {stderr.Trim()}";
+        return output.Length <= 1_000 ? output : output[..1_000] + "...";
     }
 
     /// <summary>
@@ -147,7 +271,7 @@ internal sealed class SmokeStep
             return
             [
                 Content("Smoke ok: the Agent loop ran "),
-                Content("list_files, search_text, read_file, apply_patch, direct process and explicit shell modes through the permission flow."),
+                Content("list_files, search_text, read_file, apply_patch, failing/passing fixture checks, direct process and explicit shell modes through the permission flow."),
                 End(),
             ];
         }
@@ -284,7 +408,7 @@ internal static class SmokeScript
     /// 按 list、search、read、patch、再读、direct、shell 的顺序建立完整工具闭环。
     /// Builds the full list/search/read/patch/read/direct/explicit-shell tool-closure sequence.
     /// </summary>
-    public static SmokePlan Build(ProcessProbe processProbe)
+    public static SmokePlan Build(ProcessProbe processProbe, string fixtureRoot)
     {
         var steps = new List<SmokeStep>
         {
@@ -319,6 +443,29 @@ internal static class SmokeScript
             }),
             Tool("read_file", """{"path":"src/fixme.cs"}""", content =>
                      RequireEqual(content, "line1\nline2-fixed\nline3", "read_file patched fixme.cs")),
+            Tool("shell", BuildArguments(fixtureRoot), content =>
+                     RequireContains(content, "Exit code: 0", "initial fixture build")),
+            Tool("shell", CheckArguments(fixtureRoot), content =>
+            {
+                RequireContains(content, "Exit code: 1", "failing fixture check");
+                RequireContains(content, "CHECK_RESULT=-1", "failing fixture result");
+                RequireContains(content, "CHECK_FAIL", "failing fixture marker");
+            }),
+            Tool("search_text", """{"pattern":"left - right","path":"Calculator.cs"}""", content =>
+                     RequireContains(content, "Calculator.cs:", "search failing implementation")),
+            Tool("read_file", """{"path":"Calculator.cs"}""", content =>
+                     RequireContains(content, "public static int Add(int left, int right) => left - right;",
+                                     "read failing implementation")),
+            Tool("apply_patch", TestPatchArguments(), content =>
+                     RequireContains(content, "Applied patch to 1 file(s)", "fix failing test")),
+            Tool("shell", BuildArguments(fixtureRoot), content =>
+                     RequireContains(content, "Exit code: 0", "fixed fixture build")),
+            Tool("shell", CheckArguments(fixtureRoot), content =>
+            {
+                RequireContains(content, "Exit code: 0", "passing fixture check");
+                RequireContains(content, "CHECK_RESULT=5", "passing fixture result");
+                RequireContains(content, "CHECK_PASS", "passing fixture marker");
+            }),
             Tool("shell", ShellArguments(processProbe.Executable, processProbe.Arguments), content =>
             {
                 RequireContains(content, "Exit code: 0", "shell direct");
@@ -333,7 +480,27 @@ internal static class SmokeScript
             new() // Final plain-text turn; terminates the loop.
         };
 
-        return new SmokePlan(steps, steps.Count(s => s.IsTool), ExpectedApprovalPrompts : 3);
+        return new SmokePlan(steps, steps.Count(s => s.IsTool), ExpectedApprovalPrompts : 6);
+    }
+
+    private static string BuildArguments(string fixtureRoot) =>
+        ShellArguments("dotnet",
+                       ["build", Path.Combine(fixtureRoot, "SmokeFixture.csproj"), "--no-restore", "--nologo"]);
+
+    private static string CheckArguments(string fixtureRoot) =>
+        ShellArguments("dotnet",
+                       [Path.Combine(fixtureRoot, "bin", "Debug", "net10.0", "TinyHarness.SmokeFixture.dll")]);
+
+    private static string TestPatchArguments()
+    {
+        const string patch = """
+            --- a/Calculator.cs
+            +++ b/Calculator.cs
+            @@ -3,1 +3,1 @@
+            -    public static int Add(int left, int right) => left - right;
+            +    public static int Add(int left, int right) => left + right;
+            """;
+        return new JsonObject { ["patch"] = patch }.ToJsonString();
     }
 
     private static string ShellArguments(string executable, IReadOnlyList<string> arguments)
@@ -352,7 +519,7 @@ internal static class SmokeScript
 
     private static string ExplicitShellArguments()
     {
-        var shell   = OperatingSystem.IsWindows() ? "powershell" : "sh";
+        var shell = OperatingSystem.IsWindows() ? "powershell" : "sh";
         var command = OperatingSystem.IsWindows()
             ? "Write-Output explicit-shell-stdout"
             : "printf explicit-shell-stdout";

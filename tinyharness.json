@@ -6,5 +6,6 @@
   "reservedOutputTokens": 8000,
   "maxAgentSteps": 40,
   "defaultToolTimeoutSeconds": 120,
+  "sessionDirectory": "artifacts/runs",
   "commandRules": []
 }

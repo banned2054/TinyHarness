@@ -8,7 +8,7 @@
 
 ## 当前状态
 
-M1–M6 已完成：Agent Loop、真实协议接入、只读工具、权限与补丁、进程执行、Context 与 Compaction。M7 的 session/audit 文件持久化和“检查测试失败并修复”的固定演示场景仍待完成。
+M7 的持久化与演示基础已实现：每次运行现在会在 `artifacts/runs`（或配置的 `sessionDirectory`）写入可检查的 JSONL 审计和 JSON session 快照。离线 smoke 是固定工具链演示入口；真实模型诊断仍需显式配置并选择加入。
 
 | 能力 | 当前实现 |
 |---|---|
@@ -19,6 +19,7 @@ M1–M6 已完成：Agent Loop、真实协议接入、只读工具、权限与�
 | 权限 | `Allow` / `Ask` / `Deny`；单次授权、会话授权与命令允许规则 |
 | 上下文 | token 估算、工具结果裁剪、近期完整回合、结构化摘要、连续多批压缩 |
 | 验证 | fake-client 离线测试、本地模拟 SSE 协议测试、`win-x64` NativeAOT smoke |
+| 持久化 | 每次运行生成 `<runId>.audit.jsonl` 与 `<runId>.session.json`；落盘前脱敏已配置的已知密钥和明确支持的敏感字段 |
 
 当前 CLI 每次启动执行一个任务，显示审批、压缩提示和最终结果；尚未提供交互式多轮会话、逐 token 终端文本展示或会话恢复。
 
@@ -36,12 +37,12 @@ dotnet run --project TinyHarness.Cli -- smoke --config tinyharness.json
 
 仓库中的 [tinyharness.json](../tinyharness.json) 使用占位 endpoint 和 smoke 模型名，可以直接用于离线 smoke，不能直接用于真实模型调用。
 
-Smoke 会创建临时工作区，使用脚本模型和自动审批 fixture 验证文件列举、搜索、读取、补丁、直接进程与显式 shell 的完整工具链路。成功时输出包含：
+Smoke 会创建无第三方包的临时 .NET 10 控制台 fixture。固定检查程序起初观察到错误的 `Calculator.Add` 结果 `-1` 并输出 `CHECK_FAIL`；脚本模型只检查和修改 `Calculator.cs`，重新构建后观察到结果 `5` 与 `CHECK_PASS`。fixture 使用空包源配置和本机 .NET 10 SDK/targeting pack 正常 restore；构建与检查统一走结构化 direct 模式（`dotnet build` 与 `dotnet <fixture.dll>`），另有独立步骤覆盖显式 shell。成功时输出包含：
 
 ```text
 status       : Completed
-steps        : 10
-toolExecs    : 9
+steps        : 17
+toolExecs    : 16
 ```
 
 它验证 Harness 的执行流程；真实模型的修复能力和压缩效果需要单独验证。压缩不变量与连续多批压缩由离线测试覆盖。
@@ -84,6 +85,8 @@ dotnet run --project TinyHarness.Cli -- --config artifacts/live.json "说明这�
 
 未指定 `--config` 时读取当前目录的 `tinyharness.json`。`workspaceRoot` 缺省时使用进程当前目录；相对路径也相对于进程当前目录解析，而非配置文件所在目录。操作其他项目时建议填写绝对路径。
 
+每次真实 `run` 会在 `sessionDirectory` 中写入审计与 session 快照。审计在运行期间追加记录准备摘要、权限结论、工具结果元数据和终止状态；其中 `run.completed` 表示 Agent 执行已到达终态，因为它先于快照写入，所以不能证明两份文件都保存成功。CLI 只输出实际存在的持久化文件路径。快照保存完整消息历史、结构化状态和最终结果，仅用于检查，不提供恢复或副作用重放。
+
 按 `Ctrl+C` 取消任务。正常完成返回 `0`，任务失败或达到步数上限返回 `1`，缺少提示词返回 `2`，正常运行路径中的任务取消返回 `130`。
 
 ### 配置项
@@ -99,6 +102,7 @@ dotnet run --project TinyHarness.Cli -- --config artifacts/live.json "说明这�
 | `maxAgentSteps` | `40` | 普通模型请求的最大步数，摘要请求不计入该步数 |
 | `defaultToolTimeoutSeconds` | `120` | 工具默认超时秒数 |
 | `workspaceRoot` | 当前目录 | 文件工具边界与命令工作目录的根 |
+| `sessionDirectory` | `artifacts/runs` | 每次运行的 audit JSONL 与 session JSON 输出目录 |
 | `commandRules` | `[]` | 显式配置的进程允许规则 |
 
 ## 权限与执行边界
@@ -136,7 +140,7 @@ dotnet run --project TinyHarness.Cli -- --config artifacts/live.json "说明这�
 
 显式 `shell` 模式的规则使用 `shell`、`command` 和 `workingDirectory`，精确匹配 shell 类型、完整命令文本和目录。构建与测试会执行仓库代码，允许规则应针对你信任的项目设置。
 
-进程分别捕获 stdout/stderr，以 head + tail 裁剪模型输出；发生截断时保留本地完整输出 artifact 并返回路径。真实运行会从子进程环境中移除已配置的 API key 环境变量，并对已知密钥值脱敏；这不是通用敏感信息检测。
+进程分别捕获 stdout/stderr，以 head + tail 裁剪模型输出；发生截断时保留本地完整输出 artifact 并返回路径。真实运行会从子进程环境中移除已配置的 API key 环境变量。持久化会精确替换已配置的已知密钥值（重叠时优先替换较长值），并脱敏明确支持的赋值/JSON 敏感字段，例如 API key、access token、token、password 和 secret；这不是通用秘密检测，不保证识别任意敏感信息。
 
 ## 上下文压缩如何工作
 
@@ -160,7 +164,7 @@ StructuredState 包含 `Goal`、`Constraints`、`Decisions`、`FilesInspected`�
 
 后续压缩采用“旧摘要 + 新进入折叠范围的历史 → 新摘要”。已有摘要会再次被模型改写，校验不能保证首次事实提取完整或多次摘要语义无损。token 数使用字符规则估算，当前未用服务端 usage 校准，也不保证是实际 token 数的上界。
 
-原始消息保存在进程内存中，压缩不删除这些消息；但工具在返回结果前可能已执行自己的输出裁剪。session/audit 落盘及恢复尚未实现。
+原始消息保存在进程内存中，压缩不删除这些消息；但工具在返回结果前可能已执行自己的输出裁剪。完成的运行会把这些消息和结构化状态写入 session；不支持恢复或重放。
 
 ## 测试与 NativeAOT
 
@@ -178,17 +182,17 @@ dotnet test TinyHarness.Tests/TinyHarness.Tests.csproj --no-restore --filter Ful
 在仓库根目录执行：
 
 ```powershell
-dotnet publish TinyHarness.Cli/TinyHarness.Cli.csproj -c Release -r win-x64 --self-contained true -o artifacts/m6-nativeaot
-./artifacts/m6-nativeaot/TinyHarness.exe smoke --config tinyharness.json
+dotnet publish TinyHarness.Cli/TinyHarness.Cli.csproj -c Release -r win-x64 --self-contained true -o artifacts/m7-nativeaot
+./artifacts/m7-nativeaot/TinyHarness.exe smoke --config tinyharness.json
 ```
 
 发布后的可执行文件名为 `TinyHarness.exe`，也可使用 `run --config <path> "任务"` 调用真实服务。
 
-M6 收尾验证：2026-09-10 默认测试 **171/171 通过**，NativeAOT publish 未出现 trimming/AOT warning，原生产物 smoke 成功。具体发布命令及结果见 [M6 NativeAOT 验证记录](m6-nativeaot-smoke.md)。这是一份阶段记录，当前工作区的验证结果以实际运行输出为准。
+M7 验证（2026-09-11）：默认测试 **178/178 通过**；托管 smoke 在仓库根目录和仓库外目录均成功；隔离目录中的 `win-x64` NativeAOT publish 没有 trimming/AOT warning；本次新生成的原生 EXE 也从仓库外目录通过 smoke。详情见 [M7 演示记录](m7-demo.md)。
 
 ### 服务与模型验证范围
 
-当前仓库的协议验证基于本地模拟 SSE 服务，覆盖自定义 endpoint、文本流、工具调用分片、请求工具定义、HTTP 错误和取消。尚无可据此列出的真实 tested providers/models 清单；使用“OpenAI-compatible”接口不代表所有服务和模型都已验证兼容。
+当前仓库的协议验证基于本地模拟 SSE 服务，覆盖自定义 endpoint、文本流、工具调用分片、请求工具定义、HTTP 错误和取消。真实 tested providers/models 清单仍为空；使用“OpenAI-compatible”接口不代表所有服务和模型都已验证兼容。
 
 ## 代码结构
 
