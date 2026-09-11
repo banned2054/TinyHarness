@@ -1,28 +1,30 @@
 # TinyHarness.NET
 
-一个基于 .NET 10 的轻量本地 coding-agent harness。通过 OpenAI-compatible Chat Completions 协议调用模型，让模型在工作区内检查文件、提出补丁和运行命令，并由应用执行参数校验、权限审批、工具调度与上下文管理。
+English | [**简体中文**](docs/README.md)
 
-项目重点是把 Agent 的执行链路做小、做完整、做得可解释：模型负责提出下一步行动，Harness 负责准备、授权和执行。CLI 是当前入口，NativeAOT 是持续验证的构建约束。
+A lightweight local coding-agent harness built on .NET 10. It uses the OpenAI-compatible Chat Completions protocol to let models inspect workspace files, propose patches, and run commands, while the application handles argument validation, permission approval, tool dispatch, and context management.
 
-## 当前状态
+The project focuses on a small, complete, and explainable agent execution flow: the model proposes the next action, and the harness prepares, authorizes, and executes it. The CLI is the current entry point, and NativeAOT compatibility is continuously verified.
 
-M1–M6 已完成：Agent Loop、真实协议接入、只读工具、权限与补丁、进程执行、Context 与 Compaction。M7 的 session/audit 文件持久化和“检查测试失败并修复”的固定演示场景仍待完成。
+## Current status
 
-| 能力 | 当前实现 |
+M1–M6 are complete: the agent loop, live protocol integration, read-only tools, permissions and patches, process execution, and context management with compaction. M7 session/audit persistence and a repeatable “diagnose failing tests and fix them” demo are still pending.
+
+| Capability | Current implementation |
 |---|---|
-| 模型协议 | 官方 OpenAI .NET SDK 接入自定义 endpoint；接收 SSE 文本与 tool-call 参数分片 |
-| Agent Loop | 一轮多个工具调用、顺序执行、结果回传、最大步数、失败和取消处理 |
-| 文件工具 | `list_files`、`search_text`、`read_file`、`apply_patch` |
-| 进程工具 | `shell` 的直接进程与显式 shell 模式；stdout/stderr、退出码、超时、进程树终止和输出裁剪 |
-| 权限 | `Allow` / `Ask` / `Deny`；单次授权、会话授权与命令允许规则 |
-| 上下文 | token 估算、工具结果裁剪、近期完整回合、结构化摘要、连续多批压缩 |
-| 验证 | fake-client 离线测试、本地模拟 SSE 协议测试、`win-x64` NativeAOT smoke |
+| Model protocol | Official OpenAI .NET SDK with custom endpoints; SSE text and fragmented tool-call arguments |
+| Agent loop | Multiple tool calls per response, sequential execution, result feedback, step limits, failure and cancellation handling |
+| File tools | `list_files`, `search_text`, `read_file`, `apply_patch` |
+| Process tool | `shell` with direct process and explicit shell modes; stdout/stderr, exit codes, timeouts, process-tree termination, and output trimming |
+| Permissions | `Allow` / `Ask` / `Deny`; one-time and session approvals, plus command allow rules |
+| Context | Token estimation, tool-result trimming, recent complete turns, structured summaries, and successive compaction batches |
+| Verification | Offline fake-client tests, local simulated SSE protocol tests, and a `win-x64` NativeAOT smoke test |
 
-当前 CLI 每次启动执行一个任务，显示审批、压缩提示和最终结果；尚未提供交互式多轮会话、逐 token 终端文本展示或会话恢复。
+Each CLI invocation runs one task and displays approvals, compaction notices, and the final result. Interactive multi-turn sessions, token-by-token terminal output, and session recovery are not yet available.
 
-## 快速开始：先运行离线 smoke
+## Quick start: run the offline smoke test
 
-以下命令使用 PowerShell，在 Windows 上执行。需要 .NET 10 SDK；首次还原 NuGet 依赖需要网络，测试和 smoke 本身不需要真实模型服务或 API key。
+These commands use PowerShell on Windows. The .NET 10 SDK is required. The initial NuGet restore requires network access; the tests and smoke path do not require a real model service or an API key.
 
 ```powershell
 git clone https://github.com/banned2054/TinyHarness.git
@@ -32,9 +34,9 @@ dotnet test TinyHarness.Tests/TinyHarness.Tests.csproj --no-restore
 dotnet run --project TinyHarness.Cli -- smoke --config tinyharness.json
 ```
 
-仓库中的 [tinyharness.json](tinyharness.json) 使用占位 endpoint 和 smoke 模型名，可以直接用于离线 smoke，不能直接用于真实模型调用。
+The included [tinyharness.json](tinyharness.json) uses a placeholder endpoint and smoke model name. It works with the offline smoke test but must be changed before making real model requests.
 
-Smoke 会创建临时工作区，使用脚本模型和自动审批 fixture 验证文件列举、搜索、读取、补丁、直接进程与显式 shell 的完整工具链路。成功时输出包含：
+The smoke test creates a temporary workspace and uses a scripted model with an automatic-approval fixture to verify the complete tool flow: file listing, searching, reading, patching, direct processes, and explicit shell execution. Successful output includes:
 
 ```text
 status       : Completed
@@ -42,11 +44,11 @@ steps        : 10
 toolExecs    : 9
 ```
 
-它验证 Harness 的执行流程；真实模型的修复能力和压缩效果需要单独验证。压缩不变量与连续多批压缩由离线测试覆盖。
+This verifies the harness execution flow. A real model's ability to fix code and the quality of its summaries require separate validation. Offline tests cover compaction invariants and successive compaction batches.
 
-## 连接真实模型
+## Connect a real model
 
-准备一个 JSON 配置文件，例如 `artifacts/live.json`。`artifacts/` 已被 Git 忽略，可用于本地配置；先创建该目录，再保存下面的内容，并替换 endpoint、model、工作区及对应的窗口参数。
+Create a JSON configuration file, such as `artifacts/live.json`. The `artifacts/` directory is ignored by Git and can hold local configuration. Create the directory first, then save the following content, replacing the endpoint, model, workspace, and context window settings.
 
 ```json
 {
@@ -63,63 +65,63 @@ toolExecs    : 9
 }
 ```
 
-`endpoint` 是 SDK 基地址，例如以 `/v1` 结尾；不要填写完整的 `/v1/chat/completions` URL。模型需要支持流式 Chat Completions 和 function/tool calling。窗口大小由配置显式声明，不根据模型名称推断；示例数值不代表任何具体模型的能力。
+`endpoint` is the SDK base URL, typically ending in `/v1`; do not use the full `/v1/chat/completions` URL. The model must support streaming Chat Completions and function/tool calling. The context window is explicitly configured, not inferred from the model name. The example values do not describe any particular model's capabilities.
 
-在当前 PowerShell 会话中输入密钥并执行任务：
+Enter the key in the current PowerShell session and run a task:
 
 ```powershell
 $env:TINYHARNESS_API_KEY = Read-Host "API key" -MaskInput
-dotnet run --project TinyHarness.Cli -- run --config artifacts/live.json "检查这个项目为什么测试失败并修复"
+dotnet run --project TinyHarness.Cli -- run --config artifacts/live.json "Find out why this project's tests fail and fix them"
 ```
 
-`-MaskInput` 需要 PowerShell 7.1 或更新版本。密钥由配置指定的环境变量读取，不写入 JSON。`run` 会实际调用模型服务，普通请求和压缩摘要请求都可能产生费用；获得授权的工具会实际修改文件或启动进程。
+`-MaskInput` requires PowerShell 7.1 or later. The key is read from the configured environment variable and is not stored in JSON. `run` calls the model service: both regular requests and compaction summary requests may incur charges. Authorized tools can modify files or start processes.
 
-CLI 也接受省略 `run` 的形式：
+The CLI also accepts commands without the `run` verb:
 
 ```powershell
-dotnet run --project TinyHarness.Cli -- --config artifacts/live.json "说明这个项目的目录结构"
+dotnet run --project TinyHarness.Cli -- --config artifacts/live.json "Explain this project's directory structure"
 ```
 
-未指定 `--config` 时读取当前目录的 `tinyharness.json`。`workspaceRoot` 缺省时使用进程当前目录；相对路径也相对于进程当前目录解析，而非配置文件所在目录。操作其他项目时建议填写绝对路径。
+Without `--config`, the CLI reads `tinyharness.json` from the current directory. If `workspaceRoot` is omitted, it defaults to the process's current directory. Relative workspace paths are also resolved against the process's current directory, not the configuration file's directory. Use an absolute path when working on another project.
 
-按 `Ctrl+C` 取消任务。正常完成返回 `0`，任务失败或达到步数上限返回 `1`，缺少提示词返回 `2`，正常运行路径中的任务取消返回 `130`。
+Press `Ctrl+C` to cancel. Exit codes are `0` for completion, `1` for failure or reaching the step limit, `2` for a missing prompt, and `130` for task cancellation during normal execution.
 
-### 配置项
+### Configuration
 
-| 字段 | 默认值 | 含义 |
+| Field | Default | Description |
 |---|---|---|
-| `endpoint` | 空 | 真实服务的 HTTP(S) 基地址 |
-| `model` | 空 | 模型标识；真实运行必须填写 |
-| `apiKeyEnvironmentVariable` | 空 | 保存 API key 的环境变量名称 |
-| `contextWindowTokens` | `128000` | 声明的上下文窗口 |
-| `reservedOutputTokens` | `8000` | 预算中为输出预留的空间；当前不作为 API 输出上限发送 |
-| `compactionThreshold` | `0` | 触发压缩的总估算 token 阈值，含预留输出；`0` 使用窗口大小 |
-| `maxAgentSteps` | `40` | 普通模型请求的最大步数，摘要请求不计入该步数 |
-| `defaultToolTimeoutSeconds` | `120` | 工具默认超时秒数 |
-| `workspaceRoot` | 当前目录 | 文件工具边界与命令工作目录的根 |
-| `commandRules` | `[]` | 显式配置的进程允许规则 |
+| `endpoint` | Empty | HTTP(S) base URL for the model service |
+| `model` | Empty | Model identifier; required for live runs |
+| `apiKeyEnvironmentVariable` | Empty | Name of the environment variable holding the API key |
+| `contextWindowTokens` | `128000` | Declared context window size |
+| `reservedOutputTokens` | `8000` | Space reserved for output in the budget; currently not sent as an API output limit |
+| `compactionThreshold` | `0` | Total estimated token threshold for compaction, including reserved output; `0` uses the context window size |
+| `maxAgentSteps` | `40` | Maximum number of regular model requests; summary requests do not count toward this limit |
+| `defaultToolTimeoutSeconds` | `120` | Default tool timeout in seconds |
+| `workspaceRoot` | Current directory | Root for file-tool boundaries and command working directories |
+| `commandRules` | `[]` | Explicit process allow rules |
 
-## 权限与执行边界
+## Permissions and execution boundaries
 
-每个工具经过 `Prepare → Authorize → Execute`：先校验参数、规范化目标并生成准备计划，再根据能力和资源范围判断权限，最后执行同一个计划。
+Every tool follows `Prepare → Authorize → Execute`: validate arguments, normalize targets, and create a prepared plan; evaluate permissions against capabilities and resource scopes; then execute that same plan.
 
-工作区内的列举、搜索和读取默认允许；补丁与进程默认询问。文件工具检查规范化路径，并在执行前检查 symlink/junction 的最终目标，拒绝越界访问。
+Listing, searching, and reading within the workspace are allowed by default. Patches and processes require approval by default. File tools check normalized paths and resolve symlink/junction targets before execution to reject access outside the workspace.
 
-审批界面显示调用摘要、目标路径，以及 `apply_patch` 的 diff：
+The approval prompt shows the call summary, target paths, and the diff for `apply_patch`:
 
 ```text
 [a]llow once / [s]ession / [d]eny:
 ```
 
-- `a`：允许当前调用一次。
-- `s`：按提示中的能力、路径范围及调用约束授权本次运行；目录范围包括后代路径，进程还绑定命令约束。
-- `d`、空输入或其他未识别输入：拒绝本次调用。拒绝结果会返回模型，模型可以调整方案。
+- `a`: Allow this call once.
+- `s`: Grant permission for this run using the displayed capability, path scope, and call constraints. Directory scopes include descendants; process grants also bind command constraints.
+- `d`, empty input, or any unrecognized input: Deny this call. The denial is returned to the model so it can adjust its approach.
 
-**这是应用层 policy/approval，不是 OS sandbox。** 文件工具的路径检查不会限制已获准进程的全部行为：进程可能访问工作区外的文件或网络。`shell` 检查工作目录并审批调用，但不提供操作系统级文件、网络隔离；也没有针对 Git、发布或部署的独立阶段识别机制。
+**This is application-level policy and approval, not an OS sandbox.** File-tool path checks do not constrain every action of an approved process: processes may access files outside the workspace or use the network. The `shell` tool checks the working directory and obtains approval for the call, but provides no OS-level file or network isolation. It also has no separate stage-detection mechanism for Git operations, publishing, or deployment.
 
-### 命令允许规则
+### Command allow rules
 
-只有明确配置的匹配规则或已有授权才让命令免于询问。若希望允许在工作区根目录执行精确的 `dotnet test`，可以把以下项放入 `commandRules`：
+Only an explicitly configured matching rule or an existing approval lets a command run without prompting. To allow exactly `dotnet test` at the workspace root, add this entry to `commandRules`:
 
 ```json
 {
@@ -130,78 +132,78 @@ dotnet run --project TinyHarness.Cli -- --config artifacts/live.json "说明这�
 }
 ```
 
-`direct` 模式直接启动 executable，不解释管道、重定向等 shell 语法。规则逐项匹配参数，单个参数内支持 `*` 和 `?`；工作目录精确匹配，不自动放行子目录。上述规则不匹配额外带参数的 `dotnet test SomeProject.csproj`。
+`direct` mode starts the executable without interpreting pipes, redirection, or other shell syntax. Rules match arguments individually, with `*` and `?` supported within each argument. The working directory must match exactly; subdirectories are not automatically allowed. The rule above does not match `dotnet test SomeProject.csproj` with its additional argument.
 
-显式 `shell` 模式的规则使用 `shell`、`command` 和 `workingDirectory`，精确匹配 shell 类型、完整命令文本和目录。构建与测试会执行仓库代码，允许规则应针对你信任的项目设置。
+Rules for explicit `shell` mode use `shell`, `command`, and `workingDirectory`, matching the shell type, full command text, and directory exactly. Builds and tests execute repository code, so configure allow rules only for projects you trust.
 
-进程分别捕获 stdout/stderr，以 head + tail 裁剪模型输出；发生截断时保留本地完整输出 artifact 并返回路径。真实运行会从子进程环境中移除已配置的 API key 环境变量，并对已知密钥值脱敏；这不是通用敏感信息检测。
+Processes capture stdout/stderr separately and trim model output using head + tail retention. When output is truncated, the full output is kept in a local artifact and its path is returned. Live runs remove the configured API key environment variable from child processes and redact known key values; this is not general-purpose sensitive-data detection.
 
-## 上下文压缩如何工作
+## How context compaction works
 
-Context Manager 保留运行期间的原始消息历史，并为每次模型请求构建单独的视图：
+The Context Manager keeps the original message history during a run and builds a separate view for each model request:
 
 ```text
-系统指令与原始任务
-  + StructuredState（已有摘要）
-  + 近期完整回合
-  + 当前回合
+System instructions and original task
+  + StructuredState (existing summary)
+  + Recent complete turns
+  + Current turn
 ```
 
-先裁剪模型视图中的超长工具结果，再按预算选择旧完整回合，通过额外的 Chat Completions 请求生成结构化 JSON。摘要请求不携带工具定义；工具调用及对应结果整体折叠，当前回合和最新完整回合保留。一次普通请求前可以连续压缩多批历史。
+It first trims oversized tool results in the model view, then selects older complete turns according to the budget and summarizes them into structured JSON through an additional Chat Completions request. Summary requests include no tool definitions. Tool calls and their results are folded together, while the current turn and latest complete turn are retained. Multiple batches of history can be compacted before a single regular request.
 
-StructuredState 包含 `Goal`、`Constraints`、`Decisions`、`FilesInspected`、`FilesModified`、`CommandsAndResults`、`PendingWork`。提交摘要时检查格式、压缩收益和已有状态保留规则：
+StructuredState contains `Goal`, `Constraints`, `Decisions`, `FilesInspected`, `FilesModified`, `CommandsAndResults`, and `PendingWork`. Before accepting a summary, the manager checks its format, budget savings, and rules for retaining existing state:
 
-- 已有 `Goal` 非空时不可清空。
-- 已记录的文件、命令结果和决策必须保留。
-- 每个已有待办必须保留，或以 `completed: <item>` 明确关闭；约束允许更新。
-- 校验失败不应用该批摘要，不破坏原始历史；最终估算仍超出窗口时终止任务，不发送该普通请求。
+- A nonempty `Goal` cannot be cleared.
+- Recorded files, command results, and decisions must be retained.
+- Each existing pending item must be retained or explicitly closed with `completed: <item>`; constraints may be updated.
+- If validation fails, that batch's summary is not applied and the original history remains intact. If the final estimate still exceeds the context window, the task stops without sending the regular request.
 
-后续压缩采用“旧摘要 + 新进入折叠范围的历史 → 新摘要”。已有摘要会再次被模型改写，校验不能保证首次事实提取完整或多次摘要语义无损。token 数使用字符规则估算，当前未用服务端 usage 校准，也不保证是实际 token 数的上界。
+Later compaction follows “old summary + newly folded history → new summary.” The model rewrites the existing summary, and validation cannot guarantee complete initial fact extraction or lossless meaning across repeated summaries. Token counts use a character-based estimate; they are not currently calibrated against service-reported usage and are not guaranteed to be an upper bound on actual token counts.
 
-原始消息保存在进程内存中，压缩不删除这些消息；但工具在返回结果前可能已执行自己的输出裁剪。session/audit 落盘及恢复尚未实现。
+Original messages remain in process memory and are not deleted by compaction, although tools may already have trimmed their own output before returning results. Session/audit persistence and recovery are not yet implemented.
 
-## 测试与 NativeAOT
+## Tests and NativeAOT
 
-默认测试使用 scripted/fake client 与本地模拟 SSE 服务，不调用付费模型，也不需要 API key。本地协议测试会监听 loopback 端口。
+Default tests use scripted/fake clients and a local simulated SSE service. They do not call paid models or require an API key. Local protocol tests listen on loopback ports.
 
 ```powershell
 dotnet test TinyHarness.Tests/TinyHarness.Tests.csproj
 dotnet test TinyHarness.Tests/TinyHarness.Tests.csproj --no-restore --filter FullyQualifiedName~ContextCompactionTests
 ```
 
-覆盖工具调用闭环、协议分片、参数错误、权限拒绝、路径边界、进程超时与取消、输出裁剪，以及压缩原子组、回滚、状态保留和同一步连续多批压缩。
+Coverage includes the tool-call loop, protocol fragments, argument errors, permission denial, path boundaries, process timeouts and cancellation, output trimming, and compaction atomic groups, rollback, state retention, and successive batches within one step.
 
-当前已验证的 NativeAOT RID 为 **`win-x64`**。Windows 原生发布还需要 MSVC C++ 构建工具和 Windows SDK，例如 Visual Studio/Build Tools 中的“使用 C++ 的桌面开发”工作负载。其他 RID 尚未列为已验证目标。
+The currently verified NativeAOT RID is **`win-x64`**. Native publishing on Windows also requires MSVC C++ build tools and the Windows SDK, available through the Visual Studio/Build Tools “Desktop development with C++” workload. Other RIDs are not yet listed as verified targets.
 
-在仓库根目录执行：
+Run from the repository root:
 
 ```powershell
 dotnet publish TinyHarness.Cli/TinyHarness.Cli.csproj -c Release -r win-x64 --self-contained true -o artifacts/m6-nativeaot
 ./artifacts/m6-nativeaot/TinyHarness.exe smoke --config tinyharness.json
 ```
 
-发布后的可执行文件名为 `TinyHarness.exe`，也可使用 `run --config <path> "任务"` 调用真实服务。
+The published executable is named `TinyHarness.exe`. Use `run --config <path> "task"` to call a real service.
 
-M6 收尾验证：2026-09-10 默认测试 **171/171 通过**，NativeAOT publish 未出现 trimming/AOT warning，原生产物 smoke 成功。具体发布命令及结果见 [M6 NativeAOT 验证记录](docs/m6-nativeaot-smoke.md)。这是一份阶段记录，当前工作区的验证结果以实际运行输出为准。
+M6 completion verification on 2026-09-10: **171/171 default tests passed**, NativeAOT publishing produced no trimming/AOT warnings, and the native executable passed the smoke test. See the [M6 NativeAOT verification record](docs/m6-nativeaot-smoke.md) for commands and results. This is a milestone record; verification of the current workspace depends on actual run output.
 
-### 服务与模型验证范围
+### Provider and model verification scope
 
-当前仓库的协议验证基于本地模拟 SSE 服务，覆盖自定义 endpoint、文本流、工具调用分片、请求工具定义、HTTP 错误和取消。尚无可据此列出的真实 tested providers/models 清单；使用“OpenAI-compatible”接口不代表所有服务和模型都已验证兼容。
+Protocol verification currently uses a local simulated SSE service, covering custom endpoints, text streaming, fragmented tool calls, request tool definitions, HTTP errors, and cancellation. There is no verified list of real providers/models yet. Using an “OpenAI-compatible” interface does not mean every provider and model has been tested for compatibility.
 
-## 代码结构
+## Code structure
 
-| 目录 | 职责 |
+| Directory | Responsibility |
 |---|---|
-| `TinyHarness.Core/Agent` | 主循环、工具注册、步数与终止状态 |
-| `TinyHarness.Core/ChatCompletions` | SDK 适配、消息与流事件、工具参数拼装 |
-| `TinyHarness.Core/Tools` | 五个工具的 schema、准备与执行 |
-| `TinyHarness.Core/Permissions` | 权限决策、会话授权与命令匹配 |
-| `TinyHarness.Core/Runtime` | 工作区路径边界、进程和输出捕获 |
-| `TinyHarness.Core/Context` | 预算估算、模型视图、结构化状态与压缩 |
-| `TinyHarness.Core/Configuration` | JSON 配置加载与路径解析 |
-| `TinyHarness.Cli` | 参数入口、审批界面、依赖组装、离线 smoke |
-| `TinyHarness.Tests` | 单元、协议契约与集成测试 |
+| `TinyHarness.Core/Agent` | Main loop, tool registration, step counts, and terminal states |
+| `TinyHarness.Core/ChatCompletions` | SDK adapter, messages and stream events, tool-argument assembly |
+| `TinyHarness.Core/Tools` | Schemas, preparation, and execution for the five tools |
+| `TinyHarness.Core/Permissions` | Permission decisions, session grants, and command matching |
+| `TinyHarness.Core/Runtime` | Workspace path boundaries, processes, and output capture |
+| `TinyHarness.Core/Context` | Budget estimation, model views, structured state, and compaction |
+| `TinyHarness.Core/Configuration` | JSON configuration loading and path resolution |
+| `TinyHarness.Cli` | CLI arguments, approval prompts, dependency composition, and offline smoke path |
+| `TinyHarness.Tests` | Unit, protocol contract, and integration tests |
 
-Agent Loop 通过 `IChatCompletionClient` 使用模型，SDK 类型留在协议适配层。工具显式注册；结构化状态使用 System.Text.Json source generation，配置使用无反射的手工绑定，以便持续验证 trimming 与 NativeAOT。
+The agent loop accesses models through `IChatCompletionClient`; SDK types stay in the protocol adapter layer. Tools are registered explicitly. Structured state uses System.Text.Json source generation, and configuration uses manual binding without reflection to support ongoing trimming and NativeAOT verification.
 
-完整产品边界和里程碑见 [PLAN.md](PLAN.md)，仓库开发规范见 [AGENTS.md](AGENTS.md)。MVP 不包含 GUI、MCP、RAG、多 Agent、插件系统或 OS 级 sandbox。
+See [PLAN.md](PLAN.md) for the complete product scope and milestones, and [AGENTS.md](AGENTS.md) for repository development rules. The MVP excludes GUI, MCP, RAG, multi-agent support, a plugin system, and an OS sandbox.
