@@ -16,14 +16,32 @@ namespace TinyHarness.Cli;
 internal static class Program
 {
     /// <summary>
-    /// CLI 入口。解析 smoke、run 或无动词调用方式，并把退出码交还操作系统。
-    /// CLI entry point that dispatches smoke, run, or verbless invocation forms and returns an OS exit code.
+    /// CLI 入口。解析管理命令、smoke、run 或无动词调用方式，并把退出码交还操作系统。
+    ///
+    /// CLI entry point that dispatches management commands, smoke, run, or verbless invocation forms and
+    /// returns an OS exit code.
     /// </summary>
     public static async Task<int> Main(string[] args)
     {
         try
         {
             return await DispatchAsync(args).ConfigureAwait(false);
+        }
+        catch (CliUsageException ex)
+        {
+            await Console.Error.WriteLineAsync(ex.Message);
+            if (ex.Usage is { Length: > 0 } usage)
+            {
+                await Console.Error.WriteLineAsync();
+                await Console.Error.WriteLineAsync(usage.TrimEnd());
+            }
+
+            return 2;
+        }
+        catch (ConfigException ex)
+        {
+            await Console.Error.WriteLineAsync(ex.Message);
+            return ex.IsUsageError ? 2 : 1;
         }
         catch (OperationCanceledException)
         {
@@ -42,76 +60,72 @@ internal static class Program
 
     private static async Task<int> DispatchAsync(string[] args)
     {
-        if (args.Length == 0)
+        var options = CommandLine.Parse(args);
+        switch (options.Kind)
         {
-            await Console.Error.WriteLineAsync("Usage:");
-            await Console.Error.WriteLineAsync("  tinyharness smoke [--config <path>]");
-            await Console.Error.WriteLineAsync("  tinyharness run [--config <path>] \"your prompt\"");
-            await Console.Error.WriteLineAsync("  tinyharness \"your prompt\"");
-            return 2;
-        }
+            case CliCommandKind.Help:
+                await Console.Out.WriteLineAsync(HelpText.For(options.HelpTopic).TrimEnd());
+                return 0;
 
-        var first = args[0];
-        if (string.Equals(first, "process-smoke-child", StringComparison.Ordinal))
-        {
-            await Console.Out.WriteLineAsync("process stdout");
-            await Console.Error.WriteLineAsync("process stderr");
-            return 0;
-        }
+            case CliCommandKind.ProcessSmokeChild:
+                await Console.Out.WriteLineAsync("process stdout");
+                await Console.Error.WriteLineAsync("process stderr");
+                return 0;
 
-        if (string.Equals(first, "smoke", StringComparison.Ordinal))
-        {
-            var (_, configPath) = ParseArgs(args);
-            return await RunSmokeAsync(configPath);
-        }
+            case CliCommandKind.Smoke:
+                return await RunSmokeAsync(options.ConfigPath);
 
-        var verblessPrompt = string.Equals(first, "run", StringComparison.Ordinal);
-        var (promptParts, configPath2) = ParseArgs(verblessPrompt ? args[1..] : args);
-        var prompt = string.Join(' ', promptParts).Trim();
-        if (prompt.Length == 0)
-        {
-            await Console.Error.WriteLineAsync("A prompt is required.");
-            return 2;
-        }
+            case CliCommandKind.Run:
+                return await RunAsync(options.Prompt!, options.ConfigPath);
 
-        return await RunAsync(prompt, configPath2);
+            default:
+                return await RunManagementCommandAsync(options).ConfigureAwait(false);
+        }
     }
 
     /// <summary>
-    /// 从命令行参数中提取可选配置路径，其余片段保留为用户提示词。
-    /// Extracts the optional configuration path and keeps all remaining arguments as prompt fragments.
+    /// 执行管理命令（init/config/provider/auth/model/doctor）；这些命令绝不把输入发给模型。
+    ///
+    /// Executes management commands (init/config/provider/auth/model/doctor); their input is never sent to a model.
     /// </summary>
-    private static (List<string> PromptArgs, string? ConfigPath) ParseArgs(string[] args)
+    private static async Task<int> RunManagementCommandAsync(CliOptions options)
     {
-        var     promptArgs = new List<string>();
-        string? configPath = null;
-        for (var i = 0; i < args.Length; i++)
+        using var cts                = new CancellationTokenSource();
+        using var cancelRegistration = new ConsoleCancellation(cts);
+        var context = new CommandContext
         {
-            if (string.Equals(args[i], "--config", StringComparison.Ordinal) && i + 1 < args.Length)
-            {
-                configPath = args[++i];
-            }
-            else
-            {
-                promptArgs.Add(args[i]);
-            }
-        }
+            Io             = new ConsoleCliIo(),
+            Credentials    = new WindowsCredentialStore(),
+        };
 
-        return (promptArgs, configPath);
+        return options.Kind switch
+        {
+            CliCommandKind.Init     => await InitCommand.ExecuteAsync(context, cts.Token).ConfigureAwait(false),
+            CliCommandKind.Config   => await ConfigCommand.ExecuteAsync(context, options, cts.Token).ConfigureAwait(false),
+            CliCommandKind.Provider => await ProviderCommand.ExecuteAsync(context, options, cts.Token).ConfigureAwait(false),
+            CliCommandKind.Auth     => await AuthCommand.ExecuteAsync(context, options, cts.Token).ConfigureAwait(false),
+            CliCommandKind.Model    => await ModelCommand.ExecuteAsync(context, options, cts.Token).ConfigureAwait(false),
+            CliCommandKind.Doctor   => await DoctorCommand.ExecuteAsync(context, options, cts.Token).ConfigureAwait(false),
+            _                       => throw new InvalidOperationException($"Unhandled command '{options.Kind}'."),
+        };
     }
 
     /// <summary>
-    /// 加载真实运行配置、组装模型与工具权限依赖，运行一次 Agent 任务并输出摘要。
-    /// Loads live configuration, composes model/tool/permission dependencies, runs one agent task, and prints its summary.
+    /// 加载生效配置、组装模型与工具权限依赖，运行一次 Agent 任务并输出摘要。
+    ///
+    /// Loads the effective configuration, composes model/tool/permission dependencies, runs one agent task,
+    /// and prints its summary.
     /// </summary>
     private static async Task<int> RunAsync(string prompt, string? configPath)
     {
         using var cts                = new CancellationTokenSource();
         using var cancelRegistration = new ConsoleCancellation(cts);
-        var config = await ConfigurationLoader.LoadAsync(configPath ?? "tinyharness.json", cts.Token)
-                                              .ConfigureAwait(false);
+        var resolution = await ConfigResolver.ResolveAsync(configPath, cts.Token).ConfigureAwait(false);
+        var config     = resolution.Config;
 
-        await Console.Out.WriteLineAsync($"TinyHarness run");
+        await Console.Out.WriteLineAsync("TinyHarness run");
+        await Console.Out.WriteLineAsync($"  config    : {resolution.Source}" +
+                                         (resolution.SourcePath is null ? string.Empty : $" ({resolution.SourcePath})"));
         await Console.Out.WriteLineAsync($"  model     : {config.Model}");
         await Console.Out.WriteLineAsync($"  endpoint  : {config.Endpoint}");
         await Console.Out.WriteLineAsync($"  workspace : {config.WorkspaceRoot}");
@@ -119,22 +133,26 @@ internal static class Program
 
         if (string.IsNullOrWhiteSpace(config.Model))
         {
-            await Console.Error.WriteLineAsync("A model must be configured (model= in tinyharness.json).");
+            await Console.Error
+                         .WriteLineAsync("A model must be configured. Run 'tinyharness init' (user config) or set 'model' in the config file.");
             return 1;
         }
 
         if (string.IsNullOrWhiteSpace(config.Endpoint))
         {
-            await Console.Error.WriteLineAsync("An endpoint must be configured (endpoint= in tinyharness.json).");
+            await Console.Error
+                         .WriteLineAsync("An endpoint must be configured. Run 'tinyharness init' (user config) or set 'endpoint' in the config file.");
             return 1;
         }
 
-        var apiKey = ReadApiKey(config.ApiKeyEnvironmentVariable);
+        var credentialStore = new WindowsCredentialStore();
+        var apiKey = ApiKeyReader.Read(config.ApiKeyEnvironmentVariable, config.ApiKeyCredentialTarget,
+                                       credentialStore, resolution.ProfileName);
         if (apiKey is null)
         {
             await Console.Error
-                         .WriteLineAsync($"No API key found. Set the environment variable '{config.ApiKeyEnvironmentVariable}'" +
-                                         $" (configured as apiKeyEnvironmentVariable) before running.");
+                         .WriteLineAsync("No API key found. Run 'tinyharness auth set <profile>' or set the environment variable " +
+                                         $"'{config.ApiKeyEnvironmentVariable}' before running.");
             return 1;
         }
 
@@ -207,37 +225,27 @@ internal static class Program
         ]);
 
     /// <summary>
-    /// 为进程环境清理与输出脱敏提供已知 secret；不记录 secret 值。
+    /// 为进程环境清理与输出脱敏提供已知 secret；不记录 secret 值。凭据存储来源时用目标名占位，
+    /// 该名称不存在于子进程环境中，仅让脱敏继续覆盖密钥值本身。
+    ///
     /// Supplies known secrets for child-environment removal and output redaction without logging their values.
+    /// For credential-store keys the target name stands in; no such environment variable exists in children, it
+    /// only keeps redaction covering the secret value itself.
     /// </summary>
     private static IReadOnlyDictionary<string, string> KnownSecrets(TinyHarnessConfig config, string? apiKey)
     {
-        if (string.IsNullOrWhiteSpace(config.ApiKeyEnvironmentVariable) || string.IsNullOrEmpty(apiKey))
+        var name = !string.IsNullOrWhiteSpace(config.ApiKeyEnvironmentVariable)
+            ? config.ApiKeyEnvironmentVariable
+            : config.ApiKeyCredentialTarget;
+        if (string.IsNullOrEmpty(name) || string.IsNullOrEmpty(apiKey))
         {
             return new Dictionary<string, string>(StringComparer.Ordinal);
         }
 
         return new Dictionary<string, string>(StringComparer.Ordinal)
         {
-            [config.ApiKeyEnvironmentVariable] = apiKey,
+            [name] = apiKey,
         };
-    }
-
-    /// <summary>
-    /// 只从配置指定的环境变量读取 API key；绝不记录或嵌入密钥值。
-    ///
-    /// Reads the API key from the configured environment variable. Never logs or
-    /// embeds the value; only its presence is reported.
-    /// </summary>
-    private static string? ReadApiKey(string environmentVariable)
-    {
-        if (string.IsNullOrWhiteSpace(environmentVariable))
-        {
-            return null;
-        }
-
-        var value = Environment.GetEnvironmentVariable(environmentVariable);
-        return string.IsNullOrWhiteSpace(value) ? null : value;
     }
 
     /// <summary>
@@ -250,15 +258,16 @@ internal static class Program
     {
         using var cts                = new CancellationTokenSource();
         using var cancelRegistration = new ConsoleCancellation(cts);
-        var config = await ConfigurationLoader.LoadAsync(configPath ?? "tinyharness.json", cts.Token)
-                                              .ConfigureAwait(false);
+        var resolution = await ConfigResolver.ResolveAsync(configPath, cts.Token).ConfigureAwait(false);
+        var config     = resolution.Config;
 
         await Console.Out.WriteLineAsync("TinyHarness smoke");
         await Console.Out.WriteLineAsync($"  model        : {config.Model}");
 
         if (string.IsNullOrWhiteSpace(config.Model))
         {
-            await Console.Error.WriteLineAsync("A model must be configured (model= in tinyharness.json).");
+            await Console.Error
+                         .WriteLineAsync("A model must be configured. Run 'tinyharness init' (user config) or set 'model' in the config file.");
             return 1;
         }
 
