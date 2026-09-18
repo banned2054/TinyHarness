@@ -8,7 +8,7 @@
 
 ## 当前状态
 
-M7 的持久化与演示基础已实现：每次运行现在会在 `artifacts/runs`（或配置的 `sessionDirectory`）写入可检查的 JSONL 审计和 JSON session 快照。离线 smoke 是固定工具链演示入口；真实模型诊断仍需显式配置并选择加入。
+M7 的持久化与演示基础已实现：每次运行现在会在 `artifacts/runs`（或配置的 `sessionDirectory`）写入可检查的 JSONL 审计和 JSON session 快照。M8 的配置命令链路也已实现：CLI 可以引导首次配置、管理命名 provider profile 和模型、显示生效配置，并执行离线 doctor 检查。交互式多轮聊天和会话恢复仍计划在 M9/M10 实现；真实模型诊断仍需显式配置并选择加入。
 
 | 能力 | 当前实现 |
 |---|---|
@@ -18,10 +18,10 @@ M7 的持久化与演示基础已实现：每次运行现在会在 `artifacts/ru
 | 进程工具 | `shell` 的直接进程与显式 shell 模式；stdout/stderr、退出码、超时、进程树终止和输出裁剪 |
 | 权限 | `Allow` / `Ask` / `Deny`；单次授权、会话授权与命令允许规则 |
 | 上下文 | token 估算、工具结果裁剪、近期完整回合、结构化摘要、连续多批压缩 |
-| 验证 | fake-client 离线测试、本地模拟 SSE 协议测试、`win-x64` NativeAOT smoke |
+| 验证 | fake-client 离线测试、本地模拟 SSE 协议测试、命令解析测试、`win-x64` NativeAOT smoke |
 | 持久化 | 每次运行生成 `<runId>.audit.jsonl` 与 `<runId>.session.json`；落盘前脱敏已配置的已知密钥和明确支持的敏感字段 |
 
-当前 CLI 每次启动执行一个任务，显示审批、压缩提示和最终结果；尚未提供交互式多轮会话、逐 token 终端文本展示或会话恢复。
+当前 CLI 每次启动执行一个任务，显示审批、压缩提示和最终结果。M8 管理命令不会把输入发送给模型；交互式多轮会话、逐 token 终端文本展示和会话恢复尚未提供。
 
 ## 快速开始：先运行离线 smoke
 
@@ -46,6 +46,29 @@ toolExecs    : 16
 ```
 
 它验证 Harness 的执行流程；真实模型的修复能力和压缩效果需要单独验证。压缩不变量与连续多批压缩由离线测试覆盖。
+
+## 通过 CLI 配置
+
+首次使用不需要手工编辑 JSON：
+
+```powershell
+dotnet run --project TinyHarness.Cli -- init
+dotnet run --project TinyHarness.Cli -- config show
+dotnet run --project TinyHarness.Cli -- doctor
+```
+
+引导会把命名 provider profile、endpoint、API key 引用、模型和显式上下文窗口写入平台用户配置（Windows 默认是 `%APPDATA%\tinyharness\user-config.json`）。API key 永远不会写入 JSON。使用 `auth set <profile> --env <VAR>` 保存环境变量引用，或使用 `auth set <profile> --store` 保存到 Windows Credential Manager。`doctor` 默认离线；`doctor --connect` 才会执行联网检查，并可能产生费用。
+
+其他管理命令：
+
+```text
+tinyharness provider list|add <name>|use <name>
+tinyharness model list|add <id> --context-window <tokens>|use <id>
+tinyharness auth set <name> [--env <VAR>|--store]
+tinyharness config set <key> <value>
+```
+
+未指定 `--config` 时不做隐式合并，按顺序使用第一个存在的来源：当前目录 `tinyharness.json`、用户配置、内置默认值。`config show` 会显示生效来源、绝对查找路径和密钥可用性，但不会显示密钥值。使用 `--help` 或 `help <command>` 查看具体语法。测试和便携运行可通过 `TINYHARNESS_USER_CONFIG_DIR` 覆盖用户配置目录。
 
 ## 连接真实模型
 
@@ -96,6 +119,7 @@ dotnet run --project TinyHarness.Cli -- --config artifacts/live.json "说明这�
 | `endpoint` | 空 | 真实服务的 HTTP(S) 基地址 |
 | `model` | 空 | 模型标识；真实运行必须填写 |
 | `apiKeyEnvironmentVariable` | 空 | 保存 API key 的环境变量名称 |
+| `apiKeyCredentialTarget` | 空 | Windows Credential Manager 中保存 API key 的目标名；只保存引用，不保存密钥 |
 | `contextWindowTokens` | `128000` | 声明的上下文窗口 |
 | `reservedOutputTokens` | `8000` | 预算中为输出预留的空间；当前不作为 API 输出上限发送 |
 | `compactionThreshold` | `0` | 触发压缩的总估算 token 阈值，含预留输出；`0` 使用窗口大小 |
@@ -189,6 +213,8 @@ dotnet publish TinyHarness.Cli/TinyHarness.Cli.csproj -c Release -r win-x64 --se
 发布后的可执行文件名为 `TinyHarness.exe`，也可使用 `run --config <path> "任务"` 调用真实服务。
 
 M7 验证（2026-09-11）：默认测试 **178/178 通过**；托管 smoke 在仓库根目录和仓库外目录均成功；隔离目录中的 `win-x64` NativeAOT publish 没有 trimming/AOT warning；本次新生成的原生 EXE 也从仓库外目录通过 smoke。详情见 [M7 演示记录](m7-demo.md)。
+
+M8 验证（2026-09-18）：默认测试 **225/225 通过**；CLI 无警告构建，`win-x64` NativeAOT publish 没有 trimming/AOT warning，发布后的原生程序从仓库外通过 `--help`、离线 `doctor` 和既有 smoke。使用隔离用户配置目录验证了 `init`、`config show/set`、provider/model 管理和环境变量凭据引用，并补充了这些命令路径的执行回归测试。尚未把任何真实 provider/model 列入 tested 清单。详见 [M8 配置命令演示记录](m8-demo.md)。
 
 ### 服务与模型验证范围
 

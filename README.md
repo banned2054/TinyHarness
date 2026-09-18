@@ -8,7 +8,7 @@ The project focuses on a small, complete, and explainable agent execution flow: 
 
 ## Current status
 
-M7 persistence and demo foundations are implemented: runs now write an inspectable JSONL audit and a JSON session snapshot under `artifacts/runs` (or the configured `sessionDirectory`). The offline smoke command is the repeatable tool-flow demo path; real-model diagnosis remains opt-in.
+M7 persistence and demo foundations are implemented: runs now write an inspectable JSONL audit and a JSON session snapshot under `artifacts/runs` (or the configured `sessionDirectory`). M8's configuration command path is also implemented: the CLI can guide first-time setup, manage named provider profiles and models, report effective configuration, and run an offline doctor check. Interactive multi-turn chat and session recovery remain planned for M9/M10; real-model diagnosis remains opt-in.
 
 | Capability | Current implementation |
 |---|---|
@@ -18,10 +18,10 @@ M7 persistence and demo foundations are implemented: runs now write an inspectab
 | Process tool | `shell` with direct process and explicit shell modes; stdout/stderr, exit codes, timeouts, process-tree termination, and output trimming |
 | Permissions | `Allow` / `Ask` / `Deny`; one-time and session approvals, plus command allow rules |
 | Context | Token estimation, tool-result trimming, recent complete turns, structured summaries, and successive compaction batches |
-| Verification | Offline fake-client tests, local simulated SSE protocol tests, and a `win-x64` NativeAOT smoke test |
+| Verification | Offline fake-client tests, local simulated SSE protocol tests, command-parser tests, and a `win-x64` NativeAOT smoke test |
 | Persistence | Per-run `<runId>.audit.jsonl` and `<runId>.session.json`; configured known secret values and explicitly supported sensitive fields are redacted before persistence |
 
-Each CLI invocation runs one task and displays approvals, compaction notices, and the final result. Interactive multi-turn sessions, token-by-token terminal output, and session recovery are not yet available.
+Each CLI invocation runs one task and displays approvals, compaction notices, and the final result. M8 management commands do not send their input to the model. Interactive multi-turn sessions, token-by-token terminal output, and session recovery are not yet available.
 
 ## Quick start: run the offline smoke test
 
@@ -48,6 +48,29 @@ toolExecs    : 16
 ```
 
 This verifies the harness execution flow. A real model's ability to fix code and the quality of its summaries require separate validation. Offline tests cover compaction invariants and successive compaction batches.
+
+## Configure through the CLI
+
+The first-time setup does not require hand-editing JSON:
+
+```powershell
+dotnet run --project TinyHarness.Cli -- init
+dotnet run --project TinyHarness.Cli -- config show
+dotnet run --project TinyHarness.Cli -- doctor
+```
+
+The guide stores a named provider profile, endpoint, API-key reference, model, and explicit context window in the platform user config (`%APPDATA%\tinyharness\user-config.json` on Windows). The API key is never written to JSON. Use `auth set <profile> --env <VAR>` for an environment-variable reference, or `auth set <profile> --store` to use Windows Credential Manager. `doctor` is offline by default; `doctor --connect` is the explicit network check and may incur charges.
+
+Additional management commands are:
+
+```text
+tinyharness provider list|add <name>|use <name>
+tinyharness model list|add <id> --context-window <tokens>|use <id>
+tinyharness auth set <name> [--env <VAR>|--store]
+tinyharness config set <key> <value>
+```
+
+Without `--config`, runtime lookup is non-merging and uses the first existing source: current-directory `tinyharness.json`, the user config, then built-in defaults. `config show` prints the effective source, absolute lookup paths, and key availability without printing key material. Use `--help` or `help <command>` for command-specific syntax. For tests and portable runs, `TINYHARNESS_USER_CONFIG_DIR` overrides the user-config directory.
 
 ## Connect a real model
 
@@ -96,6 +119,7 @@ Press `Ctrl+C` to cancel. Exit codes are `0` for completion, `1` for failure or 
 | `endpoint` | Empty | HTTP(S) base URL for the model service |
 | `model` | Empty | Model identifier; required for live runs |
 | `apiKeyEnvironmentVariable` | Empty | Name of the environment variable holding the API key |
+| `apiKeyCredentialTarget` | Empty | Windows Credential Manager target holding the API key; stores a reference, not the key |
 | `contextWindowTokens` | `128000` | Declared context window size |
 | `reservedOutputTokens` | `8000` | Space reserved for output in the budget; currently not sent as an API output limit |
 | `compactionThreshold` | `0` | Total estimated token threshold for compaction, including reserved output; `0` uses the context window size |
@@ -189,6 +213,8 @@ dotnet publish TinyHarness.Cli/TinyHarness.Cli.csproj -c Release -r win-x64 --se
 The published executable is named `TinyHarness.exe`. Use `run --config <path> "task"` to call a real service.
 
 M7 verification on 2026-09-11: **178/178 default tests passed**; managed smoke passed both from the repository root and from an external directory; isolated `win-x64` NativeAOT publishing produced no trimming/AOT warnings; and that run's newly published native executable passed the smoke test from an external directory. See the [M7 demo record](docs/m7-demo.md) for details.
+
+M8 validation on 2026-09-18: **225/225 default tests passed**; the CLI was built without warnings, `win-x64` NativeAOT publishing completed without trimming/AOT warnings, and the native executable passed `--help`, offline `doctor`, and the existing smoke path from outside the repository. An isolated user-config directory was used to verify `init`, `config show/set`, provider/model management, and environment-variable credential references, with command-execution regression coverage for those paths. No real provider/model is listed as tested. See the [M8 configuration demo record](docs/m8-demo.md).
 
 ### Provider and model verification scope
 
