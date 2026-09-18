@@ -8,6 +8,10 @@
 		<!-- Trim for NativeAOT from the first slice onward. -->
 		<PublishTrimmed>true</PublishTrimmed>
 		<IsAotCompatible>true</IsAotCompatible>
+
+		<!-- Required by the LibraryImport source generator used by the Windows
+         credential-store P/Invoke; only generated interop code is unsafe. -->
+		<AllowUnsafeBlocks>true</AllowUnsafeBlocks>
 	</PropertyGroup>
 
 	<ItemGroup>

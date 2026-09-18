@@ -13,6 +13,14 @@ public sealed record TinyHarnessConfig
 
     public string ApiKeyEnvironmentVariable { get; init; } = string.Empty;
 
+    /// <summary>
+    /// 系统凭据存储中保存 API key 的目标名称；非空时优先于环境变量。JSON 中只保存该引用，不保存密钥值。
+    ///
+    /// Credential-store target name holding the API key; when set it takes precedence over the environment
+    /// variable. JSON stores this reference only, never the secret value.
+    /// </summary>
+    public string ApiKeyCredentialTarget { get; init; } = string.Empty;
+
     public string Model { get; init; } = string.Empty;
 
     public int ContextWindowTokens { get; init; } = 128_000;

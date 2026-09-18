@@ -25,7 +25,7 @@ public static class ConfigurationLoader
             config = await ReadFromFileAsync(config, configJsonPath, cancellationToken).ConfigureAwait(false);
         }
 
-        return Resolve(config);
+        return NormalizePaths(config);
     }
 
     /// <summary>
@@ -44,27 +44,29 @@ public static class ConfigurationLoader
             Endpoint = ReadString(root, "endpoint") ?? config.Endpoint,
             ApiKeyEnvironmentVariable =
             ReadString(root, "apiKeyEnvironmentVariable") ?? config.ApiKeyEnvironmentVariable,
-            Model = ReadString(root, "model")                                      ?? config.Model,
-            ContextWindowTokens = ReadInt(root, "contextWindowTokens")             ?? config.ContextWindowTokens,
-            ReservedOutputTokens = ReadInt(root, "reservedOutputTokens")           ?? config.ReservedOutputTokens,
-            CompactionThreshold = ReadInt(root, "compactionThreshold")             ?? config.CompactionThreshold,
-            MaxAgentSteps = ReadInt(root, "maxAgentSteps")                         ?? config.MaxAgentSteps,
+            ApiKeyCredentialTarget =
+            ReadString(root, "apiKeyCredentialTarget") ?? config.ApiKeyCredentialTarget,
+            Model = ReadString(root, "model") ?? config.Model,
+            ContextWindowTokens = ReadInt(root, "contextWindowTokens") ?? config.ContextWindowTokens,
+            ReservedOutputTokens = ReadInt(root, "reservedOutputTokens") ?? config.ReservedOutputTokens,
+            CompactionThreshold = ReadInt(root, "compactionThreshold") ?? config.CompactionThreshold,
+            MaxAgentSteps = ReadInt(root, "maxAgentSteps") ?? config.MaxAgentSteps,
             DefaultToolTimeoutSeconds = ReadInt(root, "defaultToolTimeoutSeconds") ?? config.DefaultToolTimeoutSeconds,
-            WorkspaceRoot = ReadString(root, "workspaceRoot")                      ?? config.WorkspaceRoot,
-            SessionDirectory = ReadString(root, "sessionDirectory")                ?? config.SessionDirectory,
-            CommandRules = ReadCommandRules(root, "commandRules")                  ?? config.CommandRules,
+            WorkspaceRoot = ReadString(root, "workspaceRoot") ?? config.WorkspaceRoot,
+            SessionDirectory = ReadString(root, "sessionDirectory") ?? config.SessionDirectory,
+            CommandRules = CommandRuleJson.Read(root, "commandRules", $"'{configJsonPath}'") ?? config.CommandRules,
         };
 
         return config;
     }
 
     /// <summary>
-    /// 将工作区根目录解析为规范化绝对路径；API key 由调用方根据配置的环境变量读取。
+    /// 将工作区根目录与 session 目录解析为规范化绝对路径；API key 由调用方根据配置的凭据引用读取。
     ///
-    /// Resolves the workspace root to a normalized absolute path. The caller reads
-    /// the API key from <see cref="TinyHarnessConfig.ApiKeyEnvironmentVariable"/>.
+    /// Resolves the workspace root and session directory to normalized absolute paths. The caller reads the
+    /// API key from the configured credential reference.
     /// </summary>
-    private static TinyHarnessConfig Resolve(TinyHarnessConfig config)
+    internal static TinyHarnessConfig NormalizePaths(TinyHarnessConfig config)
     {
         var workspace = string.IsNullOrWhiteSpace(config.WorkspaceRoot)
             ? Environment.CurrentDirectory
@@ -101,99 +103,5 @@ public static class ConfigurationLoader
         return node.GetValueKind() == System.Text.Json.JsonValueKind.String
             ? int.Parse(node.GetValue<string>())
             : node.GetValue<int>();
-    }
-
-    /// <summary>
-    /// 手工绑定命令允许规则，保持配置路径无反射且对错误类型给出明确诊断。
-    /// Manually binds command allow rules, keeping configuration reflection-free and diagnostics explicit.
-    /// </summary>
-    private static IReadOnlyList<CommandRule>? ReadCommandRules(JsonObject root, string property)
-    {
-        var node = root[property];
-        if (node is null)
-        {
-            return null;
-        }
-
-        if (node is not JsonArray array)
-        {
-            throw new InvalidDataException($"Config field '{property}' must be an array.");
-        }
-
-        var rules = new List<CommandRule>(array.Count);
-        for (var i = 0; i < array.Count; i++)
-        {
-            if (array[i] is not JsonObject item)
-            {
-                throw new InvalidDataException($"Config field '{property}[{i}]' must be an object.");
-            }
-
-            var mode = (ReadString(item, "mode") ?? "direct").ToLowerInvariant();
-            if (mode is not "direct" and not "shell")
-            {
-                throw new InvalidDataException($"Config field '{property}[{i}].mode' must be 'direct' or 'shell'.");
-            }
-
-            var executable = ReadString(item, "executable") ?? string.Empty;
-            var shell      = (ReadString(item, "shell") ?? string.Empty).ToLowerInvariant();
-            var command    = ReadString(item, "command") ?? string.Empty;
-            if (mode == "direct" && string.IsNullOrWhiteSpace(executable))
-            {
-                throw new InvalidDataException(
-                                               $"Config field '{property}[{i}].executable' is required for direct mode.");
-            }
-
-            if (mode == "direct" && (!string.IsNullOrEmpty(shell) || !string.IsNullOrEmpty(command)))
-            {
-                throw new InvalidDataException(
-                                               $"Config fields '{property}[{i}].shell' and '.command' are valid only for shell mode.");
-            }
-
-            if (mode == "shell" && (string.IsNullOrWhiteSpace(shell) || string.IsNullOrWhiteSpace(command)))
-            {
-                throw new InvalidDataException(
-                                               $"Config fields '{property}[{i}].shell' and '{property}[{i}].command' are required for shell mode.");
-            }
-
-            if (mode == "shell" && (!string.IsNullOrEmpty(executable) || item["arguments"] is not null))
-            {
-                throw new InvalidDataException(
-                                               $"Config fields '{property}[{i}].executable' and '.arguments' are valid only for direct mode.");
-            }
-
-            var argumentsNode = item["arguments"];
-            var arguments     = new List<string>();
-            if (argumentsNode is not null)
-            {
-                if (argumentsNode is not JsonArray argumentsArray)
-                {
-                    throw new InvalidDataException($"Config field '{property}[{i}].arguments' must be an array.");
-                }
-
-                for (var argumentIndex = 0; argumentIndex < argumentsArray.Count; argumentIndex++)
-                {
-                    if (argumentsArray[argumentIndex] is not JsonValue value ||
-                        !value.TryGetValue<string>(out var argument)         || argument is null)
-                    {
-                        throw new InvalidDataException(
-                                                       $"Config field '{property}[{i}].arguments[{argumentIndex}]' must be a string.");
-                    }
-
-                    arguments.Add(argument);
-                }
-            }
-
-            rules.Add(new CommandRule
-            {
-                Mode             = mode,
-                Executable       = executable,
-                Arguments        = arguments,
-                Shell            = shell,
-                Command          = command,
-                WorkingDirectory = ReadString(item, "workingDirectory") ?? ".",
-            });
-        }
-
-        return rules;
     }
 }

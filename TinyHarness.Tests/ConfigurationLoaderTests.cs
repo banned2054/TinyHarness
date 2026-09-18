@@ -16,6 +16,7 @@ public class ConfigurationLoaderTests
                                          {
                                            "endpoint": "https://example.test/v1",
                                            "model": "model-x",
+                                           "apiKeyCredentialTarget": "TinyHarness:model-x",
                                            "contextWindowTokens": 64000,
                                            "reservedOutputTokens": 2000,
                                            "maxAgentSteps": 12,
@@ -41,6 +42,7 @@ public class ConfigurationLoaderTests
 
             Assert.Equal("https://example.test/v1", config.Endpoint);
             Assert.Equal("model-x", config.Model);
+            Assert.Equal("TinyHarness:model-x", config.ApiKeyCredentialTarget);
             Assert.Equal(64000, config.ContextWindowTokens);
             Assert.Equal(2000, config.ReservedOutputTokens);
             Assert.Equal(12, config.MaxAgentSteps);
