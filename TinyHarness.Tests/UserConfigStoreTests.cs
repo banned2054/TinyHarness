@@ -1,4 +1,5 @@
-using TinyHarness.Core.Configuration;
+using TinyHarness.Core.Models.Configuration;
+using TinyHarness.Core.Services.Configuration;
 
 namespace TinyHarness.Tests;
 

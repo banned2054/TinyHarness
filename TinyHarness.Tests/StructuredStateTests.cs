@@ -1,4 +1,4 @@
-using TinyHarness.Core.Context;
+using TinyHarness.Core.Models.Context;
 
 namespace TinyHarness.Tests;
 

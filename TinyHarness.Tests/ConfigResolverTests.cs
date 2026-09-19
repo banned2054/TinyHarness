@@ -1,4 +1,6 @@
-using TinyHarness.Core.Configuration;
+using TinyHarness.Core.Exceptions;
+using TinyHarness.Core.Models.Configuration;
+using TinyHarness.Core.Services.Configuration;
 
 namespace TinyHarness.Tests;
 
@@ -14,10 +16,10 @@ public class ConfigResolverTests
             var missing = Path.Combine(dir, "missing.json");
 
             var error = await Assert.ThrowsAsync<ConfigException>(() => ConfigResolver.ResolveAsync(missing,
-                                                                      CancellationToken.None,
-                                                                      workingDirectory : dir,
-                                                                      userConfigPath :
-                                                                      Path.Combine(dir, "user-config.json")));
+                                                                           CancellationToken.None,
+                                                                           workingDirectory : dir,
+                                                                           userConfigPath :
+                                                                           Path.Combine(dir, "user-config.json")));
 
             Assert.True(error.IsUsageError);
             Assert.Contains(missing, error.Message);
@@ -169,9 +171,9 @@ public class ConfigResolverTests
 
             var error =
                 await Assert.ThrowsAsync<ConfigException>(() => ConfigResolver.ResolveAsync(null,
-                                                              CancellationToken.None,
-                                                              workingDirectory : dir,
-                                                              userConfigPath : userPath));
+                                                                   CancellationToken.None,
+                                                                   workingDirectory : dir,
+                                                                   userConfigPath : userPath));
 
             Assert.False(error.IsUsageError);
             Assert.Contains("ghost", error.Message);
@@ -202,9 +204,9 @@ public class ConfigResolverTests
 
             var error =
                 await Assert.ThrowsAsync<ConfigException>(() => ConfigResolver.ResolveAsync(null,
-                                                              CancellationToken.None,
-                                                              workingDirectory : dir,
-                                                              userConfigPath : userPath));
+                                                                   CancellationToken.None,
+                                                                   workingDirectory : dir,
+                                                                   userConfigPath : userPath));
 
             Assert.False(error.IsUsageError);
             Assert.Contains("ghost-model", error.Message);

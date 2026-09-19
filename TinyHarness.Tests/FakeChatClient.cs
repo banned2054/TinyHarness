@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
-using TinyHarness.Core.ChatCompletions;
+using TinyHarness.Core.Models.ChatCompletions;
+using TinyHarness.Core.Services.ChatCompletions;
 
 namespace TinyHarness.Tests;
 

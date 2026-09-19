@@ -2,7 +2,7 @@
 
 本文档定义 TinyHarness.NET 的产品需求、架构边界、MVP 范围和实施顺序。编码 Agent 的操作规范位于 `AGENTS.md`。
 
-路线更新（2026-09-18）：M1–M7 的实现基础已完成，M8 的配置与命令入口已完成并记录于 `docs/m8-demo.md`；第 1–20 节仍作为 MVP 设计与验收基线。后续开发从第 22 节的 M9 开始，目标是把一次性任务 CLI 推进为可日常使用、可恢复对话、最终拥有 Avalonia 桌面入口的本地 coding agent。M9 及之后阶段均为计划；路线本身不代表代码修改或发布授权。
+路线更新（2026-09-19）：当前已完成至 M8，配置与命令入口的验证记录见 [M8 验证记录](docs/m8-demo.md)。第 4 节确定的按职责分类目录整理已于 2026-09-19 实施：类型已按 Models/Services 重新组织并同步 namespace；行为、配置与持久化格式保持不变。构建、225 项默认测试与 `win-x64` NativeAOT publish/smoke 均通过；其余 MVP 设计与验收基线继续适用。下一功能里程碑是第 22 节的 M9，目标是把一次性任务 CLI 推进为可日常使用、可恢复对话、最终拥有 Avalonia 桌面入口的本地 coding agent。M9 及之后阶段均为计划；路线本身不代表代码修改或发布授权。
 
 ## 1. 项目定位
 
@@ -73,22 +73,62 @@ MVP 的 `shell` 理论上可以调用 Git，但必须服从命令权限规则，
 
 ## 4. 解决方案结构
 
-MVP 保持三个项目：
+当前 M8 基线保持 `TinyHarness.Core`、`TinyHarness.Cli` 和 `TinyHarness.Tests` 三个项目。后续目录组织采用职责分类优先、功能分类作为子目录的方式（项目约定的 MVC 变体）；GUI 阶段增加 `Views` 和 `ViewModels`。
+
+以下是目标结构，目录迁移已于 2026-09-19 完成（移动与拆分文件，并按职责同步调整 namespace；公开类型的 namespace 因此发生相应变化）；子目录按实际类型需要创建，不预建空目录：
 
 ```text
 TinyHarness.Core
-├── Agent
-├── ChatCompletions
-├── Context
-├── Tools
-├── Permissions
-└── Runtime
+├── Models
+│   ├── Agent
+│   ├── ChatCompletions
+│   ├── Configuration
+│   ├── Context
+│   ├── Permissions
+│   ├── Persistence
+│   ├── Runtime
+│   └── Tools
+├── Services
+│   ├── Agent
+│   ├── ChatCompletions
+│   ├── Configuration
+│   ├── Context
+│   ├── Permissions
+│   ├── Persistence
+│   ├── Runtime
+│   └── Tools
+├── Exceptions
+└── Utils
 
 TinyHarness.Cli
+├── Commands
+├── Models
+├── Services
+├── Exceptions
+└── Utils
+
 TinyHarness.Tests
+
+TinyHarness.Desktop       # M13 阶段新增
+├── Views
+├── ViewModels
+├── Models               # 仅桌面呈现需要的数据
+├── Services             # 仅桌面平台或交互服务
+├── Exceptions
+└── Utils
 ```
 
-职责如下：
+分类约定：
+
+- `Models`：配置、消息、请求/响应、执行结果、状态和相关枚举，按功能建立子目录；不混入服务实现和异常类型。
+- `Services`：主循环、协议客户端、配置加载与存储、上下文管理、权限判断、工具执行及 Runtime 等功能实现；接口随所属功能放置。目录分类不要求所有类型增加 `Service` 后缀。
+- `Exceptions`：独立异常类型集中放置，数量增加时按功能建立子目录；名称统一使用 `Exceptions`。
+- `Utils`：通用、无业务语义的小工具；有明确业务职责的逻辑归入 `Services`。
+- `Commands`：CLI 命令解析后的入口调度与命令处理；可复用的核心能力放在 Core。
+- `Views` / `ViewModels`：仅属于桌面入口。Views 负责呈现，ViewModels 负责界面状态、属性通知和交互命令，并调用 Core 服务；Core 不依赖 GUI 框架或 ViewModel。
+- 独立的顶层类、record、接口和枚举默认各自成文件，文件名与类型名一致；仅供当前实现使用的私有嵌套类型、测试 fixture 和 fake 可以保留在所属类型内。
+
+以下功能边界继续有效；文中 `Agent`、`ChatCompletions` 等名称表示逻辑模块，其数据类型与实现分别归入 `Models/<功能>` 和 `Services/<功能>`：
 
 - `Agent`：主循环、step 状态、终止条件和错误传播；
 - `ChatCompletions`：SDK/HTTP、认证、请求/响应 DTO、SSE 解码和流式 tool-call 拼装；
@@ -96,12 +136,17 @@ TinyHarness.Tests
 - `Tools`：工具契约、schema、注册、准备和 dispatch；
 - `Permissions`：capability、资源范围、规则匹配和审批；
 - `Runtime`：文件系统与进程的受约束执行；
+- `Configuration`：配置模型、来源解析、profile 与模型选择、凭据引用和配置存储；
 - `Cli`：输入输出、审批提示、配置加载和依赖组装；
 - `Tests`：单元测试、协议契约测试和少量端到端测试。
 
 暂不创建 `TinyHarness.OpenAI`、`TinyHarness.Runtime` 等额外程序集。只有出现第二种协议、API 依赖显著膨胀或需要独立发布 Core 时，才重新评估拆分。
 
 `TinyHarness.Cli` 是 NativeAOT publish root。Core 和所有运行时依赖必须能被该入口静态分析和裁剪。
+
+目录整理作为 M8 完成后的独立重构事项记录，不改变里程碑编号，也不计入已完成状态。实施时保持行为、配置与持久化格式不变；公开类型的命名空间调整需明确评估兼容性，不能仅因移动文件而自动改变公开 API。整理后执行受影响项目的构建与回归测试，涉及 AOT 敏感边界时按既有要求执行 NativeAOT publish 和 smoke。桌面项目及其 Views/ViewModels 留到 M13 创建。
+
+2026-09-19 实施记录：文件已按职责移动，并把 7 个跨类别文件按类型拆分（配置的模型/解析器、StructuredState 与其 JSON context、审计模型与记录器、进程输出结果与捕获器、CLI 解析器/选项/使用异常）；Core 类型 namespace 同步调整为 `TinyHarness.Core.Models.<feature>` 与 `TinyHarness.Core.Services.<feature>`，因此直接引用这些类型的消费者需要更新 using。行为、配置与持久化格式保持不变。`Models/Persistence` 与 `Services/Persistence` 按实际类型需要新增。验证：solution 构建 0 警告、225/225 默认测试通过、`win-x64` NativeAOT `--force` 完整发布 0 trimming/AOT 警告，发布产物从仓库外部目录通过 `--help`、离线 `doctor` 与完整 smoke 路径。
 
 ## 5. 核心边界
 
@@ -673,6 +718,8 @@ M8–M12 是近期明确主线；M13–M14 是后续方向，进入时复核范�
 
 ### M8：配置引导、API profile 与模型选择
 
+**状态：已完成。** 验证记录见 [M8 配置与命令入口验证](docs/m8-demo.md)；下一功能里程碑为 M9。
+
 目标：第一次运行时，用户不需要先打开 JSON 文件。
 
 **范围**：
@@ -686,7 +733,7 @@ M8–M12 是近期明确主线；M13–M14 是后续方向，进入时复核范�
 - 用户配置默认放入平台用户配置目录，并固定解析规则；旧配置的相对路径继续按当前工作目录解释，避免悄悄改变现有行为。
 - `doctor` 默认离线检查字段、路径和凭据是否存在；只有显式 `--connect` 才发送最小模型测试，并提前说明会联网且可能计费。
 
-拟定命令：
+已实现命令：
 
 ```text
 tinyharness init
@@ -815,6 +862,7 @@ tinyharness chat --continue
 **再做 M13b 产品闭环**：
 
 - 增加 `TinyHarness.Desktop`，直接复用 Core 的配置、会话、执行、事件与审批契约，不另建 HTTP 服务。
+- 按第 4 节采用 Views/ViewModels 分层：界面状态、属性通知和交互命令放在 ViewModels，核心执行与数据模型复用 Core 的 Services/Models，Core 不引用桌面项目。
 - 仅在两个入口真实需要时提取共享应用服务，不预先拆出大量程序集；界面层只处理呈现与输入。
 - 最小界面包括会话列表、对话区、输入框、模型选择、设置页、工具状态/详情和审批面板。
 - 可在 GUI 中设置 API、选择工作区、新建/恢复会话、实时收取回复、取消当前回合；设置与 CLI 使用同一来源和凭据引用。

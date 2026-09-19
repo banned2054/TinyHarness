@@ -224,15 +224,17 @@ Protocol verification currently uses a local simulated SSE service, covering cus
 
 | Directory | Responsibility |
 |---|---|
-| `TinyHarness.Core/Agent` | Main loop, tool registration, step counts, and terminal states |
-| `TinyHarness.Core/ChatCompletions` | SDK adapter, messages and stream events, tool-argument assembly |
-| `TinyHarness.Core/Tools` | Schemas, preparation, and execution for the five tools |
-| `TinyHarness.Core/Permissions` | Permission decisions, session grants, and command matching |
-| `TinyHarness.Core/Runtime` | Workspace path boundaries, processes, and output capture |
-| `TinyHarness.Core/Context` | Budget estimation, model views, structured state, and compaction |
-| `TinyHarness.Core/Configuration` | JSON configuration loading and path resolution |
-| `TinyHarness.Cli` | CLI arguments, approval prompts, dependency composition, and offline smoke path |
+| `TinyHarness.Core/Models/<feature>` | Data contracts per feature (`Agent`, `ChatCompletions`, `Configuration`, `Context`, `Permissions`, `Persistence`, `Runtime`, `Tools`): messages, requests/responses, configuration, states, and execution results |
+| `TinyHarness.Core/Services/<feature>` | Implementations per feature: agent main loop, OpenAI SDK adapter, configuration loading/storage, context management and compaction, permission engine, tool preparation and execution, workspace/process runtime, and run persistence |
+| `TinyHarness.Core/Exceptions` | Standalone exception types |
+| `TinyHarness.Cli/Commands` | Argument parsing, command dispatch, and command handlers |
+| `TinyHarness.Cli/Models` | Parsed command-line options |
+| `TinyHarness.Cli/Services` | Console I/O, approval prompts, profile editing, and the offline smoke path |
+| `TinyHarness.Cli/Exceptions` | CLI usage errors |
+| `TinyHarness.Cli` (root) | Entry point and dependency composition |
 | `TinyHarness.Tests` | Unit, protocol contract, and integration tests |
+
+Namespaces now follow the directory roles: data contracts use `TinyHarness.Core.Models.<feature>`, implementations use `TinyHarness.Core.Services.<feature>`, and CLI types use `TinyHarness.Cli.Commands`, `TinyHarness.Cli.Models`, or `TinyHarness.Cli.Services`. This namespace reorganization is a public API change for consumers that reference Core types directly; behavior and persisted formats remain unchanged.
 
 The agent loop accesses models through `IChatCompletionClient`; SDK types stay in the protocol adapter layer. Tools are registered explicitly. Structured state uses System.Text.Json source generation, and configuration uses manual binding without reflection to support ongoing trimming and NativeAOT verification.
 

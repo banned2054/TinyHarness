@@ -1,11 +1,19 @@
-using TinyHarness.Core.Agent;
-using TinyHarness.Core.ChatCompletions;
-using TinyHarness.Core.Configuration;
-using TinyHarness.Core.Context;
-using TinyHarness.Core.Permissions;
-using TinyHarness.Core.Persistence;
-using TinyHarness.Core.Runtime;
-using TinyHarness.Core.Tools;
+using TinyHarness.Cli.Commands;
+using TinyHarness.Cli.Exceptions;
+using TinyHarness.Cli.Models;
+using TinyHarness.Cli.Services;
+using TinyHarness.Core.Exceptions;
+using TinyHarness.Core.Models.Agent;
+using TinyHarness.Core.Models.Configuration;
+using TinyHarness.Core.Models.Context;
+using TinyHarness.Core.Services.Agent;
+using TinyHarness.Core.Services.ChatCompletions;
+using TinyHarness.Core.Services.Configuration;
+using TinyHarness.Core.Services.Permissions;
+using TinyHarness.Core.Services.Persistence;
+using TinyHarness.Core.Services.Runtime;
+using TinyHarness.Core.Services.Tools;
+using WindowsCredentialStore = TinyHarness.Core.Services.Runtime.WindowsCredentialStore;
 
 namespace TinyHarness.Cli;
 
@@ -63,22 +71,22 @@ internal static class Program
         var options = CommandLine.Parse(args);
         switch (options.Kind)
         {
-            case CliCommandKind.Help:
+            case CliCommandKind.Help :
                 await Console.Out.WriteLineAsync(HelpText.For(options.HelpTopic).TrimEnd());
                 return 0;
 
-            case CliCommandKind.ProcessSmokeChild:
+            case CliCommandKind.ProcessSmokeChild :
                 await Console.Out.WriteLineAsync("process stdout");
                 await Console.Error.WriteLineAsync("process stderr");
                 return 0;
 
-            case CliCommandKind.Smoke:
+            case CliCommandKind.Smoke :
                 return await RunSmokeAsync(options.ConfigPath);
 
-            case CliCommandKind.Run:
+            case CliCommandKind.Run :
                 return await RunAsync(options.Prompt!, options.ConfigPath);
 
-            default:
+            default :
                 return await RunManagementCommandAsync(options).ConfigureAwait(false);
         }
     }
@@ -94,19 +102,22 @@ internal static class Program
         using var cancelRegistration = new ConsoleCancellation(cts);
         var context = new CommandContext
         {
-            Io             = new ConsoleCliIo(),
-            Credentials    = new WindowsCredentialStore(),
+            Io          = new ConsoleCliIo(),
+            Credentials = new WindowsCredentialStore(),
         };
 
         return options.Kind switch
         {
-            CliCommandKind.Init     => await InitCommand.ExecuteAsync(context, cts.Token).ConfigureAwait(false),
-            CliCommandKind.Config   => await ConfigCommand.ExecuteAsync(context, options, cts.Token).ConfigureAwait(false),
-            CliCommandKind.Provider => await ProviderCommand.ExecuteAsync(context, options, cts.Token).ConfigureAwait(false),
-            CliCommandKind.Auth     => await AuthCommand.ExecuteAsync(context, options, cts.Token).ConfigureAwait(false),
-            CliCommandKind.Model    => await ModelCommand.ExecuteAsync(context, options, cts.Token).ConfigureAwait(false),
-            CliCommandKind.Doctor   => await DoctorCommand.ExecuteAsync(context, options, cts.Token).ConfigureAwait(false),
-            _                       => throw new InvalidOperationException($"Unhandled command '{options.Kind}'."),
+            CliCommandKind.Init => await InitCommand.ExecuteAsync(context, cts.Token).ConfigureAwait(false),
+            CliCommandKind.Config => await ConfigCommand.ExecuteAsync(context, options, cts.Token)
+                                                        .ConfigureAwait(false),
+            CliCommandKind.Provider => await ProviderCommand.ExecuteAsync(context, options, cts.Token)
+                                                            .ConfigureAwait(false),
+            CliCommandKind.Auth  => await AuthCommand.ExecuteAsync(context, options, cts.Token).ConfigureAwait(false),
+            CliCommandKind.Model => await ModelCommand.ExecuteAsync(context, options, cts.Token).ConfigureAwait(false),
+            CliCommandKind.Doctor => await DoctorCommand.ExecuteAsync(context, options, cts.Token)
+                                                        .ConfigureAwait(false),
+            _ => throw new InvalidOperationException($"Unhandled command '{options.Kind}'."),
         };
     }
 
@@ -120,12 +131,14 @@ internal static class Program
     {
         using var cts                = new CancellationTokenSource();
         using var cancelRegistration = new ConsoleCancellation(cts);
-        var resolution = await ConfigResolver.ResolveAsync(configPath, cts.Token).ConfigureAwait(false);
-        var config     = resolution.Config;
+        var       resolution         = await ConfigResolver.ResolveAsync(configPath, cts.Token).ConfigureAwait(false);
+        var       config             = resolution.Config;
 
         await Console.Out.WriteLineAsync("TinyHarness run");
         await Console.Out.WriteLineAsync($"  config    : {resolution.Source}" +
-                                         (resolution.SourcePath is null ? string.Empty : $" ({resolution.SourcePath})"));
+                                         (resolution.SourcePath is null
+                                             ? string.Empty
+                                             : $" ({resolution.SourcePath})"));
         await Console.Out.WriteLineAsync($"  model     : {config.Model}");
         await Console.Out.WriteLineAsync($"  endpoint  : {config.Endpoint}");
         await Console.Out.WriteLineAsync($"  workspace : {config.WorkspaceRoot}");
@@ -258,8 +271,8 @@ internal static class Program
     {
         using var cts                = new CancellationTokenSource();
         using var cancelRegistration = new ConsoleCancellation(cts);
-        var resolution = await ConfigResolver.ResolveAsync(configPath, cts.Token).ConfigureAwait(false);
-        var config     = resolution.Config;
+        var       resolution         = await ConfigResolver.ResolveAsync(configPath, cts.Token).ConfigureAwait(false);
+        var       config             = resolution.Config;
 
         await Console.Out.WriteLineAsync("TinyHarness smoke");
         await Console.Out.WriteLineAsync($"  model        : {config.Model}");

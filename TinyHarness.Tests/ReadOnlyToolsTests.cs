@@ -1,20 +1,21 @@
 using System.Text;
-using TinyHarness.Core.Agent;
-using TinyHarness.Core.ChatCompletions;
-using TinyHarness.Core.Tools;
+using TinyHarness.Core.Models.Agent;
+using TinyHarness.Core.Models.ChatCompletions;
+using TinyHarness.Core.Models.Tools;
+using TinyHarness.Core.Services.Agent;
+using TinyHarness.Core.Services.Tools;
 
 namespace TinyHarness.Tests;
 
 public class ReadOnlyToolsTests
 {
-    private static ChatToolCall Call(ITool tool, string argumentsJson)
-        => new("call_1", tool.Definition.Name, argumentsJson);
+    private static ChatToolCall Call(ITool tool, string argumentsJson) =>
+        new("call_1", tool.Definition.Name, argumentsJson);
 
-    private static ToolPreparation Prepare(ITool tool, string argumentsJson)
-        => tool.Prepare(Call(tool, argumentsJson));
+    private static ToolPreparation Prepare(ITool tool, string argumentsJson) => tool.Prepare(Call(tool, argumentsJson));
 
-    private static async Task<ToolResult> ExecuteAsync(ITool tool, ToolPreparation preparation)
-        => await tool.ExecuteAsync(preparation, CancellationToken.None);
+    private static async Task<ToolResult> ExecuteAsync(ITool tool, ToolPreparation preparation) =>
+        await tool.ExecuteAsync(preparation, CancellationToken.None);
 
     // ---- read_file ---------------------------------------------------------
 
@@ -416,7 +417,7 @@ public class ReadOnlyToolsTests
     {
         using var dir = new TestTempDir();
         dir.WriteFile("a.txt", "needle in text\n");
-        dir.WriteBytes("b.bin", [0x00, 0x01, 0x02, .. Encoding.UTF8.GetBytes("needle")]);
+        dir.WriteBytes("b.bin", [0x00, 0x01, 0x02, .. "needle"u8.ToArray()]);
         var tool = new SearchTextTool(dir.Workspace);
 
         var result = await ExecuteAsync(tool, Prepare(tool, """{"pattern":"needle"}"""));
@@ -538,7 +539,7 @@ public class ReadOnlyToolsTests
 
         Assert.Equal(AgentStatus.Completed, result.Status);
         Assert.Equal(2, client.Requests);
-        Assert.Contains(loop.History, m => m.Role == ChatRole.Tool && m.Content == "alpha\nbeta");
+        Assert.Contains(loop.History, m => m is { Role: ChatRole.Tool, Content: "alpha\nbeta" });
     }
 
     [Fact]
@@ -553,8 +554,7 @@ public class ReadOnlyToolsTests
         var result = await loop.RunAsync("sys", "read missing.txt", CancellationToken.None);
 
         Assert.Equal(AgentStatus.Completed, result.Status);
-        Assert.Contains(loop.History,
-                        m => m.Role == ChatRole.Tool && m.Content.Contains("File not found"));
+        Assert.Contains(loop.History, m => m.Role == ChatRole.Tool && m.Content.Contains("File not found"));
     }
 
     private static AgentOptions Options() => new()

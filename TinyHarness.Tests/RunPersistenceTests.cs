@@ -1,10 +1,14 @@
 using System.Text.Json;
-using TinyHarness.Core.Agent;
-using TinyHarness.Core.ChatCompletions;
-using TinyHarness.Core.Context;
-using TinyHarness.Core.Permissions;
-using TinyHarness.Core.Persistence;
-using TinyHarness.Core.Tools;
+using TinyHarness.Core.Models.Agent;
+using TinyHarness.Core.Models.ChatCompletions;
+using TinyHarness.Core.Models.Context;
+using TinyHarness.Core.Models.Permissions;
+using TinyHarness.Core.Models.Persistence;
+using TinyHarness.Core.Models.Tools;
+using TinyHarness.Core.Services.Agent;
+using TinyHarness.Core.Services.Persistence;
+using TinyHarness.Core.Services.Tools;
+using PersistenceJsonContext = TinyHarness.Core.Services.Persistence.PersistenceJsonContext;
 
 namespace TinyHarness.Tests;
 
@@ -17,16 +21,19 @@ public sealed class RunPersistenceTests
         var       recorder = new FileRunRecorder(temp.Root, "run-1");
         var preparation = new ToolPreparation
         {
-            ToolName  = "read_file", CallId              = "call-1", Capability = "filesystem.read",
-            Summary   = "Read file 'a.txt'", TargetPaths = [Path.Combine(temp.Root, "a.txt")],
-            Arguments = new System.Text.Json.Nodes.JsonObject(),
+            ToolName    = "read_file",
+            CallId      = "call-1",
+            Capability  = "filesystem.read",
+            Summary     = "Read file 'a.txt'",
+            TargetPaths = [Path.Combine(temp.Root, "a.txt")],
+            Arguments   = new System.Text.Json.Nodes.JsonObject(),
         };
         var result      = new ToolResult { Succeeded = true, Content                       = "contents" };
         var agentResult = new AgentResult { Status   = AgentStatus.Completed, FinalMessage = "done", Steps = 1 };
 
         await recorder.StartAsync("system", "inspect", CancellationToken.None);
         await recorder.RecordPreparedAsync(preparation, CancellationToken.None);
-        await recorder.RecordPermissionAsync(preparation, Core.Permissions.PermissionDecision.Allow,
+        await recorder.RecordPermissionAsync(preparation, PermissionDecision.Allow,
                                              "allow", CancellationToken.None);
         await recorder.RecordResultAsync(preparation, result, CancellationToken.None);
         await recorder.RecordCompactionAsync(new ContextChange(100, 50), CancellationToken.None);
@@ -47,15 +54,16 @@ public sealed class RunPersistenceTests
     public async Task FinalMessageKnownSecretIsRedactedFromEntireSession()
     {
         const string secret = "synthetic-final-secret-42";
-        using var temp = new TestTempDir();
+        using var    temp   = new TestTempDir();
         var recorder = new FileRunRecorder(temp.Root, "final-secret",
-            new Dictionary<string, string> { ["TEST_KEY"] = secret });
+                                           new Dictionary<string, string> { ["TEST_KEY"] = secret });
 
-        await recorder.CompleteAsync(
-            new AgentResult { Status = AgentStatus.Completed, FinalMessage = $"answer {secret}" },
-            [ChatMessage.Assistant($"answer {secret}")], StructuredState.Empty, CancellationToken.None);
+        await recorder.CompleteAsync(new AgentResult
+                                         { Status = AgentStatus.Completed, FinalMessage = $"answer {secret}" },
+                                     [ChatMessage.Assistant($"answer {secret}")], StructuredState.Empty,
+                                     CancellationToken.None);
 
-        var raw = await File.ReadAllTextAsync(recorder.SessionPath);
+        var raw      = await File.ReadAllTextAsync(recorder.SessionPath);
         var snapshot = DeserializeSession(raw);
         Assert.DoesNotContain(secret, raw, StringComparison.Ordinal);
         Assert.Equal("answer [REDACTED]", snapshot.Result.FinalMessage);
@@ -65,16 +73,15 @@ public sealed class RunPersistenceTests
     public async Task RunErrorKnownSecretIsRedactedFromSessionAndCompletedAudit()
     {
         const string secret = "synthetic-error-secret-42";
-        using var temp = new TestTempDir();
+        using var    temp   = new TestTempDir();
         var recorder = new FileRunRecorder(temp.Root, "error-secret",
-            new Dictionary<string, string> { ["TEST_KEY"] = secret });
+                                           new Dictionary<string, string> { ["TEST_KEY"] = secret });
 
-        await recorder.CompleteAsync(
-            new AgentResult { Status = AgentStatus.Failed, Error = $"failure {secret}" },
-            [ChatMessage.User("run")], StructuredState.Empty, CancellationToken.None);
+        await recorder.CompleteAsync(new AgentResult { Status = AgentStatus.Failed, Error = $"failure {secret}" },
+                                     [ChatMessage.User("run")], StructuredState.Empty, CancellationToken.None);
 
         var session = await File.ReadAllTextAsync(recorder.SessionPath);
-        var audit = await File.ReadAllTextAsync(recorder.AuditPath);
+        var audit   = await File.ReadAllTextAsync(recorder.AuditPath);
         Assert.DoesNotContain(secret, session, StringComparison.Ordinal);
         Assert.DoesNotContain(secret, audit, StringComparison.Ordinal);
         Assert.Equal("failure [REDACTED]", DeserializeSession(session).Result.Error);
@@ -86,35 +93,44 @@ public sealed class RunPersistenceTests
     {
         const string shorterSecret = "overlap-secret";
         const string longerSecret  = "overlap-secret-value";
-        using var temp = new TestTempDir();
+        using var    temp          = new TestTempDir();
         var recorder = new FileRunRecorder(temp.Root, "all-fields", new Dictionary<string, string>
         {
-            ["SHORT_KEY"] = shorterSecret, ["LONG_KEY"] = longerSecret,
+            ["SHORT_KEY"] = shorterSecret,
+            ["LONG_KEY"]  = longerSecret,
         });
         var preparation = new ToolPreparation
         {
-            ToolName = "read_file", CallId = "call-1", Capability = "filesystem.read",
-            Summary = $"read {longerSecret}", TargetPaths = [$"C:\\fixture\\{longerSecret}.txt"],
-            Arguments = new System.Text.Json.Nodes.JsonObject(),
+            ToolName    = "read_file",
+            CallId      = "call-1",
+            Capability  = "filesystem.read",
+            Summary     = $"read {longerSecret}",
+            TargetPaths = [$"C:\\fixture\\{longerSecret}.txt"],
+            Arguments   = new System.Text.Json.Nodes.JsonObject(),
         };
         var messages = new[]
         {
             ChatMessage.User($"message {longerSecret}"),
-            ChatMessage.Assistant("tool", [new ChatToolCall("call-1", "read_file",
-                $$"""{"path":"{{longerSecret}}"}""")]),
+            ChatMessage.Assistant("tool", [
+                new ChatToolCall("call-1", "read_file",
+                                 $$"""{"path":"{{longerSecret}}"}""")
+            ]),
         };
         var state = new StructuredState
         {
-            Goal = $"goal {longerSecret}", Constraints = [$"constraint {longerSecret}"],
-            Decisions = [$"decision {longerSecret}"], FilesInspected = [$"inspected {longerSecret}"],
-            FilesModified = [$"modified {longerSecret}"], CommandsAndResults = [$"command {longerSecret}"],
-            PendingWork = [$"pending {longerSecret}"],
+            Goal               = $"goal {longerSecret}",
+            Constraints        = [$"constraint {longerSecret}"],
+            Decisions          = [$"decision {longerSecret}"],
+            FilesInspected     = [$"inspected {longerSecret}"],
+            FilesModified      = [$"modified {longerSecret}"],
+            CommandsAndResults = [$"command {longerSecret}"],
+            PendingWork        = [$"pending {longerSecret}"],
         };
 
         await recorder.StartAsync($"system {longerSecret}", $"input {longerSecret}", CancellationToken.None);
         await recorder.RecordPreparedAsync(preparation, CancellationToken.None);
         await recorder.RecordPermissionAsync(preparation, PermissionDecision.Allow,
-                                              $"allowed {longerSecret}", CancellationToken.None);
+                                             $"allowed {longerSecret}", CancellationToken.None);
         await recorder.CompleteAsync(new AgentResult { Status = AgentStatus.Completed }, messages, state,
                                      CancellationToken.None);
 
@@ -136,13 +152,13 @@ public sealed class RunPersistenceTests
         await recorder.CompleteAsync(new AgentResult { Status = AgentStatus.Completed }, [message],
                                      StructuredState.Empty, CancellationToken.None);
 
-        var snapshot = DeserializeSession(await File.ReadAllTextAsync(recorder.SessionPath));
+        var snapshot         = DeserializeSession(await File.ReadAllTextAsync(recorder.SessionPath));
         var persistedMessage = Assert.Single(snapshot.Messages);
         Assert.Null(persistedMessage.Name);
         Assert.Null(persistedMessage.ToolCallId);
         Assert.Null(snapshot.Result.Error);
-        var persistedCall = Assert.Single(persistedMessage.ToolCalls!);
-        using var document = JsonDocument.Parse(persistedCall.ArgumentsJson);
+        var       persistedCall = Assert.Single(persistedMessage.ToolCalls!);
+        using var document      = JsonDocument.Parse(persistedCall.ArgumentsJson);
         Assert.Equal("[REDACTED]", document.RootElement.GetProperty("password").GetString());
         Assert.Equal("[REDACTED]", document.RootElement.GetProperty("nested").GetProperty("api_key").GetString());
         Assert.Equal(JsonValueKind.Null, document.RootElement.GetProperty("optional").ValueKind);
@@ -167,11 +183,11 @@ public sealed class RunPersistenceTests
     }
 
     [Fact]
-    public async Task ResultAuditIOExceptionKeepsToolResultInMemoryAndDoesNotReplayTool()
+    public async Task ResultAuditIoExceptionKeepsToolResultInMemoryAndDoesNotReplayTool()
     {
         var client = new FakeChatClient();
         client.Enqueue(FakeChatClient.ToolCall("side_effect", "{}"));
-        var tool = new FakeTool("side_effect");
+        var tool     = new FakeTool("side_effect");
         var recorder = new ThrowingRecorder { ThrowOnResult = true };
         var loop = new AgentLoop(client, new ToolRegistry([tool]), Options(), permissions : null, approver : null,
                                  recorder);
@@ -185,8 +201,7 @@ public sealed class RunPersistenceTests
         Assert.Equal(1, client.Requests);
         Assert.Equal(1, recorder.ResultCalls);
         Assert.Equal(1, recorder.CompleteCalls);
-        Assert.Contains(loop.History, message =>
-            message is { Role: ChatRole.Tool, Content: "side_effect ok" });
+        Assert.Contains(loop.History, message => message is { Role: ChatRole.Tool, Content: "side_effect ok" });
     }
 
     [Theory]
@@ -202,19 +217,20 @@ public sealed class RunPersistenceTests
     {
         using var temp = new TestTempDir();
         var recorder = new FileRunRecorder(temp.Root, "escaped-json",
-            new Dictionary<string, string> { ["TEST_KEY"] = secret });
+                                           new Dictionary<string, string> { ["TEST_KEY"] = secret });
         var message = ChatMessage.Assistant(input, [new ChatToolCall("call-1", "shell", input)]);
-        var result = new AgentResult { Status = AgentStatus.Failed, FinalMessage = input, Error = input };
-        var state = new StructuredState { Goal = input };
+        var result  = new AgentResult { Status   = AgentStatus.Failed, FinalMessage = input, Error = input };
+        var state   = new StructuredState { Goal = input };
 
         await recorder.StartAsync(input, input, CancellationToken.None);
         await recorder.CompleteAsync(result, [message], state, CancellationToken.None);
 
-        var snapshot = DeserializeSession(await File.ReadAllTextAsync(recorder.SessionPath));
+        var snapshot         = DeserializeSession(await File.ReadAllTextAsync(recorder.SessionPath));
         var persistedMessage = Assert.Single(snapshot.Messages);
-        var persistedCall = Assert.Single(persistedMessage.ToolCalls!);
+        var persistedCall    = Assert.Single(persistedMessage.ToolCalls!);
         var audit = (await File.ReadAllLinesAsync(recorder.AuditPath))
-           .Select(line => JsonSerializer.Deserialize(line, PersistenceJsonContext.Default.AuditRecord)!).ToArray();
+                   .Select(line => JsonSerializer.Deserialize(line, PersistenceJsonContext.Default.AuditRecord)!)
+                   .ToArray();
         using var expectedJson = JsonDocument.Parse(expected);
         foreach (var value in new[]
                  {
@@ -235,7 +251,9 @@ public sealed class RunPersistenceTests
 
     private static AgentOptions Options() => new()
     {
-        Model = "test-model", MaxAgentSteps = 10, DefaultToolTimeoutSeconds = 30,
+        Model                     = "test-model",
+        MaxAgentSteps             = 10,
+        DefaultToolTimeoutSeconds = 30,
     };
 
     private static SessionSnapshot DeserializeSession(string json) =>
@@ -245,9 +263,9 @@ public sealed class RunPersistenceTests
     private sealed class ThrowingRecorder : IRunRecorder
     {
         public bool ThrowOnComplete { get; init; }
-        public bool ThrowOnResult { get; init; }
-        public int CompleteCalls { get; private set; }
-        public int ResultCalls { get; private set; }
+        public bool ThrowOnResult   { get; init; }
+        public int  CompleteCalls   { get; private set; }
+        public int  ResultCalls     { get; private set; }
 
         public Task StartAsync(string systemPrompt, string userInput, CancellationToken cancellationToken) =>
             Task.CompletedTask;
@@ -255,10 +273,10 @@ public sealed class RunPersistenceTests
         public Task RecordPreparedAsync(ToolPreparation preparation, CancellationToken cancellationToken) =>
             Task.CompletedTask;
 
-        public Task RecordPermissionAsync(ToolPreparation preparation, PermissionDecision decision, string outcome,
+        public Task RecordPermissionAsync(ToolPreparation   preparation, PermissionDecision decision, string outcome,
                                           CancellationToken cancellationToken) => Task.CompletedTask;
 
-        public Task RecordResultAsync(ToolPreparation preparation, ToolResult result,
+        public Task RecordResultAsync(ToolPreparation   preparation, ToolResult result,
                                       CancellationToken cancellationToken)
         {
             ResultCalls++;
@@ -270,7 +288,7 @@ public sealed class RunPersistenceTests
         public Task RecordCompactionAsync(ContextChange change, CancellationToken cancellationToken) =>
             Task.CompletedTask;
 
-        public Task CompleteAsync(AgentResult result, IReadOnlyList<ChatMessage> messages, StructuredState state,
+        public Task CompleteAsync(AgentResult       result, IReadOnlyList<ChatMessage> messages, StructuredState state,
                                   CancellationToken cancellationToken)
         {
             CompleteCalls++;

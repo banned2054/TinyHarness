@@ -54,8 +54,10 @@ public class WorkspaceTests
         using var outsideDir = new TestTempDir();
         var       outside    = outsideDir.WriteFile("outside.txt", "outside");
 
-        var ex = Assert.Throws<InvalidDataException>(() =>
-            insideDir.Workspace.EnsureFinalTargetInside(outside, isDirectory : false, "File"));
+        var ex =
+            Assert.Throws<InvalidDataException>(() =>
+                                                    insideDir.Workspace.EnsureFinalTargetInside(outside,
+                                                             isDirectory : false, "File"));
 
         Assert.Contains("is outside the workspace root", ex.Message);
     }
@@ -131,8 +133,7 @@ public class WorkspaceTests
             return false;
         }
 
-        var psi = new ProcessStartInfo("cmd.exe",
-                                       $"/c mklink /J \"{linkPath}\" \"{targetPath}\"")
+        var psi = new ProcessStartInfo("cmd.exe", $"/c mklink /J \"{linkPath}\" \"{targetPath}\"")
         {
             CreateNoWindow         = true,
             UseShellExecute        = false,

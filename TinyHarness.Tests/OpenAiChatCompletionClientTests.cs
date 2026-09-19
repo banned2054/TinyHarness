@@ -1,8 +1,11 @@
 using System.ClientModel;
 using System.Text.Json.Nodes;
-using TinyHarness.Core.Agent;
-using TinyHarness.Core.ChatCompletions;
-using TinyHarness.Core.Tools;
+using TinyHarness.Core.Models.Agent;
+using TinyHarness.Core.Models.ChatCompletions;
+using TinyHarness.Core.Models.Tools;
+using TinyHarness.Core.Services.Agent;
+using TinyHarness.Core.Services.ChatCompletions;
+using TinyHarness.Core.Services.Tools;
 
 namespace TinyHarness.Tests;
 
@@ -14,8 +17,8 @@ namespace TinyHarness.Tests;
 /// </summary>
 public class OpenAiChatCompletionClientTests
 {
-    private static OpenAiChatCompletionClient NewClient(MockSseServer server)
-        => new("mock-model", server.BaseUrl, "test-key");
+    private static OpenAiChatCompletionClient NewClient(MockSseServer server) =>
+        new("mock-model", server.BaseUrl, "test-key");
 
     private static ChatCompletionRequest Request(params ChatMessage[] messages) => new()
     {
@@ -144,11 +147,9 @@ public class OpenAiChatCompletionClientTests
 
         // Both calls announce in one chunk; argument fragments then interleave
         // per index, as real providers do.
-        server.EnqueueRaw(Sse(
-                              RoleDelta(),
+        server.EnqueueRaw(Sse(RoleDelta(),
                               Chunk("""{"tool_calls":[{"index":0,"id":"a","type":"function","function":{"name":"tool_a","arguments":""}},{"index":1,"id":"b","type":"function","function":{"name":"tool_b","arguments":""}}]}"""),
-                              ToolArgumentsDelta(0, """{"x":1}"""),
-                              ToolArgumentsDelta(1, """{"y":2}"""),
+                              ToolArgumentsDelta(0, """{"x":1}"""), ToolArgumentsDelta(1, """{"y":2}"""),
                               ToolCallsFinishDelta()));
         var client = NewClient(server);
 
@@ -229,8 +230,8 @@ public class OpenAiChatCompletionClientTests
         });
         var client = NewClient(server);
 
-        using var cts     = new CancellationTokenSource();
-        var       collect = Task.Run(() => CollectAsync(client, Request(ChatMessage.User("slow")), cts.Token));
+        using var cts = new CancellationTokenSource();
+        var collect = Task.Run(() => CollectAsync(client, Request(ChatMessage.User("slow")), cts.Token));
         await Task.Delay(200);
         await cts.CancelAsync();
 
@@ -247,12 +248,8 @@ public class OpenAiChatCompletionClientTests
         server.Start();
 
         // Turn 1: the model requests a tool call.
-        server.EnqueueRaw(Sse(
-                              RoleDelta(),
-                              ContentDelta("I will read it."),
-                              ToolCallHead(0, "call_1", "read_file"),
-                              ToolArgumentsDelta(0, """{"path":"/tmp/a.txt"}"""),
-                              ToolCallsFinishDelta()));
+        server.EnqueueRaw(Sse(RoleDelta(), ContentDelta("I will read it."), ToolCallHead(0, "call_1", "read_file"),
+                              ToolArgumentsDelta(0, """{"path":"/tmp/a.txt"}"""), ToolCallsFinishDelta()));
 
         // Turn 2: after the tool result it answers in plain text.
         server.EnqueueRaw(Sse(RoleDelta(), ContentDelta("The file read fine."), StopDelta()));

@@ -1,6 +1,7 @@
 using System.Text.Json.Nodes;
-using TinyHarness.Core.ChatCompletions;
-using TinyHarness.Core.Tools;
+using TinyHarness.Core.Models.ChatCompletions;
+using TinyHarness.Core.Models.Tools;
+using TinyHarness.Core.Services.Tools;
 
 namespace TinyHarness.Tests;
 

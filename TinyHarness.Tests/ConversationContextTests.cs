@@ -1,5 +1,6 @@
-using TinyHarness.Core.ChatCompletions;
-using TinyHarness.Core.Context;
+using TinyHarness.Core.Models.ChatCompletions;
+using TinyHarness.Core.Models.Context;
+using TinyHarness.Core.Services.Context;
 
 namespace TinyHarness.Tests;
 
@@ -311,7 +312,7 @@ public class ConversationContextTests
             ReservedOutputTokens      = 100,
             CompactionThresholdTokens = 2000,
         };
-        Assert.Throws<ArgumentOutOfRangeException>(() => above.Validate());
+        Assert.Throws<ArgumentOutOfRangeException>(above.Validate);
 
         var equal = new ContextOptions
         {

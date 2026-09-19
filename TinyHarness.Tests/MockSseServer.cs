@@ -14,9 +14,10 @@ namespace TinyHarness.Tests;
 internal sealed class MockSseServer : IDisposable
 {
     private readonly CancellationTokenSource                    _cts      = new();
-    private readonly object                                     _lock     = new();
+    private readonly Lock                                       _lock     = new();
     private readonly Queue<Func<ReceivedRequest, HttpResponse>> _handlers = new();
-    private          HttpListener                               _listener = new();
+
+    private HttpListener _listener = new();
 
     public sealed record ReceivedRequest(string Method, string Path, string Body);
 
@@ -77,8 +78,7 @@ internal sealed class MockSseServer : IDisposable
                                              },
                                          })));
 
-    public void EnqueueRaw(string sseBody)
-        => Enqueue(_ => new HttpResponse(200, "text/event-stream", sseBody));
+    public void EnqueueRaw(string sseBody) => Enqueue(_ => new HttpResponse(200, "text/event-stream", sseBody));
 
     private async Task ListenerLoopAsync()
     {

@@ -1,8 +1,10 @@
 using System.Diagnostics;
 using System.Text.Json.Nodes;
-using TinyHarness.Core.ChatCompletions;
-using TinyHarness.Core.Runtime;
-using TinyHarness.Core.Tools;
+using TinyHarness.Core.Models.ChatCompletions;
+using TinyHarness.Core.Models.Runtime;
+using TinyHarness.Core.Models.Tools;
+using TinyHarness.Core.Services.Runtime;
+using TinyHarness.Core.Services.Tools;
 
 namespace TinyHarness.Tests;
 
@@ -33,12 +35,12 @@ public class ShellToolTests
         var       tool = new ShellTool(dir.Workspace);
 
         Assert.Throws<InvalidDataException>(() => tool.Prepare(Call("dotnet", ["test"], "..")));
-        Assert.Throws<InvalidDataException>(() => tool.Prepare(new ChatToolCall(
-            "shell", "shell", """{"executable":"dotnet","arguments":[1]}""")));
-        Assert.Throws<ArgumentOutOfRangeException>(() => tool.Prepare(new ChatToolCall(
-            "shell", "shell", """{"executable":"dotnet","timeoutSeconds":0}""")));
-        Assert.Throws<InvalidDataException>(() => tool.Prepare(new ChatToolCall(
-            "shell", "shell", """{"mode":"shell","shell":"powershell","command":"Get-Date","executable":"dotnet"}""")));
+        Assert.Throws<InvalidDataException>(() => tool.Prepare(new ChatToolCall("shell", "shell",
+                                                                                    """{"executable":"dotnet","arguments":[1]}""")));
+        Assert.Throws<ArgumentOutOfRangeException>(() => tool.Prepare(new ChatToolCall("shell", "shell",
+                                                                          """{"executable":"dotnet","timeoutSeconds":0}""")));
+        Assert.Throws<InvalidDataException>(() => tool.Prepare(new ChatToolCall("shell", "shell",
+                                                                                    """{"mode":"shell","shell":"powershell","command":"Get-Date","executable":"dotnet"}""")));
     }
 
     [Fact]
@@ -62,9 +64,9 @@ public class ShellToolTests
     [Fact]
     public async Task Execute_ShellModeSupportsPipelinesAndRedirection()
     {
-        using var dir = new TestTempDir();
-        var tool = new ShellTool(dir.Workspace, artifactRoot : dir.CreateDirectory("artifacts"));
-        var shell = OperatingSystem.IsWindows() ? "powershell" : "sh";
+        using var dir   = new TestTempDir();
+        var       tool  = new ShellTool(dir.Workspace, artifactRoot : dir.CreateDirectory("artifacts"));
+        var       shell = OperatingSystem.IsWindows() ? "powershell" : "sh";
         var command = OperatingSystem.IsWindows()
             ? "'alpha' | ForEach-Object { $_.ToUpperInvariant() }; 'written' | Set-Content -NoNewline -LiteralPath shell-result.txt"
             : "printf alpha | tr '[:lower:]' '[:upper:]'; printf written > shell-result.txt";
@@ -84,10 +86,10 @@ public class ShellToolTests
             return;
         }
 
-        using var dir = new TestTempDir();
-        var tool = new ShellTool(dir.Workspace, artifactRoot : dir.CreateDirectory("artifacts"));
-        var nestedCmd = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "cmd.exe");
-        var command = $"\"{nestedCmd}\" /d /c echo nested-ok & echo \"a b\" & (echo combined-ok)";
+        using var dir       = new TestTempDir();
+        var       tool      = new ShellTool(dir.Workspace, artifactRoot : dir.CreateDirectory("artifacts"));
+        var       nestedCmd = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "cmd.exe");
+        var       command   = $"\"{nestedCmd}\" /d /c echo nested-ok & echo \"a b\" & (echo combined-ok)";
 
         var result = await tool.ExecuteAsync(tool.Prepare(ShellCall("cmd", command)), CancellationToken.None);
 
@@ -108,10 +110,10 @@ public class ShellToolTests
 
         using var dir = new TestTempDir();
         var scriptPath = dir.WriteFile("show-arguments.js", """
-            for (var index = 0; index < WScript.Arguments.length; index++) {
-                WScript.StdOut.WriteLine("<" + WScript.Arguments(index) + ">");
-            }
-            """);
+                                       for (var index = 0; index < WScript.Arguments.length; index++) {
+                                           WScript.StdOut.WriteLine("<" + WScript.Arguments(index) + ">");
+                                       }
+                                       """);
         var tool = new ShellTool(dir.Workspace, artifactRoot : dir.CreateDirectory("artifacts"));
         var arguments = new[]
         {
@@ -132,10 +134,10 @@ public class ShellToolTests
     [Fact]
     public async Task Execute_SeparatesStdoutStderrAndReturnsExitCode()
     {
-        using var dir = new TestTempDir();
-        var artifactRoot = dir.CreateDirectory("artifacts");
-        var tool = new ShellTool(dir.Workspace, artifactRoot : artifactRoot);
-        var command = PlatformCommand("echo stdout-message", "echo stderr-message 1>&2", "exit 7");
+        using var dir          = new TestTempDir();
+        var       artifactRoot = dir.CreateDirectory("artifacts");
+        var       tool         = new ShellTool(dir.Workspace, artifactRoot : artifactRoot);
+        var       command      = PlatformCommand("echo stdout-message", "echo stderr-message 1>&2", "exit 7");
 
         var result = await tool.ExecuteAsync(tool.Prepare(Call(command.Executable, command.Arguments)),
                                              CancellationToken.None);
@@ -151,9 +153,9 @@ public class ShellToolTests
     [Fact]
     public async Task Execute_TruncatesInMemoryOutputAndKeepsFullRedactedArtifact()
     {
-        using var dir = new TestTempDir();
-        const string secret = "secret-value-12345";
-        var artifactRoot = dir.CreateDirectory("artifacts");
+        using var    dir          = new TestTempDir();
+        const string secret       = "secret-value-12345";
+        var          artifactRoot = dir.CreateDirectory("artifacts");
         var tool = new ShellTool(dir.Workspace,
                                  knownSecrets : new Dictionary<string, string> { ["TEST_SECRET"] = secret },
                                  artifactRoot : artifactRoot, outputCharacterLimit : 40);
@@ -177,11 +179,11 @@ public class ShellToolTests
     [Fact]
     public async Task Execute_TimeoutTerminatesProcessTreeAndReturnsTimeoutResult()
     {
-        using var dir = new TestTempDir();
-        var tool = new ShellTool(dir.Workspace, artifactRoot : dir.CreateDirectory("artifacts"));
-        var command = SlowCommand();
-        var preparation = tool.Prepare(Call(command.Executable, command.Arguments, timeoutSeconds : 1));
-        var watch = Stopwatch.StartNew();
+        using var dir         = new TestTempDir();
+        var       tool        = new ShellTool(dir.Workspace, artifactRoot : dir.CreateDirectory("artifacts"));
+        var       command     = SlowCommand();
+        var       preparation = tool.Prepare(Call(command.Executable, command.Arguments, timeoutSeconds : 1));
+        var       watch       = Stopwatch.StartNew();
 
         var result = await tool.ExecuteAsync(preparation, CancellationToken.None);
 
@@ -197,15 +199,18 @@ public class ShellToolTests
     [Fact]
     public async Task Execute_UserCancellationTerminatesProcessAndPropagatesCancellation()
     {
-        using var dir = new TestTempDir();
-        var tool = new ShellTool(dir.Workspace, artifactRoot : dir.CreateDirectory("artifacts"));
-        var command = SlowCommand();
+        using var dir          = new TestTempDir();
+        var       tool         = new ShellTool(dir.Workspace, artifactRoot : dir.CreateDirectory("artifacts"));
+        var       command      = SlowCommand();
         using var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
-        var watch = Stopwatch.StartNew();
+        var       watch        = Stopwatch.StartNew();
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
-            tool.ExecuteAsync(tool.Prepare(Call(command.Executable, command.Arguments, timeoutSeconds : 10)),
-                              cancellation.Token));
+                                                                    tool.ExecuteAsync(tool.Prepare(Call(command
+                                                                               .Executable,
+                                                                            command.Arguments,
+                                                                            timeoutSeconds : 10)),
+                                                                        cancellation.Token));
 
         Assert.True(watch.Elapsed < TimeSpan.FromSeconds(5));
     }
@@ -218,19 +223,19 @@ public class ShellToolTests
             return;
         }
 
-        using var dir = new TestTempDir();
-        var tool = new ShellTool(dir.Workspace, artifactRoot : dir.CreateDirectory("artifacts"));
-        var pidPath = Path.Combine(dir.Root, "background.pid");
-        var command = BackgroundPowerShellCommand("background.pid");
+        using var dir          = new TestTempDir();
+        var       tool         = new ShellTool(dir.Workspace, artifactRoot : dir.CreateDirectory("artifacts"));
+        var       pidPath      = Path.Combine(dir.Root, "background.pid");
+        var       command      = BackgroundPowerShellCommand("background.pid");
         using var cancellation = new CancellationTokenSource();
-        var watch = Stopwatch.StartNew();
+        var       watch        = Stopwatch.StartNew();
 
         var execution = tool.ExecuteAsync(tool.Prepare(ShellCall("cmd", command)), cancellation.Token);
         await WaitForFileAsync(pidPath, TimeSpan.FromSeconds(5));
         watch.Restart();
         cancellation.Cancel();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
-            await execution.WaitAsync(TimeSpan.FromSeconds(5)));
+                                                                    await execution.WaitAsync(TimeSpan.FromSeconds(5)));
 
         Assert.True(watch.Elapsed < TimeSpan.FromSeconds(4), $"Cancellation took {watch.Elapsed}.");
         Assert.True(File.Exists(pidPath), "The background child did not write its PID before cancellation.");
@@ -247,14 +252,15 @@ public class ShellToolTests
             return;
         }
 
-        using var dir = new TestTempDir();
-        var tool = new ShellTool(dir.Workspace, artifactRoot : dir.CreateDirectory("artifacts"));
-        var pidPath = Path.Combine(dir.Root, "timeout-child.pid");
-        var watch = Stopwatch.StartNew();
+        using var dir     = new TestTempDir();
+        var       tool    = new ShellTool(dir.Workspace, artifactRoot : dir.CreateDirectory("artifacts"));
+        var       pidPath = Path.Combine(dir.Root, "timeout-child.pid");
+        var       watch   = Stopwatch.StartNew();
 
-        var result = await tool.ExecuteAsync(
-            tool.Prepare(ShellCall("cmd", BackgroundPowerShellCommand("timeout-child.pid"), timeoutSeconds : 2)),
-            CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(7));
+        var result = await tool
+                          .ExecuteAsync(tool.Prepare(ShellCall("cmd", BackgroundPowerShellCommand("timeout-child.pid"),
+                                                               timeoutSeconds : 2)), CancellationToken.None)
+                          .WaitAsync(TimeSpan.FromSeconds(7));
 
         Assert.True(result.TimedOut, result.Content);
         Assert.True(watch.Elapsed < TimeSpan.FromSeconds(6), $"Timeout took {watch.Elapsed}.");
@@ -267,20 +273,25 @@ public class ShellToolTests
     [Fact]
     public async Task Execute_CaptureFailureImmediatelyTerminatesProcessTree()
     {
-        using var dir = new TestTempDir();
-        var captureNumber = 0;
-        IProcessOutputCapture CreateCapture(string path, int limit, IReadOnlyList<string> secrets)
-            => Interlocked.Increment(ref captureNumber) == 1
+        using var dir           = new TestTempDir();
+        var       captureNumber = 0;
+
+        IProcessOutputCapture CreateCapture(string path, int limit, IReadOnlyList<string> secrets) =>
+            Interlocked.Increment(ref captureNumber) == 1
                 ? new FailingOutputCapture()
                 : new ProcessOutputCapture(path, limit, secrets);
+
         var tool = new ShellTool(dir.Workspace, CreateCapture, defaultTimeoutSeconds : 30,
                                  artifactRoot : dir.CreateDirectory("artifacts"));
         var command = SlowCommand();
-        var watch = Stopwatch.StartNew();
+        var watch   = Stopwatch.StartNew();
 
-        var error = await Assert.ThrowsAsync<IOException>(() =>
-            tool.ExecuteAsync(tool.Prepare(Call(command.Executable, command.Arguments)),
-                              CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5)));
+        var error =
+            await Assert.ThrowsAsync<IOException>(() => tool
+                                                       .ExecuteAsync(tool.Prepare(Call(command.Executable,
+                                                                         command.Arguments)),
+                                                                     CancellationToken.None)
+                                                       .WaitAsync(TimeSpan.FromSeconds(5)));
 
         Assert.Contains("capturing output", error.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("injected capture failure", error.InnerException?.Message ?? string.Empty,
@@ -288,8 +299,8 @@ public class ShellToolTests
         Assert.True(watch.Elapsed < TimeSpan.FromSeconds(4), $"Capture failure cleanup took {watch.Elapsed}.");
     }
 
-    private static ChatToolCall Call(string executable, IReadOnlyList<string> arguments,
-                                     string workingDirectory = ".", int? timeoutSeconds = null)
+    private static ChatToolCall Call(string executable, IReadOnlyList<string> arguments, string workingDirectory = ".",
+                                     int?   timeoutSeconds = null)
     {
         var array = new JsonArray();
         foreach (var argument in arguments)
@@ -315,7 +326,9 @@ public class ShellToolTests
     {
         var args = new JsonObject
         {
-            ["mode"] = "shell", ["shell"] = shell, ["command"] = command,
+            ["mode"]    = "shell",
+            ["shell"]   = shell,
+            ["command"] = command,
         };
         if (timeoutSeconds is not null)
         {
@@ -390,15 +403,20 @@ public class ShellToolTests
     {
         var startInfo = new ProcessStartInfo
         {
-            FileName = executable, WorkingDirectory = workingDirectory, UseShellExecute = false,
-            RedirectStandardOutput = true, RedirectStandardError = true, CreateNoWindow = true,
+            FileName               = executable,
+            WorkingDirectory       = workingDirectory,
+            UseShellExecute        = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError  = true,
+            CreateNoWindow         = true,
         };
         foreach (var argument in arguments)
         {
             startInfo.ArgumentList.Add(argument);
         }
 
-        using var process = Process.Start(startInfo) ?? throw new InvalidOperationException("Failed to start baseline process.");
+        using var process = Process.Start(startInfo) ??
+                            throw new InvalidOperationException("Failed to start baseline process.");
         var stdoutTask = process.StandardOutput.ReadToEndAsync();
         var stderrTask = process.StandardError.ReadToEndAsync();
         await process.WaitForExitAsync();

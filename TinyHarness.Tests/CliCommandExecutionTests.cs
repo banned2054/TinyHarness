@@ -1,7 +1,9 @@
 using System.Text;
-using TinyHarness.Cli;
-using TinyHarness.Core.Configuration;
-using TinyHarness.Core.Runtime;
+using TinyHarness.Cli.Commands;
+using TinyHarness.Cli.Services;
+using TinyHarness.Core.Models.Configuration;
+using TinyHarness.Core.Services.Configuration;
+using TinyHarness.Core.Services.Runtime;
 
 namespace TinyHarness.Tests;
 
@@ -84,16 +86,13 @@ public sealed class CliCommandExecutionTests
             ],
         }, CancellationToken.None);
 
-        var addResult = await ProviderCommand.ExecuteAsync(
-                                                           fixture.CreateContext(),
+        var addResult = await ProviderCommand.ExecuteAsync(fixture.CreateContext(),
                                                            CommandLine.Parse(["provider", "add", "team"]),
                                                            CancellationToken.None);
-        var useResult = await ProviderCommand.ExecuteAsync(
-                                                           fixture.CreateContext(),
+        var useResult = await ProviderCommand.ExecuteAsync(fixture.CreateContext(),
                                                            CommandLine.Parse(["provider", "use", "work"]),
                                                            CancellationToken.None);
-        var listResult = await ProviderCommand.ExecuteAsync(
-                                                            fixture.CreateContext(),
+        var listResult = await ProviderCommand.ExecuteAsync(fixture.CreateContext(),
                                                             CommandLine.Parse(["provider", "list"]),
                                                             CancellationToken.None);
         var config = await UserConfigStore.LoadAsync(fixture.UserConfigPath, CancellationToken.None);
@@ -136,8 +135,7 @@ public sealed class CliCommandExecutionTests
             ],
         }, CancellationToken.None);
 
-        var result = await ConfigCommand.ExecuteAsync(
-                                                      fixture.CreateContext(),
+        var result = await ConfigCommand.ExecuteAsync(fixture.CreateContext(),
                                                       CommandLine.Parse(["config", "set", "maxAgentSteps", "60"]),
                                                       CancellationToken.None);
         var config = await UserConfigStore.LoadAsync(fixture.UserConfigPath, CancellationToken.None);
@@ -155,8 +153,7 @@ public sealed class CliCommandExecutionTests
         using var fixture = new CliFixture();
         await UserConfigStore.SaveAsync(fixture.UserConfigPath, ProfileConfig("work"), CancellationToken.None);
 
-        var result = await AuthCommand.ExecuteAsync(
-                                                    fixture.CreateContext(),
+        var result = await AuthCommand.ExecuteAsync(fixture.CreateContext(),
                                                     CommandLine.Parse(["auth", "set", "work", "--env", "WORK_API_KEY"]),
                                                     CancellationToken.None);
         var config = await UserConfigStore.LoadAsync(fixture.UserConfigPath, CancellationToken.None);
@@ -173,19 +170,15 @@ public sealed class CliCommandExecutionTests
         using var fixture = new CliFixture();
         await UserConfigStore.SaveAsync(fixture.UserConfigPath, ProfileConfig("work"), CancellationToken.None);
 
-        var addResult = await ModelCommand.ExecuteAsync(
-                                                        fixture.CreateContext(),
+        var addResult = await ModelCommand.ExecuteAsync(fixture.CreateContext(),
                                                         CommandLine.Parse([
                                                             "model", "add", "model-y", "--context-window", "200000"
                                                         ]),
                                                         CancellationToken.None);
-        var useResult = await ModelCommand.ExecuteAsync(
-                                                        fixture.CreateContext(),
+        var useResult = await ModelCommand.ExecuteAsync(fixture.CreateContext(),
                                                         CommandLine.Parse(["model", "use", "model-y"]),
                                                         CancellationToken.None);
-        var listResult = await ModelCommand.ExecuteAsync(
-                                                         fixture.CreateContext(),
-                                                         CommandLine.Parse(["model", "list"]),
+        var listResult = await ModelCommand.ExecuteAsync(fixture.CreateContext(), CommandLine.Parse(["model", "list"]),
                                                          CancellationToken.None);
         var config = await UserConfigStore.LoadAsync(fixture.UserConfigPath, CancellationToken.None);
 
@@ -212,10 +205,9 @@ public sealed class CliCommandExecutionTests
                                      }
                                      """);
 
-        var result = await DoctorCommand.ExecuteAsync(
-                                                      fixture.CreateContext(),
-                                                      CommandLine.Parse(["doctor"]),
-                                                      CancellationToken.None);
+        var result =
+            await DoctorCommand.ExecuteAsync(fixture.CreateContext(), CommandLine.Parse(["doctor"]),
+                                             CancellationToken.None);
 
         Assert.Equal(0, result);
         Assert.True(Directory.Exists(sessionDirectory));
@@ -321,8 +313,7 @@ public sealed class CliCommandExecutionTests
 
         public void Save(string targetName, string secret) => _entries[targetName] = secret;
 
-        public string? Read(string targetName) =>
-            _entries.TryGetValue(targetName, out var secret) ? secret : null;
+        public string? Read(string targetName) => _entries.GetValueOrDefault(targetName);
 
         public bool Delete(string targetName) => _entries.Remove(targetName);
     }

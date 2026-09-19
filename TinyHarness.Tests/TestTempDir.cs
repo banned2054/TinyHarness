@@ -1,4 +1,4 @@
-using TinyHarness.Core.Runtime;
+using TinyHarness.Core.Services.Runtime;
 
 namespace TinyHarness.Tests;
 

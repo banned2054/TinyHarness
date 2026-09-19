@@ -1,8 +1,8 @@
 using System.Text.Json.Nodes;
-using TinyHarness.Cli;
-using TinyHarness.Core.ChatCompletions;
-using TinyHarness.Core.Permissions;
-using TinyHarness.Core.Tools;
+using TinyHarness.Cli.Services;
+using TinyHarness.Core.Models.ChatCompletions;
+using TinyHarness.Core.Models.Permissions;
+using TinyHarness.Core.Services.Tools;
 
 namespace TinyHarness.Tests;
 
@@ -43,8 +43,8 @@ public class ConsoleApprovalProviderTests
         using var    dir   = new TestTempDir();
         const string patch = "--- /dev/null\n+++ b/file.txt\n@@ -0,0 +1 @@\n+\u001b[2Jhidden\n";
         var preparation = new ApplyPatchTool(dir.Workspace).Prepare(new ChatToolCall("p", "apply_patch",
-                                                                        new JsonObject { ["patch"] = patch }
-                                                                           .ToJsonString()));
+                                                                             new JsonObject { ["patch"] = patch }
+                                                                                .ToJsonString()));
         using var output = new StringWriter();
         using var input  = new StringReader("d");
 
@@ -75,11 +75,14 @@ public class ConsoleApprovalProviderTests
     {
         using var dir   = new TestTempDir();
         var       shell = OperatingSystem.IsWindows() ? "powershell" : "sh";
-        var preparation = new ShellTool(dir.Workspace).Prepare(new ChatToolCall(
-            "shell", "shell", new JsonObject
-            {
-                ["mode"] = "shell", ["shell"] = shell, ["command"] = "echo one && echo two",
-            }.ToJsonString()));
+        var preparation = new ShellTool(dir.Workspace).Prepare(new ChatToolCall("shell", "shell",
+                                                                                    new JsonObject
+                                                                                    {
+                                                                                        ["mode"]  = "shell",
+                                                                                        ["shell"] = shell,
+                                                                                        ["command"] =
+                                                                                            "echo one && echo two",
+                                                                                    }.ToJsonString()));
         using var output = new StringWriter();
         using var input  = new StringReader("d");
 

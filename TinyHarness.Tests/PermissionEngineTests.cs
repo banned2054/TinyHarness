@@ -1,8 +1,10 @@
 using System.Text.Json.Nodes;
-using TinyHarness.Core.ChatCompletions;
-using TinyHarness.Core.Configuration;
-using TinyHarness.Core.Permissions;
-using TinyHarness.Core.Tools;
+using TinyHarness.Core.Models.ChatCompletions;
+using TinyHarness.Core.Models.Configuration;
+using TinyHarness.Core.Models.Permissions;
+using TinyHarness.Core.Models.Tools;
+using TinyHarness.Core.Services.Permissions;
+using TinyHarness.Core.Services.Tools;
 
 namespace TinyHarness.Tests;
 
@@ -30,8 +32,12 @@ public class PermissionEngineTests
 
         var preparation = new ToolPreparation
         {
-            ToolName   = "apply_patch", CallId       = "call_1", Arguments    = args,
-            Capability = "filesystem.write", Summary = "summary", TargetPaths = targets,
+            ToolName    = "apply_patch",
+            CallId      = "call_1",
+            Arguments   = args,
+            Capability  = "filesystem.write",
+            Summary     = "summary",
+            TargetPaths = targets,
         };
 
         args["line"] = 2;
@@ -48,12 +54,9 @@ public class PermissionEngineTests
         var       engine = new PermissionEngine(dir.Root);
         var       target = Path.Combine(dir.Root, "a.cs");
 
-        Assert.Equal(PermissionDecision.Allow,
-                     engine.Decide(Prep("filesystem.read", [target])));
-        Assert.Equal(PermissionDecision.Allow,
-                     engine.Decide(Prep("filesystem.list", [dir.Root])));
-        Assert.Equal(PermissionDecision.Allow,
-                     engine.Decide(Prep("filesystem.search", [dir.Root])));
+        Assert.Equal(PermissionDecision.Allow, engine.Decide(Prep("filesystem.read", [target])));
+        Assert.Equal(PermissionDecision.Allow, engine.Decide(Prep("filesystem.list", [dir.Root])));
+        Assert.Equal(PermissionDecision.Allow, engine.Decide(Prep("filesystem.search", [dir.Root])));
     }
 
     [Fact]
@@ -259,8 +262,7 @@ public class PermissionEngineTests
                      engine.Decide(ProcessPrep("dotnet", ["test", "TinyHarness.csproj"], src)));
         Assert.Equal(PermissionDecision.Ask,
                      engine.Decide(ProcessPrep("dotnet", ["build", "TinyHarness.csproj"], src)));
-        Assert.Equal(PermissionDecision.Ask,
-                     engine.Decide(ProcessPrep("git", ["test", "TinyHarness.csproj"], src)));
+        Assert.Equal(PermissionDecision.Ask, engine.Decide(ProcessPrep("git", ["test", "TinyHarness.csproj"], src)));
         Assert.Equal(PermissionDecision.Ask,
                      engine.Decide(ProcessPrep("dotnet", ["test", "TinyHarness.csproj"], dir.Root)));
     }
@@ -280,11 +282,11 @@ public class PermissionEngineTests
     [Fact]
     public void ShellCommandRule_AllowsOnlyExactShellCommandAndNeverMatchesDirectMode()
     {
-        using var dir = new TestTempDir();
-        var shell = OperatingSystem.IsWindows() ? "powershell" : "sh";
-        const string command = "echo one && echo two";
-        var tool = new ShellTool(dir.Workspace);
-        var shellPreparation = tool.Prepare(ShellCall(shell, command));
+        using var    dir              = new TestTempDir();
+        var          shell            = OperatingSystem.IsWindows() ? "powershell" : "sh";
+        const string command          = "echo one && echo two";
+        var          tool             = new ShellTool(dir.Workspace);
+        var          shellPreparation = tool.Prepare(ShellCall(shell, command));
         var engine = new PermissionEngine(dir.Root,
         [
             new CommandRule { Mode = "shell", Shell = shell, Command = command, WorkingDirectory = ".", },
@@ -295,26 +297,25 @@ public class PermissionEngineTests
                      engine.Decide(tool.Prepare(ShellCall(shell, command + " && echo three"))));
 
         var directEquivalent = ProcessPrep(
-            shellPreparation.Arguments["executable"]!.GetValue<string>(),
-            ReadArguments(shellPreparation), dir.Root);
+                                           shellPreparation.Arguments["executable"]!.GetValue<string>(),
+                                           ReadArguments(shellPreparation), dir.Root);
         Assert.Equal(PermissionDecision.Ask, engine.Decide(directEquivalent));
     }
 
     [Fact]
     public void ShellSessionGrant_IsBoundToModeShellFlavorAndExactCommand()
     {
-        using var dir = new TestTempDir();
-        var shell = OperatingSystem.IsWindows() ? "powershell" : "sh";
-        var tool = new ShellTool(dir.Workspace);
-        var granted = tool.Prepare(ShellCall(shell, "echo one"));
-        var engine = new PermissionEngine(dir.Root);
+        using var dir     = new TestTempDir();
+        var       shell   = OperatingSystem.IsWindows() ? "powershell" : "sh";
+        var       tool    = new ShellTool(dir.Workspace);
+        var       granted = tool.Prepare(ShellCall(shell, "echo one"));
+        var       engine  = new PermissionEngine(dir.Root);
         engine.GrantSession(granted);
         var child = dir.CreateDirectory("child");
 
         Assert.Equal(PermissionDecision.Allow, engine.Decide(tool.Prepare(ShellCall(shell, "echo one"))));
         Assert.Equal(PermissionDecision.Ask, engine.Decide(tool.Prepare(ShellCall(shell, "echo two"))));
-        Assert.Equal(PermissionDecision.Ask,
-                     engine.Decide(tool.Prepare(ShellCall(shell, "echo one", child))));
+        Assert.Equal(PermissionDecision.Ask, engine.Decide(tool.Prepare(ShellCall(shell, "echo one", child))));
     }
 
     private static ToolPreparation ProcessPrep(string executable, IReadOnlyList<string> arguments, string cwd)
@@ -333,10 +334,15 @@ public class PermissionEngineTests
         }.ToJsonString();
         return new ToolPreparation
         {
-            ToolName = "shell", CallId = "shell", Capability = "process.execute", Summary = "shell",
+            ToolName   = "shell",
+            CallId     = "shell",
+            Capability = "process.execute",
+            Summary    = "shell",
             Arguments = new JsonObject
             {
-                ["mode"] = "direct", ["executable"] = executable, ["arguments"] = array,
+                ["mode"]             = "direct",
+                ["executable"]       = executable,
+                ["arguments"]        = array,
                 ["workingDirectory"] = cwd,
             },
             SessionConstraint = identity,
@@ -344,13 +350,15 @@ public class PermissionEngineTests
         };
     }
 
-    private static ChatToolCall ShellCall(string shell, string command, string workingDirectory = ".")
-        => new("shell", "shell", new JsonObject
+    private static ChatToolCall ShellCall(string shell, string command, string workingDirectory = ".") =>
+        new("shell", "shell", new JsonObject
         {
-            ["mode"] = "shell", ["shell"] = shell, ["command"] = command,
+            ["mode"]             = "shell",
+            ["shell"]            = shell,
+            ["command"]          = command,
             ["workingDirectory"] = workingDirectory,
         }.ToJsonString());
 
-    private static IReadOnlyList<string> ReadArguments(ToolPreparation preparation)
-        => ((JsonArray)preparation.Arguments["arguments"]!).Select(node => node!.GetValue<string>()).ToArray();
+    private static IReadOnlyList<string> ReadArguments(ToolPreparation preparation) =>
+        ((JsonArray)preparation.Arguments["arguments"]!).Select(node => node!.GetValue<string>()).ToArray();
 }

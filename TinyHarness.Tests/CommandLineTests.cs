@@ -1,4 +1,6 @@
-using TinyHarness.Cli;
+using TinyHarness.Cli.Commands;
+using TinyHarness.Cli.Exceptions;
+using TinyHarness.Cli.Models;
 
 namespace TinyHarness.Tests;
 

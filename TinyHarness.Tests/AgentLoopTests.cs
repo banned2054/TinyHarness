@@ -1,5 +1,7 @@
-using TinyHarness.Core.Agent;
-using TinyHarness.Core.ChatCompletions;
+using TinyHarness.Core.Models.Agent;
+using TinyHarness.Core.Models.ChatCompletions;
+using TinyHarness.Core.Services.Agent;
+using TinyHarness.Core.Services.Tools;
 
 namespace TinyHarness.Tests;
 
@@ -171,12 +173,12 @@ public class AgentLoopTests
         var loop = new AgentLoop(client, new ToolRegistry([]), Options());
 
         using var cts = new CancellationTokenSource();
-        client.CancelMidStream = () => cts.Cancel();
+        client.CancelMidStream = cts.Cancel;
 
         var result = await loop.RunAsync("sys", "go", cts.Token);
 
         Assert.Equal(AgentStatus.Cancelled, result.Status);
-        Assert.Single(loop.History, m => m.Role == ChatRole.User);
+        Assert.Single(loop.History, m => m.Role         == ChatRole.User);
         Assert.DoesNotContain(loop.History, m => m.Role == ChatRole.Assistant);
     }
 }

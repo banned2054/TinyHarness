@@ -1,8 +1,11 @@
 using System.Text.Json.Nodes;
-using TinyHarness.Core.Agent;
-using TinyHarness.Core.ChatCompletions;
-using TinyHarness.Core.Context;
-using TinyHarness.Core.Tools;
+using TinyHarness.Core.Models.Agent;
+using TinyHarness.Core.Models.ChatCompletions;
+using TinyHarness.Core.Models.Context;
+using TinyHarness.Core.Models.Tools;
+using TinyHarness.Core.Services.Agent;
+using TinyHarness.Core.Services.Context;
+using TinyHarness.Core.Services.Tools;
 
 namespace TinyHarness.Tests;
 
@@ -54,8 +57,8 @@ public class ContextCompactionTests
 
     private static string ToolCallId(string prefix, int round) => $"{prefix}_{round}";
 
-    private static void AppendTurn(ConversationContext context,   string toolName, string id,
-                                   string              arguments, string result)
+    private static void AppendTurn(ConversationContext context, string toolName, string id, string arguments,
+                                   string              result)
     {
         context.Append(ChatMessage.Assistant(string.Empty, [new ChatToolCall(id, toolName, arguments)]));
         context.Append(ChatMessage.Tool(toolName, id, result));
@@ -489,11 +492,9 @@ public class ContextCompactionTests
         Assert.Contains(fixture.B, secondSummaryInput);
 
         Assert.True(TokenEstimator.EstimateMessages(client.RequestLog[4].Messages) +
-                    fixture.Options.ReservedOutputTokens
-                 <= fixture.Options.ContextWindowTokens);
+                    fixture.Options.ReservedOutputTokens <= fixture.Options.ContextWindowTokens);
         Assert.True(TokenEstimator.EstimateMessages(client.RequestLog[5].Messages) +
-                    fixture.Options.ReservedOutputTokens
-                 <= fixture.Options.ContextWindowTokens);
+                    fixture.Options.ReservedOutputTokens <= fixture.Options.ContextWindowTokens);
         Assert.True(fixture.BeforeD     <= fixture.Options.CompactionThresholdTokens);
         Assert.True(fixture.AfterD      > fixture.Options.CompactionThresholdTokens);
         Assert.True(fixture.AfterFirst  > fixture.Options.CompactionThresholdTokens);
@@ -505,14 +506,14 @@ public class ContextCompactionTests
         Assert.Contains(loop.History, m => m.Role                              == ChatRole.Assistant &&
                                            m.ToolCalls!.Single().Id            == "b"                &&
                                            m.ToolCalls!.Single().ArgumentsJson == fixture.Arguments);
-        Assert.Contains(loop.History, m => m.Role    == ChatRole.Tool && m.ToolCallId == "a" &&
-                                           m.Content == fixture.A + "#1");
-        Assert.Contains(loop.History, m => m.Role    == ChatRole.Tool && m.ToolCallId == "b" &&
-                                           m.Content == fixture.B + "#1");
-        Assert.Contains(loop.History, m => m.Role    == ChatRole.Tool && m.ToolCallId == "c" &&
-                                           m.Content == fixture.B + "#2");
-        Assert.Contains(loop.History, m => m.Role    == ChatRole.Tool && m.ToolCallId == "d" &&
-                                           m.Content == fixture.A + "#2");
+        Assert.Contains(loop.History,
+                        m => m is { Role: ChatRole.Tool, ToolCallId: "a" } && m.Content == fixture.A + "#1");
+        Assert.Contains(loop.History,
+                        m => m is { Role: ChatRole.Tool, ToolCallId: "b" } && m.Content == fixture.B + "#1");
+        Assert.Contains(loop.History,
+                        m => m is { Role: ChatRole.Tool, ToolCallId: "c" } && m.Content == fixture.B + "#2");
+        Assert.Contains(loop.History,
+                        m => m is { Role: ChatRole.Tool, ToolCallId: "d" } && m.Content == fixture.A + "#2");
     }
 
     [Fact]

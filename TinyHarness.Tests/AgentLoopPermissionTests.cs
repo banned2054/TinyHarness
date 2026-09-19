@@ -1,8 +1,11 @@
 using System.Text.Json.Nodes;
-using TinyHarness.Core.Agent;
-using TinyHarness.Core.ChatCompletions;
-using TinyHarness.Core.Permissions;
-using TinyHarness.Core.Tools;
+using TinyHarness.Core.Models.Agent;
+using TinyHarness.Core.Models.ChatCompletions;
+using TinyHarness.Core.Models.Permissions;
+using TinyHarness.Core.Models.Tools;
+using TinyHarness.Core.Services.Agent;
+using TinyHarness.Core.Services.Permissions;
+using TinyHarness.Core.Services.Tools;
 
 namespace TinyHarness.Tests;
 
@@ -97,19 +100,19 @@ public class AgentLoopPermissionTests
     [Fact]
     public async Task SessionDeny_BlocksAMultiFilePatchDespiteSessionGrant()
     {
-        using var dir = new TestTempDir();
-        var protectedPath = dir.WriteFile("fixme.cs", "line1\nline2\nline3\n");
-        var otherPath = dir.WriteFile("other.txt", "old\n");
-        var tool = PatchTool(dir);
-        var patch = ReplacePatch(2) + "\n--- a/other.txt\n+++ b/other.txt\n@@ -1 +1 @@\n-old\n+new\n";
-        var engine = new PermissionEngine(dir.Root);
+        using var dir           = new TestTempDir();
+        var       protectedPath = dir.WriteFile("fixme.cs", "line1\nline2\nline3\n");
+        var       otherPath     = dir.WriteFile("other.txt", "old\n");
+        var       tool          = PatchTool(dir);
+        var       patch         = ReplacePatch(2) + "\n--- a/other.txt\n+++ b/other.txt\n@@ -1 +1 @@\n-old\n+new\n";
+        var       engine        = new PermissionEngine(dir.Root);
         engine.GrantSession(tool.Prepare(new ChatToolCall("grant", "apply_patch", PatchArgs(patch))));
         engine.DenySession(tool.Prepare(new ChatToolCall("deny", "apply_patch", PatchArgs(ReplacePatch(2)))));
         var client = new FakeChatClient();
         client.Enqueue(FakeChatClient.ToolCall("apply_patch", PatchArgs(patch)));
         client.Enqueue(FakeChatClient.Text("understood"));
         var approver = new ScriptedApprover();
-        var loop = new AgentLoop(client, new ToolRegistry([tool]), Options(), engine, approver);
+        var loop     = new AgentLoop(client, new ToolRegistry([tool]), Options(), engine, approver);
 
         var result = await loop.RunAsync("sys", "patch both", CancellationToken.None);
 
@@ -118,7 +121,8 @@ public class AgentLoopPermissionTests
         Assert.Equal(0, result.ToolExecutions);
         Assert.Equal("line1\nline2\nline3\n", await File.ReadAllTextAsync(protectedPath));
         Assert.Equal("old\n", await File.ReadAllTextAsync(otherPath));
-        Assert.Contains(loop.History, message => message.Role == ChatRole.Tool && message.Content.Contains("Permission denied"));
+        Assert.Contains(loop.History,
+                        message => message.Role == ChatRole.Tool && message.Content.Contains("Permission denied"));
     }
 
     [Fact]
@@ -144,8 +148,7 @@ public class AgentLoopPermissionTests
         Assert.Equal(AgentStatus.Completed, result.Status);
         Assert.Equal(2, approver.Prompts);
         Assert.Equal(1, result.ToolExecutions);
-        Assert.Equal("line1\nline2-fixed\nline3\n",
-                     File.ReadAllText(Path.Combine(dir.Root, "fixme.cs")));
+        Assert.Equal("line1\nline2-fixed\nline3\n", await File.ReadAllTextAsync(Path.Combine(dir.Root, "fixme.cs")));
     }
 
     [Fact]
@@ -214,13 +217,13 @@ public class AgentLoopPermissionTests
         {
             new()
             {
-                Kind = ChatStreamEventKind.ToolCallDelta, ToolCallIndex = 0, ToolCallId = "p1",
-                ToolCallFunctionName = "apply_patch", ToolCallArgumentsDelta = PatchArgs(ReplacePatch(2)),
+                Kind                 = ChatStreamEventKind.ToolCallDelta, ToolCallIndex = 0, ToolCallId = "p1",
+                ToolCallFunctionName = "apply_patch", ToolCallArgumentsDelta            = PatchArgs(ReplacePatch(2)),
             },
             new()
             {
-                Kind = ChatStreamEventKind.ToolCallDelta, ToolCallIndex = 1, ToolCallId = "p2",
-                ToolCallFunctionName = "apply_patch", ToolCallArgumentsDelta = PatchArgs(EscapePatch()),
+                Kind                 = ChatStreamEventKind.ToolCallDelta, ToolCallIndex = 1, ToolCallId = "p2",
+                ToolCallFunctionName = "apply_patch", ToolCallArgumentsDelta            = PatchArgs(EscapePatch()),
             },
             new() { Kind = ChatStreamEventKind.End },
         };
@@ -237,7 +240,7 @@ public class AgentLoopPermissionTests
         Assert.Equal(AgentStatus.Completed, result.Status);
         Assert.Equal(0, approver.Prompts); // no call of an aborted round is authorized
         Assert.Equal(0, result.ToolExecutions);
-        Assert.Equal("line1\nline2\nline3\n", File.ReadAllText(path)); // untouched
+        Assert.Equal("line1\nline2\nline3\n", await File.ReadAllTextAsync(path)); // untouched
         Assert.Contains(loop.History, m => m.Role == ChatRole.Tool && m.Content.Contains("failed to prepare"));
         Assert.Contains(loop.History, m => m.Role == ChatRole.Tool && m.Content.Contains("Not executed"));
     }
@@ -245,19 +248,19 @@ public class AgentLoopPermissionTests
     [Fact]
     public async Task MultipleCalls_AreAllAuthorizedBeforeTheFirstExecution()
     {
-        using var dir = new TestTempDir();
-        var       tool = new FakeTool("write_test");
-        var client = new FakeChatClient();
+        using var dir    = new TestTempDir();
+        var       tool   = new FakeTool("write_test");
+        var       client = new FakeChatClient();
         client.Enqueue([
             new ChatStreamEvent
             {
-                Kind = ChatStreamEventKind.ToolCallDelta, ToolCallIndex = 0, ToolCallId = "w1",
-                ToolCallFunctionName = "write_test", ToolCallArgumentsDelta = "{}",
+                Kind                 = ChatStreamEventKind.ToolCallDelta, ToolCallIndex = 0, ToolCallId = "w1",
+                ToolCallFunctionName = "write_test", ToolCallArgumentsDelta             = "{}",
             },
             new ChatStreamEvent
             {
-                Kind = ChatStreamEventKind.ToolCallDelta, ToolCallIndex = 1, ToolCallId = "w2",
-                ToolCallFunctionName = "write_test", ToolCallArgumentsDelta = "{}",
+                Kind                 = ChatStreamEventKind.ToolCallDelta, ToolCallIndex = 1, ToolCallId = "w2",
+                ToolCallFunctionName = "write_test", ToolCallArgumentsDelta             = "{}",
             },
             new ChatStreamEvent { Kind = ChatStreamEventKind.End },
         ]);

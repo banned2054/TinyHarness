@@ -1,4 +1,4 @@
-using TinyHarness.Core.Runtime;
+using WindowsCredentialStore = TinyHarness.Core.Services.Runtime.WindowsCredentialStore;
 
 namespace TinyHarness.Tests;
 

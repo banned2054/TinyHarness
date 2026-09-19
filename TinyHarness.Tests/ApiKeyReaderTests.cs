@@ -1,5 +1,7 @@
-using TinyHarness.Core.Configuration;
-using TinyHarness.Core.Runtime;
+using TinyHarness.Core.Exceptions;
+using TinyHarness.Core.Models.Configuration;
+using TinyHarness.Core.Services.Configuration;
+using TinyHarness.Core.Services.Runtime;
 
 namespace TinyHarness.Tests;
 
@@ -98,8 +100,7 @@ public class ApiKeyReaderTests
 
         public void Save(string targetName, string secret) => _entries[targetName] = secret;
 
-        public string? Read(string targetName) =>
-            _entries.TryGetValue(targetName, out var secret) ? secret : null;
+        public string? Read(string targetName) => _entries.GetValueOrDefault(targetName);
 
         public bool Delete(string targetName) => _entries.Remove(targetName);
     }
