@@ -34,6 +34,13 @@ namespace TinyHarness.Core.Services.Permissions;
 /// </summary>
 public sealed class PermissionEngine
 {
+    private static readonly HashSet<string> WorkerReadOnlyCapabilities = new(StringComparer.Ordinal)
+    {
+        "filesystem.list",
+        "filesystem.search",
+        "filesystem.read",
+    };
+
     private static readonly IReadOnlyDictionary<string, PermissionDecision> DefaultInsidePolicy =
         new Dictionary<string, PermissionDecision>(StringComparer.Ordinal)
         {
@@ -45,6 +52,7 @@ public sealed class PermissionEngine
 
     private readonly string                               _workspaceRoot;
     private readonly IReadOnlyList<ConfiguredCommandRule> _commandRules;
+    private readonly bool                               _denyNonReadOnlyCapabilities;
     private readonly List<PermissionRule>                 _sessionGrants    = [];
     private readonly List<PermissionRule>                 _sessionDenies    = [];
     private readonly HashSet<string>                      _oneShotApprovals = new(StringComparer.Ordinal);
@@ -53,7 +61,8 @@ public sealed class PermissionEngine
     /// 为指定工作区建立独立的会话权限状态。
     /// Creates isolated session permission state for the specified workspace.
     /// </summary>
-    public PermissionEngine(string workspaceRoot, IEnumerable<CommandRule>? commandRules = null)
+    public PermissionEngine(string workspaceRoot, IEnumerable<CommandRule>? commandRules = null,
+                            bool denyNonReadOnlyCapabilities = false)
     {
         if (string.IsNullOrWhiteSpace(workspaceRoot))
         {
@@ -63,6 +72,7 @@ public sealed class PermissionEngine
         _workspaceRoot = Path.GetFullPath(workspaceRoot);
         _commandRules = (commandRules ?? []).Select(rule => ConfiguredCommandRule.Create(rule, _workspaceRoot))
                                             .ToArray();
+        _denyNonReadOnlyCapabilities = denyNonReadOnlyCapabilities;
     }
 
     /// <summary>
@@ -73,6 +83,14 @@ public sealed class PermissionEngine
     /// </summary>
     public PermissionDecision Decide(ToolPreparation preparation)
     {
+        // Worker mode is an explicit hard deny: unlisted capabilities, including filesystem.write
+        // and process.execute, cannot be approved by a grant or command rule. The normal CLI leaves
+        // this opt-in flag off and retains its existing policy.
+        if (_denyNonReadOnlyCapabilities && !WorkerReadOnlyCapabilities.Contains(preparation.Capability))
+        {
+            return PermissionDecision.Deny;
+        }
+
         // 1. Hard deny: a target outside the workspace is never allowed, even if
         // the tool failed to reject it at Prepare time (defense in depth).
         if (preparation.TargetPaths.Any(target => !Workspace.IsInside(_workspaceRoot, target)))

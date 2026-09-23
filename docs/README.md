@@ -8,7 +8,7 @@
 
 ## 当前状态
 
-M7 的持久化与演示基础已实现：每次运行现在会在 `artifacts/runs`（或配置的 `sessionDirectory`）写入可检查的 JSONL 审计和 JSON session 快照。M8 的配置命令链路也已实现：CLI 可以引导首次配置、管理命名 provider profile 和模型、显示生效配置，并执行离线 doctor 检查。交互式多轮聊天和会话恢复仍计划在 M9/M10 实现；真实模型诊断仍需显式配置并选择加入。
+M7 的持久化与演示基础已实现：每次运行会在 `artifacts/runs`（或配置的 `sessionDirectory`）写入可检查的 JSONL 审计和 JSON session 快照。M8 的配置命令可管理 provider profile 和模型、显示生效配置并执行离线 doctor 检查。M9 增加了供 Codex 使用的一次性只读 MCP worker；离线 fake 验收已通过，配置的 HTTPS endpoint 与 `glm-5.3` 已通过直接 stdio 和 Codex MCP 客户端调用验收。
 
 | 能力 | 当前实现 |
 |---|---|
@@ -20,8 +20,9 @@ M7 的持久化与演示基础已实现：每次运行现在会在 `artifacts/ru
 | 上下文 | token 估算、工具结果裁剪、近期完整回合、结构化摘要、连续多批压缩 |
 | 验证 | fake-client 离线测试、本地模拟 SSE 协议测试、命令解析测试、`win-x64` NativeAOT smoke |
 | 持久化 | 每次运行生成 `<runId>.audit.jsonl` 与 `<runId>.session.json`；落盘前脱敏已配置的已知密钥和明确支持的敏感字段 |
+| MCP worker | 本机 stdio 服务只注册 `ask_glm`；每次请求使用独立历史、固定工作区、只读工具和可信预算 |
 
-当前 CLI 每次启动执行一个任务，显示审批、压缩提示和最终结果。M8 管理命令不会把输入发送给模型；交互式多轮会话、逐 token 终端文本展示和会话恢复尚未提供。
+`run` CLI 每次调用执行一个任务，显示审批、压缩提示和最终结果；`mcp` 串行处理相互独立的 `ask_glm` 请求。管理命令不会把输入发送给模型。交互式多轮会话、逐 token 终端文本展示和会话恢复尚未提供。
 
 ## 快速开始：先运行离线 smoke
 
@@ -67,6 +68,34 @@ tinyharness model list|add <id> --context-window <tokens>|use <id>
 tinyharness auth set <name> [--env <VAR>|--store]
 tinyharness config set <key> <value>
 ```
+
+## 使用只读 MCP worker
+
+先用上面的配置命令设置默认 provider profile、模型、上下文窗口和凭据，再启动 stdio 服务：
+
+```powershell
+dotnet run --project TinyHarness.Cli -- mcp
+```
+
+MCP 进程只读取 TinyHarness 用户配置（路径见 `config show`），使用其中的默认 provider profile 和显式选择的模型；不会读取目标工作区的 `tinyharness.json`，也不会采用其中的 `commandRules`。工作区在服务启动时固定：默认是进程当前目录，也可以在用户配置的 `settings.worker.workspaceRoot` 中设置（相对路径按进程当前目录解析）。
+
+服务只公开 `ask_glm`，使用只读文件工具在固定工作区内列举、搜索和读取，并应用 focus 路径收窄与敏感文件排除。它不能修改文件或运行命令。允许读取的文件内容会发送到所选模型 endpoint。MCP 协议以 UTF-8、逐行 JSON 通过标准输入输出传输；启动诊断只写标准错误。收到 `notifications/cancelled`、客户端关闭输入或 Ctrl+C 时，会取消对应的模型与文件操作。请求串行处理，每次都建立新的历史、权限状态和预算。
+
+worker 限额来自用户配置的 `settings.worker`，MCP 请求不能设置或提高这些值。默认值与硬上限如下：
+
+| 设置项 | 默认值 | 硬上限 |
+|---|---:|---:|
+| `runTimeoutSeconds` | 120 秒 | 600 秒 |
+| `maxAgentSteps`（模型请求数） | 6 | 24 |
+| `defaultToolTimeoutSeconds` | 20 秒 | 120 秒 |
+| `maxTaskPackageCharacters` | 12,000 | 32,000 |
+| `maxToolCalls` | 12 | 40 |
+| `maxToolOutputCharacters` | 24,000 | 128,000 |
+| `maxContextTokensPerRequest` | `min(24,000, 上下文窗口 − 4,096)` | 256,000，且必须低于配置模型窗口减去 4,096 |
+| `maxCumulativeContextTokens` | `min(32,000, 上下文窗口 − 4,096)` | 256,000 |
+| `maxModelResponseCharacters` | 12,000 | 64,000 |
+
+`WorkerResult` 文本另有 Core 强制的 16,000 字符上限。只在用户自己的配置中调整可信设置；不要把这些值放入项目的 `tinyharness.json`。
 
 未指定 `--config` 时不做隐式合并，按顺序使用第一个存在的来源：当前目录 `tinyharness.json`、用户配置、内置默认值。`config show` 会显示生效来源、绝对查找路径和密钥可用性，但不会显示密钥值。使用 `--help` 或 `help <command>` 查看具体语法。测试和便携运行可通过 `TINYHARNESS_USER_CONFIG_DIR` 覆盖用户配置目录。
 
@@ -212,13 +241,15 @@ dotnet publish TinyHarness.Cli/TinyHarness.Cli.csproj -c Release -r win-x64 --se
 
 发布后的可执行文件名为 `TinyHarness.exe`，也可使用 `run --config <path> "任务"` 调用真实服务。
 
-M7 验证（2026-09-11）：默认测试 **178/178 通过**；托管 smoke 在仓库根目录和仓库外目录均成功；隔离目录中的 `win-x64` NativeAOT publish 没有 trimming/AOT warning；本次新生成的原生 EXE 也从仓库外目录通过 smoke。详情见 [M7 演示记录](m7-demo.md)。
+M7 验证（2026-09-11）：默认测试 **178/178 通过**；托管 smoke 在仓库根目录和仓库外目录均成功；隔离目录中的 `win-x64` NativeAOT publish 没有 trimming/AOT warning；本次新生成的原生 EXE 也从仓库外目录通过 smoke。
 
-M8 验证（2026-09-18）：默认测试 **225/225 通过**；CLI 无警告构建，`win-x64` NativeAOT publish 没有 trimming/AOT warning，发布后的原生程序从仓库外通过 `--help`、离线 `doctor` 和既有 smoke。使用隔离用户配置目录验证了 `init`、`config show/set`、provider/model 管理和环境变量凭据引用，并补充了这些命令路径的执行回归测试。尚未把任何真实 provider/model 列入 tested 清单。详见 [M8 配置命令演示记录](m8-demo.md)。
+M8 验证（2026-09-18）：默认测试 **225/225 通过**；CLI 无警告构建，`win-x64` NativeAOT publish 没有 trimming/AOT warning，发布后的原生程序从仓库外通过 `--help`、离线 `doctor` 和既有 smoke。使用隔离用户配置目录验证了 `init`、`config show/set`、provider/model 管理和环境变量凭据引用，并补充了这些命令路径的执行回归测试。尚未把任何真实 provider/model 列入 tested 清单。
+
+M9 本机实现、离线/NativeAOT 验证及真实 endpoint 检查（2026-09-23）：初始全套测试 **367 项通过**；MCP `_meta` 兼容修复后的定向测试 **21/21 通过**。`win-x64` NativeAOT publish、发布产物 CLI smoke 与 MCP stdio initialize/tools-list smoke 均通过。真实 `glm-5.3` HTTPS endpoint 调用经由直接 stdio 与 Codex MCP 完成，并返回带行号证据的结论。见 [M9 验证记录](m9-demo.md)。
 
 ### 服务与模型验证范围
 
-当前仓库的协议验证基于本地模拟 SSE 服务，覆盖自定义 endpoint、文本流、工具调用分片、请求工具定义、HTTP 错误和取消。真实 tested providers/models 清单仍为空；使用“OpenAI-compatible”接口不代表所有服务和模型都已验证兼容。
+当前仓库的协议验证基于本地模拟 SSE 服务，覆盖自定义 endpoint、文本流、工具调用分片、请求工具定义、HTTP 错误和取消。另有 `glm-5.3` / HTTPS endpoint 的真实 MCP worker 调用记录，包含直接 stdio 和 Codex 客户端路径；这只验证该配置组合，其他服务和模型仍未验证兼容。使用“OpenAI-compatible”接口不代表所有服务和模型都已验证兼容。
 
 ## 代码结构
 
@@ -236,4 +267,4 @@ M8 验证（2026-09-18）：默认测试 **225/225 通过**；CLI 无警告构�
 
 Agent Loop 通过 `IChatCompletionClient` 使用模型，SDK 类型留在协议适配层。工具显式注册；结构化状态使用 System.Text.Json source generation，配置使用无反射的手工绑定，以便持续验证 trimming 与 NativeAOT。
 
-完整产品边界和里程碑见 [PLAN.md](../PLAN.md)，仓库开发规范见 [AGENTS.md](../AGENTS.md)。MVP 不包含 GUI、MCP、RAG、多 Agent、插件系统或 OS 级 sandbox。
+完整产品边界和里程碑见 [PLAN.md](../PLAN.md)，仓库开发规范见 [AGENTS.md](../AGENTS.md)。MVP 基线不包含 GUI、MCP、RAG、多 Agent、插件系统或 OS 级 sandbox；后续 M9 已交付本机只读 MCP worker。

@@ -39,6 +39,19 @@ public class UserConfigStoreTests
                     CompactionThreshold       = 100_000,
                     DefaultToolTimeoutSeconds = 90,
                     SessionDirectory          = "custom/runs",
+                    Worker = new UserWorkerSettings
+                    {
+                        WorkspaceRoot = "C:/work/project",
+                        RunTimeoutSeconds = 180,
+                        MaxAgentSteps = 8,
+                        DefaultToolTimeoutSeconds = 25,
+                        MaxTaskPackageCharacters = 10_000,
+                        MaxToolCalls = 15,
+                        MaxToolOutputCharacters = 30_000,
+                        MaxContextTokensPerRequest = 20_000,
+                        MaxCumulativeContextTokens = 50_000,
+                        MaxModelResponseCharacters = 16_000,
+                    },
                 },
             };
 
@@ -61,6 +74,17 @@ public class UserConfigStoreTests
             Assert.Equal(100_000, loaded.Settings.CompactionThreshold);
             Assert.Equal(90, loaded.Settings.DefaultToolTimeoutSeconds);
             Assert.Equal("custom/runs", loaded.Settings.SessionDirectory);
+            var worker = loaded.Settings.Worker!;
+            Assert.Equal("C:/work/project", worker.WorkspaceRoot);
+            Assert.Equal(180, worker.RunTimeoutSeconds);
+            Assert.Equal(8, worker.MaxAgentSteps);
+            Assert.Equal(25, worker.DefaultToolTimeoutSeconds);
+            Assert.Equal(10_000, worker.MaxTaskPackageCharacters);
+            Assert.Equal(15, worker.MaxToolCalls);
+            Assert.Equal(30_000, worker.MaxToolOutputCharacters);
+            Assert.Equal(20_000, worker.MaxContextTokensPerRequest);
+            Assert.Equal(50_000, worker.MaxCumulativeContextTokens);
+            Assert.Equal(16_000, worker.MaxModelResponseCharacters);
         }
         finally
         {

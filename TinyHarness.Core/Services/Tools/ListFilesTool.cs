@@ -7,13 +7,17 @@ namespace TinyHarness.Core.Services.Tools;
 
 /// <summary>
 /// 列举工作区目录内容的只读工具。目录名以“/”结尾；递归时跳过常见构建与版本控制目录，
-/// 并通过统一遍历器限制数量和链接行为。
+/// 并通过统一遍历器限制数量和链接行为。可选的 <see cref="WorkerReadPolicy"/> 只由
+/// WorkerRunner 注入：Prepare 拒绝范围外的显式路径，枚举结果逐项过滤且被排除目录不下降。
 ///
 /// list_files: lists the entries of a workspace directory. Directory entries are
 /// suffixed with '/'; recursive walks omit and never descend into well-known
-/// build/version-control directories (see <see cref="DirectoryWalker"/>).
+/// build/version-control directories (see <see cref="DirectoryWalker"/>). The
+/// optional <see cref="WorkerReadPolicy"/>, injected only by the WorkerRunner,
+/// rejects out-of-scope explicit paths in Prepare and filters enumeration results
+/// without descending into excluded directories.
 /// </summary>
-public sealed class ListFilesTool(Workspace workspace) : ITool
+public sealed class ListFilesTool(Workspace workspace, WorkerReadPolicy? workerPolicy = null) : ITool
 {
     private const int MaxEntries = 500;
 
@@ -69,6 +73,7 @@ public sealed class ListFilesTool(Workspace workspace) : ITool
         }
 
         var absolute = workspace.ResolveInside(rawPath, "path");
+        workerPolicy?.EnsureLexicalAccessAllowed(absolute);
         args["path"] = absolute; // Normalized plan value; Execute never re-resolves raw input.
         return new ToolPreparation
         {
@@ -100,10 +105,21 @@ public sealed class ListFilesTool(Workspace workspace) : ITool
         }
 
         workspace.EnsureFinalTargetInside(absolute, isDirectory : true, "Directory");
+        // 工作区链接边界之外的第二层：显式列举的目录经链接解析后的落点也必须落在
+        // worker 读取范围内，否则 junction 可能把 focus 外目录的内容列出来。
+        // A second layer beyond the workspace link boundary: the resolved landing of an explicitly
+        // listed directory must also be inside the worker read scope, or a junction could list
+        // names from outside the focus.
+        workerPolicy?.EnsureFinalAccessAllowed(absolute);
         var recursive = JsonArgs.OptionalBool(preparation.Arguments, "recursive", false);
         var maxDepth  = JsonArgs.OptionalInt(preparation.Arguments, "maxDepth");
 
-        var result = DirectoryWalker.CollectEntries(absolute, recursive, maxDepth, MaxEntries, cancellationToken);
+        // 枚举结果按策略逐项过滤；被排除目录不下降，因此不会出现在结果里。
+        // Enumeration results are filtered by the policy; excluded directories are never descended into.
+        var result = DirectoryWalker.CollectEntries(absolute, recursive, maxDepth, MaxEntries, cancellationToken,
+                                                    workerPolicy is null
+                                                        ? null
+                                                        : child => !workerPolicy.IsEntryAllowed(child));
         if (result.Entries.Count == 0)
         {
             return Task.FromResult(new ToolResult

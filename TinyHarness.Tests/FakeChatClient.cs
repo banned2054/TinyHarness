@@ -30,6 +30,13 @@ internal sealed class FakeChatClient : IChatCompletionClient
     /// </summary>
     public Action? CancelMidStream { get; set; }
 
+    /// <summary>
+    /// 设置后每次请求在记录后抛出该异常，用于模拟携带任意消息文本的传输/服务错误。
+    /// When set, every request throws this exception right after being logged, simulating a
+    /// transport or service error that carries arbitrary message text.
+    /// </summary>
+    public Exception? ThrownError { get; set; }
+
     /// <summary>A scripted completion made of one or more content fragments.</summary>
     public static IReadOnlyList<ChatStreamEvent> Text(params string[] chunks) => chunks
        .Select(c => new ChatStreamEvent { Kind = ChatStreamEventKind.ContentDelta, ContentDelta = c })
@@ -106,6 +113,11 @@ internal sealed class FakeChatClient : IChatCompletionClient
         Requests++;
         LastRequestModel = request.Model;
         _requestLog.Add(request);
+
+        if (ThrownError is not null)
+        {
+            throw ThrownError;
+        }
 
         if (_responses.Count == 0)
         {

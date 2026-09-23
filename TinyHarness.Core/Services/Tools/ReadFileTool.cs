@@ -17,9 +17,12 @@ namespace TinyHarness.Core.Services.Tools;
 /// than 8 KiB are cut in place with an explicit "[line N truncated]" suffix.
 /// Every early stop reports the exact offset to continue from, and all markers
 /// count against the output budget. Binary files are reported rather than
-/// dumped.
+/// dumped. The optional <see cref="WorkerReadPolicy"/>, injected only by the
+/// WorkerRunner, rejects out-of-scope or sensitive explicit paths — in Prepare
+/// lexically and in Execute again over the resolved link chain — so excluded
+/// content is never returned.
 /// </summary>
-public sealed class ReadFileTool(Workspace workspace) : ITool
+public sealed class ReadFileTool(Workspace workspace, WorkerReadPolicy? workerPolicy = null) : ITool
 {
     /// <summary>
     /// 单次调用的硬行数上限，也是省略 limit 时的默认值；Prepare 会拒绝更大值。
@@ -126,6 +129,7 @@ public sealed class ReadFileTool(Workspace workspace) : ITool
         }
 
         var absolute = workspace.ResolveInside(rawPath, "path");
+        workerPolicy?.EnsureLexicalAccessAllowed(absolute);
         args["path"] = absolute; // Normalized plan value; Execute never re-resolves raw input.
         return new ToolPreparation
         {
@@ -169,6 +173,10 @@ public sealed class ReadFileTool(Workspace workspace) : ITool
         }
 
         workspace.EnsureFinalTargetInside(absolute, isDirectory : false, "File");
+        // 工作区链接边界之外的第二层：最终解析目标还必须落在 worker 读取范围内。
+        // A second layer beyond the workspace link boundary: the resolved final target must also be
+        // inside the worker read scope.
+        workerPolicy?.EnsureFinalAccessAllowed(absolute);
 
         var display    = workspace.ToDisplay(absolute);
         var fileLength = new FileInfo(absolute).Length;

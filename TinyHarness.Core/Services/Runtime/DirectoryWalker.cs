@@ -37,23 +37,26 @@ internal static class DirectoryWalker
     /// 递归收集普通文件，供 search_text 使用。
     /// Recursively collects files only for search_text.
     /// </summary>
-    public static WalkResult CollectFiles(string rootAbs, int cap, CancellationToken cancellationToken) =>
-        Collect(rootAbs, recursive : true, maxDepth : null, cap, includeDirectories : false, cancellationToken);
+    public static WalkResult CollectFiles(string              rootAbs, int cap, CancellationToken cancellationToken,
+                                          Func<string, bool>? excludeEntry = null) =>
+        Collect(rootAbs, recursive : true, maxDepth : null, cap, includeDirectories : false, cancellationToken,
+                excludeEntry);
 
     /// <summary>
     /// 按递归与深度设置收集文件和目录，供 list_files 使用。
     /// Collects files and directories according to the recursion and depth settings for list_files.
     /// </summary>
-    public static WalkResult CollectEntries(string            rootAbs, bool recursive, int? maxDepth, int cap,
-                                            CancellationToken cancellationToken) =>
-        Collect(rootAbs, recursive, maxDepth, cap, includeDirectories : true, cancellationToken);
+    public static WalkResult CollectEntries(string              rootAbs, bool recursive, int? maxDepth, int cap,
+                                            CancellationToken   cancellationToken,
+                                            Func<string, bool>? excludeEntry = null) =>
+        Collect(rootAbs, recursive, maxDepth, cap, includeDirectories : true, cancellationToken, excludeEntry);
 
     /// <summary>
     /// 执行实际遍历，在条目上限内返回排序结果，并标记是否因上限提前停止。
     /// Performs the bounded walk, returns sorted entries, and reports whether the cap stopped enumeration.
     /// </summary>
     private static WalkResult Collect(string rootAbs, bool recursive, int? maxDepth, int cap, bool includeDirectories,
-                                      CancellationToken cancellationToken)
+                                      CancellationToken cancellationToken, Func<string, bool>? excludeEntry)
     {
         var entries   = new List<string>();
         var truncated = false;
@@ -92,6 +95,18 @@ internal static class DirectoryWalker
                 }
 
                 var child = children[i];
+
+                // 调用方逐项排除（例如 worker 的 focus/敏感策略）：被排除目录不下降、
+                // 文件不进入结果；显式请求的遍历根不经过该谓词，仍由调用方自行检查。
+                // Caller-side per-entry exclusion (e.g. the worker focus/sensitive policy): excluded
+                // directories are not descended and excluded files never enter the results. The
+                // explicitly requested walk root is not passed through the predicate; the caller
+                // checks it itself.
+                if (excludeEntry is not null && excludeEntry(child))
+                {
+                    continue;
+                }
+
                 var isDir = Directory.Exists(child);
                 if (!isDir && !File.Exists(child))
                 {

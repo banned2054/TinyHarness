@@ -8,7 +8,7 @@ The project focuses on a small, complete, and explainable agent execution flow: 
 
 ## Current status
 
-M7 persistence and demo foundations are implemented: runs now write an inspectable JSONL audit and a JSON session snapshot under `artifacts/runs` (or the configured `sessionDirectory`). M8's configuration command path is also implemented: the CLI can guide first-time setup, manage named provider profiles and models, report effective configuration, and run an offline doctor check. Interactive multi-turn chat and session recovery remain planned for M9/M10; real-model diagnosis remains opt-in.
+M7 persistence and demo foundations are implemented: runs write an inspectable JSONL audit and JSON session snapshot under `artifacts/runs` (or the configured `sessionDirectory`). M8's configuration commands manage provider profiles and models, report effective configuration, and run an offline doctor check. M9 adds a one-shot, read-only MCP worker for Codex. The offline fake path is covered, and `glm-5.3` through the configured HTTPS endpoint has completed a live investigation through both stdio and Codex MCP.
 
 | Capability | Current implementation |
 |---|---|
@@ -20,8 +20,9 @@ M7 persistence and demo foundations are implemented: runs now write an inspectab
 | Context | Token estimation, tool-result trimming, recent complete turns, structured summaries, and successive compaction batches |
 | Verification | Offline fake-client tests, local simulated SSE protocol tests, command-parser tests, and a `win-x64` NativeAOT smoke test |
 | Persistence | Per-run `<runId>.audit.jsonl` and `<runId>.session.json`; configured known secret values and explicitly supported sensitive fields are redacted before persistence |
+| MCP worker | Local stdio server exposing only `ask_glm`; every request gets a fresh read-only run with fixed workspace, model and bounded budgets |
 
-Each CLI invocation runs one task and displays approvals, compaction notices, and the final result. M8 management commands do not send their input to the model. Interactive multi-turn sessions, token-by-token terminal output, and session recovery are not yet available.
+Each `run` CLI invocation handles one task and displays approvals, compaction notices, and the final result. `mcp` serves serial, independent `ask_glm` requests. Management commands do not send their input to a model. Interactive multi-turn sessions, token-by-token terminal output, and session recovery are not available.
 
 ## Quick start: run the offline smoke test
 
@@ -69,6 +70,34 @@ tinyharness model list|add <id> --context-window <tokens>|use <id>
 tinyharness auth set <name> [--env <VAR>|--store]
 tinyharness config set <key> <value>
 ```
+
+## Use the read-only MCP worker
+
+Configure the default provider profile, model, context window and credential through the user configuration commands above, then start the stdio server:
+
+```powershell
+dotnet run --project TinyHarness.Cli -- mcp
+```
+
+The MCP process reads only the TinyHarness user config at the path shown by `config show`. It uses that config's default provider profile and explicitly selected model. It ignores the target workspace's `tinyharness.json` and its `commandRules`. The workspace is fixed when the server starts: by default it is the process working directory, or it can be set in the user config under `settings.worker.workspaceRoot` (relative paths resolve from the process working directory).
+
+The server advertises only `ask_glm`. It lists, searches and reads files inside the fixed workspace, with focus-path narrowing and sensitive-file exclusions. It cannot modify files or run commands. Permitted file contents are sent to the configured model endpoint. MCP protocol messages use UTF-8 newline-delimited JSON on standard input and output; startup diagnostics go to standard error. `notifications/cancelled`, closing the client input, and Ctrl+C cancel active model and file operations. Calls are processed serially, each with fresh history, policy and budgets.
+
+Worker limits are trusted user settings under `settings.worker`; an MCP request cannot set or raise them. Defaults and hard ceilings are:
+
+| Setting | Default | Hard ceiling |
+|---|---:|---:|
+| `runTimeoutSeconds` | 120 s | 600 s |
+| `maxAgentSteps` (model requests) | 6 | 24 |
+| `defaultToolTimeoutSeconds` | 20 s | 120 s |
+| `maxTaskPackageCharacters` | 12,000 | 32,000 |
+| `maxToolCalls` | 12 | 40 |
+| `maxToolOutputCharacters` | 24,000 | 128,000 |
+| `maxContextTokensPerRequest` | `min(24,000, context window − 4,096)` | 256,000 and below the configured model window minus 4,096 |
+| `maxCumulativeContextTokens` | `min(32,000, context window − 4,096)` | 256,000 |
+| `maxModelResponseCharacters` | 12,000 | 64,000 |
+
+`WorkerResult` text also has a Core hard ceiling of 16,000 characters. Edit only the user-owned config to adjust trusted settings; do not place these values in a project `tinyharness.json`.
 
 Without `--config`, runtime lookup is non-merging and uses the first existing source: current-directory `tinyharness.json`, the user config, then built-in defaults. `config show` prints the effective source, absolute lookup paths, and key availability without printing key material. Use `--help` or `help <command>` for command-specific syntax. For tests and portable runs, `TINYHARNESS_USER_CONFIG_DIR` overrides the user-config directory.
 
@@ -212,13 +241,15 @@ dotnet publish TinyHarness.Cli/TinyHarness.Cli.csproj -c Release -r win-x64 --se
 
 The published executable is named `TinyHarness.exe`. Use `run --config <path> "task"` to call a real service.
 
-M7 verification on 2026-09-11: **178/178 default tests passed**; managed smoke passed both from the repository root and from an external directory; isolated `win-x64` NativeAOT publishing produced no trimming/AOT warnings; and that run's newly published native executable passed the smoke test from an external directory. See the [M7 demo record](docs/m7-demo.md) for details.
+M7 verification on 2026-09-11: **178/178 default tests passed**; managed smoke passed both from the repository root and from an external directory; isolated `win-x64` NativeAOT publishing produced no trimming/AOT warnings; and that run's newly published native executable passed the smoke test from an external directory.
 
-M8 validation on 2026-09-18: **225/225 default tests passed**; the CLI was built without warnings, `win-x64` NativeAOT publishing completed without trimming/AOT warnings, and the native executable passed `--help`, offline `doctor`, and the existing smoke path from outside the repository. An isolated user-config directory was used to verify `init`, `config show/set`, provider/model management, and environment-variable credential references, with command-execution regression coverage for those paths. No real provider/model is listed as tested. See the [M8 configuration demo record](docs/m8-demo.md).
+M8 validation on 2026-09-18: **225/225 default tests passed**; the CLI was built without warnings, `win-x64` NativeAOT publishing completed without trimming/AOT warnings, and the native executable passed `--help`, offline `doctor`, and the existing smoke path from outside the repository. An isolated user-config directory was used to verify `init`, `config show/set`, provider/model management, and environment-variable credential references, with command-execution regression coverage for those paths. No real provider/model is listed as tested.
+
+M9 local implementation, offline/AOT validation, and live endpoint check on 2026-09-23: the initial full suite passed **367 tests**; after the MCP `_meta` compatibility fix, the focused MCP suite passed **21/21**. `win-x64` NativeAOT publish and native smoke passed. A real `glm-5.3` request through the configured HTTPS endpoint completed with cited file lines through both stdio and Codex MCP. See the [M9 validation record](docs/m9-demo.md).
 
 ### Provider and model verification scope
 
-Protocol verification currently uses a local simulated SSE service, covering custom endpoints, text streaming, fragmented tool calls, request tool definitions, HTTP errors, and cancellation. There is no verified list of real providers/models yet. Using an “OpenAI-compatible” interface does not mean every provider and model has been tested for compatibility.
+Protocol verification uses a local simulated SSE service, covering custom endpoints, text streaming, fragmented tool calls, request tool definitions, HTTP errors, and cancellation. One live `glm-5.3`/HTTPS endpoint combination has also been verified through direct stdio and a Codex MCP call. Using an “OpenAI-compatible” interface does not mean every provider and model has been tested for compatibility.
 
 ## Code structure
 
@@ -238,4 +269,4 @@ Namespaces now follow the directory roles: data contracts use `TinyHarness.Core.
 
 The agent loop accesses models through `IChatCompletionClient`; SDK types stay in the protocol adapter layer. Tools are registered explicitly. Structured state uses System.Text.Json source generation, and configuration uses manual binding without reflection to support ongoing trimming and NativeAOT verification.
 
-See [PLAN.md](PLAN.md) for the complete product scope and milestones, and [AGENTS.md](AGENTS.md) for repository development rules. The MVP excludes GUI, MCP, RAG, multi-agent support, a plugin system, and an OS sandbox.
+See [PLAN.md](PLAN.md) for the complete product scope and milestones, and [AGENTS.md](AGENTS.md) for repository development rules. The MVP baseline excludes GUI, MCP, RAG, multi-agent support, a plugin system, and an OS sandbox; the post-MVP M9 phase now provides a local read-only MCP worker.

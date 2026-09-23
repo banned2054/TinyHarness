@@ -18,6 +18,7 @@ internal static class HelpText
           tinyharness run [--config <path>] [--] "your prompt"
           tinyharness [--config <path>] "your prompt"          (verbless)
           tinyharness smoke [--config <path>]                  (offline tool-flow smoke)
+          tinyharness mcp                                      (local MCP stdio worker)
           tinyharness init                                     (create the user config)
           tinyharness config show | config set <key> <value>
           tinyharness provider list | provider add <name> | provider use <name>
@@ -62,6 +63,26 @@ internal static class HelpText
         Runs the offline tool-flow smoke: a scripted model drives list/search/read/patch and
         process tools through the permission flow in a temporary workspace. No network, no
         API key. --config only supplies the model name and budget fields.
+        """;
+
+    public const string Mcp = """
+        Usage:
+          tinyharness mcp
+
+        Starts the local MCP stdio server for editor/agent clients such as Codex. Protocol
+        messages are newline-delimited JSON on stdin/stdout (UTF-8); all diagnostics go to
+        stderr. It serves only the `ask_glm` tool through a fresh, read-only worker run. Permitted
+        file contents are sent to the configured model endpoint; the worker cannot write files or
+        run commands. Cancellation notifications, client disconnect and Ctrl+C cancel active work.
+
+        The worker reads only the TinyHarness user config (shown by `tinyharness config show`),
+        using its default provider profile and explicitly selected model. It never reads a target
+        workspace's `tinyharness.json` or its `commandRules`. By default the workspace is the
+        process working directory; trusted overrides and worker budgets live under
+        `settings.worker` in the user config. Configure a provider, model and credential first.
+
+        Register it in the MCP client with command `tinyharness` and argument `mcp`. Closing
+        stdin shuts the server down; Ctrl+C exits without writing diagnostics to stdout.
         """;
 
     public const string Init = """
@@ -148,6 +169,7 @@ internal static class HelpText
     {
         "run"      => true,
         "smoke"    => true,
+        "mcp"      => true,
         "init"     => true,
         "config"   => true,
         "provider" => true,
@@ -166,6 +188,7 @@ internal static class HelpText
     {
         "run"      => Run,
         "smoke"    => Smoke,
+        "mcp"      => Mcp,
         "init"     => Init,
         "config"   => Config,
         "provider" => Provider,

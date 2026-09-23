@@ -79,6 +79,20 @@ public class PermissionEngineTests
     }
 
     [Fact]
+    public void WorkerMode_HardDeniesWriteProcessAndUnknownCapabilities()
+    {
+        using var dir = new TestTempDir();
+        var engine = new PermissionEngine(dir.Root, denyNonReadOnlyCapabilities : true);
+
+        Assert.Equal(PermissionDecision.Allow,
+                     engine.Decide(Prep("filesystem.read", [Path.Combine(dir.Root, "a.cs")])));
+        Assert.Equal(PermissionDecision.Deny,
+                     engine.Decide(Prep("filesystem.write", [Path.Combine(dir.Root, "a.cs")])));
+        Assert.Equal(PermissionDecision.Deny, engine.Decide(Prep("process.execute", [dir.Root])));
+        Assert.Equal(PermissionDecision.Deny, engine.Decide(Prep("filesystem.unknown", [dir.Root])));
+    }
+
+    [Fact]
     public void TargetOutsideWorkspace_IsHardDenied()
     {
         using var inside  = new TestTempDir();

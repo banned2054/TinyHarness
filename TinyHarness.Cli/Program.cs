@@ -1,3 +1,4 @@
+using System.Text;
 using TinyHarness.Cli.Commands;
 using TinyHarness.Cli.Exceptions;
 using TinyHarness.Cli.Models;
@@ -9,10 +10,12 @@ using TinyHarness.Core.Models.Context;
 using TinyHarness.Core.Services.Agent;
 using TinyHarness.Core.Services.ChatCompletions;
 using TinyHarness.Core.Services.Configuration;
+using TinyHarness.Core.Services.Mcp;
 using TinyHarness.Core.Services.Permissions;
 using TinyHarness.Core.Services.Persistence;
 using TinyHarness.Core.Services.Runtime;
 using TinyHarness.Core.Services.Tools;
+using TinyHarness.Core.Services.Worker;
 using WindowsCredentialStore = TinyHarness.Core.Services.Runtime.WindowsCredentialStore;
 
 namespace TinyHarness.Cli;
@@ -82,6 +85,9 @@ internal static class Program
 
             case CliCommandKind.Smoke :
                 return await RunSmokeAsync(options.ConfigPath);
+
+            case CliCommandKind.Mcp :
+                return await RunMcpServerAsync();
 
             case CliCommandKind.Run :
                 return await RunAsync(options.Prompt!, options.ConfigPath);
@@ -223,6 +229,49 @@ internal static class Program
             AgentStatus.Cancelled => 130,
             _                     => 1,
         };
+    }
+
+    /// <summary>
+    /// 启动本机 stdio MCP 服务端：stdout 只承载协议消息，诊断写 stderr；stdin 关闭即正常退出，
+    /// Ctrl+C 静默退出，均不污染协议输出。
+    ///
+    /// Starts the local stdio MCP server: stdout carries protocol messages only and diagnostics
+    /// go to stderr. Closing stdin exits cleanly and Ctrl+C exits silently, keeping the protocol
+    /// output unpolluted.
+    /// </summary>
+    private static async Task<int> RunMcpServerAsync()
+    {
+        using var cts                = new CancellationTokenSource();
+        using var cancelRegistration = new ConsoleCancellation(cts);
+        var       hostConfig         = await McpWorkerHostConfiguration.ResolveAsync(cts.Token).ConfigureAwait(false);
+        IChatCompletionClient model = new OpenAiChatCompletionClient(hostConfig.Model, hostConfig.Endpoint,
+                                                                     hostConfig.ApiKey);
+        var runner = new WorkerRunner(model, hostConfig.WorkspaceRoot, hostConfig.ExecutionOptions);
+
+        // 只输出不含凭据的启动摘要到 stderr。文件内容会发送到配置的模型 endpoint。
+        await Console.Error.WriteLineAsync($"TinyHarness MCP worker ready: model={hostConfig.Model}; " +
+                                           $"endpointType={hostConfig.EndpointType}; workspace={hostConfig.WorkspaceRoot}");
+        await Console.Error.WriteLineAsync("Read-permitted file contents are sent to the selected model endpoint; " +
+                                           "the worker cannot modify files or run commands.");
+
+        // 直接包装字节流并显式使用无 BOM 的 UTF-8：MCP stdio 分帧固定为 UTF-8，
+        // 而 Console.In/Out 在 Windows 上会套用传统的 OEM/ANSI 代码页。
+        using var input = new StreamReader(Console.OpenStandardInput(),
+                                           new UTF8Encoding(encoderShouldEmitUTF8Identifier : false),
+                                           detectEncodingFromByteOrderMarks : false);
+        await using var output = new StreamWriter(Console.OpenStandardOutput(),
+                                                  new UTF8Encoding(encoderShouldEmitUTF8Identifier : false));
+        var server = new McpStdioServer(input, output, runner.RunAsync);
+
+        try
+        {
+            await server.RunAsync(cts.Token).ConfigureAwait(false);
+            return 0;
+        }
+        catch (OperationCanceledException)
+        {
+            return 0;
+        }
     }
 
     /// <summary>

@@ -57,6 +57,11 @@ internal static class CommandLine
             return ParseSmokeArgs(args[1..]);
         }
 
+        if (string.Equals(first, "mcp", StringComparison.Ordinal))
+        {
+            return ParseMcpArgs(args[1..]);
+        }
+
         if (string.Equals(first, "init", StringComparison.Ordinal))
         {
             return ParseInitArgs(args[1..]);
@@ -213,6 +218,25 @@ internal static class CommandLine
         }
 
         return new CliOptions { Kind = CliCommandKind.Smoke, ConfigPath = configPath };
+    }
+
+    /// <summary>
+    /// 解析 mcp 参数；不接受任何额外参数。
+    /// Parses mcp arguments; no extra arguments are accepted.
+    /// </summary>
+    private static CliOptions ParseMcpArgs(string[] args)
+    {
+        if (args.Length == 0)
+        {
+            return new CliOptions { Kind = CliCommandKind.Mcp };
+        }
+
+        if (IsHelpFlag(args[0]))
+        {
+            return new CliOptions { Kind = CliCommandKind.Help, HelpTopic = "mcp" };
+        }
+
+        throw new CliUsageException($"Unknown argument '{args[0]}' for mcp.", HelpText.Mcp);
     }
 
     /// <summary>

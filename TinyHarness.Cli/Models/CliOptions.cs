@@ -8,6 +8,7 @@ internal enum CliCommandKind
 {
     Run,
     Smoke,
+    Mcp,
     Init,
     Config,
     Provider,

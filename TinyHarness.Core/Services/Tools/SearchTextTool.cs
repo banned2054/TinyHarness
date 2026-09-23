@@ -15,9 +15,13 @@ namespace TinyHarness.Core.Services.Tools;
 /// final target escapes the workspace are skipped and counted. The walk is
 /// bounded by the DirectoryWalker exclusion list and by
 /// <see cref="MaxFilesScanned"/> (a truncated walk is reported), and the result
-/// list stops early once <see cref="MaxResults"/> is reached.
+/// list stops early once <see cref="MaxResults"/> is reached. The optional
+/// <see cref="WorkerReadPolicy"/>, injected only by the WorkerRunner, rejects
+/// out-of-scope explicit paths in Prepare, filters walked entries, re-checks
+/// every scanned file's resolved link chain, and skips excluded paths by count
+/// without ever revealing their names or content.
 /// </summary>
-public sealed class SearchTextTool(Workspace workspace) : ITool
+public sealed class SearchTextTool(Workspace workspace, WorkerReadPolicy? workerPolicy = null) : ITool
 {
     private const int DefaultMaxResults = 100;
 
@@ -83,6 +87,7 @@ public sealed class SearchTextTool(Workspace workspace) : ITool
         }
 
         var absolute = workspace.ResolveInside(rawPath, "path");
+        workerPolicy?.EnsureLexicalAccessAllowed(absolute);
         args["path"] = absolute; // Normalized plan value; Execute never re-resolves raw input.
         return new ToolPreparation
         {
@@ -126,7 +131,13 @@ public sealed class SearchTextTool(Workspace workspace) : ITool
         }
         else
         {
-            var walk = DirectoryWalker.CollectFiles(absolute, MaxFilesScanned, cancellationToken);
+            // 枚举结果按策略逐项过滤；被排除目录不下降，因此不会进入扫描列表。
+            // Enumeration results are filtered by the policy; excluded directories are never
+            // descended into, so they never reach the scan list.
+            var walk = DirectoryWalker.CollectFiles(absolute, MaxFilesScanned, cancellationToken,
+                                                    workerPolicy is null
+                                                        ? null
+                                                        : child => !workerPolicy.IsEntryAllowed(child));
             files.AddRange(walk.Entries);
             walkLimited = walk.Truncated;
         }
@@ -136,6 +147,7 @@ public sealed class SearchTextTool(Workspace workspace) : ITool
         var skippedLarge    = 0;
         var skippedBinary   = 0;
         var skippedEscaping = 0;
+        var skippedExcluded = 0;
         var stoppedAtCap    = false;
 
         foreach (var file in files)
@@ -155,7 +167,7 @@ public sealed class SearchTextTool(Workspace workspace) : ITool
             }
 
             var scan = await ScanFileAsync(file, pattern, comparison, maxResults - output.Count, workspace,
-                                           cancellationToken).ConfigureAwait(false);
+                                           workerPolicy, cancellationToken).ConfigureAwait(false);
             if (scan.SkipReason is ScanSkipReason.Binary)
             {
                 skippedBinary++;
@@ -168,6 +180,12 @@ public sealed class SearchTextTool(Workspace workspace) : ITool
                 continue;
             }
 
+            if (scan.SkipReason is ScanSkipReason.Excluded)
+            {
+                skippedExcluded++;
+                continue;
+            }
+
             filesScanned++;
             output.AddRange(scan.Matches);
             if (scan.StoppedMidFile)
@@ -177,10 +195,15 @@ public sealed class SearchTextTool(Workspace workspace) : ITool
             }
         }
 
-        var details = new List<string>(4);
+        var details = new List<string>(5);
         if (skippedEscaping > 0)
         {
             details.Add($"skipped {skippedEscaping} file link(s) to outside the workspace");
+        }
+
+        if (skippedExcluded > 0)
+        {
+            details.Add($"skipped {skippedExcluded} excluded path(s)");
         }
 
         if (skippedBinary > 0)
@@ -239,6 +262,7 @@ public sealed class SearchTextTool(Workspace workspace) : ITool
     /// </summary>
     private static async Task<ScanOutcome> ScanFileAsync(string file, string pattern, StringComparison comparison,
                                                          int maxMatches, Workspace workspace,
+                                                         WorkerReadPolicy? workerPolicy,
                                                          CancellationToken cancellationToken)
     {
         // A file found by the walk can itself be a symlink/junction whose final
@@ -253,6 +277,23 @@ public sealed class SearchTextTool(Workspace workspace) : ITool
         catch (InvalidDataException)
         {
             return ScanOutcome.OutsideWorkspace;
+        }
+
+        // 策略的最终复核：链接链解析后的目标仍须落在 worker 读取范围内（focus/敏感排除）；
+        // 不合格按跳过计数，绝不读取内容、不暴露路径名。
+        // The policy's final re-check: the resolved link-chain target must also be inside the worker
+        // read scope (focus/sensitive). Disqualified files are skipped and counted; their content is
+        // never read and their names never revealed.
+        if (workerPolicy is not null)
+        {
+            try
+            {
+                workerPolicy.EnsureFinalAccessAllowed(file);
+            }
+            catch (InvalidDataException)
+            {
+                return ScanOutcome.Excluded;
+            }
         }
 
         await using var stream = new FileStream(file, FileMode.Open, FileAccess.Read,
@@ -309,6 +350,8 @@ public sealed class SearchTextTool(Workspace workspace) : ITool
         public static ScanOutcome Binary { get; } = new([], false, ScanSkipReason.Binary);
 
         public static ScanOutcome OutsideWorkspace { get; } = new([], false, ScanSkipReason.OutsideWorkspace);
+
+        public static ScanOutcome Excluded { get; } = new([], false, ScanSkipReason.Excluded);
     }
 
     private enum ScanSkipReason
@@ -324,5 +367,11 @@ public sealed class SearchTextTool(Workspace workspace) : ITool
         /// File link whose final target escapes the workspace.
         /// </summary>
         OutsideWorkspace,
+
+        /// <summary>
+        /// 文件被 worker 读取策略排除（focus 范围外或敏感路径）。
+        /// The file is excluded by the worker read policy (outside focus or a sensitive path).
+        /// </summary>
+        Excluded,
     }
 }

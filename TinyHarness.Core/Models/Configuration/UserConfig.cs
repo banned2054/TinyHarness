@@ -56,6 +56,41 @@ public sealed record UserConfigSettings
     public string? SessionDirectory { get; init; }
 
     public IReadOnlyList<CommandRule>? CommandRules { get; init; }
+
+    /// <summary>
+    /// 一次性只读 MCP worker 的可信设置。仅存放在用户配置中；MCP 请求和目标项目配置不能修改它。
+    /// Trusted settings for the one-shot read-only MCP worker. Stored only in user config; MCP requests
+    /// and target-project config cannot change them.
+    /// </summary>
+    public UserWorkerSettings? Worker { get; init; }
+}
+
+/// <summary>
+/// MCP worker 的宿主设置。空字段沿用保守默认值；显式字段由宿主再按稳定硬上限校验。
+/// Host settings for the MCP worker. Missing fields use conservative defaults; explicit values are
+/// checked by the host against stable hard ceilings.
+/// </summary>
+public sealed record UserWorkerSettings
+{
+    public string? WorkspaceRoot { get; init; }
+
+    public int? RunTimeoutSeconds { get; init; }
+
+    public int? MaxAgentSteps { get; init; }
+
+    public int? DefaultToolTimeoutSeconds { get; init; }
+
+    public int? MaxTaskPackageCharacters { get; init; }
+
+    public int? MaxToolCalls { get; init; }
+
+    public int? MaxToolOutputCharacters { get; init; }
+
+    public int? MaxContextTokensPerRequest { get; init; }
+
+    public int? MaxCumulativeContextTokens { get; init; }
+
+    public int? MaxModelResponseCharacters { get; init; }
 }
 
 /// <summary>
