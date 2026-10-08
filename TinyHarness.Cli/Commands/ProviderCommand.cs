@@ -1,5 +1,6 @@
 using TinyHarness.Cli.Models;
 using TinyHarness.Cli.Services;
+using TinyHarness.Core.Models.Configuration;
 
 namespace TinyHarness.Cli.Commands;
 
@@ -55,6 +56,8 @@ internal static class ProviderCommand
             await io.WriteLineAsync($"{marker} {profile.Name,-20} {endpoint}", cancellationToken)
                     .ConfigureAwait(false);
             await io.WriteLineAsync($"  key          : {UserConfigAccess.DescribeKeySource(profile)}",
+                                    cancellationToken).ConfigureAwait(false);
+            await io.WriteLineAsync($"  chat api     : {ChatApiKindParser.ToValueString(profile.ChatApi)}",
                                     cancellationToken).ConfigureAwait(false);
             await io.WriteLineAsync(
                                     $"  models       : {profile.Models.Count}{(profile.DefaultModel.Length > 0 ? $", default: {profile.DefaultModel}" : string.Empty)}",

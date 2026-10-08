@@ -64,6 +64,10 @@ internal static class DoctorCommand
             await io.WriteLineAsync($"  [ok]   endpoint {normalizedEndpoint}", cancellationToken).ConfigureAwait(false);
         }
 
+        // Chat API protocol: an explicit config choice; never guessed from the model name.
+        await io.WriteLineAsync($"  [ok]   chat api {ChatApiKindParser.ToValueString(config.ChatApi)}",
+                                cancellationToken).ConfigureAwait(false);
+
         // Model: required for live runs and the offline smoke path.
         if (config.Model.Length == 0)
         {
@@ -210,7 +214,8 @@ internal static class DoctorCommand
         timeout.CancelAfter(TimeSpan.FromSeconds(60));
         try
         {
-            IChatCompletionClient client = new OpenAiChatCompletionClient(config.Model, config.Endpoint, apiKey);
+            IChatCompletionClient client = ModelClientFactory.Create(config.Model, config.Endpoint, apiKey,
+                                                                     config.ChatApi);
             var request = new ChatCompletionRequest
             {
                 Model    = config.Model,
@@ -232,8 +237,10 @@ internal static class DoctorCommand
             }
 
             await io.WriteLineAsync(string.Empty, cancellationToken).ConfigureAwait(false);
-            await io.WriteLineAsync("  [ok]   the endpoint accepted a streaming Chat Completions request",
-                                    cancellationToken).ConfigureAwait(false);
+            await io.WriteLineAsync(
+                $"  [ok]   the endpoint accepted a streaming " +
+                $"{ChatApiKindParser.ToValueString(config.ChatApi)} request",
+                cancellationToken).ConfigureAwait(false);
             return true;
         }
         catch (Exception ex) when (ex is not OperationCanceledException ||

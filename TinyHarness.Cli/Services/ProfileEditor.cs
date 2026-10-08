@@ -51,7 +51,11 @@ internal static class ProfileEditor
             Endpoint                  = endpoint,
             ApiKeyEnvironmentVariable = envVariable,
             ApiKeyCredentialTarget    = credentialTarget,
-            DefaultModel              = modelId,
+            // 协议不经交互提示收集；覆盖已有 profile 时保留其显式选择，避免静默回退。
+            // The protocol is not prompted; overwriting an existing profile keeps its explicit
+            // choice instead of silently falling back.
+            ChatApi      = existing?.ChatApi ?? ChatApiKind.ChatCompletions,
+            DefaultModel = modelId,
             Models =
             [
                 new UserProfileModel { Id = modelId, ContextWindowTokens = contextWindow },

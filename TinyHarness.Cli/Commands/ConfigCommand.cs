@@ -78,6 +78,9 @@ internal static class ConfigCommand
                                     : "  endpoint        : (not set)",
                                 cancellationToken).ConfigureAwait(false);
 
+        await io.WriteLineAsync($"  chat api        : {ChatApiKindParser.ToValueString(config.ChatApi)}",
+                                cancellationToken).ConfigureAwait(false);
+
         var key = ApiKeyReader.Describe(config.ApiKeyEnvironmentVariable, config.ApiKeyCredentialTarget,
                                         context.Credentials);
         await io.WriteLineAsync($"  api key         : {DescribeKey(key)}", cancellationToken).ConfigureAwait(false);

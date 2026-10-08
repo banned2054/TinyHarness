@@ -147,6 +147,7 @@ internal static class Program
                                              : $" ({resolution.SourcePath})"));
         await Console.Out.WriteLineAsync($"  model     : {config.Model}");
         await Console.Out.WriteLineAsync($"  endpoint  : {config.Endpoint}");
+        await Console.Out.WriteLineAsync($"  chat api  : {ChatApiKindParser.ToValueString(config.ChatApi)}");
         await Console.Out.WriteLineAsync($"  workspace : {config.WorkspaceRoot}");
         await Console.Out.WriteLineAsync($"  tools     : list_files, search_text, read_file, apply_patch, shell");
 
@@ -177,7 +178,7 @@ internal static class Program
 
         // Assemble the real model transport, workspace tools and interactive
         // permission flow used by normal CLI runs.
-        IChatCompletionClient model = new OpenAiChatCompletionClient(config.Model, config.Endpoint, apiKey);
+        IChatCompletionClient model = ModelClientFactory.Create(config.Model, config.Endpoint, apiKey, config.ChatApi);
 
         var               workspace   = new Workspace(config.WorkspaceRoot);
         var               tools       = BuildTools(workspace, config, apiKey);
@@ -244,13 +245,15 @@ internal static class Program
         using var cts                = new CancellationTokenSource();
         using var cancelRegistration = new ConsoleCancellation(cts);
         var       hostConfig         = await McpWorkerHostConfiguration.ResolveAsync(cts.Token).ConfigureAwait(false);
-        IChatCompletionClient model = new OpenAiChatCompletionClient(hostConfig.Model, hostConfig.Endpoint,
-                                                                     hostConfig.ApiKey);
+        IChatCompletionClient model = ModelClientFactory.Create(hostConfig.Model, hostConfig.Endpoint,
+                                                                hostConfig.ApiKey, hostConfig.ChatApi);
         var runner = new WorkerRunner(model, hostConfig.WorkspaceRoot, hostConfig.ExecutionOptions);
 
         // 只输出不含凭据的启动摘要到 stderr。文件内容会发送到配置的模型 endpoint。
         await Console.Error.WriteLineAsync($"TinyHarness MCP worker ready: model={hostConfig.Model}; " +
-                                           $"endpointType={hostConfig.EndpointType}; workspace={hostConfig.WorkspaceRoot}");
+                                           $"endpointType={hostConfig.EndpointType}; " +
+                                           $"chatApi={ChatApiKindParser.ToValueString(hostConfig.ChatApi)}; " +
+                                           $"workspace={hostConfig.WorkspaceRoot}");
         await Console.Error.WriteLineAsync("Read-permitted file contents are sent to the selected model endpoint; " +
                                            "the worker cannot modify files or run commands.");
 
