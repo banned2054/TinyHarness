@@ -669,6 +669,8 @@ MVP 完成需要同时满足：
 
 **状态：先迁移 OpenAI Chat Completions 与 Responses；Anthropic Messages 暂缓。** 2026-10-08 用户确认以 `Microsoft.Extensions.AI.IChatClient` 作为统一调用接口，底层使用官方 SDK。此项扩展现有 Chat Completions-only MVP；前文记录的是原 MVP 的范围和验收历史，不回写成当时已支持多协议。
 
+同日实施完成：两条 OpenAI 协议路径已实现并入主线——`ModelClientFactory`/`MicrosoftAiChatClient` 适配 `IChatClient`，`chatApi` 显式选择协议（缺省 `chat-completions`），Responses 的 reasoning/item id/encrypted content 回传与 `store:false` 无状态请求、真实 usage 的审计与预算校准均已落地。离线验收（默认测试 408/408、`win-x64` NativeAOT publish 零警告、原生产物仓库外 smoke）见 [M10 验证记录](docs/m10-model-protocol.md)。真实供应商调用尚未执行，tested providers 清单不变。
+
 ### 兼容性结论
 
 验证使用 .NET 10、`win-x64`、`PublishAot=true`，并保持 `JsonSerializerIsReflectionEnabledByDefault=false`。所有请求都由离线 mock HTTP/SSE handler 接收，没有调用真实模型服务或读取凭据。

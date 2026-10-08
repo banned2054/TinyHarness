@@ -2,17 +2,17 @@
 
 [**English**](../README.md) | 简体中文
 
-一个基于 .NET 10 的轻量本地 coding-agent harness。通过 OpenAI-compatible Chat Completions 协议调用模型，让模型在工作区内检查文件、提出补丁和运行命令，并由应用执行参数校验、权限审批、工具调度与上下文管理。
+一个基于 .NET 10 的轻量本地 coding-agent harness。通过统一的 `Microsoft.Extensions.AI.IChatClient` 边界（底层官方 OpenAI SDK）调用模型，由配置显式选择 Chat Completions（缺省）或 Responses 协议，让模型在工作区内检查文件、提出补丁和运行命令，并由应用执行参数校验、权限审批、工具调度与上下文管理。
 
 项目重点是把 Agent 的执行链路做小、做完整、做得可解释：模型负责提出下一步行动，Harness 负责准备、授权和执行。CLI 是当前入口，NativeAOT 是持续验证的构建约束。
 
 ## 当前状态
 
-M7 的持久化与演示基础已实现：每次运行会在 `artifacts/runs`（或配置的 `sessionDirectory`）写入可检查的 JSONL 审计和 JSON session 快照。M8 的配置命令可管理 provider profile 和模型、显示生效配置并执行离线 doctor 检查。M9 增加了供 Codex 使用的一次性只读 MCP worker；离线 fake 验收已通过，配置的 HTTPS endpoint 与 `glm-5.3` 已通过直接 stdio 和 Codex MCP 客户端调用验收。
+M7 的持久化与演示基础已实现：每次运行会在 `artifacts/runs`（或配置的 `sessionDirectory`）写入可检查的 JSONL 审计和 JSON session 快照。M8 的配置命令可管理 provider profile 和模型、显示生效配置并执行离线 doctor 检查。M9 增加了供 Codex 使用的一次性只读 MCP worker。M10 把模型调用统一到 `Microsoft.Extensions.AI.IChatClient`，`chatApi` 显式选择 Chat Completions/Responses，已完成离线验证。离线 fake 验收已通过，配置的 HTTPS endpoint 与 `glm-5.3` 已通过直接 stdio 和 Codex MCP 客户端调用验收。
 
 | 能力 | 当前实现 |
 |---|---|
-| 模型协议 | 官方 OpenAI .NET SDK 接入自定义 endpoint；接收 SSE 文本与 tool-call 参数分片 |
+| 模型协议 | `Microsoft.Extensions.AI.IChatClient` + 官方 OpenAI SDK；`chatApi` 选择 Chat Completions（缺省）或 Responses；SSE 文本、tool-call 参数分片、usage 与 Responses reasoning 回传 |
 | Agent Loop | 一轮多个工具调用、顺序执行、结果回传、最大步数、失败和取消处理 |
 | 文件工具 | `list_files`、`search_text`、`read_file`、`apply_patch` |
 | 进程工具 | `shell` 的直接进程与显式 shell 模式；stdout/stderr、退出码、超时、进程树终止和输出裁剪 |
@@ -107,6 +107,7 @@ worker 限额来自用户配置的 `settings.worker`，MCP 请求不能设置或
 {
   "endpoint": "https://your-provider.example/v1",
   "model": "your-tool-capable-model",
+  "chatApi": "chat-completions",
   "apiKeyEnvironmentVariable": "TINYHARNESS_API_KEY",
   "contextWindowTokens": 128000,
   "reservedOutputTokens": 8000,
@@ -118,7 +119,7 @@ worker 限额来自用户配置的 `settings.worker`，MCP 请求不能设置或
 }
 ```
 
-`endpoint` 是 SDK 基地址，例如以 `/v1` 结尾；不要填写完整的 `/v1/chat/completions` URL。模型需要支持流式 Chat Completions 和 function/tool calling。窗口大小由配置显式声明，不根据模型名称推断；示例数值不代表任何具体模型的能力。
+`endpoint` 是 SDK 基地址，例如以 `/v1` 结尾；不要填写完整的 `/v1/chat/completions` URL。模型需要支持所选协议——流式 Chat Completions（缺省）或 Responses——以及 function/tool calling；`chatApi` 显式选择协议，不根据模型名称推断。窗口大小由配置显式声明，不根据模型名称推断；示例数值不代表任何具体模型的能力。
 
 在当前 PowerShell 会话中输入密钥并执行任务：
 
@@ -147,6 +148,7 @@ dotnet run --project TinyHarness.Cli -- --config artifacts/live.json "说明这�
 |---|---|---|
 | `endpoint` | 空 | 真实服务的 HTTP(S) 基地址 |
 | `model` | 空 | 模型标识；真实运行必须填写 |
+| `chatApi` | `chat-completions` | 模型协议传输：`chat-completions` 或 `responses`；显式选择，不根据模型名推断 |
 | `apiKeyEnvironmentVariable` | 空 | 保存 API key 的环境变量名称 |
 | `apiKeyCredentialTarget` | 空 | Windows Credential Manager 中保存 API key 的目标名；只保存引用，不保存密钥 |
 | `contextWindowTokens` | `128000` | 声明的上下文窗口 |
@@ -215,7 +217,7 @@ StructuredState 包含 `Goal`、`Constraints`、`Decisions`、`FilesInspected`�
 - 每个已有待办必须保留，或以 `completed: <item>` 明确关闭；约束允许更新。
 - 校验失败不应用该批摘要，不破坏原始历史；最终估算仍超出窗口时终止任务，不发送该普通请求。
 
-后续压缩采用“旧摘要 + 新进入折叠范围的历史 → 新摘要”。已有摘要会再次被模型改写，校验不能保证首次事实提取完整或多次摘要语义无损。token 数使用字符规则估算，当前未用服务端 usage 校准，也不保证是实际 token 数的上界。
+后续压缩采用“旧摘要 + 新进入折叠范围的历史 → 新摘要”。已有摘要会再次被模型改写，校验不能保证首次事实提取完整或多次摘要语义无损。token 数基于字符规则估算，并按最近一次服务端真实 usage 的钳位比值校准（仍属估算，不保证是实际 token 数的上界）；缺少真实 usage 时保持纯估算。每步真实 usage 与结束原因会写入审计日志。
 
 原始消息保存在进程内存中，压缩不删除这些消息；但工具在返回结果前可能已执行自己的输出裁剪。完成的运行会把这些消息和结构化状态写入 session；不支持恢复或重放。
 
@@ -247,9 +249,11 @@ M8 验证（2026-09-18）：默认测试 **225/225 通过**；CLI 无警告构�
 
 M9 本机实现、离线/NativeAOT 验证及真实 endpoint 检查（2026-09-23）：初始全套测试 **367 项通过**；MCP `_meta` 兼容修复后的定向测试 **21/21 通过**。`win-x64` NativeAOT publish、发布产物 CLI smoke 与 MCP stdio initialize/tools-list smoke 均通过。真实 `glm-5.3` HTTPS endpoint 调用经由直接 stdio 与 Codex MCP 完成，并返回带行号证据的结论。见 [M9 验证记录](m9-demo.md)。
 
+M10 统一模型协议（2026-10-08）：模型调用迁移到 `Microsoft.Extensions.AI.IChatClient`（OpenAI SDK 2.14.0 + Microsoft.Extensions.AI.OpenAI 10.10.1），`chatApi` 显式选择协议，Responses 的 reasoning/item id/encrypted content 在历史中回传；默认测试 **408/408 通过**，无警告构建，`win-x64` NativeAOT publish 无 trimming/AOT warning，发布产物从仓库外通过 `--help`、离线 `doctor` 和 smoke。离线契约测试覆盖两种协议；不新增任何真实 provider/model 结论。见 [M10 验证记录](m10-model-protocol.md)。
+
 ### 服务与模型验证范围
 
-当前仓库的协议验证基于本地模拟 SSE 服务，覆盖自定义 endpoint、文本流、工具调用分片、请求工具定义、HTTP 错误和取消。另有 `glm-5.3` / HTTPS endpoint 的真实 MCP worker 调用记录，包含直接 stdio 和 Codex 客户端路径；这只验证该配置组合，其他服务和模型仍未验证兼容。使用“OpenAI-compatible”接口不代表所有服务和模型都已验证兼容。
+当前仓库的协议验证基于本地模拟 SSE 服务，覆盖自定义 endpoint、Chat Completions 与 Responses 两种传输、文本流、工具调用分片、usage 与 reasoning 回传、请求工具定义、HTTP 错误和取消。另有 `glm-5.3` / HTTPS endpoint 的真实 MCP worker 调用记录，包含直接 stdio 和 Codex 客户端路径；这只验证该配置组合，其他服务和模型仍未验证兼容。使用“OpenAI-compatible”接口不代表所有服务和模型都已验证兼容。
 
 ## 代码结构
 

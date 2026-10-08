@@ -2,17 +2,17 @@
 
 English | [**简体中文**](docs/README.md)
 
-A lightweight local coding-agent harness built on .NET 10. It uses the OpenAI-compatible Chat Completions protocol to let models inspect workspace files, propose patches, and run commands, while the application handles argument validation, permission approval, tool dispatch, and context management.
+A lightweight local coding-agent harness built on .NET 10. It calls models through a unified `Microsoft.Extensions.AI.IChatClient` boundary backed by the official OpenAI SDK, with Chat Completions (default) or Responses selected explicitly by configuration, letting models inspect workspace files, propose patches, and run commands while the application handles argument validation, permission approval, tool dispatch, and context management.
 
 The project focuses on a small, complete, and explainable agent execution flow: the model proposes the next action, and the harness prepares, authorizes, and executes it. The CLI is the current entry point, and NativeAOT compatibility is continuously verified.
 
 ## Current status
 
-M7 persistence and demo foundations are implemented: runs write an inspectable JSONL audit and JSON session snapshot under `artifacts/runs` (or the configured `sessionDirectory`). M8's configuration commands manage provider profiles and models, report effective configuration, and run an offline doctor check. M9 adds a one-shot, read-only MCP worker for Codex. The offline fake path is covered, and `glm-5.3` through the configured HTTPS endpoint has completed a live investigation through both stdio and Codex MCP.
+M7 persistence and demo foundations are implemented: runs write an inspectable JSONL audit and JSON session snapshot under `artifacts/runs` (or the configured `sessionDirectory`). M8's configuration commands manage provider profiles and models, report effective configuration, and run an offline doctor check. M9 adds a one-shot, read-only MCP worker for Codex. M10 unifies model calls behind `Microsoft.Extensions.AI.IChatClient` with explicit Chat Completions/Responses selection, verified offline. The offline fake path is covered, and `glm-5.3` through the configured HTTPS endpoint has completed a live investigation through both stdio and Codex MCP.
 
 | Capability | Current implementation |
 |---|---|
-| Model protocol | Official OpenAI .NET SDK with custom endpoints; SSE text and fragmented tool-call arguments |
+| Model protocol | `Microsoft.Extensions.AI.IChatClient` over the official OpenAI SDK; Chat Completions (default) or Responses via `chatApi`; SSE text, fragmented tool-call arguments, usage, and Responses reasoning round-trip |
 | Agent loop | Multiple tool calls per response, sequential execution, result feedback, step limits, failure and cancellation handling |
 | File tools | `list_files`, `search_text`, `read_file`, `apply_patch` |
 | Process tool | `shell` with direct process and explicit shell modes; stdout/stderr, exit codes, timeouts, process-tree termination, and output trimming |
@@ -109,6 +109,7 @@ Create a JSON configuration file, such as `artifacts/live.json`. The `artifacts/
 {
   "endpoint": "https://your-provider.example/v1",
   "model": "your-tool-capable-model",
+  "chatApi": "chat-completions",
   "apiKeyEnvironmentVariable": "TINYHARNESS_API_KEY",
   "contextWindowTokens": 128000,
   "reservedOutputTokens": 8000,
@@ -120,7 +121,7 @@ Create a JSON configuration file, such as `artifacts/live.json`. The `artifacts/
 }
 ```
 
-`endpoint` is the SDK base URL, typically ending in `/v1`; do not use the full `/v1/chat/completions` URL. The model must support streaming Chat Completions and function/tool calling. The context window is explicitly configured, not inferred from the model name. The example values do not describe any particular model's capabilities.
+`endpoint` is the SDK base URL, typically ending in `/v1`; do not use the full `/v1/chat/completions` URL. The model must support the selected API—streaming Chat Completions (default) or Responses—together with function/tool calling; `chatApi` selects the transport explicitly and is never inferred from the model name. The context window is explicitly configured, not inferred from the model name. The example values do not describe any particular model's capabilities.
 
 Enter the key in the current PowerShell session and run a task:
 
@@ -147,6 +148,7 @@ Press `Ctrl+C` to cancel. Exit codes are `0` for completion, `1` for failure or 
 |---|---|---|
 | `endpoint` | Empty | HTTP(S) base URL for the model service |
 | `model` | Empty | Model identifier; required for live runs |
+| `chatApi` | `chat-completions` | Model API transport: `chat-completions` or `responses`; explicitly selected, never inferred from the model name |
 | `apiKeyEnvironmentVariable` | Empty | Name of the environment variable holding the API key |
 | `apiKeyCredentialTarget` | Empty | Windows Credential Manager target holding the API key; stores a reference, not the key |
 | `contextWindowTokens` | `128000` | Declared context window size |
@@ -215,7 +217,7 @@ StructuredState contains `Goal`, `Constraints`, `Decisions`, `FilesInspected`, `
 - Each existing pending item must be retained or explicitly closed with `completed: <item>`; constraints may be updated.
 - If validation fails, that batch's summary is not applied and the original history remains intact. If the final estimate still exceeds the context window, the task stops without sending the regular request.
 
-Later compaction follows “old summary + newly folded history → new summary.” The model rewrites the existing summary, and validation cannot guarantee complete initial fact extraction or lossless meaning across repeated summaries. Token counts use a character-based estimate; they are not currently calibrated against service-reported usage and are not guaranteed to be an upper bound on actual token counts.
+Later compaction follows “old summary + newly folded history → new summary.” The model rewrites the existing summary, and validation cannot guarantee complete initial fact extraction or lossless meaning across repeated summaries. Token counts use a character-based estimate, calibrated by a clamped ratio from the most recent service-reported usage (still an estimate, not guaranteed to be an upper bound on actual token counts); without real usage they remain purely estimated. Each step's real usage and finish reason, when available, are written to the audit log.
 
 Original messages remain in process memory and are not deleted by compaction, although tools may already have trimmed their own output before returning results. Completed runs persist that history and the committed structured state; session recovery and side-effect replay are deliberately not implemented.
 
@@ -247,9 +249,11 @@ M8 validation on 2026-09-18: **225/225 default tests passed**; the CLI was built
 
 M9 local implementation, offline/AOT validation, and live endpoint check on 2026-09-23: the initial full suite passed **367 tests**; after the MCP `_meta` compatibility fix, the focused MCP suite passed **21/21**. `win-x64` NativeAOT publish and native smoke passed. A real `glm-5.3` request through the configured HTTPS endpoint completed with cited file lines through both stdio and Codex MCP. See the [M9 validation record](docs/m9-demo.md).
 
+M10 unified model protocol on 2026-10-08: model calls moved behind `Microsoft.Extensions.AI.IChatClient` (OpenAI SDK 2.14.0 + Microsoft.Extensions.AI.OpenAI 10.10.1) with explicit `chatApi` selection and Responses reasoning/item-id/encrypted-content round-trip; **408/408 default tests passed**, the build reported no warnings, `win-x64` NativeAOT publishing completed without trimming/AOT warnings, and the native executable passed `--help`, offline `doctor`, and the smoke path from outside the repository. Offline contract tests cover both transports; no real provider/model claim is added. See the [M10 validation record](docs/m10-model-protocol.md).
+
 ### Provider and model verification scope
 
-Protocol verification uses a local simulated SSE service, covering custom endpoints, text streaming, fragmented tool calls, request tool definitions, HTTP errors, and cancellation. One live `glm-5.3`/HTTPS endpoint combination has also been verified through direct stdio and a Codex MCP call. Using an “OpenAI-compatible” interface does not mean every provider and model has been tested for compatibility.
+Protocol verification uses a local simulated SSE service, covering custom endpoints, both Chat Completions and Responses transports, text streaming, fragmented tool calls, usage and reasoning replay, request tool definitions, HTTP errors, and cancellation. One live `glm-5.3`/HTTPS endpoint combination has also been verified through direct stdio and a Codex MCP call. Using an “OpenAI-compatible” interface does not mean every provider and model has been tested for compatibility.
 
 ## Code structure
 
