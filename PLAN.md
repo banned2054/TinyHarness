@@ -33,7 +33,7 @@ TinyHarness.NET 是一个用于求职展示的轻量本地 coding-agent harness�
 - 开发优先采用可运行的纵向切片，不先搭建大量空接口。
 
 只有经过契约测试或人工验证的服务和模型才能列入 README 的 tested providers/models。
-以上是已实现 MVP 的范围基线，不决定后续功能顺序。后 MVP 的近期目标已调整为本机 MCP worker，见第 22 节。
+以上是已实现 MVP 的范围基线，不决定后续功能顺序。后续项目路线见第 21 节。
 
 ## 3. MVP 范围
 
@@ -74,7 +74,7 @@ MVP 的 `shell` 理论上可以调用 Git，但必须服从命令权限规则，
 
 ## 4. 解决方案结构
 
-当前 M8 基线保持 `TinyHarness.Core`、`TinyHarness.Cli` 和 `TinyHarness.Tests` 三个项目。已完成的目录整理采用职责分类优先、功能分类作为子目录的方式。MCP worker 优先复用 Core；新增入口放在 CLI 还是独立可执行项目，应以协议输入输出隔离和 NativeAOT 验证结果决定，不预建 GUI 目录或多 Agent 框架。
+当前项目包含 `TinyHarness.Core`、`TinyHarness.Cli` 和 `TinyHarness.Tests` 三个项目；已交付的本机 MCP stdio 入口位于 CLI。M9 的实现与验收作为历史功能记录保留，后续产品路线不再规划外置 subagent MCP worker。
 
 以下是目标结构，目录迁移已于 2026-09-19 完成（移动与拆分文件，并按职责同步调整 namespace；公开类型的 namespace 因此发生相应变化）；子目录按实际类型需要创建，不预建空目录：
 
@@ -134,7 +134,7 @@ TinyHarness.Tests
 
 暂不创建 `TinyHarness.OpenAI`、`TinyHarness.Runtime` 等额外程序集。只有出现第二种协议、API 依赖显著膨胀或需要独立发布 Core 时，才重新评估拆分。
 
-`TinyHarness.Cli` 是现有 NativeAOT publish root。若 MCP worker 使用独立可执行项目，该项目也必须作为 NativeAOT publish root 验证；Core 和所有运行时依赖须能被实际入口静态分析和裁剪。
+`TinyHarness.Cli` 是现有 NativeAOT publish root，覆盖 CLI 与本机 MCP 入口；Core 和运行时依赖须能被实际入口静态分析和裁剪。
 
 目录整理作为 M8 完成后的独立重构事项记录，不改变里程碑编号，也不计入已完成状态。实施时保持行为、配置与持久化格式不变；公开类型的命名空间调整需明确评估兼容性，不能仅因移动文件而自动改变公开 API。整理后执行受影响项目的构建与回归测试，涉及 AOT 敏感边界时按既有要求执行 NativeAOT publish 和 smoke。后续入口按真实需求创建。
 
@@ -665,180 +665,34 @@ MVP 完成需要同时满足：
 - 不把 policy/approval 宣称为 OS sandbox；
 - 不把未经验证的服务宣称为兼容。
 
-## 21. M9 开始前的实现基线
+## 21. 统一模型协议接入
 
-本节记录 M9 开始前的实现基础与缺口；当前 M9 状态见下一节和 [M9 验证记录](docs/m9-demo.md)。
+**状态：先迁移 OpenAI Chat Completions 与 Responses；Anthropic Messages 暂缓。** 2026-10-08 用户确认以 `Microsoft.Extensions.AI.IChatClient` 作为统一调用接口，底层使用官方 SDK。此项扩展现有 Chat Completions-only MVP；前文记录的是原 MVP 的范围和验收历史，不回写成当时已支持多协议。
 
-| 领域 | 已有基础 | 面向 MCP worker 的缺口 |
+### 兼容性结论
+
+验证使用 .NET 10、`win-x64`、`PublishAot=true`，并保持 `JsonSerializerIsReflectionEnabledByDefault=false`。所有请求都由离线 mock HTTP/SSE handler 接收，没有调用真实模型服务或读取凭据。
+
+| 协议与包 | Managed 离线闭环 | NativeAOT 原生产物 |
 |---|---|---|
-| 协议 | 官方 OpenAI .NET SDK、自定义 endpoint、SSE 和 tool-call 拼装 | 真实服务的验证清单仍为空；不能把本地模拟测试当成供应商兼容证明 |
-| 入口 | `run`、`smoke`、无动词 prompt、`--config` 和 M8 管理命令 | 没有供 Codex 调用的本机 MCP 服务入口；终端审批不可直接用于协议标准输入输出 |
-| 配置 | 手工无反射 JSON 绑定；用户配置、profile、模型选择和环境变量/Windows 凭据引用 | worker 需要由可信启动配置固定模型、工作区、读取范围和预算；不能把目标仓库配置当作授权来源 |
-| 工具 | 三个只读文件工具、`apply_patch` 与 `shell` 均已实现 | worker 需要独立的只读工具注册表、敏感文件排除和完整的执行层拒绝；`shell` 不能按名称当作只读工具 |
-| 上下文 | 完整内存历史、结构化摘要、tool-call 原子组、连续分批压缩 | 一次性 worker 应限制输入、工具结果和请求次数；不需要把长期会话或恢复作为前置条件 |
-| 权限 | prepared plan、单次与当前运行授权、命令匹配规则 | MCP 调用许可不能代替对内部副作用的用户审批；无权限引擎的运行路径不能用于 worker |
-| 验证 | 离线测试、固定修复 Demo、M8 配置验收、`win-x64` NativeAOT | 缺少 Codex → MCP → fake/真实模型 → 有界结果的端到端验收及真实使用记录 |
+| OpenAI Chat Completions；`Microsoft.Extensions.AI.OpenAI` 10.10.1 / OpenAI 2.14.0 | 通过 | 通过 |
+| OpenAI Responses；同上 | 通过 | 通过 |
+| Anthropic Messages；Anthropic 12.54.0 | 失败 | 失败 |
 
-这些缺口构成了 M9 的实施范围。已落地的设计选择包括官方 SDK、手工 JSON 绑定、JSONL + JSON snapshot、字符 token 估算、结构化命令参数匹配和复用现有 `StructuredState`。估算准确度、摘要语义保真，以及这次已验证组合以外的服务兼容性仍需后续验证。
+两个 OpenAI 路径已验证文本和工具参数分片、多个工具调用、usage、结束原因及下一轮工具结果回传。Responses 还验证了 `store:false`、不依赖 `previous_response_id`，以及 reasoning item ID 和 `encrypted_content` 在后续请求中的保留。工具只提供声明式 schema，SDK 不自动执行工具。
 
-连续会话、恢复和 GUI 属于原先拟定的使用方式，不作为当前主线的前置条件。
+Anthropic 12.54.0 在 NativeAOT 发布产物中产生 2,625 条 IL2026/IL3050 警告记录，运行时在发出 HTTP 请求前因禁用反射 JSON 而于 `TextBlockParam` 构造路径失败。Anthropic 12.54.1 的 managed 探针也复现同类失败。NativeAOT publish 成功不能证明该路径兼容；修复单个序列化调用也不足以证明整个 SDK 兼容。因此当前不把 Anthropic 包引入生产依赖，也不通过启用反射 JSON、关闭 AOT 或压制警告来绕过此门槛。
 
-## 22. 后 MVP 主线：本机 GLM 专项分析 worker
+### 本轮实施范围
 
-下一轮产品目标：**让 Codex 把小而具体的本地代码调查任务交给 TinyHarness，使用一次性 GLM 上下文得到可核查的结论。** Codex 保持全局任务状态并决定是否实施；TinyHarness 管理本机工具、模型调用、预算和结果。GLM 输入、缓存和输出的成本特点及窄任务的效果是待实际测量的工作假设，不把它们写成已验证结论。
+- 用 `IChatClient` 统一模型调用边界，保留现有 Agent Loop、上下文预算与压缩、工具注册和 `Prepare → Authorize → Execute` 权限流程；不启用自动函数执行。
+- 通过配置显式选择 Chat Completions 或 Responses。旧配置缺省继续使用 Chat Completions；不按模型名猜协议，也不自动切换。
+- CLI `run`、MCP host、`doctor --connect` 使用同一客户端创建逻辑。Responses 仅使用本地历史并设 `store:false`，不引入服务端会话恢复。
+- 在流、历史、压缩和持久化中保留 reasoning 内容、item ID 与 encrypted content；正确传递 usage、结束原因、取消和错误。缺少真实 usage 时继续明确标为估算。
+- Anthropic 只有在官方 SDK 的完整 NativeAOT 路径通过禁用反射 JSON 的离线探针和原生产物 smoke 后，才重新进入实现范围。
 
-这是 TinyHarness **向 Codex 提供 MCP 服务**，与原先候选的“TinyHarness 接入外部 MCP 工具”方向不同。第一版只提供一个 `ask_glm` 工具，不建立通用 MCP 平台、多模型编排层、长期子智能体会话或远程服务。
+### 完成验收
 
-| 阶段 | 用户能获得什么 | 优先级与进入条件 |
-|---|---|---|
-| M8：配置与命令入口 | 已有 CLI、profile、凭据引用和离线诊断 | 已完成（验证见 README） |
-| M9：只读 MCP worker | Codex 调用 `ask_glm`，GLM 在固定工作区调查并返回有界结论 | 本机实现、离线闭环、NativeAOT smoke 和一次 `glm-5.3` HTTPS endpoint 调用已完成；Codex 客户端注册与调用待完成 |
-| M10：真实使用与任务包优化 | 用其他项目的真实小任务评估质量、成本、延迟和重复读取 | M9 可用后；只修复实际暴露的问题 |
-| M11：补丁建议模式 | GLM 返回可审查的补丁建议，由 Codex 决定是否应用 | 仅在 M10 记录了反复搬运补丁的需求后进入 |
-| M12：受控执行能力 | 在明确审批链路下让 worker 修改或运行特定命令 | 仅在只读与建议模式不足以完成真实任务后进入 |
-
-M9 与 M10 是近期主线；M11、M12 是有进入条件的候选，不要求全部完成。交互式连续对话、会话恢复、Avalonia、TinyHarness 作为 MCP 客户端、多 Agent 并发和复杂部署不再占用当前路线编号；如果后来有真实使用需求，重新定义范围和验收。已实现的单次 CLI 和 MVP 验收基线保持有效。
-
-求职展示材料来自真实功能、测试证据和使用记录；外部开源 PR 继续作为独立机会，不作为主线进度条件。
-
-### M8：配置引导、API profile 与模型选择
-
-**状态：已完成。** 命令入口、profile、凭据引用、模型选择和离线 doctor 已交付。M9 的 worker 配置另设用户配置边界，不采用目标项目配置。
-
-目标：第一次运行时，用户不需要先打开 JSON 文件。
-
-**范围**：
-
-- 增加 `--help`、各子命令帮助、未知参数诊断；管理命令不得误当 prompt 发给模型。为与命令名冲突的普通文本提供 `run -- "文本"` 入口，明确 `--` 后均为 prompt。
-- `tinyharness init` 引导创建用户配置：endpoint、API key 来源、模型和上下文预算；缺配置时显示该入口和实际查找路径。
-- 支持命名 provider profile，每个保存 endpoint、凭据引用、模型列表及各模型的显式 context window；默认 profile 可选择。
-- API key 通过隐藏输入设置到当前交互进程，或从既有环境变量读取；需要跨启动保存时，通过明确选择的系统凭据存储实现，先验证 Windows 方案。普通 JSON 只保存引用；不可用时给出环境变量用法，不退化为明文落盘。
-- `config show` 显示生效值、来源和绝对文件路径，密钥只显示是否可用；`config set` 校验非敏感字段，默认只更新用户配置。
-- 保留现有 `--config` 用法及旧文件语义：显式指定时选择该文件；未指定时保留当前目录 `tinyharness.json` 的优先级，再查用户配置，最后使用默认值。不在第一版隐式合并多份文件；用户配置、项目配置、会话目录分开显示。
-- 用户配置默认放入平台用户配置目录，并固定解析规则；旧配置的相对路径继续按当前工作目录解释，避免悄悄改变现有行为。
-- `doctor` 默认离线检查字段、路径和凭据是否存在；只有显式 `--connect` 才发送最小模型测试，并提前说明会联网且可能计费。
-
-已实现命令：
-
-```text
-tinyharness init
-tinyharness config show
-tinyharness config set maxAgentSteps 60
-tinyharness provider list
-tinyharness provider add work
-tinyharness provider use work
-tinyharness auth set work
-tinyharness model list
-tinyharness model add <model-id> --context-window <tokens>
-tinyharness model use <model-id>
-tinyharness doctor
-```
-
-`provider add`、`auth set` 和 `model add` 提供必要的交互引导。独立运行的 `auth set` 用于环境变量引用或系统凭据存储；临时内存密钥仅适用于随后继续聊天的同一进程，不声称可以修改父 shell 的环境。`model list` 默认列出本地配置；远端模型发现作为可选后续能力，不假定每个 endpoint 都支持，也不从模型名称猜预算。
-
-**验收**：在空的测试用户配置目录中，仅根据终端提示完成 profile 和模型配置；重新启动可发现配置和凭据来源；旧 `run --config`、无动词 prompt 和 smoke 仍可用。错误参数、无效预算、损坏配置和不存在的显式配置文件返回可操作提示，不发模型请求。新增序列化、凭据依赖与命令路径通过 `win-x64` NativeAOT publish 和离线 smoke；凭据值不进入日志、会话或命令参数。
-
-### M9：本机只读 MCP worker
-
-**本机实现、离线验收、真实 endpoint 与 Codex 客户端调用：已完成。** `glm-5.3` 经配置的 HTTPS endpoint 从 Codex MCP 工具完成了有界只读调查并返回行号证据。记录见 [M9 验证记录](docs/m9-demo.md)。当前兼容性结论仅适用于已测模型与 endpoint。
-
-目标：Codex 调用一次 `ask_glm`，TinyHarness 在一个新的、有限的 GLM 上下文中调查本地代码，返回可核查的结论，不修改工作区。
-
-**请求契约**：必填的具体 `task`；可选、大小受限的 `knownFacts`、`focusPaths`、`expectedOutput`。调用方提供的事实与文件内容只是任务资料，不是授权。`focusPaths` 只能缩小或提示搜索范围；模型、endpoint、工作区、权限模式、命令规则和预算均不能由 MCP 请求提高或改写。一次调用生成独立 run，不继承此前消息、会话授权或模型结论。
-
-**入口与边界**：
-
-- 提供本机 MCP 标准输入输出入口，第一版只注册 `ask_glm`。标准输出仅传协议消息，诊断写标准错误；不启动监听网络的服务。Codex 取消请求或断开连接时，取消对应模型调用和文件工具。第一版串行执行请求，避免共享状态与预算相互污染。
-- 复用现有 Core 的 Chat Completions client 与 Agent Loop；具体 GLM 模型和 endpoint 从可信的本机配置显式选择。MCP 入口不自动采用目标仓库的 `tinyharness.json` 或其中的 `commandRules`。旧 CLI 的配置优先级保持原样，worker 另行建立清晰的可信配置边界。
-- worker 只注册 `list_files`、`search_text`、`read_file`；权限层也必须明确拒绝 `filesystem.write`、`process.execute` 和未知副作用能力。不得用不注入 Permission Engine 的 Agent Loop 路径，也不得把 MCP 调用许可当作内部操作审批。`apply_patch` 和 `shell` 不向 worker 暴露。
-- 工作区由服务启动时的可信配置固定；读取、搜索和列举都执行工作区及链接边界检查，并对直接路径和遍历结果应用同一套敏感文件排除。默认保护常见凭据与密钥文件，允许可信配置进一步收紧范围；仓库内容和 `AGENTS.md` 不能扩大读取权限。明确告知使用者，准许读取的内容会送往所选模型 endpoint。
-- 以可配置的任务输入长度、模型请求次数、工具调用次数、工具输出量、总上下文量、返回长度和总耗时限制发散；达到限制时返回“未完成”及已有证据，不伪造结论。短任务不做自动 compaction；预算不够时结束或请求更小任务包，不能因关闭 Context Manager 而无限发送历史。
-- 固定 specialist 指令要求只解决当前任务、证据足够时结束，并把任务包、仓库文本与工具结果视为待分析资料而非新的权限或系统指令；这些指令不能替代前述工具和权限硬边界。
-- 输出包含状态、结论、证据（工作区相对路径及行号）、建议改法、测试建议、不确定项和执行统计。只把有界结果交还 Codex；不把完整工具历史、凭据、原始审计或大段代码默认塞进主会话。GLM 可以提出修改建议，但本阶段不返回已应用变更。
-
-**验收**：fake client 离线完成一次 Codex 风格 MCP 请求，经文件检索返回结构化结果；越界路径、敏感文件、提示注入诱导写入或运行命令均失败且无副作用；两个请求的状态与授权隔离；取消、超时、模型错误和达到预算都有明确结果；协议标准输出无诊断污染。新入口及协议序列化完成 `win-x64` NativeAOT publish 和原生产物 smoke。另须在 Codex 中显式启用真实 GLM，完成至少一个本地小任务并记录模型、endpoint 类型和日期；不能把离线 fake 视为兼容验证。
-
-### M10：真实使用与任务包优化
-
-目标：让 `ask_glm` 成为自己在 Codex 中实际会调用的工具，用使用记录决定下一步，而不是补齐原先设想的通用 Agent 产品功能。
-
-**范围**：
-
-- 至少在三个非 TinyHarness 项目的真实、小范围代码调查任务中使用。记录 Codex 给出的任务包、GLM 检查的文件、证据是否充分、结论是否正确、人工修正次数及是否真正节省主任务时间。敏感项目内容不进入公开 fixture 或文档。
-- 根据失败样本调整任务包：明确目标、已知事实、当前唯一关键未知量、关注文件、禁止扩大范围的约束和预期输出。`knownFacts` 不覆盖工具查到的相反证据；worker 须标出矛盾与不确定性。
-- 对反复搜索、无新证据的重复读取和过长最终输出设置可解释的停止条件；必要时改善搜索排序或关注路径输入，不先建设索引、记忆系统或复杂规划器。
-- 能取得可靠 usage 时分别记录输入、缓存输入和输出 token；否则标注为估算或不可用。记录调用耗时、模型请求数、工具调用数及 Codex 收到的结果长度。按同类任务比较直接让 Codex 调查与调用 worker 的结果；如有可行对照，再比较长期 GLM 主 Agent 与一次性 specialist 的成本和质量。不写死供应商价格。
-- 修复真实使用暴露的协议、取消、路径和结果质量问题；默认回归测试保持离线。真实服务验收显式 opt-in，并准确更新 tested providers/models 记录。
-
-**验收**：至少三个任务有可复核的匿名化结果记录，能指出成功案例、失败案例和下一项最值得做的改进；Codex 收到的结果足够做下一步决定，同时不会被完整 worker 历史淹没。每项改动有对应离线回归测试，真实调用的计量数据与估算值明确区分。
-
-### M11：候选——补丁建议模式
-
-进入条件：M10 的真实使用记录表明，GLM 的建议经常足够准确，却需要用户反复手动把修改搬给 Codex。
-
-目标：让 worker 返回可审查、可定位到文件基线的最小补丁建议，**仍由 Codex 根据当前用户任务和自身权限决定是否应用**。这一阶段不把 `apply_patch` 注册给 worker，不因为输出了 diff 就声称文件已经修改。
-
-**范围**：
-
-- 在 `ask_glm` 的结果中增加可选的统一 diff 或逐文件修改建议，并附根因、证据、适用的文件路径、生成时的文件基线标识和测试建议。证据不足时明确返回无法给出可靠补丁。
-- 补丁建议受文件数、字符数和返回预算约束；不允许在建议中夹带对工作区外路径、Git 操作或外部平台操作的执行指令。
-- Codex 应以当前文件内容重新检查和应用建议；建议可能过期，不把 worker 的文本输出解释成审批或已执行结果。
-
-**验收**：针对真实样本，Codex 能看清建议涉及哪些文件以及依据；文件在调查后变化时，旧建议不会被当成可无条件应用的事实。worker 仍保持零写入、零进程执行，离线测试覆盖无效 diff、路径越界和输出截断。
-
-### M12：候选——受控执行能力
-
-进入条件：M10/M11 的使用记录表明，只读分析和 Codex 应用建议仍有反复出现、可量化的阻碍；先选一个具体操作，不一次开放所有内置工具。
-
-目标：在保持 Codex 主任务控制权的前提下，为 worker 增加确有收益的本地副作用能力。
-
-**约束**：
-
-- 优先评估明确配置的验证命令；测试和构建会执行仓库代码，不能把它们称为只读 shell。通用 `shell`、显式解释器模式和网络访问不因单个验证需求自动开放。
-- 若允许 worker 写文件，必须有把 prepared plan 和 diff 展示给**实际用户**的审批通道；Codex 对 `ask_glm` 的一次调用许可、模型建议或仓库指令都不能代替内部审批。MCP 标准输入输出不得与终端提示混用；没有可用审批通道时拒绝执行。
-- 授权绑定能力、规范化路径、命令约束和单次 worker run；不跨请求继承 session grant。检查审批时与实际写入前的文件基线；发生变化就废弃旧计划。失败或取消后如实报告已发生与状态未知的副作用，不自动重放。
-- Git 暂存、提交、推送、标签、Release、发布和部署保持各自独立的用户授权阶段；本阶段不默认实现这些操作。进程仍非 OS 沙箱，若真实任务需要运行不可信代码，须另行评估隔离。
-
-**验收**：先针对选定的一个副作用场景完成离线授权、拒绝、取消、冲突及结果归因测试；无审批或越权请求确实没有副作用。相关入口、工具和权限变更通过 NativeAOT publish 与原生产物 smoke 后，才在真实任务中启用。
-
-### 其他候选与进入条件
-
-以下方向没有预定里程碑。只有在 `ask_glm` 的真实使用记录提供明确需求时，才重新提出范围与验收：
-
-| 候选 | 进入信号 | 第一切片 |
-|---|---|---|
-| 更强代码检索 | 现有搜索在多个真实仓库中成为主要瓶颈 | 先改善忽略规则、排序和预算，再比较索引收益 |
-| TinyHarness 接入外部 MCP 工具 | 内置文件工具无法取得反复需要的本地服务或数据 | 从一个明确配置的服务验证 SDK/AOT、权限和启动边界 |
-| 交互式 CLI 与会话恢复 | 用户确实需要让 TinyHarness 而非 Codex 长期持有对话 | 另定回合、恢复、授权失效与中断副作用契约 |
-| GUI | 本机 MCP + Codex 界面不能满足反复出现的交互或审批需求 | 先验证 UI 依赖、NativeAOT 和一个最小闭环 |
-| 并发 worker 或多模型编排 | 串行、单一 specialist 在真实任务中形成可量化瓶颈 | 先做只读隔离和资源上限实验 |
-| OS 级隔离 | 必须运行不可信仓库命令 | 对一个平台验证文件、网络和进程边界，不能把现有应用层策略称为沙箱 |
-| 供应商兼容增强 | 真实服务出现可复现协议差异 | 在 ChatCompletions 模块增加最小适配与契约测试 |
-
-远程服务、多用户账户、插件市场和自动发布不进入当前主线。
-
-## 23. 后续阶段的共同完成定义
-
-每个进入实施的阶段必须交付可运行的用户路径，而不仅是接口或存储结构：
-
-- Codex 能发起边界清晰的任务并收到状态、证据和限制说明；模型错误、取消与预算用尽不会被呈现为成功结论；
-- 默认离线测试无需网络或 API key，覆盖禁止发生的副作用；真实模型调用显式 opt-in；
-- 涉及入口、依赖、序列化、配置或工具注册时，执行目标 RID NativeAOT publish 与原生产物 smoke；
-- 现有 CLI 单次运行、工具审批、上下文不变量和持久化脱敏没有退化；MCP 协议输出与诊断隔离；
-- 每次 worker 请求隔离历史、权限与预算；任何恢复或重试均不隐式重放副作用或继承旧授权；
-- README、帮助和示例区分旧 CLI 与新 MCP worker 的配置和权限边界；里程碑完成时更新状态并链接验证记录；
-- 不为了新入口重写已有 Agent Loop，不为未来候选预先引入 GUI、数据库、通用 MCP 平台或复杂编排；
-- 未通过的验证、真实服务兼容性、模型用量和平台范围如实列出，不把计划或估算当成完成证据。
-
-M8 已交付命令骨架、`init`、`config show/set`、profile/凭据/模型选择和离线 `doctor`。M9 的只读 MCP worker 已通过离线、NativeAOT、真实 `glm-5.3` endpoint 和 Codex 客户端调用验收；下一步按 M10 范围记录真实使用，再决定后续改进。
-
-所有取舍继续遵循：
-
-```text
-用户控制与安全边界
-> 正确性和可测试性
-> 日常可用性与可演示性
-> 简单性
-> 扩展性
-> 功能数量
-```
+- 离线契约测试覆盖分片、多工具调用与结果回传、拒绝后继续、取消、错误、Responses reasoning 回传及旧配置兼容。
+- 受影响测试和回归通过；`win-x64` NativeAOT publish 后实际运行原生产物，并验证现有 CLI 功能未退化。
+- 真实供应商调用另行授权；离线验证只作为 SDK 适配和本地执行路径的证据，不作为真实 endpoint 兼容结论。
