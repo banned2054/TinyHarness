@@ -15,10 +15,12 @@
 	</PropertyGroup>
 
 	<ItemGroup>
-		<!-- M2 transport decision (PLAN §5/§21): official OpenAI SDK 2.13.0 verified
-         against custom endpoint, streaming text, streaming tool-call deltas and
-         NativeAOT publish with zero trim/AOT warnings (experiment + AOT probe). -->
-		<PackageReference Include="OpenAI" Version="2.13.0" />
+		<!-- PLAN §21：模型调用统一经 Microsoft.Extensions.AI 的 IChatClient，底层保留
+             OpenAI 官方 SDK。两个包都被 Core 直接使用：M.E.AI.OpenAI 提供
+             ChatClient → IChatClient 适配，OpenAI 提供传输构造。离线 mock 与
+             win-x64 NativeAOT 探针均已验证零 trim/AOT 警告。 -->
+		<PackageReference Include="Microsoft.Extensions.AI.OpenAI" Version="10.10.1" />
+		<PackageReference Include="OpenAI" Version="2.14.0" />
 	</ItemGroup>
 
 </Project>

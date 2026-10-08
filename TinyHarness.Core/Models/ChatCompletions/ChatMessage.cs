@@ -29,6 +29,14 @@ public sealed record ChatMessage
     public string? Name { get; init; }
 
     /// <summary>
+    /// assistant 消息携带的推理内容；回传时可原样续接服务的推理上下文。
+    ///
+    /// Reasoning content carried on assistant messages; replaying it verbatim
+    /// continues the service-side reasoning context.
+    /// </summary>
+    public IReadOnlyList<ReasoningContent>? Reasoning { get; init; }
+
+    /// <summary>
     /// 创建系统指令消息。
     /// Creates a system-instruction message.
     /// </summary>
@@ -57,6 +65,19 @@ public sealed record ChatMessage
         Role      = ChatRole.Assistant,
         Content   = content,
         ToolCalls = toolCalls,
+    };
+
+    /// <summary>
+    /// 创建同时携带推理内容、文本和可选工具调用的 assistant 消息。
+    /// Creates an assistant message carrying reasoning, text, and optional tool calls.
+    /// </summary>
+    public static ChatMessage Assistant(string content, IReadOnlyList<ChatToolCall>? toolCalls,
+                                        IReadOnlyList<ReasoningContent>? reasoning) => new()
+    {
+        Role      = ChatRole.Assistant,
+        Content   = content,
+        ToolCalls = toolCalls,
+        Reasoning = reasoning,
     };
 
     /// <summary>
