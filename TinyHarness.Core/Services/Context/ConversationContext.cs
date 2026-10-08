@@ -71,6 +71,19 @@ public sealed class ConversationContext
     // latch, because the caller may need more passes to fold everything.
     private int _messagesAtLastAttempt = -1;
 
+    // 预算校准（PLAN §13）：最近一次“请求前估算输入 vs 服务端实测输入”的比值，乘回后续
+    // 视图估算。钳位在 [0.5, 4.0]，防止单点异常 usage 主导预算；校准后的数字仍是估算，
+    // 不是实测。跨任务保留（Reset 不清除）：它描述估算器与服务端的整体偏差，不属于
+    // 单次会话的状态。
+    //
+    // Budget calibration (PLAN §13): the most recent "pre-request estimated input
+    // vs server-reported input" ratio, multiplied back into later view estimates.
+    // Clamped to [0.5, 4.0] so a single outlier usage cannot dominate the budget;
+    // the calibrated figure remains an estimate, not a measurement. Kept across
+    // Reset: it describes overall estimator-vs-service drift, not the state of
+    // one conversation.
+    private double _usageCalibration = 1.0;
+
     /// <summary>
     /// 创建上下文管理器。<paramref name="options"/> 为 <see langword="null"/> 时不启用预算
     /// 与压缩，视图等于完整历史（向后兼容的直通模式）。
@@ -145,10 +158,46 @@ public sealed class ConversationContext
     }
 
     /// <summary>
-    /// 当前模型视图的估算 token 数（含状态消息与 tool 结果裁剪）。
-    /// Estimated tokens of the current model view, including the state message and caps.
+    /// 当前模型视图的估算 token 数（含状态消息与 tool 结果裁剪），已乘以 usage 校准比值；
+    /// 结果仍是估算而非实测（PLAN §13）。
+    /// Estimated tokens of the current model view, including the state message and caps,
+    /// scaled by the usage-calibration ratio; the result stays an estimate, not a
+    /// measurement (PLAN §13).
     /// </summary>
-    public int EstimateViewTokens() => TokenEstimator.EstimateMessages(BuildModelView());
+    public int EstimateViewTokens() => (int)Math.Ceiling(TokenEstimator.EstimateMessages(BuildModelView()) * _usageCalibration);
+
+    /// <summary>
+    /// 记录一次模型请求的“请求前估算输入”与服务端实测输入 token，用两者比值校准后续视图
+    /// 估算（PLAN §13：服务返回可靠 usage 时用实际数据校准估算）。只有最近一次观测生效；
+    /// 比值钳位在 0.5–4.0，避免单点异常值主导预算。实测为 null 或非正数、估算为非正数时
+    /// 忽略本次观测。
+    /// 已知取舍（PLAN §13 下的启发式近似）：观测口径是请求级——估算含工具定义、服务端
+    /// prompt_tokens 含序列化工具 schema；应用口径却是纯消息视图估算。工具 schema 占比
+    /// 显著时比值被系统性抬高、视图估算偏保守（压缩偏早触发）；方向安全，且受 0.5–4.0
+    /// 钳位约束。
+    ///
+    /// Records the pre-request estimated input and the server-reported actual input
+    /// tokens of one model request, calibrating later view estimates by their ratio
+    /// (PLAN §13: calibrate estimates with real usage when the service reports it
+    /// reliably). Only the most recent observation applies and the ratio is clamped
+    /// to 0.5–4.0 so one outlier cannot dominate the budget. Observations with a
+    /// null or non-positive actual, or a non-positive estimate, are ignored.
+    /// Known trade-off (a heuristic approximation under PLAN §13): the observation is
+    /// request-scoped — the estimate includes tool definitions and the server's
+    /// prompt_tokens include serialized tool schemas — while the application is the
+    /// message-only view estimate. With large tool schemas the ratio drifts
+    /// systematically high, making view estimates conservative (compaction triggers
+    /// early); the direction is safe and bounded by the 0.5–4.0 clamp.
+    /// </summary>
+    public void RecordModelUsage(int estimatedPromptTokens, int? actualInputTokens)
+    {
+        if (actualInputTokens is not (> 0 and int actual) || estimatedPromptTokens <= 0)
+        {
+            return;
+        }
+
+        _usageCalibration = Math.Clamp(actual / (double)estimatedPromptTokens, 0.5, 4.0);
+    }
 
     /// <summary>
     /// 构建本次请求发送给模型的视图：头部 + （如有）结构化状态消息 + 未折叠回合；
@@ -610,9 +659,16 @@ public sealed class ConversationContext
     }
 
     /// <summary>
-    /// 估算提交候选状态并推进折叠边界后的视图 token 数，用于提交前的收益校验。
+    /// 估算提交候选状态并推进折叠边界后的视图 token 数，用于提交前的收益校验。与
+    /// <see cref="EstimateViewTokens"/> 相同，结果乘以校准比值，保证收益比较两侧口径一致
+    /// （校准是单调乘法，不改变“候选视图必须严格变小”的不变量语义）。
+    ///
     /// Estimates the tokens of the view after committing the candidate state and
-    /// advancing the fold boundary, used to verify the compaction benefit.
+    /// advancing the fold boundary, used to verify the compaction benefit. Like
+    /// <see cref="EstimateViewTokens"/>, the result is scaled by the calibration
+    /// ratio so both sides of the comparison share one scale (calibration is a
+    /// monotone multiplication and does not change the meaning of the
+    /// strictly-smaller-view invariant).
     /// </summary>
     private int EstimateCandidateViewTokens(StructuredState state, int foldStart, int foldEnd)
     {
@@ -628,7 +684,7 @@ public sealed class ConversationContext
             tokens += TokenEstimator.EstimateMessage(CapViewMessage(_messages[i]));
         }
 
-        return tokens;
+        return (int)Math.Ceiling(tokens * _usageCalibration);
     }
 
     private void LatchAttempt() => _messagesAtLastAttempt = _messages.Count;

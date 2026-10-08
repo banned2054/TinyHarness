@@ -165,6 +165,59 @@ public sealed class RunPersistenceTests
     }
 
     [Fact]
+    public async Task ReasoningContentSurvivesSessionSnapshotRoundTrip()
+    {
+        using var temp     = new TestTempDir();
+        var       recorder = new FileRunRecorder(temp.Root, "reasoning-roundtrip");
+        var message = ChatMessage.Assistant("done",
+                                            toolCalls : null,
+                                            reasoning : [new ReasoningContent("thinking", "opaque-payload", "rs_1")]);
+
+        await recorder.CompleteAsync(new AgentResult { Status = AgentStatus.Completed }, [message],
+                                     StructuredState.Empty, CancellationToken.None);
+
+        var persistedMessage = Assert.Single(DeserializeSession(await File.ReadAllTextAsync(recorder.SessionPath))
+                                           .Messages);
+        var reasoning = Assert.Single(persistedMessage.Reasoning!);
+        Assert.Equal("thinking", reasoning.Text);
+        Assert.Equal("opaque-payload", reasoning.ProtectedData);
+        Assert.Equal("rs_1", reasoning.ItemId);
+    }
+
+    [Fact]
+    public async Task ReasoningRedactsTextAndKnownSecretsButKeepsOpaqueIdentifiers()
+    {
+        const string secret = "synthetic-reasoning-secret-42";
+        using var    temp   = new TestTempDir();
+        var recorder = new FileRunRecorder(temp.Root, "reasoning-redaction",
+                                           new Dictionary<string, string> { ["TEST_KEY"] = secret });
+        var message = ChatMessage.Assistant("done",
+                                            toolCalls : null,
+                                            reasoning :
+                                            [
+                                                new ReasoningContent($"reasoned about {secret}", secret, secret),
+                                                new ReasoningContent("plain", "opaque-keep", "rs_2"),
+                                            ]);
+
+        await recorder.CompleteAsync(new AgentResult { Status = AgentStatus.Completed }, [message],
+                                     StructuredState.Empty, CancellationToken.None);
+
+        var raw = await File.ReadAllTextAsync(recorder.SessionPath);
+        Assert.DoesNotContain(secret, raw, StringComparison.Ordinal);
+        var persisted = Assert.Single(DeserializeSession(raw).Messages);
+        Assert.Equal(2, persisted.Reasoning!.Count);
+        // 文本与命中已知 secret 的字段被替换；其余不透明标识原样保留。
+        // Text and fields matching a known secret are replaced; other opaque
+        // identifiers are kept verbatim.
+        Assert.Equal("reasoned about [REDACTED]", persisted.Reasoning[0].Text);
+        Assert.Equal("[REDACTED]", persisted.Reasoning[0].ProtectedData);
+        Assert.Equal("[REDACTED]", persisted.Reasoning[0].ItemId);
+        Assert.Equal("plain", persisted.Reasoning[1].Text);
+        Assert.Equal("opaque-keep", persisted.Reasoning[1].ProtectedData);
+        Assert.Equal("rs_2", persisted.Reasoning[1].ItemId);
+    }
+
+    [Fact]
     public async Task RecorderCompletionIOExceptionPreservesRunFailureAndAttemptsFinalizationOnce()
     {
         var client   = new FakeChatClient();
@@ -249,6 +302,26 @@ public sealed class RunPersistenceTests
         Assert.Equal(input, state.Goal);
     }
 
+    [Fact]
+    public async Task ModelUsageIsAppendedAsCamelCaseAuditJsonl()
+    {
+        using var temp     = new TestTempDir();
+        var       recorder = new FileRunRecorder(temp.Root, "usage-1");
+
+        await recorder.RecordModelUsageAsync(120, 45, "stop", CancellationToken.None);
+
+        var lines = await File.ReadAllLinesAsync(recorder.AuditPath);
+        Assert.Contains("\"kind\":\"model_usage\"", lines[0], StringComparison.Ordinal);
+        Assert.Contains("\"inputTokens\":120", lines[0], StringComparison.Ordinal);
+        var usage = Assert.Single(lines.Select(line =>
+            JsonSerializer.Deserialize(line, PersistenceJsonContext.Default.AuditRecord)!));
+        Assert.Equal("usage-1", usage.RunId);
+        Assert.Equal("model_usage", usage.Kind);
+        Assert.Equal(120, usage.InputTokens);
+        Assert.Equal(45, usage.OutputTokens);
+        Assert.Equal("stop", usage.FinishReason);
+    }
+
     private static AgentOptions Options() => new()
     {
         Model                     = "test-model",
@@ -287,6 +360,9 @@ public sealed class RunPersistenceTests
 
         public Task RecordCompactionAsync(ContextChange change, CancellationToken cancellationToken) =>
             Task.CompletedTask;
+
+        public Task RecordModelUsageAsync(int? inputTokens, int? outputTokens, string? finishReason,
+                                          CancellationToken cancellationToken) => Task.CompletedTask;
 
         public Task CompleteAsync(AgentResult       result, IReadOnlyList<ChatMessage> messages, StructuredState state,
                                   CancellationToken cancellationToken)

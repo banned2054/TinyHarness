@@ -24,6 +24,7 @@ public class UserConfigStoreTests
                         Endpoint                  = "https://api.example.com/v1",
                         ApiKeyEnvironmentVariable = "WORK_API_KEY",
                         ApiKeyCredentialTarget    = "TinyHarness:work",
+                        ChatApi                   = ChatApiKind.Responses,
                         DefaultModel              = "model-x",
                         Models =
                         [
@@ -64,6 +65,7 @@ public class UserConfigStoreTests
             Assert.Equal("https://api.example.com/v1", profile.Endpoint);
             Assert.Equal("WORK_API_KEY", profile.ApiKeyEnvironmentVariable);
             Assert.Equal("TinyHarness:work", profile.ApiKeyCredentialTarget);
+            Assert.Equal(ChatApiKind.Responses, profile.ChatApi);
             Assert.Equal("model-x", profile.DefaultModel);
             Assert.Equal(2, profile.Models.Count);
             Assert.Equal(128_000, profile.Models[0].ContextWindowTokens);
@@ -103,6 +105,28 @@ public class UserConfigStoreTests
     }
 
     [Fact]
+    public async Task LoadAsync_LegacyProfileWithoutChatApi_DefaultsToChatCompletions()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"tinyharness-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        var path = Path.Combine(dir, "user-config.json");
+        try
+        {
+            await File.WriteAllTextAsync(path,
+                                         """{"defaultProfile":"work","profiles":[{"name":"work","endpoint":"https://work.test/v1"}]}""");
+
+            var loaded = await UserConfigStore.LoadAsync(path, CancellationToken.None);
+
+            var profile = Assert.Single(loaded.Profiles);
+            Assert.Equal(ChatApiKind.ChatCompletions, profile.ChatApi);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive : true);
+        }
+    }
+
+    [Fact]
     public async Task LoadAsync_NonObjectRoot_ThrowsWithPath()
     {
         var dir = Path.Combine(Path.GetTempPath(), $"tinyharness-{Guid.NewGuid():N}");
@@ -130,6 +154,9 @@ public class UserConfigStoreTests
     [InlineData("""{"profiles":[{"endpoint":"https://x"}]}""", "'profiles[0].name'")]
     [InlineData("""{"profiles":[{"name":"a","models":[{"contextWindowTokens":100}]}]}""", "'profiles[0].models[0].id'")]
     [InlineData("""{"profiles":[{"name":"a","models":[{"id":"m","contextWindowTokens":0}]}]}""", "positive integer")]
+    [InlineData("""{"profiles":[{"name":"a","chatApi":"grpc"}]}""", "'profiles[0].chatApi'")]
+    [InlineData("""{"profiles":[{"name":"a","chatApi":"grpc"}]}""", "invalid value 'grpc'")]
+    [InlineData("""{"profiles":[{"name":"a","chatApi":5}]}""", "must be a string")]
     [InlineData("""{"defaultProfile":42}""", "'defaultProfile'")]
     [InlineData("""{"settings":{"maxAgentSteps":-1}}""", "positive integer")]
     [InlineData("""{"settings":{"compactionThreshold":-5}}""", "non-negative integer")]

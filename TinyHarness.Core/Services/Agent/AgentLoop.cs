@@ -138,8 +138,17 @@ public sealed class AgentLoop
                     }
                 }
 
-                var request   = BuildRequest(definitions);
-                var assistant = await RequestAssistantMessageAsync(request, cancellationToken);
+                var request = BuildRequest(definitions);
+
+                // Calibration reference (PLAN §13), captured before the request is sent so
+                // the view cannot change between estimate and send: the input-scope
+                // estimate (view + tool definitions) of exactly the payload being sent,
+                // on the raw estimator scale. It must stay raw — a value already scaled
+                // by the current calibration factor would make the observed ratio
+                // oscillate instead of converging.
+                var estimatedPromptTokens = TokenEstimator.EstimateMessages(request.Messages)
+                                                  + TokenEstimator.EstimateToolDefinitions(definitions);
+                var assistant = await RequestAssistantMessageAsync(request, cancellationToken, estimatedPromptTokens);
 
                 _context.Append(assistant);
 
@@ -357,7 +366,12 @@ public sealed class AgentLoop
                 Messages = foldMessages,
                 Tools    = null,
             };
-            summary = await RequestAssistantMessageAsync(summaryRequest, cancellationToken).ConfigureAwait(false);
+            // The summary request calibrates on its own request-scope input estimate
+            // (its messages, no tool definitions), captured before the call like
+            // every other model request.
+            var estimatedSummaryTokens = TokenEstimator.EstimateMessages(foldMessages);
+            summary = await RequestAssistantMessageAsync(summaryRequest, cancellationToken, estimatedSummaryTokens)
+                          .ConfigureAwait(false);
             if (summary.ToolCalls is { Count: > 0 })
             {
                 throw new InvalidOperationException("The compaction summary unexpectedly requested tools.");
@@ -392,11 +406,20 @@ public sealed class AgentLoop
     }
 
     /// <summary>
-    /// 消费一次模型流，将文本与分片工具调用汇总成单条完整的 assistant 消息。
-    /// Consumes one model stream and assembles its text and fragmented tool calls into one assistant message.
+    /// 消费一次模型流，将文本与分片工具调用汇总成单条完整的 assistant 消息；流结束后把
+    /// 服务端报告的 usage 与结束原因（如有）写入审计，并用实测输入 token 校准预算估算。
+    /// usage 与结束原因全部缺失时不写审计行，避免 JSONL 噪音。
+    ///
+    /// Consumes one model stream and assembles its text and fragmented tool calls
+    /// into one assistant message. After the stream, any server-reported usage and
+    /// finish reason land in the audit trail, and the actual input tokens calibrate
+    /// the budget estimates against the pre-request estimate. A stream reporting
+    /// neither usage nor a finish reason writes no audit line to keep the JSONL
+    /// free of noise.
     /// </summary>
     private async Task<ChatMessage> RequestAssistantMessageAsync(ChatCompletionRequest request,
-                                                                 CancellationToken     cancellationToken)
+                                                                 CancellationToken     cancellationToken,
+                                                                 int                  estimatedPromptTokens)
     {
         var accumulator = new StreamAccumulator();
 
@@ -407,7 +430,28 @@ public sealed class AgentLoop
         }
 
         accumulator.Finish();
-        return ChatMessage.Assistant(accumulator.Content, accumulator.ToolCalls);
+
+        // Land the server-reported usage and finish reason (when any) in the audit
+        // trail. Compaction summary calls flow through here too, so their usage is
+        // recorded the same way without special casing.
+        if (_recorder is not null &&
+            (accumulator.InputTokens is not null || accumulator.OutputTokens is not null ||
+             accumulator.FinishReason is not null))
+        {
+            await _recorder.RecordModelUsageAsync(accumulator.InputTokens, accumulator.OutputTokens,
+                                                  accumulator.FinishReason, cancellationToken)
+                           .ConfigureAwait(false);
+        }
+
+        // PLAN §13: calibrate the estimator with the measured input of this request
+        // against the estimate captured before it was sent; ignored when no
+        // reliable usage arrived.
+        if (accumulator.InputTokens is { } actualInputTokens)
+        {
+            _context.RecordModelUsage(estimatedPromptTokens, actualInputTokens);
+        }
+
+        return ChatMessage.Assistant(accumulator.Content, accumulator.ToolCalls, accumulator.Reasoning);
     }
 
     /// <summary>

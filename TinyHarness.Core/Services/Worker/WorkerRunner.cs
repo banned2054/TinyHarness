@@ -724,10 +724,30 @@ public sealed class WorkerRunner
             long responseChars = 0;
             await foreach (var @event in inner.CompleteAsync(request, cancellationToken))
             {
+                // Reasoning 增量按文本增量的规则计数；reasoning 的加密载荷与 item id 按
+                // 工具调用标识/参数片段的规则计数；usage 与结束原因是纯元数据，不计数。
+                // ReasoningItem 事件携带的 ReasoningDelta 是该条目的完整文本，与已流出的增量
+                // 重复，不计入本次 cost——以增量事件为准计费，与 StreamAccumulator 按条目去重
+                // 的口径一致；条目事件的加密载荷与 item id 照常计数。
+                //
+                // Reasoning deltas count like text deltas; reasoning protected
+                // payloads and item ids count like tool-call identifiers and
+                // argument fragments; usage and finish reason are pure metadata
+                // and are not counted. A ReasoningItem event carries the item's
+                // complete text in ReasoningDelta, duplicating deltas already
+                // billed, so it is excluded from this cost — deltas are the
+                // billing source of truth, matching StreamAccumulator's per-item
+                // dedup — while the item event's payload and id still count.
+                var reasoningDeltaLength = @event.Kind == ChatStreamEventKind.ReasoningItem
+                    ? 0
+                    : @event.ReasoningDelta?.Length ?? 0;
                 var cost = (long)@event.ContentDelta.Length
                          + (@event.ToolCallId?.Length ?? 0)
                          + (@event.ToolCallFunctionName?.Length ?? 0)
-                         + @event.ToolCallArgumentsDelta.Length;
+                         + @event.ToolCallArgumentsDelta.Length
+                         + reasoningDeltaLength
+                         + (@event.ReasoningProtectedData?.Length ?? 0)
+                         + (@event.ReasoningItemId?.Length ?? 0);
                 if (cost > maxResponseChars - responseChars)
                 {
                     state.ModelResponseBudgetExhausted = true;

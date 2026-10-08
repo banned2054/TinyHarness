@@ -30,6 +30,15 @@ public sealed record UserProfile
 
     public string ApiKeyCredentialTarget { get; init; } = string.Empty;
 
+    /// <summary>
+    /// 该 profile 使用的 Chat API 协议；只能显式选择，不按模型名猜测。旧配置缺省该字段时沿用
+    /// Chat Completions。
+    ///
+    /// The Chat API protocol this profile uses; an explicit choice that is never guessed from model names.
+    /// Legacy configurations without this field keep Chat Completions.
+    /// </summary>
+    public ChatApiKind ChatApi { get; init; } = ChatApiKind.ChatCompletions;
+
     public string DefaultModel { get; init; } = string.Empty;
 
     public IReadOnlyList<UserProfileModel> Models { get; init; } = [];

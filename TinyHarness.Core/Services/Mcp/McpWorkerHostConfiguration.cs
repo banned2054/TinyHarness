@@ -15,12 +15,13 @@ namespace TinyHarness.Core.Services.Mcp;
 /// </summary>
 public sealed class McpWorkerHostConfiguration
 {
-    private McpWorkerHostConfiguration(string model, string endpoint, string endpointType, string apiKey,
-                                       string workspaceRoot, string userConfigPath,
+    private McpWorkerHostConfiguration(string model, string endpoint, ChatApiKind chatApi, string endpointType,
+                                       string apiKey, string workspaceRoot, string userConfigPath,
                                        WorkerExecutionOptions executionOptions)
     {
         Model            = model;
         Endpoint         = endpoint;
+        ChatApi          = chatApi;
         EndpointType     = endpointType;
         ApiKey           = apiKey;
         WorkspaceRoot    = workspaceRoot;
@@ -31,6 +32,9 @@ public sealed class McpWorkerHostConfiguration
     public string Model { get; }
 
     public string Endpoint { get; }
+
+    /// <summary>启动时固定的 Chat API 协议选择，来自默认 profile；不按模型名猜测。The chat API protocol fixed at startup, from the default profile; never guessed from model names.</summary>
+    public ChatApiKind ChatApi { get; }
 
     /// <summary>仅用于启动诊断与验收记录，不包含 endpoint URL 或凭据。The scheme only; no URL or credential.</summary>
     public string EndpointType { get; }
@@ -156,7 +160,7 @@ public sealed class McpWorkerHostConfiguration
                 ConfigException($"No API key is available for the default profile in user config '{configPath}'. " +
                                 $"Run 'tinyharness auth set {profile.Name}' or configure its API key environment variable.");
 
-        return new McpWorkerHostConfiguration(profile.DefaultModel, profile.Endpoint,
+        return new McpWorkerHostConfiguration(profile.DefaultModel, profile.Endpoint, profile.ChatApi,
                                               endpointUri.Scheme.ToUpperInvariant(), apiKey, workspaceRoot, configPath,
                                               options);
     }

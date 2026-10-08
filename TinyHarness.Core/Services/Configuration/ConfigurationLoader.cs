@@ -47,6 +47,7 @@ public static class ConfigurationLoader
             ReadString(root, "apiKeyEnvironmentVariable") ?? config.ApiKeyEnvironmentVariable,
             ApiKeyCredentialTarget =
             ReadString(root, "apiKeyCredentialTarget") ?? config.ApiKeyCredentialTarget,
+            ChatApi = ReadChatApi(root, "chatApi", configJsonPath) ?? config.ChatApi,
             Model = ReadString(root, "model") ?? config.Model,
             ContextWindowTokens = ReadInt(root, "contextWindowTokens") ?? config.ContextWindowTokens,
             ReservedOutputTokens = ReadInt(root, "reservedOutputTokens") ?? config.ReservedOutputTokens,
@@ -104,5 +105,38 @@ public static class ConfigurationLoader
         return node.GetValueKind() == System.Text.Json.JsonValueKind.String
             ? int.Parse(node.GetValue<string>())
             : node.GetValue<int>();
+    }
+
+    /// <summary>
+    /// 通过共享映射读取可选 chatApi 字段；字段缺失时返回 <see langword="null"/> 沿用现值，
+    /// 非法值抛出包含键名与原值的错误。
+    ///
+    /// Reads the optional chatApi property through the shared mapping; an absent property returns
+    /// <see langword="null"/> to keep the current value, an invalid one fails with the key and raw value.
+    /// </summary>
+    private static ChatApiKind? ReadChatApi(JsonObject root, string property, string source)
+    {
+        var node = root[property];
+        if (node is null)
+        {
+            return null;
+        }
+
+        // JSON 值可能是任意类型（如 "chatApi": 5）；显式校验类型并给出带键名的错误，
+        // 而不是让 GetValue<string>() 抛出无上下文的 InvalidOperationException。
+        // A JSON value may be of any type (e.g. "chatApi": 5); the explicit kind
+        // check fails with the key name instead of the context-free
+        // InvalidOperationException from GetValue<string>().
+        if (node.GetValueKind() is not System.Text.Json.JsonValueKind.String)
+        {
+            throw new InvalidDataException($"Config file '{source}' field '{property}' must be a string.");
+        }
+
+        var text = node.GetValue<string>();
+        return ChatApiKindParser.TryParse(text, out var api)
+            ? api
+            : throw new InvalidDataException(
+                                              $"Config file '{source}' field '{property}' has an invalid value '{text}'; " +
+                                              $"expected '{ChatApiKindParser.ChatCompletionsValue}' or '{ChatApiKindParser.ResponsesValue}'.");
     }
 }

@@ -597,4 +597,68 @@ public class ContextCompactionTests
         Assert.Equal(3, client.Requests);
         Assert.Equal(7, loop.History.Count); // two rounds + head + final assistant message
     }
+
+    /// <summary>
+    /// 把一段脚本化响应的末尾 End 事件替换为携带 usage 的版本，模拟服务端实测数据。
+    /// Replaces the trailing End event of a scripted response with one carrying usage,
+    /// simulating server-measured data.
+    /// </summary>
+    private static IReadOnlyList<ChatStreamEvent> WithUsage(IReadOnlyList<ChatStreamEvent> events,
+                                                            int inputTokens, int outputTokens, string finishReason)
+    {
+        var withUsage = events.ToList();
+        withUsage[^1] = withUsage[^1] with
+        {
+            InputTokens = inputTokens, OutputTokens = outputTokens, FinishReason = finishReason,
+        };
+        return withUsage;
+    }
+
+    [Fact]
+    public async Task CalibratedUsageEstimates_StillCompactAndCompleteWithTheShrinkInvariant()
+    {
+        var tool   = new FakeTool("t") { ResultContent = new string('x', 1600) };
+        var client = new FakeChatClient();
+        // Every agent response reports input usage at exactly twice the harness
+        // estimate, so from the first stream on the budget scale is calibrated 2.0.
+        client.Enqueue(WithUsage(FakeChatClient.ToolCall("t", "{}", ToolCallId("a", 1)), 50, 10, "tool_calls"));
+        client.Enqueue(WithUsage(FakeChatClient.ToolCall("t", "{}", ToolCallId("b", 2)), 878, 10, "tool_calls"));
+        client.Enqueue(WithUsage(FakeChatClient.ToolCall("t", "{}", ToolCallId("c", 3)), 1706, 10, "tool_calls"));
+        // The summary stream carries no usage: the calibration keeps its last
+        // observation, exactly like a service that omits usage on summary calls.
+        client.Enqueue(FakeChatClient.Text(StateJson("goal-one", "a.cs", "decision-x")));
+        client.Enqueue(WithUsage(FakeChatClient.Text("done"), 1790, 6, "stop"));
+
+        var changes = new List<ContextChange>();
+        var loop = new AgentLoop(client, new ToolRegistry([tool]), new AgentOptions
+        {
+            Model                     = "test-model",
+            MaxAgentSteps             = 10,
+            DefaultToolTimeoutSeconds = 30,
+            Context = new ContextOptions
+            {
+                ContextWindowTokens       = 2000,
+                ReservedOutputTokens      = 30,
+                CompactionThresholdTokens = 1400,
+            },
+        });
+        loop.ContextCompacted += changes.Add;
+
+        var result = await loop.RunAsync("sys", "go", CancellationToken.None);
+
+        Assert.True(result.Status == AgentStatus.Completed,
+                    $"{result.Error} requests={client.Requests} compactions={result.Compactions} steps={result.Steps}");
+        Assert.Equal(3, result.ToolExecutions);
+        Assert.Equal(5, client.Requests); // three agent requests + one summary + final
+        Assert.Null(client.RequestLog[3].Tools); // request 4 is the tools-disabled summary
+
+        // Without calibration the raw estimate after three rounds stays below the
+        // 1400 threshold, so this single compaction is driven by the calibrated
+        // (2x) estimate; the strictly-smaller-view invariant still holds on the
+        // calibrated scale.
+        Assert.Equal(1, result.Compactions);
+        var change = Assert.Single(changes);
+        Assert.True(change.BeforeTokens > change.AfterTokens && change.AfterTokens > 0,
+                    $"calibrated compaction must still shrink the view: {change.BeforeTokens} -> {change.AfterTokens}");
+    }
 }

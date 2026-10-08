@@ -142,12 +142,14 @@ public static class ConfigResolver
         string model               = string.Empty;
         var    defaults            = new TinyHarnessConfig();
         var    contextWindowTokens = defaults.ContextWindowTokens;
+        var    chatApi             = defaults.ChatApi;
 
         if (profile is not null)
         {
             endpoint   = profile.Endpoint;
             envVar     = profile.ApiKeyEnvironmentVariable;
             credTarget = profile.ApiKeyCredentialTarget;
+            chatApi    = profile.ChatApi;
 
             UserProfileModel? selectedModel = null;
             if (!string.IsNullOrWhiteSpace(profile.DefaultModel))
@@ -176,6 +178,7 @@ public static class ConfigResolver
             Endpoint                  = endpoint,
             ApiKeyEnvironmentVariable = envVar,
             ApiKeyCredentialTarget    = credTarget,
+            ChatApi                   = chatApi,
             Model                     = model,
             ContextWindowTokens       = contextWindowTokens,
             ReservedOutputTokens      = settings?.ReservedOutputTokens ?? defaults.ReservedOutputTokens,

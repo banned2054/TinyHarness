@@ -21,4 +21,7 @@ public sealed record AuditRecord
     public bool? OutputTruncated { get; init; }
     public int? BeforeTokens { get; init; }
     public int? AfterTokens { get; init; }
+    public int? InputTokens { get; init; }
+    public int? OutputTokens { get; init; }
+    public string? FinishReason { get; init; }
 }

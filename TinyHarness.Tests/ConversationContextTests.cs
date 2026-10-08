@@ -322,4 +322,68 @@ public class ConversationContextTests
         };
         Assert.Same(equal, equal.Validate());
     }
+
+    [Fact]
+    public void RecordModelUsage_CalibratesViewEstimatesByTheObservedRatio()
+    {
+        var context = new ConversationContext();
+        context.Append(ChatMessage.System("sys"));
+        context.Append(ChatMessage.User("go"));
+        var uncalibrated = context.EstimateViewTokens(); // calibration starts at 1.0
+        Assert.True(uncalibrated > 0);
+
+        // 估算 100 实测 150 → 后续估算 = 原值 × 1.5（向上取整）。
+        // Estimate 100 vs actual 150 → later estimates scale by 1.5, rounded up.
+        context.RecordModelUsage(100, 150);
+        Assert.Equal((int)Math.Ceiling(uncalibrated * 1.5), context.EstimateViewTokens());
+
+        // 只有最近一次观测生效。Only the most recent observation applies.
+        context.RecordModelUsage(100, 300);
+        Assert.Equal((int)Math.Ceiling(uncalibrated * 3.0), context.EstimateViewTokens());
+    }
+
+    [Fact]
+    public void RecordModelUsage_ClampsTheRatioOnBothSides()
+    {
+        var context = new ConversationContext();
+        context.Append(ChatMessage.User("go"));
+        var uncalibrated = context.EstimateViewTokens();
+
+        context.RecordModelUsage(100, 20); // ratio 0.2 → clamped down to 0.5
+        Assert.Equal((int)Math.Ceiling(uncalibrated * 0.5), context.EstimateViewTokens());
+
+        context.RecordModelUsage(100, 900); // ratio 9.0 → clamped up to 4.0
+        Assert.Equal((int)Math.Ceiling(uncalibrated * 4.0), context.EstimateViewTokens());
+    }
+
+    [Fact]
+    public void RecordModelUsage_IgnoresNullOrNonPositiveObservations()
+    {
+        var context = new ConversationContext();
+        context.Append(ChatMessage.User("go"));
+        var before = context.EstimateViewTokens();
+
+        context.RecordModelUsage(100, null);  // no reliable usage reported
+        context.RecordModelUsage(100, 0);
+        context.RecordModelUsage(100, -5);
+        context.RecordModelUsage(0, 150);     // non-positive estimate
+        context.RecordModelUsage(-10, 150);
+
+        Assert.Equal(before, context.EstimateViewTokens()); // calibration stays 1.0
+    }
+
+    [Fact]
+    public void RecordModelUsage_KeepsTheCompactionShrinkInvariant()
+    {
+        var context = ContextWithRounds(window : 1000, reserved : 30, rounds : 3, toolResult : new string('x', 1600));
+        Assert.NotEmpty(context.BuildCompactionMessages([]));
+
+        // A 4x calibration inflates both sides of the pre-commit benefit check by
+        // the same monotone factor, so a valid summary must still shrink the view.
+        context.RecordModelUsage(100, 400);
+        var before = context.EstimateViewTokens();
+        Assert.True(context.TryApplyCompaction("""{"goal":"g"}"""));
+        var after = context.EstimateViewTokens();
+        Assert.True(after < before, $"calibrated compaction must still shrink the view: {after} >= {before}");
+    }
 }

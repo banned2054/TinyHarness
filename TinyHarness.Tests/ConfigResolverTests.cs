@@ -102,6 +102,7 @@ public class ConfigResolverTests
                                                "name": "work",
                                                "endpoint": "https://work.test/v1",
                                                "apiKeyCredentialTarget": "TinyHarness:work",
+                                               "chatApi": "responses",
                                                "defaultModel": "model-x",
                                                "models": [
                                                  {"id": "model-x", "contextWindowTokens": 64000}
@@ -121,6 +122,7 @@ public class ConfigResolverTests
             Assert.Equal("work", resolution.ProfileName);
             Assert.Equal("model-x", resolution.ModelName);
             Assert.Equal("https://work.test/v1", resolution.Config.Endpoint);
+            Assert.Equal(ChatApiKind.Responses, resolution.Config.ChatApi);
             Assert.Equal("model-x", resolution.Config.Model);
             Assert.Equal(64_000, resolution.Config.ContextWindowTokens);
             Assert.Equal("TinyHarness:work", resolution.Config.ApiKeyCredentialTarget);
@@ -152,6 +154,35 @@ public class ConfigResolverTests
             Assert.Null(resolution.ProfileName);
             Assert.Empty(resolution.Config.Endpoint);
             Assert.Empty(resolution.Config.Model);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive : true);
+        }
+    }
+
+    [Fact]
+    public async Task UserConfig_DefaultProfileWithoutChatApi_DefaultsToChatCompletions()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"tinyharness-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var userPath = Path.Combine(dir, "user-config.json");
+            await File.WriteAllTextAsync(userPath, """
+                                         {
+                                           "defaultProfile": "work",
+                                           "profiles": [
+                                             {"name": "work", "endpoint": "https://work.test/v1"}
+                                           ]
+                                         }
+                                         """);
+
+            var resolution = await ConfigResolver.ResolveAsync(null, CancellationToken.None,
+                                                               workingDirectory : dir,
+                                                               userConfigPath : userPath);
+
+            Assert.Equal(ChatApiKind.ChatCompletions, resolution.Config.ChatApi);
         }
         finally
         {

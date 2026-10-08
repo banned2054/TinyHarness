@@ -22,6 +22,9 @@ public interface IRunRecorder
     Task RecordResultAsync(ToolPreparation   preparation, ToolResult result, CancellationToken cancellationToken);
     Task RecordCompactionAsync(ContextChange change,      CancellationToken cancellationToken);
 
+    Task RecordModelUsageAsync(int? inputTokens, int? outputTokens, string? finishReason,
+                               CancellationToken cancellationToken);
+
     Task CompleteAsync(AgentResult       result, IReadOnlyList<ChatMessage> messages, StructuredState state,
                        CancellationToken cancellationToken);
 }
@@ -113,6 +116,17 @@ public sealed class FileRunRecorder : IRunRecorder
             Kind         = "context.compacted",
             BeforeTokens = change.BeforeTokens,
             AfterTokens  = change.AfterTokens,
+        }, cancellationToken);
+
+    public Task RecordModelUsageAsync(int? inputTokens, int? outputTokens, string? finishReason,
+                                      CancellationToken cancellationToken) =>
+        AppendAsync(new AuditRecord
+        {
+            RunId        = _runId,
+            Kind         = "model_usage",
+            InputTokens  = inputTokens,
+            OutputTokens = outputTokens,
+            FinishReason = _redactor.RedactNullable(finishReason),
         }, cancellationToken);
 
     public async Task CompleteAsync(AgentResult result, IReadOnlyList<ChatMessage> messages, StructuredState state,
@@ -244,6 +258,15 @@ internal sealed class SecretRedactor
         ToolCalls = message.ToolCalls
                           ?.Select(call => new ChatToolCall(Redact(call.Id), Redact(call.FunctionName),
                                                             Redact(call.ArgumentsJson))).ToArray(),
+        // ProtectedData/ItemId 是不透明标识，沿用与 ToolCallId 相同的脱敏规则：
+        // 正常原样保留，但与已知 secret 匹配时必须替换。
+        //
+        // ProtectedData/ItemId are opaque identifiers redacted with the same
+        // rule as ToolCallId: kept verbatim unless they match a known secret.
+        Reasoning = message.Reasoning
+                           ?.Select(entry => new ReasoningContent(RedactNullable(entry.Text),
+                                                                  RedactNullable(entry.ProtectedData),
+                                                                  RedactNullable(entry.ItemId))).ToArray(),
     };
 
     private bool TryRedactJson(string value, out string redacted)
@@ -329,6 +352,7 @@ internal sealed class SecretRedactor
 [JsonSerializable(typeof(AgentResult))]
 [JsonSerializable(typeof(ChatMessage))]
 [JsonSerializable(typeof(ChatToolCall))]
+[JsonSerializable(typeof(ReasoningContent))]
 [JsonSerializable(typeof(StructuredState))]
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase,
                              GenerationMode = JsonSourceGenerationMode.Metadata |

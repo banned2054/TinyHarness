@@ -141,6 +141,7 @@ public static class UserConfigStore
                         string.IsNullOrWhiteSpace(profile.ApiKeyCredentialTarget)
                             ? null
                             : profile.ApiKeyCredentialTarget,
+                    ["chatApi"]      = ChatApiKindParser.ToValueString(profile.ChatApi),
                     ["defaultModel"] =
                         string.IsNullOrWhiteSpace(profile.DefaultModel) ? null : profile.DefaultModel,
                     ["models"] = models,
@@ -301,6 +302,7 @@ public static class UserConfigStore
                     ReadString(profileNode, "apiKeyEnvironmentVariable", filePath) ?? string.Empty;
                 var apiKeyCredentialTarget =
                     ReadString(profileNode, "apiKeyCredentialTarget", filePath) ?? string.Empty;
+                var chatApi = ReadChatApi(profileNode, "chatApi", filePath, $"profiles[{i}].chatApi");
 
                 profiles[i] = new UserProfile
                 {
@@ -308,6 +310,7 @@ public static class UserConfigStore
                     Endpoint                  = endpoint,
                     ApiKeyEnvironmentVariable = apiKeyEnvironmentVariable,
                     ApiKeyCredentialTarget    = apiKeyCredentialTarget,
+                    ChatApi                   = chatApi,
                     DefaultModel              = ReadString(profileNode, "defaultModel", filePath) ?? string.Empty,
                     Models                    = models                                            ?? [],
                 };
@@ -423,6 +426,28 @@ public static class UserConfigStore
 
         throw new
             InvalidDataException($"User config field '{fieldPath}' in '{filePath}' must be a non-negative integer.");
+    }
+
+    /// <summary>
+    /// 通过共享映射读取可选 chatApi 字段；字段缺失时沿用 Chat Completions 默认值，
+    /// 非法值抛出包含字段路径与原值的错误。
+    ///
+    /// Reads the optional chatApi property through the shared mapping; an absent property keeps the
+    /// Chat Completions default, an invalid one fails with the field path and raw value.
+    /// </summary>
+    private static ChatApiKind ReadChatApi(JsonObject node, string property, string filePath, string fieldPath)
+    {
+        var value = ReadString(node, property, filePath);
+        if (value is null)
+        {
+            return ChatApiKind.ChatCompletions;
+        }
+
+        return ChatApiKindParser.TryParse(value, out var api)
+            ? api
+            : throw new InvalidDataException(
+                                             $"User config field '{fieldPath}' in '{filePath}' has an invalid value '{value}'; " +
+                                             $"expected '{ChatApiKindParser.ChatCompletionsValue}' or '{ChatApiKindParser.ResponsesValue}'.");
     }
 
     /// <summary>

@@ -28,6 +28,7 @@ public class McpWorkerHostConfigurationTests
                     Name = "glm",
                     Endpoint = "https://glm.example/v1",
                     ApiKeyCredentialTarget = "tinyharness:test-glm",
+                    ChatApi = ChatApiKind.Responses,
                     DefaultModel = "glm-flash",
                     Models = [new UserProfileModel { Id = "glm-flash", ContextWindowTokens = 32_000 }],
                 },
@@ -56,6 +57,7 @@ public class McpWorkerHostConfigurationTests
 
         Assert.Equal("glm-flash", resolved.Model);
         Assert.Equal("https://glm.example/v1", resolved.Endpoint);
+        Assert.Equal(ChatApiKind.Responses, resolved.ChatApi);
         Assert.Equal("HTTPS", resolved.EndpointType);
         Assert.Equal("test-api-key", resolved.ApiKey);
         Assert.Equal(workspace, resolved.WorkspaceRoot);

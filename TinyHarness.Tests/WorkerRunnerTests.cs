@@ -903,6 +903,47 @@ public class WorkerRunnerTests
     }
 
     [Fact]
+    public async Task ModelResponseBudget_ReasoningItemFullTextIsNotDoubleCounted()
+    {
+        using var dir  = new TestTempDir();
+        var       fake = new FakeChatClient();
+
+        // ReasoningItem 事件携带的 ReasoningDelta 是该条目的完整文本，与先前流出的增量重复：
+        // 预算若把它重复计入，本流在预算 700 下于条目事件处即超限（500 增量 + 507 条目 > 700），
+        // 响应被截断并映射为 Incomplete；按增量口径计费后整流 670 字符，在预算内完成。
+        // A ReasoningItem event carries the item's complete text in ReasoningDelta, duplicating
+        // the already-streamed delta: counting it twice busts the 700-char budget at the item
+        // event (500 delta + 507 item > 700), truncating the response into an Incomplete result;
+        // billing deltas only keeps the whole 670-char stream inside the budget.
+        var reasoning = new string('R', 500);
+        fake.Enqueue(
+        [
+            new ChatStreamEvent { Kind = ChatStreamEventKind.ReasoningDelta, ReasoningDelta = reasoning },
+            new ChatStreamEvent
+            {
+                Kind                   = ChatStreamEventKind.ReasoningItem,
+                ReasoningDelta         = reasoning,
+                ReasoningProtectedData = "enc",
+                ReasoningItemId        = "rs_1",
+            },
+            new ChatStreamEvent
+            {
+                Kind         = ChatStreamEventKind.ContentDelta,
+                ContentDelta = DraftJson("Done.", "docs/a.md"),
+            },
+            new ChatStreamEvent { Kind = ChatStreamEventKind.End },
+        ]);
+        var runner = new WorkerRunner(fake, dir.Root, Options() with { MaxModelResponseCharacters = 700 });
+
+        var result = await runner.RunAsync(new WorkerRequest { TaskPrompt = "Investigate." },
+                                           CancellationToken.None);
+
+        Assert.Equal(WorkerResultStatus.Completed, result.Status);
+        Assert.Equal("Done.", result.Conclusion);
+        Assert.Equal(1, result.Statistics.ModelRequests);
+    }
+
+    [Fact]
     public async Task ResultConclusionOverBudget_IncompleteWithoutConclusion()
     {
         using var dir            = new TestTempDir();
