@@ -7,19 +7,18 @@ using TinyHarness.Core.Services.Runtime;
 namespace TinyHarness.Core.Services.Tools;
 
 /// <summary>
-/// 在工作区文本文件中执行子字符串搜索。结果格式为“路径:行号: 内容”，会跳过二进制、
-/// 超大文件以及最终目标逃逸工作区的文件链接，并对扫描量和结果量设置上限。
-///
-/// search_text: substring search over workspace text files. Matches are reported
-/// as "path:line: text". Binary files, oversized files and file links whose
-/// final target escapes the workspace are skipped and counted. The walk is
-/// bounded by the DirectoryWalker exclusion list and by
-/// <see cref="MaxFilesScanned"/> (a truncated walk is reported), and the result
-/// list stops early once <see cref="MaxResults"/> is reached. The optional
-/// <see cref="WorkerReadPolicy"/>, injected only by the WorkerRunner, rejects
-/// out-of-scope explicit paths in Prepare, filters walked entries, re-checks
-/// every scanned file's resolved link chain, and skips excluded paths by count
-/// without ever revealing their names or content.
+///     在工作区文本文件中执行子字符串搜索。结果格式为“路径:行号: 内容”，会跳过二进制、
+///     超大文件以及最终目标逃逸工作区的文件链接，并对扫描量和结果量设置上限。
+///     search_text: substring search over workspace text files. Matches are reported
+///     as "path:line: text". Binary files, oversized files and file links whose
+///     final target escapes the workspace are skipped and counted. The walk is
+///     bounded by the DirectoryWalker exclusion list and by
+///     <see cref="MaxFilesScanned" /> (a truncated walk is reported), and the result
+///     list stops early once <see cref="MaxResults" /> is reached. The optional
+///     <see cref="WorkerReadPolicy" />, injected only by the WorkerRunner, rejects
+///     out-of-scope explicit paths in Prepare, filters walked entries, re-checks
+///     every scanned file's resolved link chain, and skips excluded paths by count
+///     without ever revealing their names or content.
 /// </summary>
 public sealed class SearchTextTool(Workspace workspace, WorkerReadPolicy? workerPolicy = null) : ITool
 {
@@ -43,37 +42,37 @@ public sealed class SearchTextTool(Workspace workspace, WorkerReadPolicy? worker
             ["pattern"] = new JsonObject
             {
                 ["type"]        = "string",
-                ["description"] = "Text to search for.",
+                ["description"] = "Text to search for."
             },
             ["path"] = new JsonObject
             {
                 ["type"]        = "string",
-                ["description"] = "File or directory to search, relative to the workspace root (default \".\").",
+                ["description"] = "File or directory to search, relative to the workspace root (default \".\")."
             },
             ["caseSensitive"] = new JsonObject
             {
                 ["type"]        = "boolean",
-                ["description"] = "Case-sensitive match (default false).",
+                ["description"] = "Case-sensitive match (default false)."
             },
             ["maxResults"] = new JsonObject
             {
                 ["type"]        = "integer",
-                ["description"] = "Maximum matches to report (default 100, max 500).",
-            },
+                ["description"] = "Maximum matches to report (default 100, max 500)."
+            }
         },
-        ["required"] = new JsonArray("pattern"),
+        ["required"] = new JsonArray("pattern")
     };
 
     public ToolDefinition Definition { get; } = new()
     {
         Name        = "search_text",
         Description = "Searches for a substring in workspace text files. Reports 'path:line: text' matches.",
-        Parameters  = Schema,
+        Parameters  = Schema
     };
 
     /// <summary>
-    /// 校验搜索模式、路径和结果上限，并把路径规范化到工作区内。
-    /// Validates the search pattern, path, and result cap, then normalizes the path inside the workspace.
+    ///     校验搜索模式、路径和结果上限，并把路径规范化到工作区内。
+    ///     Validates the search pattern, path, and result cap, then normalizes the path inside the workspace.
     /// </summary>
     public ToolPreparation Prepare(ChatToolCall call)
     {
@@ -82,9 +81,7 @@ public sealed class SearchTextTool(Workspace workspace, WorkerReadPolicy? worker
         var rawPath    = JsonArgs.Optional(args, "path", ".");
         var maxResults = JsonArgs.OptionalInt(args, "maxResults") ?? DefaultMaxResults;
         if (maxResults is < 1 or > AbsoluteMaxResults)
-        {
             throw new InvalidDataException($"Tool argument 'maxResults' must be between 1 and {AbsoluteMaxResults}.");
-        }
 
         var absolute = workspace.ResolveInside(rawPath, "path");
         workerPolicy?.EnsureLexicalAccessAllowed(absolute);
@@ -96,13 +93,13 @@ public sealed class SearchTextTool(Workspace workspace, WorkerReadPolicy? worker
             Arguments   = args,
             Capability  = "filesystem.search",
             Summary     = $"search_text \"{pattern}\" in {workspace.ToDisplay(absolute)}",
-            TargetPaths = [absolute],
+            TargetPaths = [absolute]
         };
     }
 
     /// <summary>
-    /// 扫描单个文件或受限目录树，汇总匹配结果及各类跳过原因，并在达到上限时提前结束。
-    /// Scans one file or a bounded directory tree, reporting matches, skip reasons, and early result-cap termination.
+    ///     扫描单个文件或受限目录树，汇总匹配结果及各类跳过原因，并在达到上限时提前结束。
+    ///     Scans one file or a bounded directory tree, reporting matches, skip reasons, and early result-cap termination.
     /// </summary>
     public async Task<ToolResult> ExecuteAsync(ToolPreparation preparation, CancellationToken cancellationToken)
     {
@@ -113,15 +110,13 @@ public sealed class SearchTextTool(Workspace workspace, WorkerReadPolicy? worker
         var comparison    = caseSensitive ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
 
         if (!File.Exists(absolute) && !Directory.Exists(absolute))
-        {
             return new ToolResult
             {
                 Succeeded = false,
-                Content   = $"Path not found: {workspace.ToDisplay(absolute)}",
+                Content   = $"Path not found: {workspace.ToDisplay(absolute)}"
             };
-        }
 
-        workspace.EnsureFinalTargetInside(absolute, isDirectory : Directory.Exists(absolute), "Path");
+        workspace.EnsureFinalTargetInside(absolute, Directory.Exists(absolute), "Path");
 
         var files       = new List<string>();
         var walkLimited = false;
@@ -196,30 +191,15 @@ public sealed class SearchTextTool(Workspace workspace, WorkerReadPolicy? worker
         }
 
         var details = new List<string>(5);
-        if (skippedEscaping > 0)
-        {
-            details.Add($"skipped {skippedEscaping} file link(s) to outside the workspace");
-        }
+        if (skippedEscaping > 0) details.Add($"skipped {skippedEscaping} file link(s) to outside the workspace");
 
-        if (skippedExcluded > 0)
-        {
-            details.Add($"skipped {skippedExcluded} excluded path(s)");
-        }
+        if (skippedExcluded > 0) details.Add($"skipped {skippedExcluded} excluded path(s)");
 
-        if (skippedBinary > 0)
-        {
-            details.Add($"skipped {skippedBinary} binary file(s)");
-        }
+        if (skippedBinary > 0) details.Add($"skipped {skippedBinary} binary file(s)");
 
-        if (skippedLarge > 0)
-        {
-            details.Add($"skipped {skippedLarge} large file(s)");
-        }
+        if (skippedLarge > 0) details.Add($"skipped {skippedLarge} large file(s)");
 
-        if (walkLimited)
-        {
-            details.Add($"only the first {MaxFilesScanned} files scanned");
-        }
+        if (walkLimited) details.Add($"only the first {MaxFilesScanned} files scanned");
 
         var note = details.Count == 0 ? string.Empty : "; " + string.Join("; ", details);
 
@@ -230,21 +210,14 @@ public sealed class SearchTextTool(Workspace workspace, WorkerReadPolicy? worker
         }
         else
         {
-            foreach (var line in output)
-            {
-                content.Append(line).Append('\n');
-            }
+            foreach (var line in output) content.Append(line).Append('\n');
 
             var matchWord = output.Count == 1 ? "match" : "matches";
             if (stoppedAtCap)
-            {
                 content.Append($"... (stopped after {output.Count} {matchWord}");
-            }
             else
-            {
                 content.Append($"({output.Count} {matchWord} in {filesScanned} " +
                                (filesScanned == 1 ? "file" : "files"));
-            }
 
             content.Append(note).Append(')');
         }
@@ -253,12 +226,11 @@ public sealed class SearchTextTool(Workspace workspace, WorkerReadPolicy? worker
     }
 
     /// <summary>
-    /// 逐行扫描一个文件；文件像二进制或链接目标越界时返回跳过状态，否则返回匹配行和截断状态。
-    ///
-    /// Scans one file line by line. Returns a skip outcome when the file looks
-    /// binary or when it is a link whose final target escapes the workspace;
-    /// otherwise the matched "path:line: text" lines and whether the scan had
-    /// to stop mid-file because the match cap was hit.
+    ///     逐行扫描一个文件；文件像二进制或链接目标越界时返回跳过状态，否则返回匹配行和截断状态。
+    ///     Scans one file line by line. Returns a skip outcome when the file looks
+    ///     binary or when it is a link whose final target escapes the workspace;
+    ///     otherwise the matched "path:line: text" lines and whether the scan had
+    ///     to stop mid-file because the match cap was hit.
     /// </summary>
     private static async Task<ScanOutcome> ScanFileAsync(string file, string pattern, StringComparison comparison,
                                                          int maxMatches, Workspace workspace,
@@ -272,7 +244,7 @@ public sealed class SearchTextTool(Workspace workspace, WorkerReadPolicy? worker
         // this only fires for walk-discovered links: skip them, never read.
         try
         {
-            workspace.EnsureFinalTargetInside(file, isDirectory : false, "File");
+            workspace.EnsureFinalTargetInside(file, false, "File");
         }
         catch (InvalidDataException)
         {
@@ -285,7 +257,6 @@ public sealed class SearchTextTool(Workspace workspace, WorkerReadPolicy? worker
         // read scope (focus/sensitive). Disqualified files are skipped and counted; their content is
         // never read and their names never revealed.
         if (workerPolicy is not null)
-        {
             try
             {
                 workerPolicy.EnsureFinalAccessAllowed(file);
@@ -294,7 +265,6 @@ public sealed class SearchTextTool(Workspace workspace, WorkerReadPolicy? worker
             {
                 return ScanOutcome.Excluded;
             }
-        }
 
         await using var stream = new FileStream(file, FileMode.Open, FileAccess.Read,
                                                 FileShare.ReadWrite | FileShare.Delete, 64 * 1024,
@@ -303,16 +273,12 @@ public sealed class SearchTextTool(Workspace workspace, WorkerReadPolicy? worker
         var read = await stream.ReadAsync(probe.AsMemory(0, BinaryProbeBytes), cancellationToken)
                                .ConfigureAwait(false);
         for (var i = 0; i < read; i++)
-        {
             if (probe[i] == 0)
-            {
                 return ScanOutcome.Binary;
-            }
-        }
 
         stream.Position = 0;
-        using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks : true,
-                                            bufferSize : 64 * 1024, leaveOpen : false);
+        using var reader = new StreamReader(stream, Encoding.UTF8, true,
+                                            64 * 1024, false);
 
         var     display    = workspace.ToDisplay(file);
         var     matches    = new List<string>(maxMatches);
@@ -322,10 +288,7 @@ public sealed class SearchTextTool(Workspace workspace, WorkerReadPolicy? worker
                (line = await reader.ReadLineAsync(cancellationToken).ConfigureAwait(false)) is not null)
         {
             lineNumber++;
-            if (line.IndexOf(pattern, comparison) < 0)
-            {
-                continue;
-            }
+            if (line.IndexOf(pattern, comparison) < 0) continue;
 
             var shown = line.Length <= MaxLineDisplayChars
                 ? line
@@ -357,21 +320,21 @@ public sealed class SearchTextTool(Workspace workspace, WorkerReadPolicy? worker
     private enum ScanSkipReason
     {
         /// <summary>
-        /// 文件内容像二进制，不再扫描。
-        /// File content looks binary and is not scanned further.
+        ///     文件内容像二进制，不再扫描。
+        ///     File content looks binary and is not scanned further.
         /// </summary>
         Binary,
 
         /// <summary>
-        /// 文件链接的最终目标逃逸工作区。
-        /// File link whose final target escapes the workspace.
+        ///     文件链接的最终目标逃逸工作区。
+        ///     File link whose final target escapes the workspace.
         /// </summary>
         OutsideWorkspace,
 
         /// <summary>
-        /// 文件被 worker 读取策略排除（focus 范围外或敏感路径）。
-        /// The file is excluded by the worker read policy (outside focus or a sensitive path).
+        ///     文件被 worker 读取策略排除（focus 范围外或敏感路径）。
+        ///     The file is excluded by the worker read policy (outside focus or a sensitive path).
         /// </summary>
-        Excluded,
+        Excluded
     }
 }

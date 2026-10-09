@@ -9,13 +9,20 @@ namespace TinyHarness.Tests;
 
 public class ReadOnlyToolsTests
 {
-    private static ChatToolCall Call(ITool tool, string argumentsJson) =>
-        new("call_1", tool.Definition.Name, argumentsJson);
+    private static ChatToolCall Call(ITool tool, string argumentsJson)
+    {
+        return new ChatToolCall("call_1", tool.Definition.Name, argumentsJson);
+    }
 
-    private static ToolPreparation Prepare(ITool tool, string argumentsJson) => tool.Prepare(Call(tool, argumentsJson));
+    private static ToolPreparation Prepare(ITool tool, string argumentsJson)
+    {
+        return tool.Prepare(Call(tool, argumentsJson));
+    }
 
-    private static async Task<ToolResult> ExecuteAsync(ITool tool, ToolPreparation preparation) =>
-        await tool.ExecuteAsync(preparation, CancellationToken.None);
+    private static async Task<ToolResult> ExecuteAsync(ITool tool, ToolPreparation preparation)
+    {
+        return await tool.ExecuteAsync(preparation, CancellationToken.None);
+    }
 
     // ---- read_file ---------------------------------------------------------
 
@@ -173,10 +180,7 @@ public class ReadOnlyToolsTests
         // fit and line 809 is the first one not shown.
         using var dir = new TestTempDir();
         var       sb  = new StringBuilder();
-        for (var i = 1; i <= 2_000; i++)
-        {
-            sb.Append(i.ToString("D5")).Append(new string('x', 75)).Append('\n');
-        }
+        for (var i = 1; i <= 2_000; i++) sb.Append(i.ToString("D5")).Append(new string('x', 75)).Append('\n');
 
         dir.WriteFile("wide.txt", sb.ToString());
         var tool = new ReadFileTool(dir.Workspace);
@@ -433,10 +437,7 @@ public class ReadOnlyToolsTests
         // More files than the walk cap: the result must say the scan was partial
         // instead of presenting "(no matches...)" as if the whole repo was seen.
         using var dir = new TestTempDir();
-        for (var i = 0; i < 3_005; i++)
-        {
-            dir.WriteFile($"f{i:D4}.txt", "filler\n");
-        }
+        for (var i = 0; i < 3_005; i++) dir.WriteFile($"f{i:D4}.txt", "filler\n");
 
         var tool = new SearchTextTool(dir.Workspace);
 
@@ -456,10 +457,7 @@ public class ReadOnlyToolsTests
         using var outsideDir   = new TestTempDir();
         var       outsideFile  = outsideDir.WriteFile("secret.txt", "TOP-SECRET-PLACEHOLDER needle-outside\n");
         var       linkPath     = Path.Combine(workspaceDir.Root, "link.txt");
-        if (!TryCreateFileSymlink(linkPath, outsideFile))
-        {
-            return; // No symlink privilege; nothing to verify.
-        }
+        if (!TryCreateFileSymlink(linkPath, outsideFile)) return; // No symlink privilege; nothing to verify.
 
         var tool = new SearchTextTool(workspaceDir.Workspace);
 
@@ -479,10 +477,7 @@ public class ReadOnlyToolsTests
         using var dir      = new TestTempDir();
         var       target   = dir.WriteFile("real.txt", "needle-inside\n");
         var       linkPath = Path.Combine(dir.Root, "alias.txt");
-        if (!TryCreateFileSymlink(linkPath, target))
-        {
-            return; // No symlink privilege; nothing to verify.
-        }
+        if (!TryCreateFileSymlink(linkPath, target)) return; // No symlink privilege; nothing to verify.
 
         var tool = new SearchTextTool(dir.Workspace);
 
@@ -557,10 +552,13 @@ public class ReadOnlyToolsTests
         Assert.Contains(loop.History, m => m.Role == ChatRole.Tool && m.Content.Contains("File not found"));
     }
 
-    private static AgentOptions Options() => new()
+    private static AgentOptions Options()
     {
-        Model                     = "test-model",
-        MaxAgentSteps             = 10,
-        DefaultToolTimeoutSeconds = 30,
-    };
+        return new AgentOptions
+        {
+            Model                     = "test-model",
+            MaxAgentSteps             = 10,
+            DefaultToolTimeoutSeconds = 30
+        };
+    }
 }

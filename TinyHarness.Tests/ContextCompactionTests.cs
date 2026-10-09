@@ -6,17 +6,17 @@ using TinyHarness.Core.Models.Tools;
 using TinyHarness.Core.Services.Agent;
 using TinyHarness.Core.Services.Context;
 using TinyHarness.Core.Services.Tools;
+using Xunit.Sdk;
 
 namespace TinyHarness.Tests;
 
 /// <summary>
-/// M6 Context Manager 集成测试：压缩触发、tools 禁用、原子组完整性、失败回滚、跨轮累积、
-/// 模型视图裁剪，以及压缩仍无法容纳窗口时主循环的显式失败（PLAN §13/§17）。
-///
-/// M6 context-manager integration tests: compaction triggering, disabled tools,
-/// atomic-group integrity, rollback on failure, cross-round accumulation, model-view
-/// trimming, and the explicit failure when compaction still cannot fit the window
-/// (PLAN §13/§17).
+///     M6 Context Manager 集成测试：压缩触发、tools 禁用、原子组完整性、失败回滚、跨轮累积、
+///     模型视图裁剪，以及压缩仍无法容纳窗口时主循环的显式失败（PLAN §13/§17）。
+///     M6 context-manager integration tests: compaction triggering, disabled tools,
+///     atomic-group integrity, rollback on failure, cross-round accumulation, model-view
+///     trimming, and the explicit failure when compaction still cannot fit the window
+///     (PLAN §13/§17).
 /// </summary>
 public class ContextCompactionTests
 {
@@ -25,37 +25,49 @@ public class ContextCompactionTests
     // window; the loop refuses to send a request that still exceeds the window.
     private const int TightWindow = 1000;
 
-    private static AgentOptions TightBudgetOptions(int maxSteps = 10) => new()
+    private static AgentOptions TightBudgetOptions(int maxSteps = 10)
     {
-        Model                     = "test-model",
-        MaxAgentSteps             = maxSteps,
-        DefaultToolTimeoutSeconds = 30,
-        Context = new ContextOptions
+        return new AgentOptions
         {
-            ContextWindowTokens  = TightWindow,
-            ReservedOutputTokens = 30,
-        },
-    };
+            Model                     = "test-model",
+            MaxAgentSteps             = maxSteps,
+            DefaultToolTimeoutSeconds = 30,
+            Context = new ContextOptions
+            {
+                ContextWindowTokens  = TightWindow,
+                ReservedOutputTokens = 30
+            }
+        };
+    }
 
-    private static AgentOptions NoContextOptions(int maxSteps = 10) => new()
+    private static AgentOptions NoContextOptions(int maxSteps = 10)
     {
-        Model                     = "test-model",
-        MaxAgentSteps             = maxSteps,
-        DefaultToolTimeoutSeconds = 30,
-    };
+        return new AgentOptions
+        {
+            Model                     = "test-model",
+            MaxAgentSteps             = maxSteps,
+            DefaultToolTimeoutSeconds = 30
+        };
+    }
 
-    private static string StateJson(string goal, string modified, string decision) => new JsonObject
+    private static string StateJson(string goal, string modified, string decision)
     {
-        ["goal"]               = goal,
-        ["constraints"]        = new JsonArray(),
-        ["decisions"]          = new JsonArray(decision),
-        ["filesInspected"]     = new JsonArray("src"),
-        ["filesModified"]      = new JsonArray(modified),
-        ["commandsAndResults"] = new JsonArray(),
-        ["pendingWork"]        = new JsonArray(),
-    }.ToJsonString();
+        return new JsonObject
+        {
+            ["goal"]               = goal,
+            ["constraints"]        = new JsonArray(),
+            ["decisions"]          = new JsonArray(decision),
+            ["filesInspected"]     = new JsonArray("src"),
+            ["filesModified"]      = new JsonArray(modified),
+            ["commandsAndResults"] = new JsonArray(),
+            ["pendingWork"]        = new JsonArray()
+        }.ToJsonString();
+    }
 
-    private static string ToolCallId(string prefix, int round) => $"{prefix}_{round}";
+    private static string ToolCallId(string prefix, int round)
+    {
+        return $"{prefix}_{round}";
+    }
 
     private static void AppendTurn(ConversationContext context, string toolName, string id, string arguments,
                                    string              result)
@@ -70,108 +82,69 @@ public class ContextCompactionTests
         var          summaryJson = StateJson("goal", "a.cs", "decision");
 
         for (var window = 700; window <= 5000; window += 50)
+        for (var longLength = 80; longLength <= 1600; longLength += 20)
+        for (var shortLength = 40; shortLength <= 800; shortLength += 20)
         {
-            for (var longLength = 80; longLength <= 1600; longLength += 20)
+            var options = new ContextOptions
             {
-                for (var shortLength = 40; shortLength <= 800; shortLength += 20)
-                {
-                    var options = new ContextOptions
-                    {
-                        ContextWindowTokens       = window,
-                        ReservedOutputTokens      = 30,
-                        CompactionThresholdTokens = window,
-                        ToolResultViewCharacters  = 12_000,
-                    };
-                    var context = new ConversationContext(options);
-                    context.Append(ChatMessage.System("sys"));
-                    context.Append(ChatMessage.User("go"));
-                    var a = new string('A', longLength);
-                    var b = new string('B', shortLength);
-                    var c = new string('C', shortLength);
-                    var d = new string('D', longLength);
-                    AppendTurn(context, longTool.Name, "a", arguments, a);
-                    AppendTurn(context, shortTool.Name, "b", arguments, b);
-                    AppendTurn(context, shortTool.Name, "c", arguments, c);
-                    var beforeD = context.EstimateViewTokens();
-                    AppendTurn(context, longTool.Name, "d", arguments, d);
-                    var afterD = context.EstimateViewTokens();
-                    var definitions = new[] { longTool, shortTool };
-                    var fixedCost = TokenEstimator.EstimateToolDefinitions(definitions) + options.ReservedOutputTokens;
-                    if (beforeD + fixedCost > window || afterD + fixedCost <= window)
-                    {
-                        continue;
-                    }
+                ContextWindowTokens       = window,
+                ReservedOutputTokens      = 30,
+                CompactionThresholdTokens = window,
+                ToolResultViewCharacters  = 12_000
+            };
+            var context = new ConversationContext(options);
+            context.Append(ChatMessage.System("sys"));
+            context.Append(ChatMessage.User("go"));
+            var a = new string('A', longLength);
+            var b = new string('B', shortLength);
+            var c = new string('C', shortLength);
+            var d = new string('D', longLength);
+            AppendTurn(context, longTool.Name, "a", arguments, a);
+            AppendTurn(context, shortTool.Name, "b", arguments, b);
+            AppendTurn(context, shortTool.Name, "c", arguments, c);
+            var beforeD = context.EstimateViewTokens();
+            AppendTurn(context, longTool.Name, "d", arguments, d);
+            var afterD      = context.EstimateViewTokens();
+            var definitions = new[] { longTool, shortTool };
+            var fixedCost   = TokenEstimator.EstimateToolDefinitions(definitions) + options.ReservedOutputTokens;
+            if (beforeD + fixedCost > window || afterD + fixedCost <= window) continue;
 
-                    var first = context.BuildCompactionMessages(definitions);
-                    if (first.Count                                                           == 0 ||
-                        TokenEstimator.EstimateMessages(first) + options.ReservedOutputTokens > window)
-                    {
-                        continue;
-                    }
+            var first = context.BuildCompactionMessages(definitions);
+            if (first.Count                                                           == 0 ||
+                TokenEstimator.EstimateMessages(first) + options.ReservedOutputTokens > window)
+                continue;
 
-                    var bMessages = new[]
-                    {
-                        ChatMessage.Assistant(string.Empty,
-                                              [new ChatToolCall("b", shortTool.Name, arguments)]),
-                        ChatMessage.Tool(shortTool.Name, "b", b),
-                    };
-                    if (TokenEstimator.EstimateMessages(first.Concat(bMessages)) + options.ReservedOutputTokens <=
-                        window)
-                    {
-                        continue;
-                    }
+            var bMessages = new[]
+            {
+                ChatMessage.Assistant(string.Empty,
+                                      [new ChatToolCall("b", shortTool.Name, arguments)]),
+                ChatMessage.Tool(shortTool.Name, "b", b)
+            };
+            if (TokenEstimator.EstimateMessages(first.Concat(bMessages)) + options.ReservedOutputTokens <=
+                window)
+                continue;
 
-                    if (!context.TryApplyCompaction(summaryJson))
-                    {
-                        continue;
-                    }
+            if (!context.TryApplyCompaction(summaryJson)) continue;
 
-                    var afterFirst = context.EstimateViewTokens() + fixedCost;
-                    if (afterFirst <= options.CompactionThresholdTokens)
-                    {
-                        continue;
-                    }
+            var afterFirst = context.EstimateViewTokens() + fixedCost;
+            if (afterFirst <= options.CompactionThresholdTokens) continue;
 
-                    var second = context.BuildCompactionMessages(definitions);
-                    if (second.Count                                                           == 0 ||
-                        TokenEstimator.EstimateMessages(second) + options.ReservedOutputTokens > window)
-                    {
-                        continue;
-                    }
+            var second = context.BuildCompactionMessages(definitions);
+            if (second.Count                                                           == 0 ||
+                TokenEstimator.EstimateMessages(second) + options.ReservedOutputTokens > window)
+                continue;
 
-                    if (!context.TryApplyCompaction(summaryJson))
-                    {
-                        continue;
-                    }
+            if (!context.TryApplyCompaction(summaryJson)) continue;
 
-                    var afterSecond = context.EstimateViewTokens() + fixedCost;
-                    if (afterSecond > options.ContextWindowTokens)
-                    {
-                        continue;
-                    }
+            var afterSecond = context.EstimateViewTokens() + fixedCost;
+            if (afterSecond > options.ContextWindowTokens) continue;
 
-                    return new TwoBatchCase(options, arguments, a, b, c, d, first, second, beforeD + fixedCost,
-                                            afterD + fixedCost, afterFirst, afterSecond);
-                }
-            }
+            return new TwoBatchCase(options, arguments, a, b, c, d, first, second, beforeD + fixedCost,
+                                    afterD + fixedCost, afterFirst, afterSecond);
         }
 
-        throw new Xunit.Sdk.XunitException("No deterministic two-batch compaction fixture was found.");
+        throw new XunitException("No deterministic two-batch compaction fixture was found.");
     }
-
-    private sealed record TwoBatchCase(
-        ContextOptions             Options,
-        string                     Arguments,
-        string                     A,
-        string                     B,
-        string                     C,
-        string                     D,
-        IReadOnlyList<ChatMessage> FirstSummary,
-        IReadOnlyList<ChatMessage> SecondSummary,
-        int                        BeforeD,
-        int                        AfterD,
-        int                        AfterFirst,
-        int                        AfterSecond);
 
     [Fact]
     public async Task Compaction_DisablesTools_FoldsOldestTurnAndKeepsNewestCompleteTurn()
@@ -287,8 +260,8 @@ public class ContextCompactionTests
             {
                 ContextWindowTokens       = 1500,
                 ReservedOutputTokens      = 30,
-                CompactionThresholdTokens = 1100,
-            },
+                CompactionThresholdTokens = 1100
+            }
         };
         var loop   = new AgentLoop(client, new ToolRegistry([tool]), options);
         var result = await loop.RunAsync("sys", "go", CancellationToken.None);
@@ -328,12 +301,12 @@ public class ContextCompactionTests
             ["filesInspected"]     = new JsonArray("src"),
             ["filesModified"]      = new JsonArray("a.cs", "b.cs"),
             ["commandsAndResults"] = new JsonArray(),
-            ["pendingWork"]        = new JsonArray(),
+            ["pendingWork"]        = new JsonArray()
         }.ToJsonString()));
         client.Enqueue(FakeChatClient.Text("done"));
 
         var changes = new List<ContextChange>();
-        var loop    = new AgentLoop(client, new ToolRegistry([tool]), TightBudgetOptions(maxSteps : 12));
+        var loop    = new AgentLoop(client, new ToolRegistry([tool]), TightBudgetOptions(12));
         loop.ContextCompacted += changes.Add;
 
         var result = await loop.RunAsync("sys", "go", CancellationToken.None);
@@ -388,9 +361,7 @@ public class ContextCompactionTests
         var client        = new FakeChatClient();
         var argumentsJson = $"{{\"padding\":\"{new string('a', 300)}\"}}";
         for (var round = 1; round <= 3; round++)
-        {
-            client.Enqueue(FakeChatClient.ToolCalls("t", count : 3, idPrefix : $"round{round}", argumentsJson));
-        }
+            client.Enqueue(FakeChatClient.ToolCalls("t", 3, $"round{round}", argumentsJson));
 
         var summary = new JsonObject
         {
@@ -400,7 +371,7 @@ public class ContextCompactionTests
             ["filesInspected"] = new JsonArray(Enumerable.Range(1, 5).Select(i => (JsonNode?)$"file-{i}.cs").ToArray()),
             ["filesModified"] = new JsonArray("file.cs"),
             ["commandsAndResults"] = new JsonArray(),
-            ["pendingWork"] = new JsonArray(),
+            ["pendingWork"] = new JsonArray()
         }.ToJsonString();
 
         client.Enqueue(FakeChatClient.Text(summary));
@@ -417,8 +388,8 @@ public class ContextCompactionTests
             {
                 ContextWindowTokens       = 2900,
                 ReservedOutputTokens      = 30,
-                CompactionThresholdTokens = 2800,
-            },
+                CompactionThresholdTokens = 2800
+            }
         });
         loop.ContextCompacted += changes.Add;
 
@@ -469,7 +440,7 @@ public class ContextCompactionTests
             Model                     = "test-model",
             MaxAgentSteps             = 10,
             DefaultToolTimeoutSeconds = 30,
-            Context                   = fixture.Options,
+            Context                   = fixture.Options
         });
 
         var result = await loop.RunAsync("sys", "go", CancellationToken.None);
@@ -533,8 +504,8 @@ public class ContextCompactionTests
             {
                 ContextWindowTokens      = 1000,
                 ReservedOutputTokens     = 100,
-                ToolResultViewCharacters = 96,
-            },
+                ToolResultViewCharacters = 96
+            }
         };
         var loop = new AgentLoop(client, new ToolRegistry([tool]), options);
 
@@ -567,7 +538,7 @@ public class ContextCompactionTests
             Model                     = "test-model",
             MaxAgentSteps             = 10,
             DefaultToolTimeoutSeconds = 30,
-            Context                   = new ContextOptions { ContextWindowTokens = 4000, ReservedOutputTokens = 200 },
+            Context                   = new ContextOptions { ContextWindowTokens = 4000, ReservedOutputTokens = 200 }
         };
         var loop = new AgentLoop(client, new ToolRegistry([tool]), options);
 
@@ -599,9 +570,9 @@ public class ContextCompactionTests
     }
 
     /// <summary>
-    /// 把一段脚本化响应的末尾 End 事件替换为携带 usage 的版本，模拟服务端实测数据。
-    /// Replaces the trailing End event of a scripted response with one carrying usage,
-    /// simulating server-measured data.
+    ///     把一段脚本化响应的末尾 End 事件替换为携带 usage 的版本，模拟服务端实测数据。
+    ///     Replaces the trailing End event of a scripted response with one carrying usage,
+    ///     simulating server-measured data.
     /// </summary>
     private static IReadOnlyList<ChatStreamEvent> WithUsage(IReadOnlyList<ChatStreamEvent> events,
                                                             int inputTokens, int outputTokens, string finishReason)
@@ -609,7 +580,7 @@ public class ContextCompactionTests
         var withUsage = events.ToList();
         withUsage[^1] = withUsage[^1] with
         {
-            InputTokens = inputTokens, OutputTokens = outputTokens, FinishReason = finishReason,
+            InputTokens = inputTokens, OutputTokens = outputTokens, FinishReason = finishReason
         };
         return withUsage;
     }
@@ -639,8 +610,8 @@ public class ContextCompactionTests
             {
                 ContextWindowTokens       = 2000,
                 ReservedOutputTokens      = 30,
-                CompactionThresholdTokens = 1400,
-            },
+                CompactionThresholdTokens = 1400
+            }
         });
         loop.ContextCompacted += changes.Add;
 
@@ -649,7 +620,7 @@ public class ContextCompactionTests
         Assert.True(result.Status == AgentStatus.Completed,
                     $"{result.Error} requests={client.Requests} compactions={result.Compactions} steps={result.Steps}");
         Assert.Equal(3, result.ToolExecutions);
-        Assert.Equal(5, client.Requests); // three agent requests + one summary + final
+        Assert.Equal(5, client.Requests);        // three agent requests + one summary + final
         Assert.Null(client.RequestLog[3].Tools); // request 4 is the tools-disabled summary
 
         // Without calibration the raw estimate after three rounds stays below the
@@ -661,4 +632,18 @@ public class ContextCompactionTests
         Assert.True(change.BeforeTokens > change.AfterTokens && change.AfterTokens > 0,
                     $"calibrated compaction must still shrink the view: {change.BeforeTokens} -> {change.AfterTokens}");
     }
+
+    private sealed record TwoBatchCase(
+        ContextOptions             Options,
+        string                     Arguments,
+        string                     A,
+        string                     B,
+        string                     C,
+        string                     D,
+        IReadOnlyList<ChatMessage> FirstSummary,
+        IReadOnlyList<ChatMessage> SecondSummary,
+        int                        BeforeD,
+        int                        AfterD,
+        int                        AfterFirst,
+        int                        AfterSecond);
 }

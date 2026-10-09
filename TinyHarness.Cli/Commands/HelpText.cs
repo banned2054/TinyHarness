@@ -1,15 +1,14 @@
 namespace TinyHarness.Cli.Commands;
 
 /// <summary>
-/// TinyHarness 的帮助文本。CLI 与文档共用同一套命令含义，避免两处各自漂移。
-///
-/// Help text for TinyHarness. The CLI and documentation share one set of command meanings so they cannot drift apart.
+///     TinyHarness 的帮助文本。CLI 与文档共用同一套命令含义，避免两处各自漂移。
+///     Help text for TinyHarness. The CLI and documentation share one set of command meanings so they cannot drift apart.
 /// </summary>
 internal static class HelpText
 {
     /// <summary>
-    /// 顶层用法总览。
-    /// The top-level usage overview.
+    ///     顶层用法总览。
+    ///     The top-level usage overview.
     /// </summary>
     public const string Overview = """
         TinyHarness - a local coding-agent harness (Chat Completions)
@@ -162,39 +161,45 @@ internal static class HelpText
         """;
 
     /// <summary>
-    /// 判断是否为已知 help 主题。
-    /// Whether a name is a known help topic.
+    ///     判断是否为已知 help 主题。
+    ///     Whether a name is a known help topic.
     /// </summary>
-    public static bool IsKnownCommand(string name) => name.ToLowerInvariant() switch
+    public static bool IsKnownCommand(string name)
     {
-        "run"      => true,
-        "smoke"    => true,
-        "mcp"      => true,
-        "init"     => true,
-        "config"   => true,
-        "provider" => true,
-        "auth"     => true,
-        "model"    => true,
-        "doctor"   => true,
-        "help"     => true,
-        _          => false,
-    };
+        return name.ToLowerInvariant() switch
+        {
+            "run"      => true,
+            "smoke"    => true,
+            "mcp"      => true,
+            "init"     => true,
+            "config"   => true,
+            "provider" => true,
+            "auth"     => true,
+            "model"    => true,
+            "doctor"   => true,
+            "help"     => true,
+            _          => false
+        };
+    }
 
     /// <summary>
-    /// 返回某个主题的帮助文本；未知主题返回总览。
-    /// Returns the help text for a topic; the overview for unknown topics.
+    ///     返回某个主题的帮助文本；未知主题返回总览。
+    ///     Returns the help text for a topic; the overview for unknown topics.
     /// </summary>
-    public static string For(string? topic) => topic?.ToLowerInvariant() switch
+    public static string For(string? topic)
     {
-        "run"      => Run,
-        "smoke"    => Smoke,
-        "mcp"      => Mcp,
-        "init"     => Init,
-        "config"   => Config,
-        "provider" => Provider,
-        "auth"     => Auth,
-        "model"    => Model,
-        "doctor"   => Doctor,
-        _          => Overview,
-    };
+        return topic?.ToLowerInvariant() switch
+        {
+            "run"      => Run,
+            "smoke"    => Smoke,
+            "mcp"      => Mcp,
+            "init"     => Init,
+            "config"   => Config,
+            "provider" => Provider,
+            "auth"     => Auth,
+            "model"    => Model,
+            "doctor"   => Doctor,
+            _          => Overview
+        };
+    }
 }

@@ -1,32 +1,34 @@
 namespace TinyHarness.Core.Models.Configuration;
 
 /// <summary>
-/// 配置查找来源。显式 `--config` 与当前目录项目文件直接来自文件；用户配置来自平台用户配置目录；
-/// 都不存在时使用内置默认值。
-///
-/// Where the effective configuration came from. An explicit `--config` and the current-directory project
-/// file are read directly; the user config lives in the platform user config directory; built-in defaults
-/// apply when no file exists.
+///     配置查找来源。显式 `--config` 与当前目录项目文件直接来自文件；用户配置来自平台用户配置目录；
+///     都不存在时使用内置默认值。
+///     Where the effective configuration came from. An explicit `--config` and the current-directory project
+///     file are read directly; the user config lives in the platform user config directory; built-in defaults
+///     apply when no file exists.
 /// </summary>
 public enum ConfigSourceKind
 {
     /// <summary>未找到任何配置文件，全部使用内置默认值。No config file found; built-in defaults only.</summary>
     Defaults,
 
-    /// <summary>未指定 --config 时自动发现的当前目录 tinyharness.json。The auto-discovered current-directory tinyharness.json when --config is absent.</summary>
+    /// <summary>
+    ///     未指定 --config 时自动发现的当前目录 tinyharness.json。The auto-discovered current-directory tinyharness.json when --config
+    ///     is absent.
+    /// </summary>
     ProjectFile,
 
     /// <summary>通过 --config 显式指定的配置文件。The file explicitly selected through --config.</summary>
     ExplicitFile,
 
     /// <summary>用户配置目录中的 user-config.json。The user-config.json in the user config directory.</summary>
-    UserConfig,
+    UserConfig
 }
 
 /// <summary>
-/// 一次配置解析的完整结果：生效配置、来源与查找路径，供 CLI 展示与诊断。
-///
-/// The complete result of one config resolution: effective config, source, and lookup paths, for CLI display and diagnostics.
+///     一次配置解析的完整结果：生效配置、来源与查找路径，供 CLI 展示与诊断。
+///     The complete result of one config resolution: effective config, source, and lookup paths, for CLI display and
+///     diagnostics.
 /// </summary>
 public sealed record ConfigResolution
 {

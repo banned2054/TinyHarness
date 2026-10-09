@@ -29,9 +29,9 @@ public class UserConfigStoreTests
                         Models =
                         [
                             new UserProfileModel { Id = "model-x", ContextWindowTokens = 128_000 },
-                            new UserProfileModel { Id = "model-y", ContextWindowTokens = 200_000 },
-                        ],
-                    },
+                            new UserProfileModel { Id = "model-y", ContextWindowTokens = 200_000 }
+                        ]
+                    }
                 ],
                 Settings = new UserConfigSettings
                 {
@@ -42,18 +42,18 @@ public class UserConfigStoreTests
                     SessionDirectory          = "custom/runs",
                     Worker = new UserWorkerSettings
                     {
-                        WorkspaceRoot = "C:/work/project",
-                        RunTimeoutSeconds = 180,
-                        MaxAgentSteps = 8,
-                        DefaultToolTimeoutSeconds = 25,
-                        MaxTaskPackageCharacters = 10_000,
-                        MaxToolCalls = 15,
-                        MaxToolOutputCharacters = 30_000,
+                        WorkspaceRoot              = "C:/work/project",
+                        RunTimeoutSeconds          = 180,
+                        MaxAgentSteps              = 8,
+                        DefaultToolTimeoutSeconds  = 25,
+                        MaxTaskPackageCharacters   = 10_000,
+                        MaxToolCalls               = 15,
+                        MaxToolOutputCharacters    = 30_000,
                         MaxContextTokensPerRequest = 20_000,
                         MaxCumulativeContextTokens = 50_000,
-                        MaxModelResponseCharacters = 16_000,
-                    },
-                },
+                        MaxModelResponseCharacters = 16_000
+                    }
+                }
             };
 
             await UserConfigStore.SaveAsync(path, config, CancellationToken.None);
@@ -90,7 +90,7 @@ public class UserConfigStoreTests
         }
         finally
         {
-            Directory.Delete(dir, recursive : true);
+            Directory.Delete(dir, true);
         }
     }
 
@@ -122,7 +122,7 @@ public class UserConfigStoreTests
         }
         finally
         {
-            Directory.Delete(dir, recursive : true);
+            Directory.Delete(dir, true);
         }
     }
 
@@ -145,7 +145,7 @@ public class UserConfigStoreTests
         }
         finally
         {
-            Directory.Delete(dir, recursive : true);
+            Directory.Delete(dir, true);
         }
     }
 
@@ -180,7 +180,7 @@ public class UserConfigStoreTests
         }
         finally
         {
-            Directory.Delete(dir, recursive : true);
+            Directory.Delete(dir, true);
         }
     }
 
@@ -200,10 +200,10 @@ public class UserConfigStoreTests
                     [
                         new CommandRule
                         {
-                            Mode = "direct", Executable = "dotnet", Arguments = ["test"], WorkingDirectory = ".",
-                        },
-                    ],
-                },
+                            Mode = "direct", Executable = "dotnet", Arguments = ["test"], WorkingDirectory = "."
+                        }
+                    ]
+                }
             };
 
             await UserConfigStore.SaveAsync(path, config, CancellationToken.None);
@@ -215,7 +215,7 @@ public class UserConfigStoreTests
         }
         finally
         {
-            Directory.Delete(dir, recursive : true);
+            Directory.Delete(dir, true);
         }
     }
 }

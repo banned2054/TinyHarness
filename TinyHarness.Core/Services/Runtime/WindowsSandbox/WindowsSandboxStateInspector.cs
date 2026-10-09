@@ -4,13 +4,12 @@ using TinyHarness.Core.Models.Runtime.WindowsSandbox;
 namespace TinyHarness.Core.Services.Runtime.WindowsSandbox;
 
 /// <summary>
-/// 沙箱就绪状态检查：setup/runner 组件存在、setup marker 完成且版本一致、cap_sid 可解析、
-/// 凭据文件可解析。聚合全部问题返回，不做任何修复；执行路径据此 fail closed。
-///
-/// Sandbox readiness check: setup/runner components exist, the setup marker
-/// is complete with a matching version, cap_sid parses, and the credentials
-/// file parses. All problems are aggregated; nothing is repaired, and the
-/// execution path fails closed on the result.
+///     沙箱就绪状态检查：setup/runner 组件存在、setup marker 完成且版本一致、cap_sid 可解析、
+///     凭据文件可解析。聚合全部问题返回，不做任何修复；执行路径据此 fail closed。
+///     Sandbox readiness check: setup/runner components exist, the setup marker
+///     is complete with a matching version, cap_sid parses, and the credentials
+///     file parses. All problems are aggregated; nothing is repaired, and the
+///     execution path fails closed on the result.
 /// </summary>
 public sealed class WindowsSandboxStateInspector(WindowsSandboxComponents components)
 {
@@ -20,14 +19,10 @@ public sealed class WindowsSandboxStateInspector(WindowsSandboxComponents compon
     {
         var problems = new List<string>();
         if (!File.Exists(Components.SetupExecutablePath))
-        {
             problems.Add($"Setup executable not found: {Components.SetupExecutablePath}");
-        }
 
         if (!File.Exists(Components.RunnerExecutablePath))
-        {
             problems.Add($"Runner executable not found: {Components.RunnerExecutablePath}");
-        }
 
         await InspectMarkerAsync(problems, cancellationToken).ConfigureAwait(false);
         await InspectCapabilitySidsAsync(problems, cancellationToken).ConfigureAwait(false);
@@ -58,10 +53,8 @@ public sealed class WindowsSandboxStateInspector(WindowsSandboxComponents compon
             var content = await File.ReadAllTextAsync(Components.MarkerPath, cancellationToken).ConfigureAwait(false);
             var marker  = JsonSerializer.Deserialize(content, WindowsSandboxJsonContext.Default.SandboxSetupMarker);
             if (marker?.Version != WindowsSandboxComponents.SetupVersion)
-            {
                 problems.Add(
                              $"Sandbox setup marker version {marker?.Version.ToString() ?? "unknown"} does not match the required {WindowsSandboxComponents.SetupVersion}.");
-            }
         }
         catch (JsonException ex)
         {
@@ -83,13 +76,12 @@ public sealed class WindowsSandboxStateInspector(WindowsSandboxComponents compon
 
         try
         {
-            var content        = await File.ReadAllTextAsync(Components.CapabilitySidPath, cancellationToken).ConfigureAwait(false);
+            var content = await File.ReadAllTextAsync(Components.CapabilitySidPath, cancellationToken)
+                                    .ConfigureAwait(false);
             var capabilitySids = JsonSerializer.Deserialize(content,
                                                             WindowsSandboxJsonContext.Default.SandboxCapabilitySids);
             if (string.IsNullOrEmpty(capabilitySids?.ReadOnly))
-            {
                 problems.Add("Capability SID table is missing its readonly SID.");
-            }
         }
         catch (JsonException ex)
         {
@@ -111,8 +103,9 @@ public sealed class WindowsSandboxStateInspector(WindowsSandboxComponents compon
 
         try
         {
-            var content = await File.ReadAllTextAsync(Components.UsersFilePath, cancellationToken).ConfigureAwait(false);
-            var users   = JsonSerializer.Deserialize(content, WindowsSandboxJsonContext.Default.SandboxUsersFile);
+            var content = await File.ReadAllTextAsync(Components.UsersFilePath, cancellationToken)
+                                    .ConfigureAwait(false);
+            var users = JsonSerializer.Deserialize(content, WindowsSandboxJsonContext.Default.SandboxUsersFile);
             if (users?.Version != SandboxUsersFile.RequiredVersion)
             {
                 problems.Add($"Sandbox account credentials version {users?.Version.ToString() ?? "unknown"} " +
@@ -121,9 +114,7 @@ public sealed class WindowsSandboxStateInspector(WindowsSandboxComponents compon
             }
 
             if (string.IsNullOrEmpty(users?.Offline?.Username) || string.IsNullOrEmpty(users.Offline.ProtectedPassword))
-            {
                 problems.Add("Sandbox account credentials are missing the offline account entry.");
-            }
         }
         catch (JsonException ex)
         {

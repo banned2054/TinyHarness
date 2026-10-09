@@ -8,50 +8,57 @@ namespace TinyHarness.Tests;
 
 public class WorkerRunnerTests
 {
-    private static WorkerExecutionOptions Options(int maxSteps = 6, TimeSpan? runTimeout = null) => new()
+    private static WorkerExecutionOptions Options(int maxSteps = 6, TimeSpan? runTimeout = null)
     {
-        Model                      = "fake-model",
-        RunTimeout                 = runTimeout ?? TimeSpan.FromSeconds(30),
-        MaxAgentSteps              = maxSteps,
-        DefaultToolTimeoutSeconds  = 10,
-        MaxTaskPackageCharacters   = 8_000,
-        MaxToolCalls               = 12,
-        MaxToolOutputCharacters    = 100_000,
-        MaxCumulativeContextTokens = 200_000,
-        MaxContextTokensPerRequest = 200_000,
-        MaxModelResponseCharacters = 64_000,
-    };
+        return new WorkerExecutionOptions
+        {
+            Model                      = "fake-model",
+            RunTimeout                 = runTimeout ?? TimeSpan.FromSeconds(30),
+            MaxAgentSteps              = maxSteps,
+            DefaultToolTimeoutSeconds  = 10,
+            MaxTaskPackageCharacters   = 8_000,
+            MaxToolCalls               = 12,
+            MaxToolOutputCharacters    = 100_000,
+            MaxCumulativeContextTokens = 200_000,
+            MaxContextTokensPerRequest = 200_000,
+            MaxModelResponseCharacters = 64_000
+        };
+    }
 
-    private static string DraftJson(string conclusion, string path) => $$"""
-        {"conclusion":"{{conclusion}}","evidence":[{"path":"{{path}}","lineStart":2,"lineEnd":3,"note":"States it."}],"suggestedChanges":[],"testSuggestions":[],"uncertainties":[]}
-        """;
+    private static string DraftJson(string conclusion, string path)
+    {
+        return $$"""
+            {"conclusion":"{{conclusion}}","evidence":[{"path":"{{path}}","lineStart":2,"lineEnd":3,"note":"States it."}],"suggestedChanges":[],"testSuggestions":[],"uncertainties":[]}
+            """;
+    }
 
     /// <summary>
-    /// 取单个请求里的 tool 消息内容；模型的最后一次请求携带完整最终历史，
-    /// 因此单 run 测试传 <c>fake.RequestLog[^1]</c>，多 run 测试传各 run 的最后请求。
-    /// Takes the tool-message contents of one request. The model's last request carries the complete
-    /// final history, so single-run tests pass <c>fake.RequestLog[^1]</c> and multi-run tests pass
-    /// each run's final request.
+    ///     取单个请求里的 tool 消息内容；模型的最后一次请求携带完整最终历史，
+    ///     因此单 run 测试传 <c>fake.RequestLog[^1]</c>，多 run 测试传各 run 的最后请求。
+    ///     Takes the tool-message contents of one request. The model's last request carries the complete
+    ///     final history, so single-run tests pass <c>fake.RequestLog[^1]</c> and multi-run tests pass
+    ///     each run's final request.
     /// </summary>
-    private static IReadOnlyList<string> ToolMessages(ChatCompletionRequest request) => request.Messages
-       .Where(message => message.Role == ChatRole.Tool)
-       .Select(message => message.Content)
-       .ToArray();
+    private static IReadOnlyList<string> ToolMessages(ChatCompletionRequest request)
+    {
+        return request.Messages
+                      .Where(message => message.Role == ChatRole.Tool)
+                      .Select(message => message.Content)
+                      .ToArray();
+    }
 
     private static IReadOnlyList<ChatStreamEvent> MultiToolCall(params (string Name, string Arguments)[] calls)
     {
         var events = new List<ChatStreamEvent>();
         for (var i = 0; i < calls.Length; i++)
-        {
             events.Add(new ChatStreamEvent
             {
                 Kind                   = ChatStreamEventKind.ToolCallDelta,
                 ToolCallIndex          = i,
                 ToolCallId             = $"call_{i}",
                 ToolCallFunctionName   = calls[i].Name,
-                ToolCallArgumentsDelta = calls[i].Arguments,
+                ToolCallArgumentsDelta = calls[i].Arguments
             });
-        }
 
         events.Add(new ChatStreamEvent { Kind = ChatStreamEventKind.End });
         return events;
@@ -72,7 +79,7 @@ public class WorkerRunnerTests
         {
             TaskPrompt = "Where is the retry budget documented?",
             KnownFacts = ["docs/note.md exists"],
-            FocusPaths = ["docs"],
+            FocusPaths = ["docs"]
         }, CancellationToken.None);
 
         Assert.Equal(WorkerResultStatus.Completed, result.Status);
@@ -107,7 +114,7 @@ public class WorkerRunnerTests
         {
             TaskPrompt = "Where is the retry budget documented?",
             KnownFacts = ["docs/note.md exists"],
-            FocusPaths = ["docs"],
+            FocusPaths = ["docs"]
         }, CancellationToken.None);
 
         var messages = fake.RequestLog[0].Messages;
@@ -241,7 +248,7 @@ public class WorkerRunnerTests
             ThrownError =
                 new
                     HttpRequestException("GET https://secret-endpoint.example/v1/models failed sk-live-SENTINEL-abc123 " +
-                                         "[response body: internal quota secrets for tenant-42]"),
+                                         "[response body: internal quota secrets for tenant-42]")
         };
         var runner = new WorkerRunner(fake, dir.Root, Options());
 
@@ -268,7 +275,7 @@ public class WorkerRunnerTests
         var       fake = new FakeChatClient();
         fake.Enqueue(FakeChatClient.ToolCall("list_files", "{}", "call_a"));
         fake.Enqueue(FakeChatClient.ToolCall("list_files", "{}", "call_b"));
-        var runner = new WorkerRunner(fake, dir.Root, Options(maxSteps : 2));
+        var runner = new WorkerRunner(fake, dir.Root, Options(2));
 
         var result = await runner.RunAsync(new WorkerRequest { TaskPrompt = "Investigate." },
                                            CancellationToken.None);
@@ -377,7 +384,10 @@ public class WorkerRunnerTests
         Assert.Throws<ArgumentException>(() => new WorkerRunner(fake, dir.Root,
                                                                 Options() with { MaxModelResponseCharacters = 0 }));
         Assert.Throws<ArgumentException>(() => new WorkerRunner(fake, dir.Root,
-                                                                Options() with { MaxModelResponseCharacters = 64_001 }));
+                                                                Options() with
+                                                                {
+                                                                    MaxModelResponseCharacters = 64_001
+                                                                }));
         Assert.Throws<ArgumentException>(() => new WorkerRunner(fake, dir.Root,
                                                                 Options() with { Model = " " }));
         Assert.Throws<ArgumentException>(() => new WorkerRunner(fake, " ", Options()));
@@ -404,17 +414,14 @@ public class WorkerRunnerTests
         var result = await runner.RunAsync(new WorkerRequest
         {
             TaskPrompt = "Find the needle.",
-            FocusPaths = ["docs"],
+            FocusPaths = ["docs"]
         }, CancellationToken.None);
 
         Assert.Equal(WorkerResultStatus.Completed, result.Status);
         Assert.Equal(1, result.Statistics.ToolCalls);
         var messages = ToolMessages(fake.RequestLog[^1]);
         Assert.Equal(5, messages.Count);
-        for (var i = 0; i < 4; i++)
-        {
-            Assert.Contains("focused read scope", messages[i], StringComparison.Ordinal);
-        }
+        for (var i = 0; i < 4; i++) Assert.Contains("focused read scope", messages[i], StringComparison.Ordinal);
 
         Assert.Contains("needle in docs", messages[4], StringComparison.Ordinal);
         Assert.DoesNotContain("TOPSECRET", string.Join('\n', messages), StringComparison.Ordinal);
@@ -441,7 +448,7 @@ public class WorkerRunnerTests
         fake.Enqueue(FakeChatClient.ToolCall("search_text", """{"pattern":"SECRET_ENV","path":".env"}"""));
         fake.Enqueue(FakeChatClient.ToolCall("read_file", """{"path":"docs/normal.md"}"""));
         fake.Enqueue(FakeChatClient.Text(DraftJson("Done.", "docs/normal.md")));
-        var runner = new WorkerRunner(fake, dir.Root, Options(maxSteps : 12));
+        var runner = new WorkerRunner(fake, dir.Root, Options(12));
 
         var result = await runner.RunAsync(new WorkerRequest { TaskPrompt = "Look around." },
                                            CancellationToken.None);
@@ -451,9 +458,7 @@ public class WorkerRunnerTests
         var messages = ToolMessages(fake.RequestLog[^1]);
         Assert.Equal(8, messages.Count);
         for (var i = 0; i < 7; i++)
-        {
             Assert.Contains("excluded by the worker read policy", messages[i], StringComparison.Ordinal);
-        }
 
         Assert.Contains("plain text", messages[7], StringComparison.Ordinal);
         var joined = string.Join('\n', messages);
@@ -565,13 +570,15 @@ public class WorkerRunnerTests
     }
 
     private static string AbsolutePath(string root, string relative)
-        => root.Replace('\\', '/') + "/" + relative;
+    {
+        return root.Replace('\\', '/') + "/" + relative;
+    }
 
     // ---- link boundary ------------------------------------------------------------------
 
     /// <summary>
-    /// 用 mklink /J 创建目录 junction（不需要管理员权限）。
-    /// Creates a directory junction via mklink /J (no administrator privileges required).
+    ///     用 mklink /J 创建目录 junction（不需要管理员权限）。
+    ///     Creates a directory junction via mklink /J (no administrator privileges required).
     /// </summary>
     private static void CreateJunction(string link, string target)
     {
@@ -579,7 +586,7 @@ public class WorkerRunnerTests
         {
             CreateNoWindow        = true,
             UseShellExecute       = false,
-            RedirectStandardError = true,
+            RedirectStandardError = true
         };
         using var process = Process.Start(startInfo)!;
         var       error   = process.StandardError.ReadToEnd().Trim();
@@ -597,10 +604,7 @@ public class WorkerRunnerTests
         // must be denied at its resolved landing path before the file is opened. Junctions are
         // Windows-only here; non-Windows symlinks run the same segment-wise resolution code, but
         // this test has not been executed on a non-Windows runtime.
-        if (!OperatingSystem.IsWindows())
-        {
-            return;
-        }
+        if (!OperatingSystem.IsWindows()) return;
 
         using var dir = new TestTempDir();
         dir.WriteFile("docs/a.md", "focus content");
@@ -619,7 +623,7 @@ public class WorkerRunnerTests
         var result = await runner.RunAsync(new WorkerRequest
         {
             TaskPrompt = "read through the link",
-            FocusPaths = ["docs"],
+            FocusPaths = ["docs"]
         }, CancellationToken.None);
 
         Assert.Equal(WorkerResultStatus.Completed, result.Status);
@@ -655,10 +659,7 @@ public class WorkerRunnerTests
         // Review regressions 1+2: explicitly listing a junction is denied by the policy without
         // enumerating the landing; a recursive listing never exposes link entries whose landing is
         // outside the focus or sensitive; ordinary in-focus files still list.
-        if (!OperatingSystem.IsWindows())
-        {
-            return;
-        }
+        if (!OperatingSystem.IsWindows()) return;
 
         using var dir = new TestTempDir();
         dir.WriteFile("docs/a.md", "focus content");
@@ -677,7 +678,7 @@ public class WorkerRunnerTests
         var result = await runner.RunAsync(new WorkerRequest
         {
             TaskPrompt = "list through the link",
-            FocusPaths = ["docs"],
+            FocusPaths = ["docs"]
         }, CancellationToken.None);
 
         Assert.Equal(WorkerResultStatus.Completed, result.Status);
@@ -739,7 +740,7 @@ public class WorkerRunnerTests
         fake.Enqueue(FakeChatClient.ToolCall("read_file", """{"path":"docs/a.md"}""", "b3"));
         fake.Enqueue(FakeChatClient.Text(DraftJson("Done.", "docs/a.md")));
         var runner = new WorkerRunner(fake, dir.Root,
-                                      Options(maxSteps : 8) with { MaxToolCalls = 2 });
+                                      Options(8) with { MaxToolCalls = 2 });
 
         var result = await runner.RunAsync(new WorkerRequest { TaskPrompt = "Read repeatedly." },
                                            CancellationToken.None);
@@ -794,7 +795,7 @@ public class WorkerRunnerTests
         var measureFake = new FakeChatClient();
         measureFake.Enqueue(FakeChatClient.ToolCall("read_file", """{"path":"docs/a.md"}""", "c1"));
         measureFake.Enqueue(FakeChatClient.Text(DraftJson("Done.", "docs/a.md")));
-        var measureRunner = new WorkerRunner(measureFake, dir.Root, Options(maxSteps : 4));
+        var measureRunner = new WorkerRunner(measureFake, dir.Root, Options(4));
         await measureRunner.RunAsync(new WorkerRequest { TaskPrompt = "Read the big file." },
                                      CancellationToken.None);
         var firstRequest = measureFake.RequestLog[0];
@@ -808,7 +809,7 @@ public class WorkerRunnerTests
         fake.Enqueue(FakeChatClient.ToolCall("read_file", """{"path":"docs/a.md"}""", "c1"));
         fake.Enqueue(FakeChatClient.Text(DraftJson("Done.", "docs/a.md")));
         var runner = new WorkerRunner(fake, dir.Root,
-                                      Options(maxSteps : 4) with { MaxCumulativeContextTokens = firstEstimate });
+                                      Options(4) with { MaxCumulativeContextTokens = firstEstimate });
 
         var result = await runner.RunAsync(new WorkerRequest { TaskPrompt = "Read the big file." },
                                            CancellationToken.None);
@@ -825,10 +826,10 @@ public class WorkerRunnerTests
     [Fact]
     public async Task PerRequestContextBudget_ExactFirstRequestAllowed_OverLimitNeverReachesClient()
     {
-        using var dir = new TestTempDir();
-        var measureFake = new FakeChatClient();
+        using var dir         = new TestTempDir();
+        var       measureFake = new FakeChatClient();
         measureFake.Enqueue(FakeChatClient.Text(DraftJson("Measured.", "docs/a.md")));
-        var measureRunner = new WorkerRunner(measureFake, dir.Root, Options(maxSteps : 2));
+        var measureRunner = new WorkerRunner(measureFake, dir.Root, Options(2));
         await measureRunner.RunAsync(new WorkerRequest { TaskPrompt = "Measure context." }, CancellationToken.None);
         var request = measureFake.RequestLog[0];
         var estimate = TokenEstimator.EstimateMessages(request.Messages)
@@ -837,7 +838,7 @@ public class WorkerRunnerTests
         var exactFake = new FakeChatClient();
         exactFake.Enqueue(FakeChatClient.Text(DraftJson("Exact boundary.", "docs/a.md")));
         var exactRunner = new WorkerRunner(exactFake, dir.Root,
-            Options(maxSteps : 2) with { MaxContextTokensPerRequest = estimate });
+                                           Options(2) with { MaxContextTokensPerRequest = estimate });
         var exact = await exactRunner.RunAsync(new WorkerRequest { TaskPrompt = "Measure context." },
                                                CancellationToken.None);
         Assert.Equal(WorkerResultStatus.Completed, exact.Status);
@@ -846,7 +847,7 @@ public class WorkerRunnerTests
         var blockedFake = new FakeChatClient();
         blockedFake.Enqueue(FakeChatClient.Text(DraftJson("Must not run.", "docs/a.md")));
         var blockedRunner = new WorkerRunner(blockedFake, dir.Root,
-            Options(maxSteps : 2) with { MaxContextTokensPerRequest = estimate - 1 });
+                                             Options(2) with { MaxContextTokensPerRequest = estimate - 1 });
         var blocked = await blockedRunner.RunAsync(new WorkerRequest { TaskPrompt = "Measure context." },
                                                    CancellationToken.None);
 
@@ -924,14 +925,14 @@ public class WorkerRunnerTests
                 Kind                   = ChatStreamEventKind.ReasoningItem,
                 ReasoningDelta         = reasoning,
                 ReasoningProtectedData = "enc",
-                ReasoningItemId        = "rs_1",
+                ReasoningItemId        = "rs_1"
             },
             new ChatStreamEvent
             {
                 Kind         = ChatStreamEventKind.ContentDelta,
-                ContentDelta = DraftJson("Done.", "docs/a.md"),
+                ContentDelta = DraftJson("Done.", "docs/a.md")
             },
-            new ChatStreamEvent { Kind = ChatStreamEventKind.End },
+            new ChatStreamEvent { Kind = ChatStreamEventKind.End }
         ]);
         var runner = new WorkerRunner(fake, dir.Root, Options() with { MaxModelResponseCharacters = 700 });
 

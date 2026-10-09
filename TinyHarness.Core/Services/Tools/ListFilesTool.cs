@@ -6,16 +6,15 @@ using TinyHarness.Core.Services.Runtime;
 namespace TinyHarness.Core.Services.Tools;
 
 /// <summary>
-/// 列举工作区目录内容的只读工具。目录名以“/”结尾；递归时跳过常见构建与版本控制目录，
-/// 并通过统一遍历器限制数量和链接行为。可选的 <see cref="WorkerReadPolicy"/> 只由
-/// WorkerRunner 注入：Prepare 拒绝范围外的显式路径，枚举结果逐项过滤且被排除目录不下降。
-///
-/// list_files: lists the entries of a workspace directory. Directory entries are
-/// suffixed with '/'; recursive walks omit and never descend into well-known
-/// build/version-control directories (see <see cref="DirectoryWalker"/>). The
-/// optional <see cref="WorkerReadPolicy"/>, injected only by the WorkerRunner,
-/// rejects out-of-scope explicit paths in Prepare and filters enumeration results
-/// without descending into excluded directories.
+///     列举工作区目录内容的只读工具。目录名以“/”结尾；递归时跳过常见构建与版本控制目录，
+///     并通过统一遍历器限制数量和链接行为。可选的 <see cref="WorkerReadPolicy" /> 只由
+///     WorkerRunner 注入：Prepare 拒绝范围外的显式路径，枚举结果逐项过滤且被排除目录不下降。
+///     list_files: lists the entries of a workspace directory. Directory entries are
+///     suffixed with '/'; recursive walks omit and never descend into well-known
+///     build/version-control directories (see <see cref="DirectoryWalker" />). The
+///     optional <see cref="WorkerReadPolicy" />, injected only by the WorkerRunner,
+///     rejects out-of-scope explicit paths in Prepare and filters enumeration results
+///     without descending into excluded directories.
 /// </summary>
 public sealed class ListFilesTool(Workspace workspace, WorkerReadPolicy? workerPolicy = null) : ITool
 {
@@ -29,19 +28,19 @@ public sealed class ListFilesTool(Workspace workspace, WorkerReadPolicy? workerP
             ["path"] = new JsonObject
             {
                 ["type"]        = "string",
-                ["description"] = "Directory to inspect, relative to the workspace root (default \".\").",
+                ["description"] = "Directory to inspect, relative to the workspace root (default \".\")."
             },
             ["recursive"] = new JsonObject
             {
                 ["type"]        = "boolean",
-                ["description"] = "Recurse into subdirectories (default false).",
+                ["description"] = "Recurse into subdirectories (default false)."
             },
             ["maxDepth"] = new JsonObject
             {
                 ["type"]        = "integer",
-                ["description"] = "Maximum recursion depth when recursive (default: unlimited).",
-            },
-        },
+                ["description"] = "Maximum recursion depth when recursive (default: unlimited)."
+            }
+        }
     };
 
     public ToolDefinition Definition { get; } = new()
@@ -49,12 +48,12 @@ public sealed class ListFilesTool(Workspace workspace, WorkerReadPolicy? workerP
         Name = "list_files",
         Description = "Lists files and directories inside the workspace. Returns one entry per line; " +
                       "directories end with '/'. Paths are relative to the workspace root.",
-        Parameters = Schema,
+        Parameters = Schema
     };
 
     /// <summary>
-    /// 校验路径、递归和深度参数，并生成绑定到工作区绝对路径的只读计划。
-    /// Validates path, recursion, and depth arguments and creates a read-only plan bound to an absolute workspace path.
+    ///     校验路径、递归和深度参数，并生成绑定到工作区绝对路径的只读计划。
+    ///     Validates path, recursion, and depth arguments and creates a read-only plan bound to an absolute workspace path.
     /// </summary>
     public ToolPreparation Prepare(ChatToolCall call)
     {
@@ -63,14 +62,10 @@ public sealed class ListFilesTool(Workspace workspace, WorkerReadPolicy? workerP
         var recursive = JsonArgs.OptionalBool(args, "recursive", false);
         var maxDepth  = JsonArgs.OptionalInt(args, "maxDepth");
         if (maxDepth is < 1)
-        {
             throw new InvalidDataException("Tool argument 'maxDepth' must be a positive integer when provided.");
-        }
 
         if (!recursive && maxDepth is not null)
-        {
             throw new InvalidDataException("Tool argument 'maxDepth' requires 'recursive' to be true.");
-        }
 
         var absolute = workspace.ResolveInside(rawPath, "path");
         workerPolicy?.EnsureLexicalAccessAllowed(absolute);
@@ -84,27 +79,25 @@ public sealed class ListFilesTool(Workspace workspace, WorkerReadPolicy? workerP
             Summary = $"list_files {workspace.ToDisplay(absolute)}" + (recursive
                 ? maxDepth is null ? " (recursive)" : $" (recursive, depth {maxDepth})"
                 : string.Empty),
-            TargetPaths = [absolute],
+            TargetPaths = [absolute]
         };
     }
 
     /// <summary>
-    /// 重新确认最终路径边界后列举目录，返回稳定排序的相对路径并明确标注截断。
-    /// Rechecks the final path boundary, lists the directory, and returns sorted relative paths with explicit truncation.
+    ///     重新确认最终路径边界后列举目录，返回稳定排序的相对路径并明确标注截断。
+    ///     Rechecks the final path boundary, lists the directory, and returns sorted relative paths with explicit truncation.
     /// </summary>
     public Task<ToolResult> ExecuteAsync(ToolPreparation preparation, CancellationToken cancellationToken)
     {
         var absolute = ToolArgs.ReadAbsolute(preparation, "path");
         if (!Directory.Exists(absolute))
-        {
             return Task.FromResult(new ToolResult
             {
                 Succeeded = false,
-                Content   = $"Directory not found: {workspace.ToDisplay(absolute)}",
+                Content   = $"Directory not found: {workspace.ToDisplay(absolute)}"
             });
-        }
 
-        workspace.EnsureFinalTargetInside(absolute, isDirectory : true, "Directory");
+        workspace.EnsureFinalTargetInside(absolute, true, "Directory");
         // 工作区链接边界之外的第二层：显式列举的目录经链接解析后的落点也必须落在
         // worker 读取范围内，否则 junction 可能把 focus 外目录的内容列出来。
         // A second layer beyond the workspace link boundary: the resolved landing of an explicitly
@@ -121,13 +114,11 @@ public sealed class ListFilesTool(Workspace workspace, WorkerReadPolicy? workerP
                                                         ? null
                                                         : child => !workerPolicy.IsEntryAllowed(child));
         if (result.Entries.Count == 0)
-        {
             return Task.FromResult(new ToolResult
             {
                 Succeeded = true,
-                Content   = $"(no entries in {workspace.ToDisplay(absolute)})",
+                Content   = $"(no entries in {workspace.ToDisplay(absolute)})"
             });
-        }
 
         var lines = new List<string>(result.Entries.Count);
         foreach (var entry in result.Entries)
@@ -136,10 +127,7 @@ public sealed class ListFilesTool(Workspace workspace, WorkerReadPolicy? workerP
             lines.Add(workspace.ToDisplay(entry) + (isDir ? "/" : string.Empty));
         }
 
-        if (result.Truncated)
-        {
-            lines.Add($"... (only the first {MaxEntries} entries are shown)");
-        }
+        if (result.Truncated) lines.Add($"... (only the first {MaxEntries} entries are shown)");
 
         return Task.FromResult(new ToolResult { Succeeded = true, Content = string.Join('\n', lines) });
     }

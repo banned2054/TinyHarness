@@ -18,17 +18,17 @@ public class WorkerResultTests
                     Path      = "src/retry.cs",
                     LineStart = 42,
                     LineEnd   = 58,
-                    Note      = "The budget check happens here.",
-                },
+                    Note      = "The budget check happens here."
+                }
             ],
             Uncertainties = ["Whether the limit applies before or after the first attempt."],
-            Statistics    = new WorkerExecutionStats
+            Statistics = new WorkerExecutionStats
             {
-                ModelRequests         = 3,
-                ToolCalls             = 12,
-                ToolOutputCharacters  = 48_000,
-                Elapsed               = TimeSpan.FromSeconds(90),
-            },
+                ModelRequests        = 3,
+                ToolCalls            = 12,
+                ToolOutputCharacters = 48_000,
+                Elapsed              = TimeSpan.FromSeconds(90)
+            }
         };
 
         Assert.NotEqual(WorkerResultStatus.Completed, result.Status);
@@ -46,12 +46,12 @@ public class WorkerResultTests
     {
         var result = new WorkerResult
         {
-            Status            = WorkerResultStatus.Completed,
-            Conclusion        = "The retry budget is enforced in RetryPolicy.Evaluate.",
-            Evidence          = [new WorkerEvidence { Path = "src/RetryPolicy.cs", LineStart = 17 }],
-            SuggestedChanges  = ["Move the budget check before the first attempt."],
-            TestSuggestions   = ["Add a unit test that exhausts the budget on the first attempt."],
-            Uncertainties     = ["Behavior on concurrent calls is unverified."],
+            Status           = WorkerResultStatus.Completed,
+            Conclusion       = "The retry budget is enforced in RetryPolicy.Evaluate.",
+            Evidence         = [new WorkerEvidence { Path = "src/RetryPolicy.cs", LineStart = 17 }],
+            SuggestedChanges = ["Move the budget check before the first attempt."],
+            TestSuggestions  = ["Add a unit test that exhausts the budget on the first attempt."],
+            Uncertainties    = ["Behavior on concurrent calls is unverified."]
         };
 
         Assert.Equal(WorkerResultStatus.Completed, result.Status);

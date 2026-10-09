@@ -7,9 +7,9 @@ using System.Text;
 namespace TinyHarness.Core.Services.Runtime;
 
 /// <summary>
-/// Starts a Windows process suspended, assigns it to a kill-on-close Job Object,
-/// then resumes its primary thread. Descendants therefore enter the Job before
-/// user code can run, including commands whose root process exits immediately.
+///     Starts a Windows process suspended, assigns it to a kill-on-close Job Object,
+///     then resumes its primary thread. Descendants therefore enter the Job before
+///     user code can run, including commands whose root process exits immediately.
 /// </summary>
 internal static class WindowsJobProcess
 {
@@ -25,9 +25,7 @@ internal static class WindowsJobProcess
     {
         ArgumentNullException.ThrowIfNull(startInfo);
         if (!OperatingSystem.IsWindows())
-        {
             throw new PlatformNotSupportedException("Windows Job Objects are available only on Windows.");
-        }
 
         SafeFileHandle? job           = null;
         SafeFileHandle? stdoutRead    = null;
@@ -50,14 +48,12 @@ internal static class WindowsJobProcess
             {
                 BasicLimitInformation = new JobObjectBasicLimitInformation
                 {
-                    LimitFlags = JobObjectLimitKillOnClose,
-                },
+                    LimitFlags = JobObjectLimitKillOnClose
+                }
             };
             if (!SetInformationJobObject(job, ExtendedLimitInformationClass, ref limits,
                                          (uint)Marshal.SizeOf<JobObjectExtendedLimitInformation>()))
-            {
                 throw LastWin32("configure process Job Object");
-            }
 
             CreateRedirectPipe(out stdoutRead, out stdoutWrite, "stdout");
             CreateRedirectPipe(out stderrRead, out stderrWrite, "stderr");
@@ -69,22 +65,20 @@ internal static class WindowsJobProcess
                 Flags          = StartfUseStdHandles,
                 StandardInput  = stdinChild.DangerousGetHandle(),
                 StandardOutput = stdoutWrite.DangerousGetHandle(),
-                StandardError  = stderrWrite.DangerousGetHandle(),
+                StandardError  = stderrWrite.DangerousGetHandle()
             };
             var commandLine = new StringBuilder(BuildCommandLine(startInfo, rawCmdCommand));
             var environment = Marshal.StringToHGlobalUni(BuildEnvironmentBlock(startInfo.Environment));
             try
             {
-                if (!CreateProcessW(null, commandLine, IntPtr.Zero, IntPtr.Zero, inheritHandles : true,
+                if (!CreateProcessW(null, commandLine, IntPtr.Zero, IntPtr.Zero, true,
                                     CreateSuspended | CreateNoWindow | CreateUnicodeEnvironment,
                                     environment, startInfo.WorkingDirectory, ref startupInfo,
                                     out var processInformation))
-                {
                     throw LastWin32($"start executable '{startInfo.FileName}'");
-                }
 
-                processHandle = new SafeFileHandle(processInformation.Process, ownsHandle : true);
-                threadHandle  = new SafeFileHandle(processInformation.Thread, ownsHandle : true);
+                processHandle = new SafeFileHandle(processInformation.Process, true);
+                threadHandle  = new SafeFileHandle(processInformation.Thread, true);
                 process       = Process.GetProcessById(checked((int)processInformation.ProcessId));
                 // Force Process to open and retain its own handle while the native
                 // process is guaranteed to exist in suspended state. Waiting and
@@ -106,26 +100,21 @@ internal static class WindowsJobProcess
             stdinChild = null;
 
             if (!AssignProcessToJobObject(job, processHandle))
-            {
                 throw LastWin32($"assign process {process.Id} to its Job Object");
-            }
 
             assignedToJob = true;
             var encoding = startInfo.StandardOutputEncoding ?? Console.OutputEncoding;
             // CreatePipe produces synchronous handles. FileStream must reflect
             // that mode; marking them overlapped would make ReadFile invalid.
-            stdout = new StreamReader(new FileStream(stdoutRead, FileAccess.Read, 4096, isAsync : false),
-                                      encoding, detectEncodingFromByteOrderMarks : true);
+            stdout = new StreamReader(new FileStream(stdoutRead, FileAccess.Read, 4096, false),
+                                      encoding, true);
             stdoutRead = null;
             var errorEncoding = startInfo.StandardErrorEncoding ?? Console.OutputEncoding;
-            stderr = new StreamReader(new FileStream(stderrRead, FileAccess.Read, 4096, isAsync : false),
-                                      errorEncoding, detectEncodingFromByteOrderMarks : true);
+            stderr = new StreamReader(new FileStream(stderrRead, FileAccess.Read, 4096, false),
+                                      errorEncoding, true);
             stderrRead = null;
 
-            if (ResumeThread(threadHandle) == uint.MaxValue)
-            {
-                throw LastWin32($"resume process {process.Id}");
-            }
+            if (ResumeThread(threadHandle) == uint.MaxValue) throw LastWin32($"resume process {process.Id}");
 
             threadHandle.Dispose();
             threadHandle = null;
@@ -158,24 +147,18 @@ internal static class WindowsJobProcess
                 {
                     var waitResult = WaitForSingleObject(processHandle, 5_000);
                     if (waitResult == 258)
-                    {
                         cleanupError =
                             new
                                 TimeoutException("Timed out waiting for the suspended process to terminate after launch failure.");
-                    }
                     else if (waitResult == uint.MaxValue)
-                    {
                         cleanupError = LastWin32("wait for suspended process cleanup");
-                    }
                 }
             }
 
             if (cleanupError is not null)
-            {
                 throw new
                     InvalidOperationException("Process launch failed and cleanup of the suspended process also failed.",
                                               new AggregateException(startException, cleanupError));
-            }
 
             throw;
         }
@@ -204,10 +187,7 @@ internal static class WindowsJobProcess
             return commandLine.ToString();
         }
 
-        foreach (var argument in startInfo.ArgumentList)
-        {
-            commandLine.Append(' ').Append(QuoteWindowsArgument(argument));
-        }
+        foreach (var argument in startInfo.ArgumentList) commandLine.Append(' ').Append(QuoteWindowsArgument(argument));
 
         return commandLine.ToString();
     }
@@ -215,9 +195,7 @@ internal static class WindowsJobProcess
     private static string QuoteWindowsArgument(string argument)
     {
         if (argument.Length != 0 && !argument.Any(character => char.IsWhiteSpace(character) || character == '"'))
-        {
             return argument;
-        }
 
         var quoted      = new StringBuilder(argument.Length + 2).Append('"');
         var backslashes = 0;
@@ -248,9 +226,7 @@ internal static class WindowsJobProcess
     {
         var block = new StringBuilder();
         foreach (var item in environment.OrderBy(item => item.Key, StringComparer.OrdinalIgnoreCase))
-        {
             block.Append(item.Key).Append('=').Append(item.Value).Append('\0');
-        }
 
         return block.Append('\0').ToString();
     }
@@ -261,33 +237,24 @@ internal static class WindowsJobProcess
         var security = new SecurityAttributes
         {
             Length        = Marshal.SizeOf<SecurityAttributes>(),
-            InheritHandle = true,
+            InheritHandle = true
         };
         if (!CreatePipe(out readHandle, out writeHandle, ref security, 0))
-        {
             throw LastWin32($"create redirected {streamName} pipe");
-        }
 
         if (!SetHandleInformation(readHandle, 1, 0))
-        {
             throw LastWin32($"make redirected {streamName} read handle private");
-        }
     }
 
     private static SafeFileHandle DuplicateStandardInput()
     {
         var standardInput = GetStdHandle(-10);
-        if (standardInput == IntPtr.Zero || standardInput == new IntPtr(-1))
-        {
-            return CreateInheritedNullInput();
-        }
+        if (standardInput == IntPtr.Zero || standardInput == new IntPtr(-1)) return CreateInheritedNullInput();
 
         var currentProcess = GetCurrentProcess();
         if (DuplicateHandle(currentProcess, standardInput, currentProcess, out var duplicate, 0,
-                            inheritHandle : true, DuplicateSameAccess))
-        {
+                            true, DuplicateSameAccess))
             return duplicate;
-        }
 
         return CreateInheritedNullInput();
     }
@@ -297,7 +264,7 @@ internal static class WindowsJobProcess
         var security = new SecurityAttributes
         {
             Length        = Marshal.SizeOf<SecurityAttributes>(),
-            InheritHandle = true,
+            InheritHandle = true
         };
         var handle = CreateFileW("NUL", 0x80000000, 0x00000001 | 0x00000002, ref security,
                                  3, 0x00000080, IntPtr.Zero);
@@ -307,10 +274,7 @@ internal static class WindowsJobProcess
 
     private static void ThrowIfInvalid(SafeFileHandle handle, string operation)
     {
-        if (handle.IsInvalid)
-        {
-            throw LastWin32(operation);
-        }
+        if (handle.IsInvalid) throw LastWin32(operation);
     }
 
     private static Win32Exception LastWin32(string operation)
@@ -319,23 +283,85 @@ internal static class WindowsJobProcess
         return new Win32Exception(error, $"Failed to {operation}: {new Win32Exception(error).Message}");
     }
 
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern SafeFileHandle CreateJobObjectW(IntPtr jobAttributes, string? name);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return : MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetInformationJobObject(SafeFileHandle                        job, int informationClass,
+                                                       ref JobObjectExtendedLimitInformation information,
+                                                       uint                                  informationLength);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return : MarshalAs(UnmanagedType.Bool)]
+    private static extern bool AssignProcessToJobObject(SafeFileHandle job, SafeFileHandle process);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return : MarshalAs(UnmanagedType.Bool)]
+    private static extern bool TerminateJobObject(SafeFileHandle job, uint exitCode);
+
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    [return : MarshalAs(UnmanagedType.Bool)]
+    private static extern bool CreateProcessW(string? applicationName, StringBuilder commandLine,
+                                              IntPtr processAttributes, IntPtr threadAttributes,
+                                              [MarshalAs(UnmanagedType.Bool)] bool inheritHandles,
+                                              uint creationFlags, IntPtr environment,
+                                              string currentDirectory, ref StartupInfo startupInfo,
+                                              out ProcessInformation processInformation);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern uint ResumeThread(SafeFileHandle thread);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return : MarshalAs(UnmanagedType.Bool)]
+    private static extern bool TerminateProcess(SafeFileHandle process, uint exitCode);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern uint WaitForSingleObject(SafeFileHandle handle, uint milliseconds);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return : MarshalAs(UnmanagedType.Bool)]
+    private static extern bool CreatePipe(out SafeFileHandle     readPipe,       out SafeFileHandle writePipe,
+                                          ref SecurityAttributes pipeAttributes, uint               size);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return : MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetHandleInformation(SafeFileHandle handle, uint mask, uint flags);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr GetStdHandle(int standardHandle);
+
+    [DllImport("kernel32.dll")]
+    private static extern IntPtr GetCurrentProcess();
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return : MarshalAs(UnmanagedType.Bool)]
+    private static extern bool DuplicateHandle(IntPtr sourceProcess, IntPtr sourceHandle,
+                                               IntPtr targetProcess, out SafeFileHandle targetHandle,
+                                               uint   desiredAccess, [MarshalAs(UnmanagedType.Bool)] bool inheritHandle,
+                                               uint   options);
+
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern SafeFileHandle CreateFileW(string fileName, uint desiredAccess, uint shareMode,
+                                                     ref SecurityAttributes securityAttributes,
+                                                     uint creationDisposition, uint flagsAndAttributes,
+                                                     IntPtr templateFile);
+
     private sealed class WindowsJobLifetime(SafeFileHandle job) : IDisposable
     {
+        public void Dispose()
+        {
+            job.Dispose();
+        }
+
         public void Terminate()
         {
             if (job.IsClosed || job.IsInvalid)
-            {
                 throw new
                     InvalidOperationException("Cannot terminate the process tree because its Job Object is closed.");
-            }
 
-            if (!TerminateJobObject(job, 1))
-            {
-                throw LastWin32("terminate process Job Object");
-            }
+            if (!TerminateJobObject(job, 1)) throw LastWin32("terminate process Job Object");
         }
-
-        public void Dispose() => job.Dispose();
     }
 
     internal sealed class RunningProcess(
@@ -349,14 +375,17 @@ internal static class WindowsJobProcess
         public StreamReader StandardOutput { get; } = standardOutput;
         public StreamReader StandardError  { get; } = standardError;
 
-        public void Terminate() => terminate();
-
         public void Dispose()
         {
             lifetime.Dispose();
             StandardOutput.Dispose();
             StandardError.Dispose();
             Process.Dispose();
+        }
+
+        public void Terminate()
+        {
+            terminate();
         }
     }
 
@@ -438,68 +467,4 @@ internal static class WindowsJobProcess
         public UIntPtr    PeakProcessMemoryUsed;
         public UIntPtr    PeakJobMemoryUsed;
     }
-
-    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
-    private static extern SafeFileHandle CreateJobObjectW(IntPtr jobAttributes, string? name);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    [return : MarshalAs(UnmanagedType.Bool)]
-    private static extern bool SetInformationJobObject(SafeFileHandle                        job, int informationClass,
-                                                       ref JobObjectExtendedLimitInformation information,
-                                                       uint                                  informationLength);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    [return : MarshalAs(UnmanagedType.Bool)]
-    private static extern bool AssignProcessToJobObject(SafeFileHandle job, SafeFileHandle process);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    [return : MarshalAs(UnmanagedType.Bool)]
-    private static extern bool TerminateJobObject(SafeFileHandle job, uint exitCode);
-
-    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
-    [return : MarshalAs(UnmanagedType.Bool)]
-    private static extern bool CreateProcessW(string? applicationName, StringBuilder commandLine,
-                                              IntPtr processAttributes, IntPtr threadAttributes,
-                                              [MarshalAs(UnmanagedType.Bool)] bool inheritHandles,
-                                              uint creationFlags, IntPtr environment,
-                                              string currentDirectory, ref StartupInfo startupInfo,
-                                              out ProcessInformation processInformation);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern uint ResumeThread(SafeFileHandle thread);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    [return : MarshalAs(UnmanagedType.Bool)]
-    private static extern bool TerminateProcess(SafeFileHandle process, uint exitCode);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern uint WaitForSingleObject(SafeFileHandle handle, uint milliseconds);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    [return : MarshalAs(UnmanagedType.Bool)]
-    private static extern bool CreatePipe(out SafeFileHandle     readPipe,       out SafeFileHandle writePipe,
-                                          ref SecurityAttributes pipeAttributes, uint               size);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    [return : MarshalAs(UnmanagedType.Bool)]
-    private static extern bool SetHandleInformation(SafeFileHandle handle, uint mask, uint flags);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern IntPtr GetStdHandle(int standardHandle);
-
-    [DllImport("kernel32.dll")]
-    private static extern IntPtr GetCurrentProcess();
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    [return : MarshalAs(UnmanagedType.Bool)]
-    private static extern bool DuplicateHandle(IntPtr sourceProcess, IntPtr sourceHandle,
-                                               IntPtr targetProcess, out SafeFileHandle targetHandle,
-                                               uint   desiredAccess, [MarshalAs(UnmanagedType.Bool)] bool inheritHandle,
-                                               uint   options);
-
-    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
-    private static extern SafeFileHandle CreateFileW(string fileName, uint desiredAccess, uint shareMode,
-                                                     ref SecurityAttributes securityAttributes,
-                                                     uint creationDisposition, uint flagsAndAttributes,
-                                                     IntPtr templateFile);
 }

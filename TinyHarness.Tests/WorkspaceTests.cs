@@ -57,7 +57,7 @@ public class WorkspaceTests
         var ex =
             Assert.Throws<InvalidDataException>(() =>
                                                     insideDir.Workspace.EnsureFinalTargetInside(outside,
-                                                             isDirectory : false, "File"));
+                                                        false, "File"));
 
         Assert.Contains("is outside the workspace root", ex.Message);
     }
@@ -83,26 +83,21 @@ public class WorkspaceTests
 
         var junction = Path.Combine(workspaceDir.Root, "link");
         if (!TryCreateJunction(junction, outsideDir.Root))
-        {
             return; // Environment does not permit junction creation; nothing to verify.
-        }
 
         // Lexical resolution is fine: the path is inside the root on paper.
         var pathInside = workspace.ResolveInside("link/secret.txt", "path");
 
         var ex =
-            Assert.Throws<InvalidDataException>(() => workspace.EnsureFinalTargetInside(pathInside, isDirectory : false,
-                                                         "File"));
+            Assert.Throws<InvalidDataException>(() => workspace.EnsureFinalTargetInside(pathInside, false,
+                                                    "File"));
         Assert.Contains("resolves outside the workspace root", ex.Message);
     }
 
     [Fact]
     public void ReadFile_ThroughFileSymlinkEscapingRoot_IsRejected()
     {
-        if (!OperatingSystem.IsWindows())
-        {
-            return;
-        }
+        if (!OperatingSystem.IsWindows()) return;
 
         using var workspaceDir = new TestTempDir();
         using var outsideDir   = new TestTempDir();
@@ -121,31 +116,25 @@ public class WorkspaceTests
 
         var pathInside = workspace.ResolveInside("link.txt", "path");
         var boundaryEx =
-            Assert.Throws<InvalidDataException>(() => workspace.EnsureFinalTargetInside(pathInside, isDirectory : false,
-                                                         "File"));
+            Assert.Throws<InvalidDataException>(() => workspace.EnsureFinalTargetInside(pathInside, false,
+                                                    "File"));
         Assert.Contains("resolves outside the workspace root", boundaryEx.Message);
     }
 
     private static bool TryCreateJunction(string linkPath, string targetPath)
     {
-        if (!OperatingSystem.IsWindows())
-        {
-            return false;
-        }
+        if (!OperatingSystem.IsWindows()) return false;
 
         var psi = new ProcessStartInfo("cmd.exe", $"/c mklink /J \"{linkPath}\" \"{targetPath}\"")
         {
             CreateNoWindow         = true,
             UseShellExecute        = false,
             RedirectStandardOutput = true,
-            RedirectStandardError  = true,
+            RedirectStandardError  = true
         };
 
         using var process = Process.Start(psi);
-        if (process is null)
-        {
-            return false;
-        }
+        if (process is null) return false;
 
         process.WaitForExit(5_000);
         return process.ExitCode == 0;

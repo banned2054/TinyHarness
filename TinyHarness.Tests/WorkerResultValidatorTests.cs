@@ -5,17 +5,23 @@ namespace TinyHarness.Tests;
 
 public class WorkerResultValidatorTests
 {
-    private static WorkerResult CompletedResult() => new()
+    private static WorkerResult CompletedResult()
     {
-        Status     = WorkerResultStatus.Completed,
-        Conclusion = "The retry budget is enforced in RetryPolicy.Evaluate.",
-    };
+        return new WorkerResult
+        {
+            Status     = WorkerResultStatus.Completed,
+            Conclusion = "The retry budget is enforced in RetryPolicy.Evaluate."
+        };
+    }
 
-    private static WorkerResult NonCompletedResult(WorkerResultStatus status) => new()
+    private static WorkerResult NonCompletedResult(WorkerResultStatus status)
     {
-        Status       = status,
-        StatusDetail = "Stopped at the tool-call limit; no final conclusion was reached.",
-    };
+        return new WorkerResult
+        {
+            Status       = status,
+            StatusDetail = "Stopped at the tool-call limit; no final conclusion was reached."
+        };
+    }
 
     // ---- legal shapes per status ---------------------------------------------
 
@@ -40,19 +46,19 @@ public class WorkerResultValidatorTests
                     Path      = "src/RetryPolicy.cs",
                     LineStart = 17,
                     LineEnd   = 29,
-                    Note      = "The budget check happens here.",
-                },
+                    Note      = "The budget check happens here."
+                }
             ],
             SuggestedChanges = ["Move the budget check before the first attempt."],
-            TestSuggestions  = ["Add a unit test that exhausts the budget on the first attempt."],
-            Uncertainties    = ["Behavior on concurrent calls is unverified."],
-            Statistics       = new WorkerExecutionStats
+            TestSuggestions = ["Add a unit test that exhausts the budget on the first attempt."],
+            Uncertainties = ["Behavior on concurrent calls is unverified."],
+            Statistics = new WorkerExecutionStats
             {
                 ModelRequests        = 3,
                 ToolCalls            = 12,
                 ToolOutputCharacters = 48_000,
-                Elapsed              = TimeSpan.FromSeconds(90),
-            },
+                Elapsed              = TimeSpan.FromSeconds(90)
+            }
         };
 
         var result = WorkerResultValidator.Validate(request);
@@ -165,13 +171,14 @@ public class WorkerResultValidatorTests
     {
         var candidate = CompletedResult() with
         {
-            Statistics = new WorkerExecutionStats { ToolOutputCharacters = -1 },
+            Statistics = new WorkerExecutionStats { ToolOutputCharacters = -1 }
         };
 
         var result = WorkerResultValidator.Validate(candidate);
 
         Assert.False(result.IsValid);
-        Assert.Contains(result.Errors, error => error.Contains("statistics.toolOutputCharacters", StringComparison.Ordinal));
+        Assert.Contains(result.Errors,
+                        error => error.Contains("statistics.toolOutputCharacters", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -179,7 +186,7 @@ public class WorkerResultValidatorTests
     {
         var candidate = CompletedResult() with
         {
-            Statistics = new WorkerExecutionStats { Elapsed = TimeSpan.FromSeconds(-1) },
+            Statistics = new WorkerExecutionStats { Elapsed = TimeSpan.FromSeconds(-1) }
         };
 
         var result = WorkerResultValidator.Validate(candidate);
@@ -208,12 +215,13 @@ public class WorkerResultValidatorTests
         {
             Evidence = Enumerable.Range(1, WorkerResultLimits.MaxEvidenceCount)
                                  .Select(i => new WorkerEvidence
-                                 {
-                                     Path      = new string('p', WorkerResultLimits.MaxEvidencePathLength - 4) + $"/p{i:D2}",
-                                     LineStart = 1,
-                                     Note      = new string('n', WorkerResultLimits.MaxEvidenceNoteLength),
-                                 })
-                                 .ToArray(),
+                                  {
+                                      Path = new string('p', WorkerResultLimits.MaxEvidencePathLength - 4) +
+                                             $"/p{i:D2}",
+                                      LineStart = 1,
+                                      Note      = new string('n', WorkerResultLimits.MaxEvidenceNoteLength)
+                                  })
+                                 .ToArray()
         };
 
         var result = WorkerResultValidator.Validate(candidate);
@@ -229,7 +237,7 @@ public class WorkerResultValidatorTests
         {
             Evidence = Enumerable.Range(1, WorkerResultLimits.MaxEvidenceCount + 1)
                                  .Select(i => new WorkerEvidence { Path = $"src/file{i}.cs" })
-                                 .ToArray(),
+                                 .ToArray()
         };
 
         var result = WorkerResultValidator.Validate(candidate);
@@ -272,8 +280,8 @@ public class WorkerResultValidatorTests
                 new WorkerEvidence { Path = "src/a.cs" },
                 new WorkerEvidence { Path = "src/b.cs", LineStart = 42 },
                 new WorkerEvidence { Path = "src/c.cs", LineStart = 42, LineEnd = 42 },
-                new WorkerEvidence { Path = "src/d.cs", LineStart = 1, LineEnd = 10 },
-            ],
+                new WorkerEvidence { Path = "src/d.cs", LineStart = 1, LineEnd  = 10 }
+            ]
         };
 
         var result = WorkerResultValidator.Validate(candidate);
@@ -289,7 +297,7 @@ public class WorkerResultValidatorTests
     {
         var candidate = CompletedResult() with
         {
-            Evidence = [new WorkerEvidence { Path = "src/a.cs", LineStart = lineStart }],
+            Evidence = [new WorkerEvidence { Path = "src/a.cs", LineStart = lineStart }]
         };
 
         var result = WorkerResultValidator.Validate(candidate);
@@ -303,7 +311,7 @@ public class WorkerResultValidatorTests
     {
         var candidate = CompletedResult() with
         {
-            Evidence = [new WorkerEvidence { Path = "src/a.cs", LineStart = 10, LineEnd = 5 }],
+            Evidence = [new WorkerEvidence { Path = "src/a.cs", LineStart = 10, LineEnd = 5 }]
         };
 
         var result = WorkerResultValidator.Validate(candidate);
@@ -317,7 +325,7 @@ public class WorkerResultValidatorTests
     {
         var candidate = CompletedResult() with
         {
-            Evidence = [new WorkerEvidence { Path = "src/a.cs", LineEnd = 5 }],
+            Evidence = [new WorkerEvidence { Path = "src/a.cs", LineEnd = 5 }]
         };
 
         var result = WorkerResultValidator.Validate(candidate);
@@ -336,9 +344,9 @@ public class WorkerResultValidatorTests
                 new WorkerEvidence
                 {
                     Path = "src/a.cs",
-                    Note = new string('n', WorkerResultLimits.MaxEvidenceNoteLength + 1),
-                },
-            ],
+                    Note = new string('n', WorkerResultLimits.MaxEvidenceNoteLength + 1)
+                }
+            ]
         };
 
         var result = WorkerResultValidator.Validate(candidate);
@@ -352,7 +360,7 @@ public class WorkerResultValidatorTests
     {
         var candidate = CompletedResult() with
         {
-            Evidence = [new WorkerEvidence { Path = new string('p', WorkerResultLimits.MaxEvidencePathLength + 1) }],
+            Evidence = [new WorkerEvidence { Path = new string('p', WorkerResultLimits.MaxEvidencePathLength + 1) }]
         };
 
         var result = WorkerResultValidator.Validate(candidate);
@@ -378,7 +386,10 @@ public class WorkerResultValidatorTests
     [Fact]
     public void Conclusion_OverLimit_IsRejectedWithLimit()
     {
-        var candidate = CompletedResult() with { Conclusion = new string('a', WorkerResultLimits.MaxConclusionLength + 1) };
+        var candidate = CompletedResult() with
+        {
+            Conclusion = new string('a', WorkerResultLimits.MaxConclusionLength + 1)
+        };
 
         var result = WorkerResultValidator.Validate(candidate);
 
@@ -393,7 +404,7 @@ public class WorkerResultValidatorTests
     {
         var candidate = NonCompletedResult(WorkerResultStatus.Incomplete) with
         {
-            StatusDetail = new string('d', WorkerResultLimits.MaxStatusDetailLength),
+            StatusDetail = new string('d', WorkerResultLimits.MaxStatusDetailLength)
         };
 
         var result = WorkerResultValidator.Validate(candidate);
@@ -406,7 +417,7 @@ public class WorkerResultValidatorTests
     {
         var candidate = NonCompletedResult(WorkerResultStatus.Incomplete) with
         {
-            StatusDetail = new string('d', WorkerResultLimits.MaxStatusDetailLength + 1),
+            StatusDetail = new string('d', WorkerResultLimits.MaxStatusDetailLength + 1)
         };
 
         var result = WorkerResultValidator.Validate(candidate);
@@ -425,7 +436,7 @@ public class WorkerResultValidatorTests
         // the length limit applies regardless of status.
         var candidate = CompletedResult() with
         {
-            StatusDetail = new string(' ', WorkerResultLimits.MaxStatusDetailLength + 1),
+            StatusDetail = new string(' ', WorkerResultLimits.MaxStatusDetailLength + 1)
         };
 
         var result = WorkerResultValidator.Validate(candidate);
@@ -441,7 +452,7 @@ public class WorkerResultValidatorTests
     {
         var candidate = NonCompletedResult(WorkerResultStatus.Incomplete) with
         {
-            StatusDetail = new string(' ', WorkerResultLimits.MaxStatusDetailLength + 1),
+            StatusDetail = new string(' ', WorkerResultLimits.MaxStatusDetailLength + 1)
         };
 
         var result = WorkerResultValidator.Validate(candidate);
@@ -461,7 +472,7 @@ public class WorkerResultValidatorTests
         {
             SuggestedChanges = Enumerable.Range(1, WorkerResultLimits.MaxListCount)
                                          .Select(i => new string('c', WorkerResultLimits.MaxListEntryLength))
-                                         .ToArray(),
+                                         .ToArray()
         };
 
         var result = WorkerResultValidator.Validate(candidate);
@@ -479,8 +490,8 @@ public class WorkerResultValidatorTests
         var candidate = CompletedResult() with
         {
             SuggestedChanges = fullList,
-            TestSuggestions  = fullList,
-            Uncertainties    = fullList,
+            TestSuggestions = fullList,
+            Uncertainties = fullList
         };
 
         var result = WorkerResultValidator.Validate(candidate);
@@ -497,7 +508,7 @@ public class WorkerResultValidatorTests
         {
             SuggestedChanges = Enumerable.Range(1, WorkerResultLimits.MaxListCount + 1)
                                          .Select(i => $"change {i}")
-                                         .ToArray(),
+                                         .ToArray()
         };
 
         var result = WorkerResultValidator.Validate(candidate);
@@ -511,7 +522,7 @@ public class WorkerResultValidatorTests
     {
         var candidate = CompletedResult() with
         {
-            TestSuggestions = [new string('t', WorkerResultLimits.MaxListEntryLength + 1)],
+            TestSuggestions = [new string('t', WorkerResultLimits.MaxListEntryLength + 1)]
         };
 
         var result = WorkerResultValidator.Validate(candidate);
@@ -540,13 +551,13 @@ public class WorkerResultValidatorTests
     {
         var candidate = CompletedResult() with
         {
-            Conclusion       = new string('a', WorkerResultLimits.MaxConclusionLength),
+            Conclusion = new string('a', WorkerResultLimits.MaxConclusionLength),
             SuggestedChanges = Enumerable.Range(1, WorkerResultLimits.MaxListCount)
                                          .Select(i => new string('c', WorkerResultLimits.MaxListEntryLength))
                                          .ToArray(),
             TestSuggestions = Enumerable.Range(1, WorkerResultLimits.MaxListCount - 2)
                                         .Select(i => new string('t', WorkerResultLimits.MaxListEntryLength))
-                                        .ToArray(),
+                                        .ToArray()
         };
 
         var result = WorkerResultValidator.Validate(candidate);
@@ -560,14 +571,14 @@ public class WorkerResultValidatorTests
     {
         var candidate = CompletedResult() with
         {
-            Conclusion       = new string('a', WorkerResultLimits.MaxConclusionLength),
+            Conclusion = new string('a', WorkerResultLimits.MaxConclusionLength),
             SuggestedChanges = Enumerable.Range(1, WorkerResultLimits.MaxListCount)
                                          .Select(i => new string('c', WorkerResultLimits.MaxListEntryLength))
                                          .ToArray(),
             TestSuggestions = Enumerable.Range(1, WorkerResultLimits.MaxListCount - 2)
                                         .Select(i => new string('t', WorkerResultLimits.MaxListEntryLength))
                                         .Append(new string('t', WorkerResultLimits.MaxListEntryLength + 1))
-                                        .ToArray(),
+                                        .ToArray()
         };
 
         var result = WorkerResultValidator.Validate(candidate);
@@ -583,9 +594,10 @@ public class WorkerResultValidatorTests
         const int entryCount = 30_000;
         var candidate = CompletedResult() with
         {
-            Evidence = Enumerable.Repeat(new WorkerEvidence { Path = new string('p', WorkerResultLimits.MaxEvidencePathLength) },
+            Evidence = Enumerable.Repeat(new WorkerEvidence
+                                             { Path = new string('p', WorkerResultLimits.MaxEvidencePathLength) },
                                          entryCount)
-                                 .ToArray(),
+                                 .ToArray()
         };
 
         var result = WorkerResultValidator.Validate(candidate);
@@ -606,7 +618,7 @@ public class WorkerResultValidatorTests
             Status     = WorkerResultStatus.Completed,
             Conclusion = string.Empty,
             Evidence   = [new WorkerEvidence { Path = "C:\\outside\\file.cs" }],
-            Statistics = new WorkerExecutionStats { ToolCalls = -2 },
+            Statistics = new WorkerExecutionStats { ToolCalls = -2 }
         };
 
         var result = WorkerResultValidator.Validate(candidate);

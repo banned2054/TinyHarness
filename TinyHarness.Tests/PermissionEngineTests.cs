@@ -11,15 +11,18 @@ namespace TinyHarness.Tests;
 public class PermissionEngineTests
 {
     private static ToolPreparation Prep(string capability, IReadOnlyList<string> targets, string argumentKey = "x",
-                                        int    argumentValue = 1) => new()
+                                        int    argumentValue = 1)
     {
-        ToolName    = "apply_patch",
-        CallId      = "call_1",
-        Arguments   = new JsonObject { [argumentKey] = argumentValue },
-        Capability  = capability,
-        Summary     = "summary",
-        TargetPaths = targets,
-    };
+        return new ToolPreparation
+        {
+            ToolName    = "apply_patch",
+            CallId      = "call_1",
+            Arguments   = new JsonObject { [argumentKey] = argumentValue },
+            Capability  = capability,
+            Summary     = "summary",
+            TargetPaths = targets
+        };
+    }
 
     [Fact]
     public void ToolPreparation_SnapshotsMutableInputs()
@@ -37,7 +40,7 @@ public class PermissionEngineTests
             Arguments   = args,
             Capability  = "filesystem.write",
             Summary     = "summary",
-            TargetPaths = targets,
+            TargetPaths = targets
         };
 
         args["line"] = 2;
@@ -81,8 +84,8 @@ public class PermissionEngineTests
     [Fact]
     public void WorkerMode_HardDeniesWriteProcessAndUnknownCapabilities()
     {
-        using var dir = new TestTempDir();
-        var engine = new PermissionEngine(dir.Root, denyNonReadOnlyCapabilities : true);
+        using var dir    = new TestTempDir();
+        var       engine = new PermissionEngine(dir.Root, denyNonReadOnlyCapabilities : true);
 
         Assert.Equal(PermissionDecision.Allow,
                      engine.Decide(Prep("filesystem.read", [Path.Combine(dir.Root, "a.cs")])));
@@ -172,13 +175,9 @@ public class PermissionEngineTests
 
         engine.DenySession(Prep("filesystem.write", [Path.Combine(dir.Root, "protected")]));
         if (grantSession)
-        {
             engine.GrantSession(Prep("filesystem.write", [dir.Root]));
-        }
         else
-        {
             engine.GrantOnce(call);
-        }
 
         Assert.Equal(PermissionDecision.Deny, engine.Decide(call));
     }
@@ -269,7 +268,7 @@ public class PermissionEngineTests
         var engine =
             new PermissionEngine(dir.Root,
             [
-                new CommandRule { Executable = "dotnet", Arguments = ["test", "*.csproj"], WorkingDirectory = "src", },
+                new CommandRule { Executable = "dotnet", Arguments = ["test", "*.csproj"], WorkingDirectory = "src" }
             ]);
 
         Assert.Equal(PermissionDecision.Allow,
@@ -303,7 +302,7 @@ public class PermissionEngineTests
         var          shellPreparation = tool.Prepare(ShellCall(shell, command));
         var engine = new PermissionEngine(dir.Root,
         [
-            new CommandRule { Mode = "shell", Shell = shell, Command = command, WorkingDirectory = ".", },
+            new CommandRule { Mode = "shell", Shell = shell, Command = command, WorkingDirectory = "." }
         ]);
 
         Assert.Equal(PermissionDecision.Allow, engine.Decide(shellPreparation));
@@ -335,16 +334,13 @@ public class PermissionEngineTests
     private static ToolPreparation ProcessPrep(string executable, IReadOnlyList<string> arguments, string cwd)
     {
         var array = new JsonArray();
-        foreach (var argument in arguments)
-        {
-            array.Add((JsonNode?)JsonValue.Create(argument));
-        }
+        foreach (var argument in arguments) array.Add((JsonNode?)JsonValue.Create(argument));
 
         var identity = new JsonObject
         {
             ["mode"]       = "direct",
             ["executable"] = executable,
-            ["arguments"]  = array.DeepClone(),
+            ["arguments"]  = array.DeepClone()
         }.ToJsonString();
         return new ToolPreparation
         {
@@ -357,22 +353,26 @@ public class PermissionEngineTests
                 ["mode"]             = "direct",
                 ["executable"]       = executable,
                 ["arguments"]        = array,
-                ["workingDirectory"] = cwd,
+                ["workingDirectory"] = cwd
             },
             SessionConstraint = identity,
-            TargetPaths       = [cwd],
+            TargetPaths       = [cwd]
         };
     }
 
-    private static ChatToolCall ShellCall(string shell, string command, string workingDirectory = ".") =>
-        new("shell", "shell", new JsonObject
+    private static ChatToolCall ShellCall(string shell, string command, string workingDirectory = ".")
+    {
+        return new ChatToolCall("shell", "shell", new JsonObject
         {
             ["mode"]             = "shell",
             ["shell"]            = shell,
             ["command"]          = command,
-            ["workingDirectory"] = workingDirectory,
+            ["workingDirectory"] = workingDirectory
         }.ToJsonString());
+    }
 
-    private static IReadOnlyList<string> ReadArguments(ToolPreparation preparation) =>
-        ((JsonArray)preparation.Arguments["arguments"]!).Select(node => node!.GetValue<string>()).ToArray();
+    private static IReadOnlyList<string> ReadArguments(ToolPreparation preparation)
+    {
+        return ((JsonArray)preparation.Arguments["arguments"]!).Select(node => node!.GetValue<string>()).ToArray();
+    }
 }

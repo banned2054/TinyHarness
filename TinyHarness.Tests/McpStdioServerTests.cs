@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Threading.Channels;
 using TinyHarness.Core.Models.Mcp;
 using TinyHarness.Core.Models.Worker;
 using TinyHarness.Core.Services.Mcp;
@@ -7,11 +8,10 @@ using TinyHarness.Core.Services.Worker;
 namespace TinyHarness.Tests;
 
 /// <summary>
-/// MCP stdio 协议与 ask_glm 闭环的离线测试。全部通过注入的 TextReader/TextWriter 和
-/// fake worker 驱动，无进程、无网络。
-///
-/// Offline tests for MCP stdio and the ask_glm path, driven through injected readers/writers and
-/// a fake worker — no processes and no network.
+///     MCP stdio 协议与 ask_glm 闭环的离线测试。全部通过注入的 TextReader/TextWriter 和
+///     fake worker 驱动，无进程、无网络。
+///     Offline tests for MCP stdio and the ask_glm path, driven through injected readers/writers and
+///     a fake worker — no processes and no network.
 /// </summary>
 public class McpStdioServerTests
 {
@@ -129,7 +129,7 @@ public class McpStdioServerTests
     public async Task ToolsCall_BeforeInitialize_IsRejectedAsNotInitialized()
     {
         var responses = await RunAsync(
-            """{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"ask_glm","arguments":{"task":"test"}}}""");
+                                       """{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"ask_glm","arguments":{"task":"test"}}}""");
 
         Assert.Single(responses);
         Assert.Equal(-32002, responses[0].GetProperty("error").GetProperty("code").GetInt32());
@@ -140,18 +140,27 @@ public class McpStdioServerTests
     {
         WorkerRequest? received = null;
         var responses = await RunAsync(
-            [Initialize2025,
-             """{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"ask_glm","arguments":{"task":"find retry handling","knownFacts":["retry count is configurable"],"focusPaths":["src"],"expectedOutput":"short"}}}"""],
-            (request, _) =>
-            {
-                received = request;
-                return Task.FromResult(new WorkerResult
-                {
-                    Status = WorkerResultStatus.Completed,
-                    Conclusion = "Retry count is bounded in RetryPolicy.",
-                    Evidence = [new WorkerEvidence { Path = "src/RetryPolicy.cs", LineStart = 18, LineEnd = 25, Note = "Applies the configured retry limit." }],
-                });
-            });
+                                       [
+                                           Initialize2025,
+                                           """{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"ask_glm","arguments":{"task":"find retry handling","knownFacts":["retry count is configurable"],"focusPaths":["src"],"expectedOutput":"short"}}}"""
+                                       ],
+                                       (request, _) =>
+                                       {
+                                           received = request;
+                                           return Task.FromResult(new WorkerResult
+                                           {
+                                               Status     = WorkerResultStatus.Completed,
+                                               Conclusion = "Retry count is bounded in RetryPolicy.",
+                                               Evidence =
+                                               [
+                                                   new WorkerEvidence
+                                                   {
+                                                       Path = "src/RetryPolicy.cs", LineStart = 18, LineEnd = 25,
+                                                       Note = "Applies the configured retry limit."
+                                                   }
+                                               ]
+                                           });
+                                       });
 
         Assert.Equal("find retry handling", received!.TaskPrompt);
         Assert.Equal(["retry count is configurable"], received.KnownFacts);
@@ -173,17 +182,19 @@ public class McpStdioServerTests
     {
         var invoked = false;
         var responses = await RunAsync(
-            [Initialize2025,
-             """{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"ask_glm","arguments":{"task":"inspect the worker budget"},"_meta":{"progressToken":7}}}"""],
-            (_, _) =>
-            {
-                invoked = true;
-                return Task.FromResult(new WorkerResult
-                {
-                    Status = WorkerResultStatus.Completed,
-                    Conclusion = "The worker returned a bounded result.",
-                });
-            });
+                                       [
+                                           Initialize2025,
+                                           """{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"ask_glm","arguments":{"task":"inspect the worker budget"},"_meta":{"progressToken":7}}}"""
+                                       ],
+                                       (_, _) =>
+                                       {
+                                           invoked = true;
+                                           return Task.FromResult(new WorkerResult
+                                           {
+                                               Status     = WorkerResultStatus.Completed,
+                                               Conclusion = "The worker returned a bounded result."
+                                           });
+                                       });
 
         Assert.True(invoked);
         Assert.False(responses[1].GetProperty("result").GetProperty("isError").GetBoolean());
@@ -193,41 +204,45 @@ public class McpStdioServerTests
     public async Task OfflineMcpRequest_RunsFakeWorkerThroughFileToolsAndReturnsEvidence()
     {
         using var dir = new TestTempDir();
-        var filePath = dir.WriteFile("src/RetryPolicy.cs", "public sealed class RetryPolicy { public int RetryBudget = 3; }");
+        var filePath = dir.WriteFile("src/RetryPolicy.cs",
+                                     "public sealed class RetryPolicy { public int RetryBudget = 3; }");
         var fake = new FakeChatClient();
         fake.Enqueue(FakeChatClient.ToolCall("list_files", """{"path":"src"}""", "mcp-list"));
-        fake.Enqueue(FakeChatClient.ToolCall("search_text", """{"pattern":"RetryBudget","path":"src"}""", "mcp-search"));
+        fake.Enqueue(FakeChatClient.ToolCall("search_text", """{"pattern":"RetryBudget","path":"src"}""",
+                                             "mcp-search"));
         fake.Enqueue(FakeChatClient.ToolCall("read_file", """{"path":"src/RetryPolicy.cs"}""", "mcp-read"));
         fake.Enqueue(FakeChatClient.Text("""
-            {"conclusion":"RetryPolicy declares a fixed retry budget of 3.","evidence":[{"path":"src/RetryPolicy.cs","lineStart":1,"lineEnd":1,"note":"The field is initialized to 3."}],"suggestedChanges":[],"testSuggestions":[],"uncertainties":[]}
-            """));
+                                         {"conclusion":"RetryPolicy declares a fixed retry budget of 3.","evidence":[{"path":"src/RetryPolicy.cs","lineStart":1,"lineEnd":1,"note":"The field is initialized to 3."}],"suggestedChanges":[],"testSuggestions":[],"uncertainties":[]}
+                                         """));
         var options = new WorkerExecutionOptions
         {
-            Model = "fake-mcp-model",
-            RunTimeout = TimeSpan.FromSeconds(15),
-            MaxAgentSteps = 6,
-            DefaultToolTimeoutSeconds = 10,
-            MaxTaskPackageCharacters = 8_000,
-            MaxToolCalls = 12,
-            MaxToolOutputCharacters = 100_000,
+            Model                      = "fake-mcp-model",
+            RunTimeout                 = TimeSpan.FromSeconds(15),
+            MaxAgentSteps              = 6,
+            DefaultToolTimeoutSeconds  = 10,
+            MaxTaskPackageCharacters   = 8_000,
+            MaxToolCalls               = 12,
+            MaxToolOutputCharacters    = 100_000,
             MaxContextTokensPerRequest = 200_000,
             MaxCumulativeContextTokens = 200_000,
-            MaxModelResponseCharacters = 64_000,
+            MaxModelResponseCharacters = 64_000
         };
         var runner = new WorkerRunner(fake, dir.Root, options);
         var responses = await RunAsync(
-            [Initialize2025,
-             """{"jsonrpc":"2.0","id":13,"method":"tools/call","params":{"name":"ask_glm","arguments":{"task":"Find and explain the retry budget.","focusPaths":["src"]}}}"""],
-            runner.RunAsync);
+                                       [
+                                           Initialize2025,
+                                           """{"jsonrpc":"2.0","id":13,"method":"tools/call","params":{"name":"ask_glm","arguments":{"task":"Find and explain the retry budget.","focusPaths":["src"]}}}"""
+                                       ],
+                                       runner.RunAsync);
 
         Assert.Equal(4, fake.Requests);
         Assert.Equal("public sealed class RetryPolicy { public int RetryBudget = 3; }",
                      await File.ReadAllTextAsync(filePath));
         var call = responses[1].GetProperty("result");
         Assert.False(call.GetProperty("isError").GetBoolean());
-        var text = call.GetProperty("content")[0].GetProperty("text").GetString()!;
+        var       text         = call.GetProperty("content")[0].GetProperty("text").GetString()!;
         using var workerResult = JsonDocument.Parse(text);
-        var result = workerResult.RootElement;
+        var       result       = workerResult.RootElement;
         Assert.Equal("Completed", result.GetProperty("status").GetString());
         Assert.Equal("RetryPolicy declares a fixed retry budget of 3.", result.GetProperty("conclusion").GetString());
         Assert.Equal("src/RetryPolicy.cs", result.GetProperty("evidence")[0].GetProperty("path").GetString());
@@ -241,13 +256,18 @@ public class McpStdioServerTests
     {
         var invoked = false;
         var responses = await RunAsync(
-            [Initialize2025,
-             """{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"ask_glm","arguments":{"task":"read a file","workspaceRoot":"C:/outside"}}}"""],
-            (_, _) =>
-            {
-                invoked = true;
-                return Task.FromResult(new WorkerResult { Status = WorkerResultStatus.Completed, Conclusion = "should not run" });
-            });
+                                       [
+                                           Initialize2025,
+                                           """{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"ask_glm","arguments":{"task":"read a file","workspaceRoot":"C:/outside"}}}"""
+                                       ],
+                                       (_, _) =>
+                                       {
+                                           invoked = true;
+                                           return Task.FromResult(new WorkerResult
+                                           {
+                                               Status = WorkerResultStatus.Completed, Conclusion = "should not run"
+                                           });
+                                       });
 
         Assert.False(invoked);
         Assert.Equal(-32602, responses[1].GetProperty("error").GetProperty("code").GetInt32());
@@ -256,27 +276,31 @@ public class McpStdioServerTests
     [Fact]
     public async Task ToolsCall_ValidationFailureAndWorkerExceptionAreBoundedAndWithheld()
     {
-        var invoked = 0;
+        var invoked     = 0;
         var tooLongTask = new string('x', WorkerRequestLimits.MaxTaskPromptLength + 1);
         var responses = await RunAsync(
-            [Initialize2025,
-             "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"tools/call\",\"params\":{\"name\":\"ask_glm\",\"arguments\":{\"task\":\"" + tooLongTask + "\"}}}",
-             """{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"ask_glm","arguments":{"task":"model failure case"}}}"""],
-            (_, _) =>
-            {
-                invoked++;
-                throw new InvalidOperationException("sk-live-MCP-SENTINEL internal response fragment");
-            });
+                                       [
+                                           Initialize2025,
+                                           "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"tools/call\",\"params\":{\"name\":\"ask_glm\",\"arguments\":{\"task\":\"" +
+                                           tooLongTask + "\"}}}",
+                                           """{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"ask_glm","arguments":{"task":"model failure case"}}}"""
+                                       ],
+                                       (_, _) =>
+                                       {
+                                           invoked++;
+                                           throw new
+                                               InvalidOperationException("sk-live-MCP-SENTINEL internal response fragment");
+                                       });
 
         Assert.Equal(1, invoked);
         var invalid = Assert.Single(responses, response => response.GetProperty("id").GetInt32() == 5)
-                      .GetProperty("result");
+                            .GetProperty("result");
         Assert.True(invalid.GetProperty("isError").GetBoolean());
         var invalidText = invalid.GetProperty("content")[0].GetProperty("text").GetString()!;
         Assert.DoesNotContain(tooLongTask, invalidText, StringComparison.Ordinal);
 
         var failed = Assert.Single(responses, response => response.GetProperty("id").GetInt32() == 6)
-                     .GetProperty("result");
+                           .GetProperty("result");
         Assert.True(failed.GetProperty("isError").GetBoolean());
         var failedText = failed.GetProperty("content")[0].GetProperty("text").GetString()!;
         Assert.DoesNotContain("sk-live-MCP-SENTINEL", failedText, StringComparison.Ordinal);
@@ -287,9 +311,9 @@ public class McpStdioServerTests
     [Fact]
     public async Task ToolsCall_CancelledNotificationCancelsActiveWorker()
     {
-        var input = new ChannelTextReader();
-        using var output = new StringWriter();
-        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var       input   = new ChannelTextReader();
+        using var output  = new StringWriter();
+        var       started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var server = new McpStdioServer(input, output, async (_, token) =>
         {
             started.SetResult();
@@ -299,16 +323,19 @@ public class McpStdioServerTests
 
         var serverTask = server.RunAsync(CancellationToken.None);
         await input.SendLineAsync(Initialize2025);
-        await input.SendLineAsync("""{"jsonrpc":"2.0","id":42,"method":"tools/call","params":{"name":"ask_glm","arguments":{"task":"inspect cancellation"}}}""");
+        await
+            input.SendLineAsync("""{"jsonrpc":"2.0","id":42,"method":"tools/call","params":{"name":"ask_glm","arguments":{"task":"inspect cancellation"}}}""");
         await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        await input.SendLineAsync("""{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":42,"reason":"caller stopped"}}""");
+        await
+            input.SendLineAsync("""{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":42,"reason":"caller stopped"}}""");
         input.Complete();
         await serverTask.WaitAsync(TimeSpan.FromSeconds(5));
 
-        var responses = output.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(ToJsonElement).ToArray();
+        var responses = output.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(ToJsonElement)
+                              .ToArray();
         var call = Assert.Single(responses, response => response.TryGetProperty("id", out var id) &&
                                                         id.ValueKind == JsonValueKind.Number && id.GetInt32() == 42)
-                   .GetProperty("result");
+                         .GetProperty("result");
         Assert.True(call.GetProperty("isError").GetBoolean());
         using var result = JsonDocument.Parse(call.GetProperty("content")[0].GetProperty("text").GetString()!);
         Assert.Equal("Cancelled", result.RootElement.GetProperty("status").GetString());
@@ -364,7 +391,7 @@ public class McpStdioServerTests
     [Fact]
     public async Task OversizedInputLine_IsRejectedWithoutParsingOrEchoingContent()
     {
-        var sentinel = "input-sentinel-" + new string('x', 70_000);
+        var sentinel  = "input-sentinel-" + new string('x', 70_000);
         var responses = await RunAsync(sentinel);
 
         var response = Assert.Single(responses);
@@ -377,13 +404,18 @@ public class McpStdioServerTests
     {
         var invoked = false;
         var responses = await RunAsync(
-            [Initialize2025,
-             """{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"shell","arguments":{"task":"run command"}}}"""],
-            (_, _) =>
-            {
-                invoked = true;
-                return Task.FromResult(new WorkerResult { Status = WorkerResultStatus.Completed, Conclusion = "unexpected" });
-            });
+                                       [
+                                           Initialize2025,
+                                           """{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"shell","arguments":{"task":"run command"}}}"""
+                                       ],
+                                       (_, _) =>
+                                       {
+                                           invoked = true;
+                                           return Task.FromResult(new WorkerResult
+                                           {
+                                               Status = WorkerResultStatus.Completed, Conclusion = "unexpected"
+                                           });
+                                       });
 
         Assert.False(invoked);
         var call = responses[1].GetProperty("result");
@@ -394,11 +426,13 @@ public class McpStdioServerTests
 
     // ---- helpers -----------------------------------------------------------
 
-    private static Task<IReadOnlyList<JsonElement>> RunAsync(params string[] messages) =>
-        RunAsync((IReadOnlyList<string>)messages, null);
+    private static Task<IReadOnlyList<JsonElement>> RunAsync(params string[] messages)
+    {
+        return RunAsync(messages, null);
+    }
 
     private static async Task<IReadOnlyList<JsonElement>> RunAsync(
-        IReadOnlyList<string> messages,
+        IReadOnlyList<string>                                       messages,
         Func<WorkerRequest, CancellationToken, Task<WorkerResult>>? worker)
     {
         using var input  = new StringReader(string.Join('\n', messages) + "\n");
@@ -411,10 +445,16 @@ public class McpStdioServerTests
                      .ToList();
     }
 
+    private static JsonElement ToJsonElement(string line)
+    {
+        using var document = JsonDocument.Parse(line);
+        return document.RootElement.Clone();
+    }
+
     private sealed class ChannelTextReader : TextReader
     {
-        private readonly System.Threading.Channels.Channel<char> _characters =
-            System.Threading.Channels.Channel.CreateUnbounded<char>();
+        private readonly Channel<char> _characters =
+            Channel.CreateUnbounded<char>();
 
         public async Task SendLineAsync(string line)
         {
@@ -422,9 +462,13 @@ public class McpStdioServerTests
                 await _characters.Writer.WriteAsync(character);
         }
 
-        public void Complete() => _characters.Writer.TryComplete();
+        public void Complete()
+        {
+            _characters.Writer.TryComplete();
+        }
 
-        public override async ValueTask<int> ReadAsync(Memory<char> buffer, CancellationToken cancellationToken = default)
+        public override async ValueTask<int> ReadAsync(Memory<char>      buffer,
+                                                       CancellationToken cancellationToken = default)
         {
             if (buffer.Length == 0) return 0;
             if (!await _characters.Reader.WaitToReadAsync(cancellationToken)) return 0;
@@ -434,11 +478,5 @@ public class McpStdioServerTests
                 buffer.Span[count++] = character;
             return count;
         }
-    }
-
-    private static JsonElement ToJsonElement(string line)
-    {
-        using var document = JsonDocument.Parse(line);
-        return document.RootElement.Clone();
     }
 }

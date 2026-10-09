@@ -3,7 +3,7 @@ using TinyHarness.Core.Services.Runtime;
 namespace TinyHarness.Tests;
 
 /// <summary>
-/// A disposable unique temp directory used as a fake workspace root in M3 tests.
+///     A disposable unique temp directory used as a fake workspace root in M3 tests.
 /// </summary>
 internal sealed class TestTempDir : IDisposable
 {
@@ -16,6 +16,18 @@ internal sealed class TestTempDir : IDisposable
     public string Root { get; }
 
     public Workspace Workspace => new(Root);
+
+    public void Dispose()
+    {
+        try
+        {
+            Directory.Delete(Root, true);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Best-effort cleanup of a temp directory.
+        }
+    }
 
     public string WriteFile(string relativePath, string content)
     {
@@ -38,17 +50,5 @@ internal sealed class TestTempDir : IDisposable
         var full = Path.Combine(Root, relativePath);
         Directory.CreateDirectory(full);
         return full;
-    }
-
-    public void Dispose()
-    {
-        try
-        {
-            Directory.Delete(Root, recursive : true);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            // Best-effort cleanup of a temp directory.
-        }
     }
 }

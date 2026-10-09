@@ -8,7 +8,6 @@ using TinyHarness.Core.Models.Agent;
 using TinyHarness.Core.Models.Configuration;
 using TinyHarness.Core.Models.Context;
 using TinyHarness.Core.Models.Runtime;
-using TinyHarness.Core.Models.Runtime.WindowsSandbox;
 using TinyHarness.Core.Services.Agent;
 using TinyHarness.Core.Services.ChatCompletions;
 using TinyHarness.Core.Services.Configuration;
@@ -24,16 +23,15 @@ using WindowsCredentialStore = TinyHarness.Core.Services.Runtime.WindowsCredenti
 namespace TinyHarness.Cli;
 
 /// <summary>
-/// TinyHarness 命令行应用的组合根与入口调度器。
-/// Composition root and entry-point dispatcher for the TinyHarness command-line application.
+///     TinyHarness 命令行应用的组合根与入口调度器。
+///     Composition root and entry-point dispatcher for the TinyHarness command-line application.
 /// </summary>
 internal static class Program
 {
     /// <summary>
-    /// CLI 入口。解析管理命令、smoke、run 或无动词调用方式，并把退出码交还操作系统。
-    ///
-    /// CLI entry point that dispatches management commands, smoke, run, or verbless invocation forms and
-    /// returns an OS exit code.
+    ///     CLI 入口。解析管理命令、smoke、run 或无动词调用方式，并把退出码交还操作系统。
+    ///     CLI entry point that dispatches management commands, smoke, run, or verbless invocation forms and
+    ///     returns an OS exit code.
     /// </summary>
     public static async Task<int> Main(string[] args)
     {
@@ -44,11 +42,9 @@ internal static class Program
         catch (CliUsageException ex)
         {
             await Console.Error.WriteLineAsync(ex.Message);
-            if (ex.Usage is { Length: > 0 } usage)
-            {
-                await Console.Error.WriteLineAsync();
-                await Console.Error.WriteLineAsync(usage.TrimEnd());
-            }
+            if (ex.Usage is not { Length: > 0 } usage) return 2;
+            await Console.Error.WriteLineAsync();
+            await Console.Error.WriteLineAsync(usage.TrimEnd());
 
             return 2;
         }
@@ -101,9 +97,8 @@ internal static class Program
     }
 
     /// <summary>
-    /// 执行管理命令（init/config/provider/auth/model/doctor）；这些命令绝不把输入发给模型。
-    ///
-    /// Executes management commands (init/config/provider/auth/model/doctor); their input is never sent to a model.
+    ///     执行管理命令（init/config/provider/auth/model/doctor）；这些命令绝不把输入发给模型。
+    ///     Executes management commands (init/config/provider/auth/model/doctor); their input is never sent to a model.
     /// </summary>
     private static async Task<int> RunManagementCommandAsync(CliOptions options)
     {
@@ -112,7 +107,7 @@ internal static class Program
         var context = new CommandContext
         {
             Io          = new ConsoleCliIo(),
-            Credentials = new WindowsCredentialStore(),
+            Credentials = new WindowsCredentialStore()
         };
 
         return options.Kind switch
@@ -126,15 +121,14 @@ internal static class Program
             CliCommandKind.Model => await ModelCommand.ExecuteAsync(context, options, cts.Token).ConfigureAwait(false),
             CliCommandKind.Doctor => await DoctorCommand.ExecuteAsync(context, options, cts.Token)
                                                         .ConfigureAwait(false),
-            _ => throw new InvalidOperationException($"Unhandled command '{options.Kind}'."),
+            _ => throw new InvalidOperationException($"Unhandled command '{options.Kind}'.")
         };
     }
 
     /// <summary>
-    /// 加载生效配置、组装模型与工具权限依赖，运行一次 Agent 任务并输出摘要。
-    ///
-    /// Loads the effective configuration, composes model/tool/permission dependencies, runs one agent task,
-    /// and prints its summary.
+    ///     加载生效配置、组装模型与工具权限依赖，运行一次 Agent 任务并输出摘要。
+    ///     Loads the effective configuration, composes model/tool/permission dependencies, runs one agent task,
+    ///     and prints its summary.
     /// </summary>
     private static async Task<int> RunAsync(string prompt, string? configPath)
     {
@@ -193,11 +187,11 @@ internal static class Program
 
         // Assemble the real model transport, workspace tools and interactive
         // permission flow used by normal CLI runs.
-        IChatCompletionClient model = ModelClientFactory.Create(config.Model, config.Endpoint, apiKey, config.ChatApi);
+        var model = ModelClientFactory.Create(config.Model, config.Endpoint, apiKey, config.ChatApi);
 
-        var               workspace   = new Workspace(config.WorkspaceRoot);
-        var               tools       = BuildTools(workspace, config, apiKey, executionPolicy, sandbox?.Backend,
-                                                   knownSecrets : knownSecrets);
+        var workspace = new Workspace(config.WorkspaceRoot);
+        var tools = BuildTools(workspace, config, apiKey, executionPolicy, sandbox?.Backend,
+                               knownSecrets);
         var               permissions = new PermissionEngine(config.WorkspaceRoot, config.CommandRules);
         IApprovalProvider approver    = new ConsoleApprovalProvider();
         var options = new AgentOptions
@@ -209,8 +203,8 @@ internal static class Program
             {
                 ContextWindowTokens       = config.ContextWindowTokens,
                 ReservedOutputTokens      = config.ReservedOutputTokens,
-                CompactionThresholdTokens = config.CompactionThreshold,
-            },
+                CompactionThresholdTokens = config.CompactionThreshold
+            }
         };
 
         var recorder = new FileRunRecorder(config.SessionDirectory, knownSecrets : knownSecrets);
@@ -235,39 +229,35 @@ internal static class Program
         await Console.Out.WriteLineAsync($"toolExecs  : {result.ToolExecutions}");
         await Console.Out.WriteLineAsync($"final      : {result.FinalMessage}");
         await WritePersistencePathsAsync(recorder).ConfigureAwait(false);
-        if (!string.IsNullOrWhiteSpace(result.Error))
-        {
-            await Console.Out.WriteLineAsync($"error      : {result.Error}");
-        }
+        if (!string.IsNullOrWhiteSpace(result.Error)) await Console.Out.WriteLineAsync($"error      : {result.Error}");
 
         return result.Status switch
         {
             AgentStatus.Completed => 0,
             AgentStatus.Cancelled => 130,
-            _                     => 1,
+            _                     => 1
         };
     }
 
     /// <summary>
-    /// 启动本机 stdio MCP 服务端：stdout 只承载协议消息，诊断写 stderr；stdin 关闭即正常退出，
-    /// Ctrl+C 静默退出，均不污染协议输出。
-    ///
-    /// Starts the local stdio MCP server: stdout carries protocol messages only and diagnostics
-    /// go to stderr. Closing stdin exits cleanly and Ctrl+C exits silently, keeping the protocol
-    /// output unpolluted.
+    ///     启动本机 stdio MCP 服务端：stdout 只承载协议消息，诊断写 stderr；stdin 关闭即正常退出，
+    ///     Ctrl+C 静默退出，均不污染协议输出。
+    ///     Starts the local stdio MCP server: stdout carries protocol messages only and diagnostics
+    ///     go to stderr. Closing stdin exits cleanly and Ctrl+C exits silently, keeping the protocol
+    ///     output unpolluted.
     /// </summary>
     private static async Task<int> RunMcpServerAsync()
     {
         using var cts                = new CancellationTokenSource();
         using var cancelRegistration = new ConsoleCancellation(cts);
         var       hostConfig         = await McpWorkerHostConfiguration.ResolveAsync(cts.Token).ConfigureAwait(false);
-        IChatCompletionClient model = ModelClientFactory.Create(hostConfig.Model, hostConfig.Endpoint,
-                                                                hostConfig.ApiKey, hostConfig.ChatApi);
+        var model = ModelClientFactory.Create(hostConfig.Model, hostConfig.Endpoint,
+                                              hostConfig.ApiKey, hostConfig.ChatApi);
         var runner = new WorkerRunner(model, hostConfig.WorkspaceRoot, hostConfig.ExecutionOptions);
 
         // 只输出不含凭据的启动摘要到 stderr。文件内容会发送到配置的模型 endpoint。
-        await Console.Error.WriteLineAsync($"TinyHarness MCP worker ready: model={hostConfig.Model}; " +
-                                           $"endpointType={hostConfig.EndpointType}; " +
+        await Console.Error.WriteLineAsync($"TinyHarness MCP worker ready: model={hostConfig.Model}; "        +
+                                           $"endpointType={hostConfig.EndpointType}; "                        +
                                            $"chatApi={ChatApiKindParser.ToValueString(hostConfig.ChatApi)}; " +
                                            $"workspace={hostConfig.WorkspaceRoot}");
         await Console.Error.WriteLineAsync("Read-permitted file contents are sent to the selected model endpoint; " +
@@ -276,10 +266,10 @@ internal static class Program
         // 直接包装字节流并显式使用无 BOM 的 UTF-8：MCP stdio 分帧固定为 UTF-8，
         // 而 Console.In/Out 在 Windows 上会套用传统的 OEM/ANSI 代码页。
         using var input = new StreamReader(Console.OpenStandardInput(),
-                                           new UTF8Encoding(encoderShouldEmitUTF8Identifier : false),
-                                           detectEncodingFromByteOrderMarks : false);
+                                           new UTF8Encoding(false),
+                                           false);
         await using var output = new StreamWriter(Console.OpenStandardOutput(),
-                                                  new UTF8Encoding(encoderShouldEmitUTF8Identifier : false));
+                                                  new UTF8Encoding(false));
         var server = new McpStdioServer(input, output, runner.RunAsync);
 
         try
@@ -294,9 +284,8 @@ internal static class Program
     }
 
     /// <summary>
-    /// 把完整的只读与写入工具集合绑定到同一个工作区。
-    ///
-    /// Binds the complete read/write tool set to one workspace.
+    ///     把完整的只读与写入工具集合绑定到同一个工作区。
+    ///     Binds the complete read/write tool set to one workspace.
     /// </summary>
     private static ToolRegistry BuildTools(Workspace workspace, TinyHarnessConfig config, string? apiKey = null,
                                            ProcessExecutionPolicy? executionPolicy = null,
@@ -304,25 +293,23 @@ internal static class Program
                                            IReadOnlyDictionary<string, string>? knownSecrets = null)
     {
         var secrets = knownSecrets ?? KnownSecrets(config, apiKey);
-        return new ToolRegistry(
-            [
-                new ListFilesTool(workspace), new SearchTextTool(workspace), new ReadFileTool(workspace),
-                new ApplyPatchTool(workspace),
-                new ShellTool(workspace, config.DefaultToolTimeoutSeconds, secrets,
-                              processBackend: processBackend ?? new HostProcessBackend(secrets),
-                              executionPolicy: executionPolicy),
-            ]);
+        return new ToolRegistry([
+            new ListFilesTool(workspace), new SearchTextTool(workspace), new ReadFileTool(workspace),
+            new ApplyPatchTool(workspace),
+            new ShellTool(workspace, config.DefaultToolTimeoutSeconds, secrets,
+                          processBackend : processBackend ?? new HostProcessBackend(secrets),
+                          executionPolicy : executionPolicy)
+        ]);
     }
 
     /// <summary>
-    /// 读取可信用户设置并在显式启用时组合 Windows 沙箱执行要素；未启用返回 null（保持宿主
-    /// 执行并明示无 OS 隔离）。启用后的任何组合失败都抛出，由入口转换为失败退出——绝不回退。
-    ///
-    /// Reads the trusted user settings and, when explicitly enabled, composes
-    /// the Windows sandbox execution pieces; disabled returns null (host
-    /// execution with an explicit "no OS isolation" notice). Any composition
-    /// failure throws and the entry point turns it into a failing exit — never
-    /// a fallback.
+    ///     读取可信用户设置并在显式启用时组合 Windows 沙箱执行要素；未启用返回 null（保持宿主
+    ///     执行并明示无 OS 隔离）。启用后的任何组合失败都抛出，由入口转换为失败退出——绝不回退。
+    ///     Reads the trusted user settings and, when explicitly enabled, composes
+    ///     the Windows sandbox execution pieces; disabled returns null (host
+    ///     execution with an explicit "no OS isolation" notice). Any composition
+    ///     failure throws and the entry point turns it into a failing exit — never
+    ///     a fallback.
     /// </summary>
     private static async Task<WindowsSandboxExecution?> TryComposeWindowsSandboxAsync(
         TinyHarnessConfig config, IReadOnlyDictionary<string, string> knownSecrets, CancellationToken cancellationToken)
@@ -330,30 +317,25 @@ internal static class Program
         var userConfig = await UserConfigStore.LoadAsync(UserConfigStore.DefaultFilePath(), cancellationToken)
                                               .ConfigureAwait(false);
         var settings = userConfig.Settings?.WindowsSandbox;
-        if (settings is not { Enabled: true })
-        {
-            return null;
-        }
+        if (settings is not { Enabled: true }) return null;
 
         var sessionDirectory = Path.GetFullPath(config.SessionDirectory);
         if (Workspace.IsInside(config.WorkspaceRoot, sessionDirectory))
-        {
-            throw new InvalidOperationException(
-                $"The session directory '{sessionDirectory}' lies inside the workspace '{config.WorkspaceRoot}'; " +
-                "sandboxed commands could tamper with audit records. Move it outside the workspace " +
-                "(settings.sessionDirectory) before enabling the Windows sandbox.");
-        }
+            throw new InvalidOperationException($"The session directory '{sessionDirectory}' lies inside "   +
+                                                $"the workspace '{config.WorkspaceRoot}'; "                  +
+                                                "sandboxed commands could tamper with audit records. "       +
+                                                "Move it outside the workspace (settings.sessionDirectory) " +
+                                                "before enabling the Windows sandbox.");
 
         return WindowsSandboxComposer.Compose(settings, config.WorkspaceRoot, knownSecrets);
     }
 
     /// <summary>
-    /// 为进程环境清理与输出脱敏提供已知 secret；不记录 secret 值。凭据存储来源时用目标名占位，
-    /// 该名称不存在于子进程环境中，仅让脱敏继续覆盖密钥值本身。
-    ///
-    /// Supplies known secrets for child-environment removal and output redaction without logging their values.
-    /// For credential-store keys the target name stands in; no such environment variable exists in children, it
-    /// only keeps redaction covering the secret value itself.
+    ///     为进程环境清理与输出脱敏提供已知 secret；不记录 secret 值。凭据存储来源时用目标名占位，
+    ///     该名称不存在于子进程环境中，仅让脱敏继续覆盖密钥值本身。
+    ///     Supplies known secrets for child-environment removal and output redaction without logging their values.
+    ///     For credential-store keys the target name stands in; no such environment variable exists in children, it
+    ///     only keeps redaction covering the secret value itself.
     /// </summary>
     private static IReadOnlyDictionary<string, string> KnownSecrets(TinyHarnessConfig config, string? apiKey)
     {
@@ -361,21 +343,18 @@ internal static class Program
             ? config.ApiKeyEnvironmentVariable
             : config.ApiKeyCredentialTarget;
         if (string.IsNullOrEmpty(name) || string.IsNullOrEmpty(apiKey))
-        {
             return new Dictionary<string, string>(StringComparer.Ordinal);
-        }
 
         return new Dictionary<string, string>(StringComparer.Ordinal)
         {
-            [name] = apiKey,
+            [name] = apiKey
         };
     }
 
     /// <summary>
-    /// 使用脚本模型和临时工作区运行离线冒烟流程，检查读写工具闭环及审批流程。
-    ///
-    /// Runs an offline smoke flow with a scripted model and disposable workspace,
-    /// exercising the read/write tool loop and approval flow without network access.
+    ///     使用脚本模型和临时工作区运行离线冒烟流程，检查读写工具闭环及审批流程。
+    ///     Runs an offline smoke flow with a scripted model and disposable workspace,
+    ///     exercising the read/write tool loop and approval flow without network access.
     /// </summary>
     private static async Task<int> RunSmokeAsync(string? configPath)
     {
@@ -414,8 +393,8 @@ internal static class Program
             {
                 ContextWindowTokens       = config.ContextWindowTokens,
                 ReservedOutputTokens      = config.ReservedOutputTokens,
-                CompactionThresholdTokens = config.CompactionThreshold,
-            },
+                CompactionThresholdTokens = config.CompactionThreshold
+            }
         };
 
         var recorder = new FileRunRecorder(Path.Combine(Path.GetTempPath(), "tinyharness-smoke-runs"));
@@ -436,14 +415,9 @@ internal static class Program
         await Console.Out.WriteLineAsync($"  finalMessage : {result.FinalMessage}");
         await WritePersistencePathsAsync(recorder, "  ").ConfigureAwait(false);
         if (!string.IsNullOrWhiteSpace(result.Error))
-        {
             await Console.Out.WriteLineAsync($"  error        : {result.Error}");
-        }
 
-        if (result.Status != AgentStatus.Completed)
-        {
-            return 1;
-        }
+        if (result.Status != AgentStatus.Completed) return 1;
 
         // The scripted client throws on any closure or content mismatch, which the
         // Agent loop surfaces as Failed above; a Completed run with the expected
@@ -458,25 +432,21 @@ internal static class Program
     }
 
     /// <summary>
-    /// 只报告实际存在的持久化产物，避免保存失败时把预期路径误报为已成功生成。
-    /// Reports only persistence artifacts that actually exist, so an expected path is never presented as saved.
+    ///     只报告实际存在的持久化产物，避免保存失败时把预期路径误报为已成功生成。
+    ///     Reports only persistence artifacts that actually exist, so an expected path is never presented as saved.
     /// </summary>
     private static async Task WritePersistencePathsAsync(FileRunRecorder recorder, string prefix = "")
     {
         if (File.Exists(recorder.SessionPath))
-        {
             await Console.Out.WriteLineAsync($"{prefix}session    : {recorder.SessionPath}");
-        }
 
         if (File.Exists(recorder.AuditPath))
-        {
             await Console.Out.WriteLineAsync($"{prefix}audit      : {recorder.AuditPath}");
-        }
     }
 
     /// <summary>
-    /// 构造调用当前 CLI 隐藏 probe 动词的结构化命令；兼容 framework-dependent 与原生发布入口。
-    /// Builds a structured invocation of this CLI's hidden probe verb for both framework-dependent and native hosts.
+    ///     构造调用当前 CLI 隐藏 probe 动词的结构化命令；兼容 framework-dependent 与原生发布入口。
+    ///     Builds a structured invocation of this CLI's hidden probe verb for both framework-dependent and native hosts.
     /// </summary>
     private static ProcessProbe ProcessProbeCommand()
     {
@@ -491,13 +461,13 @@ internal static class Program
     }
 
     /// <summary>
-    /// 将 Ctrl+C 转换为任务取消，并在运行结束时可靠移除全局事件处理器。
-    /// Converts Ctrl+C into task cancellation and reliably detaches the global handler afterward.
+    ///     将 Ctrl+C 转换为任务取消，并在运行结束时可靠移除全局事件处理器。
+    ///     Converts Ctrl+C into task cancellation and reliably detaches the global handler afterward.
     /// </summary>
     private sealed class ConsoleCancellation : IDisposable
     {
-        private readonly CancellationTokenSource   _source;
         private readonly ConsoleCancelEventHandler _handler;
+        private readonly CancellationTokenSource   _source;
 
         public ConsoleCancellation(CancellationTokenSource source)
         {
@@ -506,7 +476,10 @@ internal static class Program
             Console.CancelKeyPress += _handler;
         }
 
-        public void Dispose() => Console.CancelKeyPress -= _handler;
+        public void Dispose()
+        {
+            Console.CancelKeyPress -= _handler;
+        }
 
         private void OnCancel(object? sender, ConsoleCancelEventArgs args)
         {

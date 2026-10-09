@@ -1,3 +1,4 @@
+using System.Text.Json.Nodes;
 using TinyHarness.Core.Models.ChatCompletions;
 using TinyHarness.Core.Models.Context;
 using TinyHarness.Core.Services.Context;
@@ -5,41 +6,45 @@ using TinyHarness.Core.Services.Context;
 namespace TinyHarness.Tests;
 
 /// <summary>
-/// ConversationContext 直接 API 回归测试，覆盖 M6 review 修复：首次规划计入头部消息、
-/// 空摘要与丢事实摘要被拒绝、提交前收益校验、计划后追加消息拒绝、摘要请求裁剪与自身预算、
-/// 首次摘要携带原始任务，以及阈值/窗口配置校验。
-///
-/// Direct ConversationContext API regression tests for the M6 review fixes: first-plan
-/// head accounting, rejection of empty or fact-dropping summaries, the pre-commit
-/// benefit check, rejection after plan-time appends, summary-request capping and its
-/// own budget, the original task on the first fold, and threshold/window validation.
+///     ConversationContext 直接 API 回归测试，覆盖 M6 review 修复：首次规划计入头部消息、
+///     空摘要与丢事实摘要被拒绝、提交前收益校验、计划后追加消息拒绝、摘要请求裁剪与自身预算、
+///     首次摘要携带原始任务，以及阈值/窗口配置校验。
+///     Direct ConversationContext API regression tests for the M6 review fixes: first-plan
+///     head accounting, rejection of empty or fact-dropping summaries, the pre-commit
+///     benefit check, rejection after plan-time appends, summary-request capping and its
+///     own budget, the original task on the first fold, and threshold/window validation.
 /// </summary>
 public class ConversationContextTests
 {
-    private static ContextOptions Options(int window, int reserved, int toolResultCap = 12_000) => new()
+    private static ContextOptions Options(int window, int reserved, int toolResultCap = 12_000)
     {
-        ContextWindowTokens      = window,
-        ReservedOutputTokens     = reserved,
-        ToolResultViewCharacters = toolResultCap,
-    };
+        return new ContextOptions
+        {
+            ContextWindowTokens      = window,
+            ReservedOutputTokens     = reserved,
+            ToolResultViewCharacters = toolResultCap
+        };
+    }
 
-    private static string StateJson(string goal, string[] decisions, string[] inspected, string[] modified) =>
-        new System.Text.Json.Nodes.JsonObject
+    private static string StateJson(string goal, string[] decisions, string[] inspected, string[] modified)
+    {
+        return new JsonObject
         {
             ["goal"]        = goal,
-            ["constraints"] = new System.Text.Json.Nodes.JsonArray(),
+            ["constraints"] = new JsonArray(),
             ["decisions"] =
-                new System.Text.Json.Nodes.JsonArray(decisions.Select(d => (System.Text.Json.Nodes.JsonNode)d!)
-                                                              .ToArray()),
+                new JsonArray(decisions.Select(d => (JsonNode)d!)
+                                       .ToArray()),
             ["filesInspected"] =
-                new System.Text.Json.Nodes.JsonArray(inspected.Select(d => (System.Text.Json.Nodes.JsonNode)d!)
-                                                              .ToArray()),
+                new JsonArray(inspected.Select(d => (JsonNode)d!)
+                                       .ToArray()),
             ["filesModified"] =
-                new System.Text.Json.Nodes.JsonArray(modified.Select(d => (System.Text.Json.Nodes.JsonNode)d!)
-                                                             .ToArray()),
-            ["commandsAndResults"] = new System.Text.Json.Nodes.JsonArray(),
-            ["pendingWork"]        = new System.Text.Json.Nodes.JsonArray(),
+                new JsonArray(modified.Select(d => (JsonNode)d!)
+                                      .ToArray()),
+            ["commandsAndResults"] = new JsonArray(),
+            ["pendingWork"]        = new JsonArray()
         }.ToJsonString();
+    }
 
     private static void AppendRound(ConversationContext context, string callId, string toolResult)
     {
@@ -56,10 +61,7 @@ public class ConversationContextTests
         var context = new ConversationContext(Options(window, reserved));
         context.Append(ChatMessage.System(systemPrompt));
         context.Append(ChatMessage.User("go"));
-        for (var round = 1; round <= rounds; round++)
-        {
-            AppendRound(context, $"c{round}", toolResult);
-        }
+        for (var round = 1; round <= rounds; round++) AppendRound(context, $"c{round}", toolResult);
 
         return context;
     }
@@ -67,7 +69,7 @@ public class ConversationContextTests
     [Fact]
     public void EmptySummary_IsRejected_AndFirstFoldCarriesTheOriginalTask()
     {
-        var context = ContextWithRounds(window : 1000, reserved : 30, rounds : 3, toolResult : new string('x', 1600));
+        var context = ContextWithRounds(1000, 30, 3, new string('x', 1600));
         Assert.True(context.RequiresCompaction([]));
 
         // First fold: instructions, "no previous summary", the original task and
@@ -90,7 +92,7 @@ public class ConversationContextTests
     [Fact]
     public void FirstFold_AcceptsAGoalOnlySummary()
     {
-        var context = ContextWithRounds(window : 1000, reserved : 30, rounds : 3, toolResult : new string('x', 1600));
+        var context = ContextWithRounds(1000, 30, 3, new string('x', 1600));
         Assert.NotEmpty(context.BuildCompactionMessages([]));
 
         // A goal-only summary is not degenerate (the goal is present), so it is
@@ -104,17 +106,17 @@ public class ConversationContextTests
     [Fact]
     public void Compaction_AllowsCurrentStateToAdvance_ButKeepsHistoricalFacts()
     {
-        var context = ContextWithRounds(window : 1000, reserved : 30, rounds : 3, toolResult : new string('x', 1600));
+        var context = ContextWithRounds(1000, 30, 3, new string('x', 1600));
         Assert.NotEmpty(context.BuildCompactionMessages([]));
-        var first = new System.Text.Json.Nodes.JsonObject
+        var first = new JsonObject
         {
             ["goal"]               = "goal-g",
-            ["constraints"]        = new System.Text.Json.Nodes.JsonArray("old constraint"),
-            ["decisions"]          = new System.Text.Json.Nodes.JsonArray("run tests"),
-            ["filesInspected"]     = new System.Text.Json.Nodes.JsonArray("src"),
-            ["filesModified"]      = new System.Text.Json.Nodes.JsonArray("a.cs"),
-            ["commandsAndResults"] = new System.Text.Json.Nodes.JsonArray("build passed"),
-            ["pendingWork"]        = new System.Text.Json.Nodes.JsonArray("run tests"),
+            ["constraints"]        = new JsonArray("old constraint"),
+            ["decisions"]          = new JsonArray("run tests"),
+            ["filesInspected"]     = new JsonArray("src"),
+            ["filesModified"]      = new JsonArray("a.cs"),
+            ["commandsAndResults"] = new JsonArray("build passed"),
+            ["pendingWork"]        = new JsonArray("run tests")
         }.ToJsonString();
         Assert.True(context.TryApplyCompaction(first));
 
@@ -125,15 +127,15 @@ public class ConversationContextTests
 
         // Constraints and pending work may be replaced by a non-empty current state,
         // while prior decisions and historical facts must still be carried forward.
-        var completed = new System.Text.Json.Nodes.JsonObject
+        var completed = new JsonObject
         {
             ["goal"]               = "goal-g",
-            ["constraints"]        = new System.Text.Json.Nodes.JsonArray("current constraint"),
-            ["decisions"]          = new System.Text.Json.Nodes.JsonArray("run tests", "tests passed"),
-            ["filesInspected"]     = new System.Text.Json.Nodes.JsonArray("src"),
-            ["filesModified"]      = new System.Text.Json.Nodes.JsonArray("a.cs"),
-            ["commandsAndResults"] = new System.Text.Json.Nodes.JsonArray("build passed", "tests passed"),
-            ["pendingWork"]        = new System.Text.Json.Nodes.JsonArray("completed: run tests"),
+            ["constraints"]        = new JsonArray("current constraint"),
+            ["decisions"]          = new JsonArray("run tests", "tests passed"),
+            ["filesInspected"]     = new JsonArray("src"),
+            ["filesModified"]      = new JsonArray("a.cs"),
+            ["commandsAndResults"] = new JsonArray("build passed", "tests passed"),
+            ["pendingWork"]        = new JsonArray("completed: run tests")
         }.ToJsonString();
         Assert.True(context.TryApplyCompaction(completed));
         Assert.True(StructuredState.TryParse(context.BuildModelView()[2].Content, out var state));
@@ -145,17 +147,17 @@ public class ConversationContextTests
     [Fact]
     public void Compaction_RejectsSummaryThatDropsHistoricalFilesOrCommands()
     {
-        var context = ContextWithRounds(window : 1000, reserved : 30, rounds : 3, toolResult : new string('x', 1600));
+        var context = ContextWithRounds(1000, 30, 3, new string('x', 1600));
         Assert.NotEmpty(context.BuildCompactionMessages([]));
-        Assert.True(context.TryApplyCompaction(new System.Text.Json.Nodes.JsonObject
+        Assert.True(context.TryApplyCompaction(new JsonObject
         {
             ["goal"]               = "goal-g",
-            ["constraints"]        = new System.Text.Json.Nodes.JsonArray(),
-            ["decisions"]          = new System.Text.Json.Nodes.JsonArray(),
-            ["filesInspected"]     = new System.Text.Json.Nodes.JsonArray("src"),
-            ["filesModified"]      = new System.Text.Json.Nodes.JsonArray("a.cs"),
-            ["commandsAndResults"] = new System.Text.Json.Nodes.JsonArray("build passed"),
-            ["pendingWork"]        = new System.Text.Json.Nodes.JsonArray(),
+            ["constraints"]        = new JsonArray(),
+            ["decisions"]          = new JsonArray(),
+            ["filesInspected"]     = new JsonArray("src"),
+            ["filesModified"]      = new JsonArray("a.cs"),
+            ["commandsAndResults"] = new JsonArray("build passed"),
+            ["pendingWork"]        = new JsonArray()
         }.ToJsonString()));
 
         AppendRound(context, "c4", new string('x', 1600));
@@ -169,30 +171,30 @@ public class ConversationContextTests
     [Fact]
     public void Compaction_RejectsSummaryThatSilentlyDropsDecisionOrPendingWork()
     {
-        var context = ContextWithRounds(window : 1000, reserved : 30, rounds : 3, toolResult : new string('x', 1600));
+        var context = ContextWithRounds(1000, 30, 3, new string('x', 1600));
         Assert.NotEmpty(context.BuildCompactionMessages([]));
-        Assert.True(context.TryApplyCompaction(new System.Text.Json.Nodes.JsonObject
+        Assert.True(context.TryApplyCompaction(new JsonObject
         {
             ["goal"]               = "goal-g",
-            ["constraints"]        = new System.Text.Json.Nodes.JsonArray("stay in workspace"),
-            ["decisions"]          = new System.Text.Json.Nodes.JsonArray("run tests"),
-            ["filesInspected"]     = new System.Text.Json.Nodes.JsonArray("src"),
-            ["filesModified"]      = new System.Text.Json.Nodes.JsonArray(),
-            ["commandsAndResults"] = new System.Text.Json.Nodes.JsonArray(),
-            ["pendingWork"]        = new System.Text.Json.Nodes.JsonArray("rerun tests"),
+            ["constraints"]        = new JsonArray("stay in workspace"),
+            ["decisions"]          = new JsonArray("run tests"),
+            ["filesInspected"]     = new JsonArray("src"),
+            ["filesModified"]      = new JsonArray(),
+            ["commandsAndResults"] = new JsonArray(),
+            ["pendingWork"]        = new JsonArray("rerun tests")
         }.ToJsonString()));
 
         AppendRound(context, "c4", new string('x', 1600));
         Assert.NotEmpty(context.BuildCompactionMessages([]));
-        var droppingState = new System.Text.Json.Nodes.JsonObject
+        var droppingState = new JsonObject
         {
             ["goal"]               = "goal-g",
-            ["constraints"]        = new System.Text.Json.Nodes.JsonArray("updated"),
-            ["decisions"]          = new System.Text.Json.Nodes.JsonArray(),
-            ["filesInspected"]     = new System.Text.Json.Nodes.JsonArray("src"),
-            ["filesModified"]      = new System.Text.Json.Nodes.JsonArray(),
-            ["commandsAndResults"] = new System.Text.Json.Nodes.JsonArray(),
-            ["pendingWork"]        = new System.Text.Json.Nodes.JsonArray(),
+            ["constraints"]        = new JsonArray("updated"),
+            ["decisions"]          = new JsonArray(),
+            ["filesInspected"]     = new JsonArray("src"),
+            ["filesModified"]      = new JsonArray(),
+            ["commandsAndResults"] = new JsonArray(),
+            ["pendingWork"]        = new JsonArray()
         }.ToJsonString();
 
         Assert.False(context.TryApplyCompaction(droppingState));
@@ -201,7 +203,7 @@ public class ConversationContextTests
     [Fact]
     public void Compaction_RejectsSummaryThatDoesNotShrinkTheView()
     {
-        var context = ContextWithRounds(window : 1000, reserved : 30, rounds : 3, toolResult : new string('x', 1600));
+        var context = ContextWithRounds(1000, 30, 3, new string('x', 1600));
         Assert.NotEmpty(context.BuildCompactionMessages([]));
 
         // A structurally valid but enormous summary would grow the view instead of
@@ -217,7 +219,7 @@ public class ConversationContextTests
     [Fact]
     public void TryApplyCompaction_RejectsWhenMessagesWereAppendedAfterThePlan()
     {
-        var context = ContextWithRounds(window : 1000, reserved : 30, rounds : 3, toolResult : new string('x', 1600));
+        var context = ContextWithRounds(1000, 30, 3, new string('x', 1600));
         Assert.NotEmpty(context.BuildCompactionMessages([]));
 
         // The fold plan addresses raw message indexes; an append after planning
@@ -237,8 +239,8 @@ public class ConversationContextTests
         // conclude there is something to fold instead of assuming everything fits:
         // the total estimate exceeds the window but would previously have been
         // misjudged as foldable-nothing because the head was not charged.
-        var context = ContextWithRounds(window : 1000, reserved : 30, rounds : 3,
-                                        toolResult : new string('x', 1600), systemPrompt : new string('x', 400));
+        var context = ContextWithRounds(1000, 30, 3,
+                                        new string('x', 1600), new string('x', 400));
         Assert.True(context.EstimateViewTokens() + 30 > 1000, "the total estimate must exceed the window");
         Assert.True(context.RequiresCompaction([]));
         Assert.NotEmpty(context.BuildCompactionMessages([]));
@@ -247,14 +249,11 @@ public class ConversationContextTests
     [Fact]
     public void SummaryRequest_CapsOversizedToolResults_AndFitsItsOwnWindow()
     {
-        var context = new ConversationContext(Options(1000, 30, toolResultCap : 2048));
+        var context = new ConversationContext(Options(1000, 30, 2048));
         context.Append(ChatMessage.System("sys"));
         context.Append(ChatMessage.User("go"));
         var huge = new string('x', 200_000);
-        for (var round = 1; round <= 3; round++)
-        {
-            AppendRound(context, $"c{round}", huge);
-        }
+        for (var round = 1; round <= 3; round++) AppendRound(context, $"c{round}", huge);
 
         Assert.True(context.RequiresCompaction([]));
         var summary = context.BuildCompactionMessages([]);
@@ -277,7 +276,7 @@ public class ConversationContextTests
     [Fact]
     public void ThreeCompactionBatches_FitTheWindowWithoutAppendingHistory()
     {
-        var context = ContextWithRounds(window : 1000, reserved : 30, rounds : 8, toolResult : new string('x', 1200));
+        var context              = ContextWithRounds(1000, 30, 8, new string('x', 1200));
         var originalMessageCount = context.Messages.Count;
 
         for (var batch = 0; batch < 3; batch++)
@@ -297,7 +296,7 @@ public class ConversationContextTests
     [Fact]
     public void OversizedAtomicGroup_IsNotForcedIntoAnOverBudgetSummary()
     {
-        var context = ContextWithRounds(window : 500, reserved : 30, rounds : 3, toolResult : new string('x', 1200));
+        var context = ContextWithRounds(500, 30, 3, new string('x', 1200));
 
         Assert.False(context.RequiresCompaction([]));
         Assert.Empty(context.BuildCompactionMessages([]));
@@ -310,7 +309,7 @@ public class ConversationContextTests
         {
             ContextWindowTokens       = 1000,
             ReservedOutputTokens      = 100,
-            CompactionThresholdTokens = 2000,
+            CompactionThresholdTokens = 2000
         };
         Assert.Throws<ArgumentOutOfRangeException>(above.Validate);
 
@@ -318,7 +317,7 @@ public class ConversationContextTests
         {
             ContextWindowTokens       = 1000,
             ReservedOutputTokens      = 100,
-            CompactionThresholdTokens = 1000,
+            CompactionThresholdTokens = 1000
         };
         Assert.Same(equal, equal.Validate());
     }
@@ -363,10 +362,10 @@ public class ConversationContextTests
         context.Append(ChatMessage.User("go"));
         var before = context.EstimateViewTokens();
 
-        context.RecordModelUsage(100, null);  // no reliable usage reported
+        context.RecordModelUsage(100, null); // no reliable usage reported
         context.RecordModelUsage(100, 0);
         context.RecordModelUsage(100, -5);
-        context.RecordModelUsage(0, 150);     // non-positive estimate
+        context.RecordModelUsage(0, 150); // non-positive estimate
         context.RecordModelUsage(-10, 150);
 
         Assert.Equal(before, context.EstimateViewTokens()); // calibration stays 1.0
@@ -375,7 +374,7 @@ public class ConversationContextTests
     [Fact]
     public void RecordModelUsage_KeepsTheCompactionShrinkInvariant()
     {
-        var context = ContextWithRounds(window : 1000, reserved : 30, rounds : 3, toolResult : new string('x', 1600));
+        var context = ContextWithRounds(1000, 30, 3, new string('x', 1600));
         Assert.NotEmpty(context.BuildCompactionMessages([]));
 
         // A 4x calibration inflates both sides of the pre-commit benefit check by

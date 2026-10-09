@@ -8,10 +8,8 @@ public class WindowsCredentialStoreTests
     public void SaveReadOverwriteDelete_RoundTripsSecretInWindowsCredentialManager()
     {
         if (!OperatingSystem.IsWindows())
-        {
             // Only win-x64 is a verified NativeAOT RID; skip elsewhere.
             return;
-        }
 
         var store = new WindowsCredentialStore();
         Assert.True(store.IsSupported);
@@ -47,10 +45,7 @@ public class WindowsCredentialStoreTests
     [Fact]
     public void ReadMissingEntry_ReturnsNull()
     {
-        if (!OperatingSystem.IsWindows())
-        {
-            return;
-        }
+        if (!OperatingSystem.IsWindows()) return;
 
         var store = new WindowsCredentialStore();
         Assert.Null(store.Read($"TinyHarness.Tests:{Guid.NewGuid():N}"));

@@ -83,7 +83,7 @@ public class ApiKeyReaderTests
     }
 
     /// <summary>
-    /// Fake credential store for offline tests; entries live in memory only.
+    ///     Fake credential store for offline tests; entries live in memory only.
     /// </summary>
     private sealed class FakeCredentialStore : ICredentialStore
     {
@@ -91,17 +91,26 @@ public class ApiKeyReaderTests
 
         public bool PlatformSupported { get; init; } = true;
 
-        public bool IsSupported => PlatformSupported;
-
         public string this[string targetName]
         {
             init => _entries[targetName] = value;
         }
 
-        public void Save(string targetName, string secret) => _entries[targetName] = secret;
+        public bool IsSupported => PlatformSupported;
 
-        public string? Read(string targetName) => _entries.GetValueOrDefault(targetName);
+        public void Save(string targetName, string secret)
+        {
+            _entries[targetName] = secret;
+        }
 
-        public bool Delete(string targetName) => _entries.Remove(targetName);
+        public string? Read(string targetName)
+        {
+            return _entries.GetValueOrDefault(targetName);
+        }
+
+        public bool Delete(string targetName)
+        {
+            return _entries.Remove(targetName);
+        }
     }
 }

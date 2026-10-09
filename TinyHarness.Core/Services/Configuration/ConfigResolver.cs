@@ -4,29 +4,27 @@ using TinyHarness.Core.Models.Configuration;
 namespace TinyHarness.Core.Services.Configuration;
 
 /// <summary>
-/// 按固定顺序解析生效配置：显式 `--config` → 当前目录 tinyharness.json → 用户配置 → 内置默认值。
-/// 不隐式合并多份文件；旧文件的相对路径继续按当前工作目录解释。
-///
-/// Resolves the effective configuration in a fixed order: explicit `--config` → current-directory
-/// tinyharness.json → user config → built-in defaults. Multiple files are never merged implicitly, and
-/// relative paths in older files keep being interpreted against the current working directory.
+///     按固定顺序解析生效配置：显式 `--config` → 当前目录 tinyharness.json → 用户配置 → 内置默认值。
+///     不隐式合并多份文件；旧文件的相对路径继续按当前工作目录解释。
+///     Resolves the effective configuration in a fixed order: explicit `--config` → current-directory
+///     tinyharness.json → user config → built-in defaults. Multiple files are never merged implicitly, and
+///     relative paths in older files keep being interpreted against the current working directory.
 /// </summary>
 public static class ConfigResolver
 {
     /// <summary>
-    /// 当前目录项目配置文件名。
-    /// The project config file name in the current directory.
+    ///     当前目录项目配置文件名。
+    ///     The project config file name in the current directory.
     /// </summary>
     public const string ProjectConfigFileName = "tinyharness.json";
 
     /// <summary>
-    /// 解析生效配置与来源信息。显式指定但不存在的配置文件抛出使用错误，不发模型请求。
-    /// 工作目录与用户配置路径可注入，供测试与嵌入式调用使用；省略时使用进程当前目录与默认用户配置路径。
-    ///
-    /// Resolves the effective configuration and its source. An explicitly specified but missing file throws a
-    /// usage error before any model request is made. The working directory and user config path can be injected
-    /// for tests and embedded callers; omitted values mean the process current directory and the default user
-    /// config path.
+    ///     解析生效配置与来源信息。显式指定但不存在的配置文件抛出使用错误，不发模型请求。
+    ///     工作目录与用户配置路径可注入，供测试与嵌入式调用使用；省略时使用进程当前目录与默认用户配置路径。
+    ///     Resolves the effective configuration and its source. An explicitly specified but missing file throws a
+    ///     usage error before any model request is made. The working directory and user config path can be injected
+    ///     for tests and embedded callers; omitted values mean the process current directory and the default user
+    ///     config path.
     /// </summary>
     public static async Task<ConfigResolution> ResolveAsync(string?           explicitConfigPath,
                                                             CancellationToken cancellationToken,
@@ -47,12 +45,9 @@ public static class ConfigResolver
         {
             var explicitPath = Path.GetFullPath(explicitConfigPath);
             if (!File.Exists(explicitPath))
-            {
-                throw new ConfigException(
-                                          $"Configuration file not found: {explicitPath}" + Environment.NewLine +
+                throw new ConfigException($"Configuration file not found: {explicitPath}" + Environment.NewLine +
                                           "Pass an existing file via --config, or run 'tinyharness config show' to see the lookup paths.",
-                                          isUsageError : true);
-            }
+                                          true);
 
             var explicitConfig = await ConfigurationLoader.LoadAsync(explicitPath, cancellationToken)
                                                           .ConfigureAwait(false);
@@ -64,7 +59,7 @@ public static class ConfigResolver
                 UserConfigPath      = userConfigPathResolved,
                 UserConfigExists    = userExists,
                 ProjectConfigPath   = projectConfigPath,
-                ProjectConfigExists = projectExists,
+                ProjectConfigExists = projectExists
             };
         }
 
@@ -80,7 +75,7 @@ public static class ConfigResolver
                 UserConfigPath      = userConfigPathResolved,
                 UserConfigExists    = userExists,
                 ProjectConfigPath   = projectConfigPath,
-                ProjectConfigExists = true,
+                ProjectConfigExists = true
             };
         }
 
@@ -99,7 +94,7 @@ public static class ConfigResolver
                 UserConfigPath = userConfigPathResolved,
                 UserConfigExists = true,
                 ProjectConfigPath = projectConfigPath,
-                ProjectConfigExists = false,
+                ProjectConfigExists = false
             };
         }
 
@@ -110,17 +105,16 @@ public static class ConfigResolver
             UserConfigPath      = userConfigPathResolved,
             UserConfigExists    = false,
             ProjectConfigPath   = projectConfigPath,
-            ProjectConfigExists = false,
+            ProjectConfigExists = false
         };
     }
 
     /// <summary>
-    /// 把用户配置映射为运行配置：endpoint 与凭据引用来自默认 profile，上下文窗口来自所选模型，
-    /// 其余字段来自用户设置；缺省部分沿用内置默认值。
-    ///
-    /// Maps the user config onto the runtime config: endpoint and credential references come from the default
-    /// profile, the context window from the selected model, other fields from user settings; absent parts keep
-    /// built-in defaults.
+    ///     把用户配置映射为运行配置：endpoint 与凭据引用来自默认 profile，上下文窗口来自所选模型，
+    ///     其余字段来自用户设置；缺省部分沿用内置默认值。
+    ///     Maps the user config onto the runtime config: endpoint and credential references come from the default
+    ///     profile, the context window from the selected model, other fields from user settings; absent parts keep
+    ///     built-in defaults.
     /// </summary>
     private static TinyHarnessConfig FromUserConfig(UserConfig userConfig, string userConfigPath)
     {
@@ -129,20 +123,18 @@ public static class ConfigResolver
             : userConfig.Profiles.FirstOrDefault(p => string.Equals(p.Name, userConfig.DefaultProfile,
                                                                     StringComparison.Ordinal));
         if (profile is null && !string.IsNullOrWhiteSpace(userConfig.DefaultProfile))
-        {
-            throw new ConfigException(
-                                      $"User config '{userConfigPath}' declares default profile '{userConfig.DefaultProfile}', " +
-                                      "but no profile with that name exists. Run 'tinyharness provider list' and " +
-                                      "'tinyharness provider use <name>' to fix it.");
-        }
+            throw new
+                ConfigException($"User config '{userConfigPath}' declares default profile '{userConfig.DefaultProfile}', " +
+                                "but no profile with that name exists. Run 'tinyharness provider list' and " +
+                                "'tinyharness provider use <name>' to fix it.");
 
-        string endpoint            = string.Empty;
-        string envVar              = string.Empty;
-        string credTarget          = string.Empty;
-        string model               = string.Empty;
-        var    defaults            = new TinyHarnessConfig();
-        var    contextWindowTokens = defaults.ContextWindowTokens;
-        var    chatApi             = defaults.ChatApi;
+        var endpoint            = string.Empty;
+        var envVar              = string.Empty;
+        var credTarget          = string.Empty;
+        var model               = string.Empty;
+        var defaults            = new TinyHarnessConfig();
+        var contextWindowTokens = defaults.ContextWindowTokens;
+        var chatApi             = defaults.ChatApi;
 
         if (profile is not null)
         {
@@ -157,12 +149,10 @@ public static class ConfigResolver
                 selectedModel = profile.Models.FirstOrDefault(m => string.Equals(m.Id, profile.DefaultModel,
                                                                        StringComparison.Ordinal));
                 if (selectedModel is null)
-                {
-                    throw new ConfigException(
-                                              $"Profile '{profile.Name}' in '{userConfigPath}' declares default model '{profile.DefaultModel}', " +
-                                              "but no model with that id exists. Run 'tinyharness model add " +
-                                              $"{profile.DefaultModel} --context-window <tokens>' or 'tinyharness model use <model-id>'.");
-                }
+                    throw new
+                        ConfigException($"Profile '{profile.Name}' in '{userConfigPath}' declares default model '{profile.DefaultModel}', " +
+                                        "but no model with that id exists. Run 'tinyharness model add " +
+                                        $"{profile.DefaultModel} --context-window <tokens>' or 'tinyharness model use <model-id>'.");
             }
 
             if (selectedModel is not null)
@@ -181,17 +171,15 @@ public static class ConfigResolver
             ChatApi                   = chatApi,
             Model                     = model,
             ContextWindowTokens       = contextWindowTokens,
-            ReservedOutputTokens      = settings?.ReservedOutputTokens ?? defaults.ReservedOutputTokens,
-            CompactionThreshold       = settings?.CompactionThreshold  ?? defaults.CompactionThreshold,
-            MaxAgentSteps             = settings?.MaxAgentSteps        ?? defaults.MaxAgentSteps,
-            DefaultToolTimeoutSeconds =
-                settings?.DefaultToolTimeoutSeconds ?? defaults.DefaultToolTimeoutSeconds,
-            WorkspaceRoot = string.Empty,
-            SessionDirectory =
-                string.IsNullOrWhiteSpace(settings?.SessionDirectory)
-                    ? defaults.SessionDirectory
-                    : settings.SessionDirectory,
-            CommandRules = settings?.CommandRules ?? [],
+            ReservedOutputTokens      = settings?.ReservedOutputTokens      ?? defaults.ReservedOutputTokens,
+            CompactionThreshold       = settings?.CompactionThreshold       ?? defaults.CompactionThreshold,
+            MaxAgentSteps             = settings?.MaxAgentSteps             ?? defaults.MaxAgentSteps,
+            DefaultToolTimeoutSeconds = settings?.DefaultToolTimeoutSeconds ?? defaults.DefaultToolTimeoutSeconds,
+            WorkspaceRoot             = string.Empty,
+            SessionDirectory = string.IsNullOrWhiteSpace(settings?.SessionDirectory)
+                ? defaults.SessionDirectory
+                : settings.SessionDirectory,
+            CommandRules = settings?.CommandRules ?? []
         };
     }
 }

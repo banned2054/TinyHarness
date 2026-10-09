@@ -1,4 +1,6 @@
 using System.Buffers.Binary;
+using System.Security.Cryptography;
+using System.Security.Principal;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -8,15 +10,14 @@ using TinyHarness.Core.Services.Runtime.WindowsSandbox;
 namespace TinyHarness.Tests;
 
 /// <summary>
-/// 帧协议与 wire DTO 测试：长度前缀、版本硬校验、截断/超长、空 payload 控制帧、
-/// spawn_request/setup payload 的精确字段形状，以及 cap_sid、状态检查、凭据与策略解析。
-/// 全部离线，不启动进程、不修改机器状态。
-///
-/// Frame-protocol and wire-DTO tests: length prefixes, the hard version
-/// check, truncation/oversize, empty-payload control frames, exact field
-/// shapes of spawn_request/setup payloads, plus cap_sid, readiness checks,
-/// credentials, and policy resolution. Fully offline — no processes, no
-/// machine-state changes.
+///     帧协议与 wire DTO 测试：长度前缀、版本硬校验、截断/超长、空 payload 控制帧、
+///     spawn_request/setup payload 的精确字段形状，以及 cap_sid、状态检查、凭据与策略解析。
+///     全部离线，不启动进程、不修改机器状态。
+///     Frame-protocol and wire-DTO tests: length prefixes, the hard version
+///     check, truncation/oversize, empty-payload control frames, exact field
+///     shapes of spawn_request/setup payloads, plus cap_sid, readiness checks,
+///     credentials, and policy resolution. Fully offline — no processes, no
+///     machine-state changes.
 /// </summary>
 public class WindowsSandboxProtocolTests
 {
@@ -26,7 +27,8 @@ public class WindowsSandboxProtocolTests
     public async Task WriteFrame_RoundTripsThroughLengthPrefixAndVersion()
     {
         using var stream = new MemoryStream();
-        await RunnerFrameCodec.WriteFrameAsync(stream, "exit", new RunnerExitPayload { ExitCode = 23, TimedOut = false },
+        await RunnerFrameCodec.WriteFrameAsync(stream, "exit",
+                                               new RunnerExitPayload { ExitCode = 23, TimedOut = false },
                                                CancellationToken.None);
 
         stream.Position = 0;
@@ -46,7 +48,7 @@ public class WindowsSandboxProtocolTests
                                                CancellationToken.None);
 
         stream.Position = 0;
-        var body = ReadFrameBody(stream);
+        var body     = ReadFrameBody(stream);
         var envelope = JsonNode.Parse(body)!.AsObject();
         Assert.Equal(6, (int)envelope["version"]!);
         Assert.Equal("spawn_ready", (string)envelope["type"]!);
@@ -70,7 +72,8 @@ public class WindowsSandboxProtocolTests
         // The length prefix promises a full frame but the stream ends ten
         // bytes short: a real mid-frame truncation, unlike a short-but
         // complete frame with malformed JSON.
-        var body = Encoding.UTF8.GetBytes("""{"version":6,"type":"exit","payload":{"exit_code":0,"timed_out":false}}""");
+        var body =
+            Encoding.UTF8.GetBytes("""{"version":6,"type":"exit","payload":{"exit_code":0,"timed_out":false}}""");
         var prefix = new byte[4];
         BinaryPrimitives.WriteUInt32LittleEndian(prefix, (uint)body.Length);
         using var stream = new MemoryStream();
@@ -78,8 +81,7 @@ public class WindowsSandboxProtocolTests
         stream.Write(body, 0, body.Length - 10);
         stream.Position = 0;
 
-        await Assert.ThrowsAnyAsync<IOException>(
-            () => RunnerFrameCodec.ReadFrameAsync(stream, CancellationToken.None));
+        await Assert.ThrowsAnyAsync<IOException>(() => RunnerFrameCodec.ReadFrameAsync(stream, CancellationToken.None));
     }
 
     [Fact]
@@ -89,11 +91,11 @@ public class WindowsSandboxProtocolTests
         var oversized = new RunnerOutputPayload
         {
             DataBase64 = new string('A', RunnerFrameCodec.MaxFrameLength),
-            Stream     = "stdout",
+            Stream     = "stdout"
         };
 
-        await Assert.ThrowsAsync<InvalidDataException>(
-            () => RunnerFrameCodec.WriteFrameAsync(stream, "output", oversized, CancellationToken.None));
+        await Assert.ThrowsAsync<InvalidDataException>(() => RunnerFrameCodec.WriteFrameAsync(stream, "output",
+                                                           oversized, CancellationToken.None));
         Assert.Equal(0, stream.Length);
     }
 
@@ -107,47 +109,53 @@ public class WindowsSandboxProtocolTests
     [Fact]
     public async Task ReadFrame_RejectsMismatchedProtocolVersion()
     {
-        var body = Encoding.UTF8.GetBytes("""{"version":5,"type":"exit","payload":{"exit_code":0,"timed_out":false}}""");
+        var body =
+            Encoding.UTF8.GetBytes("""{"version":5,"type":"exit","payload":{"exit_code":0,"timed_out":false}}""");
         using var stream = FrameStream(body);
-        await Assert.ThrowsAsync<InvalidDataException>(
-            () => RunnerFrameCodec.ReadFrameAsync(stream, CancellationToken.None));
+        await Assert.ThrowsAsync<InvalidDataException>(() =>
+                                                           RunnerFrameCodec.ReadFrameAsync(stream,
+                                                               CancellationToken.None));
     }
 
     [Fact]
     public async Task ReadFrame_RejectsOversizedLengthPrefix()
     {
         var prefix = new byte[4];
-        BinaryPrimitives.WriteUInt32LittleEndian(prefix, (uint)(8 * 1024 * 1024 + 1));
+        BinaryPrimitives.WriteUInt32LittleEndian(prefix, 8 * 1024 * 1024 + 1);
         using var stream = new MemoryStream(prefix);
-        await Assert.ThrowsAsync<InvalidDataException>(
-            () => RunnerFrameCodec.ReadFrameAsync(stream, CancellationToken.None));
+        await Assert.ThrowsAsync<InvalidDataException>(() =>
+                                                           RunnerFrameCodec.ReadFrameAsync(stream,
+                                                               CancellationToken.None));
     }
 
     [Fact]
     public async Task ReadFrame_RejectsTruncatedBody()
     {
-        var body    = Encoding.UTF8.GetBytes("""{"version":6,"type":"exit","payload":{"exit_code":0,"timed_out":false}}""");
-        var truncated = body[..^10];
-        using var stream = FrameStream(truncated);
-        await Assert.ThrowsAsync<InvalidDataException>(
-            () => RunnerFrameCodec.ReadFrameAsync(stream, CancellationToken.None));
+        var body =
+            Encoding.UTF8.GetBytes("""{"version":6,"type":"exit","payload":{"exit_code":0,"timed_out":false}}""");
+        var       truncated = body[..^10];
+        using var stream    = FrameStream(truncated);
+        await Assert.ThrowsAsync<InvalidDataException>(() =>
+                                                           RunnerFrameCodec.ReadFrameAsync(stream,
+                                                               CancellationToken.None));
     }
 
     [Fact]
     public async Task ReadFrame_RejectsMissingPayloadObject()
     {
-        var body = Encoding.UTF8.GetBytes("""{"version":6,"type":"exit"}""");
+        var       body   = Encoding.UTF8.GetBytes("""{"version":6,"type":"exit"}""");
         using var stream = FrameStream(body);
-        await Assert.ThrowsAsync<InvalidDataException>(
-            () => RunnerFrameCodec.ReadFrameAsync(stream, CancellationToken.None));
+        await Assert.ThrowsAsync<InvalidDataException>(() =>
+                                                           RunnerFrameCodec.ReadFrameAsync(stream,
+                                                               CancellationToken.None));
     }
 
     [Fact]
     public async Task ReadFrame_ParsesWellFormedFrameOfAnyType()
     {
-        var body = Encoding.UTF8.GetBytes("""{"version":6,"type":"resize","payload":{"rows":10,"cols":10}}""");
+        var       body   = Encoding.UTF8.GetBytes("""{"version":6,"type":"resize","payload":{"rows":10,"cols":10}}""");
         using var stream = FrameStream(body);
-        var frame = await RunnerFrameCodec.ReadFrameAsync(stream, CancellationToken.None);
+        var       frame  = await RunnerFrameCodec.ReadFrameAsync(stream, CancellationToken.None);
         Assert.NotNull(frame);
         Assert.Equal("resize", frame!.Type);
     }
@@ -189,12 +197,12 @@ public class WindowsSandboxProtocolTests
     {
         var request = new RunnerSpawnRequest
         {
-            Command                    = ["cmd.exe", "/c", "whoami"],
-            WorkingDirectory           = @"C:\work\repo",
-            Environment                = new Dictionary<string, string> { ["PATH"] = "C:\\windows" },
-            PermissionProfile          = SandboxPolicyResolver.Resolve(SandboxPolicyKind.ReadOnly, @"C:\work\repo",
-                                                                      new Dictionary<string, string>())
-                                                              .SpawnProfile,
+            Command          = ["cmd.exe", "/c", "whoami"],
+            WorkingDirectory = @"C:\work\repo",
+            Environment      = new Dictionary<string, string> { ["PATH"] = "C:\\windows" },
+            PermissionProfile = SandboxPolicyResolver.Resolve(SandboxPolicyKind.ReadOnly, @"C:\work\repo",
+                                                              new Dictionary<string, string>())
+                                                     .SpawnProfile,
             WorkspaceRoots             = [@"C:\work\repo"],
             SandboxDirectory           = @"C:\harness\.codex-home\.sandbox",
             RealSandboxHome            = @"C:\harness\.codex-home",
@@ -203,13 +211,13 @@ public class WindowsSandboxProtocolTests
             TimeoutMilliseconds        = 30000,
             Tty                        = false,
             StdinOpen                  = false,
-            PrivateDesktopName         = "CodexSandboxDesktop-0123456789abcdef0123456789abcdef",
+            PrivateDesktopName         = "CodexSandboxDesktop-0123456789abcdef0123456789abcdef"
         };
 
         using var stream = new MemoryStream();
         await RunnerFrameCodec.WriteFrameAsync(stream, "spawn_request", request, CancellationToken.None);
         stream.Position = 0;
-        var frame = await RunnerFrameCodec.ReadFrameAsync(stream, CancellationToken.None);
+        var frame   = await RunnerFrameCodec.ReadFrameAsync(stream, CancellationToken.None);
         var payload = frame!.Payload;
 
         Assert.Equal(["cmd.exe", "/c", "whoami"],
@@ -262,7 +270,7 @@ public class WindowsSandboxProtocolTests
         var environment = new Dictionary<string, string>
         {
             ["TEMP"] = @"C:\temp\custom",
-            ["TMP"]  = @"C:\temp\custom",
+            ["TMP"]  = @"C:\temp\custom"
         };
         var policy = SandboxPolicyResolver.Resolve(SandboxPolicyKind.WorkspaceWrite, @"C:\work\repo", environment);
 
@@ -275,10 +283,10 @@ public class WindowsSandboxProtocolTests
         var entries  = policy.SpawnProfile.FileSystem.Entries;
         var metadata = entries.Skip(4).ToArray();
         Assert.Equal(8, entries.Count);
-        Assert.Equal("read", entries[0].Access);                            // root
-        Assert.Equal("write", entries[1].Access);                            // project_roots
-        Assert.Equal("slash_tmp", entries[2].Path.Value!.Kind);            // slash_tmp write
-        Assert.Equal("tmpdir", entries[3].Path.Value!.Kind);                // tmpdir write
+        Assert.Equal("read", entries[0].Access);                // root
+        Assert.Equal("write", entries[1].Access);               // project_roots
+        Assert.Equal("slash_tmp", entries[2].Path.Value!.Kind); // slash_tmp write
+        Assert.Equal("tmpdir", entries[3].Path.Value!.Kind);    // tmpdir write
         Assert.All(metadata, entry =>
         {
             Assert.Equal("read", entry.Access);
@@ -295,7 +303,7 @@ public class WindowsSandboxProtocolTests
         var environment = new Dictionary<string, string>
         {
             ["TEMP"] = "relative\\temp",
-            ["TMP"]  = "",
+            ["TMP"]  = ""
         };
         var policy = SandboxPolicyResolver.Resolve(SandboxPolicyKind.WorkspaceWrite, @"C:\work\repo", environment);
         Assert.Empty(policy.TempWriteRoots);
@@ -312,7 +320,7 @@ public class WindowsSandboxProtocolTests
         var environment = new Dictionary<string, string>
         {
             ["TEMP"] = "C:temp",
-            ["TMP"]  = "C:tmp",
+            ["TMP"]  = "C:tmp"
         };
         var policy = SandboxPolicyResolver.Resolve(SandboxPolicyKind.WorkspaceWrite, dir.Root, environment);
 
@@ -327,9 +335,9 @@ public class WindowsSandboxProtocolTests
         var policy = SandboxPolicyResolver.Resolve(SandboxPolicyKind.WorkspaceWrite, @"C:\work\repo",
                                                    new Dictionary<string, string> { ["TEMP"] = @"C:\temp\custom" });
 
-        var payload = policy.CreateSetupPayload(home.Components, @"C:\work\repo\sub", "tester", refreshOnly : true);
+        var payload = policy.CreateSetupPayload(home.Components, @"C:\work\repo\sub", "tester", true);
         using var document = JsonDocument.Parse(JsonSerializer.SerializeToUtf8Bytes(
-                                                    payload, WindowsSandboxJsonContext.Default.SandboxSetupPayload));
+                                                 payload, WindowsSandboxJsonContext.Default.SandboxSetupPayload));
         var root = document.RootElement;
         Assert.Equal(5, root.GetProperty("version").GetInt32());
         Assert.Equal("CodexSandboxOffline", root.GetProperty("offline_username").GetString());
@@ -352,15 +360,16 @@ public class WindowsSandboxProtocolTests
     [Fact]
     public async Task CapabilitySidStore_CreatesTableWhenMissingAndStaysStable()
     {
-        using var dir  = new TestTempDir();
+        using var dir = new TestTempDir();
         var components = new WindowsSandboxComponents
         {
             SetupExecutablePath  = dir.WriteBytes("setup.exe", []),
             RunnerExecutablePath = dir.WriteBytes("runner.exe", []),
-            SandboxHome          = dir.Root,
+            SandboxHome          = dir.Root
         };
-        var store     = new SandboxCapabilitySidStore(components);
-        var readOnly  = SandboxPolicyResolver.Resolve(SandboxPolicyKind.ReadOnly, dir.Root, new Dictionary<string, string>());
+        var store = new SandboxCapabilitySidStore(components);
+        var readOnly =
+            SandboxPolicyResolver.Resolve(SandboxPolicyKind.ReadOnly, dir.Root, new Dictionary<string, string>());
 
         var first  = await store.ResolveForPolicy(readOnly);
         var second = await store.ResolveForPolicy(readOnly);
@@ -374,15 +383,16 @@ public class WindowsSandboxProtocolTests
     [Fact]
     public async Task CapabilitySidStore_GetOrCreatePerWriteRootPersistsEntries()
     {
-        using var dir  = new TestTempDir();
+        using var dir = new TestTempDir();
         var components = new WindowsSandboxComponents
         {
             SetupExecutablePath  = dir.WriteBytes("setup.exe", []),
             RunnerExecutablePath = dir.WriteBytes("runner.exe", []),
-            SandboxHome          = dir.Root,
+            SandboxHome          = dir.Root
         };
         var store = new SandboxCapabilitySidStore(components);
-        var policy = SandboxPolicyResolver.Resolve(SandboxPolicyKind.WorkspaceWrite, dir.Root, new Dictionary<string, string>());
+        var policy =
+            SandboxPolicyResolver.Resolve(SandboxPolicyKind.WorkspaceWrite, dir.Root, new Dictionary<string, string>());
 
         var first  = await store.ResolveForPolicy(policy);
         var second = await store.ResolveForPolicy(policy);
@@ -398,10 +408,7 @@ public class WindowsSandboxProtocolTests
     [Fact]
     public void CapabilitySidStore_CanonicalRootKeyMatchesRustKeyFormat()
     {
-        if (!OperatingSystem.IsWindows())
-        {
-            return;
-        }
+        if (!OperatingSystem.IsWindows()) return;
 
         // Pinned to the Rust setup helper's canonical_path_key: forward
         // slashes and lower casing, so "C:\Work\Repo" and "c:/WORK/REPO"
@@ -413,12 +420,12 @@ public class WindowsSandboxProtocolTests
     [Fact]
     public async Task CapabilitySidStore_RejectsLegacyTextTable()
     {
-        using var dir       = new TestTempDir();
-        var components     = new WindowsSandboxComponents
+        using var dir = new TestTempDir();
+        var components = new WindowsSandboxComponents
         {
             SetupExecutablePath  = dir.WriteBytes("setup.exe", []),
             RunnerExecutablePath = dir.WriteBytes("runner.exe", []),
-            SandboxHome          = dir.Root,
+            SandboxHome          = dir.Root
         };
         dir.WriteFile("cap_sid", "S-1-5-21-9-9-9-9");
         var store = new SandboxCapabilitySidStore(components);
@@ -430,20 +437,20 @@ public class WindowsSandboxProtocolTests
     [Fact]
     public async Task StateInspector_ReportsReadyForFullyProvisionedHome()
     {
-        using var home = new SandboxTestHome();
-        var status = await new WindowsSandboxStateInspector(home.Components).InspectAsync();
+        using var home   = new SandboxTestHome();
+        var       status = await new WindowsSandboxStateInspector(home.Components).InspectAsync();
         Assert.True(status.Ready, string.Join("; ", status.Problems));
     }
 
     [Fact]
     public async Task StateInspector_AggregatesEveryProblemForEmptyHome()
     {
-        using var dir  = new TestTempDir();
+        using var dir = new TestTempDir();
         var components = new WindowsSandboxComponents
         {
             SetupExecutablePath  = Path.Combine(dir.Root, "missing-setup.exe"),
             RunnerExecutablePath = Path.Combine(dir.Root, "missing-runner.exe"),
-            SandboxHome          = dir.Root,
+            SandboxHome          = dir.Root
         };
         var status = await new WindowsSandboxStateInspector(components).InspectAsync();
         Assert.False(status.Ready);
@@ -475,13 +482,10 @@ public class WindowsSandboxProtocolTests
     [Fact]
     public void DesktopFactory_BuildSddlGrantsOwnerAllAndSandboxParticipant()
     {
-        if (!OperatingSystem.IsWindows())
-        {
-            return;
-        }
+        if (!OperatingSystem.IsWindows()) return;
 
-        var owner   = new System.Security.Principal.SecurityIdentifier("S-1-5-21-100-200-300-1001");
-        var sandbox = new System.Security.Principal.SecurityIdentifier("S-1-5-21-100-200-300-404");
+        var owner   = new SecurityIdentifier("S-1-5-21-100-200-300-1001");
+        var sandbox = new SecurityIdentifier("S-1-5-21-100-200-300-404");
 
         var sddl = WindowsSandboxDesktopFactory.BuildSddl(owner, sandbox);
 
@@ -501,26 +505,21 @@ public class WindowsSandboxProtocolTests
     [Fact]
     public async Task CredentialReader_DecryptsDpapiPasswordForExistingAccount()
     {
-        if (!OperatingSystem.IsWindows())
-        {
-            return;
-        }
+        if (!OperatingSystem.IsWindows()) return;
 
-        using var home = new SandboxTestHome();
-        var identity = System.Security.Principal.WindowsIdentity.GetCurrent().Name.Split('\\');
+        using var home     = new SandboxTestHome();
+        var       identity = WindowsIdentity.GetCurrent().Name.Split('\\');
         if (identity.Length != 2 || !identity[0].Equals(Environment.MachineName, StringComparison.OrdinalIgnoreCase))
-        {
             // SID lookup requires a machine-local account; skip elsewhere.
             return;
-        }
 
-        var secret  = "sandbox-password-Ø";
-        var blob    = System.Security.Cryptography.ProtectedData.Protect(
-            Encoding.UTF8.GetBytes(secret), null,
-            System.Security.Cryptography.DataProtectionScope.LocalMachine);
+        var secret = "sandbox-password-Ø";
+        var blob = ProtectedData.Protect(
+                                         Encoding.UTF8.GetBytes(secret), null,
+                                         DataProtectionScope.LocalMachine);
         File.WriteAllText(home.Components.UsersFilePath,
-                          "{\"version\":5,\"offline\":{\"username\":\"" + identity[1] +
-                          "\",\"password\":\"" + Convert.ToBase64String(blob) +
+                          "{\"version\":5,\"offline\":{\"username\":\"" + identity[1]                  +
+                          "\",\"password\":\""                          + Convert.ToBase64String(blob) +
                           "\"},\"online\":{\"username\":\"CodexSandboxOnline\",\"password\":\"QUJDRA==\"}}");
 
         var account = await new SandboxCredentialReader(home.Components).LoadOfflineAccount();
@@ -532,16 +531,13 @@ public class WindowsSandboxProtocolTests
     [Fact]
     public async Task CredentialReader_RejectsVersionMismatch()
     {
-        if (!OperatingSystem.IsWindows())
-        {
-            return;
-        }
+        if (!OperatingSystem.IsWindows()) return;
 
         using var home = new SandboxTestHome();
         File.WriteAllText(home.Components.UsersFilePath,
                           """{"version":4,"offline":{"username":"a","password":"QQ=="},"online":{"username":"b","password":"QQ=="}}""");
-        await Assert.ThrowsAsync<InvalidOperationException>(
-            () => new SandboxCredentialReader(home.Components).LoadOfflineAccount());
+        await Assert.ThrowsAsync<InvalidOperationException>(() => new SandboxCredentialReader(home.Components)
+                                                               .LoadOfflineAccount());
     }
 
     // ---- setup invoker payload channel ----
@@ -549,9 +545,9 @@ public class WindowsSandboxProtocolTests
     [Fact]
     public void SetupInvoker_UsesArgumentChannelForSmallPayloads()
     {
-        using var home   = new SandboxTestHome();
-        var invoker     = new ProcessSandboxSetupInvoker(home.Components);
-        var smallBase64 = Convert.ToBase64String([1, 2, 3]);
+        using var home        = new SandboxTestHome();
+        var       invoker     = new ProcessSandboxSetupInvoker(home.Components);
+        var       smallBase64 = Convert.ToBase64String([1, 2, 3]);
 
         var startInfo = invoker.BuildStartInfo(smallBase64);
         Assert.Equal(smallBase64, startInfo.Arguments);
@@ -561,16 +557,17 @@ public class WindowsSandboxProtocolTests
     [Fact]
     public void SetupInvoker_SwitchesToChunkedEnvChannelForLargePayloads()
     {
-        using var home   = new SandboxTestHome();
-        var invoker     = new ProcessSandboxSetupInvoker(home.Components);
-        var largeBase64 = new string('A', ProcessSandboxSetupInvoker.PayloadArgumentCharacterLimit + 5);
+        using var home        = new SandboxTestHome();
+        var       invoker     = new ProcessSandboxSetupInvoker(home.Components);
+        var       largeBase64 = new string('A', ProcessSandboxSetupInvoker.PayloadArgumentCharacterLimit + 5);
 
         var startInfo = invoker.BuildStartInfo(largeBase64);
         Assert.Equal("--launch-payload-env", startInfo.Arguments);
         Assert.Equal(largeBase64.Length.ToString(), startInfo.Environment["CODEX_SANDBOX_LAUNCH_BYTES"]);
         var chunkCount = int.Parse(startInfo.Environment["CODEX_SANDBOX_LAUNCH_COUNT"]!);
         var reassembled = string.Concat(Enumerable.Range(0, chunkCount)
-                                                  .Select(index => startInfo.Environment[$"CODEX_SANDBOX_LAUNCH_{index}"]));
+                                                  .Select(index =>
+                                                              startInfo.Environment[$"CODEX_SANDBOX_LAUNCH_{index}"]));
         Assert.Equal(largeBase64, reassembled);
         Assert.All(Enumerable.Range(0, chunkCount),
                    index => Assert.True(startInfo.Environment[$"CODEX_SANDBOX_LAUNCH_{index}"]!.Length <= 16 * 1024));
@@ -587,17 +584,19 @@ public class WindowsSandboxProtocolTests
     [InlineData("with space\\", "\"with space\\\\\"")]
     [InlineData(@"C:\pre\""quote", "\"C:\\pre\\\\\\\"quote\"")]
     public void RunnerLauncher_QuoteArgumentFollowsCrtRules(string value, string expected)
-        => Assert.Equal(expected, WindowsSandboxRunnerLauncher.QuoteArgument(value));
+    {
+        Assert.Equal(expected, WindowsSandboxRunnerLauncher.QuoteArgument(value));
+    }
 
     [Fact]
     public void RunnerLauncher_CommandLinePassesFullPipeNames()
     {
         var commandLine = WindowsSandboxRunnerLauncher.BuildRunnerCommandLine(
-            @"C:\tools\codex-command-runner.exe",
-            @"\\.\pipe\codex-runner-abcd-in",
-            @"\\.\pipe\codex-runner-abcd-out");
+                                                                              @"C:\tools\codex-command-runner.exe",
+                                                                              @"\\.\pipe\codex-runner-abcd-in",
+                                                                              @"\\.\pipe\codex-runner-abcd-out");
         // CRT rules add no quotes for tokens without whitespace/quotes.
-        Assert.Equal(@"C:\tools\codex-command-runner.exe" +
+        Assert.Equal(@"C:\tools\codex-command-runner.exe"           +
                      " --pipe-in=\\\\.\\pipe\\codex-runner-abcd-in" +
                      " --pipe-out=\\\\.\\pipe\\codex-runner-abcd-out",
                      commandLine);

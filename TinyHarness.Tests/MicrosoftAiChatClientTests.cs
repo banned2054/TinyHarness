@@ -1,8 +1,8 @@
+using Microsoft.Extensions.AI;
 using System.ClientModel;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using Microsoft.Extensions.AI;
 using TinyHarness.Core.Models.Agent;
 using TinyHarness.Core.Models.ChatCompletions;
 using TinyHarness.Core.Models.Tools;
@@ -15,36 +15,37 @@ using MicrosoftChatMessage = Microsoft.Extensions.AI.ChatMessage;
 namespace TinyHarness.Tests;
 
 /// <summary>
-/// M.E.AI 传输层契约测试：经 ModelClientFactory 构造的 MicrosoftAiChatClient 驱动真实
-/// OpenAI/M.E.AI SDK 打本地脚本 SSE 服务，验证请求形状、流式翻译、工具调用拼装、usage、
-/// 结束原因与错误/取消语义——全部离线，无真实 key，无 loopback 之外的网络。
-///
-/// Contract tests for the M.E.AI transport: the MicrosoftAiChatClient built by
-/// ModelClientFactory drives the real OpenAI/M.E.AI SDK against a local scripted
-/// SSE server, verifying request shape, streaming translation, tool-call assembly,
-/// usage, finish reason, and error/cancellation semantics — all offline, no key,
-/// no network beyond loopback.
+///     M.E.AI 传输层契约测试：经 ModelClientFactory 构造的 MicrosoftAiChatClient 驱动真实
+///     OpenAI/M.E.AI SDK 打本地脚本 SSE 服务，验证请求形状、流式翻译、工具调用拼装、usage、
+///     结束原因与错误/取消语义——全部离线，无真实 key，无 loopback 之外的网络。
+///     Contract tests for the M.E.AI transport: the MicrosoftAiChatClient built by
+///     ModelClientFactory drives the real OpenAI/M.E.AI SDK against a local scripted
+///     SSE server, verifying request shape, streaming translation, tool-call assembly,
+///     usage, finish reason, and error/cancellation semantics — all offline, no key,
+///     no network beyond loopback.
 /// </summary>
 public class MicrosoftAiChatClientTests
 {
-    private static IChatCompletionClient NewClient(MockSseServer server) =>
-        ModelClientFactory.Create("mock-model", server.BaseUrl, "test-key");
-
-    private static ChatCompletionRequest Request(params ChatMessage[] messages) => new()
+    private static IChatCompletionClient NewClient(MockSseServer server)
     {
-        Model    = "mock-model",
-        Messages = messages,
-    };
+        return ModelClientFactory.Create("mock-model", server.BaseUrl, "test-key");
+    }
+
+    private static ChatCompletionRequest Request(params ChatMessage[] messages)
+    {
+        return new ChatCompletionRequest
+        {
+            Model    = "mock-model",
+            Messages = messages
+        };
+    }
 
     private static async Task<List<ChatStreamEvent>> CollectAsync(IChatCompletionClient client,
                                                                   ChatCompletionRequest request,
                                                                   CancellationToken     cancellationToken = default)
     {
         var events = new List<ChatStreamEvent>();
-        await foreach (var @event in client.CompleteAsync(request, cancellationToken))
-        {
-            events.Add(@event);
-        }
+        await foreach (var @event in client.CompleteAsync(request, cancellationToken)) events.Add(@event);
 
         return events;
     }
@@ -52,10 +53,7 @@ public class MicrosoftAiChatClientTests
     private static StreamAccumulator Accumulate(IEnumerable<ChatStreamEvent> events)
     {
         var accumulator = new StreamAccumulator();
-        foreach (var @event in events)
-        {
-            accumulator.Append(@event);
-        }
+        foreach (var @event in events) accumulator.Append(@event);
 
         accumulator.Finish();
         return accumulator;
@@ -71,29 +69,55 @@ public class MicrosoftAiChatClientTests
                $"\"model\":\"mock\",\"choices\":[{{\"index\":0,\"delta\":{deltaJson},\"finish_reason\":{finish}}}]{usage}}}\n\n";
     }
 
-    private static string Sse(params string[] chunks) => string.Concat(chunks) + "data: [DONE]\n\n";
+    private static string Sse(params string[] chunks)
+    {
+        return string.Concat(chunks) + "data: [DONE]\n\n";
+    }
 
-    private static string Json(string value) => System.Text.Json.JsonSerializer.Serialize(value);
+    private static string Json(string value)
+    {
+        return JsonSerializer.Serialize(value);
+    }
 
-    private static string RoleDelta() => Chunk("""{"role":"assistant","content":""}""");
+    private static string RoleDelta()
+    {
+        return Chunk("""{"role":"assistant","content":""}""");
+    }
 
-    private static string ContentDelta(string text) => Chunk($"{{\"content\":{Json(text)}}}");
+    private static string ContentDelta(string text)
+    {
+        return Chunk($"{{\"content\":{Json(text)}}}");
+    }
 
-    private static string ToolCallHead(int index, string id, string name) => Chunk(
-         $"{{\"tool_calls\":[{{\"index\":{index},\"id\":{Json(id)},\"type\":\"function\"," +
-         $"\"function\":{{\"name\":{Json(name)},\"arguments\":\"\"}}}}]}}");
+    private static string ToolCallHead(int index, string id, string name)
+    {
+        return Chunk(
+                     $"{{\"tool_calls\":[{{\"index\":{index},\"id\":{Json(id)},\"type\":\"function\"," +
+                     $"\"function\":{{\"name\":{Json(name)},\"arguments\":\"\"}}}}]}}");
+    }
 
-    private static string ToolArgumentsDelta(int index, string argumentsFragment) => Chunk(
-         $"{{\"tool_calls\":[{{\"index\":{index},\"function\":{{\"arguments\":{Json(argumentsFragment)}}}}}]}}");
+    private static string ToolArgumentsDelta(int index, string argumentsFragment)
+    {
+        return Chunk(
+                     $"{{\"tool_calls\":[{{\"index\":{index},\"function\":{{\"arguments\":{Json(argumentsFragment)}}}}}]}}");
+    }
 
-    private static string StopDelta() => Chunk("{}", finishReason : "stop");
+    private static string StopDelta()
+    {
+        return Chunk("{}", "stop");
+    }
 
-    private static string ToolCallsFinishDelta() => Chunk("{}", finishReason : "tool_calls");
+    private static string ToolCallsFinishDelta()
+    {
+        return Chunk("{}", "tool_calls");
+    }
 
-    private static string UsageStopDelta(int promptTokens, int completionTokens) =>
-        Chunk("{}", finishReason : "stop", usageJson : $"{{\"prompt_tokens\":{promptTokens}," +
-                                                      $"\"completion_tokens\":{completionTokens}," +
-                                                      $"\"total_tokens\":{promptTokens + completionTokens}}}");
+    private static string UsageStopDelta(int promptTokens, int completionTokens)
+    {
+        return Chunk("{}", "stop", $"{{\"prompt_tokens\":{promptTokens},"       +
+                                   $"\"completion_tokens\":{completionTokens}," +
+                                   $"\"total_tokens\":{promptTokens + completionTokens}}}");
+    }
 
     // ---- tests ---------------------------------------------------------------
 
@@ -205,12 +229,12 @@ public class MicrosoftAiChatClientTests
         {
             new(null, new List<AIContent>
             {
-                new FunctionCallContent(string.Empty, "tool_a", new Dictionary<string, object?> { ["x"] = 1 }),
+                new FunctionCallContent(string.Empty, "tool_a", new Dictionary<string, object?> { ["x"] = 1 })
             }),
             new(null, new List<AIContent>
             {
-                new FunctionCallContent(string.Empty, "tool_b", new Dictionary<string, object?> { ["y"] = 2 }),
-            }),
+                new FunctionCallContent(string.Empty, "tool_b", new Dictionary<string, object?> { ["y"] = 2 })
+            })
         };
         using var client = new MicrosoftAiChatClient(new ScriptedUpdateChatClient(updates));
 
@@ -243,7 +267,7 @@ public class MicrosoftAiChatClientTests
         {
             Model    = "mock-model",
             Messages = [ChatMessage.User("read it")],
-            Tools    = [tool],
+            Tools    = [tool]
         });
 
         // Replay the round an Agent loop would build: the assistant's tool call
@@ -256,9 +280,9 @@ public class MicrosoftAiChatClientTests
                 ChatMessage.User("read it"),
                 ChatMessage.Assistant("I will read it.",
                                       [new ChatToolCall("call_1", "read_file", """{"path":"/tmp/a.txt"}""")]),
-                ChatMessage.Tool("read_file", "call_1", "read_file ok"),
+                ChatMessage.Tool("read_file", "call_1", "read_file ok")
             ],
-            Tools = [tool],
+            Tools = [tool]
         });
 
         Assert.Equal(2, server.Requests.Count);
@@ -293,14 +317,17 @@ public class MicrosoftAiChatClientTests
         Assert.Equal("read_file ok", toolMessage["content"]!.GetValue<string>());
     }
 
-    private static ToolDefinition ReadFileTool() => new()
+    private static ToolDefinition ReadFileTool()
     {
-        Name        = "read_file",
-        Description = "Read a text file.",
-        Parameters =
-            JsonNode.Parse("""{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}""") as
-                JsonObject ?? throw new InvalidOperationException("bad fixture"),
-    };
+        return new ToolDefinition
+        {
+            Name        = "read_file",
+            Description = "Read a text file.",
+            Parameters =
+                JsonNode.Parse("""{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}""") as
+                    JsonObject ?? throw new InvalidOperationException("bad fixture")
+        };
+    }
 
     [Fact]
     public async Task FinalUsageChunk_FillsAccumulatorTokenCounts()
@@ -363,8 +390,8 @@ public class MicrosoftAiChatClientTests
         });
         var client = NewClient(server);
 
-        using var cts = new CancellationTokenSource();
-        var collect = Task.Run(() => CollectAsync(client, Request(ChatMessage.User("slow")), cts.Token));
+        using var cts     = new CancellationTokenSource();
+        var       collect = Task.Run(() => CollectAsync(client, Request(ChatMessage.User("slow")), cts.Token));
         await Task.Delay(200);
         await cts.CancelAsync();
 
@@ -393,7 +420,7 @@ public class MicrosoftAiChatClientTests
         {
             Model                     = "mock-model",
             MaxAgentSteps             = 10,
-            DefaultToolTimeoutSeconds = 30,
+            DefaultToolTimeoutSeconds = 30
         });
 
         var result = await loop.RunAsync("sys", "inspect /tmp/a.txt", CancellationToken.None);
@@ -414,25 +441,24 @@ public class MicrosoftAiChatClientTests
     }
 
     /// <summary>
-    /// 逐条回放预构造 <see cref="ChatResponseUpdate"/> 的最小 IChatClient：用于 wire 协议无法
-    /// 表达的离线场景（如缺失工具调用 id），绕过 SSE 与真实 SDK。
-    ///
-    /// A minimal IChatClient replaying prebuilt <see cref="ChatResponseUpdate"/> instances
-    /// one by one; used for offline shapes the wire protocol cannot express (such as a
-    /// missing tool-call id), bypassing SSE and the real SDK.
+    ///     逐条回放预构造 <see cref="ChatResponseUpdate" /> 的最小 IChatClient：用于 wire 协议无法
+    ///     表达的离线场景（如缺失工具调用 id），绕过 SSE 与真实 SDK。
+    ///     A minimal IChatClient replaying prebuilt <see cref="ChatResponseUpdate" /> instances
+    ///     one by one; used for offline shapes the wire protocol cannot express (such as a
+    ///     missing tool-call id), bypassing SSE and the real SDK.
     /// </summary>
     private sealed class ScriptedUpdateChatClient(IReadOnlyList<ChatResponseUpdate> updates) : IChatClient
     {
         public Task<ChatResponse> GetResponseAsync(IEnumerable<MicrosoftChatMessage> messages,
-                                                   ChatOptions? options,
-                                                   CancellationToken cancellationToken)
+                                                   ChatOptions?                      options,
+                                                   CancellationToken                 cancellationToken)
         {
             throw new NotSupportedException("This fake only supports streaming.");
         }
 
         public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
-            IEnumerable<MicrosoftChatMessage> messages,
-            ChatOptions? options,
+            IEnumerable<MicrosoftChatMessage>          messages,
+            ChatOptions?                               options,
             [EnumeratorCancellation] CancellationToken cancellationToken)
         {
             foreach (var update in updates)
@@ -442,7 +468,10 @@ public class MicrosoftAiChatClientTests
             }
         }
 
-        public object? GetService(Type serviceType, object? serviceKey = null) => null;
+        public object? GetService(Type serviceType, object? serviceKey = null)
+        {
+            return null;
+        }
 
         public void Dispose()
         {

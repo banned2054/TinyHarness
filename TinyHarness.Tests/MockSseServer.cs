@@ -6,42 +6,22 @@ using System.Text.Json;
 namespace TinyHarness.Tests;
 
 /// <summary>
-/// A scripted local HTTP server that mimics an OpenAI-compatible SSE endpoint
-/// (PLAN M2 contract tests). Each HTTP request is answered from a queue of
-/// handlers, letting tests drive the real transport without network or key.
-/// Requests are recorded so tests can assert what the client actually sent.
+///     A scripted local HTTP server that mimics an OpenAI-compatible SSE endpoint
+///     (PLAN M2 contract tests). Each HTTP request is answered from a queue of
+///     handlers, letting tests drive the real transport without network or key.
+///     Requests are recorded so tests can assert what the client actually sent.
 /// </summary>
 internal sealed class MockSseServer : IDisposable
 {
     private readonly CancellationTokenSource                    _cts      = new();
-    private readonly Lock                                       _lock     = new();
     private readonly Queue<Func<ReceivedRequest, HttpResponse>> _handlers = new();
+    private readonly Lock                                       _lock     = new();
 
     private HttpListener _listener = new();
-
-    public sealed record ReceivedRequest(string Method, string Path, string Body);
-
-    public sealed record HttpResponse(int Status, string ContentType, string Body);
 
     public string BaseUrl { get; private set; } = string.Empty;
 
     public List<ReceivedRequest> Requests { get; } = [];
-
-    public void Start()
-    {
-        int port;
-        using (var probe = new TcpListener(IPAddress.Loopback, 0))
-        {
-            probe.Start();
-            port = ((IPEndPoint)probe.LocalEndpoint).Port;
-        }
-
-        _listener = new HttpListener();
-        _listener.Prefixes.Add($"http://127.0.0.1:{port}/");
-        _listener.Start();
-        BaseUrl = $"http://127.0.0.1:{port}/v1";
-        _       = Task.Run(ListenerLoopAsync);
-    }
 
     public void Dispose()
     {
@@ -59,6 +39,22 @@ internal sealed class MockSseServer : IDisposable
         _cts.Dispose();
     }
 
+    public void Start()
+    {
+        int port;
+        using (var probe = new TcpListener(IPAddress.Loopback, 0))
+        {
+            probe.Start();
+            port = ((IPEndPoint)probe.LocalEndpoint).Port;
+        }
+
+        _listener = new HttpListener();
+        _listener.Prefixes.Add($"http://127.0.0.1:{port}/");
+        _listener.Start();
+        BaseUrl = $"http://127.0.0.1:{port}/v1";
+        _       = Task.Run(ListenerLoopAsync);
+    }
+
     /// <summary>Enqueues the response for the next request.</summary>
     public void Enqueue(Func<ReceivedRequest, HttpResponse> handler)
     {
@@ -69,16 +65,21 @@ internal sealed class MockSseServer : IDisposable
     }
 
     public void EnqueueError(int status)
-        => Enqueue(_ => new HttpResponse(status, "application/json",
-                                         JsonSerializer.Serialize(new
-                                         {
-                                             error = new
-                                             {
-                                                 message = $"mock {status}", type = "mock_error", code = status,
-                                             },
-                                         })));
+    {
+        Enqueue(_ => new HttpResponse(status, "application/json",
+                                      JsonSerializer.Serialize(new
+                                      {
+                                          error = new
+                                          {
+                                              message = $"mock {status}", type = "mock_error", code = status
+                                          }
+                                      })));
+    }
 
-    public void EnqueueRaw(string sseBody) => Enqueue(_ => new HttpResponse(200, "text/event-stream", sseBody));
+    public void EnqueueRaw(string sseBody)
+    {
+        Enqueue(_ => new HttpResponse(200, "text/event-stream", sseBody));
+    }
 
     private async Task ListenerLoopAsync()
     {
@@ -146,4 +147,8 @@ internal sealed class MockSseServer : IDisposable
             // Response already closed.
         }
     }
+
+    public sealed record ReceivedRequest(string Method, string Path, string Body);
+
+    public sealed record HttpResponse(int Status, string ContentType, string Body);
 }

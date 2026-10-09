@@ -5,10 +5,13 @@ namespace TinyHarness.Tests;
 
 public class WorkerRequestValidatorTests
 {
-    private static WorkerRequest MinimalValidRequest() => new()
+    private static WorkerRequest MinimalValidRequest()
     {
-        TaskPrompt = "Find where the retry budget is enforced and report the call sites.",
-    };
+        return new WorkerRequest
+        {
+            TaskPrompt = "Find where the retry budget is enforced and report the call sites."
+        };
+    }
 
     // ---- valid requests ----------------------------------------------------
 
@@ -29,7 +32,7 @@ public class WorkerRequestValidatorTests
             TaskPrompt     = "Explain how session snapshots are written.",
             KnownFacts     = ["Snapshots live under artifacts/runs.", "The CLI owns persistence."],
             FocusPaths     = ["src/persistence", "src/persistence/snapshot.cs"],
-            ExpectedOutput = "A short summary plus up to three cited files.",
+            ExpectedOutput = "A short summary plus up to three cited files."
         };
 
         var result = WorkerRequestValidator.Validate(request);
@@ -50,7 +53,7 @@ public class WorkerRequestValidatorTests
             FocusPaths = Enumerable.Range(1, WorkerRequestLimits.MaxFocusPathCount)
                                    .Select(i => new string('p', WorkerRequestLimits.MaxFocusPathLength - 4) +
                                                 $"/p{i:D2}").ToArray(),
-            ExpectedOutput = new string('b', WorkerRequestLimits.MaxExpectedOutputLength),
+            ExpectedOutput = new string('b', WorkerRequestLimits.MaxExpectedOutputLength)
         };
 
         var result = WorkerRequestValidator.Validate(request);
@@ -90,7 +93,7 @@ public class WorkerRequestValidatorTests
     {
         var request = new WorkerRequest
         {
-            TaskPrompt = new string('a', WorkerRequestLimits.MaxTaskPromptLength + 1),
+            TaskPrompt = new string('a', WorkerRequestLimits.MaxTaskPromptLength + 1)
         };
 
         var result = WorkerRequestValidator.Validate(request);
@@ -110,7 +113,7 @@ public class WorkerRequestValidatorTests
         {
             KnownFacts = Enumerable.Range(1, WorkerRequestLimits.MaxKnownFactCount + 1)
                                    .Select(i => $"fact {i}")
-                                   .ToArray(),
+                                   .ToArray()
         };
 
         var result = WorkerRequestValidator.Validate(request);
@@ -124,7 +127,7 @@ public class WorkerRequestValidatorTests
     {
         var request = MinimalValidRequest() with
         {
-            KnownFacts = ["short fact", new string('x', WorkerRequestLimits.MaxKnownFactLength + 1)],
+            KnownFacts = ["short fact", new string('x', WorkerRequestLimits.MaxKnownFactLength + 1)]
         };
 
         var result = WorkerRequestValidator.Validate(request);
@@ -179,7 +182,7 @@ public class WorkerRequestValidatorTests
         {
             FocusPaths = Enumerable.Range(1, WorkerRequestLimits.MaxFocusPathCount + 1)
                                    .Select(i => $"dir/file{i}.cs")
-                                   .ToArray(),
+                                   .ToArray()
         };
 
         var result = WorkerRequestValidator.Validate(request);
@@ -193,7 +196,7 @@ public class WorkerRequestValidatorTests
     {
         var request = MinimalValidRequest() with
         {
-            FocusPaths = [new string('p', WorkerRequestLimits.MaxFocusPathLength + 1)],
+            FocusPaths = [new string('p', WorkerRequestLimits.MaxFocusPathLength + 1)]
         };
 
         var result = WorkerRequestValidator.Validate(request);
@@ -211,7 +214,7 @@ public class WorkerRequestValidatorTests
     {
         var request = MinimalValidRequest() with
         {
-            ExpectedOutput = new string('b', WorkerRequestLimits.MaxExpectedOutputLength + 1),
+            ExpectedOutput = new string('b', WorkerRequestLimits.MaxExpectedOutputLength + 1)
         };
 
         var result = WorkerRequestValidator.Validate(request);
@@ -251,7 +254,7 @@ public class WorkerRequestValidatorTests
             TaskPrompt     = " ",
             KnownFacts     = [new string('x', WorkerRequestLimits.MaxKnownFactLength + 1)],
             FocusPaths     = ["C:\\tmp"],
-            ExpectedOutput = new string('y', WorkerRequestLimits.MaxExpectedOutputLength + 1),
+            ExpectedOutput = new string('y', WorkerRequestLimits.MaxExpectedOutputLength + 1)
         };
 
         var result = WorkerRequestValidator.Validate(request);

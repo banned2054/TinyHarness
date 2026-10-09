@@ -7,19 +7,19 @@ using TinyHarness.Core.Services.Tools;
 namespace TinyHarness.Tests;
 
 /// <summary>
-/// ShellTool 与 IProcessExecutionBackend 之间契约的映射测试：使用 fake backend
-/// 验证冻结计划的传递、输出块到 ToolResult 的组装，以及终态映射，不启动真实进程。
+///     ShellTool 与 IProcessExecutionBackend 之间契约的映射测试：使用 fake backend
+///     验证冻结计划的传递、输出块到 ToolResult 的组装，以及终态映射，不启动真实进程。
 /// </summary>
 public class ShellToolBackendTests
 {
     [Fact]
     public async Task Execute_SendsFrozenShellModePlanToBackend()
     {
-        using var dir    = new TestTempDir();
-        var       shell  = OperatingSystem.IsWindows() ? "powershell" : "sh";
+        using var dir     = new TestTempDir();
+        var       shell   = OperatingSystem.IsWindows() ? "powershell" : "sh";
         var       command = "Write-Output probe";
         var       fake    = new FakeProcessExecutionBackend { ExitCode = 0 };
-        var       tool    = new ShellTool(dir.Workspace, defaultTimeoutSeconds : 45, processBackend : fake);
+        var       tool    = new ShellTool(dir.Workspace, 45, processBackend : fake);
 
         var preparation = tool.Prepare(ShellCall(shell, command));
         var result      = await tool.ExecuteAsync(preparation, CancellationToken.None);
@@ -62,15 +62,12 @@ public class ShellToolBackendTests
     [Fact]
     public async Task Execute_SendsRawCmdTailToBackendForWindowsCmdShell()
     {
-        if (!OperatingSystem.IsWindows())
-        {
-            return;
-        }
+        if (!OperatingSystem.IsWindows()) return;
 
-        using var dir     = new TestTempDir();
+        using var    dir     = new TestTempDir();
         const string command = "echo quoted \"a b\" & echo combined";
-        var       fake   = new FakeProcessExecutionBackend { ExitCode = 0 };
-        var       tool   = new ShellTool(dir.Workspace, processBackend : fake);
+        var          fake    = new FakeProcessExecutionBackend { ExitCode = 0 };
+        var          tool    = new ShellTool(dir.Workspace, processBackend : fake);
 
         await tool.ExecuteAsync(tool.Prepare(ShellCall("cmd", command)), CancellationToken.None);
 
@@ -88,7 +85,7 @@ public class ShellToolBackendTests
         {
             StdoutChunks = ["out-part-1 ", "out-part-2"],
             StderrChunks = ["err-part-1 ", "err-part-2"],
-            ExitCode     = 0,
+            ExitCode     = 0
         };
         var tool = new ShellTool(dir.Workspace, artifactRoot : dir.CreateDirectory("artifacts"),
                                  processBackend : fake);
@@ -135,15 +132,15 @@ public class ShellToolBackendTests
     [Fact]
     public async Task Execute_KeepsOutputAndFailsOnBackendTimeout()
     {
-        using var dir  = new TestTempDir();
-        var       fake = new FakeProcessExecutionBackend
+        using var dir = new TestTempDir();
+        var fake = new FakeProcessExecutionBackend
         {
             StdoutChunks = ["partial-stdout"],
             StderrChunks = ["partial-stderr"],
             ExitCode     = 1,
-            TimedOut     = true,
+            TimedOut     = true
         };
-        var tool = new ShellTool(dir.Workspace, defaultTimeoutSeconds : 9, processBackend : fake);
+        var tool = new ShellTool(dir.Workspace, 9, processBackend : fake);
 
         var result = await tool.ExecuteAsync(tool.Prepare(Call("dotnet", ["test"])), CancellationToken.None);
 
@@ -157,27 +154,27 @@ public class ShellToolBackendTests
     [Fact]
     public async Task Execute_PropagatesBackendCancellation()
     {
-        using var dir  = new TestTempDir();
-        var       fake = new FakeProcessExecutionBackend
+        using var dir = new TestTempDir();
+        var fake = new FakeProcessExecutionBackend
         {
-            ThrowOnExecute = new OperationCanceledException(),
+            ThrowOnExecute = new OperationCanceledException()
         };
         var tool = new ShellTool(dir.Workspace, processBackend : fake);
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
                                                                     tool.ExecuteAsync(tool.Prepare(Call("dotnet",
-                                                                               ["test"])),
-                                                                        CancellationToken.None));
+                                                                                               ["test"])),
+                                                                             CancellationToken.None));
     }
 
     [Fact]
     public async Task Execute_FailsWithoutExitCodeOnBackendFailure()
     {
-        using var dir  = new TestTempDir();
-        var       fake = new FakeProcessExecutionBackend
+        using var dir = new TestTempDir();
+        var fake = new FakeProcessExecutionBackend
         {
             StderrChunks = ["partial-stderr"],
-            Failure      = new ProcessExecutionFailure("sandbox runner handshake failed"),
+            Failure      = new ProcessExecutionFailure("sandbox runner handshake failed")
         };
         var tool = new ShellTool(dir.Workspace, processBackend : fake);
 
@@ -195,11 +192,11 @@ public class ShellToolBackendTests
     [Fact]
     public async Task Execute_MapsBackendStartFailureToFailedResult()
     {
-        using var dir  = new TestTempDir();
-        var       fake = new FakeProcessExecutionBackend
+        using var dir = new TestTempDir();
+        var fake = new FakeProcessExecutionBackend
         {
             ThrowOnExecute = new ProcessExecutionStartException("executable was not found",
-                                                                new IOException("no such file")),
+                                                                new IOException("no such file"))
         };
         var tool = new ShellTool(dir.Workspace, processBackend : fake);
 
@@ -213,12 +210,12 @@ public class ShellToolBackendTests
     [Fact]
     public async Task Execute_RedactsSecretAcrossBackendChunkBoundary()
     {
-        using var    dir     = new TestTempDir();
-        const string secret  = "chunk-boundary-secret";
-        var          fake    = new FakeProcessExecutionBackend
+        using var    dir    = new TestTempDir();
+        const string secret = "chunk-boundary-secret";
+        var fake = new FakeProcessExecutionBackend
         {
             StdoutChunks = ["prefix-" + secret[..10], secret[10..] + "-suffix"],
-            ExitCode     = 0,
+            ExitCode     = 0
         };
         var tool = new ShellTool(dir.Workspace,
                                  knownSecrets : new Dictionary<string, string> { ["TEST_SECRET"] = secret },
@@ -236,16 +233,13 @@ public class ShellToolBackendTests
                                      string workingDirectory = ".")
     {
         var array = new JsonArray();
-        foreach (var argument in arguments)
-        {
-            array.Add((JsonNode?)JsonValue.Create(argument));
-        }
+        foreach (var argument in arguments) array.Add((JsonNode?)JsonValue.Create(argument));
 
         var args = new JsonObject
         {
             ["executable"]       = executable,
             ["arguments"]        = array,
-            ["workingDirectory"] = workingDirectory,
+            ["workingDirectory"] = workingDirectory
         };
         return new ChatToolCall("shell-call", "shell", args.ToJsonString());
     }
@@ -256,7 +250,7 @@ public class ShellToolBackendTests
         {
             ["mode"]    = "shell",
             ["shell"]   = shell,
-            ["command"] = command,
+            ["command"] = command
         };
         return new ChatToolCall("shell-call", "shell", args.ToJsonString());
     }

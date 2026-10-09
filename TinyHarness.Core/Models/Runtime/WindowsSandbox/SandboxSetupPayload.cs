@@ -3,14 +3,13 @@ using System.Text.Json.Serialization;
 namespace TinyHarness.Core.Models.Runtime.WindowsSandbox;
 
 /// <summary>
-/// 传给 codex-windows-sandbox-setup.exe 的 payload（serde snake_case，version 必须 == 5）。
-/// 日常执行只以 refresh_only=true 调用（普通权限，不提权）；首次 provisioning 是独立
-/// 管理入口的职责，不在本模型的使用路径中。
-///
-/// The payload handed to codex-windows-sandbox-setup.exe (serde snake_case;
-/// version must equal 5). Routine execution only calls it with
-/// refresh_only=true at normal privilege; first-time provisioning belongs to
-/// the separate management entry point.
+///     传给 codex-windows-sandbox-setup.exe 的 payload（serde snake_case，version 必须 == 5）。
+///     日常执行只以 refresh_only=true 调用（普通权限，不提权）；首次 provisioning 是独立
+///     管理入口的职责，不在本模型的使用路径中。
+///     The payload handed to codex-windows-sandbox-setup.exe (serde snake_case;
+///     version must equal 5). Routine execution only calls it with
+///     refresh_only=true at normal privilege; first-time provisioning belongs to
+///     the separate management entry point.
 /// </summary>
 public sealed record SandboxSetupPayload
 {
@@ -53,9 +52,9 @@ public sealed record SandboxSetupPayload
     public required string RealUser { get; init; }
 
     /// <summary>
-    /// "full"（默认）、"interactive-provision"、"provision-only" 或 "read-acls-only"，kebab-case。
-    /// Either "full" (default), "interactive-provision", "provision-only", or
-    /// "read-acls-only", in kebab-case.
+    ///     "full"（默认）、"interactive-provision"、"provision-only" 或 "read-acls-only"，kebab-case。
+    ///     Either "full" (default), "interactive-provision", "provision-only", or
+    ///     "read-acls-only", in kebab-case.
     /// </summary>
     [JsonPropertyName("mode")]
     public string Mode { get; init; } = "full";

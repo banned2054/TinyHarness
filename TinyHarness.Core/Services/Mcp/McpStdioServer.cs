@@ -31,9 +31,11 @@ public sealed class McpStdioServer(
     private const int    MaxMessageCharacters      = 65_536;
     private const int    MaxQueuedMessages         = 16;
 
-    private readonly TextReader _input      = input  ?? throw new ArgumentNullException(nameof(input));
-    private readonly TextWriter _output     = output ?? throw new ArgumentNullException(nameof(output));
-    private readonly Lock       _activeGate = new();
+    private static readonly string TooLargeMessageSentinel = "\0tinyharness-mcp-message-too-large\0";
+    private readonly        Lock   _activeGate             = new();
+
+    private readonly TextReader _input  = input  ?? throw new ArgumentNullException(nameof(input));
+    private readonly TextWriter _output = output ?? throw new ArgumentNullException(nameof(output));
 
     private JsonElement?             _activeRequestId;
     private CancellationTokenSource? _activeWorker;
@@ -47,7 +49,7 @@ public sealed class McpStdioServer(
         {
             SingleReader = true,
             SingleWriter = true,
-            FullMode     = BoundedChannelFullMode.Wait,
+            FullMode     = BoundedChannelFullMode.Wait
         });
         var readerTask = PumpInputAsync(channel.Writer, cancellationToken);
 
@@ -104,13 +106,11 @@ public sealed class McpStdioServer(
                     continue;
                 }
 
-                if (!writer.TryWrite(line.Value.Text!))
-                {
-                    // Backpressure overflow closes the input side and cancels the active run instead
-                    // of allocating an unbounded queue of local requests.
-                    CancelActiveWorker();
-                    break;
-                }
+                if (writer.TryWrite(line.Value.Text!)) continue;
+                // Backpressure overflow closes the input side and cancels the active run instead
+                // of allocating an unbounded queue of local requests.
+                CancelActiveWorker();
+                break;
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -124,12 +124,10 @@ public sealed class McpStdioServer(
         }
     }
 
-    private static readonly string TooLargeMessageSentinel = "\0tinyharness-mcp-message-too-large\0";
-
     private async Task<string?> HandleMessageAsync(string line, CancellationToken cancellationToken)
     {
         if (string.Equals(line, TooLargeMessageSentinel, StringComparison.Ordinal))
-            return WriteError(id : null, ErrorInvalidRequest, "Message exceeds the maximum size");
+            return WriteError(null, ErrorInvalidRequest, "Message exceeds the maximum size");
 
         JsonDocument document;
         try
@@ -138,7 +136,7 @@ public sealed class McpStdioServer(
         }
         catch (JsonException)
         {
-            return WriteError(id : null, ErrorParse, "Parse error");
+            return WriteError(null, ErrorParse, "Parse error");
         }
 
         using (document)
@@ -150,7 +148,7 @@ public sealed class McpStdioServer(
             }
             catch (JsonException)
             {
-                return WriteError(id : null, ErrorInvalidRequest, "Invalid Request");
+                return WriteError(null, ErrorInvalidRequest, "Invalid Request");
             }
 
             if (request is null || !IsWellFormed(request))
@@ -160,15 +158,17 @@ public sealed class McpStdioServer(
         }
     }
 
-    private static bool IsWellFormed(McpJsonRpcRequest request) =>
-        string.Equals(request.JsonRpc, JsonRpcVersion, StringComparison.Ordinal) &&
-        !string.IsNullOrWhiteSpace(request.Method)                               &&
-        (!request.Id.HasValue ||
-         request.Id.Value.ValueKind is JsonValueKind.String or JsonValueKind.Number or JsonValueKind.Null);
+    private static bool IsWellFormed(McpJsonRpcRequest request)
+    {
+        return string.Equals(request.JsonRpc, JsonRpcVersion, StringComparison.Ordinal) &&
+               !string.IsNullOrWhiteSpace(request.Method)                               &&
+               (!request.Id.HasValue ||
+                request.Id.Value.ValueKind is JsonValueKind.String or JsonValueKind.Number or JsonValueKind.Null);
+    }
 
     private static JsonElement? IdOf(McpJsonRpcRequest? request)
     {
-        if (request?.Id is not { ValueKind: (JsonValueKind.String or JsonValueKind.Number) } id)
+        if (request?.Id is not { ValueKind: JsonValueKind.String or JsonValueKind.Number } id)
             return null;
         return id;
     }
@@ -200,8 +200,8 @@ public sealed class McpStdioServer(
         }
     }
 
-    private async Task<string> CallToolAsync(JsonElement       id, JsonElement? parameters,
-                                             CancellationToken serverCancellationToken)
+    private async Task<string> CallToolAsync(
+        JsonElement id, JsonElement? parameters, CancellationToken serverCancellationToken)
     {
         if (!McpAskGlmArgumentsParser.TryParse(parameters, out var name, out var taskRequest))
             return WriteError(id, ErrorInvalidParams, "Invalid tools/call parameters");
@@ -209,13 +209,13 @@ public sealed class McpStdioServer(
         if (!string.Equals(name, "ask_glm", StringComparison.Ordinal))
         {
             var unknown = FailureResult("Unknown tool name.");
-            return WriteResult(id, ToCallResult(unknown, isError : true), McpJsonContext.Default.McpToolCallResult);
+            return WriteResult(id, ToCallResult(unknown, true), McpJsonContext.Default.McpToolCallResult);
         }
 
         if (askGlm is null)
         {
             var unavailable = FailureResult("The worker is not configured.");
-            return WriteResult(id, ToCallResult(unavailable, isError : true), McpJsonContext.Default.McpToolCallResult);
+            return WriteResult(id, ToCallResult(unavailable, true), McpJsonContext.Default.McpToolCallResult);
         }
 
         var workerCancellation = CancellationTokenSource.CreateLinkedTokenSource(serverCancellationToken);
@@ -237,20 +237,16 @@ public sealed class McpStdioServer(
         {
             var requestValidation = WorkerRequestValidator.Validate(taskRequest);
             if (!requestValidation.IsValid)
-            {
                 result = FailureResult("The ask_glm task does not satisfy the worker input limits.");
-            }
             else
-            {
                 result = await askGlm(taskRequest!, workerCancellation.Token).ConfigureAwait(false);
-            }
         }
         catch (OperationCanceledException) when (workerCancellation.IsCancellationRequested)
         {
             result = new WorkerResult
             {
                 Status       = WorkerResultStatus.Cancelled,
-                StatusDetail = "Cancelled by the MCP client or host before completion.",
+                StatusDetail = "Cancelled by the MCP client or host before completion."
             };
         }
         catch (Exception)
@@ -285,15 +281,18 @@ public sealed class McpStdioServer(
         return new McpToolCallResult
         {
             Content = [new McpTextContent { Text = json }],
-            IsError = isError,
+            IsError = isError
         };
     }
 
-    private static WorkerResult FailureResult(string detail) => new()
+    private static WorkerResult FailureResult(string detail)
     {
-        Status       = WorkerResultStatus.Failed,
-        StatusDetail = detail,
-    };
+        return new WorkerResult
+        {
+            Status       = WorkerResultStatus.Failed,
+            StatusDetail = detail
+        };
+    }
 
     private void CancelActiveWorker(JsonElement? cancellationTarget = null)
     {
@@ -340,9 +339,11 @@ public sealed class McpStdioServer(
         }
     }
 
-    private static bool IdsEqual(JsonElement left, JsonElement right) =>
-        left.ValueKind == right.ValueKind &&
-        string.Equals(left.GetRawText(), right.GetRawText(), StringComparison.Ordinal);
+    private static bool IdsEqual(JsonElement left, JsonElement right)
+    {
+        return left.ValueKind == right.ValueKind &&
+               string.Equals(left.GetRawText(), right.GetRawText(), StringComparison.Ordinal);
+    }
 
     private static McpInitializeResult BuildInitializeResult(JsonElement? parameters)
     {
@@ -361,29 +362,33 @@ public sealed class McpStdioServer(
                 "ask_glm runs a one-shot, read-only investigation over the workspace fixed at server startup. "   +
                 "Provide a concrete task; the worker returns a bounded result with status, evidence and limits. " +
                 "Files permitted by the worker read policy are sent to the explicitly selected model endpoint. "  +
-                "The worker cannot modify files or run commands.",
+                "The worker cannot modify files or run commands."
         };
     }
 
-    private static string WriteResult<T>(JsonElement? id, T result, JsonTypeInfo<T> typeInfo) =>
-        JsonSerializer.Serialize(new McpJsonRpcResponse
+    private static string WriteResult<T>(JsonElement? id, T result, JsonTypeInfo<T> typeInfo)
+    {
+        return JsonSerializer.Serialize(new McpJsonRpcResponse
         {
             Id     = id,
-            Result = JsonSerializer.SerializeToElement(result, typeInfo),
+            Result = JsonSerializer.SerializeToElement(result, typeInfo)
         }, McpJsonContext.Default.McpJsonRpcResponse) + "\n";
+    }
 
-    private static string WriteError(JsonElement? id, int code, string message) =>
-        JsonSerializer.Serialize(new McpJsonRpcResponse
+    private static string WriteError(JsonElement? id, int code, string message)
+    {
+        return JsonSerializer.Serialize(new McpJsonRpcResponse
         {
             Id    = id,
-            Error = new McpJsonRpcError { Code = code, Message = message },
+            Error = new McpJsonRpcError { Code = code, Message = message }
         }, McpJsonContext.Default.McpJsonRpcResponse) + "\n";
+    }
 
     private sealed class BoundedLineReader(TextReader input, int maximumCharacters)
     {
         private readonly char[] _buffer = new char[4096];
-        private          int    _start;
         private          int    _count;
+        private          int    _start;
 
         public async ValueTask<BoundedLine?> ReadLineAsync(CancellationToken cancellationToken)
         {

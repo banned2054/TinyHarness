@@ -33,7 +33,10 @@ public sealed class McpWorkerHostConfiguration
 
     public string Endpoint { get; }
 
-    /// <summary>启动时固定的 Chat API 协议选择，来自默认 profile；不按模型名猜测。The chat API protocol fixed at startup, from the default profile; never guessed from model names.</summary>
+    /// <summary>
+    ///     启动时固定的 Chat API 协议选择，来自默认 profile；不按模型名猜测。The chat API protocol fixed at startup, from the default profile;
+    ///     never guessed from model names.
+    /// </summary>
     public ChatApiKind ChatApi { get; }
 
     /// <summary>仅用于启动诊断与验收记录，不包含 endpoint URL 或凭据。The scheme only; no URL or credential.</summary>
@@ -50,7 +53,7 @@ public sealed class McpWorkerHostConfiguration
 
     /// <summary>
     ///     从给定用户配置解析默认 profile 和其中显式选择的模型。显式参数只供离线测试/嵌入调用；
-    ///     MCP CLI 入口固定使用 <see cref="UserConfigStore.DefaultFilePath"/>，忽略项目配置文件。
+    ///     MCP CLI 入口固定使用 <see cref="UserConfigStore.DefaultFilePath" />，忽略项目配置文件。
     ///     Resolves the default profile and its explicitly selected model from the user config. Explicit
     ///     paths are for offline tests/embedded callers; the MCP CLI always uses the standard user config
     ///     path and ignores project config files.
@@ -149,7 +152,7 @@ public sealed class McpWorkerHostConfiguration
             MaxModelResponseCharacters = Value(worker?.MaxModelResponseCharacters,
                                                WorkerExecutionLimits.DefaultMaxModelResponseCharacters,
                                                WorkerExecutionLimits.MaxModelResponseCharacters,
-                                               "maxModelResponseCharacters"),
+                                               "maxModelResponseCharacters")
         };
 
         var store = credentialStore ?? new WindowsCredentialStore();

@@ -1,8 +1,8 @@
 namespace TinyHarness.Cli.Models;
 
 /// <summary>
-/// 支持的顶层命令。
-/// Supported top-level commands.
+///     支持的顶层命令。
+///     Supported top-level commands.
 /// </summary>
 internal enum CliCommandKind
 {
@@ -16,15 +16,14 @@ internal enum CliCommandKind
     Model,
     Doctor,
     Help,
-    ProcessSmokeChild,
+    ProcessSmokeChild
 }
 
 /// <summary>
-/// 解析后的命令行意图。一个命令最多带一个主位置参数和一个次位置参数，
-/// 例如 `config set &lt;key&gt; &lt;value&gt;` 或 `provider add &lt;name&gt;`。
-///
-/// The parsed command-line intent. A command carries at most one primary and one secondary positional
-/// argument, e.g. `config set &lt;key&gt; &lt;value&gt;` or `provider add &lt;name&gt;`.
+///     解析后的命令行意图。一个命令最多带一个主位置参数和一个次位置参数，
+///     例如 `config set &lt;key&gt; &lt;value&gt;` 或 `provider add &lt;name&gt;`。
+///     The parsed command-line intent. A command carries at most one primary and one secondary positional
+///     argument, e.g. `config set &lt;key&gt; &lt;value&gt;` or `provider add &lt;name&gt;`.
 /// </summary>
 internal sealed record CliOptions
 {

@@ -37,14 +37,13 @@ public sealed class CliCommandExecutionTests
     [Fact]
     public async Task Init_CreatesDefaultProfileAndModel()
     {
-        using var fixture = new CliFixture(input :
-        [
+        using var fixture = new CliFixture([
             "work",
             "https://api.example/v1",
             "1",
             "WORK_API_KEY",
             "model-x",
-            "64000",
+            "64000"
         ]);
 
         var result = await InitCommand.ExecuteAsync(fixture.CreateContext(), CancellationToken.None);
@@ -63,13 +62,12 @@ public sealed class CliCommandExecutionTests
     [Fact]
     public async Task ProviderAddAndUse_UpdatesTheSelectedProfile()
     {
-        using var fixture = new CliFixture(input :
-        [
+        using var fixture = new CliFixture([
             "https://team.example/v1",
             "3",
             "team-model",
             "32000",
-            "y",
+            "y"
         ]);
         await UserConfigStore.SaveAsync(fixture.UserConfigPath, new UserConfig
         {
@@ -81,9 +79,9 @@ public sealed class CliCommandExecutionTests
                     Name         = "work",
                     Endpoint     = "https://work.example/v1",
                     DefaultModel = "work-model",
-                    Models       = [new UserProfileModel { Id = "work-model", ContextWindowTokens = 64000 }],
-                },
-            ],
+                    Models       = [new UserProfileModel { Id = "work-model", ContextWindowTokens = 64000 }]
+                }
+            ]
         }, CancellationToken.None);
 
         var addResult = await ProviderCommand.ExecuteAsync(fixture.CreateContext(),
@@ -130,9 +128,9 @@ public sealed class CliCommandExecutionTests
                     Name         = "work",
                     Endpoint     = "https://work.example/v1",
                     DefaultModel = "work-model",
-                    Models       = [new UserProfileModel { Id = "work-model", ContextWindowTokens = 64000 }],
-                },
-            ],
+                    Models       = [new UserProfileModel { Id = "work-model", ContextWindowTokens = 64000 }]
+                }
+            ]
         }, CancellationToken.None);
 
         var result = await ConfigCommand.ExecuteAsync(fixture.CreateContext(),
@@ -217,20 +215,23 @@ public sealed class CliCommandExecutionTests
         Assert.DoesNotContain("--connect will send one real model request", fixture.Io.Output);
     }
 
-    private static UserConfig ProfileConfig(string name) => new()
+    private static UserConfig ProfileConfig(string name)
     {
-        DefaultProfile = name,
-        Profiles =
-        [
-            new UserProfile
-            {
-                Name         = name,
-                Endpoint     = "https://api.example/v1",
-                DefaultModel = "model-x",
-                Models       = [new UserProfileModel { Id = "model-x", ContextWindowTokens = 64000 }],
-            },
-        ],
-    };
+        return new UserConfig
+        {
+            DefaultProfile = name,
+            Profiles =
+            [
+                new UserProfile
+                {
+                    Name         = name,
+                    Endpoint     = "https://api.example/v1",
+                    DefaultModel = "model-x",
+                    Models       = [new UserProfileModel { Id = "model-x", ContextWindowTokens = 64000 }]
+                }
+            ]
+        };
+    }
 
     private sealed class CliFixture : IDisposable
     {
@@ -251,34 +252,34 @@ public sealed class CliCommandExecutionTests
 
         public FakeCredentialStore Credentials { get; }
 
-        public CommandContext CreateContext() => new()
-        {
-            Io               = Io,
-            Credentials      = Credentials,
-            UserConfigPath   = UserConfigPath,
-            WorkingDirectory = Root,
-        };
-
         public void Dispose()
         {
-            if (Directory.Exists(Root))
+            if (Directory.Exists(Root)) Directory.Delete(Root, true);
+        }
+
+        public CommandContext CreateContext()
+        {
+            return new CommandContext
             {
-                Directory.Delete(Root, recursive : true);
-            }
+                Io               = Io,
+                Credentials      = Credentials,
+                UserConfigPath   = UserConfigPath,
+                WorkingDirectory = Root
+            };
         }
     }
 
     private sealed class FakeCliConsole(IReadOnlyList<string>? input) : ICliConsole
     {
+        private readonly StringBuilder  _error  = new();
         private readonly Queue<string?> _input  = new(input ?? []);
         private readonly StringBuilder  _output = new();
-        private readonly StringBuilder  _error  = new();
-
-        public bool IsInteractive => false;
 
         public string Output => _output.ToString();
 
         public string Error => _error.ToString();
+
+        public bool IsInteractive => false;
 
         public Task WriteAsync(string text, CancellationToken cancellationToken)
         {
@@ -298,11 +299,15 @@ public sealed class CliCommandExecutionTests
             return Task.CompletedTask;
         }
 
-        public Task<string?> ReadLineAsync(CancellationToken cancellationToken) =>
-            Task.FromResult(_input.Count > 0 ? _input.Dequeue() : null);
+        public Task<string?> ReadLineAsync(CancellationToken cancellationToken)
+        {
+            return Task.FromResult(_input.Count > 0 ? _input.Dequeue() : null);
+        }
 
-        public Task<string?> ReadHiddenLineAsync(CancellationToken cancellationToken) =>
-            Task.FromResult(_input.Count > 0 ? _input.Dequeue() : null);
+        public Task<string?> ReadHiddenLineAsync(CancellationToken cancellationToken)
+        {
+            return Task.FromResult(_input.Count > 0 ? _input.Dequeue() : null);
+        }
     }
 
     private sealed class FakeCredentialStore : ICredentialStore
@@ -311,10 +316,19 @@ public sealed class CliCommandExecutionTests
 
         public bool IsSupported => false;
 
-        public void Save(string targetName, string secret) => _entries[targetName] = secret;
+        public void Save(string targetName, string secret)
+        {
+            _entries[targetName] = secret;
+        }
 
-        public string? Read(string targetName) => _entries.GetValueOrDefault(targetName);
+        public string? Read(string targetName)
+        {
+            return _entries.GetValueOrDefault(targetName);
+        }
 
-        public bool Delete(string targetName) => _entries.Remove(targetName);
+        public bool Delete(string targetName)
+        {
+            return _entries.Remove(targetName);
+        }
     }
 }

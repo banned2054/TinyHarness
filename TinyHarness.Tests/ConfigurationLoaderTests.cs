@@ -60,7 +60,7 @@ public class ConfigurationLoaderTests
         }
         finally
         {
-            Directory.Delete(dir, recursive : true);
+            Directory.Delete(dir, true);
         }
     }
 
@@ -92,7 +92,7 @@ public class ConfigurationLoaderTests
         }
         finally
         {
-            Directory.Delete(dir, recursive : true);
+            Directory.Delete(dir, true);
         }
     }
 
@@ -113,7 +113,7 @@ public class ConfigurationLoaderTests
         }
         finally
         {
-            Directory.Delete(dir, recursive : true);
+            Directory.Delete(dir, true);
         }
     }
 
@@ -133,7 +133,7 @@ public class ConfigurationLoaderTests
         }
         finally
         {
-            Directory.Delete(dir, recursive : true);
+            Directory.Delete(dir, true);
         }
     }
 
@@ -150,14 +150,14 @@ public class ConfigurationLoaderTests
             var error = await Assert.ThrowsAsync<InvalidDataException>(() =>
                                                                            ConfigurationLoader
                                                                               .LoadAsync(path,
-                                                                                         CancellationToken.None));
+                                                                                        CancellationToken.None));
 
             Assert.Contains("chatApi", error.Message);
             Assert.Contains("grpc", error.Message);
         }
         finally
         {
-            Directory.Delete(dir, recursive : true);
+            Directory.Delete(dir, true);
         }
     }
 
@@ -174,14 +174,14 @@ public class ConfigurationLoaderTests
             var error = await Assert.ThrowsAsync<InvalidDataException>(() =>
                                                                            ConfigurationLoader
                                                                               .LoadAsync(path,
-                                                                                         CancellationToken.None));
+                                                                                        CancellationToken.None));
 
             Assert.Contains("chatApi", error.Message);
             Assert.Contains("must be a string", error.Message);
         }
         finally
         {
-            Directory.Delete(dir, recursive : true);
+            Directory.Delete(dir, true);
         }
     }
 
@@ -206,7 +206,7 @@ public class ConfigurationLoaderTests
         }
         finally
         {
-            Directory.Delete(dir, recursive : true);
+            Directory.Delete(dir, true);
         }
     }
 }

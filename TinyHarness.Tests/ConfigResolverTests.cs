@@ -17,8 +17,7 @@ public class ConfigResolverTests
 
             var error = await Assert.ThrowsAsync<ConfigException>(() => ConfigResolver.ResolveAsync(missing,
                                                                            CancellationToken.None,
-                                                                           workingDirectory : dir,
-                                                                           userConfigPath :
+                                                                           dir,
                                                                            Path.Combine(dir, "user-config.json")));
 
             Assert.True(error.IsUsageError);
@@ -26,7 +25,7 @@ public class ConfigResolverTests
         }
         finally
         {
-            Directory.Delete(dir, recursive : true);
+            Directory.Delete(dir, true);
         }
     }
 
@@ -42,8 +41,8 @@ public class ConfigResolverTests
                                          """{"endpoint":"https://explicit.test/v1","model":"m-explicit","maxAgentSteps":7}""");
 
             var resolution = await ConfigResolver.ResolveAsync(explicitPath, CancellationToken.None,
-                                                               workingDirectory : dir,
-                                                               userConfigPath : Path.Combine(dir, "user-config.json"));
+                                                               dir,
+                                                               Path.Combine(dir, "user-config.json"));
 
             Assert.Equal(ConfigSourceKind.ExplicitFile, resolution.Source);
             Assert.Equal(Path.GetFullPath(explicitPath), resolution.SourcePath);
@@ -54,7 +53,7 @@ public class ConfigResolverTests
         }
         finally
         {
-            Directory.Delete(dir, recursive : true);
+            Directory.Delete(dir, true);
         }
     }
 
@@ -71,8 +70,8 @@ public class ConfigResolverTests
             await File.WriteAllTextAsync(userPath, """{"defaultProfile":"work"}""");
 
             var resolution = await ConfigResolver.ResolveAsync(null, CancellationToken.None,
-                                                               workingDirectory : dir,
-                                                               userConfigPath : userPath);
+                                                               dir,
+                                                               userPath);
 
             Assert.Equal(ConfigSourceKind.ProjectFile, resolution.Source);
             Assert.Equal(Path.Combine(dir, "tinyharness.json"), resolution.SourcePath);
@@ -82,7 +81,7 @@ public class ConfigResolverTests
         }
         finally
         {
-            Directory.Delete(dir, recursive : true);
+            Directory.Delete(dir, true);
         }
     }
 
@@ -114,8 +113,8 @@ public class ConfigResolverTests
                                          """);
 
             var resolution = await ConfigResolver.ResolveAsync(null, CancellationToken.None,
-                                                               workingDirectory : dir,
-                                                               userConfigPath : userPath);
+                                                               dir,
+                                                               userPath);
 
             Assert.Equal(ConfigSourceKind.UserConfig, resolution.Source);
             Assert.Equal(userPath, resolution.SourcePath);
@@ -132,7 +131,7 @@ public class ConfigResolverTests
         }
         finally
         {
-            Directory.Delete(dir, recursive : true);
+            Directory.Delete(dir, true);
         }
     }
 
@@ -147,8 +146,8 @@ public class ConfigResolverTests
             await File.WriteAllTextAsync(userPath, """{"profiles":[]}""");
 
             var resolution = await ConfigResolver.ResolveAsync(null, CancellationToken.None,
-                                                               workingDirectory : dir,
-                                                               userConfigPath : userPath);
+                                                               dir,
+                                                               userPath);
 
             Assert.Equal(ConfigSourceKind.UserConfig, resolution.Source);
             Assert.Null(resolution.ProfileName);
@@ -157,7 +156,7 @@ public class ConfigResolverTests
         }
         finally
         {
-            Directory.Delete(dir, recursive : true);
+            Directory.Delete(dir, true);
         }
     }
 
@@ -179,14 +178,14 @@ public class ConfigResolverTests
                                          """);
 
             var resolution = await ConfigResolver.ResolveAsync(null, CancellationToken.None,
-                                                               workingDirectory : dir,
-                                                               userConfigPath : userPath);
+                                                               dir,
+                                                               userPath);
 
             Assert.Equal(ChatApiKind.ChatCompletions, resolution.Config.ChatApi);
         }
         finally
         {
-            Directory.Delete(dir, recursive : true);
+            Directory.Delete(dir, true);
         }
     }
 
@@ -203,8 +202,8 @@ public class ConfigResolverTests
             var error =
                 await Assert.ThrowsAsync<ConfigException>(() => ConfigResolver.ResolveAsync(null,
                                                                    CancellationToken.None,
-                                                                   workingDirectory : dir,
-                                                                   userConfigPath : userPath));
+                                                                   dir,
+                                                                   userPath));
 
             Assert.False(error.IsUsageError);
             Assert.Contains("ghost", error.Message);
@@ -212,7 +211,7 @@ public class ConfigResolverTests
         }
         finally
         {
-            Directory.Delete(dir, recursive : true);
+            Directory.Delete(dir, true);
         }
     }
 
@@ -236,8 +235,8 @@ public class ConfigResolverTests
             var error =
                 await Assert.ThrowsAsync<ConfigException>(() => ConfigResolver.ResolveAsync(null,
                                                                    CancellationToken.None,
-                                                                   workingDirectory : dir,
-                                                                   userConfigPath : userPath));
+                                                                   dir,
+                                                                   userPath));
 
             Assert.False(error.IsUsageError);
             Assert.Contains("ghost-model", error.Message);
@@ -245,7 +244,7 @@ public class ConfigResolverTests
         }
         finally
         {
-            Directory.Delete(dir, recursive : true);
+            Directory.Delete(dir, true);
         }
     }
 
@@ -259,8 +258,8 @@ public class ConfigResolverTests
             var userPath = Path.Combine(dir, "user-config.json");
 
             var resolution = await ConfigResolver.ResolveAsync(null, CancellationToken.None,
-                                                               workingDirectory : dir,
-                                                               userConfigPath : userPath);
+                                                               dir,
+                                                               userPath);
 
             Assert.Equal(ConfigSourceKind.Defaults, resolution.Source);
             Assert.Null(resolution.SourcePath);
@@ -271,7 +270,7 @@ public class ConfigResolverTests
         }
         finally
         {
-            Directory.Delete(dir, recursive : true);
+            Directory.Delete(dir, true);
         }
     }
 }

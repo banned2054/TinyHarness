@@ -15,7 +15,7 @@ public class StructuredStateTests
             FilesInspected     = ["src/A.cs"],
             FilesModified      = ["src/A.cs"],
             CommandsAndResults = ["dotnet test: 12 passed"],
-            PendingWork        = ["rerun tests"],
+            PendingWork        = ["rerun tests"]
         };
 
         var json = state.ToJson();

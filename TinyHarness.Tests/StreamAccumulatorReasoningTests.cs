@@ -4,40 +4,42 @@ using TinyHarness.Core.Services.ChatCompletions;
 namespace TinyHarness.Tests;
 
 /// <summary>
-/// StreamAccumulator 对推理增量、推理条目边界与 usage/结束元数据累积的单元测试，
-/// 使用合成事件驱动（Responses 协议接入前先固化承载行为）。
-///
-/// Unit tests for StreamAccumulator's handling of reasoning deltas, reasoning
-/// item boundaries, and usage/finish metadata, driven by synthetic events
-/// (the carrying behavior is fixed before the Responses protocol lands).
+///     StreamAccumulator 对推理增量、推理条目边界与 usage/结束元数据累积的单元测试，
+///     使用合成事件驱动（Responses 协议接入前先固化承载行为）。
+///     Unit tests for StreamAccumulator's handling of reasoning deltas, reasoning
+///     item boundaries, and usage/finish metadata, driven by synthetic events
+///     (the carrying behavior is fixed before the Responses protocol lands).
 /// </summary>
 public class StreamAccumulatorReasoningTests
 {
-    private static ChatStreamEvent ReasoningDelta(string text, string? itemId = null) => new()
+    private static ChatStreamEvent ReasoningDelta(string text, string? itemId = null)
     {
-        Kind            = ChatStreamEventKind.ReasoningDelta,
-        ReasoningDelta  = text,
-        ReasoningItemId = itemId,
-    };
+        return new ChatStreamEvent
+        {
+            Kind            = ChatStreamEventKind.ReasoningDelta,
+            ReasoningDelta  = text,
+            ReasoningItemId = itemId
+        };
+    }
 
     private static ChatStreamEvent ReasoningItem(string? protectedData = null, string? itemId = null,
-                                                 string? text = null) => new()
+                                                 string? text          = null)
     {
-        Kind                   = ChatStreamEventKind.ReasoningItem,
-        ReasoningProtectedData = protectedData,
-        ReasoningItemId        = itemId,
-        // 条目事件经 ReasoningDelta 字段携带条目完整文本。
-        // Item events carry the entry's complete text via the ReasoningDelta field.
-        ReasoningDelta         = text,
-    };
+        return new ChatStreamEvent
+        {
+            Kind                   = ChatStreamEventKind.ReasoningItem,
+            ReasoningProtectedData = protectedData,
+            ReasoningItemId        = itemId,
+            // 条目事件经 ReasoningDelta 字段携带条目完整文本。
+            // Item events carry the entry's complete text via the ReasoningDelta field.
+            ReasoningDelta = text
+        };
+    }
 
     private static StreamAccumulator Accumulate(params ChatStreamEvent[] events)
     {
         var accumulator = new StreamAccumulator();
-        foreach (var @event in events)
-        {
-            accumulator.Append(@event);
-        }
+        foreach (var @event in events) accumulator.Append(@event);
 
         return accumulator;
     }
@@ -64,10 +66,10 @@ public class StreamAccumulatorReasoningTests
         // payload and item id belong to the closed entry; later deltas go to a
         // new one.
         var accumulator = Accumulate(
-            ReasoningDelta("first "),
-            ReasoningItem(protectedData : "opaque-1", itemId : "rs_1"),
-            ReasoningDelta("second"),
-            new ChatStreamEvent { Kind = ChatStreamEventKind.End });
+                                     ReasoningDelta("first "),
+                                     ReasoningItem("opaque-1", "rs_1"),
+                                     ReasoningDelta("second"),
+                                     new ChatStreamEvent { Kind = ChatStreamEventKind.End });
         accumulator.Finish();
 
         Assert.Equal(2, accumulator.Reasoning!.Count);
@@ -86,10 +88,10 @@ public class StreamAccumulatorReasoningTests
         // Items are delimited by item id: without explicit item events, deltas
         // with distinct ids each form their own entry.
         var accumulator = Accumulate(
-            ReasoningDelta("think ", itemId : "rs_1"),
-            ReasoningDelta("hard", itemId : "rs_1"),
-            ReasoningDelta("again", itemId : "rs_2"),
-            new ChatStreamEvent { Kind = ChatStreamEventKind.End });
+                                     ReasoningDelta("think ", "rs_1"),
+                                     ReasoningDelta("hard", "rs_1"),
+                                     ReasoningDelta("again", "rs_2"),
+                                     new ChatStreamEvent { Kind = ChatStreamEventKind.End });
         accumulator.Finish();
 
         Assert.Equal(2, accumulator.Reasoning!.Count);
@@ -107,10 +109,10 @@ public class StreamAccumulatorReasoningTests
         // When the item event's complete text duplicates the streamed deltas,
         // exactly one copy of the complete text is kept per entry.
         var accumulator = Accumulate(
-            ReasoningDelta("think ", itemId : "rs_1"),
-            ReasoningDelta("hard", itemId : "rs_1"),
-            ReasoningItem(protectedData : "opaque", itemId : "rs_1", text : "think hard"),
-            new ChatStreamEvent { Kind = ChatStreamEventKind.End });
+                                     ReasoningDelta("think ", "rs_1"),
+                                     ReasoningDelta("hard", "rs_1"),
+                                     ReasoningItem("opaque", "rs_1", "think hard"),
+                                     new ChatStreamEvent { Kind = ChatStreamEventKind.End });
         accumulator.Finish();
 
         var entry = Assert.Single(accumulator.Reasoning!);
@@ -125,8 +127,8 @@ public class StreamAccumulatorReasoningTests
         // 空文本且无任何不透明标识的条目事件不产出条目。
         // An item event with neither text nor any opaque identifier produces no entry.
         var accumulator = Accumulate(
-            ReasoningItem(),
-            new ChatStreamEvent { Kind = ChatStreamEventKind.End });
+                                     ReasoningItem(),
+                                     new ChatStreamEvent { Kind = ChatStreamEventKind.End });
         accumulator.Finish();
 
         Assert.Null(accumulator.Reasoning);
@@ -139,8 +141,8 @@ public class StreamAccumulatorReasoningTests
         // Entries carrying only opaque identifiers are kept too: continuing the
         // reasoning context depends on replaying them verbatim.
         var accumulator = Accumulate(
-            ReasoningItem(protectedData : "opaque", itemId : "rs_1"),
-            new ChatStreamEvent { Kind = ChatStreamEventKind.End });
+                                     ReasoningItem("opaque", "rs_1"),
+                                     new ChatStreamEvent { Kind = ChatStreamEventKind.End });
         accumulator.Finish();
 
         var entry = Assert.Single(accumulator.Reasoning!);
@@ -153,8 +155,9 @@ public class StreamAccumulatorReasoningTests
     public void WithoutReasoningEvents_ReasoningStaysNullAndContentIsUntouched()
     {
         var accumulator = Accumulate(
-            new ChatStreamEvent { Kind = ChatStreamEventKind.ContentDelta, ContentDelta = "answer" },
-            new ChatStreamEvent { Kind = ChatStreamEventKind.End });
+                                     new ChatStreamEvent
+                                         { Kind = ChatStreamEventKind.ContentDelta, ContentDelta = "answer" },
+                                     new ChatStreamEvent { Kind = ChatStreamEventKind.End });
         accumulator.Finish();
 
         Assert.Null(accumulator.Reasoning);
@@ -165,14 +168,15 @@ public class StreamAccumulatorReasoningTests
     public void UsageAndEndEvents_FillTokenCountsAndFinishReason_FirstValueWins()
     {
         var accumulator = Accumulate(
-            new ChatStreamEvent { Kind = ChatStreamEventKind.Usage, InputTokens = 10, OutputTokens = 4 },
-            new ChatStreamEvent
-            {
-                Kind         = ChatStreamEventKind.End,
-                InputTokens  = 99,
-                OutputTokens = 5,
-                FinishReason = "stop",
-            });
+                                     new ChatStreamEvent
+                                         { Kind = ChatStreamEventKind.Usage, InputTokens = 10, OutputTokens = 4 },
+                                     new ChatStreamEvent
+                                     {
+                                         Kind         = ChatStreamEventKind.End,
+                                         InputTokens  = 99,
+                                         OutputTokens = 5,
+                                         FinishReason = "stop"
+                                     });
 
         Assert.Equal(10, accumulator.InputTokens);
         Assert.Equal(4, accumulator.OutputTokens);
@@ -183,8 +187,9 @@ public class StreamAccumulatorReasoningTests
     public void MetadataAlone_LeavesNullableCountersNull()
     {
         var accumulator = Accumulate(
-            new ChatStreamEvent { Kind = ChatStreamEventKind.ContentDelta, ContentDelta = "hi" },
-            new ChatStreamEvent { Kind = ChatStreamEventKind.End });
+                                     new ChatStreamEvent
+                                         { Kind = ChatStreamEventKind.ContentDelta, ContentDelta = "hi" },
+                                     new ChatStreamEvent { Kind = ChatStreamEventKind.End });
 
         accumulator.Finish();
 
@@ -200,16 +205,16 @@ public class StreamAccumulatorReasoningTests
         // Backward compatibility: reasoning fields do not change Finish's
         // validation of tool-call names and argument JSON.
         var accumulator = Accumulate(
-            ReasoningDelta("thinking"),
-            new ChatStreamEvent
-            {
-                Kind                   = ChatStreamEventKind.ToolCallDelta,
-                ToolCallIndex          = 0,
-                ToolCallId             = "call_1",
-                ToolCallFunctionName   = "read_file",
-                ToolCallArgumentsDelta = """{"path":"a"}""",
-            },
-            new ChatStreamEvent { Kind = ChatStreamEventKind.End });
+                                     ReasoningDelta("thinking"),
+                                     new ChatStreamEvent
+                                     {
+                                         Kind                   = ChatStreamEventKind.ToolCallDelta,
+                                         ToolCallIndex          = 0,
+                                         ToolCallId             = "call_1",
+                                         ToolCallFunctionName   = "read_file",
+                                         ToolCallArgumentsDelta = """{"path":"a"}"""
+                                     },
+                                     new ChatStreamEvent { Kind = ChatStreamEventKind.End });
         accumulator.Finish();
 
         var call = Assert.Single(accumulator.ToolCalls);

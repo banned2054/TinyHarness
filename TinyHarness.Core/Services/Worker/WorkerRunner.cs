@@ -107,36 +107,53 @@ public sealed class WorkerRunner
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentException.ThrowIfNullOrWhiteSpace(options.Model);
-        if (options.RunTimeout <= TimeSpan.Zero || options.RunTimeout > TimeSpan.FromSeconds(WorkerExecutionLimits.MaxRunTimeoutSeconds))
-            throw new ArgumentException($"RunTimeout must be a positive duration no greater than {WorkerExecutionLimits.MaxRunTimeoutSeconds} seconds.", nameof(options));
+        if (options.RunTimeout <= TimeSpan.Zero ||
+            options.RunTimeout > TimeSpan.FromSeconds(WorkerExecutionLimits.MaxRunTimeoutSeconds))
+            throw new
+                ArgumentException($"RunTimeout must be a positive duration no greater than {WorkerExecutionLimits.MaxRunTimeoutSeconds} seconds.",
+                                  nameof(options));
 
         if (options.MaxAgentSteps is < 1 or > WorkerExecutionLimits.MaxAgentSteps)
-            throw new ArgumentException($"MaxAgentSteps must be between 1 and {WorkerExecutionLimits.MaxAgentSteps}.", nameof(options));
+            throw new ArgumentException($"MaxAgentSteps must be between 1 and {WorkerExecutionLimits.MaxAgentSteps}.",
+                                        nameof(options));
 
         if (options.DefaultToolTimeoutSeconds is < 1 or > WorkerExecutionLimits.MaxToolTimeoutSeconds)
-            throw new ArgumentException($"DefaultToolTimeoutSeconds must be between 1 and {WorkerExecutionLimits.MaxToolTimeoutSeconds}.", nameof(options));
+            throw new
+                ArgumentException($"DefaultToolTimeoutSeconds must be between 1 and {WorkerExecutionLimits.MaxToolTimeoutSeconds}.",
+                                  nameof(options));
 
         _model        = model;
         _options      = options;
         WorkspaceRoot = Path.GetFullPath(workspaceRoot);
 
         if (options.MaxTaskPackageCharacters is < 1 or > WorkerExecutionLimits.MaxTaskPackageCharacters)
-            throw new ArgumentException($"MaxTaskPackageCharacters must be between 1 and {WorkerExecutionLimits.MaxTaskPackageCharacters}.", nameof(options));
+            throw new
+                ArgumentException($"MaxTaskPackageCharacters must be between 1 and {WorkerExecutionLimits.MaxTaskPackageCharacters}.",
+                                  nameof(options));
 
         if (options.MaxToolCalls is < 1 or > WorkerExecutionLimits.MaxToolCalls)
-            throw new ArgumentException($"MaxToolCalls must be between 1 and {WorkerExecutionLimits.MaxToolCalls}.", nameof(options));
+            throw new ArgumentException($"MaxToolCalls must be between 1 and {WorkerExecutionLimits.MaxToolCalls}.",
+                                        nameof(options));
 
         if (options.MaxToolOutputCharacters is < 1 or > WorkerExecutionLimits.MaxToolOutputCharacters)
-            throw new ArgumentException($"MaxToolOutputCharacters must be between 1 and {WorkerExecutionLimits.MaxToolOutputCharacters}.", nameof(options));
+            throw new
+                ArgumentException($"MaxToolOutputCharacters must be between 1 and {WorkerExecutionLimits.MaxToolOutputCharacters}.",
+                                  nameof(options));
 
         if (options.MaxCumulativeContextTokens is < 1 or > WorkerExecutionLimits.MaxCumulativeContextTokens)
-            throw new ArgumentException($"MaxCumulativeContextTokens must be between 1 and {WorkerExecutionLimits.MaxCumulativeContextTokens}.", nameof(options));
+            throw new
+                ArgumentException($"MaxCumulativeContextTokens must be between 1 and {WorkerExecutionLimits.MaxCumulativeContextTokens}.",
+                                  nameof(options));
 
         if (options.MaxContextTokensPerRequest is < 1 or > WorkerExecutionLimits.MaxCumulativeContextTokens)
-            throw new ArgumentException($"MaxContextTokensPerRequest must be between 1 and {WorkerExecutionLimits.MaxCumulativeContextTokens}.", nameof(options));
+            throw new
+                ArgumentException($"MaxContextTokensPerRequest must be between 1 and {WorkerExecutionLimits.MaxCumulativeContextTokens}.",
+                                  nameof(options));
 
         if (options.MaxModelResponseCharacters is < 1 or > WorkerExecutionLimits.MaxModelResponseCharacters)
-            throw new ArgumentException($"MaxModelResponseCharacters must be between 1 and {WorkerExecutionLimits.MaxModelResponseCharacters}.", nameof(options));
+            throw new
+                ArgumentException($"MaxModelResponseCharacters must be between 1 and {WorkerExecutionLimits.MaxModelResponseCharacters}.",
+                                  nameof(options));
     }
 
     /// <summary>本次 worker 服务的固定工作区根目录（绝对路径）。 The fixed absolute workspace root served by this worker.</summary>
@@ -621,9 +638,9 @@ public sealed class WorkerRunner
 
         public int ToolCallsExecuted;
 
-        public int ToolOutputAdmitted;
-
         public int ToolMessageCharactersAdmitted;
+
+        public int ToolOutputAdmitted;
 
         public bool ToolOutputBudgetExhausted;
 
@@ -742,12 +759,12 @@ public sealed class WorkerRunner
                     ? 0
                     : @event.ReasoningDelta?.Length ?? 0;
                 var cost = (long)@event.ContentDelta.Length
-                         + (@event.ToolCallId?.Length ?? 0)
+                         + (@event.ToolCallId?.Length           ?? 0)
                          + (@event.ToolCallFunctionName?.Length ?? 0)
                          + @event.ToolCallArgumentsDelta.Length
                          + reasoningDeltaLength
                          + (@event.ReasoningProtectedData?.Length ?? 0)
-                         + (@event.ReasoningItemId?.Length ?? 0);
+                         + (@event.ReasoningItemId?.Length        ?? 0);
                 if (cost > maxResponseChars - responseChars)
                 {
                     state.ModelResponseBudgetExhausted = true;

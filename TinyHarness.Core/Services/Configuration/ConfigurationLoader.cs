@@ -1,37 +1,35 @@
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using TinyHarness.Core.Models.Configuration;
 
 namespace TinyHarness.Core.Services.Configuration;
 
 /// <summary>
-/// 从 JSON 文件加载配置，并使用手工、无反射的绑定保持 NativeAOT 安全；缺失项沿用
-/// <see cref="TinyHarnessConfig"/> 的默认值。
-///
-/// Builds a config document from a JSON file. Uses <see cref="JsonObject"/> for
-/// manual, reflection-free binding so the config path stays NativeAOT-safe
-/// without a source-generated context at this layer. Values not present in the
-/// file fall back to the documented defaults in <see cref="TinyHarnessConfig"/>.
+///     从 JSON 文件加载配置，并使用手工、无反射的绑定保持 NativeAOT 安全；缺失项沿用
+///     <see cref="TinyHarnessConfig" /> 的默认值。
+///     Builds a config document from a JSON file. Uses <see cref="JsonObject" /> for
+///     manual, reflection-free binding so the config path stays NativeAOT-safe
+///     without a source-generated context at this layer. Values not present in the
+///     file fall back to the documented defaults in <see cref="TinyHarnessConfig" />.
 /// </summary>
 public static class ConfigurationLoader
 {
     /// <summary>
-    /// 读取可选配置文件、合并默认值，并规范化需要在运行时使用的路径。
-    /// Reads an optional configuration file, merges defaults, and normalizes runtime paths.
+    ///     读取可选配置文件、合并默认值，并规范化需要在运行时使用的路径。
+    ///     Reads an optional configuration file, merges defaults, and normalizes runtime paths.
     /// </summary>
     public static async Task<TinyHarnessConfig> LoadAsync(string configJsonPath, CancellationToken cancellationToken)
     {
         var config = new TinyHarnessConfig();
         if (!string.IsNullOrWhiteSpace(configJsonPath) && File.Exists(configJsonPath))
-        {
             config = await ReadFromFileAsync(config, configJsonPath, cancellationToken).ConfigureAwait(false);
-        }
 
         return NormalizePaths(config);
     }
 
     /// <summary>
-    /// 将 JSON 对象中的已知字段覆盖到现有配置上；格式或类型错误直接报告给调用方。
-    /// Overlays known JSON fields onto an existing configuration and surfaces malformed values.
+    ///     将 JSON 对象中的已知字段覆盖到现有配置上；格式或类型错误直接报告给调用方。
+    ///     Overlays known JSON fields onto an existing configuration and surfaces malformed values.
     /// </summary>
     private static async Task<TinyHarnessConfig> ReadFromFileAsync(TinyHarnessConfig config, string configJsonPath,
                                                                    CancellationToken cancellationToken)
@@ -56,17 +54,16 @@ public static class ConfigurationLoader
             DefaultToolTimeoutSeconds = ReadInt(root, "defaultToolTimeoutSeconds") ?? config.DefaultToolTimeoutSeconds,
             WorkspaceRoot = ReadString(root, "workspaceRoot") ?? config.WorkspaceRoot,
             SessionDirectory = ReadString(root, "sessionDirectory") ?? config.SessionDirectory,
-            CommandRules = CommandRuleJson.Read(root, "commandRules", $"'{configJsonPath}'") ?? config.CommandRules,
+            CommandRules = CommandRuleJson.Read(root, "commandRules", $"'{configJsonPath}'") ?? config.CommandRules
         };
 
         return config;
     }
 
     /// <summary>
-    /// 将工作区根目录与 session 目录解析为规范化绝对路径；API key 由调用方根据配置的凭据引用读取。
-    ///
-    /// Resolves the workspace root and session directory to normalized absolute paths. The caller reads the
-    /// API key from the configured credential reference.
+    ///     将工作区根目录与 session 目录解析为规范化绝对路径；API key 由调用方根据配置的凭据引用读取。
+    ///     Resolves the workspace root and session directory to normalized absolute paths. The caller reads the
+    ///     API key from the configured credential reference.
     /// </summary>
     internal static TinyHarnessConfig NormalizePaths(TinyHarnessConfig config)
     {
@@ -81,8 +78,8 @@ public static class ConfigurationLoader
     }
 
     /// <summary>
-    /// 读取可选字符串字段，字段缺失时返回 <see langword="null"/>。
-    /// Reads an optional string property and returns <see langword="null"/> when absent.
+    ///     读取可选字符串字段，字段缺失时返回 <see langword="null" />。
+    ///     Reads an optional string property and returns <see langword="null" /> when absent.
     /// </summary>
     private static string? ReadString(JsonObject root, string property)
     {
@@ -91,52 +88,43 @@ public static class ConfigurationLoader
     }
 
     /// <summary>
-    /// 读取可选整数字段，同时接受 JSON 数字和整数字符串。
-    /// Reads an optional integer property from either a JSON number or an integer string.
+    ///     读取可选整数字段，同时接受 JSON 数字和整数字符串。
+    ///     Reads an optional integer property from either a JSON number or an integer string.
     /// </summary>
     private static int? ReadInt(JsonObject root, string property)
     {
         var node = root[property];
-        if (node is null)
-        {
-            return null;
-        }
+        if (node is null) return null;
 
-        return node.GetValueKind() == System.Text.Json.JsonValueKind.String
+        return node.GetValueKind() == JsonValueKind.String
             ? int.Parse(node.GetValue<string>())
             : node.GetValue<int>();
     }
 
     /// <summary>
-    /// 通过共享映射读取可选 chatApi 字段；字段缺失时返回 <see langword="null"/> 沿用现值，
-    /// 非法值抛出包含键名与原值的错误。
-    ///
-    /// Reads the optional chatApi property through the shared mapping; an absent property returns
-    /// <see langword="null"/> to keep the current value, an invalid one fails with the key and raw value.
+    ///     通过共享映射读取可选 chatApi 字段；字段缺失时返回 <see langword="null" /> 沿用现值，
+    ///     非法值抛出包含键名与原值的错误。
+    ///     Reads the optional chatApi property through the shared mapping; an absent property returns
+    ///     <see langword="null" /> to keep the current value, an invalid one fails with the key and raw value.
     /// </summary>
     private static ChatApiKind? ReadChatApi(JsonObject root, string property, string source)
     {
         var node = root[property];
-        if (node is null)
-        {
-            return null;
-        }
+        if (node is null) return null;
 
         // JSON 值可能是任意类型（如 "chatApi": 5）；显式校验类型并给出带键名的错误，
         // 而不是让 GetValue<string>() 抛出无上下文的 InvalidOperationException。
         // A JSON value may be of any type (e.g. "chatApi": 5); the explicit kind
         // check fails with the key name instead of the context-free
         // InvalidOperationException from GetValue<string>().
-        if (node.GetValueKind() is not System.Text.Json.JsonValueKind.String)
-        {
+        if (node.GetValueKind() is not JsonValueKind.String)
             throw new InvalidDataException($"Config file '{source}' field '{property}' must be a string.");
-        }
 
         var text = node.GetValue<string>();
         return ChatApiKindParser.TryParse(text, out var api)
             ? api
-            : throw new InvalidDataException(
-                                              $"Config file '{source}' field '{property}' has an invalid value '{text}'; " +
-                                              $"expected '{ChatApiKindParser.ChatCompletionsValue}' or '{ChatApiKindParser.ResponsesValue}'.");
+            : throw new InvalidDataException($"Config file '{source}' field '{property}' " +
+                                             $"has an invalid value '{text}'; "            +
+                                             $"expected '{ChatApiKindParser.ChatCompletionsValue}' or '{ChatApiKindParser.ResponsesValue}'.");
     }
 }

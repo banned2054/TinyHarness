@@ -11,12 +11,15 @@ namespace TinyHarness.Tests;
 
 public class AgentLoopTests
 {
-    private static AgentOptions Options(int maxSteps = 10) => new()
+    private static AgentOptions Options(int maxSteps = 10)
     {
-        Model                     = "test-model",
-        MaxAgentSteps             = maxSteps,
-        DefaultToolTimeoutSeconds = 30,
-    };
+        return new AgentOptions
+        {
+            Model                     = "test-model",
+            MaxAgentSteps             = maxSteps,
+            DefaultToolTimeoutSeconds = 30
+        };
+    }
 
     [Fact]
     public async Task PlainText_Completes()
@@ -56,7 +59,7 @@ public class AgentLoopTests
     {
         var client = new FakeChatClient();
         var tool   = new FakeTool("echo_test");
-        client.Enqueue(FakeChatClient.ToolCall("echo_test", "{\"value\":\"abc\"}", id : "c1"));
+        client.Enqueue(FakeChatClient.ToolCall("echo_test", "{\"value\":\"abc\"}", "c1"));
         client.Enqueue(FakeChatClient.Text("ok"));
         var loop = new AgentLoop(client, new ToolRegistry([tool]), Options());
 
@@ -87,7 +90,7 @@ public class AgentLoopTests
                 Kind                 = ChatStreamEventKind.ToolCallDelta, ToolCallIndex = 1, ToolCallId = "b",
                 ToolCallFunctionName = "tool_b", ToolCallArgumentsDelta                 = "{}"
             },
-            new() { Kind = ChatStreamEventKind.End },
+            new() { Kind = ChatStreamEventKind.End }
         };
         client.Enqueue(calls);
         client.Enqueue(FakeChatClient.Text("all done"));
@@ -121,12 +124,9 @@ public class AgentLoopTests
     {
         var client = new FakeChatClient();
         var tool   = new FakeTool("loop");
-        var loop   = new AgentLoop(client, new ToolRegistry([tool]), Options(maxSteps : 3));
+        var loop   = new AgentLoop(client, new ToolRegistry([tool]), Options(3));
 
-        for (var i = 0; i < 10; i++)
-        {
-            client.Enqueue(FakeChatClient.ToolCall("loop", "{}"));
-        }
+        for (var i = 0; i < 10; i++) client.Enqueue(FakeChatClient.ToolCall("loop", "{}"));
 
         var result = await loop.RunAsync("sys", "go", CancellationToken.None);
 
@@ -145,7 +145,7 @@ public class AgentLoopTests
                 Kind = ChatStreamEventKind.ToolCallDelta, ToolCallIndex = 0, ToolCallFunctionName = "t",
                 ToolCallArgumentsDelta = "{not json"
             },
-            new() { Kind = ChatStreamEventKind.End },
+            new() { Kind = ChatStreamEventKind.End }
         });
         var loop = new AgentLoop(client, new ToolRegistry([]), Options());
 
@@ -187,21 +187,22 @@ public class AgentLoopTests
     }
 
     /// <summary>
-    /// 一个文本片段加携带 usage 的 End 事件的脚本化响应；用于验证审计链。
-    /// One text fragment plus an End event carrying usage; drives the audit chain.
+    ///     一个文本片段加携带 usage 的 End 事件的脚本化响应；用于验证审计链。
+    ///     One text fragment plus an End event carrying usage; drives the audit chain.
     /// </summary>
-    private static IReadOnlyList<ChatStreamEvent> TextWithUsage(string text, int inputTokens, int outputTokens,
-                                                                string finishReason) =>
+    private static IReadOnlyList<ChatStreamEvent> TextWithUsage(
+        string text, int inputTokens, int outputTokens, string finishReason) =>
     [
-        new ChatStreamEvent { Kind = ChatStreamEventKind.ContentDelta, ContentDelta = text },
-        new ChatStreamEvent
+        new() { Kind = ChatStreamEventKind.ContentDelta, ContentDelta = text },
+        new()
         {
             Kind         = ChatStreamEventKind.End,
             InputTokens  = inputTokens,
             OutputTokens = outputTokens,
-            FinishReason = finishReason,
-        },
+            FinishReason = finishReason
+        }
     ];
+
 
     [Fact]
     public async Task ModelUsage_EndCarryingUsageIsSentToTheRecorder()
@@ -209,7 +210,7 @@ public class AgentLoopTests
         var client   = new FakeChatClient();
         var recorder = new CapturingRecorder();
         client.Enqueue(TextWithUsage("hello", 120, 45, "stop"));
-        var loop = new AgentLoop(client, new ToolRegistry([]), Options(), permissions : null, approver : null,
+        var loop = new AgentLoop(client, new ToolRegistry([]), Options(), null, null,
                                  recorder);
 
         var result = await loop.RunAsync("sys", "hi", CancellationToken.None);
@@ -226,9 +227,9 @@ public class AgentLoopTests
         client.Enqueue(
         [
             new ChatStreamEvent { Kind = ChatStreamEventKind.ContentDelta, ContentDelta = "hello" },
-            new ChatStreamEvent { Kind = ChatStreamEventKind.End, FinishReason = "stop" },
+            new ChatStreamEvent { Kind = ChatStreamEventKind.End, FinishReason          = "stop" }
         ]);
-        var loop = new AgentLoop(client, new ToolRegistry([]), Options(), permissions : null, approver : null,
+        var loop = new AgentLoop(client, new ToolRegistry([]), Options(), null, null,
                                  recorder);
 
         var result = await loop.RunAsync("sys", "hi", CancellationToken.None);
@@ -245,7 +246,7 @@ public class AgentLoopTests
         var client   = new FakeChatClient();
         var recorder = new CapturingRecorder();
         client.Enqueue(FakeChatClient.Text("hello")); // plain End: no usage, no finish reason
-        var loop = new AgentLoop(client, new ToolRegistry([]), Options(), permissions : null, approver : null,
+        var loop = new AgentLoop(client, new ToolRegistry([]), Options(), null, null,
                                  recorder);
 
         var result = await loop.RunAsync("sys", "hi", CancellationToken.None);
@@ -255,36 +256,52 @@ public class AgentLoopTests
     }
 
     /// <summary>
-    /// 捕获 model_usage 审计调用的 recorder；其余方法均为空实现。
-    /// Captures model-usage audit calls; every other recorder method is a no-op.
+    ///     捕获 model_usage 审计调用的 recorder；其余方法均为空实现。
+    ///     Captures model-usage audit calls; every other recorder method is a no-op.
     /// </summary>
     private sealed class CapturingRecorder : IRunRecorder
     {
         public List<(int? InputTokens, int? OutputTokens, string? FinishReason)> UsageRecords { get; } = [];
 
-        public Task StartAsync(string systemPrompt, string userInput, CancellationToken cancellationToken) =>
-            Task.CompletedTask;
+        public Task StartAsync(string systemPrompt, string userInput, CancellationToken cancellationToken)
+        {
+            return Task.CompletedTask;
+        }
 
-        public Task RecordPreparedAsync(ToolPreparation preparation, CancellationToken cancellationToken) =>
-            Task.CompletedTask;
+        public Task RecordPreparedAsync(ToolPreparation preparation, CancellationToken cancellationToken)
+        {
+            return Task.CompletedTask;
+        }
 
         public Task RecordPermissionAsync(ToolPreparation   preparation, PermissionDecision decision, string outcome,
-                                          CancellationToken cancellationToken) => Task.CompletedTask;
-
-        public Task RecordResultAsync(ToolPreparation   preparation, ToolResult result,
-                                      CancellationToken cancellationToken) => Task.CompletedTask;
-
-        public Task RecordCompactionAsync(ContextChange change, CancellationToken cancellationToken) =>
-            Task.CompletedTask;
-
-        public Task RecordModelUsageAsync(int? inputTokens, int? outputTokens, string? finishReason,
                                           CancellationToken cancellationToken)
+        {
+            return Task.CompletedTask;
+        }
+
+        public Task RecordResultAsync(
+            ToolPreparation preparation, ToolResult result, CancellationToken cancellationToken)
+        {
+            return Task.CompletedTask;
+        }
+
+        public Task RecordCompactionAsync(ContextChange change, CancellationToken cancellationToken)
+        {
+            return Task.CompletedTask;
+        }
+
+        public Task RecordModelUsageAsync(
+            int? inputTokens, int? outputTokens, string? finishReason, CancellationToken cancellationToken)
         {
             UsageRecords.Add((inputTokens, outputTokens, finishReason));
             return Task.CompletedTask;
         }
 
-        public Task CompleteAsync(AgentResult       result, IReadOnlyList<ChatMessage> messages, StructuredState state,
-                                  CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task CompleteAsync(
+            AgentResult       result, IReadOnlyList<ChatMessage> messages, StructuredState state,
+            CancellationToken cancellationToken)
+        {
+            return Task.CompletedTask;
+        }
     }
 }

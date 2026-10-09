@@ -58,7 +58,7 @@ public class TokenEstimationTests
             new()
             {
                 Name = "alpha", Description = "describes alpha", Parameters = new JsonObject()
-            },
+            }
         };
 
         var estimate = TokenEstimator.EstimateToolDefinitions(tools);

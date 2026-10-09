@@ -6,31 +6,28 @@ using TinyHarness.Core.Models.Tools;
 namespace TinyHarness.Core.Services.Context;
 
 /// <summary>
-/// Context Manager：在本地保留完整历史（PLAN §13），并据此构建“发送给模型的视图”。
-/// 启用预算后，视图会对每条 tool 结果消息做字符上限裁剪；当总估算超过阈值且存在可压缩
-/// 的旧完整回合时，先由外部模型（禁用 tools）把最旧的完整回合汇总成 <see cref="StructuredState"/>，
-/// 再提交压缩。assistant tool_calls 与其 tool 消息始终作为不可拆分的原子组整体保留或整体折叠，
-/// 进行中的回合（最新 assistant + 尚未续写的 tool 结果）永远不会被折叠。
-///
-/// 压缩请求本身也受预算约束：折叠输入按视图上限逐条裁剪，并按独立预算从最旧回合开始分批，
-/// 放不下的旧回合留到同一预请求阶段的后继压缩批次继续折叠。提交摘要前会验证其保留此前已
-/// 折叠状态中的事实、确实使视图变小，且计划构建后历史未被追加；任一不满足都回滚并保持原视图。
-///
-/// The context manager: retains the full history locally (PLAN §13) and derives the
-/// model-facing view from it. When budgeting is enabled the view caps every tool-result
-/// message; once the estimated total exceeds the threshold and foldable old complete
-/// turns exist, an external model (with tools disabled) summarizes the oldest complete
-/// turns into a <see cref="StructuredState"/> which is then committed. An assistant's
-/// tool_calls and their tool messages are treated as one atomic group that is either
-/// kept whole or folded whole; the in-progress turn (newest assistant plus its tool
-/// results that have not been continued yet) is never folded.
-///
-/// The summarization request is budgeted on its own: every folded message is capped
-/// like the model view, and the fold set is batched oldest-first against an independent
-/// budget, leaving any overflow for later compaction passes in the same pre-request
-/// phase. Before a summary is committed it must preserve the facts of the previously
-/// folded state, make the view strictly smaller, and the history must not have grown
-/// since the plan was built; any failure rolls back and keeps the original view.
+///     Context Manager：在本地保留完整历史（PLAN §13），并据此构建“发送给模型的视图”。
+///     启用预算后，视图会对每条 tool 结果消息做字符上限裁剪；当总估算超过阈值且存在可压缩
+///     的旧完整回合时，先由外部模型（禁用 tools）把最旧的完整回合汇总成 <see cref="StructuredState" />，
+///     再提交压缩。assistant tool_calls 与其 tool 消息始终作为不可拆分的原子组整体保留或整体折叠，
+///     进行中的回合（最新 assistant + 尚未续写的 tool 结果）永远不会被折叠。
+///     压缩请求本身也受预算约束：折叠输入按视图上限逐条裁剪，并按独立预算从最旧回合开始分批，
+///     放不下的旧回合留到同一预请求阶段的后继压缩批次继续折叠。提交摘要前会验证其保留此前已
+///     折叠状态中的事实、确实使视图变小，且计划构建后历史未被追加；任一不满足都回滚并保持原视图。
+///     The context manager: retains the full history locally (PLAN §13) and derives the
+///     model-facing view from it. When budgeting is enabled the view caps every tool-result
+///     message; once the estimated total exceeds the threshold and foldable old complete
+///     turns exist, an external model (with tools disabled) summarizes the oldest complete
+///     turns into a <see cref="StructuredState" /> which is then committed. An assistant's
+///     tool_calls and their tool messages are treated as one atomic group that is either
+///     kept whole or folded whole; the in-progress turn (newest assistant plus its tool
+///     results that have not been continued yet) is never folded.
+///     The summarization request is budgeted on its own: every folded message is capped
+///     like the model view, and the fold set is batched oldest-first against an independent
+///     budget, leaving any overflow for later compaction passes in the same pre-request
+///     phase. Before a summary is committed it must preserve the facts of the previously
+///     folded state, make the view strictly smaller, and the history must not have grown
+///     since the plan was built; any failure rolls back and keeps the original view.
 /// </summary>
 public sealed class ConversationContext
 {
@@ -52,24 +49,24 @@ public sealed class ConversationContext
         "summary.') and, on the first fold, the run's original task and constraints; use them "           +
         "to fill goal, constraints and pendingWork accurately.";
 
-    private readonly ContextOptions?   _options;
     private readonly List<ChatMessage> _messages = [];
-    private          StructuredState   _state    = StructuredState.Empty;
-    private          bool              _hasState;
+
+    private readonly ContextOptions? _options;
+    private          int             _foldEndMessageIndex;
 
     // Raw-message window of the turns already folded into _state. Nothing between
     // _foldStartMessageIndex and _foldEndMessageIndex appears in the model view,
     // while the full messages stay retained below.
-    private int _foldStartMessageIndex = -1;
-    private int _foldEndMessageIndex;
-
-    private FoldSelection? _pendingFold;
+    private int  _foldStartMessageIndex = -1;
+    private bool _hasState;
 
     // Failed compaction attempts are latched to the message count they ran against:
     // until new messages arrive the manager will not retry a failed or rejected
     // compaction, so it can never spin in a loop. Successful compactions do not
     // latch, because the caller may need more passes to fold everything.
     private int _messagesAtLastAttempt = -1;
+
+    private FoldSelection? _pendingFold;
 
     // 预算校准（PLAN §13）：最近一次“请求前估算输入 vs 服务端实测输入”的比值，乘回后续
     // 视图估算。钳位在 [0.5, 4.0]，防止单点异常 usage 主导预算；校准后的数字仍是估算，
@@ -85,12 +82,11 @@ public sealed class ConversationContext
     private double _usageCalibration = 1.0;
 
     /// <summary>
-    /// 创建上下文管理器。<paramref name="options"/> 为 <see langword="null"/> 时不启用预算
-    /// 与压缩，视图等于完整历史（向后兼容的直通模式）。
-    ///
-    /// Creates the context manager. A <see langword="null"/> <paramref name="options"/>
-    /// disables budgeting and compaction: the view equals the full history (pass-through
-    /// mode kept for backward compatibility).
+    ///     创建上下文管理器。<paramref name="options" /> 为 <see langword="null" /> 时不启用预算
+    ///     与压缩，视图等于完整历史（向后兼容的直通模式）。
+    ///     Creates the context manager. A <see langword="null" /> <paramref name="options" />
+    ///     disables budgeting and compaction: the view equals the full history (pass-through
+    ///     mode kept for backward compatibility).
     /// </summary>
     public ConversationContext(ContextOptions? options = null)
     {
@@ -98,22 +94,26 @@ public sealed class ConversationContext
     }
 
     /// <summary>
-    /// 是否启用预算与压缩。
-    /// Whether budgeting and compaction are enabled.
+    ///     是否启用预算与压缩。
+    ///     Whether budgeting and compaction are enabled.
     /// </summary>
     public bool Enabled => _options is not null;
 
     /// <summary>
-    /// 完整本地历史（压缩不会移除其中的任何消息）。
-    /// The complete local history; compaction never removes messages from it.
+    ///     完整本地历史（压缩不会移除其中的任何消息）。
+    ///     The complete local history; compaction never removes messages from it.
     /// </summary>
     public IReadOnlyList<ChatMessage> Messages => _messages;
 
-    public StructuredState State => _state;
+    public StructuredState State { get; private set; } = StructuredState.Empty;
+
+    private int ThresholdTokens => _options!.CompactionThresholdTokens > 0
+        ? _options.CompactionThresholdTokens
+        : _options.ContextWindowTokens;
 
     /// <summary>
-    /// 追加一条消息；任何追加都会解除上次压缩尝试的重试锁。
-    /// Appends one message; every append releases the previous compaction-attempt latch.
+    ///     追加一条消息；任何追加都会解除上次压缩尝试的重试锁。
+    ///     Appends one message; every append releases the previous compaction-attempt latch.
     /// </summary>
     public void Append(ChatMessage message)
     {
@@ -123,13 +123,13 @@ public sealed class ConversationContext
     }
 
     /// <summary>
-    /// 清空历史并回到未压缩状态，用于开始一次新任务。
-    /// Clears the history and compaction state, ready for a fresh task.
+    ///     清空历史并回到未压缩状态，用于开始一次新任务。
+    ///     Clears the history and compaction state, ready for a fresh task.
     /// </summary>
     public void Reset()
     {
         _messages.Clear();
-        _state                 = StructuredState.Empty;
+        State                  = StructuredState.Empty;
         _hasState              = false;
         _foldStartMessageIndex = -1;
         _foldEndMessageIndex   = 0;
@@ -138,168 +138,135 @@ public sealed class ConversationContext
     }
 
     /// <summary>
-    /// 判断下一次模型请求前是否需要压缩：总估算（视图 + 工具定义 + 保留输出）超过阈值，
-    /// 且存在尚未折叠、可压缩的旧完整回合。只记录失败尝试的重试锁在此生效。
-    ///
-    /// Reports whether the next model request requires compaction: the total estimate
-    /// (view + tool definitions + reserved output) exceeds the threshold and there are
-    /// foldable old complete turns not yet compacted. The retry latch recorded for
-    /// failed attempts is honored here.
+    ///     判断下一次模型请求前是否需要压缩：总估算（视图 + 工具定义 + 保留输出）超过阈值，
+    ///     且存在尚未折叠、可压缩的旧完整回合。只记录失败尝试的重试锁在此生效。
+    ///     Reports whether the next model request requires compaction: the total estimate
+    ///     (view + tool definitions + reserved output) exceeds the threshold and there are
+    ///     foldable old complete turns not yet compacted. The retry latch recorded for
+    ///     failed attempts is honored here.
     /// </summary>
     public bool RequiresCompaction(IReadOnlyList<ToolDefinition> tools)
     {
-        if (!Enabled || _messagesAtLastAttempt == _messages.Count || PlanFold(tools) is null)
-        {
-            return false;
-        }
+        if (!Enabled || _messagesAtLastAttempt == _messages.Count || PlanFold(tools) is null) return false;
 
         var total = EstimateViewTokens() + TokenEstimator.EstimateToolDefinitions(tools);
         return total + _options!.ReservedOutputTokens > ThresholdTokens;
     }
 
     /// <summary>
-    /// 当前模型视图的估算 token 数（含状态消息与 tool 结果裁剪），已乘以 usage 校准比值；
-    /// 结果仍是估算而非实测（PLAN §13）。
-    /// Estimated tokens of the current model view, including the state message and caps,
-    /// scaled by the usage-calibration ratio; the result stays an estimate, not a
-    /// measurement (PLAN §13).
+    ///     当前模型视图的估算 token 数（含状态消息与 tool 结果裁剪），已乘以 usage 校准比值；
+    ///     结果仍是估算而非实测（PLAN §13）。
+    ///     Estimated tokens of the current model view, including the state message and caps,
+    ///     scaled by the usage-calibration ratio; the result stays an estimate, not a
+    ///     measurement (PLAN §13).
     /// </summary>
-    public int EstimateViewTokens() => (int)Math.Ceiling(TokenEstimator.EstimateMessages(BuildModelView()) * _usageCalibration);
+    public int EstimateViewTokens()
+    {
+        return (int)Math.Ceiling(TokenEstimator.EstimateMessages(BuildModelView()) * _usageCalibration);
+    }
 
     /// <summary>
-    /// 记录一次模型请求的“请求前估算输入”与服务端实测输入 token，用两者比值校准后续视图
-    /// 估算（PLAN §13：服务返回可靠 usage 时用实际数据校准估算）。只有最近一次观测生效；
-    /// 比值钳位在 0.5–4.0，避免单点异常值主导预算。实测为 null 或非正数、估算为非正数时
-    /// 忽略本次观测。
-    /// 已知取舍（PLAN §13 下的启发式近似）：观测口径是请求级——估算含工具定义、服务端
-    /// prompt_tokens 含序列化工具 schema；应用口径却是纯消息视图估算。工具 schema 占比
-    /// 显著时比值被系统性抬高、视图估算偏保守（压缩偏早触发）；方向安全，且受 0.5–4.0
-    /// 钳位约束。
-    ///
-    /// Records the pre-request estimated input and the server-reported actual input
-    /// tokens of one model request, calibrating later view estimates by their ratio
-    /// (PLAN §13: calibrate estimates with real usage when the service reports it
-    /// reliably). Only the most recent observation applies and the ratio is clamped
-    /// to 0.5–4.0 so one outlier cannot dominate the budget. Observations with a
-    /// null or non-positive actual, or a non-positive estimate, are ignored.
-    /// Known trade-off (a heuristic approximation under PLAN §13): the observation is
-    /// request-scoped — the estimate includes tool definitions and the server's
-    /// prompt_tokens include serialized tool schemas — while the application is the
-    /// message-only view estimate. With large tool schemas the ratio drifts
-    /// systematically high, making view estimates conservative (compaction triggers
-    /// early); the direction is safe and bounded by the 0.5–4.0 clamp.
+    ///     记录一次模型请求的“请求前估算输入”与服务端实测输入 token，用两者比值校准后续视图
+    ///     估算（PLAN §13：服务返回可靠 usage 时用实际数据校准估算）。只有最近一次观测生效；
+    ///     比值钳位在 0.5–4.0，避免单点异常值主导预算。实测为 null 或非正数、估算为非正数时
+    ///     忽略本次观测。
+    ///     已知取舍（PLAN §13 下的启发式近似）：观测口径是请求级——估算含工具定义、服务端
+    ///     prompt_tokens 含序列化工具 schema；应用口径却是纯消息视图估算。工具 schema 占比
+    ///     显著时比值被系统性抬高、视图估算偏保守（压缩偏早触发）；方向安全，且受 0.5–4.0
+    ///     钳位约束。
+    ///     Records the pre-request estimated input and the server-reported actual input
+    ///     tokens of one model request, calibrating later view estimates by their ratio
+    ///     (PLAN §13: calibrate estimates with real usage when the service reports it
+    ///     reliably). Only the most recent observation applies and the ratio is clamped
+    ///     to 0.5–4.0 so one outlier cannot dominate the budget. Observations with a
+    ///     null or non-positive actual, or a non-positive estimate, are ignored.
+    ///     Known trade-off (a heuristic approximation under PLAN §13): the observation is
+    ///     request-scoped — the estimate includes tool definitions and the server's
+    ///     prompt_tokens include serialized tool schemas — while the application is the
+    ///     message-only view estimate. With large tool schemas the ratio drifts
+    ///     systematically high, making view estimates conservative (compaction triggers
+    ///     early); the direction is safe and bounded by the 0.5–4.0 clamp.
     /// </summary>
     public void RecordModelUsage(int estimatedPromptTokens, int? actualInputTokens)
     {
-        if (actualInputTokens is not (> 0 and int actual) || estimatedPromptTokens <= 0)
-        {
-            return;
-        }
+        if (actualInputTokens is not (> 0 and var actual) || estimatedPromptTokens <= 0) return;
 
         _usageCalibration = Math.Clamp(actual / (double)estimatedPromptTokens, 0.5, 4.0);
     }
 
     /// <summary>
-    /// 构建本次请求发送给模型的视图：头部 + （如有）结构化状态消息 + 未折叠回合；
-    /// 在直通模式下等于完整历史。
-    ///
-    /// Builds the view sent to the model on the next request: retained head, the
-    /// structured-state message when present, then all not-yet-folded turns. In
-    /// pass-through mode this equals the full history.
+    ///     构建本次请求发送给模型的视图：头部 + （如有）结构化状态消息 + 未折叠回合；
+    ///     在直通模式下等于完整历史。
+    ///     Builds the view sent to the model on the next request: retained head, the
+    ///     structured-state message when present, then all not-yet-folded turns. In
+    ///     pass-through mode this equals the full history.
     /// </summary>
     public IReadOnlyList<ChatMessage> BuildModelView()
     {
-        if (!Enabled)
-        {
-            return _messages.ToList();
-        }
+        if (!Enabled) return _messages.ToList();
 
         var view      = new List<ChatMessage>(_messages.Count + 1);
         var prefixEnd = _foldStartMessageIndex < 0 ? 0 : _foldStartMessageIndex;
-        for (var i = 0; i < prefixEnd; i++)
-        {
-            view.Add(CapViewMessage(_messages[i]));
-        }
+        for (var i = 0; i < prefixEnd; i++) view.Add(CapViewMessage(_messages[i]));
 
-        if (_hasState)
-        {
-            view.Add(ChatMessage.User(_state.ToJson()));
-        }
+        if (_hasState) view.Add(ChatMessage.User(State.ToJson()));
 
-        for (var i = _foldEndMessageIndex; i < _messages.Count; i++)
-        {
-            view.Add(CapViewMessage(_messages[i]));
-        }
+        for (var i = _foldEndMessageIndex; i < _messages.Count; i++) view.Add(CapViewMessage(_messages[i]));
 
         return view;
     }
 
     /// <summary>
-    /// 构造本次压缩的摘要请求消息：指令 + 已有状态 + （首次压缩时）原始任务与约束 +
-    /// 将要折叠的旧完整回合（每条已按视图上限裁剪）。当没有可折叠内容时返回空列表。
-    /// 调用成功后、<see cref="TryApplyCompaction"/> 之前不应追加新消息；若追加，
-    /// 应用摘要会因消息数不匹配而失败。
-    ///
-    /// Builds the summarization request messages: instructions, the current state
-    /// (when present), the original task and constraints (on the first fold only),
-    /// then the old complete turns to fold, each capped like the model view. Returns
-    /// an empty list when there is nothing to fold. Do not append messages between
-    /// this call and <see cref="TryApplyCompaction"/>; an append makes the commit
-    /// fail on the message-count mismatch.
+    ///     构造本次压缩的摘要请求消息：指令 + 已有状态 + （首次压缩时）原始任务与约束 +
+    ///     将要折叠的旧完整回合（每条已按视图上限裁剪）。当没有可折叠内容时返回空列表。
+    ///     调用成功后、<see cref="TryApplyCompaction" /> 之前不应追加新消息；若追加，
+    ///     应用摘要会因消息数不匹配而失败。
+    ///     Builds the summarization request messages: instructions, the current state
+    ///     (when present), the original task and constraints (on the first fold only),
+    ///     then the old complete turns to fold, each capped like the model view. Returns
+    ///     an empty list when there is nothing to fold. Do not append messages between
+    ///     this call and <see cref="TryApplyCompaction" />; an append makes the commit
+    ///     fail on the message-count mismatch.
     /// </summary>
     public IReadOnlyList<ChatMessage> BuildCompactionMessages(IReadOnlyList<ToolDefinition> tools)
     {
         var selection = PlanFold(tools);
-        if (selection is null)
-        {
-            return [];
-        }
+        if (selection is null) return [];
 
         _pendingFold = selection;
         var result = new List<ChatMessage>(selection.Spans.Count * 2 + 3)
         {
             ChatMessage.System(CompactionInstruction),
-            ChatMessage.User(_hasState ? _state.ToJson() : "No previous summary."),
+            ChatMessage.User(_hasState ? State.ToJson() : "No previous summary.")
         };
 
         // First fold only: the summarizer has no compacted state to derive the goal
         // from, so hand it the original task and standing constraints that remain in
         // the retained head instead of letting it guess from bare tool records.
-        if (!_hasState && BuildOriginalTaskMessage() is { } originalTask)
-        {
-            result.Add(originalTask);
-        }
+        if (!_hasState && BuildOriginalTaskMessage() is { } originalTask) result.Add(originalTask);
 
         foreach (var span in selection.Spans)
-        {
             for (var i = span.Start; i < span.Start + span.Count; i++)
-            {
                 result.Add(CapViewMessage(_messages[i]));
-            }
-        }
 
         return result;
     }
 
     /// <summary>
-    /// 提交摘要结果：解析、校验结构、验证状态保留与压缩收益后推进折叠边界。解析失败、
-    /// 摘要为空或丢弃了此前已记录的事实、候选视图没有变小、没有挂起的折叠计划、或消息
-    /// 在计划后被追加，都会返回 <see langword="false"/>，且不修改任何上下文状态。
-    ///
-    /// Commits a summarizer result: parses and validates the structured state, verifies
-    /// that it preserves previously recorded facts and that the candidate view is
-    /// strictly smaller, then advances the fold boundary. Returns
-    /// <see langword="false"/> — without touching any context state — when parsing
-    /// fails, the summary is empty or drops previously recorded facts, the candidate
-    /// view does not shrink, no fold plan is pending, or messages were appended after
-    /// the plan was built.
+    ///     提交摘要结果：解析、校验结构、验证状态保留与压缩收益后推进折叠边界。解析失败、
+    ///     摘要为空或丢弃了此前已记录的事实、候选视图没有变小、没有挂起的折叠计划、或消息
+    ///     在计划后被追加，都会返回 <see langword="false" />，且不修改任何上下文状态。
+    ///     Commits a summarizer result: parses and validates the structured state, verifies
+    ///     that it preserves previously recorded facts and that the candidate view is
+    ///     strictly smaller, then advances the fold boundary. Returns
+    ///     <see langword="false" /> — without touching any context state — when parsing
+    ///     fails, the summary is empty or drops previously recorded facts, the candidate
+    ///     view does not shrink, no fold plan is pending, or messages were appended after
+    ///     the plan was built.
     /// </summary>
     public bool TryApplyCompaction(string summaryJson)
     {
-        if (_pendingFold is null)
-        {
-            return false;
-        }
+        if (_pendingFold is null) return false;
 
         var pending = _pendingFold;
         _pendingFold = null;
@@ -351,28 +318,29 @@ public sealed class ConversationContext
 
         _foldStartMessageIndex = newFoldStart;
         _foldEndMessageIndex   = newFoldEnd;
-        _state                 = parsed;
+        State                  = parsed;
         _hasState              = true;
         return true;
     }
 
     /// <summary>
-    /// 记录一次失败压缩尝试（例如摘要模型调用抛错），锁定到当前消息数，避免立即重试。
-    /// Records one failed compaction attempt (for example a failed summarizer call) and
-    /// latches it to the current message count so it is not retried immediately.
+    ///     记录一次失败压缩尝试（例如摘要模型调用抛错），锁定到当前消息数，避免立即重试。
+    ///     Records one failed compaction attempt (for example a failed summarizer call) and
+    ///     latches it to the current message count so it is not retried immediately.
     /// </summary>
-    public void MarkCompactionAttempted() => LatchAttempt();
+    public void MarkCompactionAttempted()
+    {
+        LatchAttempt();
+    }
 
     /// <summary>
-    /// 单条 tool 结果消息在模型视图中的裁剪；启用预算时只对超长结果生效。
-    /// Applies the per-tool-result character cap to a view message when budgeting is on.
+    ///     单条 tool 结果消息在模型视图中的裁剪；启用预算时只对超长结果生效。
+    ///     Applies the per-tool-result character cap to a view message when budgeting is on.
     /// </summary>
     private ChatMessage CapViewMessage(ChatMessage message)
     {
         if (message.Role != ChatRole.Tool || message.Content.Length <= _options!.ToolResultViewCharacters)
-        {
             return message;
-        }
 
         var cap  = _options.ToolResultViewCharacters;
         var head = cap / 2;
@@ -384,52 +352,34 @@ public sealed class ConversationContext
         return ChatMessage.Tool(message.Name ?? string.Empty, message.ToolCallId ?? string.Empty, content);
     }
 
-    private int ThresholdTokens => _options!.CompactionThresholdTokens > 0
-        ? _options.CompactionThresholdTokens
-        : _options.ContextWindowTokens;
-
     /// <summary>
-    /// 计划本次要折叠的旧完整回合：总是保留最新完整回合作为近端上下文，再按预算从新到旧
-    /// 继续保留，其余较旧的完整回合进入折叠集合。折叠集合还要满足摘要请求自己的预算——
-    /// 放不下的部分留到后继批次，因此一次计划可能只折叠最旧的一批完整回合。
-    ///
-    /// Plans the old complete turns to fold: the newest complete turn is always kept as
-    /// nearby context, further turns are kept newest-first while the budget allows, and
-    /// the remaining older complete turns form the fold set. The fold set must also fit
-    /// the summarization request's own budget, so a single plan may fold only the
-    /// oldest batch and leave the rest for the next pass.
+    ///     计划本次要折叠的旧完整回合：总是保留最新完整回合作为近端上下文，再按预算从新到旧
+    ///     继续保留，其余较旧的完整回合进入折叠集合。折叠集合还要满足摘要请求自己的预算——
+    ///     放不下的部分留到后继批次，因此一次计划可能只折叠最旧的一批完整回合。
+    ///     Plans the old complete turns to fold: the newest complete turn is always kept as
+    ///     nearby context, further turns are kept newest-first while the budget allows, and
+    ///     the remaining older complete turns form the fold set. The fold set must also fit
+    ///     the summarization request's own budget, so a single plan may fold only the
+    ///     oldest batch and leave the rest for the next pass.
     /// </summary>
     private FoldSelection? PlanFold(IReadOnlyList<ToolDefinition> tools)
     {
-        if (!Enabled)
-        {
-            return null;
-        }
+        if (!Enabled) return null;
 
         var spans = AssistantSpans();
-        if (spans.Count < 2)
-        {
-            return null; // The only turn is still in progress; nothing is complete yet.
-        }
+        if (spans.Count < 2) return null; // The only turn is still in progress; nothing is complete yet.
 
         var tailSpan = spans[^1];
         var complete = new List<MessageSpan>(spans.Count - 1);
         for (var i = 0; i < spans.Count - 1; i++)
-        {
             if (spans[i].Start >= _foldEndMessageIndex)
-            {
                 complete.Add(spans[i]);
-            }
-        }
 
-        if (complete.Count == 0)
-        {
-            return null;
-        }
+        if (complete.Count == 0) return null;
 
         var headTokens = TokenEstimator.EstimateMessages(HeadMessages());
         var stateTokens = _hasState
-            ? TokenEstimator.EstimateMessage(ChatMessage.User(_state.ToJson()))
+            ? TokenEstimator.EstimateMessage(ChatMessage.User(State.ToJson()))
             : NewStateTokenAssumption;
         var tailTokens = SpanTokens(tailSpan);
         var fixedCosts = TokenEstimator.EstimateToolDefinitions(tools) + _options!.ReservedOutputTokens;
@@ -439,20 +389,14 @@ public sealed class ConversationContext
         for (var i = complete.Count - 1; i >= 0; i--)
         {
             var cost = SpanTokens(complete[i]);
-            if (keptCount > 0 && cost > remaining)
-            {
-                break; // Fold this and every older complete turn.
-            }
+            if (keptCount > 0 && cost > remaining) break; // Fold this and every older complete turn.
 
             keptCount++;
             remaining -= cost;
         }
 
         var foldable = complete.Count - keptCount;
-        if (foldable <= 0)
-        {
-            return null; // Every complete turn fits; there is nothing to fold.
-        }
+        if (foldable <= 0) return null; // Every complete turn fits; there is nothing to fold.
 
         // The summarizer input is itself a model request: fold the oldest complete
         // turns that fit the summarizer budget, oldest first. A compaction request
@@ -464,10 +408,7 @@ public sealed class ConversationContext
         for (var i = 0; i < foldable; i++)
         {
             var cost = SpanTokens(complete[i]);
-            if (cost > summaryRemaining)
-            {
-                break;
-            }
+            if (cost > summaryRemaining) break;
 
             toFold.Add(complete[i]);
             summaryRemaining -= cost;
@@ -477,37 +418,33 @@ public sealed class ConversationContext
     }
 
     /// <summary>
-    /// 摘要请求自身可用的估算预算：模型窗口扣除保留输出、指令、既有状态与原始任务后，
-    /// 剩余空间用于装入被折叠回合。折叠输入与普通视图一样逐条裁剪。
-    ///
-    /// Estimated budget available for the summarization request itself: the model
-    /// window minus reserved output, the instruction, the existing state and the
-    /// original task; the remainder carries the capped fold input.
+    ///     摘要请求自身可用的估算预算：模型窗口扣除保留输出、指令、既有状态与原始任务后，
+    ///     剩余空间用于装入被折叠回合。折叠输入与普通视图一样逐条裁剪。
+    ///     Estimated budget available for the summarization request itself: the model
+    ///     window minus reserved output, the instruction, the existing state and the
+    ///     original task; the remainder carries the capped fold input.
     /// </summary>
     private int SummaryInputBudgetTokens()
     {
         var budget = _options!.ContextWindowTokens - _options.ReservedOutputTokens;
         budget -= TokenEstimator.EstimateMessage(ChatMessage.System(CompactionInstruction));
         budget -=
-            TokenEstimator.EstimateMessage(ChatMessage.User(_hasState ? _state.ToJson() : "No previous summary."));
+            TokenEstimator.EstimateMessage(ChatMessage.User(_hasState ? State.ToJson() : "No previous summary."));
         if (!_hasState && BuildOriginalTaskMessage() is { } originalTask)
-        {
             budget -= TokenEstimator.EstimateMessage(originalTask);
-        }
 
         return budget;
     }
 
     /// <summary>
-    /// 首次压缩时构造“原始任务与约束”消息：把保留在头部（折叠区之前）的 system/user
-    /// 内容整理成一条 user 消息，使摘要模型能准确填写 goal、constraints 与 pendingWork，
-    /// 而不是仅凭被折叠回合里的工具记录猜测任务意图。头部为空时返回 <see langword="null"/>。
-    ///
-    /// Builds the original-task message used on the first fold: the system/user content
-    /// retained in the head (before the fold region) is gathered into one user message
-    /// so the summarizer can fill goal, constraints and pendingWork accurately instead
-    /// of guessing the task from bare tool records. Returns <see langword="null"/> when
-    /// the head carries no content.
+    ///     首次压缩时构造“原始任务与约束”消息：把保留在头部（折叠区之前）的 system/user
+    ///     内容整理成一条 user 消息，使摘要模型能准确填写 goal、constraints 与 pendingWork，
+    ///     而不是仅凭被折叠回合里的工具记录猜测任务意图。头部为空时返回 <see langword="null" />。
+    ///     Builds the original-task message used on the first fold: the system/user content
+    ///     retained in the head (before the fold region) is gathered into one user message
+    ///     so the summarizer can fill goal, constraints and pendingWork accurately instead
+    ///     of guessing the task from bare tool records. Returns <see langword="null" /> when
+    ///     the head carries no content.
     /// </summary>
     private ChatMessage? BuildOriginalTaskMessage()
     {
@@ -518,10 +455,7 @@ public sealed class ConversationContext
         for (var i = 0; i < HeadEndIndex(); i++)
         {
             var message = _messages[i];
-            if (string.IsNullOrWhiteSpace(message.Content))
-            {
-                continue;
-            }
+            if (string.IsNullOrWhiteSpace(message.Content)) continue;
 
             text.Append("\n[")
                 .Append(message.Role)
@@ -534,8 +468,8 @@ public sealed class ConversationContext
     }
 
     /// <summary>
-    /// 头部消息：折叠区起点之前、始终原样保留的指令与输入。
-    /// Head messages: instructions and the user input retained verbatim before the fold region.
+    ///     头部消息：折叠区起点之前、始终原样保留的指令与输入。
+    ///     Head messages: instructions and the user input retained verbatim before the fold region.
     /// </summary>
     private IReadOnlyList<ChatMessage> HeadMessages()
     {
@@ -544,102 +478,75 @@ public sealed class ConversationContext
     }
 
     /// <summary>
-    /// 头部消息的结束下标。折叠已经发生时是折叠区起点；首次折叠尚未发生时用最早完整回合
-    /// 的起点——折叠一旦发生，这条边界之前的所有消息都会继续留在模型视图中，所以规划预算
-    /// 时不能漏算它们。
-    ///
-    /// End index of the head region. Once a fold exists this is the fold-region start;
-    /// before the first fold it is the start of the oldest complete turn, because those
-    /// messages stay in the model view after the fold and must be charged when planning.
+    ///     头部消息的结束下标。折叠已经发生时是折叠区起点；首次折叠尚未发生时用最早完整回合
+    ///     的起点——折叠一旦发生，这条边界之前的所有消息都会继续留在模型视图中，所以规划预算
+    ///     时不能漏算它们。
+    ///     End index of the head region. Once a fold exists this is the fold-region start;
+    ///     before the first fold it is the start of the oldest complete turn, because those
+    ///     messages stay in the model view after the fold and must be charged when planning.
     /// </summary>
     private int HeadEndIndex()
     {
-        if (_foldStartMessageIndex >= 0)
-        {
-            return _foldStartMessageIndex;
-        }
+        if (_foldStartMessageIndex >= 0) return _foldStartMessageIndex;
 
         var spans = AssistantSpans();
         return spans.Count == 0 ? 0 : spans[0].Start;
     }
 
     /// <summary>
-    /// 摘要是否保留了此前已记录的事实，且没有把承载真实工作的回合压缩成空状态。
-    /// 规则：空摘要（Goal 与所有列表都为空）在旧状态有内容或折叠含实质内容时被拒绝；
-    /// 旧 Goal 非空时新 Goal 不能为空；文件、命令和已有决策是历史事实，必须保留。
-    /// 约束与待办是当前状态，允许用非空列表更新；每个已有待办必须保留或用明确的
-    /// completed: <item> 条目关闭。这样不试图解决所有语义失真，但能阻止
-    /// 摘要模型无理由吞掉关键状态。
-    ///
-    /// Whether the summary preserves previously recorded facts and does not compress
-    /// turns that carried real work into an empty state. An all-empty summary is
-    /// rejected when the previous state had content or the fold carries substance;
-    /// a non-empty previous goal must stay non-empty; files, command records, and prior
-    /// decisions are historical facts that cannot be dropped. Constraints and pending
-    /// work may be updated, but each prior pending item must remain or be explicitly
-    /// closed with a matching `completed: <item>` entry. This does not
-    /// attempt to solve every semantic distortion, only silent loss of key state.
+    ///     摘要是否保留了此前已记录的事实，且没有把承载真实工作的回合压缩成空状态。
+    ///     规则：空摘要（Goal 与所有列表都为空）在旧状态有内容或折叠含实质内容时被拒绝；
+    ///     旧 Goal 非空时新 Goal 不能为空；文件、命令和已有决策是历史事实，必须保留。
+    ///     约束与待办是当前状态，允许用非空列表更新；每个已有待办必须保留，或用明确的
+    ///     <c>completed: &lt;item&gt;</c> 条目关闭（&lt;item&gt; 为原待办文本）。这样不试图
+    ///     解决所有语义失真，但能阻止摘要模型无理由吞掉关键状态。
+    ///     Whether the summary preserves previously recorded facts and does not compress
+    ///     turns that carried real work into an empty state. An all-empty summary is
+    ///     rejected when the previous state had content or the fold carries substance;
+    ///     a non-empty previous goal must stay non-empty; files, command records, and prior
+    ///     decisions are historical facts that cannot be dropped. Constraints and pending
+    ///     work may be updated, but each prior pending item must remain or be explicitly
+    ///     closed with a matching <c>completed: &lt;item&gt;</c> entry (where &lt;item&gt; is
+    ///     the prior pending text). This does not attempt to solve every semantic
+    ///     distortion, only silent loss of key state.
     /// </summary>
     private bool KeepsPriorFacts(StructuredState parsed, FoldSelection pending)
     {
         var foldCarriesSubstance = false;
         foreach (var span in pending.Spans)
-        {
             for (var i = span.Start; i < span.Start + span.Count && !foldCarriesSubstance; i++)
             {
                 var message = _messages[i];
-                foldCarriesSubstance = message.Role == ChatRole.Tool
-                                    || !string.IsNullOrWhiteSpace(message.Content)
-                                    || message.ToolCalls is { Count: > 0 };
+                foldCarriesSubstance = message.Role == ChatRole.Tool               ||
+                                       !string.IsNullOrWhiteSpace(message.Content) ||
+                                       message.ToolCalls is { Count: > 0 };
             }
-        }
 
-        if (parsed.IsEmpty && (!_state.IsEmpty || foldCarriesSubstance))
-        {
-            return false;
-        }
+        if (parsed.IsEmpty && (!State.IsEmpty || foldCarriesSubstance)) return false;
 
-        if (!_hasState)
-        {
-            return true;
-        }
+        if (!_hasState) return true;
 
-        if (!string.IsNullOrWhiteSpace(_state.Goal) && string.IsNullOrWhiteSpace(parsed.Goal))
-        {
-            return false;
-        }
+        if (!string.IsNullOrWhiteSpace(State.Goal) && string.IsNullOrWhiteSpace(parsed.Goal)) return false;
 
-        return ContainsEvery(parsed.FilesInspected, _state.FilesInspected)
-            && ContainsEvery(parsed.FilesModified, _state.FilesModified)
-            && ContainsEvery(parsed.CommandsAndResults, _state.CommandsAndResults)
-            && ContainsEvery(parsed.Decisions, _state.Decisions)
+        return ContainsEvery(parsed.FilesInspected, State.FilesInspected)
+            && ContainsEvery(parsed.FilesModified, State.FilesModified)
+            && ContainsEvery(parsed.CommandsAndResults, State.CommandsAndResults)
+            && ContainsEvery(parsed.Decisions, State.Decisions)
             && KeepsPendingWork(parsed.PendingWork);
     }
 
     private bool KeepsPendingWork(IReadOnlyList<string> pendingWork)
     {
-        if (_state.PendingWork.Count == 0)
-        {
-            return true;
-        }
+        if (State.PendingWork.Count == 0) return true;
 
-        if (pendingWork.Count == 0)
-        {
-            return false;
-        }
+        if (pendingWork.Count == 0) return false;
 
-        foreach (var priorItem in _state.PendingWork)
+        foreach (var priorItem in State.PendingWork)
         {
-            if (pendingWork.Contains(priorItem, StringComparer.Ordinal))
-            {
-                continue;
-            }
+            if (pendingWork.Contains(priorItem, StringComparer.Ordinal)) continue;
 
             var completion = "completed: " + priorItem;
-            if (!pendingWork.Contains(completion, StringComparer.OrdinalIgnoreCase))
-            {
-                return false;
-            }
+            if (!pendingWork.Contains(completion, StringComparer.OrdinalIgnoreCase)) return false;
         }
 
         return true;
@@ -648,66 +555,53 @@ public sealed class ConversationContext
     private static bool ContainsEvery(IReadOnlyList<string> container, IReadOnlyList<string> required)
     {
         foreach (var item in required)
-        {
             if (!container.Contains(item, StringComparer.Ordinal))
-            {
                 return false;
-            }
-        }
 
         return true;
     }
 
     /// <summary>
-    /// 估算提交候选状态并推进折叠边界后的视图 token 数，用于提交前的收益校验。与
-    /// <see cref="EstimateViewTokens"/> 相同，结果乘以校准比值，保证收益比较两侧口径一致
-    /// （校准是单调乘法，不改变“候选视图必须严格变小”的不变量语义）。
-    ///
-    /// Estimates the tokens of the view after committing the candidate state and
-    /// advancing the fold boundary, used to verify the compaction benefit. Like
-    /// <see cref="EstimateViewTokens"/>, the result is scaled by the calibration
-    /// ratio so both sides of the comparison share one scale (calibration is a
-    /// monotone multiplication and does not change the meaning of the
-    /// strictly-smaller-view invariant).
+    ///     估算提交候选状态并推进折叠边界后的视图 token 数，用于提交前的收益校验。与
+    ///     <see cref="EstimateViewTokens" /> 相同，结果乘以校准比值，保证收益比较两侧口径一致
+    ///     （校准是单调乘法，不改变“候选视图必须严格变小”的不变量语义）。
+    ///     Estimates the tokens of the view after committing the candidate state and
+    ///     advancing the fold boundary, used to verify the compaction benefit. Like
+    ///     <see cref="EstimateViewTokens" />, the result is scaled by the calibration
+    ///     ratio so both sides of the comparison share one scale (calibration is a
+    ///     monotone multiplication and does not change the meaning of the
+    ///     strictly-smaller-view invariant).
     /// </summary>
     private int EstimateCandidateViewTokens(StructuredState state, int foldStart, int foldEnd)
     {
-        var tokens = 0;
-        for (var i = 0; i < foldStart; i++)
-        {
-            tokens += TokenEstimator.EstimateMessage(CapViewMessage(_messages[i]));
-        }
+        var tokens                                 = 0;
+        for (var i = 0; i < foldStart; i++) tokens += TokenEstimator.EstimateMessage(CapViewMessage(_messages[i]));
 
         tokens += TokenEstimator.EstimateMessage(ChatMessage.User(state.ToJson()));
         for (var i = foldEnd; i < _messages.Count; i++)
-        {
             tokens += TokenEstimator.EstimateMessage(CapViewMessage(_messages[i]));
-        }
 
         return (int)Math.Ceiling(tokens * _usageCalibration);
     }
 
-    private void LatchAttempt() => _messagesAtLastAttempt = _messages.Count;
+    private void LatchAttempt()
+    {
+        _messagesAtLastAttempt = _messages.Count;
+    }
 
     /// <summary>
-    /// 定位每个 assistant 回合：一条 assistant 消息及其后紧邻的连续 tool 消息（原子组）。
-    /// Locates every assistant turn: an assistant message plus its contiguous tool messages (one atomic group).
+    ///     定位每个 assistant 回合：一条 assistant 消息及其后紧邻的连续 tool 消息（原子组）。
+    ///     Locates every assistant turn: an assistant message plus its contiguous tool messages (one atomic group).
     /// </summary>
     private List<MessageSpan> AssistantSpans()
     {
         var spans = new List<MessageSpan>();
         for (var i = 0; i < _messages.Count; i++)
         {
-            if (_messages[i].Role != ChatRole.Assistant)
-            {
-                continue;
-            }
+            if (_messages[i].Role != ChatRole.Assistant) continue;
 
             var start = i;
-            while (i + 1 < _messages.Count && _messages[i + 1].Role == ChatRole.Tool)
-            {
-                i++;
-            }
+            while (i + 1 < _messages.Count && _messages[i + 1].Role == ChatRole.Tool) i++;
 
             spans.Add(new MessageSpan(start, i - start + 1));
         }
@@ -719,28 +613,26 @@ public sealed class ConversationContext
     {
         var tokens = 0;
         for (var i = span.Start; i < span.Start + span.Count; i++)
-        {
             tokens += TokenEstimator.EstimateMessage(CapViewMessage(_messages[i]));
-        }
 
         return tokens;
     }
 
     /// <summary>
-    /// 保留在原始历史中的消息区间。
-    /// A message range within the retained raw history.
+    ///     保留在原始历史中的消息区间。
+    ///     A message range within the retained raw history.
     /// </summary>
     private readonly record struct MessageSpan(int Start, int Count);
 
     /// <summary>
-    /// 一次压缩选择的折叠区间（必然是连续前缀）。
-    /// The fold ranges chosen by one compaction (always a contiguous prefix).
+    ///     一次压缩选择的折叠区间（必然是连续前缀）。
+    ///     The fold ranges chosen by one compaction (always a contiguous prefix).
     /// </summary>
     private sealed record FoldSelection(IReadOnlyList<MessageSpan> Spans)
     {
         /// <summary>
-        /// 构建计划时的消息总数；提交时若消息已追加则计划失效。
-        /// Total message count when the plan was built; appends invalidate the plan.
+        ///     构建计划时的消息总数；提交时若消息已追加则计划失效。
+        ///     Total message count when the plan was built; appends invalidate the plan.
         /// </summary>
         public int MessageCountAtPlan { get; init; }
 
@@ -748,16 +640,7 @@ public sealed class ConversationContext
 
         public int FoldMessageCount
         {
-            get
-            {
-                var count = 0;
-                foreach (var span in Spans)
-                {
-                    count += span.Count;
-                }
-
-                return count;
-            }
+            get => Spans.Sum(span => span.Count);
         }
     }
 }

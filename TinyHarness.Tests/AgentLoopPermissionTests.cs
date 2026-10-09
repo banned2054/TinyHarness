@@ -11,39 +11,24 @@ namespace TinyHarness.Tests;
 
 public class AgentLoopPermissionTests
 {
-    private static AgentOptions Options() => new()
+    private static AgentOptions Options()
     {
-        Model                     = "test-model",
-        MaxAgentSteps             = 10,
-        DefaultToolTimeoutSeconds = 30,
-    };
-
-    private static string PatchArgs(string patch) => new JsonObject { ["patch"] = patch }.ToJsonString();
-
-    private static ApplyPatchTool PatchTool(TestTempDir dir) => new(dir.Workspace);
-
-    /// <summary>Returns actions from a queue and counts how many times it was asked.</summary>
-    private sealed class ScriptedApprover : IApprovalProvider
-    {
-        private readonly Queue<ApprovalAction> _actions = new();
-
-        public int Prompts { get; private set; }
-
-        public Action? OnPrompt { get; init; }
-
-        public void Enqueue(ApprovalAction action) => _actions.Enqueue(action);
-
-        public Task<ApprovalAction> PromptAsync(ToolPreparation preparation, CancellationToken cancellationToken)
+        return new AgentOptions
         {
-            OnPrompt?.Invoke();
-            Prompts++;
-            if (_actions.Count == 0)
-            {
-                throw new InvalidOperationException("No scripted approval action left.");
-            }
+            Model                     = "test-model",
+            MaxAgentSteps             = 10,
+            DefaultToolTimeoutSeconds = 30
+        };
+    }
 
-            return Task.FromResult(_actions.Dequeue());
-        }
+    private static string PatchArgs(string patch)
+    {
+        return new JsonObject { ["patch"] = patch }.ToJsonString();
+    }
+
+    private static ApplyPatchTool PatchTool(TestTempDir dir)
+    {
+        return new ApplyPatchTool(dir.Workspace);
     }
 
     [Fact]
@@ -53,8 +38,8 @@ public class AgentLoopPermissionTests
         dir.WriteFile("fixme.cs", "line1\nline2\nline3\n");
 
         var client = new FakeChatClient();
-        client.Enqueue(FakeChatClient.ToolCall("apply_patch", PatchArgs(ReplacePatch(2)), id : "p1"));
-        client.Enqueue(FakeChatClient.ToolCall("apply_patch", PatchArgs(ReplacePatch(3)), id : "p2"));
+        client.Enqueue(FakeChatClient.ToolCall("apply_patch", PatchArgs(ReplacePatch(2)), "p1"));
+        client.Enqueue(FakeChatClient.ToolCall("apply_patch", PatchArgs(ReplacePatch(3)), "p2"));
         client.Enqueue(FakeChatClient.Text("both patches applied"));
 
         var approver = new ScriptedApprover();
@@ -68,7 +53,7 @@ public class AgentLoopPermissionTests
         Assert.Equal(AgentStatus.Completed, result.Status);
         Assert.Equal(1, approver.Prompts); // the second write is auto-approved by the session grant
         Assert.Equal("line1\nline2-fixed\nline3-fixed\n",
-                     File.ReadAllText(Path.Combine(dir.Root, "fixme.cs")));
+                     await File.ReadAllTextAsync(Path.Combine(dir.Root, "fixme.cs")));
     }
 
     [Fact]
@@ -78,7 +63,7 @@ public class AgentLoopPermissionTests
         var       path = dir.WriteFile("fixme.cs", "line1\nline2\nline3\n");
 
         var client = new FakeChatClient();
-        client.Enqueue(FakeChatClient.ToolCall("apply_patch", PatchArgs(ReplacePatch(2)), id : "p1"));
+        client.Enqueue(FakeChatClient.ToolCall("apply_patch", PatchArgs(ReplacePatch(2)), "p1"));
         client.Enqueue(FakeChatClient.Text("understood"));
 
         var approver = new ScriptedApprover();
@@ -92,7 +77,7 @@ public class AgentLoopPermissionTests
         Assert.Equal(AgentStatus.Completed, result.Status);
         Assert.Equal(1, approver.Prompts);
         Assert.Equal(0, result.ToolExecutions);
-        Assert.Equal("line1\nline2\nline3\n", File.ReadAllText(path)); // untouched
+        Assert.Equal("line1\nline2\nline3\n", await File.ReadAllTextAsync(path)); // untouched
         Assert.Contains(loop.History,
                         m => m.Role == ChatRole.Tool && m.Content.Contains("Permission denied by user"));
     }
@@ -132,8 +117,8 @@ public class AgentLoopPermissionTests
         dir.WriteFile("fixme.cs", "line1\nline2\nline3\n");
 
         var client = new FakeChatClient();
-        client.Enqueue(FakeChatClient.ToolCall("apply_patch", PatchArgs(ReplacePatch(2)), id : "p1"));
-        client.Enqueue(FakeChatClient.ToolCall("apply_patch", PatchArgs(ReplacePatch(2)), id : "p2"));
+        client.Enqueue(FakeChatClient.ToolCall("apply_patch", PatchArgs(ReplacePatch(2)), "p1"));
+        client.Enqueue(FakeChatClient.ToolCall("apply_patch", PatchArgs(ReplacePatch(2)), "p2"));
         client.Enqueue(FakeChatClient.Text("done"));
 
         var approver = new ScriptedApprover();
@@ -158,8 +143,8 @@ public class AgentLoopPermissionTests
         dir.WriteFile("fixme.cs", "line1\nline2\nline3\n");
 
         var client = new FakeChatClient();
-        client.Enqueue(FakeChatClient.ToolCall("apply_patch", PatchArgs(ReplacePatch(2)), id : "p1"));
-        client.Enqueue(FakeChatClient.ToolCall("apply_patch", PatchArgs(ReplacePatch(3)), id : "p2"));
+        client.Enqueue(FakeChatClient.ToolCall("apply_patch", PatchArgs(ReplacePatch(2)), "p1"));
+        client.Enqueue(FakeChatClient.ToolCall("apply_patch", PatchArgs(ReplacePatch(3)), "p2"));
         client.Enqueue(FakeChatClient.Text("done"));
 
         var approver = new ScriptedApprover();
@@ -186,8 +171,8 @@ public class AgentLoopPermissionTests
         // capability, targets, arguments), different call id — call ids are not
         // part of the fingerprint. The first "allow once" must not auto-approve
         // this second attempt.
-        client.Enqueue(FakeChatClient.ToolCall("apply_patch", PatchArgs(ReplacePatch(2)), id : "p1"));
-        client.Enqueue(FakeChatClient.ToolCall("apply_patch", PatchArgs(ReplacePatch(2)), id : "p2"));
+        client.Enqueue(FakeChatClient.ToolCall("apply_patch", PatchArgs(ReplacePatch(2)), "p1"));
+        client.Enqueue(FakeChatClient.ToolCall("apply_patch", PatchArgs(ReplacePatch(2)), "p2"));
         client.Enqueue(FakeChatClient.Text("done"));
 
         var approver = new ScriptedApprover();
@@ -217,15 +202,19 @@ public class AgentLoopPermissionTests
         {
             new()
             {
-                Kind                 = ChatStreamEventKind.ToolCallDelta, ToolCallIndex = 0, ToolCallId = "p1",
-                ToolCallFunctionName = "apply_patch", ToolCallArgumentsDelta            = PatchArgs(ReplacePatch(2)),
+                Kind                   = ChatStreamEventKind.ToolCallDelta,
+                ToolCallIndex          = 0, ToolCallId = "p1",
+                ToolCallFunctionName   = "apply_patch",
+                ToolCallArgumentsDelta = PatchArgs(ReplacePatch(2))
             },
             new()
             {
-                Kind                 = ChatStreamEventKind.ToolCallDelta, ToolCallIndex = 1, ToolCallId = "p2",
-                ToolCallFunctionName = "apply_patch", ToolCallArgumentsDelta            = PatchArgs(EscapePatch()),
+                Kind                   = ChatStreamEventKind.ToolCallDelta,
+                ToolCallIndex          = 1, ToolCallId = "p2",
+                ToolCallFunctionName   = "apply_patch",
+                ToolCallArgumentsDelta = PatchArgs(EscapePatch())
             },
-            new() { Kind = ChatStreamEventKind.End },
+            new() { Kind = ChatStreamEventKind.End }
         };
         client.Enqueue(round);
         client.Enqueue(FakeChatClient.Text("understood"));
@@ -254,15 +243,21 @@ public class AgentLoopPermissionTests
         client.Enqueue([
             new ChatStreamEvent
             {
-                Kind                 = ChatStreamEventKind.ToolCallDelta, ToolCallIndex = 0, ToolCallId = "w1",
-                ToolCallFunctionName = "write_test", ToolCallArgumentsDelta             = "{}",
+                Kind                   = ChatStreamEventKind.ToolCallDelta,
+                ToolCallIndex          = 0,
+                ToolCallId             = "w1",
+                ToolCallFunctionName   = "write_test",
+                ToolCallArgumentsDelta = "{}"
             },
             new ChatStreamEvent
             {
-                Kind                 = ChatStreamEventKind.ToolCallDelta, ToolCallIndex = 1, ToolCallId = "w2",
-                ToolCallFunctionName = "write_test", ToolCallArgumentsDelta             = "{}",
+                Kind                   = ChatStreamEventKind.ToolCallDelta,
+                ToolCallIndex          = 1,
+                ToolCallId             = "w2",
+                ToolCallFunctionName   = "write_test",
+                ToolCallArgumentsDelta = "{}"
             },
-            new ChatStreamEvent { Kind = ChatStreamEventKind.End },
+            new ChatStreamEvent { Kind = ChatStreamEventKind.End }
         ]);
         client.Enqueue(FakeChatClient.Text("done"));
 
@@ -302,13 +297,16 @@ public class AgentLoopPermissionTests
         Assert.Equal(0, approver.Prompts);
     }
 
-    private static string EscapePatch() => """
-        --- a/fixme.cs
-        +++ b/../outside.cs
-        @@ -1 +1 @@
-        -line1
-        +line1-x
-        """;
+    private static string EscapePatch()
+    {
+        return """
+            --- a/fixme.cs
+            +++ b/../outside.cs
+            @@ -1 +1 @@
+            -line1
+            +line1-x
+            """;
+    }
 
     private static string ReplacePatch(int lineNumber)
     {
@@ -321,5 +319,29 @@ public class AgentLoopPermissionTests
             -{old}
             +{n}
             """;
+    }
+
+    /// <summary>Returns actions from a queue and counts how many times it was asked.</summary>
+    private sealed class ScriptedApprover : IApprovalProvider
+    {
+        private readonly Queue<ApprovalAction> _actions = new();
+
+        public int Prompts { get; private set; }
+
+        public Action? OnPrompt { get; init; }
+
+        public Task<ApprovalAction> PromptAsync(ToolPreparation preparation, CancellationToken cancellationToken)
+        {
+            OnPrompt?.Invoke();
+            Prompts++;
+            return _actions.Count == 0
+                ? throw new InvalidOperationException("No scripted approval action left.")
+                : Task.FromResult(_actions.Dequeue());
+        }
+
+        public void Enqueue(ApprovalAction action)
+        {
+            _actions.Enqueue(action);
+        }
     }
 }

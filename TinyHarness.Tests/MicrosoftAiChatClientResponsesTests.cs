@@ -1,7 +1,6 @@
 using System.ClientModel;
 using System.Text;
 using System.Text.Json.Nodes;
-using ChatFinishReason = Microsoft.Extensions.AI.ChatFinishReason;
 using TinyHarness.Core.Models.Agent;
 using TinyHarness.Core.Models.ChatCompletions;
 using TinyHarness.Core.Models.Configuration;
@@ -9,45 +8,47 @@ using TinyHarness.Core.Models.Tools;
 using TinyHarness.Core.Services.Agent;
 using TinyHarness.Core.Services.ChatCompletions;
 using TinyHarness.Core.Services.Tools;
+using ChatFinishReason = Microsoft.Extensions.AI.ChatFinishReason;
 
 namespace TinyHarness.Tests;
 
 /// <summary>
-/// Responses 协议传输契约测试：经 ModelClientFactory 以 ChatApiKind.Responses 构造的
-/// MicrosoftAiChatClient 驱动真实 OpenAI/M.E.AI SDK 打本地脚本 SSE 服务，验证流式拼装、
-/// reasoning 条目累积、无状态请求（store:false、无 previous_response_id）、reasoning 与工具
-/// 结果回传、AgentLoop 两轮闭环与错误语义——全部离线，fixture 形状照抄
-/// artifacts/protocol-compat/ProviderProbe.cs 的 ResponsesSse。
-///
-/// Contract tests for the Responses protocol transport: the MicrosoftAiChatClient built by
-/// ModelClientFactory with ChatApiKind.Responses drives the real OpenAI/M.E.AI SDK against a
-/// local scripted SSE server, verifying stream assembly, reasoning entry accumulation,
-/// stateless requests (store:false, no previous_response_id), reasoning and tool-result
-/// replay, a two-turn AgentLoop, and error semantics — all offline, with fixtures shaped
-/// after ResponsesSse in artifacts/protocol-compat/ProviderProbe.cs.
+///     Responses 协议传输契约测试：经 ModelClientFactory 以 ChatApiKind.Responses 构造的
+///     MicrosoftAiChatClient 驱动真实 OpenAI/M.E.AI SDK 打本地脚本 SSE 服务，验证流式拼装、
+///     reasoning 条目累积、无状态请求（store:false、无 previous_response_id）、reasoning 与工具
+///     结果回传、AgentLoop 两轮闭环与错误语义——全部离线，fixture 形状照抄
+///     artifacts/protocol-compat/ProviderProbe.cs 的 ResponsesSse。
+///     Contract tests for the Responses protocol transport: the MicrosoftAiChatClient built by
+///     ModelClientFactory with ChatApiKind.Responses drives the real OpenAI/M.E.AI SDK against a
+///     local scripted SSE server, verifying stream assembly, reasoning entry accumulation,
+///     stateless requests (store:false, no previous_response_id), reasoning and tool-result
+///     replay, a two-turn AgentLoop, and error semantics — all offline, with fixtures shaped
+///     after ResponsesSse in artifacts/protocol-compat/ProviderProbe.cs.
 /// </summary>
 public class MicrosoftAiChatClientResponsesTests
 {
     private const string Model = "resp-model";
 
-    private static IChatCompletionClient NewClient(MockSseServer server) =>
-        ModelClientFactory.Create(Model, server.BaseUrl, "test-key", ChatApiKind.Responses);
-
-    private static ChatCompletionRequest Request(params ChatMessage[] messages) => new()
+    private static IChatCompletionClient NewClient(MockSseServer server)
     {
-        Model    = Model,
-        Messages = messages,
-    };
+        return ModelClientFactory.Create(Model, server.BaseUrl, "test-key", ChatApiKind.Responses);
+    }
+
+    private static ChatCompletionRequest Request(params ChatMessage[] messages)
+    {
+        return new ChatCompletionRequest
+        {
+            Model    = Model,
+            Messages = messages
+        };
+    }
 
     private static async Task<List<ChatStreamEvent>> CollectAsync(IChatCompletionClient client,
                                                                   ChatCompletionRequest request,
                                                                   CancellationToken     cancellationToken = default)
     {
         var events = new List<ChatStreamEvent>();
-        await foreach (var @event in client.CompleteAsync(request, cancellationToken))
-        {
-            events.Add(@event);
-        }
+        await foreach (var @event in client.CompleteAsync(request, cancellationToken)) events.Add(@event);
 
         return events;
     }
@@ -55,10 +56,7 @@ public class MicrosoftAiChatClientResponsesTests
     private static StreamAccumulator Accumulate(IEnumerable<ChatStreamEvent> events)
     {
         var accumulator = new StreamAccumulator();
-        foreach (var @event in events)
-        {
-            accumulator.Append(@event);
-        }
+        foreach (var @event in events) accumulator.Append(@event);
 
         accumulator.Finish();
         return accumulator;
@@ -73,60 +71,64 @@ public class MicrosoftAiChatClientResponsesTests
     }
 
     /// <summary>
-    /// 构造一轮 Responses SSE：reasoning 摘要增量 + 条目完成（encrypted_content）、文本增量、
-    /// count 个 function_call 分片参数与完成、带 usage 的 response.completed。
-    ///
-    /// Builds one Responses SSE round: a reasoning summary delta plus item done
-    /// (encrypted_content), text deltas, count function calls with split argument
-    /// fragments and done events, and a response.completed carrying usage.
+    ///     构造一轮 Responses SSE：reasoning 摘要增量 + 条目完成（encrypted_content）、文本增量、
+    ///     count 个 function_call 分片参数与完成、带 usage 的 response.completed。
+    ///     Builds one Responses SSE round: a reasoning summary delta plus item done
+    ///     (encrypted_content), text deltas, count function calls with split argument
+    ///     fragments and done events, and a response.completed carrying usage.
     /// </summary>
     private static string ResponsesSse(int calls)
     {
         var s = new StringBuilder();
         var response = JsonNode.Parse(
-            """{"id":"resp_1","object":"response","created_at":1,"status":"in_progress","model":"mock","output":[],"store":false}""")!.AsObject();
-        s.Append(Event("response.created", new() { ["sequence_number"] = 0, ["response"] = response.DeepClone() }));
+                                      """{"id":"resp_1","object":"response","created_at":1,"status":"in_progress","model":"mock","output":[],"store":false}""")
+            !.AsObject();
+        s.Append(Event("response.created",
+                       new JsonObject { ["sequence_number"] = 0, ["response"] = response.DeepClone() }));
 
         s.Append(Event("response.reasoning_summary_text.delta",
-                       JsonNode.Parse("""{"sequence_number":1,"item_id":"rs_1","output_index":0,"summary_index":0,"delta":"thought"}""")!.AsObject()));
+                       JsonNode.Parse("""{"sequence_number":1,"item_id":"rs_1","output_index":0,"summary_index":0,"delta":"thought"}""")
+                           !.AsObject()));
         s.Append(Event("response.output_item.done",
                        JsonNode.Parse(
-                           """{"sequence_number":2,"output_index":0,"item":{"type":"reasoning","id":"rs_1","summary":[{"type":"summary_text","text":"thought"}],"encrypted_content":"opaque"}}""")!.AsObject()));
+                                      """{"sequence_number":2,"output_index":0,"item":{"type":"reasoning","id":"rs_1","summary":[{"type":"summary_text","text":"thought"}],"encrypted_content":"opaque"}}""")
+                           !.AsObject()));
 
         foreach (var text in new[] { "Hello ", "world" })
-        {
-            s.Append(Event("response.output_text.delta", new()
+            s.Append(Event("response.output_text.delta", new JsonObject
             {
                 ["sequence_number"] = 3, ["item_id"] = "msg_1", ["output_index"] = 1,
-                ["content_index"]   = 0, ["delta"]     = text,
+                ["content_index"]   = 0, ["delta"]   = text
             }));
-        }
 
         for (var i = 0; i < calls; i++)
         {
             var item = new JsonObject
             {
-                ["type"] = "function_call", ["id"] = $"fc_{i}", ["call_id"] = $"call_{i}",
-                ["name"] = "read_file", ["arguments"] = "", ["status"] = "in_progress",
+                ["type"] = "function_call", ["id"]    = $"fc_{i}", ["call_id"] = $"call_{i}",
+                ["name"] = "read_file", ["arguments"] = "", ["status"]         = "in_progress"
             };
-            s.Append(Event("response.output_item.added", new() { ["sequence_number"] = 4, ["output_index"] = i + 2, ["item"] = item.DeepClone() }));
-            s.Append(Event("response.function_call_arguments.delta", new()
+            s.Append(Event("response.output_item.added",
+                           new JsonObject
+                               { ["sequence_number"] = 4, ["output_index"] = i + 2, ["item"] = item.DeepClone() }));
+            s.Append(Event("response.function_call_arguments.delta", new JsonObject
             {
-                ["sequence_number"] = 5, ["item_id"] = $"fc_{i}", ["output_index"] = i + 2, ["delta"] = "{\"path\":",
+                ["sequence_number"] = 5, ["item_id"] = $"fc_{i}", ["output_index"] = i + 2, ["delta"] = "{\"path\":"
             }));
-            s.Append(Event("response.function_call_arguments.delta", new()
+            s.Append(Event("response.function_call_arguments.delta", new JsonObject
             {
-                ["sequence_number"] = 6, ["item_id"] = $"fc_{i}", ["output_index"] = i + 2, ["delta"] = "\"a\"}",
+                ["sequence_number"] = 6, ["item_id"] = $"fc_{i}", ["output_index"] = i + 2, ["delta"] = "\"a\"}"
             }));
             item["arguments"] = "{\"path\":\"a\"}";
             item["status"]    = "completed";
-            s.Append(Event("response.output_item.done", new() { ["sequence_number"] = 7, ["output_index"] = i + 2, ["item"] = item }));
+            s.Append(Event("response.output_item.done",
+                           new JsonObject { ["sequence_number"] = 7, ["output_index"] = i + 2, ["item"] = item }));
         }
 
         response["status"] = "completed";
-        response["usage"]  = JsonNode.Parse(
-            """{"input_tokens":9,"output_tokens":5,"total_tokens":14,"input_tokens_details":{"cached_tokens":2},"output_tokens_details":{"reasoning_tokens":1}}""");
-        s.Append(Event("response.completed", new() { ["sequence_number"] = 8, ["response"] = response }));
+        response["usage"] = JsonNode.Parse(
+                                           """{"input_tokens":9,"output_tokens":5,"total_tokens":14,"input_tokens_details":{"cached_tokens":2},"output_tokens_details":{"reasoning_tokens":1}}""");
+        s.Append(Event("response.completed", new JsonObject { ["sequence_number"] = 8, ["response"] = response }));
         return s.ToString();
     }
 
@@ -135,19 +137,25 @@ public class MicrosoftAiChatClientResponsesTests
     {
         var s = new StringBuilder();
         var response = JsonNode.Parse(
-            """{"id":"resp_2","object":"response","created_at":2,"status":"in_progress","model":"mock","output":[],"store":false}""")!.AsObject();
-        s.Append(Event("response.created", new() { ["sequence_number"] = 0, ["response"] = response.DeepClone() }));
-        s.Append(Event("response.output_text.delta", new()
+                                      """{"id":"resp_2","object":"response","created_at":2,"status":"in_progress","model":"mock","output":[],"store":false}""")
+            !.AsObject();
+        s.Append(Event("response.created",
+                       new JsonObject { ["sequence_number"] = 0, ["response"] = response.DeepClone() }));
+        s.Append(Event("response.output_text.delta", new JsonObject
         {
-            ["sequence_number"] = 1, ["item_id"] = "msg_1", ["output_index"] = 0, ["content_index"] = 0, ["delta"] = text,
+            ["sequence_number"] = 1, ["item_id"] = "msg_1", ["output_index"] = 0, ["content_index"] = 0,
+            ["delta"]           = text
         }));
         response["status"] = "completed";
         response["usage"]  = JsonNode.Parse("""{"input_tokens":9,"output_tokens":5,"total_tokens":14}""");
-        s.Append(Event("response.completed", new() { ["sequence_number"] = 2, ["response"] = response }));
+        s.Append(Event("response.completed", new JsonObject { ["sequence_number"] = 2, ["response"] = response }));
         return s.ToString();
     }
 
-    private static IReadOnlyList<ToolDefinition> ReadFileTool() => [new FakeTool("read_file").Definition];
+    private static IReadOnlyList<ToolDefinition> ReadFileTool()
+    {
+        return [new FakeTool("read_file").Definition];
+    }
 
     // ---- tests ---------------------------------------------------------------
 
@@ -156,7 +164,7 @@ public class MicrosoftAiChatClientResponsesTests
     {
         using var server = new MockSseServer();
         server.Start();
-        server.EnqueueRaw(ResponsesSse(calls : 2));
+        server.EnqueueRaw(ResponsesSse(2));
         var client = NewClient(server);
 
         var events = await CollectAsync(client,
@@ -164,7 +172,7 @@ public class MicrosoftAiChatClientResponsesTests
                                         {
                                             Model    = Model,
                                             Messages = [ChatMessage.User("read it")],
-                                            Tools    = ReadFileTool(),
+                                            Tools    = ReadFileTool()
                                         });
 
         // 文本增量逐条翻译并拼接为完整正文。
@@ -208,7 +216,7 @@ public class MicrosoftAiChatClientResponsesTests
     {
         using var server = new MockSseServer();
         server.Start();
-        server.EnqueueRaw(ResponsesSse(calls : 2));
+        server.EnqueueRaw(ResponsesSse(2));
         server.EnqueueRaw(TextSse("done"));
         var client = NewClient(server);
 
@@ -217,7 +225,7 @@ public class MicrosoftAiChatClientResponsesTests
                                                   {
                                                       Model    = Model,
                                                       Messages = [ChatMessage.User("read it")],
-                                                      Tools    = ReadFileTool(),
+                                                      Tools    = ReadFileTool()
                                                   }));
 
         // 重放 Agent 会构建的历史：assistant（文本 + reasoning + 两个工具调用）+ 两条工具结果。
@@ -231,9 +239,9 @@ public class MicrosoftAiChatClientResponsesTests
                 ChatMessage.User("read it"),
                 ChatMessage.Assistant("Hello world", first.ToolCalls, first.Reasoning),
                 ChatMessage.Tool("read_file", "call_0", "read_file ok #0"),
-                ChatMessage.Tool("read_file", "call_1", "read_file ok #1"),
+                ChatMessage.Tool("read_file", "call_1", "read_file ok #1")
             ],
-            Tools = ReadFileTool(),
+            Tools = ReadFileTool()
         });
 
         Assert.Equal(2, server.Requests.Count);
@@ -274,7 +282,7 @@ public class MicrosoftAiChatClientResponsesTests
 
         // 第一轮：reasoning + 文本 + 一个工具调用；第二轮：纯文本终答。
         // Turn 1: reasoning, text, and one tool call; turn 2: a plain-text answer.
-        server.EnqueueRaw(ResponsesSse(calls : 1));
+        server.EnqueueRaw(ResponsesSse(1));
         server.EnqueueRaw(TextSse("The file read fine."));
 
         var client = NewClient(server);
@@ -283,7 +291,7 @@ public class MicrosoftAiChatClientResponsesTests
         {
             Model                     = Model,
             MaxAgentSteps             = 10,
-            DefaultToolTimeoutSeconds = 30,
+            DefaultToolTimeoutSeconds = 30
         });
 
         var result = await loop.RunAsync("sys", "inspect a.txt", CancellationToken.None);
@@ -296,8 +304,8 @@ public class MicrosoftAiChatClientResponsesTests
         // reasoning 在 AgentLoop 历史中存活并在第二轮请求中重放。
         // The reasoning survives in the AgentLoop history and is replayed in
         // the second request.
-        var second  = JsonNode.Parse(server.Requests[1].Body)!.AsObject();
-        var input   = second["input"]!.AsArray();
+        var second    = JsonNode.Parse(server.Requests[1].Body)!.AsObject();
+        var input     = second["input"]!.AsArray();
         var reasoning = Assert.Single(input, i => i?["type"]?.GetValue<string>() == "reasoning")!;
         Assert.Equal("rs_1", reasoning["id"]!.GetValue<string>());
         Assert.Equal("opaque", reasoning["encrypted_content"]!.GetValue<string>());

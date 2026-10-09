@@ -81,7 +81,7 @@ public class ConsoleApprovalProviderTests
                                                                                         ["mode"]  = "shell",
                                                                                         ["shell"] = shell,
                                                                                         ["command"] =
-                                                                                            "echo one && echo two",
+                                                                                            "echo one && echo two"
                                                                                     }.ToJsonString()));
         using var output = new StringWriter();
         using var input  = new StringReader("d");

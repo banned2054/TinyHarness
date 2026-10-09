@@ -13,16 +13,18 @@ namespace TinyHarness.Core.Services.Persistence;
 
 public interface IRunRecorder
 {
-    Task StartAsync(string                   systemPrompt, string userInput, CancellationToken cancellationToken);
-    Task RecordPreparedAsync(ToolPreparation preparation,  CancellationToken cancellationToken);
+    Task StartAsync(string systemPrompt, string userInput, CancellationToken cancellationToken);
+
+    Task RecordPreparedAsync(ToolPreparation preparation, CancellationToken cancellationToken);
 
     Task RecordPermissionAsync(ToolPreparation   preparation, PermissionDecision decision, string outcome,
                                CancellationToken cancellationToken);
 
-    Task RecordResultAsync(ToolPreparation   preparation, ToolResult result, CancellationToken cancellationToken);
-    Task RecordCompactionAsync(ContextChange change,      CancellationToken cancellationToken);
+    Task RecordResultAsync(ToolPreparation preparation, ToolResult result, CancellationToken cancellationToken);
 
-    Task RecordModelUsageAsync(int? inputTokens, int? outputTokens, string? finishReason,
+    Task RecordCompactionAsync(ContextChange change, CancellationToken cancellationToken);
+
+    Task RecordModelUsageAsync(int?              inputTokens, int? outputTokens, string? finishReason,
                                CancellationToken cancellationToken);
 
     Task CompleteAsync(AgentResult       result, IReadOnlyList<ChatMessage> messages, StructuredState state,
@@ -31,76 +33,80 @@ public interface IRunRecorder
 
 public sealed class FileRunRecorder : IRunRecorder
 {
+    private readonly SemaphoreSlim  _gate = new(1, 1);
     private readonly SecretRedactor _redactor;
-    private readonly string         _auditPath;
-    private readonly string         _sessionPath;
-    private readonly string         _runId;
     private readonly DateTimeOffset _startedUtc = DateTimeOffset.UtcNow;
-    private readonly SemaphoreSlim  _gate       = new(1, 1);
 
-    public FileRunRecorder(string                               directory, string? runId = null,
-                           IReadOnlyDictionary<string, string>? knownSecrets = null)
+    public FileRunRecorder(
+        string directory, string? runId = null, IReadOnlyDictionary<string, string>? knownSecrets = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(directory);
-        _runId    = string.IsNullOrWhiteSpace(runId) ? Guid.NewGuid().ToString("N") : runId;
+        RunId     = string.IsNullOrWhiteSpace(runId) ? Guid.NewGuid().ToString("N") : runId;
         _redactor = new SecretRedactor(knownSecrets);
-        if (_runId.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
-        {
+        if (RunId.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
             throw new ArgumentException("Run id contains invalid filename characters.", nameof(runId));
-        }
 
         Directory.CreateDirectory(directory);
-        _auditPath   = Path.Combine(directory, $"{_runId}.audit.jsonl");
-        _sessionPath = Path.Combine(directory, $"{_runId}.session.json");
+        AuditPath   = Path.Combine(directory, $"{RunId}.audit.jsonl");
+        SessionPath = Path.Combine(directory, $"{RunId}.session.json");
     }
 
-    public string RunId       => _runId;
-    public string AuditPath   => _auditPath;
-    public string SessionPath => _sessionPath;
+    public string RunId { get; }
 
-    public Task StartAsync(string systemPrompt, string userInput, CancellationToken cancellationToken) =>
-        AppendAsync(new AuditRecord
+    public string AuditPath { get; }
+
+    public string SessionPath { get; }
+
+    public Task StartAsync(string systemPrompt, string userInput, CancellationToken cancellationToken)
+    {
+        return AppendAsync(new AuditRecord
         {
-            RunId        = _runId,
+            RunId        = RunId,
             Kind         = "run.started",
             SystemPrompt = _redactor.Redact(systemPrompt),
-            UserInput    = _redactor.Redact(userInput),
+            UserInput    = _redactor.Redact(userInput)
         }, cancellationToken);
+    }
 
-    public Task RecordPreparedAsync(ToolPreparation preparation, CancellationToken cancellationToken) =>
-        AppendAsync(new AuditRecord
+    public Task RecordPreparedAsync(ToolPreparation preparation, CancellationToken cancellationToken)
+    {
+        return AppendAsync(new AuditRecord
         {
-            RunId          = _runId,
-            Kind           = "tool.prepared",
-            ToolName       = _redactor.Redact(preparation.ToolName),
-            CallId         = _redactor.Redact(preparation.CallId),
-            Capability     = _redactor.Redact(preparation.Capability),
-            Summary        = _redactor.Redact(preparation.Summary),
-            TargetPaths    = RedactPaths(preparation.TargetPaths),
-            ExecutionPolicy = _redactor.RedactNullable(preparation.ExecutionPolicy),
+            RunId           = RunId,
+            Kind            = "tool.prepared",
+            ToolName        = _redactor.Redact(preparation.ToolName),
+            CallId          = _redactor.Redact(preparation.CallId),
+            Capability      = _redactor.Redact(preparation.Capability),
+            Summary         = _redactor.Redact(preparation.Summary),
+            TargetPaths     = RedactPaths(preparation.TargetPaths),
+            ExecutionPolicy = _redactor.RedactNullable(preparation.ExecutionPolicy)
         }, cancellationToken);
+    }
 
-    public Task RecordPermissionAsync(ToolPreparation   preparation, PermissionDecision decision, string outcome,
-                                      CancellationToken cancellationToken) =>
-        AppendAsync(new AuditRecord
+    public Task RecordPermissionAsync(
+        ToolPreparation preparation, PermissionDecision decision, string outcome, CancellationToken cancellationToken)
+    {
+        return AppendAsync(new AuditRecord
         {
-            RunId          = _runId,
-            Kind           = "tool.permission",
-            ToolName       = _redactor.Redact(preparation.ToolName),
-            CallId         = _redactor.Redact(preparation.CallId),
-            Capability     = _redactor.Redact(preparation.Capability),
-            Summary        = _redactor.Redact(preparation.Summary),
-            TargetPaths    = RedactPaths(preparation.TargetPaths),
-            Decision       = _redactor.Redact(decision.ToString()),
-            Outcome        = _redactor.Redact(outcome),
-            ExecutionPolicy = _redactor.RedactNullable(preparation.ExecutionPolicy),
+            RunId           = RunId,
+            Kind            = "tool.permission",
+            ToolName        = _redactor.Redact(preparation.ToolName),
+            CallId          = _redactor.Redact(preparation.CallId),
+            Capability      = _redactor.Redact(preparation.Capability),
+            Summary         = _redactor.Redact(preparation.Summary),
+            TargetPaths     = RedactPaths(preparation.TargetPaths),
+            Decision        = _redactor.Redact(decision.ToString()),
+            Outcome         = _redactor.Redact(outcome),
+            ExecutionPolicy = _redactor.RedactNullable(preparation.ExecutionPolicy)
         }, cancellationToken);
+    }
 
-    public Task RecordResultAsync(ToolPreparation   preparation, ToolResult result,
-                                  CancellationToken cancellationToken) =>
-        AppendAsync(new AuditRecord
+    public Task RecordResultAsync(
+        ToolPreparation preparation, ToolResult result, CancellationToken cancellationToken)
+    {
+        return AppendAsync(new AuditRecord
         {
-            RunId           = _runId,
+            RunId           = RunId,
             Kind            = "tool.result",
             ToolName        = _redactor.Redact(preparation.ToolName),
             CallId          = _redactor.Redact(preparation.CallId),
@@ -109,28 +115,33 @@ public sealed class FileRunRecorder : IRunRecorder
             TimedOut        = result.TimedOut,
             OutputTruncated = result.OutputTruncated,
             Outcome         = result.Succeeded ? "tool completed" : "tool failed",
-            ExecutionPolicy = _redactor.RedactNullable(preparation.ExecutionPolicy),
+            ExecutionPolicy = _redactor.RedactNullable(preparation.ExecutionPolicy)
         }, cancellationToken);
+    }
 
-    public Task RecordCompactionAsync(ContextChange change, CancellationToken cancellationToken) =>
-        AppendAsync(new AuditRecord
+    public Task RecordCompactionAsync(ContextChange change, CancellationToken cancellationToken)
+    {
+        return AppendAsync(new AuditRecord
         {
-            RunId        = _runId,
+            RunId        = RunId,
             Kind         = "context.compacted",
             BeforeTokens = change.BeforeTokens,
-            AfterTokens  = change.AfterTokens,
+            AfterTokens  = change.AfterTokens
         }, cancellationToken);
+    }
 
-    public Task RecordModelUsageAsync(int? inputTokens, int? outputTokens, string? finishReason,
-                                      CancellationToken cancellationToken) =>
-        AppendAsync(new AuditRecord
+    public Task RecordModelUsageAsync(
+        int? inputTokens, int? outputTokens, string? finishReason, CancellationToken cancellationToken)
+    {
+        return AppendAsync(new AuditRecord
         {
-            RunId        = _runId,
+            RunId        = RunId,
             Kind         = "model_usage",
             InputTokens  = inputTokens,
             OutputTokens = outputTokens,
-            FinishReason = _redactor.RedactNullable(finishReason),
+            FinishReason = _redactor.RedactNullable(finishReason)
         }, cancellationToken);
+    }
 
     public async Task CompleteAsync(AgentResult result, IReadOnlyList<ChatMessage> messages, StructuredState state,
                                     CancellationToken cancellationToken)
@@ -138,7 +149,7 @@ public sealed class FileRunRecorder : IRunRecorder
         var safeResult = result with
         {
             FinalMessage = _redactor.Redact(result.FinalMessage),
-            Error = _redactor.RedactNullable(result.Error),
+            Error = _redactor.RedactNullable(result.Error)
         };
 
         // run.completed means that Agent execution reached a terminal result. It is
@@ -146,29 +157,28 @@ public sealed class FileRunRecorder : IRunRecorder
         // persistence file was saved successfully.
         await AppendAsync(new AuditRecord
         {
-            RunId   = _runId,
+            RunId   = RunId,
             Kind    = "run.completed",
             Status  = _redactor.Redact(safeResult.Status.ToString()),
-            Outcome = safeResult.Error,
+            Outcome = safeResult.Error
         }, cancellationToken).ConfigureAwait(false);
 
         var snapshot = new SessionSnapshot
         {
-            RunId        = _runId,
+            RunId        = RunId,
             StartedUtc   = _startedUtc,
             CompletedUtc = DateTimeOffset.UtcNow,
             Messages     = messages.Select(_redactor.Redact).ToArray(),
             State        = _redactor.Redact(state),
-            Result       = safeResult,
+            Result       = safeResult
         };
         var json          = JsonSerializer.Serialize(snapshot, PersistenceJsonContext.Default.SessionSnapshot);
-        var temporaryPath = _sessionPath + ".tmp";
+        var temporaryPath = SessionPath + ".tmp";
         await File.WriteAllTextAsync(temporaryPath, json, cancellationToken).ConfigureAwait(false);
-        File.Move(temporaryPath, _sessionPath, overwrite : true);
+        File.Move(temporaryPath, SessionPath, true);
     }
 
-    private IReadOnlyList<string> RedactPaths(IReadOnlyList<string> paths) =>
-        paths.Select(_redactor.Redact).ToArray();
+    private IReadOnlyList<string> RedactPaths(IReadOnlyList<string> paths) => paths.Select(_redactor.Redact).ToArray();
 
     private async Task AppendAsync(AuditRecord record, CancellationToken cancellationToken)
     {
@@ -176,7 +186,7 @@ public sealed class FileRunRecorder : IRunRecorder
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            await File.AppendAllTextAsync(_auditPath, json, cancellationToken).ConfigureAwait(false);
+            await File.AppendAllTextAsync(AuditPath, json, cancellationToken).ConfigureAwait(false);
         }
         finally
         {
@@ -193,7 +203,7 @@ internal sealed class SecretRedactor
 
     private static readonly HashSet<string> SensitiveJsonNames = new(StringComparer.OrdinalIgnoreCase)
     {
-        "apikey", "accesstoken", "token", "password", "secret",
+        "apikey", "accesstoken", "token", "password", "secret"
     };
 
     private readonly IReadOnlyList<string> _knownSecrets;
@@ -209,15 +219,9 @@ internal sealed class SecretRedactor
 
     public string Redact(string value)
     {
-        if (string.IsNullOrEmpty(value))
-        {
-            return value;
-        }
+        if (string.IsNullOrEmpty(value)) return value;
 
-        if (TryRedactJson(value, out var redactedJson))
-        {
-            return redactedJson;
-        }
+        if (TryRedactJson(value, out var redactedJson)) return redactedJson;
 
         return SecretAssignment.Replace(RedactKnownSecrets(value), static match =>
         {
@@ -229,48 +233,54 @@ internal sealed class SecretRedactor
         });
     }
 
-    public string? RedactNullable(string? value) => value is null ? null : Redact(value);
+    public string? RedactNullable(string? value)
+    {
+        return value is null ? null : Redact(value);
+    }
 
     private string RedactKnownSecrets(string value)
     {
-        foreach (var secret in _knownSecrets)
-        {
-            value = value.Replace(secret, "[REDACTED]", StringComparison.Ordinal);
-        }
+        foreach (var secret in _knownSecrets) value = value.Replace(secret, "[REDACTED]", StringComparison.Ordinal);
 
         return value;
     }
 
-    public StructuredState Redact(StructuredState state) => new()
+    public StructuredState Redact(StructuredState state)
     {
-        Goal               = Redact(state.Goal),
-        Constraints        = state.Constraints.Select(Redact).ToArray(),
-        Decisions          = state.Decisions.Select(Redact).ToArray(),
-        FilesInspected     = state.FilesInspected.Select(Redact).ToArray(),
-        FilesModified      = state.FilesModified.Select(Redact).ToArray(),
-        CommandsAndResults = state.CommandsAndResults.Select(Redact).ToArray(),
-        PendingWork        = state.PendingWork.Select(Redact).ToArray(),
-    };
+        return new StructuredState
+        {
+            Goal               = Redact(state.Goal),
+            Constraints        = state.Constraints.Select(Redact).ToArray(),
+            Decisions          = state.Decisions.Select(Redact).ToArray(),
+            FilesInspected     = state.FilesInspected.Select(Redact).ToArray(),
+            FilesModified      = state.FilesModified.Select(Redact).ToArray(),
+            CommandsAndResults = state.CommandsAndResults.Select(Redact).ToArray(),
+            PendingWork        = state.PendingWork.Select(Redact).ToArray()
+        };
+    }
 
-    public ChatMessage Redact(ChatMessage message) => new()
+    public ChatMessage Redact(ChatMessage message)
     {
-        Role       = message.Role,
-        Content    = Redact(message.Content),
-        Name       = RedactNullable(message.Name),
-        ToolCallId = RedactNullable(message.ToolCallId),
-        ToolCalls = message.ToolCalls
-                          ?.Select(call => new ChatToolCall(Redact(call.Id), Redact(call.FunctionName),
-                                                            Redact(call.ArgumentsJson))).ToArray(),
-        // ProtectedData/ItemId 是不透明标识，沿用与 ToolCallId 相同的脱敏规则：
-        // 正常原样保留，但与已知 secret 匹配时必须替换。
-        //
-        // ProtectedData/ItemId are opaque identifiers redacted with the same
-        // rule as ToolCallId: kept verbatim unless they match a known secret.
-        Reasoning = message.Reasoning
-                           ?.Select(entry => new ReasoningContent(RedactNullable(entry.Text),
-                                                                  RedactNullable(entry.ProtectedData),
-                                                                  RedactNullable(entry.ItemId))).ToArray(),
-    };
+        return new ChatMessage
+        {
+            Role       = message.Role,
+            Content    = Redact(message.Content),
+            Name       = RedactNullable(message.Name),
+            ToolCallId = RedactNullable(message.ToolCallId),
+            ToolCalls = message.ToolCalls
+                              ?.Select(call => new ChatToolCall(Redact(call.Id), Redact(call.FunctionName),
+                                                                Redact(call.ArgumentsJson))).ToArray(),
+            // ProtectedData/ItemId 是不透明标识，沿用与 ToolCallId 相同的脱敏规则：
+            // 正常原样保留，但与已知 secret 匹配时必须替换。
+            //
+            // ProtectedData/ItemId are opaque identifiers redacted with the same
+            // rule as ToolCallId: kept verbatim unless they match a known secret.
+            Reasoning = message.Reasoning
+                              ?.Select(entry => new ReasoningContent(RedactNullable(entry.Text),
+                                                                     RedactNullable(entry.ProtectedData),
+                                                                     RedactNullable(entry.ItemId))).ToArray()
+        };
+    }
 
     private bool TryRedactJson(string value, out string redacted)
     {
@@ -311,13 +321,9 @@ internal sealed class SecretRedactor
                 {
                     writer.WritePropertyName(RedactKnownSecrets(property.Name));
                     if (IsSensitiveJsonName(property.Name) && property.Value.ValueKind != JsonValueKind.Null)
-                    {
                         writer.WriteStringValue("[REDACTED]");
-                    }
                     else
-                    {
                         WriteRedactedJson(property.Value, writer);
-                    }
                 }
 
                 writer.WriteEndObject();
@@ -325,10 +331,7 @@ internal sealed class SecretRedactor
 
             case JsonValueKind.Array :
                 writer.WriteStartArray();
-                foreach (var item in element.EnumerateArray())
-                {
-                    WriteRedactedJson(item, writer);
-                }
+                foreach (var item in element.EnumerateArray()) WriteRedactedJson(item, writer);
 
                 writer.WriteEndArray();
                 break;

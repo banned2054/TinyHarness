@@ -9,26 +9,24 @@ using TinyHarness.Core.Services.Configuration;
 namespace TinyHarness.Cli.Commands;
 
 /// <summary>
-/// `tinyharness doctor`：默认离线检查配置字段、路径与凭据可用性；只有显式 `--connect`
-/// 才发送一次最小模型请求，并在联网前明确提示可能产生费用。
-///
-/// `tinyharness doctor`: checks config fields, paths, and credential availability offline by default; only an
-/// explicit `--connect` sends one minimal model request, with a clear notice beforehand that it may incur charges.
+///     `tinyharness doctor`：默认离线检查配置字段、路径与凭据可用性；只有显式 `--connect`
+///     才发送一次最小模型请求，并在联网前明确提示可能产生费用。
+///     `tinyharness doctor`: checks config fields, paths, and credential availability offline by default; only an
+///     explicit `--connect` sends one minimal model request, with a clear notice beforehand that it may incur charges.
 /// </summary>
 internal static class DoctorCommand
 {
     /// <summary>
-    /// 执行 doctor 检查；存在失败项时返回 1，警告不影响退出码。
-    ///
-    /// Runs the doctor checks; returns 1 when any check fails, warnings do not affect the exit code.
+    ///     执行 doctor 检查；存在失败项时返回 1，警告不影响退出码。
+    ///     Runs the doctor checks; returns 1 when any check fails, warnings do not affect the exit code.
     /// </summary>
     public static async Task<int> ExecuteAsync(CommandContext    context, CliOptions options,
                                                CancellationToken cancellationToken)
     {
         var io = context.Io;
         var resolution = await ConfigResolver.ResolveAsync(null, cancellationToken,
-                                                           workingDirectory : context.ResolveWorkingDirectory(),
-                                                           userConfigPath : context.ResolveUserConfigPath())
+                                                           context.ResolveWorkingDirectory(),
+                                                           context.ResolveUserConfigPath())
                                              .ConfigureAwait(false);
         var config   = resolution.Config;
         var failures = 0;
@@ -39,11 +37,9 @@ internal static class DoctorCommand
                                 cancellationToken).ConfigureAwait(false);
 
         if (resolution.Source is ConfigSourceKind.Defaults)
-        {
             await io.WriteLineAsync("  [warn] no config file found; run 'tinyharness init' to create one",
                                     cancellationToken)
                     .ConfigureAwait(false);
-        }
 
         // Endpoint: must be set and a syntactically valid absolute http(s) URL for live runs.
         var endpointValid = ProfileEditor.IsValidEndpoint(config.Endpoint, out var normalizedEndpoint);
@@ -83,11 +79,9 @@ internal static class DoctorCommand
 
         // Budget sanity.
         if (config.ReservedOutputTokens >= config.ContextWindowTokens)
-        {
             await io.WriteLineAsync($"  [warn] reservedOutputTokens ({config.ReservedOutputTokens:N0}) leaves no room" +
                                     " inside the context window; live runs will stop before sending",
                                     cancellationToken).ConfigureAwait(false);
-        }
 
         // Workspace.
         if (!Directory.Exists(config.WorkspaceRoot))
@@ -146,10 +140,7 @@ internal static class DoctorCommand
         {
             var connectOk = await ConnectAsync(context, config, endpointValid, key, cancellationToken)
                .ConfigureAwait(false);
-            if (!connectOk)
-            {
-                failures++;
-            }
+            if (!connectOk) failures++;
         }
         else
         {
@@ -164,9 +155,8 @@ internal static class DoctorCommand
     }
 
     /// <summary>
-    /// 发送一次最小模型请求；联网与计费提示先行，工具定义不随请求发送。
-    ///
-    /// Sends one minimal model request; the network/charge notice comes first and no tool definitions are sent.
+    ///     发送一次最小模型请求；联网与计费提示先行，工具定义不随请求发送。
+    ///     Sends one minimal model request; the network/charge notice comes first and no tool definitions are sent.
     /// </summary>
     private static async Task<bool> ConnectAsync(CommandContext context, TinyHarnessConfig config, bool endpointValid,
                                                  ApiKeyStatus   key,     CancellationToken cancellationToken)
@@ -185,7 +175,7 @@ internal static class DoctorCommand
                              cancellationToken).ConfigureAwait(false);
         await io.WriteLineAsync("  This uses the network and may incur charges. No tools are sent with the request.",
                                 cancellationToken).ConfigureAwait(false);
-        if (!await CliPrompt.ConfirmAsync(io, "Continue?", defaultYes : false, cancellationToken).ConfigureAwait(false))
+        if (!await CliPrompt.ConfirmAsync(io, "Continue?", false, cancellationToken).ConfigureAwait(false))
         {
             await io.WriteLineAsync("  Skipped by user choice.", cancellationToken).ConfigureAwait(false);
             return true;
@@ -214,33 +204,28 @@ internal static class DoctorCommand
         timeout.CancelAfter(TimeSpan.FromSeconds(60));
         try
         {
-            IChatCompletionClient client = ModelClientFactory.Create(config.Model, config.Endpoint, apiKey,
-                                                                     config.ChatApi);
+            var client = ModelClientFactory.Create(config.Model, config.Endpoint, apiKey,
+                                                   config.ChatApi);
             var request = new ChatCompletionRequest
             {
                 Model    = config.Model,
-                Messages = [ChatMessage.User("Reply with exactly: ok")],
+                Messages = [ChatMessage.User("Reply with exactly: ok")]
             };
 
             await io.WriteAsync("  waiting for reply", cancellationToken).ConfigureAwait(false);
             await foreach (var streamEvent in client.CompleteAsync(request, timeout.Token).ConfigureAwait(false))
             {
-                if (streamEvent.Kind == ChatStreamEventKind.End)
-                {
-                    break;
-                }
+                if (streamEvent.Kind == ChatStreamEventKind.End) break;
 
                 if (streamEvent is { Kind: ChatStreamEventKind.ContentDelta, ContentDelta.Length: > 0 })
-                {
                     await io.WriteAsync(".", cancellationToken).ConfigureAwait(false);
-                }
             }
 
             await io.WriteLineAsync(string.Empty, cancellationToken).ConfigureAwait(false);
             await io.WriteLineAsync(
-                $"  [ok]   the endpoint accepted a streaming " +
-                $"{ChatApiKindParser.ToValueString(config.ChatApi)} request",
-                cancellationToken).ConfigureAwait(false);
+                                    $"  [ok]   the endpoint accepted a streaming " +
+                                    $"{ChatApiKindParser.ToValueString(config.ChatApi)} request",
+                                    cancellationToken).ConfigureAwait(false);
             return true;
         }
         catch (Exception ex) when (ex is not OperationCanceledException ||

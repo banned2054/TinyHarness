@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using TinyHarness.Core.Models.Agent;
 using TinyHarness.Core.Models.ChatCompletions;
 using TinyHarness.Core.Models.Context;
@@ -26,7 +27,7 @@ public sealed class RunPersistenceTests
             Capability  = "filesystem.read",
             Summary     = "Read file 'a.txt'",
             TargetPaths = [Path.Combine(temp.Root, "a.txt")],
-            Arguments   = new System.Text.Json.Nodes.JsonObject(),
+            Arguments   = new JsonObject()
         };
         var result      = new ToolResult { Succeeded = true, Content                       = "contents" };
         var agentResult = new AgentResult { Status   = AgentStatus.Completed, FinalMessage = "done", Steps = 1 };
@@ -97,7 +98,7 @@ public sealed class RunPersistenceTests
         var recorder = new FileRunRecorder(temp.Root, "all-fields", new Dictionary<string, string>
         {
             ["SHORT_KEY"] = shorterSecret,
-            ["LONG_KEY"]  = longerSecret,
+            ["LONG_KEY"]  = longerSecret
         });
         var preparation = new ToolPreparation
         {
@@ -106,7 +107,7 @@ public sealed class RunPersistenceTests
             Capability  = "filesystem.read",
             Summary     = $"read {longerSecret}",
             TargetPaths = [$"C:\\fixture\\{longerSecret}.txt"],
-            Arguments   = new System.Text.Json.Nodes.JsonObject(),
+            Arguments   = new JsonObject()
         };
         var messages = new[]
         {
@@ -114,7 +115,7 @@ public sealed class RunPersistenceTests
             ChatMessage.Assistant("tool", [
                 new ChatToolCall("call-1", "read_file",
                                  $$"""{"path":"{{longerSecret}}"}""")
-            ]),
+            ])
         };
         var state = new StructuredState
         {
@@ -124,7 +125,7 @@ public sealed class RunPersistenceTests
             FilesInspected     = [$"inspected {longerSecret}"],
             FilesModified      = [$"modified {longerSecret}"],
             CommandsAndResults = [$"command {longerSecret}"],
-            PendingWork        = [$"pending {longerSecret}"],
+            PendingWork        = [$"pending {longerSecret}"]
         };
 
         await recorder.StartAsync($"system {longerSecret}", $"input {longerSecret}", CancellationToken.None);
@@ -170,14 +171,14 @@ public sealed class RunPersistenceTests
         using var temp     = new TestTempDir();
         var       recorder = new FileRunRecorder(temp.Root, "reasoning-roundtrip");
         var message = ChatMessage.Assistant("done",
-                                            toolCalls : null,
-                                            reasoning : [new ReasoningContent("thinking", "opaque-payload", "rs_1")]);
+                                            null,
+                                            [new ReasoningContent("thinking", "opaque-payload", "rs_1")]);
 
         await recorder.CompleteAsync(new AgentResult { Status = AgentStatus.Completed }, [message],
                                      StructuredState.Empty, CancellationToken.None);
 
         var persistedMessage = Assert.Single(DeserializeSession(await File.ReadAllTextAsync(recorder.SessionPath))
-                                           .Messages);
+                                                .Messages);
         var reasoning = Assert.Single(persistedMessage.Reasoning!);
         Assert.Equal("thinking", reasoning.Text);
         Assert.Equal("opaque-payload", reasoning.ProtectedData);
@@ -192,11 +193,10 @@ public sealed class RunPersistenceTests
         var recorder = new FileRunRecorder(temp.Root, "reasoning-redaction",
                                            new Dictionary<string, string> { ["TEST_KEY"] = secret });
         var message = ChatMessage.Assistant("done",
-                                            toolCalls : null,
-                                            reasoning :
+                                            null,
                                             [
                                                 new ReasoningContent($"reasoned about {secret}", secret, secret),
-                                                new ReasoningContent("plain", "opaque-keep", "rs_2"),
+                                                new ReasoningContent("plain", "opaque-keep", "rs_2")
                                             ]);
 
         await recorder.CompleteAsync(new AgentResult { Status = AgentStatus.Completed }, [message],
@@ -222,7 +222,7 @@ public sealed class RunPersistenceTests
     {
         var client   = new FakeChatClient();
         var recorder = new ThrowingRecorder { ThrowOnComplete = true };
-        var loop = new AgentLoop(client, new ToolRegistry([]), Options(), permissions : null, approver : null,
+        var loop = new AgentLoop(client, new ToolRegistry([]), Options(), null, null,
                                  recorder);
 
         var result = await loop.RunAsync("sys", "run", CancellationToken.None);
@@ -242,7 +242,7 @@ public sealed class RunPersistenceTests
         client.Enqueue(FakeChatClient.ToolCall("side_effect", "{}"));
         var tool     = new FakeTool("side_effect");
         var recorder = new ThrowingRecorder { ThrowOnResult = true };
-        var loop = new AgentLoop(client, new ToolRegistry([tool]), Options(), permissions : null, approver : null,
+        var loop = new AgentLoop(client, new ToolRegistry([tool]), Options(), null, null,
                                  recorder);
 
         var result = await loop.RunAsync("sys", "run", CancellationToken.None);
@@ -289,7 +289,7 @@ public sealed class RunPersistenceTests
                  {
                      snapshot.Result.FinalMessage, snapshot.Result.Error!, persistedMessage.Content,
                      persistedCall.ArgumentsJson, snapshot.State.Goal, audit[0].SystemPrompt!,
-                     audit[0].UserInput!, audit[1].Outcome!,
+                     audit[0].UserInput!, audit[1].Outcome!
                  })
         {
             using var actualJson = JsonDocument.Parse(value);
@@ -314,7 +314,9 @@ public sealed class RunPersistenceTests
         Assert.Contains("\"kind\":\"model_usage\"", lines[0], StringComparison.Ordinal);
         Assert.Contains("\"inputTokens\":120", lines[0], StringComparison.Ordinal);
         var usage = Assert.Single(lines.Select(line =>
-            JsonSerializer.Deserialize(line, PersistenceJsonContext.Default.AuditRecord)!));
+                                                   JsonSerializer.Deserialize(line,
+                                                                              PersistenceJsonContext.Default
+                                                                                 .AuditRecord)!));
         Assert.Equal("usage-1", usage.RunId);
         Assert.Equal("model_usage", usage.Kind);
         Assert.Equal(120, usage.InputTokens);
@@ -322,16 +324,21 @@ public sealed class RunPersistenceTests
         Assert.Equal("stop", usage.FinishReason);
     }
 
-    private static AgentOptions Options() => new()
+    private static AgentOptions Options()
     {
-        Model                     = "test-model",
-        MaxAgentSteps             = 10,
-        DefaultToolTimeoutSeconds = 30,
-    };
+        return new AgentOptions
+        {
+            Model                     = "test-model",
+            MaxAgentSteps             = 10,
+            DefaultToolTimeoutSeconds = 30
+        };
+    }
 
-    private static SessionSnapshot DeserializeSession(string json) =>
-        JsonSerializer.Deserialize(json, PersistenceJsonContext.Default.SessionSnapshot)
-     ?? throw new InvalidDataException("Session snapshot was null.");
+    private static SessionSnapshot DeserializeSession(string json)
+    {
+        return JsonSerializer.Deserialize(json, PersistenceJsonContext.Default.SessionSnapshot)
+            ?? throw new InvalidDataException("Session snapshot was null.");
+    }
 
     private sealed class ThrowingRecorder : IRunRecorder
     {
@@ -340,14 +347,21 @@ public sealed class RunPersistenceTests
         public int  CompleteCalls   { get; private set; }
         public int  ResultCalls     { get; private set; }
 
-        public Task StartAsync(string systemPrompt, string userInput, CancellationToken cancellationToken) =>
-            Task.CompletedTask;
+        public Task StartAsync(string systemPrompt, string userInput, CancellationToken cancellationToken)
+        {
+            return Task.CompletedTask;
+        }
 
-        public Task RecordPreparedAsync(ToolPreparation preparation, CancellationToken cancellationToken) =>
-            Task.CompletedTask;
+        public Task RecordPreparedAsync(ToolPreparation preparation, CancellationToken cancellationToken)
+        {
+            return Task.CompletedTask;
+        }
 
         public Task RecordPermissionAsync(ToolPreparation   preparation, PermissionDecision decision, string outcome,
-                                          CancellationToken cancellationToken) => Task.CompletedTask;
+                                          CancellationToken cancellationToken)
+        {
+            return Task.CompletedTask;
+        }
 
         public Task RecordResultAsync(ToolPreparation   preparation, ToolResult result,
                                       CancellationToken cancellationToken)
@@ -358,11 +372,16 @@ public sealed class RunPersistenceTests
                 : Task.CompletedTask;
         }
 
-        public Task RecordCompactionAsync(ContextChange change, CancellationToken cancellationToken) =>
-            Task.CompletedTask;
+        public Task RecordCompactionAsync(ContextChange change, CancellationToken cancellationToken)
+        {
+            return Task.CompletedTask;
+        }
 
-        public Task RecordModelUsageAsync(int? inputTokens, int? outputTokens, string? finishReason,
-                                          CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task RecordModelUsageAsync(int?              inputTokens, int? outputTokens, string? finishReason,
+                                          CancellationToken cancellationToken)
+        {
+            return Task.CompletedTask;
+        }
 
         public Task CompleteAsync(AgentResult       result, IReadOnlyList<ChatMessage> messages, StructuredState state,
                                   CancellationToken cancellationToken)

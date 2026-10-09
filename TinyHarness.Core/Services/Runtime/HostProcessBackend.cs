@@ -5,25 +5,23 @@ using TinyHarness.Core.Models.Runtime;
 namespace TinyHarness.Core.Services.Runtime;
 
 /// <summary>
-/// 宿主侧进程执行后端：直接在宿主上启动受约束的子进程，把两条重定向流按块推入捕获器，
-/// 并按计划的时限终止进程树。启动、等待、终止、排空与宽限语义自 ShellTool 原样迁入，
-/// 可观察行为不变。
-///
-/// Host-side process-execution backend: starts the constrained child process
-/// directly on the host machine, pumps both redirected streams into captures as
-/// chunks, and terminates the process tree at the plan's timeout. The start,
-/// wait, terminate, drain, and grace semantics were moved verbatim from
-/// ShellTool; observable behavior is unchanged.
+///     宿主侧进程执行后端：直接在宿主上启动受约束的子进程，把两条重定向流按块推入捕获器，
+///     并按计划的时限终止进程树。启动、等待、终止、排空与宽限语义自 ShellTool 原样迁入，
+///     可观察行为不变。
+///     Host-side process-execution backend: starts the constrained child process
+///     directly on the host machine, pumps both redirected streams into captures as
+///     chunks, and terminates the process tree at the plan's timeout. The start,
+///     wait, terminate, drain, and grace semantics were moved verbatim from
+///     ShellTool; observable behavior is unchanged.
 /// </summary>
 public sealed class HostProcessBackend : IProcessExecutionBackend
 {
     private readonly IReadOnlyDictionary<string, string> _knownSecrets;
 
     /// <summary>
-    /// 用已知 secret 集合构造宿主后端；secret 的环境变量名会从子进程环境中移除。
-    ///
-    /// Constructs the host backend with the known-secret set; each secret's
-    /// environment variable name is removed from the child environment.
+    ///     用已知 secret 集合构造宿主后端；secret 的环境变量名会从子进程环境中移除。
+    ///     Constructs the host backend with the known-secret set; each secret's
+    ///     environment variable name is removed from the child environment.
     /// </summary>
     public HostProcessBackend(IReadOnlyDictionary<string, string>? knownSecrets = null)
     {
@@ -31,9 +29,9 @@ public sealed class HostProcessBackend : IProcessExecutionBackend
     }
 
     public async Task<ProcessExecutionResult> ExecuteAsync(PreparedProcessExecution execution,
-                                                           IProcessOutputCapture     stdoutCapture,
-                                                           IProcessOutputCapture     stderrCapture,
-                                                           CancellationToken         cancellationToken)
+                                                           IProcessOutputCapture    stdoutCapture,
+                                                           IProcessOutputCapture    stderrCapture,
+                                                           CancellationToken        cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(execution);
         ArgumentNullException.ThrowIfNull(stdoutCapture);
@@ -42,7 +40,7 @@ public sealed class HostProcessBackend : IProcessExecutionBackend
         using var timeoutSource = new CancellationTokenSource(TimeSpan.FromSeconds(execution.TimeoutSeconds));
         using var linkedSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken,
             timeoutSource.Token);
-        using var        captureSource   = new CancellationTokenSource();
+        using var        captureSource = new CancellationTokenSource();
         ProcessExecution processExecution;
         try
         {
@@ -57,7 +55,7 @@ public sealed class HostProcessBackend : IProcessExecutionBackend
         {
             var processTask = processExecution.Process.WaitForExitAsync(CancellationToken.None);
             var stdoutTask  = PumpAsync(processExecution.StandardOutput, stdoutCapture, captureSource.Token);
-            var stderrTask  = PumpAsync(processExecution.StandardError,  stderrCapture, captureSource.Token);
+            var stderrTask  = PumpAsync(processExecution.StandardError, stderrCapture, captureSource.Token);
             var allTasks    = new[] { processTask, stdoutTask, stderrTask };
             var timedOut    = false;
             try
@@ -103,7 +101,7 @@ public sealed class HostProcessBackend : IProcessExecutionBackend
             }
 
             int? exitCode = processExecution.Process.HasExited ? processExecution.Process.ExitCode : null;
-            return new ProcessExecutionResult(exitCode, timedOut, Failure : null);
+            return new ProcessExecutionResult(exitCode, timedOut, null);
         }
     }
 
@@ -116,40 +114,30 @@ public sealed class HostProcessBackend : IProcessExecutionBackend
             UseShellExecute        = false,
             RedirectStandardOutput = true,
             RedirectStandardError  = true,
-            CreateNoWindow         = true,
+            CreateNoWindow         = true
         };
-        foreach (var argument in execution.Arguments)
-        {
-            startInfo.ArgumentList.Add(argument);
-        }
+        foreach (var argument in execution.Arguments) startInfo.ArgumentList.Add(argument);
 
-        foreach (var secret in _knownSecrets)
-        {
-            startInfo.Environment.Remove(secret.Key);
-        }
+        foreach (var secret in _knownSecrets) startInfo.Environment.Remove(secret.Key);
 
         return startInfo;
     }
 
     /// <summary>
-    /// 把一条重定向进程流按 4096 字符块推入捕获器；跨块 secret 脱敏依赖该块大小。
-    /// 流读到结尾后追加一个空块，触发捕获器的尾部冲刷。
-    ///
-    /// Pumps one redirected process stream into its capture in 4096-character
-    /// chunks; cross-chunk secret redaction depends on that chunk size. After
-    /// end-of-stream an empty chunk is appended to flush the capture's tail.
+    ///     把一条重定向进程流按 4096 字符块推入捕获器；跨块 secret 脱敏依赖该块大小。
+    ///     流读到结尾后追加一个空块，触发捕获器的尾部冲刷。
+    ///     Pumps one redirected process stream into its capture in 4096-character
+    ///     chunks; cross-chunk secret redaction depends on that chunk size. After
+    ///     end-of-stream an empty chunk is appended to flush the capture's tail.
     /// </summary>
-    private static async Task PumpAsync(StreamReader reader, IProcessOutputCapture capture,
+    private static async Task PumpAsync(StreamReader      reader, IProcessOutputCapture capture,
                                         CancellationToken cancellationToken)
     {
         var buffer = new char[4096];
         while (true)
         {
             var read = await reader.ReadAsync(buffer.AsMemory(), cancellationToken).ConfigureAwait(false);
-            if (read == 0)
-            {
-                break;
-            }
+            if (read == 0) break;
 
             await capture.AppendAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
         }
@@ -168,11 +156,11 @@ public sealed class HostProcessBackend : IProcessExecutionBackend
         }
     }
 
-    private static async Task TerminateAndDrainAsync(ProcessExecution      execution,
+    private static async Task TerminateAndDrainAsync(ProcessExecution          execution,
                                                      IReadOnlyCollection<Task> tasks,
-                                                     CancellationTokenSource captureSource,
-                                                     string                 reason,
-                                                     Exception?             knownFailure = null)
+                                                     CancellationTokenSource   captureSource,
+                                                     string                    reason,
+                                                     Exception?                knownFailure = null)
     {
         Exception? terminationError = null;
         try
@@ -218,10 +206,7 @@ public sealed class HostProcessBackend : IProcessExecutionBackend
             if (unexpectedErrors.Count != 0 || terminationError is not null)
             {
                 var cleanupErrors = unexpectedErrors.ToList();
-                if (terminationError is not null)
-                {
-                    cleanupErrors.Insert(0, terminationError);
-                }
+                if (terminationError is not null) cleanupErrors.Insert(0, terminationError);
 
                 throw new
                     InvalidOperationException($"Process-tree cleanup encountered an additional failure after {reason}: " +
@@ -231,11 +216,9 @@ public sealed class HostProcessBackend : IProcessExecutionBackend
         }
 
         if (terminationError is not null)
-        {
             throw new
                 InvalidOperationException($"Failed to terminate the process tree after {reason}: {terminationError.Message}",
                                           terminationError);
-        }
     }
 
     private sealed class ProcessExecution : IDisposable
@@ -256,6 +239,15 @@ public sealed class HostProcessBackend : IProcessExecutionBackend
         public StreamReader StandardOutput { get; }
         public StreamReader StandardError  { get; }
 
+        public void Dispose()
+        {
+            CloseOutput();
+            if (_windowsProcess is not null)
+                _windowsProcess.Dispose();
+            else
+                Process.Dispose();
+        }
+
         public static ProcessExecution Start(ProcessStartInfo startInfo, string? rawCmdCommand)
         {
             if (OperatingSystem.IsWindows())
@@ -266,9 +258,7 @@ public sealed class HostProcessBackend : IProcessExecutionBackend
             }
 
             if (rawCmdCommand is not null)
-            {
                 throw new PlatformNotSupportedException("Raw cmd execution is available only on Windows.");
-            }
 
             var managedProcess = new Process { StartInfo = startInfo };
             if (!managedProcess.Start())
@@ -278,7 +268,7 @@ public sealed class HostProcessBackend : IProcessExecutionBackend
             }
 
             return new ProcessExecution(managedProcess, managedProcess.StandardOutput,
-                                        managedProcess.StandardError, windowsProcess : null);
+                                        managedProcess.StandardError, null);
         }
 
         public void Terminate()
@@ -290,37 +280,19 @@ public sealed class HostProcessBackend : IProcessExecutionBackend
             }
 
             if (Process.HasExited)
-            {
                 throw new
                     InvalidOperationException("Cannot terminate descendants after the root process has exited on this platform.");
-            }
 
-            Process.Kill(entireProcessTree : true);
+            Process.Kill(true);
         }
 
         public void CloseOutput()
         {
-            if (_outputClosed)
-            {
-                return;
-            }
+            if (_outputClosed) return;
 
             _outputClosed = true;
             StandardOutput.Dispose();
             StandardError.Dispose();
-        }
-
-        public void Dispose()
-        {
-            CloseOutput();
-            if (_windowsProcess is not null)
-            {
-                _windowsProcess.Dispose();
-            }
-            else
-            {
-                Process.Dispose();
-            }
         }
     }
 }

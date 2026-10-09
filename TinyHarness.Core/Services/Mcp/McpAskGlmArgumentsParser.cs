@@ -75,7 +75,7 @@ public static class McpAskGlmArgumentsParser
             TaskPrompt     = task,
             KnownFacts     = knownFacts,
             FocusPaths     = focusPaths,
-            ExpectedOutput = expectedOutput,
+            ExpectedOutput = expectedOutput
         };
         return true;
     }

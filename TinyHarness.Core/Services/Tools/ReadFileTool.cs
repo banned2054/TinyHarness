@@ -7,66 +7,61 @@ using TinyHarness.Core.Services.Runtime;
 namespace TinyHarness.Core.Services.Tools;
 
 /// <summary>
-/// 读取工作区文本文件的只读工具，支持从 1 开始的行分页。它限制文件大小、单次行数、
-/// 总输出字符数和单行长度；所有提前停止都会给出准确续读位置，二进制文件不会直接输出。
-///
-/// read_file: reads a text file inside the workspace, with optional 1-based line
-/// offset/limit paging. Line-oriented so partial reads are always line-aligned.
-/// Output is bounded: files larger than 4 MiB are refused with their size, a
-/// call returns at most 4000 lines and 64 KiB of text, and single lines longer
-/// than 8 KiB are cut in place with an explicit "[line N truncated]" suffix.
-/// Every early stop reports the exact offset to continue from, and all markers
-/// count against the output budget. Binary files are reported rather than
-/// dumped. The optional <see cref="WorkerReadPolicy"/>, injected only by the
-/// WorkerRunner, rejects out-of-scope or sensitive explicit paths — in Prepare
-/// lexically and in Execute again over the resolved link chain — so excluded
-/// content is never returned.
+///     读取工作区文本文件的只读工具，支持从 1 开始的行分页。它限制文件大小、单次行数、
+///     总输出字符数和单行长度；所有提前停止都会给出准确续读位置，二进制文件不会直接输出。
+///     read_file: reads a text file inside the workspace, with optional 1-based line
+///     offset/limit paging. Line-oriented so partial reads are always line-aligned.
+///     Output is bounded: files larger than 4 MiB are refused with their size, a
+///     call returns at most 4000 lines and 64 KiB of text, and single lines longer
+///     than 8 KiB are cut in place with an explicit "[line N truncated]" suffix.
+///     Every early stop reports the exact offset to continue from, and all markers
+///     count against the output budget. Binary files are reported rather than
+///     dumped. The optional <see cref="WorkerReadPolicy" />, injected only by the
+///     WorkerRunner, rejects out-of-scope or sensitive explicit paths — in Prepare
+///     lexically and in Execute again over the resolved link chain — so excluded
+///     content is never returned.
 /// </summary>
 public sealed class ReadFileTool(Workspace workspace, WorkerReadPolicy? workerPolicy = null) : ITool
 {
     /// <summary>
-    /// 单次调用的硬行数上限，也是省略 limit 时的默认值；Prepare 会拒绝更大值。
-    ///
-    /// Hard per-call line ceiling, also the default when the caller omits limit.
-    /// Prepare rejects larger values; Execute never clamps silently.
+    ///     单次调用的硬行数上限，也是省略 limit 时的默认值；Prepare 会拒绝更大值。
+    ///     Hard per-call line ceiling, also the default when the caller omits limit.
+    ///     Prepare rejects larger values; Execute never clamps silently.
     /// </summary>
     private const int AbsoluteMaxLines = 4_000;
 
     /// <summary>
-    /// 严格大于该字节数的文件会被拒绝，并报告实际大小。
-    /// Files strictly larger than this are refused with their size.
+    ///     严格大于该字节数的文件会被拒绝，并报告实际大小。
+    ///     Files strictly larger than this are refused with their size.
     /// </summary>
     private const long MaxFileBytes = 4 * 1024 * 1024;
 
     /// <summary>
-    /// 以 UTF-16 code unit 计量的总输出预算，包含所有截断标记。
-    ///
-    /// Total output budget in UTF-16 code units, truncation markers included.
-    /// One code unit is one char, so CJK-heavy content can still serialize to
-    /// ~3x this many bytes; the JSON byte bound is a transport concern.
+    ///     以 UTF-16 code unit 计量的总输出预算，包含所有截断标记。
+    ///     Total output budget in UTF-16 code units, truncation markers included.
+    ///     One code unit is one char, so CJK-heavy content can still serialize to
+    ///     ~3x this many bytes; the JSON byte bound is a transport concern.
     /// </summary>
     private const int MaxOutputChars = 64 * 1024;
 
     /// <summary>
-    /// 单行保留的最大内容长度；超出部分丢弃并在原位置添加行号截断标记。
-    ///
-    /// Content kept from a line longer than this; the rest is discarded and the
-    /// line is marked "... [line N truncated]" in place. The line still counts
-    /// as displayed, so the next page starts after it, never by re-reading it.
+    ///     单行保留的最大内容长度；超出部分丢弃并在原位置添加行号截断标记。
+    ///     Content kept from a line longer than this; the rest is discarded and the
+    ///     line is marked "... [line N truncated]" in place. The line still counts
+    ///     as displayed, so the next page starts after it, never by re-reading it.
     /// </summary>
     private const int MaxLineChars = 8 * 1024;
 
     /// <summary>
-    /// 为续读标记和并发增长说明预留的字符空间，确保总输出不超过预算。
-    ///
-    /// Headroom kept from the line budget so every marker (and the concurrency
-    /// note) still fits inside <see cref="MaxOutputChars"/>.
+    ///     为续读标记和并发增长说明预留的字符空间，确保总输出不超过预算。
+    ///     Headroom kept from the line budget so every marker (and the concurrency
+    ///     note) still fits inside <see cref="MaxOutputChars" />.
     /// </summary>
     private const int TrailerReserveChars = 80;
 
     /// <summary>
-    /// 用于二进制文件探测的前缀字节数。
-    /// Number of prefix bytes probed for binary detection.
+    ///     用于二进制文件探测的前缀字节数。
+    ///     Number of prefix bytes probed for binary detection.
     /// </summary>
     private const int BinaryProbeBytes = 512;
 
@@ -78,13 +73,13 @@ public sealed class ReadFileTool(Workspace workspace, WorkerReadPolicy? workerPo
             ["path"] = new JsonObject
             {
                 ["type"]        = "string",
-                ["description"] = "File to read, relative to the workspace root.",
+                ["description"] = "File to read, relative to the workspace root."
             },
             ["offset"] = new JsonObject
             {
                 ["type"]        = "integer",
                 ["minimum"]     = 1,
-                ["description"] = "1-based first line to read (default 1).",
+                ["description"] = "1-based first line to read (default 1)."
             },
             ["limit"] = new JsonObject
             {
@@ -93,10 +88,10 @@ public sealed class ReadFileTool(Workspace workspace, WorkerReadPolicy? workerPo
                 ["maximum"] = AbsoluteMaxLines,
                 ["description"] =
                     "Maximum lines to return (1-4000; default 4000). Output is also capped at 64 KiB total " +
-                    "and 8 KiB per line; files over 4 MiB are refused.",
-            },
+                    "and 8 KiB per line; files over 4 MiB are refused."
+            }
         },
-        ["required"] = new JsonArray("path"),
+        ["required"] = new JsonArray("path")
     };
 
     public ToolDefinition Definition { get; } = new()
@@ -105,12 +100,12 @@ public sealed class ReadFileTool(Workspace workspace, WorkerReadPolicy? workerPo
         Description =
             "Reads a text file from the workspace. Page large files with offset/limit. " +
             "Files over 4 MiB are refused; output is capped at 4000 lines / 64 KiB.",
-        Parameters = Schema,
+        Parameters = Schema
     };
 
     /// <summary>
-    /// 校验文件路径、起始行和行数限制，并生成只包含规范化参数的读取计划。
-    /// Validates the file path, starting line, and line limit, then creates a plan containing normalized arguments.
+    ///     校验文件路径、起始行和行数限制，并生成只包含规范化参数的读取计划。
+    ///     Validates the file path, starting line, and line limit, then creates a plan containing normalized arguments.
     /// </summary>
     public ToolPreparation Prepare(ChatToolCall call)
     {
@@ -118,15 +113,10 @@ public sealed class ReadFileTool(Workspace workspace, WorkerReadPolicy? workerPo
         var rawPath = JsonArgs.Required(args, "path");
         var offset  = JsonArgs.OptionalInt(args, "offset") ?? 1;
         var limit   = JsonArgs.OptionalInt(args, "limit");
-        if (offset < 1)
-        {
-            throw new InvalidDataException("Tool argument 'offset' must be a positive integer.");
-        }
+        if (offset < 1) throw new InvalidDataException("Tool argument 'offset' must be a positive integer.");
 
         if (limit is < 1 or > AbsoluteMaxLines)
-        {
             throw new InvalidDataException($"Tool argument 'limit' must be between 1 and {AbsoluteMaxLines}.");
-        }
 
         var absolute = workspace.ResolveInside(rawPath, "path");
         workerPolicy?.EnsureLexicalAccessAllowed(absolute);
@@ -140,13 +130,13 @@ public sealed class ReadFileTool(Workspace workspace, WorkerReadPolicy? workerPo
             Summary = $"read_file {workspace.ToDisplay(absolute)}"           +
                       (offset > 1 ? $" (from line {offset})" : string.Empty) +
                       (limit is not null ? $" (up to {limit} lines)" : string.Empty),
-            TargetPaths = [absolute],
+            TargetPaths = [absolute]
         };
     }
 
     /// <summary>
-    /// 检查最终链接边界与文件类型后按行异步读取，在安全预算内返回内容或明确的续读提示。
-    /// Rechecks link boundaries and file type, then reads asynchronously by line within the safety budgets.
+    ///     检查最终链接边界与文件类型后按行异步读取，在安全预算内返回内容或明确的续读提示。
+    ///     Rechecks link boundaries and file type, then reads asynchronously by line within the safety budgets.
     /// </summary>
     public async Task<ToolResult> ExecuteAsync(ToolPreparation preparation, CancellationToken cancellationToken)
     {
@@ -155,24 +145,20 @@ public sealed class ReadFileTool(Workspace workspace, WorkerReadPolicy? workerPo
         var limit    = JsonArgs.OptionalInt(preparation.Arguments, "limit")  ?? AbsoluteMaxLines;
 
         if (Directory.Exists(absolute))
-        {
             return new ToolResult
             {
                 Succeeded = false,
-                Content   = $"{workspace.ToDisplay(absolute)} is a directory; use list_files instead.",
+                Content   = $"{workspace.ToDisplay(absolute)} is a directory; use list_files instead."
             };
-        }
 
         if (!File.Exists(absolute))
-        {
             return new ToolResult
             {
                 Succeeded = false,
-                Content   = $"File not found: {workspace.ToDisplay(absolute)}",
+                Content   = $"File not found: {workspace.ToDisplay(absolute)}"
             };
-        }
 
-        workspace.EnsureFinalTargetInside(absolute, isDirectory : false, "File");
+        workspace.EnsureFinalTargetInside(absolute, false, "File");
         // 工作区链接边界之外的第二层：最终解析目标还必须落在 worker 读取范围内。
         // A second layer beyond the workspace link boundary: the resolved final target must also be
         // inside the worker read scope.
@@ -181,7 +167,6 @@ public sealed class ReadFileTool(Workspace workspace, WorkerReadPolicy? workerPo
         var display    = workspace.ToDisplay(absolute);
         var fileLength = new FileInfo(absolute).Length;
         if (fileLength > MaxFileBytes)
-        {
             // Refuse rather than partially read: offset paging is line-based, so
             // a truncated byte window could never be paged past, and a file this
             // large is better served by search_text anyway.
@@ -190,31 +175,28 @@ public sealed class ReadFileTool(Workspace workspace, WorkerReadPolicy? workerPo
                 Succeeded = true,
                 Content =
                     $"{display} is {fileLength} bytes, larger than the {MaxFileBytes / (1024 * 1024)} MiB read limit; " +
-                    "it was not read. Use search_text to locate specific content instead.",
+                    "it was not read. Use search_text to locate specific content instead."
             };
-        }
 
         await using var stream = new FileStream(absolute, FileMode.Open, FileAccess.Read,
                                                 FileShare.ReadWrite | FileShare.Delete, 64 * 1024,
                                                 FileOptions.Asynchronous);
         var binary = await LooksBinaryAsync(stream, cancellationToken).ConfigureAwait(false);
         if (binary)
-        {
             return new ToolResult
             {
                 Succeeded = true,
-                Content   = $"{display} appears to be a binary file ({fileLength} bytes); not shown.",
+                Content   = $"{display} appears to be a binary file ({fileLength} bytes); not shown."
             };
-        }
 
         stream.Position = 0;
         // The size check above already refused files over MaxFileBytes; this
         // bounded read only trips if the file grew in between (FileShare allows
         // concurrent writes). It keeps a single ReadLineAsync from ever loading
         // more than MaxFileBytes worth of one line into memory.
-        using var limited = new LimitedReadStream(stream, MaxFileBytes, leaveOpen : true);
-        using var reader = new StreamReader(limited, Encoding.UTF8, detectEncodingFromByteOrderMarks : true,
-                                            bufferSize : 64 * 1024, leaveOpen : false);
+        using var limited = new LimitedReadStream(stream, MaxFileBytes, true);
+        using var reader = new StreamReader(limited, Encoding.UTF8, true,
+                                            64 * 1024, false);
 
         var     output     = new StringBuilder();
         var     lineNumber = 0;
@@ -226,10 +208,7 @@ public sealed class ReadFileTool(Workspace workspace, WorkerReadPolicy? workerPo
         while ((line = await reader.ReadLineAsync(cancellationToken).ConfigureAwait(false)) is not null)
         {
             lineNumber++;
-            if (lineNumber < offset)
-            {
-                continue;
-            }
+            if (lineNumber < offset) continue;
 
             if (rendered >= limit)
             {
@@ -257,27 +236,23 @@ public sealed class ReadFileTool(Workspace workspace, WorkerReadPolicy? workerPo
         }
 
         if (!stopped && limited.HitLimit)
-        {
             // Only reachable through concurrent growth after the size check:
             // reads ended at the 4 MiB ceiling instead of at a natural EOF.
             output.Append("\n(... read stopped at the 4 MiB safety limit: the file grew while being read)");
-        }
 
         if (output.Length == 0)
-        {
             return new ToolResult
             {
                 Succeeded = true,
-                Content   = $"(no lines in {display} from line {offset} on)",
+                Content   = $"(no lines in {display} from line {offset} on)"
             };
-        }
 
         return new ToolResult { Succeeded = true, Content = output.ToString().TrimEnd('\n') };
     }
 
     /// <summary>
-    /// 追加包含准确下一行 offset 的分页续读标记。
-    /// Appends a paging marker containing the exact next-line offset.
+    ///     追加包含准确下一行 offset 的分页续读标记。
+    ///     Appends a paging marker containing the exact next-line offset.
     /// </summary>
     private static void AppendContinueMarker(StringBuilder output, int nextLine)
     {
@@ -286,8 +261,8 @@ public sealed class ReadFileTool(Workspace workspace, WorkerReadPolicy? workerPo
     }
 
     /// <summary>
-    /// 截断超长行而不拆开 UTF-16 代理项对，并附加可识别的行号标记。
-    /// Truncates an oversized line without splitting a UTF-16 surrogate pair and appends a line marker.
+    ///     截断超长行而不拆开 UTF-16 代理项对，并附加可识别的行号标记。
+    ///     Truncates an oversized line without splitting a UTF-16 surrogate pair and appends a line marker.
     /// </summary>
     private static string TruncateLine(string line, int lineNumber, int maxChars)
     {
@@ -295,22 +270,17 @@ public sealed class ReadFileTool(Workspace workspace, WorkerReadPolicy? workerPo
         // pair; the "... [line N truncated]" suffix is an annotation, not file
         // content, so no line-number prefix is injected into the content itself.
         var cut = Math.Min(line.Length, maxChars);
-        if (cut < line.Length && char.IsHighSurrogate(line[cut - 1]))
-        {
-            cut++; // The pair's low surrogate sits at index cut; keep both.
-        }
+        if (cut < line.Length &&
+            char.IsHighSurrogate(line[cut - 1])) cut++; // The pair's low surrogate sits at index cut; keep both.
 
-        if (cut == line.Length)
-        {
-            return line; // The pair straddled the boundary: the whole line fits after all.
-        }
+        if (cut == line.Length) return line; // The pair straddled the boundary: the whole line fits after all.
 
         return $"{line[..cut]}... [line {lineNumber} truncated]";
     }
 
     /// <summary>
-    /// 探测文件开头是否含 NUL 字节，以保守判断是否为二进制文件。
-    /// Probes the file prefix for a NUL byte as a conservative binary-file check.
+    ///     探测文件开头是否含 NUL 字节，以保守判断是否为二进制文件。
+    ///     Probes the file prefix for a NUL byte as a conservative binary-file check.
     /// </summary>
     private static async Task<bool> LooksBinaryAsync(FileStream stream, CancellationToken cancellationToken)
     {
@@ -318,32 +288,27 @@ public sealed class ReadFileTool(Workspace workspace, WorkerReadPolicy? workerPo
         var read = await stream.ReadAsync(probe.AsMemory(0, BinaryProbeBytes), cancellationToken)
                                .ConfigureAwait(false);
         for (var i = 0; i < read; i++)
-        {
             if (probe[i] == 0)
-            {
                 return true;
-            }
-        }
 
         return false;
     }
 
     /// <summary>
-    /// 包装只读流并限制累计读取字节数；仅在确实存在超过上限的数据时设置
-    /// <see cref="HitLimit"/>。
-    ///
-    /// Read-only ceiling over an inner stream. Reads stop after
-    /// <paramref name="maxBytes"/> bytes have been consumed, and
-    /// <see cref="HitLimit"/> is set only when that ceiling (not a natural end
-    /// of the inner stream) ended the reads.
+    ///     包装只读流并限制累计读取字节数；仅在确实存在超过上限的数据时设置
+    ///     <see cref="HitLimit" />。
+    ///     Read-only ceiling over an inner stream. Reads stop after
+    ///     <paramref name="maxBytes" /> bytes have been consumed, and
+    ///     <see cref="HitLimit" /> is set only when that ceiling (not a natural end
+    ///     of the inner stream) ended the reads.
     /// </summary>
     private sealed class LimitedReadStream(Stream inner, long maxBytes, bool leaveOpen) : Stream
     {
         private long _consumed;
 
         /// <summary>
-        /// 读取因字节上限而非自然 EOF 结束时为 <see langword="true"/>。
-        /// True when reads ended at the byte ceiling instead of a natural EOF.
+        ///     读取因字节上限而非自然 EOF 结束时为 <see langword="true" />。
+        ///     True when reads ended at the byte ceiling instead of a natural EOF.
         /// </summary>
         public bool HitLimit { get; private set; }
 
@@ -362,42 +327,48 @@ public sealed class ReadFileTool(Workspace workspace, WorkerReadPolicy? workerPo
         }
 
         /// <summary>
-        /// 只读包装器没有待刷新的写入缓冲，因此此操作为空操作。
-        /// No-op because the read-only wrapper has no pending write buffer.
+        ///     只读包装器没有待刷新的写入缓冲，因此此操作为空操作。
+        ///     No-op because the read-only wrapper has no pending write buffer.
         /// </summary>
         public override void Flush()
         {
         }
 
         /// <summary>
-        /// 该受限流不支持定位，以免绕过累计字节预算。
-        /// Seeking is unsupported so callers cannot bypass the cumulative byte budget.
+        ///     该受限流不支持定位，以免绕过累计字节预算。
+        ///     Seeking is unsupported so callers cannot bypass the cumulative byte budget.
         /// </summary>
-        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin)
+        {
+            throw new NotSupportedException();
+        }
 
         /// <summary>
-        /// 只读包装器不支持改变流长度。
-        /// Changing stream length is unsupported by this read-only wrapper.
+        ///     只读包装器不支持改变流长度。
+        ///     Changing stream length is unsupported by this read-only wrapper.
         /// </summary>
-        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void SetLength(long value)
+        {
+            throw new NotSupportedException();
+        }
 
         /// <summary>
-        /// 只读包装器拒绝所有写入。
-        /// All writes are rejected by this read-only wrapper.
+        ///     只读包装器拒绝所有写入。
+        ///     All writes are rejected by this read-only wrapper.
         /// </summary>
-        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count)
+        {
+            throw new NotSupportedException();
+        }
 
         /// <summary>
-        /// 在剩余字节预算内执行同步数组读取，到达上限后探测是否还有数据。
-        /// Reads synchronously into an array within the remaining byte budget, then probes past the ceiling.
+        ///     在剩余字节预算内执行同步数组读取，到达上限后探测是否还有数据。
+        ///     Reads synchronously into an array within the remaining byte budget, then probes past the ceiling.
         /// </summary>
         public override int Read(byte[] buffer, int offset, int count)
         {
             var remaining = maxBytes - _consumed;
-            if (remaining <= 0)
-            {
-                return ProbePastEnd();
-            }
+            if (remaining <= 0) return ProbePastEnd();
 
             var read = inner.Read(buffer, offset, (int)Math.Min(remaining, count));
             _consumed += read;
@@ -405,16 +376,13 @@ public sealed class ReadFileTool(Workspace workspace, WorkerReadPolicy? workerPo
         }
 
         /// <summary>
-        /// 在剩余字节预算内执行同步 Span 读取，到达上限后探测是否还有数据。
-        /// Reads synchronously into a span within the remaining byte budget, then probes past the ceiling.
+        ///     在剩余字节预算内执行同步 Span 读取，到达上限后探测是否还有数据。
+        ///     Reads synchronously into a span within the remaining byte budget, then probes past the ceiling.
         /// </summary>
         public override int Read(Span<byte> buffer)
         {
             var remaining = maxBytes - _consumed;
-            if (remaining <= 0)
-            {
-                return ProbePastEnd();
-            }
+            if (remaining <= 0) return ProbePastEnd();
 
             var read = inner.Read(buffer[..(int)Math.Min(remaining, buffer.Length)]);
             _consumed += read;
@@ -422,17 +390,14 @@ public sealed class ReadFileTool(Workspace workspace, WorkerReadPolicy? workerPo
         }
 
         /// <summary>
-        /// 在剩余字节预算内异步读取，到达上限后以可取消方式探测是否还有数据。
-        /// Reads asynchronously within the remaining byte budget and probes past the ceiling with cancellation.
+        ///     在剩余字节预算内异步读取，到达上限后以可取消方式探测是否还有数据。
+        ///     Reads asynchronously within the remaining byte budget and probes past the ceiling with cancellation.
         /// </summary>
         public override async ValueTask<int> ReadAsync(Memory<byte>      buffer,
                                                        CancellationToken cancellationToken = default)
         {
             var remaining = maxBytes - _consumed;
-            if (remaining <= 0)
-            {
-                return await ProbePastEndAsync(cancellationToken).ConfigureAwait(false);
-            }
+            if (remaining <= 0) return await ProbePastEndAsync(cancellationToken).ConfigureAwait(false);
 
             var read = await inner.ReadAsync(buffer[..(int)Math.Min(remaining, buffer.Length)], cancellationToken)
                                   .ConfigureAwait(false);
@@ -441,66 +406,53 @@ public sealed class ReadFileTool(Workspace workspace, WorkerReadPolicy? workerPo
         }
 
         /// <summary>
-        /// 将旧式数组异步重载转发到基于 <see cref="Memory{T}"/> 的受限实现。
-        /// Forwards the legacy array-based async overload to the bounded <see cref="Memory{T}"/> implementation.
+        ///     将旧式数组异步重载转发到基于 <see cref="Memory{T}" /> 的受限实现。
+        ///     Forwards the legacy array-based async overload to the bounded <see cref="Memory{T}" /> implementation.
         /// </summary>
         public override Task<int> ReadAsync(byte[]            buffer, int offset, int count,
                                             CancellationToken cancellationToken)
-            => ReadAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
+        {
+            return ReadAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
+        }
 
         /// <summary>
-        /// 同步探测上限之后是否仍有数据；始终返回 0，仅在确有额外数据时设置 <see cref="HitLimit"/>。
-        /// Probes synchronously beyond the ceiling; always returns 0 and sets <see cref="HitLimit"/> only if data remains.
+        ///     同步探测上限之后是否仍有数据；始终返回 0，仅在确有额外数据时设置 <see cref="HitLimit" />。
+        ///     Probes synchronously beyond the ceiling; always returns 0 and sets <see cref="HitLimit" /> only if data remains.
         /// </summary>
         private int ProbePastEnd()
         {
-            if (HitLimit)
-            {
-                return 0;
-            }
+            if (HitLimit) return 0;
 
             var probe = new byte[1];
-            if (inner.Read(probe, 0, 1) == 0)
-            {
-                return 0; // Natural EOF: the file ended exactly at the ceiling.
-            }
+            if (inner.Read(probe, 0, 1) == 0) return 0; // Natural EOF: the file ended exactly at the ceiling.
 
             HitLimit = true; // Data exists past the ceiling: the file grew mid-read.
             return 0;
         }
 
         /// <summary>
-        /// 异步探测上限之后是否仍有数据；始终返回 0，并保留取消语义。
-        /// Probes asynchronously beyond the ceiling, always returning 0 while preserving cancellation.
+        ///     异步探测上限之后是否仍有数据；始终返回 0，并保留取消语义。
+        ///     Probes asynchronously beyond the ceiling, always returning 0 while preserving cancellation.
         /// </summary>
         private async ValueTask<int> ProbePastEndAsync(CancellationToken cancellationToken)
         {
-            if (HitLimit)
-            {
-                return 0;
-            }
+            if (HitLimit) return 0;
 
             var probe = new byte[1];
             var read  = await inner.ReadAsync(probe.AsMemory(0, 1), cancellationToken).ConfigureAwait(false);
-            if (read == 0)
-            {
-                return 0; // Natural EOF.
-            }
+            if (read == 0) return 0; // Natural EOF.
 
             HitLimit = true;
             return 0;
         }
 
         /// <summary>
-        /// 按构造参数决定是否同时释放内部流。
-        /// Disposes the inner stream only when ownership was requested at construction.
+        ///     按构造参数决定是否同时释放内部流。
+        ///     Disposes the inner stream only when ownership was requested at construction.
         /// </summary>
         protected override void Dispose(bool disposing)
         {
-            if (disposing && !leaveOpen)
-            {
-                inner.Dispose();
-            }
+            if (disposing && !leaveOpen) inner.Dispose();
 
             base.Dispose(disposing);
         }
