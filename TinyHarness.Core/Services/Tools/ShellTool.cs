@@ -1,5 +1,3 @@
-using System.ComponentModel;
-using System.Diagnostics;
 using System.Text;
 using System.Text.Json.Nodes;
 using TinyHarness.Core.Models.ChatCompletions;
@@ -99,11 +97,13 @@ public sealed class ShellTool : ITool
     private readonly string                                                          _artifactRoot;
     private readonly IReadOnlyDictionary<string, string>                             _knownSecrets;
     private readonly Func<string, int, IReadOnlyList<string>, IProcessOutputCapture> _captureFactory;
+    private readonly IProcessExecutionBackend                                        _processBackend;
 
     public ShellTool(Workspace                            workspace, int? defaultTimeoutSeconds = null,
                      IReadOnlyDictionary<string, string>? knownSecrets         = null,
                      string?                              artifactRoot         = null,
-                     int                                  outputCharacterLimit = DefaultOutputCharactersPerStream)
+                     int                                  outputCharacterLimit = DefaultOutputCharactersPerStream,
+                     IProcessExecutionBackend?            processBackend       = null)
     {
         _workspace             = workspace;
         _defaultTimeoutSeconds = defaultTimeoutSeconds ?? DefaultTimeoutSeconds;
@@ -118,14 +118,16 @@ public sealed class ShellTool : ITool
         _artifactRoot         = artifactRoot ?? Path.Combine(Path.GetTempPath(), "TinyHarness", "process-output");
         _knownSecrets         = knownSecrets ?? new Dictionary<string, string>(StringComparer.Ordinal);
         _captureFactory       = static (path, limit, secrets) => new ProcessOutputCapture(path, limit, secrets);
+        _processBackend       = processBackend ?? new HostProcessBackend(_knownSecrets);
     }
 
     internal ShellTool(Workspace workspace,
                        Func<string, int, IReadOnlyList<string>, IProcessOutputCapture> captureFactory,
                        int? defaultTimeoutSeconds = null, string? artifactRoot = null,
-                       int outputCharacterLimit = DefaultOutputCharactersPerStream)
-        : this(workspace, defaultTimeoutSeconds, artifactRoot : artifactRoot,
-               outputCharacterLimit : outputCharacterLimit)
+                       int outputCharacterLimit = DefaultOutputCharactersPerStream,
+                       IProcessExecutionBackend? processBackend = null)
+        : this(workspace, defaultTimeoutSeconds, knownSecrets : null, artifactRoot : artifactRoot,
+               outputCharacterLimit : outputCharacterLimit, processBackend : processBackend)
     {
         _captureFactory = captureFactory ?? throw new ArgumentNullException(nameof(captureFactory));
     }
@@ -193,17 +195,17 @@ public sealed class ShellTool : ITool
             RiskLevel         = mode == "shell" ? ToolRiskLevel.Elevated : ToolRiskLevel.Standard,
             SessionConstraint = commandIdentity,
             TargetPaths       = [workingDirectory],
-            ExecutionPlan = new ShellExecutionPlan(command.Executable, Array.AsReadOnly(command.Arguments.ToArray()),
-                                                   workingDirectory, timeoutSeconds, workspaceExecutable,
-                                                   mode == "shell" && command.Shell == "cmd"
-                                                       ? command.CommandText
-                                                       : null),
+            ExecutionPlan = new PreparedProcessExecution(command.Executable, Array.AsReadOnly(command.Arguments.ToArray()),
+                                                         workingDirectory, timeoutSeconds, workspaceExecutable,
+                                                         mode == "shell" && command.Shell == "cmd"
+                                                             ? command.CommandText
+                                                             : null),
         };
     }
 
     public async Task<ToolResult> ExecuteAsync(ToolPreparation preparation, CancellationToken cancellationToken)
     {
-        if (preparation.ExecutionPlan is not ShellExecutionPlan plan)
+        if (preparation.ExecutionPlan is not PreparedProcessExecution plan)
         {
             throw new InvalidDataException("Shell execution requires the immutable plan produced by Prepare.");
         }
@@ -226,116 +228,52 @@ public sealed class ShellTool : ITool
 
         cancellationToken.ThrowIfCancellationRequested();
         Directory.CreateDirectory(_artifactRoot);
-        var       runId         = $"{DateTimeOffset.UtcNow:yyyyMMddTHHmmssfff}-{Guid.NewGuid():N}";
-        var       stdoutPath    = Path.Combine(_artifactRoot, runId + ".stdout.txt");
-        var       stderrPath    = Path.Combine(_artifactRoot, runId + ".stderr.txt");
-        var       secrets       = _knownSecrets.Values.Where(value => !string.IsNullOrEmpty(value)).ToArray();
-        var       stdoutCapture = _captureFactory(stdoutPath, _outputCharacterLimit, secrets);
-        var       stderrCapture = _captureFactory(stderrPath, _outputCharacterLimit, secrets);
-        using var timeoutSource = new CancellationTokenSource(TimeSpan.FromSeconds(plan.TimeoutSeconds));
-        using var linkedSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken,
-            timeoutSource.Token);
-        using var        captureSource = new CancellationTokenSource();
-        ProcessExecution execution;
+        var runId         = $"{DateTimeOffset.UtcNow:yyyyMMddTHHmmssfff}-{Guid.NewGuid():N}";
+        var stdoutPath    = Path.Combine(_artifactRoot, runId + ".stdout.txt");
+        var stderrPath    = Path.Combine(_artifactRoot, runId + ".stderr.txt");
+        var secrets       = _knownSecrets.Values.Where(value => !string.IsNullOrEmpty(value)).ToArray();
+        var stdoutCapture = _captureFactory(stdoutPath, _outputCharacterLimit, secrets);
+        var stderrCapture = _captureFactory(stderrPath, _outputCharacterLimit, secrets);
+        ProcessExecutionResult execution;
         try
         {
-            execution = ProcessExecution.Start(BuildStartInfo(plan), plan.RawCmdCommand);
+            execution = await _processBackend.ExecuteAsync(plan, stdoutCapture, stderrCapture, cancellationToken)
+                                             .ConfigureAwait(false);
         }
-        catch (Exception ex) when (ex is Win32Exception or InvalidOperationException or IOException)
+        catch (ProcessExecutionStartException ex)
         {
+            stdoutCapture.Discard();
+            stderrCapture.Discard();
             return Failed($"Failed to start executable '{plan.Executable}': {ex.Message}");
         }
-
-        using (execution)
+        catch (Exception)
         {
-            var processTask = execution.Process.WaitForExitAsync(CancellationToken.None);
-            var stdoutTask  = stdoutCapture.ReadAsync(execution.StandardOutput, captureSource.Token);
-            var stderrTask  = stderrCapture.ReadAsync(execution.StandardError, captureSource.Token);
-            var allTasks    = new[] { processTask, stdoutTask, stderrTask };
-            var timedOut    = false;
-            try
-            {
-                await WaitForExecutionAsync(allTasks, linkedSource.Token).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) when (linkedSource.IsCancellationRequested)
-            {
-                await TerminateAndDrainAsync(execution, allTasks, captureSource,
-                                             cancellationToken.IsCancellationRequested
-                                                 ? "cancellation"
-                                                 : $"the {plan.TimeoutSeconds}s timeout").ConfigureAwait(false);
-                if (cancellationToken.IsCancellationRequested)
-                {
-                    stdoutCapture.Discard();
-                    stderrCapture.Discard();
-                    cancellationToken.ThrowIfCancellationRequested();
-                }
-
-                timedOut = true;
-            }
-            catch (Exception executionError) when (executionError is not OperationCanceledException)
-            {
-                try
-                {
-                    await TerminateAndDrainAsync(execution, allTasks, captureSource,
-                                                 "an execution or output-capture failure",
-                                                 executionError).ConfigureAwait(false);
-                }
-                catch (Exception cleanupError)
-                {
-                    throw new
-                        InvalidOperationException($"Process execution failed ({executionError.Message}) and process-tree cleanup also failed " +
-                                                  $"({cleanupError.Message}).",
-                                                  new AggregateException(executionError, cleanupError));
-                }
-
-                stdoutCapture.Discard();
-                stderrCapture.Discard();
-                throw new IOException(
-                                      $"Failed while executing or capturing output from '{plan.Executable}': {executionError.Message}",
-                                      executionError);
-            }
-
-            var  stdout   = stdoutCapture.Complete();
-            var  stderr   = stderrCapture.Complete();
-            int? exitCode = execution.Process.HasExited ? execution.Process.ExitCode : null;
-            var  content  = FormatResult(exitCode, timedOut, plan.TimeoutSeconds, stdout, stderr);
-            return new ToolResult
-            {
-                Succeeded          = !timedOut && exitCode == 0,
-                Content            = content,
-                ExitCode           = exitCode,
-                TimedOut           = timedOut,
-                OutputTruncated    = stdout.Truncated || stderr.Truncated,
-                Stdout             = stdout.Content,
-                Stderr             = stderr.Content,
-                StdoutArtifactPath = stdout.ArtifactPath,
-                StderrArtifactPath = stderr.ArtifactPath,
-            };
+            stdoutCapture.Discard();
+            stderrCapture.Discard();
+            throw;
         }
-    }
 
-    private ProcessStartInfo BuildStartInfo(ShellExecutionPlan plan)
-    {
-        var startInfo = new ProcessStartInfo
+        var  stdout   = stdoutCapture.Complete();
+        var  stderr   = stderrCapture.Complete();
+        int? exitCode = execution.ExitCode;
+        var  content  = FormatResult(exitCode, execution.TimedOut, plan.TimeoutSeconds, stdout, stderr);
+        if (execution.Failure is { } failure)
         {
-            FileName               = plan.Executable,
-            WorkingDirectory       = plan.WorkingDirectory,
-            UseShellExecute        = false,
-            RedirectStandardOutput = true,
-            RedirectStandardError  = true,
-            CreateNoWindow         = true,
+            content += $"{Environment.NewLine}Failure: {failure.Message}{Environment.NewLine}";
+        }
+
+        return new ToolResult
+        {
+            Succeeded          = !execution.TimedOut && exitCode == 0 && execution.Failure is null,
+            Content            = content,
+            ExitCode           = exitCode,
+            TimedOut           = execution.TimedOut,
+            OutputTruncated    = stdout.Truncated || stderr.Truncated,
+            Stdout             = stdout.Content,
+            Stderr             = stderr.Content,
+            StdoutArtifactPath = stdout.ArtifactPath,
+            StderrArtifactPath = stderr.ArtifactPath,
         };
-        foreach (var argument in plan.Arguments)
-        {
-            startInfo.ArgumentList.Add(argument);
-        }
-
-        foreach (var secret in _knownSecrets)
-        {
-            startInfo.Environment.Remove(secret.Key);
-        }
-
-        return startInfo;
     }
 
     /// <summary>
@@ -479,87 +417,6 @@ public sealed class ShellTool : ITool
         }
     }
 
-    private static async Task WaitForExecutionAsync(IEnumerable<Task> tasks, CancellationToken cancellationToken)
-    {
-        var pending = tasks.ToList();
-        while (pending.Count != 0)
-        {
-            var completed = await Task.WhenAny(pending).WaitAsync(cancellationToken).ConfigureAwait(false);
-            pending.Remove(completed);
-            await completed.ConfigureAwait(false);
-        }
-    }
-
-    private static async Task TerminateAndDrainAsync(ProcessExecution          execution,
-                                                     IReadOnlyCollection<Task> tasks,
-                                                     CancellationTokenSource   captureSource,
-                                                     string                    reason,
-                                                     Exception?                knownFailure = null)
-    {
-        Exception? terminationError = null;
-        try
-        {
-            execution.Terminate();
-        }
-        catch (Exception ex) when (ex is InvalidOperationException or Win32Exception or NotSupportedException)
-        {
-            terminationError = ex;
-        }
-
-        var completion = Task.WhenAll(tasks);
-        try
-        {
-            await completion.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
-        }
-        catch (TimeoutException) when (!completion.IsCompleted)
-        {
-            captureSource.Cancel();
-            execution.CloseOutput();
-            try
-            {
-                await completion.WaitAsync(TimeSpan.FromSeconds(1)).ConfigureAwait(false);
-            }
-            catch (Exception)
-            {
-                // The contextual cleanup error below is authoritative. All
-                // component tasks are observed by Task.WhenAll.
-            }
-
-            throw new
-                TimeoutException($"Timed out draining process output after {reason}; the process tree was termination-requested" +
-                                 (terminationError is null
-                                     ? "."
-                                     : $", but termination failed: {terminationError.Message}"), terminationError);
-        }
-        catch (Exception drainError)
-        {
-            var drainErrors = completion.Exception?.Flatten().InnerExceptions ?? [drainError];
-            IReadOnlyList<Exception> unexpectedErrors = knownFailure is null
-                ? drainErrors
-                : drainErrors.Where(error => !ReferenceEquals(error, knownFailure)).ToArray();
-            if (unexpectedErrors.Count != 0 || terminationError is not null)
-            {
-                var cleanupErrors = unexpectedErrors.ToList();
-                if (terminationError is not null)
-                {
-                    cleanupErrors.Insert(0, terminationError);
-                }
-
-                throw new
-                    InvalidOperationException($"Process-tree cleanup encountered an additional failure after {reason}: " +
-                                              string.Join("; ", cleanupErrors.Select(error => error.Message)),
-                                              new AggregateException(cleanupErrors));
-            }
-        }
-
-        if (terminationError is not null)
-        {
-            throw new
-                InvalidOperationException($"Failed to terminate the process tree after {reason}: {terminationError.Message}",
-                                          terminationError);
-        }
-    }
-
     private static string FormatCommand(string executable, IReadOnlyList<string> arguments)
         => string.Join(' ', new[] { executable }.Concat(arguments).Select(QuoteForDisplay));
 
@@ -586,98 +443,4 @@ public sealed class ShellTool : ITool
         IReadOnlyList<string> Arguments,
         string?               Shell,
         string?               CommandText);
-
-    private sealed record ShellExecutionPlan(
-        string                Executable,
-        IReadOnlyList<string> Arguments,
-        string                WorkingDirectory,
-        int                   TimeoutSeconds,
-        bool                  WorkspaceExecutable,
-        string?               RawCmdCommand);
-
-    private sealed class ProcessExecution : IDisposable
-    {
-        private readonly WindowsJobProcess.RunningProcess? _windowsProcess;
-        private          bool                              _outputClosed;
-
-        private ProcessExecution(Process process, StreamReader standardOutput, StreamReader standardError,
-                                 WindowsJobProcess.RunningProcess? windowsProcess)
-        {
-            Process         = process;
-            StandardOutput  = standardOutput;
-            StandardError   = standardError;
-            _windowsProcess = windowsProcess;
-        }
-
-        public Process      Process        { get; }
-        public StreamReader StandardOutput { get; }
-        public StreamReader StandardError  { get; }
-
-        public static ProcessExecution Start(ProcessStartInfo startInfo, string? rawCmdCommand)
-        {
-            if (OperatingSystem.IsWindows())
-            {
-                var process = WindowsJobProcess.Start(startInfo, rawCmdCommand);
-                return new ProcessExecution(process.Process, process.StandardOutput, process.StandardError,
-                                            process);
-            }
-
-            if (rawCmdCommand is not null)
-            {
-                throw new PlatformNotSupportedException("Raw cmd execution is available only on Windows.");
-            }
-
-            var managedProcess = new Process { StartInfo = startInfo };
-            if (!managedProcess.Start())
-            {
-                managedProcess.Dispose();
-                throw new InvalidOperationException($"Failed to start executable '{startInfo.FileName}'.");
-            }
-
-            return new ProcessExecution(managedProcess, managedProcess.StandardOutput,
-                                        managedProcess.StandardError, windowsProcess : null);
-        }
-
-        public void Terminate()
-        {
-            if (_windowsProcess is not null)
-            {
-                _windowsProcess.Terminate();
-                return;
-            }
-
-            if (Process.HasExited)
-            {
-                throw new
-                    InvalidOperationException("Cannot terminate descendants after the root process has exited on this platform.");
-            }
-
-            Process.Kill(entireProcessTree : true);
-        }
-
-        public void CloseOutput()
-        {
-            if (_outputClosed)
-            {
-                return;
-            }
-
-            _outputClosed = true;
-            StandardOutput.Dispose();
-            StandardError.Dispose();
-        }
-
-        public void Dispose()
-        {
-            CloseOutput();
-            if (_windowsProcess is not null)
-            {
-                _windowsProcess.Dispose();
-            }
-            else
-            {
-                Process.Dispose();
-            }
-        }
-    }
 }

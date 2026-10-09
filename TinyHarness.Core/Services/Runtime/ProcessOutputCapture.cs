@@ -3,22 +3,41 @@ using TinyHarness.Core.Models.Runtime;
 
 namespace TinyHarness.Core.Services.Runtime;
 
-internal interface IProcessOutputCapture
+/// <summary>
+/// 接收按块推送的进程输出：持续写入本地临时 artifact，同时只在内存中保留有界的模型视图。
+/// 已知 secret 在写入 artifact 和内存前进行跨块脱敏；长度为零的块表示流结束，触发尾部冲刷。
+///
+/// Receives pushed process-output chunks, streaming them to a local temporary
+/// artifact while retaining only a bounded model-facing view in memory. Known
+/// secrets are redacted across chunk boundaries before either destination sees
+/// them; a zero-length chunk marks end-of-stream and flushes the redaction tail.
+/// </summary>
+public interface IProcessOutputCapture
 {
-    Task ReadAsync(StreamReader reader, CancellationToken cancellationToken);
+    /// <summary>
+    /// 追加一个输出块。空块表示该流已结束：捕获器完成跨块脱敏的尾部冲刷，之后不再有块。
+    /// Appends one output chunk. An empty chunk marks the stream as ended: the
+    /// capture flushes the cross-chunk redaction tail and expects no further chunks.
+    /// </summary>
+    ValueTask AppendAsync(ReadOnlyMemory<char> chunk, CancellationToken cancellationToken);
 
+    /// <summary>
+    /// 结束捕获并返回有界视图；被裁剪时包含截断说明与完整 artifact 路径。
+    /// Finalizes the capture and returns the bounded view; when truncated it
+    /// includes the truncation notice and the full-artifact path.
+    /// </summary>
     CapturedProcessOutput Complete();
 
+    /// <summary>
+    /// 丢弃本次捕获并删除已写入的临时 artifact。
+    /// Discards the capture and deletes any temporary artifact already written.
+    /// </summary>
     void Discard();
 }
 
 /// <summary>
-/// 把一个进程流持续写入本地临时 artifact，同时只在内存中保留有界的模型视图。
-/// 已知 secret 在写入 artifact 和内存前进行跨读取块脱敏。
-///
-/// Streams one redirected process channel to a local temporary artifact while
-/// retaining only a bounded model-facing view in memory. Known secrets are
-/// redacted across read-buffer boundaries before either destination sees them.
+/// <see cref="IProcessOutputCapture"/> 的本地文件实现。
+/// Local-file implementation of <see cref="IProcessOutputCapture"/>.
 /// </summary>
 internal sealed class ProcessOutputCapture(string artifactPath, int modelCharacterLimit, IReadOnlyList<string> secrets)
     : IProcessOutputCapture
@@ -27,58 +46,28 @@ internal sealed class ProcessOutputCapture(string artifactPath, int modelCharact
     private readonly int                     _tailLimit = modelCharacterLimit - modelCharacterLimit / 2;
     private readonly StringBuilder           _view      = new(modelCharacterLimit);
     private readonly StreamingSecretRedactor _redactor  = new(secrets);
+    private          FileStream?             _artifactStream;
+    private          StreamWriter?           _artifactWriter;
     private          bool                    _truncated;
     private          long                    _totalCharacters;
 
-    public async Task ReadAsync(StreamReader reader, CancellationToken cancellationToken)
+    public async ValueTask AppendAsync(ReadOnlyMemory<char> chunk, CancellationToken cancellationToken)
     {
-        await using var stream = new FileStream(artifactPath, FileMode.CreateNew, FileAccess.Write, FileShare.Read,
-                                                16 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
-        await using var writer = new StreamWriter(stream, new UTF8Encoding(encoderShouldEmitUTF8Identifier : false));
-        var             buffer = new char[4096];
-        while (true)
-        {
-            var read = await reader.ReadAsync(buffer.AsMemory(), cancellationToken).ConfigureAwait(false);
-            if (read == 0)
-            {
-                break;
-            }
-
-            await AppendAsync(_redactor.Transform(buffer.AsSpan(0, read), final : false), writer,
-                              cancellationToken)
-               .ConfigureAwait(false);
-        }
-
-        await AppendAsync(_redactor.Transform(ReadOnlySpan<char>.Empty, final : true), writer,
-                          cancellationToken)
-           .ConfigureAwait(false);
-    }
-
-    public CapturedProcessOutput Complete()
-    {
-        if (!_truncated)
-        {
-            TryDeleteArtifact();
-            return new CapturedProcessOutput(_view.ToString(), false, _totalCharacters, ArtifactPath : null);
-        }
-
-        var omitted = Math.Max(0, _totalCharacters - _view.Length);
-        var content = _view.ToString(0, _headLimit)                                                    +
-                      $"\n... [truncated {omitted} chars; full redacted output: {artifactPath}] ...\n" +
-                      _view.ToString(_view.Length - _tailLimit, _tailLimit);
-        return new CapturedProcessOutput(content, true, _totalCharacters, artifactPath);
-    }
-
-    public void Discard() => TryDeleteArtifact();
-
-    private async Task AppendAsync(string text, StreamWriter writer, CancellationToken cancellationToken)
-    {
+        var text = _redactor.Transform(chunk.Span, final : chunk.IsEmpty);
         if (text.Length == 0)
         {
             return;
         }
 
-        await writer.WriteAsync(text.AsMemory(), cancellationToken).ConfigureAwait(false);
+        if (_artifactWriter is null)
+        {
+            _artifactStream = new FileStream(artifactPath, FileMode.CreateNew, FileAccess.Write, FileShare.Read,
+                                             16 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
+            _artifactWriter = new StreamWriter(_artifactStream,
+                                               new UTF8Encoding(encoderShouldEmitUTF8Identifier : false));
+        }
+
+        await _artifactWriter.WriteAsync(text.AsMemory(), cancellationToken).ConfigureAwait(false);
         _totalCharacters += text.Length;
         if (!_truncated)
         {
@@ -99,6 +88,35 @@ internal sealed class ProcessOutputCapture(string artifactPath, int modelCharact
         {
             _view.Remove(_headLimit, _view.Length - _headLimit - _tailLimit);
         }
+    }
+
+    public CapturedProcessOutput Complete()
+    {
+        CloseArtifact();
+        if (!_truncated)
+        {
+            TryDeleteArtifact();
+            return new CapturedProcessOutput(_view.ToString(), false, _totalCharacters, ArtifactPath : null);
+        }
+
+        var omitted = Math.Max(0, _totalCharacters - _view.Length);
+        var content = _view.ToString(0, _headLimit)                                                    +
+                      $"\n... [truncated {omitted} chars; full redacted output: {artifactPath}] ...\n" +
+                      _view.ToString(_view.Length - _tailLimit, _tailLimit);
+        return new CapturedProcessOutput(content, true, _totalCharacters, artifactPath);
+    }
+
+    public void Discard()
+    {
+        CloseArtifact();
+        TryDeleteArtifact();
+    }
+
+    private void CloseArtifact()
+    {
+        _artifactWriter?.Dispose();
+        _artifactWriter = null;
+        _artifactStream = null;
     }
 
     private void TryDeleteArtifact()

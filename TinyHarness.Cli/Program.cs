@@ -282,12 +282,17 @@ internal static class Program
     ///
     /// Binds the complete read/write tool set to one workspace.
     /// </summary>
-    private static ToolRegistry BuildTools(Workspace workspace, TinyHarnessConfig config, string? apiKey = null) =>
-        new([
-            new ListFilesTool(workspace), new SearchTextTool(workspace), new ReadFileTool(workspace),
-            new ApplyPatchTool(workspace), new ShellTool(workspace, config.DefaultToolTimeoutSeconds,
-                                                         KnownSecrets(config, apiKey)),
-        ]);
+    private static ToolRegistry BuildTools(Workspace workspace, TinyHarnessConfig config, string? apiKey = null)
+    {
+        var secrets = KnownSecrets(config, apiKey);
+        return new ToolRegistry(
+            [
+                new ListFilesTool(workspace), new SearchTextTool(workspace), new ReadFileTool(workspace),
+                new ApplyPatchTool(workspace),
+                new ShellTool(workspace, config.DefaultToolTimeoutSeconds, secrets,
+                              processBackend : new HostProcessBackend(secrets)),
+            ]);
+    }
 
     /// <summary>
     /// 为进程环境清理与输出脱敏提供已知 secret；不记录 secret 值。凭据存储来源时用目标名占位，

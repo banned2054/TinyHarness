@@ -283,7 +283,10 @@ public class ShellToolTests
 
         var tool = new ShellTool(dir.Workspace, CreateCapture, defaultTimeoutSeconds : 30,
                                  artifactRoot : dir.CreateDirectory("artifacts"));
-        var command = SlowCommand();
+        // Chunk-push captures surface an injected failure only when output data
+        // arrives, so the probe must keep emitting stdout instead of running
+        // silently for the whole timeout window.
+        var command = OutputtingSlowCommand();
         var watch   = Stopwatch.StartNew();
 
         var error =
@@ -353,6 +356,11 @@ public class ShellToolTests
         => OperatingSystem.IsWindows()
             ? PlatformCommand("ping -n 8 127.0.0.1 >nul")
             : PlatformCommand("sleep 8");
+
+    private static PlatformProcess OutputtingSlowCommand()
+        => OperatingSystem.IsWindows()
+            ? PlatformCommand("ping -n 8 127.0.0.1")
+            : PlatformCommand("ping -c 8 127.0.0.1");
 
     private static string BackgroundPowerShellCommand(string pidFile)
         => "start \"\" /b powershell.exe -NoLogo -NoProfile -NonInteractive -Command " +
@@ -427,8 +435,8 @@ public class ShellToolTests
 
     private sealed class FailingOutputCapture : IProcessOutputCapture
     {
-        public Task ReadAsync(StreamReader reader, CancellationToken cancellationToken)
-            => Task.FromException(new IOException("Injected capture failure."));
+        public ValueTask AppendAsync(ReadOnlyMemory<char> chunk, CancellationToken cancellationToken)
+            => ValueTask.FromException(new IOException("Injected capture failure."));
 
         public CapturedProcessOutput Complete()
             => throw new InvalidOperationException("A failed capture cannot be completed.");
