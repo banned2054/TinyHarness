@@ -33,7 +33,7 @@ TinyHarness.NET 是一个用于求职展示的轻量本地 coding-agent harness�
 - 开发优先采用可运行的纵向切片，不先搭建大量空接口。
 
 只有经过契约测试或人工验证的服务和模型才能列入 README 的 tested providers/models。
-以上是已实现 MVP 的范围基线，不决定后续功能顺序。后续项目路线见第 21 节。
+以上是已实现 MVP 的范围基线，不决定后续功能顺序。后续项目路线见第 21 节（M10 统一模型协议）和第 22 节（M11 Windows 工具进程沙箱）。
 
 ## 3. MVP 范围
 
@@ -698,3 +698,83 @@ Anthropic 12.54.0 在 NativeAOT 发布产物中产生 2,625 条 IL2026/IL3050 �
 - 离线契约测试覆盖分片、多工具调用与结果回传、拒绝后继续、取消、错误、Responses reasoning 回传及旧配置兼容。
 - 受影响测试和回归通过；`win-x64` NativeAOT publish 后实际运行原生产物，并验证现有 CLI 功能未退化。
 - 真实供应商调用另行授权；离线验证只作为 SDK 适配和本地执行路径的证据，不作为真实 endpoint 兼容结论。
+
+## 22. M11：Windows 工具进程沙箱
+
+**状态：M11.1（执行后端）与 M11.2（Windows 编排）已实现并提交；M11.3（策略闭环）已实现待提交；M11.4（管理/产物）与 M11.5（隔离验收）未开始，隔离验收完成前不宣称沙箱可用。** 2026-10-09 确定 Windows 优先，TinyHarness 的 C# Runtime 直接编排已独立编译的 Codex Windows 沙箱组件；不通过 Codex CLI/Agent 执行，不新增 Rust shim，不把修改 Codex Rust 公共 API 作为首期前置条件。Linux/macOS 后续独立接入。
+
+技术依据及 wire 协议见 [Windows 沙箱直接组件接入方案](docs/windows-sandbox-dotnet-integration.md)。该文档基于 Codex revision `d650bd7c05`、setup version 5、IPC version 6；组件已编译，真实 Rust 序列化/帧协议和部分 C# 片段已有验证记录，但这些不证明完整 TinyHarness 接入或隔离生效。前文 MVP 的“无 OS sandbox”是历史基线，M11 完成前现有执行边界仍然有效。
+
+### 22.1 产品范围
+
+这是本机 Windows 账户、受限 token、ACL、私有桌面和防火墙/WFP 隔离，不是虚拟机或独立 Windows Sandbox 桌面环境。
+
+首期支持：
+
+- `win-x64`，仅 `shell` 启动的工具进程；保留文件工具的应用层路径边界。
+- 结构化 direct 模式和经过 quoting 验证的显式 shell 模式；非 TTY、关闭 stdin、每命令独立 runner，不支持后台常驻进程。
+- 固定断网策略，以及只读执行/工作区写入策略。只读指工作区不可写，必要临时写根需单独声明；工作区写入保护约定元数据目录。
+- stdout/stderr、输出脱敏/裁剪/artifact、超时、取消、进程树回收、结构化结果和审计。
+- 独立的状态检查与显式 provisioning 管理入口（命令名暂定 `sandbox status`、`sandbox provision`）。
+
+首期不做：联网代理/域名或端口白名单、模型请求扩大隔离权限或宿主逃逸、交互式终端/GUI、自动提权修复、一键全局卸载、整个 Harness/worker 的 OS 隔离。MCP worker 保持现有只读工具及 hard deny；模型 HTTP 请求不受 shell 沙箱网络策略限制。
+
+标准 elevated 路径要求有效 `root/read`，不提供严格的“仅仓库可读”保证；环境 key 清理也不能替代磁盘敏感文件访问控制。用户界面必须说明真实读写/网络范围，不宣传不存在的隔离。
+
+### 22.2 组件和架构边界
+
+日常生产执行使用 `codex-windows-sandbox-setup.exe`（普通权限 refresh）和 `codex-command-runner.exe`；`codex-windows-managed-deny-probe.exe` 用于验收。`codex-windows-sandbox-service.exe` 面向服务/MSIX 模式，首期不安装或依赖该服务。
+
+```text
+ShellTool.Prepare：命令 + 清理后的环境 + 有效隔离策略
+  → PermissionEngine：审批同一不可变计划
+  → ShellTool.ExecuteAsync
+      → HostProcessBackend：既有宿主执行
+      → WindowsSandboxBackend：C# 直接编排 setup / runner
+  → 输出捕获、执行终态、工具结果和审计
+```
+
+在 `Services/Runtime` 提取窄的进程执行后端，通过 CLI composition root 显式注入 `ShellTool`。prepared execution、effective policy、result 等类型按需归入 `Models/Runtime`；名称在实现时确定，不预建跨平台空类型或拆分程序集。
+
+后端契约不强制返回 `.NET Process`，而是表达执行会话、双流输出、取消和结构化终态。Windows 后端负责有效权限解析、refresh、capability SID、凭据、私有桌面、管道身份和 runner 生命周期的一致性；直接用当前用户 `Process.Start(runner.exe)` 不构成正确接入。
+
+### 22.3 配置信任和权限不变量
+
+- 组件绝对路径、sandbox home、最低隔离要求、网络上限和额外写根来自独立可信用户/宿主设置，不进入可被目标项目配置覆盖的普通来源链。模型不接收任意 profile 或组件路径参数。
+- 旧配置保留宿主执行并明确显示“无 OS 隔离”；显式启用 Windows sandbox 后，缺组件、未初始化、版本/策略不匹配或启动失败均拒绝执行，绝不自动 fallback。
+- Prepare 无副作用，冻结命令、cwd、timeout、清理后的环境与有效策略。refresh、SID 写回、桌面/管道创建、进程启动均在授权后执行，不得在执行阶段扩大权限。
+- fingerprint/session grant 绑定 backend、策略版本、规范化有效读写范围、deny、网络、临时根、元数据保护和环境策略身份。同一命令不能复用旧授权联网、扩大写根或切换宿主；拒绝不得因 backend 变化意外失效。
+- commandRules 只表示命令许可，不授予 provisioning、联网或隔离逃逸。sandbox 不自动将 `Ask` 转为 `Allow`。
+- 普通 run、默认 doctor/smoke 不自动 provisioning、账户修复或 UAC。管理操作展示机器级副作用，另行取得授权。
+
+账户、密码、网络规则是机器级共享状态，不同 home 不证明与 Codex 或其他 TinyHarness 实例隔离；首期不宣称未经验证的共存。legacy cleanup 影响共享资源且保留部分 home/cache/ACL，不提供实例级完整回滚，不进入自动失败回收。
+
+### 22.4 执行、输出和生命周期
+
+- setup、runner、目标命令环境分别清理；明确 PATH、TEMP/TMP、用户目录和缓存。凭据仅用于启动，不写入参数摘要、模型、审计或异常。
+- 可信组件、审计和 artifact 目录不对目标命令可写；若位于工作区写根内，必须明确保护或迁移至受保护位置。
+- 保留跨块脱敏、head/tail 与完整输出 artifact；字节流增量解码。有界内存和输出磁盘限额不得导致静默丢失，输出不完整要明确报告。
+- 直接保留 runner 的 `exit_code`、`timed_out` 和错误 stage。缺少 exit 不用 OS 退出码补造命令结果，自然退出 192 不代表超时。
+- 准备/refresh、连接、启动、命令、输出排空和回收期限分别有界；取消后使用独立清理期限。区分用户取消、命令超时、启动/协议失败和策略拒绝。
+- 取消与回收状态进入审计；命令失败可以返回模型，回收失败或进程树状态未知必须终止后续副作用，不能当作普通工具错误继续。
+- 现有 runner 的 breakaway/保留后代行为与首期“不遗留后台进程”要求需真实验证。若既有 EXE 无法满足，应报告阻碍并重新确定范围；不以杀死 runner/根进程代替完整杀树证明，不预先授权修改 Rust 模块。
+
+### 22.5 纵向切片与验收
+
+| 切片 | 实施内容 | 验收门槛 |
+|---|---|---|
+| M11.1 执行后端 | 提取宿主 backend；prepared execution、输出与结果契约；fake backend | 现有 shell 行为不退化，相关默认测试通过 |
+| M11.2 Windows 编排 | C# 版本/状态检查、权限解析、refresh、SID/凭据、桌面、管道及 runner 协议 | 模拟管道覆盖错误/终态/取消；在获授权的受控环境完成最小启动与生命周期验证，阻碍未解决不继续宣称可用 |
+| M11.3 策略闭环 | 可信配置、固定断网策略、指纹/授权、CLI 展示、输出和审计 | fake model 工具调用闭环；无权限扩大、无 fallback；实际执行与审批策略一致 |
+| M11.4 管理和产物 | 显式 status/provision、组件路径/版本及打包约定 | 普通入口不自动修改机器；NativeAOT publish 和仓库外原生产物 smoke 通过 |
+| M11.5 隔离验收 | Opt-in Windows 文件/网络/元数据及进程生命周期测试 | 验证真实隔离与完整回收，记录组件版本、环境、结果与限制后才声明支持 |
+
+每个切片包含直接相关测试，不将测试集中到最后。默认测试使用 fake backend/管道，不修改机器账户、ACL、注册表或防火墙；覆盖策略不可变、授权隔离、无 fallback、帧版本/长度/截断、缺终态、断管道、跨帧解码/脱敏、大输出、超时/取消和回收失败。显式 shell 验证空参数、引号、尾反斜杠、管道及组合语法，保留现有 cmd quoting 语义。
+
+真实系统测试另行授权，在可丢弃 Windows 环境执行：允许/拒绝读写对照、只读工作区、元数据保护、断网、自然退出 23/192、实际超时、启动取消、主动 terminate、宿主异常退出和后代存活状态。标准策略的读取范围与共存限制应明确记录，测试成功也不扩大宣称范围。
+
+涉及配置、DTO、工具入口或 P/Invoke 的切片完成 `win-x64` NativeAOT publish，保持禁用反射 JSON，无未解释的 trimming/AOT warning；从仓库外运行原生产物的 CLI smoke 和 MCP 只读边界回归。默认 smoke 不隐式 provisioning，实际沙箱 smoke 单独 opt-in。
+
+### 22.6 后续 Linux/macOS
+
+共用的是有效策略语义、准备/授权和执行结果契约，不是 Windows SID、桌面或管道。后续分别调查平台能力并实现 Linux/macOS backend；不支持的请求明确拒绝，不静默忽略文件/网络限制。各平台独立完成 NativeAOT RID 发布、原生产物运行和真实隔离验收后，才进入 supported 清单。
