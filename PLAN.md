@@ -701,7 +701,7 @@ Anthropic 12.54.0 在 NativeAOT 发布产物中产生 2,625 条 IL2026/IL3050 �
 
 ## 22. M11：Windows 工具进程沙箱
 
-**状态：M11.1（执行后端）与 M11.2（Windows 编排）已实现并提交；M11.3（策略闭环）已实现待提交；M11.4（管理/产物）与 M11.5（隔离验收）未开始，隔离验收完成前不宣称沙箱可用。** 2026-10-09 确定 Windows 优先，TinyHarness 的 C# Runtime 直接编排已独立编译的 Codex Windows 沙箱组件；不通过 Codex CLI/Agent 执行，不新增 Rust shim，不把修改 Codex Rust 公共 API 作为首期前置条件。Linux/macOS 后续独立接入。
+**状态：M11.1（执行后端）、M11.2（Windows 编排）与 M11.3（策略闭环）已实现并提交；M11.4（管理/产物）已实现（2026-10-10 本轮完成，待提交）；M11.5（隔离验收）未开始，隔离验收完成前不宣称沙箱可用。** 2026-10-09 确定 Windows 优先，TinyHarness 的 C# Runtime 直接编排已独立编译的 Codex Windows 沙箱组件；不通过 Codex CLI/Agent 执行，不新增 Rust shim，不把修改 Codex Rust 公共 API 作为首期前置条件。Linux/macOS 后续独立接入。
 
 技术依据及 wire 协议见 [Windows 沙箱直接组件接入方案](docs/windows-sandbox-dotnet-integration.md)。该文档基于 Codex revision `d650bd7c05`、setup version 5、IPC version 6；组件已编译，真实 Rust 序列化/帧协议和部分 C# 片段已有验证记录，但这些不证明完整 TinyHarness 接入或隔离生效。前文 MVP 的“无 OS sandbox”是历史基线，M11 完成前现有执行边界仍然有效。
 

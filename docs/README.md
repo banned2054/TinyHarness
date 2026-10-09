@@ -197,6 +197,32 @@ dotnet run --project TinyHarness.Cli -- --config artifacts/live.json "说明这�
 
 进程分别捕获 stdout/stderr，以 head + tail 裁剪模型输出；发生截断时保留本地完整输出 artifact 并返回路径。真实运行会从子进程环境中移除已配置的 API key 环境变量。持久化会精确替换已配置的已知密钥值（重叠时优先替换较长值），并脱敏明确支持的赋值/JSON 敏感字段，例如 API key、access token、token、password 和 secret；这不是通用秘密检测，不保证识别任意敏感信息。
 
+## Windows 沙箱管理命令
+
+`tinyharness sandbox` 是 Windows 工具进程沙箱的显式管理入口，只读取用户配置中的可信设置 `settings.windowsSandbox`，不发送任何输入给模型。普通入口（`run`、`smoke`、`doctor`、`mcp`）不会触发 provisioning、账户修复或 UAC；机器级修改只能通过 `sandbox provision` 显式发生。
+
+### sandbox status（严格只读）
+
+```powershell
+tinyharness sandbox status
+```
+
+打印 Enabled、policy、setup/runner/home 路径、本 build 期望的协议版本（setup v5 / IPC v6），并运行就绪检查：setup/runner 组件文件、`.sandbox\setup_marker.json`（version==5）、`cap_sid` 表与 `.sandbox-secrets\sandbox_users.json`。不创建任何目录或文件、不提权。退出码：未配置或就绪为 `0`；报告任何问题为 `1`。未配置 windowsSandbox 时打印启用指引。
+
+### sandbox provision（显式机器级修改）
+
+```powershell
+tinyharness sandbox provision [--yes]
+```
+
+校验配置并构造 provisioning payload（路径缺失、非绝对或 payload base64 超过约 23000 字符都会在提权之前拒绝），打印机器级副作用清单并请求确认，然后以 UAC 运行 `codex-windows-sandbox-setup.exe` 一次（有界等待 10 分钟）。副作用包括：本地组 `CodexSandboxUsers`；本地账户 `CodexSandboxOffline`/`CodexSandboxOnline`（随机密码、永不过期）；注册表隐藏账户；防火墙规则与 offline 账户的 WFP BLOCK 过滤器；sandbox home 目录 ACL 与 write roots 授权。重复 provisioning 会重置账户密码，可能影响共用同一机器级状态的其他客户端（Codex 或其他 TinyHarness 实例）；没有卸载或回滚。
+
+确认语义：默认交互确认（默认否）；`--yes` 跳过确认；非交互且无 `--yes` 直接报错退出、不提权。用户在 UAC 对话框取消、超时/取消（状态未知，请用 `sandbox status` 检查）、helper 非 0 退出（读取 `setup_error.json` 报告错误码与消息）均退出 `1`。退出 `0` 仅当 helper 成功且事后就绪检查通过。每次提权尝试（含拒绝、失败、超时/取消）向 `<sandboxHome>\.sandbox\tinyharness-provision.jsonl` 追加一行 JSON 审计（UTC 时间、outcome、退出码、mode、refreshOnly、payload SHA-256、截断的错误摘要；不含完整 payload 或凭据），写入尽力而为、失败仅告警。
+
+### 组件打包约定
+
+两个日常组件 exe 文件名固定为 `codex-windows-sandbox-setup.exe` 与 `codex-command-runner.exe`，来自 Codex 仓库的 Windows 沙箱构建（验收另用 `codex-windows-managed-deny-probe.exe`；`codex-windows-sandbox-service.exe` 首期不使用）。TinyHarness 不安装、不搜索它们：用户把 exe 放在任意自选的绝对路径，并在 user-config.json 的 `settings.windowsSandbox` 配置 `setupExecutablePath`、`runnerExecutablePath`、`sandboxHome`，再运行 `sandbox provision`；`enabled: true` 后 `run` 才会使用沙箱。组件 exe 没有 PE 版本资源（ProductVersion/FileVersion 为空），因此版本权威校验是三处 JSON 数值：payload `version==5`（SETUP_VERSION）、runner 帧协议 `version==6`（IPC_PROTOCOL_VERSION）、setup marker `version==5`，加上 `cap_sid` 与 `sandbox_users.json` 的可解析检查；不匹配一律拒绝执行（fail closed，不回退宿主）。UAC 启动路径（`UseShellExecute=true`）无法使用环境分块通道，payload base64 超过约 23000 字符时 provision 直接拒绝并提示减少 `additionalWriteRoots`。技术细节见 [Windows 沙箱接入方案](windows-sandbox-dotnet-integration.md)。
+
 ## 上下文压缩如何工作
 
 Context Manager 保留运行期间的原始消息历史，并为每次模型请求构建单独的视图：
@@ -250,6 +276,8 @@ M8 验证（2026-09-18）：默认测试 **225/225 通过**；CLI 无警告构�
 M9 本机实现、离线/NativeAOT 验证及真实 endpoint 检查（2026-09-23）：初始全套测试 **367 项通过**；MCP `_meta` 兼容修复后的定向测试 **21/21 通过**。`win-x64` NativeAOT publish、发布产物 CLI smoke 与 MCP stdio initialize/tools-list smoke 均通过。真实 `glm-5.3` HTTPS endpoint 调用经由直接 stdio 与 Codex MCP 完成，并返回带行号证据的结论。见 [M9 验证记录](m9-demo.md)。
 
 M10 统一模型协议（2026-10-08）：模型调用迁移到 `Microsoft.Extensions.AI.IChatClient`（OpenAI SDK 2.14.0 + Microsoft.Extensions.AI.OpenAI 10.10.1），`chatApi` 显式选择协议，Responses 的 reasoning/item id/encrypted content 在历史中回传；默认测试 **408/408 通过**，无警告构建，`win-x64` NativeAOT publish 无 trimming/AOT warning，发布产物从仓库外通过 `--help`、离线 `doctor` 和 smoke。离线契约测试覆盖两种协议；不新增任何真实 provider/model 结论。见 [M10 验证记录](m10-model-protocol.md)。
+
+M11 Windows 沙箱（2026-10-10，M11.1–M11.4）：M11.4 交付 `sandbox status`/`sandbox provision` 管理入口（见上文"Windows 沙箱管理命令"）。默认测试 **532/532 通过**（新增 28 个管理入口测试，全部离线，不启动真实 setup.exe、不触发 UAC）；`TinyHarness.Cli` 构建 0 警告；`win-x64` NativeAOT publish 无 trimming/AOT warning；发布产物从仓库外通过 `--help`、`sandbox status`（只读，本机未配置 windowsSandbox 如实报告并退出 0）、离线 `doctor` 与既有 smoke（Completed/17 steps/16 toolExecs），全程无 UAC、无机器修改；`sandbox provision --yes` 在未配置时于提权前拒绝（exit 1）。隔离验收（M11.5）未开始，完成前不宣称沙箱可用。
 
 ### 服务与模型验证范围
 
