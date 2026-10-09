@@ -70,28 +70,30 @@ public sealed class FileRunRecorder : IRunRecorder
     public Task RecordPreparedAsync(ToolPreparation preparation, CancellationToken cancellationToken) =>
         AppendAsync(new AuditRecord
         {
-            RunId       = _runId,
-            Kind        = "tool.prepared",
-            ToolName    = _redactor.Redact(preparation.ToolName),
-            CallId      = _redactor.Redact(preparation.CallId),
-            Capability  = _redactor.Redact(preparation.Capability),
-            Summary     = _redactor.Redact(preparation.Summary),
-            TargetPaths = RedactPaths(preparation.TargetPaths),
+            RunId          = _runId,
+            Kind           = "tool.prepared",
+            ToolName       = _redactor.Redact(preparation.ToolName),
+            CallId         = _redactor.Redact(preparation.CallId),
+            Capability     = _redactor.Redact(preparation.Capability),
+            Summary        = _redactor.Redact(preparation.Summary),
+            TargetPaths    = RedactPaths(preparation.TargetPaths),
+            ExecutionPolicy = _redactor.RedactNullable(preparation.ExecutionPolicy),
         }, cancellationToken);
 
     public Task RecordPermissionAsync(ToolPreparation   preparation, PermissionDecision decision, string outcome,
                                       CancellationToken cancellationToken) =>
         AppendAsync(new AuditRecord
         {
-            RunId       = _runId,
-            Kind        = "tool.permission",
-            ToolName    = _redactor.Redact(preparation.ToolName),
-            CallId      = _redactor.Redact(preparation.CallId),
-            Capability  = _redactor.Redact(preparation.Capability),
-            Summary     = _redactor.Redact(preparation.Summary),
-            TargetPaths = RedactPaths(preparation.TargetPaths),
-            Decision    = _redactor.Redact(decision.ToString()),
-            Outcome     = _redactor.Redact(outcome),
+            RunId          = _runId,
+            Kind           = "tool.permission",
+            ToolName       = _redactor.Redact(preparation.ToolName),
+            CallId         = _redactor.Redact(preparation.CallId),
+            Capability     = _redactor.Redact(preparation.Capability),
+            Summary        = _redactor.Redact(preparation.Summary),
+            TargetPaths    = RedactPaths(preparation.TargetPaths),
+            Decision       = _redactor.Redact(decision.ToString()),
+            Outcome        = _redactor.Redact(outcome),
+            ExecutionPolicy = _redactor.RedactNullable(preparation.ExecutionPolicy),
         }, cancellationToken);
 
     public Task RecordResultAsync(ToolPreparation   preparation, ToolResult result,
@@ -107,6 +109,7 @@ public sealed class FileRunRecorder : IRunRecorder
             TimedOut        = result.TimedOut,
             OutputTruncated = result.OutputTruncated,
             Outcome         = result.Succeeded ? "tool completed" : "tool failed",
+            ExecutionPolicy = _redactor.RedactNullable(preparation.ExecutionPolicy),
         }, cancellationToken);
 
     public Task RecordCompactionAsync(ContextChange change, CancellationToken cancellationToken) =>

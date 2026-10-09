@@ -17,15 +17,20 @@ public static class SandboxPolicyResolver
 {
     /// <summary>
     /// 解析策略。workspaceRoot 必须是完全限定的绝对路径（否则抛 ArgumentException）；
-    /// env 是将冻结给目标命令的环境（从中取 TEMP/TMP）。
+    /// env 是将冻结给目标命令的环境（从中取 TEMP/TMP）；additionalWriteRoots 是可信设置声明的
+    /// 额外写根（绝对路径；read-only 策略下这是声明必要临时写根的唯一机制）。
     ///
     /// Resolves a policy. workspaceRoot must be a fully qualified absolute
-    /// path (otherwise ArgumentException is thrown); env is the environment
-    /// to be frozen for the target command (TEMP/TMP are read from it).
+    /// path (otherwise ArgumentException is thrown); env is the environment to
+    /// be frozen for the target command (TEMP/TMP are read from it);
+    /// additionalWriteRoots are extra write roots declared by trusted settings
+    /// (absolute paths; under the read-only policy this is the only mechanism
+    /// to declare necessary write roots).
     /// </summary>
     public static SandboxIsolationPolicy Resolve(SandboxPolicyKind kind,
                                                  string                  workspaceRoot,
-                                                 IReadOnlyDictionary<string, string> targetEnvironment)
+                                                 IReadOnlyDictionary<string, string> targetEnvironment,
+                                                 IReadOnlyList<string>?  additionalWriteRoots = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
         ArgumentNullException.ThrowIfNull(targetEnvironment);
@@ -37,6 +42,7 @@ public static class SandboxPolicyResolver
                                         nameof(workspaceRoot));
         }
 
+        var extraRoots = NormalizeAdditionalWriteRoots(additionalWriteRoots, workspaceRoot);
         var tempRoots = ResolveTempRoots(targetEnvironment);
         return kind switch
         {
@@ -48,11 +54,14 @@ public static class SandboxPolicyResolver
                 {
                     FileSystem = new SandboxFileSystemRestriction
                     {
-                        Entries = [SandboxFileSystemEntry.Read(SandboxPolicyPath.Root())],
+                        // Explicitly declared write roots are the only write
+                        // capability a read-only policy ever carries.
+                        Entries = [SandboxFileSystemEntry.Read(SandboxPolicyPath.Root()),
+                                   .. extraRoots.Select(root => SandboxFileSystemEntry.Write(SandboxPolicyPath.Directory(root)))],
                     },
                     Network    = "restricted",
                 },
-                EffectiveWriteRoots = [],
+                EffectiveWriteRoots = extraRoots,
                 DenyWritePaths      = [],
                 TempWriteRoots      = tempRoots,
             },
@@ -64,11 +73,12 @@ public static class SandboxPolicyResolver
                 {
                     FileSystem = new SandboxFileSystemRestriction
                     {
-                        Entries = BuildWorkspaceWriteEntries(),
+                        Entries = [.. BuildWorkspaceWriteEntries(),
+                                   .. extraRoots.Select(root => SandboxFileSystemEntry.Write(SandboxPolicyPath.Directory(root)))],
                     },
                     Network    = "restricted",
                 },
-                EffectiveWriteRoots = SandboxIsolationPolicy.Deduplicate([workspaceRoot, .. tempRoots]),
+                EffectiveWriteRoots = SandboxIsolationPolicy.Deduplicate([workspaceRoot, .. tempRoots, .. extraRoots]),
                 DenyWritePaths      = SandboxIsolationPolicy.ProtectedMetadataSubpaths
                                                                 .Select(subpath => Path.Combine(workspaceRoot, subpath))
                                                                 .ToArray(),
@@ -76,6 +86,52 @@ public static class SandboxPolicyResolver
             },
             _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unknown sandbox policy kind."),
         };
+    }
+
+    /// <summary>
+    /// 校验并规范化额外写根：必须全限定绝对路径；与工作区根规范相同的条目被丢弃
+    /// （workspace-write 已由 project_roots 覆盖）；去重保持顺序。组合器
+    /// （WindowsSandboxComposer）复用此规范化结果，对可信路径做可写根覆盖校验。
+    ///
+    /// Validates and normalizes additional write roots: each must be a fully
+    /// qualified absolute path; entries identical to the workspace root are
+    /// dropped (workspace-write already covers them via project_roots);
+    /// deduplication preserves order. The composer (WindowsSandboxComposer)
+    /// reuses this normalization to validate trusted paths against the write
+    /// roots.
+    /// </summary>
+    internal static IReadOnlyList<string> NormalizeAdditionalWriteRoots(IReadOnlyList<string>? additionalWriteRoots,
+                                                                       string                  workspaceRoot)
+    {
+        if (additionalWriteRoots is not { Count: > 0 })
+        {
+            return [];
+        }
+
+        var workspaceKey = SandboxCapabilitySidStore.CanonicalRootKey(workspaceRoot);
+        var roots = new List<string>();
+        foreach (var root in additionalWriteRoots)
+        {
+            if (string.IsNullOrWhiteSpace(root) || !Path.IsPathFullyQualified(root))
+            {
+                throw new ArgumentException(
+                                            $"An additional sandbox write root must be a fully qualified absolute path: '{root}'.",
+                                            nameof(additionalWriteRoots));
+            }
+
+            var full = Path.GetFullPath(root);
+            if (SandboxCapabilitySidStore.CanonicalRootKey(full).Equals(workspaceKey, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (!roots.Contains(full, StringComparer.OrdinalIgnoreCase))
+            {
+                roots.Add(full);
+            }
+        }
+
+        return roots;
     }
 
     /// <summary>

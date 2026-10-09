@@ -98,12 +98,14 @@ public sealed class ShellTool : ITool
     private readonly IReadOnlyDictionary<string, string>                             _knownSecrets;
     private readonly Func<string, int, IReadOnlyList<string>, IProcessOutputCapture> _captureFactory;
     private readonly IProcessExecutionBackend                                        _processBackend;
+    private readonly ProcessExecutionPolicy?                                         _executionPolicy;
 
     public ShellTool(Workspace                            workspace, int? defaultTimeoutSeconds = null,
                      IReadOnlyDictionary<string, string>? knownSecrets         = null,
                      string?                              artifactRoot         = null,
                      int                                  outputCharacterLimit = DefaultOutputCharactersPerStream,
-                     IProcessExecutionBackend?            processBackend       = null)
+                     IProcessExecutionBackend?            processBackend       = null,
+                     ProcessExecutionPolicy?              executionPolicy      = null)
     {
         _workspace             = workspace;
         _defaultTimeoutSeconds = defaultTimeoutSeconds ?? DefaultTimeoutSeconds;
@@ -119,15 +121,18 @@ public sealed class ShellTool : ITool
         _knownSecrets         = knownSecrets ?? new Dictionary<string, string>(StringComparer.Ordinal);
         _captureFactory       = static (path, limit, secrets) => new ProcessOutputCapture(path, limit, secrets);
         _processBackend       = processBackend ?? new HostProcessBackend(_knownSecrets);
+        _executionPolicy      = executionPolicy;
     }
 
     internal ShellTool(Workspace workspace,
                        Func<string, int, IReadOnlyList<string>, IProcessOutputCapture> captureFactory,
                        int? defaultTimeoutSeconds = null, string? artifactRoot = null,
                        int outputCharacterLimit = DefaultOutputCharactersPerStream,
-                       IProcessExecutionBackend? processBackend = null)
+                       IProcessExecutionBackend? processBackend = null,
+                       ProcessExecutionPolicy? executionPolicy = null)
         : this(workspace, defaultTimeoutSeconds, knownSecrets : null, artifactRoot : artifactRoot,
-               outputCharacterLimit : outputCharacterLimit, processBackend : processBackend)
+               outputCharacterLimit : outputCharacterLimit, processBackend : processBackend,
+               executionPolicy : executionPolicy)
     {
         _captureFactory = captureFactory ?? throw new ArgumentNullException(nameof(captureFactory));
     }
@@ -181,19 +186,33 @@ public sealed class ShellTool : ITool
             ["command"]          = command.CommandText,
             ["workingDirectory"] = mode == "shell" ? workingDirectory : null,
         }.ToJsonString();
+        // Grants bind the command identity plus the execution policy identity,
+        // so an approval can never be reused to switch hosts or widen the
+        // sandbox policy; denies keep the bare command identity and survive
+        // backend changes (see ToolPreparation.SessionGrantConstraint).
+        var grantConstraint = _executionPolicy is { } policy
+            ? commandIdentity + "\nexecution-policy: " + policy.PolicyIdentity
+            : null;
         var displayCommand = mode == "direct"
             ? FormatCommand(command.Executable, command.Arguments)
             : $"{command.Shell}: {command.CommandText}";
+        var summary = $"shell: {displayCommand} (cwd: {_workspace.ToDisplay(workingDirectory)}, timeout: {timeoutSeconds}s)";
+        if (_executionPolicy is { } executionPolicy)
+        {
+            summary += $" [{executionPolicy.DisplayName}]";
+        }
+
         return new ToolPreparation
         {
             ToolName   = Definition.Name,
             CallId     = call.Id,
             Arguments  = args,
             Capability = "process.execute",
-            Summary =
-                $"shell: {displayCommand} (cwd: {_workspace.ToDisplay(workingDirectory)}, timeout: {timeoutSeconds}s)",
+            Summary    = summary,
             RiskLevel         = mode == "shell" ? ToolRiskLevel.Elevated : ToolRiskLevel.Standard,
             SessionConstraint = commandIdentity,
+            SessionGrantConstraint = grantConstraint,
+            ExecutionPolicy   = _executionPolicy?.PolicyIdentity,
             TargetPaths       = [workingDirectory],
             ExecutionPlan = new PreparedProcessExecution(command.Executable, Array.AsReadOnly(command.Arguments.ToArray()),
                                                          workingDirectory, timeoutSeconds, workspaceExecutable,

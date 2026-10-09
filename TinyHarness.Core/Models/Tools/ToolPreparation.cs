@@ -123,14 +123,37 @@ public sealed class ToolPreparation
     public ToolRiskLevel RiskLevel { get; init; }
 
     /// <summary>
-    /// 可选的会话授权约束。权限引擎只会把同能力、同资源范围且约束完全相同的调用视为
-    /// 已被会话授权；进程工具用它绑定 executable 与 arguments，避免一次授权放行任意命令。
+    /// 可选的会话约束。会话拒绝与它精确匹配（命令身份），使拒绝不因执行后端变化意外失效；
+    /// 进程工具用它绑定 executable 与 arguments，避免一次规则覆盖任意命令。
     ///
-    /// Optional session-grant constraint. A session grant covers only later calls
-    /// with the same capability, resource scope, and exact constraint. Process
-    /// tools use this to bind a grant to the approved executable and arguments.
+    /// Optional session constraint. Session denies match it exactly (command
+    /// identity) so a denial survives execution-backend changes; process tools
+    /// use it to bind executable and arguments so one rule never covers arbitrary commands.
     /// </summary>
     public string? SessionConstraint { get; init; }
+
+    /// <summary>
+    /// 可选的会话授权约束（allow session / allow once 使用）：在命令身份之上叠加执行策略身份，
+    /// 使同一命令的授权不能跨后端、跨隔离策略或跨环境复用。缺省时回落到
+    /// <see cref="SessionConstraint"/>，非进程工具行为不变。
+    ///
+    /// Optional session grant constraint (used by allow session / allow once):
+    /// the command identity plus the execution policy identity, so an approval
+    /// for one command can never be reused across backends, isolation policies,
+    /// or environments. Absent means fall back to <see cref="SessionConstraint"/>;
+    /// non-process tools keep their existing behavior.
+    /// </summary>
+    public string? SessionGrantConstraint { get; init; }
+
+    /// <summary>
+    /// 本次执行的策略身份（如 backend=host 或完整沙箱身份串），进入审计记录；
+    /// 空表示工具未提供执行策略描述。它只是事实记录，不是授权。
+    ///
+    /// The execution policy identity for this invocation (e.g. backend=host or
+    /// the full sandbox identity), recorded in the audit trail; empty when the
+    /// tool provides no execution policy. It is a factual record, not an authorization.
+    /// </summary>
+    public string? ExecutionPolicy { get; init; }
 
     /// <summary>
     /// 本次调用将访问的规范化绝对路径；权限规则以此匹配范围，Agent Loop 与 CLI 用于展示。

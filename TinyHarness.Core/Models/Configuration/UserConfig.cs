@@ -72,6 +72,15 @@ public sealed record UserConfigSettings
     /// and target-project config cannot change them.
     /// </summary>
     public UserWorkerSettings? Worker { get; init; }
+
+    /// <summary>
+    /// Windows 沙箱的可信设置。仅存放在用户配置中；目标项目配置、命令规则和模型请求都不能
+    /// 修改或覆盖它。缺省（null 或 enabled=false）保持宿主执行。
+    /// Trusted settings for the Windows sandbox. Stored only in user config; the
+    /// target project's config, command rules, and model requests cannot change
+    /// or override them. Absent (null or enabled=false) keeps host execution.
+    /// </summary>
+    public WindowsSandboxSettings? WindowsSandbox { get; init; }
 }
 
 /// <summary>

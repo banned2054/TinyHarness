@@ -46,18 +46,19 @@ public class WindowsSandboxBackendTests
             WindowsSandboxBackendLimits?                  limits        = null,
             Exception?                                    launchError   = null)
     {
-        var home      = new SandboxTestHome();
-        var workspace = workspaceRoot ?? home.Components.SandboxHome; // arbitrary inside-policy root
-        var policy    = SandboxPolicyResolver.Resolve(kind, workspace,
-                                                      new Dictionary<string, string> { ["TEMP"] = workspace });
-        var setup     = new FakeSetupInvoker { ThrowOnRefresh = refreshError };
-        var desktops  = new FakeDesktopFactory();
-        var launcher  = new FakeSandboxRunnerLauncher { RunnerBody = runnerBody, ThrowOnLaunch = launchError };
-        var backend   = new WindowsSandboxBackend(
-                                                components ?? home.Components, policy, knownSecrets,
-                                                setupInvoker : setup, credentialSource : new FakeCredentialSource(),
-                                                desktopFactory : desktops, runnerLauncher : launcher,
-                                                limits : limits ?? TestLimits, allowNullDeviceAccess : _ => { });
+        var home             = new SandboxTestHome();
+        var workspace        = workspaceRoot ?? home.Components.SandboxHome; // arbitrary inside-policy root
+        var targetEnvironment = new Dictionary<string, string> { ["TEMP"] = workspace };
+        var policy           = SandboxPolicyResolver.Resolve(kind, workspace, targetEnvironment);
+        var setup            = new FakeSetupInvoker { ThrowOnRefresh = refreshError };
+        var desktops         = new FakeDesktopFactory();
+        var launcher         = new FakeSandboxRunnerLauncher { RunnerBody = runnerBody, ThrowOnLaunch = launchError };
+        var backend          = new WindowsSandboxBackend(
+                                                       components ?? home.Components, policy, targetEnvironment,
+                                                       knownSecrets,
+                                                       setupInvoker : setup, credentialSource : new FakeCredentialSource(),
+                                                       desktopFactory : desktops, runnerLauncher : launcher,
+                                                       limits : limits ?? TestLimits, allowNullDeviceAccess : _ => { });
         return (backend, setup, desktops, launcher, home);
     }
 
@@ -634,7 +635,11 @@ public class WindowsSandboxBackendTests
             Assert.Equal(home.Components.SandboxHome, request.RealSandboxHome);
             Assert.Equal("restricted", request.PermissionProfile.Network);
             Assert.False(request.Environment.ContainsKey("TEST_SECRET"));
-            Assert.NotEmpty(request.Environment);
+            // The spawn environment must be exactly the composition-frozen target
+            // environment ({ TEMP = workspace }); any additional key would mean the
+            // backend regressed to inheriting host variables.
+            Assert.Single(request.Environment);
+            Assert.Equal(home.Components.SandboxHome, request.Environment["TEMP"]);
             Assert.NotEmpty(request.CapabilitySids);
             Assert.All(request.CapabilitySids, sid => Assert.Matches(@"^S-1-5-21-\d+-\d+-\d+-\d+$", sid));
 

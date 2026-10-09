@@ -57,37 +57,45 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
 {
     private const ulong MaximumRunnerTimeoutMilliseconds = 4_294_967_294;
 
-    private readonly WindowsSandboxComponents     _components;
-    private readonly SandboxIsolationPolicy       _policy;
+    private readonly WindowsSandboxComponents           _components;
+    private readonly SandboxIsolationPolicy             _policy;
+    private readonly IReadOnlyDictionary<string, string> _targetEnvironment;
     private readonly IReadOnlyDictionary<string, string> _knownSecrets;
-    private readonly WindowsSandboxStateInspector _stateInspector;
-    private readonly ISandboxSetupInvoker         _setupInvoker;
-    private readonly ISandboxCredentialSource     _credentialSource;
-    private readonly SandboxCapabilitySidStore    _capabilitySidStore;
-    private readonly ISandboxDesktopFactory       _desktopFactory;
-    private readonly ISandboxRunnerLauncher       _runnerLauncher;
-    private readonly WindowsSandboxBackendLimits  _limits;
-    private readonly Action<SecurityIdentifier>   _allowNullDeviceAccess;
+    private readonly WindowsSandboxStateInspector       _stateInspector;
+    private readonly ISandboxSetupInvoker               _setupInvoker;
+    private readonly ISandboxCredentialSource           _credentialSource;
+    private readonly SandboxCapabilitySidStore          _capabilitySidStore;
+    private readonly ISandboxDesktopFactory             _desktopFactory;
+    private readonly ISandboxRunnerLauncher             _runnerLauncher;
+    private readonly WindowsSandboxBackendLimits        _limits;
+    private readonly Action<SecurityIdentifier>         _allowNullDeviceAccess;
 
     public WindowsSandboxBackend(
-        WindowsSandboxComponents    components,
-        SandboxIsolationPolicy      policy,
-        IReadOnlyDictionary<string, string>? knownSecrets   = null,
-        ISandboxSetupInvoker?       setupInvoker  = null,
-        ISandboxCredentialSource?   credentialSource = null,
-        SandboxCapabilitySidStore?  capabilitySidStore = null,
-        ISandboxDesktopFactory?     desktopFactory = null,
-        ISandboxRunnerLauncher?     runnerLauncher = null,
-        WindowsSandboxBackendLimits? limits        = null,
-        Action<SecurityIdentifier>? allowNullDeviceAccess = null)
+        WindowsSandboxComponents              components,
+        SandboxIsolationPolicy                policy,
+        IReadOnlyDictionary<string, string>   targetEnvironment,
+        IReadOnlyDictionary<string, string>?  knownSecrets      = null,
+        ISandboxSetupInvoker?                 setupInvoker      = null,
+        ISandboxCredentialSource?             credentialSource  = null,
+        SandboxCapabilitySidStore?            capabilitySidStore = null,
+        ISandboxDesktopFactory?               desktopFactory    = null,
+        ISandboxRunnerLauncher?               runnerLauncher    = null,
+        WindowsSandboxBackendLimits?          limits            = null,
+        Action<SecurityIdentifier>?           allowNullDeviceAccess = null)
     {
         if (!OperatingSystem.IsWindows())
         {
             throw new PlatformNotSupportedException("The Windows sandbox backend is available on Windows only.");
         }
 
+        ArgumentNullException.ThrowIfNull(targetEnvironment);
+
         _components     = components;
         _policy         = policy;
+        // The frozen target environment comes from composition (built from
+        // trusted settings); it is the same instance the policy's temp roots
+        // were derived from, so ACLs and the spawned env cannot drift apart.
+        _targetEnvironment = targetEnvironment;
         _knownSecrets   = knownSecrets ?? new Dictionary<string, string>(StringComparer.Ordinal);
         _stateInspector = new WindowsSandboxStateInspector(components);
         _setupInvoker   = setupInvoker  ?? new ProcessSandboxSetupInvoker(components, limits?.RefreshTimeout);
@@ -308,7 +316,7 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
         {
             Command                    = [execution.Executable, .. execution.Arguments],
             WorkingDirectory           = execution.WorkingDirectory,
-            Environment                = BuildChildEnvironment(),
+            Environment                = BuildSpawnEnvironment(),
             PermissionProfile          = _policy.SpawnProfile,
             WorkspaceRoots             = [_policy.WorkspaceRoot],
             SandboxDirectory           = _components.SandboxDirectory,
@@ -323,25 +331,19 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
     }
 
     /// <summary>
-    /// 【M11.2 临时形态】当前继承宿主全部环境、仅移除已知 secret 键；设计文档 §5.2 要求按
-    /// PATH/TEMP/工具链显式构造目标环境，环境治理属 M11.3 范围。沙箱执行的是不可信命令，
-    /// 全量宿主环境对其可见是已知缺口，不是最终行为。
+    /// 从组合期冻结的目标环境构造 spawn 环境字典（wire 模型要求可变 Dictionary）。已知
+    /// secret 键最后再移除一次：环境本就由可信 allowlist 构建，这里是防止密键复用的防线，
+    /// 不是唯一的清理点。
     ///
-    /// [M11.2 interim] The child currently inherits the full host environment
-    /// minus the known secret keys; design doc §5.2 requires building the
-    /// target environment explicitly from PATH/TEMP/toolchain entries, and
-    /// environment governance is M11.3 scope. The sandbox runs untrusted
-    /// commands, and their full visibility into the host environment is a
-    /// known gap, not the final behavior.
+    /// Builds the spawn environment dictionary from the composition-time frozen
+    /// target environment (the wire model requires a mutable Dictionary). Known
+    /// secret keys are removed once more at the end: the environment is already
+    /// built from a trusted allowlist, so this is a defense against key reuse,
+    /// not the only cleanup point.
     /// </summary>
-    private Dictionary<string, string> BuildChildEnvironment()
+    private Dictionary<string, string> BuildSpawnEnvironment()
     {
-        var environment = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        foreach (System.Collections.DictionaryEntry entry in Environment.GetEnvironmentVariables())
-        {
-            environment[(string)entry.Key] = (string?)entry.Value ?? string.Empty;
-        }
-
+        var environment = new Dictionary<string, string>(_targetEnvironment, StringComparer.OrdinalIgnoreCase);
         foreach (var secret in _knownSecrets)
         {
             environment.Remove(secret.Key);

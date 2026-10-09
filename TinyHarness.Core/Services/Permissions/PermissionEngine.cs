@@ -149,38 +149,62 @@ public sealed class PermissionEngine
     /// Spends a one-shot approval for this exact invocation when one is present,
     /// and reports whether one was spent. The Agent Loop calls this as an
     /// approved execution commits, so an "allow once" covers exactly one attempt
-    /// and an identical later invocation must be approved again. A no-op when
-    /// the execution was approved through another mechanism (session grant,
+    /// and an identical later invocation must be approved again. A no-op when the
+    /// execution was approved through another mechanism (session grant,
     /// default policy), because no one-shot entry exists for it.
     /// </summary>
     public bool TryConsumeOnce(ToolPreparation preparation) => _oneShotApprovals.Remove(Fingerprint(preparation));
 
     /// <summary>
-    /// 记录覆盖该能力与资源范围的会话级允许规则。
-    /// Records a session-wide allow rule for this capability and resource scope.
-    /// </summary>
-    public void GrantSession(ToolPreparation preparation) => _sessionGrants.Add(ToRule(preparation));
-
-    /// <summary>
-    /// 记录覆盖该能力与资源范围的会话级拒绝规则。
-    /// Records a session-wide deny rule for this capability and resource scope.
-    /// </summary>
-    public void DenySession(ToolPreparation preparation) => _sessionDenies.Add(ToRule(preparation));
-
-    /// <summary>
-    /// 从不可变准备计划提取能力和规范化目标，生成会话规则。
-    /// Creates a session rule from a prepared plan's capability and normalized targets.
-    /// </summary>
-    private static PermissionRule ToRule(ToolPreparation preparation)
-        => new(preparation.Capability, preparation.TargetPaths.ToArray(), preparation.SessionConstraint);
-
-    /// <summary>
-    /// 对工具名、能力、排序后的目标路径和规范化参数生成稳定 SHA-256 指纹，
-    /// 保证单次授权只匹配完全相同的调用。
+    /// 记录覆盖该能力与资源范围的会话级允许规则。规则约束绑定命令身份加执行策略身份
+    /// （<see cref="ToolPreparation.SessionGrantConstraint"/>）：同一命令的授权不能跨后端、
+    /// 跨隔离策略或跨环境复用。
     ///
-    /// A stable fingerprint of the full prepared invocation: tool name, capability,
-    /// normalized target paths and normalized arguments. "Allow once" matches only
-    /// the exact same call, never a re-interpretation of similar input.
+    /// Records a session-wide allow rule for this capability and resource scope.
+    /// The rule constraint binds the command identity plus the execution policy
+    /// identity (<see cref="ToolPreparation.SessionGrantConstraint"/>): an
+    /// approval for one command can never be reused across backends, isolation
+    /// policies, or environments.
+    /// </summary>
+    public void GrantSession(ToolPreparation preparation) => _sessionGrants.Add(ToRule(preparation, deny : false));
+
+    /// <summary>
+    /// 记录覆盖该能力与资源范围的会话级拒绝规则。规则约束只绑定命令身份，使拒绝不因
+    /// 执行后端变化意外失效。
+    ///
+    /// Records a session-wide deny rule for this capability and resource scope.
+    /// The rule constraint binds the bare command identity so a denial survives
+    /// execution-backend changes.
+    /// </summary>
+    public void DenySession(ToolPreparation preparation) => _sessionDenies.Add(ToRule(preparation, deny : true));
+
+    /// <summary>
+    /// 从不可变准备计划提取能力和规范化目标，生成会话规则；允许规则绑定授权约束，
+    /// 拒绝规则绑定命令约束。
+    /// Creates a session rule from a prepared plan's capability and normalized
+    /// targets; grants bind the grant constraint, denies the command constraint.
+    /// </summary>
+    private static PermissionRule ToRule(ToolPreparation preparation, bool deny)
+        => new(preparation.Capability, preparation.TargetPaths.ToArray(),
+               deny ? preparation.SessionConstraint : GrantConstraint(preparation));
+
+    /// <summary>
+    /// 会话授权与一次性授权使用的约束：优先执行策略绑定的授权约束，缺省回落到命令约束。
+    /// The constraint used by session grants and one-shot approvals: the
+    /// policy-bound grant constraint when present, otherwise the command constraint.
+    /// </summary>
+    private static string? GrantConstraint(ToolPreparation preparation)
+        => preparation.SessionGrantConstraint ?? preparation.SessionConstraint;
+
+    /// <summary>
+    /// 对工具名、能力、排序后的目标路径、授权约束和规范化参数生成稳定 SHA-256 指纹，
+    /// 保证单次授权只匹配完全相同的调用——包括同一执行策略下的调用；切换后端或策略后
+    /// 旧授权不再命中。
+    ///
+    /// A stable fingerprint of the full prepared invocation: tool name,
+    /// capability, normalized target paths, the grant constraint, and normalized
+    /// arguments. "Allow once" matches only the exact same call under the same
+    /// execution policy; switching backend or policy never reuses an old approval.
     /// </summary>
     private static string Fingerprint(ToolPreparation preparation)
     {
@@ -188,7 +212,7 @@ public sealed class PermissionEngine
             preparation.ToolName                                                               + '\n' +
             preparation.Capability                                                             + '\n' +
             string.Join('\n', preparation.TargetPaths.OrderBy(x => x, StringComparer.Ordinal)) + '\n' +
-            preparation.SessionConstraint                                                      + '\n' +
+            GrantConstraint(preparation)                                                       + '\n' +
             preparation.Arguments.ToJsonString();
 
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical)));

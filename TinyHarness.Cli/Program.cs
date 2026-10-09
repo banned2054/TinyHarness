@@ -7,6 +7,8 @@ using TinyHarness.Core.Exceptions;
 using TinyHarness.Core.Models.Agent;
 using TinyHarness.Core.Models.Configuration;
 using TinyHarness.Core.Models.Context;
+using TinyHarness.Core.Models.Runtime;
+using TinyHarness.Core.Models.Runtime.WindowsSandbox;
 using TinyHarness.Core.Services.Agent;
 using TinyHarness.Core.Services.ChatCompletions;
 using TinyHarness.Core.Services.Configuration;
@@ -14,6 +16,7 @@ using TinyHarness.Core.Services.Mcp;
 using TinyHarness.Core.Services.Permissions;
 using TinyHarness.Core.Services.Persistence;
 using TinyHarness.Core.Services.Runtime;
+using TinyHarness.Core.Services.Runtime.WindowsSandbox;
 using TinyHarness.Core.Services.Tools;
 using TinyHarness.Core.Services.Worker;
 using WindowsCredentialStore = TinyHarness.Core.Services.Runtime.WindowsCredentialStore;
@@ -140,17 +143,6 @@ internal static class Program
         var       resolution         = await ConfigResolver.ResolveAsync(configPath, cts.Token).ConfigureAwait(false);
         var       config             = resolution.Config;
 
-        await Console.Out.WriteLineAsync("TinyHarness run");
-        await Console.Out.WriteLineAsync($"  config    : {resolution.Source}" +
-                                         (resolution.SourcePath is null
-                                             ? string.Empty
-                                             : $" ({resolution.SourcePath})"));
-        await Console.Out.WriteLineAsync($"  model     : {config.Model}");
-        await Console.Out.WriteLineAsync($"  endpoint  : {config.Endpoint}");
-        await Console.Out.WriteLineAsync($"  chat api  : {ChatApiKindParser.ToValueString(config.ChatApi)}");
-        await Console.Out.WriteLineAsync($"  workspace : {config.WorkspaceRoot}");
-        await Console.Out.WriteLineAsync($"  tools     : list_files, search_text, read_file, apply_patch, shell");
-
         if (string.IsNullOrWhiteSpace(config.Model))
         {
             await Console.Error
@@ -176,12 +168,36 @@ internal static class Program
             return 1;
         }
 
+        // The sandbox composition reads trusted user settings only — never the
+        // target project's config chain. Any validation failure (missing
+        // components, invalid paths, wrong platform, session directory inside
+        // the workspace) throws and fails the run; host execution is never a
+        // silent fallback.
+        var knownSecrets = KnownSecrets(config, apiKey);
+        var sandbox = await TryComposeWindowsSandboxAsync(config, knownSecrets, cts.Token).ConfigureAwait(false);
+        var executionPolicy = sandbox?.ExecutionPolicy ?? ProcessExecutionPolicy.Host();
+
+        await Console.Out.WriteLineAsync("TinyHarness run");
+        await Console.Out.WriteLineAsync($"  config    : {resolution.Source}" +
+                                         (resolution.SourcePath is null
+                                             ? string.Empty
+                                             : $" ({resolution.SourcePath})"));
+        await Console.Out.WriteLineAsync($"  model     : {config.Model}");
+        await Console.Out.WriteLineAsync($"  endpoint  : {config.Endpoint}");
+        await Console.Out.WriteLineAsync($"  chat api  : {ChatApiKindParser.ToValueString(config.ChatApi)}");
+        await Console.Out.WriteLineAsync($"  workspace : {config.WorkspaceRoot}");
+        await Console.Out.WriteLineAsync(sandbox is null
+                                             ? $"  sandbox   : {executionPolicy.DisplayName}"
+                                             : $"  sandbox   : {executionPolicy.DisplayName}; home: {sandbox.Components.SandboxHome}");
+        await Console.Out.WriteLineAsync("  tools     : list_files, search_text, read_file, apply_patch, shell");
+
         // Assemble the real model transport, workspace tools and interactive
         // permission flow used by normal CLI runs.
         IChatCompletionClient model = ModelClientFactory.Create(config.Model, config.Endpoint, apiKey, config.ChatApi);
 
         var               workspace   = new Workspace(config.WorkspaceRoot);
-        var               tools       = BuildTools(workspace, config, apiKey);
+        var               tools       = BuildTools(workspace, config, apiKey, executionPolicy, sandbox?.Backend,
+                                                   knownSecrets : knownSecrets);
         var               permissions = new PermissionEngine(config.WorkspaceRoot, config.CommandRules);
         IApprovalProvider approver    = new ConsoleApprovalProvider();
         var options = new AgentOptions
@@ -197,7 +213,7 @@ internal static class Program
             },
         };
 
-        var recorder = new FileRunRecorder(config.SessionDirectory, knownSecrets : KnownSecrets(config, apiKey));
+        var recorder = new FileRunRecorder(config.SessionDirectory, knownSecrets : knownSecrets);
         var loop     = new AgentLoop(model, tools, options, permissions, approver, recorder);
         loop.ContextCompacted += change =>
             Console.Out.WriteLine($"Context: {change.BeforeTokens:N0} -> {change.AfterTokens:N0} tokens after compaction");
@@ -282,16 +298,53 @@ internal static class Program
     ///
     /// Binds the complete read/write tool set to one workspace.
     /// </summary>
-    private static ToolRegistry BuildTools(Workspace workspace, TinyHarnessConfig config, string? apiKey = null)
+    private static ToolRegistry BuildTools(Workspace workspace, TinyHarnessConfig config, string? apiKey = null,
+                                           ProcessExecutionPolicy? executionPolicy = null,
+                                           IProcessExecutionBackend? processBackend = null,
+                                           IReadOnlyDictionary<string, string>? knownSecrets = null)
     {
-        var secrets = KnownSecrets(config, apiKey);
+        var secrets = knownSecrets ?? KnownSecrets(config, apiKey);
         return new ToolRegistry(
             [
                 new ListFilesTool(workspace), new SearchTextTool(workspace), new ReadFileTool(workspace),
                 new ApplyPatchTool(workspace),
                 new ShellTool(workspace, config.DefaultToolTimeoutSeconds, secrets,
-                              processBackend : new HostProcessBackend(secrets)),
+                              processBackend: processBackend ?? new HostProcessBackend(secrets),
+                              executionPolicy: executionPolicy),
             ]);
+    }
+
+    /// <summary>
+    /// 读取可信用户设置并在显式启用时组合 Windows 沙箱执行要素；未启用返回 null（保持宿主
+    /// 执行并明示无 OS 隔离）。启用后的任何组合失败都抛出，由入口转换为失败退出——绝不回退。
+    ///
+    /// Reads the trusted user settings and, when explicitly enabled, composes
+    /// the Windows sandbox execution pieces; disabled returns null (host
+    /// execution with an explicit "no OS isolation" notice). Any composition
+    /// failure throws and the entry point turns it into a failing exit — never
+    /// a fallback.
+    /// </summary>
+    private static async Task<WindowsSandboxExecution?> TryComposeWindowsSandboxAsync(
+        TinyHarnessConfig config, IReadOnlyDictionary<string, string> knownSecrets, CancellationToken cancellationToken)
+    {
+        var userConfig = await UserConfigStore.LoadAsync(UserConfigStore.DefaultFilePath(), cancellationToken)
+                                              .ConfigureAwait(false);
+        var settings = userConfig.Settings?.WindowsSandbox;
+        if (settings is not { Enabled: true })
+        {
+            return null;
+        }
+
+        var sessionDirectory = Path.GetFullPath(config.SessionDirectory);
+        if (Workspace.IsInside(config.WorkspaceRoot, sessionDirectory))
+        {
+            throw new InvalidOperationException(
+                $"The session directory '{sessionDirectory}' lies inside the workspace '{config.WorkspaceRoot}'; " +
+                "sandboxed commands could tamper with audit records. Move it outside the workspace " +
+                "(settings.sessionDirectory) before enabling the Windows sandbox.");
+        }
+
+        return WindowsSandboxComposer.Compose(settings, config.WorkspaceRoot, knownSecrets);
     }
 
     /// <summary>

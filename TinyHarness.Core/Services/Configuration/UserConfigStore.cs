@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using TinyHarness.Core.Models.Configuration;
+using TinyHarness.Core.Models.Runtime.WindowsSandbox;
 
 namespace TinyHarness.Core.Services.Configuration;
 
@@ -214,6 +215,41 @@ public static class UserConfigStore
                     settingsNode["worker"] = workerNode;
             }
 
+            if (settings.WindowsSandbox is { } sandbox)
+            {
+                var sandboxNode = new JsonObject();
+                if (sandbox.Enabled)
+                    sandboxNode["enabled"] = true;
+                if (!string.IsNullOrWhiteSpace(sandbox.SetupExecutablePath))
+                    sandboxNode["setupExecutablePath"] = sandbox.SetupExecutablePath;
+                if (!string.IsNullOrWhiteSpace(sandbox.RunnerExecutablePath))
+                    sandboxNode["runnerExecutablePath"] = sandbox.RunnerExecutablePath;
+                if (!string.IsNullOrWhiteSpace(sandbox.SandboxHome))
+                    sandboxNode["sandboxHome"] = sandbox.SandboxHome;
+                if (sandbox.Policy != SandboxPolicyKind.WorkspaceWrite)
+                    sandboxNode["policy"] = sandbox.Policy == SandboxPolicyKind.ReadOnly ? "read-only" : "workspace-write";
+                if (!string.IsNullOrWhiteSpace(sandbox.SandboxTempRoot))
+                    sandboxNode["sandboxTempRoot"] = sandbox.SandboxTempRoot;
+                if (sandbox.AdditionalWriteRoots is { Count: > 0 } writeRoots)
+                {
+                    var rootsArray = new JsonArray();
+                    foreach (var writeRoot in writeRoots)
+                        rootsArray.Add((JsonNode?)JsonValue.Create(writeRoot));
+                    sandboxNode["additionalWriteRoots"] = rootsArray;
+                }
+
+                if (sandbox.ExtraEnvironment is { Count: > 0 } environment)
+                {
+                    var environmentNode = new JsonObject();
+                    foreach (var (name, value) in environment)
+                        environmentNode[name] = value;
+                    sandboxNode["extraEnvironment"] = environmentNode;
+                }
+
+                if (sandboxNode.Count > 0)
+                    settingsNode["windowsSandbox"] = sandboxNode;
+            }
+
             if (settingsNode.Count > 0)
             {
                 root["settings"] = settingsNode;
@@ -365,6 +401,7 @@ public static class UserConfigStore
                     ? CommandRuleJson.Read(settingsNode, "commandRules", $"user config '{filePath}'")
                     : null,
                 Worker = workerSettings,
+                WindowsSandbox = BindWindowsSandbox(settingsNode, filePath),
             };
         }
 
@@ -373,6 +410,123 @@ public static class UserConfigStore
             DefaultProfile = defaultProfile,
             Profiles       = profiles ?? [],
             Settings       = settings,
+        };
+    }
+
+    /// <summary>
+    /// 绑定可信的 settings.windowsSandbox；字段缺失沿用保守默认（enabled=false、workspace-write）。
+    /// 绑定只做结构校验（类型与枚举值），路径与组件存在性由组合器 fail-closed 校验。
+    ///
+    /// Binds the trusted settings.windowsSandbox; missing fields keep the
+    /// conservative defaults (enabled=false, workspace-write). Binding checks
+    /// structure only (types and enum values); paths and component existence are
+    /// validated fail-closed by the composer.
+    /// </summary>
+    private static WindowsSandboxSettings? BindWindowsSandbox(JsonObject settingsNode, string filePath)
+    {
+        if (settingsNode["windowsSandbox"] is not JsonObject sandboxNode)
+        {
+            return null;
+        }
+
+        IReadOnlyList<string> additionalRoots = [];
+        if (sandboxNode["additionalWriteRoots"] is not null)
+        {
+            if (sandboxNode["additionalWriteRoots"] is not JsonArray rootsArray)
+            {
+                throw new
+                    InvalidDataException($"User config field 'settings.windowsSandbox.additionalWriteRoots' in '{filePath}' must be an array.");
+            }
+
+            var roots = new List<string>();
+            foreach (var node in rootsArray)
+            {
+                if (node is not JsonValue { } value || value.GetValueKind() is not JsonValueKind.String)
+                {
+                    throw new
+                        InvalidDataException($"User config field 'settings.windowsSandbox.additionalWriteRoots' in '{filePath}' must contain strings only.");
+                }
+
+                roots.Add(value.GetValue<string>());
+            }
+
+            additionalRoots = roots;
+        }
+
+        IReadOnlyDictionary<string, string>? extraEnvironment = null;
+        if (sandboxNode["extraEnvironment"] is not null)
+        {
+            if (sandboxNode["extraEnvironment"] is not JsonObject environmentNode)
+            {
+                throw new
+                    InvalidDataException($"User config field 'settings.windowsSandbox.extraEnvironment' in '{filePath}' must be an object.");
+            }
+
+            var environment = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var (name, value) in environmentNode)
+            {
+                if (string.IsNullOrWhiteSpace(name) || value is not JsonValue { } envValue ||
+                    envValue.GetValueKind() is not JsonValueKind.String)
+                {
+                    throw new
+                        InvalidDataException($"User config field 'settings.windowsSandbox.extraEnvironment' in '{filePath}' must map non-empty names to string values.");
+                }
+
+                environment[name] = envValue.GetValue<string>();
+            }
+
+            extraEnvironment = environment;
+        }
+
+        return new WindowsSandboxSettings
+        {
+            Enabled = ReadBool(sandboxNode, "enabled", filePath, "settings.windowsSandbox.enabled") ?? false,
+            SetupExecutablePath  = ReadString(sandboxNode, "setupExecutablePath", filePath) ?? string.Empty,
+            RunnerExecutablePath = ReadString(sandboxNode, "runnerExecutablePath", filePath) ?? string.Empty,
+            SandboxHome          = ReadString(sandboxNode, "sandboxHome", filePath) ?? string.Empty,
+            Policy               = ReadSandboxPolicyKind(sandboxNode, filePath),
+            SandboxTempRoot      = ReadString(sandboxNode, "sandboxTempRoot", filePath),
+            AdditionalWriteRoots = additionalRoots,
+            ExtraEnvironment     = extraEnvironment,
+        };
+    }
+
+    /// <summary>
+    /// 读取可选布尔字段；类型非法时报出字段路径。
+    /// Reads an optional boolean property, reporting the field path on a type mismatch.
+    /// </summary>
+    private static bool? ReadBool(JsonObject node, string property, string filePath, string fieldPath)
+    {
+        var value = node[property];
+        if (value is null)
+        {
+            return null;
+        }
+
+        if (value.GetValueKind() is not JsonValueKind.True and not JsonValueKind.False)
+        {
+            throw new InvalidDataException($"User config field '{fieldPath}' in '{filePath}' must be a boolean.");
+        }
+
+        return value.GetValue<bool>();
+    }
+
+    /// <summary>
+    /// 读取可选的沙箱策略种类；缺失沿用 workspace-write，非法值报出可接受的取值。
+    /// Reads the optional sandbox policy kind; absent keeps workspace-write, an
+    /// invalid value lists the accepted choices.
+    /// </summary>
+    private static SandboxPolicyKind ReadSandboxPolicyKind(JsonObject sandboxNode, string filePath)
+    {
+        var value = ReadString(sandboxNode, "policy", filePath);
+        return value switch
+        {
+            null                    => SandboxPolicyKind.WorkspaceWrite,
+            "workspace-write"       => SandboxPolicyKind.WorkspaceWrite,
+            "read-only"             => SandboxPolicyKind.ReadOnly,
+            _ => throw new InvalidDataException(
+                                         $"User config field 'settings.windowsSandbox.policy' in '{filePath}' has an invalid value '{value}'; " +
+                                         "expected 'workspace-write' or 'read-only'."),
         };
     }
 

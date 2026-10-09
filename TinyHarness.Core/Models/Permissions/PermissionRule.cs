@@ -15,9 +15,14 @@ namespace TinyHarness.Core.Models.Permissions;
 internal sealed record PermissionRule(string Capability, IReadOnlyList<string> ScopePaths, string? SessionConstraint)
 {
     /// <summary>
-    /// 判断准备计划是否落入本规则；<paramref name="deny"/> 决定采用“任一目标”还是“所有目标”语义。
-    /// Tests whether a prepared plan falls under this rule, using any-target semantics for denies and
-    /// all-target semantics for grants.
+    /// 判断准备计划是否落入本规则；<paramref name="deny"/> 决定采用“任一目标”还是“所有目标”
+    /// 语义，以及约束比较对象：允许规则与会话授权约束（命令 + 执行策略身份）比较，拒绝规则
+    /// 只与命令约束比较，使拒绝不因执行后端变化意外失效。
+    /// Tests whether a prepared plan falls under this rule. <paramref name="deny"/>
+    /// selects any-target vs all-target semantics and the constraint to compare
+    /// against: grants compare the session grant constraint (command plus
+    /// execution policy identity); denies compare the bare command constraint so
+    /// a denial survives execution-backend changes.
     /// </summary>
     public bool Matches(ToolPreparation preparation, bool deny = false)
     {
@@ -26,7 +31,10 @@ internal sealed record PermissionRule(string Capability, IReadOnlyList<string> S
             return false;
         }
 
-        if (!string.Equals(SessionConstraint, preparation.SessionConstraint, StringComparison.Ordinal))
+        var constraint = deny
+            ? preparation.SessionConstraint
+            : preparation.SessionGrantConstraint ?? preparation.SessionConstraint;
+        if (!string.Equals(SessionConstraint, constraint, StringComparison.Ordinal))
         {
             return false;
         }

@@ -14,6 +14,13 @@ public sealed record AuditRecord
     public IReadOnlyList<string>? TargetPaths { get; init; }
     public string? Decision { get; init; }
     public string? Outcome { get; init; }
+
+    /// <summary>
+    /// 工具执行使用的策略身份（backend=host 或完整沙箱身份串）；非工具记录为空。
+    /// The execution policy identity used by a tool invocation (backend=host or
+    /// the full sandbox identity); empty for non-tool records.
+    /// </summary>
+    public string? ExecutionPolicy { get; init; }
     public string? Status { get; init; }
     public bool? Succeeded { get; init; }
     public int? ExitCode { get; init; }
