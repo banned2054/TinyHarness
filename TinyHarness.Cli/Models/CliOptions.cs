@@ -15,6 +15,7 @@ internal enum CliCommandKind
     Auth,
     Model,
     Doctor,
+    Sandbox,
     Help,
     ProcessSmokeChild
 }
@@ -60,4 +61,7 @@ internal sealed record CliOptions
 
     /// <summary>doctor --connect 是否联网测试。Whether doctor --connect was requested.</summary>
     public bool Connect { get; init; }
+
+    /// <summary>sandbox provision --yes 是否跳过确认门。Whether sandbox provision --yes skipped the confirmation gate.</summary>
+    public bool AssumeYes { get; init; }
 }

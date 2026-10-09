@@ -49,60 +49,50 @@ public static class WindowsSandboxComposer
                                                     "The Windows sandbox is enabled in the trusted user settings but this platform is not Windows; " +
                                                     "refusing to fall back to host execution. Disable settings.windowsSandbox.enabled to run host execution.");
 
-        var setupPath   = RequireAbsoluteSetting(settings.SetupExecutablePath, "setupExecutablePath");
-        var runnerPath  = RequireAbsoluteSetting(settings.RunnerExecutablePath, "runnerExecutablePath");
-        var sandboxHome = RequireAbsoluteSetting(settings.SandboxHome, "sandboxHome");
-        var extraRoots =
-            SandboxPolicyResolver.NormalizeAdditionalWriteRoots(settings.AdditionalWriteRoots, workspaceRoot);
-
-        string tempRoot;
-        if (string.IsNullOrWhiteSpace(settings.SandboxTempRoot))
-            tempRoot = Path.Combine(sandboxHome, "tmp");
-        else
-            tempRoot = RequireAbsoluteSetting(settings.SandboxTempRoot, "sandboxTempRoot");
+        // Root/environment derivation is shared with the provisioning entry
+        // point (WindowsSandboxPolicyPlanner) so refresh ACLs and provisioning
+        // payloads can never drift apart.
+        var plan = WindowsSandboxPolicyPlanner.Plan(settings, workspaceRoot, knownSecrets);
 
         // Trusted pieces must never be writable by the target command: reject
         // any of them inside the workspace or a declared additional write root.
-        IReadOnlyList<string> writeRoots = [workspaceRoot, .. extraRoots];
-        RequireTrustedPathOutsideWriteRoots(setupPath, "setup executable", writeRoots);
-        RequireTrustedPathOutsideWriteRoots(runnerPath, "runner executable", writeRoots);
-        RequireTrustedPathOutsideWriteRoots(sandboxHome, "sandbox home", writeRoots);
-        RequireTrustedPathOutsideWriteRoots(tempRoot, "sandbox temp root", writeRoots);
+        IReadOnlyList<string> writeRoots = [workspaceRoot, .. plan.AdditionalWriteRoots];
+        RequireTrustedPathOutsideWriteRoots(plan.SetupExecutablePath, "setup executable", writeRoots);
+        RequireTrustedPathOutsideWriteRoots(plan.RunnerExecutablePath, "runner executable", writeRoots);
+        RequireTrustedPathOutsideWriteRoots(plan.SandboxHome, "sandbox home", writeRoots);
+        RequireTrustedPathOutsideWriteRoots(plan.TempRoot, "sandbox temp root", writeRoots);
 
-        if (!File.Exists(setupPath))
+        if (!File.Exists(plan.SetupExecutablePath))
             throw new InvalidOperationException(
-                                                $"The Windows sandbox setup executable was not found at '{setupPath}'; refusing to fall back to host execution.");
+                                                $"The Windows sandbox setup executable was not found at '{plan.SetupExecutablePath}'; refusing to fall back to host execution.");
 
-        if (!File.Exists(runnerPath))
+        if (!File.Exists(plan.RunnerExecutablePath))
             throw new InvalidOperationException(
-                                                $"The Windows sandbox runner executable was not found at '{runnerPath}'; refusing to fall back to host execution.");
+                                                $"The Windows sandbox runner executable was not found at '{plan.RunnerExecutablePath}'; refusing to fall back to host execution.");
 
-        if (!Directory.Exists(sandboxHome))
+        if (!Directory.Exists(plan.SandboxHome))
             throw new InvalidOperationException(
-                                                $"The Windows sandbox home was not found at '{sandboxHome}'; run provisioning first. " +
+                                                $"The Windows sandbox home was not found at '{plan.SandboxHome}'; run provisioning first. " +
                                                 "Refusing to fall back to host execution.");
 
-        Directory.CreateDirectory(tempRoot);
+        Directory.CreateDirectory(plan.TempRoot);
 
         var components = new WindowsSandboxComponents
         {
-            SetupExecutablePath  = setupPath,
-            RunnerExecutablePath = runnerPath,
-            SandboxHome          = sandboxHome
+            SetupExecutablePath  = plan.SetupExecutablePath,
+            RunnerExecutablePath = plan.RunnerExecutablePath,
+            SandboxHome          = plan.SandboxHome
         };
 
-        var targetEnvironment = SandboxTargetEnvironment.Build(tempRoot, settings.ExtraEnvironment, knownSecrets);
-        var policy = SandboxPolicyResolver.Resolve(settings.Policy, workspaceRoot, targetEnvironment,
-                                                   settings.AdditionalWriteRoots);
         var executionPolicy = new ProcessExecutionPolicy
         {
             Backend        = ProcessExecutionBackendKind.WindowsSandbox,
             DisplayName    = $"windows-sandbox: {PolicyKindDisplay(settings.Policy)}, network: restricted",
-            PolicyIdentity = BuildPolicyIdentity(policy, targetEnvironment)
+            PolicyIdentity = BuildPolicyIdentity(plan.Policy, plan.TargetEnvironment)
         };
 
-        var backend = new WindowsSandboxBackend(components, policy, targetEnvironment, knownSecrets);
-        return new WindowsSandboxExecution(components, policy, targetEnvironment, executionPolicy, backend);
+        var backend = new WindowsSandboxBackend(components, plan.Policy, plan.TargetEnvironment, knownSecrets);
+        return new WindowsSandboxExecution(components, plan.Policy, plan.TargetEnvironment, executionPolicy, backend);
     }
 
     /// <summary>
@@ -158,15 +148,6 @@ public static class WindowsSandboxComposer
                                      .Select(pair => pair.Key + "=" + pair.Value);
         var canonical = string.Join("\n", lines);
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical)));
-    }
-
-    private static string RequireAbsoluteSetting(string? value, string fieldName)
-    {
-        return string.IsNullOrWhiteSpace(value) || !Path.IsPathFullyQualified(value)
-            ? throw new InvalidOperationException(
-                                                  $"The trusted Windows sandbox setting '{fieldName}' must be a fully qualified absolute path" +
-                                                  (string.IsNullOrWhiteSpace(value) ? "." : $": '{value}'."))
-            : value.Trim();
     }
 
     /// <summary>

@@ -85,7 +85,7 @@ public sealed class ProcessSandboxSetupInvoker(
 
         if (process.ExitCode != 0)
             throw new InvalidOperationException($"Sandbox ACL refresh failed with exit code {process.ExitCode}: " +
-                                                $"{await DescribeSetupErrorAsync().ConfigureAwait(false)}");
+                                                $"{await SandboxSetupErrorReader.DescribeAsync(components.SetupErrorPath).ConfigureAwait(false)}");
     }
 
     internal ProcessStartInfo BuildStartInfo(string base64Payload)
@@ -121,31 +121,6 @@ public sealed class ProcessSandboxSetupInvoker(
         startInfo.Environment["CODEX_SANDBOX_LAUNCH_COUNT"] = chunkCount.ToString();
         startInfo.Environment["CODEX_SANDBOX_LAUNCH_BYTES"] = base64Payload.Length.ToString();
         return startInfo;
-    }
-
-    private async Task<string> DescribeSetupErrorAsync()
-    {
-        try
-        {
-            if (File.Exists(components.SetupErrorPath))
-            {
-                // Reading failure details runs on the failure path only; the
-                // surrounding context may already be cancelled, so the read
-                // deliberately ignores it.
-                var content = await File.ReadAllTextAsync(components.SetupErrorPath, CancellationToken.None)
-                                        .ConfigureAwait(false);
-                var report = JsonSerializer.Deserialize(content,
-                                                        WindowsSandboxJsonContext.Default.SandboxSetupErrorReport);
-                if (report is not null) return $"{report.Code}: {report.Message}";
-            }
-        }
-        catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)
-        {
-            // The exit code plus a missing/unreadable report is still a
-            // complete failure message; the cause stays in the sandbox log.
-        }
-
-        return $"no error report found at {components.SetupErrorPath}; see the sandbox log for details.";
     }
 
     private static async Task KillAsync(Process process)

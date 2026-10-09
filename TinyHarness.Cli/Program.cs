@@ -97,8 +97,8 @@ internal static class Program
     }
 
     /// <summary>
-    ///     执行管理命令（init/config/provider/auth/model/doctor）；这些命令绝不把输入发给模型。
-    ///     Executes management commands (init/config/provider/auth/model/doctor); their input is never sent to a model.
+    ///     执行管理命令（init/config/provider/auth/model/doctor/sandbox）；这些命令绝不把输入发给模型。
+    ///     Executes management commands (init/config/provider/auth/model/doctor/sandbox); their input is never sent to a model.
     /// </summary>
     private static async Task<int> RunManagementCommandAsync(CliOptions options)
     {
@@ -121,6 +121,8 @@ internal static class Program
             CliCommandKind.Model => await ModelCommand.ExecuteAsync(context, options, cts.Token).ConfigureAwait(false),
             CliCommandKind.Doctor => await DoctorCommand.ExecuteAsync(context, options, cts.Token)
                                                         .ConfigureAwait(false),
+            CliCommandKind.Sandbox => await SandboxCommand.ExecuteAsync(context, options, cts.Token)
+                                                          .ConfigureAwait(false),
             _ => throw new InvalidOperationException($"Unhandled command '{options.Kind}'.")
         };
     }

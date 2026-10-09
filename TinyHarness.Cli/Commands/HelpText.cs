@@ -24,6 +24,7 @@ internal static class HelpText
           tinyharness auth set <name> [--env <VAR>] [--store]
           tinyharness model list | model add <model-id> --context-window <tokens> | model use <model-id>
           tinyharness doctor [--connect]
+          tinyharness sandbox status | sandbox provision [--yes]
           tinyharness help [<command>]
 
         Management commands are never sent to the model. To prompt with text that starts
@@ -160,6 +161,34 @@ internal static class HelpText
         This uses the network and may incur charges; it never runs tools.
         """;
 
+    public const string Sandbox = """
+        Usage:
+          tinyharness sandbox status
+          tinyharness sandbox provision [--yes]
+
+        Management entry for the Windows tool-process sandbox (trusted user settings,
+        settings.windowsSandbox in the user config). Neither subcommand sends input to
+        a model.
+
+        sandbox status is strictly read-only: it prints the trusted settings, the
+        protocol versions this build expects, and the readiness inspection
+        (component files, setup marker, capability SIDs, account credentials). Exit 0
+        when not configured or ready; exit 1 when any problem is reported.
+
+        sandbox provision runs the elevated setup helper once (UAC). It creates or
+        resets machine-level state: local group CodexSandboxUsers, the local accounts
+        CodexSandboxOffline/CodexSandboxOnline (fresh random passwords that never
+        expire), registry entries hiding those accounts, firewall rules plus WFP
+        block filters for the offline account, and directory ACLs for the sandbox
+        home and the declared write roots. Re-provisioning resets the shared account
+        passwords and can disturb other clients (Codex or other TinyHarness
+        instances) on the same machine; there is no uninstall or rollback. The
+        command asks for confirmation first; --yes skips it (non-interactive use
+        requires --yes). Every elevation attempt is appended to
+        <sandboxHome>\.sandbox\tinyharness-provision.jsonl. Exit 0 only when the
+        helper succeeded and the re-inspection is ready.
+        """;
+
     /// <summary>
     ///     判断是否为已知 help 主题。
     ///     Whether a name is a known help topic.
@@ -177,6 +206,7 @@ internal static class HelpText
             "auth"     => true,
             "model"    => true,
             "doctor"   => true,
+            "sandbox"  => true,
             "help"     => true,
             _          => false
         };
@@ -199,6 +229,7 @@ internal static class HelpText
             "auth"     => Auth,
             "model"    => Model,
             "doctor"   => Doctor,
+            "sandbox"  => Sandbox,
             _          => Overview
         };
     }

@@ -4,9 +4,10 @@ using TinyHarness.Cli.Models;
 namespace TinyHarness.Cli.Commands;
 
 /// <summary>
-///     TinyHarness 命令行解析器。管理命令（init/config/provider/auth/model/doctor）永远不作为提示词发送给
-///     模型；与命令名冲突的普通文本使用 `run -- "文本"`，`--` 之后全部按提示词处理。
-///     The TinyHarness command-line parser. Management commands (init/config/provider/auth/model/doctor) are never
+///     TinyHarness 命令行解析器。管理命令（init/config/provider/auth/model/doctor/sandbox）永远不作为
+///     提示词发送给模型；与命令名冲突的普通文本使用 `run -- "文本"`，`--` 之后全部按提示词处理。
+///     The TinyHarness command-line parser. Management commands
+///     (init/config/provider/auth/model/doctor/sandbox) are never
 ///     sent to the model as a prompt; plain text that collides with a command name uses `run -- "text"`, and
 ///     everything after `--` is treated as the prompt.
 /// </summary>
@@ -54,6 +55,8 @@ internal static class CommandLine
         if (string.Equals(first, "model", StringComparison.Ordinal)) return ParseModelArgs(args[1..]);
 
         if (string.Equals(first, "doctor", StringComparison.Ordinal)) return ParseDoctorArgs(args[1..]);
+
+        if (string.Equals(first, "sandbox", StringComparison.Ordinal)) return ParseSandboxArgs(args[1..]);
 
         if (first.StartsWith('-') && first.Length > 1)
             throw new CliUsageException($"Unknown option '{first}'.", HelpText.Overview);
@@ -417,6 +420,45 @@ internal static class CommandLine
         }
 
         return new CliOptions { Kind = CliCommandKind.Doctor, Connect = connect };
+    }
+
+    /// <summary>
+    ///     解析 sandbox 子命令：status 或 provision [--yes]。
+    ///     Parses the sandbox subcommands: status or provision [--yes].
+    /// </summary>
+    private static CliOptions ParseSandboxArgs(string[] args)
+    {
+        var usage = HelpText.Sandbox;
+        if (args.Length == 0) throw new CliUsageException("sandbox requires a subcommand: status or provision.", usage);
+
+        if (IsHelpFlag(args[0])) return new CliOptions { Kind = CliCommandKind.Help, HelpTopic = "sandbox" };
+
+        var subcommand = args[0].ToLowerInvariant();
+        switch (subcommand)
+        {
+            case "status" :
+                if (args.Length > 1) throw new CliUsageException($"Unknown argument '{args[1]}' for sandbox status.", usage);
+
+                return new CliOptions { Kind = CliCommandKind.Sandbox, Subcommand = "status" };
+
+            case "provision" :
+                var assumeYes = false;
+                for (var i = 1; i < args.Length; i++)
+                {
+                    if (string.Equals(args[i], "--yes", StringComparison.Ordinal))
+                    {
+                        assumeYes = true;
+                        continue;
+                    }
+
+                    throw new CliUsageException($"Unknown argument '{args[i]}' for sandbox provision.", usage);
+                }
+
+                return new CliOptions { Kind = CliCommandKind.Sandbox, Subcommand = "provision", AssumeYes = assumeYes };
+
+            default :
+                throw new CliUsageException($"Unknown sandbox subcommand '{args[0]}'.", usage);
+        }
     }
 
     /// <summary>

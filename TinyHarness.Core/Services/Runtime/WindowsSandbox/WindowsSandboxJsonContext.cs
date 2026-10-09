@@ -19,4 +19,5 @@ namespace TinyHarness.Core.Services.Runtime.WindowsSandbox;
 [JsonSerializable(typeof(RunnerOutputPayload))]
 [JsonSerializable(typeof(RunnerExitPayload))]
 [JsonSerializable(typeof(RunnerErrorPayload))]
+[JsonSerializable(typeof(SandboxProvisionAuditRecord))]
 internal sealed partial class WindowsSandboxJsonContext : JsonSerializerContext;
