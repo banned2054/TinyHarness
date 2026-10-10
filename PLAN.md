@@ -701,7 +701,7 @@ Anthropic 12.54.0 在 NativeAOT 发布产物中产生 2,625 条 IL2026/IL3050 �
 
 ## 22. M11：Windows 工具进程沙箱
 
-**状态：M11.1（执行后端）、M11.2（Windows 编排）与 M11.3（策略闭环）已实现并提交；M11.4（管理/产物）已实现（2026-10-10 本轮完成，待提交）；M11.5（隔离验收）未开始，隔离验收完成前不宣称沙箱可用。** 2026-10-09 确定 Windows 优先，TinyHarness 的 C# Runtime 直接编排已独立编译的 Codex Windows 沙箱组件；不通过 Codex CLI/Agent 执行，不新增 Rust shim，不把修改 Codex Rust 公共 API 作为首期前置条件。Linux/macOS 后续独立接入。
+**状态：M11.1（执行后端）、M11.2（Windows 编排）与 M11.3（策略闭环）已实现并提交；M11.4（管理/产物）已实现并提交；M11.5（隔离验收）的验收工具（`sandbox verify` 入口、Core 验收运行器与离线测试）已实现并入工作区（2026-10-10）。2026-10-10 起接入目标改为沙箱的 TinyHarness 独立命名空间 fork（上游同机安装会与 Codex 争用机器级命名）：setup/runner 二进制替换为 fork 构建（exe 文件名与 wire 协议不变），setup payload 账户名改为 `TinyHarnessOffline`/`TinyHarnessOnline`，父进程私有桌面前缀改为 `TinyHarnessDesktop-`，sandbox home 缺省使用独立固定默认（`%LOCALAPPDATA%\tinyharness\windows-sandbox-home`），仍为 Codex 用户名的旧 marker/凭据在状态检查、执行与 provisioning 一律拒绝复用；DPAPI 与 IPC 协议不变，不安装服务。同日经用户授权在本机完成真实 provisioning 与 `sandbox verify` 全矩阵：14/15 用例 PASS（身份、deny-read、读写与元数据隔离、退出码/超时/取消/断管道/大输出/遗弃回收），`network-denied` FAIL 如实记录——沙箱内对 127.0.0.1 与本机 IP 的 TCP 连接未被拦截（按用户作用域的防火墙 BLOCK 规则未对沙箱账户进程生效，或本机 IP 环回快速路径绕过远程地址匹配，用例无法区分；WFP 当时仅覆盖 ICMP/DNS/SMB）；真实验收同时修复了 3 个离线测试无法暴露的缺陷（ConvertStringSecurityDescriptorToSecurityDescriptorW 缺第 4 参数致原生崩溃、STARTUPINFOW 布局错误、cap SID 的 workspace_by_cwd 契约）。同晚 fork 补齐按账户 SID 的 WFP 通用 TCP/UDP BLOCK 过滤器（内核强制、覆盖环回，setup v5/IPC v6 与 C# 接入层不变）并重新 provisioning 后，`network-denied` 复验 PASS、全矩阵 **15/15 PASS（exit 0，报告 `tinyharness-verify-20261010-232828.json`）**——M11.5 隔离验收在本机闭环：身份、deny-read/deny-write、元数据保护、工作区写入、断网、退出码/超时/取消、断管道、大输出、宿主遗弃回收全部真实验证通过。边界：验证覆盖本机单环境；跨 home 重复 provisioning 会轮换共享账户密码（本次已实证并经默认 home 重新 provisioning 恢复一致）；与 Codex 发布版共存未验收。详见 [docs/README.md](docs/README.md) M11.5 验证记录。** 2026-10-09 确定 Windows 优先，TinyHarness 的 C# Runtime 直接编排已独立编译的 Codex Windows 沙箱组件；不通过 Codex CLI/Agent 执行，不新增 Rust shim，不把修改 Codex Rust 公共 API 作为首期前置条件。Linux/macOS 后续独立接入。
 
 技术依据及 wire 协议见 [Windows 沙箱直接组件接入方案](docs/windows-sandbox-dotnet-integration.md)。该文档基于 Codex revision `d650bd7c05`、setup version 5、IPC version 6；组件已编译，真实 Rust 序列化/帧协议和部分 C# 片段已有验证记录，但这些不证明完整 TinyHarness 接入或隔离生效。前文 MVP 的“无 OS sandbox”是历史基线，M11 完成前现有执行边界仍然有效。
 
@@ -723,7 +723,7 @@ Anthropic 12.54.0 在 NativeAOT 发布产物中产生 2,625 条 IL2026/IL3050 �
 
 ### 22.2 组件和架构边界
 
-日常生产执行使用 `codex-windows-sandbox-setup.exe`（普通权限 refresh）和 `codex-command-runner.exe`；`codex-windows-managed-deny-probe.exe` 用于验收。`codex-windows-sandbox-service.exe` 面向服务/MSIX 模式，首期不安装或依赖该服务。
+日常生产执行使用 `codex-windows-sandbox-setup.exe`（普通权限 refresh）和 `codex-command-runner.exe`；`codex-windows-managed-deny-probe.exe` 用于验收。`codex-windows-sandbox-service.exe` 面向服务/MSIX 模式，首期不安装或依赖该服务。2026-10-10 起这组组件替换为 TinyHarness 独立命名空间 fork 构建：exe 文件名、payload 字段名、分块环境通道、DPAPI 与 IPC 协议不变，机器级命名（账户 `TinyHarnessOffline`/`TinyHarnessOnline`、组 `TinyHarnessUsers`、防火墙规则、WFP 对象、mutex、注册表记录、桌面前缀 `TinyHarnessDesktop-`）与 Codex 发布版完全分栈。
 
 ```text
 ShellTool.Prepare：命令 + 清理后的环境 + 有效隔离策略
@@ -747,7 +747,7 @@ ShellTool.Prepare：命令 + 清理后的环境 + 有效隔离策略
 - commandRules 只表示命令许可，不授予 provisioning、联网或隔离逃逸。sandbox 不自动将 `Ask` 转为 `Allow`。
 - 普通 run、默认 doctor/smoke 不自动 provisioning、账户修复或 UAC。管理操作展示机器级副作用，另行取得授权。
 
-账户、密码、网络规则是机器级共享状态，不同 home 不证明与 Codex 或其他 TinyHarness 实例隔离；首期不宣称未经验证的共存。legacy cleanup 影响共享资源且保留部分 home/cache/ACL，不提供实例级完整回滚，不进入自动失败回收。
+账户、密码、网络规则是机器级共享状态。fork 后 TinyHarness 与 Codex 发布版的机器级命名完全分栈，但分栈命名只降低共存时的互相破坏，不构成共存已验收的证明；同一 fork 命名空间内部不同 home 仍共享账户、密码和网络规则（重复 provisioning 重置 `TinyHarnessOffline`/`TinyHarnessOnline` 密码会使其他 home 凭据失效），仍不为实例级完整回滚提供保证，legacy cleanup 不进入自动失败回收。仍为 Codex 用户名的 marker/凭据一律拒绝复用。
 
 ### 22.4 执行、输出和生命周期
 

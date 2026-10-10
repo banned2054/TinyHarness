@@ -4,6 +4,7 @@
 > 协议硬版本：`SETUP_VERSION = 5`，`IPC_PROTOCOL_VERSION = 6`
 > 主方案：TinyHarness 的 C# Runtime 直接编排独立编译的 setup / runner 组件，不调用 Codex CLI，不新增 Rust shim
 > 状态：组件已编译，协议及部分 C# 片段已验证；完整 TinyHarness 接入与实际隔离验收尚未完成
+> 命名空间（2026-10-10）：接入目标改为 TinyHarness 独立命名空间 fork（§1.1）；setup/runner 已替换为 fork 构建
 > 产品范围和实施顺序：[PLAN.md §22：M11](../PLAN.md#22-m11windows-工具进程沙箱)
 > 目标读者：在 .NET harness 中复用 Codex Windows 沙箱模块执行不可信命令的集成开发者
 
@@ -20,6 +21,35 @@
   - 每命令 ACL 刷新走普通权限；首次 provisioning 或后续修复只能由独立、显式管理操作触发 UAC，普通执行不得自动提权；
   - 权限解析、ACL、capability SID、网络账户、私有桌面和管道身份必须一致；合法 `permission_profile` 不证明隔离已生效。
 - 下文 C# 代码是局部编排片段，不是完整生产实现。行数与工时不作未经验证的承诺。标准 Windows 策略要求有效 `root/read`，不能宣传为“只允许读取仓库”；清理目标环境也不能替代磁盘敏感文件访问控制。
+
+### 1.1 TinyHarness 独立命名空间 fork（2026-10-10）
+
+上游 Codex 发布版与 TinyHarness 曾共用同一组机器级命名（账户、组、防火墙规则、WFP 对象、桌面前缀），同机两个安装会静默争用：重置对方依赖的密码、把防火墙规则改写到对方账户 SID、以 delete-then-add 删掉对方的 WFP 过滤器。因此本地 `C:\Code\Rust\codex` 已改为 **TinyHarness 独立命名空间 fork**（命名统一收口在 `codex-rs/windows-sandbox-rs/src/branding.rs`），并替换 setup / runner 两个 exe；TinyHarness 的 C# 接入同步适配。
+
+fork 改名（机器级命名）：
+
+| 类别 | 上游 Codex | TinyHarness fork |
+|---|---|---|
+| 本地账户 | `CodexSandboxOffline` / `CodexSandboxOnline` | `TinyHarnessOffline` / `TinyHarnessOnline` |
+| 本地组 | `CodexSandboxUsers` | `TinyHarnessUsers` |
+| 私有桌面前缀 | `CodexSandboxDesktop-` | `TinyHarnessDesktop-` |
+| setup / read-ACL mutex | `Global\CodexSandboxSetup` / `Local\CodexSandboxReadAcl` | `Global\TinyHarnessSandboxSetup` / `Local\TinyHarnessSandboxReadAcl` |
+| 防火墙规则名 | `codex_sandbox_offline_*` | `tinyharness_sandbox_offline_*` |
+| WFP provider/sublayer/filter | Codex 固定 GUID 与名称 | TinyHarness 专属 GUID（uuid5 派生，可复现可审计） |
+| 注册表安装记录 | `SOFTWARE\OpenAI\Codex\WindowsSandboxService` | `SOFTWARE\TinyHarness\WindowsSandboxService` |
+| provisioning 管道（service 专用，首期不用） | `\\.\pipe\OpenAI.CodexSandbox` | `\\.\pipe\TinyHarness.Sandbox` |
+| 服务名（不安装） | `CodexSandboxService` | `TinyHarnessSandboxService` |
+
+保持不变（wire 兼容）：exe 文件名（`codex-windows-sandbox-setup.exe`、`codex-command-runner.exe`、`codex-windows-managed-deny-probe.exe`）、payload/spawn 字段名（`codex_home`、`real_codex_home` 等）、`--launch-payload-env` 与 `CODEX_SANDBOX_LAUNCH_*` 分块通道、deny-probe 的 `CODEX_WINDOWS_*` 环境变量、DPAPI(LocalMachine) 凭据格式、`SETUP_VERSION=5` / `IPC_PROTOCOL_VERSION=6`。不安装 service。
+
+TinyHarness C# 侧适配：
+
+- setup payload 的 `offline_username` / `online_username` 为 `TinyHarnessOffline` / `TinyHarnessOnline`；
+- 父进程私有桌面前缀为 `TinyHarnessDesktop-`；
+- sandbox home 使用独立固定默认 `%LOCALAPPDATA%\tinyharness\windows-sandbox-home`（可信设置可显式覆盖），与 Codex 的 home 完全独立；
+- marker（`setup_marker.json`）与凭据（`sandbox_users.json`）中仍为旧 Codex 用户名（`CodexSandboxOffline` / `CodexSandboxOnline`）时，状态检查、凭据读取与 provisioning 一律拒绝复用（fail closed），要求换独立 home 重新 provisioning；
+- `sandbox verify` 的验收报告仅作为“新二进制已通过最小测试”的依据，不构成完整隔离验收或与 Codex 共存已验证的证明。
+- 网络隔离（2026-10-10 修复闭环）：首轮流验收实测按用户作用域（LocalUserAuthorizedList）的防火墙 BLOCK 规则未拦住沙箱账户进程的 TCP 出站（本机 IP 环回快速路径亦绕过按远程地址匹配的规则），`network-denied` 如实 FAIL；随后 fork 补充按账户 SID 的 WFP 通用 BLOCK 过滤器（`tinyharness_wfp_tcp_connect_v4/v6`、`tinyharness_wfp_udp_connect_v4/v6`，ALE_AUTH_CONNECT 层、内核强制、覆盖环回），重新 provisioning 后该用例 PASS，全矩阵 15/15 PASS。防火墙规则仍保留（纵深防御），但断网不再依赖其归因行为。
 
 ### 核实范围（2026-10-09）
 
@@ -75,7 +105,7 @@ cargo build --locked --release --target x86_64-pc-windows-msvc \
 | `codex-windows-managed-deny-probe.exe` | ACL 生效性自检（测试用，不在生产链路） | 无 |
 | `codex-windows-sandbox-service.exe` | MSIX 打包 codex 的免 UAC provisioning 服务 | 须由 SCM 启动（SYSTEM）；**自建 harness 不需要** |
 
-两条账户模型：`CodexSandboxOffline`（默认断网）与 `CodexSandboxOnline`（可联网，Codex 用于走代理）。**TinyHarness 首期只支持 offline；联网、代理、端口放行及 online 账户选择不向模型开放。**
+两条账户模型：fork 后为 `TinyHarnessOffline`（默认断网）与 `TinyHarnessOnline`（可联网，上游 Codex 用于走代理）。**TinyHarness 首期只支持 offline；联网、代理、端口放行及 online 账户选择不向模型开放。**
 
 ### 2.1 TinyHarness 调用链与职责
 
@@ -121,9 +151,9 @@ Payload JSON 结构（serde，kebab/camel 混合以源码为准，以下为已�
 ```jsonc
 {
   "version": 5,                          // 必填，必须 == 5
-  "offline_username": "CodexSandboxOffline",
-  "online_username":  "CodexSandboxOnline",
-  "codex_home":  "C:\\harness\\.codex-home",
+  "offline_username": "TinyHarnessOffline",   // fork 命名空间
+  "online_username":  "TinyHarnessOnline",
+  "codex_home":  "C:\\harness\\tinyharness-sandbox-home",
   "command_cwd": "C:\\work\\repo",
   "read_roots":  ["C:\\work\\repo"],     // 必填数组
   "write_roots": ["C:\\work\\repo"],     // 必填数组
@@ -166,7 +196,7 @@ Payload JSON 结构（serde，kebab/camel 混合以源码为准，以下为已�
 | 项 | 内容 |
 |---|---|
 | 参数 | 无参数 或 `--service`；`--foreground` 仅 debug 构建有效 |
-| 管道 | 服务端监听 `\\.\pipe\OpenAI.CodexSandbox`（打包版带包族后缀） |
+| 管道 | 服务端监听上游 `\\.\pipe\OpenAI.CodexSandbox`（fork 为 `\\.\pipe\TinyHarness.Sandbox`；打包版带包族后缀） |
 | 请求 | `register_installation_request` / `provision_sandbox_request`（帧协议 version 1，一连接一帧，请求 ≤4096B，空闲 5s 超时） |
 | 结论 | **自建 harness 完全可以不用它**，直接走 setup.exe 的 UAC helper 路径 |
 
@@ -176,8 +206,8 @@ Payload JSON 结构（serde，kebab/camel 混合以源码为准，以下为已�
 
 | 类别 | 内容 | 位置 |
 |---|---|---|
-| 本地组 | `CodexSandboxUsers` | 机器级 |
-| 本地账户 | `CodexSandboxOffline` / `CodexSandboxOnline`（随机 24 位密码，`UF_DONT_EXPIRE_PASSWD`） | 机器级 |
+| 本地组 | `TinyHarnessUsers`（fork；上游为 `CodexSandboxUsers`） | 机器级 |
+| 本地账户 | `TinyHarnessOffline` / `TinyHarnessOnline`（fork；上游为 `CodexSandboxOffline` / `CodexSandboxOnline`；随机 24 位密码，`UF_DONT_EXPIRE_PASSWD`） | 机器级 |
 | 注册表 | 隐藏上述账户（`HKLM\...\SpecialAccounts\UserList`） | 机器级 |
 | 防火墙 | INetFwPolicy2 COM：loopback 代理端口放行 + offline 账户断网规则 | 机器级 |
 | WFP | 对 offline 账户 SID 的 BLOCK 过滤器（ICMP、DNS 53/853、SMB 445，v4+v6） | 机器级 |
@@ -199,7 +229,7 @@ Payload JSON 结构（serde，kebab/camel 混合以源码为准，以下为已�
 
 ---
 
-不同 `codex_home` 只分开部分 marker、凭据文件和 capability 数据，**不隔离机器级账户、密码和网络状态**。固定账户的 provisioning 可能重置密码，使另一个 home 的凭据失效；同机 Codex、多个 TinyHarness 或其他客户端的共存必须专门验证。首期不声称支持共享机器状态的无干扰共存，系统验收使用可丢弃 Windows 环境；不能在日常机器上无提示地重复初始化。
+fork 之后，TinyHarness 与 Codex 发布版在机器级命名上完全分栈（账户、组、防火墙规则、WFP 对象、mutex、注册表记录互不共享），`codex_home`（sandbox home）也各自独立——TinyHarness 缺省使用固定默认 home。命名分栈显著降低同机共存时的互相破坏，但**不等于共存已验收**：共存行为仍未验证，系统验收使用可丢弃 Windows 环境；不能在日常机器上无提示地重复初始化。同一 fork 命名空间内部的多个 home 仍共享账户与网络规则：重复 provisioning 会重置 `TinyHarnessOffline` / `TinyHarnessOnline` 的密码，使另一个 home 的凭据失效。
 
 ## 5. .NET Harness 接入方案（主方案：C# 直接编排）
 
@@ -236,9 +266,9 @@ Prepare 必须保持无副作用：冻结命令、cwd、timeout、清理后的�
 ```csharp
 var payload = new {
     version = 5,
-    offline_username = "CodexSandboxOffline",
-    online_username  = "CodexSandboxOnline",
-    codex_home = codexHome,                 // 如 C:\harness\.codex-home
+    offline_username = "TinyHarnessOffline",   // fork 命名空间
+    online_username  = "TinyHarnessOnline",
+    codex_home = codexHome,                 // 如 C:\harness\tinyharness-sandbox-home
     command_cwd = workspaceRoot,
     read_roots  = new[] { workspaceRoot },
     write_roots = new[] { workspaceRoot },
@@ -313,7 +343,7 @@ string password = Encoding.UTF8.GetString(
 
 父进程应对齐 `desktop.rs:263-348` 的编排：
 
-1. 生成 `CodexSandboxDesktop-` 加 32 位随机十六进制后缀，通过 `CreateDesktopW` 创建私有桌面；请求字段传**裸桌面名**，不带 `Winsta0\` 前缀。
+1. 生成 `TinyHarnessDesktop-`（fork 前缀；上游为 `CodexSandboxDesktop-`）加 32 位随机十六进制后缀，通过 `CreateDesktopW` 创建私有桌面；请求字段传**裸桌面名**，不带 `Winsta0\` 前缀。
 2. DACL 将 `DESKTOP_ALL_ACCESS` 授予父进程用户 SID，将 `DESKTOP_PARTICIPANT_ACCESS` 授予所选沙箱账户 SID。后者排除 `WRITE_DAC`、`WRITE_OWNER`、`DELETE`（精确定义见 `desktop.rs:69-84`）；不要以共用的 logon SID 代替父进程用户 SID 授予 ACL 管理权。
 3. 将实际名称写入 `spawn_request.payload.private_desktop_name`，保持父进程桌面句柄存活，至少覆盖命令完整生命周期。
 4. 若跨命令复用桌面，只允许相同沙箱账户及相同有效安全策略复用。库的缓存键同时包含 capability SIDs、网络策略、有效读写根及 deny 路径，不能为不同权限命令共用一个全局桌面。
@@ -341,7 +371,7 @@ var outPipe = NamedPipeServerStreamAcl.Create(outName, PipeDirection.In, 1,
     PipeTransmissionMode.Byte, PipeOptions.Asynchronous, 0, 0, sec);
 
 // P/Invoke advapi32!CreateProcessWithLogonW：
-//   userName="CodexSandboxOffline", domain=".", password=Step3,
+//   userName="TinyHarnessOffline"（fork 命名空间）, domain=".", password=Step3,
 //   cmdline = "\"…\codex-command-runner.exe\" --pipe-in=<runnerInName> --pipe-out=<runnerOutName>",
 //   creationFlags = CREATE_NO_WINDOW(0x08000000) | CREATE_UNICODE_ENVIRONMENT(0x400)
 //   environment = NULL（继承父 env）
@@ -507,14 +537,14 @@ static async Task<JsonObject?> ReadFrameAsync(Stream s, CancellationToken ct) {
       "network": "restricted"
     },
     "workspace_roots": ["C:\\work\\repo"],
-    "codex_home": "C:\\harness\\.codex-home\\.sandbox",
-    "real_codex_home": "C:\\harness\\.codex-home",
+    "codex_home": "C:\\harness\\tinyharness-sandbox-home\\.sandbox",
+    "real_codex_home": "C:\\harness\\tinyharness-sandbox-home",
     "cap_sids": ["S-1-5-21-100-200-300-400"],
     "network_proxy_restricting_sid": null,
     "timeout_ms": 30000,
     "tty": false,
     "stdin_open": false,
-    "private_desktop_name": "CodexSandboxDesktop-0123456789abcdef0123456789abcdef"
+    "private_desktop_name": "TinyHarnessDesktop-0123456789abcdef0123456789abcdef"
   }
 }
 ```
@@ -614,7 +644,7 @@ static async Task<JsonObject?> ReadFrameAsync(Stream s, CancellationToken ct) {
 | 4 | NUL 设备 ACE | 库父进程及当前 Runner 都调用 `allow_null_device`；对齐完整编排并验证 NUL 访问，不要忽略这些 ACL 动作 |
 | 5 | 账户修复不是普通执行 | Rust 库遇登录失败可能刷新密码重试（`runner_client.rs:118-177`）；C# 主方案不自动复刻该自愈，改为错误报告及显式管理操作 |
 | 6 | 每命令开销 | 一条命令 = 一次 refresh（setup.exe 进程）+ 一个 runner 进程；批量短命令注意复用与节流 |
-| 7 | 机器级共享状态 | 不同 home 不隔离固定账户、密码和网络规则；provisioning/cleanup 可能影响其他客户端，共存尚未验收 |
+| 7 | 机器级共享状态 | fork 已与 Codex 分栈命名（账户/组/防火墙/WFP 互不共享），但共存尚未验收；同一 fork 命名空间内不同 home 仍共享账户密码与网络规则 |
 | 8 | offline 断网靠 WFP+防火墙 | 若你后续自定义防火墙规则，注意别把 offline 账户的阻断规则冲掉 |
 | 9 | 私有桌面为必需资源 | CLI / TTY / GUI 都要实际创建、授权并保持父进程拥有的私有桌面；不同账户或有效策略不可共享桌面 |
 | 10 | runner OS 退出码不能替代命令帧 | 早期错误可能以 1 退出而没有 exit；超时帧为 192,true。保留两个 payload 字段，区分协议失败、命令失败及超时 |
