@@ -29,6 +29,10 @@ internal static class SandboxCommand
         {
             "status"    => await StatusAsync(context, cancellationToken).ConfigureAwait(false),
             "provision" => await ProvisionAsync(context, options, cancellationToken, provisioner).ConfigureAwait(false),
+            "verify" => await SandboxVerifyCommand.ExecuteAsync(context, options, cancellationToken)
+                                                   .ConfigureAwait(false),
+            "verify-worker" => await SandboxVerifyCommand.ExecuteWorkerAsync(context, options, cancellationToken)
+                                                          .ConfigureAwait(false),
             _ => throw new InvalidOperationException($"Unhandled sandbox subcommand '{options.Subcommand}'.")
         };
     }

@@ -169,7 +169,7 @@ internal static class Program
         // components, invalid paths, wrong platform, session directory inside
         // the workspace) throws and fails the run; host execution is never a
         // silent fallback.
-        var knownSecrets = KnownSecrets(config, apiKey);
+        var knownSecrets = SandboxCliComposition.KnownSecrets(config, apiKey);
         var sandbox = await TryComposeWindowsSandboxAsync(config, knownSecrets, cts.Token).ConfigureAwait(false);
         var executionPolicy = sandbox?.ExecutionPolicy ?? ProcessExecutionPolicy.Host();
 
@@ -294,7 +294,7 @@ internal static class Program
                                            IProcessExecutionBackend? processBackend = null,
                                            IReadOnlyDictionary<string, string>? knownSecrets = null)
     {
-        var secrets = knownSecrets ?? KnownSecrets(config, apiKey);
+        var secrets = knownSecrets ?? SandboxCliComposition.KnownSecrets(config, apiKey);
         return new ToolRegistry([
             new ListFilesTool(workspace), new SearchTextTool(workspace), new ReadFileTool(workspace),
             new ApplyPatchTool(workspace),
@@ -307,50 +307,19 @@ internal static class Program
     /// <summary>
     ///     读取可信用户设置并在显式启用时组合 Windows 沙箱执行要素；未启用返回 null（保持宿主
     ///     执行并明示无 OS 隔离）。启用后的任何组合失败都抛出，由入口转换为失败退出——绝不回退。
+    ///     逻辑位于 <see cref="SandboxCliComposition" />，与 sandbox verify 共享。
     ///     Reads the trusted user settings and, when explicitly enabled, composes
     ///     the Windows sandbox execution pieces; disabled returns null (host
     ///     execution with an explicit "no OS isolation" notice). Any composition
     ///     failure throws and the entry point turns it into a failing exit — never
-    ///     a fallback.
+    ///     a fallback. The logic lives in <see cref="SandboxCliComposition" /> and
+    ///     is shared with sandbox verify.
     /// </summary>
     private static async Task<WindowsSandboxExecution?> TryComposeWindowsSandboxAsync(
         TinyHarnessConfig config, IReadOnlyDictionary<string, string> knownSecrets, CancellationToken cancellationToken)
     {
-        var userConfig = await UserConfigStore.LoadAsync(UserConfigStore.DefaultFilePath(), cancellationToken)
-                                              .ConfigureAwait(false);
-        var settings = userConfig.Settings?.WindowsSandbox;
-        if (settings is not { Enabled: true }) return null;
-
-        var sessionDirectory = Path.GetFullPath(config.SessionDirectory);
-        if (Workspace.IsInside(config.WorkspaceRoot, sessionDirectory))
-            throw new InvalidOperationException($"The session directory '{sessionDirectory}' lies inside "   +
-                                                $"the workspace '{config.WorkspaceRoot}'; "                  +
-                                                "sandboxed commands could tamper with audit records. "       +
-                                                "Move it outside the workspace (settings.sessionDirectory) " +
-                                                "before enabling the Windows sandbox.");
-
-        return WindowsSandboxComposer.Compose(settings, config.WorkspaceRoot, knownSecrets);
-    }
-
-    /// <summary>
-    ///     为进程环境清理与输出脱敏提供已知 secret；不记录 secret 值。凭据存储来源时用目标名占位，
-    ///     该名称不存在于子进程环境中，仅让脱敏继续覆盖密钥值本身。
-    ///     Supplies known secrets for child-environment removal and output redaction without logging their values.
-    ///     For credential-store keys the target name stands in; no such environment variable exists in children, it
-    ///     only keeps redaction covering the secret value itself.
-    /// </summary>
-    private static IReadOnlyDictionary<string, string> KnownSecrets(TinyHarnessConfig config, string? apiKey)
-    {
-        var name = !string.IsNullOrWhiteSpace(config.ApiKeyEnvironmentVariable)
-            ? config.ApiKeyEnvironmentVariable
-            : config.ApiKeyCredentialTarget;
-        if (string.IsNullOrEmpty(name) || string.IsNullOrEmpty(apiKey))
-            return new Dictionary<string, string>(StringComparer.Ordinal);
-
-        return new Dictionary<string, string>(StringComparer.Ordinal)
-        {
-            [name] = apiKey
-        };
+        var settings = await SandboxCliComposition.LoadSettingsAsync(cancellationToken).ConfigureAwait(false);
+        return SandboxCliComposition.TryCompose(settings, config.SessionDirectory, config.WorkspaceRoot, knownSecrets);
     }
 
     /// <summary>
@@ -488,5 +457,77 @@ internal static class Program
             args.Cancel = true;
             _source.Cancel();
         }
+    }
+}
+
+/// <summary>
+///     run 与 sandbox verify 共享的沙箱组合逻辑：加载可信设置、会话目录保护检查与 Compose 调用，
+///     以及与 run 一致的 knownSecrets 解析。verify 用独立工作区复用同一套语义，绝不漂移出第二条
+///     组合路径。
+///     The sandbox composition logic shared by run and sandbox verify: loading
+///     the trusted settings, the session-directory guard, the Compose call,
+///     and the knownSecrets resolution identical to run's. Verify reuses the
+///     same semantics with its own workspace so no second composition path
+///     ever drifts apart.
+/// </summary>
+internal static class SandboxCliComposition
+{
+    /// <summary>
+    ///     加载用户配置中的 settings.windowsSandbox（与 run 的组合路径一致：固定默认位置）。
+    ///     Loads settings.windowsSandbox from the user config (identical to
+    ///     run's composition path: the fixed default location).
+    /// </summary>
+    public static async Task<WindowsSandboxSettings?> LoadSettingsAsync(CancellationToken cancellationToken)
+    {
+        var userConfig = await UserConfigStore.LoadAsync(UserConfigStore.DefaultFilePath(), cancellationToken)
+                                              .ConfigureAwait(false);
+        return userConfig.Settings?.WindowsSandbox;
+    }
+
+    /// <summary>
+    ///     显式启用时组合沙箱执行要素；未启用返回 null。会话目录位于组合工作区内时抛异常（审计
+    ///     记录可被沙箱命令篡改），绝不静默回退宿主执行。
+    ///     Composes the sandbox execution pieces when explicitly enabled;
+    ///     disabled returns null. A session directory inside the composition
+    ///     workspace throws (sandboxed commands could tamper with audit
+    ///     records); host execution is never a silent fallback.
+    /// </summary>
+    public static WindowsSandboxExecution? TryCompose(WindowsSandboxSettings?             settings,
+                                                      string                              sessionDirectory,
+                                                      string                              workspaceRoot,
+                                                      IReadOnlyDictionary<string, string> knownSecrets)
+    {
+        if (settings is not { Enabled: true }) return null;
+
+        var fullSessionDirectory = Path.GetFullPath(sessionDirectory);
+        if (Workspace.IsInside(workspaceRoot, fullSessionDirectory))
+            throw new InvalidOperationException($"The session directory '{fullSessionDirectory}' lies inside "  +
+                                                $"the workspace '{workspaceRoot}'; "                   +
+                                                "sandboxed commands could tamper with audit records. " +
+                                                "Move it outside the workspace (settings.sessionDirectory) " +
+                                                "before enabling the Windows sandbox.");
+
+        return WindowsSandboxComposer.Compose(settings, workspaceRoot, knownSecrets);
+    }
+
+    /// <summary>
+    ///     为进程环境清理与输出脱敏提供已知 secret；不记录 secret 值。凭据存储来源时用目标名占位，
+    ///     该名称不存在于子进程环境中，仅让脱敏继续覆盖密钥值本身。
+    ///     Supplies known secrets for child-environment removal and output redaction without logging their values.
+    ///     For credential-store keys the target name stands in; no such environment variable exists in children, it
+    ///     only keeps redaction covering the secret value itself.
+    /// </summary>
+    public static IReadOnlyDictionary<string, string> KnownSecrets(TinyHarnessConfig config, string? apiKey)
+    {
+        var name = !string.IsNullOrWhiteSpace(config.ApiKeyEnvironmentVariable)
+            ? config.ApiKeyEnvironmentVariable
+            : config.ApiKeyCredentialTarget;
+        if (string.IsNullOrEmpty(name) || string.IsNullOrEmpty(apiKey))
+            return new Dictionary<string, string>(StringComparer.Ordinal);
+
+        return new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            [name] = apiKey
+        };
     }
 }

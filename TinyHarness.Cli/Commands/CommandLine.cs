@@ -423,13 +423,17 @@ internal static class CommandLine
     }
 
     /// <summary>
-    ///     解析 sandbox 子命令：status 或 provision [--yes]。
-    ///     Parses the sandbox subcommands: status or provision [--yes].
+    ///     解析 sandbox 子命令：status、provision [--yes]、verify [--yes] [--case &lt;name&gt;[,&lt;name&gt;...]]
+    ///     [--workspace &lt;path&gt;]，以及隐藏的 verify-worker（内部使用，不进公开帮助）。
+    ///     Parses the sandbox subcommands: status, provision [--yes], verify
+    ///     [--yes] [--case &lt;name&gt;[,&lt;name&gt;...]] [--workspace &lt;path&gt;], plus the
+    ///     hidden verify-worker (internal use, absent from the public help).
     /// </summary>
     private static CliOptions ParseSandboxArgs(string[] args)
     {
         var usage = HelpText.Sandbox;
-        if (args.Length == 0) throw new CliUsageException("sandbox requires a subcommand: status or provision.", usage);
+        if (args.Length == 0)
+            throw new CliUsageException("sandbox requires a subcommand: status, provision, or verify.", usage);
 
         if (IsHelpFlag(args[0])) return new CliOptions { Kind = CliCommandKind.Help, HelpTopic = "sandbox" };
 
@@ -456,9 +460,137 @@ internal static class CommandLine
 
                 return new CliOptions { Kind = CliCommandKind.Sandbox, Subcommand = "provision", AssumeYes = assumeYes };
 
+            case "verify" :
+                return ParseSandboxVerifyArgs(args, usage);
+
+            case "verify-worker" :
+                return ParseSandboxVerifyWorkerArgs(args, usage);
+
             default :
                 throw new CliUsageException($"Unknown sandbox subcommand '{args[0]}'.", usage);
         }
+    }
+
+    /// <summary>
+    ///     解析 sandbox verify：[--yes] [--case &lt;name&gt;[,&lt;name&gt;...]] [--workspace &lt;path&gt;]。
+    ///     Parses sandbox verify: [--yes] [--case &lt;name&gt;[,&lt;name&gt;...]] [--workspace &lt;path&gt;].
+    /// </summary>
+    private static CliOptions ParseSandboxVerifyArgs(string[] args, string usage)
+    {
+        var assumeYes  = false;
+        var workspace  = (string?)null;
+        var caseFilter = (List<string>?)null;
+        for (var i = 1; i < args.Length; i++)
+        {
+            if (string.Equals(args[i], "--yes", StringComparison.Ordinal))
+            {
+                assumeYes = true;
+                continue;
+            }
+
+            if (string.Equals(args[i], "--case", StringComparison.Ordinal))
+            {
+                if (i + 1 >= args.Length)
+                    throw new CliUsageException("The --case option requires a comma-separated case name list.", usage);
+
+                var names = args[++i].Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+                if (names.Length == 0)
+                    throw new CliUsageException("The --case option requires at least one case name.", usage);
+
+                caseFilter ??= [];
+                caseFilter.AddRange(names);
+                continue;
+            }
+
+            if (string.Equals(args[i], "--workspace", StringComparison.Ordinal))
+            {
+                if (i + 1 >= args.Length)
+                    throw new CliUsageException("The --workspace option requires a directory path.", usage);
+
+                workspace = args[++i];
+                if (string.IsNullOrWhiteSpace(workspace))
+                    throw new CliUsageException("The --workspace option requires a non-empty directory path.", usage);
+
+                continue;
+            }
+
+            throw new CliUsageException($"Unknown argument '{args[i]}' for sandbox verify.", usage);
+        }
+
+        return new CliOptions
+        {
+            Kind            = CliCommandKind.Sandbox,
+            Subcommand      = "verify",
+            AssumeYes       = assumeYes,
+            CaseFilter      = caseFilter,
+            VerifyWorkspace = workspace
+        };
+    }
+
+    /// <summary>
+    ///     解析隐藏的 sandbox verify-worker：--marker &lt;path&gt; --hold-seconds &lt;n&gt; --workspace &lt;path&gt;
+    ///     全部必填（由父 verify 进程构造，不面向用户）。
+    ///     Parses the hidden sandbox verify-worker: --marker &lt;path&gt;
+    ///     --hold-seconds &lt;n&gt; --workspace &lt;path&gt;, all required (constructed by
+    ///     the parent verify process, not user facing).
+    /// </summary>
+    private static CliOptions ParseSandboxVerifyWorkerArgs(string[] args, string usage)
+    {
+        string? marker    = null;
+        string? workspace = null;
+        int?    hold      = null;
+        for (var i = 1; i < args.Length; i++)
+        {
+            if (string.Equals(args[i], "--marker", StringComparison.Ordinal))
+            {
+                if (i + 1 >= args.Length)
+                    throw new CliUsageException("The --marker option requires a file path.", usage);
+
+                marker = args[++i];
+                if (string.IsNullOrWhiteSpace(marker))
+                    throw new CliUsageException("The --marker option requires a non-empty file path.", usage);
+
+                continue;
+            }
+
+            if (string.Equals(args[i], "--hold-seconds", StringComparison.Ordinal))
+            {
+                if (i + 1 >= args.Length || !int.TryParse(args[i + 1], out var parsed) || parsed <= 0)
+                    throw new CliUsageException("The --hold-seconds option requires a positive integer.", usage);
+
+                hold = parsed;
+                i++;
+                continue;
+            }
+
+            if (string.Equals(args[i], "--workspace", StringComparison.Ordinal))
+            {
+                if (i + 1 >= args.Length)
+                    throw new CliUsageException("The --workspace option requires a directory path.", usage);
+
+                workspace = args[++i];
+                if (string.IsNullOrWhiteSpace(workspace))
+                    throw new CliUsageException("The --workspace option requires a non-empty directory path.", usage);
+
+                continue;
+            }
+
+            throw new CliUsageException($"Unknown argument '{args[i]}' for sandbox verify-worker.", usage);
+        }
+
+        if (marker is null || hold is null || workspace is null)
+            throw new CliUsageException(
+                                      "sandbox verify-worker requires --marker <path>, --hold-seconds <n>, and --workspace <path>.",
+                                      usage);
+
+        return new CliOptions
+        {
+            Kind              = CliCommandKind.Sandbox,
+            Subcommand        = "verify-worker",
+            VerifyMarkerPath  = marker,
+            VerifyHoldSeconds = hold,
+            VerifyWorkspace   = workspace
+        };
     }
 
     /// <summary>

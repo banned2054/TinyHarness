@@ -24,7 +24,7 @@ internal static class HelpText
           tinyharness auth set <name> [--env <VAR>] [--store]
           tinyharness model list | model add <model-id> --context-window <tokens> | model use <model-id>
           tinyharness doctor [--connect]
-          tinyharness sandbox status | sandbox provision [--yes]
+          tinyharness sandbox status | sandbox provision [--yes] | sandbox verify [--yes]
           tinyharness help [<command>]
 
         Management commands are never sent to the model. To prompt with text that starts
@@ -165,10 +165,11 @@ internal static class HelpText
         Usage:
           tinyharness sandbox status
           tinyharness sandbox provision [--yes]
+          tinyharness sandbox verify [--yes] [--case <name>[,<name>...]] [--workspace <path>]
 
         Management entry for the Windows tool-process sandbox (trusted user settings,
-        settings.windowsSandbox in the user config). Neither subcommand sends input to
-        a model.
+        settings.windowsSandbox in the user config). None of the subcommands sends
+        input to a model.
 
         sandbox status is strictly read-only: it prints the trusted settings, the
         protocol versions this build expects, and the readiness inspection
@@ -194,6 +195,23 @@ internal static class HelpText
         (non-interactive use requires --yes). Every elevation attempt is
         appended to <sandboxHome>\.sandbox\tinyharness-provision.jsonl. Exit 0
         only when the helper succeeded and the re-inspection is ready.
+
+        sandbox verify is the opt-in isolation acceptance: a REAL system test that
+        runs a fixed matrix of sandboxed commands (one ACL refresh + runner per
+        command) in a disposable workspace under %TEMP%\TinyHarness by default,
+        covering identity, deny-read/deny-write probes, network blocking, exit-code
+        and timeout semantics, cancellation, runner protocol failure, large output,
+        and host-abandonment reclamation. It requires the sandbox to be configured,
+        enabled, and provisioned; it never provisions, never changes machine
+        configuration, and never falls back to host execution. Run it only in an
+        environment authorized for such testing. It prints a per-case table and
+        writes a JSON report to <sandboxHome>\.sandbox\tinyharness-verify-*.json.
+        --case selects a subset of cases by stable name; --workspace overrides the
+        acceptance workspace. The command asks for confirmation first; --yes skips
+        it (non-interactive use requires --yes). Exit 0 only when every selected
+        gated case passed with no INDETERMINATE result; exit 4 otherwise.
+        (An internal verify-worker subcommand exists for the host-abandonment case;
+        it is not part of the public interface.)
         """;
 
     /// <summary>
