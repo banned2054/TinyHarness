@@ -126,7 +126,7 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
         await PreflightAsync(execution, cancellationToken).ConfigureAwait(false);
 
         var       account        = await LoadAccount(cancellationToken).ConfigureAwait(false);
-        var       capabilitySids = await ResolveCapabilitySids(cancellationToken).ConfigureAwait(false);
+        var       capabilitySids = await ResolveCapabilitySids(execution, cancellationToken).ConfigureAwait(false);
         using var desktop        = CreateDesktop(account);
 
         var                     request = BuildSpawnRequest(execution, capabilitySids, desktop.Name);
@@ -259,15 +259,21 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
         }
     }
 
-    private async Task<IReadOnlyList<string>> ResolveCapabilitySids(CancellationToken cancellationToken)
+    private async Task<IReadOnlyList<string>> ResolveCapabilitySids(PreparedProcessExecution execution,
+                                                                    CancellationToken cancellationToken)
     {
         if (!OperatingSystem.IsWindows())
             throw new PlatformNotSupportedException("The Windows sandbox backend is available on Windows only.");
 
         try
         {
-            var capabilitySids = await _capabilitySidStore.ResolveForPolicy(_policy, cancellationToken)
-                                                          .ConfigureAwait(false);
+            // The command cwd must match the refresh payload's command_cwd so
+            // the per-cwd workspace SID (the directory's actual ACE) lands in
+            // the spawn token — the same contract as cap.rs's
+            // workspace_write_cap_sid_for_root on the Rust side.
+            var capabilitySids = await _capabilitySidStore
+                                       .ResolveForPolicy(_policy, execution.WorkingDirectory, cancellationToken)
+                                       .ConfigureAwait(false);
             // Mirror the library's NUL device allowance using the first
             // capability SID; the runner repeats this for the child.
             _allowNullDeviceAccess(new SecurityIdentifier(capabilitySids[0]));

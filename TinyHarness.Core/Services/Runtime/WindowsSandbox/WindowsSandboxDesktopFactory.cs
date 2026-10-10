@@ -81,7 +81,7 @@ public sealed partial class WindowsSandboxDesktopFactory : ISandboxDesktopFactor
         var name = DesktopNamePrefix + GenerateNameSuffix();
         var sddl = BuildSddl(ownerSid, sandboxAccountSid);
         if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl, SddlRevision,
-                                                                  out var securityDescriptor) ||
+                                                                  out var securityDescriptor, IntPtr.Zero) ||
             securityDescriptor == IntPtr.Zero)
             throw new Win32Exception(Marshal.GetLastWin32Error(),
                                      "Failed to build the private desktop security descriptor.");
@@ -131,11 +131,16 @@ public sealed partial class WindowsSandboxDesktopFactory : ISandboxDesktopFactor
             $"D:P(A;;0x{DesktopAllAccess:x};;;{ownerSid.Value})(A;;0x{DesktopParticipantAccess:x};;;{sandboxAccountSid.Value})";
     }
 
+    // The native API has FOUR parameters; the trailing PULONG optionalSize is
+    // allowed to be NULL. Declaring only three left the fourth x64 argument
+    // register holding garbage that the callee dereferenced (0xC0000005 on the
+    // first real invocation — unit tests never call the native function).
     [LibraryImport("advapi32.dll", EntryPoint = "ConvertStringSecurityDescriptorToSecurityDescriptorW",
                    SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
     [return : MarshalAs(UnmanagedType.Bool)]
     private static partial bool ConvertStringSecurityDescriptorToSecurityDescriptorW(
-        string securityDescriptorString, uint revision, out IntPtr securityDescriptor);
+        string securityDescriptorString, uint revision, out IntPtr securityDescriptor,
+        IntPtr optionalSize);
 
     [LibraryImport("user32.dll", EntryPoint = "CreateDesktopW", SetLastError = true,
                    StringMarshalling = StringMarshalling.Utf16)]

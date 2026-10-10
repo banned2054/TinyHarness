@@ -371,8 +371,8 @@ public class WindowsSandboxProtocolTests
         var readOnly =
             SandboxPolicyResolver.Resolve(SandboxPolicyKind.ReadOnly, dir.Root, new Dictionary<string, string>());
 
-        var first  = await store.ResolveForPolicy(readOnly);
-        var second = await store.ResolveForPolicy(readOnly);
+        var first  = await store.ResolveForPolicy(readOnly, dir.Root);
+        var second = await store.ResolveForPolicy(readOnly, dir.Root);
 
         Assert.Single(first);
         Assert.Equal(first, second);
@@ -394,15 +394,46 @@ public class WindowsSandboxProtocolTests
         var policy =
             SandboxPolicyResolver.Resolve(SandboxPolicyKind.WorkspaceWrite, dir.Root, new Dictionary<string, string>());
 
-        var first  = await store.ResolveForPolicy(policy);
-        var second = await store.ResolveForPolicy(policy);
+        var first  = await store.ResolveForPolicy(policy, dir.Root);
+        var second = await store.ResolveForPolicy(policy, dir.Root);
 
         // No TEMP/TMP in the environment, so the workspace root is the only
         // effective write root.
         Assert.Single(first);
         Assert.Equal(first, second);
         var savedTable = await new SandboxCapabilitySidStore(components).LoadOrCreate();
+        // The Rust contract (cap.rs workspace_write_cap_sid_for_root): a write
+        // root equal to the command cwd uses the per-cwd workspace table — the
+        // SID setup grants on that directory — never the per-root table.
+        Assert.Contains(SandboxCapabilitySidStore.CanonicalRootKey(dir.Root), savedTable.WorkspaceByCwd.Keys);
+        Assert.DoesNotContain(SandboxCapabilitySidStore.CanonicalRootKey(dir.Root), savedTable.WritableRootByPath.Keys);
+    }
+
+    [Fact]
+    public async Task CapabilitySidStore_AdditionalWriteRootsWithDifferentCwdUsePerRootTable()
+    {
+        using var dir = new TestTempDir();
+        var components = new WindowsSandboxComponents
+        {
+            SetupExecutablePath  = dir.WriteBytes("setup.exe", []),
+            RunnerExecutablePath = dir.WriteBytes("runner.exe", []),
+            SandboxHome          = dir.Root
+        };
+        var store = new SandboxCapabilitySidStore(components);
+        var policy = SandboxPolicyResolver.Resolve(SandboxPolicyKind.WorkspaceWrite, dir.Root,
+                                                   new Dictionary<string, string>(),
+                                                   [Path.Combine(dir.Root, "extra-cache")]);
+
+        // The command runs from a subdirectory, so the workspace root is NOT
+        // the cwd: every effective write root must take the per-root table.
+        var resolved = await store.ResolveForPolicy(policy, Path.Combine(dir.Root, "sub"));
+
+        var savedTable = await store.LoadOrCreate();
+        Assert.Equal(2, resolved.Count);
         Assert.Contains(SandboxCapabilitySidStore.CanonicalRootKey(dir.Root), savedTable.WritableRootByPath.Keys);
+        Assert.Contains(SandboxCapabilitySidStore.CanonicalRootKey(Path.Combine(dir.Root, "extra-cache")),
+                        savedTable.WritableRootByPath.Keys);
+        Assert.Empty(savedTable.WorkspaceByCwd);
     }
 
     [Fact]

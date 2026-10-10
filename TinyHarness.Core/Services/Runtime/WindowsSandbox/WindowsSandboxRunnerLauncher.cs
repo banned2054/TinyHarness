@@ -161,6 +161,10 @@ public sealed partial class WindowsSandboxRunnerLauncher(TimeSpan? connectTimeou
         var previousErrorMode = SetErrorMode(ErrorModeFailCriticalErrors | ErrorModeNoGpFaultErrorBox);
         try
         {
+            // Mirrors the library's runner_client.rs: a fully zeroed
+            // STARTUPINFOW with only cb and STARTF_FORCEOFFFEEDBACK set (no
+            // lpDesktop — the runner opens the private desktop for the child
+            // itself, from spawn_request.private_desktop_name).
             var startupInfo = new StartupInfoW
             {
                 Size  = (uint)Marshal.SizeOf<StartupInfoW>(),
@@ -368,16 +372,39 @@ public sealed partial class WindowsSandboxRunnerLauncher(TimeSpan? connectTimeou
         }
     }
 
+    /// <summary>
+    ///     原生 STARTUPINFOW 的完整布局（x64 下 104 字节）。此前只声明了 7 个"用到的"字段，
+    ///     Size 与偏移都不符：CreateProcessWithLogonW 按真实偏移读取（dwFlags 在偏移 56、
+    ///     hStd* 在 72 之后），会读到结构体外与错误位置的值。字段顺序与类型对齐 C 定义，
+    ///     由 Sequential 布局自动复现原生对齐。
+    ///     The full native STARTUPINFOW layout (104 bytes on x64). The earlier
+    ///     7-field "only what we use" shape had the wrong size AND offsets:
+    ///     CreateProcessWithLogonW reads at the real offsets (dwFlags at 56,
+    ///     hStd* past 72), pulling values from beyond the struct or the wrong
+    ///     slots. Field order and types match the C definition so Sequential
+    ///     layout reproduces the native alignment.
+    /// </summary>
     [StructLayout(LayoutKind.Sequential)]
     private struct StartupInfoW
     {
-        public uint   Size;
-        public uint   Flags;
-        public uint   ShowWindow;
-        public uint   Reserved1;
-        public IntPtr Reserved2;
-        public IntPtr Reserved3;
-        public IntPtr Reserved4;
+        public uint   Size;             // cb
+        public IntPtr Reserved;         // lpReserved
+        public IntPtr Desktop;          // lpDesktop
+        public IntPtr Title;            // lpTitle
+        public uint   X;                // dwX
+        public uint   Y;                // dwY
+        public uint   XSize;            // dwXSize
+        public uint   YSize;            // dwYSize
+        public uint   XCountChars;      // dwXCountChars
+        public uint   YCountChars;      // dwYCountChars
+        public uint   FillAttribute;    // dwFillAttribute
+        public uint   Flags;            // dwFlags
+        public ushort ShowWindow;       // wShowWindow
+        public ushort Reserved2Bytes;   // cbReserved2
+        public IntPtr Reserved2;        // lpReserved2
+        public IntPtr StandardInput;    // hStdInput
+        public IntPtr StandardOutput;   // hStdOutput
+        public IntPtr StandardError;    // hStdError
     }
 
     [StructLayout(LayoutKind.Sequential)]

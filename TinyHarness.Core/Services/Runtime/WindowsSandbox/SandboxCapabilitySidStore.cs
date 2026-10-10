@@ -6,29 +6,40 @@ namespace TinyHarness.Core.Services.Runtime.WindowsSandbox;
 
 /// <summary>
 ///     capability SID 表（&lt;home&gt;\cap_sid）的 get-or-create 语义：只读命令取 readonly SID；
-///     可写命令对每个有效写入根在 writable_root_by_path 查询，缺失则生成
-///     S-1-5-21-{4 个随机 u32} 并整体写回。生成的 SID 必须与 setup 刷到对应根上的 ACL 一致。
+///     可写命令按 Rust 契约 <c>workspace_write_cap_sid_for_root</c>（cap.rs）逐根取 SID——写根等于
+///     命令 cwd 时取 <c>workspace_by_cwd</c> 表（正是 setup 刷到该目录 ACL 上的 SID），其余写根取
+///     <c>writable_root_by_path</c> 表；缺失则生成 S-1-5-21-{4 个随机 u32} 并整体写回。setup 的
+///     ACL refresh 与 spawn token 用同一份推导，两侧 SID 必须一致，否则受限 token 缺目录 ACE 对应
+///     的 SID，写入会被拒。
 ///     Get-or-create semantics for the capability-SID table (&lt;home&gt;\cap_sid):
-///     read-only commands take the readonly SID; writable commands look up each
-///     effective write root in writable_root_by_path, generating
-///     S-1-5-21-{four random u32} and rewriting the file for missing entries. The
-///     generated SIDs must match the ACLs setup refreshed onto those roots.
+///     read-only commands take the readonly SID; writable commands follow the
+///     Rust contract <c>workspace_write_cap_sid_for_root</c> (cap.rs) per root —
+///     a write root equal to the command cwd takes the <c>workspace_by_cwd</c>
+///     table (exactly the SID setup grants on that directory's ACL), every
+///     other root takes <c>writable_root_by_path</c>; missing entries generate
+///     S-1-5-21-{four random u32} and rewrite the file. Setup's ACL refresh and
+///     the spawn token share this derivation — both sides must agree, or the
+///     restricted token lacks the SID of the directory's ACE and writes are
+///     denied.
 /// </summary>
 public sealed class SandboxCapabilitySidStore(WindowsSandboxComponents components)
 {
     public WindowsSandboxComponents Components { get; } = components;
 
     /// <summary>
-    ///     按策略解析 capability SID 列表；有写入根时逐根 get-or-create。返回列表的首个 SID
-    ///     同时用于 NUL 设备 allow ACE。
+    ///     按策略解析 capability SID 列表；有写入根时逐根 get-or-create（选表规则见类注释）。
+    ///     返回列表的首个 SID 同时用于 NUL 设备 allow ACE。commandWorkingDirectory 必须与
+    ///     refresh payload 的 command_cwd 一致。
     ///     Resolves the capability-SID list for a policy, get-or-creating per
-    ///     write root. The first returned SID is also used for the NUL device
-    ///     allow ACE.
+    ///     write root (table choice per the class comment). The first returned
+    ///     SID is also used for the NUL device allow ACE. commandWorkingDirectory
+    ///     must equal the refresh payload's command_cwd.
     /// </summary>
     public async Task<IReadOnlyList<string>> ResolveForPolicy(
-        SandboxIsolationPolicy policy, CancellationToken cancellationToken = default)
+        SandboxIsolationPolicy policy, string commandWorkingDirectory, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(policy);
+        ArgumentException.ThrowIfNullOrWhiteSpace(commandWorkingDirectory);
 
         var capabilitySids = await LoadOrCreate(cancellationToken).ConfigureAwait(false);
         if (!policy.UsesWriteCapabilities) return [capabilitySids.ReadOnly];
@@ -37,14 +48,19 @@ public sealed class SandboxCapabilitySidStore(WindowsSandboxComponents component
             throw new
                 InvalidOperationException("The workspace-write sandbox policy has no writable root capability SIDs.");
 
-        var resolved = new List<string>();
+        var commandCwdKey = CanonicalRootKey(commandWorkingDirectory);
+        var resolved      = new List<string>();
         foreach (var writeRoot in policy.EffectiveWriteRoots)
         {
-            var key = CanonicalRootKey(writeRoot);
-            if (!capabilitySids.WritableRootByPath.TryGetValue(key, out var sid))
+            var key  = CanonicalRootKey(writeRoot);
+            // cap.rs workspace_write_cap_sid_for_root: root == cwd → the
+            // per-cwd workspace SID (the ACE setup grants on that directory);
+            // any other root → the per-root writable table.
+            var table = key == commandCwdKey ? capabilitySids.WorkspaceByCwd : capabilitySids.WritableRootByPath;
+            if (!table.TryGetValue(key, out var sid))
             {
-                sid                                    = GenerateCapabilitySid();
-                capabilitySids.WritableRootByPath[key] = sid;
+                sid          = GenerateCapabilitySid();
+                table[key]   = sid;
                 await SaveAsync(capabilitySids, cancellationToken).ConfigureAwait(false);
             }
 
