@@ -176,17 +176,24 @@ internal static class HelpText
         when not configured or ready; exit 1 when any problem is reported.
 
         sandbox provision runs the elevated setup helper once (UAC). It creates or
-        resets machine-level state: local group CodexSandboxUsers, the local accounts
-        CodexSandboxOffline/CodexSandboxOnline (fresh random passwords that never
-        expire), registry entries hiding those accounts, firewall rules plus WFP
-        block filters for the offline account, and directory ACLs for the sandbox
-        home and the declared write roots. Re-provisioning resets the shared account
-        passwords and can disturb other clients (Codex or other TinyHarness
-        instances) on the same machine; there is no uninstall or rollback. The
-        command asks for confirmation first; --yes skips it (non-interactive use
-        requires --yes). Every elevation attempt is appended to
-        <sandboxHome>\.sandbox\tinyharness-provision.jsonl. Exit 0 only when the
-        helper succeeded and the re-inspection is ready.
+        resets machine-level state: local group TinyHarnessUsers, the local
+        accounts TinyHarnessOffline/TinyHarnessOnline (fresh random passwords
+        that never expire), registry entries hiding those accounts, firewall
+        rules plus WFP block filters for the offline account, and directory ACLs
+        for the sandbox home and the declared write roots. These names belong to
+        the TinyHarness independent-namespace fork of the sandbox components
+        (the setup/runner binary file names, payload fields, DPAPI, and the IPC
+        protocol are unchanged; no service is installed). sandboxHome may stay
+        blank in the trusted settings and defaults to a fixed per-user home
+        (%LOCALAPPDATA%\tinyharness\windows-sandbox-home), independent of the
+        Codex release's home; markers or credentials still naming the legacy
+        Codex accounts are refused and must be re-provisioned. Re-provisioning
+        resets this namespace's account passwords and can disturb other homes
+        sharing this fork's namespace on the same machine; there is no uninstall
+        or rollback. The command asks for confirmation first; --yes skips it
+        (non-interactive use requires --yes). Every elevation attempt is
+        appended to <sandboxHome>\.sandbox\tinyharness-provision.jsonl. Exit 0
+        only when the helper succeeded and the re-inspection is ready.
         """;
 
     /// <summary>

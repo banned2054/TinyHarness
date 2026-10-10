@@ -38,7 +38,13 @@ public sealed record WindowsSandboxSettings
 
     /// <summary>
     ///     sandbox home（codex_home）：cap_sid、.sandbox、.sandbox-secrets、.sandbox-bin 所在目录。
-    ///     The sandbox home (codex_home): directory holding cap_sid, .sandbox, .sandbox-secrets, and .sandbox-bin.
+    ///     留空时使用独立固定默认 home（每用户 %LOCALAPPDATA%\tinyharness\windows-sandbox-home），
+    ///     与 Codex 发布版的 home 完全独立；显式设置时必须是绝对路径。
+    ///     The sandbox home (codex_home): directory holding cap_sid, .sandbox,
+    ///     .sandbox-secrets, and .sandbox-bin. When left blank the independent
+    ///     fixed default home applies (per-user
+    ///     %LOCALAPPDATA%\tinyharness\windows-sandbox-home), fully independent
+    ///     of the Codex release's home; an explicit value must be absolute.
     /// </summary>
     public string SandboxHome { get; init; } = string.Empty;
 

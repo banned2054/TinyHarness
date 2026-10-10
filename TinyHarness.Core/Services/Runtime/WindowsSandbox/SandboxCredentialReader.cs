@@ -58,6 +58,13 @@ public sealed class SandboxCredentialReader(WindowsSandboxComponents components)
         if (string.IsNullOrEmpty(offline.Username) || string.IsNullOrEmpty(offline.ProtectedPassword))
             throw new InvalidOperationException("Sandbox account credentials are missing the offline account entry.");
 
+        // Refuse foreign-namespace credentials before touching DPAPI: a legacy
+        // Codex home must be re-provisioned, never reused across installs.
+        if (!string.Equals(offline.Username, components.OfflineUsername, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException(WindowsSandboxComponents.IsLegacyCodexAccountName(offline.Username)
+                                                    ? $"Sandbox account credentials at {components.UsersFilePath} name the legacy Codex account '{offline.Username}'; refusing to reuse Codex-release credentials. Provision an independent TinyHarness sandbox home with this fork's setup executable."
+                                                    : $"Sandbox account credentials at {components.UsersFilePath} name account '{offline.Username}', which does not match this build's offline account '{components.OfflineUsername}'.");
+
         string password;
         try
         {

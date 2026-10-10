@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization.Metadata;
 using TinyHarness.Core.Models.Configuration;
 using TinyHarness.Core.Models.Runtime.WindowsSandbox;
 
@@ -125,6 +126,7 @@ public sealed class WindowsSandboxProvisioner(ISandboxSetupElevator elevator)
             RunnerExecutablePath = plan.RunnerExecutablePath,
             SandboxHome          = plan.SandboxHome
         };
+        EnsureHomeCarriesNoLegacyCodexState(components);
 
         // Provisioning uses the default "full" mode with refresh_only=false;
         // proxy ports stay empty under the fixed offline policy.
@@ -150,6 +152,61 @@ public sealed class WindowsSandboxProvisioner(ISandboxSetupElevator elevator)
             TempRoot             = plan.TempRoot,
             AdditionalWriteRoots = plan.AdditionalWriteRoots
         };
+    }
+
+    /// <summary>
+    ///     拒绝向仍带旧 Codex 用户名的 home provisioning：该 home 属于 Codex 发布版，继续写入会
+    ///     覆写它的 setup marker/凭据并让两个安装争用同一目录。只读取已有 marker/users 文件，
+    ///     解析失败按"无 legacy"处理（Inspector 会另行报告损坏状态）。无副作用。
+    ///     Refuses provisioning into a home that still carries legacy Codex
+    ///     usernames: that home belongs to a Codex release, and writing to it
+    ///     would overwrite its setup marker/credentials and pit the two installs
+    ///     against each other over one directory. Only existing marker/users
+    ///     files are read; parse failures count as "not legacy" (the inspector
+    ///     reports the corruption separately). No side effects.
+    /// </summary>
+    private static void EnsureHomeCarriesNoLegacyCodexState(WindowsSandboxComponents components)
+    {
+        if (ReadAccountNames(components.MarkerPath, WindowsSandboxJsonContext.Default.SandboxSetupMarker,
+                             marker => marker?.OfflineUsername, marker => marker?.OnlineUsername)
+            is { } legacyMarkerName)
+            throw new InvalidOperationException(
+                $"The sandbox home '{components.SandboxHome}' still names the legacy Codex account '{legacyMarkerName}' in its setup marker; it belongs to a Codex release. " +
+                "Refusing to provision into it — point settings.windowsSandbox.sandboxHome at an independent TinyHarness sandbox home instead.");
+
+        if (ReadAccountNames(components.UsersFilePath, WindowsSandboxJsonContext.Default.SandboxUsersFile,
+                             users => users?.Offline?.Username, users => users?.Online?.Username)
+            is { } legacyUsersName)
+            throw new InvalidOperationException(
+                $"The sandbox home '{components.SandboxHome}' still names the legacy Codex account '{legacyUsersName}' in its account credentials; it belongs to a Codex release. " +
+                "Refusing to provision into it — point settings.windowsSandbox.sandboxHome at an independent TinyHarness sandbox home instead.");
+    }
+
+    /// <summary>
+    ///     读取一个 JSON 文件并提取 offline/online 用户名，任一为 legacy Codex 名时返回它；文件不存在、
+    ///     JSON 损坏或无 legacy 名时返回 null。
+    ///     Reads a JSON file and extracts the offline/online usernames, returning
+    ///     either one when it is a legacy Codex name; a missing file, broken
+    ///     JSON, or no legacy name yields null.
+    /// </summary>
+    private static string? ReadAccountNames<T>(string path, JsonTypeInfo<T> jsonContext,
+                                               Func<T?, string?> offlineSelector, Func<T?, string?> onlineSelector)
+    {
+        try
+        {
+            if (!File.Exists(path)) return null;
+
+            var parsed    = JsonSerializer.Deserialize(File.ReadAllText(path), jsonContext);
+            var offline   = offlineSelector(parsed);
+            var online    = onlineSelector(parsed);
+            return WindowsSandboxComponents.IsLegacyCodexAccountName(offline) ? offline
+                       : WindowsSandboxComponents.IsLegacyCodexAccountName(online) ? online
+                       : null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            return null;
+        }
     }
 
     /// <summary>

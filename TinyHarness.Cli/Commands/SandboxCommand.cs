@@ -56,8 +56,9 @@ internal static class SandboxCommand
                  .ConfigureAwait(false);
             await io
                  .WriteLineAsync("  要启用：在上述用户配置的 settings.windowsSandbox 中设置 setupExecutablePath、" +
-                                 "runnerExecutablePath（两个组件 exe 的绝对路径）与 sandboxHome，" +
-                                 "再运行 tinyharness sandbox provision；enabled 显式设为 true 后 run 才会使用沙箱。",
+                                 "runnerExecutablePath（两个组件 exe 的绝对路径）；sandboxHome 可省略（缺省使用独立固定默认 " +
+                                 $"{WindowsSandboxComponents.DefaultSandboxHome}），再运行 tinyharness sandbox provision；" +
+                                 "enabled 显式设为 true 后 run 才会使用沙箱。",
                                  cancellationToken)
                  .ConfigureAwait(false);
             return 0;
@@ -69,7 +70,13 @@ internal static class SandboxCommand
         await io.WriteLineAsync($"  policy   : {PolicyDisplay(settings.Policy)}", cancellationToken).ConfigureAwait(false);
         await io.WriteLineAsync($"  setup    : {settings.SetupExecutablePath}", cancellationToken).ConfigureAwait(false);
         await io.WriteLineAsync($"  runner   : {settings.RunnerExecutablePath}", cancellationToken).ConfigureAwait(false);
-        await io.WriteLineAsync($"  home     : {settings.SandboxHome}", cancellationToken).ConfigureAwait(false);
+        // A relative home is reported by the problems section below instead of
+        // throwing here, so status stays a read-only diagnostic for bad input.
+        await io.WriteLineAsync(string.IsNullOrWhiteSpace(settings.SandboxHome)
+                                    ? $"  home     : {WindowsSandboxComponents.DefaultSandboxHome}（sandboxHome 未设置，使用固定默认）"
+                                    : $"  home     : {settings.SandboxHome}",
+                                cancellationToken)
+                .ConfigureAwait(false);
         await io
              .WriteLineAsync(
                             $"  versions : 本 build 期望 setup v{WindowsSandboxComponents.SetupVersion} / ipc v{WindowsSandboxComponents.IpcVersion}",
@@ -98,7 +105,7 @@ internal static class SandboxCommand
         {
             SetupExecutablePath  = settings.SetupExecutablePath.Trim(),
             RunnerExecutablePath = settings.RunnerExecutablePath.Trim(),
-            SandboxHome          = settings.SandboxHome.Trim()
+            SandboxHome          = WindowsSandboxComponents.ResolveSandboxHome(settings.SandboxHome)
         };
         var status = await new WindowsSandboxStateInspector(components).InspectAsync(cancellationToken)
                                        .ConfigureAwait(false);
@@ -149,8 +156,8 @@ internal static class SandboxCommand
         if (settings is null)
         {
             await io
-                 .WriteLineAsync("  [fail] 用户配置未设置 settings.windowsSandbox；先配置 setupExecutablePath、" +
-                                 "runnerExecutablePath 与 sandboxHome",
+                 .WriteLineAsync("  [fail] 用户配置未设置 settings.windowsSandbox；先配置 setupExecutablePath 与 " +
+                                 "runnerExecutablePath（sandboxHome 可省略，缺省使用独立固定默认 home）",
                                  cancellationToken)
                  .ConfigureAwait(false);
             return 1;
@@ -166,10 +173,10 @@ internal static class SandboxCommand
             return 1;
         }
 
-        if (IsMissingOrRelative(settings.SandboxHome))
+        if (IsExplicitRelative(settings.SandboxHome))
         {
             await io
-                 .WriteLineAsync("  [fail] settings.windowsSandbox.sandboxHome 缺失或不是绝对路径" +
+                 .WriteLineAsync("  [fail] settings.windowsSandbox.sandboxHome 不是绝对路径（留空则使用固定默认 home）" +
                                  DescribeSetting(settings.SandboxHome),
                                  cancellationToken)
                  .ConfigureAwait(false);
@@ -245,8 +252,8 @@ internal static class SandboxCommand
 
         await io.WriteLineAsync("  本命令将以 UAC 提权运行 setup.exe 一次，修改以下机器级状态：", cancellationToken)
                 .ConfigureAwait(false);
-        await io.WriteLineAsync("    - 本地组 CodexSandboxUsers", cancellationToken).ConfigureAwait(false);
-        await io.WriteLineAsync("    - 本地账户 CodexSandboxOffline / CodexSandboxOnline（随机密码、永不过期）",
+        await io.WriteLineAsync("    - 本地组 TinyHarnessUsers", cancellationToken).ConfigureAwait(false);
+        await io.WriteLineAsync("    - 本地账户 TinyHarnessOffline / TinyHarnessOnline（随机密码、永不过期）",
                                 cancellationToken)
                 .ConfigureAwait(false);
         await io.WriteLineAsync("    - 注册表条目隐藏上述账户", cancellationToken).ConfigureAwait(false);
@@ -255,8 +262,9 @@ internal static class SandboxCommand
         await io.WriteLineAsync("    - sandbox home 目录 ACL 与上述 write roots 的授权", cancellationToken)
                 .ConfigureAwait(false);
         await io
-             .WriteLineAsync("  警告：重复 provisioning 会重置账户密码，可能影响共用同一机器级状态的其他客户端" +
-                             "（Codex 或其他 TinyHarness 实例）。本命令没有卸载或回滚。",
+             .WriteLineAsync("  警告：重复 provisioning 会重置本命名空间账户（TinyHarnessOffline/TinyHarnessOnline）的密码，" +
+                             "同机共用这套 fork 命名空间的其他 home 会受影响。本 fork 与 Codex 发布版使用独立命名空间" +
+                             "（账户、组、防火墙、WFP 互不共享），但其共存尚未验收。本命令没有卸载或回滚。",
                              cancellationToken)
              .ConfigureAwait(false);
     }
@@ -315,6 +323,16 @@ internal static class SandboxCommand
         return string.IsNullOrWhiteSpace(value) || !Path.IsPathFullyQualified(value);
     }
 
+    /// <summary>
+    ///     显式设置但非绝对（home 可留空使用固定默认，只有显式相对路径才是错误）。
+    ///     Explicitly set but not absolute (the home may stay blank for the fixed
+    ///     default; only an explicitly relative value is an error).
+    /// </summary>
+    private static bool IsExplicitRelative(string? value)
+    {
+        return !string.IsNullOrWhiteSpace(value) && !Path.IsPathFullyQualified(value);
+    }
+
     private static string DescribeSetting(string? value)
     {
         return string.IsNullOrWhiteSpace(value) ? "。" : $"：'{value}'。";
@@ -331,8 +349,9 @@ internal static class SandboxCommand
             problems.Add("settings.windowsSandbox.runnerExecutablePath 缺失或不是绝对路径" +
                          DescribeSetting(settings.RunnerExecutablePath));
 
-        if (IsMissingOrRelative(settings.SandboxHome))
-            problems.Add("settings.windowsSandbox.sandboxHome 缺失或不是绝对路径" + DescribeSetting(settings.SandboxHome));
+        if (IsExplicitRelative(settings.SandboxHome))
+            problems.Add("settings.windowsSandbox.sandboxHome 不是绝对路径（留空则使用固定默认 home）" +
+                         DescribeSetting(settings.SandboxHome));
 
         return problems;
     }

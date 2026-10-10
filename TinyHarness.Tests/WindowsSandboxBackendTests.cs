@@ -647,7 +647,7 @@ public class WindowsSandboxBackendTests
             Assert.All(request.CapabilitySids, sid => Assert.Matches(@"^S-1-5-21-\d+-\d+-\d+-\d+$", sid));
 
             // The launcher got the same account the desktop was created for.
-            Assert.Equal("CodexSandboxOffline", launcher.LastRequest!.Account.Username);
+            Assert.Equal("TinyHarnessOffline", launcher.LastRequest!.Account.Username);
             if (OperatingSystem.IsWindows())
                 Assert.Equal(desktops.GrantedSids.Single(), launcher.LastRequest.Account.AccountSid.Value);
 

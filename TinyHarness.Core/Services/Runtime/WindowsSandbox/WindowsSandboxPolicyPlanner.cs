@@ -63,7 +63,9 @@ internal static class WindowsSandboxPolicyPlanner
 
         var setupPath   = RequireAbsoluteSetting(settings.SetupExecutablePath, "setupExecutablePath");
         var runnerPath  = RequireAbsoluteSetting(settings.RunnerExecutablePath, "runnerExecutablePath");
-        var sandboxHome = RequireAbsoluteSetting(settings.SandboxHome, "sandboxHome");
+        // A blank home resolves to the independent fixed default home; an
+        // explicit value must stay absolute (fail closed).
+        var sandboxHome = WindowsSandboxComponents.ResolveSandboxHome(settings.SandboxHome);
         var extraRoots =
             SandboxPolicyResolver.NormalizeAdditionalWriteRoots(settings.AdditionalWriteRoots, workspaceRoot);
 

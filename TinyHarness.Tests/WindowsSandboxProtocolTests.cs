@@ -340,7 +340,7 @@ public class WindowsSandboxProtocolTests
                                                  payload, WindowsSandboxJsonContext.Default.SandboxSetupPayload));
         var root = document.RootElement;
         Assert.Equal(5, root.GetProperty("version").GetInt32());
-        Assert.Equal("CodexSandboxOffline", root.GetProperty("offline_username").GetString());
+        Assert.Equal("TinyHarnessOffline", root.GetProperty("offline_username").GetString());
         Assert.Equal("tester", root.GetProperty("real_user").GetString());
         Assert.True(root.GetProperty("refresh_only").GetBoolean());
         Assert.Equal("full", root.GetProperty("mode").GetString());
@@ -477,6 +477,57 @@ public class WindowsSandboxProtocolTests
         Assert.Contains(empty.Problems, problem => problem.Contains("did not complete"));
     }
 
+    [Fact]
+    public async Task StateInspector_RefusesLegacyCodexMarkerAndCredentials()
+    {
+        using var home = new SandboxTestHome();
+        File.WriteAllText(home.Components.MarkerPath,
+                          """{"version":5,"offline_username":"CodexSandboxOffline","online_username":"CodexSandboxOnline","created_at":"2026-10-01T00:00:00Z"}""");
+        File.WriteAllText(home.Components.UsersFilePath,
+                          """{"version":5,"offline":{"username":"CodexSandboxOffline","password":"QUJDRA=="},"online":{"username":"CodexSandboxOnline","password":"QUJDRA=="}}""");
+
+        var status = await new WindowsSandboxStateInspector(home.Components).InspectAsync();
+        Assert.False(status.Ready);
+        // Marker and credentials each report the legacy Codex namespace twice
+        // (offline + online) with an explicit do-not-reuse explanation.
+        Assert.Equal(4, status.Problems.Count(problem => problem.Contains("legacy Codex-release account name")));
+        Assert.Contains(status.Problems,
+                        problem => problem.Contains("Refusing to reuse it", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task StateInspector_RejectsAccountNameMismatchAgainstExpectedAccounts()
+    {
+        using var home = new SandboxTestHome();
+        File.WriteAllText(home.Components.MarkerPath,
+                          """{"version":5,"offline_username":"TinyHarnessOffline","online_username":"SomeOtherOnline","created_at":"2026-10-01T00:00:00Z"}""");
+
+        var status = await new WindowsSandboxStateInspector(home.Components).InspectAsync();
+        Assert.False(status.Ready);
+        Assert.Contains(status.Problems,
+                        problem => problem.Contains("'SomeOtherOnline'") &&
+                                   problem.Contains("TinyHarnessOnline"));
+        // The matching offline username contributes no problem of its own.
+        Assert.DoesNotContain(status.Problems, problem => problem.Contains("TinyHarnessOffline'"));
+    }
+
+    [Fact]
+    public void SandboxHome_DefaultAndResolutionRules()
+    {
+        Assert.EndsWith(Path.Combine("tinyharness", "windows-sandbox-home"),
+                        WindowsSandboxComponents.DefaultSandboxHome);
+        Assert.True(Path.IsPathFullyQualified(WindowsSandboxComponents.DefaultSandboxHome));
+
+        // Blank resolves to the independent fixed default; explicit absolute
+        // values pass through; explicitly relative values fail closed (padding
+        // is not forgiven — same rule as the other trusted path settings).
+        Assert.Equal(WindowsSandboxComponents.DefaultSandboxHome, WindowsSandboxComponents.ResolveSandboxHome(null));
+        Assert.Equal(WindowsSandboxComponents.DefaultSandboxHome, WindowsSandboxComponents.ResolveSandboxHome("  "));
+        Assert.Equal(@"C:\sb\home", WindowsSandboxComponents.ResolveSandboxHome(@"C:\sb\home"));
+        Assert.Throws<InvalidOperationException>(() => WindowsSandboxComponents.ResolveSandboxHome("relative\\home"));
+        Assert.Throws<InvalidOperationException>(() => WindowsSandboxComponents.ResolveSandboxHome("  C:\\sb\\home  "));
+    }
+
     // ---- desktop SDDL ----
 
     [Fact]
@@ -520,12 +571,45 @@ public class WindowsSandboxProtocolTests
         File.WriteAllText(home.Components.UsersFilePath,
                           "{\"version\":5,\"offline\":{\"username\":\"" + identity[1]                  +
                           "\",\"password\":\""                          + Convert.ToBase64String(blob) +
-                          "\"},\"online\":{\"username\":\"CodexSandboxOnline\",\"password\":\"QUJDRA==\"}}");
+                          "\"},\"online\":{\"username\":\"TinyHarnessOnline\",\"password\":\"QUJDRA==\"}}");
 
-        var account = await new SandboxCredentialReader(home.Components).LoadOfflineAccount();
+        // The reader accepts whichever offline account the components expect;
+        // the DPAPI roundtrip itself is the point of this test.
+        var components = home.Components with { OfflineUsername = identity[1] };
+        var account    = await new SandboxCredentialReader(components).LoadOfflineAccount();
         Assert.Equal(identity[1], account.Username);
         Assert.Equal(secret, account.Password);
         Assert.StartsWith("S-1-", account.AccountSid.Value);
+    }
+
+    [Fact]
+    public async Task CredentialReader_RejectsLegacyCodexUsernameWithoutDecrypting()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        using var home = new SandboxTestHome();
+        // The password blob is placeholder base64: the username check must
+        // refuse before any DPAPI decryption is attempted.
+        File.WriteAllText(home.Components.UsersFilePath,
+                          """{"version":5,"offline":{"username":"CodexSandboxOffline","password":"QUJDRA=="},"online":{"username":"CodexSandboxOnline","password":"QUJDRA=="}}""");
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => new SandboxCredentialReader(home.Components).LoadOfflineAccount());
+        Assert.Contains("legacy Codex account 'CodexSandboxOffline'", exception.Message);
+        Assert.Contains("refusing to reuse", exception.Message);
+    }
+
+    [Fact]
+    public async Task CredentialReader_RejectsUnexpectedOfflineAccountName()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        using var home = new SandboxTestHome();
+        File.WriteAllText(home.Components.UsersFilePath,
+                          """{"version":5,"offline":{"username":"SomeOtherAccount","password":"QUJDRA=="},"online":{"username":"TinyHarnessOnline","password":"QUJDRA=="}}""");
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => new SandboxCredentialReader(home.Components).LoadOfflineAccount());
+        Assert.Contains("SomeOtherAccount", exception.Message);
+        Assert.Contains("TinyHarnessOffline", exception.Message);
     }
 
     [Fact]

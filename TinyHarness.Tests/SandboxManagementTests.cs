@@ -190,7 +190,7 @@ public sealed class SandboxManagementTests
                     Enabled              = true,
                     SetupExecutablePath  = "relative\\setup.exe",
                     RunnerExecutablePath = "C:\\sb\\runner.exe",
-                    SandboxHome          = ""
+                    SandboxHome          = "relative\\home"
                 }
             }
         }, CancellationToken.None);
@@ -352,7 +352,7 @@ public sealed class SandboxManagementTests
         Assert.Equal(home.Components.SetupExecutablePath, request.Components.SetupExecutablePath);
         Assert.Equal(request.Components.SandboxHome, request.Components.SandboxHome);
         Assert.Contains("机器级状态", fixture.Io.Output);
-        Assert.Contains("CodexSandboxUsers", fixture.Io.Output);
+        Assert.Contains("TinyHarnessUsers", fixture.Io.Output);
         Assert.Contains("没有卸载或回滚", fixture.Io.Output);
         Assert.Contains("[ok]", fixture.Io.Output);
 
@@ -501,6 +501,53 @@ public sealed class SandboxManagementTests
         Assert.True(plan.Base64Payload.Length <= ProcessSandboxSetupInvoker.PayloadArgumentCharacterLimit);
         Assert.Equal(Convert.ToHexString(SHA256.HashData(plan.PayloadJson)), plan.PayloadSha256);
         Assert.Equal(Path.Combine(home.Components.SandboxDirectory, "tinyharness-provision.jsonl"), plan.AuditPath);
+    }
+
+    [Fact]
+    public void Provisioner_BlankHomeUsesFixedDefaultAndForkAccountNames()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        using var home      = new SandboxTestHome();
+        using var workspace = new TestTempDir();
+        var settings = SandboxSettings(home) with { SandboxHome = "" };
+
+        var plan = new WindowsSandboxProvisioner(new FakeSetupElevator()).BuildPlan(settings, workspace.Root, "TestUser");
+
+        Assert.Equal(WindowsSandboxComponents.DefaultSandboxHome, plan.Payload.SandboxHome);
+        Assert.Equal(WindowsSandboxComponents.DefaultSandboxHome, plan.Components.SandboxHome);
+        Assert.Equal("TinyHarnessOffline", plan.Payload.OfflineUsername);
+        Assert.Equal("TinyHarnessOnline", plan.Payload.OnlineUsername);
+        // The fixed default home must stay outside every workspace write root
+        // or composition would reject it as tamperable.
+        Assert.False(Workspace.IsInside(workspace.Root, plan.Components.SandboxHome));
+    }
+
+    [Fact]
+    public void Provisioner_RefusesHomeCarryingLegacyCodexMarkerOrCredentials()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        using var home      = new SandboxTestHome();
+        using var workspace = new TestTempDir();
+        File.WriteAllText(home.Components.MarkerPath,
+                          """{"version":5,"offline_username":"CodexSandboxOffline","online_username":"CodexSandboxOnline","created_at":"2026-10-01T00:00:00Z"}""");
+
+        var markerError = Assert.Throws<InvalidOperationException>(() =>
+                                                                           new WindowsSandboxProvisioner(new FakeSetupElevator())
+                                                                              .BuildPlan(SandboxSettings(home), workspace.Root, "TestUser"));
+        Assert.Contains("legacy Codex account 'CodexSandboxOffline'", markerError.Message, StringComparison.Ordinal);
+        Assert.Contains("setup marker", markerError.Message, StringComparison.Ordinal);
+
+        File.WriteAllText(home.Components.MarkerPath,
+                          """{"version":5,"offline_username":"TinyHarnessOffline","online_username":"TinyHarnessOnline","created_at":"2026-10-01T00:00:00Z"}""");
+        File.WriteAllText(home.Components.UsersFilePath,
+                          """{"version":5,"offline":{"username":"TinyHarnessOffline","password":"QUJDRA=="},"online":{"username":"CodexSandboxOnline","password":"QUJDRA=="}}""");
+
+        var credentialsError = Assert.Throws<InvalidOperationException>(() =>
+                                                                                new WindowsSandboxProvisioner(new FakeSetupElevator())
+                                                                                   .BuildPlan(SandboxSettings(home), workspace.Root, "TestUser"));
+        Assert.Contains("account credentials", credentialsError.Message, StringComparison.Ordinal);
     }
 
     [Fact]

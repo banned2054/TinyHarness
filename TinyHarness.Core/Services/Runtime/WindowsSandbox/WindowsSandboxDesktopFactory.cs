@@ -7,10 +7,10 @@ using System.Security.Principal;
 namespace TinyHarness.Core.Services.Runtime.WindowsSandbox;
 
 /// <summary>
-///     创建父进程拥有的私有桌面：名称为 CodexSandboxDesktop- + 32 位小写 hex；DACL 给父进程
+///     创建父进程拥有的私有桌面：名称为 TinyHarnessDesktop- + 32 位小写 hex；DACL 给父进程
 ///     用户 DESKTOP_ALL_ACCESS(0xf01ff)、给沙箱账户 DESKTOP_PARTICIPANT_ACCESS(0x201ff，排除
 ///     WRITE_DAC/WRITE_OWNER/DELETE)。句柄在命令生命周期内由父进程持有，跨命令不复用。
-///     Creates the parent-owned private desktop: the name is CodexSandboxDesktop-
+///     Creates the parent-owned private desktop: the name is TinyHarnessDesktop-
 ///     plus 32 lowercase hex digits; the DACL grants the parent user
 ///     DESKTOP_ALL_ACCESS (0xf01ff) and the sandbox account
 ///     DESKTOP_PARTICIPANT_ACCESS (0x201ff, excluding WRITE_DAC/WRITE_OWNER/
@@ -63,7 +63,7 @@ public sealed partial class PrivateDesktop : IDisposable
 /// </summary>
 public sealed partial class WindowsSandboxDesktopFactory : ISandboxDesktopFactory
 {
-    internal const string DesktopNamePrefix        = "CodexSandboxDesktop-";
+    internal const string DesktopNamePrefix        = "TinyHarnessDesktop-";
     internal const uint   DesktopAllAccess         = 0x000F_01FF;
     internal const uint   DesktopParticipantAccess = 0x0002_01FF;
     private const  uint   SddlRevision             = 1;

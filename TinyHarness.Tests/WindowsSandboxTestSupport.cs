@@ -319,7 +319,7 @@ internal sealed class FakeSetupInvoker : ISandboxSetupInvoker
 /// </summary>
 internal sealed class FakeCredentialSource(string username) : ISandboxCredentialSource
 {
-    public FakeCredentialSource() : this("CodexSandboxOffline")
+    public FakeCredentialSource() : this("TinyHarnessOffline")
     {
     }
 
@@ -347,7 +347,7 @@ internal sealed class FakeCredentialSource(string username) : ISandboxCredential
 /// </summary>
 internal sealed class FakeDesktopFactory : ISandboxDesktopFactory
 {
-    public const string DesktopName = "CodexSandboxDesktop-0123456789abcdef0123456789abcdef";
+    public const string DesktopName = "TinyHarnessDesktop-0123456789abcdef0123456789abcdef";
 
     public List<string> GrantedSids { get; } = [];
 
@@ -377,11 +377,11 @@ internal sealed class SandboxTestHome : IDisposable
         var setupExe  = _directory.WriteBytes("setup.exe", [0x4d, 0x5a]);
         var runnerExe = _directory.WriteBytes("runner.exe", [0x4d, 0x5a]);
         _directory.WriteFile(".sandbox/setup_marker.json",
-                             """{"version":5,"offline_username":"CodexSandboxOffline","online_username":"CodexSandboxOnline","created_at":"2026-10-09T00:00:00Z","proxy_ports":[],"allow_local_binding":false,"read_roots":[],"write_roots":[]}""");
+                             """{"version":5,"offline_username":"TinyHarnessOffline","online_username":"TinyHarnessOnline","created_at":"2026-10-09T00:00:00Z","proxy_ports":[],"allow_local_binding":false,"read_roots":[],"write_roots":[]}""");
         _directory.WriteFile("cap_sid",
                              """{"workspace":"S-1-5-21-11-11-11-11","readonly":"S-1-5-21-22-22-22-22","workspace_by_cwd":{},"writable_root_by_path":{}}""");
         _directory.WriteFile(".sandbox-secrets/sandbox_users.json",
-                             """{"version":5,"offline":{"username":"CodexSandboxOffline","password":"QUJDRA=="},"online":{"username":"CodexSandboxOnline","password":"QUJDRA=="}}""");
+                             """{"version":5,"offline":{"username":"TinyHarnessOffline","password":"QUJDRA=="},"online":{"username":"TinyHarnessOnline","password":"QUJDRA=="}}""");
         Components = new WindowsSandboxComponents
         {
             SetupExecutablePath  = setupExe,
