@@ -273,4 +273,4 @@ Namespaces now follow the directory roles: data contracts use `TinyHarness.Core.
 
 The agent loop accesses models through `IChatCompletionClient`; SDK types stay in the protocol adapter layer. Tools are registered explicitly. Structured state uses System.Text.Json source generation, and configuration uses manual binding without reflection to support ongoing trimming and NativeAOT verification.
 
-See [PLAN.md](PLAN.md) for the complete product scope and milestones, and [AGENTS.md](AGENTS.md) for repository development rules. The MVP baseline excludes GUI, MCP, RAG, multi-agent support, a plugin system, and an OS sandbox; the post-MVP M9 phase now provides a local read-only MCP worker.
+See [PLAN.md](PLAN.md) for the current product scope and the M12+ roadmap toward a daily-use coding agent. The original MVP and M9–M11 plan, including its historical scope and validation boundaries, is preserved unchanged in [PAST_PLAN.md](PAST_PLAN.md). Repository development rules remain in [AGENTS.md](AGENTS.md). Future milestones describe planned work, not currently available features.

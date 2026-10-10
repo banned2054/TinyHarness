@@ -1,0 +1,780 @@
+# TinyHarness.NET 项目计划
+
+本文档定义 TinyHarness.NET 的产品需求、架构边界、MVP 范围和实施顺序。编码 Agent 的操作规范位于 `AGENTS.md`。
+
+路线更新（2026-09-23）：M8 已完成；2026-09-19 的职责目录整理及其构建、225 项默认测试、`win-x64` NativeAOT publish/smoke 验证记录继续有效。M9 的本机 MCP worker、离线闭环、`win-x64` NativeAOT smoke、`glm-5.3` HTTPS endpoint 和 Codex 客户端调用均已验证，记录见 [M9 验证记录](docs/m9-demo.md)。
+
+## 1. 项目定位
+
+TinyHarness.NET 是一个用于求职展示的轻量本地 coding-agent harness。它通过 OpenAI-compatible Chat Completions 协议调用模型，围绕真实的本地代码任务提供工具调用、权限审批、受约束执行和上下文压缩。
+
+核心展示点：
+
+1. 可靠的 tool-call 主循环；
+2. 可解释、可审计的权限控制；
+3. 文件系统与进程执行的工程边界；
+4. 基于 token budget 的上下文管理；
+5. 可离线测试、可稳定复现的完整 Agent 链路。
+
+项目优先追求“小而完整、稳定可演示、代码易解释”。已实现的 CLI harness 保持可用；后续优先让它成为自己真实使用的本机专项分析 worker，由 Codex 保持全局任务状态、决定是否实施修改。向其他项目提交 issue 或 PR 只是在遇到合适、可独立复现的问题时顺手进行，不能成为本项目完成的依赖。
+
+## 2. 已确定的产品决策
+
+- 目标框架为 .NET 10；
+- NativeAOT 是 MVP 硬要求，不是发布阶段的可选优化；
+- 第一使用形态为 CLI；
+- 使用 `/v1/chat/completions`，不是 Legacy `/v1/completions`，也不以 Responses API 为基础；
+- endpoint、API key、model 和 context window 可配置；
+- 支持满足基线协议的第三方 endpoint，但不承诺兼容所有“OpenAI-compatible”服务；
+- API 与 Agent Loop 逻辑分离，但 MVP 不拆成独立 API 程序集；
+- 一轮可以返回多个 tool calls，但 MVP 顺序执行，不并行；
+- 会话压缩由本地 Context Manager 实现，不依赖供应商专属 compaction endpoint；
+- CLI、权限、Runtime 和 Context Manager 是 MVP；GUI、MCP 和多 Agent 不是 MVP；
+- 开发优先采用可运行的纵向切片，不先搭建大量空接口。
+
+只有经过契约测试或人工验证的服务和模型才能列入 README 的 tested providers/models。
+以上是已实现 MVP 的范围基线，不决定后续功能顺序。后续项目路线见第 21 节（M10 统一模型协议）和第 22 节（M11 Windows 工具进程沙箱）。
+
+## 3. MVP 范围
+
+MVP 必须具备：
+
+- Chat Completions 流式文本；
+- function/tool calling；
+- 流式 tool-call arguments 拼装；
+- 一轮多个 tool calls 的校验、授权、顺序 dispatch 和结果回传；
+- 最大 agent step；
+- 异常、timeout 和用户取消；
+- `Allow`、`Ask`、`Deny` 权限决策；
+- `allow once`、`allow session`、`deny` 用户交互；
+- 工作区文件边界；
+- 结构化进程执行、进程树终止和输出裁剪；
+- token budget、recent turns、structured state 和 compaction；
+- 简单、可检查的本地会话与审计记录；
+- 使用 fake model client 的离线测试；
+- 可成功 NativeAOT publish，并能运行发布产物完成 smoke test；
+- 一个可重复演示的“检查测试失败并修复”场景。
+
+MVP 明确不做：
+
+- Responses API；
+- MCP；
+- RAG；
+- multi-agent；
+- Web UI、TUI 或 Avalonia；
+- Docker、VM 或 OS 级 sandbox；
+- 插件系统；
+- 远程服务和多用户账户；
+- 复杂 eval 平台；
+- 针对大量供应商的特殊兼容层；
+- 专用 Git 工具；
+- 自动 commit、push、tag、Release、发布或部署。
+
+MVP 的 `shell` 理论上可以调用 Git，但必须服从命令权限规则，不能因为没有专用 Git 工具就绕过授权。
+
+## 4. 解决方案结构
+
+当前项目包含 `TinyHarness.Core`、`TinyHarness.Cli` 和 `TinyHarness.Tests` 三个项目；已交付的本机 MCP stdio 入口位于 CLI。M9 的实现与验收作为历史功能记录保留，后续产品路线不再规划外置 subagent MCP worker。
+
+以下是目标结构，目录迁移已于 2026-09-19 完成（移动与拆分文件，并按职责同步调整 namespace；公开类型的 namespace 因此发生相应变化）；子目录按实际类型需要创建，不预建空目录：
+
+```text
+TinyHarness.Core
+├── Models
+│   ├── Agent
+│   ├── ChatCompletions
+│   ├── Configuration
+│   ├── Context
+│   ├── Permissions
+│   ├── Persistence
+│   ├── Runtime
+│   └── Tools
+├── Services
+│   ├── Agent
+│   ├── ChatCompletions
+│   ├── Configuration
+│   ├── Context
+│   ├── Permissions
+│   ├── Persistence
+│   ├── Runtime
+│   └── Tools
+├── Exceptions
+└── Utils
+
+TinyHarness.Cli
+├── Commands
+├── Models
+├── Services
+├── Exceptions
+└── Utils
+
+TinyHarness.Tests
+```
+
+分类约定：
+
+- `Models`：配置、消息、请求/响应、执行结果、状态和相关枚举，按功能建立子目录；不混入服务实现和异常类型。
+- `Services`：主循环、协议客户端、配置加载与存储、上下文管理、权限判断、工具执行及 Runtime 等功能实现；接口随所属功能放置。目录分类不要求所有类型增加 `Service` 后缀。
+- `Exceptions`：独立异常类型集中放置，数量增加时按功能建立子目录；名称统一使用 `Exceptions`。
+- `Utils`：通用、无业务语义的小工具；有明确业务职责的逻辑归入 `Services`。
+- `Commands`：CLI 命令解析后的入口调度与命令处理；可复用的核心能力放在 Core。
+- 独立的顶层类、record、接口和枚举默认各自成文件，文件名与类型名一致；仅供当前实现使用的私有嵌套类型、测试 fixture 和 fake 可以保留在所属类型内。
+
+以下功能边界继续有效；文中 `Agent`、`ChatCompletions` 等名称表示逻辑模块，其数据类型与实现分别归入 `Models/<功能>` 和 `Services/<功能>`：
+
+- `Agent`：主循环、step 状态、终止条件和错误传播；
+- `ChatCompletions`：SDK/HTTP、认证、请求/响应 DTO、SSE 解码和流式 tool-call 拼装；
+- `Context`：消息历史、token budget、tool output 裁剪、structured state 和 compaction；
+- `Tools`：工具契约、schema、注册、准备和 dispatch；
+- `Permissions`：capability、资源范围、规则匹配和审批；
+- `Runtime`：文件系统与进程的受约束执行；
+- `Configuration`：配置模型、来源解析、profile 与模型选择、凭据引用和配置存储；
+- `Cli`：输入输出、审批提示、配置加载和依赖组装；
+- `Tests`：单元测试、协议契约测试和少量端到端测试。
+
+暂不创建 `TinyHarness.OpenAI`、`TinyHarness.Runtime` 等额外程序集。只有出现第二种协议、API 依赖显著膨胀或需要独立发布 Core 时，才重新评估拆分。
+
+`TinyHarness.Cli` 是现有 NativeAOT publish root，覆盖 CLI 与本机 MCP 入口；Core 和运行时依赖须能被实际入口静态分析和裁剪。
+
+目录整理作为 M8 完成后的独立重构事项记录，不改变里程碑编号，也不计入已完成状态。实施时保持行为、配置与持久化格式不变；公开类型的命名空间调整需明确评估兼容性，不能仅因移动文件而自动改变公开 API。整理后执行受影响项目的构建与回归测试，涉及 AOT 敏感边界时按既有要求执行 NativeAOT publish 和 smoke。后续入口按真实需求创建。
+
+2026-09-19 实施记录：文件已按职责移动，并把 7 个跨类别文件按类型拆分（配置的模型/解析器、StructuredState 与其 JSON context、审计模型与记录器、进程输出结果与捕获器、CLI 解析器/选项/使用异常）；Core 类型 namespace 同步调整为 `TinyHarness.Core.Models.<feature>` 与 `TinyHarness.Core.Services.<feature>`，因此直接引用这些类型的消费者需要更新 using。行为、配置与持久化格式保持不变。`Models/Persistence` 与 `Services/Persistence` 按实际类型需要新增。验证：solution 构建 0 警告、225/225 默认测试通过、`win-x64` NativeAOT `--force` 完整发布 0 trimming/AOT 警告，发布产物从仓库外部目录通过 `--help`、离线 `doctor` 与完整 smoke 路径。
+
+## 5. 核心边界
+
+Agent Loop 不直接依赖某个 SDK 类型，只依赖一个窄的 Chat Completions client 接口，例如：
+
+```csharp
+public interface IChatCompletionClient
+{
+    IAsyncEnumerable<ChatStreamEvent> CompleteAsync(
+        ChatCompletionRequest request,
+        CancellationToken cancellationToken);
+}
+```
+
+Core 可以明确依赖 Chat Completions 的消息和 tool-call 语义，不建立假想的 OpenAI、Anthropic、Gemini 等供应商接口树。
+
+SDK 选择原则：
+
+- 优先验证官方 `OpenAI` .NET SDK 是否同时满足自定义 endpoint、流式文本、tool calls 和 NativeAOT；
+- 如果 SDK 对第三方返回过于严格或缺少必要能力，只在 `ChatCompletions` 模块内增加薄 `HttpClient` 实现；
+- 不把 SDK 类型泄漏到 Agent、Context、Permissions 或 Tools；
+- 不引入重量级 Agent 框架；
+- 任何 SDK 在普通 JIT 模式下可用，都不能替代 NativeAOT publish 与运行验证。
+
+## 6. NativeAOT 约束
+
+NativeAOT 必须从第一个可执行 CLI 切片开始持续验证。不能先按 JIT 方式完成全部功能，再在最后集中处理裁剪和 AOT 问题。
+
+设计约束：
+
+- `TinyHarness.Cli` 的发布配置启用 NativeAOT；
+- MVP 至少持续验证当前开发平台的一个明确 RID，支持的 RID 必须在 README 中准确列出；
+- JSON 优先使用 `System.Text.Json` source-generated context；
+- Chat Completions、配置、审计和 structured state 的序列化类型必须进入静态 JSON metadata；
+- 工具、权限规则和服务使用显式注册，不通过 assembly scanning 自动发现；
+- 避免 `Type.GetType`、运行时泛型构造、动态代理、表达式编译和其他动态代码生成；
+- 依赖注入仅使用可静态分析的注册方式；如果容器带来不必要的 AOT 风险，使用直接 composition root；
+- CLI 参数库、配置库、SDK 和日志库都必须经过 AOT publish 验证；
+- 不通过无依据的 suppression 隐藏 ILLink、trimming 或 AOT warning；
+- 必须运行发布后的原生产物，而不只检查 `dotnet publish` exit code。
+
+NativeAOT 验证至少覆盖：
+
+```text
+启动 CLI
+读取配置
+构造依赖
+运行不需要网络的基本命令或 fake-client smoke path
+正常退出
+```
+
+真实 API 调用可以保持 opt-in，但模型协议实现的类型不能因为测试未联网而逃避 AOT 静态分析。
+
+## 7. Agent 状态与主循环
+
+建议的运行状态：
+
+```text
+Ready
+  -> CallingModel
+  -> PreparingTools
+  -> AwaitingApproval
+  -> ExecutingTools
+  -> CallingModel
+  -> Completed / Failed / Cancelled / StepLimitReached
+```
+
+主循环：
+
+```text
+构造模型上下文
+  -> 请求模型
+  -> 消费流式事件
+  -> 得到最终 assistant message
+  -> 无 tool call：结束当前 turn
+  -> 有 tool calls：全部校验并准备
+  -> 分别执行权限判断
+  -> 顺序执行获准的调用
+  -> 生成拒绝、失败或成功的 tool results
+  -> 将全部 tool results 追加到消息历史
+  -> 进入下一 step
+```
+
+必须显式处理：
+
+- 未知工具名；
+- arguments 不是合法 JSON；
+- arguments 不符合 schema；
+- tool call ID 缺失、重复或无法匹配；
+- 工具异常；
+- 权限拒绝；
+- 模型流中断；
+- timeout 或取消；
+- 达到最大 step。
+
+权限拒绝通常转换为 tool result 返回模型，使模型可以调整方案。用户明确取消整个任务时才终止循环。
+
+流式 `tool_calls[index].function.arguments` 可能分布在多个 delta 中。协议层必须按 choice、tool index 和 call ID 拼装，完成后再解析 JSON，不能逐 delta 解析。
+
+## 8. 用户意图与操作阶段
+
+Harness 应在 system/developer instructions 中明确区分询问和实施：
+
+- 询问、评审、解释和诊断默认只允许分析与读取；
+- 明确的实现或修复请求才允许进入修改流程；
+- 修改意图不会自动授权具体副作用，写文件和进程仍由 Permission Engine 决策；
+- commit、push、tag、Release 和发布不能从代码修改授权中推导。
+
+模型对用户意图的判断只影响建议的工作模式，不能成为安全授权来源。真正的副作用边界由 Permission Engine 和用户审批强制执行。
+
+建议的授权关系：
+
+```text
+只读分析
+  -> 明确实施请求
+  -> 本地修改与必要验证
+  -> 明确 commit 授权
+  -> 明确 push 授权
+  -> tag / Release / publish / deploy 分别授权
+```
+
+## 9. 工具集
+
+MVP 仅实现五个工具：
+
+```text
+list_files
+search_text
+read_file
+apply_patch
+shell
+```
+
+暂不提供任意 `write_file`。源代码修改统一通过 `apply_patch`，方便展示 diff、审批和审计。
+
+### Prepare、Authorize、Execute
+
+每个工具必须经过：
+
+```text
+Prepare -> Authorize -> Execute
+```
+
+`Prepare` 只能执行无副作用工作：
+
+- 校验和规范化参数；
+- 解析路径与工作目录；
+- 识别将访问的资源；
+- 计算所需 capability；
+- 生成人类可读摘要；
+- 生成稳定调用指纹；
+- 创建不可变的 prepared plan。
+
+Permission Engine 审批 prepared plan，Runtime 执行同一个 plan。执行阶段不能重新解释原始参数，避免展示内容与实际副作用不一致。
+
+建议 capability：
+
+```text
+filesystem.list
+filesystem.search
+filesystem.read
+filesystem.write
+process.execute
+```
+
+网络权限不是独立的 MVP 工具能力，但 shell 命令一旦包含下载、远端访问或外部写入，应提高风险等级并默认询问或拒绝。
+
+## 10. Permission Engine
+
+权限结果：
+
+```text
+Allow
+Ask
+Deny
+```
+
+审批选项：
+
+```text
+allow once
+allow session
+deny
+```
+
+`allow session` 必须绑定 capability、规范化资源范围和必要调用约束，不能简单地永久放行某个工具。
+
+建议决策优先级：
+
+```text
+hard deny
+  > explicit/session deny
+  > one-shot approval
+  > session grant
+  > configured allow rule
+  > ask
+```
+
+默认策略：
+
+| 操作 | 工作区内 | 工作区外 |
+|---|---|---|
+| 列举、搜索、读取 | allow | deny |
+| apply_patch | ask | deny |
+| shell | ask | deny |
+| 精确配置的只读命令 | allow | deny |
+| 精确配置的 build/test 命令 | allow | deny |
+| Git 写操作 | ask | deny |
+| 破坏性命令 | ask 或 hard deny | deny |
+
+“测试命令”本质上仍然会执行仓库代码，不能仅根据名字自动视为安全。自动允许必须来自用户或项目配置中的精确规则，例如 executable、arguments pattern 和 cwd 范围。
+
+权限判断必须基于 prepared plan 的规范化资源，不能只看工具名。
+
+项目提供的是应用层 policy/approval，不是 OS sandbox。所有用户文档、CLI 文案和简历描述都必须准确表达这一边界。
+
+### 外部仓库指令
+
+TinyHarness 将来读取目标仓库中的 `AGENTS.md` 时，应把它作为项目约定输入，而不是安全授权：
+
+```text
+Harness hard safety policy
+  > 当前用户的明确授权
+  > 目标仓库 AGENTS.md
+  > 推断出的约定
+```
+
+目标仓库文件可以规定构建、测试、风格和目录规则，但不能授权泄露凭据、读取范围外敏感文件、绕过权限、自动 commit/push、执行破坏性命令或发布部署。
+
+## 11. 文件系统 Runtime
+
+所有文件工具在执行前必须：
+
+- 将输入路径解析为规范化绝对路径；
+- 明确工作区根目录；
+- 拒绝通过 `..`、绝对路径、大小写差异等方式逃逸；
+- 处理 Windows junction/reparse point 和其他平台的 symlink；
+- 对最终解析目标重新检查边界；
+- 使用文件大小和输出长度限制；
+- 支持 `CancellationToken`。
+
+不能仅使用字符串前缀判断路径归属。
+
+`apply_patch` 必须先解析所有目标文件并统一完成权限检查，之后才能产生写入，避免补丁预览与真实修改范围不同。
+
+## 12. 进程 Runtime
+
+工具名可以是 `shell`，但默认输入采用结构化进程参数：
+
+```json
+{
+  "executable": "dotnet",
+  "arguments": ["test"],
+  "workingDirectory": ".",
+  "timeoutSeconds": 120
+}
+```
+
+默认直接启动 executable，不把整段字符串交给系统 shell。只有确实需要管道、重定向或 shell 内建语法时才进入显式 shell 模式，并提高风险等级。
+
+执行要求：
+
+- 检查 working directory 边界；
+- 分离捕获 stdout/stderr；
+- 支持 timeout 和 `CancellationToken`；
+- 取消时终止整个进程树；
+- 返回明确 exit code；
+- 限制内存中的输出量；
+- 截断时报告原始长度和裁剪方式；
+- 防止 API key、环境变量全集和已知 secret 进入模型上下文或普通日志。
+
+输出分为：
+
+```text
+完整输出：本地日志或临时 artifact
+终端输出：供用户查看
+模型输出：按预算保留 head + tail + 截断说明
+```
+
+## 13. Context Manager 与 Compaction
+
+Chat Completions 不依赖服务端会话状态。应用显式维护并构造：
+
+```text
+System Instructions
+Structured State
+Recent Complete Turns
+Current Turn
+```
+
+Structured State 至少包含：
+
+```text
+Goal
+Constraints
+Decisions
+FilesInspected
+FilesModified
+CommandsAndResults
+PendingWork
+```
+
+预算模型：
+
+```text
+ContextWindow
+- ReservedOutput
+- SystemInstructions
+- ToolDefinitions
+- CurrentTurn
+= AvailableHistoryBudget
+```
+
+规则：
+
+- 服务返回可靠 usage 时使用实际数据；否则采用保守估算；
+- context window 由配置显式声明，不根据任意第三方 model 名称猜测；
+- 先裁剪超长 tool output，再总结旧历史；
+- 保留最近若干完整 turn；
+- 旧历史压缩成结构化状态，而不是无约束自然语言摘要；
+- assistant `tool_calls` 与对应 tool messages 是不可拆分的原子组；
+- 等待审批或工具正在执行时不压缩；
+- 摘要调用禁用 tools；
+- 摘要结果需要结构校验；
+- compaction 失败不得破坏原上下文；
+- 完整历史保留在本地，压缩只影响发送给模型的视图；
+- 测试允许设置极小预算以稳定触发压缩。
+
+## 14. 配置
+
+不得硬编码 endpoint、model、context window 或 API key。配置至少包含：
+
+```text
+Endpoint
+ApiKeyEnvironmentVariable
+Model
+ContextWindowTokens
+ReservedOutputTokens
+CompactionThreshold
+MaxAgentSteps
+DefaultToolTimeout
+WorkspaceRoot
+CommandRules
+```
+
+API key 只从环境变量或明确的 secret provider 读取。
+
+MVP 不实现复杂 capability negotiation。不满足基线协议的服务应返回清晰错误；只有出现真实、已验证需求时，才增加 `SupportsTools`、`SupportsStreamingUsage` 等能力配置。
+
+## 15. 持久化与审计
+
+MVP 不引入完整 event-sourcing 框架或数据库。优先使用简单、可检查的 JSONL 日志或 JSON session snapshot。
+
+至少记录：
+
+- 用户消息；
+- 最终 assistant message；
+- prepared tool call 摘要；
+- 权限决策；
+- tool result、exit code、timeout 和取消；
+- compaction 前后 token 数据或估算；
+- 错误状态。
+
+不需要逐 token 持久化流式输出。崩溃恢复和中断副作用重放不是 MVP；以后若实现，绝不能自动重跑状态不明的写入或进程调用。
+
+## 16. CLI 体验
+
+CLI 首先让用户看清 Agent 正在做什么：
+
+- 流式显示 assistant 文本；
+- 在工具执行前显示工具名、规范化目标和风险摘要；
+- `Ask` 时明确显示 allow once、allow session、deny；
+- 区分模型错误、工具错误、权限拒绝、timeout 和取消；
+- 显示 step 使用情况；
+- compaction 时显示压缩前后 token 数或估算值。
+
+MVP 不追求复杂终端 UI。普通文本、稳定输入和可测试输出优先于动画或布局。
+
+## 17. 测试策略
+
+核心逻辑必须能在没有 API key、网络和付费模型的情况下测试。优先实现 scripted/fake `IChatCompletionClient`，使用预设流式事件驱动 Agent Loop。
+
+必须覆盖：
+
+- 普通文本完成；
+- 单个 tool call；
+- 一轮多个 tool calls；
+- 分片 arguments 拼装；
+- 非法 JSON、未知工具和 schema 错误；
+- Allow、Ask、Deny；
+- 用户拒绝后模型继续；
+- 最大 step；
+- timeout 和取消；
+- 路径逃逸和链接逃逸；
+- stdout/stderr、exit code 和输出裁剪；
+- compaction 不拆分 tool-call 原子组；
+- compaction 后 Goal、Decisions、FilesModified 和 PendingWork 不丢失。
+- structured state 的保留边界必须可检查：Goal 非空时不得清空；FilesInspected、FilesModified、
+  CommandsAndResults 和已有 Decisions 是历史事实，摘要不得删除；Constraints 可替换；PendingWork
+  可用非空列表更新，但每个已有待办必须原样保留，或用对应的 `completed: <item>` 条目明确
+  关闭；不得静默变为空或被其他待办替换。该规则只防止关键状态的无理由丢失，不承诺消除所有
+  摘要语义失真。
+
+真实 API 测试必须显式 opt-in，不能成为默认 `dotnet test` 的必要条件。
+
+NativeAOT 是独立质量门槛：涉及可执行入口、依赖、序列化、配置绑定、工具注册或协议 DTO 的变更，必须执行目标 RID 的 publish，并运行生成的原生产物完成 smoke test。普通 `dotnet build` 成功不能替代这一验证。
+
+## 18. 实施路线
+
+按可运行的纵向切片推进：
+
+### M1：离线 Agent Loop
+
+- 建立 CLI、Core 和 Tests 项目；
+- 定义最小消息、流事件和 client 接口；
+- fake client 驱动纯文本响应；
+- 实现 step 与取消；
+- 建立 NativeAOT publish 配置和本地 smoke path；
+- 从第一个可执行版本开始运行原生发布产物；
+- 完成第一批离线测试。
+
+### M2：真实 Chat Completions
+
+- 验证 SDK 或薄 HTTP 方案；
+- 将 NativeAOT publish 结果作为 SDK 选择条件；
+- 支持自定义 endpoint、model 和 key 环境变量；
+- 实现 SSE 文本流；
+- 实现 tool-call delta 拼装；
+- 增加协议契约测试。
+
+### M3：只读工具闭环
+
+- 实现 `list_files`、`search_text`、`read_file`；
+- 建立 tool schema、registry 和 prepared plan；
+- 完成模型调用、工具结果、下一轮模型调用的闭环。
+
+### M4：权限与写入
+
+- 实现 Permission Engine；
+- 实现 CLI 审批；
+- 实现 `apply_patch`；
+- 覆盖路径边界、拒绝和 session grant 测试。
+
+### M5：进程执行
+
+- 实现结构化 `shell`；
+- 实现 timeout、取消和进程树终止；
+- 实现 stdout/stderr 与输出裁剪；
+- 加入命令规则。
+
+### M6：Context 与 Compaction
+
+- 实现预算计算；
+- 实现 tool output 裁剪；
+- 实现 recent turns 和 structured state；
+- 完成压缩不变量测试。
+
+### M7：持久化与演示打磨
+
+- 增加简单 session/audit 文件；
+- 完成 README、示例配置和 tested providers；
+- 固化可重复 Demo；
+- 固化目标 RID 的 NativeAOT publish 与 smoke 命令；
+- 完成默认离线测试与必要端到端验证。
+
+每个里程碑必须同时包含相关测试，不把测试集中拖到最后。
+
+## 19. MVP 验收场景
+
+目标演示：
+
+```text
+> tinyharness "检查这个项目为什么测试失败并修复"
+
+● shell
+  dotnet test
+
+● search_text
+  FooService
+
+● read_file
+  src/FooService.cs
+
+⚠ Agent wants to modify:
+  src/FooService.cs
+  [allow once / allow session / deny]
+
+● apply_patch
+  src/FooService.cs
+
+● shell
+  dotnet test
+
+✓ 48 tests passed
+
+Context:
+  18,420 -> 7,930 tokens after compaction
+```
+
+验收重点不是模型每次都能独立修复任意项目，而是 Harness 能稳定、清楚、安全地完成：
+
+```text
+模型请求
+-> 工具准备
+-> 权限决策
+-> 受约束执行
+-> 结果回传
+-> 上下文管理
+-> 最终回答
+```
+
+## 20. 完成定义
+
+MVP 完成需要同时满足：
+
+- 核心功能符合第 3 节；
+- NativeAOT publish 无未解释的 trimming/AOT warning，且发布产物通过 smoke test；
+- 默认测试不需要网络或 API key；
+- 权限拒绝确实阻止副作用；
+- 文件和进程执行具备明确边界；
+- compaction 满足原子组和 structured state 不变量；
+- CLI 能稳定运行验收场景；
+- README 能让面试官完成 clone、配置、运行和理解设计；
+- 不把 policy/approval 宣称为 OS sandbox；
+- 不把未经验证的服务宣称为兼容。
+
+## 21. 统一模型协议接入
+
+**状态：先迁移 OpenAI Chat Completions 与 Responses；Anthropic Messages 暂缓。** 2026-10-08 用户确认以 `Microsoft.Extensions.AI.IChatClient` 作为统一调用接口，底层使用官方 SDK。此项扩展现有 Chat Completions-only MVP；前文记录的是原 MVP 的范围和验收历史，不回写成当时已支持多协议。
+
+同日实施完成：两条 OpenAI 协议路径已实现并入主线——`ModelClientFactory`/`MicrosoftAiChatClient` 适配 `IChatClient`，`chatApi` 显式选择协议（缺省 `chat-completions`），Responses 的 reasoning/item id/encrypted content 回传与 `store:false` 无状态请求、真实 usage 的审计与预算校准均已落地。离线验收（默认测试 408/408、`win-x64` NativeAOT publish 零警告、原生产物仓库外 smoke）见 [M10 验证记录](docs/m10-model-protocol.md)。真实供应商调用尚未执行，tested providers 清单不变。
+
+### 兼容性结论
+
+验证使用 .NET 10、`win-x64`、`PublishAot=true`，并保持 `JsonSerializerIsReflectionEnabledByDefault=false`。所有请求都由离线 mock HTTP/SSE handler 接收，没有调用真实模型服务或读取凭据。
+
+| 协议与包 | Managed 离线闭环 | NativeAOT 原生产物 |
+|---|---|---|
+| OpenAI Chat Completions；`Microsoft.Extensions.AI.OpenAI` 10.10.1 / OpenAI 2.14.0 | 通过 | 通过 |
+| OpenAI Responses；同上 | 通过 | 通过 |
+| Anthropic Messages；Anthropic 12.54.0 | 失败 | 失败 |
+
+两个 OpenAI 路径已验证文本和工具参数分片、多个工具调用、usage、结束原因及下一轮工具结果回传。Responses 还验证了 `store:false`、不依赖 `previous_response_id`，以及 reasoning item ID 和 `encrypted_content` 在后续请求中的保留。工具只提供声明式 schema，SDK 不自动执行工具。
+
+Anthropic 12.54.0 在 NativeAOT 发布产物中产生 2,625 条 IL2026/IL3050 警告记录，运行时在发出 HTTP 请求前因禁用反射 JSON 而于 `TextBlockParam` 构造路径失败。Anthropic 12.54.1 的 managed 探针也复现同类失败。NativeAOT publish 成功不能证明该路径兼容；修复单个序列化调用也不足以证明整个 SDK 兼容。因此当前不把 Anthropic 包引入生产依赖，也不通过启用反射 JSON、关闭 AOT 或压制警告来绕过此门槛。
+
+### 本轮实施范围
+
+- 用 `IChatClient` 统一模型调用边界，保留现有 Agent Loop、上下文预算与压缩、工具注册和 `Prepare → Authorize → Execute` 权限流程；不启用自动函数执行。
+- 通过配置显式选择 Chat Completions 或 Responses。旧配置缺省继续使用 Chat Completions；不按模型名猜协议，也不自动切换。
+- CLI `run`、MCP host、`doctor --connect` 使用同一客户端创建逻辑。Responses 仅使用本地历史并设 `store:false`，不引入服务端会话恢复。
+- 在流、历史、压缩和持久化中保留 reasoning 内容、item ID 与 encrypted content；正确传递 usage、结束原因、取消和错误。缺少真实 usage 时继续明确标为估算。
+- Anthropic 只有在官方 SDK 的完整 NativeAOT 路径通过禁用反射 JSON 的离线探针和原生产物 smoke 后，才重新进入实现范围。
+
+### 完成验收
+
+- 离线契约测试覆盖分片、多工具调用与结果回传、拒绝后继续、取消、错误、Responses reasoning 回传及旧配置兼容。
+- 受影响测试和回归通过；`win-x64` NativeAOT publish 后实际运行原生产物，并验证现有 CLI 功能未退化。
+- 真实供应商调用另行授权；离线验证只作为 SDK 适配和本地执行路径的证据，不作为真实 endpoint 兼容结论。
+
+## 22. M11：Windows 工具进程沙箱
+
+**状态：M11.1（执行后端）、M11.2（Windows 编排）与 M11.3（策略闭环）已实现并提交；M11.4（管理/产物）已实现并提交；M11.5（隔离验收）的验收工具（`sandbox verify` 入口、Core 验收运行器与离线测试）已实现并入工作区（2026-10-10）。2026-10-10 起接入目标改为沙箱的 TinyHarness 独立命名空间 fork（上游同机安装会与 Codex 争用机器级命名）：setup/runner 二进制替换为 fork 构建（exe 文件名与 wire 协议不变），setup payload 账户名改为 `TinyHarnessOffline`/`TinyHarnessOnline`，父进程私有桌面前缀改为 `TinyHarnessDesktop-`，sandbox home 缺省使用独立固定默认（`%LOCALAPPDATA%\tinyharness\windows-sandbox-home`），仍为 Codex 用户名的旧 marker/凭据在状态检查、执行与 provisioning 一律拒绝复用；DPAPI 与 IPC 协议不变，不安装服务。同日经用户授权在本机完成真实 provisioning 与 `sandbox verify` 全矩阵：14/15 用例 PASS（身份、deny-read、读写与元数据隔离、退出码/超时/取消/断管道/大输出/遗弃回收），`network-denied` FAIL 如实记录——沙箱内对 127.0.0.1 与本机 IP 的 TCP 连接未被拦截（按用户作用域的防火墙 BLOCK 规则未对沙箱账户进程生效，或本机 IP 环回快速路径绕过远程地址匹配，用例无法区分；WFP 当时仅覆盖 ICMP/DNS/SMB）；真实验收同时修复了 3 个离线测试无法暴露的缺陷（ConvertStringSecurityDescriptorToSecurityDescriptorW 缺第 4 参数致原生崩溃、STARTUPINFOW 布局错误、cap SID 的 workspace_by_cwd 契约）。同晚 fork 补齐按账户 SID 的 WFP 通用 TCP/UDP BLOCK 过滤器（内核强制、覆盖环回，setup v5/IPC v6 与 C# 接入层不变）并重新 provisioning 后，`network-denied` 复验 PASS、全矩阵 **15/15 PASS（exit 0，报告 `tinyharness-verify-20261010-232828.json`）**——M11.5 隔离验收在本机闭环：身份、deny-read/deny-write、元数据保护、工作区写入、断网、退出码/超时/取消、断管道、大输出、宿主遗弃回收全部真实验证通过。边界：验证覆盖本机单环境；跨 home 重复 provisioning 会轮换共享账户密码（本次已实证并经默认 home 重新 provisioning 恢复一致）；与 Codex 发布版共存未验收。详见 [docs/README.md](docs/README.md) M11.5 验证记录。** 2026-10-09 确定 Windows 优先，TinyHarness 的 C# Runtime 直接编排已独立编译的 Codex Windows 沙箱组件；不通过 Codex CLI/Agent 执行，不新增 Rust shim，不把修改 Codex Rust 公共 API 作为首期前置条件。Linux/macOS 后续独立接入。
+
+技术依据及 wire 协议见 [Windows 沙箱直接组件接入方案](docs/windows-sandbox-dotnet-integration.md)。该文档基于 Codex revision `d650bd7c05`、setup version 5、IPC version 6；组件已编译，真实 Rust 序列化/帧协议和部分 C# 片段已有验证记录，但这些不证明完整 TinyHarness 接入或隔离生效。前文 MVP 的“无 OS sandbox”是历史基线，M11 完成前现有执行边界仍然有效。
+
+### 22.1 产品范围
+
+这是本机 Windows 账户、受限 token、ACL、私有桌面和防火墙/WFP 隔离，不是虚拟机或独立 Windows Sandbox 桌面环境。
+
+首期支持：
+
+- `win-x64`，仅 `shell` 启动的工具进程；保留文件工具的应用层路径边界。
+- 结构化 direct 模式和经过 quoting 验证的显式 shell 模式；非 TTY、关闭 stdin、每命令独立 runner，不支持后台常驻进程。
+- 固定断网策略，以及只读执行/工作区写入策略。只读指工作区不可写，必要临时写根需单独声明；工作区写入保护约定元数据目录。
+- stdout/stderr、输出脱敏/裁剪/artifact、超时、取消、进程树回收、结构化结果和审计。
+- 独立的状态检查与显式 provisioning 管理入口（命令名暂定 `sandbox status`、`sandbox provision`）。
+
+首期不做：联网代理/域名或端口白名单、模型请求扩大隔离权限或宿主逃逸、交互式终端/GUI、自动提权修复、一键全局卸载、整个 Harness/worker 的 OS 隔离。MCP worker 保持现有只读工具及 hard deny；模型 HTTP 请求不受 shell 沙箱网络策略限制。
+
+标准 elevated 路径要求有效 `root/read`，不提供严格的“仅仓库可读”保证；环境 key 清理也不能替代磁盘敏感文件访问控制。用户界面必须说明真实读写/网络范围，不宣传不存在的隔离。
+
+### 22.2 组件和架构边界
+
+日常生产执行使用 `codex-windows-sandbox-setup.exe`（普通权限 refresh）和 `codex-command-runner.exe`；`codex-windows-managed-deny-probe.exe` 用于验收。`codex-windows-sandbox-service.exe` 面向服务/MSIX 模式，首期不安装或依赖该服务。2026-10-10 起这组组件替换为 TinyHarness 独立命名空间 fork 构建：exe 文件名、payload 字段名、分块环境通道、DPAPI 与 IPC 协议不变，机器级命名（账户 `TinyHarnessOffline`/`TinyHarnessOnline`、组 `TinyHarnessUsers`、防火墙规则、WFP 对象、mutex、注册表记录、桌面前缀 `TinyHarnessDesktop-`）与 Codex 发布版完全分栈。
+
+```text
+ShellTool.Prepare：命令 + 清理后的环境 + 有效隔离策略
+  → PermissionEngine：审批同一不可变计划
+  → ShellTool.ExecuteAsync
+      → HostProcessBackend：既有宿主执行
+      → WindowsSandboxBackend：C# 直接编排 setup / runner
+  → 输出捕获、执行终态、工具结果和审计
+```
+
+在 `Services/Runtime` 提取窄的进程执行后端，通过 CLI composition root 显式注入 `ShellTool`。prepared execution、effective policy、result 等类型按需归入 `Models/Runtime`；名称在实现时确定，不预建跨平台空类型或拆分程序集。
+
+后端契约不强制返回 `.NET Process`，而是表达执行会话、双流输出、取消和结构化终态。Windows 后端负责有效权限解析、refresh、capability SID、凭据、私有桌面、管道身份和 runner 生命周期的一致性；直接用当前用户 `Process.Start(runner.exe)` 不构成正确接入。
+
+### 22.3 配置信任和权限不变量
+
+- 组件绝对路径、sandbox home、最低隔离要求、网络上限和额外写根来自独立可信用户/宿主设置，不进入可被目标项目配置覆盖的普通来源链。模型不接收任意 profile 或组件路径参数。
+- 旧配置保留宿主执行并明确显示“无 OS 隔离”；显式启用 Windows sandbox 后，缺组件、未初始化、版本/策略不匹配或启动失败均拒绝执行，绝不自动 fallback。
+- Prepare 无副作用，冻结命令、cwd、timeout、清理后的环境与有效策略。refresh、SID 写回、桌面/管道创建、进程启动均在授权后执行，不得在执行阶段扩大权限。
+- fingerprint/session grant 绑定 backend、策略版本、规范化有效读写范围、deny、网络、临时根、元数据保护和环境策略身份。同一命令不能复用旧授权联网、扩大写根或切换宿主；拒绝不得因 backend 变化意外失效。
+- commandRules 只表示命令许可，不授予 provisioning、联网或隔离逃逸。sandbox 不自动将 `Ask` 转为 `Allow`。
+- 普通 run、默认 doctor/smoke 不自动 provisioning、账户修复或 UAC。管理操作展示机器级副作用，另行取得授权。
+
+账户、密码、网络规则是机器级共享状态。fork 后 TinyHarness 与 Codex 发布版的机器级命名完全分栈，但分栈命名只降低共存时的互相破坏，不构成共存已验收的证明；同一 fork 命名空间内部不同 home 仍共享账户、密码和网络规则（重复 provisioning 重置 `TinyHarnessOffline`/`TinyHarnessOnline` 密码会使其他 home 凭据失效），仍不为实例级完整回滚提供保证，legacy cleanup 不进入自动失败回收。仍为 Codex 用户名的 marker/凭据一律拒绝复用。
+
+### 22.4 执行、输出和生命周期
+
+- setup、runner、目标命令环境分别清理；明确 PATH、TEMP/TMP、用户目录和缓存。凭据仅用于启动，不写入参数摘要、模型、审计或异常。
+- 可信组件、审计和 artifact 目录不对目标命令可写；若位于工作区写根内，必须明确保护或迁移至受保护位置。
+- 保留跨块脱敏、head/tail 与完整输出 artifact；字节流增量解码。有界内存和输出磁盘限额不得导致静默丢失，输出不完整要明确报告。
+- 直接保留 runner 的 `exit_code`、`timed_out` 和错误 stage。缺少 exit 不用 OS 退出码补造命令结果，自然退出 192 不代表超时。
+- 准备/refresh、连接、启动、命令、输出排空和回收期限分别有界；取消后使用独立清理期限。区分用户取消、命令超时、启动/协议失败和策略拒绝。
+- 取消与回收状态进入审计；命令失败可以返回模型，回收失败或进程树状态未知必须终止后续副作用，不能当作普通工具错误继续。
+- 现有 runner 的 breakaway/保留后代行为与首期“不遗留后台进程”要求需真实验证。若既有 EXE 无法满足，应报告阻碍并重新确定范围；不以杀死 runner/根进程代替完整杀树证明，不预先授权修改 Rust 模块。
+
+### 22.5 纵向切片与验收
+
+| 切片 | 实施内容 | 验收门槛 |
+|---|---|---|
+| M11.1 执行后端 | 提取宿主 backend；prepared execution、输出与结果契约；fake backend | 现有 shell 行为不退化，相关默认测试通过 |
+| M11.2 Windows 编排 | C# 版本/状态检查、权限解析、refresh、SID/凭据、桌面、管道及 runner 协议 | 模拟管道覆盖错误/终态/取消；在获授权的受控环境完成最小启动与生命周期验证，阻碍未解决不继续宣称可用 |
+| M11.3 策略闭环 | 可信配置、固定断网策略、指纹/授权、CLI 展示、输出和审计 | fake model 工具调用闭环；无权限扩大、无 fallback；实际执行与审批策略一致 |
+| M11.4 管理和产物 | 显式 status/provision、组件路径/版本及打包约定 | 普通入口不自动修改机器；NativeAOT publish 和仓库外原生产物 smoke 通过 |
+| M11.5 隔离验收 | Opt-in Windows 文件/网络/元数据及进程生命周期测试 | 验证真实隔离与完整回收，记录组件版本、环境、结果与限制后才声明支持 |
+
+每个切片包含直接相关测试，不将测试集中到最后。默认测试使用 fake backend/管道，不修改机器账户、ACL、注册表或防火墙；覆盖策略不可变、授权隔离、无 fallback、帧版本/长度/截断、缺终态、断管道、跨帧解码/脱敏、大输出、超时/取消和回收失败。显式 shell 验证空参数、引号、尾反斜杠、管道及组合语法，保留现有 cmd quoting 语义。
+
+真实系统测试另行授权，在可丢弃 Windows 环境执行：允许/拒绝读写对照、只读工作区、元数据保护、断网、自然退出 23/192、实际超时、启动取消、主动 terminate、宿主异常退出和后代存活状态。标准策略的读取范围与共存限制应明确记录，测试成功也不扩大宣称范围。
+
+涉及配置、DTO、工具入口或 P/Invoke 的切片完成 `win-x64` NativeAOT publish，保持禁用反射 JSON，无未解释的 trimming/AOT warning；从仓库外运行原生产物的 CLI smoke 和 MCP 只读边界回归。默认 smoke 不隐式 provisioning，实际沙箱 smoke 单独 opt-in。
+
+### 22.6 后续 Linux/macOS
+
+共用的是有效策略语义、准备/授权和执行结果契约，不是 Windows SID、桌面或管道。后续分别调查平台能力并实现 Linux/macOS backend；不支持的请求明确拒绝，不静默忽略文件/网络限制。各平台独立完成 NativeAOT RID 发布、原生产物运行和真实隔离验收后，才进入 supported 清单。

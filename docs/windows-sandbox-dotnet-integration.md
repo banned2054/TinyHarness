@@ -5,7 +5,7 @@
 > 主方案：TinyHarness 的 C# Runtime 直接编排独立编译的 setup / runner 组件，不调用 Codex CLI，不新增 Rust shim
 > 状态：组件已编译，协议及部分 C# 片段已验证；完整 TinyHarness 接入与实际隔离验收尚未完成
 > 命名空间（2026-10-10）：接入目标改为 TinyHarness 独立命名空间 fork（§1.1）；setup/runner 已替换为 fork 构建
-> 产品范围和实施顺序：[PLAN.md §22：M11](../PLAN.md#22-m11windows-工具进程沙箱)
+> 产品范围和实施顺序：[PAST_PLAN.md §22：M11](../PAST_PLAN.md#22-m11windows-工具进程沙箱)
 > 目标读者：在 .NET harness 中复用 Codex Windows 沙箱模块执行不可信命令的集成开发者
 
 ---
@@ -655,7 +655,7 @@ static async Task<JsonObject?> ReadFrameAsync(Stream s, CancellationToken ct) {
 
 ## 10. 实施路线与后续平台
 
-详细里程碑见 [PLAN.md §22](../PLAN.md#22-m11windows-工具进程沙箱)，本节只记录技术落点：
+详细历史里程碑见 [PAST_PLAN.md §22](../PAST_PLAN.md#22-m11windows-工具进程沙箱)，本节只记录技术落点：
 
 1. 提取现有宿主进程 backend，建立 prepared execution、输出和终态契约，保留现有 shell 行为与默认测试。
 2. 实现 C# Windows 编排及 fake 管道测试；直接使用已编译 setup/runner，不调用 Codex CLI，不新增 Rust shim。

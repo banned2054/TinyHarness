@@ -317,4 +317,4 @@ M11.5 断网修复与全矩阵闭环（2026-10-10 晚）：fork 侧新增按账�
 
 Agent Loop 通过 `IChatCompletionClient` 使用模型，SDK 类型留在协议适配层。工具显式注册；结构化状态使用 System.Text.Json source generation，配置使用无反射的手工绑定，以便持续验证 trimming 与 NativeAOT。
 
-完整产品边界和里程碑见 [PLAN.md](../PLAN.md)，仓库开发规范见 [AGENTS.md](../AGENTS.md)。MVP 基线不包含 GUI、MCP、RAG、多 Agent、插件系统或 OS 级 sandbox；后续 M9 已交付本机只读 MCP worker。
+当前产品边界及面向日常 coding agent 的 M12+ 路线见 [PLAN.md](../PLAN.md)。原 MVP 与 M9–M11 计划（包含历史范围和验收边界）原样归档于 [PAST_PLAN.md](../PAST_PLAN.md)，仓库开发规范仍见 [AGENTS.md](../AGENTS.md)。后续里程碑表示计划中的工作，不代表功能已经提供。
