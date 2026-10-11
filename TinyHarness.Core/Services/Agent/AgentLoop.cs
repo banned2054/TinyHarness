@@ -3,11 +3,13 @@ using TinyHarness.Core.Models.Agent;
 using TinyHarness.Core.Models.ChatCompletions;
 using TinyHarness.Core.Models.Context;
 using TinyHarness.Core.Models.Permissions;
+using TinyHarness.Core.Models.Session;
 using TinyHarness.Core.Models.Tools;
 using TinyHarness.Core.Services.ChatCompletions;
 using TinyHarness.Core.Services.Context;
 using TinyHarness.Core.Services.Permissions;
 using TinyHarness.Core.Services.Persistence;
+using TinyHarness.Core.Services.Session;
 using TinyHarness.Core.Services.Tools;
 
 namespace TinyHarness.Core.Services.Agent;
@@ -19,6 +21,9 @@ namespace TinyHarness.Core.Services.Agent;
 ///     压缩旧历史，再发送模型视图。压缩只发生在两次模型请求之间，绝不会在等待审批或工具
 ///     执行期间进行。
 ///     未提供 <see cref="PermissionEngine" /> 时会跳过授权，仅用于测试或简单的只读流程。
+///     循环不感知会话层概念：宿主可注入共享的 <see cref="ConversationContext" /> 实现跨回合
+///     续聊（<see cref="RunTurnAsync" />），并经由窄的 <see cref="IHostEventSink" /> 契约接收
+///     统一的宿主事件（PLAN §6），事件身份由宿主补齐。
 ///     The Agent main loop. Request the model, consume the stream, assemble tool
 ///     calls, prepare every call of the round, authorize and execute the approved
 ///     ones, hand results back, and repeat until the model produces a plain-text
@@ -29,19 +34,31 @@ namespace TinyHarness.Core.Services.Agent;
 ///     requests, never while an approval is pending or a tool is executing.
 ///     When no <see cref="PermissionEngine" /> is supplied (test/simple read-only
 ///     scenarios), authorization is skipped and every prepared invocation executes.
+///     The loop knows nothing about sessions: the host can inject a shared
+///     <see cref="ConversationContext" /> for cross-turn continuation
+///     (<see cref="RunTurnAsync" />) and receives unified host events through the
+///     narrow <see cref="IHostEventSink" /> contract (PLAN §6), with identity stamped
+///     in by the host.
 /// </summary>
 public sealed class AgentLoop
 {
     private readonly IApprovalProvider?    _approver;
     private readonly ConversationContext   _context;
     private readonly IChatCompletionClient _model;
+    private readonly IHostEventSink?       _events;
     private readonly AgentOptions          _options;
     private readonly PermissionEngine?     _permissions;
     private readonly IRunRecorder?         _recorder;
     private readonly ToolRegistry          _tools;
 
+    private long _eventSequence;
+
+    /// <summary>回合内首个事件接收方故障的说明；随终态结果并入 Error。The first sink-fault note of the turn; merged into Error on the terminal result.</summary>
+    private string? _sinkFault;
+
     public AgentLoop(IChatCompletionClient model,       ToolRegistry       tools,    AgentOptions  options,
-                     PermissionEngine?     permissions, IApprovalProvider? approver, IRunRecorder? recorder = null)
+                     PermissionEngine?     permissions, IApprovalProvider? approver, IRunRecorder? recorder = null,
+                     IHostEventSink?       events = null, ConversationContext? context = null)
     {
         ArgumentNullException.ThrowIfNull(model);
         ArgumentNullException.ThrowIfNull(tools);
@@ -52,7 +69,8 @@ public sealed class AgentLoop
         _permissions = permissions;
         _approver    = approver;
         _recorder    = recorder;
-        _context     = new ConversationContext(options.Context);
+        _events      = events;
+        _context     = context ?? new ConversationContext(options.Context);
     }
 
     /// <summary>
@@ -68,20 +86,68 @@ public sealed class AgentLoop
     public IReadOnlyList<ChatMessage> History => _context.Messages;
 
     /// <summary>
-    ///     每次成功压缩后触发，携带压缩前后的视图估算 token 数（CLI 用于展示）。
-    ///     Raised after every successful compaction with the view estimates before and after (shown by the CLI).
-    /// </summary>
-    public event Action<ContextChange>? ContextCompacted;
-
-    /// <summary>
     ///     从系统提示和用户输入开始运行一次完整 Agent 任务，并返回终止状态、最终文本及执行统计。
+    ///     上下文总是被重置；跨回合续聊请使用 <see cref="RunTurnAsync" />。
     ///     Runs one complete agent task from the supplied prompts and returns its terminal state, final text,
-    ///     and execution counts.
+    ///     and execution counts. The context is always reset; use <see cref="RunTurnAsync" /> to continue
+    ///     a conversation across turns.
     /// </summary>
     public async Task<AgentResult> RunAsync(string systemPrompt, string userInput, CancellationToken cancellationToken)
     {
         _context.Reset();
         _context.Append(ChatMessage.System(systemPrompt));
+
+        return await RunTurnCoreAsync(systemPrompt, userInput, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    ///     在既有对话上下文上继续一个新回合：上下文为空时先写入系统提示；非空时要求系统提示
+    ///     与首条 system 消息一致（会话内指令固定），并要求历史以完整的工具原子组结尾，然后
+    ///     只追加新的用户输入。上一回合若在工具执行中途被取消或失败，续聊会被显式拒绝——
+    ///     不补造工具结果，也不把无效历史发给模型（PLAN §7.3 的进程内对应物）。
+    ///     Continues a new turn on the existing conversation context: an empty context gets
+    ///     the system prompt first; a non-empty one must carry the same system prompt
+    ///     (instructions are fixed per session) and must end with a complete tool group,
+    ///     and then only the new user input is appended. When the previous turn was
+    ///     cancelled or failed mid tool execution, continuation is explicitly refused —
+    ///     tool results are never fabricated and invalid history is never sent to the
+    ///     model (the in-process counterpart of PLAN §7.3).
+    /// </summary>
+    public async Task<AgentResult> RunTurnAsync(string systemPrompt, string userInput,
+                                                CancellationToken cancellationToken)
+    {
+        if (_context.Messages.Count == 0)
+        {
+            _context.Append(ChatMessage.System(systemPrompt));
+        }
+        else
+        {
+            var head = _context.Messages[0];
+            if (head.Role != ChatRole.System ||
+                !string.Equals(head.Content, systemPrompt, StringComparison.Ordinal))
+                throw new InvalidOperationException(
+                    "The supplied system prompt differs from the conversation's existing system prompt; " +
+                    "continuing a session requires the same instructions.");
+
+            EnsureCompleteToolGroups();
+        }
+
+        return await RunTurnCoreAsync(systemPrompt, userInput, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    ///     一次回合的共享执行核心：追加用户输入、发布运行开始事件，并驱动主循环到终态。
+    ///     The shared execution core of one turn: append the user input, publish the
+    ///     run-started event, and drive the main loop to a terminal state.
+    /// </summary>
+    private async Task<AgentResult> RunTurnCoreAsync(string systemPrompt, string userInput,
+                                                     CancellationToken cancellationToken)
+    {
+        // Each turn is one run for the event contract: sequence and sink-fault state
+        // restart here so a reused loop still reports per-run identity.
+        _eventSequence = 0;
+        _sinkFault     = null;
+
         _context.Append(ChatMessage.User(userInput));
 
         var steps          = 0;
@@ -92,6 +158,8 @@ public sealed class AgentLoop
         {
             if (_recorder is not null)
                 await _recorder.StartAsync(systemPrompt, userInput, cancellationToken).ConfigureAwait(false);
+
+            await PublishEventAsync(HostEventKind.RunStarted, null, cancellationToken).ConfigureAwait(false);
 
             while (steps < _options.MaxAgentSteps)
             {
@@ -255,7 +323,7 @@ public sealed class AgentLoop
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
             {
-                return result with
+                result = result with
                 {
                     Status = AgentStatus.Failed,
                     Error = string.IsNullOrWhiteSpace(result.Error)
@@ -264,7 +332,130 @@ public sealed class AgentLoop
                 };
             }
 
+        return await PublishRunFinishedAsync(result).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    ///     发布运行终态事件。终态事件不带令牌发布：取消也不得吞掉终态交付；事件接收方失败
+    ///     不改变运行终态，只在 Error 中附加说明——显示失败不能抹去真实的执行结果。
+    ///     回合内由普通事件发布记录的展示故障也在此并入 Error。
+    ///     Publishes the run-finished event. The terminal event is published without a
+    ///     token so cancellation can never swallow its delivery; a failing sink does not
+    ///     change the terminal state and only appends an explanatory error — a display
+    ///     failure must not erase the real outcome. Display faults recorded while
+    ///     publishing ordinary events are merged into Error here as well.
+    /// </summary>
+    private async Task<AgentResult> PublishRunFinishedAsync(AgentResult result)
+    {
+        if (_events is null) return result;
+
+        if (_sinkFault is not null)
+            result = result with
+            {
+                Error = string.IsNullOrWhiteSpace(result.Error)
+                    ? $"Host event sink failed during the run: {_sinkFault}"
+                    : $"{result.Error}; host event sink failed during the run: {_sinkFault}"
+            };
+
+        try
+        {
+            await _events.PublishAsync(new HostEvent
+                                       {
+                                           Kind     = HostEventKind.RunFinished,
+                                           Sequence = Interlocked.Increment(ref _eventSequence),
+                                           Payload  = result
+                                       },
+                                       CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            result = result with
+            {
+                Error = string.IsNullOrWhiteSpace(result.Error)
+                    ? $"Host event sink failed: {ex.Message}"
+                    : $"{result.Error}; host event sink failed: {ex.Message}"
+            };
+        }
+
         return result;
+    }
+
+    /// <summary>
+    ///     发布一条宿主事件；未配置事件接收方时为无操作。顺序号按运行递增（每个运行从 1 开始）。
+    ///     与终态发布一致，展示失败不终止运行（PLAN §6：事件通道只有发布语义）：异常在此
+    ///     转换为首条故障说明并随终态结果上报，而不是抹去真实的执行结果。
+    ///     Publishes one host event; a no-op when no sink is configured. The sequence
+    ///     increases within the run (starting at 1). Matching the terminal publish, a sink
+    ///     failure never aborts the run (PLAN §6: the channel is publish-only): the
+    ///     exception is converted into the first fault note and surfaced on the terminal
+    ///     result instead of erasing the real outcome.
+    /// </summary>
+    private async ValueTask PublishEventAsync(HostEventKind kind, object? payload,
+                                              CancellationToken cancellationToken)
+    {
+        if (_events is null) return;
+
+        var @event = new HostEvent
+        {
+            Kind     = kind,
+            Sequence = Interlocked.Increment(ref _eventSequence),
+            Payload  = payload
+        };
+        try
+        {
+            await _events.PublishAsync(@event, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _sinkFault ??= ex.Message;
+        }
+    }
+
+    /// <summary>
+    ///     校验历史中不存在不完整的工具原子组：每个 assistant tool_calls 的每个调用都必须
+    ///     有对应的 tool 结果消息。取消或失败可能留下已请求但未回传结果的调用；把这样的
+    ///     历史继续发给模型是无效请求，必须在追加新输入前拒绝。
+    ///     Verifies the history carries no incomplete tool group: every assistant tool
+    ///     call must have a matching tool-result message. A cancel or failure can
+    ///     leave calls whose results never arrived; continuing would send invalid history,
+    ///     so the turn is refused before any new input is appended.
+    /// </summary>
+    private void EnsureCompleteToolGroups()
+    {
+        HashSet<string>? pending = null;
+        foreach (var message in _context.Messages)
+        {
+            switch (message.Role)
+            {
+                case ChatRole.Assistant :
+                    if (pending is { Count: > 0 }) throw IncompleteTail(pending);
+
+                    pending = message.ToolCalls is { Count: > 0 }
+                        ? new HashSet<string>(message.ToolCalls.Select(call => call.Id), StringComparer.Ordinal)
+                        : null;
+                    break;
+
+                case ChatRole.Tool :
+                    if (pending is not null && message.ToolCallId is { } id) pending.Remove(id);
+                    break;
+
+                case ChatRole.User or ChatRole.System :
+                    if (pending is { Count: > 0 }) throw IncompleteTail(pending);
+                    break;
+            }
+        }
+
+        if (pending is { Count: > 0 }) throw IncompleteTail(pending);
+
+        static InvalidOperationException IncompleteTail(IReadOnlyCollection<string> pending)
+        {
+            return new InvalidOperationException(
+                "The conversation contains an incomplete tool round: assistant tool call(s) " +
+                string.Join(", ", pending) +
+                " have no tool result. The previous run was cancelled or failed mid-round, so the executed " +
+                "work may have an unknown state; continuing would send malformed history to the model. " +
+                "Inspect the workspace before starting new work.");
+        }
     }
 
     /// <summary>
@@ -354,7 +545,7 @@ public sealed class AgentLoop
 
         var after  = _context.EstimateViewTokens();
         var change = new ContextChange(before, after);
-        ContextCompacted?.Invoke(change);
+        await PublishEventAsync(HostEventKind.CompactionApplied, change, cancellationToken).ConfigureAwait(false);
         if (_recorder is not null)
             await _recorder.RecordCompactionAsync(change, cancellationToken).ConfigureAwait(false);
 

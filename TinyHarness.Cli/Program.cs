@@ -210,9 +210,8 @@ internal static class Program
         };
 
         var recorder = new FileRunRecorder(config.SessionDirectory, knownSecrets : knownSecrets);
-        var loop     = new AgentLoop(model, tools, options, permissions, approver, recorder);
-        loop.ContextCompacted += change =>
-            Console.Out.WriteLine($"Context: {change.BeforeTokens:N0} -> {change.AfterTokens:N0} tokens after compaction");
+        var loop     = new AgentLoop(model, tools, options, permissions, approver, recorder,
+                                     new ConsoleHostEventSink());
         const string systemPrompt =
             "You are TinyHarness, a local coding harness that inspects and modifies a workspace. " +
             "Use list_files, search_text and read_file to inspect, apply_patch to modify files, and shell to run commands. " +

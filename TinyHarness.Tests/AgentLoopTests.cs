@@ -2,9 +2,12 @@ using TinyHarness.Core.Models.Agent;
 using TinyHarness.Core.Models.ChatCompletions;
 using TinyHarness.Core.Models.Context;
 using TinyHarness.Core.Models.Permissions;
+using TinyHarness.Core.Models.Session;
 using TinyHarness.Core.Models.Tools;
 using TinyHarness.Core.Services.Agent;
+using TinyHarness.Core.Services.Context;
 using TinyHarness.Core.Services.Persistence;
+using TinyHarness.Core.Services.Session;
 using TinyHarness.Core.Services.Tools;
 
 namespace TinyHarness.Tests;
@@ -253,6 +256,123 @@ public class AgentLoopTests
 
         Assert.Equal(AgentStatus.Completed, result.Status);
         Assert.Empty(recorder.UsageRecords);
+    }
+
+    [Fact]
+    public async Task RunTurn_ContinuesSharedContextAndRejectsChangedSystemPrompt()
+    {
+        var client  = new FakeChatClient();
+        client.Enqueue(FakeChatClient.Text("one"));
+        client.Enqueue(FakeChatClient.Text("two"));
+        var context = new ConversationContext();
+        var loop    = new AgentLoop(client, new ToolRegistry([]), Options(), null, null, context: context);
+
+        await loop.RunTurnAsync("sys", "u1", CancellationToken.None);
+
+        // A different system prompt is refused before anything is appended; the
+        // context still ends with turn 1's assistant reply.
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => loop.RunTurnAsync("different", "u2", CancellationToken.None));
+        Assert.Equal(3, context.Messages.Count);
+        Assert.Equal("one", context.Messages[2].Content);
+
+        // The matching system prompt continues on the shared context: the second
+        // request carries the first exchange and only one system message.
+        await loop.RunTurnAsync("sys", "u2", CancellationToken.None);
+        Assert.Equal(2, client.Requests);
+        Assert.Equal([ChatRole.System, ChatRole.User, ChatRole.Assistant, ChatRole.User],
+                     client.RequestLog[1].Messages.Select(m => m.Role).ToArray());
+        Assert.Single(client.RequestLog[1].Messages, m => m.Role == ChatRole.System);
+    }
+
+    [Fact]
+    public async Task RunTurn_RefusesToContinueWhenHistoryEndsWithoutToolResults()
+    {
+        var client  = new FakeChatClient();
+        var context = new ConversationContext();
+        context.Append(ChatMessage.System("sys"));
+        context.Append(ChatMessage.User("u1"));
+        context.Append(ChatMessage.Assistant(string.Empty, [new ChatToolCall("call_1", "t", "{}")]));
+        var loop = new AgentLoop(client, new ToolRegistry([new FakeTool("t")]), Options(), null, null,
+                                 context: context);
+
+        var rejected = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => loop.RunTurnAsync("sys", "u2", CancellationToken.None));
+
+        Assert.Contains("call_1", rejected.Message);
+        Assert.Equal(0, client.Requests);
+        // Nothing was appended for the rejected turn.
+        Assert.Equal(3, context.Messages.Count);
+    }
+
+    [Fact]
+    public async Task RunEvents_SinkFailureOnNonTerminalEventDoesNotFailTheRun()
+    {
+        var client = new FakeChatClient();
+        client.Enqueue(FakeChatClient.Text("done"));
+        var sink = new ThrowingSink(HostEventKind.RunStarted);
+        var loop = new AgentLoop(client, new ToolRegistry([]), Options(), null, null, events: sink);
+
+        var result = await loop.RunAsync("sys", "go", CancellationToken.None);
+
+        // A display failure never aborts the run: the real outcome is preserved, the
+        // fault is surfaced on the terminal result, and the terminal delivery happens.
+        Assert.Equal(AgentStatus.Completed, result.Status);
+        Assert.Equal("done", result.FinalMessage);
+        Assert.Contains("sink exploded", result.Error);
+        Assert.Equal(2, sink.Published);
+    }
+
+    [Fact]
+    public async Task RunEvents_SinkFailureOnTerminalEventPreservesTheOutcome()
+    {
+        var client = new FakeChatClient();
+        client.Enqueue(FakeChatClient.Text("done"));
+        var sink = new ThrowingSink(HostEventKind.RunFinished);
+        var loop = new AgentLoop(client, new ToolRegistry([]), Options(), null, null, events: sink);
+
+        var result = await loop.RunAsync("sys", "go", CancellationToken.None);
+
+        Assert.Equal(AgentStatus.Completed, result.Status);
+        Assert.Equal("done", result.FinalMessage);
+        Assert.Contains("sink exploded", result.Error);
+        Assert.Equal(2, sink.Published);
+    }
+
+    [Fact]
+    public async Task RunTurn_EventSequenceRestartsAtOneForEachTurn()
+    {
+        var client = new FakeChatClient();
+        client.Enqueue(FakeChatClient.Text("one"));
+        client.Enqueue(FakeChatClient.Text("two"));
+        var sink    = new TestHostEventSink();
+        var context = new ConversationContext();
+        var loop    = new AgentLoop(client, new ToolRegistry([]), Options(), null, null,
+                                    events: sink, context: context);
+
+        await loop.RunTurnAsync("sys", "u1", CancellationToken.None);
+        await loop.RunTurnAsync("sys", "u2", CancellationToken.None);
+
+        // Each turn is one run: the run-scoped sequence restarts at 1 instead of
+        // accumulating across turns on a reused loop.
+        Assert.Equal([1L, 2L, 1L, 2L], sink.Events.Select(@event => @event.Sequence).ToArray());
+    }
+
+    /// <summary>
+    ///     在指定事件种类上抛出的 sink，用于钉住发布点的容错规则。
+    ///     A sink that throws on one event kind, pinning the publish-site fault rules.
+    /// </summary>
+    private sealed class ThrowingSink(HostEventKind failOn) : IHostEventSink
+    {
+        public int Published { get; private set; }
+
+        public ValueTask PublishAsync(HostEvent @event, CancellationToken cancellationToken)
+        {
+            Published++;
+            if (@event.Kind == failOn) throw new InvalidOperationException("sink exploded");
+
+            return ValueTask.CompletedTask;
+        }
     }
 
     /// <summary>

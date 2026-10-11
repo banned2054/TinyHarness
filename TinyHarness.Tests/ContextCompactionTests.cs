@@ -157,11 +157,11 @@ public class ContextCompactionTests
         client.Enqueue(FakeChatClient.Text(StateJson("goal-one", "a.cs", "decision-x")));
         client.Enqueue(FakeChatClient.Text("done"));
 
-        var changes = new List<ContextChange>();
-        var loop    = new AgentLoop(client, new ToolRegistry([tool]), TightBudgetOptions());
-        loop.ContextCompacted += changes.Add;
+        var sink = new TestHostEventSink();
+        var loop = new AgentLoop(client, new ToolRegistry([tool]), TightBudgetOptions(), null, null, events: sink);
 
         var result = await loop.RunAsync("sys", "go", CancellationToken.None);
+        var changes = sink.Compactions();
 
         Assert.True(result.Status == AgentStatus.Completed,
                     $"{result.Error} requests={client.Requests} compactions={result.Compactions} steps={result.Steps}");
@@ -305,11 +305,11 @@ public class ContextCompactionTests
         }.ToJsonString()));
         client.Enqueue(FakeChatClient.Text("done"));
 
-        var changes = new List<ContextChange>();
-        var loop    = new AgentLoop(client, new ToolRegistry([tool]), TightBudgetOptions(12));
-        loop.ContextCompacted += changes.Add;
+        var sink = new TestHostEventSink();
+        var loop = new AgentLoop(client, new ToolRegistry([tool]), TightBudgetOptions(12), null, null, events: sink);
 
         var result = await loop.RunAsync("sys", "go", CancellationToken.None);
+        var changes = sink.Compactions();
 
         Assert.Equal(AgentStatus.Completed, result.Status);
         Assert.Equal(4, result.ToolExecutions);
@@ -378,7 +378,7 @@ public class ContextCompactionTests
 
         client.Enqueue(FakeChatClient.Text("done"));
 
-        var changes = new List<ContextChange>();
+        var sink = new TestHostEventSink();
         var loop = new AgentLoop(client, new ToolRegistry([tool]), new AgentOptions
         {
             Model                     = "test-model",
@@ -390,10 +390,10 @@ public class ContextCompactionTests
                 ReservedOutputTokens      = 30,
                 CompactionThresholdTokens = 2800
             }
-        });
-        loop.ContextCompacted += changes.Add;
+        }, null, null, events: sink);
 
         var result = await loop.RunAsync("sys", "go", CancellationToken.None);
+        var changes = sink.Compactions();
 
         Assert.True(result.Status == AgentStatus.Completed,
                     $"{result.Error} requests={client.Requests} compactions={result.Compactions} steps={result.Steps}");
@@ -600,7 +600,7 @@ public class ContextCompactionTests
         client.Enqueue(FakeChatClient.Text(StateJson("goal-one", "a.cs", "decision-x")));
         client.Enqueue(WithUsage(FakeChatClient.Text("done"), 1790, 6, "stop"));
 
-        var changes = new List<ContextChange>();
+        var sink = new TestHostEventSink();
         var loop = new AgentLoop(client, new ToolRegistry([tool]), new AgentOptions
         {
             Model                     = "test-model",
@@ -612,10 +612,10 @@ public class ContextCompactionTests
                 ReservedOutputTokens      = 30,
                 CompactionThresholdTokens = 1400
             }
-        });
-        loop.ContextCompacted += changes.Add;
+        }, null, null, events: sink);
 
         var result = await loop.RunAsync("sys", "go", CancellationToken.None);
+        var changes = sink.Compactions();
 
         Assert.True(result.Status == AgentStatus.Completed,
                     $"{result.Error} requests={client.Requests} compactions={result.Compactions} steps={result.Steps}");
