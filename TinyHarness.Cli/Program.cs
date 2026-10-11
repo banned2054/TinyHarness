@@ -188,14 +188,17 @@ internal static class Program
         await Console.Out.WriteLineAsync("  tools     : list_files, search_text, read_file, apply_patch, shell");
 
         // Assemble the real model transport, workspace tools and interactive
-        // permission flow used by normal CLI runs.
+        // permission flow used by normal CLI runs. stdin is dispatched through the
+        // single input coordinator (PLAN §6), so approval prompts never race another
+        // read loop; the M12.3 interactive input joins the same outlet.
         var model = ModelClientFactory.Create(config.Model, config.Endpoint, apiKey, config.ChatApi);
 
         var workspace = new Workspace(config.WorkspaceRoot);
         var tools = BuildTools(workspace, config, apiKey, executionPolicy, sandbox?.Backend,
                                knownSecrets);
         var               permissions = new PermissionEngine(config.WorkspaceRoot, config.CommandRules);
-        IApprovalProvider approver    = new ConsoleApprovalProvider();
+        IApprovalProvider approver    = new ConsoleApprovalProvider(new ExclusiveInputReader(Console.In), Console.Out,
+                                                                    knownSecrets);
         var options = new AgentOptions
         {
             Model                     = config.Model,
@@ -211,7 +214,7 @@ internal static class Program
 
         var recorder = new FileRunRecorder(config.SessionDirectory, knownSecrets : knownSecrets);
         var loop     = new AgentLoop(model, tools, options, permissions, approver, recorder,
-                                     new ConsoleHostEventSink());
+                                     new ConsoleHostEventSink(knownSecrets));
         const string systemPrompt =
             "You are TinyHarness, a local coding harness that inspects and modifies a workspace. " +
             "Use list_files, search_text and read_file to inspect, apply_patch to modify files, and shell to run commands. " +
@@ -228,6 +231,12 @@ internal static class Program
         await Console.Out.WriteLineAsync($"status     : {result.Status}");
         await Console.Out.WriteLineAsync($"steps      : {result.Steps}");
         await Console.Out.WriteLineAsync($"toolExecs  : {result.ToolExecutions}");
+        if (result.InputTokens is not null || result.OutputTokens is not null)
+        {
+            var inputTokens  = (result.InputTokens ?? 0).ToString("N0");
+            var outputTokens = (result.OutputTokens ?? 0).ToString("N0");
+            await Console.Out.WriteLineAsync($"usage      : {inputTokens} in / {outputTokens} out tokens (server-reported; absent requests not counted)");
+        }
         await Console.Out.WriteLineAsync($"final      : {result.FinalMessage}");
         await WritePersistencePathsAsync(recorder).ConfigureAwait(false);
         if (!string.IsNullOrWhiteSpace(result.Error)) await Console.Out.WriteLineAsync($"error      : {result.Error}");

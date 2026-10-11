@@ -56,6 +56,16 @@ public sealed class AgentLoop
     /// <summary>回合内首个事件接收方故障的说明；随终态结果并入 Error。The first sink-fault note of the turn; merged into Error on the terminal result.</summary>
     private string? _sinkFault;
 
+    /// <summary>
+    ///     服务端报告的输入/输出 token 累计（含压缩摘要请求）；任一请求缺可靠 usage 时不计入，
+    ///     全程无可靠 usage 保持 null。终态结果只反映本回合的累计。
+    ///     Server-reported input/output token totals (compaction summary requests
+    ///     included); requests without reliable usage contribute nothing and an all-null
+    ///     run keeps null. The terminal result reflects this turn's totals only.
+    /// </summary>
+    private long? _reportedInputTokens;
+    private long? _reportedOutputTokens;
+
     public AgentLoop(IChatCompletionClient model,       ToolRegistry       tools,    AgentOptions  options,
                      PermissionEngine?     permissions, IApprovalProvider? approver, IRunRecorder? recorder = null,
                      IHostEventSink?       events = null, ConversationContext? context = null)
@@ -147,6 +157,8 @@ public sealed class AgentLoop
         // restart here so a reused loop still reports per-run identity.
         _eventSequence = 0;
         _sinkFault     = null;
+        _reportedInputTokens  = null;
+        _reportedOutputTokens = null;
 
         _context.Append(ChatMessage.User(userInput));
 
@@ -206,7 +218,8 @@ public sealed class AgentLoop
                 // oscillate instead of converging.
                 var estimatedPromptTokens = TokenEstimator.EstimateMessages(request.Messages)
                                           + TokenEstimator.EstimateToolDefinitions(definitions);
-                var assistant = await RequestAssistantMessageAsync(request, cancellationToken, estimatedPromptTokens);
+                var assistant = await RequestAssistantMessageAsync(request, cancellationToken, estimatedPromptTokens,
+                                                                   publishTextDeltas : true);
 
                 _context.Append(assistant);
 
@@ -233,6 +246,10 @@ public sealed class AgentLoop
                         if (prepared.Preparation is not null)
                             await _recorder.RecordPreparedAsync(prepared.Preparation, cancellationToken)
                                            .ConfigureAwait(false);
+                foreach (var item in round)
+                    if (item.Preparation is not null)
+                        await PublishEventAsync(HostEventKind.ToolPrepared, item.Preparation, cancellationToken)
+                             .ConfigureAwait(false);
 
                 var invalid = round.FirstOrDefault(item => item.Error is not null);
                 if (invalid is not null)
@@ -266,6 +283,8 @@ public sealed class AgentLoop
                     }
 
                     toolExecutions++;
+                    await PublishEventAsync(HostEventKind.ToolStarted, item.RoundCall.Preparation!, cancellationToken)
+                         .ConfigureAwait(false);
                     var result = await ExecutePreparedAsync(item.RoundCall.Tool!, item.RoundCall.Preparation!,
                                                             cancellationToken);
 
@@ -274,6 +293,10 @@ public sealed class AgentLoop
                     // recorder failure cannot erase or cause a replay of the tool.
                     _context.Append(ChatMessage.Tool(item.RoundCall.Call.FunctionName, item.RoundCall.Call.Id,
                                                      result.Content));
+                    await PublishEventAsync(HostEventKind.ToolFinished,
+                                            new ToolExecutionOutcome(item.RoundCall.Preparation!, result),
+                                            cancellationToken)
+                         .ConfigureAwait(false);
                     if (_recorder is not null)
                         await _recorder.RecordResultAsync(item.RoundCall.Preparation!, result, cancellationToken)
                                        .ConfigureAwait(false);
@@ -315,6 +338,10 @@ public sealed class AgentLoop
 
     private async Task<AgentResult> FinishAsync(AgentResult result)
     {
+        // Stamp the turn's server-reported usage totals; a request without reliable
+        // usage contributes nothing, so absence keeps meaning "not reported".
+        result = result with { InputTokens = _reportedInputTokens, OutputTokens = _reportedOutputTokens };
+
         if (_recorder is not null)
             try
             {
@@ -338,12 +365,17 @@ public sealed class AgentLoop
     /// <summary>
     ///     发布运行终态事件。终态事件不带令牌发布：取消也不得吞掉终态交付；事件接收方失败
     ///     不改变运行终态，只在 Error 中附加说明——显示失败不能抹去真实的执行结果。
-    ///     回合内由普通事件发布记录的展示故障也在此并入 Error。
+    ///     回合内由普通事件发布记录的展示故障也在此并入 Error。失败终态在终态事件之前发布
+    ///     一条 <see cref="HostEventKind.RunError" />（同样不带令牌），让宿主能以独立种类呈现
+    ///     错误说明；取消与未失败终态不发布。
     ///     Publishes the run-finished event. The terminal event is published without a
     ///     token so cancellation can never swallow its delivery; a failing sink does not
     ///     change the terminal state and only appends an explanatory error — a display
     ///     failure must not erase the real outcome. Display faults recorded while
-    ///     publishing ordinary events are merged into Error here as well.
+    ///     publishing ordinary events are merged into Error here as well. A failed
+    ///     terminal state first publishes a <see cref="HostEventKind.RunError" /> (also
+    ///     tokenless) so hosts can render the error under its own kind; cancelled and
+    ///     non-failed terminals do not.
     /// </summary>
     private async Task<AgentResult> PublishRunFinishedAsync(AgentResult result)
     {
@@ -356,6 +388,22 @@ public sealed class AgentLoop
                     ? $"Host event sink failed during the run: {_sinkFault}"
                     : $"{result.Error}; host event sink failed during the run: {_sinkFault}"
             };
+
+        if (result.Status == AgentStatus.Failed && !string.IsNullOrEmpty(result.Error))
+            try
+            {
+                await _events.PublishAsync(new HostEvent
+                                           {
+                                               Kind     = HostEventKind.RunError,
+                                               Sequence = Interlocked.Increment(ref _eventSequence),
+                                               Payload  = result.Error
+                                           },
+                                           CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _sinkFault ??= ex.Message;
+            }
 
         try
         {
@@ -383,12 +431,15 @@ public sealed class AgentLoop
     /// <summary>
     ///     发布一条宿主事件；未配置事件接收方时为无操作。顺序号按运行递增（每个运行从 1 开始）。
     ///     与终态发布一致，展示失败不终止运行（PLAN §6：事件通道只有发布语义）：异常在此
-    ///     转换为首条故障说明并随终态结果上报，而不是抹去真实的执行结果。
+    ///     转换为首条故障说明并随终态结果上报，而不是抹去真实的执行结果。运行自身取消导致
+    ///     的接收方取消异常原样传播——不得把取消误记为展示故障。
     ///     Publishes one host event; a no-op when no sink is configured. The sequence
     ///     increases within the run (starting at 1). Matching the terminal publish, a sink
     ///     failure never aborts the run (PLAN §6: the channel is publish-only): the
     ///     exception is converted into the first fault note and surfaced on the terminal
-    ///     result instead of erasing the real outcome.
+    ///     result instead of erasing the real outcome. A sink failure driven by the run's
+    ///     own cancellation propagates instead — cancellation must never latch a fault note
+    ///     onto the cancelled result.
     /// </summary>
     private async ValueTask PublishEventAsync(HostEventKind kind, object? payload,
                                               CancellationToken cancellationToken)
@@ -405,7 +456,7 @@ public sealed class AgentLoop
         {
             await _events.PublishAsync(@event, cancellationToken).ConfigureAwait(false);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
         {
             _sinkFault ??= ex.Message;
         }
@@ -522,10 +573,13 @@ public sealed class AgentLoop
             };
             // The summary request calibrates on its own request-scope input estimate
             // (its messages, no tool definitions), captured before the call like
-            // every other model request.
+            // every other model request. Its text stream is internal and never
+            // published as answer deltas; its usage still publishes, flagged as a
+            // summary request.
             var estimatedSummaryTokens = TokenEstimator.EstimateMessages(foldMessages);
-            summary = await RequestAssistantMessageAsync(summaryRequest, cancellationToken, estimatedSummaryTokens)
-               .ConfigureAwait(false);
+            summary = await RequestAssistantMessageAsync(summaryRequest, cancellationToken, estimatedSummaryTokens,
+                                                         publishTextDeltas : false)
+                       .ConfigureAwait(false);
             if (summary.ToolCalls is { Count: > 0 })
                 throw new InvalidOperationException("The compaction summary unexpectedly requested tools.");
         }
@@ -563,9 +617,19 @@ public sealed class AgentLoop
     ///     neither usage nor a finish reason writes no audit line to keep the JSONL
     ///     free of noise.
     /// </summary>
+    /// <param name="publishTextDeltas">
+    ///     是否把正文增量以 <see cref="HostEventKind.AssistantTextDelta" /> 发布（增量原样、
+    ///     跨片段脱敏由宿主负责）；压缩摘要请求传 <see langword="false" />，内部摘要文本不进入
+    ///     回答展示。
+    ///     Whether content deltas publish as <see cref="HostEventKind.AssistantTextDelta" />
+    ///     (verbatim; cross-fragment redaction is the host's job); compaction summary
+    ///     requests pass <see langword="false" /> so internal summary text never enters the
+    ///     answer display.
+    /// </param>
     private async Task<ChatMessage> RequestAssistantMessageAsync(ChatCompletionRequest request,
                                                                  CancellationToken     cancellationToken,
-                                                                 int                   estimatedPromptTokens)
+                                                                 int                   estimatedPromptTokens,
+                                                                 bool                  publishTextDeltas)
     {
         var accumulator = new StreamAccumulator();
 
@@ -573,6 +637,9 @@ public sealed class AgentLoop
         {
             cancellationToken.ThrowIfCancellationRequested();
             accumulator.Append(@event);
+            if (publishTextDeltas && @event.Kind == ChatStreamEventKind.ContentDelta)
+                await PublishEventAsync(HostEventKind.AssistantTextDelta, @event.ContentDelta, cancellationToken)
+                     .ConfigureAwait(false);
         }
 
         accumulator.Finish();
@@ -580,12 +647,25 @@ public sealed class AgentLoop
         // Land the server-reported usage and finish reason (when any) in the audit
         // trail. Compaction summary calls flow through here too, so their usage is
         // recorded the same way without special casing.
-        if (_recorder is not null &&
-            (accumulator.InputTokens is not null || accumulator.OutputTokens is not null ||
-             accumulator.FinishReason is not null))
-            await _recorder.RecordModelUsageAsync(accumulator.InputTokens, accumulator.OutputTokens,
-                                                  accumulator.FinishReason, cancellationToken)
-                           .ConfigureAwait(false);
+        if (accumulator.InputTokens is not null || accumulator.OutputTokens is not null ||
+            accumulator.FinishReason is not null)
+        {
+            if (_recorder is not null)
+                await _recorder.RecordModelUsageAsync(accumulator.InputTokens, accumulator.OutputTokens,
+                                                      accumulator.FinishReason, cancellationToken)
+                               .ConfigureAwait(false);
+
+            // Every model request — summary calls included — publishes its usage and
+            // joins the turn's totals; the summary flag lets hosts tell the two apart.
+            var usage = new ModelUsage(accumulator.InputTokens, accumulator.OutputTokens,
+                                       accumulator.FinishReason, !publishTextDeltas);
+            await PublishEventAsync(HostEventKind.ModelUsage, usage, cancellationToken).ConfigureAwait(false);
+            if (accumulator.InputTokens is { } inputTokens)
+                _reportedInputTokens = (_reportedInputTokens ?? 0) + inputTokens;
+
+            if (accumulator.OutputTokens is { } outputTokens)
+                _reportedOutputTokens = (_reportedOutputTokens ?? 0) + outputTokens;
+        }
 
         // PLAN §13: calibrate the estimator with the measured input of this request
         // against the estimate captured before it was sent; ignored when no
@@ -681,17 +761,22 @@ public sealed class AgentLoop
                 // identical calls in the same round reuse the same grant.
                 _permissions.TryConsumeOnce(preparation);
                 await RecordPermissionAsync(preparation, decision, "allow", cancellationToken).ConfigureAwait(false);
+                await PublishResolutionAsync(decision, null, "allow", cancellationToken).ConfigureAwait(false);
                 return AuthorizationOutcome.Granted;
 
             case PermissionDecision.Deny :
                 var policyDenied = AuthorizationOutcome.Denied($"Permission denied: {preparation.Summary}");
                 await RecordPermissionAsync(preparation, decision, policyDenied.Reason, cancellationToken)
                    .ConfigureAwait(false);
+                await PublishResolutionAsync(decision, null, policyDenied.Reason, cancellationToken)
+                   .ConfigureAwait(false);
                 return policyDenied;
 
             case PermissionDecision.Ask :
                 var approvalProvider = _approver ?? throw new InvalidOperationException(
                      "An approval provider is required when the permission engine returns Ask.");
+                await PublishEventAsync(HostEventKind.ApprovalRequested, preparation, cancellationToken)
+                     .ConfigureAwait(false);
                 var action = await approvalProvider.PromptAsync(preparation, cancellationToken);
                 switch (action)
                 {
@@ -703,11 +788,15 @@ public sealed class AgentLoop
                         // recorded here.
                         await RecordPermissionAsync(preparation, decision, "allow once", cancellationToken)
                            .ConfigureAwait(false);
+                        await PublishResolutionAsync(decision, action, "allow once", cancellationToken)
+                           .ConfigureAwait(false);
                         return AuthorizationOutcome.Granted;
 
                     case ApprovalAction.AllowSession :
                         _permissions.GrantSession(preparation);
                         await RecordPermissionAsync(preparation, decision, "allow session", cancellationToken)
+                           .ConfigureAwait(false);
+                        await PublishResolutionAsync(decision, action, "allow session", cancellationToken)
                            .ConfigureAwait(false);
                         return AuthorizationOutcome.Granted;
 
@@ -716,12 +805,29 @@ public sealed class AgentLoop
                             AuthorizationOutcome.Denied($"Permission denied by user: {preparation.Summary}");
                         await RecordPermissionAsync(preparation, decision, userDenied.Reason, cancellationToken)
                            .ConfigureAwait(false);
+                        await PublishResolutionAsync(decision, ApprovalAction.Deny, userDenied.Reason, cancellationToken)
+                           .ConfigureAwait(false);
                         return userDenied;
                 }
 
             default :
                 throw new InvalidOperationException($"Unknown permission decision: {decision}");
         }
+    }
+
+    /// <summary>
+    ///     发布审批结论事件；与审计记录一一对应，宿主据此呈现每次权限结论（含规则自动
+    ///     允许/拒绝），事件通道只读，不反向影响执行。
+    ///     Publishes the approval-resolution event, one per audit-recorded decision, so
+    ///     hosts can render every outcome (rule-based allows and denies included); the
+    ///     event channel stays read-only and never influences execution.
+    /// </summary>
+    private async ValueTask PublishResolutionAsync(PermissionDecision decision,   ApprovalAction? action,
+                                                   string              outcome,    CancellationToken cancellationToken)
+    {
+        await PublishEventAsync(HostEventKind.ApprovalResolved, new ApprovalResolution(decision, action, outcome),
+                                cancellationToken)
+             .ConfigureAwait(false);
     }
 
     private async Task RecordPermissionAsync(ToolPreparation   preparation, PermissionDecision decision, string outcome,

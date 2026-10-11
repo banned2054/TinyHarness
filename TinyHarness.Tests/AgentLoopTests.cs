@@ -320,7 +320,7 @@ public class AgentLoopTests
         Assert.Equal(AgentStatus.Completed, result.Status);
         Assert.Equal("done", result.FinalMessage);
         Assert.Contains("sink exploded", result.Error);
-        Assert.Equal(2, sink.Published);
+        Assert.Equal(3, sink.Published); // RunStarted, the failing delta, RunFinished.
     }
 
     [Fact]
@@ -336,7 +336,7 @@ public class AgentLoopTests
         Assert.Equal(AgentStatus.Completed, result.Status);
         Assert.Equal("done", result.FinalMessage);
         Assert.Contains("sink exploded", result.Error);
-        Assert.Equal(2, sink.Published);
+        Assert.Equal(3, sink.Published); // RunStarted, the delta, the failing terminal.
     }
 
     [Fact]
@@ -354,8 +354,9 @@ public class AgentLoopTests
         await loop.RunTurnAsync("sys", "u2", CancellationToken.None);
 
         // Each turn is one run: the run-scoped sequence restarts at 1 instead of
-        // accumulating across turns on a reused loop.
-        Assert.Equal([1L, 2L, 1L, 2L], sink.Events.Select(@event => @event.Sequence).ToArray());
+        // accumulating across turns on a reused loop. A text answer now yields
+        // started + one delta + finished per turn.
+        Assert.Equal([1L, 2L, 3L, 1L, 2L, 3L], sink.Events.Select(@event => @event.Sequence).ToArray());
     }
 
     /// <summary>

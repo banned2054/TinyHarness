@@ -27,7 +27,7 @@ public class ConsoleApprovalProviderTests
             var shown = output.ToString();
             Assert.Contains(patch, shown);
             Assert.Contains(Path.Combine(dir.Root, "file.txt"), shown);
-            Assert.Contains("Session approval grants 'filesystem.write' for the target paths above", shown);
+            Assert.Contains("Run approval ('s') grants 'filesystem.write' for the target paths above", shown);
             Assert.Contains("later changes in this scope may run without asking", shown);
         });
         var provider = new ConsoleApprovalProvider(input, output);
@@ -68,6 +68,60 @@ public class ConsoleApprovalProviderTests
 
         Assert.Contains("this exact executable/argument shape", output.ToString());
         Assert.Contains("dotnet test", output.ToString());
+    }
+
+    [Fact]
+    public async Task Prompt_StatesRunScopedApprovalAndLegacySessionInputMeaning()
+    {
+        using var dir = new TestTempDir();
+        var preparation =
+            new ApplyPatchTool(dir.Workspace).Prepare(new ChatToolCall("p", "apply_patch",
+                                                                       new JsonObject
+                                                                       {
+                                                                           ["patch"] = "--- a/f.txt\n" +
+                                                                                       "+++ b/f.txt\n" +
+                                                                                       "@@ -1 +1 @@\n-old\n+new\n"
+                                                                       }.ToJsonString()));
+        using var output = new StringWriter();
+        using var input  = new StringReader("d");
+
+        await new ConsoleApprovalProvider(input, output).PromptAsync(preparation, CancellationToken.None);
+
+        // The 's' grant is explicitly run-scoped (PLAN §4.2): it never extends to
+        // future runs, and a saved session does not inherit it. The legacy
+        // '[s]ession' input is named as still accepted with the same meaning.
+        var shown = output.ToString();
+        Assert.Contains("It lasts for the remainder of this run only", shown);
+        Assert.Contains("future runs and a saved session do not inherit it", shown);
+        Assert.Contains("The legacy '[s]ession' input keeps the same run-scoped meaning", shown);
+    }
+
+    [Fact]
+    public async Task Prompt_RedactsKnownSecretsFromSummaryAndPatchPreview()
+    {
+        using var dir = new TestTempDir();
+        var preparation =
+            new ApplyPatchTool(dir.Workspace).Prepare(new ChatToolCall("p", "apply_patch",
+                                                                       new JsonObject
+                                                                       {
+                                                                           ["patch"] = "--- a/f.txt\n" +
+                                                                                       "+++ b/f.txt\n" +
+                                                                                       "@@ -1 +1 @@\n" +
+                                                                                       "-key = sk-secret-value\n" +
+                                                                                       "+key = new\n"
+                                                                       }.ToJsonString()));
+        using var output = new StringWriter();
+        using var input  = new StringReader("d");
+
+        await new ConsoleApprovalProvider(input, output,
+                                          new Dictionary<string, string> { ["env"] = "sk-secret-value" })
+            .PromptAsync(preparation, CancellationToken.None);
+
+        // The approval UI is a display surface like any other: a known secret embedded
+        // in the prepared patch preview must not reach the terminal raw.
+        var shown = output.ToString();
+        Assert.Contains("[REDACTED]", shown);
+        Assert.DoesNotContain("sk-secret-value", shown);
     }
 
     [Fact]

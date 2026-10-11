@@ -16,13 +16,20 @@ namespace TinyHarness.Core.Services.Session;
 public interface IHostEventSink
 {
     /// <summary>
-    ///     发布一条事件。事件按发出顺序送达；M12.1 不定义消费者缓慢或断开时的缓冲策略
-    ///     （M12.2 处理）。接收方失败按非致命的展示故障处理：运行继续，首个故障说明随
-    ///     终态结果上报，终态事件的交付本身从不被丢弃。
-    ///     Publishes one event, delivered in emission order. M12.1 defines no buffering for
-    ///     slow or disconnected consumers (handled in M12.2). A sink failure is treated as
-    ///     a non-fatal display fault: the run continues, the first fault note is surfaced
-    ///     on the terminal result, and the terminal delivery itself is never dropped.
+    ///     发布一条事件。事件按发出顺序送达。M12.2 落定的交付策略：发布方内联等待接收方
+    ///     返回——不设中间队列，内存占用有界，缓慢的消费者直接拖慢发布方（模型流在事件边界
+    ///     停止），不会无限缓存或丢失事件；需要解耦的宿主自行持有有界缓冲与合并策略。
+    ///     接收方失败按非致命的展示故障处理：运行继续，首个故障说明随终态结果上报，终态
+    ///     事件（与失败终态前的错误事件）不带取消令牌发布，其交付本身从不被丢弃。
+    ///     Publishes one event, delivered in emission order. The M12.2 delivery strategy:
+    ///     the publisher awaits this call inline — no intermediate queue, bounded memory,
+    ///     and a slow consumer throttles the publisher directly (the model stream stalls
+    ///     at the event boundary), so events are never buffered without bound or dropped;
+    ///     hosts that need decoupling own their own bounded buffers and merge policies.
+    ///     A sink failure is treated as a non-fatal display fault: the run continues, the
+    ///     first fault note is surfaced on the terminal result, and the terminal event
+    ///     (with the error event preceding a failed terminal) is published without a
+    ///     cancellation token, so its delivery is never dropped.
     /// </summary>
     ValueTask PublishAsync(HostEvent @event, CancellationToken cancellationToken);
 }

@@ -113,31 +113,37 @@ public class ChatSessionTests
         var run2 = await host.SubmitTurnAsync("u2", CancellationToken.None);
 
         var session = host.Session;
-        Assert.Equal(4, sink.Events.Count);
+        // M12.2: each turn now also publishes its streamed content deltas between the
+        // lifecycle events, so one scripted text answer yields three events per run.
+        Assert.Equal(6, sink.Events.Count);
         for (var i = 1; i < sink.Events.Count; i++)
             Assert.True(sink.Events[i].TimestampUtc >= sink.Events[i - 1].TimestampUtc);
 
-        // Run 1: started then finished, run-scoped sequence 1..2, identity stamped by the host.
-        var first = sink.Events.Take(2).ToArray();
+        // Run 1: started, its one text delta, then finished — run-scoped sequence 1..3,
+        // identity stamped by the host on every kind.
+        var first = sink.Events.Take(3).ToArray();
         Assert.Equal(HostEventKind.RunStarted, first[0].Kind);
-        Assert.Equal(HostEventKind.RunFinished, first[1].Kind);
+        Assert.Equal(HostEventKind.AssistantTextDelta, first[1].Kind);
+        Assert.Equal(HostEventKind.RunFinished, first[2].Kind);
         Assert.Equal(1, first[0].Sequence);
-        Assert.Equal(2, first[1].Sequence);
-        Assert.Equal(session.Id, first[0].SessionId);
-        Assert.Equal(session.Turns[0].Id, first[0].TurnId);
-        Assert.Equal(run1.Id, first[0].RunId);
-        Assert.Equal(run1.Id, first[1].RunId);
-        Assert.Same(run1.Result, first[1].Payload);
+        Assert.Equal(3, first[2].Sequence);
+        Assert.All(first, @event => Assert.Equal(session.Id, @event.SessionId));
+        Assert.All(first, @event => Assert.Equal(session.Turns[0].Id, @event.TurnId));
+        Assert.All(first, @event => Assert.Equal(run1.Id, @event.RunId));
+        Assert.Equal("one", Assert.IsType<string>(first[1].Payload));
+        Assert.Same(run1.Result, first[2].Payload);
 
         // Run 2 keeps the same identity scheme with its own run-scoped sequence.
-        var second = sink.Events.Skip(2).ToArray();
+        var second = sink.Events.Skip(3).ToArray();
         Assert.Equal(HostEventKind.RunStarted, second[0].Kind);
-        Assert.Equal(HostEventKind.RunFinished, second[1].Kind);
+        Assert.Equal(HostEventKind.AssistantTextDelta, second[1].Kind);
+        Assert.Equal(HostEventKind.RunFinished, second[2].Kind);
         Assert.Equal(1, second[0].Sequence);
-        Assert.Equal(2, second[1].Sequence);
+        Assert.Equal(3, second[2].Sequence);
         Assert.Equal(session.Turns[1].Id, second[0].TurnId);
         Assert.Equal(run2.Id, second[0].RunId);
         Assert.Equal(session.Id, second[0].SessionId);
+        Assert.All(second, @event => Assert.Equal(run2.Id, @event.RunId));
     }
 
     [Fact]

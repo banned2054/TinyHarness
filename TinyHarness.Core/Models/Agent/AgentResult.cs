@@ -33,6 +33,22 @@ public sealed record AgentResult
     public int Compactions { get; init; }
 
     /// <summary>
+    ///     服务端报告的输入 token 总和（含压缩摘要请求）；任一请求未报告可靠 usage 时不计入，
+    ///     全程无可靠 usage 时保持 null——缺失表示“未报告”，不是零。
+    ///     Sum of server-reported input tokens (compaction summary requests included);
+    ///     requests without reliable usage contribute nothing and an all-null run keeps
+    ///     null — absence means "not reported", not zero.
+    /// </summary>
+    public long? InputTokens { get; init; }
+
+    /// <summary>
+    ///     服务端报告的输出 token 总和；缺失语义与 <see cref="InputTokens" /> 相同。
+    ///     Sum of server-reported output tokens; absence means the same as
+    ///     <see cref="InputTokens" />.
+    /// </summary>
+    public long? OutputTokens { get; init; }
+
+    /// <summary>
     ///     运行失败或取消时的错误说明。
     ///     Error detail set when the run failed or was cancelled.
     /// </summary>
