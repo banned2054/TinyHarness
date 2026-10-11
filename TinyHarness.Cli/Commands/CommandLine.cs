@@ -6,10 +6,12 @@ namespace TinyHarness.Cli.Commands;
 /// <summary>
 ///     TinyHarness 命令行解析器。管理命令（init/config/provider/auth/model/doctor/sandbox）永远不作为
 ///     提示词发送给模型；与命令名冲突的普通文本使用 `run -- "文本"`，`--` 之后全部按提示词处理。
+///     `chat` 启动交互会话，不接受提示词参数。
 ///     The TinyHarness command-line parser. Management commands
 ///     (init/config/provider/auth/model/doctor/sandbox) are never
 ///     sent to the model as a prompt; plain text that collides with a command name uses `run -- "text"`, and
-///     everything after `--` is treated as the prompt.
+///     everything after `--` is treated as the prompt. `chat` starts an interactive session and takes no prompt
+///     argument.
 /// </summary>
 internal static class CommandLine
 {
@@ -39,6 +41,8 @@ internal static class CommandLine
 
             return ParsePromptArgs(args[1..], true);
         }
+
+        if (string.Equals(first, "chat", StringComparison.Ordinal)) return ParseChatArgs(args[1..]);
 
         if (string.Equals(first, "smoke", StringComparison.Ordinal)) return ParseSmokeArgs(args[1..]);
 
@@ -134,6 +138,39 @@ internal static class CommandLine
         if (prompt.Length == 0) throw new CliUsageException("A prompt is required.", usage);
 
         return new CliOptions { Kind = CliCommandKind.Run, Prompt = prompt, ConfigPath = configPath };
+    }
+
+    /// <summary>
+    ///     解析 chat 参数；只接受 --config 与 help 标志。chat 不接受提示词：每个回合都在
+    ///     交互中逐行输入，把文本作为参数传入是重复的启动请求，按使用错误处理。
+    ///     Parses chat arguments; only --config and help flags are accepted. Chat takes no
+    ///     prompt — every turn is typed interactively, so passing text as an argument is a
+    ///     duplicate start request and a usage error.
+    /// </summary>
+    private static CliOptions ParseChatArgs(string[] args)
+    {
+        var usage      = HelpText.Chat;
+        string? configPath = null;
+        for (var i = 0; i < args.Length; i++)
+        {
+            if (IsHelpFlag(args[i])) return new CliOptions { Kind = CliCommandKind.Help, HelpTopic = "chat" };
+
+            if (string.Equals(args[i], "--config", StringComparison.Ordinal))
+            {
+                if (i + 1 >= args.Length)
+                    throw new CliUsageException("The --config option requires a file path.", usage);
+
+                configPath = args[++i];
+                continue;
+            }
+
+            throw new CliUsageException(
+                                        $"Unknown argument '{args[i]}' for chat. Chat takes no prompt; type each turn after it starts " +
+                                        "(use `run -- \"text\"` for a one-shot prompt).",
+                                        usage);
+        }
+
+        return new CliOptions { Kind = CliCommandKind.Chat, ConfigPath = configPath };
     }
 
     /// <summary>

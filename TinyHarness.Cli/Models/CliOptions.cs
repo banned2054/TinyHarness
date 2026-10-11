@@ -7,6 +7,7 @@ namespace TinyHarness.Cli.Models;
 internal enum CliCommandKind
 {
     Run,
+    Chat,
     Smoke,
     Mcp,
     Init,

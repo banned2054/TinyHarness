@@ -1,4 +1,3 @@
-using System.Text;
 using TinyHarness.Core.Models.Permissions;
 using TinyHarness.Core.Models.Tools;
 using TinyHarness.Core.Services.Permissions;
@@ -43,15 +42,16 @@ internal sealed class ConsoleApprovalProvider(TextReader input, TextWriter outpu
             await
                 output.WriteLineAsync("  RISK: elevated — shell syntax can chain commands, redirect output, and expand variables.");
 
-        await output.WriteLineAsync($"  {DisplayText(preparation.Summary)}");
-        foreach (var target in preparation.TargetPaths) await output.WriteLineAsync($"  target: {DisplayText(target)}");
+        await output.WriteLineAsync($"  {TerminalDisplay.Format(preparation.Summary, _redactor)}");
+        foreach (var target in preparation.TargetPaths)
+            await output.WriteLineAsync($"  target: {TerminalDisplay.Format(target, _redactor)}");
 
         if (preparation.ToolName == "apply_patch")
         {
             var patch = preparation.Arguments["patch"]?.GetValue<string>()
                      ?? throw new InvalidDataException("Cannot approve apply_patch without a patch preview.");
             await output.WriteLineAsync("  Proposed diff (control characters are escaped):");
-            await output.WriteLineAsync(DisplayText(patch));
+            await output.WriteLineAsync(TerminalDisplay.Format(patch, _redactor));
         }
 
         var runConstraint = preparation.SessionConstraint is null
@@ -60,7 +60,7 @@ internal sealed class ConsoleApprovalProvider(TextReader input, TextWriter outpu
                 ? " and this exact shell type, command text, and working directory."
                 : " and this exact executable/argument shape.";
         await
-            output.WriteLineAsync($"  Run approval ('s') grants '{DisplayText(preparation.Capability)}' for the target paths above" +
+            output.WriteLineAsync($"  Run approval ('s') grants '{TerminalDisplay.Format(preparation.Capability, _redactor)}' for the target paths above" +
                                   runConstraint);
         await
             output.WriteLineAsync("  It lasts for the remainder of this run only; future runs and a saved session do not inherit it.");
@@ -78,25 +78,5 @@ internal sealed class ConsoleApprovalProvider(TextReader input, TextWriter outpu
             "s" or "session" or "allow session"                      => ApprovalAction.AllowSession,
             _                                                        => ApprovalAction.Deny
         };
-    }
-
-    /// <summary>
-    ///     先做已知密钥脱敏，再保留换行与制表符、转义其他控制字符，避免审批界面回显密钥或
-    ///     被不可见内容误导。
-    ///     Redacts known secrets first, then preserves newlines/tabs while escaping other
-    ///     control characters, so the approval UI neither echoes secrets nor is misled by
-    ///     invisible content.
-    /// </summary>
-    private string DisplayText(string text)
-    {
-        text = _redactor.Redact(text);
-        var display = new StringBuilder();
-        foreach (var character in text.Replace("\r\n", "\n", StringComparison.Ordinal))
-            if (char.IsControl(character) && character is not '\n' and not '\t')
-                display.Append("\\u").Append(((int)character).ToString("X4"));
-            else
-                display.Append(character);
-
-        return display.ToString();
     }
 }

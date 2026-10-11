@@ -1,4 +1,3 @@
-using System.Text;
 using TinyHarness.Core.Models.Context;
 using TinyHarness.Core.Models.Permissions;
 using TinyHarness.Core.Models.Session;
@@ -67,7 +66,7 @@ internal sealed class ConsoleHostEventSink : IHostEventSink
 
             case HostEventKind.ToolStarted when @event.Payload is ToolPreparation started :
                 await CloseOpenLineAsync(cancellationToken).ConfigureAwait(false);
-                await _output.WriteAsync(Display(_redactor.Redact($"tool: {started.Summary}")).AsMemory(),
+                await _output.WriteAsync(TerminalDisplay.Format($"tool: {started.Summary}", _redactor).AsMemory(),
                                          cancellationToken)
                              .ConfigureAwait(false);
                 _lineOpen     = true;
@@ -107,7 +106,7 @@ internal sealed class ConsoleHostEventSink : IHostEventSink
                 break;
 
             case HostEventKind.RunError when @event.Payload is string error :
-                await WriteLineAsync($"error: {_redactor.Redact(error)}", cancellationToken).ConfigureAwait(false);
+                await WriteLineAsync($"error: {error}", cancellationToken).ConfigureAwait(false);
                 break;
 
             case HostEventKind.RunFinished :
@@ -126,7 +125,8 @@ internal sealed class ConsoleHostEventSink : IHostEventSink
     /// </summary>
     private async Task WriteDeltaAsync(string delta, CancellationToken cancellationToken)
     {
-        var text = Display(_redactor.Push(delta));
+        // Push already replaced the secrets; Format skips a redundant redaction scan.
+        var text = TerminalDisplay.Format(_redactor.Push(delta));
         if (text.Length == 0) return;
 
         await _output.WriteAsync(text.AsMemory(), cancellationToken).ConfigureAwait(false);
@@ -149,7 +149,8 @@ internal sealed class ConsoleHostEventSink : IHostEventSink
         else
         {
             await CloseOpenLineAsync(cancellationToken).ConfigureAwait(false);
-            await _output.WriteLineAsync(Display(_redactor.Redact($"tool: {outcome.Preparation.Summary}{suffix}"))
+            await _output.WriteLineAsync(TerminalDisplay.Format($"tool: {outcome.Preparation.Summary}{suffix}",
+                                                                _redactor)
                                            .AsMemory(),
                                          cancellationToken)
                          .ConfigureAwait(false);
@@ -166,7 +167,7 @@ internal sealed class ConsoleHostEventSink : IHostEventSink
     private async Task WriteLineAsync(string text, CancellationToken cancellationToken)
     {
         await CloseOpenLineAsync(cancellationToken).ConfigureAwait(false);
-        await _output.WriteLineAsync(Display(_redactor.Redact(text)).AsMemory(), cancellationToken)
+        await _output.WriteLineAsync(TerminalDisplay.Format(text, _redactor).AsMemory(), cancellationToken)
                      .ConfigureAwait(false);
     }
 
@@ -194,22 +195,5 @@ internal sealed class ConsoleHostEventSink : IHostEventSink
 
         await _output.WriteLineAsync(ReadOnlyMemory<char>.Empty, cancellationToken).ConfigureAwait(false);
         _lineOpen = false;
-    }
-
-    /// <summary>
-    ///     保留换行与制表符，同时转义其他控制字符，与审批界面的展示规则一致。
-    ///     Preserves newlines/tabs while escaping other control characters, matching the
-    ///     approval display rule.
-    /// </summary>
-    private static string Display(string text)
-    {
-        var display = new StringBuilder(text.Length);
-        foreach (var character in text)
-            if (char.IsControl(character) && character is not '\n' and not '\t')
-                display.Append("\\u").Append(((int)character).ToString("X4"));
-            else
-                display.Append(character);
-
-        return display.ToString();
     }
 }

@@ -16,6 +16,7 @@ internal static class HelpText
         Usage:
           tinyharness run [--config <path>] [--] "your prompt"
           tinyharness [--config <path>] "your prompt"          (verbless)
+          tinyharness chat [--config <path>]                   (interactive multi-turn session)
           tinyharness smoke [--config <path>]                  (offline tool-flow smoke)
           tinyharness mcp                                      (local MCP stdio worker)
           tinyharness init                                     (create the user config)
@@ -54,6 +55,23 @@ internal static class HelpText
           1. .\tinyharness.json in the current directory (project config)
           2. the user config (tinyharness init creates it)
           3. built-in defaults
+        """;
+
+    public const string Chat = """
+        Usage:
+          tinyharness chat [--config <path>]
+
+        Starts an interactive multi-turn session against the configured model and workspace.
+        Each line you type is one user turn; turns share one conversation context and the
+        latest input is the current goal. Tool approvals are prompted inline and scoped to
+        the current run only.
+
+        Ctrl+C cancels the active turn (the session keeps running; start a new turn
+        afterwards). Ctrl+C at the prompt or EOF (Ctrl+Z then Enter on Windows) ends the
+        session. Sessions are in-process in this milestone: closing the session ends it,
+        and nothing is persisted for restart-resume yet.
+
+        chat takes no prompt argument; use `run -- "text"` for a one-shot prompt.
         """;
 
     public const string Smoke = """
@@ -223,6 +241,7 @@ internal static class HelpText
         return name.ToLowerInvariant() switch
         {
             "run"      => true,
+            "chat"     => true,
             "smoke"    => true,
             "mcp"      => true,
             "init"     => true,
@@ -246,6 +265,7 @@ internal static class HelpText
         return topic?.ToLowerInvariant() switch
         {
             "run"      => Run,
+            "chat"     => Chat,
             "smoke"    => Smoke,
             "mcp"      => Mcp,
             "init"     => Init,

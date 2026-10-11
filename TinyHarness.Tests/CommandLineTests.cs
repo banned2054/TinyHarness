@@ -58,4 +58,43 @@ public class CommandLineTests
         Assert.Equal(CliCommandKind.Doctor, options.Kind);
         Assert.True(options.Connect);
     }
+
+    [Fact]
+    public void ChatCommand_ParsesWithAnOptionalConfigPath()
+    {
+        var options = CommandLine.Parse(["chat", "--config", "team.json"]);
+
+        Assert.Equal(CliCommandKind.Chat, options.Kind);
+        Assert.Equal("team.json", options.ConfigPath);
+    }
+
+    [Fact]
+    public void ChatCommand_WithoutArguments_StartsTheSession()
+    {
+        var options = CommandLine.Parse(["chat"]);
+
+        Assert.Equal(CliCommandKind.Chat, options.Kind);
+        Assert.Null(options.ConfigPath);
+    }
+
+    [Fact]
+    public void ChatCommand_WithAPromptArgument_IsAUsageError()
+    {
+        var error = Assert.Throws<CliUsageException>(() => CommandLine.Parse(["chat", "explain the repo"]));
+
+        Assert.Contains("takes no prompt", error.Message, StringComparison.Ordinal);
+        Assert.Contains("tinyharness chat", error.Usage, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ChatCommand_HelpFlag_ReturnsTheChatTopic()
+    {
+        var options = CommandLine.Parse(["chat", "--help"]);
+
+        Assert.Equal(CliCommandKind.Help, options.Kind);
+        Assert.Equal("chat", options.HelpTopic);
+        Assert.True(HelpText.IsKnownCommand("chat"));
+        Assert.Equal(HelpText.Chat, HelpText.For("chat"));
+        Assert.Contains("tinyharness chat", HelpText.Overview, StringComparison.Ordinal);
+    }
 }

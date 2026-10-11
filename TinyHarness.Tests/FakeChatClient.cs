@@ -71,6 +71,59 @@ internal sealed class FakeChatClient : IChatCompletionClient
               .Append(new ChatStreamEvent { Kind = ChatStreamEventKind.End }).ToArray();
     }
 
+    /// <summary>
+    ///     脚本化一个先推理后回答的完成：一个推理条目（增量 + 条目边界，携带 item id 与加密
+    ///     载荷），随后是文本增量。多回合测试据此断言推理内容被原样续传到后续请求。
+    ///     Scripts a reason-then-answer completion: one reasoning entry (a delta plus an item
+    ///     boundary carrying the item id and the encrypted payload) followed by text deltas.
+    ///     Multi-turn tests use it to assert reasoning is replayed verbatim into later requests.
+    /// </summary>
+    public static IReadOnlyList<ChatStreamEvent> ReasonedText(string reasoningText, string itemId,
+                                                              string protectedData, params string[] chunks)
+    {
+        var events = new List<ChatStreamEvent>
+        {
+            new()
+            {
+                Kind            = ChatStreamEventKind.ReasoningDelta,
+                ReasoningDelta  = reasoningText,
+                ReasoningItemId = itemId
+            },
+            new()
+            {
+                Kind                   = ChatStreamEventKind.ReasoningItem,
+                ReasoningItemId        = itemId,
+                ReasoningProtectedData = protectedData
+            }
+        };
+        foreach (var chunk in chunks)
+            events.Add(new ChatStreamEvent { Kind = ChatStreamEventKind.ContentDelta, ContentDelta = chunk });
+
+        events.Add(new ChatStreamEvent { Kind = ChatStreamEventKind.End });
+        return events;
+    }
+
+    /// <summary>
+    ///     脚本化一个携带服务端 usage 的文本完成，用于回合累计与终态摘要断言。
+    ///     Scripts a text completion carrying server-reported usage, for turn totals and
+    ///     terminal-summary assertions.
+    /// </summary>
+    public static IReadOnlyList<ChatStreamEvent> TextWithUsage(int inputTokens, int outputTokens,
+                                                               params string[] chunks)
+    {
+        var events = new List<ChatStreamEvent>();
+        foreach (var chunk in chunks)
+            events.Add(new ChatStreamEvent { Kind = ChatStreamEventKind.ContentDelta, ContentDelta = chunk });
+
+        events.Add(new ChatStreamEvent
+        {
+            Kind         = ChatStreamEventKind.End,
+            InputTokens  = inputTokens,
+            OutputTokens = outputTokens
+        });
+        return events;
+    }
+
     /// <summary>A scripted completion containing a single tool call.</summary>
     public static IReadOnlyList<ChatStreamEvent> ToolCall(string name, string argumentsJson, string? id = "call_1")
     {

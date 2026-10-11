@@ -8,6 +8,7 @@ using TinyHarness.Core.Models.Agent;
 using TinyHarness.Core.Models.Configuration;
 using TinyHarness.Core.Models.Context;
 using TinyHarness.Core.Models.Runtime;
+using TinyHarness.Core.Models.Session;
 using TinyHarness.Core.Services.Agent;
 using TinyHarness.Core.Services.ChatCompletions;
 using TinyHarness.Core.Services.Configuration;
@@ -16,6 +17,7 @@ using TinyHarness.Core.Services.Permissions;
 using TinyHarness.Core.Services.Persistence;
 using TinyHarness.Core.Services.Runtime;
 using TinyHarness.Core.Services.Runtime.WindowsSandbox;
+using TinyHarness.Core.Services.Session;
 using TinyHarness.Core.Services.Tools;
 using TinyHarness.Core.Services.Worker;
 using WindowsCredentialStore = TinyHarness.Core.Services.Runtime.WindowsCredentialStore;
@@ -28,6 +30,23 @@ namespace TinyHarness.Cli;
 /// </summary>
 internal static class Program
 {
+    /// <summary>
+    ///     run 与 chat 共享的工作区系统提示：会话内指令固定，跨回合续聊要求同一条提示
+    ///     （ChatSessionHost 的续聊一致性校验）。
+    ///     The workspace system prompt shared by run and chat: instructions are fixed per
+    ///     session, and cross-turn continuation requires the same prompt (enforced by
+    ///     ChatSessionHost's continuation check).
+    /// </summary>
+    private const string WorkspaceSystemPrompt =
+        "You are TinyHarness, a local coding harness that inspects and modifies a workspace. " +
+        "Use list_files, search_text and read_file to inspect, apply_patch to modify files, and shell to run commands. " +
+        "For ordinary commands use shell mode 'direct' with executable and an arguments array. Use mode 'shell' " +
+        "with a shell flavor and command string only when pipelines, redirection, or other shell syntax is required. " +
+        "Tool paths are relative to the workspace root. " +
+        "apply_patch takes a unified diff: '--- a/path' and '+++ b/path' headers, then '@@ -s[,c] +s[,c] @@' " +
+        "hunks with ' ' (context), '-' (remove) and '+' (add) line prefixes. New files use '--- /dev/null'. " +
+        "Writes and commands may require the user's approval before they run; a denial is returned to you so you can adjust.";
+
     /// <summary>
     ///     CLI 入口。解析管理命令、smoke、run 或无动词调用方式，并把退出码交还操作系统。
     ///     CLI entry point that dispatches management commands, smoke, run, or verbless invocation forms and
@@ -91,6 +110,9 @@ internal static class Program
             case CliCommandKind.Run :
                 return await RunAsync(options.Prompt!, options.ConfigPath);
 
+            case CliCommandKind.Chat :
+                return await RunChatAsync(options.ConfigPath);
+
             default :
                 return await RunManagementCommandAsync(options).ConfigureAwait(false);
         }
@@ -128,104 +150,33 @@ internal static class Program
     }
 
     /// <summary>
-    ///     加载生效配置、组装模型与工具权限依赖，运行一次 Agent 任务并输出摘要。
-    ///     Loads the effective configuration, composes model/tool/permission dependencies, runs one agent task,
-    ///     and prints its summary.
+    ///     加载生效配置并运行一次 Agent 任务：组合经 <see cref="ComposeAgentAsync" /> 共享，
+    ///     stdin 经单一输入协调分发（PLAN §6），输出事件流与摘要。
+    ///     Loads the effective configuration and runs one agent task: composition is shared
+    ///     via <see cref="ComposeAgentAsync" />, stdin is dispatched through the single input
+    ///     coordinator (PLAN §6), and the event stream plus summary are printed.
     /// </summary>
     private static async Task<int> RunAsync(string prompt, string? configPath)
     {
         using var cts                = new CancellationTokenSource();
         using var cancelRegistration = new ConsoleCancellation(cts);
-        var       resolution         = await ConfigResolver.ResolveAsync(configPath, cts.Token).ConfigureAwait(false);
-        var       config             = resolution.Config;
+        var       composition        = await ComposeAgentAsync(configPath, cts.Token).ConfigureAwait(false);
 
-        if (string.IsNullOrWhiteSpace(config.Model))
-        {
-            await Console.Error
-                         .WriteLineAsync("A model must be configured. Run 'tinyharness init' (user config) or set 'model' in the config file.");
-            return 1;
-        }
+        await WriteHeaderAsync("TinyHarness run", composition).ConfigureAwait(false);
 
-        if (string.IsNullOrWhiteSpace(config.Endpoint))
-        {
-            await Console.Error
-                         .WriteLineAsync("An endpoint must be configured. Run 'tinyharness init' (user config) or set 'endpoint' in the config file.");
-            return 1;
-        }
+        // Assemble the interactive permission flow used by normal CLI runs. stdin is
+        // dispatched through the single input coordinator (PLAN §6), so approval prompts
+        // never race another read loop; the M12.3 chat input joins the same outlet.
+        IApprovalProvider approver = new ConsoleApprovalProvider(new ExclusiveInputReader(Console.In), Console.Out,
+                                                                composition.KnownSecrets);
 
-        var credentialStore = new WindowsCredentialStore();
-        var apiKey = ApiKeyReader.Read(config.ApiKeyEnvironmentVariable, config.ApiKeyCredentialTarget,
-                                       credentialStore, resolution.ProfileName);
-        if (apiKey is null)
-        {
-            await Console.Error
-                         .WriteLineAsync("No API key found. Run 'tinyharness auth set <profile>' or set the environment variable " +
-                                         $"'{config.ApiKeyEnvironmentVariable}' before running.");
-            return 1;
-        }
+        var recorder = new FileRunRecorder(composition.Config.SessionDirectory,
+                                           knownSecrets : composition.KnownSecrets);
+        var loop = new AgentLoop(composition.Model, composition.Tools, composition.Options,
+                                 composition.Permissions, approver, recorder,
+                                 new ConsoleHostEventSink(composition.KnownSecrets));
 
-        // The sandbox composition reads trusted user settings only — never the
-        // target project's config chain. Any validation failure (missing
-        // components, invalid paths, wrong platform, session directory inside
-        // the workspace) throws and fails the run; host execution is never a
-        // silent fallback.
-        var knownSecrets = SandboxCliComposition.KnownSecrets(config, apiKey);
-        var sandbox = await TryComposeWindowsSandboxAsync(config, knownSecrets, cts.Token).ConfigureAwait(false);
-        var executionPolicy = sandbox?.ExecutionPolicy ?? ProcessExecutionPolicy.Host();
-
-        await Console.Out.WriteLineAsync("TinyHarness run");
-        await Console.Out.WriteLineAsync($"  config    : {resolution.Source}" +
-                                         (resolution.SourcePath is null
-                                             ? string.Empty
-                                             : $" ({resolution.SourcePath})"));
-        await Console.Out.WriteLineAsync($"  model     : {config.Model}");
-        await Console.Out.WriteLineAsync($"  endpoint  : {config.Endpoint}");
-        await Console.Out.WriteLineAsync($"  chat api  : {ChatApiKindParser.ToValueString(config.ChatApi)}");
-        await Console.Out.WriteLineAsync($"  workspace : {config.WorkspaceRoot}");
-        await Console.Out.WriteLineAsync(sandbox is null
-                                             ? $"  sandbox   : {executionPolicy.DisplayName}"
-                                             : $"  sandbox   : {executionPolicy.DisplayName}; home: {sandbox.Components.SandboxHome}");
-        await Console.Out.WriteLineAsync("  tools     : list_files, search_text, read_file, apply_patch, shell");
-
-        // Assemble the real model transport, workspace tools and interactive
-        // permission flow used by normal CLI runs. stdin is dispatched through the
-        // single input coordinator (PLAN §6), so approval prompts never race another
-        // read loop; the M12.3 interactive input joins the same outlet.
-        var model = ModelClientFactory.Create(config.Model, config.Endpoint, apiKey, config.ChatApi);
-
-        var workspace = new Workspace(config.WorkspaceRoot);
-        var tools = BuildTools(workspace, config, apiKey, executionPolicy, sandbox?.Backend,
-                               knownSecrets);
-        var               permissions = new PermissionEngine(config.WorkspaceRoot, config.CommandRules);
-        IApprovalProvider approver    = new ConsoleApprovalProvider(new ExclusiveInputReader(Console.In), Console.Out,
-                                                                    knownSecrets);
-        var options = new AgentOptions
-        {
-            Model                     = config.Model,
-            MaxAgentSteps             = config.MaxAgentSteps,
-            DefaultToolTimeoutSeconds = config.DefaultToolTimeoutSeconds,
-            Context = new ContextOptions
-            {
-                ContextWindowTokens       = config.ContextWindowTokens,
-                ReservedOutputTokens      = config.ReservedOutputTokens,
-                CompactionThresholdTokens = config.CompactionThreshold
-            }
-        };
-
-        var recorder = new FileRunRecorder(config.SessionDirectory, knownSecrets : knownSecrets);
-        var loop     = new AgentLoop(model, tools, options, permissions, approver, recorder,
-                                     new ConsoleHostEventSink(knownSecrets));
-        const string systemPrompt =
-            "You are TinyHarness, a local coding harness that inspects and modifies a workspace. " +
-            "Use list_files, search_text and read_file to inspect, apply_patch to modify files, and shell to run commands. " +
-            "For ordinary commands use shell mode 'direct' with executable and an arguments array. Use mode 'shell' " +
-            "with a shell flavor and command string only when pipelines, redirection, or other shell syntax is required. " +
-            "Tool paths are relative to the workspace root. " +
-            "apply_patch takes a unified diff: '--- a/path' and '+++ b/path' headers, then '@@ -s[,c] +s[,c] @@' " +
-            "hunks with ' ' (context), '-' (remove) and '+' (add) line prefixes. New files use '--- /dev/null'. " +
-            "Writes and commands may require the user's approval before they run; a denial is returned to you so you can adjust.";
-
-        var result = await loop.RunAsync(systemPrompt, prompt, cts.Token).ConfigureAwait(false);
+        var result = await loop.RunAsync(WorkspaceSystemPrompt, prompt, cts.Token).ConfigureAwait(false);
 
         await Console.Out.WriteLineAsync();
         await Console.Out.WriteLineAsync($"status     : {result.Status}");
@@ -247,6 +198,155 @@ internal static class Program
             AgentStatus.Cancelled => 130,
             _                     => 1
         };
+    }
+
+    /// <summary>
+    ///     加载生效配置并启动交互式多回合 chat 会话（M12.3，PLAN §10）。执行栈与 run 完全共享
+    ///     （<see cref="ComposeAgentAsync" />）；回合输入与审批提示共享同一个
+    ///     <see cref="ExclusiveInputReader" /> 单一出口，Ctrl+C 的回合/会话分发由
+    ///     <see cref="ChatCancellation" /> 承担。会话仅存在于本进程：循环退出即结束，
+    ///     不宣称重启续聊（M13 落地持久化）。
+    ///     Loads the effective configuration and starts the interactive multi-turn chat
+    ///     session (M12.3, PLAN §10). The execution stack is shared with run exactly
+    ///     (<see cref="ComposeAgentAsync" />); the turn input and approval prompts share one
+    ///     <see cref="ExclusiveInputReader" /> outlet, and Ctrl+C's turn/session dispatch lives
+    ///     in <see cref="ChatCancellation" />. The session exists within this process only:
+    ///     exiting the loop ends it, and restart-resume is not claimed until M13 lands
+    ///     persistence.
+    /// </summary>
+    private static async Task<int> RunChatAsync(string? configPath)
+    {
+        using var cancellation = new ChatCancellation();
+        var       composition  = await ComposeAgentAsync(configPath, cancellation.SessionToken).ConfigureAwait(false);
+        var       config       = composition.Config;
+
+        // One single-input outlet serves both the turn prompts and the inline approval
+        // prompts (PLAN §6); the console and the approver must wrap the same instance.
+        var reader = new ExclusiveInputReader(Console.In);
+
+        var host = new ChatSessionHost(config.WorkspaceRoot,
+                                       new SessionModelIdentity(config.Model, config.Endpoint, config.ChatApi),
+                                       composition.Options,
+                                       composition.Model,
+                                       composition.Tools,
+                                       WorkspaceSystemPrompt,
+                                       composition.Permissions,
+                                       new ConsoleApprovalProvider(reader, Console.Out, composition.KnownSecrets),
+                                       new ConsoleHostEventSink(composition.KnownSecrets),
+                                       runId => new FileRunRecorder(config.SessionDirectory, runId,
+                                                                    composition.KnownSecrets));
+
+        await WriteHeaderAsync("TinyHarness chat", composition, host.Session.Id).ConfigureAwait(false);
+
+        var console = new ChatSessionConsole(host, reader, Console.Out, cancellation, composition.KnownSecrets);
+        return await console.RunAsync().ConfigureAwait(false);
+    }
+
+    /// <summary>
+    ///     run 与 chat 共享的执行栈组合：解析配置、校验模型与 endpoint、按引用解析 API key、
+    ///     组合沙箱执行要素，并构建模型客户端、工作区工具、权限引擎与 Agent 选项。审批器与
+    ///     事件展示由各入口自行组装（chat 的审批必须与回合输入共享同一读取出口）。配置缺失
+    ///     模型/endpoint 或找不到 API key 时抛出 <see cref="ConfigException" />，由入口以
+    ///     退出码 1 报告，与原 run 行为一致。
+    ///     The execution-stack composition shared by run and chat: resolve the config, validate
+    ///     the model and endpoint, resolve the API key by reference, compose the sandbox
+    ///     execution pieces, and build the model client, workspace tools, permission engine and
+    ///     agent options. The approver and event display stay with each entry point (the chat
+    ///     approver must share the turn-input reader outlet). A missing model/endpoint or API
+    ///     key throws <see cref="ConfigException" />, reported by the entry with exit code 1 —
+    ///     matching the previous run behavior.
+    /// </summary>
+    private static async Task<AgentComposition> ComposeAgentAsync(string?                       configPath,
+                                                                  CancellationToken cancellationToken)
+    {
+        var resolution = await ConfigResolver.ResolveAsync(configPath, cancellationToken).ConfigureAwait(false);
+        var config     = resolution.Config;
+
+        if (string.IsNullOrWhiteSpace(config.Model))
+            throw new ConfigException("A model must be configured. Run 'tinyharness init' (user config) or set 'model' in the config file.");
+
+        if (string.IsNullOrWhiteSpace(config.Endpoint))
+            throw new ConfigException("An endpoint must be configured. Run 'tinyharness init' (user config) or set 'endpoint' in the config file.");
+
+        var apiKey = ApiKeyReader.Read(config.ApiKeyEnvironmentVariable, config.ApiKeyCredentialTarget,
+                                       new WindowsCredentialStore(), resolution.ProfileName);
+        if (apiKey is null)
+            throw new ConfigException("No API key found. Run 'tinyharness auth set <profile>' or set the environment variable " +
+                                      $"'{config.ApiKeyEnvironmentVariable}' before running.");
+
+        // The sandbox composition reads trusted user settings only — never the
+        // target project's config chain. Any validation failure (missing
+        // components, invalid paths, wrong platform, session directory inside
+        // the workspace) throws and fails the run; host execution is never a
+        // silent fallback.
+        var knownSecrets = SandboxCliComposition.KnownSecrets(config, apiKey);
+        var sandbox = await TryComposeWindowsSandboxAsync(config, knownSecrets, cancellationToken).ConfigureAwait(false);
+        var executionPolicy = sandbox?.ExecutionPolicy ?? ProcessExecutionPolicy.Host();
+
+        var model       = ModelClientFactory.Create(config.Model, config.Endpoint, apiKey, config.ChatApi);
+        var workspace   = new Workspace(config.WorkspaceRoot);
+        var tools       = BuildTools(workspace, config, apiKey, executionPolicy, sandbox?.Backend, knownSecrets);
+        var permissions = new PermissionEngine(config.WorkspaceRoot, config.CommandRules);
+        var options = new AgentOptions
+        {
+            Model                     = config.Model,
+            MaxAgentSteps             = config.MaxAgentSteps,
+            DefaultToolTimeoutSeconds = config.DefaultToolTimeoutSeconds,
+            Context = new ContextOptions
+            {
+                ContextWindowTokens       = config.ContextWindowTokens,
+                ReservedOutputTokens      = config.ReservedOutputTokens,
+                CompactionThresholdTokens = config.CompactionThreshold
+            }
+        };
+
+        return new AgentComposition(resolution, config, knownSecrets, sandbox, executionPolicy, model, tools,
+                                    permissions, options);
+    }
+
+    /// <summary>
+    ///     run 与 chat 共享的组合结果：除审批器与事件展示外的全部执行栈要素。
+    ///     The shared composition result: every execution-stack element except the
+    ///     approver and the event display, which stay with each entry point.
+    /// </summary>
+    private sealed record AgentComposition(
+        ConfigResolution                    Resolution,
+        TinyHarnessConfig                   Config,
+        IReadOnlyDictionary<string, string> KnownSecrets,
+        WindowsSandboxExecution?            Sandbox,
+        ProcessExecutionPolicy              ExecutionPolicy,
+        IChatCompletionClient               Model,
+        ToolRegistry                        Tools,
+        PermissionEngine                    Permissions,
+        AgentOptions                        Options);
+
+    /// <summary>
+    ///     打印 run 与 chat 共享的头部：配置来源、模型、endpoint、协议、工作区、沙箱与工具。
+    ///     chat 额外携带会话 ID 行。单一格式避免两条头部路径漂移。
+    ///     Prints the header shared by run and chat: config source, model, endpoint, protocol,
+    ///     workspace, sandbox and tools. Chat adds the session-id line. One format keeps the
+    ///     two header paths from drifting.
+    /// </summary>
+    private static async Task WriteHeaderAsync(string title, AgentComposition composition, string? sessionId = null)
+    {
+        var resolution = composition.Resolution;
+        var config     = composition.Config;
+
+        await Console.Out.WriteLineAsync(title);
+        if (sessionId is not null) await Console.Out.WriteLineAsync($"  session   : {sessionId}");
+
+        await Console.Out.WriteLineAsync($"  config    : {resolution.Source}" +
+                                         (resolution.SourcePath is null
+                                             ? string.Empty
+                                             : $" ({resolution.SourcePath})"));
+        await Console.Out.WriteLineAsync($"  model     : {config.Model}");
+        await Console.Out.WriteLineAsync($"  endpoint  : {config.Endpoint}");
+        await Console.Out.WriteLineAsync($"  chat api  : {ChatApiKindParser.ToValueString(config.ChatApi)}");
+        await Console.Out.WriteLineAsync($"  workspace : {config.WorkspaceRoot}");
+        await Console.Out.WriteLineAsync(composition.Sandbox is null
+                                             ? $"  sandbox   : {composition.ExecutionPolicy.DisplayName}"
+                                             : $"  sandbox   : {composition.ExecutionPolicy.DisplayName}; home: {composition.Sandbox.Components.SandboxHome}");
+        await Console.Out.WriteLineAsync("  tools     : list_files, search_text, read_file, apply_patch, shell");
     }
 
     /// <summary>
