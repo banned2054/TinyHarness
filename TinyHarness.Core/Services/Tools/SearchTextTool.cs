@@ -163,31 +163,24 @@ public sealed class SearchTextTool(Workspace workspace, WorkerReadPolicy? worker
 
             var scan = await ScanFileAsync(file, pattern, comparison, maxResults - output.Count, workspace,
                                            workerPolicy, cancellationToken).ConfigureAwait(false);
-            if (scan.SkipReason is ScanSkipReason.Binary)
+            switch (scan.SkipReason)
             {
-                skippedBinary++;
-                continue;
-            }
-
-            if (scan.SkipReason is ScanSkipReason.OutsideWorkspace)
-            {
-                skippedEscaping++;
-                continue;
-            }
-
-            if (scan.SkipReason is ScanSkipReason.Excluded)
-            {
-                skippedExcluded++;
-                continue;
+                case ScanSkipReason.Binary :
+                    skippedBinary++;
+                    continue;
+                case ScanSkipReason.OutsideWorkspace :
+                    skippedEscaping++;
+                    continue;
+                case ScanSkipReason.Excluded :
+                    skippedExcluded++;
+                    continue;
             }
 
             filesScanned++;
             output.AddRange(scan.Matches);
-            if (scan.StoppedMidFile)
-            {
-                stoppedAtCap = true;
-                break;
-            }
+            if (!scan.StoppedMidFile) continue;
+            stoppedAtCap = true;
+            break;
         }
 
         var details = new List<string>(5);
@@ -299,11 +292,9 @@ public sealed class SearchTextTool(Workspace workspace, WorkerReadPolicy? worker
         // Distinguish "the file had exactly maxMatches and ended" from "we cut it
         // off mid-file" with one extra probe read.
         var stoppedMidFile = false;
-        if (matches.Count >= maxMatches)
-        {
-            var more = await reader.ReadLineAsync(cancellationToken).ConfigureAwait(false);
-            stoppedMidFile = more is not null;
-        }
+        if (matches.Count < maxMatches) return new ScanOutcome(matches, stoppedMidFile, null);
+        var more = await reader.ReadLineAsync(cancellationToken).ConfigureAwait(false);
+        stoppedMidFile = more is not null;
 
         return new ScanOutcome(matches, stoppedMidFile, null);
     }

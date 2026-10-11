@@ -1,6 +1,5 @@
 using System.Globalization;
 using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization.Metadata;
 using TinyHarness.Core.Models.Configuration;
@@ -108,9 +107,8 @@ public sealed class WindowsSandboxProvisioner(ISandboxSetupElevator elevator)
     ///     argument limit throw contextual exceptions — the UAC launch
     ///     (UseShellExecute=true) cannot use the chunked environment channel.
     /// </summary>
-    public WindowsSandboxProvisionPlan BuildPlan(WindowsSandboxSettings settings,
-                                                 string               commandWorkingDirectory,
-                                                 string               realUser)
+    public WindowsSandboxProvisionPlan BuildPlan(
+        WindowsSandboxSettings settings, string commandWorkingDirectory, string realUser)
     {
         ArgumentNullException.ThrowIfNull(settings);
         ArgumentException.ThrowIfNullOrWhiteSpace(commandWorkingDirectory);
@@ -130,16 +128,16 @@ public sealed class WindowsSandboxProvisioner(ISandboxSetupElevator elevator)
 
         // Provisioning uses the default "full" mode with refresh_only=false;
         // proxy ports stay empty under the fixed offline policy.
-        var payload = plan.Policy.CreateSetupPayload(components, commandWorkingDirectory, realUser, refreshOnly : false);
+        var payload = plan.Policy.CreateSetupPayload(components, commandWorkingDirectory, realUser, false);
         var payloadJson = JsonSerializer.SerializeToUtf8Bytes(payload,
                                                               WindowsSandboxJsonContext.Default.SandboxSetupPayload);
         var base64Payload = Convert.ToBase64String(payloadJson);
         if (base64Payload.Length > ProcessSandboxSetupInvoker.PayloadArgumentCharacterLimit)
-            throw new InvalidOperationException(
-                                                $"The provisioning payload is {base64Payload.Length} base64 characters, past the " +
-                                                $"{ProcessSandboxSetupInvoker.PayloadArgumentCharacterLimit} argument limit of the UAC launch path " +
-                                                "(the elevated helper cannot use the chunked environment channel). " +
-                                                "Reduce settings.windowsSandbox.additionalWriteRoots and provision again.");
+            throw new
+                InvalidOperationException($"The provisioning payload is {base64Payload.Length} base64 characters, past the " +
+                                          $"{ProcessSandboxSetupInvoker.PayloadArgumentCharacterLimit} argument limit of the UAC launch path " +
+                                          "(the elevated helper cannot use the chunked environment channel). " +
+                                          "Reduce settings.windowsSandbox.additionalWriteRoots and provision again.");
 
         return new WindowsSandboxProvisionPlan
         {
@@ -170,16 +168,16 @@ public sealed class WindowsSandboxProvisioner(ISandboxSetupElevator elevator)
         if (ReadAccountNames(components.MarkerPath, WindowsSandboxJsonContext.Default.SandboxSetupMarker,
                              marker => marker?.OfflineUsername, marker => marker?.OnlineUsername)
             is { } legacyMarkerName)
-            throw new InvalidOperationException(
-                $"The sandbox home '{components.SandboxHome}' still names the legacy Codex account '{legacyMarkerName}' in its setup marker; it belongs to a Codex release. " +
-                "Refusing to provision into it — point settings.windowsSandbox.sandboxHome at an independent TinyHarness sandbox home instead.");
+            throw new
+                InvalidOperationException($"The sandbox home '{components.SandboxHome}' still names the legacy Codex account '{legacyMarkerName}' in its setup marker; it belongs to a Codex release. " +
+                                          "Refusing to provision into it — point settings.windowsSandbox.sandboxHome at an independent TinyHarness sandbox home instead.");
 
         if (ReadAccountNames(components.UsersFilePath, WindowsSandboxJsonContext.Default.SandboxUsersFile,
                              users => users?.Offline?.Username, users => users?.Online?.Username)
             is { } legacyUsersName)
-            throw new InvalidOperationException(
-                $"The sandbox home '{components.SandboxHome}' still names the legacy Codex account '{legacyUsersName}' in its account credentials; it belongs to a Codex release. " +
-                "Refusing to provision into it — point settings.windowsSandbox.sandboxHome at an independent TinyHarness sandbox home instead.");
+            throw new
+                InvalidOperationException($"The sandbox home '{components.SandboxHome}' still names the legacy Codex account '{legacyUsersName}' in its account credentials; it belongs to a Codex release. " +
+                                          "Refusing to provision into it — point settings.windowsSandbox.sandboxHome at an independent TinyHarness sandbox home instead.");
     }
 
     /// <summary>
@@ -189,19 +187,19 @@ public sealed class WindowsSandboxProvisioner(ISandboxSetupElevator elevator)
     ///     either one when it is a legacy Codex name; a missing file, broken
     ///     JSON, or no legacy name yields null.
     /// </summary>
-    private static string? ReadAccountNames<T>(string path, JsonTypeInfo<T> jsonContext,
-                                               Func<T?, string?> offlineSelector, Func<T?, string?> onlineSelector)
+    private static string? ReadAccountNames<T>(
+        string path, JsonTypeInfo<T> jsonContext, Func<T?, string?> offlineSelector, Func<T?, string?> onlineSelector)
     {
         try
         {
             if (!File.Exists(path)) return null;
 
-            var parsed    = JsonSerializer.Deserialize(File.ReadAllText(path), jsonContext);
-            var offline   = offlineSelector(parsed);
-            var online    = onlineSelector(parsed);
+            var parsed  = JsonSerializer.Deserialize(File.ReadAllText(path), jsonContext);
+            var offline = offlineSelector(parsed);
+            var online  = onlineSelector(parsed);
             return WindowsSandboxComponents.IsLegacyCodexAccountName(offline) ? offline
-                       : WindowsSandboxComponents.IsLegacyCodexAccountName(online) ? online
-                       : null;
+                : WindowsSandboxComponents.IsLegacyCodexAccountName(online)   ? online
+                    : null;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
         {
@@ -218,35 +216,36 @@ public sealed class WindowsSandboxProvisioner(ISandboxSetupElevator elevator)
     ///     InspectAsync; NotFinished never kills the elevated process — the
     ///     machine state is unknown.
     /// </summary>
-    public async Task<WindowsSandboxProvisionResult> ProvisionAsync(WindowsSandboxProvisionPlan plan,
-                                                                    CancellationToken        cancellationToken)
+    public async Task<WindowsSandboxProvisionResult> ProvisionAsync(
+        WindowsSandboxProvisionPlan plan, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(plan);
         var elevation = await elevator.ElevateAsync(plan.Components, plan.Base64Payload, cancellationToken)
                                       .ConfigureAwait(false);
 
         WindowsSandboxProvisionResult result;
+
         string  outcome;
         string? errorSummary = null;
         switch (elevation.Outcome)
         {
             case SandboxSetupElevationOutcome.DeclinedByUser :
                 outcome = "declined";
-                result = new WindowsSandboxProvisionResult { Outcome = SandboxProvisionOutcome.Declined };
+                result  = new WindowsSandboxProvisionResult { Outcome = SandboxProvisionOutcome.Declined };
                 break;
 
             case SandboxSetupElevationOutcome.DidNotFinish :
                 outcome = "not-finished";
-                result = new WindowsSandboxProvisionResult { Outcome = SandboxProvisionOutcome.NotFinished };
+                result  = new WindowsSandboxProvisionResult { Outcome = SandboxProvisionOutcome.NotFinished };
                 break;
 
             case SandboxSetupElevationOutcome.Completed when elevation.ExitCode != 0 :
-                outcome     = "failed";
+                outcome = "failed";
                 // The helper may fail while the caller is already cancelling (a raced
                 // Ctrl+C); this bounded read deliberately ignores that so the failure
                 // still reaches the audit line below.
                 errorSummary = await SandboxSetupErrorReader.DescribeAsync(plan.Components.SetupErrorPath)
-                                                           .ConfigureAwait(false);
+                                                            .ConfigureAwait(false);
                 result = new WindowsSandboxProvisionResult
                 {
                     Outcome = SandboxProvisionOutcome.Failed, ExitCode = elevation.ExitCode, SetupError = errorSummary
@@ -262,7 +261,8 @@ public sealed class WindowsSandboxProvisioner(ISandboxSetupElevator elevator)
                 break;
 
             default :
-                throw new InvalidOperationException($"Unhandled sandbox setup elevation outcome '{elevation.Outcome}'.");
+                throw
+                    new InvalidOperationException($"Unhandled sandbox setup elevation outcome '{elevation.Outcome}'.");
         }
 
         var auditError = await TryAppendAuditAsync(plan, outcome, elevation.ExitCode, errorSummary)
@@ -286,20 +286,18 @@ public sealed class WindowsSandboxProvisioner(ISandboxSetupElevator elevator)
     ///     failure returns an explanation instead of throwing and never
     ///     rewrites the command result.
     /// </summary>
-    private static async Task<string?> TryAppendAuditAsync(WindowsSandboxProvisionPlan plan,
-                                                           string                      outcome,
-                                                           int?                        exitCode,
-                                                           string?                     error)
+    private static async Task<string?> TryAppendAuditAsync(
+        WindowsSandboxProvisionPlan plan, string outcome, int? exitCode, string? error)
     {
         var record = new SandboxProvisionAuditRecord
         {
-            TimestampUtc = DateTime.UtcNow.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture),
-            Outcome      = outcome,
-            ExitCode     = exitCode,
-            Mode         = plan.Payload.Mode,
-            RefreshOnly  = plan.Payload.RefreshOnly,
+            TimestampUtc  = DateTime.UtcNow.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture),
+            Outcome       = outcome,
+            ExitCode      = exitCode,
+            Mode          = plan.Payload.Mode,
+            RefreshOnly   = plan.Payload.RefreshOnly,
             PayloadSha256 = plan.PayloadSha256,
-            Error        = error is null ? null : Truncate(error)
+            Error         = error is null ? null : Truncate(error)
         };
         try
         {
@@ -320,8 +318,6 @@ public sealed class WindowsSandboxProvisioner(ISandboxSetupElevator elevator)
         }
     }
 
-    private static string Truncate(string text)
-    {
-        return text.Length <= ErrorSummaryLimit ? text : text[..ErrorSummaryLimit] + "…";
-    }
+    private static string Truncate(string text) =>
+        text.Length <= ErrorSummaryLimit ? text : text[..ErrorSummaryLimit] + "…";
 }

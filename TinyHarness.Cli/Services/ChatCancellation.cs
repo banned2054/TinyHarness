@@ -16,9 +16,9 @@ namespace TinyHarness.Cli.Services;
 /// </summary>
 internal sealed class ChatCancellation : IDisposable
 {
-    private readonly CancellationTokenSource   _session = new();
     private readonly ConsoleCancelEventHandler _handler;
     private readonly bool                      _registerConsole;
+    private readonly CancellationTokenSource   _session = new();
 
     // Invariant: _turnActive == 1 implies _turn is set (until the dispose race, whose
     // ObjectDisposedException is swallowed in RaiseCancel). The flag is written with
@@ -28,6 +28,7 @@ internal sealed class ChatCancellation : IDisposable
     // its state reads and re-checks it before acting, so a keypress that raced a turn
     // teardown never cancels the next turn.
     private CancellationTokenSource? _turn;
+
     private int _turnActive;
     private int _turnGeneration;
 
@@ -43,6 +44,12 @@ internal sealed class ChatCancellation : IDisposable
 
     /// <summary>会话是否已被请求结束。Whether the session has been asked to end.</summary>
     public bool IsSessionCancelled => _session.IsCancellationRequested;
+
+    public void Dispose()
+    {
+        if (_registerConsole) Console.CancelKeyPress -= _handler;
+        _session.Dispose();
+    }
 
     /// <summary>
     ///     标记一个回合开始并返回其取消令牌：链接会话令牌与外部令牌，Ctrl+C 在活动状态下
@@ -111,11 +118,5 @@ internal sealed class ChatCancellation : IDisposable
         // cancel the turn, or end the session through its own shutdown path.
         args.Cancel = true;
         RaiseCancel();
-    }
-
-    public void Dispose()
-    {
-        if (_registerConsole) Console.CancelKeyPress -= _handler;
-        _session.Dispose();
     }
 }

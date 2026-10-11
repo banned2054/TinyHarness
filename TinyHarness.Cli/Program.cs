@@ -120,7 +120,8 @@ internal static class Program
 
     /// <summary>
     ///     执行管理命令（init/config/provider/auth/model/doctor/sandbox）；这些命令绝不把输入发给模型。
-    ///     Executes management commands (init/config/provider/auth/model/doctor/sandbox); their input is never sent to a model.
+    ///     Executes management commands (init/config/provider/auth/model/doctor/sandbox); their input is never sent to a
+    ///     model.
     /// </summary>
     private static async Task<int> RunManagementCommandAsync(CliOptions options)
     {
@@ -168,7 +169,7 @@ internal static class Program
         // dispatched through the single input coordinator (PLAN §6), so approval prompts
         // never race another read loop; the M12.3 chat input joins the same outlet.
         IApprovalProvider approver = new ConsoleApprovalProvider(new ExclusiveInputReader(Console.In), Console.Out,
-                                                                composition.KnownSecrets);
+                                                                 composition.KnownSecrets);
 
         var recorder = new FileRunRecorder(composition.Config.SessionDirectory,
                                            knownSecrets : composition.KnownSecrets);
@@ -184,10 +185,12 @@ internal static class Program
         await Console.Out.WriteLineAsync($"toolExecs  : {result.ToolExecutions}");
         if (result.InputTokens is not null || result.OutputTokens is not null)
         {
-            var inputTokens  = (result.InputTokens ?? 0).ToString("N0");
+            var inputTokens  = (result.InputTokens  ?? 0).ToString("N0");
             var outputTokens = (result.OutputTokens ?? 0).ToString("N0");
-            await Console.Out.WriteLineAsync($"usage      : {inputTokens} in / {outputTokens} out tokens (server-reported; absent requests not counted)");
+            await Console.Out
+                         .WriteLineAsync($"usage      : {inputTokens} in / {outputTokens} out tokens (server-reported; absent requests not counted)");
         }
+
         await Console.Out.WriteLineAsync($"final      : {result.FinalMessage}");
         await WritePersistencePathsAsync(recorder).ConfigureAwait(false);
         if (!string.IsNullOrWhiteSpace(result.Error)) await Console.Out.WriteLineAsync($"error      : {result.Error}");
@@ -256,23 +259,26 @@ internal static class Program
     ///     key throws <see cref="ConfigException" />, reported by the entry with exit code 1 —
     ///     matching the previous run behavior.
     /// </summary>
-    private static async Task<AgentComposition> ComposeAgentAsync(string?                       configPath,
-                                                                  CancellationToken cancellationToken)
+    private static async Task<AgentComposition> ComposeAgentAsync(
+        string? configPath, CancellationToken cancellationToken)
     {
         var resolution = await ConfigResolver.ResolveAsync(configPath, cancellationToken).ConfigureAwait(false);
         var config     = resolution.Config;
 
         if (string.IsNullOrWhiteSpace(config.Model))
-            throw new ConfigException("A model must be configured. Run 'tinyharness init' (user config) or set 'model' in the config file.");
+            throw new
+                ConfigException("A model must be configured. Run 'tinyharness init' (user config) or set 'model' in the config file.");
 
         if (string.IsNullOrWhiteSpace(config.Endpoint))
-            throw new ConfigException("An endpoint must be configured. Run 'tinyharness init' (user config) or set 'endpoint' in the config file.");
+            throw new
+                ConfigException("An endpoint must be configured. Run 'tinyharness init' (user config) or set 'endpoint' in the config file.");
 
         var apiKey = ApiKeyReader.Read(config.ApiKeyEnvironmentVariable, config.ApiKeyCredentialTarget,
                                        new WindowsCredentialStore(), resolution.ProfileName);
         if (apiKey is null)
-            throw new ConfigException("No API key found. Run 'tinyharness auth set <profile>' or set the environment variable " +
-                                      $"'{config.ApiKeyEnvironmentVariable}' before running.");
+            throw new
+                ConfigException("No API key found. Run 'tinyharness auth set <profile>' or set the environment variable " +
+                                $"'{config.ApiKeyEnvironmentVariable}' before running.");
 
         // The sandbox composition reads trusted user settings only — never the
         // target project's config chain. Any validation failure (missing
@@ -280,7 +286,8 @@ internal static class Program
         // the workspace) throws and fails the run; host execution is never a
         // silent fallback.
         var knownSecrets = SandboxCliComposition.KnownSecrets(config, apiKey);
-        var sandbox = await TryComposeWindowsSandboxAsync(config, knownSecrets, cancellationToken).ConfigureAwait(false);
+        var sandbox = await TryComposeWindowsSandboxAsync(config, knownSecrets, cancellationToken)
+           .ConfigureAwait(false);
         var executionPolicy = sandbox?.ExecutionPolicy ?? ProcessExecutionPolicy.Host();
 
         var model       = ModelClientFactory.Create(config.Model, config.Endpoint, apiKey, config.ChatApi);
@@ -303,22 +310,6 @@ internal static class Program
         return new AgentComposition(resolution, config, knownSecrets, sandbox, executionPolicy, model, tools,
                                     permissions, options);
     }
-
-    /// <summary>
-    ///     run 与 chat 共享的组合结果：除审批器与事件展示外的全部执行栈要素。
-    ///     The shared composition result: every execution-stack element except the
-    ///     approver and the event display, which stay with each entry point.
-    /// </summary>
-    private sealed record AgentComposition(
-        ConfigResolution                    Resolution,
-        TinyHarnessConfig                   Config,
-        IReadOnlyDictionary<string, string> KnownSecrets,
-        WindowsSandboxExecution?            Sandbox,
-        ProcessExecutionPolicy              ExecutionPolicy,
-        IChatCompletionClient               Model,
-        ToolRegistry                        Tools,
-        PermissionEngine                    Permissions,
-        AgentOptions                        Options);
 
     /// <summary>
     ///     打印 run 与 chat 共享的头部：配置来源、模型、endpoint、协议、工作区、沙箱与工具。
@@ -540,6 +531,22 @@ internal static class Program
     }
 
     /// <summary>
+    ///     run 与 chat 共享的组合结果：除审批器与事件展示外的全部执行栈要素。
+    ///     The shared composition result: every execution-stack element except the
+    ///     approver and the event display, which stay with each entry point.
+    /// </summary>
+    private sealed record AgentComposition(
+        ConfigResolution                    Resolution,
+        TinyHarnessConfig                   Config,
+        IReadOnlyDictionary<string, string> KnownSecrets,
+        WindowsSandboxExecution?            Sandbox,
+        ProcessExecutionPolicy              ExecutionPolicy,
+        IChatCompletionClient               Model,
+        ToolRegistry                        Tools,
+        PermissionEngine                    Permissions,
+        AgentOptions                        Options);
+
+    /// <summary>
     ///     将 Ctrl+C 转换为任务取消，并在运行结束时可靠移除全局事件处理器。
     ///     Converts Ctrl+C into task cancellation and reliably detaches the global handler afterward.
     /// </summary>
@@ -600,19 +607,20 @@ internal static class SandboxCliComposition
     ///     workspace throws (sandboxed commands could tamper with audit
     ///     records); host execution is never a silent fallback.
     /// </summary>
-    public static WindowsSandboxExecution? TryCompose(WindowsSandboxSettings?             settings,
-                                                      string                              sessionDirectory,
-                                                      string                              workspaceRoot,
-                                                      IReadOnlyDictionary<string, string> knownSecrets)
+    public static WindowsSandboxExecution? TryCompose(
+        WindowsSandboxSettings?             settings,
+        string                              sessionDirectory,
+        string                              workspaceRoot,
+        IReadOnlyDictionary<string, string> knownSecrets)
     {
         if (settings is not { Enabled: true }) return null;
 
         var fullSessionDirectory = Path.GetFullPath(sessionDirectory);
         if (Workspace.IsInside(workspaceRoot, fullSessionDirectory))
-            throw new InvalidOperationException($"The session directory '{fullSessionDirectory}' lies inside "  +
-                                                $"the workspace '{workspaceRoot}'; "                   +
-                                                "sandboxed commands could tamper with audit records. " +
-                                                "Move it outside the workspace (settings.sessionDirectory) " +
+            throw new InvalidOperationException($"The session directory '{fullSessionDirectory}' lies inside " +
+                                                $"the workspace '{workspaceRoot}'; "                           +
+                                                "sandboxed commands could tamper with audit records. "         +
+                                                "Move it outside the workspace (settings.sessionDirectory) "   +
                                                 "before enabling the Windows sandbox.");
 
         return WindowsSandboxComposer.Compose(settings, workspaceRoot, knownSecrets);

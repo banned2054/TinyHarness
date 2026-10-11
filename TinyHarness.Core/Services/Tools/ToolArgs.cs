@@ -29,8 +29,6 @@ internal static class ToolArgs
     ///     Reads the absolute path that Prepare resolved and wrote into the plan.
     ///     Execute never re-resolves raw model input.
     /// </summary>
-    public static string ReadAbsolute(ToolPreparation preparation, string key)
-    {
-        return JsonArgs.Required(preparation.Arguments, key);
-    }
+    public static string ReadAbsolute(ToolPreparation preparation, string key) =>
+        JsonArgs.Required(preparation.Arguments, key);
 }

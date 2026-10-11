@@ -113,21 +113,25 @@ internal static class DirectoryWalker
                 if (excludeEntry is not null && excludeEntry(child)) continue;
 
                 var isDir = Directory.Exists(child);
-                if (!isDir && !File.Exists(child)) continue; // Vanished between enumeration and classification.
-
-                if (isDir)
+                switch (isDir)
                 {
-                    var name = Path.GetFileName(child);
-                    if (ExcludedNames.Contains(name, StringComparer.Ordinal)) continue;
-
-                    if (IsReparsePoint(child))
+                    case false when !File.Exists(child) :
+                        continue; // Vanished between enumeration and classification.
+                    case true :
                     {
-                        if (includeDirectories) entries.Add(child);
+                        var name = Path.GetFileName(child);
+                        if (ExcludedNames.Contains(name, StringComparer.Ordinal)) continue;
 
-                        continue; // Never descend through links/junctions.
+                        if (IsReparsePoint(child))
+                        {
+                            if (includeDirectories) entries.Add(child);
+
+                            continue; // Never descend through links/junctions.
+                        }
+
+                        if (recursive && (maxDepth is null || depth + 1 <= maxDepth)) stack.Push((child, depth + 1));
+                        break;
                     }
-
-                    if (recursive && (maxDepth is null || depth + 1 <= maxDepth)) stack.Push((child, depth + 1));
                 }
 
                 if (includeDirectories || !isDir) entries.Add(child);

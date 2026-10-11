@@ -303,56 +303,60 @@ public static class UserConfigStore
         }
 
         UserConfigSettings? settings = null;
-        if (root["settings"] is JsonObject settingsNode)
+        if (root["settings"] is not JsonObject settingsNode)
+            return new UserConfig
+            {
+                DefaultProfile = defaultProfile,
+                Profiles       = profiles ?? [],
+                Settings       = settings
+            };
+        UserWorkerSettings? workerSettings = null;
+        if (settingsNode["worker"] is not null)
         {
-            UserWorkerSettings? workerSettings = null;
-            if (settingsNode["worker"] is not null)
-            {
-                if (settingsNode["worker"] is not JsonObject workerNode)
-                    throw new
-                        InvalidDataException($"User config field 'settings.worker' in '{filePath}' must be an object.");
+            if (settingsNode["worker"] is not JsonObject workerNode)
+                throw new
+                    InvalidDataException($"User config field 'settings.worker' in '{filePath}' must be an object.");
 
-                workerSettings = new UserWorkerSettings
-                {
-                    WorkspaceRoot = ReadString(workerNode, "workspaceRoot", filePath),
-                    RunTimeoutSeconds = ReadPositiveInt(workerNode, "runTimeoutSeconds", filePath,
-                                                        "settings.worker.runTimeoutSeconds"),
-                    MaxAgentSteps =
-                        ReadPositiveInt(workerNode, "maxAgentSteps", filePath, "settings.worker.maxAgentSteps"),
-                    DefaultToolTimeoutSeconds = ReadPositiveInt(workerNode, "defaultToolTimeoutSeconds", filePath,
-                                                                "settings.worker.defaultToolTimeoutSeconds"),
-                    MaxTaskPackageCharacters = ReadPositiveInt(workerNode, "maxTaskPackageCharacters", filePath,
-                                                               "settings.worker.maxTaskPackageCharacters"),
-                    MaxToolCalls =
-                        ReadPositiveInt(workerNode, "maxToolCalls", filePath, "settings.worker.maxToolCalls"),
-                    MaxToolOutputCharacters = ReadPositiveInt(workerNode, "maxToolOutputCharacters", filePath,
-                                                              "settings.worker.maxToolOutputCharacters"),
-                    MaxContextTokensPerRequest = ReadPositiveInt(workerNode, "maxContextTokensPerRequest", filePath,
-                                                                 "settings.worker.maxContextTokensPerRequest"),
-                    MaxCumulativeContextTokens = ReadPositiveInt(workerNode, "maxCumulativeContextTokens", filePath,
-                                                                 "settings.worker.maxCumulativeContextTokens"),
-                    MaxModelResponseCharacters = ReadPositiveInt(workerNode, "maxModelResponseCharacters", filePath,
-                                                                 "settings.worker.maxModelResponseCharacters")
-                };
-            }
-
-            settings = new UserConfigSettings
+            workerSettings = new UserWorkerSettings
             {
-                MaxAgentSteps = ReadPositiveInt(settingsNode, "maxAgentSteps", filePath, "settings.maxAgentSteps"),
-                ReservedOutputTokens =
-                    ReadNonNegativeInt(settingsNode, "reservedOutputTokens", filePath, "settings.reservedOutputTokens"),
-                CompactionThreshold =
-                    ReadNonNegativeInt(settingsNode, "compactionThreshold", filePath, "settings.compactionThreshold"),
-                DefaultToolTimeoutSeconds = ReadNonNegativeInt(settingsNode, "defaultToolTimeoutSeconds", filePath,
-                                                               "settings.defaultToolTimeoutSeconds"),
-                SessionDirectory = ReadString(settingsNode, "sessionDirectory", filePath),
-                CommandRules = root["settings"] is JsonObject s && s["commandRules"] is not null
-                    ? CommandRuleJson.Read(settingsNode, "commandRules", $"user config '{filePath}'")
-                    : null,
-                Worker         = workerSettings,
-                WindowsSandbox = BindWindowsSandbox(settingsNode, filePath)
+                WorkspaceRoot = ReadString(workerNode, "workspaceRoot", filePath),
+                RunTimeoutSeconds = ReadPositiveInt(workerNode, "runTimeoutSeconds", filePath,
+                                                    "settings.worker.runTimeoutSeconds"),
+                MaxAgentSteps =
+                    ReadPositiveInt(workerNode, "maxAgentSteps", filePath, "settings.worker.maxAgentSteps"),
+                DefaultToolTimeoutSeconds = ReadPositiveInt(workerNode, "defaultToolTimeoutSeconds", filePath,
+                                                            "settings.worker.defaultToolTimeoutSeconds"),
+                MaxTaskPackageCharacters = ReadPositiveInt(workerNode, "maxTaskPackageCharacters", filePath,
+                                                           "settings.worker.maxTaskPackageCharacters"),
+                MaxToolCalls =
+                    ReadPositiveInt(workerNode, "maxToolCalls", filePath, "settings.worker.maxToolCalls"),
+                MaxToolOutputCharacters = ReadPositiveInt(workerNode, "maxToolOutputCharacters", filePath,
+                                                          "settings.worker.maxToolOutputCharacters"),
+                MaxContextTokensPerRequest = ReadPositiveInt(workerNode, "maxContextTokensPerRequest", filePath,
+                                                             "settings.worker.maxContextTokensPerRequest"),
+                MaxCumulativeContextTokens = ReadPositiveInt(workerNode, "maxCumulativeContextTokens", filePath,
+                                                             "settings.worker.maxCumulativeContextTokens"),
+                MaxModelResponseCharacters = ReadPositiveInt(workerNode, "maxModelResponseCharacters", filePath,
+                                                             "settings.worker.maxModelResponseCharacters")
             };
         }
+
+        settings = new UserConfigSettings
+        {
+            MaxAgentSteps = ReadPositiveInt(settingsNode, "maxAgentSteps", filePath, "settings.maxAgentSteps"),
+            ReservedOutputTokens =
+                ReadNonNegativeInt(settingsNode, "reservedOutputTokens", filePath, "settings.reservedOutputTokens"),
+            CompactionThreshold =
+                ReadNonNegativeInt(settingsNode, "compactionThreshold", filePath, "settings.compactionThreshold"),
+            DefaultToolTimeoutSeconds = ReadNonNegativeInt(settingsNode, "defaultToolTimeoutSeconds", filePath,
+                                                           "settings.defaultToolTimeoutSeconds"),
+            SessionDirectory = ReadString(settingsNode, "sessionDirectory", filePath),
+            CommandRules = root["settings"] is JsonObject s && s["commandRules"] is not null
+                ? CommandRuleJson.Read(settingsNode, "commandRules", $"user config '{filePath}'")
+                : null,
+            Worker         = workerSettings,
+            WindowsSandbox = BindWindowsSandbox(settingsNode, filePath)
+        };
 
         return new UserConfig
         {

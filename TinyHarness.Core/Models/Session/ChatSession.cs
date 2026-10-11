@@ -12,8 +12,8 @@ public sealed class ChatSession
 {
     private readonly List<SessionTurn> _turns = [];
 
-    public ChatSession(string id, string workspaceRoot, SessionModelIdentity model,
-                       DateTimeOffset? createdUtc = null)
+    public ChatSession(
+        string id, string workspaceRoot, SessionModelIdentity model, DateTimeOffset? createdUtc = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(id);
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);

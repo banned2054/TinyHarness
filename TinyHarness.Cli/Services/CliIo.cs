@@ -104,14 +104,14 @@ internal static class CliPrompt
     ///     Shows a prompt and reads one line; EOF throws with an explanation instead of silently treating empty input as an
     ///     answer.
     /// </summary>
-    public static async Task<string> RequiredLineAsync(ICliConsole       io, string label,
-                                                       CancellationToken cancellationToken)
+    public static async Task<string> RequiredLineAsync(
+        ICliConsole io, string label, CancellationToken cancellationToken)
     {
         await io.WriteAsync($"{label}: ", cancellationToken).ConfigureAwait(false);
         var line = await io.ReadLineAsync(cancellationToken).ConfigureAwait(false);
         if (line is null)
-            throw new InvalidOperationException(
-                                                $"Input ended while waiting for '{label}'. Nothing was saved; rerun the command to answer all prompts.");
+            throw new
+                InvalidOperationException($"Input ended while waiting for '{label}'. Nothing was saved; rerun the command to answer all prompts.");
 
         return line.Trim();
     }
@@ -120,8 +120,8 @@ internal static class CliPrompt
     ///     显示提示并读取一行，空输入时使用默认值。
     ///     Shows a prompt and reads one line, using the default when the input is empty.
     /// </summary>
-    public static async Task<string> LineWithDefaultAsync(ICliConsole       io, string label, string defaultValue,
-                                                          CancellationToken cancellationToken)
+    public static async Task<string> LineWithDefaultAsync(
+        ICliConsole io, string label, string defaultValue, CancellationToken cancellationToken)
     {
         var line = await RequiredLineAsync(io, $"{label} [{defaultValue}]", cancellationToken)
            .ConfigureAwait(false);
@@ -132,8 +132,8 @@ internal static class CliPrompt
     ///     读取一个正整数，非法输入时重复提示。
     ///     Reads a positive integer, re-prompting on invalid input.
     /// </summary>
-    public static async Task<int> PositiveIntAsync(ICliConsole       io, string label, int defaultValue,
-                                                   CancellationToken cancellationToken)
+    public static async Task<int> PositiveIntAsync(
+        ICliConsole io, string label, int defaultValue, CancellationToken cancellationToken)
     {
         while (true)
         {
@@ -150,8 +150,8 @@ internal static class CliPrompt
     ///     读取一个 yes/no 确认；空输入使用默认答案。
     ///     Reads a yes/no confirmation; empty input uses the default answer.
     /// </summary>
-    public static async Task<bool> ConfirmAsync(ICliConsole       io, string label, bool defaultYes,
-                                                CancellationToken cancellationToken)
+    public static async Task<bool> ConfirmAsync(
+        ICliConsole io, string label, bool defaultYes, CancellationToken cancellationToken)
     {
         var suffix = defaultYes ? "[Y/n]" : "[y/N]";
         while (true)

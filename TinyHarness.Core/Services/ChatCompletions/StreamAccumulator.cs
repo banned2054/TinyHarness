@@ -97,7 +97,8 @@ public sealed class StreamAccumulator
         var index = @event.ToolCallIndex ?? 0;
         while (_buffers.Count <= index) _buffers.Add(new ToolCallBuffer());
 
-        var buffer                                   = _buffers[index];
+        var buffer = _buffers[index];
+
         if (@event.ToolCallId is not null) buffer.Id = @event.ToolCallId;
 
         if (@event.ToolCallFunctionName is not null) buffer.Name = @event.ToolCallFunctionName;
@@ -116,8 +117,8 @@ public sealed class StreamAccumulator
     /// </summary>
     private void AppendReasoningDelta(ChatStreamEvent @event)
     {
-        if (@event.ReasoningItemId is { } itemId
-         && !string.Equals(_openReasoningItemId, itemId, StringComparison.Ordinal))
+        if (@event.ReasoningItemId is { } itemId &&
+            !string.Equals(_openReasoningItemId, itemId, StringComparison.Ordinal))
         {
             FlushReasoningEntry();
             _openReasoningItemId = itemId;

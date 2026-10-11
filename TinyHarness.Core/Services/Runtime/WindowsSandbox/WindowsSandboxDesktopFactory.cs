@@ -27,19 +27,13 @@ public interface ISandboxDesktopFactory
 ///     A private desktop handle closed on Dispose. The bare name (without the
 ///     WinSta0 prefix) is what goes into spawn_request.
 /// </summary>
-public sealed partial class PrivateDesktop : IDisposable
+public sealed partial class PrivateDesktop(string name, IntPtr handle) : IDisposable
 {
     private bool _closed;
 
-    public PrivateDesktop(string name, IntPtr handle)
-    {
-        Name   = name;
-        Handle = handle;
-    }
+    public string Name { get; } = name;
 
-    public string Name { get; }
-
-    internal IntPtr Handle { get; }
+    internal IntPtr Handle { get; } = handle;
 
     public void Dispose()
     {

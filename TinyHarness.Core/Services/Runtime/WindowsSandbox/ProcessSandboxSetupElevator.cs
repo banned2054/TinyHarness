@@ -14,20 +14,10 @@ namespace TinyHarness.Core.Services.Runtime.WindowsSandbox;
 /// </summary>
 public sealed record SandboxSetupElevationResult
 {
-    public required SandboxSetupElevationOutcome Outcome { get; init; }
-
-    /// <summary>helper 进程退出码；仅 Outcome == Completed 时有值。</summary>
-    public int? ExitCode { get; init; }
-
     public static readonly SandboxSetupElevationResult Completed0 = new()
     {
         Outcome = SandboxSetupElevationOutcome.Completed, ExitCode = 0
     };
-
-    public static SandboxSetupElevationResult Completed(int exitCode)
-    {
-        return new SandboxSetupElevationResult { Outcome = SandboxSetupElevationOutcome.Completed, ExitCode = exitCode };
-    }
 
     public static readonly SandboxSetupElevationResult Declined = new()
     {
@@ -43,6 +33,17 @@ public sealed record SandboxSetupElevationResult
     {
         Outcome = SandboxSetupElevationOutcome.DidNotFinish
     };
+
+    public required SandboxSetupElevationOutcome Outcome { get; init; }
+
+    /// <summary>helper 进程退出码；仅 Outcome == Completed 时有值。</summary>
+    public int? ExitCode { get; init; }
+
+    public static SandboxSetupElevationResult Completed(int exitCode)
+    {
+        return new SandboxSetupElevationResult
+            { Outcome = SandboxSetupElevationOutcome.Completed, ExitCode = exitCode };
+    }
 }
 
 /// <summary>提权执行的终态：已完成 / 用户拒绝 / 未在期限内完成（超时或取消，状态未知）。</summary>
@@ -75,9 +76,8 @@ public interface ISandboxSetupElevator
     ///     The base64 payload is the single positional argument — the chunked
     ///     environment channel is unavailable with UseShellExecute=true.
     /// </summary>
-    Task<SandboxSetupElevationResult> ElevateAsync(WindowsSandboxComponents components,
-                                                   string                   base64Payload,
-                                                   CancellationToken        cancellationToken);
+    Task<SandboxSetupElevationResult> ElevateAsync(
+        WindowsSandboxComponents components, string base64Payload, CancellationToken cancellationToken);
 }
 
 /// <summary>
@@ -104,9 +104,8 @@ public sealed class ProcessSandboxSetupElevator(TimeSpan? timeout = null) : ISan
 
     private readonly TimeSpan _timeout = timeout ?? DefaultTimeout;
 
-    public async Task<SandboxSetupElevationResult> ElevateAsync(WindowsSandboxComponents components,
-                                                                string                   base64Payload,
-                                                                CancellationToken        cancellationToken)
+    public async Task<SandboxSetupElevationResult> ElevateAsync(
+        WindowsSandboxComponents components, string base64Payload, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(components);
         ArgumentException.ThrowIfNullOrWhiteSpace(base64Payload);
@@ -114,9 +113,9 @@ public sealed class ProcessSandboxSetupElevator(TimeSpan? timeout = null) : ISan
 
         var startInfo = new ProcessStartInfo(components.SetupExecutablePath)
         {
-            Arguments        = base64Payload,
-            UseShellExecute  = true,
-            Verb             = "runas",
+            Arguments       = base64Payload,
+            UseShellExecute = true,
+            Verb            = "runas",
             // CreateNoWindow is ignored under UseShellExecute; a console-subsystem
             // helper may briefly show a window.
             WorkingDirectory = Path.GetDirectoryName(components.SetupExecutablePath)!
@@ -140,8 +139,9 @@ public sealed class ProcessSandboxSetupElevator(TimeSpan? timeout = null) : ISan
                                           ex);
         }
 
-        using var timeoutSource     = new CancellationTokenSource(_timeout);
-        using var linkedSource      = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutSource.Token);
+        using var timeoutSource = new CancellationTokenSource(_timeout);
+        using var linkedSource =
+            CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutSource.Token);
         try
         {
             await process.WaitForExitAsync(linkedSource.Token).ConfigureAwait(false);

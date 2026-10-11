@@ -194,17 +194,20 @@ public class AgentLoopTests
     ///     One text fragment plus an End event carrying usage; drives the audit chain.
     /// </summary>
     private static IReadOnlyList<ChatStreamEvent> TextWithUsage(
-        string text, int inputTokens, int outputTokens, string finishReason) =>
-    [
-        new() { Kind = ChatStreamEventKind.ContentDelta, ContentDelta = text },
-        new()
-        {
-            Kind         = ChatStreamEventKind.End,
-            InputTokens  = inputTokens,
-            OutputTokens = outputTokens,
-            FinishReason = finishReason
-        }
-    ];
+        string text, int inputTokens, int outputTokens, string finishReason)
+    {
+        return
+        [
+            new() { Kind = ChatStreamEventKind.ContentDelta, ContentDelta = text },
+            new()
+            {
+                Kind         = ChatStreamEventKind.End,
+                InputTokens  = inputTokens,
+                OutputTokens = outputTokens,
+                FinishReason = finishReason
+            }
+        ];
+    }
 
 
     [Fact]
@@ -261,18 +264,18 @@ public class AgentLoopTests
     [Fact]
     public async Task RunTurn_ContinuesSharedContextAndRejectsChangedSystemPrompt()
     {
-        var client  = new FakeChatClient();
+        var client = new FakeChatClient();
         client.Enqueue(FakeChatClient.Text("one"));
         client.Enqueue(FakeChatClient.Text("two"));
         var context = new ConversationContext();
-        var loop    = new AgentLoop(client, new ToolRegistry([]), Options(), null, null, context: context);
+        var loop    = new AgentLoop(client, new ToolRegistry([]), Options(), null, null, context : context);
 
         await loop.RunTurnAsync("sys", "u1", CancellationToken.None);
 
         // A different system prompt is refused before anything is appended; the
         // context still ends with turn 1's assistant reply.
-        await Assert.ThrowsAsync<InvalidOperationException>(
-            () => loop.RunTurnAsync("different", "u2", CancellationToken.None));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => loop.RunTurnAsync("different", "u2",
+                                                                CancellationToken.None));
         Assert.Equal(3, context.Messages.Count);
         Assert.Equal("one", context.Messages[2].Content);
 
@@ -294,10 +297,11 @@ public class AgentLoopTests
         context.Append(ChatMessage.User("u1"));
         context.Append(ChatMessage.Assistant(string.Empty, [new ChatToolCall("call_1", "t", "{}")]));
         var loop = new AgentLoop(client, new ToolRegistry([new FakeTool("t")]), Options(), null, null,
-                                 context: context);
+                                 context : context);
 
-        var rejected = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => loop.RunTurnAsync("sys", "u2", CancellationToken.None));
+        var rejected =
+            await Assert.ThrowsAsync<InvalidOperationException>(() => loop.RunTurnAsync("sys", "u2",
+                                                                    CancellationToken.None));
 
         Assert.Contains("call_1", rejected.Message);
         Assert.Equal(0, client.Requests);
@@ -311,7 +315,7 @@ public class AgentLoopTests
         var client = new FakeChatClient();
         client.Enqueue(FakeChatClient.Text("done"));
         var sink = new ThrowingSink(HostEventKind.RunStarted);
-        var loop = new AgentLoop(client, new ToolRegistry([]), Options(), null, null, events: sink);
+        var loop = new AgentLoop(client, new ToolRegistry([]), Options(), null, null, events : sink);
 
         var result = await loop.RunAsync("sys", "go", CancellationToken.None);
 
@@ -329,7 +333,7 @@ public class AgentLoopTests
         var client = new FakeChatClient();
         client.Enqueue(FakeChatClient.Text("done"));
         var sink = new ThrowingSink(HostEventKind.RunFinished);
-        var loop = new AgentLoop(client, new ToolRegistry([]), Options(), null, null, events: sink);
+        var loop = new AgentLoop(client, new ToolRegistry([]), Options(), null, null, events : sink);
 
         var result = await loop.RunAsync("sys", "go", CancellationToken.None);
 
@@ -347,8 +351,8 @@ public class AgentLoopTests
         client.Enqueue(FakeChatClient.Text("two"));
         var sink    = new TestHostEventSink();
         var context = new ConversationContext();
-        var loop    = new AgentLoop(client, new ToolRegistry([]), Options(), null, null,
-                                    events: sink, context: context);
+        var loop = new AgentLoop(client, new ToolRegistry([]), Options(), null, null,
+                                 events : sink, context : context);
 
         await loop.RunTurnAsync("sys", "u1", CancellationToken.None);
         await loop.RunTurnAsync("sys", "u2", CancellationToken.None);

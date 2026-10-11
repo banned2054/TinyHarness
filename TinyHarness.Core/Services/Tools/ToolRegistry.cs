@@ -30,19 +30,13 @@ public sealed record ToolRegistry : IReadOnlyDictionary<string, ITool>
     ///     判断是否注册了指定名称的工具。
     ///     Reports whether a tool with the specified name is registered.
     /// </summary>
-    public bool ContainsKey(string key)
-    {
-        return _tools.ContainsKey(key);
-    }
+    public bool ContainsKey(string key) => _tools.ContainsKey(key);
 
     /// <summary>
     ///     尝试按名称取得工具，不存在时返回 <see langword="false" />。
     ///     Attempts to retrieve a tool by name and returns <see langword="false" /> when absent.
     /// </summary>
-    public bool TryGetValue(string key, out ITool value)
-    {
-        return _tools.TryGetValue(key, out value!);
-    }
+    public bool TryGetValue(string key, out ITool value) => _tools.TryGetValue(key, out value!);
 
     public ITool this[string key] => _tools[key];
 
@@ -50,13 +44,7 @@ public sealed record ToolRegistry : IReadOnlyDictionary<string, ITool>
     ///     按底层只读字典枚举已注册工具。
     ///     Enumerates registered tools through the underlying read-only dictionary.
     /// </summary>
-    public IEnumerator<KeyValuePair<string, ITool>> GetEnumerator()
-    {
-        return _tools.GetEnumerator();
-    }
+    public IEnumerator<KeyValuePair<string, ITool>> GetEnumerator() => _tools.GetEnumerator();
 
-    IEnumerator IEnumerable.GetEnumerator()
-    {
-        return GetEnumerator();
-    }
+    IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
 }

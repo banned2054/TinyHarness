@@ -26,10 +26,9 @@ public static class ConfigResolver
     ///     for tests and embedded callers; omitted values mean the process current directory and the default user
     ///     config path.
     /// </summary>
-    public static async Task<ConfigResolution> ResolveAsync(string?           explicitConfigPath,
-                                                            CancellationToken cancellationToken,
-                                                            string?           workingDirectory = null,
-                                                            string?           userConfigPath   = null)
+    public static async Task<ConfigResolution> ResolveAsync(
+        string? explicitConfigPath, CancellationToken cancellationToken, string? workingDirectory = null,
+        string? userConfigPath = null)
     {
         var projectConfigPath = Path.GetFullPath(ProjectConfigFileName,
                                                  string.IsNullOrWhiteSpace(workingDirectory)
@@ -79,32 +78,29 @@ public static class ConfigResolver
             };
         }
 
-        if (userExists)
-        {
-            var userConfig = await UserConfigStore.LoadAsync(userConfigPathResolved, cancellationToken)
-                                                  .ConfigureAwait(false);
-            var config = FromUserConfig(userConfig, userConfigPathResolved);
+        if (!userExists)
             return new ConfigResolution
             {
-                Config = ConfigurationLoader.NormalizePaths(config),
-                Source = ConfigSourceKind.UserConfig,
-                SourcePath = userConfigPathResolved,
-                ProfileName = string.IsNullOrWhiteSpace(userConfig.DefaultProfile) ? null : userConfig.DefaultProfile,
-                ModelName = string.IsNullOrWhiteSpace(config.Model) ? null : config.Model,
-                UserConfigPath = userConfigPathResolved,
-                UserConfigExists = true,
-                ProjectConfigPath = projectConfigPath,
+                Config              = ConfigurationLoader.NormalizePaths(new TinyHarnessConfig()),
+                Source              = ConfigSourceKind.Defaults,
+                UserConfigPath      = userConfigPathResolved,
+                UserConfigExists    = false,
+                ProjectConfigPath   = projectConfigPath,
                 ProjectConfigExists = false
             };
-        }
-
+        var userConfig = await UserConfigStore.LoadAsync(userConfigPathResolved, cancellationToken)
+                                              .ConfigureAwait(false);
+        var config = FromUserConfig(userConfig, userConfigPathResolved);
         return new ConfigResolution
         {
-            Config              = ConfigurationLoader.NormalizePaths(new TinyHarnessConfig()),
-            Source              = ConfigSourceKind.Defaults,
-            UserConfigPath      = userConfigPathResolved,
-            UserConfigExists    = false,
-            ProjectConfigPath   = projectConfigPath,
+            Config = ConfigurationLoader.NormalizePaths(config),
+            Source = ConfigSourceKind.UserConfig,
+            SourcePath = userConfigPathResolved,
+            ProfileName = string.IsNullOrWhiteSpace(userConfig.DefaultProfile) ? null : userConfig.DefaultProfile,
+            ModelName = string.IsNullOrWhiteSpace(config.Model) ? null : config.Model,
+            UserConfigPath = userConfigPathResolved,
+            UserConfigExists = true,
+            ProjectConfigPath = projectConfigPath,
             ProjectConfigExists = false
         };
     }

@@ -75,6 +75,9 @@ internal sealed record CliOptions
     /// <summary>sandbox verify-worker --marker 的 marker 文件路径。The marker file path of sandbox verify-worker --marker.</summary>
     public string? VerifyMarkerPath { get; init; }
 
-    /// <summary>sandbox verify-worker --hold-seconds 的保持秒数。The hold duration in seconds of sandbox verify-worker --hold-seconds.</summary>
+    /// <summary>
+    ///     sandbox verify-worker --hold-seconds 的保持秒数。The hold duration in seconds of sandbox verify-worker
+    ///     --hold-seconds.
+    /// </summary>
     public int? VerifyHoldSeconds { get; init; }
 }

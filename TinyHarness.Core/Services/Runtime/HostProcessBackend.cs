@@ -39,7 +39,7 @@ public sealed class HostProcessBackend : IProcessExecutionBackend
 
         using var timeoutSource = new CancellationTokenSource(TimeSpan.FromSeconds(execution.TimeoutSeconds));
         using var linkedSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken,
-            timeoutSource.Token);
+                 timeoutSource.Token);
         using var        captureSource = new CancellationTokenSource();
         ProcessExecution processExecution;
         try
@@ -95,9 +95,9 @@ public sealed class HostProcessBackend : IProcessExecutionBackend
 
                 stdoutCapture.Discard();
                 stderrCapture.Discard();
-                throw new IOException(
-                                      $"Failed while executing or capturing output from '{execution.Executable}': {executionError.Message}",
-                                      executionError);
+                throw new
+                    IOException($"Failed while executing or capturing output from '{execution.Executable}': {executionError.Message}",
+                                executionError);
             }
 
             int? exitCode = processExecution.Process.HasExited ? processExecution.Process.ExitCode : null;
@@ -130,8 +130,8 @@ public sealed class HostProcessBackend : IProcessExecutionBackend
     ///     chunks; cross-chunk secret redaction depends on that chunk size. After
     ///     end-of-stream an empty chunk is appended to flush the capture's tail.
     /// </summary>
-    private static async Task PumpAsync(StreamReader      reader, IProcessOutputCapture capture,
-                                        CancellationToken cancellationToken)
+    private static async Task PumpAsync(
+        StreamReader reader, IProcessOutputCapture capture, CancellationToken cancellationToken)
     {
         var buffer = new char[4096];
         while (true)
@@ -261,14 +261,11 @@ public sealed class HostProcessBackend : IProcessExecutionBackend
                 throw new PlatformNotSupportedException("Raw cmd execution is available only on Windows.");
 
             var managedProcess = new Process { StartInfo = startInfo };
-            if (!managedProcess.Start())
-            {
-                managedProcess.Dispose();
-                throw new InvalidOperationException($"Failed to start executable '{startInfo.FileName}'.");
-            }
-
-            return new ProcessExecution(managedProcess, managedProcess.StandardOutput,
-                                        managedProcess.StandardError, null);
+            if (managedProcess.Start())
+                return new ProcessExecution(managedProcess, managedProcess.StandardOutput,
+                                            managedProcess.StandardError, null);
+            managedProcess.Dispose();
+            throw new InvalidOperationException($"Failed to start executable '{startInfo.FileName}'.");
         }
 
         public void Terminate()

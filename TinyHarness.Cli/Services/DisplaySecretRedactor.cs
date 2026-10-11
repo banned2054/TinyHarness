@@ -32,10 +32,10 @@ internal sealed class DisplaySecretRedactor
     public DisplaySecretRedactor(IReadOnlyDictionary<string, string>? knownSecrets)
     {
         _secrets = (knownSecrets ?? new Dictionary<string, string>(StringComparer.Ordinal)).Values
-                   .Where(value => !string.IsNullOrEmpty(value))
-                   .Distinct(StringComparer.Ordinal)
-                   .OrderByDescending(value => value.Length)
-                   .ToArray();
+           .Where(value => !string.IsNullOrEmpty(value))
+           .Distinct(StringComparer.Ordinal)
+           .OrderByDescending(value => value.Length)
+           .ToArray();
         _maximumSecretLength = _secrets.Count == 0 ? 0 : _secrets.Max(value => value.Length);
     }
 
@@ -69,9 +69,7 @@ internal sealed class DisplaySecretRedactor
 
         _pending += delta;
         var processLimit = Math.Max(0, _pending.Length - _maximumSecretLength + 1);
-        if (processLimit == 0) return string.Empty;
-
-        return RedactPrefix(processLimit);
+        return processLimit == 0 ? string.Empty : RedactPrefix(processLimit);
     }
 
     /// <summary>
@@ -119,7 +117,7 @@ internal sealed class DisplaySecretRedactor
         for (var length = maximum; length > 0; length--)
             if (_secrets.Any(value => value.Length > length &&
                                       value.AsSpan(0, length)
-                                          .SequenceEqual(_pending.AsSpan(_pending.Length - length, length))))
+                                           .SequenceEqual(_pending.AsSpan(_pending.Length - length, length))))
                 return length;
 
         return 0;

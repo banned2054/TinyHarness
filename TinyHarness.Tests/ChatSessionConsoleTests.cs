@@ -3,7 +3,6 @@ using TinyHarness.Cli.Services;
 using TinyHarness.Core.Models.Agent;
 using TinyHarness.Core.Models.ChatCompletions;
 using TinyHarness.Core.Models.Configuration;
-using TinyHarness.Core.Models.Permissions;
 using TinyHarness.Core.Models.Session;
 using TinyHarness.Core.Models.Tools;
 using TinyHarness.Core.Services.ChatCompletions;
@@ -26,24 +25,29 @@ public class ChatSessionConsoleTests
 {
     private const string SystemPrompt = "You are a test harness inspecting a workspace.";
 
-    private static CancellationToken TestToken() => new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token;
+    private static CancellationToken TestToken()
+    {
+        return new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token;
+    }
 
-    private static ChatSessionHost NewHost(IChatCompletionClient  client,
-                                           ToolRegistry?          tools       = null,
-                                           PermissionEngine?      permissions = null,
-                                           IApprovalProvider?     approver    = null,
-                                           IHostEventSink?        events      = null)
+    private static ChatSessionHost NewHost(IChatCompletionClient client,
+                                           ToolRegistry?         tools       = null,
+                                           PermissionEngine?     permissions = null,
+                                           IApprovalProvider?    approver    = null,
+                                           IHostEventSink?       events      = null)
     {
         return new ChatSessionHost(
-            Path.Combine(Path.GetTempPath(), "tinyharness-chat-console-tests"),
-            new SessionModelIdentity("test-model", "https://example.invalid/v1", ChatApiKind.ChatCompletions),
-            new AgentOptions { Model = "test-model", MaxAgentSteps = 8, DefaultToolTimeoutSeconds = 30 },
-            client,
-            tools ?? new ToolRegistry([]),
-            SystemPrompt,
-            permissions : permissions,
-            approver    : approver,
-            events      : events);
+                                   Path.Combine(Path.GetTempPath(), "tinyharness-chat-console-tests"),
+                                   new SessionModelIdentity("test-model", "https://example.invalid/v1",
+                                                            ChatApiKind.ChatCompletions),
+                                   new AgentOptions
+                                       { Model = "test-model", MaxAgentSteps = 8, DefaultToolTimeoutSeconds = 30 },
+                                   client,
+                                   tools ?? new ToolRegistry([]),
+                                   SystemPrompt,
+                                   permissions,
+                                   approver,
+                                   events);
     }
 
     private static int Count(string text, string needle)
@@ -61,8 +65,8 @@ public class ChatSessionConsoleTests
         var host   = NewHost(client, events : new ConsoleHostEventSink(null, output));
         var input  = new ScriptedInput("解释一下这个仓库", "那测试为什么失败？");
         input.Complete();
-        using var cancellation = new ChatCancellation(registerConsole : false);
-        var console = new ChatSessionConsole(host, input, output, cancellation);
+        using var cancellation = new ChatCancellation(false);
+        var       console      = new ChatSessionConsole(host, input, output, cancellation);
 
         var exit = await console.RunAsync();
 
@@ -106,12 +110,12 @@ public class ChatSessionConsoleTests
         scripted.Complete();
         var reader = new ExclusiveInputReader(scripted);
         var host = NewHost(client, new ToolRegistry([tool]),
-                           permissions : new PermissionEngine(Path.Combine(Path.GetTempPath(),
-                                                                           "tinyharness-chat-console-tests")),
-                           approver    : new ConsoleApprovalProvider(reader, output),
-                           events      : new ConsoleHostEventSink(null, output));
-        using var cancellation = new ChatCancellation(registerConsole : false);
-        var console = new ChatSessionConsole(host, reader, output, cancellation);
+                           new PermissionEngine(Path.Combine(Path.GetTempPath(),
+                                                             "tinyharness-chat-console-tests")),
+                           new ConsoleApprovalProvider(reader, output),
+                           new ConsoleHostEventSink(null, output));
+        using var cancellation = new ChatCancellation(false);
+        var       console      = new ChatSessionConsole(host, reader, output, cancellation);
 
         var exit = await console.RunAsync();
 
@@ -162,8 +166,8 @@ public class ChatSessionConsoleTests
         var host   = NewHost(client, events : new ConsoleHostEventSink(null, output));
         var input  = new ScriptedInput("", "   ", "问一下");
         input.Complete();
-        using var cancellation = new ChatCancellation(registerConsole : false);
-        var console = new ChatSessionConsole(host, input, output, cancellation);
+        using var cancellation = new ChatCancellation(false);
+        var       console      = new ChatSessionConsole(host, input, output, cancellation);
 
         var exit = await console.RunAsync();
 
@@ -176,12 +180,12 @@ public class ChatSessionConsoleTests
     [Fact]
     public async Task RunAsync_CancelDuringTurn_CancelsTheRunAndTheSessionContinues()
     {
-        var client = new GateChatClient();
-        var host   = NewHost(client);
-        var output = new StringWriter();
-        var input  = new ScriptedInput("开始一个任务");
-        using var cancellation = new ChatCancellation(registerConsole : false);
-        var console = new ChatSessionConsole(host, input, output, cancellation);
+        var       client       = new GateChatClient();
+        var       host         = NewHost(client);
+        var       output       = new StringWriter();
+        var       input        = new ScriptedInput("开始一个任务");
+        using var cancellation = new ChatCancellation(false);
+        var       console      = new ChatSessionConsole(host, input, output, cancellation);
 
         var runTask = console.RunAsync();
         await client.WaitStartedAsync(TestToken());
@@ -205,11 +209,11 @@ public class ChatSessionConsoleTests
     [Fact]
     public async Task RunAsync_CancelWhileIdle_EndsTheSessionWith130()
     {
-        var host   = NewHost(new FakeChatClient());
-        var output = new StringWriter();
-        var input  = new BlockingInput();
-        using var cancellation = new ChatCancellation(registerConsole : false);
-        var console = new ChatSessionConsole(host, input, output, cancellation);
+        var       host         = NewHost(new FakeChatClient());
+        var       output       = new StringWriter();
+        var       input        = new BlockingInput();
+        using var cancellation = new ChatCancellation(false);
+        var       console      = new ChatSessionConsole(host, input, output, cancellation);
 
         var runTask = console.RunAsync();
         await input.Started.WaitAsync(TestToken());
@@ -227,13 +231,13 @@ public class ChatSessionConsoleTests
     public async Task RunAsync_CancelDuringToolExecution_NextTurnIsRefusedAndSessionContinues()
     {
         var client = new FakeChatClient();
-        client.Enqueue(FakeChatClient.ToolCall("slow_tool", "{}", "call_1"));
-        var tool   = new GateTool();
-        var output = new StringWriter();
-        var host   = NewHost(client, new ToolRegistry([tool]), events : new ConsoleHostEventSink(null, output));
-        var input  = new ScriptedInput("go");
-        using var cancellation = new ChatCancellation(registerConsole : false);
-        var console = new ChatSessionConsole(host, input, output, cancellation);
+        client.Enqueue(FakeChatClient.ToolCall("slow_tool", "{}"));
+        var       tool = new GateTool();
+        var       output = new StringWriter();
+        var       host = NewHost(client, new ToolRegistry([tool]), events : new ConsoleHostEventSink(null, output));
+        var       input = new ScriptedInput("go");
+        using var cancellation = new ChatCancellation(false);
+        var       console = new ChatSessionConsole(host, input, output, cancellation);
 
         var runTask = console.RunAsync();
         await tool.WaitStartedAsync(TestToken());
@@ -264,8 +268,8 @@ public class ChatSessionConsoleTests
         var output = new StringWriter();
         var input  = new ScriptedInput("first");
         input.Complete();
-        using var cancellation = new ChatCancellation(registerConsole : false);
-        var console = new ChatSessionConsole(host, input, output, cancellation);
+        using var cancellation = new ChatCancellation(false);
+        var       console      = new ChatSessionConsole(host, input, output, cancellation);
 
         var external = host.SubmitTurnAsync("external", CancellationToken.None);
         await client.WaitStartedAsync(TestToken());
@@ -289,8 +293,8 @@ public class ChatSessionConsoleTests
         var host   = NewHost(client, events : new ConsoleHostEventSink(null, output));
         var input  = new ScriptedInput("第一问", "第二问");
         input.Complete();
-        using var cancellation = new ChatCancellation(registerConsole : false);
-        var console = new ChatSessionConsole(host, input, output, cancellation);
+        using var cancellation = new ChatCancellation(false);
+        var       console      = new ChatSessionConsole(host, input, output, cancellation);
 
         var exit = await console.RunAsync();
 
@@ -312,8 +316,8 @@ public class ChatSessionConsoleTests
         var host   = NewHost(client, events : new ConsoleHostEventSink(null, output));
         var input  = new ScriptedInput("问一下");
         input.Complete();
-        using var cancellation = new ChatCancellation(registerConsole : false);
-        var console = new ChatSessionConsole(host, input, output, cancellation);
+        using var cancellation = new ChatCancellation(false);
+        var       console      = new ChatSessionConsole(host, input, output, cancellation);
 
         var exit = await console.RunAsync();
 
@@ -332,10 +336,10 @@ public class ChatSessionConsoleTests
     /// </summary>
     private sealed class ScriptedInput : TextReader
     {
-        private readonly object           _gate  = new();
-        private readonly Queue<string>    _lines = new();
-        private TaskCompletionSource      _signal = NewSignal();
-        private bool                      _completed;
+        private readonly object               _gate  = new();
+        private readonly Queue<string>        _lines = new();
+        private          bool                 _completed;
+        private          TaskCompletionSource _signal = NewSignal();
 
         public ScriptedInput(params string[] lines)
         {
@@ -355,7 +359,11 @@ public class ChatSessionConsoleTests
 
         public void Complete()
         {
-            lock (_gate) _completed = true;
+            lock (_gate)
+            {
+                _completed = true;
+            }
+
             _signal.TrySetResult();
         }
 
@@ -376,7 +384,10 @@ public class ChatSessionConsoleTests
                 await Task.WhenAny(signal.Task,
                                    Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken)).ConfigureAwait(false);
                 cancellationToken.ThrowIfCancellationRequested();
-                lock (_gate) _signal = NewSignal();
+                lock (_gate)
+                {
+                    _signal = NewSignal();
+                }
             }
         }
 

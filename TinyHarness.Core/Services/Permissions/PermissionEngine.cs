@@ -175,11 +175,9 @@ public sealed class PermissionEngine
     ///     Creates a session rule from a prepared plan's capability and normalized
     ///     targets; grants bind the grant constraint, denies the command constraint.
     /// </summary>
-    private static PermissionRule ToRule(ToolPreparation preparation, bool deny)
-    {
-        return new PermissionRule(preparation.Capability, preparation.TargetPaths.ToArray(),
-                                  deny ? preparation.SessionConstraint : GrantConstraint(preparation));
-    }
+    private static PermissionRule ToRule(ToolPreparation preparation, bool deny) => new(preparation.Capability,
+             preparation.TargetPaths.ToArray(),
+             deny ? preparation.SessionConstraint : GrantConstraint(preparation));
 
     /// <summary>
     ///     会话授权与一次性授权使用的约束：优先执行策略绑定的授权约束，缺省回落到命令约束。
@@ -235,12 +233,12 @@ public sealed class PermissionEngine
             {
                 case "direct" when string.IsNullOrWhiteSpace(rule.Executable) :
                     throw new InvalidDataException("A direct command rule executable must be a non-empty string.");
-                case "direct" when (!string.IsNullOrEmpty(rule.Shell) || !string.IsNullOrEmpty(rule.Command)) :
+                case "direct" when !string.IsNullOrEmpty(rule.Shell) || !string.IsNullOrEmpty(rule.Command) :
                     throw new InvalidDataException("A direct command rule cannot contain shell or command fields.");
                 case "shell" when
-                    (string.IsNullOrWhiteSpace(rule.Shell) || string.IsNullOrWhiteSpace(rule.Command)) :
+                    string.IsNullOrWhiteSpace(rule.Shell) || string.IsNullOrWhiteSpace(rule.Command) :
                     throw new InvalidDataException("A shell command rule requires a shell flavor and exact command.");
-                case "shell" when (!string.IsNullOrEmpty(rule.Executable) || rule.Arguments.Count != 0) :
+                case "shell" when !string.IsNullOrEmpty(rule.Executable) || rule.Arguments.Count != 0 :
                     throw new
                         InvalidDataException("A shell command rule cannot contain executable or arguments fields.");
             }

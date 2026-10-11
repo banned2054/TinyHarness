@@ -376,11 +376,10 @@ public sealed class ShellTool : ITool
         return full;
     }
 
-    private static bool IsPathLike(string executable)
-    {
-        return Path.IsPathRooted(executable) || executable.Contains(Path.DirectorySeparatorChar) ||
-               executable.Contains(Path.AltDirectorySeparatorChar);
-    }
+    private static bool IsPathLike(string executable) =>
+        Path.IsPathRooted(executable)                    ||
+        executable.Contains(Path.DirectorySeparatorChar) ||
+        executable.Contains(Path.AltDirectorySeparatorChar);
 
     private static void ValidateText(string value, string argumentName)
     {
@@ -402,20 +401,15 @@ public sealed class ShellTool : ITool
                                                   $"Timeout must be between 1 and {MaximumTimeoutSeconds} seconds.");
     }
 
-    private static string FormatCommand(string executable, IReadOnlyList<string> arguments)
-    {
-        return string.Join(' ', new[] { executable }.Concat(arguments).Select(QuoteForDisplay));
-    }
+    private static string FormatCommand(string executable, IReadOnlyList<string> arguments) =>
+        string.Join(' ', new[] { executable }.Concat(arguments).Select(QuoteForDisplay));
 
-    private static string QuoteForDisplay(string value)
-    {
-        return value.Any(char.IsWhiteSpace) || value.Contains('"')
-            ? '"' + value.Replace("\"", "\\\"", StringComparison.Ordinal) + '"'
-            : value;
-    }
+    private static string QuoteForDisplay(string value) => value.Any(char.IsWhiteSpace) || value.Contains('"')
+        ? '"' + value.Replace("\"", "\\\"", StringComparison.Ordinal) + '"'
+        : value;
 
-    private static string FormatResult(int?                  exitCode, bool timedOut, int timeoutSeconds,
-                                       CapturedProcessOutput stdout,   CapturedProcessOutput stderr)
+    private static string FormatResult(
+        int? exitCode, bool timedOut, int timeoutSeconds, CapturedProcessOutput stdout, CapturedProcessOutput stderr)
     {
         var output = new StringBuilder();
         output.Append("Exit code: ").AppendLine(exitCode?.ToString() ?? "unavailable");
@@ -425,10 +419,7 @@ public sealed class ShellTool : ITool
         return output.ToString();
     }
 
-    private static ToolResult Failed(string message)
-    {
-        return new ToolResult { Succeeded = false, Content = message };
-    }
+    private static ToolResult Failed(string message) => new() { Succeeded = false, Content = message };
 
     private sealed record PreparedCommand(
         string                Executable,

@@ -172,21 +172,19 @@ internal static class PatchParser
         }
 
         var target = StripGitPrefix(newPath);
-        if (string.IsNullOrWhiteSpace(target)) throw new InvalidDataException("apply_patch: invalid target path.");
-
-        return target;
+        return string.IsNullOrWhiteSpace(target)
+            ? throw new InvalidDataException("apply_patch: invalid target path.")
+            : target;
     }
 
     /// <summary>
     ///     移除 unified diff 常见的“a/”或“b/”路径前缀。
     ///     Removes the conventional "a/" or "b/" unified-diff path prefix.
     /// </summary>
-    private static string StripGitPrefix(string path)
-    {
-        return path.StartsWith("b/", StringComparison.Ordinal) || path.StartsWith("a/", StringComparison.Ordinal)
-            ? path[2..]
-            : path;
-    }
+    private static string StripGitPrefix(string path) => path.StartsWith("b/", StringComparison.Ordinal) ||
+                                                         path.StartsWith("a/", StringComparison.Ordinal)
+        ? path[2..]
+        : path;
 
     /// <summary>
     ///     解析“@@ -old +new @@”头部，并验证起始行及计数均非负。

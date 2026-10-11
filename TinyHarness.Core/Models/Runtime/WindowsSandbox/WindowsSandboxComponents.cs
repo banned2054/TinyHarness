@@ -33,10 +33,10 @@ public sealed record WindowsSandboxComponents
     ///     instead of fighting with a Codex install over the same accounts.
     /// </summary>
     public const string LegacyCodexOfflineUsername = "CodexSandboxOffline";
-    public const string LegacyCodexOnlineUsername  = "CodexSandboxOnline";
 
-    public required string SetupExecutablePath { get; init; }
+    public const string LegacyCodexOnlineUsername = "CodexSandboxOnline";
 
+    public required string SetupExecutablePath  { get; init; }
     public required string RunnerExecutablePath { get; init; }
 
     /// <summary>
@@ -47,8 +47,7 @@ public sealed record WindowsSandboxComponents
     public required string SandboxHome { get; init; }
 
     public string OfflineUsername { get; init; } = DefaultOfflineUsername;
-
-    public string OnlineUsername { get; init; } = DefaultOnlineUsername;
+    public string OnlineUsername  { get; init; } = DefaultOnlineUsername;
 
     /// <summary>
     ///     独立固定的默认 sandbox home（每用户 %LOCALAPPDATA%\tinyharness\windows-sandbox-home）。
@@ -60,9 +59,15 @@ public sealed record WindowsSandboxComponents
     ///     SIDs), so it lives under Local rather than Roaming; it is fully
     ///     independent of the Codex release's home.
     /// </summary>
-    public static string DefaultSandboxHome => Path.Combine(
-                                                              Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                                                              "tinyharness", "windows-sandbox-home");
+    public static string DefaultSandboxHome =>
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "tinyharness",
+                     "windows-sandbox-home");
+
+    public string SandboxDirectory  => Path.Combine(SandboxHome, ".sandbox");
+    public string MarkerPath        => Path.Combine(SandboxDirectory, "setup_marker.json");
+    public string SetupErrorPath    => Path.Combine(SandboxDirectory, "setup_error.json");
+    public string UsersFilePath     => Path.Combine(SandboxHome, ".sandbox-secrets", "sandbox_users.json");
+    public string CapabilitySidPath => Path.Combine(SandboxHome, "cap_sid");
 
     /// <summary>
     ///     解析 sandbox home 设置：空白时使用独立固定默认 home；显式设置时必须是绝对路径
@@ -77,8 +82,8 @@ public sealed record WindowsSandboxComponents
 
         return Path.IsPathFullyQualified(configuredSandboxHome)
             ? configuredSandboxHome.Trim()
-            : throw new InvalidOperationException(
-                                                 $"The trusted Windows sandbox setting 'sandboxHome' must be a fully qualified absolute path: '{configuredSandboxHome}'.");
+            : throw new
+                InvalidOperationException($"The trusted Windows sandbox setting 'sandboxHome' must be a fully qualified absolute path: '{configuredSandboxHome}'.");
     }
 
     /// <summary>
@@ -86,19 +91,7 @@ public sealed record WindowsSandboxComponents
     ///     Whether this is a legacy Codex-release sandbox account name
     ///     (case-insensitive SAM-name comparison).
     /// </summary>
-    public static bool IsLegacyCodexAccountName(string? username)
-    {
-        return string.Equals(username, LegacyCodexOfflineUsername, StringComparison.OrdinalIgnoreCase) ||
-               string.Equals(username, LegacyCodexOnlineUsername, StringComparison.OrdinalIgnoreCase);
-    }
-
-    public string SandboxDirectory => Path.Combine(SandboxHome, ".sandbox");
-
-    public string MarkerPath => Path.Combine(SandboxDirectory, "setup_marker.json");
-
-    public string SetupErrorPath => Path.Combine(SandboxDirectory, "setup_error.json");
-
-    public string UsersFilePath => Path.Combine(SandboxHome, ".sandbox-secrets", "sandbox_users.json");
-
-    public string CapabilitySidPath => Path.Combine(SandboxHome, "cap_sid");
+    public static bool IsLegacyCodexAccountName(string? username) =>
+        string.Equals(username, LegacyCodexOfflineUsername, StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(username, LegacyCodexOnlineUsername, StringComparison.OrdinalIgnoreCase);
 }

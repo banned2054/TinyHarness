@@ -102,18 +102,14 @@ public sealed partial class WindowsCredentialStore : ICredentialStore
         ThrowIfUnsupported();
         ArgumentException.ThrowIfNullOrWhiteSpace(targetName);
 
-        if (!CredDelete(targetName, GenericCredentialType, 0))
-        {
-            var error = Marshal.GetLastWin32Error();
-            if (error == 1168)
-                // ERROR_NOT_FOUND: nothing to delete.
-                return false;
+        if (CredDelete(targetName, GenericCredentialType, 0)) return true;
+        var error = Marshal.GetLastWin32Error();
+        if (error == 1168)
+            // ERROR_NOT_FOUND: nothing to delete.
+            return false;
 
-            throw new
-                InvalidOperationException($"Windows Credential Manager failed to delete credential '{targetName}' (Win32 error {error}).");
-        }
-
-        return true;
+        throw new
+            InvalidOperationException($"Windows Credential Manager failed to delete credential '{targetName}' (Win32 error {error}).");
     }
 
     /// <summary>

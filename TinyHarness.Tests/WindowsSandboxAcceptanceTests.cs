@@ -46,8 +46,10 @@ public sealed class WindowsSandboxAcceptanceTests
     [Fact]
     public void SandboxVerify_ParsesYesCaseAndWorkspace()
     {
-        var options = CommandLine.Parse(["sandbox", "verify", "--yes", "--case", "deny-probe,exit-natural-23",
-                                         "--workspace", "C:\\verify-ws"]);
+        var options = CommandLine.Parse([
+            "sandbox", "verify", "--yes", "--case", "deny-probe,exit-natural-23",
+            "--workspace", "C:\\verify-ws"
+        ]);
 
         Assert.Equal("verify", options.Subcommand);
         Assert.True(options.AssumeYes);
@@ -84,8 +86,10 @@ public sealed class WindowsSandboxAcceptanceTests
     [Fact]
     public void SandboxVerifyWorker_ParsesAllRequiredOptions()
     {
-        var options = CommandLine.Parse(["sandbox", "verify-worker", "--marker", "C:\\m.txt", "--hold-seconds", "30",
-                                         "--workspace", "C:\\ws"]);
+        var options = CommandLine.Parse([
+            "sandbox", "verify-worker", "--marker", "C:\\m.txt", "--hold-seconds", "30",
+            "--workspace", "C:\\ws"
+        ]);
 
         Assert.Equal("verify-worker", options.Subcommand);
         Assert.Equal("C:\\m.txt", options.VerifyMarkerPath);
@@ -97,10 +101,14 @@ public sealed class WindowsSandboxAcceptanceTests
     public void SandboxVerifyWorker_MissingRequiredOptions_AreUsageErrors()
     {
         Assert.Throws<CliUsageException>(() => CommandLine.Parse(["sandbox", "verify-worker"]));
-        Assert.Throws<CliUsageException>(() => CommandLine.Parse(["sandbox", "verify-worker", "--marker", "C:\\m.txt"]));
+        Assert.Throws<CliUsageException>(() => CommandLine.Parse([
+            "sandbox", "verify-worker", "--marker", "C:\\m.txt"
+        ]));
         Assert.Throws<CliUsageException>(() =>
-                                             CommandLine.Parse(["sandbox", "verify-worker", "--marker", "C:\\m",
-                                                                "--hold-seconds", "5"]));
+                                             CommandLine.Parse([
+                                                 "sandbox", "verify-worker", "--marker", "C:\\m",
+                                                 "--hold-seconds", "5"
+                                             ]));
     }
 
     [Fact]
@@ -116,8 +124,10 @@ public sealed class WindowsSandboxAcceptanceTests
     public void SandboxVerifyWorker_MissingOptionValueAndUnknownArgument_AreUsageErrors()
     {
         Assert.Throws<CliUsageException>(() =>
-                                             CommandLine.Parse(["sandbox", "verify-worker", "--marker", "C:\\m",
-                                                                "--hold-seconds", "5", "--workspace"]));
+                                             CommandLine.Parse([
+                                                 "sandbox", "verify-worker", "--marker", "C:\\m",
+                                                 "--hold-seconds", "5", "--workspace"
+                                             ]));
         Assert.Throws<CliUsageException>(() =>
                                              CommandLine.Parse(["sandbox", "verify-worker", "--extra", "1"]));
     }
@@ -149,8 +159,8 @@ public sealed class WindowsSandboxAcceptanceTests
             return index <= 2
                 ? WaitUntilCancelledAsync(ct)
                 : SimulateExternalRunnerKillAsync(workspace.Root,
-                                                  new ScriptedOutcome(Failure: new ProcessExecutionFailure(
-                                                                          "The runner pipe closed before the exit frame; no command exit code is available.")));
+                                                  new ScriptedOutcome(Failure : new ProcessExecutionFailure(
+                                                                       "The runner pipe closed before the exit frame; no command exit code is available.")));
         });
 
         var runner = new WindowsSandboxAcceptanceRunner(factory.Invoke, workspace.Root,
@@ -160,7 +170,7 @@ public sealed class WindowsSandboxAcceptanceTests
 
         Assert.All(report.Cases,
                    result => Assert.True(result.Verdict == SandboxAcceptanceVerdict.Pass,
-                                          $"{result.Name}: {result.Verdict} {result.Detail}"));
+                                         $"{result.Name}: {result.Verdict} {result.Detail}"));
         Assert.Equal(WindowsSandboxAcceptanceRunner.CaseNames.Count, report.Cases.Count);
         Assert.Contains("read-only", report.PolicyKinds);
         Assert.Contains("workspace-write", report.PolicyKinds);
@@ -205,7 +215,7 @@ public sealed class WindowsSandboxAcceptanceTests
         using var workspace = new TestTempDir();
         var factory = new RecordingBackendFactory(home.Components, workspace.Root,
                                                   (plan, ct) => HappyScriptAsync(plan, ct));
-        var runner  = new WindowsSandboxAcceptanceRunner(factory.Invoke, workspace.Root, limits : TestLimits());
+        var runner = new WindowsSandboxAcceptanceRunner(factory.Invoke, workspace.Root, limits : TestLimits());
 
         await Assert.ThrowsAsync<ArgumentException>(() => runner.RunAsync(["no-such-case"], CancellationToken.None));
     }
@@ -217,10 +227,10 @@ public sealed class WindowsSandboxAcceptanceTests
 
         using var home      = new SandboxTestHome();
         using var workspace = new TestTempDir();
-        var factory = new RecordingBackendFactory(home.Components, workspace.Root, StallThenHappyScript);
-        var limits  = TestLimits() with { OverallDeadline = TimeSpan.FromMilliseconds(150) };
-        var runner  = new WindowsSandboxAcceptanceRunner(factory.Invoke, workspace.Root, limits : limits);
-        var report  = await runner.RunAsync(null, CancellationToken.None);
+        var       factory   = new RecordingBackendFactory(home.Components, workspace.Root, StallThenHappyScript);
+        var       limits    = TestLimits() with { OverallDeadline = TimeSpan.FromMilliseconds(150) };
+        var       runner    = new WindowsSandboxAcceptanceRunner(factory.Invoke, workspace.Root, limits : limits);
+        var       report    = await runner.RunAsync(null, CancellationToken.None);
 
         Assert.Equal(SandboxAcceptanceVerdict.Fail, VerdictOf(report, "identity-whoami"));
         Assert.Contains(report.Cases, result => result.Verdict == SandboxAcceptanceVerdict.Skipped);
@@ -240,7 +250,7 @@ public sealed class WindowsSandboxAcceptanceTests
             if (command.StartsWith("exit 192", StringComparison.Ordinal))
                 // A lying backend that reports 192 WITH timed_out=true for a
                 // natural exit must not fool the verdict.
-                return Task.FromResult(new ScriptedOutcome(192, TimedOut : true));
+                return Task.FromResult(new ScriptedOutcome(192, true));
 
             if (Path.GetFileName(plan.Executable) == "powershell.exe")
                 // The timeout case expects TimedOut=true; a plain success fails.
@@ -250,7 +260,7 @@ public sealed class WindowsSandboxAcceptanceTests
         });
         var runner = new WindowsSandboxAcceptanceRunner(factory.Invoke, workspace.Root, limits : TestLimits());
         var report = await runner.RunAsync(["exit-natural-23", "exit-natural-192", "timeout-finite"],
-                                          CancellationToken.None);
+                                           CancellationToken.None);
 
         Assert.Equal(SandboxAcceptanceVerdict.Pass, VerdictOf(report, "exit-natural-23"));
         Assert.Equal(SandboxAcceptanceVerdict.Fail, VerdictOf(report, "exit-natural-192"));
@@ -270,21 +280,22 @@ public sealed class WindowsSandboxAcceptanceTests
 
         // 0 = PASS; 20 = isolation breach FAIL; throw = no-exit-code FAIL.
         var report = await RunSingleCaseAsync(home, "deny-probe", (plan, ct) =>
-            Task.FromResult(new ScriptedOutcome(0)));
+                                                  Task.FromResult(new ScriptedOutcome(0)));
         Assert.Equal(SandboxAcceptanceVerdict.Pass, VerdictOf(report, "deny-probe"));
 
         report = await RunSingleCaseAsync(home, "deny-probe", (plan, ct) =>
-            Task.FromResult(new ScriptedOutcome(20)));
+                                              Task.FromResult(new ScriptedOutcome(20)));
         Assert.Equal(SandboxAcceptanceVerdict.Fail, VerdictOf(report, "deny-probe"));
         Assert.Contains("隔离失效", CaseDetail(report, "deny-probe")!, StringComparison.Ordinal);
 
         report = await RunSingleCaseAsync(home, "deny-probe", (plan, ct) =>
-            Task.FromResult(new ScriptedOutcome(21)));
+                                              Task.FromResult(new ScriptedOutcome(21)));
         Assert.Equal(SandboxAcceptanceVerdict.Fail, VerdictOf(report, "deny-probe"));
         Assert.Contains("fixture", CaseDetail(report, "deny-probe")!, StringComparison.Ordinal);
 
         report = await RunSingleCaseAsync(home, "deny-probe", (plan, ct) =>
-            Task.FromResult(new ScriptedOutcome(Throw : new InvalidOperationException("pipe broke"))));
+                                              Task.FromResult(new ScriptedOutcome(Throw :
+                                                                  new InvalidOperationException("pipe broke"))));
         Assert.Equal(SandboxAcceptanceVerdict.Fail, VerdictOf(report, "deny-probe"));
     }
 
@@ -293,7 +304,7 @@ public sealed class WindowsSandboxAcceptanceTests
     {
         if (!OperatingSystem.IsWindows()) return;
 
-        using var home      = new SandboxTestHome();
+        using var home = new SandboxTestHome();
 
         // Happy path: allowed write creates the file with exit 0; all deny
         // targets fail without creating anything.
@@ -310,7 +321,7 @@ public sealed class WindowsSandboxAcceptanceTests
         // A write that "succeeds" (exit 0) but leaves no file is a broken
         // positive control.
         report = await RunSingleCaseAsync(home, "workspace-write-allowed", (plan, ct) =>
-            Task.FromResult(new ScriptedOutcome(0)));
+                                              Task.FromResult(new ScriptedOutcome(0)));
         Assert.Equal(SandboxAcceptanceVerdict.Fail, VerdictOf(report, "workspace-write-allowed"));
 
         // An outside-root write that creates the file means isolation failed.
@@ -328,26 +339,27 @@ public sealed class WindowsSandboxAcceptanceTests
     {
         if (!OperatingSystem.IsWindows()) return;
 
-        using var home      = new SandboxTestHome();
+        using var home = new SandboxTestHome();
 
         var report = await RunSingleCaseAsync(home, "network-denied", (plan, ct) =>
-            Task.FromResult(Path.GetFileName(plan.Executable) == "curl.exe" && !LastArgument(plan)
-                                                                                                .Contains("127.0.0.1",
-                                                                                                          StringComparison
-                                                                                                              .Ordinal)
-                ? new ScriptedOutcome(7)
-                : new ScriptedOutcome(0)));
+                                                  Task.FromResult(Path.GetFileName(plan.Executable) == "curl.exe" &&
+                                                                  !LastArgument(plan)
+                                                                     .Contains("127.0.0.1",
+                                                                               StringComparison
+                                                                                  .Ordinal)
+                                                                      ? new ScriptedOutcome(7)
+                                                                      : new ScriptedOutcome(0)));
         Assert.Equal(SandboxAcceptanceVerdict.Pass, VerdictOf(report, "network-denied"));
 
         report = await RunSingleCaseAsync(home, "network-denied", (plan, ct) =>
-            Task.FromResult(new ScriptedOutcome(0)));
+                                              Task.FromResult(new ScriptedOutcome(0)));
         Assert.Equal(SandboxAcceptanceVerdict.Fail, VerdictOf(report, "network-denied"));
 
         var limits = TestLimits() with { NonLoopbackAddressResolver = () => null };
         report = await RunSingleCaseAsync(home, "network-denied", HappyScriptAsync, limits);
         Assert.Equal(SandboxAcceptanceVerdict.Indeterminate, VerdictOf(report, "network-denied"));
 
-        limits  = TestLimits() with { CurlPathResolver = () => null };
+        limits = TestLimits() with { CurlPathResolver = () => null };
         report = await RunSingleCaseAsync(home, "network-denied", HappyScriptAsync, limits);
         Assert.Equal(SandboxAcceptanceVerdict.Indeterminate, VerdictOf(report, "network-denied"));
     }
@@ -359,11 +371,12 @@ public sealed class WindowsSandboxAcceptanceTests
 
         using var home      = new SandboxTestHome();
         using var workspace = new TestTempDir();
-        var limits  = TestLimits();
-        var runner  = new WindowsSandboxAcceptanceRunner(
-            new RecordingBackendFactory(home.Components, workspace.Root,
-                                        (plan, ct) => HappyScriptAsync(plan, ct)).Invoke,
-            workspace.Root, (marker, _) => new FakeWorker(marker, true), limits : limits);
+        var       limits    = TestLimits();
+        var runner = new WindowsSandboxAcceptanceRunner(
+                                                        new RecordingBackendFactory(home.Components, workspace.Root,
+                                                            (plan, ct) => HappyScriptAsync(plan, ct)).Invoke,
+                                                        workspace.Root, (marker, _) => new FakeWorker(marker, true),
+                                                        limits : limits);
         var report = await runner.RunAsync(["large-output"], CancellationToken.None);
         var result = report.Cases.Single(caseResult => caseResult.Name == "large-output");
 
@@ -378,9 +391,12 @@ public sealed class WindowsSandboxAcceptanceTests
 
         // Tiny output that never crosses the budget must not count as truncated.
         var tiny = new WindowsSandboxAcceptanceRunner(
-            new RecordingBackendFactory(home.Components, workspace.Root, (plan, ct) =>
-                Task.FromResult(new ScriptedOutcome(0, StdoutChunks: ["small"]))).Invoke,
-            workspace.Root, (marker, _) => new FakeWorker(marker, true), limits : limits);
+                                                      new RecordingBackendFactory(home.Components, workspace.Root,
+                                                          (plan, ct) =>
+                                                              Task.FromResult(new ScriptedOutcome(0, StdoutChunks :
+                                                                                  ["small"]))).Invoke,
+                                                      workspace.Root, (marker, _) => new FakeWorker(marker, true),
+                                                      limits : limits);
         report = await tiny.RunAsync(["large-output"], CancellationToken.None);
         Assert.Equal(SandboxAcceptanceVerdict.Fail, VerdictOf(report, "large-output"));
     }
@@ -390,7 +406,7 @@ public sealed class WindowsSandboxAcceptanceTests
     {
         if (!OperatingSystem.IsWindows()) return;
 
-        using var home      = new SandboxTestHome();
+        using var home = new SandboxTestHome();
         var report = await RunSingleCaseAsync(home, "terminate-active",
                                               (plan, ct) => WaitUntilCancelledAsync(ct));
         Assert.Equal(SandboxAcceptanceVerdict.Pass, VerdictOf(report, "terminate-active"));
@@ -404,7 +420,8 @@ public sealed class WindowsSandboxAcceptanceTests
         report = await RunSingleCaseAsync(home, "terminate-active",
                                           (plan, ct) => Task.FromResult(new ScriptedOutcome(1)));
         Assert.Equal(SandboxAcceptanceVerdict.Fail, VerdictOf(report, "terminate-active"));
-        Assert.Contains("OperationCanceledException", CaseDetail(report, "terminate-active")!, StringComparison.Ordinal);
+        Assert.Contains("OperationCanceledException", CaseDetail(report, "terminate-active")!,
+                        StringComparison.Ordinal);
     }
 
     [Fact]
@@ -415,15 +432,15 @@ public sealed class WindowsSandboxAcceptanceTests
         using var home      = new SandboxTestHome();
         using var workspace = new TestTempDir();
         var report = await RunSingleCaseAsync(home, "runner-broken-pipe", (plan, ct) =>
-            SimulateExternalRunnerKillAsync(workspace.Root,
-                                            new ScriptedOutcome(Failure: new ProcessExecutionFailure(
-                                                                    "The runner pipe closed before the exit frame."))));
+                                                  SimulateExternalRunnerKillAsync(workspace.Root,
+                                                      new ScriptedOutcome(Failure : new ProcessExecutionFailure(
+                                                                           "The runner pipe closed before the exit frame."))));
         Assert.Equal(SandboxAcceptanceVerdict.Pass, VerdictOf(report, "runner-broken-pipe"));
 
         // The kill succeeded but the backend invented exit code 5 — a contract
         // violation the acceptance must catch.
         report = await RunSingleCaseAsync(home, "runner-broken-pipe", (plan, ct) =>
-            SimulateExternalRunnerKillAsync(workspace.Root, new ScriptedOutcome(5)));
+                                              SimulateExternalRunnerKillAsync(workspace.Root, new ScriptedOutcome(5)));
         Assert.Equal(SandboxAcceptanceVerdict.Fail, VerdictOf(report, "runner-broken-pipe"));
         Assert.Contains("补造", CaseDetail(report, "runner-broken-pipe")!, StringComparison.Ordinal);
     }
@@ -433,7 +450,7 @@ public sealed class WindowsSandboxAcceptanceTests
     {
         if (!OperatingSystem.IsWindows()) return;
 
-        using var home      = new SandboxTestHome();
+        using var home = new SandboxTestHome();
         // A plain sleeper without any runner image: the locate window expires.
         var report = await RunSingleCaseAsync(home, "runner-broken-pipe",
                                               (plan, ct) => WaitUntilCancelledAsync(ct));
@@ -450,18 +467,22 @@ public sealed class WindowsSandboxAcceptanceTests
 
         // The worker never writes the marker: the bounded wait fails the case.
         var runner = new WindowsSandboxAcceptanceRunner(
-            new RecordingBackendFactory(home.Components, workspace.Root,
-                                        (plan, ct) => HappyScriptAsync(plan, ct)).Invoke,
-            workspace.Root, (marker, _) => new FakeWorker(marker, false), limits : TestLimits());
+                                                        new RecordingBackendFactory(home.Components, workspace.Root,
+                                                            (plan, ct) => HappyScriptAsync(plan, ct)).Invoke,
+                                                        workspace.Root, (marker, _) => new FakeWorker(marker, false),
+                                                        limits : TestLimits());
         var report = await runner.RunAsync(["host-exit-reclaim"], CancellationToken.None);
         Assert.Equal(SandboxAcceptanceVerdict.Fail, VerdictOf(report, "host-exit-reclaim"));
         Assert.Contains("marker", CaseDetail(report, "host-exit-reclaim")!, StringComparison.Ordinal);
 
         // A worker that writes the marker and dies on Kill leaves no survivors.
         runner = new WindowsSandboxAcceptanceRunner(
-            new RecordingBackendFactory(home.Components, workspace.Root,
-                                        (plan, ct) => HappyScriptAsync(plan, ct)).Invoke,
-            workspace.Root, (marker, _) => new FakeWorker(marker, true), limits : TestLimits());
+                                                    new RecordingBackendFactory(home.Components, workspace.Root,
+                                                                                    (plan, ct) =>
+                                                                                        HappyScriptAsync(plan, ct))
+                                                       .Invoke,
+                                                    workspace.Root, (marker, _) => new FakeWorker(marker, true),
+                                                    limits : TestLimits());
         report = await runner.RunAsync(["host-exit-reclaim"], CancellationToken.None);
         Assert.Equal(SandboxAcceptanceVerdict.Pass, VerdictOf(report, "host-exit-reclaim"));
     }
@@ -473,22 +494,28 @@ public sealed class WindowsSandboxAcceptanceTests
 
         using var home      = new SandboxTestHome();
         using var workspace = new TestTempDir();
-        var limits  = TestLimits() with { SurvivorImageNames = ["cmd"] };
-        var runner  = new WindowsSandboxAcceptanceRunner(
-            new RecordingBackendFactory(home.Components, workspace.Root, (plan, ct) =>
-            {
-                if (Path.GetFileName(plan.Executable) != "powershell.exe") return HappyScriptAsync(plan, ct);
+        var       limits    = TestLimits() with { SurvivorImageNames = ["cmd"] };
+        var runner = new WindowsSandboxAcceptanceRunner(
+                                                        new RecordingBackendFactory(home.Components, workspace.Root,
+                                                            (plan, ct) =>
+                                                            {
+                                                                if (Path.GetFileName(plan.Executable) !=
+                                                                    "powershell.exe")
+                                                                    return HappyScriptAsync(plan, ct);
 
-                // Leave a same-image process behind: the survivor scan must
-                // catch it after the cancellation.
-                var comSpec = Environment.GetEnvironmentVariable("ComSpec")!;
-                var process = Process.Start(new ProcessStartInfo(comSpec, "/c ping -n 20 -w 1000 127.0.0.1")
-                {
-                    UseShellExecute = false,
-                    CreateNoWindow  = true
-                });
-                return WaitUntilCancelledAsync(ct);
-            }).Invoke, workspace.Root, limits : limits);
+                                                                // Leave a same-image process behind: the survivor scan must
+                                                                // catch it after the cancellation.
+                                                                var comSpec =
+                                                                    Environment.GetEnvironmentVariable("ComSpec")!;
+                                                                var process =
+                                                                    Process.Start(new ProcessStartInfo(comSpec,
+                                                                        "/c ping -n 20 -w 1000 127.0.0.1")
+                                                                    {
+                                                                        UseShellExecute = false,
+                                                                        CreateNoWindow  = true
+                                                                    });
+                                                                return WaitUntilCancelledAsync(ct);
+                                                            }).Invoke, workspace.Root, limits : limits);
         var report = await runner.RunAsync(["terminate-active"], CancellationToken.None);
 
         Assert.Equal(SandboxAcceptanceVerdict.Fail, VerdictOf(report, "terminate-active"));
@@ -510,7 +537,7 @@ public sealed class WindowsSandboxAcceptanceTests
             WorkspaceRoot      = @"C:\verify-ws",
             Components = new SandboxAcceptanceComponentSnapshot
             {
-                SetupExecutable  = new SandboxAcceptanceFileInfo { Path = @"C:\sb\setup.exe", SizeBytes = 17 },
+                SetupExecutable  = new SandboxAcceptanceFileInfo { Path = @"C:\sb\setup.exe", SizeBytes  = 17 },
                 RunnerExecutable = new SandboxAcceptanceFileInfo { Path = @"C:\sb\runner.exe", SizeBytes = 8 },
                 SandboxHome      = @"C:\sb-home",
                 MarkerVersion    = 5,
@@ -541,7 +568,8 @@ public sealed class WindowsSandboxAcceptanceTests
         Assert.DoesNotContain("password", json, StringComparison.OrdinalIgnoreCase);
 
         var back = JsonSerializer.Deserialize(json,
-                                              WindowsSandboxAcceptanceJsonContext.Default.WindowsSandboxAcceptanceReport);
+                                              WindowsSandboxAcceptanceJsonContext.Default
+                                                 .WindowsSandboxAcceptanceReport);
         Assert.NotNull(back);
         Assert.Equal(report.TimestampUtc, back.TimestampUtc);
         Assert.Equal(report.OfflineAccountName, back.OfflineAccountName);
@@ -558,8 +586,8 @@ public sealed class WindowsSandboxAcceptanceTests
     [Fact]
     public async Task Verify_UnconfiguredSettings_RefusesWithoutCallingTheFactory()
     {
-        using var fixture  = new CliFixture();
-        using var home     = new SandboxTestHome();
+        using var fixture   = new CliFixture();
+        using var home      = new SandboxTestHome();
         using var workspace = new TestTempDir();
         var factory = new RecordingBackendFactory(home.Components, workspace.Root,
                                                   (plan, ct) => HappyScriptAsync(plan, ct));
@@ -581,7 +609,7 @@ public sealed class WindowsSandboxAcceptanceTests
         using var fixture   = new CliFixture();
         await UserConfigStore.SaveAsync(fixture.UserConfigPath, new UserConfig
         {
-            Settings = new UserConfigSettings { WindowsSandbox = SandboxSettings(home, enabled : false) }
+            Settings = new UserConfigSettings { WindowsSandbox = SandboxSettings(home, false) }
         }, CancellationToken.None);
         var factory = new RecordingBackendFactory(home.Components, workspace.Root,
                                                   (plan, ct) => HappyScriptAsync(plan, ct));
@@ -598,7 +626,7 @@ public sealed class WindowsSandboxAcceptanceTests
     [Fact]
     public async Task Verify_NotReady_SuggestsProvisioningAndRefuses()
     {
-        using var home      = new SandboxTestHome();
+        using var home = new SandboxTestHome();
         await File.WriteAllTextAsync(home.Components.MarkerPath, "{\"version\":4}");
         using var workspace = new TestTempDir();
         using var fixture   = new CliFixture();
@@ -621,7 +649,7 @@ public sealed class WindowsSandboxAcceptanceTests
         using var home      = new SandboxTestHome();
         using var workspace = new TestTempDir();
         using var fixture   = new CliFixture();
-        await UserConfigStore.SaveAsync(fixture.UserConfigPath, SandboxConfig(home, enabled : true),
+        await UserConfigStore.SaveAsync(fixture.UserConfigPath, SandboxConfig(home, true),
                                         CancellationToken.None);
         var factory = new RecordingBackendFactory(home.Components, workspace.Root,
                                                   (plan, ct) => HappyScriptAsync(plan, ct));
@@ -642,8 +670,8 @@ public sealed class WindowsSandboxAcceptanceTests
 
         using var home      = new SandboxTestHome();
         using var workspace = new TestTempDir();
-        using var fixture   = new CliFixture(["n"], interactive : true);
-        await UserConfigStore.SaveAsync(fixture.UserConfigPath, SandboxConfig(home, enabled : true),
+        using var fixture   = new CliFixture(["n"], true);
+        await UserConfigStore.SaveAsync(fixture.UserConfigPath, SandboxConfig(home, true),
                                         CancellationToken.None);
         var factory = new RecordingBackendFactory(home.Components, workspace.Root,
                                                   (plan, ct) => HappyScriptAsync(plan, ct));
@@ -665,16 +693,20 @@ public sealed class WindowsSandboxAcceptanceTests
         using var home      = new SandboxTestHome();
         using var workspace = new TestTempDir();
         using var fixture   = new CliFixture();
-        await UserConfigStore.SaveAsync(fixture.UserConfigPath, SandboxConfig(home, enabled : true),
+        await UserConfigStore.SaveAsync(fixture.UserConfigPath, SandboxConfig(home, true),
                                         CancellationToken.None);
         var factory = new RecordingBackendFactory(home.Components, workspace.Root,
                                                   (plan, ct) => HappyScriptAsync(plan, ct));
 
         var result = await SandboxVerifyCommand.ExecuteAsync(
-            fixture.CreateContext(),
-            CommandLine.Parse(["sandbox", "verify", "--yes", "--case", "exit-natural-23",
-                               "--workspace", workspace.Root]),
-            CancellationToken.None, factory.Invoke, (marker, _) => new FakeWorker(marker, true));
+                                                             fixture.CreateContext(),
+                                                             CommandLine.Parse([
+                                                                 "sandbox", "verify", "--yes",
+                                                                 "--case", "exit-natural-23",
+                                                                 "--workspace", workspace.Root
+                                                             ]),
+                                                             CancellationToken.None, factory.Invoke,
+                                                             (marker, _) => new FakeWorker(marker, true));
 
         Assert.Equal(0, result);
         Assert.Contains("exit-natural-23", fixture.Io.Output);
@@ -695,16 +727,20 @@ public sealed class WindowsSandboxAcceptanceTests
         using var home      = new SandboxTestHome();
         using var workspace = new TestTempDir();
         using var fixture   = new CliFixture();
-        await UserConfigStore.SaveAsync(fixture.UserConfigPath, SandboxConfig(home, enabled : true),
+        await UserConfigStore.SaveAsync(fixture.UserConfigPath, SandboxConfig(home, true),
                                         CancellationToken.None);
         var factory = new RecordingBackendFactory(home.Components, workspace.Root,
                                                   (plan, ct) => Task.FromResult(new ScriptedOutcome(1)));
 
         var result = await SandboxVerifyCommand.ExecuteAsync(
-            fixture.CreateContext(),
-            CommandLine.Parse(["sandbox", "verify", "--yes", "--case", "identity-whoami",
-                               "--workspace", workspace.Root]),
-            CancellationToken.None, factory.Invoke, (marker, _) => new FakeWorker(marker, true));
+                                                             fixture.CreateContext(),
+                                                             CommandLine.Parse([
+                                                                 "sandbox", "verify", "--yes",
+                                                                 "--case", "identity-whoami",
+                                                                 "--workspace", workspace.Root
+                                                             ]),
+                                                             CancellationToken.None, factory.Invoke,
+                                                             (marker, _) => new FakeWorker(marker, true));
 
         Assert.Equal(4, result);
         Assert.Contains("FAIL 1", fixture.Io.Output);
@@ -725,9 +761,10 @@ public sealed class WindowsSandboxAcceptanceTests
         // A worker that never writes: without the parent-side cleanup the stale
         // marker would fake readiness instantly and the case would PASS.
         var runner = new WindowsSandboxAcceptanceRunner(
-            new RecordingBackendFactory(home.Components, workspace.Root,
-                                        (plan, ct) => HappyScriptAsync(plan, ct)).Invoke,
-            workspace.Root, (marker, _) => new FakeWorker(marker, writeMarker : false), limits : TestLimits());
+                                                        new RecordingBackendFactory(home.Components, workspace.Root,
+                                                            (plan, ct) => HappyScriptAsync(plan, ct)).Invoke,
+                                                        workspace.Root, (marker, _) => new FakeWorker(marker, false),
+                                                        limits : TestLimits());
 
         var report = await runner.RunAsync(["host-exit-reclaim"], CancellationToken.None);
 
@@ -739,17 +776,21 @@ public sealed class WindowsSandboxAcceptanceTests
     [Fact]
     public async Task VerifyWorker_MarkerOutsideTheWorkspaceArtifacts_IsRefused()
     {
-        using var directory = new TestTempDir();
-        using var fixture   = new CliFixture();
-        var outsideMarker = Path.Combine(directory.Root, "outside", "marker.txt");
+        using var directory     = new TestTempDir();
+        using var fixture       = new CliFixture();
+        var       outsideMarker = Path.Combine(directory.Root, "outside", "marker.txt");
         Directory.CreateDirectory(Path.GetDirectoryName(outsideMarker)!);
         await File.WriteAllTextAsync(outsideMarker, "keep");
 
         var result = await SandboxVerifyCommand.ExecuteWorkerAsync(
-            fixture.CreateContext(),
-            CommandLine.Parse(["sandbox", "verify-worker", "--marker", outsideMarker,
-                               "--hold-seconds", "30", "--workspace", Path.Combine(directory.Root, "ws")]),
-            CancellationToken.None);
+                                                                   fixture.CreateContext(),
+                                                                   CommandLine.Parse([
+                                                                       "sandbox", "verify-worker", "--marker",
+                                                                       outsideMarker,
+                                                                       "--hold-seconds", "30", "--workspace",
+                                                                       Path.Combine(directory.Root, "ws")
+                                                                   ]),
+                                                                   CancellationToken.None);
 
         Assert.Equal(1, result);
         Assert.True(File.Exists(outsideMarker));
@@ -761,18 +802,22 @@ public sealed class WindowsSandboxAcceptanceTests
     {
         using var directory = new TestTempDir();
         using var fixture   = new CliFixture();
-        var workspace = Path.Combine(directory.Root, "ws");
-        var marker    = Path.Combine(workspace, "artifacts", "host-exit-marker.txt");
+        var       workspace = Path.Combine(directory.Root, "ws");
+        var       marker    = Path.Combine(workspace, "artifacts", "host-exit-marker.txt");
         Directory.CreateDirectory(Path.GetDirectoryName(marker)!);
         await File.WriteAllTextAsync(marker, "keep");
 
         // No user config saved: the worker must refuse on the settings check
         // and leave the marker untouched (the old code deleted it up front).
         var result = await SandboxVerifyCommand.ExecuteWorkerAsync(
-            fixture.CreateContext(),
-            CommandLine.Parse(["sandbox", "verify-worker", "--marker", marker,
-                               "--hold-seconds", "30", "--workspace", workspace]),
-            CancellationToken.None);
+                                                                   fixture.CreateContext(),
+                                                                   CommandLine.Parse([
+                                                                       "sandbox", "verify-worker", "--marker",
+                                                                       marker,
+                                                                       "--hold-seconds", "30", "--workspace",
+                                                                       workspace
+                                                                   ]),
+                                                                   CancellationToken.None);
 
         Assert.Equal(1, result);
         Assert.True(File.Exists(marker));
@@ -784,9 +829,9 @@ public sealed class WindowsSandboxAcceptanceTests
     [Fact]
     public async Task VerifyOutputCapture_TruncatesAndKeepsTheArtifact()
     {
-        using var directory = new TestTempDir();
-        var artifactPath = Path.Combine(directory.Root, "out.txt");
-        var capture = new VerifyOutputCapture(artifactPath, 100);
+        using var directory    = new TestTempDir();
+        var       artifactPath = Path.Combine(directory.Root, "out.txt");
+        var       capture      = new VerifyOutputCapture(artifactPath, 100);
 
         foreach (var chunk in new[] { new string('a', 60), new string('b', 60), new string('c', 60) })
             await capture.AppendAsync(chunk.AsMemory(), CancellationToken.None);
@@ -804,103 +849,14 @@ public sealed class WindowsSandboxAcceptanceTests
     [Fact]
     public async Task VerifyOutputCapture_DiscardDeletesTheArtifact()
     {
-        using var directory = new TestTempDir();
-        var artifactPath = Path.Combine(directory.Root, "out.txt");
-        var capture = new VerifyOutputCapture(artifactPath, 100);
+        using var directory    = new TestTempDir();
+        var       artifactPath = Path.Combine(directory.Root, "out.txt");
+        var       capture      = new VerifyOutputCapture(artifactPath, 100);
 
         await capture.AppendAsync("hello".AsMemory(), CancellationToken.None);
         capture.Discard();
 
         Assert.False(File.Exists(artifactPath));
-    }
-
-    // ---- 脚本与 fixture ----
-
-    private sealed record ScriptedOutcome(
-        int?                     ExitCode     = null,
-        bool                     TimedOut     = false,
-        ProcessExecutionFailure? Failure      = null,
-        IReadOnlyList<string>?   StdoutChunks = null,
-        Exception?               Throw        = null);
-
-    /// <summary>
-    ///     按计划脚本化的 fake 后端：把结果/异常原样呈给运行器，不做任何真实进程操作。
-    ///     A scripted fake backend: hands the scripted result or exception to
-    ///     the runner without any real process activity.
-    /// </summary>
-    private sealed class ScriptedBackend(
-        Func<PreparedProcessExecution, CancellationToken, Task<ScriptedOutcome>> script) : IProcessExecutionBackend
-    {
-        public async Task<ProcessExecutionResult> ExecuteAsync(PreparedProcessExecution execution,
-                                                               IProcessOutputCapture    stdoutCapture,
-                                                               IProcessOutputCapture    stderrCapture,
-                                                               CancellationToken        cancellationToken)
-        {
-            var outcome = await script(execution, cancellationToken).ConfigureAwait(false);
-            foreach (var chunk in outcome.StdoutChunks ?? [])
-                await stdoutCapture.AppendAsync(chunk.AsMemory(), cancellationToken).ConfigureAwait(false);
-
-            await stdoutCapture.AppendAsync(ReadOnlyMemory<char>.Empty, cancellationToken).ConfigureAwait(false);
-            await stderrCapture.AppendAsync(ReadOnlyMemory<char>.Empty, cancellationToken).ConfigureAwait(false);
-            if (outcome.Throw is not null) throw outcome.Throw;
-
-            return new ProcessExecutionResult(outcome.ExitCode, outcome.TimedOut, outcome.Failure);
-        }
-    }
-
-    /// <summary>
-    ///     录制式工厂 fake：记录每次 (策略种类, 附加环境) 请求并返回脚本化后端组合。策略用真实的
-    ///     SandboxPolicyResolver 对验收工作区解析，使读根/写根判定与生产语义一致。
-    ///     A recording factory fake: it records every (policy kind, extra
-    ///     environment) request and returns a scripted backend composition. The
-    ///     policy is resolved with the real SandboxPolicyResolver against the
-    ///     acceptance workspace so read-root/write-root verdicts match
-    ///     production semantics.
-    /// </summary>
-    private sealed class RecordingBackendFactory(
-        WindowsSandboxComponents                                              components,
-        string                                                                workspaceRoot,
-        Func<PreparedProcessExecution, CancellationToken, Task<ScriptedOutcome>> script)
-    {
-        public List<(SandboxPolicyKind Kind, IReadOnlyDictionary<string, string>? ExtraEnvironment)> Requests
-        {
-            get;
-        } = [];
-
-        public WindowsSandboxExecution Invoke(SandboxPolicyKind                    kind,
-                                              IReadOnlyDictionary<string, string>? extraEnvironment)
-        {
-            Requests.Add((kind, extraEnvironment));
-            var tempRoot = Path.Combine(components.SandboxHome, "tmp");
-            var targetEnvironment = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-            {
-                ["TEMP"] = tempRoot,
-                ["TMP"]  = tempRoot
-            };
-            var policy = SandboxPolicyResolver.Resolve(kind, workspaceRoot, targetEnvironment);
-            return new WindowsSandboxExecution(components, policy, targetEnvironment,
-                                               ProcessExecutionPolicy.Host(), new ScriptedBackend(script));
-        }
-    }
-
-    /// <summary>
-    ///     fake verify-worker：按标志立即写 marker（或永不写）；Kill 仅记录。
-    ///     A fake verify-worker: it writes the marker immediately (or never),
-    ///     and Kill only records the call.
-    /// </summary>
-    private sealed class FakeWorker : ISandboxVerifyWorkerProcess
-    {
-        public FakeWorker(string markerPath, bool writeMarker)
-        {
-            if (writeMarker) File.WriteAllText(markerPath, DateTimeOffset.UtcNow.ToString("O"));
-        }
-
-        public bool Killed { get; private set; }
-
-        public void Kill()
-        {
-            Killed = true;
-        }
     }
 
     /// <summary>
@@ -911,14 +867,16 @@ public sealed class WindowsSandboxAcceptanceTests
     ///     the file-existence verdicts.
     /// </summary>
     private static async Task<WindowsSandboxAcceptanceReport> RunSingleCaseAsync(
-        SandboxTestHome home, string caseName,
+        SandboxTestHome                                                          home, string caseName,
         Func<PreparedProcessExecution, CancellationToken, Task<ScriptedOutcome>> script,
-        WindowsSandboxAcceptanceLimits? limits = null)
+        WindowsSandboxAcceptanceLimits?                                          limits = null)
     {
         using var workspace = new TestTempDir();
         var runner = new WindowsSandboxAcceptanceRunner(
-            new RecordingBackendFactory(home.Components, workspace.Root, script).Invoke,
-            workspace.Root, (marker, _) => new FakeWorker(marker, true), limits : limits ?? TestLimits());
+                                                        new RecordingBackendFactory(home.Components, workspace.Root,
+                                                            script).Invoke,
+                                                        workspace.Root, (marker, _) => new FakeWorker(marker, true),
+                                                        limits : limits ?? TestLimits());
         return await runner.RunAsync([caseName], CancellationToken.None);
     }
 
@@ -952,9 +910,11 @@ public sealed class WindowsSandboxAcceptanceTests
         {
             case "whoami.exe" :
                 return Task.FromResult(new ScriptedOutcome(
-                                           0,
-                                           StdoutChunks :
-                                           [$"test-machine\\{WindowsSandboxComponents.DefaultOfflineUsername}\n"]));
+                                                           0,
+                                                           StdoutChunks :
+                                                           [
+                                                               $"test-machine\\{WindowsSandboxComponents.DefaultOfflineUsername}\n"
+                                                           ]));
             case "codex-windows-managed-deny-probe.exe" :
                 return Task.FromResult(new ScriptedOutcome(0));
             case "curl.exe" :
@@ -963,7 +923,7 @@ public sealed class WindowsSandboxAcceptanceTests
                                            : new ScriptedOutcome(7));
             case "powershell.exe" :
                 // The timeout case: the runner reports its timeout verdict.
-                return Task.FromResult(new ScriptedOutcome(192, TimedOut : true));
+                return Task.FromResult(new ScriptedOutcome(192, true));
             case "cmd.exe" :
                 return CmdScriptAsync(plan);
             default :
@@ -1000,7 +960,7 @@ public sealed class WindowsSandboxAcceptanceTests
         if (command.StartsWith("type ", StringComparison.Ordinal))
         {
             var content = await File.ReadAllTextAsync(QuotedPath(command)).ConfigureAwait(false);
-            var chunks = new List<string>();
+            var chunks  = new List<string>();
             for (var offset = 0; offset < content.Length; offset += 8192)
                 chunks.Add(content.Substring(offset, Math.Min(8192, content.Length - offset)));
 
@@ -1030,7 +990,7 @@ public sealed class WindowsSandboxAcceptanceTests
     ///     afterKill — simulating "locate this case's runner by image name and
     ///     kill it externally".
     /// </summary>
-    private static async Task<ScriptedOutcome> SimulateExternalRunnerKillAsync(string       workspaceRoot,
+    private static async Task<ScriptedOutcome> SimulateExternalRunnerKillAsync(string          workspaceRoot,
                                                                                ScriptedOutcome afterKill)
     {
         var comSpec = Environment.GetEnvironmentVariable("ComSpec")
@@ -1090,13 +1050,98 @@ public sealed class WindowsSandboxAcceptanceTests
         return new UserConfig { Settings = new UserConfigSettings { WindowsSandbox = SandboxSettings(home, enabled) } };
     }
 
+    // ---- 脚本与 fixture ----
+
+    private sealed record ScriptedOutcome(
+        int?                     ExitCode     = null,
+        bool                     TimedOut     = false,
+        ProcessExecutionFailure? Failure      = null,
+        IReadOnlyList<string>?   StdoutChunks = null,
+        Exception?               Throw        = null);
+
+    /// <summary>
+    ///     按计划脚本化的 fake 后端：把结果/异常原样呈给运行器，不做任何真实进程操作。
+    ///     A scripted fake backend: hands the scripted result or exception to
+    ///     the runner without any real process activity.
+    /// </summary>
+    private sealed class ScriptedBackend(
+        Func<PreparedProcessExecution, CancellationToken, Task<ScriptedOutcome>> script) : IProcessExecutionBackend
+    {
+        public async Task<ProcessExecutionResult> ExecuteAsync(PreparedProcessExecution execution,
+                                                               IProcessOutputCapture    stdoutCapture,
+                                                               IProcessOutputCapture    stderrCapture,
+                                                               CancellationToken        cancellationToken)
+        {
+            var outcome = await script(execution, cancellationToken).ConfigureAwait(false);
+            foreach (var chunk in outcome.StdoutChunks ?? [])
+                await stdoutCapture.AppendAsync(chunk.AsMemory(), cancellationToken).ConfigureAwait(false);
+
+            await stdoutCapture.AppendAsync(ReadOnlyMemory<char>.Empty, cancellationToken).ConfigureAwait(false);
+            await stderrCapture.AppendAsync(ReadOnlyMemory<char>.Empty, cancellationToken).ConfigureAwait(false);
+            if (outcome.Throw is not null) throw outcome.Throw;
+
+            return new ProcessExecutionResult(outcome.ExitCode, outcome.TimedOut, outcome.Failure);
+        }
+    }
+
+    /// <summary>
+    ///     录制式工厂 fake：记录每次 (策略种类, 附加环境) 请求并返回脚本化后端组合。策略用真实的
+    ///     SandboxPolicyResolver 对验收工作区解析，使读根/写根判定与生产语义一致。
+    ///     A recording factory fake: it records every (policy kind, extra
+    ///     environment) request and returns a scripted backend composition. The
+    ///     policy is resolved with the real SandboxPolicyResolver against the
+    ///     acceptance workspace so read-root/write-root verdicts match
+    ///     production semantics.
+    /// </summary>
+    private sealed class RecordingBackendFactory(
+        WindowsSandboxComponents                                                 components,
+        string                                                                   workspaceRoot,
+        Func<PreparedProcessExecution, CancellationToken, Task<ScriptedOutcome>> script)
+    {
+        public List<(SandboxPolicyKind Kind, IReadOnlyDictionary<string, string>? ExtraEnvironment)> Requests { get; } =
+            [];
+
+        public WindowsSandboxExecution Invoke(SandboxPolicyKind                    kind,
+                                              IReadOnlyDictionary<string, string>? extraEnvironment)
+        {
+            Requests.Add((kind, extraEnvironment));
+            var tempRoot = Path.Combine(components.SandboxHome, "tmp");
+            var targetEnvironment = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["TEMP"] = tempRoot,
+                ["TMP"]  = tempRoot
+            };
+            var policy = SandboxPolicyResolver.Resolve(kind, workspaceRoot, targetEnvironment);
+            return new WindowsSandboxExecution(components, policy, targetEnvironment,
+                                               ProcessExecutionPolicy.Host(), new ScriptedBackend(script));
+        }
+    }
+
+    /// <summary>
+    ///     fake verify-worker：按标志立即写 marker（或永不写）；Kill 仅记录。
+    ///     A fake verify-worker: it writes the marker immediately (or never),
+    ///     and Kill only records the call.
+    /// </summary>
+    private sealed class FakeWorker : ISandboxVerifyWorkerProcess
+    {
+        public FakeWorker(string markerPath, bool writeMarker)
+        {
+            if (writeMarker) File.WriteAllText(markerPath, DateTimeOffset.UtcNow.ToString("O"));
+        }
+
+        public bool Killed { get; private set; }
+
+        public void Kill()
+        {
+            Killed = true;
+        }
+    }
+
     private sealed class CliFixture(IReadOnlyList<string>? input = null) : IDisposable
     {
-        private readonly FakeCliConsole _io = new(input);
-
         public CliFixture(IReadOnlyList<string> input, bool interactive) : this(input)
         {
-            _io.Interactive = interactive;
+            Io.Interactive = interactive;
         }
 
         public string Root { get; } = Path.Combine(Path.GetTempPath(), $"tinyharness-verify-{Guid.NewGuid():N}");
@@ -1105,18 +1150,7 @@ public sealed class WindowsSandboxAcceptanceTests
                                                              $"tinyharness-verify-config-{Guid.NewGuid():N}",
                                                              "user-config.json");
 
-        public FakeCliConsole Io => _io;
-
-        public CommandContext CreateContext()
-        {
-            return new CommandContext
-            {
-                Io               = _io,
-                Credentials      = new FakeCredentialStore(),
-                UserConfigPath   = UserConfigPath,
-                WorkingDirectory = Root
-            };
-        }
+        public FakeCliConsole Io { get; } = new(input);
 
         public void Dispose()
         {
@@ -1124,6 +1158,17 @@ public sealed class WindowsSandboxAcceptanceTests
 
             var configDirectory = Path.GetDirectoryName(UserConfigPath);
             if (Directory.Exists(configDirectory)) Directory.Delete(configDirectory, true);
+        }
+
+        public CommandContext CreateContext()
+        {
+            return new CommandContext
+            {
+                Io               = Io,
+                Credentials      = new FakeCredentialStore(),
+                UserConfigPath   = UserConfigPath,
+                WorkingDirectory = Root
+            };
         }
     }
 

@@ -1,6 +1,4 @@
 using TinyHarness.Core.Models.Agent;
-using TinyHarness.Core.Models.ChatCompletions;
-using TinyHarness.Core.Models.Permissions;
 using TinyHarness.Core.Models.Session;
 using TinyHarness.Core.Services.Agent;
 using TinyHarness.Core.Services.ChatCompletions;
@@ -33,28 +31,27 @@ namespace TinyHarness.Core.Services.Session;
 /// </summary>
 public sealed class ChatSessionHost
 {
-    private readonly IApprovalProvider?    _approver;
-    private readonly ConversationContext   _context;
-    private readonly IHostEventSink?       _events;
-    private readonly IChatCompletionClient _modelClient;
-    private readonly AgentOptions          _options;
-    private readonly PermissionEngine?     _permissions;
+    private readonly IApprovalProvider?          _approver;
+    private readonly ConversationContext         _context;
+    private readonly IHostEventSink?             _events;
+    private readonly IChatCompletionClient       _modelClient;
+    private readonly AgentOptions                _options;
+    private readonly PermissionEngine?           _permissions;
     private readonly Func<string, IRunRecorder>? _recorderFactory;
-    private readonly ChatSession           _session;
-    private readonly string                _systemPrompt;
-    private readonly ToolRegistry          _tools;
+    private readonly string                      _systemPrompt;
+    private readonly ToolRegistry                _tools;
 
     private int _activeRuns;
 
-    public ChatSessionHost(string                 workspaceRoot,
-                           SessionModelIdentity   model,
-                           AgentOptions           options,
-                           IChatCompletionClient  modelClient,
-                           ToolRegistry           tools,
-                           string                 systemPrompt,
-                           PermissionEngine?      permissions     = null,
-                           IApprovalProvider?     approver        = null,
-                           IHostEventSink?        events          = null,
+    public ChatSessionHost(string                      workspaceRoot,
+                           SessionModelIdentity        model,
+                           AgentOptions                options,
+                           IChatCompletionClient       modelClient,
+                           ToolRegistry                tools,
+                           string                      systemPrompt,
+                           PermissionEngine?           permissions     = null,
+                           IApprovalProvider?          approver        = null,
+                           IHostEventSink?             events          = null,
                            Func<string, IRunRecorder>? recorderFactory = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
@@ -64,11 +61,11 @@ public sealed class ChatSessionHost
         ArgumentNullException.ThrowIfNull(tools);
         ArgumentException.ThrowIfNullOrWhiteSpace(systemPrompt);
         if (!string.Equals(options.Model, model.ModelId, StringComparison.Ordinal))
-            throw new ArgumentException(
-                $"AgentOptions.Model '{options.Model}' does not match the session model identity '{model.ModelId}'.",
-                nameof(options));
+            throw new
+                ArgumentException($"AgentOptions.Model '{options.Model}' does not match the session model identity '{model.ModelId}'.",
+                                  nameof(options));
 
-        _session         = new ChatSession(NewId(), workspaceRoot, model);
+        Session          = new ChatSession(NewId(), workspaceRoot, model);
         _options         = options;
         _modelClient     = modelClient;
         _tools           = tools;
@@ -81,7 +78,7 @@ public sealed class ChatSessionHost
     }
 
     /// <summary>本宿主服务的会话（稳定身份与全部回合）。The session served by this host (stable identity, all turns).</summary>
-    public ChatSession Session => _session;
+    public ChatSession Session { get; }
 
     /// <summary>当前是否存在活动运行；同一会话同一时刻最多一个。Whether a run is currently active; at most one per session.</summary>
     public bool HasActiveRun => Volatile.Read(ref _activeRuns) == 1;
@@ -98,13 +95,13 @@ public sealed class ChatSessionHost
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(userInput);
         if (Interlocked.CompareExchange(ref _activeRuns, 1, 0) != 0)
-            throw new InvalidOperationException(
-                "This session already has an active run; a session processes one run at a time (PLAN §5). " +
-                "Wait for the current turn to finish before submitting another one.");
+            throw new
+                InvalidOperationException("This session already has an active run; a session processes one run at a time (PLAN §5). " +
+                                          "Wait for the current turn to finish before submitting another one.");
 
         var turn = new SessionTurn(NewId(), userInput);
-        var run  = new SessionRun(NewId(), _session.Id, turn.Id);
-        _session.AddTurn(turn);
+        var run  = new SessionRun(NewId(), Session.Id, turn.Id);
+        Session.AddTurn(turn);
         turn.AddRun(run);
         try
         {
@@ -141,7 +138,7 @@ public sealed class ChatSessionHost
     private AgentLoop ComposeRunLoop(SessionRun run)
     {
         var recorder = _recorderFactory?.Invoke(run.Id);
-        var events   = _events is null ? null : new RunEventCorrelator(_session.Id, run.TurnId, run.Id, _events);
+        var events   = _events is null ? null : new RunEventCorrelator(Session.Id, run.TurnId, run.Id, _events);
         return new AgentLoop(_modelClient, _tools, _options, _permissions, _approver, recorder, events, _context);
     }
 
@@ -165,11 +162,11 @@ public sealed class ChatSessionHost
             await inner.PublishAsync(@event with
                                      {
                                          SessionId = sessionId,
-                                         TurnId    = turnId,
-                                         RunId     = runId
+                                         TurnId = turnId,
+                                         RunId = runId
                                      },
                                      cancellationToken)
-                           .ConfigureAwait(false);
+                       .ConfigureAwait(false);
         }
     }
 }

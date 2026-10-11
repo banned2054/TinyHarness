@@ -153,7 +153,7 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
         {
             if (!await TrySendFrameAsync(connection, writerGate,
                                          stream => RunnerFrameCodec.WriteFrameAsync(stream, "spawn_request", request,
-                                                  CancellationToken.None),
+                                             CancellationToken.None),
                                          cancellationToken).ConfigureAwait(false))
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -259,8 +259,8 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
         }
     }
 
-    private async Task<IReadOnlyList<string>> ResolveCapabilitySids(PreparedProcessExecution execution,
-                                                                    CancellationToken cancellationToken)
+    private async Task<IReadOnlyList<string>> ResolveCapabilitySids(
+        PreparedProcessExecution execution, CancellationToken cancellationToken)
     {
         if (!OperatingSystem.IsWindows())
             throw new PlatformNotSupportedException("The Windows sandbox backend is available on Windows only.");
@@ -272,8 +272,8 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
             // the spawn token — the same contract as cap.rs's
             // workspace_write_cap_sid_for_root on the Rust side.
             var capabilitySids = await _capabilitySidStore
-                                       .ResolveForPolicy(_policy, execution.WorkingDirectory, cancellationToken)
-                                       .ConfigureAwait(false);
+                                      .ResolveForPolicy(_policy, execution.WorkingDirectory, cancellationToken)
+                                      .ConfigureAwait(false);
             // Mirror the library's NUL device allowance using the first
             // capability SID; the runner repeats this for the child.
             _allowNullDeviceAccess(new SecurityIdentifier(capabilitySids[0]));
@@ -571,7 +571,7 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
         using var writeCancellation = new CancellationTokenSource(_limits.TerminateWriteTimeout);
         return TrySendFrameAsync(connection, writerGate,
                                  stream => RunnerFrameCodec.WriteControlFrameAsync(stream, "terminate",
-                                          writeCancellation.Token),
+                                     writeCancellation.Token),
                                  CancellationToken.None);
     }
 
@@ -726,14 +726,13 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
         {
             if (!_handshakeCompleted)
             {
-                _handshake.TrySetException(new IOException(
-                                                           "The runner closed the pipe before spawn_ready; no command was started."));
+                _handshake.TrySetException(new
+                                               IOException("The runner closed the pipe before spawn_ready; no command was started."));
             }
             else if (!_exitCompleted)
             {
                 _exitCompleted = true;
-                _exit.TrySetResult(new RunnerExitOutcome(
-                                                         null, false,
+                _exit.TrySetResult(new RunnerExitOutcome(null, false,
                                                          "The runner pipe closed before the exit frame; no command exit code is available."));
             }
         }
@@ -747,8 +746,7 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
             else if (!_exitCompleted)
             {
                 _exitCompleted = true;
-                _exit.TrySetResult(new RunnerExitOutcome(
-                                                         null, false,
+                _exit.TrySetResult(new RunnerExitOutcome(null, false,
                                                          $"The runner session ended with a protocol failure: {ex.Message}"));
             }
         }

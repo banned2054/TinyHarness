@@ -14,7 +14,7 @@ public class ChatCancellationTests
     [Fact]
     public void RaiseCancel_WhileIdle_CancelsTheSession()
     {
-        using var cancellation = new ChatCancellation(registerConsole : false);
+        using var cancellation = new ChatCancellation(false);
 
         Assert.False(cancellation.IsSessionCancelled);
 
@@ -27,8 +27,8 @@ public class ChatCancellationTests
     [Fact]
     public void RaiseCancel_DuringActiveTurn_CancelsOnlyTheTurn()
     {
-        using var cancellation = new ChatCancellation(registerConsole : false);
-        var turnToken = cancellation.BeginTurn(CancellationToken.None);
+        using var cancellation = new ChatCancellation(false);
+        var       turnToken    = cancellation.BeginTurn(CancellationToken.None);
 
         cancellation.RaiseCancel();
 
@@ -44,9 +44,9 @@ public class ChatCancellationTests
     [Fact]
     public void BeginTurn_LinksTheExternalToken()
     {
-        using var cancellation = new ChatCancellation(registerConsole : false);
-        using var external    = new CancellationTokenSource();
-        var turnToken = cancellation.BeginTurn(external.Token);
+        using var cancellation = new ChatCancellation(false);
+        using var external     = new CancellationTokenSource();
+        var       turnToken    = cancellation.BeginTurn(external.Token);
 
         external.Cancel();
 
@@ -58,7 +58,7 @@ public class ChatCancellationTests
     [Fact]
     public void EndTurn_AllowsTheNextTurnToBegin()
     {
-        using var cancellation = new ChatCancellation(registerConsole : false);
+        using var cancellation = new ChatCancellation(false);
 
         var first = cancellation.BeginTurn(CancellationToken.None);
         cancellation.RaiseCancel();

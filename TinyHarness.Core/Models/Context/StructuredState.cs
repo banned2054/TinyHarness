@@ -42,14 +42,13 @@ public sealed record StructuredState
     ///     decisions, modified files and similar facts never vanish from the model view.
     /// </summary>
     [JsonIgnore]
-    public bool IsEmpty =>
-        string.IsNullOrWhiteSpace(Goal)
-     && HasNoSubstantiveEntry(Constraints)
-     && HasNoSubstantiveEntry(Decisions)
-     && HasNoSubstantiveEntry(FilesInspected)
-     && HasNoSubstantiveEntry(FilesModified)
-     && HasNoSubstantiveEntry(CommandsAndResults)
-     && HasNoSubstantiveEntry(PendingWork);
+    public bool IsEmpty => string.IsNullOrWhiteSpace(Goal)           &&
+                           HasNoSubstantiveEntry(Constraints)        &&
+                           HasNoSubstantiveEntry(Decisions)          &&
+                           HasNoSubstantiveEntry(FilesInspected)     &&
+                           HasNoSubstantiveEntry(FilesModified)      &&
+                           HasNoSubstantiveEntry(CommandsAndResults) &&
+                           HasNoSubstantiveEntry(PendingWork);
 
     /// <summary>
     ///     以紧凑 camelCase JSON 序列化，作为模型视图中的状态消息内容。

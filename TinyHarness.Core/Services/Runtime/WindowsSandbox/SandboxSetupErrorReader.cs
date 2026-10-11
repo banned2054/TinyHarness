@@ -20,8 +20,8 @@ internal static class SandboxSetupErrorReader
     ///     Reads setup_error.json; a missing, unreadable, or invalid file yields
     ///     null (the exit code remains a complete failure signal).
     /// </summary>
-    internal static async Task<SandboxSetupErrorReport?> TryReadAsync(string setupErrorPath,
-                                                                      CancellationToken cancellationToken = default)
+    internal static async Task<SandboxSetupErrorReport?> TryReadAsync(
+        string setupErrorPath, CancellationToken cancellationToken = default)
     {
         try
         {
@@ -41,8 +41,8 @@ internal static class SandboxSetupErrorReader
     ///     Builds the human-readable failure description "code: message"; with
     ///     no report it falls back to a placeholder pointing at the sandbox log.
     /// </summary>
-    internal static async Task<string> DescribeAsync(string setupErrorPath,
-                                                     CancellationToken cancellationToken = default)
+    internal static async Task<string> DescribeAsync(
+        string setupErrorPath, CancellationToken cancellationToken = default)
     {
         var report = await TryReadAsync(setupErrorPath, cancellationToken).ConfigureAwait(false);
         return report is not null

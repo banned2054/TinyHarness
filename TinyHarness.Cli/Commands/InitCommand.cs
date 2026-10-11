@@ -34,8 +34,7 @@ internal static class InitCommand
         var existing    = UserConfigAccess.FindProfile(config, profileName);
         if (existing is not null &&
             !await CliPrompt.ConfirmAsync(io, $"Profile '{profileName}' already exists. Overwrite it?",
-                                          false,
-                                          cancellationToken).ConfigureAwait(false))
+                                          false, cancellationToken).ConfigureAwait(false))
         {
             await io.WriteLineAsync("Cancelled. Nothing was changed.", cancellationToken).ConfigureAwait(false);
             return 0;
@@ -66,8 +65,8 @@ internal static class InitCommand
     ///     Prompts for and validates the profile name; the default is 'default', and a colliding existing name only serves as
     ///     the overwrite notice.
     /// </summary>
-    private static async Task<string> PromptProfileNameAsync(ICliConsole       io, UserConfig config,
-                                                             CancellationToken cancellationToken)
+    private static async Task<string> PromptProfileNameAsync(
+        ICliConsole io, UserConfig config, CancellationToken cancellationToken)
     {
         while (true)
         {

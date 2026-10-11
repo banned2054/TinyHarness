@@ -55,13 +55,10 @@ public sealed record ProcessExecutionPolicy
     ///     audit records use the backend=host identity and the display name states
     ///     plainly that there is no OS isolation.
     /// </summary>
-    public static ProcessExecutionPolicy Host()
+    public static ProcessExecutionPolicy Host() => new()
     {
-        return new ProcessExecutionPolicy
-        {
-            Backend        = ProcessExecutionBackendKind.Host,
-            DisplayName    = "host execution (no OS isolation)",
-            PolicyIdentity = "backend=host"
-        };
-    }
+        Backend        = ProcessExecutionBackendKind.Host,
+        DisplayName    = "host execution (no OS isolation)",
+        PolicyIdentity = "backend=host"
+    };
 }

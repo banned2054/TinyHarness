@@ -33,7 +33,10 @@ public sealed class SessionRun
     /// <summary>终态写入时间；尚未结束时为 <see langword="null" />。When the terminal result was recorded; null until finished.</summary>
     public DateTimeOffset? FinishedUtc { get; private set; }
 
-    /// <summary>由执行栈产生的终态结果；尚未结束时为 <see langword="null" />。The terminal result produced by the execution stack; null until finished.</summary>
+    /// <summary>
+    ///     由执行栈产生的终态结果；尚未结束时为 <see langword="null" />。The terminal result produced by the execution stack; null until
+    ///     finished.
+    /// </summary>
     public AgentResult? Result { get; private set; }
 
     /// <summary>运行是否已到达终态。Whether the run has reached a terminal result.</summary>
@@ -47,8 +50,8 @@ public sealed class SessionRun
     {
         ArgumentNullException.ThrowIfNull(result);
         if (Result is not null)
-            throw new InvalidOperationException(
-                $"Run '{Id}' already finished; a run records exactly one terminal result.");
+            throw new
+                InvalidOperationException($"Run '{Id}' already finished; a run records exactly one terminal result.");
 
         Result      = result;
         FinishedUtc = DateTimeOffset.UtcNow;

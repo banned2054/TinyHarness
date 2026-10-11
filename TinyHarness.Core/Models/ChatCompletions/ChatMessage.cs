@@ -78,30 +78,24 @@ public sealed record ChatMessage
     ///     创建同时携带推理内容、文本和可选工具调用的 assistant 消息。
     ///     Creates an assistant message carrying reasoning, text, and optional tool calls.
     /// </summary>
-    public static ChatMessage Assistant(string content, IReadOnlyList<ChatToolCall>? toolCalls,
-                                        IReadOnlyList<ReasoningContent>? reasoning)
+    public static ChatMessage Assistant(
+        string content, IReadOnlyList<ChatToolCall>? toolCalls, IReadOnlyList<ReasoningContent>? reasoning) => new()
     {
-        return new ChatMessage
-        {
-            Role      = ChatRole.Assistant,
-            Content   = content,
-            ToolCalls = toolCalls,
-            Reasoning = reasoning
-        };
-    }
+        Role      = ChatRole.Assistant,
+        Content   = content,
+        ToolCalls = toolCalls,
+        Reasoning = reasoning
+    };
 
     /// <summary>
     ///     创建绑定到指定调用 ID 的工具结果消息。
     ///     Creates a tool-result message linked to the specified call id.
     /// </summary>
-    public static ChatMessage Tool(string name, string callId, string content)
+    public static ChatMessage Tool(string name, string callId, string content) => new()
     {
-        return new ChatMessage
-        {
-            Role       = ChatRole.Tool,
-            Name       = name,
-            ToolCallId = callId,
-            Content    = content
-        };
-    }
+        Role       = ChatRole.Tool,
+        Name       = name,
+        ToolCallId = callId,
+        Content    = content
+    };
 }

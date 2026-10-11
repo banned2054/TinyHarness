@@ -84,7 +84,7 @@ public sealed record WindowsSandboxAcceptanceLimits
 
     /// <summary>
     ///     回收/遗弃扫描覆盖的镜像名（不含 .exe）；测试可替换以模拟残留。sleeper 用 powershell
-    /// （Start-Sleep 不依赖网络；waitfor 走 SMB mailslot，会被断网过滤秒退，不是有效 sleeper）。
+    ///     （Start-Sleep 不依赖网络；waitfor 走 SMB mailslot，会被断网过滤秒退，不是有效 sleeper）。
     ///     Survivor image names covered by the reclamation/abandonment scans
     ///     (without .exe); tests replace them to simulate leftovers. The sleeper
     ///     is powershell (Start-Sleep needs no network; waitfor uses SMB
@@ -148,26 +148,27 @@ public sealed class WindowsSandboxAcceptanceRunner
     private readonly Func<string, IProcessOutputCapture>? _captureFactory;
     private readonly WindowsSandboxAcceptanceLimits       _limits;
     private readonly SandboxVerifyWorkerSpawner?          _workerSpawner;
-    private readonly string                               _workspaceRoot;
+
+    private readonly string       _workspaceRoot;
+    private          string       _artifactDirectory = string.Empty;
+    private          HashSet<int> _baselineIds       = [];
 
     private List<AcceptanceCaseDefinition> _caseDefinitions = [];
-    private HashSet<int>                   _baselineIds     = [];
     private DateTimeOffset                 _runStartedLocal = DateTimeOffset.Now;
     private WindowsSandboxExecution?       _snapshotExecution;
-    private string                         _artifactDirectory = string.Empty;
 
-    public WindowsSandboxAcceptanceRunner(WindowsSandboxBackendFactory backendFactory,
-                                          string                        workspaceRoot,
-                                          SandboxVerifyWorkerSpawner?   workerSpawner  = null,
+    public WindowsSandboxAcceptanceRunner(WindowsSandboxBackendFactory         backendFactory,
+                                          string                               workspaceRoot,
+                                          SandboxVerifyWorkerSpawner?          workerSpawner  = null,
                                           Func<string, IProcessOutputCapture>? captureFactory = null,
-                                          WindowsSandboxAcceptanceLimits? limits         = null)
+                                          WindowsSandboxAcceptanceLimits?      limits         = null)
     {
         ArgumentNullException.ThrowIfNull(backendFactory);
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
         if (!Path.IsPathFullyQualified(workspaceRoot))
-            throw new ArgumentException(
-                $"The acceptance workspace root must be a fully qualified absolute path: '{workspaceRoot}'.",
-                nameof(workspaceRoot));
+            throw new
+                ArgumentException($"The acceptance workspace root must be a fully qualified absolute path: '{workspaceRoot}'.",
+                                  nameof(workspaceRoot));
 
         _backendFactory = backendFactory;
         _workspaceRoot  = workspaceRoot;
@@ -195,8 +196,8 @@ public sealed class WindowsSandboxAcceptanceRunner
     ///     OperationCanceledException; the overall deadline never throws — the
     ///     remaining cases become SKIPPED and the interrupted one FAIL.
     /// </summary>
-    public async Task<WindowsSandboxAcceptanceReport> RunAsync(IReadOnlyList<string>? caseFilter = null,
-                                                               CancellationToken cancellationToken = default)
+    public async Task<WindowsSandboxAcceptanceReport> RunAsync(
+        IReadOnlyList<string>? caseFilter = null, CancellationToken cancellationToken = default)
     {
         var selected = ValidateCaseFilter(caseFilter);
 
@@ -275,61 +276,56 @@ public sealed class WindowsSandboxAcceptanceRunner
         };
     }
 
-    // ---- 用例矩阵 ----
-
-    private sealed record AcceptanceCaseDefinition(
-        string                                                    Name,
-        SandboxPolicyKind                                         Kind,
-        string                                                    Expectation,
-        string                                                    CommandSummary,
-        Func<CancellationToken, Task<SandboxAcceptanceCaseResult>> Body);
-
-    private List<AcceptanceCaseDefinition> BuildCaseDefinitions()
-    {
-        return
-        [
-            new("identity-whoami", SandboxPolicyKind.ReadOnly, "whoami 输出包含所选 offline 沙箱账户名",
-                "whoami.exe", IdentityWhoamiAsync),
-            new("deny-probe", SandboxPolicyKind.WorkspaceWrite,
-                "deny-probe 经完整链路执行并退出 0（deny-read ACL 生效）", "codex-windows-managed-deny-probe.exe",
-                DenyProbeAsync),
-            new("write-denied-outside-roots", SandboxPolicyKind.WorkspaceWrite,
-                "向所有写根之外写入被拒绝（非零退出且文件未创建）", "cmd /c copy NUL <写根之外>",
-                WriteDeniedOutsideRootsAsync),
-            new("readonly-workspace-write-denied", SandboxPolicyKind.ReadOnly, "read-only 策略下向工作区写入被拒绝",
-                "cmd /c copy NUL <工作区>", ReadonlyWorkspaceWriteDeniedAsync),
-            new("metadata-protected", SandboxPolicyKind.WorkspaceWrite,
-                "workspace-write 策略下向 <ws>\\.git\\ 写入被拒绝（元数据只读保护）", "cmd /c copy NUL <ws>\\.git\\",
-                MetadataProtectedAsync),
-            new("workspace-write-allowed", SandboxPolicyKind.WorkspaceWrite,
-                "workspace-write 策略下向工作区普通路径写入成功（正对照）", "cmd /c copy NUL <工作区普通路径>",
-                WorkspaceWriteAllowedAsync),
-            new("network-denied", SandboxPolicyKind.WorkspaceWrite,
-                "沙箱内对本机非回环 IP 的连接被阻断；回环结果仅作观测", "curl.exe → 127.0.0.1 / 本机非回环 IP",
-                NetworkDeniedAsync),
-            new("exit-natural-23", SandboxPolicyKind.WorkspaceWrite, "自然退出 23：ExitCode=23 且 TimedOut=false",
-                "cmd /c exit 23", ExitNaturalAsync(23)),
-            new("exit-natural-192", SandboxPolicyKind.WorkspaceWrite,
-                "自然退出 192：ExitCode=192 且 TimedOut=false（绝不判为超时）", "cmd /c exit 192", ExitNaturalAsync(192)),
-            new("timeout-finite", SandboxPolicyKind.WorkspaceWrite,
-                "有限命令超时：TimedOut=true（runner 超时帧契约为 192,true）", $"长 sleeper + {TimeoutCaseCommandSeconds}s 命令超时",
-                TimeoutFiniteAsync),
-            new("terminate-active", SandboxPolicyKind.WorkspaceWrite,
-                "运行中取消 CancellationToken：以 OperationCanceledException 呈现且无镜像残留", "长 sleeper + 中段取消",
-                TerminateActiveAsync),
-            new("cancel-startup", SandboxPolicyKind.WorkspaceWrite, "启动阶段即取消：结果正确反映取消且无镜像残留",
-                "启动后立即取消", CancelStartupAsync),
-            new("runner-broken-pipe", SandboxPolicyKind.WorkspaceWrite,
-                "外部击杀本用例 runner：后端报协议失败且不补造退出码，事后无目标进程残留",
-                "外部 kill codex-command-runner", RunnerBrokenPipeAsync),
-            new("large-output", SandboxPolicyKind.WorkspaceWrite,
-                "约 4MB 输出：模型视图按预算截断、完整 artifact 落盘、报告原始长度与截断方式",
-                "cmd /c type large-output.txt", LargeOutputAsync),
-            new("host-exit-reclaim", SandboxPolicyKind.WorkspaceWrite,
-                "宿主（verify-worker）被 Kill 后有界窗口内无 runner/目标镜像幸存",
-                "sandbox verify-worker + Process.Kill", HostExitReclaimAsync)
-        ];
-    }
+    private List<AcceptanceCaseDefinition> BuildCaseDefinitions() =>
+    [
+        new("identity-whoami", SandboxPolicyKind.ReadOnly, "whoami 输出包含所选 offline 沙箱账户名",
+            "whoami.exe", IdentityWhoamiAsync),
+        new("deny-probe", SandboxPolicyKind.WorkspaceWrite,
+            "deny-probe 经完整链路执行并退出 0（deny-read ACL 生效）",
+            "codex-windows-managed-deny-probe.exe",
+            DenyProbeAsync),
+        new("write-denied-outside-roots", SandboxPolicyKind.WorkspaceWrite,
+            "向所有写根之外写入被拒绝（非零退出且文件未创建）", "cmd /c copy NUL <写根之外>",
+            WriteDeniedOutsideRootsAsync),
+        new("readonly-workspace-write-denied", SandboxPolicyKind.ReadOnly,
+            "read-only 策略下向工作区写入被拒绝",
+            "cmd /c copy NUL <工作区>", ReadonlyWorkspaceWriteDeniedAsync),
+        new("metadata-protected", SandboxPolicyKind.WorkspaceWrite,
+            "workspace-write 策略下向 <ws>\\.git\\ 写入被拒绝（元数据只读保护）",
+            "cmd /c copy NUL <ws>\\.git\\",
+            MetadataProtectedAsync),
+        new("workspace-write-allowed", SandboxPolicyKind.WorkspaceWrite,
+            "workspace-write 策略下向工作区普通路径写入成功（正对照）", "cmd /c copy NUL <工作区普通路径>",
+            WorkspaceWriteAllowedAsync),
+        new("network-denied", SandboxPolicyKind.WorkspaceWrite,
+            "沙箱内对本机非回环 IP 的连接被阻断；回环结果仅作观测", "curl.exe → 127.0.0.1 / 本机非回环 IP",
+            NetworkDeniedAsync),
+        new("exit-natural-23", SandboxPolicyKind.WorkspaceWrite,
+            "自然退出 23：ExitCode=23 且 TimedOut=false",
+            "cmd /c exit 23", ExitNaturalAsync(23)),
+        new("exit-natural-192", SandboxPolicyKind.WorkspaceWrite,
+            "自然退出 192：ExitCode=192 且 TimedOut=false（绝不判为超时）", "cmd /c exit 192",
+            ExitNaturalAsync(192)),
+        new("timeout-finite", SandboxPolicyKind.WorkspaceWrite,
+            "有限命令超时：TimedOut=true（runner 超时帧契约为 192,true）",
+            $"长 sleeper + {TimeoutCaseCommandSeconds}s 命令超时",
+            TimeoutFiniteAsync),
+        new("terminate-active", SandboxPolicyKind.WorkspaceWrite,
+            "运行中取消 CancellationToken：以 OperationCanceledException 呈现且无镜像残留",
+            "长 sleeper + 中段取消",
+            TerminateActiveAsync),
+        new("cancel-startup", SandboxPolicyKind.WorkspaceWrite, "启动阶段即取消：结果正确反映取消且无镜像残留",
+            "启动后立即取消", CancelStartupAsync),
+        new("runner-broken-pipe", SandboxPolicyKind.WorkspaceWrite,
+            "外部击杀本用例 runner：后端报协议失败且不补造退出码，事后无目标进程残留",
+            "外部 kill codex-command-runner", RunnerBrokenPipeAsync),
+        new("large-output", SandboxPolicyKind.WorkspaceWrite,
+            "约 4MB 输出：模型视图按预算截断、完整 artifact 落盘、报告原始长度与截断方式",
+            "cmd /c type large-output.txt", LargeOutputAsync),
+        new("host-exit-reclaim", SandboxPolicyKind.WorkspaceWrite,
+            "宿主（verify-worker）被 Kill 后有界窗口内无 runner/目标镜像幸存",
+            "sandbox verify-worker + Process.Kill", HostExitReclaimAsync)
+    ];
 
     private async Task<SandboxAcceptanceCaseResult> IdentityWhoamiAsync(CancellationToken cancellationToken)
     {
@@ -346,7 +342,7 @@ public sealed class WindowsSandboxAcceptanceRunner
                                          "identity-whoami", cancellationToken).ConfigureAwait(false);
 
         var actual = Describe(run, $"stdout 首行: {FirstLine(run.Stdout?.Content)}");
-        var passed = run.Exception is null && run.Result is { ExitCode: 0, TimedOut: false } &&
+        var passed = run.Exception is null    && run.Result is { ExitCode: 0, TimedOut: false } &&
                      run.Stdout is { } stdout &&
                      stdout.Content.Contains(account, StringComparison.OrdinalIgnoreCase);
         return Result(definition, passed ? SandboxAcceptanceVerdict.Pass : SandboxAcceptanceVerdict.Fail, actual,
@@ -355,10 +351,10 @@ public sealed class WindowsSandboxAcceptanceRunner
 
     private async Task<SandboxAcceptanceCaseResult> DenyProbeAsync(CancellationToken cancellationToken)
     {
-        var definition = Definition("deny-probe");
-        var stopwatch  = Stopwatch.StartNew();
+        var definition      = Definition("deny-probe");
+        var stopwatch       = Stopwatch.StartNew();
         var runnerDirectory = Path.GetDirectoryName(_snapshotExecution!.Components.RunnerExecutablePath)!;
-        var probeSource = Path.Combine(runnerDirectory, "codex-windows-managed-deny-probe.exe");
+        var probeSource     = Path.Combine(runnerDirectory, "codex-windows-managed-deny-probe.exe");
         if (!File.Exists(probeSource))
             return Result(definition, SandboxAcceptanceVerdict.Indeterminate, null,
                           $"未找到 codex-windows-managed-deny-probe.exe（期望与 runner 同目录: {runnerDirectory}）。",
@@ -432,8 +428,8 @@ public sealed class WindowsSandboxAcceptanceRunner
     {
         var definition = Definition("write-denied-outside-roots");
         var stopwatch  = Stopwatch.StartNew();
-        var target = Path.Combine(DeniedFixtureRoot(), "outside-roots-probe.txt");
-        var execution = _backendFactory(SandboxPolicyKind.WorkspaceWrite, null);
+        var target     = Path.Combine(DeniedFixtureRoot(), "outside-roots-probe.txt");
+        var execution  = _backendFactory(SandboxPolicyKind.WorkspaceWrite, null);
         if (execution.Policy.EffectiveWriteRoots.Any(root => Workspace.IsInside(root, target)))
             return Result(definition, SandboxAcceptanceVerdict.Fail, null,
                           $"目标（{target}）落在有效写根内，fixture 与策略冲突；写根: {string.Join("; ", execution.Policy.EffectiveWriteRoots)}",
@@ -443,7 +439,8 @@ public sealed class WindowsSandboxAcceptanceRunner
                                      cancellationToken).ConfigureAwait(false);
     }
 
-    private async Task<SandboxAcceptanceCaseResult> ReadonlyWorkspaceWriteDeniedAsync(CancellationToken cancellationToken)
+    private async Task<SandboxAcceptanceCaseResult> ReadonlyWorkspaceWriteDeniedAsync(
+        CancellationToken cancellationToken)
     {
         var definition = Definition("readonly-workspace-write-denied");
         var stopwatch  = Stopwatch.StartNew();
@@ -454,11 +451,11 @@ public sealed class WindowsSandboxAcceptanceRunner
 
     private async Task<SandboxAcceptanceCaseResult> MetadataProtectedAsync(CancellationToken cancellationToken)
     {
-        var definition = Definition("metadata-protected");
-        var stopwatch  = Stopwatch.StartNew();
+        var definition   = Definition("metadata-protected");
+        var stopwatch    = Stopwatch.StartNew();
         var gitDirectory = Path.Combine(_workspaceRoot, ".git");
         Directory.CreateDirectory(gitDirectory);
-        var target = Path.Combine(gitDirectory, "metadata-probe.txt");
+        var target    = Path.Combine(gitDirectory, "metadata-probe.txt");
         var execution = _backendFactory(SandboxPolicyKind.WorkspaceWrite, null);
         var denyEntry = execution.Policy.DenyWritePaths.FirstOrDefault(path => Workspace.IsInside(path, target));
         var result = await WriteProbeAsync(definition, SandboxPolicyKind.WorkspaceWrite, target, stopwatch,
@@ -474,7 +471,7 @@ public sealed class WindowsSandboxAcceptanceRunner
     {
         var definition = Definition("workspace-write-allowed");
         var stopwatch  = Stopwatch.StartNew();
-        var target = Path.Combine(_workspaceRoot, "write-allowed-probe.txt");
+        var target     = Path.Combine(_workspaceRoot, "write-allowed-probe.txt");
         var run = await ExecuteOnceAsync(SandboxPolicyKind.WorkspaceWrite, null,
                                          CmdPlan($"copy /y NUL {CmdSafePath(target)}", WriteProbeTimeoutSeconds),
                                          "workspace-write-allowed", cancellationToken).ConfigureAwait(false);
@@ -504,15 +501,15 @@ public sealed class WindowsSandboxAcceptanceRunner
                           "无法解析本机非回环地址，无法执行门控断网对照。", stopwatch);
 
         using var listener = new TcpListenerProbe();
-        var port = listener.Start();
+        var       port     = listener.Start();
         var loopbackRun = await CurlAsync(curl, $"http://127.0.0.1:{port}/", "network-denied-loopback",
                                           cancellationToken).ConfigureAwait(false);
         var nonLoopbackRun = await CurlAsync(curl, $"http://{nonLoopback}:{port}/", "network-denied-nonloopback",
                                              cancellationToken).ConfigureAwait(false);
 
-        var loopbackExit     = ExitOf(loopbackRun);
-        var nonLoopbackExit  = ExitOf(nonLoopbackRun);
-        var curlError = FirstLine(nonLoopbackRun.Stderr?.Content);
+        var loopbackExit    = ExitOf(loopbackRun);
+        var nonLoopbackExit = ExitOf(nonLoopbackRun);
+        var curlError       = FirstLine(nonLoopbackRun.Stderr?.Content);
         var actual =
             $"回环 127.0.0.1 exit={loopbackExit?.ToString() ?? "无"}（观测）；非回环 {nonLoopback} exit={nonLoopbackExit?.ToString() ?? "无"}（门控）" +
             (string.IsNullOrEmpty(curlError) ? string.Empty : $"；非回环 stderr: {curlError}");
@@ -528,24 +525,22 @@ public sealed class WindowsSandboxAcceptanceRunner
                       stopwatch);
     }
 
-    private Func<CancellationToken, Task<SandboxAcceptanceCaseResult>> ExitNaturalAsync(int expectedExitCode)
-    {
-        return async cancellationToken =>
+    private Func<CancellationToken, Task<SandboxAcceptanceCaseResult>> ExitNaturalAsync(int expectedExitCode) =>
+        async cancellationToken =>
         {
             var definition = Definition($"exit-natural-{expectedExitCode}");
             var stopwatch  = Stopwatch.StartNew();
             var run = await ExecuteOnceAsync(SandboxPolicyKind.WorkspaceWrite, null,
                                              CmdPlan($"exit {expectedExitCode}", ExitProbeTimeoutSeconds),
                                              $"exit-natural-{expectedExitCode}", cancellationToken)
-                .ConfigureAwait(false);
+               .ConfigureAwait(false);
             var actual = Describe(run, null);
-            var passed = run.Exception is null &&
+            var passed = run.Exception is null                                 &&
                          run.Result is { ExitCode: var code, TimedOut: false } && code == expectedExitCode;
             return Result(definition, passed ? SandboxAcceptanceVerdict.Pass : SandboxAcceptanceVerdict.Fail, actual,
                           expectedExitCode == 192 ? "192 且 timed_out=false 是自然退出；绝不按退出码判超时。" : null,
                           stopwatch);
         };
-    }
 
     private async Task<SandboxAcceptanceCaseResult> TimeoutFiniteAsync(CancellationToken cancellationToken)
     {
@@ -557,8 +552,10 @@ public sealed class WindowsSandboxAcceptanceRunner
 
         var run = await ExecuteOnceAsync(SandboxPolicyKind.WorkspaceWrite, null,
                                          new PreparedProcessExecution(powershell,
-                                                                      ["-NoProfile", "-NonInteractive", "-Command",
-                                                                       $"Start-Sleep -Seconds {SleeperDurationSeconds}"],
+                                                                      [
+                                                                          "-NoProfile", "-NonInteractive", "-Command",
+                                                                          $"Start-Sleep -Seconds {SleeperDurationSeconds}"
+                                                                      ],
                                                                       _workspaceRoot, TimeoutCaseCommandSeconds, false,
                                                                       null),
                                          "timeout-finite", cancellationToken).ConfigureAwait(false);
@@ -586,7 +583,7 @@ public sealed class WindowsSandboxAcceptanceRunner
         var run = await AwaitAsOutcomeAsync(runTask, true).ConfigureAwait(false);
 
         var survivors = await WaitForNoSurvivorsAsync(cancellationToken).ConfigureAwait(false);
-        var actual = Describe(run, null);
+        var actual    = Describe(run, null);
         if (run.Exception is not OperationCanceledException)
             return Result(definition, SandboxAcceptanceVerdict.Fail, actual,
                           "取消未以 OperationCanceledException 呈现（后端取消语义不符）。", stopwatch);
@@ -614,7 +611,7 @@ public sealed class WindowsSandboxAcceptanceRunner
         var run = await AwaitAsOutcomeAsync(runTask, true).ConfigureAwait(false);
 
         var survivors = await WaitForNoSurvivorsAsync(cancellationToken).ConfigureAwait(false);
-        var actual = Describe(run, null);
+        var actual    = Describe(run, null);
         if (run.Exception is not OperationCanceledException)
             return Result(definition, SandboxAcceptanceVerdict.Fail, actual,
                           "启动阶段取消未以 OperationCanceledException 呈现（后端取消语义不符）。", stopwatch);
@@ -634,14 +631,14 @@ public sealed class WindowsSandboxAcceptanceRunner
                           "缺少 powershell.exe，无法布置长 sleeper。", stopwatch);
 
         using var caseCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        var caseStart = DateTimeOffset.Now;
+        var       caseStart        = DateTimeOffset.Now;
         var runTask = ExecuteOnceAsync(SandboxPolicyKind.WorkspaceWrite, null, SleeperPlan(sleeper),
                                        "runner-broken-pipe", caseCancellation.Token);
 
         // Locate THIS case's runner by image name plus the case's start window;
         // the baseline excludes runners of earlier cases.
-        var locateDeadline = DateTimeOffset.UtcNow + _limits.ProcessScanTimeout;
-        Process? runner = null;
+        var      locateDeadline = DateTimeOffset.UtcNow + _limits.ProcessScanTimeout;
+        Process? runner         = null;
         while (runner is null && DateTimeOffset.UtcNow < locateDeadline)
         {
             foreach (var survivor in SandboxSurvivorScan.FindSurvivors(_baselineIds, [_limits.RunnerImageName],
@@ -663,7 +660,7 @@ public sealed class WindowsSandboxAcceptanceRunner
             await caseCancellation.CancelAsync().ConfigureAwait(false);
             var cancelledRun = await AwaitAsOutcomeAsync(runTask, true).ConfigureAwait(false);
             return Result(definition, SandboxAcceptanceVerdict.Indeterminate, Describe(cancelledRun, null),
-                          $"在 {(_limits.ProcessScanTimeout).TotalSeconds:0}s 内未找到本用例的 {_limits.RunnerImageName} 进程，无法执行击杀。",
+                          $"在 {_limits.ProcessScanTimeout.TotalSeconds:0}s 内未找到本用例的 {_limits.RunnerImageName} 进程，无法执行击杀。",
                           stopwatch);
         }
 
@@ -674,9 +671,9 @@ public sealed class WindowsSandboxAcceptanceRunner
 
         // Either a result without an exit code or an exception means no exit
         // code was invented; both satisfy the contract.
-        var run = await AwaitAsOutcomeAsync(runTask, false).ConfigureAwait(false);
-        var survivors = await WaitForNoSurvivorsAsync(cancellationToken).ConfigureAwait(false);
-        var actual = Describe(run, null);
+        var run              = await AwaitAsOutcomeAsync(runTask, false).ConfigureAwait(false);
+        var survivors        = await WaitForNoSurvivorsAsync(cancellationToken).ConfigureAwait(false);
+        var actual           = Describe(run, null);
         var exitCodeInvented = run.Result?.ExitCode is not null;
         if (exitCodeInvented)
             return Result(definition, SandboxAcceptanceVerdict.Fail, actual,
@@ -692,19 +689,20 @@ public sealed class WindowsSandboxAcceptanceRunner
     {
         var definition = Definition("large-output");
         var stopwatch  = Stopwatch.StartNew();
-        var content = BuildLargeOutput(_limits.LargeOutputTargetCharacters);
-        var file    = Path.Combine(_workspaceRoot, "large-output.txt");
+        var content    = BuildLargeOutput(_limits.LargeOutputTargetCharacters);
+        var file       = Path.Combine(_workspaceRoot, "large-output.txt");
         await File.WriteAllTextAsync(file, content, cancellationToken).ConfigureAwait(false);
 
         var run = await ExecuteOnceAsync(SandboxPolicyKind.WorkspaceWrite, null,
-                                         CmdPlan($"type {CmdSafePath(file)}", LargeOutputTimeoutSeconds), "large-output",
+                                         CmdPlan($"type {CmdSafePath(file)}", LargeOutputTimeoutSeconds),
+                                         "large-output",
                                          cancellationToken).ConfigureAwait(false);
-        var stdout = run.Stdout;
+        var stdout         = run.Stdout;
         var artifactExists = stdout?.ArtifactPath is { } artifactPath && File.Exists(artifactPath);
         var actual = run.Exception is null && stdout is not null
             ? $"原始 {stdout.OriginalCharacterCount} 字符；截断={stdout.Truncated}；artifact 存在={artifactExists}"
             : Describe(run, null);
-        var passed = run.Exception is null && stdout is { Truncated: true } &&
+        var passed = run.Exception is null                           && stdout is { Truncated: true } &&
                      stdout.OriginalCharacterCount == content.Length && artifactExists;
         return Result(definition, passed ? SandboxAcceptanceVerdict.Pass : SandboxAcceptanceVerdict.Fail, actual,
                       $"模型视图上限 {_limits.ModelOutputCharacterLimit} 字符（head+tail 截断）；期望原始长度 {content.Length}；完整 artifact: {stdout?.ArtifactPath ?? "<无>"}",
@@ -730,23 +728,17 @@ public sealed class WindowsSandboxAcceptanceRunner
         {
             var killNote = TryKill(worker);
             return Result(definition, SandboxAcceptanceVerdict.Fail, null,
-                          $"worker 未在 {(_limits.MarkerWaitTimeout).TotalSeconds:0}s 内写出 marker（沙箱可能未就绪）{killNote}。",
+                          $"worker 未在 {_limits.MarkerWaitTimeout.TotalSeconds:0}s 内写出 marker（沙箱可能未就绪）{killNote}。",
                           stopwatch);
         }
 
-        var note = TryKill(worker);
+        var note      = TryKill(worker);
         var survivors = await WaitForNoSurvivorsAsync(cancellationToken).ConfigureAwait(false);
         return survivors.Count == 0
             ? Result(definition, SandboxAcceptanceVerdict.Pass, $"marker: {markerPath}", note, stopwatch)
             : Result(definition, SandboxAcceptanceVerdict.Fail, $"marker: {markerPath}",
                      $"{note}Kill 后仍有镜像幸存: {SandboxSurvivorScan.Describe(survivors)}。", stopwatch);
     }
-
-    // ---- 共享执行管线 ----
-
-    private sealed record SandboxRun(
-        ProcessExecutionResult? Result, Exception? Exception, CapturedProcessOutput? Stdout,
-        CapturedProcessOutput? Stderr);
 
     /// <summary>
     ///     组合一次执行并跑完：命令超时由后端按计划实施；任何异常先丢弃输出再上抛（调用方决定按
@@ -758,14 +750,14 @@ public sealed class WindowsSandboxAcceptanceRunner
     ///     (head+tail truncation).
     /// </summary>
     private async Task<SandboxRun> ExecuteOnceAsync(SandboxPolicyKind                    kind,
-                                                   IReadOnlyDictionary<string, string>? environment,
-                                                   PreparedProcessExecution             plan,
-                                                   string                               artifactPrefix,
-                                                   CancellationToken                    cancellationToken)
+                                                    IReadOnlyDictionary<string, string>? environment,
+                                                    PreparedProcessExecution             plan,
+                                                    string                               artifactPrefix,
+                                                    CancellationToken                    cancellationToken)
     {
         var execution = _backendFactory(kind, environment);
-        var stdout = CreateCapture(Path.Combine(_artifactDirectory, $"{artifactPrefix}.stdout.txt"));
-        var stderr = CreateCapture(Path.Combine(_artifactDirectory, $"{artifactPrefix}.stderr.txt"));
+        var stdout    = CreateCapture(Path.Combine(_artifactDirectory, $"{artifactPrefix}.stdout.txt"));
+        var stderr    = CreateCapture(Path.Combine(_artifactDirectory, $"{artifactPrefix}.stderr.txt"));
         try
         {
             var result = await execution.Backend.ExecuteAsync(plan, stdout, stderr, cancellationToken)
@@ -810,27 +802,31 @@ public sealed class WindowsSandboxAcceptanceRunner
                                                                     Stopwatch                stopwatch,
                                                                     CancellationToken        cancellationToken)
     {
-        var run = await ExecuteOnceAsync(kind, null, CmdPlan($"copy /y NUL {CmdSafePath(target)}", WriteProbeTimeoutSeconds),
+        var run = await ExecuteOnceAsync(kind, null,
+                                         CmdPlan($"copy /y NUL {CmdSafePath(target)}", WriteProbeTimeoutSeconds),
                                          definition.Name, cancellationToken).ConfigureAwait(false);
         var exists = File.Exists(target);
         var actual = Describe(run, $"目标文件已创建: {exists}");
-        var denied = run.Exception is null &&
+        var denied = run.Exception is null                                           &&
                      run.Result is { ExitCode: not null and not 0, TimedOut: false } && !exists;
         return Result(definition, denied ? SandboxAcceptanceVerdict.Pass : SandboxAcceptanceVerdict.Fail, actual, null,
                       stopwatch);
     }
 
-    private async Task<SandboxRun> CurlAsync(string curl, string url, string artifactPrefix,
-                                             CancellationToken cancellationToken)
-    {
-        return await ExecuteOnceAsync(SandboxPolicyKind.WorkspaceWrite, null,
-                                      new PreparedProcessExecution(curl,
-                                                                   ["-sS", "-o", "NUL", "--connect-timeout", "3",
-                                                                    "--max-time", "5", url],
-                                                                   _workspaceRoot, NetworkProbeTimeoutSeconds, false,
-                                                                   null),
-                                      artifactPrefix, cancellationToken).ConfigureAwait(false);
-    }
+    private async Task<SandboxRun> CurlAsync(
+        string curl, string url, string artifactPrefix, CancellationToken cancellationToken) =>
+        await ExecuteOnceAsync(SandboxPolicyKind.WorkspaceWrite, null,
+                               new PreparedProcessExecution(curl,
+                                                            [
+                                                                "-sS", "-o", "NUL",
+                                                                "--connect-timeout", "3",
+                                                                "--max-time", "5", url
+                                                            ],
+                                                            _workspaceRoot,
+                                                            NetworkProbeTimeoutSeconds, false,
+                                                            null),
+                               artifactPrefix, cancellationToken)
+           .ConfigureAwait(false);
 
     /// <summary>
     ///     长 sleeper 计划：powershell Start-Sleep。与 waitfor 不同，它不依赖网络（waitfor 走
@@ -840,19 +836,13 @@ public sealed class WindowsSandboxAcceptanceRunner
     ///     under the network block); the timeout-finite case proved it runs
     ///     long inside the sandbox.
     /// </summary>
-    private PreparedProcessExecution SleeperPlan(string powershell)
-    {
-        return new PreparedProcessExecution(powershell,
-                                            ["-NoProfile", "-NonInteractive", "-Command",
-                                             $"Start-Sleep -Seconds {SleeperDurationSeconds}"],
-                                            _workspaceRoot, SleeperDurationSeconds + 30, false, null);
-    }
+    private PreparedProcessExecution SleeperPlan(string powershell) =>
+        new(powershell, ["-NoProfile", "-NonInteractive", "-Command", $"Start-Sleep -Seconds {SleeperDurationSeconds}"],
+            _workspaceRoot, SleeperDurationSeconds + 30, false, null);
 
-    private IProcessOutputCapture CreateCapture(string artifactPath)
-    {
-        return _captureFactory?.Invoke(artifactPath)
-               ?? new ProcessOutputCapture(artifactPath, _limits.ModelOutputCharacterLimit, []);
-    }
+    private IProcessOutputCapture CreateCapture(string artifactPath) => _captureFactory?.Invoke(artifactPath) ??
+                                                                        new ProcessOutputCapture(artifactPath,
+                                                                            _limits.ModelOutputCharacterLimit, []);
 
     /// <summary>
     ///     cmd /c 载荷内的裸路径约束。runner 会按 CRT 规则重组 argv：含空格/引号的路径经双层
@@ -873,7 +863,7 @@ public sealed class WindowsSandboxAcceptanceRunner
             return path;
 
         throw new InvalidOperationException(
-            $"验收 fixture 路径含 cmd /c 载荷无法承载的字符（空格/引号等），换用无空格的验收工作区：'{path}'");
+                                            $"验收 fixture 路径含 cmd /c 载荷无法承载的字符（空格/引号等），换用无空格的验收工作区：'{path}'");
     }
 
     private PreparedProcessExecution CmdPlan(string commandText, int timeoutSeconds)
@@ -941,24 +931,26 @@ public sealed class WindowsSandboxAcceptanceRunner
     private string DeniedFixtureRoot()
     {
         var trimmed = _workspaceRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        var name   = Path.GetFileName(trimmed);
-        var parent = Path.GetDirectoryName(trimmed);
+        var name    = Path.GetFileName(trimmed);
+        var parent  = Path.GetDirectoryName(trimmed);
         if (string.IsNullOrEmpty(name) || string.IsNullOrEmpty(parent))
             throw new InvalidOperationException($"无法从验收工作区推导 denied fixture 目录：'{_workspaceRoot}'。");
 
         return Path.Combine(parent, name + "-denied-" + Guid.NewGuid().ToString("N")[..8]);
     }
 
-    private async Task<List<SandboxSurvivorScan.Survivor>> WaitForNoSurvivorsAsync(CancellationToken cancellationToken)
-    {
-        return await SandboxSurvivorScan.WaitForNoSurvivorsAsync(_baselineIds, _limits.SurvivorImageNames,
-                                                                 _runStartedLocal, _limits.ProcessScanTimeout,
-                                                                 _limits.ProcessScanInterval, cancellationToken)
-                                        .ConfigureAwait(false);
-    }
+    private async Task<List<SandboxSurvivorScan.Survivor>>
+        WaitForNoSurvivorsAsync(CancellationToken cancellationToken) => await SandboxSurvivorScan
+                                                                             .WaitForNoSurvivorsAsync(_baselineIds,
+                                                                                  _limits.SurvivorImageNames,
+                                                                                  _runStartedLocal,
+                                                                                  _limits.ProcessScanTimeout,
+                                                                                  _limits.ProcessScanInterval,
+                                                                                  cancellationToken)
+                                                                             .ConfigureAwait(false);
 
-    private static async Task<bool> WaitForFileAsync(string path, TimeSpan timeout, TimeSpan interval,
-                                                     CancellationToken cancellationToken)
+    private static async Task<bool> WaitForFileAsync(
+        string path, TimeSpan timeout, TimeSpan interval, CancellationToken cancellationToken)
     {
         var deadline = DateTimeOffset.UtcNow + timeout;
         while (DateTimeOffset.UtcNow < deadline)
@@ -1000,26 +992,24 @@ public sealed class WindowsSandboxAcceptanceRunner
     private AcceptanceCaseDefinition Definition(string name)
     {
         return _caseDefinitions.FirstOrDefault(definition => definition.Name == name)
-               ?? throw new InvalidOperationException($"未定义的验收用例 '{name}'。");
+            ?? throw new InvalidOperationException($"未定义的验收用例 '{name}'。");
     }
 
-    private SandboxAcceptanceCaseResult Result(AcceptanceCaseDefinition    definition,
-                                               SandboxAcceptanceVerdict    verdict,
-                                               string?                     actual,
-                                               string?                     detail,
-                                               Stopwatch?                  stopwatch = null)
+    private SandboxAcceptanceCaseResult Result(
+        AcceptanceCaseDefinition definition,
+        SandboxAcceptanceVerdict verdict,
+        string?                  actual,
+        string?                  detail,
+        Stopwatch?               stopwatch = null) => new()
     {
-        return new SandboxAcceptanceCaseResult
-        {
-            Name          = definition.Name,
-            CommandSummary = definition.CommandSummary,
-            Expectation   = definition.Expectation,
-            ActualSummary = actual,
-            Verdict       = verdict,
-            Duration      = (stopwatch?.Elapsed ?? TimeSpan.Zero).ToString("hh\\:mm\\:ss\\.fff"),
-            Detail        = detail
-        };
-    }
+        Name           = definition.Name,
+        CommandSummary = definition.CommandSummary,
+        Expectation    = definition.Expectation,
+        ActualSummary  = actual,
+        Verdict        = verdict,
+        Duration       = (stopwatch?.Elapsed ?? TimeSpan.Zero).ToString("hh\\:mm\\:ss\\.fff"),
+        Detail         = detail
+    };
 
     private static string Describe(SandboxRun run, string? extra)
     {
@@ -1038,10 +1028,7 @@ public sealed class WindowsSandboxAcceptanceRunner
         return string.Join("; ", parts);
     }
 
-    private static int? ExitOf(SandboxRun run)
-    {
-        return run.Exception is null ? run.Result?.ExitCode : null;
-    }
+    private static int? ExitOf(SandboxRun run) => run.Exception is null ? run.Result?.ExitCode : null;
 
     private static string FirstLine(string? text)
     {
@@ -1057,34 +1044,29 @@ public sealed class WindowsSandboxAcceptanceRunner
         var unknown = caseFilter.Where(name => !CaseNames.Contains(name, StringComparer.Ordinal)).ToArray();
         if (unknown.Length > 0)
             throw new ArgumentException(
-                $"未知的验收用例名: {string.Join(", ", unknown)}。有效名称: {string.Join(", ", CaseNames)}。");
+                                        $"未知的验收用例名: {string.Join(", ", unknown)}。有效名称: {string.Join(", ", CaseNames)}。");
 
         return caseFilter.Distinct(StringComparer.Ordinal).ToArray();
     }
 
-    private static string PolicyKindDisplay(SandboxPolicyKind kind)
+    private static string PolicyKindDisplay(SandboxPolicyKind kind) => kind switch
     {
-        return kind switch
-        {
-            SandboxPolicyKind.ReadOnly       => "read-only",
-            SandboxPolicyKind.WorkspaceWrite => "workspace-write",
-            _                                => kind.ToString()
-        };
-    }
+        SandboxPolicyKind.ReadOnly       => "read-only",
+        SandboxPolicyKind.WorkspaceWrite => "workspace-write",
+        _                                => kind.ToString()
+    };
 
-    private sealed record ComponentSnapshotResult(SandboxAcceptanceComponentSnapshot Snapshot, string? MarkerError);
-
-    private static async Task<ComponentSnapshotResult> BuildComponentSnapshotAsync(WindowsSandboxExecution execution,
-                                                                                   CancellationToken cancellationToken)
+    private static async Task<ComponentSnapshotResult> BuildComponentSnapshotAsync(
+        WindowsSandboxExecution execution, CancellationToken cancellationToken)
     {
-        uint?      markerVersion = null;
-        string?    markerError   = null;
+        uint?   markerVersion = null;
+        string? markerError   = null;
         try
         {
             var markerJson = await File.ReadAllTextAsync(execution.Components.MarkerPath, cancellationToken)
-                                      .ConfigureAwait(false);
+                                       .ConfigureAwait(false);
             markerVersion = JsonSerializer.Deserialize(markerJson,
-                                                        WindowsSandboxJsonContext.Default.SandboxSetupMarker)?.Version;
+                                                       WindowsSandboxJsonContext.Default.SandboxSetupMarker)?.Version;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
         {
@@ -1097,13 +1079,13 @@ public sealed class WindowsSandboxAcceptanceRunner
             : Path.Combine(runnerDirectory, "codex-windows-managed-deny-probe.exe");
         var snapshot = new SandboxAcceptanceComponentSnapshot
         {
-            SetupExecutable   = DescribeFile(execution.Components.SetupExecutablePath),
-            RunnerExecutable  = DescribeFile(execution.Components.RunnerExecutablePath),
+            SetupExecutable     = DescribeFile(execution.Components.SetupExecutablePath),
+            RunnerExecutable    = DescribeFile(execution.Components.RunnerExecutablePath),
             DenyProbeExecutable = File.Exists(probePath) ? DescribeFile(probePath!) : null,
-            SandboxHome       = execution.Components.SandboxHome,
-            MarkerVersion     = markerVersion,
-            SetupVersion      = WindowsSandboxComponents.SetupVersion,
-            IpcVersion        = WindowsSandboxComponents.IpcVersion
+            SandboxHome         = execution.Components.SandboxHome,
+            MarkerVersion       = markerVersion,
+            SetupVersion        = WindowsSandboxComponents.SetupVersion,
+            IpcVersion          = WindowsSandboxComponents.IpcVersion
         };
         return new ComponentSnapshotResult(snapshot, markerError);
     }
@@ -1113,24 +1095,24 @@ public sealed class WindowsSandboxAcceptanceRunner
         var info = new FileInfo(path);
         return new SandboxAcceptanceFileInfo
         {
-            Path            = path,
-            SizeBytes       = info.Exists ? info.Length : null,
+            Path             = path,
+            SizeBytes        = info.Exists ? info.Length : null,
             LastWriteTimeUtc = info.Exists ? info.LastWriteTimeUtc.ToString("O") : null
         };
     }
 
-    private async Task<string?> TryWriteReportAsync(WindowsSandboxAcceptanceReport report,
-                                                    DateTimeOffset                 startedAtUtc,
-                                                    CancellationToken              cancellationToken)
+    private async Task<string?> TryWriteReportAsync(
+        WindowsSandboxAcceptanceReport report, DateTimeOffset startedAtUtc, CancellationToken cancellationToken)
     {
         try
         {
             var directory = _snapshotExecution!.Components.SandboxDirectory;
             Directory.CreateDirectory(directory);
             var path = Path.Combine(directory,
-                                     $"tinyharness-verify-{startedAtUtc.LocalDateTime:yyyyMMdd-HHmmss}.json");
+                                    $"tinyharness-verify-{startedAtUtc.LocalDateTime:yyyyMMdd-HHmmss}.json");
             var json = JsonSerializer.Serialize(report,
-                                                WindowsSandboxAcceptanceJsonContext.Default.WindowsSandboxAcceptanceReport);
+                                                WindowsSandboxAcceptanceJsonContext.Default
+                                                   .WindowsSandboxAcceptanceReport);
             await File.WriteAllTextAsync(path, json, cancellationToken).ConfigureAwait(false);
             return path;
         }
@@ -1140,6 +1122,25 @@ public sealed class WindowsSandboxAcceptanceRunner
             return null;
         }
     }
+
+    // ---- 用例矩阵 ----
+
+    private sealed record AcceptanceCaseDefinition(
+        string                                                     Name,
+        SandboxPolicyKind                                          Kind,
+        string                                                     Expectation,
+        string                                                     CommandSummary,
+        Func<CancellationToken, Task<SandboxAcceptanceCaseResult>> Body);
+
+    // ---- 共享执行管线 ----
+
+    private sealed record SandboxRun(
+        ProcessExecutionResult? Result,
+        Exception?              Exception,
+        CapturedProcessOutput?  Stdout,
+        CapturedProcessOutput?  Stderr);
+
+    private sealed record ComponentSnapshotResult(SandboxAcceptanceComponentSnapshot Snapshot, string? MarkerError);
 
     /// <summary>
     ///     host 侧一次性 HTTP 对照监听：绑定全部接口的随机端口，对每个连接回一个最小合法 HTTP/1.0
@@ -1158,9 +1159,14 @@ public sealed class WindowsSandboxAcceptanceRunner
     /// </summary>
     private sealed class TcpListenerProbe : IDisposable
     {
-        private TcpListener?          _listener;
+        private Task?                    _acceptLoop;
         private CancellationTokenSource? _acceptSource;
-        private Task?                _acceptLoop;
+        private TcpListener?             _listener;
+
+        public void Dispose()
+        {
+            Stop();
+        }
 
         public int Start()
         {
@@ -1187,11 +1193,6 @@ public sealed class WindowsSandboxAcceptanceRunner
             _acceptSource = null;
         }
 
-        public void Dispose()
-        {
-            Stop();
-        }
-
         private static async Task AcceptLoopAsync(TcpListener listener, CancellationToken cancellationToken)
         {
             while (!cancellationToken.IsCancellationRequested)
@@ -1216,11 +1217,9 @@ public sealed class WindowsSandboxAcceptanceRunner
                     try
                     {
                         var stream = client.GetStream();
-                        await stream.WriteAsync(
-                                       "HTTP/1.0 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nOK"u8
-                                          .ToArray(),
-                                       CancellationToken.None)
-                                    .ConfigureAwait(false);
+                        await stream
+                             .WriteAsync("HTTP/1.0 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nOK"u8
+                                            .ToArray(), CancellationToken.None).ConfigureAwait(false);
                         await stream.FlushAsync(CancellationToken.None).ConfigureAwait(false);
                     }
                     catch (Exception ex) when (ex is SocketException or ObjectDisposedException)
@@ -1235,7 +1234,7 @@ public sealed class WindowsSandboxAcceptanceRunner
 
 /// <summary>
 ///     进程存活扫描的小工具：按镜像名 + 启动时间过滤并限期轮询，供 terminate/cancel/broken-pipe/
-/// host-exit 用例复用。识别局限（同名进程、PID 复用、改名）记录在报告 limitations 中。
+///     host-exit 用例复用。识别局限（同名进程、PID 复用、改名）记录在报告 limitations 中。
 ///     A small process-survival scan utility: filters by image name plus start
 ///     time with a bounded polling deadline, shared by the
 ///     terminate/cancel/broken-pipe/host-exit cases. Its identification limits
@@ -1244,8 +1243,6 @@ public sealed class WindowsSandboxAcceptanceRunner
 /// </summary>
 internal static class SandboxSurvivorScan
 {
-    internal readonly record struct Survivor(string Image, int Id, DateTime StartTime);
-
     /// <summary>
     ///     记录验收开始前已存在的目标镜像 PID；扫描把它们从“残留”中排除。
     ///     Records target-image PIDs that exist before the run; scans exclude
@@ -1255,45 +1252,45 @@ internal static class SandboxSurvivorScan
     {
         var ids = new HashSet<int>();
         foreach (var image in imageNames)
-            foreach (var process in SafeGetProcessesByName(image))
-            {
-                ids.Add(process.Id);
-                process.Dispose();
-            }
+        foreach (var process in SafeGetProcessesByName(image))
+        {
+            ids.Add(process.Id);
+            process.Dispose();
+        }
 
         return ids;
     }
 
-    internal static List<Survivor> FindSurvivors(HashSet<int>        baseline,
-                                                 IReadOnlyList<string> imageNames,
-                                                 DateTimeOffset      startedAfter)
+    internal static List<Survivor> FindSurvivors(
+        HashSet<int> baseline, IReadOnlyList<string> imageNames, DateTimeOffset startedAfter)
     {
         var survivors = new List<Survivor>();
         foreach (var image in imageNames)
-            foreach (var process in SafeGetProcessesByName(image))
-                try
-                {
-                    if (!baseline.Contains(process.Id) && process.StartTime >= startedAfter.LocalDateTime)
-                        survivors.Add(new Survivor(image, process.Id, process.StartTime));
-                }
-                catch (Exception ex) when (ex is Win32Exception or InvalidOperationException)
-                {
-                    // The process exited between enumeration and the StartTime query.
-                }
-                finally
-                {
-                    process.Dispose();
-                }
+        foreach (var process in SafeGetProcessesByName(image))
+            try
+            {
+                if (!baseline.Contains(process.Id) && process.StartTime >= startedAfter.LocalDateTime)
+                    survivors.Add(new Survivor(image, process.Id, process.StartTime));
+            }
+            catch (Exception ex) when (ex is Win32Exception or InvalidOperationException)
+            {
+                // The process exited between enumeration and the StartTime query.
+            }
+            finally
+            {
+                process.Dispose();
+            }
 
         return survivors;
     }
 
-    internal static async Task<List<Survivor>> WaitForNoSurvivorsAsync(HashSet<int>          baseline,
-                                                                       IReadOnlyList<string> imageNames,
-                                                                       DateTimeOffset        startedAfter,
-                                                                       TimeSpan              timeout,
-                                                                       TimeSpan              interval,
-                                                                       CancellationToken     cancellationToken)
+    internal static async Task<List<Survivor>> WaitForNoSurvivorsAsync(
+        HashSet<int>          baseline,
+        IReadOnlyList<string> imageNames,
+        DateTimeOffset        startedAfter,
+        TimeSpan              timeout,
+        TimeSpan              interval,
+        CancellationToken     cancellationToken)
     {
         var deadline = DateTimeOffset.UtcNow + timeout;
         while (true)
@@ -1305,10 +1302,8 @@ internal static class SandboxSurvivorScan
         }
     }
 
-    internal static string Describe(IReadOnlyList<Survivor> survivors)
-    {
-        return string.Join(", ", survivors.Select(survivor => $"{survivor.Image}#{survivor.Id}"));
-    }
+    internal static string Describe(IReadOnlyList<Survivor> survivors) =>
+        string.Join(", ", survivors.Select(survivor => $"{survivor.Image}#{survivor.Id}"));
 
     private static Process[] SafeGetProcessesByName(string imageName)
     {
@@ -1322,4 +1317,6 @@ internal static class SandboxSurvivorScan
             return [];
         }
     }
+
+    internal readonly record struct Survivor(string Image, int Id, DateTime StartTime);
 }

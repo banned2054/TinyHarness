@@ -79,8 +79,8 @@ public class ConsoleApprovalProviderTests
                                                                        new JsonObject
                                                                        {
                                                                            ["patch"] = "--- a/f.txt\n" +
-                                                                                       "+++ b/f.txt\n" +
-                                                                                       "@@ -1 +1 @@\n-old\n+new\n"
+                                                                               "+++ b/f.txt\n"         +
+                                                                               "@@ -1 +1 @@\n-old\n+new\n"
                                                                        }.ToJsonString()));
         using var output = new StringWriter();
         using var input  = new StringReader("d");
@@ -104,18 +104,18 @@ public class ConsoleApprovalProviderTests
             new ApplyPatchTool(dir.Workspace).Prepare(new ChatToolCall("p", "apply_patch",
                                                                        new JsonObject
                                                                        {
-                                                                           ["patch"] = "--- a/f.txt\n" +
-                                                                                       "+++ b/f.txt\n" +
-                                                                                       "@@ -1 +1 @@\n" +
-                                                                                       "-key = sk-secret-value\n" +
-                                                                                       "+key = new\n"
+                                                                           ["patch"] = "--- a/f.txt\n"    +
+                                                                               "+++ b/f.txt\n"            +
+                                                                               "@@ -1 +1 @@\n"            +
+                                                                               "-key = sk-secret-value\n" +
+                                                                               "+key = new\n"
                                                                        }.ToJsonString()));
         using var output = new StringWriter();
         using var input  = new StringReader("d");
 
         await new ConsoleApprovalProvider(input, output,
                                           new Dictionary<string, string> { ["env"] = "sk-secret-value" })
-            .PromptAsync(preparation, CancellationToken.None);
+           .PromptAsync(preparation, CancellationToken.None);
 
         // The approval UI is a display surface like any other: a known secret embedded
         // in the prepared patch preview must not reach the terminal raw.

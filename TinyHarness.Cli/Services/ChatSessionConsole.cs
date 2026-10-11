@@ -29,16 +29,16 @@ namespace TinyHarness.Cli.Services;
 /// </summary>
 internal sealed class ChatSessionConsole
 {
-    private readonly ChatSessionHost _host;
-    private readonly TextReader      _input;
-    private readonly TextWriter      _output;
-    private readonly ChatCancellation _cancellation;
+    private readonly ChatCancellation      _cancellation;
+    private readonly ChatSessionHost       _host;
+    private readonly TextReader            _input;
+    private readonly TextWriter            _output;
     private readonly DisplaySecretRedactor _redactor;
 
-    public ChatSessionConsole(ChatSessionHost                host,
-                              TextReader                     input,
-                              TextWriter                     output,
-                              ChatCancellation               cancellation,
+    public ChatSessionConsole(ChatSessionHost                      host,
+                              TextReader                           input,
+                              TextWriter                           output,
+                              ChatCancellation                     cancellation,
                               IReadOnlyDictionary<string, string>? knownSecrets = null)
     {
         ArgumentNullException.ThrowIfNull(host);
@@ -109,8 +109,8 @@ internal sealed class ChatSessionConsole
     /// </summary>
     private async Task SubmitTurnAsync(string userInput, CancellationToken cancellationToken)
     {
-        var turnNumber = _host.Session.Turns.Count + 1;
-        var turnToken  = _cancellation.BeginTurn(cancellationToken);
+        var        turnNumber = _host.Session.Turns.Count + 1;
+        var        turnToken  = _cancellation.BeginTurn(cancellationToken);
         SessionRun run;
         try
         {
@@ -151,34 +151,37 @@ internal sealed class ChatSessionConsole
     private async Task WriteTurnFooterAsync(int turnNumber, AgentResult result)
     {
         var summary = new StringBuilder("turn ").Append(turnNumber).Append(" finished: ")
-                           .Append(StatusText(result.Status))
-                           .Append(" (steps: ").Append(result.Steps)
-                           .Append(", tools: ").Append(result.ToolExecutions);
+                                                .Append(StatusText(result.Status))
+                                                .Append(" (steps: ").Append(result.Steps)
+                                                .Append(", tools: ").Append(result.ToolExecutions);
         if (result.InputTokens is not null || result.OutputTokens is not null)
-            summary.Append(", ").Append((result.InputTokens ?? 0).ToString("N0"))
+            summary.Append(", ").Append((result.InputTokens      ?? 0).ToString("N0"))
                    .Append(" in / ").Append((result.OutputTokens ?? 0).ToString("N0"))
                    .Append(" out tokens");
         summary.Append(')');
 
-        if (result.Status == AgentStatus.Failed && !string.IsNullOrWhiteSpace(result.Error))
-            summary.Append(" — ").Append(result.Error);
-        else if (result.Status == AgentStatus.Cancelled)
-            summary.Append(" — the session continues; start a new turn when ready.");
-        else if (result.Status == AgentStatus.StepLimitReached)
-            summary.Append(" — the step limit was reached.");
+        switch (result.Status)
+        {
+            case AgentStatus.Failed when !string.IsNullOrWhiteSpace(result.Error) :
+                summary.Append(" — ").Append(result.Error);
+                break;
+            case AgentStatus.Cancelled :
+                summary.Append(" — the session continues; start a new turn when ready.");
+                break;
+            case AgentStatus.StepLimitReached :
+                summary.Append(" — the step limit was reached.");
+                break;
+        }
 
         await _output.WriteLineAsync(TerminalDisplay.Format(summary.ToString(), _redactor));
     }
 
-    private static string StatusText(AgentStatus status)
+    private static string StatusText(AgentStatus status) => status switch
     {
-        return status switch
-        {
-            AgentStatus.Completed        => "completed",
-            AgentStatus.Cancelled        => "cancelled",
-            AgentStatus.Failed           => "failed",
-            AgentStatus.StepLimitReached => "step limit reached",
-            _                            => status.ToString().ToLowerInvariant()
-        };
-    }
+        AgentStatus.Completed        => "completed",
+        AgentStatus.Cancelled        => "cancelled",
+        AgentStatus.Failed           => "failed",
+        AgentStatus.StepLimitReached => "step limit reached",
+        _                            => status.ToString().ToLowerInvariant()
+    };
 }

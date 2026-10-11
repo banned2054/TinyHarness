@@ -42,11 +42,12 @@ internal static class JsonArgs
     public static bool OptionalBool(JsonObject args, string key, bool fallback)
     {
         var node = args[key];
-        if (node is null) return fallback;
-
-        if (node is JsonValue v && v.TryGetValue<bool>(out var value)) return value;
-
-        throw Error(args, key, "a boolean", "is invalid");
+        return node switch
+        {
+            null                                                => fallback,
+            JsonValue v when v.TryGetValue<bool>(out var value) => value,
+            _                                                   => throw Error(args, key, "a boolean", "is invalid")
+        };
     }
 
     /// <summary>
@@ -56,11 +57,12 @@ internal static class JsonArgs
     public static int? OptionalInt(JsonObject args, string key)
     {
         var node = args[key];
-        if (node is null) return null;
-
-        if (node is JsonValue v && v.TryGetValue<int>(out var value)) return value;
-
-        throw Error(args, key, "an integer", "is invalid");
+        return node switch
+        {
+            null                                               => null,
+            JsonValue v when v.TryGetValue<int>(out var value) => value,
+            _                                                  => throw Error(args, key, "an integer", "is invalid")
+        };
     }
 
     /// <summary>

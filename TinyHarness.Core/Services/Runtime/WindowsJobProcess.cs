@@ -146,12 +146,13 @@ internal static class WindowsJobProcess
                 else
                 {
                     var waitResult = WaitForSingleObject(processHandle, 5_000);
-                    if (waitResult == 258)
-                        cleanupError =
-                            new
-                                TimeoutException("Timed out waiting for the suspended process to terminate after launch failure.");
-                    else if (waitResult == uint.MaxValue)
-                        cleanupError = LastWin32("wait for suspended process cleanup");
+                    cleanupError = waitResult switch
+                    {
+                        258 => new
+                            TimeoutException("Timed out waiting for the suspended process to terminate after launch failure."),
+                        uint.MaxValue => LastWin32("wait for suspended process cleanup"),
+                        _             => cleanupError
+                    };
                 }
             }
 
@@ -201,21 +202,20 @@ internal static class WindowsJobProcess
         var backslashes = 0;
         foreach (var character in argument)
         {
-            if (character == '\\')
+            switch (character)
             {
-                backslashes++;
-                continue;
+                case '\\' :
+                    backslashes++;
+                    continue;
+                case '"' :
+                    quoted.Append('\\', backslashes * 2 + 1).Append('"');
+                    backslashes = 0;
+                    continue;
+                default :
+                    quoted.Append('\\', backslashes).Append(character);
+                    backslashes = 0;
+                    break;
             }
-
-            if (character == '"')
-            {
-                quoted.Append('\\', backslashes * 2 + 1).Append('"');
-                backslashes = 0;
-                continue;
-            }
-
-            quoted.Append('\\', backslashes).Append(character);
-            backslashes = 0;
         }
 
         quoted.Append('\\', backslashes * 2).Append('"');
@@ -231,8 +231,8 @@ internal static class WindowsJobProcess
         return block.Append('\0').ToString();
     }
 
-    private static void CreateRedirectPipe(out SafeFileHandle readHandle, out SafeFileHandle writeHandle,
-                                           string             streamName)
+    private static void CreateRedirectPipe(
+        out SafeFileHandle readHandle, out SafeFileHandle writeHandle, string streamName)
     {
         var security = new SecurityAttributes
         {
@@ -252,11 +252,10 @@ internal static class WindowsJobProcess
         if (standardInput == IntPtr.Zero || standardInput == new IntPtr(-1)) return CreateInheritedNullInput();
 
         var currentProcess = GetCurrentProcess();
-        if (DuplicateHandle(currentProcess, standardInput, currentProcess, out var duplicate, 0,
-                            true, DuplicateSameAccess))
-            return duplicate;
-
-        return CreateInheritedNullInput();
+        return DuplicateHandle(currentProcess, standardInput, currentProcess, out var duplicate, 0,
+                               true, DuplicateSameAccess)
+            ? duplicate
+            : CreateInheritedNullInput();
     }
 
     private static SafeFileHandle CreateInheritedNullInput()

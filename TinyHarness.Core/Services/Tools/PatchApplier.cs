@@ -83,13 +83,12 @@ internal static class PatchApplier
             start = i + 1;
         }
 
-        if (start < text.Length)
-        {
-            var last                      = text[start..];
-            if (last.EndsWith('\r')) last = last[..^1];
+        if (start >= text.Length) return (lines, endsWithNewline);
+        var last = text[start..];
 
-            lines.Add(last);
-        }
+        if (last.EndsWith('\r')) last = last[..^1];
+
+        lines.Add(last);
 
         return (lines, endsWithNewline);
     }

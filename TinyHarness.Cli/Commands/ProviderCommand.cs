@@ -23,7 +23,6 @@ internal static class ProviderCommand
         _      => throw new InvalidOperationException($"Unknown provider subcommand '{options.Subcommand}'.")
     };
 
-
     /// <summary>
     ///     列出全部 profile；用户配置不存在时给出 init 入口提示。
     ///     Lists all profiles; a missing user config points at the init entry.
@@ -68,8 +67,8 @@ internal static class ProviderCommand
     ///     交互式添加或覆盖一个 profile；可选择设为默认。
     ///     Interactively adds or overwrites one profile; optionally selects it as the default.
     /// </summary>
-    private static async Task<int> AddAsync(CommandContext    context, string profileName,
-                                            CancellationToken cancellationToken)
+    private static async Task<int> AddAsync(
+        CommandContext context, string profileName, CancellationToken cancellationToken)
     {
         var io = context.Io;
         var (config, exists) = await UserConfigAccess.LoadAsync(context, cancellationToken).ConfigureAwait(false);
@@ -113,8 +112,8 @@ internal static class ProviderCommand
     ///     选择默认 profile；不存在时列出可用名称。
     ///     Selects the default profile; unknown names list the available ones.
     /// </summary>
-    private static async Task<int> UseAsync(CommandContext    context, string profileName,
-                                            CancellationToken cancellationToken)
+    private static async Task<int> UseAsync(
+        CommandContext context, string profileName, CancellationToken cancellationToken)
     {
         var io = context.Io;
         var (config, exists) = await UserConfigAccess.LoadAsync(context, cancellationToken).ConfigureAwait(false);

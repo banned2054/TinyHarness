@@ -69,16 +69,14 @@ public static class WorkerResultValidator
         // The statusDetail length limit applies unconditionally: even long whitespace-only values under
         // Completed are rejected, so malformed shapes cannot slip past the status shape checks.
         if (statusDetail.Length > WorkerResultLimits.MaxStatusDetailLength)
-            errors.Add(
-                       $"Field 'statusDetail' exceeds the maximum length of {WorkerResultLimits.MaxStatusDetailLength} characters (actual: {statusDetail.Length}).");
+            errors.Add($"Field 'statusDetail' exceeds the maximum length of {WorkerResultLimits.MaxStatusDetailLength} characters (actual: {statusDetail.Length}).");
 
         if (status == WorkerResultStatus.Completed)
         {
             if (string.IsNullOrWhiteSpace(conclusion))
                 errors.Add("Field 'conclusion' is required and must contain non-whitespace characters when status is 'completed'.");
             else if (conclusion.Length > WorkerResultLimits.MaxConclusionLength)
-                errors.Add(
-                           $"Field 'conclusion' exceeds the maximum length of {WorkerResultLimits.MaxConclusionLength} characters (actual: {conclusion.Length}).");
+                errors.Add($"Field 'conclusion' exceeds the maximum length of {WorkerResultLimits.MaxConclusionLength} characters (actual: {conclusion.Length}).");
 
             if (!string.IsNullOrWhiteSpace(statusDetail))
                 errors.Add("Field 'statusDetail' must be empty when status is 'completed'; non-completion reasons belong on non-completed statuses.");
@@ -87,12 +85,10 @@ public static class WorkerResultValidator
         }
 
         if (!string.IsNullOrWhiteSpace(conclusion))
-            errors.Add(
-                       $"Field 'conclusion' must be empty when status is '{status}'; only completed runs may carry a conclusion.");
+            errors.Add($"Field 'conclusion' must be empty when status is '{status}'; only completed runs may carry a conclusion.");
 
         if (string.IsNullOrWhiteSpace(statusDetail))
-            errors.Add(
-                       $"Field 'statusDetail' is required and must contain non-whitespace characters when status is '{status}'.");
+            errors.Add($"Field 'statusDetail' is required and must contain non-whitespace characters when status is '{status}'.");
     }
 
     private static void ValidateEvidence(IReadOnlyList<WorkerEvidence>? evidence, List<string> errors)
@@ -100,8 +96,7 @@ public static class WorkerResultValidator
         if (evidence is not { Count: > 0 }) return;
 
         if (evidence.Count > WorkerResultLimits.MaxEvidenceCount)
-            errors.Add(
-                       $"Field 'evidence' contains {evidence.Count} citations; the maximum is {WorkerResultLimits.MaxEvidenceCount}.");
+            errors.Add($"Field 'evidence' contains {evidence.Count} citations; the maximum is {WorkerResultLimits.MaxEvidenceCount}.");
 
         for (var i = 0; i < evidence.Count; i++)
         {
@@ -118,8 +113,7 @@ public static class WorkerResultValidator
 
             var noteLength = item.Note?.Length ?? 0;
             if (noteLength > WorkerResultLimits.MaxEvidenceNoteLength)
-                errors.Add(
-                           $"Field 'evidence[{i}].note' exceeds the maximum length of {WorkerResultLimits.MaxEvidenceNoteLength} characters (actual: {noteLength}).");
+                errors.Add($"Field 'evidence[{i}].note' exceeds the maximum length of {WorkerResultLimits.MaxEvidenceNoteLength} characters (actual: {noteLength}).");
         }
     }
 
@@ -135,8 +129,7 @@ public static class WorkerResultValidator
 
         if (path.Length > WorkerResultLimits.MaxEvidencePathLength)
         {
-            errors.Add(
-                       $"{field} exceeds the maximum length of {WorkerResultLimits.MaxEvidencePathLength} characters (actual: {path.Length}).");
+            errors.Add($"{field} exceeds the maximum length of {WorkerResultLimits.MaxEvidencePathLength} characters (actual: {path.Length}).");
             return;
         }
 
@@ -153,8 +146,7 @@ public static class WorkerResultValidator
         // boundary remains the Workspace and read-only tools.
         if (!WorkspaceRelativePath.IsAcceptableShape(path))
         {
-            errors.Add(
-                       $"{field} ('{path}') must be a workspace-relative path; rooted, absolute, drive-qualified or UNC paths are not accepted.");
+            errors.Add($"{field} ('{path}') must be a workspace-relative path; rooted, absolute, drive-qualified or UNC paths are not accepted.");
             return;
         }
 
@@ -166,12 +158,10 @@ public static class WorkerResultValidator
         if (item.LineStart is { } lineStart)
         {
             if (lineStart < 1)
-                errors.Add(
-                           $"Field 'evidence[{index}].lineStart' must be 1 or greater when provided (actual: {lineStart}).");
+                errors.Add($"Field 'evidence[{index}].lineStart' must be 1 or greater when provided (actual: {lineStart}).");
 
             if (item.LineEnd is { } lineEnd && lineEnd < lineStart)
-                errors.Add(
-                           $"Field 'evidence[{index}].lineEnd' must not be smaller than lineStart (actual: {lineEnd} < {lineStart}).");
+                errors.Add($"Field 'evidence[{index}].lineEnd' must not be smaller than lineStart (actual: {lineEnd} < {lineStart}).");
 
             return;
         }
@@ -185,8 +175,7 @@ public static class WorkerResultValidator
         if (entries is not { Count: > 0 }) return;
 
         if (entries.Count > WorkerResultLimits.MaxListCount)
-            errors.Add(
-                       $"Field '{fieldName}' contains {entries.Count} entries; the maximum is {WorkerResultLimits.MaxListCount}.");
+            errors.Add($"Field '{fieldName}' contains {entries.Count} entries; the maximum is {WorkerResultLimits.MaxListCount}.");
 
         for (var i = 0; i < entries.Count; i++)
         {
@@ -199,8 +188,7 @@ public static class WorkerResultValidator
             }
 
             if (entry.Length > WorkerResultLimits.MaxListEntryLength)
-                errors.Add(
-                           $"Field '{fieldName}[{i}]' exceeds the maximum length of {WorkerResultLimits.MaxListEntryLength} characters (actual: {entry.Length}).");
+                errors.Add($"Field '{fieldName}[{i}]' exceeds the maximum length of {WorkerResultLimits.MaxListEntryLength} characters (actual: {entry.Length}).");
         }
     }
 
@@ -245,8 +233,7 @@ public static class WorkerResultValidator
         total += SumLengths(result.Uncertainties);
 
         if (total > WorkerResultLimits.MaxTotalTextLength)
-            errors.Add(
-                       $"Field 'result' exceeds the maximum total of {WorkerResultLimits.MaxTotalTextLength} characters across conclusion, statusDetail, evidence and suggestion lists (actual: {total}).");
+            errors.Add($"Field 'result' exceeds the maximum total of {WorkerResultLimits.MaxTotalTextLength} characters across conclusion, statusDetail, evidence and suggestion lists (actual: {total}).");
     }
 
     private static long SumLengths(IReadOnlyList<string>? entries)

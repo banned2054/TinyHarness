@@ -84,12 +84,9 @@ public static class TokenEstimator
     ///     Coarse wide-character test (roughly one token per character): CJK unified
     ///     and compatibility ideographs, kana/hangul, full-width forms, and CJK punctuation.
     /// </summary>
-    private static bool IsWideCharacter(char value)
-    {
-        return value is >= '\u2E80' and <= '\u9FFF'
-                     or >= '\uAC00' and <= '\uD7AF'
-                     or >= '\uF900' and <= '\uFAFF'
-                     or >= '\uFF00' and <= '\uFFEF'
-                     or >= '\u3000' and <= '\u303F';
-    }
+    private static bool IsWideCharacter(char value) => value is >= '\u2E80' and <= '\u9FFF'
+                                                             or >= '\uAC00' and <= '\uD7AF'
+                                                             or >= '\uF900' and <= '\uFAFF'
+                                                             or >= '\uFF00' and <= '\uFFEF'
+                                                             or >= '\u3000' and <= '\u303F';
 }

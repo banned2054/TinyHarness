@@ -6,7 +6,6 @@ using TinyHarness.Core.Models.Context;
 using TinyHarness.Core.Models.Permissions;
 using TinyHarness.Core.Models.Session;
 using TinyHarness.Core.Models.Tools;
-using TinyHarness.Core.Services.Agent;
 using TinyHarness.Core.Services.ChatCompletions;
 using TinyHarness.Core.Services.Persistence;
 using TinyHarness.Core.Services.Session;
@@ -36,21 +35,22 @@ public class ChatSessionTests
         };
     }
 
-    private static ChatSessionHost NewHost(IChatCompletionClient            client,
-                                           ToolRegistry?                    tools           = null,
-                                           IHostEventSink?                  events          = null,
-                                           Func<string, IRunRecorder>?      recorderFactory = null,
-                                           int                              maxSteps        = 10)
+    private static ChatSessionHost NewHost(IChatCompletionClient       client,
+                                           ToolRegistry?               tools           = null,
+                                           IHostEventSink?             events          = null,
+                                           Func<string, IRunRecorder>? recorderFactory = null,
+                                           int                         maxSteps        = 10)
     {
         return new ChatSessionHost(
-            Path.Combine(Path.GetTempPath(), "tinyharness-session-tests"),
-            new SessionModelIdentity("test-model", "https://example.invalid/v1", ChatApiKind.ChatCompletions),
-            Options(maxSteps),
-            client,
-            tools ?? new ToolRegistry([]),
-            SystemPrompt,
-            events          : events,
-            recorderFactory : recorderFactory);
+                                   Path.Combine(Path.GetTempPath(), "tinyharness-session-tests"),
+                                   new SessionModelIdentity("test-model", "https://example.invalid/v1",
+                                                            ChatApiKind.ChatCompletions),
+                                   Options(maxSteps),
+                                   client,
+                                   tools ?? new ToolRegistry([]),
+                                   SystemPrompt,
+                                   events : events,
+                                   recorderFactory : recorderFactory);
     }
 
     [Fact]
@@ -156,8 +156,10 @@ public class ChatSessionTests
         await client.WaitStartedAsync(new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);
         Assert.True(host.HasActiveRun);
 
-        var rejected = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => host.SubmitTurnAsync("second", CancellationToken.None));
+        var rejected =
+            await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                                                                    host.SubmitTurnAsync("second",
+                                                                        CancellationToken.None));
         Assert.Contains("active run", rejected.Message);
 
         client.Open();
@@ -175,9 +177,9 @@ public class ChatSessionTests
     [Fact]
     public async Task SubmitTurn_CancelBeforeToolCalls_StillAllowsNextTurn()
     {
-        var client = new GateChatClient();
-        using var cts = new CancellationTokenSource();
-        var host = NewHost(client);
+        var       client = new GateChatClient();
+        using var cts    = new CancellationTokenSource();
+        var       host   = NewHost(client);
 
         var first = host.SubmitTurnAsync("first", cts.Token);
         await client.WaitStartedAsync(new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);
@@ -199,10 +201,10 @@ public class ChatSessionTests
     public async Task SubmitTurn_CancelDuringToolExecution_BlocksNextTurnWithExplicitError()
     {
         var client = new FakeChatClient();
-        client.Enqueue(FakeChatClient.ToolCall("slow", "{}", "call_1"));
-        var tool = new GateTool();
-        using var cts = new CancellationTokenSource();
-        var host = NewHost(client, new ToolRegistry([tool]));
+        client.Enqueue(FakeChatClient.ToolCall("slow", "{}"));
+        var       tool = new GateTool();
+        using var cts  = new CancellationTokenSource();
+        var       host = NewHost(client, new ToolRegistry([tool]));
 
         var first = host.SubmitTurnAsync("go", cts.Token);
         await tool.WaitStartedAsync(new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);
@@ -260,12 +262,15 @@ public class ChatSessionTests
         var options = Options() with { Model = "other-model" };
 
         Assert.Throws<ArgumentException>(() => new ChatSessionHost(
-            Path.Combine(Path.GetTempPath(), "tinyharness-session-tests"),
-            new SessionModelIdentity("test-model", "https://example.invalid/v1", ChatApiKind.ChatCompletions),
-            options,
-            new FakeChatClient(),
-            new ToolRegistry([]),
-            SystemPrompt));
+                                                                   Path.Combine(Path.GetTempPath(),
+                                                                                    "tinyharness-session-tests"),
+                                                                   new SessionModelIdentity("test-model",
+                                                                       "https://example.invalid/v1",
+                                                                       ChatApiKind.ChatCompletions),
+                                                                   options,
+                                                                   new FakeChatClient(),
+                                                                   new ToolRegistry([]),
+                                                                   SystemPrompt));
     }
 
     [Fact]
@@ -277,8 +282,7 @@ public class ChatSessionTests
         run.Finish(new AgentResult { Status = AgentStatus.Completed });
 
         Assert.True(run.IsFinished);
-        Assert.Throws<InvalidOperationException>(
-            () => run.Finish(new AgentResult { Status = AgentStatus.Failed }));
+        Assert.Throws<InvalidOperationException>(() => run.Finish(new AgentResult { Status = AgentStatus.Failed }));
     }
 
     /// <summary>
@@ -344,7 +348,7 @@ public class ChatSessionTests
         }
 
         public Task RecordPermissionAsync(
-            ToolPreparation preparation, PermissionDecision decision, string outcome,
+            ToolPreparation   preparation, PermissionDecision decision, string outcome,
             CancellationToken cancellationToken)
         {
             return Task.CompletedTask;
@@ -368,7 +372,7 @@ public class ChatSessionTests
         }
 
         public Task CompleteAsync(
-            AgentResult result, IReadOnlyList<ChatMessage> messages, StructuredState state,
+            AgentResult       result, IReadOnlyList<ChatMessage> messages, StructuredState state,
             CancellationToken cancellationToken)
         {
             CompletedResults.Add(result);

@@ -20,7 +20,10 @@ public enum HostEventKind
     /// <summary>一次运行开始处理一个回合；无负载。A run started processing a turn; no payload.</summary>
     RunStarted = 1,
 
-    /// <summary>一次成功的上下文压缩；负载为 <see cref="ContextChange" />。One successful context compaction; payload is a <see cref="ContextChange" />.</summary>
+    /// <summary>
+    ///     一次成功的上下文压缩；负载为 <see cref="ContextChange" />。One successful context compaction; payload is a
+    ///     <see cref="ContextChange" />.
+    /// </summary>
     CompactionApplied = 2,
 
     /// <summary>

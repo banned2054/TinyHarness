@@ -298,8 +298,8 @@ public sealed class WorkerRunner
     ///     with no budget flag → Failed. Budget reasons come only from this run's budget state flags —
     ///     exception messages are never read or echoed.
     /// </summary>
-    private WorkerResult MapResult(AgentResult       agentResult, BudgetState state, WorkerExecutionStats statistics,
-                                   CancellationToken callerToken)
+    private WorkerResult MapResult(
+        AgentResult agentResult, BudgetState state, WorkerExecutionStats statistics, CancellationToken callerToken)
     {
         switch (agentResult.Status)
         {
@@ -439,12 +439,10 @@ public sealed class WorkerRunner
     ///     Salvages evidence from a final message, keeping only entries with a valid path shape,
     ///     consistent line numbers and bounded lengths, capped at the hard limit.
     /// </summary>
-    private static IReadOnlyList<WorkerEvidence> SalvageEvidence(string? finalMessage)
-    {
-        return WorkerConclusionParser.TryParse(finalMessage, out var draft) && draft is not null
+    private static IReadOnlyList<WorkerEvidence> SalvageEvidence(string? finalMessage) =>
+        WorkerConclusionParser.TryParse(finalMessage, out var draft) && draft is not null
             ? MapEvidence(draft.Evidence)
             : [];
-    }
 
     /// <summary>
     ///     把草稿证据按结构合法性映射为可保留的证据：路径形状、行号与长度任一不合格的条目
@@ -567,26 +565,21 @@ public sealed class WorkerRunner
             foreach (var path in request.FocusPaths) builder.Append("- ").AppendLine(path);
         }
 
-        if (!string.IsNullOrWhiteSpace(request.ExpectedOutput))
-        {
-            builder.AppendLine();
-            builder.AppendLine("EXPECTED OUTPUT SHAPE (caller preference; the final JSON contract still applies)");
-            builder.AppendLine(request.ExpectedOutput);
-        }
+        if (string.IsNullOrWhiteSpace(request.ExpectedOutput)) return builder.ToString();
+        builder.AppendLine();
+        builder.AppendLine("EXPECTED OUTPUT SHAPE (caller preference; the final JSON contract still applies)");
+        builder.AppendLine(request.ExpectedOutput);
 
         return builder.ToString();
     }
 
-    private static WorkerExecutionStats Statistics(Stopwatch started, BudgetState state)
+    private static WorkerExecutionStats Statistics(Stopwatch started, BudgetState state) => new()
     {
-        return new WorkerExecutionStats
-        {
-            ModelRequests        = state.ModelRequestsAdmitted,
-            ToolCalls            = state.ToolCallsExecuted,
-            ToolOutputCharacters = state.ToolMessageCharactersAdmitted,
-            Elapsed              = started.Elapsed
-        };
-    }
+        ModelRequests        = state.ModelRequestsAdmitted,
+        ToolCalls            = state.ToolCallsExecuted,
+        ToolOutputCharacters = state.ToolMessageCharactersAdmitted,
+        Elapsed              = started.Elapsed
+    };
 
     /// <summary>
     ///     截断到 statusDetail 的硬上限；错误文本可能来自模型客户端，绝不应包含凭据
@@ -594,12 +587,9 @@ public sealed class WorkerRunner
     ///     Truncates to the statusDetail hard limit; error text may come from the model client and must
     ///     never carry credentials (keys never enter exceptions or logs).
     /// </summary>
-    private static string Shorten(string text)
-    {
-        return text.Length <= WorkerResultLimits.MaxStatusDetailLength
-            ? text
-            : text[..WorkerResultLimits.MaxStatusDetailLength];
-    }
+    private static string Shorten(string text) => text.Length <= WorkerResultLimits.MaxStatusDetailLength
+        ? text
+        : text[..WorkerResultLimits.MaxStatusDetailLength];
 
     /// <summary>
     ///     永远拒绝 Ask 的审批器：worker 没有任何交互审批通道，权限引擎意外要求审批的调用
@@ -612,10 +602,8 @@ public sealed class WorkerRunner
     {
         public static readonly DenyingApprovalProvider Instance = new();
 
-        public Task<ApprovalAction> PromptAsync(ToolPreparation preparation, CancellationToken cancellationToken)
-        {
-            return Task.FromResult(ApprovalAction.Deny);
-        }
+        public Task<ApprovalAction> PromptAsync(ToolPreparation preparation, CancellationToken cancellationToken) =>
+            Task.FromResult(ApprovalAction.Deny);
     }
 
     /// <summary>
@@ -792,10 +780,7 @@ public sealed class WorkerRunner
     {
         public ToolDefinition Definition => inner.Definition;
 
-        public ToolPreparation Prepare(ChatToolCall call)
-        {
-            return inner.Prepare(call);
-        }
+        public ToolPreparation Prepare(ChatToolCall call) => inner.Prepare(call);
 
         public async Task<ToolResult> ExecuteAsync(ToolPreparation preparation, CancellationToken cancellationToken)
         {

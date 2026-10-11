@@ -75,14 +75,17 @@ internal static class CommandLine
     /// </summary>
     private static CliOptions ParseHelpArgs(string[] args)
     {
-        if (args.Length == 0) return new CliOptions { Kind = CliCommandKind.Help };
+        switch (args.Length)
+        {
+            case 0 :
+                return new CliOptions { Kind = CliCommandKind.Help };
+            case > 1 :
+                throw new CliUsageException("help accepts at most one command name.", HelpText.Overview);
+        }
 
-        if (args.Length > 1) throw new CliUsageException("help accepts at most one command name.", HelpText.Overview);
-
-        if (!HelpText.IsKnownCommand(args[0]))
-            throw new CliUsageException($"Unknown help topic '{args[0]}'.", HelpText.Overview);
-
-        return new CliOptions { Kind = CliCommandKind.Help, HelpTopic = args[0] };
+        return !HelpText.IsKnownCommand(args[0])
+            ? throw new CliUsageException($"Unknown help topic '{args[0]}'.", HelpText.Overview)
+            : new CliOptions { Kind = CliCommandKind.Help, HelpTopic = args[0] };
     }
 
     /// <summary>
@@ -118,9 +121,9 @@ internal static class CommandLine
                 return new CliOptions { Kind = CliCommandKind.Help, HelpTopic = withRunVerb ? "run" : null };
 
             if (args[i].StartsWith('-') && args[i].Length > 1)
-                throw new CliUsageException(
-                                            $"Unknown option '{args[i]}'. To send text that starts with '-' as part of the prompt, put it after '--'.",
-                                            usage);
+                throw new
+                    CliUsageException($"Unknown option '{args[i]}'. To send text that starts with '-' as part of the prompt, put it after '--'.",
+                                      usage);
 
             promptParts.Add(args[i]);
         }
@@ -135,9 +138,9 @@ internal static class CommandLine
     private static CliOptions FinishPrompt(string? configPath, List<string> promptParts, string usage)
     {
         var prompt = string.Join(' ', promptParts).Trim();
-        if (prompt.Length == 0) throw new CliUsageException("A prompt is required.", usage);
-
-        return new CliOptions { Kind = CliCommandKind.Run, Prompt = prompt, ConfigPath = configPath };
+        return prompt.Length == 0
+            ? throw new CliUsageException("A prompt is required.", usage)
+            : new CliOptions { Kind = CliCommandKind.Run, Prompt = prompt, ConfigPath = configPath };
     }
 
     /// <summary>
@@ -149,25 +152,22 @@ internal static class CommandLine
     /// </summary>
     private static CliOptions ParseChatArgs(string[] args)
     {
-        var usage      = HelpText.Chat;
+        const string usage = HelpText.Chat;
+
         string? configPath = null;
         for (var i = 0; i < args.Length; i++)
         {
             if (IsHelpFlag(args[i])) return new CliOptions { Kind = CliCommandKind.Help, HelpTopic = "chat" };
 
-            if (string.Equals(args[i], "--config", StringComparison.Ordinal))
-            {
-                if (i + 1 >= args.Length)
-                    throw new CliUsageException("The --config option requires a file path.", usage);
+            if (!string.Equals(args[i], "--config", StringComparison.Ordinal))
+                throw new
+                    CliUsageException($"Unknown argument '{args[i]}' for chat. Chat takes no prompt; type each turn after it starts " +
+                                      "(use `run -- \"text\"` for a one-shot prompt).",
+                                      usage);
+            if (i + 1 >= args.Length)
+                throw new CliUsageException("The --config option requires a file path.", usage);
 
-                configPath = args[++i];
-                continue;
-            }
-
-            throw new CliUsageException(
-                                        $"Unknown argument '{args[i]}' for chat. Chat takes no prompt; type each turn after it starts " +
-                                        "(use `run -- \"text\"` for a one-shot prompt).",
-                                        usage);
+            configPath = args[++i];
         }
 
         return new CliOptions { Kind = CliCommandKind.Chat, ConfigPath = configPath };
@@ -184,16 +184,12 @@ internal static class CommandLine
         {
             if (IsHelpFlag(args[i])) return new CliOptions { Kind = CliCommandKind.Help, HelpTopic = "smoke" };
 
-            if (string.Equals(args[i], "--config", StringComparison.Ordinal))
-            {
-                if (i + 1 >= args.Length)
-                    throw new CliUsageException("The --config option requires a file path.", HelpText.Smoke);
+            if (!string.Equals(args[i], "--config", StringComparison.Ordinal))
+                throw new CliUsageException($"Unknown argument '{args[i]}' for smoke.", HelpText.Smoke);
+            if (i + 1 >= args.Length)
+                throw new CliUsageException("The --config option requires a file path.", HelpText.Smoke);
 
-                configPath = args[++i];
-                continue;
-            }
-
-            throw new CliUsageException($"Unknown argument '{args[i]}' for smoke.", HelpText.Smoke);
+            configPath = args[++i];
         }
 
         return new CliOptions { Kind = CliCommandKind.Smoke, ConfigPath = configPath };
@@ -207,9 +203,9 @@ internal static class CommandLine
     {
         if (args.Length == 0) return new CliOptions { Kind = CliCommandKind.Mcp };
 
-        if (IsHelpFlag(args[0])) return new CliOptions { Kind = CliCommandKind.Help, HelpTopic = "mcp" };
-
-        throw new CliUsageException($"Unknown argument '{args[0]}' for mcp.", HelpText.Mcp);
+        return IsHelpFlag(args[0])
+            ? new CliOptions { Kind = CliCommandKind.Help, HelpTopic = "mcp" }
+            : throw new CliUsageException($"Unknown argument '{args[0]}' for mcp.", HelpText.Mcp);
     }
 
     /// <summary>
@@ -220,9 +216,9 @@ internal static class CommandLine
     {
         if (args.Length == 0) return new CliOptions { Kind = CliCommandKind.Init };
 
-        if (IsHelpFlag(args[0])) return new CliOptions { Kind = CliCommandKind.Help, HelpTopic = "init" };
-
-        throw new CliUsageException($"Unknown argument '{args[0]}' for init.", HelpText.Init);
+        return IsHelpFlag(args[0])
+            ? new CliOptions { Kind = CliCommandKind.Help, HelpTopic = "init" }
+            : throw new CliUsageException($"Unknown argument '{args[0]}' for init.", HelpText.Init);
     }
 
     /// <summary>
@@ -237,25 +233,17 @@ internal static class CommandLine
         if (IsHelpFlag(args[0])) return new CliOptions { Kind = CliCommandKind.Help, HelpTopic = "config" };
 
         var subcommand = args[0].ToLowerInvariant();
-        switch (subcommand)
+        return subcommand switch
         {
-            case "show" when args.Length == 1 :
-                return new CliOptions { Kind = CliCommandKind.Config, Subcommand = "show" };
-            case "show" :
-                throw new CliUsageException($"Unknown argument '{args[1]}' for config show.", usage);
-            case "set" when args.Length == 3 :
-                return new CliOptions
-                {
-                    Kind       = CliCommandKind.Config,
-                    Subcommand = "set",
-                    Primary    = args[1],
-                    Secondary  = args[2]
-                };
-            case "set" :
-                throw new CliUsageException("config set requires exactly: <key> <value>.", usage);
-            default :
-                throw new CliUsageException($"Unknown config subcommand '{args[0]}'.", usage);
-        }
+            "show" when args.Length == 1 => new CliOptions { Kind = CliCommandKind.Config, Subcommand = "show" },
+            "show" => throw new CliUsageException($"Unknown argument '{args[1]}' for config show.", usage),
+            "set" when args.Length == 3 => new CliOptions
+            {
+                Kind = CliCommandKind.Config, Subcommand = "set", Primary = args[1], Secondary = args[2]
+            },
+            "set" => throw new CliUsageException("config set requires exactly: <key> <value>.", usage),
+            _     => throw new CliUsageException($"Unknown config subcommand '{args[0]}'.", usage)
+        };
     }
 
     /// <summary>
@@ -270,23 +258,20 @@ internal static class CommandLine
         if (IsHelpFlag(args[0])) return new CliOptions { Kind = CliCommandKind.Help, HelpTopic = "provider" };
 
         var subcommand = args[0].ToLowerInvariant();
-        if (subcommand == "list")
+        switch (subcommand)
         {
-            if (args.Length > 1) throw new CliUsageException($"Unknown argument '{args[1]}' for provider list.", usage);
-
-            return new CliOptions { Kind = CliCommandKind.Provider, Subcommand = "list" };
-        }
-
-        if (subcommand is "add" or "use")
-        {
-            if (args.Length != 2)
+            case "list" :
+                return args.Length > 1
+                    ? throw new CliUsageException($"Unknown argument '{args[1]}' for provider list.", usage)
+                    : new CliOptions { Kind = CliCommandKind.Provider, Subcommand = "list" };
+            case "add" or "use" when args.Length != 2 :
                 throw new CliUsageException($"provider {subcommand} requires exactly one profile name.", usage);
-
-            ValidateProfileName(args[1], usage);
-            return new CliOptions { Kind = CliCommandKind.Provider, Subcommand = subcommand, Primary = args[1] };
+            case "add" or "use" :
+                ValidateProfileName(args[1], usage);
+                return new CliOptions { Kind = CliCommandKind.Provider, Subcommand = subcommand, Primary = args[1] };
+            default :
+                throw new CliUsageException($"Unknown provider subcommand '{args[0]}'.", usage);
         }
-
-        throw new CliUsageException($"Unknown provider subcommand '{args[0]}'.", usage);
     }
 
     /// <summary>
@@ -323,13 +308,9 @@ internal static class CommandLine
                 continue;
             }
 
-            if (profile is null && !args[i].StartsWith('-'))
-            {
-                profile = args[i];
-                continue;
-            }
-
-            throw new CliUsageException($"Unknown argument '{args[i]}' for auth set.", usage);
+            if (profile is not null || args[i].StartsWith('-'))
+                throw new CliUsageException($"Unknown argument '{args[i]}' for auth set.", usage);
+            profile = args[i];
         }
 
         if (profile is null) throw new CliUsageException("auth set requires a profile name.", usage);
@@ -361,79 +342,74 @@ internal static class CommandLine
         if (IsHelpFlag(args[0])) return new CliOptions { Kind = CliCommandKind.Help, HelpTopic = "model" };
 
         var subcommand = args[0].ToLowerInvariant();
-        if (subcommand == "list")
+        switch (subcommand)
         {
-            var provider = ReadProviderOption(args, 1, usage);
-            return new CliOptions { Kind = CliCommandKind.Model, Subcommand = "list", ProviderName = provider };
-        }
-
-        if (subcommand == "add")
-        {
-            if (args.Length < 2 || args[1].StartsWith('-'))
-                throw new CliUsageException("model add requires a model id.", usage);
-
-            var modelId = args[1];
-            ValidateModelId(modelId, usage);
-            int? contextWindow = null;
-            var  provider      = (string?)null;
-            for (var i = 2; i < args.Length; i++)
+            case "list" :
             {
-                if (string.Equals(args[i], "--context-window", StringComparison.Ordinal))
+                var provider = ReadProviderOption(args, 1, usage);
+                return new CliOptions { Kind = CliCommandKind.Model, Subcommand = "list", ProviderName = provider };
+            }
+            case "add" when args.Length < 2 || args[1].StartsWith('-') :
+                throw new CliUsageException("model add requires a model id.", usage);
+            case "add" :
+            {
+                var modelId = args[1];
+                ValidateModelId(modelId, usage);
+                int? contextWindow = null;
+                var  provider      = (string?)null;
+                for (var i = 2; i < args.Length; i++)
                 {
-                    if (i + 1 >= args.Length || !int.TryParse(args[i + 1], out var parsed) || parsed <= 0)
-                        throw new CliUsageException(
-                                                    "The --context-window option requires a positive integer (tokens).",
-                                                    usage);
+                    if (string.Equals(args[i], "--context-window", StringComparison.Ordinal))
+                    {
+                        if (i + 1 >= args.Length || !int.TryParse(args[i + 1], out var parsed) || parsed <= 0)
+                            throw new
+                                CliUsageException("The --context-window option requires a positive integer (tokens).",
+                                                  usage);
 
-                    contextWindow = parsed;
-                    i++;
-                    continue;
-                }
+                        contextWindow = parsed;
+                        i++;
+                        continue;
+                    }
 
-                if (string.Equals(args[i], "--provider", StringComparison.Ordinal))
-                {
+                    if (!string.Equals(args[i], "--provider", StringComparison.Ordinal))
+                        throw new CliUsageException($"Unknown argument '{args[i]}' for model add.", usage);
                     if (i + 1 >= args.Length)
                         throw new CliUsageException("The --provider option requires a profile name.", usage);
 
                     provider = args[++i];
-                    continue;
                 }
 
-                throw new CliUsageException($"Unknown argument '{args[i]}' for model add.", usage);
+                if (contextWindow is null)
+                    throw new
+                        CliUsageException("model add requires --context-window <tokens>; the window is never inferred from the model name.",
+                                          usage);
+
+                return new CliOptions
+                {
+                    Kind                = CliCommandKind.Model,
+                    Subcommand          = "add",
+                    Primary             = modelId,
+                    ContextWindowTokens = contextWindow,
+                    ProviderName        = provider
+                };
             }
-
-            if (contextWindow is null)
-                throw new CliUsageException(
-                                            "model add requires --context-window <tokens>; the window is never inferred from the model name.",
-                                            usage);
-
-            return new CliOptions
-            {
-                Kind                = CliCommandKind.Model,
-                Subcommand          = "add",
-                Primary             = modelId,
-                ContextWindowTokens = contextWindow,
-                ProviderName        = provider
-            };
-        }
-
-        if (subcommand == "use")
-        {
-            if (args.Length < 2 || args[1].StartsWith('-'))
+            case "use" when args.Length < 2 || args[1].StartsWith('-') :
                 throw new CliUsageException("model use requires a model id.", usage);
-
-            ValidateModelId(args[1], usage);
-            var provider = ReadProviderOption(args, 2, usage);
-            return new CliOptions
+            case "use" :
             {
-                Kind         = CliCommandKind.Model,
-                Subcommand   = "use",
-                Primary      = args[1],
-                ProviderName = provider
-            };
+                ValidateModelId(args[1], usage);
+                var provider = ReadProviderOption(args, 2, usage);
+                return new CliOptions
+                {
+                    Kind         = CliCommandKind.Model,
+                    Subcommand   = "use",
+                    Primary      = args[1],
+                    ProviderName = provider
+                };
+            }
+            default :
+                throw new CliUsageException($"Unknown model subcommand '{args[0]}'.", usage);
         }
-
-        throw new CliUsageException($"Unknown model subcommand '{args[0]}'.", usage);
     }
 
     /// <summary>
@@ -447,13 +423,9 @@ internal static class CommandLine
         {
             if (IsHelpFlag(arg)) return new CliOptions { Kind = CliCommandKind.Help, HelpTopic = "doctor" };
 
-            if (string.Equals(arg, "--connect", StringComparison.Ordinal))
-            {
-                connect = true;
-                continue;
-            }
-
-            throw new CliUsageException($"Unknown argument '{arg}' for doctor.", HelpText.Doctor);
+            if (!string.Equals(arg, "--connect", StringComparison.Ordinal))
+                throw new CliUsageException($"Unknown argument '{arg}' for doctor.", HelpText.Doctor);
+            connect = true;
         }
 
         return new CliOptions { Kind = CliCommandKind.Doctor, Connect = connect };
@@ -478,24 +450,21 @@ internal static class CommandLine
         switch (subcommand)
         {
             case "status" :
-                if (args.Length > 1) throw new CliUsageException($"Unknown argument '{args[1]}' for sandbox status.", usage);
-
-                return new CliOptions { Kind = CliCommandKind.Sandbox, Subcommand = "status" };
+                return args.Length > 1
+                    ? throw new CliUsageException($"Unknown argument '{args[1]}' for sandbox status.", usage)
+                    : new CliOptions { Kind = CliCommandKind.Sandbox, Subcommand = "status" };
 
             case "provision" :
                 var assumeYes = false;
                 for (var i = 1; i < args.Length; i++)
                 {
-                    if (string.Equals(args[i], "--yes", StringComparison.Ordinal))
-                    {
-                        assumeYes = true;
-                        continue;
-                    }
-
-                    throw new CliUsageException($"Unknown argument '{args[i]}' for sandbox provision.", usage);
+                    if (!string.Equals(args[i], "--yes", StringComparison.Ordinal))
+                        throw new CliUsageException($"Unknown argument '{args[i]}' for sandbox provision.", usage);
+                    assumeYes = true;
                 }
 
-                return new CliOptions { Kind = CliCommandKind.Sandbox, Subcommand = "provision", AssumeYes = assumeYes };
+                return new CliOptions
+                    { Kind = CliCommandKind.Sandbox, Subcommand = "provision", AssumeYes = assumeYes };
 
             case "verify" :
                 return ParseSandboxVerifyArgs(args, usage);
@@ -514,9 +483,9 @@ internal static class CommandLine
     /// </summary>
     private static CliOptions ParseSandboxVerifyArgs(string[] args, string usage)
     {
-        var assumeYes  = false;
-        var workspace  = (string?)null;
-        var caseFilter = (List<string>?)null;
+        var           assumeYes  = false;
+        string?       workspace  = null;
+        List<string>? caseFilter = null;
         for (var i = 1; i < args.Length; i++)
         {
             if (string.Equals(args[i], "--yes", StringComparison.Ordinal))
@@ -530,7 +499,8 @@ internal static class CommandLine
                 if (i + 1 >= args.Length)
                     throw new CliUsageException("The --case option requires a comma-separated case name list.", usage);
 
-                var names = args[++i].Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+                var names = args[++i]
+                   .Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
                 if (names.Length == 0)
                     throw new CliUsageException("The --case option requires at least one case name.", usage);
 
@@ -539,19 +509,14 @@ internal static class CommandLine
                 continue;
             }
 
-            if (string.Equals(args[i], "--workspace", StringComparison.Ordinal))
-            {
-                if (i + 1 >= args.Length)
-                    throw new CliUsageException("The --workspace option requires a directory path.", usage);
+            if (!string.Equals(args[i], "--workspace", StringComparison.Ordinal))
+                throw new CliUsageException($"Unknown argument '{args[i]}' for sandbox verify.", usage);
+            if (i + 1 >= args.Length)
+                throw new CliUsageException("The --workspace option requires a directory path.", usage);
 
-                workspace = args[++i];
-                if (string.IsNullOrWhiteSpace(workspace))
-                    throw new CliUsageException("The --workspace option requires a non-empty directory path.", usage);
-
-                continue;
-            }
-
-            throw new CliUsageException($"Unknown argument '{args[i]}' for sandbox verify.", usage);
+            workspace = args[++i];
+            if (string.IsNullOrWhiteSpace(workspace))
+                throw new CliUsageException("The --workspace option requires a non-empty directory path.", usage);
         }
 
         return new CliOptions
@@ -600,25 +565,20 @@ internal static class CommandLine
                 continue;
             }
 
-            if (string.Equals(args[i], "--workspace", StringComparison.Ordinal))
-            {
-                if (i + 1 >= args.Length)
-                    throw new CliUsageException("The --workspace option requires a directory path.", usage);
+            if (!string.Equals(args[i], "--workspace", StringComparison.Ordinal))
+                throw new CliUsageException($"Unknown argument '{args[i]}' for sandbox verify-worker.", usage);
+            if (i + 1 >= args.Length)
+                throw new CliUsageException("The --workspace option requires a directory path.", usage);
 
-                workspace = args[++i];
-                if (string.IsNullOrWhiteSpace(workspace))
-                    throw new CliUsageException("The --workspace option requires a non-empty directory path.", usage);
-
-                continue;
-            }
-
-            throw new CliUsageException($"Unknown argument '{args[i]}' for sandbox verify-worker.", usage);
+            workspace = args[++i];
+            if (string.IsNullOrWhiteSpace(workspace))
+                throw new CliUsageException("The --workspace option requires a non-empty directory path.", usage);
         }
 
         if (marker is null || hold is null || workspace is null)
-            throw new CliUsageException(
-                                      "sandbox verify-worker requires --marker <path>, --hold-seconds <n>, and --workspace <path>.",
-                                      usage);
+            throw new
+                CliUsageException("sandbox verify-worker requires --marker <path>, --hold-seconds <n>, and --workspace <path>.",
+                                  usage);
 
         return new CliOptions
         {
@@ -639,16 +599,12 @@ internal static class CommandLine
         string? provider = null;
         for (var i = start; i < args.Length; i++)
         {
-            if (string.Equals(args[i], "--provider", StringComparison.Ordinal))
-            {
-                if (i + 1 >= args.Length)
-                    throw new CliUsageException("The --provider option requires a profile name.", usage);
+            if (!string.Equals(args[i], "--provider", StringComparison.Ordinal))
+                throw new CliUsageException($"Unknown argument '{args[i]}' for model list.", usage);
+            if (i + 1 >= args.Length)
+                throw new CliUsageException("The --provider option requires a profile name.", usage);
 
-                provider = args[++i];
-                continue;
-            }
-
-            throw new CliUsageException($"Unknown argument '{args[i]}' for model list.", usage);
+            provider = args[++i];
         }
 
         return provider;
@@ -659,20 +615,17 @@ internal static class CommandLine
     ///     Whether a profile name is valid: letters, digits, dot, underscore, hyphen; must not start with '-' or '.', length
     ///     1-64.
     /// </summary>
-    public static bool IsValidProfileName(string name)
-    {
-        return name.Length is >= 1 and <= 64 && name[0] is not '-' and not '.' &&
-               name.All(c => char.IsAsciiLetterOrDigit(c) || c is '.' or '_' or '-');
-    }
+    public static bool IsValidProfileName(string name) =>
+        name.Length is >= 1 and <= 64 && name[0] is not '-' and not '.' &&
+        name.All(c => char.IsAsciiLetterOrDigit(c) || c is '.' or '_' or '-');
+
 
     /// <summary>
     ///     判断模型 id 是否合法：非空、无空白、长度不超过 200。
     ///     Whether a model id is valid: non-empty, no whitespace, at most 200 characters.
     /// </summary>
-    public static bool IsValidModelId(string id)
-    {
-        return id.Length is >= 1 and <= 200 && !id.Any(char.IsWhiteSpace);
-    }
+    public static bool IsValidModelId(string id) => id.Length is >= 1 and <= 200 && !id.Any(char.IsWhiteSpace);
+
 
     /// <summary>
     ///     校验 profile 名称：字母、数字、点、下划线、连字符，不以 - 或 . 开头，长度 1-64。
@@ -681,9 +634,9 @@ internal static class CommandLine
     private static void ValidateProfileName(string name, string usage)
     {
         if (!IsValidProfileName(name))
-            throw new CliUsageException(
-                                        $"'{name}' is not a valid profile name. Use 1-64 characters: letters, digits, '.', '_', '-', not starting with '-' or '.'.",
-                                        usage);
+            throw new
+                CliUsageException($"'{name}' is not a valid profile name. Use 1-64 characters: letters, digits, '.', '_', '-', not starting with '-' or '.'.",
+                                  usage);
     }
 
     /// <summary>
@@ -700,9 +653,6 @@ internal static class CommandLine
     ///     判断参数是否为 help 标志。
     ///     Whether an argument is a help flag.
     /// </summary>
-    private static bool IsHelpFlag(string argument)
-    {
-        return string.Equals(argument, "--help", StringComparison.Ordinal) ||
-               string.Equals(argument, "-h", StringComparison.Ordinal);
-    }
+    private static bool IsHelpFlag(string argument) => string.Equals(argument, "--help", StringComparison.Ordinal) ||
+                                                       string.Equals(argument, "-h", StringComparison.Ordinal);
 }

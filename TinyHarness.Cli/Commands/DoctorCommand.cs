@@ -20,8 +20,8 @@ internal static class DoctorCommand
     ///     执行 doctor 检查；存在失败项时返回 1，警告不影响退出码。
     ///     Runs the doctor checks; returns 1 when any check fails, warnings do not affect the exit code.
     /// </summary>
-    public static async Task<int> ExecuteAsync(CommandContext    context, CliOptions options,
-                                               CancellationToken cancellationToken)
+    public static async Task<int> ExecuteAsync(
+        CommandContext context, CliOptions options, CancellationToken cancellationToken)
     {
         var io = context.Io;
         var resolution = await ConfigResolver.ResolveAsync(null, cancellationToken,

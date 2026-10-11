@@ -637,10 +637,6 @@ public sealed class ConversationContext
         public int MessageCountAtPlan { get; init; }
 
         public int StartMessageIndex => Spans[0].Start;
-
-        public int FoldMessageCount
-        {
-            get => Spans.Sum(span => span.Count);
-        }
+        public int FoldMessageCount  => Spans.Sum(span => span.Count);
     }
 }

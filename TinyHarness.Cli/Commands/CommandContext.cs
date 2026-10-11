@@ -28,21 +28,15 @@ internal sealed class CommandContext
     ///     解析实际使用的用户配置路径。
     ///     Resolves the user config path actually in effect.
     /// </summary>
-    public string ResolveUserConfigPath()
-    {
-        return string.IsNullOrWhiteSpace(UserConfigPath)
-            ? UserConfigStore.DefaultFilePath()
-            : Path.GetFullPath(UserConfigPath);
-    }
+    public string ResolveUserConfigPath() => string.IsNullOrWhiteSpace(UserConfigPath)
+        ? UserConfigStore.DefaultFilePath()
+        : Path.GetFullPath(UserConfigPath);
 
     /// <summary>
     ///     返回规范化的命令工作目录。
     ///     Returns the normalized command working directory.
     /// </summary>
-    public string ResolveWorkingDirectory()
-    {
-        return string.IsNullOrWhiteSpace(WorkingDirectory)
-            ? Environment.CurrentDirectory
-            : Path.GetFullPath(WorkingDirectory);
-    }
+    public string ResolveWorkingDirectory() => string.IsNullOrWhiteSpace(WorkingDirectory)
+        ? Environment.CurrentDirectory
+        : Path.GetFullPath(WorkingDirectory);
 }

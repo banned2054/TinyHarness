@@ -14,13 +14,14 @@ public class ExclusiveInputReaderTests
     [Fact]
     public async Task SecondConcurrentRead_ThrowsInsteadOfInterleaving()
     {
-        using var gate = new ManualResetEventSlim(false);
-        using var inner = new BlockingReader(gate);
+        using var gate   = new ManualResetEventSlim(false);
+        using var inner  = new BlockingReader(gate);
         using var reader = new ExclusiveInputReader(inner);
 
         var first = reader.ReadLineAsync(CancellationToken.None);
-        var second = await Assert.ThrowsAsync<InvalidOperationException>(
-            async () => await reader.ReadLineAsync(CancellationToken.None));
+        var second =
+            await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+                                                                    await reader.ReadLineAsync(CancellationToken.None));
 
         Assert.Contains("single reader", second.Message);
         gate.Set();
@@ -30,8 +31,8 @@ public class ExclusiveInputReaderTests
     [Fact]
     public async Task SyncReadLine_WhileAsyncReadInFlight_Throws()
     {
-        using var gate = new ManualResetEventSlim(false);
-        using var inner = new BlockingReader(gate);
+        using var gate   = new ManualResetEventSlim(false);
+        using var inner  = new BlockingReader(gate);
         using var reader = new ExclusiveInputReader(inner);
 
         var first = reader.ReadLineAsync(CancellationToken.None);

@@ -41,13 +41,13 @@ internal static class CommandRuleJson
                 case "direct" when string.IsNullOrWhiteSpace(executable) :
                     throw new InvalidDataException($"Config field '{property}[{i}].executable' in {source} " +
                                                    "is required for direct mode.");
-                case "direct" when (!string.IsNullOrEmpty(shell) || !string.IsNullOrEmpty(command)) :
+                case "direct" when !string.IsNullOrEmpty(shell) || !string.IsNullOrEmpty(command) :
                     throw new InvalidDataException($"Config fields '{property}[{i}].shell' and '.command' " +
                                                    $"in {source} are valid only for shell mode.");
-                case "shell" when (string.IsNullOrWhiteSpace(shell) || string.IsNullOrWhiteSpace(command)) :
+                case "shell" when string.IsNullOrWhiteSpace(shell) || string.IsNullOrWhiteSpace(command) :
                     throw new InvalidDataException($"Config fields '{property}[{i}].shell' and " +
                                                    $"'{property}[{i}].command' in {source} are required for shell mode.");
-                case "shell" when (!string.IsNullOrEmpty(executable) || item["arguments"] is not null) :
+                case "shell" when !string.IsNullOrEmpty(executable) || item["arguments"] is not null :
                     throw new InvalidDataException($"Config fields '{property}[{i}].executable' and " +
                                                    $"'.arguments' in {source} are valid only for direct mode.");
             }

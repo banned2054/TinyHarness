@@ -17,23 +17,13 @@ internal static class WorkspaceRelativePath
     ///     调用方必须保证传入非空字符串；空白检查由各校验器在形状判断前完成。
     ///     Callers must pass a non-empty string; blank checks happen in the validators before this shape check.
     /// </summary>
-    internal static bool IsAcceptableShape(string path)
-    {
-        return !HasWindowsDrivePrefix(path) && !HasUncPrefix(path) && !IsRootedOnAnyPlatform(path);
-    }
+    internal static bool IsAcceptableShape(string path) =>
+        !HasWindowsDrivePrefix(path) && !HasUncPrefix(path) && !IsRootedOnAnyPlatform(path);
 
-    private static bool HasWindowsDrivePrefix(string path)
-    {
-        return path is [_, ':', ..] && char.IsAsciiLetter(path[0]);
-    }
+    private static bool HasWindowsDrivePrefix(string path) => path is [_, ':', ..] && char.IsAsciiLetter(path[0]);
 
-    private static bool HasUncPrefix(string path)
-    {
-        return path.StartsWith(@"\\", StringComparison.Ordinal) || path.StartsWith("//", StringComparison.Ordinal);
-    }
+    private static bool HasUncPrefix(string path) => path.StartsWith(@"\\", StringComparison.Ordinal) ||
+                                                     path.StartsWith("//", StringComparison.Ordinal);
 
-    private static bool IsRootedOnAnyPlatform(string path)
-    {
-        return path[0] is '/' or '\\' || Path.IsPathRooted(path);
-    }
+    private static bool IsRootedOnAnyPlatform(string path) => path[0] is '/' or '\\' || Path.IsPathRooted(path);
 }

@@ -58,9 +58,8 @@ public sealed class MicrosoftAiChatClient : IChatCompletionClient, IDisposable
     ///     Converts the internal request to M.E.AI input and maps M.E.AI text/tool
     ///     deltas back to project stream events.
     /// </summary>
-    public async IAsyncEnumerable<ChatStreamEvent> CompleteAsync(ChatCompletionRequest request,
-                                                                 [EnumeratorCancellation]
-                                                                 CancellationToken cancellationToken)
+    public async IAsyncEnumerable<ChatStreamEvent> CompleteAsync(
+        ChatCompletionRequest request, [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         if (request is null) throw new ArgumentNullException(nameof(request));
 
@@ -128,7 +127,7 @@ public sealed class MicrosoftAiChatClient : IChatCompletionClient, IDisposable
                     // without ProtectedData; the item-done update carries the
                     // encrypted payload (and, per the adapter source, a null or
                     // full text). Both shapes map onto the reasoning events.
-                    case TextReasoningContent reasoning when reasoning.ProtectedData is not null :
+                    case TextReasoningContent { ProtectedData: not null } reasoning :
                         yield return new ChatStreamEvent
                         {
                             Kind                   = ChatStreamEventKind.ReasoningItem,
@@ -320,10 +319,8 @@ public sealed class MicrosoftAiChatClient : IChatCompletionClient, IDisposable
     ///     the inbound value shape (the offline probes verified this shape round-trips
     ///     and survives NativeAOT publishing).
     /// </summary>
-    private static FunctionCallContent ToFunctionCall(ChatToolCall call)
-    {
-        return new FunctionCallContent(call.Id, call.FunctionName, ToArgumentDictionary(call.ArgumentsJson));
-    }
+    private static FunctionCallContent ToFunctionCall(ChatToolCall call) =>
+        new(call.Id, call.FunctionName, ToArgumentDictionary(call.ArgumentsJson));
 
     private static IDictionary<string, object?> ToArgumentDictionary(string argumentsJson)
     {
@@ -332,8 +329,8 @@ public sealed class MicrosoftAiChatClient : IChatCompletionClient, IDisposable
 
         using var document = JsonDocument.Parse(argumentsJson);
         if (document.RootElement.ValueKind != JsonValueKind.Object)
-            throw new InvalidDataException(
-                                           $"Tool call arguments must be a JSON object, got '{document.RootElement.ValueKind}'.");
+            throw new
+                InvalidDataException($"Tool call arguments must be a JSON object, got '{document.RootElement.ValueKind}'.");
 
         foreach (var property in document.RootElement.EnumerateObject())
             arguments[property.Name] = property.Value.Clone();
@@ -408,7 +405,8 @@ public sealed class MicrosoftAiChatClient : IChatCompletionClient, IDisposable
     {
         if (arguments is null || arguments.Count == 0) return "{}";
 
-        var json                                            = new JsonObject();
+        var json = new JsonObject();
+
         foreach (var (name, value) in arguments) json[name] = ToJsonNode(callId, name, value);
 
         return json.ToJsonString();
@@ -422,32 +420,29 @@ public sealed class MicrosoftAiChatClient : IChatCompletionClient, IDisposable
     ///     covers the scalar, otherwise an <see cref="InvalidDataException" /> with
     ///     context is thrown.
     /// </summary>
-    private static JsonNode? ToJsonNode(string? callId, string name, object? value)
+    private static JsonNode? ToJsonNode(string? callId, string name, object? value) => value switch
     {
-        return value switch
-        {
-            null => null,
-            JsonElement { ValueKind: JsonValueKind.Undefined or JsonValueKind.Null } => null,
-            JsonElement element => JsonNode.Parse(element.GetRawText()),
-            string text => JsonValue.Create(text),
-            bool boolean => JsonValue.Create(boolean),
-            char character => JsonValue.Create(character),
-            byte byteValue => JsonValue.Create(byteValue),
-            sbyte sbyteValue => JsonValue.Create(sbyteValue),
-            short shortValue => JsonValue.Create(shortValue),
-            ushort ushortValue => JsonValue.Create(ushortValue),
-            int intValue => JsonValue.Create(intValue),
-            uint uintValue => JsonValue.Create(uintValue),
-            long longValue => JsonValue.Create(longValue),
-            ulong ulongValue => JsonValue.Create(ulongValue),
-            float floatValue => JsonValue.Create(floatValue),
-            double doubleValue => JsonValue.Create(doubleValue),
-            decimal decimalValue => JsonValue.Create(decimalValue),
-            DateTime dateTime => JsonValue.Create(dateTime),
-            DateTimeOffset dateTimeOffset => JsonValue.Create(dateTimeOffset),
-            Guid guid => JsonValue.Create(guid),
-            _ => throw new InvalidDataException(
-                                                $"Tool call '{callId ?? "?"}' argument '{name}' has unsupported type '{value.GetType().FullName}'.")
-        };
-    }
+        null => null,
+        JsonElement { ValueKind: JsonValueKind.Undefined or JsonValueKind.Null } => null,
+        JsonElement element => JsonNode.Parse(element.GetRawText()),
+        string text => JsonValue.Create(text),
+        bool boolean => JsonValue.Create(boolean),
+        char character => JsonValue.Create(character),
+        byte byteValue => JsonValue.Create(byteValue),
+        sbyte sbyteValue => JsonValue.Create(sbyteValue),
+        short shortValue => JsonValue.Create(shortValue),
+        ushort ushortValue => JsonValue.Create(ushortValue),
+        int intValue => JsonValue.Create(intValue),
+        uint uintValue => JsonValue.Create(uintValue),
+        long longValue => JsonValue.Create(longValue),
+        ulong ulongValue => JsonValue.Create(ulongValue),
+        float floatValue => JsonValue.Create(floatValue),
+        double doubleValue => JsonValue.Create(doubleValue),
+        decimal decimalValue => JsonValue.Create(decimalValue),
+        DateTime dateTime => JsonValue.Create(dateTime),
+        DateTimeOffset dateTimeOffset => JsonValue.Create(dateTimeOffset),
+        Guid guid => JsonValue.Create(guid),
+        _ => throw new
+            InvalidDataException($"Tool call '{callId ?? "?"}' argument '{name}' has unsupported type '{value.GetType().FullName}'.")
+    };
 }

@@ -91,9 +91,9 @@ public sealed class WorkerReadPolicy
         ArgumentNullException.ThrowIfNull(workspace);
 
         var roots = new List<string>();
-        if (focusPaths is { Count: > 0 })
-            foreach (var focusPath in focusPaths)
-                roots.Add(workspace.ResolveInside(focusPath, "focusPaths"));
+        if (focusPaths is not { Count: > 0 }) return new WorkerReadPolicy(workspace, roots);
+        foreach (var focusPath in focusPaths)
+            roots.Add(workspace.ResolveInside(focusPath, "focusPaths"));
 
         return new WorkerReadPolicy(workspace, roots);
     }
@@ -186,12 +186,8 @@ public sealed class WorkerReadPolicy
                 InvalidDataException($"Argument is excluded by the worker read policy: '{_workspace.ToDisplay(absolutePath)}'.");
     }
 
-    private bool IsInsideFocus(string absolutePath)
-    {
-        if (_focusRoots.Count == 0) return true;
-
-        return _focusRoots.Any(root => Workspace.IsInside(root, absolutePath));
-    }
+    private bool IsInsideFocus(string absolutePath) =>
+        _focusRoots.Count == 0 || _focusRoots.Any(root => Workspace.IsInside(root, absolutePath));
 
     private bool IsSensitive(string absolutePath)
     {
@@ -209,9 +205,8 @@ public sealed class WorkerReadPolicy
 
         // .env 及其变体（.env.local、.env.production 等）。
         // .env and its variants (.env.local, .env.production, ...).
-        if (name.StartsWith(".env.", StringComparison.OrdinalIgnoreCase)) return true;
-
-        return ExcludedExtensions.Any(extension => name.EndsWith(extension, StringComparison.OrdinalIgnoreCase));
+        return name.StartsWith(".env.", StringComparison.OrdinalIgnoreCase) ||
+               ExcludedExtensions.Any(extension => name.EndsWith(extension, StringComparison.OrdinalIgnoreCase));
     }
 
     /// <summary>

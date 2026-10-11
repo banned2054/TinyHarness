@@ -52,15 +52,15 @@ public sealed class SandboxCapabilitySidStore(WindowsSandboxComponents component
         var resolved      = new List<string>();
         foreach (var writeRoot in policy.EffectiveWriteRoots)
         {
-            var key  = CanonicalRootKey(writeRoot);
+            var key = CanonicalRootKey(writeRoot);
             // cap.rs workspace_write_cap_sid_for_root: root == cwd → the
             // per-cwd workspace SID (the ACE setup grants on that directory);
             // any other root → the per-root writable table.
             var table = key == commandCwdKey ? capabilitySids.WorkspaceByCwd : capabilitySids.WritableRootByPath;
             if (!table.TryGetValue(key, out var sid))
             {
-                sid          = GenerateCapabilitySid();
-                table[key]   = sid;
+                sid        = GenerateCapabilitySid();
+                table[key] = sid;
                 await SaveAsync(capabilitySids, cancellationToken).ConfigureAwait(false);
             }
 
@@ -138,10 +138,8 @@ public sealed class SandboxCapabilitySidStore(WindowsSandboxComponents component
     ///     GetFullPath does not resolve symbolic links while dunce::canonicalize
     ///     does — write roots behind symlinks can still produce mismatched keys.
     /// </summary>
-    internal static string CanonicalRootKey(string root)
-    {
-        return Path.GetFullPath(root).Replace('\\', '/').ToLowerInvariant();
-    }
+    internal static string CanonicalRootKey(string root) =>
+        Path.GetFullPath(root).Replace('\\', '/').ToLowerInvariant();
 
     /// <summary>
     ///     required 属性仍会被 JSON 显式 null 置空，后续字典查找将抛裸 NRE；此处带文件路径

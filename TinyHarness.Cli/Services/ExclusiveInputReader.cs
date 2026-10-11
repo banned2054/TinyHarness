@@ -65,33 +65,70 @@ internal sealed class ExclusiveInputReader : TextReader
     }
 
     /// <summary>按字符与整段读取被拒绝：本出口只分发按行读取。Character and whole-text reads are rejected: this outlet dispatches line reads only.</summary>
-    public override int Peek() => throw SingleOutletViolation();
-
-    public override int Read() => throw SingleOutletViolation();
-
-    public override int Read(char[] buffer, int index, int count) => throw SingleOutletViolation();
-
-    public override int Read(Span<char> buffer) => throw SingleOutletViolation();
-
-    public override int ReadBlock(char[] buffer, int index, int count) => throw SingleOutletViolation();
-
-    public override int ReadBlock(Span<char> buffer) => throw SingleOutletViolation();
-
-    public override string ReadToEnd() => throw SingleOutletViolation();
-
-    public override Task<string> ReadToEndAsync() => throw SingleOutletViolation();
-
-    public override Task<string> ReadToEndAsync(CancellationToken cancellationToken) => throw SingleOutletViolation();
-
-    public override Task<int> ReadAsync(char[] buffer, int index, int count) => throw SingleOutletViolation();
-
-    public override ValueTask<int> ReadAsync(Memory<char> buffer, CancellationToken cancellationToken = default) =>
+    public override int Peek()
+    {
         throw SingleOutletViolation();
+    }
 
-    public override Task<int> ReadBlockAsync(char[] buffer, int index, int count) => throw SingleOutletViolation();
-
-    public override ValueTask<int> ReadBlockAsync(Memory<char> buffer, CancellationToken cancellationToken = default) =>
+    public override int Read()
+    {
         throw SingleOutletViolation();
+    }
+
+    public override int Read(char[] buffer, int index, int count)
+    {
+        throw SingleOutletViolation();
+    }
+
+    public override int Read(Span<char> buffer)
+    {
+        throw SingleOutletViolation();
+    }
+
+    public override int ReadBlock(char[] buffer, int index, int count)
+    {
+        throw SingleOutletViolation();
+    }
+
+    public override int ReadBlock(Span<char> buffer)
+    {
+        throw SingleOutletViolation();
+    }
+
+    public override string ReadToEnd()
+    {
+        throw SingleOutletViolation();
+    }
+
+    public override Task<string> ReadToEndAsync()
+    {
+        throw SingleOutletViolation();
+    }
+
+    public override Task<string> ReadToEndAsync(CancellationToken cancellationToken)
+    {
+        throw SingleOutletViolation();
+    }
+
+    public override Task<int> ReadAsync(char[] buffer, int index, int count)
+    {
+        throw SingleOutletViolation();
+    }
+
+    public override ValueTask<int> ReadAsync(Memory<char> buffer, CancellationToken cancellationToken = default)
+    {
+        throw SingleOutletViolation();
+    }
+
+    public override Task<int> ReadBlockAsync(char[] buffer, int index, int count)
+    {
+        throw SingleOutletViolation();
+    }
+
+    public override ValueTask<int> ReadBlockAsync(Memory<char> buffer, CancellationToken cancellationToken = default)
+    {
+        throw SingleOutletViolation();
+    }
 
     private static InvalidOperationException AlreadyReading() =>
         new("stdin is already being read by another prompt; this CLI dispatches all input " +
@@ -101,6 +138,11 @@ internal sealed class ExclusiveInputReader : TextReader
         new("Only line reads are dispatched through this outlet; every other TextReader " +
             "read member is rejected so no input path bypasses the single reader (PLAN §6).");
 
-    /// <summary>不关闭被包装的读取器：包装 <see cref="Console.In" /> 时关闭会终止进程的标准输入。Does not close the wrapped reader: closing a wrapped <see cref="Console.In" /> would end the process's stdin.</summary>
-    protected override void Dispose(bool disposing) { }
+    /// <summary>
+    ///     不关闭被包装的读取器：包装 <see cref="Console.In" /> 时关闭会终止进程的标准输入。Does not close the wrapped reader: closing a wrapped
+    ///     <see cref="Console.In" /> would end the process's stdin.
+    /// </summary>
+    protected override void Dispose(bool disposing)
+    {
+    }
 }

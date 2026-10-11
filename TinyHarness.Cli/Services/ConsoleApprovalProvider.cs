@@ -16,8 +16,10 @@ namespace TinyHarness.Cli.Services;
 ///     displayed text is redacted for known secrets before control characters are escaped —
 ///     the approval UI follows the same no-echo rule as every other display surface.
 /// </summary>
-internal sealed class ConsoleApprovalProvider(TextReader input, TextWriter output,
-                                              IReadOnlyDictionary<string, string>? knownSecrets = null) : IApprovalProvider
+internal sealed class ConsoleApprovalProvider(
+    TextReader                           input,
+    TextWriter                           output,
+    IReadOnlyDictionary<string, string>? knownSecrets = null) : IApprovalProvider
 {
     private readonly DisplaySecretRedactor _redactor = new(knownSecrets);
 

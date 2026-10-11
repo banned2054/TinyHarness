@@ -48,10 +48,7 @@ internal static class UserConfigAccess
     ///     返回默认 profile；未选择时返回 <see langword="null" />。
     ///     Returns the default profile; <see langword="null" /> when none is selected.
     /// </summary>
-    public static UserProfile? DefaultProfile(UserConfig config)
-    {
-        return FindProfile(config, config.DefaultProfile);
-    }
+    public static UserProfile? DefaultProfile(UserConfig config) => FindProfile(config, config.DefaultProfile);
 
     /// <summary>
     ///     解析命令的目标 profile：显式 --provider 名称或默认 profile；失败时给出可操作的错误。
@@ -104,12 +101,10 @@ internal static class UserConfigAccess
     ///     描述 profile 的 API key 来源，用于列表显示；不包含密钥值。
     ///     Describes a profile's API key source for listings; never includes the secret value.
     /// </summary>
-    public static string DescribeKeySource(UserProfile profile)
-    {
-        return !string.IsNullOrWhiteSpace(profile.ApiKeyCredentialTarget)
+    public static string DescribeKeySource(UserProfile profile) =>
+        !string.IsNullOrWhiteSpace(profile.ApiKeyCredentialTarget)
             ? $"credential store '{profile.ApiKeyCredentialTarget}'"
             : !string.IsNullOrWhiteSpace(profile.ApiKeyEnvironmentVariable)
                 ? $"env '{profile.ApiKeyEnvironmentVariable}'"
                 : "not configured";
-    }
 }

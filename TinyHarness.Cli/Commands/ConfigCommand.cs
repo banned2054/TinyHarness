@@ -27,17 +27,15 @@ internal static class ConfigCommand
     ///     执行 config 子命令。
     ///     Executes a config subcommand.
     /// </summary>
-    public static async Task<int> ExecuteAsync(CommandContext    context, CliOptions options,
-                                               CancellationToken cancellationToken)
+    public static async Task<int> ExecuteAsync(
+        CommandContext context, CliOptions options, CancellationToken cancellationToken) => options.Subcommand switch
     {
-        return options.Subcommand switch
-        {
-            "show" => await ShowAsync(context, cancellationToken).ConfigureAwait(false),
-            "set" => await SetAsync(context, options.Primary!, options.Secondary!, cancellationToken)
-               .ConfigureAwait(false),
-            _ => throw new InvalidOperationException($"Unknown config subcommand '{options.Subcommand}'.")
-        };
-    }
+        "show" => await ShowAsync(context, cancellationToken).ConfigureAwait(false),
+        "set" => await SetAsync(context, options.Primary!, options.Secondary!, cancellationToken)
+           .ConfigureAwait(false),
+        _ => throw new InvalidOperationException($"Unknown config subcommand '{options.Subcommand}'.")
+    };
+
 
     /// <summary>
     ///     显示生效值、来源、绝对路径与密钥可用性。
@@ -105,8 +103,8 @@ internal static class ConfigCommand
     ///     更新用户配置中的非敏感默认值；只写入用户配置，不触碰项目配置。
     ///     Updates a non-sensitive default in the user config; only the user config is written, never the project config.
     /// </summary>
-    private static async Task<int> SetAsync(CommandContext    context, string key, string value,
-                                            CancellationToken cancellationToken)
+    private static async Task<int> SetAsync(
+        CommandContext context, string key, string value, CancellationToken cancellationToken)
     {
         var io = context.Io;
         if (!SettableKeys.Contains(key, StringComparer.Ordinal))
@@ -179,41 +177,32 @@ internal static class ConfigCommand
         return parsed;
     }
 
-    private static string DescribeOptionalInt(int? value)
-    {
-        return value is { } v ? v.ToString() : "(built-in default)";
-    }
+    private static string DescribeOptionalInt(int? value) => value is { } v ? v.ToString() : "(built-in default)";
 
     /// <summary>
     ///     描述配置来源；总是带上绝对路径。
     ///     Describes the config source; always includes the absolute path.
     /// </summary>
-    private static string DescribeSource(ConfigResolution resolution)
+    private static string DescribeSource(ConfigResolution resolution) => resolution.Source switch
     {
-        return resolution.Source switch
-        {
-            ConfigSourceKind.ExplicitFile => $"explicit file {resolution.SourcePath}",
-            ConfigSourceKind.ProjectFile  => $"project file {resolution.SourcePath}",
-            ConfigSourceKind.UserConfig   => $"user config {resolution.SourcePath}",
-            _                             => "built-in defaults (no config file found)"
-        };
-    }
+        ConfigSourceKind.ExplicitFile => $"explicit file {resolution.SourcePath}",
+        ConfigSourceKind.ProjectFile  => $"project file {resolution.SourcePath}",
+        ConfigSourceKind.UserConfig   => $"user config {resolution.SourcePath}",
+        _                             => "built-in defaults (no config file found)"
+    };
 
     /// <summary>
     ///     描述密钥可用性；绝不包含密钥值。
     ///     Describes key availability; never includes the secret value.
     /// </summary>
-    private static string DescribeKey(ApiKeyStatus key)
+    private static string DescribeKey(ApiKeyStatus key) => key.Kind switch
     {
-        return key.Kind switch
-        {
-            ApiKeySourceKind.CredentialStore => key.Available
-                ? $"available (credential store '{key.SourceName}')"
-                : $"NOT available (credential store '{key.SourceName}' has no entry)",
-            ApiKeySourceKind.EnvironmentVariable => key.Available
-                ? $"available (environment variable '{key.SourceName}')"
-                : $"NOT set (environment variable '{key.SourceName}')",
-            _ => "not configured (see 'tinyharness help auth')"
-        };
-    }
+        ApiKeySourceKind.CredentialStore => key.Available
+            ? $"available (credential store '{key.SourceName}')"
+            : $"NOT available (credential store '{key.SourceName}' has no entry)",
+        ApiKeySourceKind.EnvironmentVariable => key.Available
+            ? $"available (environment variable '{key.SourceName}')"
+            : $"NOT set (environment variable '{key.SourceName}')",
+        _ => "not configured (see 'tinyharness help auth')"
+    };
 }

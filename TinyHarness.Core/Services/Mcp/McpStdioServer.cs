@@ -366,23 +366,19 @@ public sealed class McpStdioServer(
         };
     }
 
-    private static string WriteResult<T>(JsonElement? id, T result, JsonTypeInfo<T> typeInfo)
-    {
-        return JsonSerializer.Serialize(new McpJsonRpcResponse
+    private static string WriteResult<T>(JsonElement? id, T result, JsonTypeInfo<T> typeInfo) =>
+        JsonSerializer.Serialize(new McpJsonRpcResponse
         {
             Id     = id,
             Result = JsonSerializer.SerializeToElement(result, typeInfo)
         }, McpJsonContext.Default.McpJsonRpcResponse) + "\n";
-    }
 
-    private static string WriteError(JsonElement? id, int code, string message)
-    {
-        return JsonSerializer.Serialize(new McpJsonRpcResponse
+    private static string WriteError(JsonElement? id, int code, string message) =>
+        JsonSerializer.Serialize(new McpJsonRpcResponse
         {
             Id    = id,
             Error = new McpJsonRpcError { Code = code, Message = message }
         }, McpJsonContext.Default.McpJsonRpcResponse) + "\n";
-    }
 
     private sealed class BoundedLineReader(TextReader input, int maximumCharacters)
     {

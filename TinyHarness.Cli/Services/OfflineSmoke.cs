@@ -472,17 +472,15 @@ internal static class SmokeScript
         return new SmokePlan(steps, steps.Count(s => s.IsTool), 6);
     }
 
-    private static string BuildArguments(string fixtureRoot)
-    {
-        return ShellArguments("dotnet",
-                              ["build", Path.Combine(fixtureRoot, "SmokeFixture.csproj"), "--no-restore", "--nologo"]);
-    }
+    private static string BuildArguments(string fixtureRoot) => ShellArguments("dotnet",
+    [
+        "build", Path.Combine(fixtureRoot, "SmokeFixture.csproj"), "--no-restore", "--nologo"
+    ]);
 
-    private static string CheckArguments(string fixtureRoot)
-    {
-        return ShellArguments("dotnet",
-                              [Path.Combine(fixtureRoot, "bin", "Debug", "net10.0", "TinyHarness.SmokeFixture.dll")]);
-    }
+    private static string CheckArguments(string fixtureRoot) => ShellArguments("dotnet",
+    [
+        Path.Combine(fixtureRoot, "bin", "Debug", "net10.0", "TinyHarness.SmokeFixture.dll")
+    ]);
 
     private static string TestPatchArguments()
     {

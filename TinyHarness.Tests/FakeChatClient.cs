@@ -78,7 +78,7 @@ internal sealed class FakeChatClient : IChatCompletionClient
     ///     boundary carrying the item id and the encrypted payload) followed by text deltas.
     ///     Multi-turn tests use it to assert reasoning is replayed verbatim into later requests.
     /// </summary>
-    public static IReadOnlyList<ChatStreamEvent> ReasonedText(string reasoningText, string itemId,
+    public static IReadOnlyList<ChatStreamEvent> ReasonedText(string reasoningText, string          itemId,
                                                               string protectedData, params string[] chunks)
     {
         var events = new List<ChatStreamEvent>
@@ -108,7 +108,7 @@ internal sealed class FakeChatClient : IChatCompletionClient
     ///     Scripts a text completion carrying server-reported usage, for turn totals and
     ///     terminal-summary assertions.
     /// </summary>
-    public static IReadOnlyList<ChatStreamEvent> TextWithUsage(int inputTokens, int outputTokens,
+    public static IReadOnlyList<ChatStreamEvent> TextWithUsage(int             inputTokens, int outputTokens,
                                                                params string[] chunks)
     {
         var events = new List<ChatStreamEvent>();

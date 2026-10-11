@@ -56,8 +56,7 @@ public sealed class WindowsSandboxStateInspector(WindowsSandboxComponents compon
             var content = await File.ReadAllTextAsync(Components.MarkerPath, cancellationToken).ConfigureAwait(false);
             var marker  = JsonSerializer.Deserialize(content, WindowsSandboxJsonContext.Default.SandboxSetupMarker);
             if (marker?.Version != WindowsSandboxComponents.SetupVersion)
-                problems.Add(
-                             $"Sandbox setup marker version {marker?.Version.ToString() ?? "unknown"} does not match the required {WindowsSandboxComponents.SetupVersion}.");
+                problems.Add($"Sandbox setup marker version {marker?.Version.ToString() ?? "unknown"} does not match the required {WindowsSandboxComponents.SetupVersion}.");
 
             InspectAccountName(problems, "Sandbox setup marker offline_username", marker?.OfflineUsername,
                                Components.OfflineUsername);

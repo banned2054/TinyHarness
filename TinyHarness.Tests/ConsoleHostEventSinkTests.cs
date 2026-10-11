@@ -1,3 +1,4 @@
+using System.Text.Json.Nodes;
 using TinyHarness.Cli.Services;
 using TinyHarness.Core.Models.Agent;
 using TinyHarness.Core.Models.Context;
@@ -24,7 +25,7 @@ public class ConsoleHostEventSinkTests
     private static async Task<string> RenderAsync(params HostEvent[] events)
     {
         using var output = new StringWriter { NewLine = "\n" };
-        var sink = new ConsoleHostEventSink(output : output);
+        var       sink   = new ConsoleHostEventSink(output : output);
         foreach (var @event in events) await sink.PublishAsync(@event, CancellationToken.None);
 
         return output.ToString();
@@ -36,11 +37,11 @@ public class ConsoleHostEventSinkTests
         {
             Kind     = HostEventKind.ToolStarted,
             Sequence = 1,
-            Payload  = new ToolPreparation
+            Payload = new ToolPreparation
             {
                 ToolName   = "read_file",
                 CallId     = "c1",
-                Arguments  = new System.Text.Json.Nodes.JsonObject(),
+                Arguments  = new JsonObject(),
                 Capability = "filesystem.read",
                 Summary    = summary
             }
@@ -54,23 +55,23 @@ public class ConsoleHostEventSinkTests
         {
             Kind     = HostEventKind.ToolFinished,
             Sequence = 2,
-            Payload  = new ToolExecutionOutcome(
-                new ToolPreparation
-                {
-                    ToolName   = "read_file",
-                    CallId     = "c1",
-                    Arguments  = new System.Text.Json.Nodes.JsonObject(),
-                    Capability = "filesystem.read",
-                    Summary    = "read_file src/a.cs"
-                },
-                new ToolResult
-                {
-                    Succeeded       = succeeded,
-                    Content         = string.Empty,
-                    ExitCode        = exitCode,
-                    TimedOut        = timedOut,
-                    OutputTruncated = truncated
-                })
+            Payload = new ToolExecutionOutcome(
+                                               new ToolPreparation
+                                               {
+                                                   ToolName   = "read_file",
+                                                   CallId     = "c1",
+                                                   Arguments  = new JsonObject(),
+                                                   Capability = "filesystem.read",
+                                                   Summary    = "read_file src/a.cs"
+                                               },
+                                               new ToolResult
+                                               {
+                                                   Succeeded       = succeeded,
+                                                   Content         = string.Empty,
+                                                   ExitCode        = exitCode,
+                                                   TimedOut        = timedOut,
+                                                   OutputTruncated = truncated
+                                               })
         };
     }
 
@@ -123,12 +124,12 @@ public class ConsoleHostEventSinkTests
     [Fact]
     public async Task ToolFailure_TimeoutAndTruncation_AreReflected()
     {
-        var output = await RenderAsync(ToolStartedEvent(), ToolFinishedEvent(succeeded : false, timedOut : true));
+        var output = await RenderAsync(ToolStartedEvent(), ToolFinishedEvent(false, timedOut : true));
 
         Assert.Equal("tool: read_file src/a.cs -> timed out\n", output);
 
         var truncated = await RenderAsync(ToolStartedEvent(),
-                                          ToolFinishedEvent(succeeded : false, exitCode : 1, truncated : true));
+                                          ToolFinishedEvent(false, 1, truncated : true));
         Assert.Equal("tool: read_file src/a.cs -> failed (exit 1) (output truncated)\n", truncated);
     }
 
@@ -136,7 +137,7 @@ public class ConsoleHostEventSinkTests
     public async Task InteractiveApprovals_PrintButRuleDecisionsStayQuiet()
     {
         using var output = new StringWriter { NewLine = "\n" };
-        var sink = new ConsoleHostEventSink(output : output);
+        var       sink   = new ConsoleHostEventSink(output : output);
         await sink.PublishAsync(new HostEvent
                                 {
                                     Kind     = HostEventKind.ApprovalResolved,
@@ -148,8 +149,8 @@ public class ConsoleHostEventSinkTests
                                 {
                                     Kind     = HostEventKind.ApprovalResolved,
                                     Sequence = 2,
-                                    Payload  = new ApprovalResolution(PermissionDecision.Ask, ApprovalAction.AllowOnce,
-                                                                      "allow once")
+                                    Payload = new ApprovalResolution(PermissionDecision.Ask, ApprovalAction.AllowOnce,
+                                                                     "allow once")
                                 },
                                 CancellationToken.None);
 
@@ -162,7 +163,7 @@ public class ConsoleHostEventSinkTests
         // The approval provider draws its own prompt; the sink only retires the streamed
         // line so the prompt never merges into the answer text.
         using var output = new StringWriter { NewLine = "\n" };
-        var sink = new ConsoleHostEventSink(output : output);
+        var       sink   = new ConsoleHostEventSink(output : output);
         await sink.PublishAsync(TextDelta("working on it"), CancellationToken.None);
         await sink.PublishAsync(new HostEvent { Kind = HostEventKind.ApprovalRequested, Sequence = 2 },
                                 CancellationToken.None);
@@ -182,7 +183,7 @@ public class ConsoleHostEventSinkTests
 
         var output = await RenderAsync(ToolStartedEvent(), usage, ToolFinishedEvent(exitCode : 0));
 
-        Assert.Equal("tool: read_file src/a.cs\n" +
+        Assert.Equal("tool: read_file src/a.cs\n"      +
                      "usage: 120 in / 30 out tokens\n" +
                      "tool: read_file src/a.cs -> ok (exit 0)\n",
                      output);
@@ -232,7 +233,7 @@ public class ConsoleHostEventSinkTests
     public async Task ErrorLines_PrintRedacted()
     {
         using var output = new StringWriter { NewLine = "\n" };
-        var sink = new ConsoleHostEventSink(new Dictionary<string, string> { ["env"] = "tok123" }, output);
+        var       sink   = new ConsoleHostEventSink(new Dictionary<string, string> { ["env"] = "tok123" }, output);
         await sink.PublishAsync(new HostEvent
                                 {
                                     Kind     = HostEventKind.RunError,

@@ -31,8 +31,8 @@ public static class ConfigurationLoader
     ///     将 JSON 对象中的已知字段覆盖到现有配置上；格式或类型错误直接报告给调用方。
     ///     Overlays known JSON fields onto an existing configuration and surfaces malformed values.
     /// </summary>
-    private static async Task<TinyHarnessConfig> ReadFromFileAsync(TinyHarnessConfig config, string configJsonPath,
-                                                                   CancellationToken cancellationToken)
+    private static async Task<TinyHarnessConfig> ReadFromFileAsync(
+        TinyHarnessConfig config, string configJsonPath, CancellationToken cancellationToken)
     {
         var json = await File.ReadAllTextAsync(configJsonPath, cancellationToken).ConfigureAwait(false);
         var root = JsonNode.Parse(json) as JsonObject

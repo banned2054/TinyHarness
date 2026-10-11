@@ -28,6 +28,9 @@ public sealed record HostEvent
 
     public DateTimeOffset TimestampUtc { get; init; } = DateTimeOffset.UtcNow;
 
-    /// <summary>种类相关的负载对象；各成员的负载类型记录在 <see cref="HostEventKind" /> 上。The kind-specific payload; payload types are documented on <see cref="HostEventKind" />.</summary>
+    /// <summary>
+    ///     种类相关的负载对象；各成员的负载类型记录在 <see cref="HostEventKind" /> 上。The kind-specific payload; payload types are documented
+    ///     on <see cref="HostEventKind" />.
+    /// </summary>
     public object? Payload { get; init; }
 }

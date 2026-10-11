@@ -14,9 +14,9 @@ namespace TinyHarness.Tests;
 /// </summary>
 internal sealed class GateChatClient : IChatCompletionClient
 {
-    private readonly TaskCompletionSource _gate    = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly TaskCompletionSource           _gate = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly IReadOnlyList<ChatStreamEvent> _response;
-    private readonly TaskCompletionSource _started = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly TaskCompletionSource           _started = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     public GateChatClient(string responseText = "done")
     {
@@ -25,19 +25,8 @@ internal sealed class GateChatClient : IChatCompletionClient
 
     public int Requests { get; private set; }
 
-    /// <summary>等待某次模型请求真正开始。Waits until a model request has actually started.</summary>
-    public Task WaitStartedAsync(CancellationToken cancellationToken)
-    {
-        return _started.Task.WaitAsync(cancellationToken);
-    }
-
-    public void Open()
-    {
-        _gate.TrySetResult();
-    }
-
     public async IAsyncEnumerable<ChatStreamEvent> CompleteAsync(
-        ChatCompletionRequest request,
+        ChatCompletionRequest                      request,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         Requests++;
@@ -48,5 +37,16 @@ internal sealed class GateChatClient : IChatCompletionClient
             cancellationToken.ThrowIfCancellationRequested();
             yield return item;
         }
+    }
+
+    /// <summary>等待某次模型请求真正开始。Waits until a model request has actually started.</summary>
+    public Task WaitStartedAsync(CancellationToken cancellationToken)
+    {
+        return _started.Task.WaitAsync(cancellationToken);
+    }
+
+    public void Open()
+    {
+        _gate.TrySetResult();
     }
 }

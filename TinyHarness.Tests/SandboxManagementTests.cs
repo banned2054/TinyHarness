@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using TinyHarness.Cli.Commands;
 using TinyHarness.Cli.Exceptions;
 using TinyHarness.Cli.Models;
@@ -127,9 +128,9 @@ public sealed class SandboxManagementTests
     [Fact]
     public async Task Status_ReadyHomeExitsZeroWithOkSummary()
     {
-        using var home = new SandboxTestHome();
+        using var home    = new SandboxTestHome();
         using var fixture = new CliFixture();
-        await UserConfigStore.SaveAsync(fixture.UserConfigPath, SandboxConfig(home, enabled : true), CancellationToken.None);
+        await UserConfigStore.SaveAsync(fixture.UserConfigPath, SandboxConfig(home, true), CancellationToken.None);
 
         var result = await SandboxCommand.ExecuteAsync(fixture.CreateContext(),
                                                        CommandLine.Parse(["sandbox", "status"]),
@@ -207,9 +208,9 @@ public sealed class SandboxManagementTests
     [Fact]
     public async Task Status_ChangesNoFileOrDirectory()
     {
-        using var home     = new SandboxTestHome();
-        using var fixture  = new CliFixture();
-        await UserConfigStore.SaveAsync(fixture.UserConfigPath, SandboxConfig(home, enabled : true), CancellationToken.None);
+        using var home    = new SandboxTestHome();
+        using var fixture = new CliFixture();
+        await UserConfigStore.SaveAsync(fixture.UserConfigPath, SandboxConfig(home, true), CancellationToken.None);
         var beforeHome    = Snapshot(home.Components.SandboxHome);
         var beforeHomeDir = Snapshot(Path.GetDirectoryName(fixture.UserConfigPath)!);
 
@@ -229,7 +230,7 @@ public sealed class SandboxManagementTests
 
         using var home    = new SandboxTestHome();
         using var fixture = new CliFixture();
-        await UserConfigStore.SaveAsync(fixture.UserConfigPath, SandboxConfig(home, enabled : true), CancellationToken.None);
+        await UserConfigStore.SaveAsync(fixture.UserConfigPath, SandboxConfig(home, true), CancellationToken.None);
 
         var result = await SandboxCommand.ExecuteAsync(fixture.CreateContext(),
                                                        CommandLine.Parse(["sandbox", "status"]),
@@ -262,7 +263,7 @@ public sealed class SandboxManagementTests
     [Fact]
     public async Task Provision_MissingSetupExecutable_FailsWithoutElevation()
     {
-        using var home     = new SandboxTestHome();
+        using var home = new SandboxTestHome();
         File.Delete(home.Components.SetupExecutablePath);
         using var fixture  = new CliFixture();
         var       elevator = new FakeSetupElevator();
@@ -303,7 +304,7 @@ public sealed class SandboxManagementTests
     {
         if (!OperatingSystem.IsWindows()) return;
 
-        using var home = new SandboxTestHome();
+        using var home     = new SandboxTestHome();
         using var fixture  = new CliFixture();
         var       elevator = new FakeSetupElevator();
         // Enough distinct absolute write roots to push the base64 payload past
@@ -317,7 +318,9 @@ public sealed class SandboxManagementTests
                                             Settings = new UserConfigSettings
                                             {
                                                 WindowsSandbox = SandboxSettings(home) with
-                                                                { AdditionalWriteRoots = roots }
+                                                {
+                                                    AdditionalWriteRoots = roots
+                                                }
                                             }
                                         },
                                         CancellationToken.None);
@@ -340,7 +343,7 @@ public sealed class SandboxManagementTests
         using var home     = new SandboxTestHome();
         using var fixture  = new CliFixture();
         var       elevator = new FakeSetupElevator { Result = SandboxSetupElevationResult.Completed(0) };
-        await UserConfigStore.SaveAsync(fixture.UserConfigPath, SandboxConfig(home, enabled : true), CancellationToken.None);
+        await UserConfigStore.SaveAsync(fixture.UserConfigPath, SandboxConfig(home, true), CancellationToken.None);
 
         var result = await SandboxCommand.ExecuteAsync(fixture.CreateContext(),
                                                        CommandLine.Parse(["sandbox", "provision", "--yes"]),
@@ -414,7 +417,7 @@ public sealed class SandboxManagementTests
         Assert.Equal(1, result);
         Assert.Contains("拒绝了提权", fixture.Io.Output);
         var record = await ParseSingleAuditRecordAsync(Path.Combine(home.Components.SandboxDirectory,
-                                                                        "tinyharness-provision.jsonl"));
+                                                                    "tinyharness-provision.jsonl"));
         Assert.Equal("declined", record["outcome"]!.GetValue<string>());
     }
 
@@ -437,7 +440,7 @@ public sealed class SandboxManagementTests
         Assert.Contains("状态未知", fixture.Io.Output);
         Assert.Contains("sandbox status", fixture.Io.Output);
         var record = await ParseSingleAuditRecordAsync(Path.Combine(home.Components.SandboxDirectory,
-                                                                        "tinyharness-provision.jsonl"));
+                                                                    "tinyharness-provision.jsonl"));
         Assert.Equal("not-finished", record["outcome"]!.GetValue<string>());
     }
 
@@ -446,9 +449,9 @@ public sealed class SandboxManagementTests
     {
         if (!OperatingSystem.IsWindows()) return;
 
-        using var home    = new SandboxTestHome();
-        using var fixture = new CliFixture(["n"], interactive : true);
-        var elevator = new FakeSetupElevator();
+        using var home     = new SandboxTestHome();
+        using var fixture  = new CliFixture(["n"], true);
+        var       elevator = new FakeSetupElevator();
         await UserConfigStore.SaveAsync(fixture.UserConfigPath, SandboxConfig(home), CancellationToken.None);
 
         var result = await SandboxCommand.ExecuteAsync(fixture.CreateContext(),
@@ -468,10 +471,10 @@ public sealed class SandboxManagementTests
     {
         if (!OperatingSystem.IsWindows()) return;
 
-        using var home      = new SandboxTestHome();
-        using var workspace = new TestTempDir();
-        var settings = SandboxSettings(home);
-        var provisioner = new WindowsSandboxProvisioner(new FakeSetupElevator());
+        using var home        = new SandboxTestHome();
+        using var workspace   = new TestTempDir();
+        var       settings    = SandboxSettings(home);
+        var       provisioner = new WindowsSandboxProvisioner(new FakeSetupElevator());
 
         var plan = provisioner.BuildPlan(settings, workspace.Root, "TestUser");
 
@@ -492,8 +495,8 @@ public sealed class SandboxManagementTests
         Assert.Equal([workspace.Root, expectedTemp], plan.Payload.ReadRoots);
         Assert.Equal([workspace.Root, expectedTemp], plan.Payload.WriteRoots);
         Assert.Equal(SandboxIsolationPolicy.ProtectedMetadataSubpaths
-                                 .Select(subpath => Path.Combine(workspace.Root, subpath))
-                                 .ToArray(),
+                                           .Select(subpath => Path.Combine(workspace.Root, subpath))
+                                           .ToArray(),
                      plan.Payload.DenyWritePaths);
 
         Assert.Equal(expectedTemp, plan.TempRoot);
@@ -510,9 +513,10 @@ public sealed class SandboxManagementTests
 
         using var home      = new SandboxTestHome();
         using var workspace = new TestTempDir();
-        var settings = SandboxSettings(home) with { SandboxHome = "" };
+        var       settings  = SandboxSettings(home) with { SandboxHome = "" };
 
-        var plan = new WindowsSandboxProvisioner(new FakeSetupElevator()).BuildPlan(settings, workspace.Root, "TestUser");
+        var plan =
+            new WindowsSandboxProvisioner(new FakeSetupElevator()).BuildPlan(settings, workspace.Root, "TestUser");
 
         Assert.Equal(WindowsSandboxComponents.DefaultSandboxHome, plan.Payload.SandboxHome);
         Assert.Equal(WindowsSandboxComponents.DefaultSandboxHome, plan.Components.SandboxHome);
@@ -534,8 +538,11 @@ public sealed class SandboxManagementTests
                           """{"version":5,"offline_username":"CodexSandboxOffline","online_username":"CodexSandboxOnline","created_at":"2026-10-01T00:00:00Z"}""");
 
         var markerError = Assert.Throws<InvalidOperationException>(() =>
-                                                                           new WindowsSandboxProvisioner(new FakeSetupElevator())
-                                                                              .BuildPlan(SandboxSettings(home), workspace.Root, "TestUser"));
+                                                                       new
+                                                                               WindowsSandboxProvisioner(new
+                                                                                   FakeSetupElevator())
+                                                                          .BuildPlan(SandboxSettings(home),
+                                                                               workspace.Root, "TestUser"));
         Assert.Contains("legacy Codex account 'CodexSandboxOffline'", markerError.Message, StringComparison.Ordinal);
         Assert.Contains("setup marker", markerError.Message, StringComparison.Ordinal);
 
@@ -545,8 +552,11 @@ public sealed class SandboxManagementTests
                           """{"version":5,"offline":{"username":"TinyHarnessOffline","password":"QUJDRA=="},"online":{"username":"CodexSandboxOnline","password":"QUJDRA=="}}""");
 
         var credentialsError = Assert.Throws<InvalidOperationException>(() =>
-                                                                                new WindowsSandboxProvisioner(new FakeSetupElevator())
-                                                                                   .BuildPlan(SandboxSettings(home), workspace.Root, "TestUser"));
+                                                                            new
+                                                                                    WindowsSandboxProvisioner(new
+                                                                                        FakeSetupElevator())
+                                                                               .BuildPlan(SandboxSettings(home),
+                                                                                    workspace.Root, "TestUser"));
         Assert.Contains("account credentials", credentialsError.Message, StringComparison.Ordinal);
     }
 
@@ -563,8 +573,8 @@ public sealed class SandboxManagementTests
         var settings = SandboxSettings(home) with { AdditionalWriteRoots = roots };
 
         var error = Assert.Throws<InvalidOperationException>(() =>
-                                                                    new WindowsSandboxProvisioner(new FakeSetupElevator())
-                                                                       .BuildPlan(settings, workspace.Root, "TestUser"));
+                                                                 new WindowsSandboxProvisioner(new FakeSetupElevator())
+                                                                    .BuildPlan(settings, workspace.Root, "TestUser"));
 
         Assert.Contains("additionalWriteRoots", error.Message, StringComparison.Ordinal);
     }
@@ -576,11 +586,11 @@ public sealed class SandboxManagementTests
 
         using var home      = new SandboxTestHome();
         using var workspace = new TestTempDir();
-        var settings = SandboxSettings(home) with { AdditionalWriteRoots = ["relative-root"] };
+        var       settings  = SandboxSettings(home) with { AdditionalWriteRoots = ["relative-root"] };
 
         Assert.Throws<ArgumentException>(() =>
-                                                new WindowsSandboxProvisioner(new FakeSetupElevator())
-                                                   .BuildPlan(settings, workspace.Root, "TestUser"));
+                                             new WindowsSandboxProvisioner(new FakeSetupElevator())
+                                                .BuildPlan(settings, workspace.Root, "TestUser"));
     }
 
     [Fact]
@@ -591,7 +601,7 @@ public sealed class SandboxManagementTests
         using var home      = new SandboxTestHome();
         using var workspace = new TestTempDir();
         var provisioner = new WindowsSandboxProvisioner(new FakeSetupElevator
-                                                        { Result = SandboxSetupElevationResult.Cancelled });
+                                                            { Result = SandboxSetupElevationResult.Cancelled });
         var plan = provisioner.BuildPlan(SandboxSettings(home), workspace.Root, "TestUser");
 
         using var cts = new CancellationTokenSource();
@@ -609,13 +619,13 @@ public sealed class SandboxManagementTests
     {
         var record = new SandboxProvisionAuditRecord
         {
-            TimestampUtc = "2026-10-10T00:00:00Z",
-            Outcome      = "failed",
-            ExitCode     = 1,
-            Mode         = "full",
-            RefreshOnly  = false,
+            TimestampUtc  = "2026-10-10T00:00:00Z",
+            Outcome       = "failed",
+            ExitCode      = 1,
+            Mode          = "full",
+            RefreshOnly   = false,
             PayloadSha256 = "ABCDEF",
-            Error        = "create_accounts_failed: net user error 5"
+            Error         = "create_accounts_failed: net user error 5"
         };
 
         var json = JsonSerializer.Serialize(record, WindowsSandboxJsonContext.Default.SandboxProvisionAuditRecord);
@@ -637,7 +647,7 @@ public sealed class SandboxManagementTests
 
         using var home = new SandboxTestHome();
         File.Delete(home.Components.MarkerPath);
-        var invoker  = new FakeSetupInvoker();
+        var invoker = new FakeSetupInvoker();
         var launcher = new FakeSandboxRunnerLauncher
         {
             RunnerBody = (_, _, _) => Task.CompletedTask
@@ -652,13 +662,13 @@ public sealed class SandboxManagementTests
                                                 allowNullDeviceAccess : _ => { });
 
         var exception = await Assert.ThrowsAsync<ProcessExecutionStartException>(() => backend.ExecuteAsync(
-                                                                                    new PreparedProcessExecution(
-                                                                                        "cmd.exe", ["/c", "whoami"],
-                                                                                        home.Components.SandboxHome, 30,
-                                                                                        false, null),
-                                                                                    new RecordingOutputCapture(),
-                                                                                    new RecordingOutputCapture(),
-                                                                                    CancellationToken.None));
+         new PreparedProcessExecution(
+                                      "cmd.exe", ["/c", "whoami"],
+                                      home.Components.SandboxHome, 30,
+                                      false, null),
+         new RecordingOutputCapture(),
+         new RecordingOutputCapture(),
+         CancellationToken.None));
 
         Assert.Contains("not ready", exception.Message, StringComparison.Ordinal);
         Assert.Empty(invoker.RefreshPayloads);
@@ -683,11 +693,11 @@ public sealed class SandboxManagementTests
         return new UserConfig { Settings = new UserConfigSettings { WindowsSandbox = SandboxSettings(home, enabled) } };
     }
 
-    private static async Task<System.Text.Json.Nodes.JsonObject> ParseSingleAuditRecordAsync(string auditPath)
+    private static async Task<JsonObject> ParseSingleAuditRecordAsync(string auditPath)
     {
         var lines  = await File.ReadAllLinesAsync(auditPath);
         var record = Assert.Single(lines, line => !string.IsNullOrWhiteSpace(line));
-        return System.Text.Json.Nodes.JsonNode.Parse(record)!.AsObject();
+        return JsonNode.Parse(record)!.AsObject();
     }
 
     /// <summary>
@@ -728,11 +738,9 @@ public sealed class SandboxManagementTests
 
     private sealed class CliFixture(IReadOnlyList<string>? input = null) : IDisposable
     {
-        private readonly FakeCliConsole _io = new(input);
-
         public CliFixture(IReadOnlyList<string> input, bool interactive) : this(input)
         {
-            _io.Interactive = interactive;
+            Io.Interactive = interactive;
         }
 
         public string Root { get; } = Path.Combine(Path.GetTempPath(), $"tinyharness-sandbox-{Guid.NewGuid():N}");
@@ -741,18 +749,7 @@ public sealed class SandboxManagementTests
                                                              $"tinyharness-sandbox-config-{Guid.NewGuid():N}",
                                                              "user-config.json");
 
-        public FakeCliConsole Io => _io;
-
-        public CommandContext CreateContext()
-        {
-            return new CommandContext
-            {
-                Io               = _io,
-                Credentials      = new FakeCredentialStore(),
-                UserConfigPath   = UserConfigPath,
-                WorkingDirectory = Root
-            };
-        }
+        public FakeCliConsole Io { get; } = new(input);
 
         public void Dispose()
         {
@@ -760,6 +757,17 @@ public sealed class SandboxManagementTests
 
             var configDirectory = Path.GetDirectoryName(UserConfigPath);
             if (Directory.Exists(configDirectory)) Directory.Delete(configDirectory, true);
+        }
+
+        public CommandContext CreateContext()
+        {
+            return new CommandContext
+            {
+                Io               = Io,
+                Credentials      = new FakeCredentialStore(),
+                UserConfigPath   = UserConfigPath,
+                WorkingDirectory = Root
+            };
         }
     }
 

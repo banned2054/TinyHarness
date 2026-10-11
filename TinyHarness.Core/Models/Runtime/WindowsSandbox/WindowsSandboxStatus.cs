@@ -13,13 +13,8 @@ public sealed record WindowsSandboxStatus
 
     public required IReadOnlyList<string> Problems { get; init; }
 
-    public static WindowsSandboxStatus Ok()
-    {
-        return new WindowsSandboxStatus { Ready = true, Problems = [] };
-    }
+    public static WindowsSandboxStatus Ok() => new() { Ready = true, Problems = [] };
 
-    public static WindowsSandboxStatus Blocked(IReadOnlyList<string> problems)
-    {
-        return new WindowsSandboxStatus { Ready = false, Problems = problems };
-    }
+    public static WindowsSandboxStatus Blocked(IReadOnlyList<string> problems) =>
+        new() { Ready = false, Problems = problems };
 }

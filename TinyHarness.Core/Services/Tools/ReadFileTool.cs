@@ -273,9 +273,10 @@ public sealed class ReadFileTool(Workspace workspace, WorkerReadPolicy? workerPo
         if (cut < line.Length &&
             char.IsHighSurrogate(line[cut - 1])) cut++; // The pair's low surrogate sits at index cut; keep both.
 
-        if (cut == line.Length) return line; // The pair straddled the boundary: the whole line fits after all.
-
-        return $"{line[..cut]}... [line {lineNumber} truncated]";
+        return cut == line.Length
+            ? line
+            : // The pair straddled the boundary: the whole line fits after all.
+            $"{line[..cut]}... [line {lineNumber} truncated]";
     }
 
     /// <summary>
@@ -393,8 +394,8 @@ public sealed class ReadFileTool(Workspace workspace, WorkerReadPolicy? workerPo
         ///     在剩余字节预算内异步读取，到达上限后以可取消方式探测是否还有数据。
         ///     Reads asynchronously within the remaining byte budget and probes past the ceiling with cancellation.
         /// </summary>
-        public override async ValueTask<int> ReadAsync(Memory<byte>      buffer,
-                                                       CancellationToken cancellationToken = default)
+        public override async ValueTask<int> ReadAsync(
+            Memory<byte> buffer, CancellationToken cancellationToken = default)
         {
             var remaining = maxBytes - _consumed;
             if (remaining <= 0) return await ProbePastEndAsync(cancellationToken).ConfigureAwait(false);
@@ -409,8 +410,8 @@ public sealed class ReadFileTool(Workspace workspace, WorkerReadPolicy? workerPo
         ///     将旧式数组异步重载转发到基于 <see cref="Memory{T}" /> 的受限实现。
         ///     Forwards the legacy array-based async overload to the bounded <see cref="Memory{T}" /> implementation.
         /// </summary>
-        public override Task<int> ReadAsync(byte[]            buffer, int offset, int count,
-                                            CancellationToken cancellationToken)
+        public override Task<int> ReadAsync(
+            byte[] buffer, int offset, int count, CancellationToken cancellationToken)
         {
             return ReadAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
         }

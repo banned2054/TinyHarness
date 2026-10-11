@@ -102,8 +102,8 @@ public class McpWorkerHostConfigurationTests
         var error = await Assert.ThrowsAsync<ConfigException>(() =>
                                                                   McpWorkerHostConfiguration
                                                                      .ResolveAsync(CancellationToken.None, path,
-                                                                          dir.Root,
-                                                                          new FakeCredentialStore()));
+                                                                               dir.Root,
+                                                                               new FakeCredentialStore()));
 
         Assert.Contains("settings.worker.maxAgentSteps", error.Message, StringComparison.Ordinal);
     }

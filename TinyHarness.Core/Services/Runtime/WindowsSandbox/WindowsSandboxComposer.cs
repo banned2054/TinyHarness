@@ -34,20 +34,19 @@ public static class WindowsSandboxComposer
     ///     filtering. The sandbox temp write root directory is created here
     ///     (harness-owned infrastructure, not a target-command side effect).
     /// </summary>
-    public static WindowsSandboxExecution Compose(WindowsSandboxSettings               settings,
-                                                  string                               workspaceRoot,
-                                                  IReadOnlyDictionary<string, string>? knownSecrets = null)
+    public static WindowsSandboxExecution Compose(
+        WindowsSandboxSettings settings, string workspaceRoot, IReadOnlyDictionary<string, string>? knownSecrets = null)
     {
         ArgumentNullException.ThrowIfNull(settings);
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
         if (!Path.IsPathFullyQualified(workspaceRoot))
-            throw new InvalidOperationException(
-                                                $"The workspace root must be a fully qualified absolute path to enable the Windows sandbox: '{workspaceRoot}'.");
+            throw new
+                InvalidOperationException($"The workspace root must be a fully qualified absolute path to enable the Windows sandbox: '{workspaceRoot}'.");
 
         if (!OperatingSystem.IsWindows())
-            throw new PlatformNotSupportedException(
-                                                    "The Windows sandbox is enabled in the trusted user settings but this platform is not Windows; " +
-                                                    "refusing to fall back to host execution. Disable settings.windowsSandbox.enabled to run host execution.");
+            throw new
+                PlatformNotSupportedException("The Windows sandbox is enabled in the trusted user settings but this platform is not Windows; " +
+                                              "refusing to fall back to host execution. Disable settings.windowsSandbox.enabled to run host execution.");
 
         // Root/environment derivation is shared with the provisioning entry
         // point (WindowsSandboxPolicyPlanner) so refresh ACLs and provisioning
@@ -63,17 +62,17 @@ public static class WindowsSandboxComposer
         RequireTrustedPathOutsideWriteRoots(plan.TempRoot, "sandbox temp root", writeRoots);
 
         if (!File.Exists(plan.SetupExecutablePath))
-            throw new InvalidOperationException(
-                                                $"The Windows sandbox setup executable was not found at '{plan.SetupExecutablePath}'; refusing to fall back to host execution.");
+            throw new
+                InvalidOperationException($"The Windows sandbox setup executable was not found at '{plan.SetupExecutablePath}'; refusing to fall back to host execution.");
 
         if (!File.Exists(plan.RunnerExecutablePath))
-            throw new InvalidOperationException(
-                                                $"The Windows sandbox runner executable was not found at '{plan.RunnerExecutablePath}'; refusing to fall back to host execution.");
+            throw new
+                InvalidOperationException($"The Windows sandbox runner executable was not found at '{plan.RunnerExecutablePath}'; refusing to fall back to host execution.");
 
         if (!Directory.Exists(plan.SandboxHome))
-            throw new InvalidOperationException(
-                                                $"The Windows sandbox home was not found at '{plan.SandboxHome}'; run provisioning first. " +
-                                                "Refusing to fall back to host execution.");
+            throw new
+                InvalidOperationException($"The Windows sandbox home was not found at '{plan.SandboxHome}'; run provisioning first. " +
+                                          "Refusing to fall back to host execution.");
 
         Directory.CreateDirectory(plan.TempRoot);
 
@@ -104,8 +103,8 @@ public static class WindowsSandboxComposer
     ///     hash. Stable for identical configuration; any change makes old session
     ///     grants stop matching.
     /// </summary>
-    private static string BuildPolicyIdentity(SandboxIsolationPolicy              policy,
-                                              IReadOnlyDictionary<string, string> targetEnvironment)
+    private static string BuildPolicyIdentity(
+        SandboxIsolationPolicy policy, IReadOnlyDictionary<string, string> targetEnvironment)
     {
         var canonical = new StringBuilder();
         canonical.Append("backend=windows-sandbox\n");
@@ -157,27 +156,23 @@ public static class WindowsSandboxComposer
     ///     or an additional write root): sandboxed commands could tamper with it,
     ///     so host execution is never a fallback.
     /// </summary>
-    private static void RequireTrustedPathOutsideWriteRoots(string                trustedPath,
-                                                            string                label,
-                                                            IReadOnlyList<string> writeRoots)
+    private static void RequireTrustedPathOutsideWriteRoots(
+        string trustedPath, string label, IReadOnlyList<string> writeRoots)
     {
         foreach (var root in writeRoots)
         {
             if (!Workspace.IsInside(root, trustedPath)) continue;
 
-            throw new InvalidOperationException(
-                                                $"The {label} '{trustedPath}' lies inside the writable root '{root}'; " +
-                                                "sandboxed commands could tamper with it, refusing to fall back to host execution.");
+            throw new
+                InvalidOperationException($"The {label} '{trustedPath}' lies inside the writable root '{root}'; " +
+                                          "sandboxed commands could tamper with it, refusing to fall back to host execution.");
         }
     }
 
-    private static string PolicyKindDisplay(SandboxPolicyKind kind)
+    private static string PolicyKindDisplay(SandboxPolicyKind kind) => kind switch
     {
-        return kind switch
-        {
-            SandboxPolicyKind.ReadOnly       => "read-only",
-            SandboxPolicyKind.WorkspaceWrite => "workspace-write",
-            _                                => kind.ToString()
-        };
-    }
+        SandboxPolicyKind.ReadOnly       => "read-only",
+        SandboxPolicyKind.WorkspaceWrite => "workspace-write",
+        _                                => kind.ToString()
+    };
 }

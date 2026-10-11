@@ -70,8 +70,7 @@ public static class WorkerRequestValidator
         if (focusPaths is not { Count: > 0 }) return;
 
         if (focusPaths.Count > WorkerRequestLimits.MaxFocusPathCount)
-            errors.Add(
-                       $"Field 'focusPaths' contains {focusPaths.Count} entries; the maximum is {WorkerRequestLimits.MaxFocusPathCount}.");
+            errors.Add($"Field 'focusPaths' contains {focusPaths.Count} entries; the maximum is {WorkerRequestLimits.MaxFocusPathCount}.");
 
         for (var i = 0; i < focusPaths.Count; i++) ValidateFocusPath(focusPaths[i], i, errors);
     }

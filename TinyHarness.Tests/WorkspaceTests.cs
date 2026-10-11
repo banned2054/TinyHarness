@@ -57,7 +57,7 @@ public class WorkspaceTests
         var ex =
             Assert.Throws<InvalidDataException>(() =>
                                                     insideDir.Workspace.EnsureFinalTargetInside(outside,
-                                                        false, "File"));
+                                                             false, "File"));
 
         Assert.Contains("is outside the workspace root", ex.Message);
     }
@@ -90,7 +90,7 @@ public class WorkspaceTests
 
         var ex =
             Assert.Throws<InvalidDataException>(() => workspace.EnsureFinalTargetInside(pathInside, false,
-                                                    "File"));
+                                                         "File"));
         Assert.Contains("resolves outside the workspace root", ex.Message);
     }
 
@@ -117,7 +117,7 @@ public class WorkspaceTests
         var pathInside = workspace.ResolveInside("link.txt", "path");
         var boundaryEx =
             Assert.Throws<InvalidDataException>(() => workspace.EnsureFinalTargetInside(pathInside, false,
-                                                    "File"));
+                                                         "File"));
         Assert.Contains("resolves outside the workspace root", boundaryEx.Message);
     }
 

@@ -623,8 +623,9 @@ public class WindowsSandboxProtocolTests
         // refuse before any DPAPI decryption is attempted.
         File.WriteAllText(home.Components.UsersFilePath,
                           """{"version":5,"offline":{"username":"CodexSandboxOffline","password":"QUJDRA=="},"online":{"username":"CodexSandboxOnline","password":"QUJDRA=="}}""");
-        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => new SandboxCredentialReader(home.Components).LoadOfflineAccount());
+        var exception =
+            await Assert.ThrowsAsync<InvalidOperationException>(() => new SandboxCredentialReader(home.Components)
+                                                                   .LoadOfflineAccount());
         Assert.Contains("legacy Codex account 'CodexSandboxOffline'", exception.Message);
         Assert.Contains("refusing to reuse", exception.Message);
     }
@@ -637,8 +638,9 @@ public class WindowsSandboxProtocolTests
         using var home = new SandboxTestHome();
         File.WriteAllText(home.Components.UsersFilePath,
                           """{"version":5,"offline":{"username":"SomeOtherAccount","password":"QUJDRA=="},"online":{"username":"TinyHarnessOnline","password":"QUJDRA=="}}""");
-        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => new SandboxCredentialReader(home.Components).LoadOfflineAccount());
+        var exception =
+            await Assert.ThrowsAsync<InvalidOperationException>(() => new SandboxCredentialReader(home.Components)
+                                                                   .LoadOfflineAccount());
         Assert.Contains("SomeOtherAccount", exception.Message);
         Assert.Contains("TinyHarnessOffline", exception.Message);
     }

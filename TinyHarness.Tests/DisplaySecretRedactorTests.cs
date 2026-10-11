@@ -61,9 +61,9 @@ public class DisplaySecretRedactorTests
         var redactor = new DisplaySecretRedactor(Secrets("sk-secret-value"));
 
         var display = redactor.Push("see sk-secret-")
-                      + redactor.FlushSafe()
-                      + redactor.Push("value now")
-                      + redactor.Flush();
+                    + redactor.FlushSafe()
+                    + redactor.Push("value now")
+                    + redactor.Flush();
 
         Assert.Equal("see [REDACTED] now", display);
     }

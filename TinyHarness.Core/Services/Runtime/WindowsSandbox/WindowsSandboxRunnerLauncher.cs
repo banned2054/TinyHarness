@@ -89,8 +89,8 @@ public sealed partial class WindowsSandboxRunnerLauncher(TimeSpan? connectTimeou
 
     private readonly TimeSpan _connectTimeout = connectTimeout ?? DefaultConnectTimeout;
 
-    public async Task<SandboxRunnerConnection> LaunchAsync(RunnerLaunchRequest request,
-                                                           CancellationToken   cancellationToken)
+    public async Task<SandboxRunnerConnection> LaunchAsync(
+        RunnerLaunchRequest request, CancellationToken cancellationToken)
     {
         if (!OperatingSystem.IsWindows())
             throw
@@ -152,8 +152,8 @@ public sealed partial class WindowsSandboxRunnerLauncher(TimeSpan? connectTimeou
         }
     }
 
-    private static RunnerProcessHandle StartRunnerProcess(RunnerLaunchRequest request, string pipeInName,
-                                                          string              pipeOutName)
+    private static RunnerProcessHandle StartRunnerProcess(
+        RunnerLaunchRequest request, string pipeInName, string pipeOutName)
     {
         var commandLine = BuildRunnerCommandLine(request.RunnerExecutablePath,
                                                  $@"\\.\pipe\{pipeInName}", $@"\\.\pipe\{pipeOutName}");
@@ -172,8 +172,7 @@ public sealed partial class WindowsSandboxRunnerLauncher(TimeSpan? connectTimeou
             };
             var processInfo = default(ProcessInformation);
             var password    = request.Account.Password;
-            var created = CreateProcessWithLogonW(
-                                                  request.Account.Username,
+            var created = CreateProcessWithLogonW(request.Account.Username,
                                                   ".",
                                                   password,
                                                   0, // LOGON_WITH_PROFILE off: legacy runtime, no profile load
@@ -212,8 +211,8 @@ public sealed partial class WindowsSandboxRunnerLauncher(TimeSpan? connectTimeou
         }
         catch (OperationCanceledException) when (timeoutSource.IsCancellationRequested)
         {
-            throw new TimeoutException(
-                                       $"The sandbox runner did not connect its pipes within {(int)_connectTimeout.TotalSeconds}s.");
+            throw new
+                TimeoutException($"The sandbox runner did not connect its pipes within {(int)_connectTimeout.TotalSeconds}s.");
         }
 
         VerifyClientProcess(downstream, runnerProcessId, "pipe-in");
@@ -224,12 +223,12 @@ public sealed partial class WindowsSandboxRunnerLauncher(TimeSpan? connectTimeou
     {
         if (pipe is not NamedPipeServerStream serverStream ||
             !GetNamedPipeClientProcessId(serverStream.SafePipeHandle, out var clientProcessId))
-            throw new InvalidOperationException(
-                                                $"Failed to identify the client of the sandbox runner {pipeName} (Win32 error {Marshal.GetLastWin32Error()}).");
+            throw new
+                InvalidOperationException($"Failed to identify the client of the sandbox runner {pipeName} (Win32 error {Marshal.GetLastWin32Error()}).");
 
         if (clientProcessId != runnerProcessId)
-            throw new InvalidOperationException(
-                                                $"The sandbox runner {pipeName} client PID {clientProcessId} did not match the runner PID {runnerProcessId}.");
+            throw new
+                InvalidOperationException($"The sandbox runner {pipeName} client PID {clientProcessId} did not match the runner PID {runnerProcessId}.");
     }
 
     /// <summary>
@@ -240,13 +239,9 @@ public sealed partial class WindowsSandboxRunnerLauncher(TimeSpan? connectTimeou
     ///     quote, and double trailing backslashes. Pipe names carry the full
     ///     \\.\pipe\ prefix.
     /// </summary>
-    internal static string BuildRunnerCommandLine(string runnerExecutablePath, string pipeInName, string pipeOutName)
-    {
-        return string.Join(' ',
-                           QuoteArgument(runnerExecutablePath),
-                           QuoteArgument($"--pipe-in={pipeInName}"),
-                           QuoteArgument($"--pipe-out={pipeOutName}"));
-    }
+    internal static string BuildRunnerCommandLine(string runnerExecutablePath, string pipeInName, string pipeOutName) =>
+        string.Join(' ', QuoteArgument(runnerExecutablePath), QuoteArgument($"--pipe-in={pipeInName}"),
+                    QuoteArgument($"--pipe-out={pipeOutName}"));
 
     internal static string QuoteArgument(string value)
     {
@@ -260,18 +255,16 @@ public sealed partial class WindowsSandboxRunnerLauncher(TimeSpan? connectTimeou
         var backslashes = 0;
         foreach (var character in value)
         {
-            if (character == '\\')
+            switch (character)
             {
-                backslashes++;
-                continue;
-            }
-
-            if (character == '"')
-            {
-                quoted.Append('\\', backslashes * 2 + 1);
-                backslashes = 0;
-                quoted.Append('"');
-                continue;
+                case '\\' :
+                    backslashes++;
+                    continue;
+                case '"' :
+                    quoted.Append('\\', backslashes * 2 + 1);
+                    backslashes = 0;
+                    quoted.Append('"');
+                    continue;
             }
 
             quoted.Append('\\', backslashes);
@@ -336,8 +329,7 @@ public sealed partial class WindowsSandboxRunnerLauncher(TimeSpan? connectTimeou
     private sealed class RunnerProcessConnection(
         Stream              downstream,
         Stream              upstream,
-        RunnerProcessHandle process)
-        : SandboxRunnerConnection(downstream, upstream)
+        RunnerProcessHandle process) : SandboxRunnerConnection(downstream, upstream)
     {
         public uint RunnerProcessId => process.ProcessId;
 
@@ -387,24 +379,24 @@ public sealed partial class WindowsSandboxRunnerLauncher(TimeSpan? connectTimeou
     [StructLayout(LayoutKind.Sequential)]
     private struct StartupInfoW
     {
-        public uint   Size;             // cb
-        public IntPtr Reserved;         // lpReserved
-        public IntPtr Desktop;          // lpDesktop
-        public IntPtr Title;            // lpTitle
-        public uint   X;                // dwX
-        public uint   Y;                // dwY
-        public uint   XSize;            // dwXSize
-        public uint   YSize;            // dwYSize
-        public uint   XCountChars;      // dwXCountChars
-        public uint   YCountChars;      // dwYCountChars
-        public uint   FillAttribute;    // dwFillAttribute
-        public uint   Flags;            // dwFlags
-        public ushort ShowWindow;       // wShowWindow
-        public ushort Reserved2Bytes;   // cbReserved2
-        public IntPtr Reserved2;        // lpReserved2
-        public IntPtr StandardInput;    // hStdInput
-        public IntPtr StandardOutput;   // hStdOutput
-        public IntPtr StandardError;    // hStdError
+        public uint   Size;           // cb
+        public IntPtr Reserved;       // lpReserved
+        public IntPtr Desktop;        // lpDesktop
+        public IntPtr Title;          // lpTitle
+        public uint   X;              // dwX
+        public uint   Y;              // dwY
+        public uint   XSize;          // dwXSize
+        public uint   YSize;          // dwYSize
+        public uint   XCountChars;    // dwXCountChars
+        public uint   YCountChars;    // dwYCountChars
+        public uint   FillAttribute;  // dwFillAttribute
+        public uint   Flags;          // dwFlags
+        public ushort ShowWindow;     // wShowWindow
+        public ushort Reserved2Bytes; // cbReserved2
+        public IntPtr Reserved2;      // lpReserved2
+        public IntPtr StandardInput;  // hStdInput
+        public IntPtr StandardOutput; // hStdOutput
+        public IntPtr StandardError;  // hStdError
     }
 
     [StructLayout(LayoutKind.Sequential)]

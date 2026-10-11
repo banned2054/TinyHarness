@@ -90,17 +90,15 @@ internal static partial class SandboxNullDeviceAcl
         }
     }
 
-    private static TrusteeW BuildTrustee(IntPtr sidPtr)
+    private static TrusteeW BuildTrustee(IntPtr sidPtr) => new()
     {
-        return new TrusteeW
-        {
-            MultipleTrustee          = IntPtr.Zero,
-            MultipleTrusteeOperation = 0,
-            TrusteeForm              = 0, // TRUSTEE_IS_SID
-            TrusteeType              = 0, // TRUSTEE_IS_UNKNOWN
-            Name                     = sidPtr
-        };
-    }
+        MultipleTrustee          = IntPtr.Zero,
+        MultipleTrusteeOperation = 0,
+        TrusteeForm              = 0, // TRUSTEE_IS_SID
+        TrusteeType              = 0, // TRUSTEE_IS_UNKNOWN
+        Name                     = sidPtr
+    };
+
 
     [LibraryImport("kernel32.dll", EntryPoint = "CreateFileW", SetLastError = true,
                    StringMarshalling = StringMarshalling.Utf16)]

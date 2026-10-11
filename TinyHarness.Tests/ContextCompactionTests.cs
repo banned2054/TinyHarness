@@ -158,9 +158,9 @@ public class ContextCompactionTests
         client.Enqueue(FakeChatClient.Text("done"));
 
         var sink = new TestHostEventSink();
-        var loop = new AgentLoop(client, new ToolRegistry([tool]), TightBudgetOptions(), null, null, events: sink);
+        var loop = new AgentLoop(client, new ToolRegistry([tool]), TightBudgetOptions(), null, null, events : sink);
 
-        var result = await loop.RunAsync("sys", "go", CancellationToken.None);
+        var result  = await loop.RunAsync("sys", "go", CancellationToken.None);
         var changes = sink.Compactions();
 
         Assert.True(result.Status == AgentStatus.Completed,
@@ -306,9 +306,9 @@ public class ContextCompactionTests
         client.Enqueue(FakeChatClient.Text("done"));
 
         var sink = new TestHostEventSink();
-        var loop = new AgentLoop(client, new ToolRegistry([tool]), TightBudgetOptions(12), null, null, events: sink);
+        var loop = new AgentLoop(client, new ToolRegistry([tool]), TightBudgetOptions(12), null, null, events : sink);
 
-        var result = await loop.RunAsync("sys", "go", CancellationToken.None);
+        var result  = await loop.RunAsync("sys", "go", CancellationToken.None);
         var changes = sink.Compactions();
 
         Assert.Equal(AgentStatus.Completed, result.Status);
@@ -390,9 +390,9 @@ public class ContextCompactionTests
                 ReservedOutputTokens      = 30,
                 CompactionThresholdTokens = 2800
             }
-        }, null, null, events: sink);
+        }, null, null, events : sink);
 
-        var result = await loop.RunAsync("sys", "go", CancellationToken.None);
+        var result  = await loop.RunAsync("sys", "go", CancellationToken.None);
         var changes = sink.Compactions();
 
         Assert.True(result.Status == AgentStatus.Completed,
@@ -612,9 +612,9 @@ public class ContextCompactionTests
                 ReservedOutputTokens      = 30,
                 CompactionThresholdTokens = 1400
             }
-        }, null, null, events: sink);
+        }, null, null, events : sink);
 
-        var result = await loop.RunAsync("sys", "go", CancellationToken.None);
+        var result  = await loop.RunAsync("sys", "go", CancellationToken.None);
         var changes = sink.Compactions();
 
         Assert.True(result.Status == AgentStatus.Completed,

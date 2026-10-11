@@ -20,22 +20,20 @@ namespace TinyHarness.Cli.Commands;
 /// </summary>
 internal static class SandboxCommand
 {
-    public static async Task<int> ExecuteAsync(CommandContext      context,
-                                               CliOptions           options,
-                                               CancellationToken    cancellationToken,
-                                               WindowsSandboxProvisioner? provisioner = null)
+    public static async Task<int> ExecuteAsync(
+        CommandContext             context,
+        CliOptions                 options,
+        CancellationToken          cancellationToken,
+        WindowsSandboxProvisioner? provisioner = null) => options.Subcommand switch
     {
-        return options.Subcommand switch
-        {
-            "status"    => await StatusAsync(context, cancellationToken).ConfigureAwait(false),
-            "provision" => await ProvisionAsync(context, options, cancellationToken, provisioner).ConfigureAwait(false),
-            "verify" => await SandboxVerifyCommand.ExecuteAsync(context, options, cancellationToken)
-                                                   .ConfigureAwait(false),
-            "verify-worker" => await SandboxVerifyCommand.ExecuteWorkerAsync(context, options, cancellationToken)
-                                                          .ConfigureAwait(false),
-            _ => throw new InvalidOperationException($"Unhandled sandbox subcommand '{options.Subcommand}'.")
-        };
-    }
+        "status"    => await StatusAsync(context, cancellationToken).ConfigureAwait(false),
+        "provision" => await ProvisionAsync(context, options, cancellationToken, provisioner).ConfigureAwait(false),
+        "verify" => await SandboxVerifyCommand.ExecuteAsync(context, options, cancellationToken)
+                                              .ConfigureAwait(false),
+        "verify-worker" => await SandboxVerifyCommand.ExecuteWorkerAsync(context, options, cancellationToken)
+                                                     .ConfigureAwait(false),
+        _ => throw new InvalidOperationException($"Unhandled sandbox subcommand '{options.Subcommand}'.")
+    };
 
     /// <summary>
     ///     严格只读的状态检查。未配置或就绪返回 0；有任何问题返回 1。不要求 enabled=true。
@@ -44,7 +42,7 @@ internal static class SandboxCommand
     /// </summary>
     private static async Task<int> StatusAsync(CommandContext context, CancellationToken cancellationToken)
     {
-        var io = context.Io;
+        var io         = context.Io;
         var configPath = context.ResolveUserConfigPath();
         var userConfig = await UserConfigStore.LoadAsync(configPath, cancellationToken).ConfigureAwait(false);
         var settings   = userConfig.Settings?.WindowsSandbox;
@@ -59,8 +57,8 @@ internal static class SandboxCommand
                                  cancellationToken)
                  .ConfigureAwait(false);
             await io
-                 .WriteLineAsync("  要启用：在上述用户配置的 settings.windowsSandbox 中设置 setupExecutablePath、" +
-                                 "runnerExecutablePath（两个组件 exe 的绝对路径）；sandboxHome 可省略（缺省使用独立固定默认 " +
+                 .WriteLineAsync("  要启用：在上述用户配置的 settings.windowsSandbox 中设置 setupExecutablePath、"                    +
+                                 "runnerExecutablePath（两个组件 exe 的绝对路径）；sandboxHome 可省略（缺省使用独立固定默认 "                   +
                                  $"{WindowsSandboxComponents.DefaultSandboxHome}），再运行 tinyharness sandbox provision；" +
                                  "enabled 显式设为 true 后 run 才会使用沙箱。",
                                  cancellationToken)
@@ -71,9 +69,12 @@ internal static class SandboxCommand
         await io.WriteLineAsync($"  enabled  : {(settings.Enabled ? "true" : "false")}（false 时 run 保持宿主执行）",
                                 cancellationToken)
                 .ConfigureAwait(false);
-        await io.WriteLineAsync($"  policy   : {PolicyDisplay(settings.Policy)}", cancellationToken).ConfigureAwait(false);
-        await io.WriteLineAsync($"  setup    : {settings.SetupExecutablePath}", cancellationToken).ConfigureAwait(false);
-        await io.WriteLineAsync($"  runner   : {settings.RunnerExecutablePath}", cancellationToken).ConfigureAwait(false);
+        await io.WriteLineAsync($"  policy   : {PolicyDisplay(settings.Policy)}", cancellationToken)
+                .ConfigureAwait(false);
+        await io.WriteLineAsync($"  setup    : {settings.SetupExecutablePath}", cancellationToken)
+                .ConfigureAwait(false);
+        await io.WriteLineAsync($"  runner   : {settings.RunnerExecutablePath}", cancellationToken)
+                .ConfigureAwait(false);
         // A relative home is reported by the problems section below instead of
         // throwing here, so status stays a read-only diagnostic for bad input.
         await io.WriteLineAsync(string.IsNullOrWhiteSpace(settings.SandboxHome)
@@ -83,8 +84,8 @@ internal static class SandboxCommand
                 .ConfigureAwait(false);
         await io
              .WriteLineAsync(
-                            $"  versions : 本 build 期望 setup v{WindowsSandboxComponents.SetupVersion} / ipc v{WindowsSandboxComponents.IpcVersion}",
-                            cancellationToken)
+                             $"  versions : 本 build 期望 setup v{WindowsSandboxComponents.SetupVersion} / ipc v{WindowsSandboxComponents.IpcVersion}",
+                             cancellationToken)
              .ConfigureAwait(false);
 
         if (!OperatingSystem.IsWindows())
@@ -112,7 +113,7 @@ internal static class SandboxCommand
             SandboxHome          = WindowsSandboxComponents.ResolveSandboxHome(settings.SandboxHome)
         };
         var status = await new WindowsSandboxStateInspector(components).InspectAsync(cancellationToken)
-                                       .ConfigureAwait(false);
+                                                                       .ConfigureAwait(false);
         if (status.Ready)
         {
             await io.WriteLineAsync("  [ok]   沙箱就绪：组件存在，marker 版本一致，cap_sid 与账户凭据可解析",
@@ -121,8 +122,9 @@ internal static class SandboxCommand
             return 0;
         }
 
-        foreach (var problem in status.Problems) await io.WriteLineAsync($"  [fail] {problem}", cancellationToken)
-           .ConfigureAwait(false);
+        foreach (var problem in status.Problems)
+            await io.WriteLineAsync($"  [fail] {problem}", cancellationToken)
+                    .ConfigureAwait(false);
 
         await io.WriteLineAsync($"{status.Problems.Count} 项问题；未就绪时沙箱命令会拒绝执行（fail closed）。",
                                 cancellationToken)
@@ -138,10 +140,11 @@ internal static class SandboxCommand
     ///     setup.exe via UAC → re-inspect afterward. exit 0 only when the helper
     ///     succeeded and the re-inspection is ready.
     /// </summary>
-    private static async Task<int> ProvisionAsync(CommandContext             context,
-                                                  CliOptions                  options,
-                                                  CancellationToken           cancellationToken,
-                                                  WindowsSandboxProvisioner?  provisioner)
+    private static async Task<int> ProvisionAsync(
+        CommandContext             context,
+        CliOptions                 options,
+        CancellationToken          cancellationToken,
+        WindowsSandboxProvisioner? provisioner)
     {
         var io = context.Io;
         if (!OperatingSystem.IsWindows())
@@ -191,9 +194,10 @@ internal static class SandboxCommand
         try
         {
             provisioner ??= new WindowsSandboxProvisioner(new ProcessSandboxSetupElevator());
-            plan = provisioner.BuildPlan(settings, context.ResolveWorkingDirectory(), Environment.UserName);
+            plan        =   provisioner.BuildPlan(settings, context.ResolveWorkingDirectory(), Environment.UserName);
         }
-        catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or PlatformNotSupportedException)
+        catch (Exception ex) when
+            (ex is InvalidOperationException or ArgumentException or PlatformNotSupportedException)
         {
             await io.WriteLineAsync($"  [fail] 无法构造 provisioning 计划：{ex.Message}", cancellationToken)
                     .ConfigureAwait(false);
@@ -241,16 +245,15 @@ internal static class SandboxCommand
     ///     Prints the machine-level side-effect list (fixed wording from the
     ///     integration document §4) and the re-provisioning warning.
     /// </summary>
-    private static async Task PrintSideEffectsAsync(ICliConsole io, WindowsSandboxProvisionPlan plan,
-                                                    CancellationToken cancellationToken)
+    private static async Task PrintSideEffectsAsync(
+        ICliConsole io, WindowsSandboxProvisionPlan plan, CancellationToken cancellationToken)
     {
         await io.WriteLineAsync($"  setup    : {plan.Components.SetupExecutablePath}", cancellationToken)
                 .ConfigureAwait(false);
         await io.WriteLineAsync($"  home     : {plan.Components.SandboxHome}", cancellationToken).ConfigureAwait(false);
         await io.WriteLineAsync($"  tempRoot : {plan.TempRoot}（仅作为路径进入 payload，本命令不创建）",
-                                cancellationToken)
-                .ConfigureAwait(false);
-        await io.WriteLineAsync($"  writeRoots（将获得写授权）:", cancellationToken).ConfigureAwait(false);
+                                cancellationToken).ConfigureAwait(false);
+        await io.WriteLineAsync("  writeRoots（将获得写授权）:", cancellationToken).ConfigureAwait(false);
         foreach (var root in plan.Payload.WriteRoots)
             await io.WriteLineAsync($"      {root}", cancellationToken).ConfigureAwait(false);
 
@@ -267,14 +270,13 @@ internal static class SandboxCommand
                 .ConfigureAwait(false);
         await io
              .WriteLineAsync("  警告：重复 provisioning 会重置本命名空间账户（TinyHarnessOffline/TinyHarnessOnline）的密码，" +
-                             "同机共用这套 fork 命名空间的其他 home 会受影响。本 fork 与 Codex 发布版使用独立命名空间" +
-                             "（账户、组、防火墙、WFP 互不共享），但其共存尚未验收。本命令没有卸载或回滚。",
-                             cancellationToken)
+                             "同机共用这套 fork 命名空间的其他 home 会受影响。本 fork 与 Codex 发布版使用独立命名空间"                  +
+                             "（账户、组、防火墙、WFP 互不共享），但其共存尚未验收。本命令没有卸载或回滚。", cancellationToken)
              .ConfigureAwait(false);
     }
 
     private static async Task<int> ReportProvisionResultAsync(ICliConsole io, WindowsSandboxProvisionResult result,
-                                                             CancellationToken cancellationToken)
+                                                              CancellationToken cancellationToken)
     {
         switch (result.Outcome)
         {
@@ -315,32 +317,23 @@ internal static class SandboxCommand
         }
     }
 
-    private static bool IsBlankSettings(WindowsSandboxSettings settings)
-    {
-        return string.IsNullOrWhiteSpace(settings.SetupExecutablePath) &&
-               string.IsNullOrWhiteSpace(settings.RunnerExecutablePath) &&
-               string.IsNullOrWhiteSpace(settings.SandboxHome);
-    }
+    private static bool IsBlankSettings(WindowsSandboxSettings settings) =>
+        string.IsNullOrWhiteSpace(settings.SetupExecutablePath)  &&
+        string.IsNullOrWhiteSpace(settings.RunnerExecutablePath) &&
+        string.IsNullOrWhiteSpace(settings.SandboxHome);
 
-    private static bool IsMissingOrRelative(string? value)
-    {
-        return string.IsNullOrWhiteSpace(value) || !Path.IsPathFullyQualified(value);
-    }
+    private static bool IsMissingOrRelative(string? value) =>
+        string.IsNullOrWhiteSpace(value) || !Path.IsPathFullyQualified(value);
 
     /// <summary>
     ///     显式设置但非绝对（home 可留空使用固定默认，只有显式相对路径才是错误）。
     ///     Explicitly set but not absolute (the home may stay blank for the fixed
     ///     default; only an explicitly relative value is an error).
     /// </summary>
-    private static bool IsExplicitRelative(string? value)
-    {
-        return !string.IsNullOrWhiteSpace(value) && !Path.IsPathFullyQualified(value);
-    }
+    private static bool IsExplicitRelative(string? value) =>
+        !string.IsNullOrWhiteSpace(value) && !Path.IsPathFullyQualified(value);
 
-    private static string DescribeSetting(string? value)
-    {
-        return string.IsNullOrWhiteSpace(value) ? "。" : $"：'{value}'。";
-    }
+    private static string DescribeSetting(string? value) => string.IsNullOrWhiteSpace(value) ? "。" : $"：'{value}'。";
 
     private static List<string> CollectPathProblems(WindowsSandboxSettings settings)
     {
@@ -360,13 +353,10 @@ internal static class SandboxCommand
         return problems;
     }
 
-    private static string PolicyDisplay(SandboxPolicyKind kind)
+    private static string PolicyDisplay(SandboxPolicyKind kind) => kind switch
     {
-        return kind switch
-        {
-            SandboxPolicyKind.ReadOnly       => "read-only",
-            SandboxPolicyKind.WorkspaceWrite => "workspace-write",
-            _                                => kind.ToString()
-        };
-    }
+        SandboxPolicyKind.ReadOnly       => "read-only",
+        SandboxPolicyKind.WorkspaceWrite => "workspace-write",
+        _                                => kind.ToString()
+    };
 }

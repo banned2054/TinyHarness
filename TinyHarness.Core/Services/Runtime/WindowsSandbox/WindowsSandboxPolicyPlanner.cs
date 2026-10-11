@@ -20,30 +20,6 @@ namespace TinyHarness.Core.Services.Runtime.WindowsSandbox;
 internal static class WindowsSandboxPolicyPlanner
 {
     /// <summary>
-    ///     规划结果：已校验的组件绝对路径（去空白）、tempRoot 绝对路径（不创建）、规范化的额外写根、
-    ///     清理后的目标环境与有效隔离策略。
-    ///     The plan: validated absolute component paths (trimmed), the absolute
-    ///     temp root (not created), normalized additional write roots, the
-    ///     cleaned target environment, and the effective isolation policy.
-    /// </summary>
-    internal sealed record PolicyPlan
-    {
-        public required string SetupExecutablePath { get; init; }
-
-        public required string RunnerExecutablePath { get; init; }
-
-        public required string SandboxHome { get; init; }
-
-        public required string TempRoot { get; init; }
-
-        public required IReadOnlyList<string> AdditionalWriteRoots { get; init; }
-
-        public required IReadOnlyDictionary<string, string> TargetEnvironment { get; init; }
-
-        public required SandboxIsolationPolicy Policy { get; init; }
-    }
-
-    /// <summary>
     ///     校验可信设置并推导策略要素。路径缺失/非绝对或额外写根相对时抛带上下文的异常；
     ///     workspaceRoot 必须是完全限定的绝对路径。不触碰文件系统。
     ///     Validates the trusted settings and derives the policy pieces. Missing
@@ -51,18 +27,17 @@ internal static class WindowsSandboxPolicyPlanner
     ///     contextual exceptions; workspaceRoot must be a fully qualified
     ///     absolute path. The file system is never touched.
     /// </summary>
-    internal static PolicyPlan Plan(WindowsSandboxSettings               settings,
-                                    string                               workspaceRoot,
-                                    IReadOnlyDictionary<string, string>? knownSecrets = null)
+    internal static PolicyPlan Plan(
+        WindowsSandboxSettings settings, string workspaceRoot, IReadOnlyDictionary<string, string>? knownSecrets = null)
     {
         ArgumentNullException.ThrowIfNull(settings);
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
         if (!Path.IsPathFullyQualified(workspaceRoot))
-            throw new InvalidOperationException(
-                                                $"The workspace root must be a fully qualified absolute path to enable the Windows sandbox: '{workspaceRoot}'.");
+            throw new
+                InvalidOperationException($"The workspace root must be a fully qualified absolute path to enable the Windows sandbox: '{workspaceRoot}'.");
 
-        var setupPath   = RequireAbsoluteSetting(settings.SetupExecutablePath, "setupExecutablePath");
-        var runnerPath  = RequireAbsoluteSetting(settings.RunnerExecutablePath, "runnerExecutablePath");
+        var setupPath  = RequireAbsoluteSetting(settings.SetupExecutablePath, "setupExecutablePath");
+        var runnerPath = RequireAbsoluteSetting(settings.RunnerExecutablePath, "runnerExecutablePath");
         // A blank home resolves to the independent fixed default home; an
         // explicit value must stay absolute (fail closed).
         var sandboxHome = WindowsSandboxComponents.ResolveSandboxHome(settings.SandboxHome);
@@ -91,9 +66,33 @@ internal static class WindowsSandboxPolicyPlanner
     private static string RequireAbsoluteSetting(string? value, string fieldName)
     {
         return string.IsNullOrWhiteSpace(value) || !Path.IsPathFullyQualified(value)
-            ? throw new InvalidOperationException(
-                                                  $"The trusted Windows sandbox setting '{fieldName}' must be a fully qualified absolute path" +
-                                                  (string.IsNullOrWhiteSpace(value) ? "." : $": '{value}'."))
+            ? throw new
+                InvalidOperationException($"The trusted Windows sandbox setting '{fieldName}' must be a fully qualified absolute path" +
+                                          (string.IsNullOrWhiteSpace(value) ? "." : $": '{value}'."))
             : value.Trim();
+    }
+
+    /// <summary>
+    ///     规划结果：已校验的组件绝对路径（去空白）、tempRoot 绝对路径（不创建）、规范化的额外写根、
+    ///     清理后的目标环境与有效隔离策略。
+    ///     The plan: validated absolute component paths (trimmed), the absolute
+    ///     temp root (not created), normalized additional write roots, the
+    ///     cleaned target environment, and the effective isolation policy.
+    /// </summary>
+    internal sealed record PolicyPlan
+    {
+        public required string SetupExecutablePath { get; init; }
+
+        public required string RunnerExecutablePath { get; init; }
+
+        public required string SandboxHome { get; init; }
+
+        public required string TempRoot { get; init; }
+
+        public required IReadOnlyList<string> AdditionalWriteRoots { get; init; }
+
+        public required IReadOnlyDictionary<string, string> TargetEnvironment { get; init; }
+
+        public required SandboxIsolationPolicy Policy { get; init; }
     }
 }

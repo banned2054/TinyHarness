@@ -56,13 +56,9 @@ public static class ApiKeyReader
             return credential;
         }
 
-        if (!string.IsNullOrWhiteSpace(environmentVariable))
-        {
-            var value = Environment.GetEnvironmentVariable(environmentVariable);
-            return string.IsNullOrWhiteSpace(value) ? null : value;
-        }
-
-        return null;
+        if (string.IsNullOrWhiteSpace(environmentVariable)) return null;
+        var value = Environment.GetEnvironmentVariable(environmentVariable);
+        return string.IsNullOrWhiteSpace(value) ? null : value;
     }
 
     /// <summary>

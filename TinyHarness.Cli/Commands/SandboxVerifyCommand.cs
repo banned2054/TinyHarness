@@ -41,11 +41,12 @@ internal static class SandboxVerifyCommand
     private const int WorkerSleeperDurationSeconds    = 600;
     private const int WorkerCleanupGraceSeconds       = 10;
 
-    public static async Task<int> ExecuteAsync(CommandContext             context,
-                                               CliOptions                  options,
-                                               CancellationToken           cancellationToken,
-                                               WindowsSandboxBackendFactory? backendFactory = null,
-                                               SandboxVerifyWorkerSpawner? workerSpawner  = null)
+    public static async Task<int> ExecuteAsync(
+        CommandContext                context,
+        CliOptions                    options,
+        CancellationToken             cancellationToken,
+        WindowsSandboxBackendFactory? backendFactory = null,
+        SandboxVerifyWorkerSpawner?   workerSpawner  = null)
     {
         var io = context.Io;
         if (!OperatingSystem.IsWindows())
@@ -97,7 +98,7 @@ internal static class SandboxVerifyCommand
             SandboxHome          = WindowsSandboxComponents.ResolveSandboxHome(settings.SandboxHome)
         };
         var readiness = await new WindowsSandboxStateInspector(components).InspectAsync(cancellationToken)
-                                          .ConfigureAwait(false);
+                                                                          .ConfigureAwait(false);
         if (!readiness.Ready)
         {
             foreach (var problem in readiness.Problems)
@@ -112,7 +113,8 @@ internal static class SandboxVerifyCommand
 
         var caseFilter = options.CaseFilter is { Count: > 0 } ? options.CaseFilter : null;
         var unknownCases = (caseFilter ?? WindowsSandboxAcceptanceRunner.CaseNames)
-                          .Where(name => !WindowsSandboxAcceptanceRunner.CaseNames.Contains(name, StringComparer.Ordinal))
+                          .Where(name =>
+                                     !WindowsSandboxAcceptanceRunner.CaseNames.Contains(name, StringComparer.Ordinal))
                           .ToArray();
         if (unknownCases.Length > 0)
         {
@@ -124,7 +126,7 @@ internal static class SandboxVerifyCommand
             return 1;
         }
 
-        var caseCount = (caseFilter ?? WindowsSandboxAcceptanceRunner.CaseNames).Count;
+        var caseCount     = (caseFilter ?? WindowsSandboxAcceptanceRunner.CaseNames).Count;
         var workspaceRoot = ResolveWorkspace(options.VerifyWorkspace);
 
         // knownSecrets resolution is identical to run's so the acceptance
@@ -132,7 +134,7 @@ internal static class SandboxVerifyCommand
         // key source (e.g. a credential store unreadable here) only means no
         // known secrets: verify never calls a model and must not be blocked by
         // the key.
-        var resolution = await ConfigResolver.ResolveAsync(null, cancellationToken).ConfigureAwait(false);
+        var resolution   = await ConfigResolver.ResolveAsync(null, cancellationToken).ConfigureAwait(false);
         var knownSecrets = ResolveKnownSecrets(context, resolution, cancellationToken);
 
         // The shared composition path (session-directory guard + Compose) also
@@ -142,7 +144,7 @@ internal static class SandboxVerifyCommand
         {
             preview = SandboxCliComposition.TryCompose(settings, resolution.Config.SessionDirectory, workspaceRoot,
                                                        knownSecrets)
-                     ?? throw new InvalidOperationException("settings.windowsSandbox.enabled is required for verify.");
+                   ?? throw new InvalidOperationException("settings.windowsSandbox.enabled is required for verify.");
         }
         catch (Exception ex) when (ex is InvalidOperationException or ArgumentException)
         {
@@ -172,16 +174,12 @@ internal static class SandboxVerifyCommand
             }
         }
 
-        WindowsSandboxBackendFactory factory = backendFactory
-                                               ?? ((kind, extraEnvironment) => ComposeCase(settings, kind,
-                                                                                            extraEnvironment,
-                                                                                            workspaceRoot,
-                                                                                            knownSecrets));
-        SandboxVerifyWorkerSpawner spawner = workerSpawner
-                                              ?? ((markerPath, holdSeconds) => StartWorkerProcess(markerPath,
-                                                                                                 holdSeconds,
-                                                                                                 workspaceRoot));
+        var factory = backendFactory ?? ((kind, extraEnvironment) =>
+            ComposeCase(settings, kind, extraEnvironment, workspaceRoot, knownSecrets));
+        var spawner = workerSpawner ?? ((markerPath, holdSeconds) =>
+            StartWorkerProcess(markerPath, holdSeconds, workspaceRoot));
         var runner = new WindowsSandboxAcceptanceRunner(factory, workspaceRoot, spawner);
+
         WindowsSandboxAcceptanceReport report;
         try
         {
@@ -212,9 +210,8 @@ internal static class SandboxVerifyCommand
     ///     before spawning — this command never deletes a caller-supplied path.
     ///     It never elevates and never provisions.
     /// </summary>
-    public static async Task<int> ExecuteWorkerAsync(CommandContext    context,
-                                                     CliOptions         options,
-                                                     CancellationToken  cancellationToken)
+    public static async Task<int> ExecuteWorkerAsync(
+        CommandContext context, CliOptions options, CancellationToken cancellationToken)
     {
         var markerPath    = Path.GetFullPath(options.VerifyMarkerPath!);
         var holdSeconds   = options.VerifyHoldSeconds!.Value;
@@ -226,11 +223,9 @@ internal static class SandboxVerifyCommand
         var markerDirectory = Path.Combine(workspaceRoot, "artifacts");
         if (!Workspace.IsInside(markerDirectory, markerPath))
         {
-            await context.Io.WriteErrorLineAsync(
-                $"sandbox verify-worker: marker 必须位于验收工作区的 artifacts 目录内（{markerDirectory}）；" +
-                $"收到 '{markerPath}'；退出。",
-                cancellationToken)
-                         .ConfigureAwait(false);
+            await context
+                 .Io.WriteErrorLineAsync($"sandbox verify-worker: marker 必须位于验收工作区的 artifacts 目录内（{markerDirectory}）；" +
+                                         $"收到 '{markerPath}'；退出。", cancellationToken).ConfigureAwait(false);
             return 1;
         }
 
@@ -240,8 +235,7 @@ internal static class SandboxVerifyCommand
         if (settings is not { Enabled: true })
         {
             await context.Io.WriteErrorLineAsync("sandbox verify-worker: settings.windowsSandbox.enabled 不是 true；退出。",
-                                                 cancellationToken)
-                         .ConfigureAwait(false);
+                                                 cancellationToken).ConfigureAwait(false);
             return 1;
         }
 
@@ -261,7 +255,7 @@ internal static class SandboxVerifyCommand
 
             // Composition matches the parent verify: the same session-directory
             // guard and knownSecrets resolution as run.
-            var resolution = await ConfigResolver.ResolveAsync(null, cancellationToken).ConfigureAwait(false);
+            var resolution   = await ConfigResolver.ResolveAsync(null, cancellationToken).ConfigureAwait(false);
             var knownSecrets = ResolveKnownSecrets(context, resolution, cancellationToken);
             var execution = SandboxCliComposition.TryCompose(settings, resolution.Config.SessionDirectory,
                                                              workspaceRoot, knownSecrets);
@@ -273,14 +267,16 @@ internal static class SandboxVerifyCommand
             }
 
             var plan = new PreparedProcessExecution(waitfor,
-                                                    ["/t", WorkerSleeperDurationSeconds.ToString(),
-                                                     $"th-{Guid.NewGuid():N}"],
+                                                    [
+                                                        "/t", WorkerSleeperDurationSeconds.ToString(),
+                                                        $"th-{Guid.NewGuid():N}"
+                                                    ],
                                                     workspaceRoot, WorkerSleeperDurationSeconds + 60, false, null);
-            var artifactDirectory = Path.GetDirectoryName(Path.GetFullPath(markerPath))!;
-            var stdout = new VerifyOutputCapture(Path.Combine(artifactDirectory, "worker.stdout.txt"));
-            var stderr = new VerifyOutputCapture(Path.Combine(artifactDirectory, "worker.stderr.txt"));
+            var       artifactDirectory = Path.GetDirectoryName(Path.GetFullPath(markerPath))!;
+            var       stdout = new VerifyOutputCapture(Path.Combine(artifactDirectory, "worker.stdout.txt"));
+            var       stderr = new VerifyOutputCapture(Path.Combine(artifactDirectory, "worker.stderr.txt"));
             using var workerCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            var runTask = execution.Backend.ExecuteAsync(plan, stdout, stderr, workerCancellation.Token);
+            var       runTask = execution.Backend.ExecuteAsync(plan, stdout, stderr, workerCancellation.Token);
 
             await Task.Delay(TimeSpan.FromSeconds(WorkerRunnerStartupDelaySeconds), cancellationToken)
                       .ConfigureAwait(false);
@@ -351,11 +347,12 @@ internal static class SandboxVerifyCommand
     ///     composition path as run (allowlist + TEMP/TMP redirect + secret
     ///     removal); the spawn env is never hand-built around it.
     /// </summary>
-    private static WindowsSandboxExecution ComposeCase(WindowsSandboxSettings             settings,
-                                                       SandboxPolicyKind                  policyKind,
-                                                       IReadOnlyDictionary<string, string>? extraEnvironment,
-                                                       string                             workspaceRoot,
-                                                       IReadOnlyDictionary<string, string> knownSecrets)
+    private static WindowsSandboxExecution ComposeCase(
+        WindowsSandboxSettings               settings,
+        SandboxPolicyKind                    policyKind,
+        IReadOnlyDictionary<string, string>? extraEnvironment,
+        string                               workspaceRoot,
+        IReadOnlyDictionary<string, string>  knownSecrets)
     {
         var merged = extraEnvironment is null
             ? settings.ExtraEnvironment
@@ -377,16 +374,12 @@ internal static class SandboxVerifyCommand
         return merged;
     }
 
-    private static string ResolveWorkspace(string? requested)
-    {
-        return requested is null
-            ? Path.Combine(Path.GetTempPath(), "TinyHarness",
-                           $"sandbox-verify-{DateTimeOffset.Now:yyyyMMdd-HHmmss}")
-            : Path.GetFullPath(requested);
-    }
+    private static string ResolveWorkspace(string? requested) => requested is null
+        ? Path.Combine(Path.GetTempPath(), "TinyHarness", $"sandbox-verify-{DateTimeOffset.Now:yyyyMMdd-HHmmss}")
+        : Path.GetFullPath(requested);
 
-    private static ISandboxVerifyWorkerProcess StartWorkerProcess(string markerPath, int holdSeconds,
-                                                                  string workspaceRoot)
+    private static ISandboxVerifyWorkerProcess StartWorkerProcess(
+        string markerPath, int holdSeconds, string workspaceRoot)
     {
         var executable = Environment.ProcessPath
                       ?? throw new InvalidOperationException("Cannot determine the current process executable.");
@@ -408,7 +401,7 @@ internal static class SandboxVerifyCommand
             startInfo.ArgumentList.Add(argument);
 
         var process = Process.Start(startInfo)
-                     ?? throw new InvalidOperationException("Failed to start the sandbox verify-worker process.");
+                   ?? throw new InvalidOperationException("Failed to start the sandbox verify-worker process.");
         return new WorkerProcessHandle(process);
     }
 
@@ -430,8 +423,8 @@ internal static class SandboxVerifyCommand
                 .ConfigureAwait(false);
         await io
              .WriteLineAsync(
-                            $"  versions : 本 build 期望 setup v{WindowsSandboxComponents.SetupVersion} / ipc v{WindowsSandboxComponents.IpcVersion}",
-                            cancellationToken)
+                             $"  versions : 本 build 期望 setup v{WindowsSandboxComponents.SetupVersion} / ipc v{WindowsSandboxComponents.IpcVersion}",
+                             cancellationToken)
              .ConfigureAwait(false);
         await io.WriteLineAsync($"  account  : {components.OfflineUsername}（offline，断网）", cancellationToken)
                 .ConfigureAwait(false);
@@ -442,16 +435,17 @@ internal static class SandboxVerifyCommand
         await io
              .WriteLineAsync($"  将执行 {caseCount} 条真实沙箱命令：每条命令一次 ACL refresh（普通权限）与一个 runner 进程。",
                              cancellationToken)
-                .ConfigureAwait(false);
+             .ConfigureAwait(false);
         await io
              .WriteLineAsync("  本命令不执行 provisioning、不修改机器配置（账户/ACL/注册表/防火墙），也不回退宿主执行；" +
                              "这是真实系统测试，应在获得授权、可接受该测试的环境执行。",
                              cancellationToken)
-                .ConfigureAwait(false);
+             .ConfigureAwait(false);
     }
 
-    private static async Task<int> ReportAsync(ICliConsole io, WindowsSandboxAcceptanceReport report,
-                                               string workspaceRoot, CancellationToken cancellationToken)
+    private static async Task<int> ReportAsync(
+        ICliConsole       io, WindowsSandboxAcceptanceReport report, string workspaceRoot,
+        CancellationToken cancellationToken)
     {
         await io.WriteLineAsync($"  workspace: {workspaceRoot}（产物保留）", cancellationToken).ConfigureAwait(false);
         foreach (var result in report.Cases)
@@ -467,10 +461,10 @@ internal static class SandboxVerifyCommand
                 await io.WriteLineAsync($"      detail : {detail}", cancellationToken).ConfigureAwait(false);
         }
 
-        var passed = report.Cases.Count(result => result.Verdict == SandboxAcceptanceVerdict.Pass);
-        var failed = report.Cases.Count(result => result.Verdict == SandboxAcceptanceVerdict.Fail);
+        var passed        = report.Cases.Count(result => result.Verdict == SandboxAcceptanceVerdict.Pass);
+        var failed        = report.Cases.Count(result => result.Verdict == SandboxAcceptanceVerdict.Fail);
         var indeterminate = report.Cases.Count(result => result.Verdict == SandboxAcceptanceVerdict.Indeterminate);
-        var skipped = report.Cases.Count(result => result.Verdict == SandboxAcceptanceVerdict.Skipped);
+        var skipped       = report.Cases.Count(result => result.Verdict == SandboxAcceptanceVerdict.Skipped);
         await io
              .WriteLineAsync($"  合计: {report.Cases.Count} 用例；PASS {passed}，FAIL {failed}，INDETERMINATE {indeterminate}，SKIPPED {skipped}",
                              cancellationToken)
@@ -490,12 +484,10 @@ internal static class SandboxVerifyCommand
         return clean ? 0 : AcceptanceFailedExitCode;
     }
 
-    private static bool IsBlankSettings(WindowsSandboxSettings settings)
-    {
-        return string.IsNullOrWhiteSpace(settings.SetupExecutablePath) &&
-               string.IsNullOrWhiteSpace(settings.RunnerExecutablePath) &&
-               string.IsNullOrWhiteSpace(settings.SandboxHome);
-    }
+    private static bool IsBlankSettings(WindowsSandboxSettings settings) =>
+        string.IsNullOrWhiteSpace(settings.SetupExecutablePath)  &&
+        string.IsNullOrWhiteSpace(settings.RunnerExecutablePath) &&
+        string.IsNullOrWhiteSpace(settings.SandboxHome);
 
     private static List<string> CollectPathProblems(WindowsSandboxSettings settings)
     {
@@ -592,7 +584,7 @@ internal sealed class VerifyOutputCapture(string artifactPath, int modelCharacte
         }
 
         var omitted = Math.Max(0, _totalCharacters - _view.Length);
-        var content = _view.ToString(0, _headLimit)                                              +
+        var content = _view.ToString(0, _headLimit)                                           +
                       $"\n... [truncated {omitted} chars; full output: {artifactPath}] ...\n" +
                       _view.ToString(_view.Length - _tailLimit, _tailLimit);
         return new CapturedProcessOutput(content, true, _totalCharacters, artifactPath);

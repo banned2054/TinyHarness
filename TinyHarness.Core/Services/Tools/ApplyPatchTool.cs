@@ -145,29 +145,32 @@ public sealed class ApplyPatchTool(Workspace workspace) : ITool
                     };
 
                 var exists = File.Exists(absolute);
-                if (exists && file.IsNewFile)
-                    return new ToolResult
-                    {
-                        Succeeded = false,
-                        Content =
-                            $"File already exists: {workspace.ToDisplay(absolute)}; a new-file patch cannot modify it."
-                    };
-
-                if (!exists && !file.IsNewFile)
-                    return new ToolResult
-                    {
-                        Succeeded = false,
-                        Content   = $"File not found: {workspace.ToDisplay(absolute)}"
-                    };
-
-                // Re-check the final target at execution time. The leaf itself
-                // only exists for a modification; a new file is verified
-                // through its nearest existing ancestor directory, because link
-                // resolution throws for a path that does not exist yet.
-                if (exists)
-                    workspace.EnsureFinalTargetInside(absolute, false, "File");
-                else
-                    EnsureNewFileInside(workspace, absolute);
+                switch (exists)
+                {
+                    case true when file.IsNewFile :
+                        return new ToolResult
+                        {
+                            Succeeded = false,
+                            Content =
+                                $"File already exists: {workspace.ToDisplay(absolute)}; a new-file patch cannot modify it."
+                        };
+                    case false when !file.IsNewFile :
+                        return new ToolResult
+                        {
+                            Succeeded = false,
+                            Content   = $"File not found: {workspace.ToDisplay(absolute)}"
+                        };
+                    // Re-check the final target at execution time. The leaf itself
+                    // only exists for a modification; a new file is verified
+                    // through its nearest existing ancestor directory, because link
+                    // resolution throws for a path that does not exist yet.
+                    case true :
+                        workspace.EnsureFinalTargetInside(absolute, false, "File");
+                        break;
+                    default :
+                        EnsureNewFileInside(workspace, absolute);
+                        break;
+                }
 
                 var original = string.Empty;
                 if (exists)

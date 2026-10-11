@@ -66,13 +66,10 @@ public static class ChatApiKindParser
     ///     写出规范 kebab-case 值，与读取端互逆。
     ///     Writes the canonical kebab-case value, the inverse of the reading side.
     /// </summary>
-    public static string ToValueString(ChatApiKind value)
+    public static string ToValueString(ChatApiKind value) => value switch
     {
-        return value switch
-        {
-            ChatApiKind.ChatCompletions => ChatCompletionsValue,
-            ChatApiKind.Responses => ResponsesValue,
-            _ => throw new ArgumentOutOfRangeException(nameof(value), value, "Unknown chat API kind.")
-        };
-    }
+        ChatApiKind.ChatCompletions => ChatCompletionsValue,
+        ChatApiKind.Responses => ResponsesValue,
+        _ => throw new ArgumentOutOfRangeException(nameof(value), value, "Unknown chat API kind.")
+    };
 }

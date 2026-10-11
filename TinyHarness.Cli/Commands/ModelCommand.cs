@@ -16,23 +16,17 @@ internal static class ModelCommand
     ///     执行 model 子命令。
     ///     Executes a model subcommand.
     /// </summary>
-    public static async Task<int> ExecuteAsync(CommandContext    context, CliOptions options,
-                                               CancellationToken cancellationToken)
+    public static async Task<int> ExecuteAsync(
+        CommandContext context, CliOptions options, CancellationToken cancellationToken) => options.Subcommand switch
     {
-        switch (options.Subcommand)
-        {
-            case "list" :
-                return await ListAsync(context, options.ProviderName, cancellationToken).ConfigureAwait(false);
-            case "add" :
-                return await AddAsync(context, options.Primary!, options.ContextWindowTokens!.Value,
-                                      options.ProviderName, cancellationToken).ConfigureAwait(false);
-            case "use" :
-                return await UseAsync(context, options.Primary!, options.ProviderName, cancellationToken)
-                   .ConfigureAwait(false);
-            default :
-                throw new InvalidOperationException($"Unknown model subcommand '{options.Subcommand}'.");
-        }
-    }
+        "list" => await ListAsync(context, options.ProviderName, cancellationToken).ConfigureAwait(false),
+        "add" => await AddAsync(context, options.Primary!, options.ContextWindowTokens!.Value, options.ProviderName,
+                                cancellationToken)
+           .ConfigureAwait(false),
+        "use" => await UseAsync(context, options.Primary!, options.ProviderName, cancellationToken)
+           .ConfigureAwait(false),
+        _ => throw new InvalidOperationException($"Unknown model subcommand '{options.Subcommand}'.")
+    };
 
     /// <summary>
     ///     列出 profile 中配置的模型并标记默认模型。
@@ -63,8 +57,7 @@ internal static class ModelCommand
                                     cancellationToken).ConfigureAwait(false);
         }
 
-        await io.WriteLineAsync(
-                                profile.DefaultModel.Length > 0
+        await io.WriteLineAsync(profile.DefaultModel.Length > 0
                                     ? $"default model: {profile.DefaultModel}"
                                     : "no default model selected - run 'tinyharness model use <model-id>'",
                                 cancellationToken).ConfigureAwait(false);
@@ -83,8 +76,8 @@ internal static class ModelCommand
             await UserConfigAccess.RequireProfileAsync(context, providerName, cancellationToken).ConfigureAwait(false);
 
         if (profile.Models.Any(m => string.Equals(m.Id, modelId, StringComparison.Ordinal)))
-            throw new InvalidOperationException(
-                                                $"Model '{modelId}' already exists in profile '{profile.Name}'. Run 'tinyharness model use {modelId}' to select it.");
+            throw new
+                InvalidOperationException($"Model '{modelId}' already exists in profile '{profile.Name}'. Run 'tinyharness model use {modelId}' to select it.");
 
         var makeDefault = profile.DefaultModel.Length == 0;
         var updated = profile with
@@ -111,8 +104,8 @@ internal static class ModelCommand
     ///     选择默认模型；id 必须已在 profile 中声明。
     ///     Selects the default model; the id must already be declared in the profile.
     /// </summary>
-    private static async Task<int> UseAsync(CommandContext    context, string modelId, string? providerName,
-                                            CancellationToken cancellationToken)
+    private static async Task<int> UseAsync(
+        CommandContext context, string modelId, string? providerName, CancellationToken cancellationToken)
     {
         var io = context.Io;
         var (config, profile) =
@@ -124,8 +117,8 @@ internal static class ModelCommand
             var known = profile.Models.Count > 0
                 ? string.Join(", ", profile.Models.Select(m => m.Id))
                 : "(none - run 'tinyharness model add <model-id> --context-window <tokens>')";
-            throw new InvalidOperationException(
-                                                $"Model '{modelId}' is not configured in profile '{profile.Name}'. Known models: {known}.");
+            throw new
+                InvalidOperationException($"Model '{modelId}' is not configured in profile '{profile.Name}'. Known models: {known}.");
         }
 
         var updated = profile with { DefaultModel = modelId };
