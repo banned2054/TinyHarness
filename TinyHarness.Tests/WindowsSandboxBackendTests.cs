@@ -30,11 +30,9 @@ public class WindowsSandboxBackendTests
         TerminateWriteTimeout   = TimeSpan.FromSeconds(1)
     };
 
-    private static PreparedProcessExecution Plan(string workingDirectory, int timeoutSeconds = 30)
-    {
-        return new PreparedProcessExecution("cmd.exe", ["/c", "whoami"], workingDirectory, timeoutSeconds, false,
-                                            null);
-    }
+    private static PreparedProcessExecution Plan(string workingDirectory, int timeoutSeconds = 30) =>
+        new("cmd.exe", ["/c", "whoami"], workingDirectory, timeoutSeconds, false,
+            null);
 
     private static (WindowsSandboxBackend Backend, FakeSetupInvoker Setup, FakeDesktopFactory Desktops,
         FakeSandboxRunnerLauncher Launcher, SandboxTestHome Home) CreateBackend(
@@ -63,10 +61,7 @@ public class WindowsSandboxBackendTests
         return (backend, setup, desktops, launcher, home);
     }
 
-    private static string Base64(string text)
-    {
-        return Convert.ToBase64String(Encoding.UTF8.GetBytes(text));
-    }
+    private static string Base64(string text) => Convert.ToBase64String(Encoding.UTF8.GetBytes(text));
 
     // ---- 正常终态 ----
 
@@ -89,7 +84,7 @@ public class WindowsSandboxBackendTests
         Assert.Contains("stdout-hello 世界", stdout.Content);
         Assert.Contains("stderr-line", stderr.Content);
         Assert.DoesNotContain("stderr", stdout.Content, StringComparison.Ordinal);
-        Assert.All(new[] { stdout, stderr }, capture => Assert.Equal(string.Empty, capture.Chunks.Last()));
+        Assert.All([stdout, stderr], capture => Assert.Equal(string.Empty, capture.Chunks.Last()));
     }
 
     private static async Task NormalRunner(Stream downstream, Stream upstream, CancellationToken end)
@@ -119,12 +114,10 @@ public class WindowsSandboxBackendTests
     {
         if (!OperatingSystem.IsWindows()) return;
 
-        var (timedOutBackend, _, _, _, timedOutHome) = CreateBackend(
-                                                                     ScriptedRunner(new RunnerExitPayload
+        var (timedOutBackend, _, _, _, timedOutHome) = CreateBackend(ScriptedRunner(new RunnerExitPayload
                                                                                   { ExitCode = 192, TimedOut = true }));
         using var timedOutScope = timedOutHome;
-        var (naturalBackend, _, _, _, naturalHome) = CreateBackend(
-                                                                   ScriptedRunner(new RunnerExitPayload
+        var (naturalBackend, _, _, _, naturalHome) = CreateBackend(ScriptedRunner(new RunnerExitPayload
                                                                                 { ExitCode = 192, TimedOut = false }));
         using var naturalScope = naturalHome;
 
@@ -415,14 +408,11 @@ public class WindowsSandboxBackendTests
                 var frame = await RunnerFrameCodec.ReadFrameAsync(downstream, end);
                 if (frame is null) return; // the connection dropped; stop reading
 
-                if (frame.Type == "terminate")
-                {
-                    terminateSeen.TrySetResult(true);
-                    await RunnerFrameCodec.WriteFrameAsync(upstream, "exit",
-                                                           new RunnerExitPayload { ExitCode = 1, TimedOut = false },
-                                                           end);
-                    return;
-                }
+                if (frame.Type != "terminate") continue;
+                terminateSeen.TrySetResult(true);
+                await RunnerFrameCodec.WriteFrameAsync(upstream, "exit",
+                                                       new RunnerExitPayload { ExitCode = 1, TimedOut = false }, end);
+                return;
             }
         });
         using var homeScope    = home;
@@ -588,11 +578,9 @@ public class WindowsSandboxBackendTests
     {
         if (!OperatingSystem.IsWindows()) return;
 
-        var spawnSeen = new TaskCompletionSource<RunnerSpawnRequest>(
-                                                                     TaskCreationOptions
+        var spawnSeen = new TaskCompletionSource<RunnerSpawnRequest>(TaskCreationOptions
                                                                         .RunContinuationsAsynchronously);
-        var (backend, setup, desktops, launcher, home) = CreateBackend(
-                                                                       async (downstream, upstream, end) =>
+        var (backend, setup, desktops, launcher, home) = CreateBackend(async (downstream, upstream, end) =>
                                                                        {
                                                                            var frame = await RunnerFrameCodec
                                                                               .ReadFrameAsync(downstream, end);
@@ -711,9 +699,7 @@ public class WindowsSandboxBackendTests
     {
         if (!OperatingSystem.IsWindows()) return;
 
-        var (backend, _, _, launcher, home) = CreateBackend(
-                                                            NormalRunner,
-                                                            refreshError :
+        var (backend, _, _, launcher, home) = CreateBackend(NormalRunner, refreshError :
                                                             new
                                                                 InvalidOperationException("provisioning stale: helper_exit_1"));
         using var homeScope = home;
@@ -735,8 +721,7 @@ public class WindowsSandboxBackendTests
     {
         if (!OperatingSystem.IsWindows()) return;
 
-        var (backend, _, _, _, home) = CreateBackend(
-                                                     async (downstream, upstream, end) =>
+        var (backend, _, _, _, home) = CreateBackend(async (downstream, upstream, end) =>
                                                      {
                                                          await RunnerFrameCodec.ReadFrameAsync(downstream, end);
                                                          await Task.Delay(Timeout.Infinite, end);

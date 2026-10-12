@@ -236,10 +236,8 @@ internal static class PatchParser
     ///     以统一消息抛出 hunk 范围格式错误。
     ///     Throws the consistent diagnostic for a malformed hunk range.
     /// </summary>
-    private static (int, int) ThrowRange(string line)
-    {
+    private static (int, int) ThrowRange(string line) =>
         throw new InvalidDataException($"apply_patch: malformed range in hunk header '{line}'.");
-    }
 
     /// <summary>
     ///     按 LF/CRLF 拆分补丁文本，去除分隔符，并避免末尾换行产生幽灵空行。

@@ -29,23 +29,17 @@ public class MicrosoftAiChatClientResponsesTests
 {
     private const string Model = "resp-model";
 
-    private static IChatCompletionClient NewClient(MockSseServer server)
-    {
-        return ModelClientFactory.Create(Model, server.BaseUrl, "test-key", ChatApiKind.Responses);
-    }
+    private static IChatCompletionClient NewClient(MockSseServer server) =>
+        ModelClientFactory.Create(Model, server.BaseUrl, "test-key", ChatApiKind.Responses);
 
-    private static ChatCompletionRequest Request(params ChatMessage[] messages)
+    private static ChatCompletionRequest Request(params ChatMessage[] messages) => new()
     {
-        return new ChatCompletionRequest
-        {
-            Model    = Model,
-            Messages = messages
-        };
-    }
+        Model    = Model,
+        Messages = messages
+    };
 
-    private static async Task<List<ChatStreamEvent>> CollectAsync(IChatCompletionClient client,
-                                                                  ChatCompletionRequest request,
-                                                                  CancellationToken     cancellationToken = default)
+    private static async Task<List<ChatStreamEvent>> CollectAsync(
+        IChatCompletionClient client, ChatCompletionRequest request, CancellationToken cancellationToken = default)
     {
         var events = new List<ChatStreamEvent>();
         await foreach (var @event in client.CompleteAsync(request, cancellationToken)) events.Add(@event);
@@ -80,9 +74,9 @@ public class MicrosoftAiChatClientResponsesTests
     private static string ResponsesSse(int calls)
     {
         var s = new StringBuilder();
-        var response = JsonNode.Parse(
-                                      """{"id":"resp_1","object":"response","created_at":1,"status":"in_progress","model":"mock","output":[],"store":false}""")
-            !.AsObject();
+        var response =
+            JsonNode.Parse("""{"id":"resp_1","object":"response","created_at":1,"status":"in_progress","model":"mock","output":[],"store":false}""")
+                !.AsObject();
         s.Append(Event("response.created",
                        new JsonObject { ["sequence_number"] = 0, ["response"] = response.DeepClone() }));
 
@@ -126,8 +120,8 @@ public class MicrosoftAiChatClientResponsesTests
         }
 
         response["status"] = "completed";
-        response["usage"] = JsonNode.Parse(
-                                           """{"input_tokens":9,"output_tokens":5,"total_tokens":14,"input_tokens_details":{"cached_tokens":2},"output_tokens_details":{"reasoning_tokens":1}}""");
+        response["usage"] =
+            JsonNode.Parse("""{"input_tokens":9,"output_tokens":5,"total_tokens":14,"input_tokens_details":{"cached_tokens":2},"output_tokens_details":{"reasoning_tokens":1}}""");
         s.Append(Event("response.completed", new JsonObject { ["sequence_number"] = 8, ["response"] = response }));
         return s.ToString();
     }
@@ -136,9 +130,9 @@ public class MicrosoftAiChatClientResponsesTests
     private static string TextSse(string text)
     {
         var s = new StringBuilder();
-        var response = JsonNode.Parse(
-                                      """{"id":"resp_2","object":"response","created_at":2,"status":"in_progress","model":"mock","output":[],"store":false}""")
-            !.AsObject();
+        var response =
+            JsonNode.Parse("""{"id":"resp_2","object":"response","created_at":2,"status":"in_progress","model":"mock","output":[],"store":false}""")
+                !.AsObject();
         s.Append(Event("response.created",
                        new JsonObject { ["sequence_number"] = 0, ["response"] = response.DeepClone() }));
         s.Append(Event("response.output_text.delta", new JsonObject
@@ -152,10 +146,7 @@ public class MicrosoftAiChatClientResponsesTests
         return s.ToString();
     }
 
-    private static IReadOnlyList<ToolDefinition> ReadFileTool()
-    {
-        return [new FakeTool("read_file").Definition];
-    }
+    private static IReadOnlyList<ToolDefinition> ReadFileTool() => [new FakeTool("read_file").Definition];
 
     // ---- tests ---------------------------------------------------------------
 

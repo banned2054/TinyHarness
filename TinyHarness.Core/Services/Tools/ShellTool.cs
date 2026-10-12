@@ -128,12 +128,9 @@ public sealed class ShellTool : ITool
                        int outputCharacterLimit = DefaultOutputCharactersPerStream,
                        IProcessExecutionBackend? processBackend = null,
                        ProcessExecutionPolicy? executionPolicy = null)
-        : this(workspace, defaultTimeoutSeconds, null, artifactRoot,
-               outputCharacterLimit, processBackend,
-               executionPolicy)
-    {
+        : this(workspace, defaultTimeoutSeconds, null, artifactRoot, outputCharacterLimit, processBackend,
+               executionPolicy) =>
         _captureFactory = captureFactory ?? throw new ArgumentNullException(nameof(captureFactory));
-    }
 
     public ToolDefinition Definition { get; } = new()
     {

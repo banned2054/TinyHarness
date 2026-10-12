@@ -50,10 +50,7 @@ internal sealed class SmokeWorkspace : IDisposable
     ///     包装已经创建的临时工作区根目录。
     ///     Wraps an already-created temporary workspace root.
     /// </summary>
-    private SmokeWorkspace(string root)
-    {
-        Root = root;
-    }
+    private SmokeWorkspace(string root) => Root = root;
 
     public string Root { get; }
 
@@ -312,23 +309,17 @@ internal sealed class SmokeStep
     ///     创建文本增量事件。
     ///     Creates a text-delta event.
     /// </summary>
-    private static ChatStreamEvent Content(string chunk)
+    private static ChatStreamEvent Content(string chunk) => new()
     {
-        return new ChatStreamEvent
-        {
-            Kind         = ChatStreamEventKind.ContentDelta,
-            ContentDelta = chunk
-        };
-    }
+        Kind         = ChatStreamEventKind.ContentDelta,
+        ContentDelta = chunk
+    };
 
     /// <summary>
     ///     创建正常结束流事件。
     ///     Creates a normal end-of-stream event.
     /// </summary>
-    private static ChatStreamEvent End()
-    {
-        return new ChatStreamEvent { Kind = ChatStreamEventKind.End };
-    }
+    private static ChatStreamEvent End() => new() { Kind = ChatStreamEventKind.End };
 }
 
 /// <summary>
@@ -543,15 +534,12 @@ internal static class SmokeScript
     ///     创建带工具名、参数和结果断言的脚本步骤。
     ///     Creates a scripted tool step with its name, arguments, and result assertion.
     /// </summary>
-    private static SmokeStep Tool(string name, string argumentsJson, Action<string> verify)
+    private static SmokeStep Tool(string name, string argumentsJson, Action<string> verify) => new()
     {
-        return new SmokeStep
-        {
-            ToolName      = name,
-            ArgumentsJson = argumentsJson,
-            VerifyResult  = verify
-        };
-    }
+        ToolName      = name,
+        ArgumentsJson = argumentsJson,
+        VerifyResult  = verify
+    };
 
     /// <summary>
     ///     断言工具结果包含指定片段，否则抛出带上下文的冒烟错误。

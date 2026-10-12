@@ -766,7 +766,7 @@ public sealed class AgentLoop
 
             case PermissionDecision.Ask :
                 var approvalProvider = _approver ?? throw new InvalidOperationException(
-                     "An approval provider is required when the permission engine returns Ask.");
+                 "An approval provider is required when the permission engine returns Ask.");
                 await PublishEventAsync(HostEventKind.ApprovalRequested, preparation, cancellationToken)
                    .ConfigureAwait(false);
                 var action = await approvalProvider.PromptAsync(preparation, cancellationToken);
@@ -841,19 +841,14 @@ public sealed class AgentLoop
         ///     创建可进入授权阶段的调用记录。
         ///     Creates a call record ready for authorization.
         /// </summary>
-        public static RoundCall Ready(ChatToolCall call, ITool tool, ToolPreparation preparation)
-        {
-            return new RoundCall(call, tool, preparation, null);
-        }
+        public static RoundCall Ready(ChatToolCall call, ITool tool, ToolPreparation preparation) =>
+            new(call, tool, preparation, null);
 
         /// <summary>
         ///     创建携带准备错误、禁止执行的调用记录。
         ///     Creates a non-executable call record carrying its preparation error.
         /// </summary>
-        public static RoundCall Failed(ChatToolCall call, string error)
-        {
-            return new RoundCall(call, null, null, error);
-        }
+        public static RoundCall Failed(ChatToolCall call, string error) => new(call, null, null, error);
     }
 
     /// <summary>

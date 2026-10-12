@@ -5,23 +5,17 @@ namespace TinyHarness.Tests;
 
 public class WorkerResultValidatorTests
 {
-    private static WorkerResult CompletedResult()
+    private static WorkerResult CompletedResult() => new()
     {
-        return new WorkerResult
-        {
-            Status     = WorkerResultStatus.Completed,
-            Conclusion = "The retry budget is enforced in RetryPolicy.Evaluate."
-        };
-    }
+        Status     = WorkerResultStatus.Completed,
+        Conclusion = "The retry budget is enforced in RetryPolicy.Evaluate."
+    };
 
-    private static WorkerResult NonCompletedResult(WorkerResultStatus status)
+    private static WorkerResult NonCompletedResult(WorkerResultStatus status) => new()
     {
-        return new WorkerResult
-        {
-            Status       = status,
-            StatusDetail = "Stopped at the tool-call limit; no final conclusion was reached."
-        };
-    }
+        Status       = status,
+        StatusDetail = "Stopped at the tool-call limit; no final conclusion was reached."
+    };
 
     // ---- legal shapes per status ---------------------------------------------
 

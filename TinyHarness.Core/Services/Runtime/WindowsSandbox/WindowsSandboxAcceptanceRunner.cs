@@ -842,7 +842,7 @@ public sealed class WindowsSandboxAcceptanceRunner
 
     private IProcessOutputCapture CreateCapture(string artifactPath) => _captureFactory?.Invoke(artifactPath) ??
                                                                         new ProcessOutputCapture(artifactPath,
-                                                                            _limits.ModelOutputCharacterLimit, []);
+                                                                                 _limits.ModelOutputCharacterLimit, []);
 
     /// <summary>
     ///     cmd /c 载荷内的裸路径约束。runner 会按 CRT 规则重组 argv：含空格/引号的路径经双层
@@ -942,11 +942,11 @@ public sealed class WindowsSandboxAcceptanceRunner
     private async Task<List<SandboxSurvivorScan.Survivor>>
         WaitForNoSurvivorsAsync(CancellationToken cancellationToken) => await SandboxSurvivorScan
                                                                              .WaitForNoSurvivorsAsync(_baselineIds,
-                                                                                  _limits.SurvivorImageNames,
-                                                                                  _runStartedLocal,
-                                                                                  _limits.ProcessScanTimeout,
-                                                                                  _limits.ProcessScanInterval,
-                                                                                  cancellationToken)
+                                                                                       _limits.SurvivorImageNames,
+                                                                                       _runStartedLocal,
+                                                                                       _limits.ProcessScanTimeout,
+                                                                                       _limits.ProcessScanInterval,
+                                                                                       cancellationToken)
                                                                              .ConfigureAwait(false);
 
     private static async Task<bool> WaitForFileAsync(

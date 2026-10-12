@@ -23,31 +23,25 @@ namespace TinyHarness.Tests;
 /// </summary>
 public class HostEventStreamTests
 {
-    private static AgentOptions Options(int maxSteps = 10)
+    private static AgentOptions Options(int maxSteps = 10) => new()
     {
-        return new AgentOptions
-        {
-            Model                     = "test-model",
-            MaxAgentSteps             = maxSteps,
-            DefaultToolTimeoutSeconds = 30
-        };
-    }
+        Model                     = "test-model",
+        MaxAgentSteps             = maxSteps,
+        DefaultToolTimeoutSeconds = 30
+    };
 
-    private static IReadOnlyList<ChatStreamEvent> TextWithUsage(string content, int inputTokens, int outputTokens,
-                                                                string finishReason = "stop")
-    {
-        return
-        [
-            new ChatStreamEvent { Kind = ChatStreamEventKind.ContentDelta, ContentDelta = content },
-            new ChatStreamEvent
-            {
-                Kind         = ChatStreamEventKind.End,
-                InputTokens  = inputTokens,
-                OutputTokens = outputTokens,
-                FinishReason = finishReason
-            }
-        ];
-    }
+    private static IReadOnlyList<ChatStreamEvent> TextWithUsage(
+        string content, int inputTokens, int outputTokens, string finishReason = "stop") =>
+    [
+        new() { Kind = ChatStreamEventKind.ContentDelta, ContentDelta = content },
+        new()
+        {
+            Kind         = ChatStreamEventKind.End,
+            InputTokens  = inputTokens,
+            OutputTokens = outputTokens,
+            FinishReason = finishReason
+        }
+    ];
 
     [Fact]
     public async Task TextDeltas_PublishOneEventPerContentFragmentInStreamOrder()
@@ -353,43 +347,35 @@ public class HostEventStreamTests
         Assert.Equal(65, result.OutputTokens);
     }
 
-    private static AgentOptions TightBudgetOptions()
+    private static AgentOptions TightBudgetOptions() => new()
     {
-        return new AgentOptions
+        Model                     = "test-model",
+        MaxAgentSteps             = 10,
+        DefaultToolTimeoutSeconds = 30,
+        Context = new ContextOptions
         {
-            Model                     = "test-model",
-            MaxAgentSteps             = 10,
-            DefaultToolTimeoutSeconds = 30,
-            Context = new ContextOptions
-            {
-                ContextWindowTokens  = 1000,
-                ReservedOutputTokens = 30
-            }
-        };
-    }
+            ContextWindowTokens  = 1000,
+            ReservedOutputTokens = 30
+        }
+    };
 
-    private static string StateJson(string goal, string modified, string decision)
+    private static string StateJson(string goal, string modified, string decision) => new JsonObject
     {
-        return new JsonObject
-        {
-            ["goal"]               = goal,
-            ["constraints"]        = new JsonArray(),
-            ["decisions"]          = new JsonArray(decision),
-            ["filesInspected"]     = new JsonArray("src"),
-            ["filesModified"]      = new JsonArray(modified),
-            ["commandsAndResults"] = new JsonArray(),
-            ["pendingWork"]        = new JsonArray()
-        }.ToJsonString();
-    }
+        ["goal"]               = goal,
+        ["constraints"]        = new JsonArray(),
+        ["decisions"]          = new JsonArray(decision),
+        ["filesInspected"]     = new JsonArray("src"),
+        ["filesModified"]      = new JsonArray(modified),
+        ["commandsAndResults"] = new JsonArray(),
+        ["pendingWork"]        = new JsonArray()
+    }.ToJsonString();
 
     private sealed class ScriptedApprover : IApprovalProvider
     {
         private readonly Queue<ApprovalAction> _actions = new();
 
-        public Task<ApprovalAction> PromptAsync(ToolPreparation preparation, CancellationToken cancellationToken)
-        {
-            return Task.FromResult(_actions.Dequeue());
-        }
+        public Task<ApprovalAction> PromptAsync(ToolPreparation preparation, CancellationToken cancellationToken) =>
+            Task.FromResult(_actions.Dequeue());
 
         public void Enqueue(ApprovalAction action)
         {
@@ -404,9 +390,9 @@ public class HostEventStreamTests
         public ValueTask PublishAsync(HostEvent @event, CancellationToken cancellationToken)
         {
             Published++;
-            if (@event.Kind == failOn) throw new InvalidOperationException("sink exploded");
-
-            return ValueTask.CompletedTask;
+            return @event.Kind == failOn
+                ? throw new InvalidOperationException("sink exploded")
+                : ValueTask.CompletedTask;
         }
     }
 

@@ -38,41 +38,32 @@ public sealed record ChatMessage
     ///     创建系统指令消息。
     ///     Creates a system-instruction message.
     /// </summary>
-    public static ChatMessage System(string content)
+    public static ChatMessage System(string content) => new()
     {
-        return new ChatMessage
-        {
-            Role    = ChatRole.System,
-            Content = content
-        };
-    }
+        Role    = ChatRole.System,
+        Content = content
+    };
 
     /// <summary>
     ///     创建用户输入消息。
     ///     Creates a user-input message.
     /// </summary>
-    public static ChatMessage User(string content)
+    public static ChatMessage User(string content) => new()
     {
-        return new ChatMessage
-        {
-            Role    = ChatRole.User,
-            Content = content
-        };
-    }
+        Role    = ChatRole.User,
+        Content = content
+    };
 
     /// <summary>
     ///     创建包含文本和可选工具调用的 assistant 消息。
     ///     Creates an assistant message with text and optional tool calls.
     /// </summary>
-    public static ChatMessage Assistant(string content, IReadOnlyList<ChatToolCall>? toolCalls = null)
+    public static ChatMessage Assistant(string content, IReadOnlyList<ChatToolCall>? toolCalls = null) => new()
     {
-        return new ChatMessage
-        {
-            Role      = ChatRole.Assistant,
-            Content   = content,
-            ToolCalls = toolCalls
-        };
-    }
+        Role      = ChatRole.Assistant,
+        Content   = content,
+        ToolCalls = toolCalls
+    };
 
     /// <summary>
     ///     创建同时携带推理内容、文本和可选工具调用的 assistant 消息。

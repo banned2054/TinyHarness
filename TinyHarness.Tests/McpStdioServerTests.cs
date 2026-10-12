@@ -426,10 +426,7 @@ public class McpStdioServerTests
 
     // ---- helpers -----------------------------------------------------------
 
-    private static Task<IReadOnlyList<JsonElement>> RunAsync(params string[] messages)
-    {
-        return RunAsync(messages, null);
-    }
+    private static Task<IReadOnlyList<JsonElement>> RunAsync(params string[] messages) => RunAsync(messages, null);
 
     private static async Task<IReadOnlyList<JsonElement>> RunAsync(
         IReadOnlyList<string>                                       messages,

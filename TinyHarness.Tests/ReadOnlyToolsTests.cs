@@ -9,20 +9,13 @@ namespace TinyHarness.Tests;
 
 public class ReadOnlyToolsTests
 {
-    private static ChatToolCall Call(ITool tool, string argumentsJson)
-    {
-        return new ChatToolCall("call_1", tool.Definition.Name, argumentsJson);
-    }
+    private static ChatToolCall Call(ITool tool, string argumentsJson) =>
+        new("call_1", tool.Definition.Name, argumentsJson);
 
-    private static ToolPreparation Prepare(ITool tool, string argumentsJson)
-    {
-        return tool.Prepare(Call(tool, argumentsJson));
-    }
+    private static ToolPreparation Prepare(ITool tool, string argumentsJson) => tool.Prepare(Call(tool, argumentsJson));
 
-    private static async Task<ToolResult> ExecuteAsync(ITool tool, ToolPreparation preparation)
-    {
-        return await tool.ExecuteAsync(preparation, CancellationToken.None);
-    }
+    private static async Task<ToolResult> ExecuteAsync(ITool tool, ToolPreparation preparation) =>
+        await tool.ExecuteAsync(preparation, CancellationToken.None);
 
     // ---- read_file ---------------------------------------------------------
 
@@ -552,13 +545,10 @@ public class ReadOnlyToolsTests
         Assert.Contains(loop.History, m => m.Role == ChatRole.Tool && m.Content.Contains("File not found"));
     }
 
-    private static AgentOptions Options()
+    private static AgentOptions Options() => new()
     {
-        return new AgentOptions
-        {
-            Model                     = "test-model",
-            MaxAgentSteps             = 10,
-            DefaultToolTimeoutSeconds = 30
-        };
-    }
+        Model                     = "test-model",
+        MaxAgentSteps             = 10,
+        DefaultToolTimeoutSeconds = 30
+    };
 }

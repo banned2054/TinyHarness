@@ -540,9 +540,9 @@ public sealed class SandboxManagementTests
         var markerError = Assert.Throws<InvalidOperationException>(() =>
                                                                        new
                                                                                WindowsSandboxProvisioner(new
-                                                                                   FakeSetupElevator())
+                                                                                            FakeSetupElevator())
                                                                           .BuildPlan(SandboxSettings(home),
-                                                                               workspace.Root, "TestUser"));
+                                                                                    workspace.Root, "TestUser"));
         Assert.Contains("legacy Codex account 'CodexSandboxOffline'", markerError.Message, StringComparison.Ordinal);
         Assert.Contains("setup marker", markerError.Message, StringComparison.Ordinal);
 
@@ -554,9 +554,9 @@ public sealed class SandboxManagementTests
         var credentialsError = Assert.Throws<InvalidOperationException>(() =>
                                                                             new
                                                                                     WindowsSandboxProvisioner(new
-                                                                                        FakeSetupElevator())
+                                                                                                 FakeSetupElevator())
                                                                                .BuildPlan(SandboxSettings(home),
-                                                                                    workspace.Root, "TestUser"));
+                                                                                         workspace.Root, "TestUser"));
         Assert.Contains("account credentials", credentialsError.Message, StringComparison.Ordinal);
     }
 
@@ -662,13 +662,13 @@ public sealed class SandboxManagementTests
                                                 allowNullDeviceAccess : _ => { });
 
         var exception = await Assert.ThrowsAsync<ProcessExecutionStartException>(() => backend.ExecuteAsync(
-         new PreparedProcessExecution(
-                                      "cmd.exe", ["/c", "whoami"],
-                                      home.Components.SandboxHome, 30,
-                                      false, null),
-         new RecordingOutputCapture(),
-         new RecordingOutputCapture(),
-         CancellationToken.None));
+                      new PreparedProcessExecution(
+                                                   "cmd.exe", ["/c", "whoami"],
+                                                   home.Components.SandboxHome, 30,
+                                                   false, null),
+                      new RecordingOutputCapture(),
+                      new RecordingOutputCapture(),
+                      CancellationToken.None));
 
         Assert.Contains("not ready", exception.Message, StringComparison.Ordinal);
         Assert.Empty(invoker.RefreshPayloads);
@@ -677,21 +677,16 @@ public sealed class SandboxManagementTests
 
     // ---- fixture 与 fake ----
 
-    private static WindowsSandboxSettings SandboxSettings(SandboxTestHome home, bool enabled = false)
+    private static WindowsSandboxSettings SandboxSettings(SandboxTestHome home, bool enabled = false) => new()
     {
-        return new WindowsSandboxSettings
-        {
-            Enabled              = enabled,
-            SetupExecutablePath  = home.Components.SetupExecutablePath,
-            RunnerExecutablePath = home.Components.RunnerExecutablePath,
-            SandboxHome          = home.Components.SandboxHome
-        };
-    }
+        Enabled              = enabled,
+        SetupExecutablePath  = home.Components.SetupExecutablePath,
+        RunnerExecutablePath = home.Components.RunnerExecutablePath,
+        SandboxHome          = home.Components.SandboxHome
+    };
 
-    private static UserConfig SandboxConfig(SandboxTestHome home, bool enabled = false)
-    {
-        return new UserConfig { Settings = new UserConfigSettings { WindowsSandbox = SandboxSettings(home, enabled) } };
-    }
+    private static UserConfig SandboxConfig(SandboxTestHome home, bool enabled = false) => new()
+        { Settings = new UserConfigSettings { WindowsSandbox = SandboxSettings(home, enabled) } };
 
     private static async Task<JsonObject> ParseSingleAuditRecordAsync(string auditPath)
     {
@@ -738,10 +733,7 @@ public sealed class SandboxManagementTests
 
     private sealed class CliFixture(IReadOnlyList<string>? input = null) : IDisposable
     {
-        public CliFixture(IReadOnlyList<string> input, bool interactive) : this(input)
-        {
-            Io.Interactive = interactive;
-        }
+        public CliFixture(IReadOnlyList<string> input, bool interactive) : this(input) => Io.Interactive = interactive;
 
         public string Root { get; } = Path.Combine(Path.GetTempPath(), $"tinyharness-sandbox-{Guid.NewGuid():N}");
 
@@ -759,16 +751,13 @@ public sealed class SandboxManagementTests
             if (Directory.Exists(configDirectory)) Directory.Delete(configDirectory, true);
         }
 
-        public CommandContext CreateContext()
+        public CommandContext CreateContext() => new()
         {
-            return new CommandContext
-            {
-                Io               = Io,
-                Credentials      = new FakeCredentialStore(),
-                UserConfigPath   = UserConfigPath,
-                WorkingDirectory = Root
-            };
-        }
+            Io               = Io,
+            Credentials      = new FakeCredentialStore(),
+            UserConfigPath   = UserConfigPath,
+            WorkingDirectory = Root
+        };
     }
 
     private sealed class FakeCliConsole(IReadOnlyList<string>? input) : ICliConsole
@@ -803,15 +792,11 @@ public sealed class SandboxManagementTests
             return Task.CompletedTask;
         }
 
-        public Task<string?> ReadLineAsync(CancellationToken cancellationToken)
-        {
-            return Task.FromResult(_input.Count > 0 ? _input.Dequeue() : null);
-        }
+        public Task<string?> ReadLineAsync(CancellationToken cancellationToken) =>
+            Task.FromResult(_input.Count > 0 ? _input.Dequeue() : null);
 
-        public Task<string?> ReadHiddenLineAsync(CancellationToken cancellationToken)
-        {
-            return Task.FromResult(_input.Count > 0 ? _input.Dequeue() : null);
-        }
+        public Task<string?> ReadHiddenLineAsync(CancellationToken cancellationToken) =>
+            Task.FromResult(_input.Count > 0 ? _input.Dequeue() : null);
     }
 
     private sealed class FakeCredentialStore : ICredentialStore
@@ -825,14 +810,8 @@ public sealed class SandboxManagementTests
             _entries[targetName] = secret;
         }
 
-        public string? Read(string targetName)
-        {
-            return _entries.GetValueOrDefault(targetName);
-        }
+        public string? Read(string targetName) => _entries.GetValueOrDefault(targetName);
 
-        public bool Delete(string targetName)
-        {
-            return _entries.Remove(targetName);
-        }
+        public bool Delete(string targetName) => _entries.Remove(targetName);
     }
 }

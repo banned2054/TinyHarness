@@ -153,7 +153,7 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
         {
             if (!await TrySendFrameAsync(connection, writerGate,
                                          stream => RunnerFrameCodec.WriteFrameAsync(stream, "spawn_request", request,
-                                             CancellationToken.None),
+                                                  CancellationToken.None),
                                          cancellationToken).ConfigureAwait(false))
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -571,7 +571,7 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
         using var writeCancellation = new CancellationTokenSource(_limits.TerminateWriteTimeout);
         return TrySendFrameAsync(connection, writerGate,
                                  stream => RunnerFrameCodec.WriteControlFrameAsync(stream, "terminate",
-                                     writeCancellation.Token),
+                                          writeCancellation.Token),
                                  CancellationToken.None);
     }
 

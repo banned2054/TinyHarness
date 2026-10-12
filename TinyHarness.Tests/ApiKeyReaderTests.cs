@@ -103,14 +103,8 @@ public class ApiKeyReaderTests
             _entries[targetName] = secret;
         }
 
-        public string? Read(string targetName)
-        {
-            return _entries.GetValueOrDefault(targetName);
-        }
+        public string? Read(string targetName) => _entries.GetValueOrDefault(targetName);
 
-        public bool Delete(string targetName)
-        {
-            return _entries.Remove(targetName);
-        }
+        public bool Delete(string targetName) => _entries.Remove(targetName);
     }
 }

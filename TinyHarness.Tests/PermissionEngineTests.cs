@@ -10,19 +10,16 @@ namespace TinyHarness.Tests;
 
 public class PermissionEngineTests
 {
-    private static ToolPreparation Prep(string capability, IReadOnlyList<string> targets, string argumentKey = "x",
-                                        int    argumentValue = 1)
+    private static ToolPreparation Prep(
+        string capability, IReadOnlyList<string> targets, string argumentKey = "x", int argumentValue = 1) => new()
     {
-        return new ToolPreparation
-        {
-            ToolName    = "apply_patch",
-            CallId      = "call_1",
-            Arguments   = new JsonObject { [argumentKey] = argumentValue },
-            Capability  = capability,
-            Summary     = "summary",
-            TargetPaths = targets
-        };
-    }
+        ToolName    = "apply_patch",
+        CallId      = "call_1",
+        Arguments   = new JsonObject { [argumentKey] = argumentValue },
+        Capability  = capability,
+        Summary     = "summary",
+        TargetPaths = targets
+    };
 
     [Fact]
     public void ToolPreparation_SnapshotsMutableInputs()
@@ -360,16 +357,14 @@ public class PermissionEngineTests
         };
     }
 
-    private static ChatToolCall ShellCall(string shell, string command, string workingDirectory = ".")
-    {
-        return new ChatToolCall("shell", "shell", new JsonObject
+    private static ChatToolCall ShellCall(string shell, string command, string workingDirectory = ".") =>
+        new("shell", "shell", new JsonObject
         {
             ["mode"]             = "shell",
             ["shell"]            = shell,
             ["command"]          = command,
             ["workingDirectory"] = workingDirectory
         }.ToJsonString());
-    }
 
     private static IReadOnlyList<string> ReadArguments(ToolPreparation preparation)
     {

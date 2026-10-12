@@ -106,10 +106,8 @@ public sealed partial class WindowsSandboxDesktopFactory : ISandboxDesktopFactor
     ///     A 32-digit lowercase hex suffix matching the library's zero-padded u128
     ///     format, drawn from a cryptographic source.
     /// </summary>
-    internal static string GenerateNameSuffix()
-    {
-        return Convert.ToHexString(RandomNumberGenerator.GetBytes(16)).ToLowerInvariant();
-    }
+    internal static string GenerateNameSuffix() =>
+        Convert.ToHexString(RandomNumberGenerator.GetBytes(16)).ToLowerInvariant();
 
     /// <summary>
     ///     私有桌面 DACL 的 SDDL：给父进程用户 <see cref="DesktopAllAccess" />、给沙箱账户
@@ -119,11 +117,8 @@ public sealed partial class WindowsSandboxDesktopFactory : ISandboxDesktopFactor
     ///     <see cref="DesktopParticipantAccess" />; protected, with no inheritance.
     /// </summary>
     [SupportedOSPlatform("windows")]
-    internal static string BuildSddl(SecurityIdentifier ownerSid, SecurityIdentifier sandboxAccountSid)
-    {
-        return
-            $"D:P(A;;0x{DesktopAllAccess:x};;;{ownerSid.Value})(A;;0x{DesktopParticipantAccess:x};;;{sandboxAccountSid.Value})";
-    }
+    internal static string BuildSddl(SecurityIdentifier ownerSid, SecurityIdentifier sandboxAccountSid) =>
+        $"D:P(A;;0x{DesktopAllAccess:x};;;{ownerSid.Value})(A;;0x{DesktopParticipantAccess:x};;;{sandboxAccountSid.Value})";
 
     // The native API has FOUR parameters; the trailing PULONG optionalSize is
     // allowed to be NULL. Declaring only three left the fourth x64 argument

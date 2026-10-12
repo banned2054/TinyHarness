@@ -88,10 +88,7 @@ public sealed class ConversationContext
     ///     disables budgeting and compaction: the view equals the full history (pass-through
     ///     mode kept for backward compatibility).
     /// </summary>
-    public ConversationContext(ContextOptions? options = null)
-    {
-        _options = options?.Validate();
-    }
+    public ConversationContext(ContextOptions? options = null) => _options = options?.Validate();
 
     /// <summary>
     ///     是否启用预算与压缩。
@@ -160,10 +157,8 @@ public sealed class ConversationContext
     ///     scaled by the usage-calibration ratio; the result stays an estimate, not a
     ///     measurement (PLAN §13).
     /// </summary>
-    public int EstimateViewTokens()
-    {
-        return (int)Math.Ceiling(TokenEstimator.EstimateMessages(BuildModelView()) * _usageCalibration);
-    }
+    public int EstimateViewTokens() =>
+        (int)Math.Ceiling(TokenEstimator.EstimateMessages(BuildModelView()) * _usageCalibration);
 
     /// <summary>
     ///     记录一次模型请求的“请求前估算输入”与服务端实测输入 token，用两者比值校准后续视图

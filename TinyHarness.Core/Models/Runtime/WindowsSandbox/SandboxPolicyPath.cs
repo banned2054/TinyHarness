@@ -23,37 +23,23 @@ public sealed record SandboxPolicyPath
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? ExplicitPath { get; init; }
 
-    public static SandboxPolicyPath Root()
-    {
-        return new SandboxPolicyPath { Type = "special", Value = new SandboxSpecialPathValue { Kind = "root" } };
-    }
+    public static SandboxPolicyPath Root() => new()
+        { Type = "special", Value = new SandboxSpecialPathValue { Kind = "root" } };
 
-    public static SandboxPolicyPath ProjectRoots()
-    {
-        return new SandboxPolicyPath
-            { Type = "special", Value = new SandboxSpecialPathValue { Kind = "project_roots" } };
-    }
+    public static SandboxPolicyPath ProjectRoots() =>
+        new() { Type = "special", Value = new SandboxSpecialPathValue { Kind = "project_roots" } };
 
-    public static SandboxPolicyPath ProjectRootsSubpath(string subpath)
-    {
-        return new SandboxPolicyPath
-            { Type = "special", Value = new SandboxSpecialPathValue { Kind = "project_roots", Subpath = subpath } };
-    }
+    public static SandboxPolicyPath ProjectRootsSubpath(string subpath) =>
+        new() { Type = "special", Value = new SandboxSpecialPathValue { Kind = "project_roots", Subpath = subpath } };
 
-    public static SandboxPolicyPath TmpDir()
-    {
-        return new SandboxPolicyPath { Type = "special", Value = new SandboxSpecialPathValue { Kind = "tmpdir" } };
-    }
+    public static SandboxPolicyPath TmpDir() => new()
+        { Type = "special", Value = new SandboxSpecialPathValue { Kind = "tmpdir" } };
 
-    public static SandboxPolicyPath SlashTmp()
-    {
-        return new SandboxPolicyPath { Type = "special", Value = new SandboxSpecialPathValue { Kind = "slash_tmp" } };
-    }
+    public static SandboxPolicyPath SlashTmp() => new()
+        { Type = "special", Value = new SandboxSpecialPathValue { Kind = "slash_tmp" } };
 
-    public static SandboxPolicyPath Directory(string absolutePath)
-    {
-        return new SandboxPolicyPath { Type = "path", ExplicitPath = absolutePath };
-    }
+    public static SandboxPolicyPath Directory(string absolutePath) =>
+        new() { Type = "path", ExplicitPath = absolutePath };
 }
 
 /// <summary>

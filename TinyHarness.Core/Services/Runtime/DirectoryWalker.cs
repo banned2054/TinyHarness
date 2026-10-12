@@ -41,12 +41,9 @@ internal static class DirectoryWalker
     ///     递归收集普通文件，供 search_text 使用。
     ///     Recursively collects files only for search_text.
     /// </summary>
-    public static WalkResult CollectFiles(string              rootAbs, int cap, CancellationToken cancellationToken,
-                                          Func<string, bool>? excludeEntry = null)
-    {
-        return Collect(rootAbs, true, null, cap, false, cancellationToken,
-                       excludeEntry);
-    }
+    public static WalkResult CollectFiles(
+        string rootAbs, int cap, CancellationToken cancellationToken, Func<string, bool>? excludeEntry = null) =>
+        Collect(rootAbs, true, null, cap, false, cancellationToken, excludeEntry);
 
     /// <summary>
     ///     按递归与深度设置收集文件和目录，供 list_files 使用。
@@ -54,10 +51,8 @@ internal static class DirectoryWalker
     /// </summary>
     public static WalkResult CollectEntries(string              rootAbs, bool recursive, int? maxDepth, int cap,
                                             CancellationToken   cancellationToken,
-                                            Func<string, bool>? excludeEntry = null)
-    {
-        return Collect(rootAbs, recursive, maxDepth, cap, true, cancellationToken, excludeEntry);
-    }
+                                            Func<string, bool>? excludeEntry = null) =>
+        Collect(rootAbs, recursive, maxDepth, cap, true, cancellationToken, excludeEntry);
 
     /// <summary>
     ///     执行实际遍历，在条目上限内返回排序结果，并标记是否因上限提前停止。

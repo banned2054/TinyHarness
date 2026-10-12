@@ -221,10 +221,7 @@ internal sealed class SecretRedactor
         });
     }
 
-    public string? RedactNullable(string? value)
-    {
-        return value is null ? null : Redact(value);
-    }
+    public string? RedactNullable(string? value) => value is null ? null : Redact(value);
 
     private string RedactKnownSecrets(string value)
     {

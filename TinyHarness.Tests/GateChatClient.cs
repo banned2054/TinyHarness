@@ -12,22 +12,16 @@ namespace TinyHarness.Tests;
 ///     once open it returns the prepared text response. Used to test concurrent-submit
 ///     rejection and mid-run cancellation.
 /// </summary>
-internal sealed class GateChatClient : IChatCompletionClient
+internal sealed class GateChatClient(string responseText = "done") : IChatCompletionClient
 {
-    private readonly TaskCompletionSource           _gate = new(TaskCreationOptions.RunContinuationsAsynchronously);
-    private readonly IReadOnlyList<ChatStreamEvent> _response;
-    private readonly TaskCompletionSource           _started = new(TaskCreationOptions.RunContinuationsAsynchronously);
-
-    public GateChatClient(string responseText = "done")
-    {
-        _response = FakeChatClient.Text(responseText);
-    }
+    private readonly TaskCompletionSource           _gate     = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly IReadOnlyList<ChatStreamEvent> _response = FakeChatClient.Text(responseText);
+    private readonly TaskCompletionSource           _started  = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     public int Requests { get; private set; }
 
     public async IAsyncEnumerable<ChatStreamEvent> CompleteAsync(
-        ChatCompletionRequest                      request,
-        [EnumeratorCancellation] CancellationToken cancellationToken)
+        ChatCompletionRequest request, [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         Requests++;
         _started.TrySetResult();
@@ -40,10 +34,7 @@ internal sealed class GateChatClient : IChatCompletionClient
     }
 
     /// <summary>等待某次模型请求真正开始。Waits until a model request has actually started.</summary>
-    public Task WaitStartedAsync(CancellationToken cancellationToken)
-    {
-        return _started.Task.WaitAsync(cancellationToken);
-    }
+    public Task WaitStartedAsync(CancellationToken cancellationToken) => _started.Task.WaitAsync(cancellationToken);
 
     public void Open()
     {

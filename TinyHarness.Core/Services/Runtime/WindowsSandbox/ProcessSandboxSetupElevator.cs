@@ -39,11 +39,8 @@ public sealed record SandboxSetupElevationResult
     /// <summary>helper 进程退出码；仅 Outcome == Completed 时有值。</summary>
     public int? ExitCode { get; init; }
 
-    public static SandboxSetupElevationResult Completed(int exitCode)
-    {
-        return new SandboxSetupElevationResult
-            { Outcome = SandboxSetupElevationOutcome.Completed, ExitCode = exitCode };
-    }
+    public static SandboxSetupElevationResult Completed(int exitCode) =>
+        new() { Outcome = SandboxSetupElevationOutcome.Completed, ExitCode = exitCode };
 }
 
 /// <summary>提权执行的终态：已完成 / 用户拒绝 / 未在期限内完成（超时或取消，状态未知）。</summary>

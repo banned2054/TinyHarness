@@ -63,14 +63,12 @@ internal static class WindowsSandboxPolicyPlanner
         };
     }
 
-    private static string RequireAbsoluteSetting(string? value, string fieldName)
-    {
-        return string.IsNullOrWhiteSpace(value) || !Path.IsPathFullyQualified(value)
+    private static string RequireAbsoluteSetting(string? value, string fieldName) =>
+        string.IsNullOrWhiteSpace(value) || !Path.IsPathFullyQualified(value)
             ? throw new
                 InvalidOperationException($"The trusted Windows sandbox setting '{fieldName}' must be a fully qualified absolute path" +
                                           (string.IsNullOrWhiteSpace(value) ? "." : $": '{value}'."))
             : value.Trim();
-    }
 
     /// <summary>
     ///     规划结果：已校验的组件绝对路径（去空白）、tempRoot 绝对路径（不创建）、规范化的额外写根、

@@ -25,35 +25,26 @@ public class ChatSessionConsoleTests
 {
     private const string SystemPrompt = "You are a test harness inspecting a workspace.";
 
-    private static CancellationToken TestToken()
-    {
-        return new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token;
-    }
+    private static CancellationToken TestToken() => new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token;
 
     private static ChatSessionHost NewHost(IChatCompletionClient client,
                                            ToolRegistry?         tools       = null,
                                            PermissionEngine?     permissions = null,
                                            IApprovalProvider?    approver    = null,
-                                           IHostEventSink?       events      = null)
-    {
-        return new ChatSessionHost(
-                                   Path.Combine(Path.GetTempPath(), "tinyharness-chat-console-tests"),
-                                   new SessionModelIdentity("test-model", "https://example.invalid/v1",
-                                                            ChatApiKind.ChatCompletions),
-                                   new AgentOptions
-                                       { Model = "test-model", MaxAgentSteps = 8, DefaultToolTimeoutSeconds = 30 },
-                                   client,
-                                   tools ?? new ToolRegistry([]),
-                                   SystemPrompt,
-                                   permissions,
-                                   approver,
-                                   events);
-    }
+                                           IHostEventSink?       events      = null) =>
+        new(Path.Combine(Path.GetTempPath(), "tinyharness-chat-console-tests"),
+            new SessionModelIdentity("test-model", "https://example.invalid/v1",
+                                     ChatApiKind.ChatCompletions),
+            new AgentOptions
+                { Model = "test-model", MaxAgentSteps = 8, DefaultToolTimeoutSeconds = 30 },
+            client,
+            tools ?? new ToolRegistry([]),
+            SystemPrompt,
+            permissions,
+            approver,
+            events);
 
-    private static int Count(string text, string needle)
-    {
-        return text.Split(needle).Length - 1;
-    }
+    private static int Count(string text, string needle) => text.Split(needle).Length - 1;
 
     [Fact]
     public async Task RunAsync_TwoTurns_StreamAnswerOnceAndShareContext()
@@ -336,10 +327,11 @@ public class ChatSessionConsoleTests
     /// </summary>
     private sealed class ScriptedInput : TextReader
     {
-        private readonly object               _gate  = new();
-        private readonly Queue<string>        _lines = new();
-        private          bool                 _completed;
-        private          TaskCompletionSource _signal = NewSignal();
+        private readonly Lock          _gate  = new();
+        private readonly Queue<string> _lines = new();
+
+        private bool                 _completed;
+        private TaskCompletionSource _signal = NewSignal();
 
         public ScriptedInput(params string[] lines)
         {
@@ -391,10 +383,7 @@ public class ChatSessionConsoleTests
             }
         }
 
-        private static TaskCompletionSource NewSignal()
-        {
-            return new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        }
+        private static TaskCompletionSource NewSignal() => new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
 
     /// <summary>
@@ -433,17 +422,14 @@ public class ChatSessionConsoleTests
             Parameters  = new JsonObject { ["type"] = "object" }
         };
 
-        public ToolPreparation Prepare(ChatToolCall call)
+        public ToolPreparation Prepare(ChatToolCall call) => new()
         {
-            return new ToolPreparation
-            {
-                ToolName   = Definition.Name,
-                CallId     = call.Id,
-                Arguments  = new JsonObject(),
-                Capability = $"test.{Definition.Name}",
-                Summary    = $"{Definition.Name}()"
-            };
-        }
+            ToolName   = Definition.Name,
+            CallId     = call.Id,
+            Arguments  = new JsonObject(),
+            Capability = $"test.{Definition.Name}",
+            Summary    = $"{Definition.Name}()"
+        };
 
         public async Task<ToolResult> ExecuteAsync(ToolPreparation preparation, CancellationToken cancellationToken)
         {
@@ -453,9 +439,6 @@ public class ChatSessionConsoleTests
             return new ToolResult { Succeeded = true, Content = "never reached" };
         }
 
-        public Task WaitStartedAsync(CancellationToken cancellationToken)
-        {
-            return _started.Task.WaitAsync(cancellationToken);
-        }
+        public Task WaitStartedAsync(CancellationToken cancellationToken) => _started.Task.WaitAsync(cancellationToken);
     }
 }

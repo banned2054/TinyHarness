@@ -5,13 +5,10 @@ namespace TinyHarness.Tests;
 
 public class WorkerRequestValidatorTests
 {
-    private static WorkerRequest MinimalValidRequest()
+    private static WorkerRequest MinimalValidRequest() => new()
     {
-        return new WorkerRequest
-        {
-            TaskPrompt = "Find where the retry budget is enforced and report the call sites."
-        };
-    }
+        TaskPrompt = "Find where the retry budget is enforced and report the call sites."
+    };
 
     // ---- valid requests ----------------------------------------------------
 

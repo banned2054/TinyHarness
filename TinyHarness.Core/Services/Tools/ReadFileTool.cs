@@ -339,10 +339,7 @@ public sealed class ReadFileTool(Workspace workspace, WorkerReadPolicy? workerPo
         ///     该受限流不支持定位，以免绕过累计字节预算。
         ///     Seeking is unsupported so callers cannot bypass the cumulative byte budget.
         /// </summary>
-        public override long Seek(long offset, SeekOrigin origin)
-        {
-            throw new NotSupportedException();
-        }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
 
         /// <summary>
         ///     只读包装器不支持改变流长度。
@@ -411,10 +408,8 @@ public sealed class ReadFileTool(Workspace workspace, WorkerReadPolicy? workerPo
         ///     Forwards the legacy array-based async overload to the bounded <see cref="Memory{T}" /> implementation.
         /// </summary>
         public override Task<int> ReadAsync(
-            byte[] buffer, int offset, int count, CancellationToken cancellationToken)
-        {
-            return ReadAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
-        }
+            byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>
+            ReadAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
 
         /// <summary>
         ///     同步探测上限之后是否仍有数据；始终返回 0，仅在确有额外数据时设置 <see cref="HitLimit" />。

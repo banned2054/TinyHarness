@@ -12,29 +12,23 @@ namespace TinyHarness.Tests;
 /// </summary>
 public class StreamAccumulatorReasoningTests
 {
-    private static ChatStreamEvent ReasoningDelta(string text, string? itemId = null)
+    private static ChatStreamEvent ReasoningDelta(string text, string? itemId = null) => new()
     {
-        return new ChatStreamEvent
-        {
-            Kind            = ChatStreamEventKind.ReasoningDelta,
-            ReasoningDelta  = text,
-            ReasoningItemId = itemId
-        };
-    }
+        Kind            = ChatStreamEventKind.ReasoningDelta,
+        ReasoningDelta  = text,
+        ReasoningItemId = itemId
+    };
 
-    private static ChatStreamEvent ReasoningItem(string? protectedData = null, string? itemId = null,
-                                                 string? text          = null)
+    private static ChatStreamEvent ReasoningItem(
+        string? protectedData = null, string? itemId = null, string? text = null) => new()
     {
-        return new ChatStreamEvent
-        {
-            Kind                   = ChatStreamEventKind.ReasoningItem,
-            ReasoningProtectedData = protectedData,
-            ReasoningItemId        = itemId,
-            // 条目事件经 ReasoningDelta 字段携带条目完整文本。
-            // Item events carry the entry's complete text via the ReasoningDelta field.
-            ReasoningDelta = text
-        };
-    }
+        Kind                   = ChatStreamEventKind.ReasoningItem,
+        ReasoningProtectedData = protectedData,
+        ReasoningItemId        = itemId,
+        // 条目事件经 ReasoningDelta 字段携带条目完整文本。
+        // Item events carry the entry's complete text via the ReasoningDelta field.
+        ReasoningDelta = text
+    };
 
     private static StreamAccumulator Accumulate(params ChatStreamEvent[] events)
     {
@@ -65,8 +59,7 @@ public class StreamAccumulatorReasoningTests
         // The item event terminates the entry being accumulated: the encrypted
         // payload and item id belong to the closed entry; later deltas go to a
         // new one.
-        var accumulator = Accumulate(
-                                     ReasoningDelta("first "),
+        var accumulator = Accumulate(ReasoningDelta("first "),
                                      ReasoningItem("opaque-1", "rs_1"),
                                      ReasoningDelta("second"),
                                      new ChatStreamEvent { Kind = ChatStreamEventKind.End });
@@ -87,8 +80,7 @@ public class StreamAccumulatorReasoningTests
         // 多条目按 itemId 分界：无显式条目事件时，不同 item id 的增量各自成条目。
         // Items are delimited by item id: without explicit item events, deltas
         // with distinct ids each form their own entry.
-        var accumulator = Accumulate(
-                                     ReasoningDelta("think ", "rs_1"),
+        var accumulator = Accumulate(ReasoningDelta("think ", "rs_1"),
                                      ReasoningDelta("hard", "rs_1"),
                                      ReasoningDelta("again", "rs_2"),
                                      new ChatStreamEvent { Kind = ChatStreamEventKind.End });
@@ -108,8 +100,7 @@ public class StreamAccumulatorReasoningTests
         // done 事件的完整文本与已流出增量重复时，以条目为单位只保留一份完整文本。
         // When the item event's complete text duplicates the streamed deltas,
         // exactly one copy of the complete text is kept per entry.
-        var accumulator = Accumulate(
-                                     ReasoningDelta("think ", "rs_1"),
+        var accumulator = Accumulate(ReasoningDelta("think ", "rs_1"),
                                      ReasoningDelta("hard", "rs_1"),
                                      ReasoningItem("opaque", "rs_1", "think hard"),
                                      new ChatStreamEvent { Kind = ChatStreamEventKind.End });
@@ -126,8 +117,7 @@ public class StreamAccumulatorReasoningTests
     {
         // 空文本且无任何不透明标识的条目事件不产出条目。
         // An item event with neither text nor any opaque identifier produces no entry.
-        var accumulator = Accumulate(
-                                     ReasoningItem(),
+        var accumulator = Accumulate(ReasoningItem(),
                                      new ChatStreamEvent { Kind = ChatStreamEventKind.End });
         accumulator.Finish();
 
@@ -140,8 +130,7 @@ public class StreamAccumulatorReasoningTests
         // 仅携带不透明标识的条目也必须保留：续接推理上下文依赖它们原样回传。
         // Entries carrying only opaque identifiers are kept too: continuing the
         // reasoning context depends on replaying them verbatim.
-        var accumulator = Accumulate(
-                                     ReasoningItem("opaque", "rs_1"),
+        var accumulator = Accumulate(ReasoningItem("opaque", "rs_1"),
                                      new ChatStreamEvent { Kind = ChatStreamEventKind.End });
         accumulator.Finish();
 
@@ -154,8 +143,7 @@ public class StreamAccumulatorReasoningTests
     [Fact]
     public void WithoutReasoningEvents_ReasoningStaysNullAndContentIsUntouched()
     {
-        var accumulator = Accumulate(
-                                     new ChatStreamEvent
+        var accumulator = Accumulate(new ChatStreamEvent
                                          { Kind = ChatStreamEventKind.ContentDelta, ContentDelta = "answer" },
                                      new ChatStreamEvent { Kind = ChatStreamEventKind.End });
         accumulator.Finish();
@@ -167,8 +155,7 @@ public class StreamAccumulatorReasoningTests
     [Fact]
     public void UsageAndEndEvents_FillTokenCountsAndFinishReason_FirstValueWins()
     {
-        var accumulator = Accumulate(
-                                     new ChatStreamEvent
+        var accumulator = Accumulate(new ChatStreamEvent
                                          { Kind = ChatStreamEventKind.Usage, InputTokens = 10, OutputTokens = 4 },
                                      new ChatStreamEvent
                                      {
@@ -186,8 +173,7 @@ public class StreamAccumulatorReasoningTests
     [Fact]
     public void MetadataAlone_LeavesNullableCountersNull()
     {
-        var accumulator = Accumulate(
-                                     new ChatStreamEvent
+        var accumulator = Accumulate(new ChatStreamEvent
                                          { Kind = ChatStreamEventKind.ContentDelta, ContentDelta = "hi" },
                                      new ChatStreamEvent { Kind = ChatStreamEventKind.End });
 
@@ -204,8 +190,7 @@ public class StreamAccumulatorReasoningTests
         // 向后兼容：推理字段不改变 Finish 对工具调用名称与参数 JSON 的校验。
         // Backward compatibility: reasoning fields do not change Finish's
         // validation of tool-call names and argument JSON.
-        var accumulator = Accumulate(
-                                     ReasoningDelta("thinking"),
+        var accumulator = Accumulate(ReasoningDelta("thinking"),
                                      new ChatStreamEvent
                                      {
                                          Kind                   = ChatStreamEventKind.ToolCallDelta,

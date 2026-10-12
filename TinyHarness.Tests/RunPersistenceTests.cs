@@ -324,21 +324,16 @@ public sealed class RunPersistenceTests
         Assert.Equal("stop", usage.FinishReason);
     }
 
-    private static AgentOptions Options()
+    private static AgentOptions Options() => new()
     {
-        return new AgentOptions
-        {
-            Model                     = "test-model",
-            MaxAgentSteps             = 10,
-            DefaultToolTimeoutSeconds = 30
-        };
-    }
+        Model                     = "test-model",
+        MaxAgentSteps             = 10,
+        DefaultToolTimeoutSeconds = 30
+    };
 
-    private static SessionSnapshot DeserializeSession(string json)
-    {
-        return JsonSerializer.Deserialize(json, PersistenceJsonContext.Default.SessionSnapshot)
-            ?? throw new InvalidDataException("Session snapshot was null.");
-    }
+    private static SessionSnapshot DeserializeSession(string json) =>
+        JsonSerializer.Deserialize(json, PersistenceJsonContext.Default.SessionSnapshot)
+     ?? throw new InvalidDataException("Session snapshot was null.");
 
     private sealed class ThrowingRecorder : IRunRecorder
     {
@@ -347,24 +342,18 @@ public sealed class RunPersistenceTests
         public int  CompleteCalls   { get; private set; }
         public int  ResultCalls     { get; private set; }
 
-        public Task StartAsync(string systemPrompt, string userInput, CancellationToken cancellationToken)
-        {
-            return Task.CompletedTask;
-        }
+        public Task StartAsync(string systemPrompt, string userInput, CancellationToken cancellationToken) =>
+            Task.CompletedTask;
 
-        public Task RecordPreparedAsync(ToolPreparation preparation, CancellationToken cancellationToken)
-        {
-            return Task.CompletedTask;
-        }
+        public Task RecordPreparedAsync(ToolPreparation preparation, CancellationToken cancellationToken) =>
+            Task.CompletedTask;
 
         public Task RecordPermissionAsync(ToolPreparation   preparation, PermissionDecision decision, string outcome,
-                                          CancellationToken cancellationToken)
-        {
-            return Task.CompletedTask;
-        }
+                                          CancellationToken cancellationToken) =>
+            Task.CompletedTask;
 
-        public Task RecordResultAsync(ToolPreparation   preparation, ToolResult result,
-                                      CancellationToken cancellationToken)
+        public Task RecordResultAsync(
+            ToolPreparation preparation, ToolResult result, CancellationToken cancellationToken)
         {
             ResultCalls++;
             return ThrowOnResult
@@ -372,16 +361,12 @@ public sealed class RunPersistenceTests
                 : Task.CompletedTask;
         }
 
-        public Task RecordCompactionAsync(ContextChange change, CancellationToken cancellationToken)
-        {
-            return Task.CompletedTask;
-        }
+        public Task RecordCompactionAsync(ContextChange change, CancellationToken cancellationToken) =>
+            Task.CompletedTask;
 
-        public Task RecordModelUsageAsync(int?              inputTokens, int? outputTokens, string? finishReason,
-                                          CancellationToken cancellationToken)
-        {
-            return Task.CompletedTask;
-        }
+        public Task RecordModelUsageAsync(
+            int? inputTokens, int? outputTokens, string? finishReason, CancellationToken cancellationToken) =>
+            Task.CompletedTask;
 
         public Task CompleteAsync(AgentResult       result, IReadOnlyList<ChatMessage> messages, StructuredState state,
                                   CancellationToken cancellationToken)

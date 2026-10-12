@@ -55,10 +55,8 @@ internal sealed class ConsoleCliIo : ICliConsole
         await Console.Error.WriteLineAsync(text.AsMemory(), cancellationToken).ConfigureAwait(false);
     }
 
-    public async Task<string?> ReadLineAsync(CancellationToken cancellationToken)
-    {
-        return await Console.In.ReadLineAsync(cancellationToken).ConfigureAwait(false);
-    }
+    public async Task<string?> ReadLineAsync(CancellationToken cancellationToken) =>
+        await Console.In.ReadLineAsync(cancellationToken).ConfigureAwait(false);
 
     public async Task<string?> ReadHiddenLineAsync(CancellationToken cancellationToken)
     {

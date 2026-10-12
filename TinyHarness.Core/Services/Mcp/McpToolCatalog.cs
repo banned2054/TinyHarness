@@ -63,10 +63,7 @@ public static class McpToolCatalog
     ///     返回固定的工具列表；每次 tools/list 返回相同内容。
     ///     Returns the fixed tool list; every tools/list call returns the same content.
     /// </summary>
-    public static IReadOnlyList<McpToolDefinition> ListTools()
-    {
-        return Tools.Value;
-    }
+    public static IReadOnlyList<McpToolDefinition> ListTools() => Tools.Value;
 
     private static IReadOnlyList<McpToolDefinition> BuildTools()
     {

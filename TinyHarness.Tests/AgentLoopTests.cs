@@ -14,15 +14,12 @@ namespace TinyHarness.Tests;
 
 public class AgentLoopTests
 {
-    private static AgentOptions Options(int maxSteps = 10)
+    private static AgentOptions Options(int maxSteps = 10) => new()
     {
-        return new AgentOptions
-        {
-            Model                     = "test-model",
-            MaxAgentSteps             = maxSteps,
-            DefaultToolTimeoutSeconds = 30
-        };
-    }
+        Model                     = "test-model",
+        MaxAgentSteps             = maxSteps,
+        DefaultToolTimeoutSeconds = 30
+    };
 
     [Fact]
     public async Task PlainText_Completes()
@@ -194,20 +191,17 @@ public class AgentLoopTests
     ///     One text fragment plus an End event carrying usage; drives the audit chain.
     /// </summary>
     private static IReadOnlyList<ChatStreamEvent> TextWithUsage(
-        string text, int inputTokens, int outputTokens, string finishReason)
-    {
-        return
-        [
-            new() { Kind = ChatStreamEventKind.ContentDelta, ContentDelta = text },
-            new()
-            {
-                Kind         = ChatStreamEventKind.End,
-                InputTokens  = inputTokens,
-                OutputTokens = outputTokens,
-                FinishReason = finishReason
-            }
-        ];
-    }
+        string text, int inputTokens, int outputTokens, string finishReason) =>
+    [
+        new() { Kind = ChatStreamEventKind.ContentDelta, ContentDelta = text },
+        new()
+        {
+            Kind         = ChatStreamEventKind.End,
+            InputTokens  = inputTokens,
+            OutputTokens = outputTokens,
+            FinishReason = finishReason
+        }
+    ];
 
 
     [Fact]
@@ -275,7 +269,7 @@ public class AgentLoopTests
         // A different system prompt is refused before anything is appended; the
         // context still ends with turn 1's assistant reply.
         await Assert.ThrowsAsync<InvalidOperationException>(() => loop.RunTurnAsync("different", "u2",
-                                                                CancellationToken.None));
+                                                                     CancellationToken.None));
         Assert.Equal(3, context.Messages.Count);
         Assert.Equal("one", context.Messages[2].Content);
 
@@ -301,7 +295,7 @@ public class AgentLoopTests
 
         var rejected =
             await Assert.ThrowsAsync<InvalidOperationException>(() => loop.RunTurnAsync("sys", "u2",
-                                                                    CancellationToken.None));
+                                                                         CancellationToken.None));
 
         Assert.Contains("call_1", rejected.Message);
         Assert.Equal(0, client.Requests);
@@ -388,32 +382,20 @@ public class AgentLoopTests
     {
         public List<(int? InputTokens, int? OutputTokens, string? FinishReason)> UsageRecords { get; } = [];
 
-        public Task StartAsync(string systemPrompt, string userInput, CancellationToken cancellationToken)
-        {
-            return Task.CompletedTask;
-        }
+        public Task StartAsync(string systemPrompt, string userInput, CancellationToken cancellationToken) =>
+            Task.CompletedTask;
 
-        public Task RecordPreparedAsync(ToolPreparation preparation, CancellationToken cancellationToken)
-        {
-            return Task.CompletedTask;
-        }
+        public Task RecordPreparedAsync(ToolPreparation preparation, CancellationToken cancellationToken) =>
+            Task.CompletedTask;
 
         public Task RecordPermissionAsync(ToolPreparation   preparation, PermissionDecision decision, string outcome,
-                                          CancellationToken cancellationToken)
-        {
-            return Task.CompletedTask;
-        }
+                                          CancellationToken cancellationToken) => Task.CompletedTask;
 
         public Task RecordResultAsync(
-            ToolPreparation preparation, ToolResult result, CancellationToken cancellationToken)
-        {
-            return Task.CompletedTask;
-        }
+            ToolPreparation preparation, ToolResult result, CancellationToken cancellationToken) => Task.CompletedTask;
 
-        public Task RecordCompactionAsync(ContextChange change, CancellationToken cancellationToken)
-        {
-            return Task.CompletedTask;
-        }
+        public Task RecordCompactionAsync(ContextChange change, CancellationToken cancellationToken) =>
+            Task.CompletedTask;
 
         public Task RecordModelUsageAsync(
             int? inputTokens, int? outputTokens, string? finishReason, CancellationToken cancellationToken)
@@ -422,11 +404,7 @@ public class AgentLoopTests
             return Task.CompletedTask;
         }
 
-        public Task CompleteAsync(
-            AgentResult       result, IReadOnlyList<ChatMessage> messages, StructuredState state,
-            CancellationToken cancellationToken)
-        {
-            return Task.CompletedTask;
-        }
+        public Task CompleteAsync(AgentResult       result, IReadOnlyList<ChatMessage> messages, StructuredState state,
+                                  CancellationToken cancellationToken) => Task.CompletedTask;
     }
 }

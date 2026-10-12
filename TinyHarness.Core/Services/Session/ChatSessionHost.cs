@@ -142,10 +142,7 @@ public sealed class ChatSessionHost
         return new AgentLoop(_modelClient, _tools, _options, _permissions, _approver, recorder, events, _context);
     }
 
-    private static string NewId()
-    {
-        return Guid.NewGuid().ToString("N");
-    }
+    private static string NewId() => Guid.NewGuid().ToString("N");
 
     /// <summary>
     ///     把循环发布的运行内事件与会话/回合/运行身份关联后转发：循环不知道会话层概念，

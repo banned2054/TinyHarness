@@ -16,8 +16,6 @@ public static class McpProtocolVersion
     ///     判断客户端请求的协议版本是否受支持。
     ///     Whether the requested protocol version is supported.
     /// </summary>
-    public static bool IsSupported(string? requestedVersion)
-    {
-        return string.Equals(requestedVersion, Latest, StringComparison.Ordinal);
-    }
+    public static bool IsSupported(string? requestedVersion) =>
+        string.Equals(requestedVersion, Latest, StringComparison.Ordinal);
 }

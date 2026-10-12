@@ -25,33 +25,28 @@ public class ChatSessionTests
 {
     private const string SystemPrompt = "You are a test harness inspecting a workspace.";
 
-    private static AgentOptions Options(int maxSteps = 10)
+    private static AgentOptions Options(int maxSteps = 10) => new()
     {
-        return new AgentOptions
-        {
-            Model                     = "test-model",
-            MaxAgentSteps             = maxSteps,
-            DefaultToolTimeoutSeconds = 30
-        };
-    }
+        Model                     = "test-model",
+        MaxAgentSteps             = maxSteps,
+        DefaultToolTimeoutSeconds = 30
+    };
 
     private static ChatSessionHost NewHost(IChatCompletionClient       client,
                                            ToolRegistry?               tools           = null,
                                            IHostEventSink?             events          = null,
                                            Func<string, IRunRecorder>? recorderFactory = null,
-                                           int                         maxSteps        = 10)
-    {
-        return new ChatSessionHost(
-                                   Path.Combine(Path.GetTempPath(), "tinyharness-session-tests"),
-                                   new SessionModelIdentity("test-model", "https://example.invalid/v1",
-                                                            ChatApiKind.ChatCompletions),
-                                   Options(maxSteps),
-                                   client,
-                                   tools ?? new ToolRegistry([]),
-                                   SystemPrompt,
-                                   events : events,
-                                   recorderFactory : recorderFactory);
-    }
+                                           int                         maxSteps        = 10) =>
+        new(
+            Path.Combine(Path.GetTempPath(), "tinyharness-session-tests"),
+            new SessionModelIdentity("test-model", "https://example.invalid/v1",
+                                     ChatApiKind.ChatCompletions),
+            Options(maxSteps),
+            client,
+            tools ?? new ToolRegistry([]),
+            SystemPrompt,
+            events : events,
+            recorderFactory : recorderFactory);
 
     [Fact]
     public async Task SubmitTurn_TwoTurnsShareContextAndRecordLifecycle()
@@ -261,8 +256,7 @@ public class ChatSessionTests
     {
         var options = Options() with { Model = "other-model" };
 
-        Assert.Throws<ArgumentException>(() => new ChatSessionHost(
-                                                                   Path.Combine(Path.GetTempPath(),
+        Assert.Throws<ArgumentException>(() => new ChatSessionHost(Path.Combine(Path.GetTempPath(),
                                                                                     "tinyharness-session-tests"),
                                                                    new SessionModelIdentity("test-model",
                                                                        "https://example.invalid/v1",
@@ -303,17 +297,14 @@ public class ChatSessionTests
             Parameters  = new JsonObject { ["type"] = "object" }
         };
 
-        public ToolPreparation Prepare(ChatToolCall call)
+        public ToolPreparation Prepare(ChatToolCall call) => new()
         {
-            return new ToolPreparation
-            {
-                ToolName   = Definition.Name,
-                CallId     = call.Id,
-                Arguments  = new JsonObject(),
-                Capability = $"test.{Definition.Name}",
-                Summary    = $"{Definition.Name}()"
-            };
-        }
+            ToolName   = Definition.Name,
+            CallId     = call.Id,
+            Arguments  = new JsonObject(),
+            Capability = $"test.{Definition.Name}",
+            Summary    = $"{Definition.Name}()"
+        };
 
         public async Task<ToolResult> ExecuteAsync(ToolPreparation preparation, CancellationToken cancellationToken)
         {
@@ -323,10 +314,7 @@ public class ChatSessionTests
             return new ToolResult { Succeeded = true, Content = "never reached" };
         }
 
-        public Task WaitStartedAsync(CancellationToken cancellationToken)
-        {
-            return _started.Task.WaitAsync(cancellationToken);
-        }
+        public Task WaitStartedAsync(CancellationToken cancellationToken) => _started.Task.WaitAsync(cancellationToken);
     }
 
     /// <summary>
@@ -337,39 +325,25 @@ public class ChatSessionTests
     {
         public List<AgentResult> CompletedResults { get; } = [];
 
-        public Task StartAsync(string systemPrompt, string userInput, CancellationToken cancellationToken)
-        {
-            return Task.CompletedTask;
-        }
+        public Task StartAsync(string systemPrompt, string userInput, CancellationToken cancellationToken) =>
+            Task.CompletedTask;
 
-        public Task RecordPreparedAsync(ToolPreparation preparation, CancellationToken cancellationToken)
-        {
-            return Task.CompletedTask;
-        }
+        public Task RecordPreparedAsync(ToolPreparation preparation, CancellationToken cancellationToken) =>
+            Task.CompletedTask;
 
         public Task RecordPermissionAsync(
             ToolPreparation   preparation, PermissionDecision decision, string outcome,
-            CancellationToken cancellationToken)
-        {
-            return Task.CompletedTask;
-        }
+            CancellationToken cancellationToken) => Task.CompletedTask;
 
         public Task RecordResultAsync(
-            ToolPreparation preparation, ToolResult result, CancellationToken cancellationToken)
-        {
-            return Task.CompletedTask;
-        }
+            ToolPreparation preparation, ToolResult result, CancellationToken cancellationToken) => Task.CompletedTask;
 
-        public Task RecordCompactionAsync(ContextChange change, CancellationToken cancellationToken)
-        {
-            return Task.CompletedTask;
-        }
+        public Task RecordCompactionAsync(ContextChange change, CancellationToken cancellationToken) =>
+            Task.CompletedTask;
 
         public Task RecordModelUsageAsync(
-            int? inputTokens, int? outputTokens, string? finishReason, CancellationToken cancellationToken)
-        {
-            return Task.CompletedTask;
-        }
+            int? inputTokens, int? outputTokens, string? finishReason, CancellationToken cancellationToken) =>
+            Task.CompletedTask;
 
         public Task CompleteAsync(
             AgentResult       result, IReadOnlyList<ChatMessage> messages, StructuredState state,

@@ -170,21 +170,15 @@ public sealed class WorkerReadPolicy
         }
     }
 
-    private bool IsLexicallyAllowed(string absolutePath)
-    {
-        return IsInsideFocus(absolutePath) && !IsSensitive(absolutePath);
-    }
+    private bool IsLexicallyAllowed(string absolutePath) => IsInsideFocus(absolutePath) && !IsSensitive(absolutePath);
 
-    private InvalidDataException ExplainDenial(string absolutePath)
-    {
-        // 错误只描述策略类别与请求路径本身，绝不读取或暗示文件内容。
-        // The error names the policy category and the requested path only; content is never read or hinted at.
-        return !IsInsideFocus(absolutePath)
-            ? new
-                InvalidDataException($"Argument is outside the worker's focused read scope: '{_workspace.ToDisplay(absolutePath)}'.")
-            : new
-                InvalidDataException($"Argument is excluded by the worker read policy: '{_workspace.ToDisplay(absolutePath)}'.");
-    }
+    // 错误只描述策略类别与请求路径本身，绝不读取或暗示文件内容。
+    // The error names the policy category and the requested path only; content is never read or hinted at.
+    private InvalidDataException ExplainDenial(string absolutePath) => !IsInsideFocus(absolutePath)
+        ? new
+            InvalidDataException($"Argument is outside the worker's focused read scope: '{_workspace.ToDisplay(absolutePath)}'.")
+        : new
+            InvalidDataException($"Argument is excluded by the worker read policy: '{_workspace.ToDisplay(absolutePath)}'.");
 
     private bool IsInsideFocus(string absolutePath) =>
         _focusRoots.Count == 0 || _focusRoots.Any(root => Workspace.IsInside(root, absolutePath));

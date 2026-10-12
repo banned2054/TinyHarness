@@ -158,13 +158,11 @@ public sealed class McpStdioServer(
         }
     }
 
-    private static bool IsWellFormed(McpJsonRpcRequest request)
-    {
-        return string.Equals(request.JsonRpc, JsonRpcVersion, StringComparison.Ordinal) &&
-               !string.IsNullOrWhiteSpace(request.Method)                               &&
-               (!request.Id.HasValue ||
-                request.Id.Value.ValueKind is JsonValueKind.String or JsonValueKind.Number or JsonValueKind.Null);
-    }
+    private static bool IsWellFormed(McpJsonRpcRequest request) =>
+        string.Equals(request.JsonRpc, JsonRpcVersion, StringComparison.Ordinal) &&
+        !string.IsNullOrWhiteSpace(request.Method)                               &&
+        (!request.Id.HasValue ||
+         request.Id.Value.ValueKind is JsonValueKind.String or JsonValueKind.Number or JsonValueKind.Null);
 
     private static JsonElement? IdOf(McpJsonRpcRequest? request)
     {
@@ -285,14 +283,12 @@ public sealed class McpStdioServer(
         };
     }
 
-    private static WorkerResult FailureResult(string detail)
-    {
-        return new WorkerResult
+    private static WorkerResult FailureResult(string detail) =>
+        new()
         {
             Status       = WorkerResultStatus.Failed,
             StatusDetail = detail
         };
-    }
 
     private void CancelActiveWorker(JsonElement? cancellationTarget = null)
     {
@@ -339,11 +335,9 @@ public sealed class McpStdioServer(
         }
     }
 
-    private static bool IdsEqual(JsonElement left, JsonElement right)
-    {
-        return left.ValueKind == right.ValueKind &&
-               string.Equals(left.GetRawText(), right.GetRawText(), StringComparison.Ordinal);
-    }
+    private static bool IdsEqual(JsonElement left, JsonElement right) =>
+        left.ValueKind == right.ValueKind &&
+        string.Equals(left.GetRawText(), right.GetRawText(), StringComparison.Ordinal);
 
     private static McpInitializeResult BuildInitializeResult(JsonElement? parameters)
     {

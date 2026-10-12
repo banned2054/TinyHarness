@@ -145,15 +145,10 @@ internal sealed class MemoryPipeStream : Stream
         base.Dispose(disposing);
     }
 
-    public override Task CopyToAsync(Stream destination, int bufferSize, CancellationToken cancellationToken)
-    {
+    public override Task CopyToAsync(Stream destination, int bufferSize, CancellationToken cancellationToken) =>
         throw new NotSupportedException();
-    }
 
-    public override long Seek(long offset, SeekOrigin origin)
-    {
-        throw new NotSupportedException();
-    }
+    public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
 
     public override void SetLength(long value)
     {
@@ -325,18 +320,15 @@ internal sealed class FakeCredentialSource(string username) : ISandboxCredential
 
     public WindowsSandboxAccount Account { get; } = CreateAccount(username);
 
-    public Task<WindowsSandboxAccount> LoadOfflineAccount(CancellationToken cancellationToken = default)
-    {
-        return Task.FromResult(Account);
-    }
+    public Task<WindowsSandboxAccount> LoadOfflineAccount(CancellationToken cancellationToken = default) =>
+        Task.FromResult(Account);
 
     private static WindowsSandboxAccount CreateAccount(string accountUsername)
     {
         if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException();
 
         return new WindowsSandboxAccount(accountUsername, "test-password",
-                                         new SecurityIdentifier(
-                                                                "S-1-5-21-100-200-300-404"));
+                                         new SecurityIdentifier("S-1-5-21-100-200-300-404"));
     }
 }
 

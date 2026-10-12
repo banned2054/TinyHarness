@@ -23,10 +23,8 @@ public sealed class HostProcessBackend : IProcessExecutionBackend
     ///     Constructs the host backend with the known-secret set; each secret's
     ///     environment variable name is removed from the child environment.
     /// </summary>
-    public HostProcessBackend(IReadOnlyDictionary<string, string>? knownSecrets = null)
-    {
+    public HostProcessBackend(IReadOnlyDictionary<string, string>? knownSecrets = null) =>
         _knownSecrets = knownSecrets ?? new Dictionary<string, string>(StringComparer.Ordinal);
-    }
 
     public async Task<ProcessExecutionResult> ExecuteAsync(PreparedProcessExecution execution,
                                                            IProcessOutputCapture    stdoutCapture,
@@ -39,7 +37,7 @@ public sealed class HostProcessBackend : IProcessExecutionBackend
 
         using var timeoutSource = new CancellationTokenSource(TimeSpan.FromSeconds(execution.TimeoutSeconds));
         using var linkedSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken,
-                 timeoutSource.Token);
+            timeoutSource.Token);
         using var        captureSource = new CancellationTokenSource();
         ProcessExecution processExecution;
         try

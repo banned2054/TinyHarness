@@ -26,16 +26,13 @@ namespace TinyHarness.Tests;
 /// </summary>
 public class WindowsSandboxPolicyClosureTests
 {
-    private static ProcessExecutionPolicy SandboxExecutionPolicy(string? identity = null)
+    private static ProcessExecutionPolicy SandboxExecutionPolicy(string? identity = null) => new()
     {
-        return new ProcessExecutionPolicy
-        {
-            Backend     = ProcessExecutionBackendKind.WindowsSandbox,
-            DisplayName = "windows-sandbox: workspace-write, network: restricted",
-            PolicyIdentity = identity ??
-                             "backend=windows-sandbox\npolicyVersion=1\nkind=workspace-write\nnetwork=restricted"
-        };
-    }
+        Backend     = ProcessExecutionBackendKind.WindowsSandbox,
+        DisplayName = "windows-sandbox: workspace-write, network: restricted",
+        PolicyIdentity = identity ??
+                         "backend=windows-sandbox\npolicyVersion=1\nkind=workspace-write\nnetwork=restricted"
+    };
 
     private static ChatToolCall ShellCall(string executable, params string[] arguments)
     {

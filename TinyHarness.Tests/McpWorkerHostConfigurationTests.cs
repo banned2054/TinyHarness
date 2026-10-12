@@ -116,14 +116,8 @@ public class McpWorkerHostConfigurationTests
         {
         }
 
-        public string? Read(string targetName)
-        {
-            return "test-api-key";
-        }
+        public string? Read(string targetName) => "test-api-key";
 
-        public bool Delete(string targetName)
-        {
-            return false;
-        }
+        public bool Delete(string targetName) => false;
     }
 }

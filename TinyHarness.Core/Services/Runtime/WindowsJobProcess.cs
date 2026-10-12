@@ -201,7 +201,6 @@ internal static class WindowsJobProcess
         var quoted      = new StringBuilder(argument.Length + 2).Append('"');
         var backslashes = 0;
         foreach (var character in argument)
-        {
             switch (character)
             {
                 case '\\' :
@@ -216,7 +215,6 @@ internal static class WindowsJobProcess
                     backslashes = 0;
                     break;
             }
-        }
 
         quoted.Append('\\', backslashes * 2).Append('"');
         return quoted.ToString();

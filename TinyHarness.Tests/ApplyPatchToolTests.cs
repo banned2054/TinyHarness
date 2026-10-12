@@ -212,25 +212,14 @@ public class ApplyPatchToolTests
         Assert.Equal("new\n" + tail, await File.ReadAllTextAsync(path));
     }
 
-    private static ChatToolCall Call(string argumentsJson)
-    {
-        return new ChatToolCall("call_1", "apply_patch", argumentsJson);
-    }
+    private static ChatToolCall Call(string argumentsJson) => new("call_1", "apply_patch", argumentsJson);
 
-    private static ToolPreparation Prepare(ApplyPatchTool tool, string patch)
-    {
-        return tool.Prepare(Call(PatchArgs(patch)));
-    }
+    private static ToolPreparation Prepare(ApplyPatchTool tool, string patch) => tool.Prepare(Call(PatchArgs(patch)));
 
-    private static string PatchArgs(string patch)
-    {
-        return new JsonObject { ["patch"] = patch }.ToJsonString();
-    }
+    private static string PatchArgs(string patch) => new JsonObject { ["patch"] = patch }.ToJsonString();
 
-    private static async Task<ToolResult> ExecuteAsync(ApplyPatchTool tool, ToolPreparation preparation)
-    {
-        return await tool.ExecuteAsync(preparation, CancellationToken.None);
-    }
+    private static async Task<ToolResult> ExecuteAsync(ApplyPatchTool tool, ToolPreparation preparation) =>
+        await tool.ExecuteAsync(preparation, CancellationToken.None);
 
     [Fact]
     public async Task ApplyPatch_ModifiesASingleLine()

@@ -17,10 +17,8 @@ namespace TinyHarness.Tests;
 /// </summary>
 public class ConsoleHostEventSinkTests
 {
-    private static HostEvent TextDelta(string delta)
-    {
-        return new HostEvent { Kind = HostEventKind.AssistantTextDelta, Sequence = 1, Payload = delta };
-    }
+    private static HostEvent TextDelta(string delta) => new()
+        { Kind = HostEventKind.AssistantTextDelta, Sequence = 1, Payload = delta };
 
     private static async Task<string> RenderAsync(params HostEvent[] events)
     {
@@ -31,9 +29,8 @@ public class ConsoleHostEventSinkTests
         return output.ToString();
     }
 
-    private static HostEvent ToolStartedEvent(string summary = "read_file src/a.cs")
-    {
-        return new HostEvent
+    private static HostEvent ToolStartedEvent(string summary = "read_file src/a.cs") =>
+        new()
         {
             Kind     = HostEventKind.ToolStarted,
             Sequence = 1,
@@ -46,34 +43,29 @@ public class ConsoleHostEventSinkTests
                 Summary    = summary
             }
         };
-    }
 
-    private static HostEvent ToolFinishedEvent(bool succeeded = true, int? exitCode = null, bool timedOut = false,
-                                               bool truncated = false)
+    private static HostEvent ToolFinishedEvent(
+        bool succeeded = true, int? exitCode = null, bool timedOut = false, bool truncated = false) => new()
     {
-        return new HostEvent
-        {
-            Kind     = HostEventKind.ToolFinished,
-            Sequence = 2,
-            Payload = new ToolExecutionOutcome(
-                                               new ToolPreparation
-                                               {
-                                                   ToolName   = "read_file",
-                                                   CallId     = "c1",
-                                                   Arguments  = new JsonObject(),
-                                                   Capability = "filesystem.read",
-                                                   Summary    = "read_file src/a.cs"
-                                               },
-                                               new ToolResult
-                                               {
-                                                   Succeeded       = succeeded,
-                                                   Content         = string.Empty,
-                                                   ExitCode        = exitCode,
-                                                   TimedOut        = timedOut,
-                                                   OutputTruncated = truncated
-                                               })
-        };
-    }
+        Kind     = HostEventKind.ToolFinished,
+        Sequence = 2,
+        Payload = new ToolExecutionOutcome(new ToolPreparation
+                                           {
+                                               ToolName   = "read_file",
+                                               CallId     = "c1",
+                                               Arguments  = new JsonObject(),
+                                               Capability = "filesystem.read",
+                                               Summary    = "read_file src/a.cs"
+                                           },
+                                           new ToolResult
+                                           {
+                                               Succeeded       = succeeded,
+                                               Content         = string.Empty,
+                                               ExitCode        = exitCode,
+                                               TimedOut        = timedOut,
+                                               OutputTruncated = truncated
+                                           })
+    };
 
     [Fact]
     public async Task Deltas_StreamInlineWithoutTrailingNewline()

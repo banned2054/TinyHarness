@@ -23,18 +23,12 @@ public sealed record SandboxFileSystemEntry
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? MissingPathBehavior { get; init; }
 
-    public static SandboxFileSystemEntry Read(SandboxPolicyPath path, bool skipIfMissing = false)
+    public static SandboxFileSystemEntry Read(SandboxPolicyPath path, bool skipIfMissing = false) => new()
     {
-        return new SandboxFileSystemEntry
-        {
-            Path                = path,
-            Access              = "read",
-            MissingPathBehavior = skipIfMissing ? "skip" : null
-        };
-    }
+        Path                = path,
+        Access              = "read",
+        MissingPathBehavior = skipIfMissing ? "skip" : null
+    };
 
-    public static SandboxFileSystemEntry Write(SandboxPolicyPath path)
-    {
-        return new SandboxFileSystemEntry { Path = path, Access = "write" };
-    }
+    public static SandboxFileSystemEntry Write(SandboxPolicyPath path) => new() { Path = path, Access = "write" };
 }

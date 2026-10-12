@@ -8,29 +8,24 @@ namespace TinyHarness.Tests;
 
 public class WorkerRunnerTests
 {
-    private static WorkerExecutionOptions Options(int maxSteps = 6, TimeSpan? runTimeout = null)
+    private static WorkerExecutionOptions Options(int maxSteps = 6, TimeSpan? runTimeout = null) => new()
     {
-        return new WorkerExecutionOptions
-        {
-            Model                      = "fake-model",
-            RunTimeout                 = runTimeout ?? TimeSpan.FromSeconds(30),
-            MaxAgentSteps              = maxSteps,
-            DefaultToolTimeoutSeconds  = 10,
-            MaxTaskPackageCharacters   = 8_000,
-            MaxToolCalls               = 12,
-            MaxToolOutputCharacters    = 100_000,
-            MaxCumulativeContextTokens = 200_000,
-            MaxContextTokensPerRequest = 200_000,
-            MaxModelResponseCharacters = 64_000
-        };
-    }
+        Model                      = "fake-model",
+        RunTimeout                 = runTimeout ?? TimeSpan.FromSeconds(30),
+        MaxAgentSteps              = maxSteps,
+        DefaultToolTimeoutSeconds  = 10,
+        MaxTaskPackageCharacters   = 8_000,
+        MaxToolCalls               = 12,
+        MaxToolOutputCharacters    = 100_000,
+        MaxCumulativeContextTokens = 200_000,
+        MaxContextTokensPerRequest = 200_000,
+        MaxModelResponseCharacters = 64_000
+    };
 
-    private static string DraftJson(string conclusion, string path)
-    {
-        return $$"""
-            {"conclusion":"{{conclusion}}","evidence":[{"path":"{{path}}","lineStart":2,"lineEnd":3,"note":"States it."}],"suggestedChanges":[],"testSuggestions":[],"uncertainties":[]}
-            """;
-    }
+    private static string DraftJson(string conclusion, string path) =>
+        $$"""
+        {"conclusion":"{{conclusion}}","evidence":[{"path":"{{path}}","lineStart":2,"lineEnd":3,"note":"States it."}],"suggestedChanges":[],"testSuggestions":[],"uncertainties":[]}
+        """;
 
     /// <summary>
     ///     取单个请求里的 tool 消息内容；模型的最后一次请求携带完整最终历史，
@@ -569,10 +564,7 @@ public class WorkerRunnerTests
         Assert.Equal(0, third.Statistics.ToolCalls);
     }
 
-    private static string AbsolutePath(string root, string relative)
-    {
-        return root.Replace('\\', '/') + "/" + relative;
-    }
+    private static string AbsolutePath(string root, string relative) => root.Replace('\\', '/') + "/" + relative;
 
     // ---- link boundary ------------------------------------------------------------------
 

@@ -16,19 +16,15 @@ namespace TinyHarness.Tests;
 /// </summary>
 public class ConversationContextTests
 {
-    private static ContextOptions Options(int window, int reserved, int toolResultCap = 12_000)
+    private static ContextOptions Options(int window, int reserved, int toolResultCap = 12_000) => new()
     {
-        return new ContextOptions
-        {
-            ContextWindowTokens      = window,
-            ReservedOutputTokens     = reserved,
-            ToolResultViewCharacters = toolResultCap
-        };
-    }
+        ContextWindowTokens      = window,
+        ReservedOutputTokens     = reserved,
+        ToolResultViewCharacters = toolResultCap
+    };
 
-    private static string StateJson(string goal, string[] decisions, string[] inspected, string[] modified)
-    {
-        return new JsonObject
+    private static string StateJson(string goal, string[] decisions, string[] inspected, string[] modified) =>
+        new JsonObject
         {
             ["goal"]        = goal,
             ["constraints"] = new JsonArray(),
@@ -44,7 +40,6 @@ public class ConversationContextTests
             ["commandsAndResults"] = new JsonArray(),
             ["pendingWork"]        = new JsonArray()
         }.ToJsonString();
-    }
 
     private static void AppendRound(ConversationContext context, string callId, string toolResult)
     {

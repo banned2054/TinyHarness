@@ -23,10 +23,8 @@ public sealed class CliCommandExecutionTests
                                      """);
 
         var context = fixture.CreateContext();
-        var result = await ConfigCommand.ExecuteAsync(
-                                                      context,
-                                                      CommandLine.Parse(["config", "show"]),
-                                                      CancellationToken.None);
+        var result =
+            await ConfigCommand.ExecuteAsync(context, CommandLine.Parse(["config", "show"]), CancellationToken.None);
 
         Assert.Equal(0, result);
         Assert.Contains("model           : project-model (64,000 tokens context window)", fixture.Io.Output);
@@ -215,23 +213,20 @@ public sealed class CliCommandExecutionTests
         Assert.DoesNotContain("--connect will send one real model request", fixture.Io.Output);
     }
 
-    private static UserConfig ProfileConfig(string name)
+    private static UserConfig ProfileConfig(string name) => new()
     {
-        return new UserConfig
-        {
-            DefaultProfile = name,
-            Profiles =
-            [
-                new UserProfile
-                {
-                    Name         = name,
-                    Endpoint     = "https://api.example/v1",
-                    DefaultModel = "model-x",
-                    Models       = [new UserProfileModel { Id = "model-x", ContextWindowTokens = 64000 }]
-                }
-            ]
-        };
-    }
+        DefaultProfile = name,
+        Profiles =
+        [
+            new UserProfile
+            {
+                Name         = name,
+                Endpoint     = "https://api.example/v1",
+                DefaultModel = "model-x",
+                Models       = [new UserProfileModel { Id = "model-x", ContextWindowTokens = 64000 }]
+            }
+        ]
+    };
 
     private sealed class CliFixture : IDisposable
     {
@@ -257,16 +252,13 @@ public sealed class CliCommandExecutionTests
             if (Directory.Exists(Root)) Directory.Delete(Root, true);
         }
 
-        public CommandContext CreateContext()
+        public CommandContext CreateContext() => new()
         {
-            return new CommandContext
-            {
-                Io               = Io,
-                Credentials      = Credentials,
-                UserConfigPath   = UserConfigPath,
-                WorkingDirectory = Root
-            };
-        }
+            Io               = Io,
+            Credentials      = Credentials,
+            UserConfigPath   = UserConfigPath,
+            WorkingDirectory = Root
+        };
     }
 
     private sealed class FakeCliConsole(IReadOnlyList<string>? input) : ICliConsole
@@ -299,15 +291,11 @@ public sealed class CliCommandExecutionTests
             return Task.CompletedTask;
         }
 
-        public Task<string?> ReadLineAsync(CancellationToken cancellationToken)
-        {
-            return Task.FromResult(_input.Count > 0 ? _input.Dequeue() : null);
-        }
+        public Task<string?> ReadLineAsync(CancellationToken cancellationToken) =>
+            Task.FromResult(_input.Count > 0 ? _input.Dequeue() : null);
 
-        public Task<string?> ReadHiddenLineAsync(CancellationToken cancellationToken)
-        {
-            return Task.FromResult(_input.Count > 0 ? _input.Dequeue() : null);
-        }
+        public Task<string?> ReadHiddenLineAsync(CancellationToken cancellationToken) =>
+            Task.FromResult(_input.Count > 0 ? _input.Dequeue() : null);
     }
 
     private sealed class FakeCredentialStore : ICredentialStore
@@ -321,14 +309,8 @@ public sealed class CliCommandExecutionTests
             _entries[targetName] = secret;
         }
 
-        public string? Read(string targetName)
-        {
-            return _entries.GetValueOrDefault(targetName);
-        }
+        public string? Read(string targetName) => _entries.GetValueOrDefault(targetName);
 
-        public bool Delete(string targetName)
-        {
-            return _entries.Remove(targetName);
-        }
+        public bool Delete(string targetName) => _entries.Remove(targetName);
     }
 }

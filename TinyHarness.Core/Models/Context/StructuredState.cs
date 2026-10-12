@@ -54,10 +54,7 @@ public sealed record StructuredState
     ///     以紧凑 camelCase JSON 序列化，作为模型视图中的状态消息内容。
     ///     Serializes to compact camelCase JSON, used as the state message content in the model view.
     /// </summary>
-    public string ToJson()
-    {
-        return JsonSerializer.Serialize(this, StructuredStateJsonContext.Default.StructuredState);
-    }
+    public string ToJson() => JsonSerializer.Serialize(this, StructuredStateJsonContext.Default.StructuredState);
 
     /// <summary>
     ///     解析并校验摘要输出。非对象、字段类型不符或 JSON 非法都视为失败，调用方据此回滚，

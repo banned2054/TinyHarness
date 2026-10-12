@@ -43,10 +43,8 @@ internal static class RunnerFrameCodec
     ///     Writes one empty control frame (terminate/close_stdin); the payload
     ///     stays present as an empty object and is never omitted.
     /// </summary>
-    public static Task WriteControlFrameAsync(Stream stream, string type, CancellationToken cancellationToken)
-    {
-        return WriteEnvelopeAsync(stream, type, "{}"u8.ToArray(), cancellationToken);
-    }
+    public static Task WriteControlFrameAsync(Stream stream, string type, CancellationToken cancellationToken) =>
+        WriteEnvelopeAsync(stream, type, "{}"u8.ToArray(), cancellationToken);
 
     /// <summary>
     ///     读一帧；干净 EOF（首字节前）返回 null，帧中间截断抛 EndOfStreamException，超长、

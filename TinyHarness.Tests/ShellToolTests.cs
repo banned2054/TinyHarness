@@ -264,12 +264,10 @@ public class ShellToolTests
         using var dir           = new TestTempDir();
         var       captureNumber = 0;
 
-        IProcessOutputCapture CreateCapture(string path, int limit, IReadOnlyList<string> secrets)
-        {
-            return Interlocked.Increment(ref captureNumber) == 1
+        IProcessOutputCapture CreateCapture(string path, int limit, IReadOnlyList<string> secrets) =>
+            Interlocked.Increment(ref captureNumber) == 1
                 ? new FailingOutputCapture()
                 : new ProcessOutputCapture(path, limit, secrets);
-        }
 
         var tool = new ShellTool(dir.Workspace, CreateCapture, 30,
                                  dir.CreateDirectory("artifacts"));
@@ -331,25 +329,19 @@ public class ShellToolTests
         return new PlatformProcess("/bin/sh", ["-c", string.Join("; ", commands)]);
     }
 
-    private static PlatformProcess SlowCommand()
-    {
-        return OperatingSystem.IsWindows()
+    private static PlatformProcess SlowCommand() =>
+        OperatingSystem.IsWindows()
             ? PlatformCommand("ping -n 8 127.0.0.1 >nul")
             : PlatformCommand("sleep 8");
-    }
 
-    private static PlatformProcess OutputtingSlowCommand()
-    {
-        return OperatingSystem.IsWindows()
+    private static PlatformProcess OutputtingSlowCommand() =>
+        OperatingSystem.IsWindows()
             ? PlatformCommand("ping -n 8 127.0.0.1")
             : PlatformCommand("ping -c 8 127.0.0.1");
-    }
 
-    private static string BackgroundPowerShellCommand(string pidFile)
-    {
-        return "start \"\" /b powershell.exe -NoLogo -NoProfile -NonInteractive -Command " +
-               $"\"$PID | Set-Content -NoNewline -LiteralPath {pidFile}; Start-Sleep -Seconds 10\"";
-    }
+    private static string BackgroundPowerShellCommand(string pidFile) =>
+        "start \"\" /b powershell.exe -NoLogo -NoProfile -NonInteractive -Command " +
+        $"\"$PID | Set-Content -NoNewline -LiteralPath {pidFile}; Start-Sleep -Seconds 10\"";
 
     private static async Task WaitForFileAsync(string path, TimeSpan timeout)
     {
@@ -411,15 +403,11 @@ public class ShellToolTests
 
     private sealed class FailingOutputCapture : IProcessOutputCapture
     {
-        public ValueTask AppendAsync(ReadOnlyMemory<char> chunk, CancellationToken cancellationToken)
-        {
-            return ValueTask.FromException(new IOException("Injected capture failure."));
-        }
+        public ValueTask AppendAsync(ReadOnlyMemory<char> chunk, CancellationToken cancellationToken) =>
+            ValueTask.FromException(new IOException("Injected capture failure."));
 
-        public CapturedProcessOutput Complete()
-        {
+        public CapturedProcessOutput Complete() =>
             throw new InvalidOperationException("A failed capture cannot be completed.");
-        }
 
         public void Discard()
         {

@@ -25,52 +25,40 @@ public class ContextCompactionTests
     // window; the loop refuses to send a request that still exceeds the window.
     private const int TightWindow = 1000;
 
-    private static AgentOptions TightBudgetOptions(int maxSteps = 10)
+    private static AgentOptions TightBudgetOptions(int maxSteps = 10) => new()
     {
-        return new AgentOptions
+        Model                     = "test-model",
+        MaxAgentSteps             = maxSteps,
+        DefaultToolTimeoutSeconds = 30,
+        Context = new ContextOptions
         {
-            Model                     = "test-model",
-            MaxAgentSteps             = maxSteps,
-            DefaultToolTimeoutSeconds = 30,
-            Context = new ContextOptions
-            {
-                ContextWindowTokens  = TightWindow,
-                ReservedOutputTokens = 30
-            }
-        };
-    }
+            ContextWindowTokens  = TightWindow,
+            ReservedOutputTokens = 30
+        }
+    };
 
-    private static AgentOptions NoContextOptions(int maxSteps = 10)
+    private static AgentOptions NoContextOptions(int maxSteps = 10) => new()
     {
-        return new AgentOptions
-        {
-            Model                     = "test-model",
-            MaxAgentSteps             = maxSteps,
-            DefaultToolTimeoutSeconds = 30
-        };
-    }
+        Model                     = "test-model",
+        MaxAgentSteps             = maxSteps,
+        DefaultToolTimeoutSeconds = 30
+    };
 
-    private static string StateJson(string goal, string modified, string decision)
+    private static string StateJson(string goal, string modified, string decision) => new JsonObject
     {
-        return new JsonObject
-        {
-            ["goal"]               = goal,
-            ["constraints"]        = new JsonArray(),
-            ["decisions"]          = new JsonArray(decision),
-            ["filesInspected"]     = new JsonArray("src"),
-            ["filesModified"]      = new JsonArray(modified),
-            ["commandsAndResults"] = new JsonArray(),
-            ["pendingWork"]        = new JsonArray()
-        }.ToJsonString();
-    }
+        ["goal"]               = goal,
+        ["constraints"]        = new JsonArray(),
+        ["decisions"]          = new JsonArray(decision),
+        ["filesInspected"]     = new JsonArray("src"),
+        ["filesModified"]      = new JsonArray(modified),
+        ["commandsAndResults"] = new JsonArray(),
+        ["pendingWork"]        = new JsonArray()
+    }.ToJsonString();
 
-    private static string ToolCallId(string prefix, int round)
-    {
-        return $"{prefix}_{round}";
-    }
+    private static string ToolCallId(string prefix, int round) => $"{prefix}_{round}";
 
-    private static void AppendTurn(ConversationContext context, string toolName, string id, string arguments,
-                                   string              result)
+    private static void AppendTurn(
+        ConversationContext context, string toolName, string id, string arguments, string result)
     {
         context.Append(ChatMessage.Assistant(string.Empty, [new ChatToolCall(id, toolName, arguments)]));
         context.Append(ChatMessage.Tool(toolName, id, result));

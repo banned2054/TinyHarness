@@ -176,8 +176,8 @@ public sealed class PermissionEngine
     ///     targets; grants bind the grant constraint, denies the command constraint.
     /// </summary>
     private static PermissionRule ToRule(ToolPreparation preparation, bool deny) => new(preparation.Capability,
-             preparation.TargetPaths.ToArray(),
-             deny ? preparation.SessionConstraint : GrantConstraint(preparation));
+                                                                                        preparation.TargetPaths.ToArray(),
+                                                                                        deny ? preparation.SessionConstraint : GrantConstraint(preparation));
 
     /// <summary>
     ///     会话授权与一次性授权使用的约束：优先执行策略绑定的授权约束，缺省回落到命令约束。

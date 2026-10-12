@@ -11,15 +11,12 @@ namespace TinyHarness.Tests;
 
 public class AgentLoopPermissionTests
 {
-    private static AgentOptions Options()
+    private static AgentOptions Options() => new()
     {
-        return new AgentOptions
-        {
-            Model                     = "test-model",
-            MaxAgentSteps             = 10,
-            DefaultToolTimeoutSeconds = 30
-        };
-    }
+        Model                     = "test-model",
+        MaxAgentSteps             = 10,
+        DefaultToolTimeoutSeconds = 30
+    };
 
     private static string PatchArgs(string patch)
     {

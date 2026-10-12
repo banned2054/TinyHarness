@@ -95,7 +95,7 @@ public class WindowsSandboxProtocolTests
         };
 
         await Assert.ThrowsAsync<InvalidDataException>(() => RunnerFrameCodec.WriteFrameAsync(stream, "output",
-                                                           oversized, CancellationToken.None));
+                                                                oversized, CancellationToken.None));
         Assert.Equal(0, stream.Length);
     }
 
@@ -114,7 +114,7 @@ public class WindowsSandboxProtocolTests
         using var stream = FrameStream(body);
         await Assert.ThrowsAsync<InvalidDataException>(() =>
                                                            RunnerFrameCodec.ReadFrameAsync(stream,
-                                                               CancellationToken.None));
+                                                                    CancellationToken.None));
     }
 
     [Fact]
@@ -125,7 +125,7 @@ public class WindowsSandboxProtocolTests
         using var stream = new MemoryStream(prefix);
         await Assert.ThrowsAsync<InvalidDataException>(() =>
                                                            RunnerFrameCodec.ReadFrameAsync(stream,
-                                                               CancellationToken.None));
+                                                                    CancellationToken.None));
     }
 
     [Fact]
@@ -137,7 +137,7 @@ public class WindowsSandboxProtocolTests
         using var stream    = FrameStream(truncated);
         await Assert.ThrowsAsync<InvalidDataException>(() =>
                                                            RunnerFrameCodec.ReadFrameAsync(stream,
-                                                               CancellationToken.None));
+                                                                    CancellationToken.None));
     }
 
     [Fact]
@@ -147,7 +147,7 @@ public class WindowsSandboxProtocolTests
         using var stream = FrameStream(body);
         await Assert.ThrowsAsync<InvalidDataException>(() =>
                                                            RunnerFrameCodec.ReadFrameAsync(stream,
-                                                               CancellationToken.None));
+                                                                    CancellationToken.None));
     }
 
     [Fact]
@@ -337,7 +337,7 @@ public class WindowsSandboxProtocolTests
 
         var payload = policy.CreateSetupPayload(home.Components, @"C:\work\repo\sub", "tester", true);
         using var document = JsonDocument.Parse(JsonSerializer.SerializeToUtf8Bytes(
-                                                 payload, WindowsSandboxJsonContext.Default.SandboxSetupPayload));
+                                                     payload, WindowsSandboxJsonContext.Default.SandboxSetupPayload));
         var root = document.RootElement;
         Assert.Equal(5, root.GetProperty("version").GetInt32());
         Assert.Equal("TinyHarnessOffline", root.GetProperty("offline_username").GetString());
@@ -596,9 +596,7 @@ public class WindowsSandboxProtocolTests
             return;
 
         var secret = "sandbox-password-Ø";
-        var blob = ProtectedData.Protect(
-                                         Encoding.UTF8.GetBytes(secret), null,
-                                         DataProtectionScope.LocalMachine);
+        var blob   = ProtectedData.Protect(Encoding.UTF8.GetBytes(secret), null, DataProtectionScope.LocalMachine);
         File.WriteAllText(home.Components.UsersFilePath,
                           "{\"version\":5,\"offline\":{\"username\":\"" + identity[1]                  +
                           "\",\"password\":\""                          + Convert.ToBase64String(blob) +
@@ -708,8 +706,7 @@ public class WindowsSandboxProtocolTests
     [Fact]
     public void RunnerLauncher_CommandLinePassesFullPipeNames()
     {
-        var commandLine = WindowsSandboxRunnerLauncher.BuildRunnerCommandLine(
-                                                                              @"C:\tools\codex-command-runner.exe",
+        var commandLine = WindowsSandboxRunnerLauncher.BuildRunnerCommandLine(@"C:\tools\codex-command-runner.exe",
                                                                               @"\\.\pipe\codex-runner-abcd-in",
                                                                               @"\\.\pipe\codex-runner-abcd-out");
         // CRT rules add no quotes for tokens without whitespace/quotes.

@@ -26,23 +26,17 @@ namespace TinyHarness.Tests;
 /// </summary>
 public class MicrosoftAiChatClientTests
 {
-    private static IChatCompletionClient NewClient(MockSseServer server)
-    {
-        return ModelClientFactory.Create("mock-model", server.BaseUrl, "test-key");
-    }
+    private static IChatCompletionClient NewClient(MockSseServer server) =>
+        ModelClientFactory.Create("mock-model", server.BaseUrl, "test-key");
 
-    private static ChatCompletionRequest Request(params ChatMessage[] messages)
+    private static ChatCompletionRequest Request(params ChatMessage[] messages) => new()
     {
-        return new ChatCompletionRequest
-        {
-            Model    = "mock-model",
-            Messages = messages
-        };
-    }
+        Model    = "mock-model",
+        Messages = messages
+    };
 
-    private static async Task<List<ChatStreamEvent>> CollectAsync(IChatCompletionClient client,
-                                                                  ChatCompletionRequest request,
-                                                                  CancellationToken     cancellationToken = default)
+    private static async Task<List<ChatStreamEvent>> CollectAsync(
+        IChatCompletionClient client, ChatCompletionRequest request, CancellationToken cancellationToken = default)
     {
         var events = new List<ChatStreamEvent>();
         await foreach (var @event in client.CompleteAsync(request, cancellationToken)) events.Add(@event);
@@ -69,55 +63,31 @@ public class MicrosoftAiChatClientTests
                $"\"model\":\"mock\",\"choices\":[{{\"index\":0,\"delta\":{deltaJson},\"finish_reason\":{finish}}}]{usage}}}\n\n";
     }
 
-    private static string Sse(params string[] chunks)
-    {
-        return string.Concat(chunks) + "data: [DONE]\n\n";
-    }
+    private static string Sse(params string[] chunks) => string.Concat(chunks) + "data: [DONE]\n\n";
 
-    private static string Json(string value)
-    {
-        return JsonSerializer.Serialize(value);
-    }
+    private static string Json(string value) => JsonSerializer.Serialize(value);
 
-    private static string RoleDelta()
-    {
-        return Chunk("""{"role":"assistant","content":""}""");
-    }
+    private static string RoleDelta() => Chunk("""{"role":"assistant","content":""}""");
 
-    private static string ContentDelta(string text)
-    {
-        return Chunk($"{{\"content\":{Json(text)}}}");
-    }
+    private static string ContentDelta(string text) => Chunk($"{{\"content\":{Json(text)}}}");
 
-    private static string ToolCallHead(int index, string id, string name)
-    {
-        return Chunk(
-                     $"{{\"tool_calls\":[{{\"index\":{index},\"id\":{Json(id)},\"type\":\"function\"," +
-                     $"\"function\":{{\"name\":{Json(name)},\"arguments\":\"\"}}}}]}}");
-    }
+    private static string ToolCallHead(int index, string id, string name) =>
+        Chunk(
+              $"{{\"tool_calls\":[{{\"index\":{index},\"id\":{Json(id)},\"type\":\"function\"," +
+              $"\"function\":{{\"name\":{Json(name)},\"arguments\":\"\"}}}}]}}");
 
-    private static string ToolArgumentsDelta(int index, string argumentsFragment)
-    {
-        return Chunk(
-                     $"{{\"tool_calls\":[{{\"index\":{index},\"function\":{{\"arguments\":{Json(argumentsFragment)}}}}}]}}");
-    }
+    private static string ToolArgumentsDelta(int index, string argumentsFragment) =>
+        Chunk(
+              $"{{\"tool_calls\":[{{\"index\":{index},\"function\":{{\"arguments\":{Json(argumentsFragment)}}}}}]}}");
 
-    private static string StopDelta()
-    {
-        return Chunk("{}", "stop");
-    }
+    private static string StopDelta() => Chunk("{}", "stop");
 
-    private static string ToolCallsFinishDelta()
-    {
-        return Chunk("{}", "tool_calls");
-    }
+    private static string ToolCallsFinishDelta() => Chunk("{}", "tool_calls");
 
-    private static string UsageStopDelta(int promptTokens, int completionTokens)
-    {
-        return Chunk("{}", "stop", $"{{\"prompt_tokens\":{promptTokens},"       +
-                                   $"\"completion_tokens\":{completionTokens}," +
-                                   $"\"total_tokens\":{promptTokens + completionTokens}}}");
-    }
+    private static string UsageStopDelta(int promptTokens, int completionTokens) =>
+        Chunk("{}", "stop", $"{{\"prompt_tokens\":{promptTokens},"       +
+                            $"\"completion_tokens\":{completionTokens}," +
+                            $"\"total_tokens\":{promptTokens + completionTokens}}}");
 
     // ---- tests ---------------------------------------------------------------
 
@@ -317,17 +287,14 @@ public class MicrosoftAiChatClientTests
         Assert.Equal("read_file ok", toolMessage["content"]!.GetValue<string>());
     }
 
-    private static ToolDefinition ReadFileTool()
+    private static ToolDefinition ReadFileTool() => new()
     {
-        return new ToolDefinition
-        {
-            Name        = "read_file",
-            Description = "Read a text file.",
-            Parameters =
-                JsonNode.Parse("""{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}""") as
-                    JsonObject ?? throw new InvalidOperationException("bad fixture")
-        };
-    }
+        Name        = "read_file",
+        Description = "Read a text file.",
+        Parameters =
+            JsonNode.Parse("""{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}""") as
+                JsonObject ?? throw new InvalidOperationException("bad fixture")
+    };
 
     [Fact]
     public async Task FinalUsageChunk_FillsAccumulatorTokenCounts()
@@ -449,16 +416,12 @@ public class MicrosoftAiChatClientTests
     /// </summary>
     private sealed class ScriptedUpdateChatClient(IReadOnlyList<ChatResponseUpdate> updates) : IChatClient
     {
-        public Task<ChatResponse> GetResponseAsync(IEnumerable<MicrosoftChatMessage> messages,
-                                                   ChatOptions?                      options,
-                                                   CancellationToken                 cancellationToken)
-        {
+        public Task<ChatResponse> GetResponseAsync(
+            IEnumerable<MicrosoftChatMessage> messages, ChatOptions? options, CancellationToken cancellationToken) =>
             throw new NotSupportedException("This fake only supports streaming.");
-        }
 
         public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
-            IEnumerable<MicrosoftChatMessage>          messages,
-            ChatOptions?                               options,
+            IEnumerable<MicrosoftChatMessage>          messages, ChatOptions? options,
             [EnumeratorCancellation] CancellationToken cancellationToken)
         {
             foreach (var update in updates)
@@ -468,10 +431,7 @@ public class MicrosoftAiChatClientTests
             }
         }
 
-        public object? GetService(Type serviceType, object? serviceKey = null)
-        {
-            return null;
-        }
+        public object? GetService(Type serviceType, object? serviceKey = null) => null;
 
         public void Dispose()
         {

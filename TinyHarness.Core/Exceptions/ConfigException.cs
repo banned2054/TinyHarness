@@ -13,10 +13,7 @@ public sealed class ConfigException : Exception
     ///     创建配置异常并标记是否属于使用错误。
     ///     Creates a config exception and marks whether it is a usage error.
     /// </summary>
-    public ConfigException(string message, bool isUsageError = false) : base(message)
-    {
-        IsUsageError = isUsageError;
-    }
+    public ConfigException(string message, bool isUsageError = false) : base(message) => IsUsageError = isUsageError;
 
     /// <summary>
     ///     是否属于用户输入错误（对应 CLI 的使用错误退出码）。
