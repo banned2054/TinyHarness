@@ -1,32 +1,57 @@
+<!-- markdownlint-disable -->
+
+<div align="center">
+
 # TinyHarness.NET
 
-English | [**简体中文**](docs/README.md)
+<br>
 
-A lightweight local coding-agent harness built on .NET 10. It calls models through a unified `Microsoft.Extensions.AI.IChatClient` boundary backed by the official OpenAI SDK, with Chat Completions (default) or Responses selected explicitly by configuration, letting models inspect workspace files, propose patches, and run commands while the application handles argument validation, permission approval, tool dispatch, and context management.
+<div>
+    <a href="https://dotnet.microsoft.com/"><img alt=".NET 10" src="https://img.shields.io/badge/.NET-10.0-512BD4"></a>
+    <a href="https://learn.microsoft.com/dotnet/core/deploying/native-aot/"><img alt="NativeAOT win-x64" src="https://img.shields.io/badge/NativeAOT-win--x64-009688"></a>
+    <a href="#-build-and-run"><img alt="Tests offline" src="https://img.shields.io/badge/tests-offline-green"></a>
+</div>
 
-The project focuses on a small, complete, and explainable agent execution flow: the model proposes the next action, and the harness prepares, authorizes, and executes it. The CLI is the current entry point, and NativeAOT compatibility is continuously verified.
+<br>
 
-## Current status
+<!-- markdownlint-restore -->
 
-M7 persistence and demo foundations are implemented: runs write an inspectable JSONL audit and JSON session snapshot under `artifacts/runs` (or the configured `sessionDirectory`). M8's configuration commands manage provider profiles and models, report effective configuration, and run an offline doctor check. M9 adds a one-shot, read-only MCP worker for Codex. M10 unifies model calls behind `Microsoft.Extensions.AI.IChatClient` with explicit Chat Completions/Responses selection, verified offline. The offline fake path is covered, and `glm-5.3` through the configured HTTPS endpoint has completed a live investigation through both stdio and Codex MCP.
+English | [简体中文](Docs/README.md)
 
-| Capability | Current implementation |
-|---|---|
-| Model protocol | `Microsoft.Extensions.AI.IChatClient` over the official OpenAI SDK; Chat Completions (default) or Responses via `chatApi`; SSE text, fragmented tool-call arguments, usage, and Responses reasoning round-trip |
-| Agent loop | Multiple tool calls per response, sequential execution, result feedback, step limits, failure and cancellation handling |
-| File tools | `list_files`, `search_text`, `read_file`, `apply_patch` |
-| Process tool | `shell` with direct process and explicit shell modes; stdout/stderr, exit codes, timeouts, process-tree termination, and output trimming |
-| Permissions | `Allow` / `Ask` / `Deny`; one-time and session approvals, plus command allow rules |
-| Context | Token estimation, tool-result trimming, recent complete turns, structured summaries, and successive compaction batches |
-| Verification | Offline fake-client tests, local simulated SSE protocol tests, command-parser tests, and a `win-x64` NativeAOT smoke test |
-| Persistence | Per-run `<runId>.audit.jsonl` and `<runId>.session.json`; configured known secret values and explicitly supported sensitive fields are redacted before persistence |
-| MCP worker | Local stdio server exposing only `ask_glm`; every request gets a fresh read-only run with fixed workspace, model and bounded budgets |
+</div>
 
-Each `run` CLI invocation handles one task and displays approvals, compaction notices, and the final result. `mcp` serves serial, independent `ask_glm` requests. Management commands do not send their input to a model. Interactive multi-turn sessions, token-by-token terminal output, and session recovery are not available.
+A lightweight local coding-agent harness built on .NET 10. Models are called through a unified `Microsoft.Extensions.AI.IChatClient` boundary over the official OpenAI SDK, with Chat Completions (default) or Responses selected explicitly by configuration. The model proposes the next action — inspecting files, proposing patches, running commands — and the harness validates arguments, approves permissions, dispatches tools, and manages context.
 
-## Quick start: run the offline smoke test
+The goal is a small, complete, and explainable execution loop. The CLI is the current entry point; `win-x64` NativeAOT is a continuously verified constraint.
 
-These commands use PowerShell on Windows. The .NET 10 SDK is required. The initial NuGet restore requires network access; the tests and smoke path do not require a real model service or an API key.
+> **Approval here is application-level policy, not an OS sandbox.** An approved process can still access files outside the workspace and the network. The optional Windows sandbox covers only `shell` tool processes.
+
+## 🚧 Project Status
+
+Early development; commands, configuration, and storage formats may change between milestones.
+
+Implemented today: one-shot `run`, interactive multi-turn `chat`, a protected session store with strictly offline `session list` / `session show`, offline-first configuration management, a read-only MCP worker, and opt-in Windows sandbox management. Resuming a saved session, project-instruction (`AGENTS.md`) loading, and host-enforced read-only/implement modes are planned but not implemented. Default tests and builds never call a paid model; only one live combination (`glm-5.3` over a single HTTPS endpoint) has been verified.
+
+## ✨ Features
+
+- **Agent loop** — streaming replies, multiple sequential tool calls per response, step limits, failure and cancellation handling.
+- **Tools** — `list_files`, `search_text`, `read_file`, `apply_patch`, and `shell` (direct process or explicit shell mode) with timeouts, process-tree termination, and output trimming.
+- **Permissions** — every call follows `Prepare → Authorize → Execute`: workspace reads are allowed by default, patches and processes ask for approval (`a` once / `s` this run / `d` deny), and command allow rules can be configured.
+- **Context** — token budgets calibrated by real usage, tool-result trimming, and compaction of older turns into validated structured summaries.
+- **Persistence** — every run writes a JSONL audit and a redacted session snapshot; `chat` sessions are committed atomically to a protected store and can be inspected strictly offline.
+- **MCP worker** — `tinyharness mcp` runs a local read-only stdio server exposing `ask_glm` for clients such as Codex.
+- **Windows sandbox** — opt-in machine-level isolation for `shell` processes with explicit `sandbox status / provision / verify` management.
+
+## 🗺️ Limitations
+
+- Sessions can be viewed offline but cannot be resumed yet; resume is the next milestone.
+- The Windows sandbox is verified on a single machine, and coexistence with a Codex release install is unverified.
+- Only `win-x64` NativeAOT is verified; protocol coverage comes from a local simulated SSE service plus the one live endpoint above.
+- `chat` has not been verified against a real model service.
+
+## 🚀 Build and Run
+
+Requires the [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0). The initial restore needs network access; tests and the smoke path never call a real model or need an API key.
 
 ```powershell
 git clone https://github.com/banned2054/TinyHarness.git
@@ -36,74 +61,40 @@ dotnet test TinyHarness.Tests/TinyHarness.Tests.csproj --no-restore
 dotnet run --project TinyHarness.Cli -- smoke --config tinyharness.json
 ```
 
-The included [tinyharness.json](tinyharness.json) uses a placeholder endpoint and smoke model name. It works with the offline smoke test but must be changed before making real model requests.
+The bundled [tinyharness.json](tinyharness.json) uses a placeholder endpoint. In the smoke test a scripted model inspects and patches a deliberately broken fixture, rebuilds it, and the run finishes with `status : Completed`.
 
-Each live run writes its audit and completed session snapshot to `sessionDirectory`. The audit is append-only during the run and records prepared tool summaries, permission outcomes, tool-result metadata, and terminal status. Its `run.completed` entry means Agent execution reached a terminal result; because it is written before the snapshot, it is not proof that both files were saved successfully. The CLI reports only persistence paths that actually exist. The snapshot preserves the full in-memory message history and structured state for inspection; it is not a recovery or replay mechanism.
+Native publish (also needs MSVC C++ build tools and the Windows SDK):
 
-The smoke test creates a temporary package-free .NET 10 console fixture. Its fixed check program initially observes the broken `Calculator.Add` result `-1` and exits with `CHECK_FAIL`; the scripted model inspects and patches only `Calculator.cs`, rebuilds, then observes result `5` and `CHECK_PASS`. Fixture restore uses an empty package-source configuration and the installed .NET 10 SDK/targeting pack. Build and check commands use structured direct process mode (`dotnet build` and `dotnet <fixture.dll>`), while a separate step still covers explicit shell execution. Successful output includes:
-
-```text
-status       : Completed
-steps        : 17
-toolExecs    : 16
+```powershell
+dotnet publish TinyHarness.Cli/TinyHarness.Cli.csproj -c Release -r win-x64 --self-contained true -o artifacts/nativeaot
 ```
 
-This verifies the harness execution flow. A real model's ability to fix code and the quality of its summaries require separate validation. Offline tests cover compaction invariants and successive compaction batches.
+### Commands
 
-## Configure through the CLI
+```text
+tinyharness run [--config <file>] "task"    one-shot task (a bare "task" also works)
+tinyharness chat [--config <file>]          interactive multi-turn session
+tinyharness session list | show <id>        strictly offline session inspection
+tinyharness mcp                             read-only stdio MCP worker (ask_glm)
+tinyharness smoke                           offline end-to-end self check
+tinyharness init / config / provider / model / auth / doctor
+tinyharness sandbox status | provision | verify    Windows sandbox management
+```
 
-The first-time setup does not require hand-editing JSON:
+`Ctrl+C` cancels the active run; in `chat` it cancels the current turn and exits when idle. Exit codes: `0` completed, `1` failed or step limit reached, `2` missing prompt, `130` cancelled. `doctor` is offline by default; `doctor --connect` is the explicit network check. Use `--help` or `help <command>` for full syntax.
+
+### Configure
+
+First-time setup does not require hand-editing JSON. `init` stores the provider profile, endpoint, key reference, model, and context window in the user config (`%APPDATA%\tinyharness\user-config.json` on Windows). Keys are kept as references — an environment variable or Windows Credential Manager — and are never written to JSON.
 
 ```powershell
 dotnet run --project TinyHarness.Cli -- init
 dotnet run --project TinyHarness.Cli -- config show
-dotnet run --project TinyHarness.Cli -- doctor
 ```
 
-The guide stores a named provider profile, endpoint, API-key reference, model, and explicit context window in the platform user config (`%APPDATA%\tinyharness\user-config.json` on Windows). The API key is never written to JSON. Use `auth set <profile> --env <VAR>` for an environment-variable reference, or `auth set <profile> --store` to use Windows Credential Manager. `doctor` is offline by default; `doctor --connect` is the explicit network check and may incur charges.
+### Connect a real model
 
-Additional management commands are:
-
-```text
-tinyharness provider list|add <name>|use <name>
-tinyharness model list|add <id> --context-window <tokens>|use <id>
-tinyharness auth set <name> [--env <VAR>|--store]
-tinyharness config set <key> <value>
-```
-
-## Use the read-only MCP worker
-
-Configure the default provider profile, model, context window and credential through the user configuration commands above, then start the stdio server:
-
-```powershell
-dotnet run --project TinyHarness.Cli -- mcp
-```
-
-The MCP process reads only the TinyHarness user config at the path shown by `config show`. It uses that config's default provider profile and explicitly selected model. It ignores the target workspace's `tinyharness.json` and its `commandRules`. The workspace is fixed when the server starts: by default it is the process working directory, or it can be set in the user config under `settings.worker.workspaceRoot` (relative paths resolve from the process working directory).
-
-The server advertises only `ask_glm`. It lists, searches and reads files inside the fixed workspace, with focus-path narrowing and sensitive-file exclusions. It cannot modify files or run commands. Permitted file contents are sent to the configured model endpoint. MCP protocol messages use UTF-8 newline-delimited JSON on standard input and output; startup diagnostics go to standard error. `notifications/cancelled`, closing the client input, and Ctrl+C cancel active model and file operations. Calls are processed serially, each with fresh history, policy and budgets.
-
-Worker limits are trusted user settings under `settings.worker`; an MCP request cannot set or raise them. Defaults and hard ceilings are:
-
-| Setting | Default | Hard ceiling |
-|---|---:|---:|
-| `runTimeoutSeconds` | 120 s | 600 s |
-| `maxAgentSteps` (model requests) | 6 | 24 |
-| `defaultToolTimeoutSeconds` | 20 s | 120 s |
-| `maxTaskPackageCharacters` | 12,000 | 32,000 |
-| `maxToolCalls` | 12 | 40 |
-| `maxToolOutputCharacters` | 24,000 | 128,000 |
-| `maxContextTokensPerRequest` | `min(24,000, context window − 4,096)` | 256,000 and below the configured model window minus 4,096 |
-| `maxCumulativeContextTokens` | `min(32,000, context window − 4,096)` | 256,000 |
-| `maxModelResponseCharacters` | 12,000 | 64,000 |
-
-`WorkerResult` text also has a Core hard ceiling of 16,000 characters. Edit only the user-owned config to adjust trusted settings; do not place these values in a project `tinyharness.json`.
-
-Without `--config`, runtime lookup is non-merging and uses the first existing source: current-directory `tinyharness.json`, the user config, then built-in defaults. `config show` prints the effective source, absolute lookup paths, and key availability without printing key material. Use `--help` or `help <command>` for command-specific syntax. For tests and portable runs, `TINYHARNESS_USER_CONFIG_DIR` overrides the user-config directory.
-
-## Connect a real model
-
-Create a JSON configuration file, such as `artifacts/live.json`. The `artifacts/` directory is ignored by Git and can hold local configuration. Create the directory first, then save the following content, replacing the endpoint, model, workspace, and context window settings.
+Save a JSON file under the Git-ignored `artifacts/` directory, for example `artifacts/live.json`:
 
 ```json
 {
@@ -112,165 +103,36 @@ Create a JSON configuration file, such as `artifacts/live.json`. The `artifacts/
   "chatApi": "chat-completions",
   "apiKeyEnvironmentVariable": "TINYHARNESS_API_KEY",
   "contextWindowTokens": 128000,
-  "reservedOutputTokens": 8000,
-  "compactionThreshold": 100000,
-  "maxAgentSteps": 40,
-  "defaultToolTimeoutSeconds": 120,
   "workspaceRoot": "C:/Code/YourProject",
   "commandRules": []
 }
 ```
 
-`endpoint` is the SDK base URL, typically ending in `/v1`; do not use the full `/v1/chat/completions` URL. The model must support the selected API—streaming Chat Completions (default) or Responses—together with function/tool calling; `chatApi` selects the transport explicitly and is never inferred from the model name. The context window is explicitly configured, not inferred from the model name. The example values do not describe any particular model's capabilities.
-
-Enter the key in the current PowerShell session and run a task:
+`endpoint` is the SDK base URL (typically ending in `/v1`), not the full completions URL. The model must support the selected transport plus tool calling; `chatApi` is never inferred from the model name.
 
 ```powershell
-$env:TINYHARNESS_API_KEY = Read-Host "API key" -MaskInput
-dotnet run --project TinyHarness.Cli -- run --config artifacts/live.json "Find out why this project's tests fail and fix them"
+$env:TINYHARNESS_API_KEY = Read-Host "API key" -MaskInput    # PowerShell 7.1+
+dotnet run --project TinyHarness.Cli -- run --config artifacts/live.json "Find out why the tests fail and fix it"
 ```
 
-`-MaskInput` requires PowerShell 7.1 or later. The key is read from the configured environment variable and is not stored in JSON. `run` calls the model service: both regular requests and compaction summary requests may incur charges. Authorized tools can modify files or start processes.
+`run` and `chat` call the model service and may incur charges; authorized tools can modify files and start processes. Without `--config`, the CLI reads `tinyharness.json` from the current directory.
 
-The CLI also accepts commands without the `run` verb:
+## 🖥️ Platform Status
 
-```powershell
-dotnet run --project TinyHarness.Cli -- --config artifacts/live.json "Explain this project's directory structure"
-```
+| Platform | Status |
+| --- | --- |
+| Windows x64 | Primary development platform; offline tests and `win-x64` NativeAOT publish verified |
+| Other RIDs | Not yet verified |
 
-Without `--config`, the CLI reads `tinyharness.json` from the current directory. If `workspaceRoot` is omitted, it defaults to the process's current directory. Relative workspace paths are also resolved against the process's current directory, not the configuration file's directory. Use an absolute path when working on another project.
+## 📚 Documentation
 
-Press `Ctrl+C` to cancel. Exit codes are `0` for completion, `1` for failure or reaching the step limit, `2` for a missing prompt, and `130` for task cancellation during normal execution.
+- [PLAN.md](PLAN.md) — current product scope and the M12+ roadmap
+- [PAST_PLAN.md](PAST_PLAN.md) — archived MVP and M1–M11 plan
+- [Windows sandbox management and acceptance records](Docs/windows-sandbox-management.md) (Chinese)
+- [Windows sandbox integration design](Docs/windows-sandbox-dotnet-integration.md) (Chinese)
+- [M9](Docs/m9-demo.md) and [M10](Docs/m10-model-protocol.md) validation records
+- [AGENTS.md](AGENTS.md) — repository development rules
 
-### Configuration
+## 🤝 Contributing
 
-| Field | Default | Description |
-|---|---|---|
-| `endpoint` | Empty | HTTP(S) base URL for the model service |
-| `model` | Empty | Model identifier; required for live runs |
-| `chatApi` | `chat-completions` | Model API transport: `chat-completions` or `responses`; explicitly selected, never inferred from the model name |
-| `apiKeyEnvironmentVariable` | Empty | Name of the environment variable holding the API key |
-| `apiKeyCredentialTarget` | Empty | Windows Credential Manager target holding the API key; stores a reference, not the key |
-| `contextWindowTokens` | `128000` | Declared context window size |
-| `reservedOutputTokens` | `8000` | Space reserved for output in the budget; currently not sent as an API output limit |
-| `compactionThreshold` | `0` | Total estimated token threshold for compaction, including reserved output; `0` uses the context window size |
-| `maxAgentSteps` | `40` | Maximum number of regular model requests; summary requests do not count toward this limit |
-| `defaultToolTimeoutSeconds` | `120` | Default tool timeout in seconds |
-| `workspaceRoot` | Current directory | Root for file-tool boundaries and command working directories |
-| `sessionDirectory` | `artifacts/runs` | Directory for per-run audit JSONL and session JSON files |
-| `commandRules` | `[]` | Explicit process allow rules |
-
-## Permissions and execution boundaries
-
-Every tool follows `Prepare → Authorize → Execute`: validate arguments, normalize targets, and create a prepared plan; evaluate permissions against capabilities and resource scopes; then execute that same plan.
-
-Listing, searching, and reading within the workspace are allowed by default. Patches and processes require approval by default. File tools check normalized paths and resolve symlink/junction targets before execution to reject access outside the workspace.
-
-The approval prompt shows the call summary, target paths, and the diff for `apply_patch`:
-
-```text
-[a]llow once / [s]ession / [d]eny:
-```
-
-- `a`: Allow this call once.
-- `s`: Grant permission for this run using the displayed capability, path scope, and call constraints. Directory scopes include descendants; process grants also bind command constraints.
-- `d`, empty input, or any unrecognized input: Deny this call. The denial is returned to the model so it can adjust its approach.
-
-**This is application-level policy and approval, not an OS sandbox.** File-tool path checks do not constrain every action of an approved process: processes may access files outside the workspace or use the network. The `shell` tool checks the working directory and obtains approval for the call, but provides no OS-level file or network isolation. It also has no separate stage-detection mechanism for Git operations, publishing, or deployment.
-
-### Command allow rules
-
-Only an explicitly configured matching rule or an existing approval lets a command run without prompting. To allow exactly `dotnet test` at the workspace root, add this entry to `commandRules`:
-
-```json
-{
-  "mode": "direct",
-  "executable": "dotnet",
-  "arguments": ["test"],
-  "workingDirectory": "."
-}
-```
-
-`direct` mode starts the executable without interpreting pipes, redirection, or other shell syntax. Rules match arguments individually, with `*` and `?` supported within each argument. The working directory must match exactly; subdirectories are not automatically allowed. The rule above does not match `dotnet test SomeProject.csproj` with its additional argument.
-
-Rules for explicit `shell` mode use `shell`, `command`, and `workingDirectory`, matching the shell type, full command text, and directory exactly. Builds and tests execute repository code, so configure allow rules only for projects you trust.
-
-Processes capture stdout/stderr separately and trim model output using head + tail retention. When output is truncated, the full output is kept in a local artifact and its path is returned. Live runs remove the configured API key environment variable from child processes. Persistence redacts configured known secret values by exact replacement (longer overlapping values first) and explicitly supported sensitive assignment/JSON fields such as API keys, access tokens, tokens, passwords, and secrets. This is not general-purpose secret detection and does not guarantee recognition of arbitrary sensitive data.
-
-## How context compaction works
-
-The Context Manager keeps the original message history during a run and builds a separate view for each model request:
-
-```text
-System instructions and original task
-  + StructuredState (existing summary)
-  + Recent complete turns
-  + Current turn
-```
-
-It first trims oversized tool results in the model view, then selects older complete turns according to the budget and summarizes them into structured JSON through an additional Chat Completions request. Summary requests include no tool definitions. Tool calls and their results are folded together, while the current turn and latest complete turn are retained. Multiple batches of history can be compacted before a single regular request.
-
-StructuredState contains `Goal`, `Constraints`, `Decisions`, `FilesInspected`, `FilesModified`, `CommandsAndResults`, and `PendingWork`. Before accepting a summary, the manager checks its format, budget savings, and rules for retaining existing state:
-
-- A nonempty `Goal` cannot be cleared.
-- Recorded files, command results, and decisions must be retained.
-- Each existing pending item must be retained or explicitly closed with `completed: <item>`; constraints may be updated.
-- If validation fails, that batch's summary is not applied and the original history remains intact. If the final estimate still exceeds the context window, the task stops without sending the regular request.
-
-Later compaction follows “old summary + newly folded history → new summary.” The model rewrites the existing summary, and validation cannot guarantee complete initial fact extraction or lossless meaning across repeated summaries. Token counts use a character-based estimate, calibrated by a clamped ratio from the most recent service-reported usage (still an estimate, not guaranteed to be an upper bound on actual token counts); without real usage they remain purely estimated. Each step's real usage and finish reason, when available, are written to the audit log.
-
-Original messages remain in process memory and are not deleted by compaction, although tools may already have trimmed their own output before returning results. Completed runs persist that history and the committed structured state; session recovery and side-effect replay are deliberately not implemented.
-
-## Tests and NativeAOT
-
-Default tests use scripted/fake clients and a local simulated SSE service. They do not call paid models or require an API key. Local protocol tests listen on loopback ports.
-
-```powershell
-dotnet test TinyHarness.Tests/TinyHarness.Tests.csproj
-dotnet test TinyHarness.Tests/TinyHarness.Tests.csproj --no-restore --filter FullyQualifiedName~ContextCompactionTests
-```
-
-Coverage includes the tool-call loop, protocol fragments, argument errors, permission denial, path boundaries, process timeouts and cancellation, output trimming, and compaction atomic groups, rollback, state retention, and successive batches within one step.
-
-The currently verified NativeAOT RID is **`win-x64`**. Native publishing on Windows also requires MSVC C++ build tools and the Windows SDK, available through the Visual Studio/Build Tools “Desktop development with C++” workload. Other RIDs are not yet listed as verified targets.
-
-Run from the repository root:
-
-```powershell
-dotnet publish TinyHarness.Cli/TinyHarness.Cli.csproj -c Release -r win-x64 --self-contained true -o artifacts/m7-nativeaot
-./artifacts/m7-nativeaot/TinyHarness.exe smoke --config tinyharness.json
-```
-
-The published executable is named `TinyHarness.exe`. Use `run --config <path> "task"` to call a real service.
-
-M7 verification on 2026-09-11: **178/178 default tests passed**; managed smoke passed both from the repository root and from an external directory; isolated `win-x64` NativeAOT publishing produced no trimming/AOT warnings; and that run's newly published native executable passed the smoke test from an external directory.
-
-M8 validation on 2026-09-18: **225/225 default tests passed**; the CLI was built without warnings, `win-x64` NativeAOT publishing completed without trimming/AOT warnings, and the native executable passed `--help`, offline `doctor`, and the existing smoke path from outside the repository. An isolated user-config directory was used to verify `init`, `config show/set`, provider/model management, and environment-variable credential references, with command-execution regression coverage for those paths. No real provider/model is listed as tested.
-
-M9 local implementation, offline/AOT validation, and live endpoint check on 2026-09-23: the initial full suite passed **367 tests**; after the MCP `_meta` compatibility fix, the focused MCP suite passed **21/21**. `win-x64` NativeAOT publish and native smoke passed. A real `glm-5.3` request through the configured HTTPS endpoint completed with cited file lines through both stdio and Codex MCP. See the [M9 validation record](docs/m9-demo.md).
-
-M10 unified model protocol on 2026-10-08: model calls moved behind `Microsoft.Extensions.AI.IChatClient` (OpenAI SDK 2.14.0 + Microsoft.Extensions.AI.OpenAI 10.10.1) with explicit `chatApi` selection and Responses reasoning/item-id/encrypted-content round-trip; **408/408 default tests passed**, the build reported no warnings, `win-x64` NativeAOT publishing completed without trimming/AOT warnings, and the native executable passed `--help`, offline `doctor`, and the smoke path from outside the repository. Offline contract tests cover both transports; no real provider/model claim is added. See the [M10 validation record](docs/m10-model-protocol.md).
-
-### Provider and model verification scope
-
-Protocol verification uses a local simulated SSE service, covering custom endpoints, both Chat Completions and Responses transports, text streaming, fragmented tool calls, usage and reasoning replay, request tool definitions, HTTP errors, and cancellation. One live `glm-5.3`/HTTPS endpoint combination has also been verified through direct stdio and a Codex MCP call. Using an “OpenAI-compatible” interface does not mean every provider and model has been tested for compatibility.
-
-## Code structure
-
-| Directory | Responsibility |
-|---|---|
-| `TinyHarness.Core/Models/<feature>` | Data contracts per feature (`Agent`, `ChatCompletions`, `Configuration`, `Context`, `Permissions`, `Persistence`, `Runtime`, `Tools`): messages, requests/responses, configuration, states, and execution results |
-| `TinyHarness.Core/Services/<feature>` | Implementations per feature: agent main loop, OpenAI SDK adapter, configuration loading/storage, context management and compaction, permission engine, tool preparation and execution, workspace/process runtime, and run persistence |
-| `TinyHarness.Core/Exceptions` | Standalone exception types |
-| `TinyHarness.Cli/Commands` | Argument parsing, command dispatch, and command handlers |
-| `TinyHarness.Cli/Models` | Parsed command-line options |
-| `TinyHarness.Cli/Services` | Console I/O, approval prompts, profile editing, and the offline smoke path |
-| `TinyHarness.Cli/Exceptions` | CLI usage errors |
-| `TinyHarness.Cli` (root) | Entry point and dependency composition |
-| `TinyHarness.Tests` | Unit, protocol contract, and integration tests |
-
-Namespaces now follow the directory roles: data contracts use `TinyHarness.Core.Models.<feature>`, implementations use `TinyHarness.Core.Services.<feature>`, and CLI types use `TinyHarness.Cli.Commands`, `TinyHarness.Cli.Models`, or `TinyHarness.Cli.Services`. This namespace reorganization is a public API change for consumers that reference Core types directly; behavior and persisted formats remain unchanged.
-
-The agent loop accesses models through `IChatCompletionClient`; SDK types stay in the protocol adapter layer. Tools are registered explicitly. Structured state uses System.Text.Json source generation, and configuration uses manual binding without reflection to support ongoing trimming and NativeAOT verification.
-
-See [PLAN.md](PLAN.md) for the current product scope and the M12+ roadmap toward a daily-use coding agent. The original MVP and M9–M11 plan, including its historical scope and validation boundaries, is preserved unchanged in [PAST_PLAN.md](PAST_PLAN.md). Repository development rules remain in [AGENTS.md](AGENTS.md). Future milestones describe planned work, not currently available features.
+Focused issues and pull requests are welcome. Keep default tests offline and free of API keys, and distinguish implemented behavior from unverified behavior. See [AGENTS.md](AGENTS.md) for the working rules.

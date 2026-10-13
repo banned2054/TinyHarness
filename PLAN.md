@@ -11,8 +11,8 @@
 - 本文件定义当前产品目标、持续有效的架构与安全边界，以及 M12 起的实施顺序。
 - [AGENTS.md](AGENTS.md) 定义编码 Agent 在本仓库中可以怎样工作。
 - [PAST_PLAN.md](PAST_PLAN.md) 原样保存截至 2026-10-11 的旧 `PLAN.md`，包含 MVP、M1–M11、协议选择与 Windows 沙箱接入的历史决策及验收记录。该归档不再承载新增路线。
-- [README.md](README.md) 与 [中文 README](docs/README.md) 描述实际可用的功能和使用方式；新功能验收前不得按本计划宣称已支持。
-- [M9 验证记录](docs/m9-demo.md)、[M10 验证记录](docs/m10-model-protocol.md) 和 [Windows 沙箱接入方案](docs/windows-sandbox-dotnet-integration.md) 保留为历史证据。M11.5 真实验收闭环见中文 README 的验证记录。
+- [README.md](README.md) 与 [中文 README](Docs/README.md) 描述实际可用的功能和使用方式；新功能验收前不得按本计划宣称已支持。
+- [M9 验证记录](Docs/m9-demo.md)、[M10 验证记录](Docs/m10-model-protocol.md) 和 [Windows 沙箱接入方案](Docs/windows-sandbox-dotnet-integration.md) 保留为历史证据。M11.5 真实验收闭环见 [Windows 沙箱管理与验收记录](Docs/windows-sandbox-management.md)。
 
 历史记录中“当时未实现”的描述不用于否定后来验收完成的能力。历史计划与本文件冲突时，当前产品路线以本文件为准；平台安全策略、当前用户明确指令和仓库开发规则的优先级不变。
 
