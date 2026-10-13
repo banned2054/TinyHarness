@@ -18,15 +18,9 @@ public class AgentLoopPermissionTests
         DefaultToolTimeoutSeconds = 30
     };
 
-    private static string PatchArgs(string patch)
-    {
-        return new JsonObject { ["patch"] = patch }.ToJsonString();
-    }
+    private static string PatchArgs(string patch) => new JsonObject { ["patch"] = patch }.ToJsonString();
 
-    private static ApplyPatchTool PatchTool(TestTempDir dir)
-    {
-        return new ApplyPatchTool(dir.Workspace);
-    }
+    private static ApplyPatchTool PatchTool(TestTempDir dir) => new(dir.Workspace);
 
     [Fact]
     public async Task SessionGrant_AutoApprovesLaterWritesToSameFile()
@@ -294,16 +288,14 @@ public class AgentLoopPermissionTests
         Assert.Equal(0, approver.Prompts);
     }
 
-    private static string EscapePatch()
-    {
-        return """
-            --- a/fixme.cs
-            +++ b/../outside.cs
-            @@ -1 +1 @@
-            -line1
-            +line1-x
-            """;
-    }
+    private static string EscapePatch() =>
+        """
+        --- a/fixme.cs
+        +++ b/../outside.cs
+        @@ -1 +1 @@
+        -line1
+        +line1-x
+        """;
 
     private static string ReplacePatch(int lineNumber)
     {
