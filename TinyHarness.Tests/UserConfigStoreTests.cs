@@ -218,4 +218,37 @@ public class UserConfigStoreTests
             Directory.Delete(dir, true);
         }
     }
+
+    [Fact]
+    public async Task SaveThenLoad_RoundTripsTheSessionStoreDirectory()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"tinyharness-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        var path = Path.Combine(dir, "user-config.json");
+        try
+        {
+            var store = Path.Combine(dir, "sessions");
+            await UserConfigStore.SaveAsync(path,
+                                            new UserConfig
+                                            {
+                                                Settings = new UserConfigSettings { SessionStoreDirectory = store }
+                                            },
+                                            CancellationToken.None);
+
+            var loaded = await UserConfigStore.LoadAsync(path, CancellationToken.None);
+
+            Assert.Equal(store, loaded.Settings?.SessionStoreDirectory);
+
+            // An absent field round-trips as null: the default protected
+            // directory applies instead of a persisted empty value.
+            await UserConfigStore.SaveAsync(path, new UserConfig { Settings = new UserConfigSettings() },
+                                            CancellationToken.None);
+            var reloaded = await UserConfigStore.LoadAsync(path, CancellationToken.None);
+            Assert.Null(reloaded.Settings?.SessionStoreDirectory);
+        }
+        finally
+        {
+            Directory.Delete(dir, true);
+        }
+    }
 }

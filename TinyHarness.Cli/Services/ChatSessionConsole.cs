@@ -12,8 +12,8 @@ namespace TinyHarness.Cli.Services;
 ///     结束后打印一行终态摘要，绝不重复打印 <see cref="AgentResult.FinalMessage" />。
 ///     输入经与审批提示共享的单一读取出口（PLAN §6）：Ctrl+C 由 <see cref="ChatCancellation" />
 ///     分发——活动回合被取消后循环继续；EOF 或空闲 Ctrl+C 结束会话。重复的回合提交（宿主
-///     单活动运行约束）、空白行与失败回合都报告后继续，不终止会话。本里程碑会话仅存在于
-///     进程内：循环退出即会话结束，不宣称重启续聊。
+///     单活动运行约束）、空白行与失败回合都报告后继续，不终止会话。M13.1 起每个完成的回合
+///     都提交到受保护会话存储供离线查看；不可靠的保存以警告行报告，不伪称成功。
 ///     The input loop of the interactive chat session (M12.3, PLAN §10): it wires the M12.1
 ///     session lifecycle and the M12.2 event display into continuous user turns. Every input
 ///     line is the current turn's latest goal (the first input never becomes the goal of all
@@ -24,8 +24,9 @@ namespace TinyHarness.Cli.Services;
 ///     dispatched by <see cref="ChatCancellation" /> — a cancelled active turn returns to the
 ///     loop, while EOF or an idle Ctrl+C ends the session. Duplicate turn submissions (the
 ///     host's single-active-run rule), blank lines and failed turns are reported and the
-///     session continues. In this milestone the session lives in-process only: exiting the
-///     loop ends it, and restart-resume is not claimed.
+///     session continues. Since M13.1 every finished turn is committed to the protected
+///     session store for offline inspection; an unreliable save is reported as a warning
+///     line instead of being presented as success.
 /// </summary>
 internal sealed class ChatSessionConsole
 {
@@ -35,10 +36,7 @@ internal sealed class ChatSessionConsole
     private readonly TextWriter            _output;
     private readonly DisplaySecretRedactor _redactor;
 
-    public ChatSessionConsole(ChatSessionHost                      host,
-                              TextReader                           input,
-                              TextWriter                           output,
-                              ChatCancellation                     cancellation,
+    public ChatSessionConsole(ChatSessionHost host, TextReader input, TextWriter output, ChatCancellation cancellation,
                               IReadOnlyDictionary<string, string>? knownSecrets = null)
     {
         ArgumentNullException.ThrowIfNull(host);
@@ -137,6 +135,11 @@ internal sealed class ChatSessionConsole
         }
 
         await WriteTurnFooterAsync(turnNumber, run.Result!);
+        // A snapshot commit that did not verify must be told to the user right at the
+        // turn it belongs to; the run's terminal state is never proof of a save.
+        if (_host.PersistenceWarning is { Length: > 0 } warning)
+            await _output.WriteLineAsync(TerminalDisplay.Format($"warning: this turn was not reliably saved: {warning}",
+                                                                _redactor));
         await _output.WriteLineAsync();
     }
 

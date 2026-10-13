@@ -147,6 +147,9 @@ public static class UserConfigStore
             if (!string.IsNullOrWhiteSpace(settings.SessionDirectory))
                 settingsNode["sessionDirectory"] = settings.SessionDirectory;
 
+            if (!string.IsNullOrWhiteSpace(settings.SessionStoreDirectory))
+                settingsNode["sessionStoreDirectory"] = settings.SessionStoreDirectory;
+
             if (settings.CommandRules is { Count: > 0 } commandRules)
                 settingsNode["commandRules"] = CommandRuleJson.Write(commandRules);
 
@@ -350,7 +353,8 @@ public static class UserConfigStore
                 ReadNonNegativeInt(settingsNode, "compactionThreshold", filePath, "settings.compactionThreshold"),
             DefaultToolTimeoutSeconds = ReadNonNegativeInt(settingsNode, "defaultToolTimeoutSeconds", filePath,
                                                            "settings.defaultToolTimeoutSeconds"),
-            SessionDirectory = ReadString(settingsNode, "sessionDirectory", filePath),
+            SessionDirectory      = ReadString(settingsNode, "sessionDirectory", filePath),
+            SessionStoreDirectory = ReadString(settingsNode, "sessionStoreDirectory", filePath),
             CommandRules = root["settings"] is JsonObject s && s["commandRules"] is not null
                 ? CommandRuleJson.Read(settingsNode, "commandRules", $"user config '{filePath}'")
                 : null,

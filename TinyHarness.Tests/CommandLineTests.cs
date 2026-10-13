@@ -97,4 +97,39 @@ public class CommandLineTests
         Assert.Equal(HelpText.Chat, HelpText.For("chat"));
         Assert.Contains("tinyharness chat", HelpText.Overview, StringComparison.Ordinal);
     }
+
+    [Fact]
+    public void SessionList_Parses()
+    {
+        var options = CommandLine.Parse(["session", "list"]);
+
+        Assert.Equal(CliCommandKind.Session, options.Kind);
+        Assert.Equal("list", options.Subcommand);
+        Assert.Null(options.Primary);
+    }
+
+    [Fact]
+    public void SessionShow_ParsesAValidSessionIdOnly()
+    {
+        var id      = new string('a', 32);
+        var options = CommandLine.Parse(["session", "show", id]);
+
+        Assert.Equal(CliCommandKind.Session, options.Kind);
+        Assert.Equal("show", options.Subcommand);
+        Assert.Equal(id, options.Primary);
+
+        var escape = Assert.Throws<CliUsageException>(() => CommandLine.Parse(["session", "show", "../escape"]));
+        Assert.Contains("not a valid session id", escape.Message, StringComparison.Ordinal);
+        Assert.Contains("tinyharness session show", escape.Usage, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Session_WithoutASubcommandIsAUsageError()
+    {
+        var error = Assert.Throws<CliUsageException>(() => CommandLine.Parse(["session"]));
+
+        Assert.Contains("session requires a subcommand", error.Message, StringComparison.Ordinal);
+        Assert.Throws<CliUsageException>(() => CommandLine.Parse(["session", "purge"]));
+        Assert.Throws<CliUsageException>(() => CommandLine.Parse(["session", "show"]));
+    }
 }

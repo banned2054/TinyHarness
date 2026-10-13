@@ -60,6 +60,19 @@ public sealed record UserConfigSettings
 
     public string? SessionDirectory { get; init; }
 
+    /// <summary>
+    ///     受保护会话存储目录（M13.1，PLAN §7.1）：可续聊会话快照、提交审计与锁文件的用户级位置。
+    ///     只存放于用户配置（可信层）；必须是绝对路径，且经词法与链接检查后位于组合工作区之外，
+    ///     否则拒绝使用。缺省时使用 %LOCALAPPDATA%\tinyharness\sessions。
+    ///     The protected session-store directory (M13.1, PLAN §7.1): the user-level
+    ///     location of resumable session snapshots, their commit audit and lock files.
+    ///     It lives in the user config (the trusted layer) only, must be absolute,
+    ///     and must resolve — lexically and through links — outside the composition
+    ///     workspace or it is refused. When unset, %LOCALAPPDATA%\tinyharness\sessions
+    ///     is used.
+    /// </summary>
+    public string? SessionStoreDirectory { get; init; }
+
     public IReadOnlyList<CommandRule>? CommandRules { get; init; }
 
     /// <summary>

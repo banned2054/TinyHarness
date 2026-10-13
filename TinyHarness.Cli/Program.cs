@@ -146,6 +146,8 @@ internal static class Program
                                                         .ConfigureAwait(false),
             CliCommandKind.Sandbox => await SandboxCommand.ExecuteAsync(context, options, cts.Token)
                                                           .ConfigureAwait(false),
+            CliCommandKind.Session => await SessionCommand.ExecuteAsync(context, options, cts.Token)
+                                                          .ConfigureAwait(false),
             _ => throw new InvalidOperationException($"Unhandled command '{options.Kind}'.")
         };
     }
@@ -207,42 +209,59 @@ internal static class Program
     ///     加载生效配置并启动交互式多回合 chat 会话（M12.3，PLAN §10）。执行栈与 run 完全共享
     ///     （<see cref="ComposeAgentAsync" />）；回合输入与审批提示共享同一个
     ///     <see cref="ExclusiveInputReader" /> 单一出口，Ctrl+C 的回合/会话分发由
-    ///     <see cref="ChatCancellation" /> 承担。会话仅存在于本进程：循环退出即结束，
-    ///     不宣称重启续聊（M13 落地持久化）。
+    ///     <see cref="ChatCancellation" /> 承担。M13.1 起每个回合唱到终态后，会话以版本化快照
+    ///     原子提交到受保护用户级存储（<see cref="SessionStoreWriter" />），供严格离线的
+    ///     `session list` / `session show` 查看；跨进程重启续聊仍不属于本切片，保存失败按
+    ///     “本次未可靠保存”报告，不把运行终态当作落盘成功。
     ///     Loads the effective configuration and starts the interactive multi-turn chat
     ///     session (M12.3, PLAN §10). The execution stack is shared with run exactly
     ///     (<see cref="ComposeAgentAsync" />); the turn input and approval prompts share one
     ///     <see cref="ExclusiveInputReader" /> outlet, and Ctrl+C's turn/session dispatch lives
-    ///     in <see cref="ChatCancellation" />. The session exists within this process only:
-    ///     exiting the loop ends it, and restart-resume is not claimed until M13 lands
-    ///     persistence.
+    ///     in <see cref="ChatCancellation" />. Since M13.1, after every turn reaches its
+    ///     terminal state the session is atomically committed as a versioned snapshot into
+    ///     the protected user-level store (<see cref="SessionStoreWriter" />) for strictly
+    ///     offline `session list` / `session show` inspection; restart-resume across
+    ///     processes still lies outside this slice, a failed save is reported as "not
+    ///     reliably saved", and a run's terminal state never counts as proof of persistence.
     /// </summary>
     private static async Task<int> RunChatAsync(string? configPath)
     {
         using var cancellation = new ChatCancellation();
-        var       composition  = await ComposeAgentAsync(configPath, cancellation.SessionToken).ConfigureAwait(false);
-        var       config       = composition.Config;
+        var composition = await ComposeAgentAsync(configPath, cancellation.SessionToken, true)
+           .ConfigureAwait(false);
+        var config = composition.Config;
 
         // One single-input outlet serves both the turn prompts and the inline approval
         // prompts (PLAN §6); the console and the approver must wrap the same instance.
         var reader = new ExclusiveInputReader(Console.In);
 
-        var host = new ChatSessionHost(config.WorkspaceRoot,
-                                       new SessionModelIdentity(config.Model, config.Endpoint, config.ChatApi),
-                                       composition.Options,
-                                       composition.Model,
-                                       composition.Tools,
-                                       WorkspaceSystemPrompt,
-                                       composition.Permissions,
-                                       new ConsoleApprovalProvider(reader, Console.Out, composition.KnownSecrets),
-                                       new ConsoleHostEventSink(composition.KnownSecrets),
-                                       runId => new FileRunRecorder(config.SessionDirectory, runId,
-                                                                    composition.KnownSecrets));
+        using var host = new ChatSessionHost(config.WorkspaceRoot,
+                                             new SessionModelIdentity(config.Model, config.Endpoint, config.ChatApi),
+                                             composition.Options,
+                                             composition.Model,
+                                             composition.Tools,
+                                             WorkspaceSystemPrompt,
+                                             composition.Permissions,
+                                             new ConsoleApprovalProvider(reader, Console.Out, composition.KnownSecrets),
+                                             new ConsoleHostEventSink(composition.KnownSecrets),
+                                             runId => new FileRunRecorder(config.SessionDirectory, runId,
+                                                                          composition.KnownSecrets),
+                                             sessionId => new SessionStoreWriter(composition.SessionStoreDirectory!,
+                                                      sessionId, composition.KnownSecrets));
 
         await WriteHeaderAsync("TinyHarness chat", composition, host.Session.Id).ConfigureAwait(false);
 
         var console = new ChatSessionConsole(host, reader, Console.Out, cancellation, composition.KnownSecrets);
-        return await console.RunAsync().ConfigureAwait(false);
+        var exit    = await console.RunAsync().ConfigureAwait(false);
+
+        // Report only artifacts that actually exist (the same rule as run) and surface
+        // an unreliable last save instead of presenting the terminal state as saved.
+        if (host.Session.Turns.Count > 0 && File.Exists(host.PersistencePath))
+            await Console.Out.WriteLineAsync($"session    : {host.PersistencePath}");
+        if (host.PersistenceWarning is { Length: > 0 } warning)
+            await Console.Out.WriteLineAsync($"warning    : {warning}");
+
+        return exit;
     }
 
     /// <summary>
@@ -260,7 +279,7 @@ internal static class Program
     ///     matching the previous run behavior.
     /// </summary>
     private static async Task<AgentComposition> ComposeAgentAsync(
-        string? configPath, CancellationToken cancellationToken)
+        string? configPath, CancellationToken cancellationToken, bool persistSessions = false)
     {
         var resolution = await ConfigResolver.ResolveAsync(configPath, cancellationToken).ConfigureAwait(false);
         var config     = resolution.Config;
@@ -280,14 +299,29 @@ internal static class Program
                 ConfigException("No API key found. Run 'tinyharness auth set <profile>' or set the environment variable " +
                                 $"'{config.ApiKeyEnvironmentVariable}' before running.");
 
+        // The resumable-session store directory is resolved from trusted user
+        // settings only (never the target project's config chain) and must pass
+        // the protection checks before the session may start (PLAN §7.1); a
+        // failure fails the chat startup rather than degrading to an unprotected
+        // location.
+        string? sessionStoreDirectory = null;
+        if (persistSessions)
+        {
+            var userConfig = await UserConfigStore.LoadAsync(UserConfigStore.DefaultFilePath(), cancellationToken)
+                                                  .ConfigureAwait(false);
+            sessionStoreDirectory = SessionStorePaths.ResolveProtected(userConfig.Settings?.SessionStoreDirectory,
+                                                                       config.WorkspaceRoot);
+        }
+
         // The sandbox composition reads trusted user settings only — never the
         // target project's config chain. Any validation failure (missing
         // components, invalid paths, wrong platform, session directory inside
         // the workspace) throws and fails the run; host execution is never a
         // silent fallback.
         var knownSecrets = SandboxCliComposition.KnownSecrets(config, apiKey);
-        var sandbox = await TryComposeWindowsSandboxAsync(config, knownSecrets, cancellationToken)
-           .ConfigureAwait(false);
+        var sandbox =
+            await TryComposeWindowsSandboxAsync(config, knownSecrets, cancellationToken, sessionStoreDirectory)
+               .ConfigureAwait(false);
         var executionPolicy = sandbox?.ExecutionPolicy ?? ProcessExecutionPolicy.Host();
 
         var model       = ModelClientFactory.Create(config.Model, config.Endpoint, apiKey, config.ChatApi);
@@ -308,7 +342,7 @@ internal static class Program
         };
 
         return new AgentComposition(resolution, config, knownSecrets, sandbox, executionPolicy, model, tools,
-                                    permissions, options);
+                                    permissions, options, sessionStoreDirectory);
     }
 
     /// <summary>
@@ -415,10 +449,12 @@ internal static class Program
     ///     is shared with sandbox verify.
     /// </summary>
     private static async Task<WindowsSandboxExecution?> TryComposeWindowsSandboxAsync(
-        TinyHarnessConfig config, IReadOnlyDictionary<string, string> knownSecrets, CancellationToken cancellationToken)
+        TinyHarnessConfig config, IReadOnlyDictionary<string, string> knownSecrets, CancellationToken cancellationToken,
+        string?           sessionStoreDirectory = null)
     {
         var settings = await SandboxCliComposition.LoadSettingsAsync(cancellationToken).ConfigureAwait(false);
-        return SandboxCliComposition.TryCompose(settings, config.SessionDirectory, config.WorkspaceRoot, knownSecrets);
+        return SandboxCliComposition.TryCompose(settings, config.SessionDirectory, config.WorkspaceRoot, knownSecrets,
+                                                sessionStoreDirectory);
     }
 
     /// <summary>
@@ -531,9 +567,11 @@ internal static class Program
     }
 
     /// <summary>
-    ///     run 与 chat 共享的组合结果：除审批器与事件展示外的全部执行栈要素。
+    ///     run 与 chat 共享的组合结果：除审批器与事件展示外的全部执行栈要素。chat 额外携带
+    ///     受保护会话存储目录（run 或未启用持久化时为 null）。
     ///     The shared composition result: every execution-stack element except the
-    ///     approver and the event display, which stay with each entry point.
+    ///     approver and the event display. Chat additionally carries the protected
+    ///     session-store directory (null for run or when persistence is disabled).
     /// </summary>
     private sealed record AgentComposition(
         ConfigResolution                    Resolution,
@@ -544,7 +582,8 @@ internal static class Program
         IChatCompletionClient               Model,
         ToolRegistry                        Tools,
         PermissionEngine                    Permissions,
-        AgentOptions                        Options);
+        AgentOptions                        Options,
+        string?                             SessionStoreDirectory);
 
     /// <summary>
     ///     将 Ctrl+C 转换为任务取消，并在运行结束时可靠移除全局事件处理器。
@@ -601,17 +640,21 @@ internal static class SandboxCliComposition
 
     /// <summary>
     ///     显式启用时组合沙箱执行要素；未启用返回 null。会话目录位于组合工作区内时抛异常（审计
-    ///     记录可被沙箱命令篡改），绝不静默回退宿主执行。
+    ///     记录可被沙箱命令篡改），受保护会话存储目录位于工作区或任一附加写根内时同样抛异常（可续聊
+    ///     快照可被篡改）；两者都绝不静默回退宿主执行。
     ///     Composes the sandbox execution pieces when explicitly enabled;
     ///     disabled returns null. A session directory inside the composition
     ///     workspace throws (sandboxed commands could tamper with audit
-    ///     records); host execution is never a silent fallback.
+    ///     records), and so does a protected session-store directory inside the
+    ///     workspace or any additional write root (resumable snapshots could be
+    ///     tampered with); host execution is never a silent fallback.
     /// </summary>
     public static WindowsSandboxExecution? TryCompose(
         WindowsSandboxSettings?             settings,
         string                              sessionDirectory,
         string                              workspaceRoot,
-        IReadOnlyDictionary<string, string> knownSecrets)
+        IReadOnlyDictionary<string, string> knownSecrets,
+        string?                             sessionStoreDirectory = null)
     {
         if (settings is not { Enabled: true }) return null;
 
@@ -622,6 +665,19 @@ internal static class SandboxCliComposition
                                                 "sandboxed commands could tamper with audit records. "         +
                                                 "Move it outside the workspace (settings.sessionDirectory) "   +
                                                 "before enabling the Windows sandbox.");
+
+        if (sessionStoreDirectory is null) return WindowsSandboxComposer.Compose(settings, workspaceRoot, knownSecrets);
+        var fullStoreDirectory = Path.GetFullPath(sessionStoreDirectory);
+        var offendingRoot = settings.AdditionalWriteRoots?
+                                    .Select(Path.GetFullPath)
+                                    .FirstOrDefault(root => Workspace.IsInside(root, fullStoreDirectory));
+        if (Workspace.IsInside(workspaceRoot, fullStoreDirectory) || offendingRoot is not null)
+            throw new
+                InvalidOperationException($"The protected session store directory '{fullStoreDirectory}' lies inside " +
+                                          $"a sandbox-writable root '{offendingRoot ?? workspaceRoot}'; "              +
+                                          "sandboxed commands could tamper with resumable session snapshots. "         +
+                                          "Move it outside the workspace and every additional write root "             +
+                                          "(settings.sessionStoreDirectory) before enabling the Windows sandbox.");
 
         return WindowsSandboxComposer.Compose(settings, workspaceRoot, knownSecrets);
     }

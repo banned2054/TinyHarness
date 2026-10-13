@@ -17,6 +17,7 @@ internal enum CliCommandKind
     Model,
     Doctor,
     Sandbox,
+    Session,
     Help,
     ProcessSmokeChild
 }

@@ -20,7 +20,7 @@ internal static class ConfigCommand
     internal static readonly string[] SettableKeys =
     [
         "maxAgentSteps", "reservedOutputTokens", "compactionThreshold", "defaultToolTimeoutSeconds",
-        "sessionDirectory"
+        "sessionDirectory", "sessionStoreDirectory"
     ];
 
     /// <summary>
@@ -132,6 +132,17 @@ internal static class ConfigCommand
             case "defaultToolTimeoutSeconds" :
                 settings = settings with { DefaultToolTimeoutSeconds = ParsePositiveInt(key, value) };
                 oldValue = DescribeOptionalInt(config.Settings?.DefaultToolTimeoutSeconds);
+                break;
+            case "sessionStoreDirectory" :
+                if (string.IsNullOrWhiteSpace(value))
+                    throw new InvalidOperationException("'sessionStoreDirectory' cannot be empty.");
+
+                if (!Path.IsPathFullyQualified(value.Trim()))
+                    throw new
+                        InvalidOperationException("'sessionStoreDirectory' must be an absolute path; a relative location depends on the launch directory and is not accepted for resumable session storage.");
+
+                settings = settings with { SessionStoreDirectory = value.Trim() };
+                oldValue = config.Settings?.SessionStoreDirectory ?? "(built-in default)";
                 break;
             default : // sessionDirectory
                 if (string.IsNullOrWhiteSpace(value))

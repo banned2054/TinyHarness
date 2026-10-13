@@ -26,6 +26,7 @@ internal static class HelpText
           tinyharness model list | model add <model-id> --context-window <tokens> | model use <model-id>
           tinyharness doctor [--connect]
           tinyharness sandbox status | sandbox provision [--yes] | sandbox verify [--yes]
+          tinyharness session list | session show <session-id>
           tinyharness help [<command>]
 
         Management commands are never sent to the model. To prompt with text that starts
@@ -68,8 +69,10 @@ internal static class HelpText
 
         Ctrl+C cancels the active turn (the session keeps running; start a new turn
         afterwards). Ctrl+C at the prompt or EOF (Ctrl+Z then Enter on Windows) ends the
-        session. Sessions are in-process in this milestone: closing the session ends it,
-        and nothing is persisted for restart-resume yet.
+        session. Every finished turn is committed as an atomic snapshot into the protected
+        session store, where 'tinyharness session list' / 'session show <id>' can inspect
+        it strictly offline. Restarting a session in a new process is not supported yet;
+        a failed save is reported as "not reliably saved" and never presented as success.
 
         chat takes no prompt argument; use `run -- "text"` for a one-shot prompt.
         """;
@@ -127,7 +130,7 @@ internal static class HelpText
 
         config set writes non-sensitive defaults to the user config. Supported keys:
           maxAgentSteps, reservedOutputTokens, compactionThreshold,
-          defaultToolTimeoutSeconds, sessionDirectory
+          defaultToolTimeoutSeconds, sessionDirectory, sessionStoreDirectory
 
         Endpoint, profile, model, and API key changes use the provider, model, and auth
         commands instead. Use --config to run tasks against a project config file.
@@ -232,6 +235,28 @@ internal static class HelpText
         it is not part of the public interface.)
         """;
 
+    public const string Session = """
+        Usage:
+          tinyharness session list
+          tinyharness session show <session-id>
+
+        Strictly offline inspection of stored chat sessions (M13.1): no API key is
+        read, no model is called, no tool runs, and no workspace file is opened for
+        writing.
+
+        session list prints the sessions in the protected session store (default
+        %LOCALAPPDATA%\tinyharness\sessions, overridden by settings.sessionStoreDirectory
+        in the user config or the TINYHARNESS_SESSION_STORE_DIR environment variable),
+        plus the legacy run snapshots in the run-output directory. Damaged, unknown-version
+        or audit-inconsistent entries are reported instead of hidden.
+
+        session show prints one stored session: format version, workspace, model identity,
+        commit sequence, and every turn with its run outcomes. A snapshot whose commit is
+        not confirmed by its audit trail is refused with the divergence explained. Legacy
+        run snapshots (<run-id>.session.json from before M13) are shown read-only and
+        cannot be resumed.
+        """;
+
     /// <summary>
     ///     判断是否为已知 help 主题。
     ///     Whether a name is a known help topic.
@@ -251,6 +276,7 @@ internal static class HelpText
             "model"    => true,
             "doctor"   => true,
             "sandbox"  => true,
+            "session"  => true,
             "help"     => true,
             _          => false
         };
@@ -275,6 +301,7 @@ internal static class HelpText
             "model"    => Model,
             "doctor"   => Doctor,
             "sandbox"  => Sandbox,
+            "session"  => Session,
             _          => Overview
         };
     }

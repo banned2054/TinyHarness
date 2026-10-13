@@ -1,5 +1,6 @@
 using TinyHarness.Cli.Exceptions;
 using TinyHarness.Cli.Models;
+using TinyHarness.Core.Services.Persistence;
 
 namespace TinyHarness.Cli.Commands;
 
@@ -62,11 +63,51 @@ internal static class CommandLine
 
         if (string.Equals(first, "sandbox", StringComparison.Ordinal)) return ParseSandboxArgs(args[1..]);
 
+        if (string.Equals(first, "session", StringComparison.Ordinal)) return ParseSessionArgs(args[1..]);
+
         if (first.StartsWith('-') && first.Length > 1)
             throw new CliUsageException($"Unknown option '{first}'.", HelpText.Overview);
 
         // Verbless invocation: the whole argument list is a prompt with optional --config.
         return ParsePromptArgs(args, false);
+    }
+
+    /// <summary>
+    ///     解析 session 子命令：list 或 show &lt;sessionId&gt;；show 的会话 ID 在解析期即校验
+    ///     （32 位十六进制），路径逃逸输入按使用错误处理。
+    ///     Parses the session subcommands: list or show &lt;sessionId&gt;; the session id of show is
+    ///     validated at parse time (32 hex characters), so path-escape input is a usage error.
+    /// </summary>
+    private static CliOptions ParseSessionArgs(string[] args)
+    {
+        var usage = HelpText.Session;
+        if (args.Length == 0)
+            throw new CliUsageException("session requires a subcommand: list or show.", usage);
+
+        if (IsHelpFlag(args[0])) return new CliOptions { Kind = CliCommandKind.Help, HelpTopic = "session" };
+
+        var subcommand = args[0].ToLowerInvariant();
+        switch (subcommand)
+        {
+            case "list" :
+                return args.Length > 1
+                    ? throw new CliUsageException($"Unknown argument '{args[1]}' for session list.", usage)
+                    : new CliOptions { Kind = CliCommandKind.Session, Subcommand = "list" };
+
+            case "show" when args.Length != 2 :
+                throw new CliUsageException("session show requires exactly one session id.", usage);
+
+            case "show" :
+                if (!SessionStorePaths.IsValidSessionId(args[1]))
+                    throw new
+                        CliUsageException($"'{args[1]}' is not a valid session id: exactly 32 hex characters are required.",
+                                          usage);
+
+                return new CliOptions { Kind = CliCommandKind.Session, Subcommand = "show", Primary = args[1] };
+
+            default :
+                throw new CliUsageException($"Unknown session subcommand '{args[0]}'.", usage);
+        }
     }
 
     /// <summary>
