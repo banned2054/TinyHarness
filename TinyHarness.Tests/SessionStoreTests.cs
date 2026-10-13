@@ -1,9 +1,12 @@
 using System.Diagnostics;
 using System.Text;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using TinyHarness.Core.Exceptions;
 using TinyHarness.Core.Models.Agent;
+using TinyHarness.Core.Models.ChatCompletions;
 using TinyHarness.Core.Models.Configuration;
+using TinyHarness.Core.Models.Context;
 using TinyHarness.Core.Models.Persistence;
 using TinyHarness.Core.Models.Session;
 using TinyHarness.Core.Services.Persistence;
@@ -233,6 +236,70 @@ public class SessionStoreTests
             await Assert.ThrowsAsync<SessionStoreException>(() => SessionStoreReader.ReadAsync(dir.Root, "..\\escape",
                                                                      CancellationToken.None));
         Assert.Contains("not a valid session id", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Read_AcceptsAnUppercaseSessionIdInput()
+    {
+        using var dir     = new TestTempDir();
+        var       session = NewSession();
+        AddFinishedTurn(session, "q", "a");
+        using (var writer = new SessionStoreWriter(dir.Root, session.Id))
+        {
+            await writer.CommitAsync(session, CancellationToken.None);
+        }
+
+        var read = await SessionStoreReader.ReadAsync(dir.Root, session.Id.ToUpperInvariant(), CancellationToken.None);
+
+        Assert.NotNull(read);
+        Assert.Equal(session.Id, read!.Id);
+    }
+
+    [Fact]
+    public async Task Commit_CanonicalizesAnUppercaseIdToLowerCaseStorage()
+    {
+        using var dir     = new TestTempDir();
+        var       session = NewSession();
+        AddFinishedTurn(session, "q", "a");
+
+        using (var writer = new SessionStoreWriter(dir.Root, session.Id.ToUpperInvariant()))
+        {
+            Assert.Equal(session.Id, writer.SessionId);
+            await writer.CommitAsync(session, CancellationToken.None);
+        }
+
+        // The actual file name — not a case-insensitive File.Exists probe — proves
+        // the on-disk form is lower case on every file system.
+        var storedName = Directory.GetFiles(dir.Root, "*.session.json").Single();
+        Assert.Equal($"{session.Id}.session.json", Path.GetFileName(storedName));
+
+        var read = await SessionStoreReader.ReadAsync(dir.Root, session.Id, CancellationToken.None);
+        Assert.NotNull(read);
+        Assert.Equal(session.Id, read!.Id);
+    }
+
+    [Fact]
+    public async Task ReadLegacy_AcceptsAnUppercaseSessionIdInput()
+    {
+        using var dir   = new TestTempDir();
+        var       runId = Guid.NewGuid().ToString("N");
+        var snapshot = new SessionSnapshot
+        {
+            RunId        = runId,
+            StartedUtc   = DateTimeOffset.UtcNow.AddMinutes(-1),
+            CompletedUtc = DateTimeOffset.UtcNow,
+            Messages     = [],
+            State        = StructuredState.Empty,
+            Result       = new AgentResult { Status = AgentStatus.Completed, Steps = 1 }
+        };
+        await File.WriteAllTextAsync(Path.Combine(dir.Root, $"{runId}.session.json"),
+                                     JsonSerializer.Serialize(snapshot,
+                                                              PersistenceJsonContext.Default.SessionSnapshot));
+
+        var read = await SessionStoreReader.ReadLegacyAsync(dir.Root, runId.ToUpperInvariant(), CancellationToken.None);
+
+        Assert.NotNull(read);
+        Assert.Equal(runId, read!.RunId);
     }
 
     [Fact]

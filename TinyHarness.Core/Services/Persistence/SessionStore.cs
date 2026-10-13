@@ -127,11 +127,12 @@ public static class SessionStorePaths
     }
 
     /// <summary>
-    ///     会话 ID 是标识符而不是路径片段：仅接受 32 位十六进制（Guid 的 "N" 形态），
-    ///     读取端与写入端共用同一校验，杜绝路径逃逸与通配。
+    ///     会话 ID 是标识符而不是路径片段：仅接受 32 位十六进制（Guid 的 "N" 形态），输入大小写
+    ///     不敏感，但盘上统一存储为小写；读取端与写入端共用同一校验，杜绝路径逃逸与通配。
     ///     A session id is an identifier, never a path fragment: exactly 32 hex
-    ///     characters (the Guid "N" form). Readers and writers share this check,
-    ///     which rules out path escapes and wildcards.
+    ///     characters (the Guid "N" form). Input is case-insensitive while the
+    ///     on-disk form is canonically lower-case. Readers and writers share this
+    ///     check, which rules out path escapes and wildcards.
     /// </summary>
     public static bool IsValidSessionId(string id) => id.Length == 32 && id.All(char.IsAsciiHexDigit);
 
@@ -148,7 +149,7 @@ public static class SessionStorePaths
         var remainder = root is null ? directory : Path.GetRelativePath(root, directory);
         if (root is null || string.IsNullOrEmpty(remainder)) return directory;
 
-        var current = root;
+        var current  = root;
         var segments = remainder.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         foreach (var segment in segments)
         {
@@ -159,7 +160,7 @@ public static class SessionStorePaths
 
             try
             {
-                FileSystemInfo info   = Directory.Exists(current) ? new DirectoryInfo(current) : new FileInfo(current);
+                FileSystemInfo info = Directory.Exists(current) ? new DirectoryInfo(current) : new FileInfo(current);
                 var            target = info.ResolveLinkTarget(true);
                 if (target is not null) current = target.FullName;
             }
@@ -219,11 +220,15 @@ public interface ISessionStoreWriter : IDisposable
 /// </summary>
 public sealed class SessionStoreWriter : ISessionStoreWriter
 {
-    /// <summary>快照文件大小上限；超过即拒绝写入或读取，防止失控会话拖垮存储与查看。Upper bound for a snapshot file; larger files are refused on write and read so a runaway session cannot overwhelm storage or inspection.</summary>
+    /// <summary>
+    ///     快照文件大小上限；超过即拒绝写入或读取，防止失控会话拖垮存储与查看。Upper bound for a snapshot file; larger files are refused on write and read
+    ///     so a runaway session cannot overwhelm storage or inspection.
+    /// </summary>
     public const int MaxSnapshotBytes = 16 * 1024 * 1024;
 
+    private readonly FileStream _lockStream;
+
     private readonly SecretRedactor _redactor;
-    private readonly FileStream     _lockStream;
 
     /// <summary>
     ///     创建（且只创建）新会话的写入端：校验会话 ID、拒绝已存在的快照、独占打开锁文件并创建存储目录。
@@ -241,9 +246,12 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
                                   nameof(sessionId));
 
         Directory.CreateDirectory(directory);
-        SessionId    = sessionId;
-        SnapshotPath = Path.Combine(directory, $"{sessionId}.session.json");
-        AuditPath    = Path.Combine(directory, $"{sessionId}.audit.jsonl");
+        // The on-disk canonical form is lower-case hex (the Guid "N" form): the
+        // snapshot, audit and lock names — and the snapshot's id field — all use
+        // it, so case-sensitive file systems resolve every id spelling.
+        SessionId    = sessionId.ToLowerInvariant();
+        SnapshotPath = Path.Combine(directory, $"{SessionId}.session.json");
+        AuditPath    = Path.Combine(directory, $"{SessionId}.audit.jsonl");
         _redactor    = new SecretRedactor(knownSecrets);
 
         if (File.Exists(SnapshotPath))
@@ -251,7 +259,7 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
                 SessionStoreException($"A stored session '{sessionId}' already exists at '{SnapshotPath}'; M13.1 opens " +
                                       "only new sessions for writing. Open it read-only with 'session show' instead.");
 
-        var lockPath = Path.Combine(directory, $"{sessionId}.lock");
+        var lockPath = Path.Combine(directory, $"{SessionId}.lock");
         try
         {
             _lockStream = new FileStream(lockPath, FileMode.Create, FileAccess.ReadWrite, FileShare.None);
@@ -273,17 +281,19 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
     /// <summary>写入端持有的会话 ID。The session id held by this writer.</summary>
     public string SessionId { get; }
 
-    public string SnapshotPath { get; }
-
     /// <summary>会话提交审计文件绝对路径。The absolute path of the session's commit audit file.</summary>
     public string AuditPath { get; }
+
+    public string SnapshotPath { get; }
 
     public long CommitSequence { get; private set; }
 
     public async Task CommitAsync(ChatSession session, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(session);
-        if (!string.Equals(session.Id, SessionId, StringComparison.Ordinal))
+        // The id comparison is case-insensitive: the canonical storage form is
+        // the lower-case of the same id.
+        if (!string.Equals(session.Id, SessionId, StringComparison.OrdinalIgnoreCase))
             throw new
                 ArgumentException($"The snapshot writer belongs to session '{SessionId}' but was asked to commit session " +
                                   $"'{session.Id}'.", nameof(session));
@@ -314,7 +324,7 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
         // the divergence if it never does.
         var record = new SessionStoreAuditRecord
         {
-            SessionId = session.Id,
+            SessionId = SessionId,
             Kind      = SessionStoreAuditRecord.CommittedKind,
             Sequence  = sequence
         };
@@ -345,12 +355,12 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
 
     private PersistedSession BuildSnapshot(ChatSession session, long sequence) => new()
     {
-        FormatVersion = PersistedSession.CurrentFormatVersion,
-        Id            = session.Id,
-        WorkspaceRoot = session.WorkspaceRoot,
-        Model         = session.Model,
-        CreatedUtc    = session.CreatedUtc,
-        UpdatedUtc    = DateTimeOffset.UtcNow,
+        FormatVersion  = PersistedSession.CurrentFormatVersion,
+        Id             = SessionId,
+        WorkspaceRoot  = session.WorkspaceRoot,
+        Model          = session.Model,
+        CreatedUtc     = session.CreatedUtc,
+        UpdatedUtc     = DateTimeOffset.UtcNow,
         CommitSequence = sequence,
         Turns = session.Turns.Select(turn => new PersistedTurn
         {
@@ -359,16 +369,16 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
             CreatedUtc = turn.CreatedUtc,
             Runs = turn.Runs.Select(run => new PersistedRun
             {
-                Id            = run.Id,
-                StartedUtc    = run.StartedUtc,
-                FinishedUtc   = run.FinishedUtc,
-                Status        = run.Result?.Status.ToString(),
-                FinalMessage  = run.Result is null ? null : _redactor.Redact(run.Result.FinalMessage),
-                Error         = run.Result is null ? null : _redactor.RedactNullable(run.Result.Error),
-                Steps         = run.Result?.Steps ?? 0,
+                Id             = run.Id,
+                StartedUtc     = run.StartedUtc,
+                FinishedUtc    = run.FinishedUtc,
+                Status         = run.Result?.Status.ToString(),
+                FinalMessage   = run.Result is null ? null : _redactor.Redact(run.Result.FinalMessage),
+                Error          = run.Result is null ? null : _redactor.RedactNullable(run.Result.Error),
+                Steps          = run.Result?.Steps          ?? 0,
                 ToolExecutions = run.Result?.ToolExecutions ?? 0,
-                InputTokens   = run.Result?.InputTokens,
-                OutputTokens  = run.Result?.OutputTokens
+                InputTokens    = run.Result?.InputTokens,
+                OutputTokens   = run.Result?.OutputTokens
             }).ToArray()
         }).ToArray()
     };
@@ -414,7 +424,10 @@ public static class SessionStoreReader
     /// <summary>读取时允许的最大 JSON 深度；更深的输入按损坏拒绝。The maximum JSON depth accepted when reading; deeper input is rejected as damaged.</summary>
     public const int MaxJsonDepth = 32;
 
-    /// <summary>会话快照文件的统一后缀（新旧格式同名，按所在目录区分）。The shared suffix of session snapshot files (both formats use it; the directory tells them apart).</summary>
+    /// <summary>
+    ///     会话快照文件的统一后缀（新旧格式同名，按所在目录区分）。The shared suffix of session snapshot files (both formats use it; the directory
+    ///     tells them apart).
+    /// </summary>
     private const string SessionSnapshotFileSuffix = ".session.json";
 
     /// <summary>
@@ -430,6 +443,9 @@ public static class SessionStoreReader
             throw new
                 SessionStoreException($"'{sessionId}' is not a valid session id: exactly 32 hex characters are required.");
 
+        // Id input is case-insensitive; lookups go through the lower-case
+        // canonical form so case-sensitive file systems find every stored session.
+        sessionId = sessionId.ToLowerInvariant();
         var snapshotPath = Path.Combine(directory, $"{sessionId}{SessionSnapshotFileSuffix}");
         if (!File.Exists(snapshotPath)) return null;
 
@@ -446,7 +462,9 @@ public static class SessionStoreReader
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            throw new SessionStoreException($"Stored session '{sessionId}' cannot be read from '{snapshotPath}': {ex.Message}.", ex);
+            throw new
+                SessionStoreException($"Stored session '{sessionId}' cannot be read from '{snapshotPath}': {ex.Message}.",
+                                      ex);
         }
 
         PersistedSession snapshot;
@@ -463,13 +481,15 @@ public static class SessionStoreReader
         }
         catch (JsonException ex)
         {
-            throw new SessionStoreException($"Stored session '{sessionId}' at '{snapshotPath}' is damaged JSON: {ex.Message}.", ex);
+            throw new
+                SessionStoreException($"Stored session '{sessionId}' at '{snapshotPath}' is damaged JSON: {ex.Message}.",
+                                      ex);
         }
 
         if (snapshot.FormatVersion != PersistedSession.CurrentFormatVersion)
             throw new
                 SessionStoreException($"Stored session '{sessionId}' at '{snapshotPath}' uses format version " +
-                                      $"{snapshot.FormatVersion}, which this build does not know (expected " +
+                                      $"{snapshot.FormatVersion}, which this build does not know (expected "   +
                                       $"{PersistedSession.CurrentFormatVersion}); it stays read-only until a build that understands it.");
 
         if (!string.Equals(snapshot.Id, sessionId, StringComparison.Ordinal))
@@ -501,7 +521,8 @@ public static class SessionStoreReader
             var id = Path.GetFileName(path)[..^SessionSnapshotFileSuffix.Length];
             if (!SessionStorePaths.IsValidSessionId(id))
             {
-                entries.Add(new SessionStoreEntry(id, null, $"file name '{Path.GetFileName(path)}' is not a session id"));
+                entries.Add(new SessionStoreEntry(id, null,
+                                                  $"file name '{Path.GetFileName(path)}' is not a session id"));
                 continue;
             }
 
@@ -536,6 +557,8 @@ public static class SessionStoreReader
             throw new
                 SessionStoreException($"'{sessionId}' is not a valid session id: exactly 32 hex characters are required.");
 
+        // Same canonical lower-case lookup as the protected store.
+        sessionId = sessionId.ToLowerInvariant();
         var snapshotPath = Path.Combine(directory, $"{sessionId}{SessionSnapshotFileSuffix}");
         if (!File.Exists(snapshotPath)) return null;
 
@@ -550,7 +573,7 @@ public static class SessionStoreReader
             // JSON null; a snapshot without its result or messages is damaged,
             // never a crash in the display layer.
             var snapshot = JsonSerializer.Deserialize(json, PersistenceJsonContext.Default.SessionSnapshot);
-            if (snapshot is null || snapshot.Result is null || snapshot.Messages is null)
+            if (snapshot?.Result is null || snapshot.Messages is null)
                 throw new
                     SessionStoreException($"Legacy run snapshot '{sessionId}' at '{snapshotPath}' is damaged: " +
                                           "it has no run result or message list.");
@@ -559,7 +582,8 @@ public static class SessionStoreReader
         catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
         {
             throw new
-                SessionStoreException($"Legacy run snapshot '{sessionId}' at '{snapshotPath}' cannot be read: {ex.Message}.", ex);
+                SessionStoreException($"Legacy run snapshot '{sessionId}' at '{snapshotPath}' cannot be read: {ex.Message}.",
+                                      ex);
         }
     }
 
@@ -626,8 +650,8 @@ public static class SessionStoreReader
 [JsonSerializable(typeof(SessionStoreAuditRecord))]
 [JsonSerializable(typeof(SessionModelIdentity))]
 [JsonSerializable(typeof(ChatApiKind))]
-[JsonSourceGenerationOptions(PropertyNamingPolicy        = JsonKnownNamingPolicy.CamelCase,
-                             UseStringEnumConverter      = true,
-                             GenerationMode              = JsonSourceGenerationMode.Metadata |
-                                                          JsonSourceGenerationMode.Serialization)]
+[JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase,
+                             UseStringEnumConverter = true,
+                             GenerationMode = JsonSourceGenerationMode.Metadata |
+                                              JsonSourceGenerationMode.Serialization)]
 public sealed partial class SessionStoreJsonContext : JsonSerializerContext;
