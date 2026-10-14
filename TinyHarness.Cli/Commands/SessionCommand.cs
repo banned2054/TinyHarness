@@ -184,6 +184,16 @@ internal static class SessionCommand
              .WriteLineAsync($"updated         : {session.UpdatedUtc.LocalDateTime:yyyy-MM-dd HH:mm:ss} (commit {session.CommitSequence})",
                              cancellationToken).ConfigureAwait(false);
         await io.WriteLineAsync($"turns           : {session.Turns.Count}", cancellationToken).ConfigureAwait(false);
+        await io
+             .WriteLineAsync(session.Conversation is { } conversation
+                                 ? $"conversation    : {conversation.Messages.Count} messages " +
+                                   (session.FormatVersion < PersistedSession.CurrentFormatVersion ||
+                                    conversation.OpaqueRedacted
+                                       ? "(inspection only; legacy redaction)"
+                                       : "(verbatim protocol stored; resume checks required)")
+                                 : "conversation    : not stored by this format version (inspection only)",
+                             cancellationToken)
+             .ConfigureAwait(false);
 
         for (var i = 0; i < session.Turns.Count; i++)
         {

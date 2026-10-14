@@ -43,10 +43,13 @@ public sealed class SessionRun
     public bool IsFinished => Result is not null;
 
     /// <summary>
-    ///     记录唯一一次终态；重复结束是生命周期违规。
-    ///     Records the single terminal result; finishing twice is a lifecycle violation.
+    ///     记录唯一一次终态；重复结束是生命周期违规。恢复持久会话时可用
+    ///     <paramref name="finishedUtc" /> 保留快照里记录的原始终态时间。
+    ///     Records the single terminal result; finishing twice is a lifecycle
+    ///     violation. When restoring a persisted session, <paramref name="finishedUtc" />
+    ///     keeps the original terminal time recorded in the snapshot.
     /// </summary>
-    internal void Finish(AgentResult result)
+    internal void Finish(AgentResult result, DateTimeOffset? finishedUtc = null)
     {
         ArgumentNullException.ThrowIfNull(result);
         if (Result is not null)
@@ -54,6 +57,6 @@ public sealed class SessionRun
                 InvalidOperationException($"Run '{Id}' already finished; a run records exactly one terminal result.");
 
         Result      = result;
-        FinishedUtc = DateTimeOffset.UtcNow;
+        FinishedUtc = finishedUtc ?? DateTimeOffset.UtcNow;
     }
 }

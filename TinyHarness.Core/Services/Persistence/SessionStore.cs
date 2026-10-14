@@ -5,6 +5,7 @@ using TinyHarness.Core.Exceptions;
 using TinyHarness.Core.Models.Configuration;
 using TinyHarness.Core.Models.Persistence;
 using TinyHarness.Core.Models.Session;
+using TinyHarness.Core.Services.Context;
 using TinyHarness.Core.Services.Runtime;
 
 namespace TinyHarness.Core.Services.Persistence;
@@ -176,12 +177,18 @@ public static class SessionStorePaths
 }
 
 /// <summary>
-///     会话快照的写入端（M13.1）：排他持有会话锁文件，在完整回合边界原子替换版本化快照并追加
-///     提交审计。写入失败抛 <see cref="SessionStoreException" />，调用方必须按“本次未可靠保存”报告，
-///     不得把运行终态当作落盘成功的证明（PLAN §7.1）。
-///     The write side of session snapshots (M13.1): holds the session's lock
-///     file exclusively, atomically replaces the versioned snapshot at complete
-///     turn boundaries and appends the commit audit. A failed write throws
+///     会话快照的写入端（M13.1 起）：排他持有会话锁文件，在完整回合边界原子替换版本化快照并追加
+///     提交审计。M13.2 起快照同时携带消息级会话内容（<see cref="ConversationContext" /> 的完整
+///     历史与压缩形态）；v3 原样保存协议内容，可能包含秘密，只有回合/运行检查投影脱敏。
+///     写入失败抛 <see cref="SessionStoreException" />，调用方必须
+///     按“本次未可靠保存”报告，不得把运行终态当作落盘成功的证明（PLAN §7.1）。
+///     The write side of session snapshots (since M13.1): holds the session's
+///     lock file exclusively, atomically replaces the versioned snapshot at
+///     complete turn boundaries and appends the commit audit. Since M13.2 the
+///     snapshot also carries the message-level conversation content (the full
+///     history and compaction shape of a <see cref="ConversationContext" />).
+///     Format v3 preserves protocol content verbatim and may contain secrets;
+///     only the turn/run inspection projection is redacted. A failed write throws
 ///     <see cref="SessionStoreException" />; callers must report "not reliably
 ///     saved" and never present a run's terminal state as proof of persistence
 ///     (PLAN §7.1).
@@ -195,28 +202,36 @@ public interface ISessionStoreWriter : IDisposable
     long CommitSequence { get; }
 
     /// <summary>
-    ///     序列化会话的当前完整状态并以原子替换落盘（序号加一），随后追加提交审计。
-    ///     Serializes the session's current complete state, persists it by atomic replacement (sequence + 1),
-    ///     then appends the commit audit.
+    ///     序列化会话的当前完整状态（回合检查视图 + 对话内容）并以原子替换落盘（序号加一），
+    ///     随后追加提交审计。
+    ///     Serializes the session's current complete state (the turn inspection
+    ///     view plus the conversation content), persists it by atomic replacement
+    ///     (sequence + 1), then appends the commit audit.
     /// </summary>
-    Task CommitAsync(ChatSession session, CancellationToken cancellationToken);
+    Task CommitAsync(ChatSession session, ConversationContext context, CancellationToken cancellationToken);
 }
 
 /// <summary>
 ///     <see cref="ISessionStoreWriter" /> 的文件实现：同一持久会话同一时刻只允许一个写入者——
-///     构造时以独占共享模式打开 <c>&lt;id&gt;.lock</c> 并持有到 <see cref="Dispose" />，第二个进程
-///     （或同进程第二个实例）打开同一会话立即失败（PLAN §5 的跨进程排他写入）。提交顺序为
-///     “同目录临时文件 → 原子替换快照 → 追加审计提交行”：替换前的任何失败都保留上一有效快照；
-///     替换后、审计前失败会留下领先于审计的快照，由读取端的提交序号对账检出。
+///     打开端以独占共享模式持有 <c>&lt;id&gt;.lock</c> 直到 <see cref="Dispose" />，第二个进程
+///     （或同进程第二个实例）打开同一会话立即失败（PLAN §5 的跨进程排他写入）。新会话经构造器
+///     创建；已保存会话经 <see cref="OpenExistingAsync" /> 打开——先取锁、再做严格读取与审计
+///     对账，并把提交序号续种为快照的当前值。提交顺序为“同目录临时文件 → 原子替换快照 →
+///     追加审计提交行”：替换前的任何失败都保留上一有效快照；替换后、审计前失败会留下领先于
+///     审计的快照，由读取端的提交序号对账检出。
 ///     The file implementation of <see cref="ISessionStoreWriter" />: one writer
-///     per stored session at a time — the constructor opens <c>&lt;id&gt;.lock</c>
-///     with exclusive sharing and holds it until <see cref="Dispose" />, so a
-///     second process (or a second instance in the same process) fails
-///     immediately (cross-process exclusive writing, PLAN §5). The commit order
-///     is "same-directory temp file → atomic snapshot replacement → appended
-///     commit audit": any failure before the replacement keeps the previous
-///     valid snapshot; a failure between replacement and audit leaves a snapshot
-///     ahead of the audit, which the reader's sequence reconciliation detects.
+///     per stored session at a time — the opened side holds <c>&lt;id&gt;.lock</c>
+///     with exclusive sharing until <see cref="Dispose" />, so a second process
+///     (or a second instance in the same process) fails immediately
+///     (cross-process exclusive writing, PLAN §5). A brand-new session is
+///     created through the constructor; a stored one is opened through
+///     <see cref="OpenExistingAsync" /> — lock first, then the strict read with
+///     audit reconciliation, seeding the commit sequence from the snapshot. The
+///     commit order is "same-directory temp file → atomic snapshot replacement →
+///     appended commit audit": any failure before the replacement keeps the
+///     previous valid snapshot; a failure between replacement and audit leaves a
+///     snapshot ahead of the audit, which the reader's sequence reconciliation
+///     detects.
 /// </summary>
 public sealed class SessionStoreWriter : ISessionStoreWriter
 {
@@ -237,6 +252,19 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
     /// </summary>
     public SessionStoreWriter(
         string directory, string sessionId, IReadOnlyDictionary<string, string>? knownSecrets = null)
+        : this(directory, sessionId, true, knownSecrets)
+    {
+    }
+
+    /// <summary>
+    ///     共享构造核心：<paramref name="requireNewSnapshot" /> 为 true 时拒绝已存在的快照
+    ///     （新会话语义），为 false 时要求它存在（打开已保存会话的调用方在取锁后自行读取校验）。
+    ///     The shared construction core: a true <paramref name="requireNewSnapshot" /> refuses an
+    ///     existing snapshot (new-session semantics); false expects it to stay (the open-existing
+    ///     caller reads and validates after taking the lock).
+    /// </summary>
+    private SessionStoreWriter(
+        string directory, string sessionId, bool requireNewSnapshot, IReadOnlyDictionary<string, string>? knownSecrets)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(directory);
         ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
@@ -254,10 +282,11 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
         AuditPath    = Path.Combine(directory, $"{SessionId}.audit.jsonl");
         _redactor    = new SecretRedactor(knownSecrets);
 
-        if (File.Exists(SnapshotPath))
+        if (requireNewSnapshot && File.Exists(SnapshotPath))
             throw new
-                SessionStoreException($"A stored session '{sessionId}' already exists at '{SnapshotPath}'; M13.1 opens " +
-                                      "only new sessions for writing. Open it read-only with 'session show' instead.");
+                SessionStoreException($"A stored session '{sessionId}' already exists at '{SnapshotPath}'; this writer " +
+                                      "creates only new sessions. Resume it with 'tinyharness chat --session <id>' or " +
+                                      "inspect it read-only with 'session show'.");
 
         var lockPath = Path.Combine(directory, $"{SessionId}.lock");
         try
@@ -284,13 +313,20 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
     /// <summary>会话提交审计文件绝对路径。The absolute path of the session's commit audit file.</summary>
     public string AuditPath { get; }
 
+    /// <summary>
+    ///     经 <see cref="OpenExistingAsync" /> 打开时读取到的快照；新会话写入端为 null。
+    ///     The snapshot read by <see cref="OpenExistingAsync" />; null for a new-session writer.
+    /// </summary>
+    public PersistedSession? LoadedSnapshot { get; private set; }
+
     public string SnapshotPath { get; }
 
     public long CommitSequence { get; private set; }
 
-    public async Task CommitAsync(ChatSession session, CancellationToken cancellationToken)
+    public async Task CommitAsync(ChatSession session, ConversationContext context, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(context);
         // The id comparison is case-insensitive: the canonical storage form is
         // the lower-case of the same id.
         if (!string.Equals(session.Id, SessionId, StringComparison.OrdinalIgnoreCase))
@@ -299,7 +335,7 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
                                   $"'{session.Id}'.", nameof(session));
 
         var sequence  = CommitSequence + 1;
-        var snapshot  = BuildSnapshot(session, sequence);
+        var snapshot  = BuildSnapshot(session, context, sequence);
         var json      = JsonSerializer.Serialize(snapshot, SessionStoreJsonContext.Default.PersistedSession);
         var temporary = SnapshotPath + ".tmp";
         if (Encoding.UTF8.GetByteCount(json) > MaxSnapshotBytes)
@@ -353,7 +389,55 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
         _lockStream.Dispose();
     }
 
-    private PersistedSession BuildSnapshot(ChatSession session, long sequence) => new()
+    /// <summary>
+    ///     打开一个已保存会话继续写入（M13.2 续聊）：先以同一独占规则取锁，再用严格读取端
+    ///     （含审计对账）加载快照，最后把提交序号续种为快照当前值——后续提交从快照继续单调递增。
+    ///     快照不存在、损坏、版本未知或与审计不一致都在这里失败，绝不猜测解释。返回的写入端
+    ///     通过 <see cref="LoadedSnapshot" /> 暴露刚读取的快照供恢复流程校验。
+    ///     Opens an already-stored session for continued writing (M13.2 resume):
+    ///     takes the lock under the same exclusive rule first, then loads the
+    ///     snapshot through the strict reader (audit reconciliation included) and
+    ///     seeds the commit sequence with the snapshot's current value — later
+    ///     commits keep increasing monotonically from there. A missing, damaged,
+    ///     unknown-version or audit-inconsistent snapshot fails here instead of
+    ///     being guessed at. The returned writer exposes the freshly read
+    ///     snapshot as <see cref="LoadedSnapshot" /> for the resume flow to validate.
+    /// </summary>
+    public static async Task<SessionStoreWriter> OpenExistingAsync(
+        string            directory, string sessionId, IReadOnlyDictionary<string, string>? knownSecrets,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(directory);
+        ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
+        if (!SessionStorePaths.IsValidSessionId(sessionId))
+            throw new
+                SessionStoreException($"'{sessionId}' is not a valid session id: exactly 32 hex characters are required.");
+
+        sessionId = sessionId.ToLowerInvariant();
+        if (!File.Exists(Path.Combine(directory, $"{sessionId}.session.json")))
+            throw new
+                SessionStoreException($"No stored session '{sessionId}' exists in '{directory}'; there is nothing to resume. " +
+                                      "'tinyharness session list' shows the stored sessions.");
+
+        var writer = new SessionStoreWriter(directory, sessionId, false, knownSecrets);
+        try
+        {
+            var snapshot = await SessionStoreReader.ReadAsync(directory, sessionId, cancellationToken)
+                                                   .ConfigureAwait(false)
+                        ?? throw new
+                               SessionStoreException($"No stored session '{sessionId}' exists in '{directory}'; there is nothing to resume.");
+            writer.CommitSequence = snapshot.CommitSequence;
+            writer.LoadedSnapshot = snapshot;
+            return writer;
+        }
+        catch
+        {
+            writer.Dispose();
+            throw;
+        }
+    }
+
+    private PersistedSession BuildSnapshot(ChatSession session, ConversationContext context, long sequence) => new()
     {
         FormatVersion  = PersistedSession.CurrentFormatVersion,
         Id             = SessionId,
@@ -380,8 +464,63 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
                 InputTokens    = run.Result?.InputTokens,
                 OutputTokens   = run.Result?.OutputTokens
             }).ToArray()
-        }).ToArray()
+        }).ToArray(),
+        Conversation = BuildConversation(context)
     };
+
+    /// <summary>
+    ///     构建保真的消息级会话内容：完整历史的所有协议字段与压缩状态原样保存，不经过脱敏器，
+    ///     因而可能包含秘密，只能写入受保护存储。opaque 载荷（ProtectedData/ItemId）逐条记录
+    ///     完整性哈希；新写入的 <see cref="PersistedConversation.OpaqueRedacted" /> 始终为 false。
+    ///     折叠边界随消息一起保存，恢复端重建同一模型视图；检查投影的脱敏与审计逻辑保持独立。
+    ///     Builds faithful message-level conversation content: all protocol fields
+    ///     of the complete history and the compaction state are saved verbatim,
+    ///     without redaction, so they may contain secrets and require protected
+    ///     storage. Each opaque payload (ProtectedData/ItemId) receives an integrity
+    ///     hash; new writes always set <see cref="PersistedConversation.OpaqueRedacted" />
+    ///     to false. Fold boundaries are saved alongside to rebuild the same model
+    ///     view; inspection-projection redaction and the audit remain independent.
+    /// </summary>
+    private PersistedConversation BuildConversation(ConversationContext context)
+    {
+        var position = context.Position;
+        var messages = new PersistedMessage[context.Messages.Count];
+        for (var i = 0; i < context.Messages.Count; i++)
+        {
+            var original = context.Messages[i];
+            messages[i] = new PersistedMessage
+            {
+                Role       = original.Role.ToString(),
+                Content    = original.Content,
+                ToolCallId = original.ToolCallId,
+                Name       = original.Name,
+                ToolCalls = original.ToolCalls?
+                                    .Select(call => new PersistedToolCall(call.Id, call.FunctionName,
+                                                                          call.ArgumentsJson))
+                                    .ToArray(),
+                Reasoning = original.Reasoning?
+                                    .Select(entry => new PersistedReasoning
+                                     {
+                                         Text          = entry.Text,
+                                         ProtectedData = entry.ProtectedData,
+                                         ItemId        = entry.ItemId,
+                                         OpaqueHash =
+                                             PersistedReasoning.ComputeOpaqueHash(entry.ProtectedData, entry.ItemId)
+                                     })
+                                    .ToArray()
+            };
+        }
+
+        return new PersistedConversation
+        {
+            Messages              = messages,
+            StateJson             = position.HasState ? context.State.ToJson() : null,
+            HasState              = position.HasState,
+            FoldStartMessageIndex = position.FoldStartMessageIndex,
+            FoldEndMessageIndex   = position.FoldEndMessageIndex,
+            OpaqueRedacted        = false
+        };
+    }
 
     private static void TryDeleteTemporary(string path)
     {
@@ -486,10 +625,10 @@ public static class SessionStoreReader
                                       ex);
         }
 
-        if (snapshot.FormatVersion != PersistedSession.CurrentFormatVersion)
+        if (snapshot.FormatVersion is < 1 or > PersistedSession.CurrentFormatVersion)
             throw new
-                SessionStoreException($"Stored session '{sessionId}' at '{snapshotPath}' uses format version " +
-                                      $"{snapshot.FormatVersion}, which this build does not know (expected "   +
+                SessionStoreException($"Stored session '{sessionId}' at '{snapshotPath}' uses format version "    +
+                                      $"{snapshot.FormatVersion}, which this build does not know (understood: 1–" +
                                       $"{PersistedSession.CurrentFormatVersion}); it stays read-only until a build that understands it.");
 
         if (!string.Equals(snapshot.Id, sessionId, StringComparison.Ordinal))
@@ -647,6 +786,10 @@ public static class SessionStoreReader
 [JsonSerializable(typeof(PersistedSession))]
 [JsonSerializable(typeof(PersistedTurn))]
 [JsonSerializable(typeof(PersistedRun))]
+[JsonSerializable(typeof(PersistedConversation))]
+[JsonSerializable(typeof(PersistedMessage))]
+[JsonSerializable(typeof(PersistedToolCall))]
+[JsonSerializable(typeof(PersistedReasoning))]
 [JsonSerializable(typeof(SessionStoreAuditRecord))]
 [JsonSerializable(typeof(SessionModelIdentity))]
 [JsonSerializable(typeof(ChatApiKind))]

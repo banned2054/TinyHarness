@@ -154,7 +154,7 @@ public class ChatSessionTests
         var rejected =
             await Assert.ThrowsAsync<InvalidOperationException>(() =>
                                                                     host.SubmitTurnAsync("second",
-                                                                        CancellationToken.None));
+                                                                             CancellationToken.None));
         Assert.Contains("active run", rejected.Message);
 
         client.Open();
@@ -259,8 +259,8 @@ public class ChatSessionTests
         Assert.Throws<ArgumentException>(() => new ChatSessionHost(Path.Combine(Path.GetTempPath(),
                                                                                     "tinyharness-session-tests"),
                                                                    new SessionModelIdentity("test-model",
-                                                                       "https://example.invalid/v1",
-                                                                       ChatApiKind.ChatCompletions),
+                                                                            "https://example.invalid/v1",
+                                                                            ChatApiKind.ChatCompletions),
                                                                    options,
                                                                    new FakeChatClient(),
                                                                    new ToolRegistry([]),

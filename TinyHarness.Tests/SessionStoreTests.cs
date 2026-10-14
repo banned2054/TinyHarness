@@ -9,6 +9,7 @@ using TinyHarness.Core.Models.Configuration;
 using TinyHarness.Core.Models.Context;
 using TinyHarness.Core.Models.Persistence;
 using TinyHarness.Core.Models.Session;
+using TinyHarness.Core.Services.Context;
 using TinyHarness.Core.Services.Persistence;
 using TinyHarness.Core.Services.Runtime;
 
@@ -29,6 +30,8 @@ public class SessionStoreTests
         new Dictionary<string, string>(StringComparer.Ordinal) { ["MY_API_KEY"] = "sk-test-secret-value" };
 
     private static string WorkspaceRoot(TestTempDir dir) => dir.Root;
+
+    private static ConversationContext NewContext() => new();
 
     private static ChatSession NewSession(string? id = null)
     {
@@ -57,14 +60,14 @@ public class SessionStoreTests
 
         using (var writer = new SessionStoreWriter(dir.Root, session.Id))
         {
-            await writer.CommitAsync(session, CancellationToken.None);
+            await writer.CommitAsync(session, NewContext(), CancellationToken.None);
         }
 
         var snapshotPath = Path.Combine(dir.Root, $"{session.Id}.session.json");
         Assert.True(File.Exists(snapshotPath));
 
         var root = JsonNode.Parse(await File.ReadAllTextAsync(snapshotPath))!.AsObject();
-        Assert.Equal(1, (int)root["formatVersion"]!);
+        Assert.Equal(PersistedSession.CurrentFormatVersion, (int)root["formatVersion"]!);
         Assert.Equal(session.Id, (string)root["id"]!);
         Assert.Equal(1L, (long)root["commitSequence"]!);
         Assert.Single(root["turns"]!.AsArray());
@@ -88,11 +91,11 @@ public class SessionStoreTests
 
         using (var writer = new SessionStoreWriter(dir.Root, session.Id))
         {
-            await writer.CommitAsync(session, CancellationToken.None);
+            await writer.CommitAsync(session, NewContext(), CancellationToken.None);
             Assert.Equal(1, writer.CommitSequence);
 
             AddFinishedTurn(session, "q2", "a2");
-            await writer.CommitAsync(session, CancellationToken.None);
+            await writer.CommitAsync(session, NewContext(), CancellationToken.None);
             Assert.Equal(2, writer.CommitSequence);
         }
 
@@ -111,14 +114,23 @@ public class SessionStoreTests
         var       session = NewSession();
         AddFinishedTurn(session, "use key sk-test-secret-value please", "done with sk-test-secret-value");
 
+        var context = NewContext();
+        context.Append(ChatMessage.User("use key sk-test-secret-value please"));
+        context.Append(ChatMessage.Assistant("done with sk-test-secret-value"));
         using (var writer = new SessionStoreWriter(dir.Root, session.Id, KnownSecrets))
         {
-            await writer.CommitAsync(session, CancellationToken.None);
+            await writer.CommitAsync(session, context, CancellationToken.None);
         }
 
-        var json = await File.ReadAllTextAsync(Path.Combine(dir.Root, $"{session.Id}.session.json"));
-        Assert.DoesNotContain("sk-test-secret-value", json, StringComparison.Ordinal);
-        Assert.Contains("[REDACTED]", json, StringComparison.Ordinal);
+        var snapshot = await SessionStoreReader.ReadAsync(dir.Root, session.Id, CancellationToken.None);
+        Assert.NotNull(snapshot);
+        Assert.Equal("use key [REDACTED] please", snapshot.Turns.Single().UserInput);
+        Assert.Equal("done with [REDACTED]", snapshot.Turns.Single().Runs.Single().FinalMessage);
+        Assert.Equal("use key sk-test-secret-value please", snapshot.Conversation!.Messages[0].Content);
+        Assert.Equal("done with sk-test-secret-value", snapshot.Conversation.Messages[1].Content);
+        Assert.False(snapshot.Conversation.OpaqueRedacted);
+        var audit = await File.ReadAllTextAsync(Path.Combine(dir.Root, $"{session.Id}.audit.jsonl"));
+        Assert.DoesNotContain("sk-test-secret-value", audit, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -130,7 +142,7 @@ public class SessionStoreTests
 
         using (var writer = new SessionStoreWriter(dir.Root, session1.Id))
         {
-            await writer.CommitAsync(session1, CancellationToken.None);
+            await writer.CommitAsync(session1, NewContext(), CancellationToken.None);
         }
 
         // Fault injection: occupy the temp path of a second session with a
@@ -142,8 +154,8 @@ public class SessionStoreTests
         using (var writer2 = new SessionStoreWriter(dir.Root, session2.Id))
         {
             var error =
-                await Assert.ThrowsAsync<SessionStoreException>(() => writer2.CommitAsync(session2,
-                                                                         CancellationToken.None));
+                await Assert.ThrowsAsync<SessionStoreException>(() => writer2.CommitAsync(session2, NewContext(),
+                                                                    CancellationToken.None));
             Assert.Contains("not reliably saved", error.Message, StringComparison.Ordinal);
         }
 
@@ -187,7 +199,7 @@ public class SessionStoreTests
         var       session = NewSession();
         using (var writer = new SessionStoreWriter(dir.Root, session.Id))
         {
-            await writer.CommitAsync(session, CancellationToken.None);
+            await writer.CommitAsync(session, NewContext(), CancellationToken.None);
         }
 
         var existsError = Assert.Throws<SessionStoreException>(() => new SessionStoreWriter(dir.Root, session.Id));
@@ -207,8 +219,8 @@ public class SessionStoreTests
 
         using (var writer = new SessionStoreWriter(dir.Root, session.Id))
         {
-            await writer.CommitAsync(session, CancellationToken.None);
-            await writer.CommitAsync(session, CancellationToken.None);
+            await writer.CommitAsync(session, NewContext(), CancellationToken.None);
+            await writer.CommitAsync(session, NewContext(), CancellationToken.None);
         }
 
         var read = await SessionStoreReader.ReadAsync(dir.Root, session.Id, CancellationToken.None);
@@ -225,6 +237,41 @@ public class SessionStoreTests
         Assert.Equal(ChatApiKind.ChatCompletions, read.Model.ChatApi);
     }
 
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    public async Task Read_OlderFormatsRemainCompatibleForOfflineInspection(int formatVersion)
+    {
+        using var dir     = new TestTempDir();
+        var       session = NewSession();
+        AddFinishedTurn(session, "inspect old question", "inspect old answer");
+        var context = NewContext();
+        context.Append(ChatMessage.System("old instructions"));
+        context.Append(ChatMessage.User("old question"));
+        context.Append(ChatMessage.Assistant("old answer"));
+        using (var writer = new SessionStoreWriter(dir.Root, session.Id))
+        {
+            await writer.CommitAsync(session, context, CancellationToken.None);
+        }
+
+        var path = Path.Combine(dir.Root, $"{session.Id}.session.json");
+        var root = JsonNode.Parse(await File.ReadAllTextAsync(path))!.AsObject();
+        root["formatVersion"] = formatVersion;
+        if (formatVersion == 1) root.Remove("conversation");
+        await File.WriteAllTextAsync(path, root.ToJsonString());
+
+        var read = await SessionStoreReader.ReadAsync(dir.Root, session.Id, CancellationToken.None);
+        Assert.NotNull(read);
+        Assert.Equal(formatVersion, read.FormatVersion);
+        Assert.Equal("inspect old question", read.Turns.Single().UserInput);
+        Assert.Equal("inspect old answer", read.Turns.Single().Runs.Single().FinalMessage);
+        if (formatVersion == 2) Assert.NotNull(read.Conversation);
+        else Assert.Null(read.Conversation);
+        var entry = Assert.Single(await SessionStoreReader.ListAsync(dir.Root, CancellationToken.None));
+        Assert.Null(entry.Error);
+        Assert.Equal(formatVersion, entry.Session!.FormatVersion);
+    }
+
     [Fact]
     public async Task Read_MissingSnapshotReturnsNullButInvalidIdIsRejected()
     {
@@ -234,7 +281,7 @@ public class SessionStoreTests
 
         var error =
             await Assert.ThrowsAsync<SessionStoreException>(() => SessionStoreReader.ReadAsync(dir.Root, "..\\escape",
-                                                                     CancellationToken.None));
+                                                                CancellationToken.None));
         Assert.Contains("not a valid session id", error.Message, StringComparison.Ordinal);
     }
 
@@ -246,7 +293,7 @@ public class SessionStoreTests
         AddFinishedTurn(session, "q", "a");
         using (var writer = new SessionStoreWriter(dir.Root, session.Id))
         {
-            await writer.CommitAsync(session, CancellationToken.None);
+            await writer.CommitAsync(session, NewContext(), CancellationToken.None);
         }
 
         var read = await SessionStoreReader.ReadAsync(dir.Root, session.Id.ToUpperInvariant(), CancellationToken.None);
@@ -265,7 +312,7 @@ public class SessionStoreTests
         using (var writer = new SessionStoreWriter(dir.Root, session.Id.ToUpperInvariant()))
         {
             Assert.Equal(session.Id, writer.SessionId);
-            await writer.CommitAsync(session, CancellationToken.None);
+            await writer.CommitAsync(session, NewContext(), CancellationToken.None);
         }
 
         // The actual file name — not a case-insensitive File.Exists probe — proves
@@ -316,7 +363,7 @@ public class SessionStoreTests
 
         var error =
             await Assert.ThrowsAsync<SessionStoreException>(() => SessionStoreReader.ReadAsync(dir.Root, session.Id,
-                                                                     CancellationToken.None));
+                                                                CancellationToken.None));
         Assert.Contains("format version", error.Message, StringComparison.Ordinal);
         Assert.Contains("99", error.Message, StringComparison.Ordinal);
     }
@@ -330,7 +377,7 @@ public class SessionStoreTests
 
         var error =
             await Assert.ThrowsAsync<SessionStoreException>(() => SessionStoreReader.ReadAsync(dir.Root, id,
-                                                                     CancellationToken.None));
+                                                                CancellationToken.None));
         Assert.Contains("damaged JSON", error.Message, StringComparison.Ordinal);
     }
 
@@ -342,9 +389,9 @@ public class SessionStoreTests
         AddFinishedTurn(session, "q", "a");
         using (var writer = new SessionStoreWriter(dir.Root, session.Id))
         {
-            await writer.CommitAsync(session, CancellationToken.None);
+            await writer.CommitAsync(session, NewContext(), CancellationToken.None);
             AddFinishedTurn(session, "q2", "a2");
-            await writer.CommitAsync(session, CancellationToken.None);
+            await writer.CommitAsync(session, NewContext(), CancellationToken.None);
         }
 
         // Simulate a crash between replacement and audit: drop the last commit line.
@@ -355,7 +402,7 @@ public class SessionStoreTests
 
         var error =
             await Assert.ThrowsAsync<SessionStoreException>(() => SessionStoreReader.ReadAsync(dir.Root, session.Id,
-                                                                     CancellationToken.None));
+                                                                CancellationToken.None));
         Assert.Contains("inconsistent", error.Message, StringComparison.Ordinal);
     }
 
@@ -367,14 +414,14 @@ public class SessionStoreTests
         AddFinishedTurn(session, "q", "a");
         using (var writer = new SessionStoreWriter(dir.Root, session.Id))
         {
-            await writer.CommitAsync(session, CancellationToken.None);
+            await writer.CommitAsync(session, NewContext(), CancellationToken.None);
         }
 
         File.Delete(Path.Combine(dir.Root, $"{session.Id}.audit.jsonl"));
 
         var error =
             await Assert.ThrowsAsync<SessionStoreException>(() => SessionStoreReader.ReadAsync(dir.Root, session.Id,
-                                                                     CancellationToken.None));
+                                                                CancellationToken.None));
         Assert.Contains("no commit audit", error.Message, StringComparison.Ordinal);
     }
 
@@ -391,7 +438,7 @@ public class SessionStoreTests
 
         var error =
             await Assert.ThrowsAsync<SessionStoreException>(() => SessionStoreReader.ReadAsync(dir.Root, id,
-                                                                     CancellationToken.None));
+                                                                CancellationToken.None));
         Assert.Contains("damaged JSON", error.Message, StringComparison.Ordinal);
     }
 
@@ -407,7 +454,7 @@ public class SessionStoreTests
 
         var error =
             await Assert.ThrowsAsync<SessionStoreException>(() => SessionStoreReader.ReadAsync(dir.Root, id,
-                                                                     CancellationToken.None));
+                                                                CancellationToken.None));
         Assert.Contains("exceeds", error.Message, StringComparison.Ordinal);
     }
 
@@ -423,7 +470,7 @@ public class SessionStoreTests
         foreach (var session in new[] { older, newer })
         {
             using var writer = new SessionStoreWriter(dir.Root, session.Id);
-            await writer.CommitAsync(session, CancellationToken.None);
+            await writer.CommitAsync(session, NewContext(), CancellationToken.None);
         }
 
         var damagedId = new string('e', 32);
@@ -446,12 +493,12 @@ public class SessionStoreTests
 
         var childError =
             Assert.Throws<SessionStoreException>(() => SessionStorePaths.ResolveProtected(Path.Combine(dir.Root,
-                                                                   "sessions"), WorkspaceRoot(dir)));
+                                                     "sessions"), WorkspaceRoot(dir)));
         Assert.Contains("lies inside the workspace", childError.Message, StringComparison.Ordinal);
 
         var relativeError =
             Assert.Throws<SessionStoreException>(() => SessionStorePaths.ResolveProtected("relative/sessions",
-                                                          WorkspaceRoot(dir)));
+                                                     WorkspaceRoot(dir)));
         Assert.Contains("absolute path", relativeError.Message, StringComparison.Ordinal);
     }
 
@@ -506,7 +553,7 @@ public class SessionStoreTests
         {
             var error =
                 await Assert.ThrowsAsync<SessionStoreException>(() => SessionStoreReader.ReadLegacyAsync(dir.Root, id,
-                                                                         CancellationToken.None));
+                                                                    CancellationToken.None));
             Assert.Contains("no run result or message list", error.Message, StringComparison.Ordinal);
         }
     }
@@ -519,14 +566,14 @@ public class SessionStoreTests
         AddFinishedTurn(session, "q", "a");
         using (var writer = new SessionStoreWriter(dir.Root, session.Id))
         {
-            await writer.CommitAsync(session, CancellationToken.None);
+            await writer.CommitAsync(session, NewContext(), CancellationToken.None);
         }
 
         await File.AppendAllTextAsync(Path.Combine(dir.Root, $"{session.Id}.audit.jsonl"), "{ broken");
 
         var error =
             await Assert.ThrowsAsync<SessionStoreException>(() => SessionStoreReader.ReadAsync(dir.Root, session.Id,
-                                                                     CancellationToken.None));
+                                                                CancellationToken.None));
         Assert.Contains("damaged line", error.Message, StringComparison.Ordinal);
     }
 
@@ -540,7 +587,8 @@ public class SessionStoreTests
         cts.Cancel();
 
         using var writer = new SessionStoreWriter(dir.Root, session.Id);
-        var       error = await Assert.ThrowsAsync<SessionStoreException>(() => writer.CommitAsync(session, cts.Token));
+        var error =
+            await Assert.ThrowsAsync<SessionStoreException>(() => writer.CommitAsync(session, NewContext(), cts.Token));
         Assert.Contains("not reliably saved", error.Message, StringComparison.Ordinal);
         Assert.False(File.Exists(Path.Combine(dir.Root, $"{session.Id}.session.json")));
     }

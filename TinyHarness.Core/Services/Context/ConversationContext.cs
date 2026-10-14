@@ -102,6 +102,13 @@ public sealed class ConversationContext
     /// </summary>
     public IReadOnlyList<ChatMessage> Messages => _messages;
 
+    /// <summary>
+    ///     当前压缩位置（是否已有状态与折叠边界）；持久化写入端据此保存会话的压缩形态。
+    ///     The current compaction position (whether a state exists and the fold
+    ///     boundaries); the persistence writer saves the session's compacted shape from it.
+    /// </summary>
+    public CompactionPosition Position => new(_hasState, _foldStartMessageIndex, _foldEndMessageIndex);
+
     public StructuredState State { get; private set; } = StructuredState.Empty;
 
     private int ThresholdTokens => _options!.CompactionThresholdTokens > 0
@@ -130,6 +137,43 @@ public sealed class ConversationContext
         _hasState              = false;
         _foldStartMessageIndex = -1;
         _foldEndMessageIndex   = 0;
+        _pendingFold           = null;
+        _messagesAtLastAttempt = -1;
+    }
+
+    /// <summary>
+    ///     从持久化快照恢复完整历史与压缩形态（M13.2 续聊）。折叠位置必须与消息数一致：
+    ///     未折叠（起点 -1）时不允许携带状态或非零终点；已折叠时状态必须存在且
+    ///     0 ≤ 起点 &lt; 终点 ≤ 消息数。用法与 <see cref="Reset" /> 相同，只应发生在会话恢复时。
+    ///     Restores the complete history and compaction shape from a persisted
+    ///     snapshot (M13.2 resume). The fold position must agree with the message
+    ///     count: an unfolded position (start -1) may carry neither a state nor a
+    ///     non-zero end, and a folded one requires a state with
+    ///     0 ≤ start &lt; end ≤ message count. Like <see cref="Reset" />, this is
+    ///     only ever a session-restoration step.
+    /// </summary>
+    public void Restore(IReadOnlyList<ChatMessage> messages, StructuredState state,
+                        bool                       hasState, int foldStartMessageIndex, int foldEndMessageIndex)
+    {
+        ArgumentNullException.ThrowIfNull(messages);
+        ArgumentNullException.ThrowIfNull(state);
+        if (foldStartMessageIndex < 0)
+        {
+            if (hasState || foldEndMessageIndex != 0)
+                throw new
+                    ArgumentException("An unfolded conversation cannot carry a compaction state or a non-zero fold end.");
+        }
+        else if (!hasState || foldStartMessageIndex >= foldEndMessageIndex || foldEndMessageIndex > messages.Count)
+        {
+            throw new ArgumentException("The fold position does not agree with the restored message history.");
+        }
+
+        _messages.Clear();
+        _messages.AddRange(messages);
+        State                  = state;
+        _hasState              = hasState;
+        _foldStartMessageIndex = foldStartMessageIndex;
+        _foldEndMessageIndex   = foldEndMessageIndex;
         _pendingFold           = null;
         _messagesAtLastAttempt = -1;
     }
@@ -612,6 +656,12 @@ public sealed class ConversationContext
 
         return tokens;
     }
+
+    /// <summary>
+    ///     会话恢复时的压缩位置快照。
+    ///     The compaction-position snapshot used when restoring a session.
+    /// </summary>
+    public readonly record struct CompactionPosition(bool HasState, int FoldStartMessageIndex, int FoldEndMessageIndex);
 
     /// <summary>
     ///     保留在原始历史中的消息区间。

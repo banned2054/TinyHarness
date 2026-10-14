@@ -9,6 +9,7 @@ using TinyHarness.Core.Models.Configuration;
 using TinyHarness.Core.Models.Context;
 using TinyHarness.Core.Models.Persistence;
 using TinyHarness.Core.Models.Session;
+using TinyHarness.Core.Services.Context;
 using TinyHarness.Core.Services.Persistence;
 using TinyHarness.Core.Services.Runtime;
 
@@ -32,8 +33,7 @@ public class SessionCommandTests
         var       session = await CommitStoredSessionAsync(fixture.StoreDirectory, "why did it fail?", "the fix");
         WriteLegacySnapshot(fixture.LegacyDirectory);
 
-        var exit = await SessionCommand.ExecuteAsync(
-                                                     fixture.CreateContext(), Options("list"), CancellationToken.None);
+        var exit = await SessionCommand.ExecuteAsync(fixture.CreateContext(), Options("list"), CancellationToken.None);
 
         Assert.Equal(0, exit);
         Assert.Contains(session.Id, fixture.Io.Output, StringComparison.Ordinal);
@@ -49,8 +49,7 @@ public class SessionCommandTests
         await File.WriteAllTextAsync(Path.Combine(fixture.StoreDirectory, $"{new string('f', 32)}.session.json"),
                                      "not json");
 
-        var exit = await SessionCommand.ExecuteAsync(
-                                                     fixture.CreateContext(), Options("list"), CancellationToken.None);
+        var exit = await SessionCommand.ExecuteAsync(fixture.CreateContext(), Options("list"), CancellationToken.None);
 
         Assert.Equal(0, exit);
         Assert.Contains("damaged", fixture.Io.Output, StringComparison.Ordinal);
@@ -82,9 +81,64 @@ public class SessionCommandTests
 
         Assert.Equal(0, exit);
         Assert.Contains($"session         : {session.Id}", fixture.Io.Output, StringComparison.Ordinal);
-        Assert.Contains("format version  : 1", fixture.Io.Output, StringComparison.Ordinal);
+        Assert.Contains($"format version  : {PersistedSession.CurrentFormatVersion}", fixture.Io.Output,
+                        StringComparison.Ordinal);
+        Assert.Contains("conversation    : 0 messages (verbatim protocol stored; resume checks required)",
+                        fixture.Io.Output, StringComparison.Ordinal);
         Assert.Contains("input : why did it fail?", fixture.Io.Output, StringComparison.Ordinal);
         Assert.Contains("final : the fix", fixture.Io.Output, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(2, false)]
+    [InlineData(2, true)]
+    [InlineData(3, true)]
+    public async Task Show_LegacyRedactedConversationIsInspectionOnly(int formatVersion, bool opaqueRedacted)
+    {
+        using var fixture = new SessionCliFixture();
+        var       session = await CommitStoredSessionAsync(fixture.StoreDirectory, "question", "answer");
+        var legacy = session with
+        {
+            FormatVersion = formatVersion,
+            Conversation = session.Conversation! with { OpaqueRedacted = opaqueRedacted }
+        };
+        await File.WriteAllTextAsync(Path.Combine(fixture.StoreDirectory, $"{session.Id}.session.json"),
+                                     JsonSerializer.Serialize(legacy,
+                                                              SessionStoreJsonContext.Default.PersistedSession));
+
+        var exit = await SessionCommand.ExecuteAsync(fixture.CreateContext(), Options("show", session.Id),
+                                                     CancellationToken.None);
+
+        Assert.Equal(0, exit);
+        Assert.Contains("inspection only; legacy redaction", fixture.Io.Output, StringComparison.Ordinal);
+        Assert.DoesNotContain("verbatim protocol stored", fixture.Io.Output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Show_NeverPrintsVerbatimConversationSecrets()
+    {
+        using var    fixture = new SessionCliFixture();
+        const string secret  = "synthetic-private-conversation-value";
+        var          session = await CommitStoredSessionAsync(fixture.StoreDirectory, "question", "answer");
+        var stored = session with
+        {
+            Conversation = new PersistedConversation
+            {
+                Messages  = [new PersistedMessage { Role = nameof(ChatRole.User), Content = secret }],
+                StateJson = new StructuredState { Goal = secret }.ToJson()
+            }
+        };
+        await File.WriteAllTextAsync(Path.Combine(fixture.StoreDirectory, $"{session.Id}.session.json"),
+                                     JsonSerializer.Serialize(stored,
+                                                              SessionStoreJsonContext.Default.PersistedSession));
+
+        var exit = await SessionCommand.ExecuteAsync(fixture.CreateContext(), Options("show", session.Id),
+                                                     CancellationToken.None);
+
+        Assert.Equal(0, exit);
+        Assert.DoesNotContain(secret, fixture.Io.Output, StringComparison.Ordinal);
+        Assert.DoesNotContain(secret, fixture.Io.Error, StringComparison.Ordinal);
+        Assert.Contains("input : question", fixture.Io.Output, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -150,7 +204,7 @@ public class SessionCommandTests
         run.Finish(new AgentResult { Status = AgentStatus.Completed, FinalMessage = finalMessage, Steps = 1 });
 
         using var writer = new SessionStoreWriter(storeDirectory, chatSession.Id);
-        await writer.CommitAsync(chatSession, CancellationToken.None);
+        await writer.CommitAsync(chatSession, new ConversationContext(), CancellationToken.None);
         var read = await SessionStoreReader.ReadAsync(storeDirectory, chatSession.Id, CancellationToken.None);
         return read!;
     }

@@ -37,6 +37,9 @@ internal sealed record CliOptions
 
     public string? ConfigPath { get; init; }
 
+    /// <summary>chat --session 的待续聊会话 ID（32 位十六进制）。The stored session id to resume (32 hex characters) for chat --session.</summary>
+    public string? ResumeSessionId { get; init; }
+
     /// <summary>help 的主题命令；null 表示总览。Help topic command; null means the overview.</summary>
     public string? HelpTopic { get; init; }
 

@@ -37,7 +37,7 @@ public sealed class HostProcessBackend : IProcessExecutionBackend
 
         using var timeoutSource = new CancellationTokenSource(TimeSpan.FromSeconds(execution.TimeoutSeconds));
         using var linkedSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken,
-            timeoutSource.Token);
+                 timeoutSource.Token);
         using var        captureSource = new CancellationTokenSource();
         ProcessExecution processExecution;
         try

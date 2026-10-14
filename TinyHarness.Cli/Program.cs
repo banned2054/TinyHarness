@@ -111,7 +111,7 @@ internal static class Program
                 return await RunAsync(options.Prompt!, options.ConfigPath);
 
             case CliCommandKind.Chat :
-                return await RunChatAsync(options.ConfigPath);
+                return await RunChatAsync(options.ConfigPath, options.ResumeSessionId);
 
             default :
                 return await RunManagementCommandAsync(options).ConfigureAwait(false);
@@ -211,8 +211,10 @@ internal static class Program
     ///     <see cref="ExclusiveInputReader" /> 单一出口，Ctrl+C 的回合/会话分发由
     ///     <see cref="ChatCancellation" /> 承担。M13.1 起每个回合唱到终态后，会话以版本化快照
     ///     原子提交到受保护用户级存储（<see cref="SessionStoreWriter" />），供严格离线的
-    ///     `session list` / `session show` 查看；跨进程重启续聊仍不属于本切片，保存失败按
-    ///     “本次未可靠保存”报告，不把运行终态当作落盘成功。
+    ///     `session list` / `session show` 查看；保存失败按“本次未可靠保存”报告，不把运行终态
+    ///     当作落盘成功。M13.2 起 <c>--session &lt;id&gt;</c> 打开已保存会话续聊：先取锁并严格
+    ///     读取（含审计对账），再做工作区/模型/协议身份与 opaque 完整性检查
+    ///     （<see cref="SessionResume" />），任一不过即以退出码 1 拒绝，不降级放行。
     ///     Loads the effective configuration and starts the interactive multi-turn chat
     ///     session (M12.3, PLAN §10). The execution stack is shared with run exactly
     ///     (<see cref="ComposeAgentAsync" />); the turn input and approval prompts share one
@@ -220,11 +222,15 @@ internal static class Program
     ///     in <see cref="ChatCancellation" />. Since M13.1, after every turn reaches its
     ///     terminal state the session is atomically committed as a versioned snapshot into
     ///     the protected user-level store (<see cref="SessionStoreWriter" />) for strictly
-    ///     offline `session list` / `session show` inspection; restart-resume across
-    ///     processes still lies outside this slice, a failed save is reported as "not
-    ///     reliably saved", and a run's terminal state never counts as proof of persistence.
+    ///     offline `session list` / `session show` inspection; a failed save is reported as
+    ///     "not reliably saved" and a run's terminal state never counts as proof of
+    ///     persistence. Since M13.2 `--session &lt;id&gt;` opens a stored session and resumes
+    ///     it: the lock is taken and the snapshot strictly read (audit reconciliation
+    ///     included) first, then the workspace/model/protocol identity and opaque
+    ///     integrity checks run (<see cref="SessionResume" />); any failure refuses the
+    ///     resume with exit code 1 instead of degrading it.
     /// </summary>
-    private static async Task<int> RunChatAsync(string? configPath)
+    private static async Task<int> RunChatAsync(string? configPath, string? resumeSessionId)
     {
         using var cancellation = new ChatCancellation();
         var composition = await ComposeAgentAsync(configPath, cancellation.SessionToken, true)
@@ -235,33 +241,76 @@ internal static class Program
         // prompts (PLAN §6); the console and the approver must wrap the same instance.
         var reader = new ExclusiveInputReader(Console.In);
 
-        using var host = new ChatSessionHost(config.WorkspaceRoot,
-                                             new SessionModelIdentity(config.Model, config.Endpoint, config.ChatApi),
-                                             composition.Options,
-                                             composition.Model,
-                                             composition.Tools,
-                                             WorkspaceSystemPrompt,
-                                             composition.Permissions,
-                                             new ConsoleApprovalProvider(reader, Console.Out, composition.KnownSecrets),
-                                             new ConsoleHostEventSink(composition.KnownSecrets),
-                                             runId => new FileRunRecorder(config.SessionDirectory, runId,
-                                                                          composition.KnownSecrets),
-                                             sessionId => new SessionStoreWriter(composition.SessionStoreDirectory!,
-                                                      sessionId, composition.KnownSecrets));
+        ChatSessionHost host;
+        string?         resumedNote = null;
+        if (resumeSessionId is null)
+        {
+            host = new ChatSessionHost(config.WorkspaceRoot,
+                                       new SessionModelIdentity(config.Model, config.Endpoint, config.ChatApi),
+                                       composition.Options,
+                                       composition.Model,
+                                       composition.Tools,
+                                       WorkspaceSystemPrompt,
+                                       composition.Permissions,
+                                       new ConsoleApprovalProvider(reader, Console.Out, composition.KnownSecrets),
+                                       new ConsoleHostEventSink(composition.KnownSecrets),
+                                       runId => new FileRunRecorder(config.SessionDirectory, runId,
+                                                                    composition.KnownSecrets),
+                                       sessionId => new SessionStoreWriter(composition.SessionStoreDirectory!,
+                                                                           sessionId, composition.KnownSecrets));
+        }
+        else
+        {
+            // Open the stored session (lock + strict read + sequence seed) before any
+            // restoration; the writer is handed to the host only after every resume
+            // check passes, and stays ours to release when they do not.
+            var writer = await SessionStoreWriter.OpenExistingAsync(composition.SessionStoreDirectory!,
+                                                                    resumeSessionId, composition.KnownSecrets,
+                                                                    cancellation.SessionToken).ConfigureAwait(false);
+            try
+            {
+                var restored = SessionResume.Restore(writer.LoadedSnapshot!, config.WorkspaceRoot,
+                                                     new SessionModelIdentity(config.Model, config.Endpoint,
+                                                                              config.ChatApi),
+                                                     WorkspaceSystemPrompt, composition.Options.Context);
+                resumedNote = $"resumed    : {restored.Session.Turns.Count} turns from commit " +
+                              $"{writer.CommitSequence} ({writer.LoadedSnapshot!.UpdatedUtc.LocalDateTime:yyyy-MM-dd HH:mm:ss})";
+                host = new ChatSessionHost(restored.Session, restored.Context, composition.Options, composition.Model,
+                                           composition.Tools, WorkspaceSystemPrompt, composition.Permissions,
+                                           new ConsoleApprovalProvider(reader, Console.Out, composition.KnownSecrets),
+                                           new ConsoleHostEventSink(composition.KnownSecrets),
+                                           runId => new FileRunRecorder(config.SessionDirectory, runId,
+                                                                        composition.KnownSecrets),
+                                           writer);
+            }
+            catch
+            {
+                writer.Dispose();
+                throw;
+            }
+        }
 
-        await WriteHeaderAsync("TinyHarness chat", composition, host.Session.Id).ConfigureAwait(false);
+        using (host)
+        {
+            await WriteHeaderAsync("TinyHarness chat", composition, host.Session.Id).ConfigureAwait(false);
+            if (resumedNote is not null) await Console.Out.WriteLineAsync($"  {resumedNote}");
+            await
+                Console.Out
+                       .WriteLineAsync("  storage   : protocol history is saved verbatim without harness encryption; " +
+                                       "pasted secrets may be stored. Keep the session store private.");
 
-        var console = new ChatSessionConsole(host, reader, Console.Out, cancellation, composition.KnownSecrets);
-        var exit    = await console.RunAsync().ConfigureAwait(false);
+            var console = new ChatSessionConsole(host, reader, Console.Out, cancellation, composition.KnownSecrets);
+            var exit    = await console.RunAsync().ConfigureAwait(false);
 
-        // Report only artifacts that actually exist (the same rule as run) and surface
-        // an unreliable last save instead of presenting the terminal state as saved.
-        if (host.Session.Turns.Count > 0 && File.Exists(host.PersistencePath))
-            await Console.Out.WriteLineAsync($"session    : {host.PersistencePath}");
-        if (host.PersistenceWarning is { Length: > 0 } warning)
-            await Console.Out.WriteLineAsync($"warning    : {warning}");
+            // Report only artifacts that actually exist (the same rule as run) and surface
+            // an unreliable last save instead of presenting the terminal state as saved.
+            if (host.Session.Turns.Count > 0 && File.Exists(host.PersistencePath))
+                await Console.Out.WriteLineAsync($"session    : {host.PersistencePath}");
+            if (host.PersistenceWarning is { Length: > 0 } warning)
+                await Console.Out.WriteLineAsync($"warning    : {warning}");
 
-        return exit;
+            return exit;
+        }
     }
 
     /// <summary>

@@ -99,6 +99,33 @@ public class CommandLineTests
     }
 
     [Fact]
+    public void ChatCommand_SessionOptionParsesWithAnIdCaseInsensitively()
+    {
+        var id      = Guid.NewGuid().ToString("N");
+        var options = CommandLine.Parse(["chat", "--session", id.ToUpperInvariant(), "--config", "team.json"]);
+
+        Assert.Equal(CliCommandKind.Chat, options.Kind);
+        Assert.Equal(id.ToUpperInvariant(), options.ResumeSessionId);
+        Assert.Equal("team.json", options.ConfigPath);
+    }
+
+    [Fact]
+    public void ChatCommand_SessionOptionRequiresAValidIdAtMostOnce()
+    {
+        var id = Guid.NewGuid().ToString("N");
+
+        var missing = Assert.Throws<CliUsageException>(() => CommandLine.Parse(["chat", "--session"]));
+        Assert.Contains("requires a session id", missing.Message, StringComparison.Ordinal);
+
+        var invalid = Assert.Throws<CliUsageException>(() => CommandLine.Parse(["chat", "--session", "../escape"]));
+        Assert.Contains("not a valid session id", invalid.Message, StringComparison.Ordinal);
+
+        var twice =
+            Assert.Throws<CliUsageException>(() => CommandLine.Parse(["chat", "--session", id, "--session", id]));
+        Assert.Contains("at most once", twice.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void SessionList_Parses()
     {
         var options = CommandLine.Parse(["session", "list"]);

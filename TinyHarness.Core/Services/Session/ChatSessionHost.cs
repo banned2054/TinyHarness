@@ -1,4 +1,5 @@
 using TinyHarness.Core.Models.Agent;
+using TinyHarness.Core.Models.ChatCompletions;
 using TinyHarness.Core.Models.Session;
 using TinyHarness.Core.Services.Agent;
 using TinyHarness.Core.Services.ChatCompletions;
@@ -16,10 +17,13 @@ namespace TinyHarness.Core.Services.Session;
 ///     新循环的既有模式一致）并执行到终态。同一时刻只允许一个活动运行；上一回合以不完整的
 ///     工具原子组结束时（执行中途取消或失败），续聊被显式拒绝并记录为失败运行——不补造工具
 ///     结果，不把无效历史发给模型（PLAN §7.3 的进程内对应物；检查与解除阻断属于 M13/M15）。
-///     会话与运行都不包含密钥或可执行授权：凭据由调用方持有的模型客户端按引用解析。
+///     会话与运行不主动存储认证凭据（凭据由调用方持有的模型客户端按引用解析），也不存储或
+///     恢复可执行授权；对话历史可能包含用户粘贴、文件读取或模型返回的秘密（v3 canonical
+///     保真存储原样落盘，检查视图另行脱敏）。
 ///     M13.1 起可选注入会话快照写入端：每次回合唱到终态后在完整回合边界提交快照（PLAN §7.1），
 ///     保存失败不改变回合终态，而是记录为 <see cref="PersistenceWarning" /> 交由宿主展示
-///     “本次未可靠保存”。
+///     “本次未可靠保存”。M13.2 起提供恢复构造路径：由 <see cref="SessionResume" /> 重建的会话
+///     与已回填的上下文连同已打开的写入端一并接管，跨进程续聊在同一身份与提交序号上继续。
 ///     The session lifecycle coordinator (M12.1, PLAN §5): owns one <see cref="ChatSession" />'s
 ///     stable identity, the fixed system prompt and the <see cref="ConversationContext" /> shared
 ///     across turns. Every user turn creates its own <see cref="SessionRun" />, composes a fresh
@@ -28,13 +32,18 @@ namespace TinyHarness.Core.Services.Session;
 ///     turn ended with an incomplete tool group (cancel or failure mid-execution), continuation
 ///     is explicitly refused and recorded as a failed run — tool results are never fabricated and
 ///     invalid history is never sent to the model (the in-process counterpart of PLAN §7.3; the
-///     inspection and unblocking flow belongs to M13/M15). Neither the session nor a run carries
-///     secrets or executable authorization: credentials are resolved by reference inside the
-///     caller-supplied model client. Since M13.1 an optional session-snapshot writer can be
+///     inspection and unblocking flow belongs to M13/M15). Neither the session nor a run
+///     proactively stores authentication credentials (resolved by reference inside the
+///     caller-supplied model client) or any executable authorization; the conversation
+///     history may still contain secrets pasted by the user, read from files or returned
+///     by the model (stored verbatim by the v3 canonical format, while inspection views
+///     are redacted separately). Since M13.1 an optional session-snapshot writer can be
 ///     injected: after every turn reaches its terminal state the snapshot is committed at that
 ///     complete turn boundary (PLAN §7.1); a failed save never rewrites the turn's terminal
 ///     result but is recorded as <see cref="PersistenceWarning" /> for the host to report
-///     "not reliably saved".
+///     "not reliably saved". Since M13.2 a resume construction path takes over a session rebuilt
+///     by <see cref="SessionResume" /> together with its rehydrated context and an already-open
+///     writer, continuing a cross-process resume on the same identity and commit sequence.
 /// </summary>
 public sealed class ChatSessionHost : IDisposable
 {
@@ -62,19 +71,80 @@ public sealed class ChatSessionHost : IDisposable
                            IHostEventSink?                    events               = null,
                            Func<string, IRunRecorder>?        recorderFactory      = null,
                            Func<string, ISessionStoreWriter>? sessionWriterFactory = null)
+        : this(new ChatSession(NewId(), workspaceRoot, model), ContextFor(options), options, modelClient, tools,
+               systemPrompt, permissions, approver, events, recorderFactory, sessionWriterFactory)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
-        ArgumentNullException.ThrowIfNull(model);
+    }
+
+    /// <summary>
+    ///     恢复构造路径（M13.2）：接管 <see cref="SessionResume" /> 重建的会话与上下文，并沿用
+    ///     调用方已打开（锁已持有、提交序号已续种）的写入端继续在完整回合边界提交。构造失败时
+    ///     写入端仍归调用方所有，必须由调用方释放。
+    ///     The resume construction path (M13.2): takes over the session and context
+    ///     rebuilt by <see cref="SessionResume" /> and keeps committing at complete
+    ///     turn boundaries through the caller's already-open writer (lock held,
+    ///     commit sequence seeded). On a construction failure the writer still
+    ///     belongs to the caller, who must dispose it.
+    /// </summary>
+    public ChatSessionHost(ChatSession                 session,
+                           ConversationContext         context,
+                           AgentOptions                options,
+                           IChatCompletionClient       modelClient,
+                           ToolRegistry                tools,
+                           string                      systemPrompt,
+                           PermissionEngine?           permissions     = null,
+                           IApprovalProvider?          approver        = null,
+                           IHostEventSink?             events          = null,
+                           Func<string, IRunRecorder>? recorderFactory = null,
+                           ISessionStoreWriter?        sessionWriter   = null)
+        : this(session, context, options, modelClient, tools, systemPrompt, permissions, approver, events,
+               recorderFactory, sessionWriter is null ? null : _ => sessionWriter)
+    {
+    }
+
+    /// <summary>
+    ///     两条构造路径的共享主构造：校验模型身份一致，非空上下文的首条 system 消息必须与本宿主的
+    ///     系统提示一致（会话内指令固定），最后才打开/接管写入端——失败即会话启动失败（fail-closed）。
+    ///     The shared master constructor of both paths: the model identity must
+    ///     agree, and a non-empty context must start with the same system message as
+    ///     this host's prompt (instructions are fixed per session); the writer is
+    ///     opened/taken over last — any failure fails the session startup (fail-closed).
+    /// </summary>
+    private ChatSessionHost(ChatSession                        session,
+                            ConversationContext                context,
+                            AgentOptions                       options,
+                            IChatCompletionClient              modelClient,
+                            ToolRegistry                       tools,
+                            string                             systemPrompt,
+                            PermissionEngine?                  permissions,
+                            IApprovalProvider?                 approver,
+                            IHostEventSink?                    events,
+                            Func<string, IRunRecorder>?        recorderFactory,
+                            Func<string, ISessionStoreWriter>? sessionWriterFactory)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(modelClient);
         ArgumentNullException.ThrowIfNull(tools);
         ArgumentException.ThrowIfNullOrWhiteSpace(systemPrompt);
-        if (!string.Equals(options.Model, model.ModelId, StringComparison.Ordinal))
+        if (!string.Equals(options.Model, session.Model.ModelId, StringComparison.Ordinal))
             throw new
-                ArgumentException($"AgentOptions.Model '{options.Model}' does not match the session model identity '{model.ModelId}'.",
+                ArgumentException($"AgentOptions.Model '{options.Model}' does not match the session model identity '{session.Model.ModelId}'.",
                                   nameof(options));
 
-        Session          = new ChatSession(NewId(), workspaceRoot, model);
+        // A restored context must already carry the same fixed instructions; a fresh
+        // one is empty and receives the prompt on its first turn.
+        if (context.Messages.Count > 0)
+        {
+            var head = context.Messages[0];
+            if (head.Role != ChatRole.System || !string.Equals(head.Content, systemPrompt, StringComparison.Ordinal))
+                throw new
+                    ArgumentException("The restored conversation's system message differs from this host's system prompt; " +
+                                      "a resumed session requires identical instructions.", nameof(context));
+        }
+
+        Session          = session;
         _options         = options;
         _modelClient     = modelClient;
         _tools           = tools;
@@ -83,10 +153,10 @@ public sealed class ChatSessionHost : IDisposable
         _approver        = approver;
         _events          = events;
         _recorderFactory = recorderFactory;
+        _context         = context;
         // Opened after the session identity exists so the writer can bind the id;
         // a failure here fails the session startup (fail-closed, PLAN §7.1).
-        _sessionWriter = sessionWriterFactory?.Invoke(Session.Id);
-        _context       = new ConversationContext(options.Context);
+        _sessionWriter = sessionWriterFactory?.Invoke(session.Id);
     }
 
     /// <summary>本宿主服务的会话（稳定身份与全部回合）。The session served by this host (stable identity, all turns).</summary>
@@ -111,6 +181,9 @@ public sealed class ChatSessionHost : IDisposable
     public string? PersistencePath => _sessionWriter?.SnapshotPath;
 
     public void Dispose() => _sessionWriter?.Dispose();
+
+    private static ConversationContext ContextFor(AgentOptions options) =>
+        new((options ?? throw new ArgumentNullException(nameof(options))).Context);
 
     /// <summary>
     ///     提交一个新的用户回合并执行到终态。回合与运行记录先写入会话；执行栈的异常在宿主
@@ -192,7 +265,7 @@ public sealed class ChatSessionHost : IDisposable
 
         try
         {
-            await _sessionWriter.CommitAsync(Session, CancellationToken.None).ConfigureAwait(false);
+            await _sessionWriter.CommitAsync(Session, _context, CancellationToken.None).ConfigureAwait(false);
             PersistenceWarning = null;
         }
         catch (Exception ex)

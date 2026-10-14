@@ -1,8 +1,10 @@
 using TinyHarness.Core.Exceptions;
 using TinyHarness.Core.Models.Agent;
+using TinyHarness.Core.Models.ChatCompletions;
 using TinyHarness.Core.Models.Configuration;
 using TinyHarness.Core.Models.Session;
 using TinyHarness.Core.Services.ChatCompletions;
+using TinyHarness.Core.Services.Context;
 using TinyHarness.Core.Services.Persistence;
 using TinyHarness.Core.Services.Session;
 using TinyHarness.Core.Services.Tools;
@@ -31,14 +33,15 @@ public class ChatSessionPersistenceTests
     };
 
     private static ChatSessionHost NewHost(IChatCompletionClient              client,
-                                           Func<string, ISessionStoreWriter>? sessionWriterFactory) =>
-        new(
-            Path.Combine(Path.GetTempPath(), "tinyharness-session-persistence-tests"),
+                                           Func<string, ISessionStoreWriter>? sessionWriterFactory,
+                                           Func<string, IRunRecorder>?        recorderFactory = null) =>
+        new(Path.Combine(Path.GetTempPath(), "tinyharness-session-persistence-tests"),
             new SessionModelIdentity("test-model", "https://example.invalid/v1", ChatApiKind.ChatCompletions),
             Options(),
             client,
             new ToolRegistry([]),
             SystemPrompt,
+            recorderFactory : recorderFactory,
             sessionWriterFactory : sessionWriterFactory);
 
     [Fact]
@@ -66,6 +69,63 @@ public class ChatSessionPersistenceTests
         Assert.Equal("first answer", read.Turns[0].Runs.Single().FinalMessage);
         Assert.Equal("Completed", read.Turns[0].Runs.Single().Status);
         Assert.Equal("and why?", read.Turns[1].UserInput);
+    }
+
+    [Fact]
+    public async Task SubmitTurn_PreservesProtocolSecretsWhileInspectionAndAuditStayRedacted()
+    {
+        using var    dir           = new TestTempDir();
+        using var    runDir        = new TestTempDir();
+        const string secret        = "sk-test-secret-value";
+        const string numericSecret = "424242";
+        const string opaque        = " \n{ \"encrypted_content\" : \"sk-test-secret-value\", \"number\" : 424242 }\n ";
+        const string itemId        = "item_sk-test-secret-value_424242";
+        var secrets = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["MY_API_KEY"] = secret, ["NUMERIC_SECRET"] = numericSecret
+        };
+        var client = new FakeChatClient();
+        client.Enqueue(FakeChatClient.ReasonedText("reason " + secret, itemId, opaque,
+                                                   "answer " + secret + " " + numericSecret));
+        client.Enqueue(FakeChatClient.Text("next answer"));
+        using var host = NewHost(client, id => new SessionStoreWriter(dir.Root, id, secrets),
+                                 id => new FileRunRecorder(runDir.Root, id, secrets));
+        await host.SubmitTurnAsync("question " + secret + " " + numericSecret, CancellationToken.None);
+        await host.SubmitTurnAsync("follow up", CancellationToken.None);
+        Assert.Null(host.PersistenceWarning);
+
+        var read = await SessionStoreReader.ReadAsync(dir.Root, host.Session.Id, CancellationToken.None);
+        Assert.NotNull(read);
+        Assert.Equal(3, read.FormatVersion);
+        Assert.Equal("question [REDACTED] [REDACTED]", read.Turns[0].UserInput);
+        Assert.Equal("answer [REDACTED] [REDACTED]", read.Turns[0].Runs.Single().FinalMessage);
+        var conversation = read.Conversation!;
+        Assert.False(conversation.OpaqueRedacted);
+        Assert.Contains(conversation.Messages, m => m.Role    == "User" &&
+                                                    m.Content == "question " + secret + " " + numericSecret);
+        var stored          = conversation.Messages.Single(m => m.Content == "answer " + secret + " " + numericSecret);
+        var storedReasoning = Assert.Single(stored.Reasoning!);
+        Assert.Equal(opaque, storedReasoning.ProtectedData);
+        Assert.Equal(itemId, storedReasoning.ItemId);
+        Assert.Equal("reason " + secret, storedReasoning.Text);
+        var sent = client.RequestLog[1].Messages.Single(m => m.Role == ChatRole.Assistant);
+        Assert.Equal(stored.Content, sent.Content);
+        var sentReasoning = Assert.Single(sent.Reasoning!);
+        Assert.Equal(opaque, sentReasoning.ProtectedData);
+        Assert.Equal(itemId, sentReasoning.ItemId);
+        Assert.Equal("reason " + secret, sentReasoning.Text);
+        var audit = await File.ReadAllTextAsync(Path.Combine(dir.Root, $"{host.Session.Id}.audit.jsonl"));
+        Assert.DoesNotContain(secret, audit, StringComparison.Ordinal);
+        Assert.DoesNotContain(numericSecret, audit, StringComparison.Ordinal);
+        var runAudits = Directory.GetFiles(runDir.Root, "*.audit.jsonl");
+        Assert.Equal(2, runAudits.Length);
+        foreach (var path in runAudits)
+        {
+            var runAudit = await File.ReadAllTextAsync(path);
+            Assert.DoesNotContain(secret, runAudit, StringComparison.Ordinal);
+            Assert.DoesNotContain(numericSecret, runAudit, StringComparison.Ordinal);
+            Assert.DoesNotContain("encrypted_content", runAudit, StringComparison.Ordinal);
+        }
     }
 
     [Fact]
@@ -130,7 +190,8 @@ public class ChatSessionPersistenceTests
 
         public long CommitSequence => 0;
 
-        public Task CommitAsync(ChatSession session, CancellationToken cancellationToken) =>
+        public Task CommitAsync(
+            ChatSession session, ConversationContext context, CancellationToken cancellationToken) =>
             throw new SessionStoreException("disk on fire");
 
         public void Dispose()
@@ -152,7 +213,8 @@ public class ChatSessionPersistenceTests
 
         public long CommitSequence => _writer?.CommitSequence ?? 0;
 
-        public async Task CommitAsync(ChatSession session, CancellationToken cancellationToken)
+        public async Task CommitAsync(
+            ChatSession session, ConversationContext context, CancellationToken cancellationToken)
         {
             if (!_failed)
             {
@@ -161,7 +223,7 @@ public class ChatSessionPersistenceTests
             }
 
             _writer ??= new SessionStoreWriter(directory, session.Id);
-            await _writer.CommitAsync(session, cancellationToken);
+            await _writer.CommitAsync(session, context, cancellationToken);
         }
 
         public void Dispose() => _writer?.Dispose();

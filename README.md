@@ -30,7 +30,7 @@ The goal is a small, complete, and explainable execution loop. The CLI is the cu
 
 Early development; commands, configuration, and storage formats may change between milestones.
 
-Implemented today: one-shot `run`, interactive multi-turn `chat`, a protected session store with strictly offline `session list` / `session show`, offline-first configuration management, a read-only MCP worker, and opt-in Windows sandbox management. Resuming a saved session, project-instruction (`AGENTS.md`) loading, and host-enforced read-only/implement modes are planned but not implemented. Default tests and builds never call a paid model; only one live combination (`glm-5.3` over a single HTTPS endpoint) has been verified.
+Implemented today: one-shot `run`, interactive multi-turn `chat`, a protected session store with strictly offline `session list` / `session show` and cross-process resume via `chat --session <id>`, offline-first configuration management, a read-only MCP worker, and opt-in Windows sandbox management. Project-instruction (`AGENTS.md`) loading and host-enforced read-only/implement modes are planned but not implemented. Default tests and builds never call a paid model; only one live combination (`glm-5.3` over a single HTTPS endpoint) has been verified.
 
 ## ✨ Features
 
@@ -38,13 +38,13 @@ Implemented today: one-shot `run`, interactive multi-turn `chat`, a protected se
 - **Tools** — `list_files`, `search_text`, `read_file`, `apply_patch`, and `shell` (direct process or explicit shell mode) with timeouts, process-tree termination, and output trimming.
 - **Permissions** — every call follows `Prepare → Authorize → Execute`: workspace reads are allowed by default, patches and processes ask for approval (`a` once / `s` this run / `d` deny), and command allow rules can be configured.
 - **Context** — token budgets calibrated by real usage, tool-result trimming, and compaction of older turns into validated structured summaries.
-- **Persistence** — every run writes a JSONL audit and a redacted session snapshot; `chat` sessions are committed atomically to a protected store and can be inspected strictly offline.
+- **Persistence** — every run writes a JSONL audit and a redacted session snapshot; `chat` sessions are committed atomically to a protected store, can be inspected strictly offline, and can be resumed in a new process (`chat --session <id>`) after workspace/model/protocol and opaque-data integrity checks. Format v3 stores the conversation verbatim for faithful resume, so session files may contain secrets and are not encrypted; `session list` / `session show` print only redacted inspection views, never the canonical messages or opaque payloads.
 - **MCP worker** — `tinyharness mcp` runs a local read-only stdio server exposing `ask_glm` for clients such as Codex.
 - **Windows sandbox** — opt-in machine-level isolation for `shell` processes with explicit `sandbox status / provision / verify` management.
 
 ## 🗺️ Limitations
 
-- Sessions can be viewed offline but cannot be resumed yet; resume is the next milestone.
+- A session whose last run ended mid tool execution (cancel or failure) is refused on resume until interruption recovery lands; sessions stored by format versions older than v3 (v1/v2) are inspection-only and refused for resume.
 - The Windows sandbox is verified on a single machine, and coexistence with a Codex release install is unverified.
 - Only `win-x64` NativeAOT is verified; protocol coverage comes from a local simulated SSE service plus the one live endpoint above.
 - `chat` has not been verified against a real model service.
@@ -73,7 +73,7 @@ dotnet publish TinyHarness.Cli/TinyHarness.Cli.csproj -c Release -r win-x64 --se
 
 ```text
 tinyharness run [--config <file>] "task"    one-shot task (a bare "task" also works)
-tinyharness chat [--config <file>]          interactive multi-turn session
+tinyharness chat [--config <file>] [--session <id>]    interactive multi-turn session; --session resumes a stored one
 tinyharness session list | show <id>        strictly offline session inspection
 tinyharness mcp                             read-only stdio MCP worker (ask_glm)
 tinyharness smoke                           offline end-to-end self check
@@ -85,7 +85,7 @@ tinyharness sandbox status | provision | verify    Windows sandbox management
 
 ### Configure
 
-First-time setup does not require hand-editing JSON. `init` stores the provider profile, endpoint, key reference, model, and context window in the user config (`%APPDATA%\tinyharness\user-config.json` on Windows). Keys are kept as references — an environment variable or Windows Credential Manager — and are never written to JSON.
+First-time setup does not require hand-editing JSON. `init` stores the provider profile, endpoint, key reference, model, and context window in the user config (`%APPDATA%\tinyharness\user-config.json` on Windows). The authentication configuration stores only key references — an environment variable or a Windows Credential Manager entry — never the key material itself, and keys are not proactively injected into `chat` sessions. Session files are different: format v3 preserves conversation content verbatim so resume stays faithful, which means anything pasted into the chat, read from files, or returned by the model may contain secrets. The harness does not encrypt session files — the protected store location is a path and exclusive-write convention, not encryption and not a promise that other local processes cannot read it. Sessions stored by older format versions (v1/v2) are inspection-only.
 
 ```powershell
 dotnet run --project TinyHarness.Cli -- init

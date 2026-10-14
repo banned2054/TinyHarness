@@ -185,33 +185,54 @@ internal static class CommandLine
     }
 
     /// <summary>
-    ///     解析 chat 参数；只接受 --config 与 help 标志。chat 不接受提示词：每个回合都在
-    ///     交互中逐行输入，把文本作为参数传入是重复的启动请求，按使用错误处理。
-    ///     Parses chat arguments; only --config and help flags are accepted. Chat takes no
-    ///     prompt — every turn is typed interactively, so passing text as an argument is a
-    ///     duplicate start request and a usage error.
+    ///     解析 chat 参数；接受 --config、--session &lt;id&gt; 与 help 标志。chat 不接受提示词：
+    ///     每个回合都在交互中逐行输入，把文本作为参数传入是重复的启动请求，按使用错误处理。
+    ///     会话 ID 在解析期即校验（32 位十六进制），路径逃逸输入按使用错误处理。
+    ///     Parses chat arguments; --config, --session &lt;id&gt; and help flags are
+    ///     accepted. Chat takes no prompt — every turn is typed interactively, so
+    ///     passing text as an argument is a duplicate start request and a usage
+    ///     error. The session id is validated at parse time (32 hex characters),
+    ///     so path-escape input is a usage error.
     /// </summary>
     private static CliOptions ParseChatArgs(string[] args)
     {
         const string usage = HelpText.Chat;
 
-        string? configPath = null;
+        string? configPath      = null;
+        string? resumeSessionId = null;
         for (var i = 0; i < args.Length; i++)
         {
             if (IsHelpFlag(args[i])) return new CliOptions { Kind = CliCommandKind.Help, HelpTopic = "chat" };
 
+            if (string.Equals(args[i], "--session", StringComparison.Ordinal))
+            {
+                if (resumeSessionId is not null)
+                    throw new CliUsageException("The --session option may be given at most once.", usage);
+
+                if (i + 1 >= args.Length)
+                    throw new CliUsageException("The --session option requires a session id.", usage);
+
+                if (!SessionStorePaths.IsValidSessionId(args[i + 1]))
+                    throw new
+                        CliUsageException($"'{args[i + 1]}' is not a valid session id: exactly 32 hex characters are required.",
+                                          usage);
+
+                resumeSessionId = args[++i];
+                continue;
+            }
+
             if (!string.Equals(args[i], "--config", StringComparison.Ordinal))
                 throw new
                     CliUsageException($"Unknown argument '{args[i]}' for chat. Chat takes no prompt; type each turn after it starts " +
-                                      "(use `run -- \"text\"` for a one-shot prompt).",
-                                      usage);
+                                      "(use `run -- \"text\"` for a one-shot prompt).", usage);
             if (i + 1 >= args.Length)
                 throw new CliUsageException("The --config option requires a file path.", usage);
 
             configPath = args[++i];
         }
 
-        return new CliOptions { Kind = CliCommandKind.Chat, ConfigPath = configPath };
+        return new CliOptions
+            { Kind = CliCommandKind.Chat, ConfigPath = configPath, ResumeSessionId = resumeSessionId };
     }
 
     /// <summary>

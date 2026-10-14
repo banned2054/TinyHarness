@@ -30,7 +30,7 @@
 
 早期开发中，命令、配置和存储格式可能随里程碑变化。
 
-目前已实现：单任务 `run`、交互式多轮 `chat`、受保护会话存储与严格离线的 `session list` / `session show`、离线优先的配置管理、只读 MCP worker 和可选的 Windows 沙箱管理。续聊已保存的会话、项目指令（`AGENTS.md`）加载和宿主强制的只读/实施模式属于计划，尚未实现。默认测试与构建不调用付费模型；真实链路只验证过一组组合（`glm-5.3` + 单个 HTTPS endpoint）。
+目前已实现：单任务 `run`、交互式多轮 `chat`、受保护会话存储（严格离线的 `session list` / `session show`，并支持 `chat --session <id>` 跨进程续聊）、离线优先的配置管理、只读 MCP worker 和可选的 Windows 沙箱管理。项目指令（`AGENTS.md`）加载和宿主强制的只读/实施模式属于计划，尚未实现。默认测试与构建不调用付费模型；真实链路只验证过一组组合（`glm-5.3` + 单个 HTTPS endpoint）。
 
 ## ✨ 特性
 
@@ -38,13 +38,13 @@
 - **工具** — `list_files`、`search_text`、`read_file`、`apply_patch` 与 `shell`（直接进程/显式 shell 模式），带超时、进程树终止和输出裁剪。
 - **权限** — 每次调用经过 `Prepare → Authorize → Execute`：工作区内读取默认放行，补丁与进程默认询问（`a` 单次 / `s` 本次运行 / `d` 拒绝），可配置命令允许规则。
 - **上下文** — token 预算按真实 usage 校准、工具结果裁剪、旧回合压缩为经过校验的结构化摘要。
-- **持久化** — 每次运行写入 JSONL 审计和脱敏 session 快照；`chat` 会话原子提交到受保护存储，可严格离线查看。
+- **持久化** — 每次运行写入 JSONL 审计和脱敏 session 快照；`chat` 会话原子提交到受保护存储，可严格离线查看，并可在新进程经工作区/模型/协议与 opaque 完整性检查后续聊（`chat --session <id>`）。格式 v3 为保真续聊原样保存会话内容：会话文件因此可能包含秘密且不被 Harness 加密；`session list` / `session show` 只输出脱敏检查视图，不展示 canonical 消息或 opaque 载荷。
 - **MCP worker** — `tinyharness mcp` 启动本机只读 stdio 服务，向 Codex 等客户端提供 `ask_glm`。
 - **Windows 沙箱** — 可选的机器级 `shell` 进程隔离，通过 `sandbox status / provision / verify` 显式管理。
 
 ## 🗺️ 限制
 
-- 会话可离线查看，但尚不能续聊；续聊是下一个里程碑。
+- 最后一次运行在工具执行中途结束（取消或失败）的会话，在中断恢复落地前拒绝续聊；v3 之前格式版本（v1/v2）存储的会话仅支持查看（inspection-only），拒绝续聊。
 - Windows 沙箱只在单台机器上验证过，与 Codex 发布版共存未验收。
 - NativeAOT 只验证了 `win-x64`；协议验证基于本地模拟 SSE 服务加上上述唯一真实 endpoint。
 - `chat` 尚未用真实模型服务验证。
@@ -73,7 +73,7 @@ dotnet publish TinyHarness.Cli/TinyHarness.Cli.csproj -c Release -r win-x64 --se
 
 ```text
 tinyharness run [--config <file>] "任务"    单任务执行（也可省略 run 直接给任务）
-tinyharness chat [--config <file>]           交互式多轮会话
+tinyharness chat [--config <file>] [--session <id>]    交互式多轮会话；--session 续聊已保存会话
 tinyharness session list | show <id>         严格离线的会话查看
 tinyharness mcp                              只读 stdio MCP worker（ask_glm）
 tinyharness smoke                            离线端到端自检
@@ -85,7 +85,7 @@ tinyharness sandbox status | provision | verify    Windows 沙箱管理
 
 ### 配置
 
-首次使用不需要手工编辑 JSON。`init` 会把 provider profile、endpoint、密钥引用、模型和上下文窗口写入用户配置（Windows 为 `%APPDATA%\tinyharness\user-config.json`）。密钥只保存引用——环境变量或 Windows Credential Manager——永远不会写入 JSON。
+首次使用不需要手工编辑 JSON。`init` 会把 provider profile、endpoint、密钥引用、模型和上下文窗口写入用户配置（Windows 为 `%APPDATA%\tinyharness\user-config.json`）。认证配置只保存密钥引用——环境变量或 Windows Credential Manager——不保存密钥本体，密钥也不会被主动注入 `chat` 会话。会话文件则不同：格式 v3 为保真续聊原样保存对话内容，粘贴进会话的文本、会话读取的文件或模型返回的内容都可能包含秘密；Harness 不加密会话文件——“受保护”的存储位置只是路径与排他写约定，不代表加密、也不承诺其他本地进程不可读写。v1/v2 旧格式会话仅支持查看（inspection-only）。
 
 ```powershell
 dotnet run --project TinyHarness.Cli -- init

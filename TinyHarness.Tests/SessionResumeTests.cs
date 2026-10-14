@@ -1,0 +1,680 @@
+using System.Text.Json.Nodes;
+using TinyHarness.Core.Exceptions;
+using TinyHarness.Core.Models.Agent;
+using TinyHarness.Core.Models.ChatCompletions;
+using TinyHarness.Core.Models.Configuration;
+using TinyHarness.Core.Models.Context;
+using TinyHarness.Core.Models.Persistence;
+using TinyHarness.Core.Models.Session;
+using TinyHarness.Core.Services.ChatCompletions;
+using TinyHarness.Core.Services.Context;
+using TinyHarness.Core.Services.Persistence;
+using TinyHarness.Core.Services.Session;
+using TinyHarness.Core.Services.Tools;
+
+namespace TinyHarness.Tests;
+
+/// <summary>
+///     M13.2 会话续聊测试（PLAN §7.2/§7.3）：跨进程往返——一个宿主提交带 Responses reasoning 的
+///     回合后退出，另一个宿主经 <see cref="SessionStoreWriter.OpenExistingAsync" /> 与
+///     <see cref="SessionResume.Restore" /> 打开同一会话继续——旧回合、目标与 opaque 协议内容
+///     必须原样进入后续请求；恢复的拒绝路径（v1 无内容、v1/v2 旧脱敏格式、opaque 被脱敏改动、哈希不符、工作区/
+///     模型/协议身份不一致、系统提示不同、不完整工具组、损坏的状态/折叠/终态）逐一验证。
+///     M13.2 session-resume tests (PLAN §7.2/§7.3): the cross-process round trip —
+///     one host commits a turn carrying Responses reasoning and exits, another
+///     opens the same stored session through
+///     <see cref="SessionStoreWriter.OpenExistingAsync" /> and
+///     <see cref="SessionResume.Restore" /> to continue — must replay earlier
+///     turns, the goal and the opaque protocol content verbatim into later
+///     requests; every refusal path of the restoration (v1 without conversation
+///     content, v1/v2 legacy redacted formats, opaque touched by redaction, hash mismatches, workspace/model/
+///     protocol identity divergence, a different system prompt, incomplete tool
+///     groups, damaged state/fold/terminal records) is verified individually.
+/// </summary>
+public class SessionResumeTests
+{
+    private const string SystemPrompt = "You are a test harness inspecting a workspace.";
+
+    private static SessionModelIdentity Identity { get; } =
+        new("test-model", "https://example.invalid/v1", ChatApiKind.ChatCompletions);
+
+    private static string WorkspaceRoot => Path.Combine(Path.GetTempPath(), "tinyharness-session-resume-ws");
+
+    private static AgentOptions Options() => new()
+    {
+        Model                     = "test-model",
+        MaxAgentSteps             = 10,
+        DefaultToolTimeoutSeconds = 30
+    };
+
+    private static ChatSessionHost NewHost(IChatCompletionClient client, string workspaceRoot, string storeDirectory) =>
+        new(workspaceRoot,
+            Identity,
+            Options(),
+            client,
+            new ToolRegistry([]),
+            SystemPrompt,
+            sessionWriterFactory : id => new SessionStoreWriter(storeDirectory, id));
+
+    [Fact]
+    public async Task Resume_RoundTripsConversationAndReasoningAcrossProcesses()
+    {
+        using var ws     = new TestTempDir();
+        using var dir    = new TestTempDir();
+        var       client = new FakeChatClient();
+        client.Enqueue(FakeChatClient.ReasonedText("thinking it over", "item_1", "opaque-payload-1", "first answer"));
+
+        string sessionId;
+        using (var host = NewHost(client, ws.Root, dir.Root))
+        {
+            sessionId = host.Session.Id;
+            var run = await host.SubmitTurnAsync("what is this repo?", CancellationToken.None);
+            Assert.Equal(AgentStatus.Completed, run.Result!.Status);
+        }
+
+        // "New process": open the stored session exclusively, seed the sequence,
+        // restore, and continue with a fresh client.
+        using var writer =
+            await SessionStoreWriter.OpenExistingAsync(dir.Root, sessionId, null, CancellationToken.None);
+        var restored = SessionResume.Restore(writer.LoadedSnapshot!, ws.Root, Identity, SystemPrompt);
+        Assert.Equal(1, writer.CommitSequence);
+        Assert.Equal(sessionId, restored.Session.Id);
+        Assert.Single(restored.Session.Turns);
+
+        var client2 = new FakeChatClient();
+        client2.Enqueue(FakeChatClient.Text("second answer"));
+        using var host2 = new ChatSessionHost(restored.Session, restored.Context, Options(), client2,
+                                              new ToolRegistry([]), SystemPrompt, sessionWriter : writer);
+        var run2 = await host2.SubmitTurnAsync("and why?", CancellationToken.None);
+        Assert.Equal(AgentStatus.Completed, run2.Result!.Status);
+
+        // The earlier turn's user input, the assistant answer and the opaque
+        // reasoning payloads must reach the next request verbatim (PLAN §7.2).
+        var messages = client2.RequestLog.Single().Messages;
+        Assert.Contains(messages, m => m.Role == ChatRole.System && m.Content == SystemPrompt);
+        Assert.Contains(messages, m => m.Role == ChatRole.User   && m.Content == "what is this repo?");
+        Assert.Contains(messages, m => m.Role == ChatRole.User   && m.Content == "and why?");
+        var assistant = messages.Single(m => m.Role == ChatRole.Assistant);
+        Assert.Equal("first answer", assistant.Content);
+        var reasoning = Assert.Single(assistant.Reasoning!);
+        Assert.Equal("thinking it over", reasoning.Text);
+        Assert.Equal("opaque-payload-1", reasoning.ProtectedData);
+        Assert.Equal("item_1", reasoning.ItemId);
+
+        // The resumed commit continues the sequence and keeps both turns in the
+        // inspection view — a resume must never overwrite the earlier history.
+        Assert.Equal(2, writer.CommitSequence);
+        var read = await SessionStoreReader.ReadAsync(dir.Root, sessionId, CancellationToken.None);
+        Assert.NotNull(read);
+        Assert.Equal(2, read!.CommitSequence);
+        Assert.Equal(2, read.Turns.Count);
+        Assert.Equal("what is this repo?", read.Turns[0].UserInput);
+        Assert.Equal("and why?", read.Turns[1].UserInput);
+    }
+
+    [Fact]
+    public async Task Resume_SecondExclusiveOpenFailsAndMissingSessionsAreRefused()
+    {
+        using var ws     = new TestTempDir();
+        using var dir    = new TestTempDir();
+        var       client = new FakeChatClient();
+        client.Enqueue(FakeChatClient.Text("answer"));
+
+        string sessionId;
+        using (var host = NewHost(client, ws.Root, dir.Root))
+        {
+            sessionId = host.Session.Id;
+            await host.SubmitTurnAsync("one turn", CancellationToken.None);
+        }
+
+        using (var writer =
+               await SessionStoreWriter.OpenExistingAsync(dir.Root, sessionId, null, CancellationToken.None))
+        {
+            Assert.NotNull(writer.LoadedSnapshot);
+
+            var second =
+                await Assert.ThrowsAsync<SessionStoreException>(() =>
+                                                                    SessionStoreWriter.OpenExistingAsync(dir.Root,
+                                                                             sessionId, null, CancellationToken.None));
+            Assert.Contains("already open", second.Message, StringComparison.Ordinal);
+        }
+
+        // The handle is released; the session may be reopened for another resume.
+        using (var reopened =
+               await SessionStoreWriter.OpenExistingAsync(dir.Root, sessionId, null, CancellationToken.None))
+        {
+            Assert.Equal(1, reopened.CommitSequence);
+        }
+
+        var missing =
+            await Assert.ThrowsAsync<SessionStoreException>(() =>
+                                                                SessionStoreWriter.OpenExistingAsync(dir.Root,
+                                                                         new string('a', 32), null,
+                                                                         CancellationToken.None));
+        Assert.Contains("nothing to resume", missing.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Resume_TamperedOpaquePayloadIsRejectedAfterAuditReconciliation()
+    {
+        using var ws     = new TestTempDir();
+        using var dir    = new TestTempDir();
+        var       client = new FakeChatClient();
+        client.Enqueue(FakeChatClient.ReasonedText("hmm", "item_1", "opaque-payload-1", "answer"));
+
+        string sessionId;
+        using (var host = NewHost(client, ws.Root, dir.Root))
+        {
+            sessionId = host.Session.Id;
+            await host.SubmitTurnAsync("turn", CancellationToken.None);
+        }
+
+        // Tamper with the stored opaque payload. The commit sequence is untouched,
+        // so audit reconciliation still passes — only the resume-side hash check
+        // can catch this (PLAN §7.2).
+        var snapshotPath = Path.Combine(dir.Root, $"{sessionId}.session.json");
+        var root         = JsonNode.Parse(await File.ReadAllTextAsync(snapshotPath))!.AsObject();
+        root["conversation"]!["messages"]!.AsArray()
+                                          .Single(m => m!["role"]!.GetValue<string>() == "Assistant")!["reasoning"]![0]!
+                                           ["protectedData"] =
+            "tampered-payload";
+        await File.WriteAllTextAsync(snapshotPath, root.ToJsonString());
+
+        using var writer =
+            await SessionStoreWriter.OpenExistingAsync(dir.Root, sessionId, null, CancellationToken.None);
+        var error =
+            Assert.Throws<SessionStoreException>(() => SessionResume.Restore(writer.LoadedSnapshot!, ws.Root, Identity,
+                                                                             SystemPrompt));
+        Assert.Contains("integrity check", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Restore_RejectsSnapshotsWithoutResumableConversation()
+    {
+        var error = Assert.Throws<SessionStoreException>(() => SessionResume.Restore(ValidSnapshot() with
+                                                                  {
+                                                                      FormatVersion = 1, Conversation = null
+                                                                  }, WorkspaceRoot,
+                                                                  Identity, SystemPrompt));
+        Assert.Contains("no resumable conversation", error.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    public void Restore_RejectsConversationsWhoseOpaqueContentWasRedacted(int formatVersion)
+    {
+        var snapshot = ValidSnapshot(ValidConversation() with { OpaqueRedacted = true }) with
+        {
+            FormatVersion = formatVersion
+        };
+        var error =
+            Assert.Throws<SessionStoreException>(() => SessionResume.Restore(snapshot, WorkspaceRoot, Identity,
+                                                                             SystemPrompt));
+        Assert.Contains("cannot be resumed losslessly", error.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    public void Restore_RejectsOlderFormatsEvenWithConversationContent(int formatVersion)
+    {
+        var snapshot = ValidSnapshot() with { FormatVersion = formatVersion };
+        Assert.NotNull(snapshot.Conversation);
+        var error =
+            Assert.Throws<SessionStoreException>(() => SessionResume.Restore(snapshot, WorkspaceRoot, Identity,
+                                                                             SystemPrompt));
+        Assert.Contains("inspection-only", error.Message, StringComparison.Ordinal);
+        Assert.Contains($"format version {formatVersion}", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Restore_RejectsWorkspaceAndModelIdentityMismatches()
+    {
+        var workspaceError = Assert.Throws<SessionStoreException>(() => SessionResume.Restore(ValidSnapshot(),
+                                                                           Path.Combine(Path.GetTempPath(),
+                                                                                    "another-workspace"), Identity,
+                                                                           SystemPrompt));
+        Assert.Contains("fixed to one workspace", workspaceError.Message, StringComparison.Ordinal);
+
+        var endpointError = Assert.Throws<SessionStoreException>(() => SessionResume.Restore(ValidSnapshot(),
+                                                                          WorkspaceRoot,
+                                                                          Identity with
+                                                                          {
+                                                                              Endpoint = "https://other.invalid/v1"
+                                                                          }, SystemPrompt));
+        Assert.Contains("never silently replayed", endpointError.Message, StringComparison.Ordinal);
+
+        var modelError = Assert.Throws<SessionStoreException>(() => SessionResume.Restore(ValidSnapshot(),
+                                                                       WorkspaceRoot,
+                                                                       Identity with { ModelId = "other-model" },
+                                                                       SystemPrompt));
+        Assert.Contains("never silently replayed", modelError.Message, StringComparison.Ordinal);
+
+        var protocolError = Assert.Throws<SessionStoreException>(() => SessionResume.Restore(ValidSnapshot(),
+                                                                          WorkspaceRoot,
+                                                                          Identity with
+                                                                          {
+                                                                              ChatApi = ChatApiKind.Responses
+                                                                          },
+                                                                          SystemPrompt));
+        Assert.Contains("never silently replayed", protocolError.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Restore_RejectsADifferentSystemPrompt()
+    {
+        var error = Assert.Throws<SessionStoreException>(() => SessionResume.Restore(ValidSnapshot(), WorkspaceRoot,
+                                                                  Identity, "a different instruction set"));
+        Assert.Contains("same system prompt", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Restore_RejectsHistoryEndingInAnIncompleteToolGroup()
+    {
+        var conversation = ValidConversation(messages :
+        [
+            .. DefaultMessages(),
+            new PersistedMessage { Role = ChatRole.User.ToString(), Content = "run something" },
+            new PersistedMessage
+            {
+                Role      = ChatRole.Assistant.ToString(),
+                ToolCalls = [new PersistedToolCall("call_9", "shell", "{}")]
+            }
+        ]);
+
+        var error = Assert.Throws<SessionStoreException>(() => SessionResume.Restore(ValidSnapshot(conversation),
+                                                                  WorkspaceRoot, Identity, SystemPrompt));
+        Assert.Contains("incomplete tool round", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Restore_RejectsDamagedConversationRecords()
+    {
+        var unknownRole =
+            Assert.Throws<SessionStoreException>(() => SessionResume.Restore(ValidSnapshot(ValidConversation(
+                                                                                           messages :
+                                                                                           [
+                                                                                               new PersistedMessage
+                                                                                               {
+                                                                                                   Role    = "Wizard",
+                                                                                                   Content = "hi"
+                                                                                               }
+                                                                                           ])),
+                                                                             WorkspaceRoot, Identity, SystemPrompt));
+        Assert.Contains("not a known conversation role", unknownRole.Message, StringComparison.Ordinal);
+
+        var emptyConversation =
+            Assert.Throws<SessionStoreException>(() =>
+                                                     SessionResume.Restore(ValidSnapshot(ValidConversation(messages :
+                                                                                             [])), WorkspaceRoot,
+                                                                           Identity,
+                                                                           SystemPrompt));
+        Assert.Contains("empty conversation", emptyConversation.Message, StringComparison.Ordinal);
+
+        var badState =
+            Assert.Throws<SessionStoreException>(() =>
+                                                     SessionResume
+                                                        .Restore(ValidSnapshot(ValidConversation("{ not state", true)),
+                                                                 WorkspaceRoot, Identity, SystemPrompt));
+        Assert.Contains("compacted state cannot be parsed", badState.Message, StringComparison.Ordinal);
+
+        var badFold =
+            Assert.Throws<SessionStoreException>(() =>
+                                                     SessionResume
+                                                        .Restore(ValidSnapshot(ValidConversation(foldStart : 2,
+                                                                                        foldEnd : 5)), WorkspaceRoot,
+                                                                 Identity, SystemPrompt));
+        Assert.Contains("fold position", badFold.Message, StringComparison.Ordinal);
+
+        var badStatus = Assert.Throws<SessionStoreException>(() => SessionResume.Restore(ValidSnapshot(
+                                                                           ValidConversation(),
+                                                                           "Exploded"),
+                                                                      WorkspaceRoot, Identity, SystemPrompt));
+        Assert.Contains("unknown terminal status", badStatus.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Restore_RebuildsTurnsRunTerminalsAndTheCompactedView()
+    {
+        var state = new StructuredState { Goal = "inspect the fixture", Decisions = ["use read_file"] };
+        var snapshot = ValidSnapshot(ValidConversation(state.ToJson(), true, 1,
+                                                       2));
+
+        var restored = SessionResume.Restore(snapshot, WorkspaceRoot, Identity, SystemPrompt,
+                                             new ContextOptions
+                                             {
+                                                 ContextWindowTokens = 100_000, ReservedOutputTokens = 1_000
+                                             });
+
+        // Turns and run terminals come back, unfinished runs stay unfinished.
+        var turn = Assert.Single(restored.Session.Turns);
+        var run  = Assert.Single(turn.Runs);
+        Assert.True(run.IsFinished);
+        Assert.Equal(AgentStatus.Completed, run.Result!.Status);
+        Assert.Equal("it is a fixture", run.Result.FinalMessage);
+        Assert.Equal(2, run.Result.Steps);
+
+        // The compaction position survives: the model view carries the head, the
+        // state message and the unfolded tail (the folded middle stays local-only).
+        Assert.Equal(new ConversationContext.CompactionPosition(true, 1, 2), restored.Context.Position);
+        var view = restored.Context.BuildModelView();
+        Assert.Equal(ChatRole.System, view[0].Role);
+        Assert.Equal(ChatRole.User, view[1].Role);
+        Assert.Contains("inspect the fixture", view[1].Content, StringComparison.Ordinal);
+        Assert.DoesNotContain(view, m => m.Content == "what is here?");
+    }
+
+    [Fact]
+    public async Task Commit_PreservesKnownSecretTextForResumeAndRedactsInspectionOnly()
+    {
+        using var ws     = new TestTempDir();
+        using var dir    = new TestTempDir();
+        var       client = new FakeChatClient();
+        client.Enqueue(FakeChatClient.ReasonedText("hmm", "item_1", "opaque-payload-1",
+                                                   "done with sk-test-secret-value"));
+
+        var secrets = new Dictionary<string, string>(StringComparer.Ordinal)
+            { ["MY_API_KEY"] = "sk-test-secret-value" };
+        string sessionId;
+        using (var host = new ChatSessionHost(ws.Root, Identity, Options(), client, new ToolRegistry([]), SystemPrompt,
+                                              sessionWriterFactory : id =>
+                                                  new SessionStoreWriter(dir.Root, id, secrets)))
+        {
+            sessionId = host.Session.Id;
+            await host.SubmitTurnAsync("use key sk-test-secret-value", CancellationToken.None);
+        }
+
+        var json = await File.ReadAllTextAsync(Path.Combine(dir.Root, $"{sessionId}.session.json"));
+        Assert.Contains("sk-test-secret-value", json, StringComparison.Ordinal);
+        Assert.Contains("opaque-payload-1", json, StringComparison.Ordinal);
+
+        using var writer =
+            await SessionStoreWriter.OpenExistingAsync(dir.Root, sessionId, secrets, CancellationToken.None);
+        var snapshot = writer.LoadedSnapshot!;
+        Assert.False(snapshot.Conversation!.OpaqueRedacted);
+        Assert.Equal("use key [REDACTED]", snapshot.Turns.Single().UserInput);
+        Assert.Equal("done with [REDACTED]", snapshot.Turns.Single().Runs.Single().FinalMessage);
+        var restored = SessionResume.Restore(snapshot, ws.Root, Identity, SystemPrompt);
+        Assert.Equal(sessionId, restored.Session.Id);
+
+        var nextClient = new FakeChatClient();
+        nextClient.Enqueue(FakeChatClient.Text("continued"));
+        using var nextHost = new ChatSessionHost(restored.Session, restored.Context, Options(), nextClient,
+                                                 new ToolRegistry([]), SystemPrompt, sessionWriter : writer);
+        await nextHost.SubmitTurnAsync("continue", CancellationToken.None);
+        var sent = nextClient.RequestLog.Single().Messages;
+        Assert.Contains(sent, message => message.Role    == ChatRole.User &&
+                                         message.Content == "use key sk-test-secret-value");
+        Assert.Contains(sent, message => message.Role    == ChatRole.Assistant &&
+                                         message.Content == "done with sk-test-secret-value");
+        var audit = await File.ReadAllTextAsync(Path.Combine(dir.Root, $"{sessionId}.audit.jsonl"));
+        Assert.DoesNotContain("sk-test-secret-value", audit, StringComparison.Ordinal);
+        Assert.DoesNotContain("opaque-payload-1", audit, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("sk-test-secret-value")]
+    [InlineData(" \n{ \"encrypted_content\" : \"sk-test-secret-value\", \"number\" : 424242 }\n ")]
+    [InlineData(" \n{ \"encrypted_content\" : \"opaque-payload-1\", \"number\" : 7 }\n ")]
+    public async Task Commit_PreservesOpaquePayloadFormattingWithoutMarkingItRedacted(string protectedData)
+    {
+        using var    ws     = new TestTempDir();
+        using var    dir    = new TestTempDir();
+        var          client = new FakeChatClient();
+        const string itemId = "item_sk-test-secret-value";
+        client.Enqueue(FakeChatClient.ReasonedText("hmm sk-test-secret-value", itemId, protectedData, "answer"));
+
+        var secrets = new Dictionary<string, string>(StringComparer.Ordinal)
+            { ["MY_API_KEY"] = "sk-test-secret-value" };
+        string sessionId;
+        using (var host = new ChatSessionHost(ws.Root, Identity, Options(), client, new ToolRegistry([]), SystemPrompt,
+                                              sessionWriterFactory : id =>
+                                                  new SessionStoreWriter(dir.Root, id, secrets)))
+        {
+            sessionId = host.Session.Id;
+            await host.SubmitTurnAsync("turn", CancellationToken.None);
+        }
+
+        using var writer =
+            await SessionStoreWriter.OpenExistingAsync(dir.Root, sessionId, secrets, CancellationToken.None);
+        var conversation = writer.LoadedSnapshot!.Conversation!;
+        Assert.False(conversation.OpaqueRedacted);
+        var stored = Assert.Single(conversation.Messages.Single(m => m.Role == "Assistant").Reasoning!);
+        Assert.Equal(protectedData, stored.ProtectedData);
+        Assert.Equal(itemId, stored.ItemId);
+        Assert.Equal("hmm sk-test-secret-value", stored.Text);
+        Assert.Equal(PersistedReasoning.ComputeOpaqueHash(protectedData, itemId), stored.OpaqueHash);
+
+        var restored   = SessionResume.Restore(writer.LoadedSnapshot!, ws.Root, Identity, SystemPrompt);
+        var nextClient = new FakeChatClient();
+        nextClient.Enqueue(FakeChatClient.Text("continued"));
+        using var nextHost = new ChatSessionHost(restored.Session, restored.Context, Options(), nextClient,
+                                                 new ToolRegistry([]), SystemPrompt, sessionWriter : writer);
+        await nextHost.SubmitTurnAsync("continue", CancellationToken.None);
+        var sent = Assert.Single(nextClient.RequestLog.Single().Messages
+                                           .Single(m => m.Role == ChatRole.Assistant).Reasoning!);
+        Assert.Equal(protectedData, sent.ProtectedData);
+        Assert.Equal(itemId, sent.ItemId);
+        Assert.Equal("hmm sk-test-secret-value", sent.Text);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CommitAndResume_PreserveProtocolFieldsAndCompactionStateForTheNextRequest(bool compacted)
+    {
+        using var    ws = new TestTempDir();
+        using var    dir = new TestTempDir();
+        const string secret = "sk-test-secret-value";
+        const string numericSecret = "424242";
+        const string callId = "call_sk-test-secret-value_424242";
+        const string toolName = "tool_sk-test-secret-value_424242";
+        const string arguments = " \n{ \"sk-test-secret-value\" : \"sk-test-secret-value\", \"number\" : 424242 }\n ";
+        const string opaque = " \n{ \"encrypted_content\" : \"sk-test-secret-value\", \"number\" : 424242 }\n ";
+        const string itemId = "item_sk-test-secret-value_424242";
+        var          systemPrompt = SystemPrompt + " " + secret + " " + numericSecret;
+        var state = new StructuredState
+        {
+            Goal               = "goal " + secret + " " + numericSecret,
+            Constraints        = ["constraint " + secret],
+            Decisions          = ["decision "   + numericSecret],
+            FilesInspected     = ["read/"       + secret],
+            FilesModified      = ["write/"      + secret],
+            CommandsAndResults = ["command "    + secret + " " + numericSecret],
+            PendingWork        = ["pending "    + secret]
+        };
+        ChatMessage[] messages =
+        [
+            ChatMessage.System(systemPrompt),
+            ChatMessage.User("old "             + secret + " " + numericSecret),
+            ChatMessage.Assistant("old answer " + secret),
+            ChatMessage.User("current "         + secret + " " + numericSecret),
+            ChatMessage.Assistant("calling " + secret,
+                                  [new ChatToolCall(callId, toolName, arguments)],
+                                  [
+                                      new ReasoningContent("reason " + secret + " " + numericSecret, opaque, itemId),
+                                      new ReasoningContent(null, null, "item-only_" + secret)
+                                  ]),
+            ChatMessage.Tool(toolName, callId, "result " + secret + " " + numericSecret),
+            ChatMessage.Assistant("done "                + secret, [], [])
+        ];
+        var contextOptions = new ContextOptions { ContextWindowTokens = 100_000, ReservedOutputTokens = 1_000 };
+        var context        = new ConversationContext(contextOptions);
+        context.Restore(messages, compacted ? state : StructuredState.Empty, compacted,
+                        compacted ? 1 : -1, compacted ? 3 : 0);
+        var session = new ChatSession(Guid.NewGuid().ToString("N"), ws.Root, Identity);
+        var turn    = new SessionTurn(Guid.NewGuid().ToString("N"), messages[3].Content);
+        var run     = new SessionRun(Guid.NewGuid().ToString("N"), session.Id, turn.Id);
+        session.AddTurn(turn);
+        turn.AddRun(run);
+        run.Finish(new AgentResult
+        {
+            Status = AgentStatus.Completed, FinalMessage = messages[^1].Content, Error = "error " + secret
+        });
+        var secrets = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["MY_API_KEY"] = secret, ["NUMERIC_SECRET"] = numericSecret
+        };
+        using (var writer = new SessionStoreWriter(dir.Root, session.Id, secrets))
+        {
+            await writer.CommitAsync(session, context, CancellationToken.None);
+        }
+
+        using var reopened =
+            await SessionStoreWriter.OpenExistingAsync(dir.Root, session.Id, secrets, CancellationToken.None);
+        var snapshot = reopened.LoadedSnapshot!;
+        Assert.Equal(3, snapshot.FormatVersion);
+        var conversation = snapshot.Conversation!;
+        Assert.False(conversation.OpaqueRedacted);
+        Assert.Equal(compacted ? state.ToJson() : null, conversation.StateJson);
+        Assert.Equal(compacted, conversation.HasState);
+        Assert.Equal(context.Position.FoldStartMessageIndex, conversation.FoldStartMessageIndex);
+        Assert.Equal(context.Position.FoldEndMessageIndex, conversation.FoldEndMessageIndex);
+        Assert.Equal(messages.Length, conversation.Messages.Count);
+        for (var i = 0; i < messages.Length; i++)
+        {
+            var original = messages[i];
+            var stored   = conversation.Messages[i];
+            Assert.Equal(original.Role.ToString(), stored.Role);
+            Assert.Equal(original.Content, stored.Content);
+            Assert.Equal(original.Name, stored.Name);
+            Assert.Equal(original.ToolCallId, stored.ToolCallId);
+            Assert.Equal(original.ToolCalls?.Select(c => (c.Id, c.FunctionName, c.ArgumentsJson)),
+                         stored.ToolCalls?.Select(c => (c.Id, c.Name, c.Arguments)));
+            Assert.Equal(original.Reasoning?.Select(r => (r.Text, r.ProtectedData, r.ItemId)),
+                         stored.Reasoning?.Select(r => (r.Text, r.ProtectedData, r.ItemId)));
+            foreach (var entry in stored.Reasoning ?? [])
+                Assert.Equal(PersistedReasoning.ComputeOpaqueHash(entry.ProtectedData, entry.ItemId), entry.OpaqueHash);
+        }
+
+        Assert.Equal("current [REDACTED] [REDACTED]", snapshot.Turns.Single().UserInput);
+        var storedRun = snapshot.Turns.Single().Runs.Single();
+        Assert.Equal("done [REDACTED]", storedRun.FinalMessage);
+        Assert.Equal("error [REDACTED]", storedRun.Error);
+        var audit = await File.ReadAllTextAsync(reopened.AuditPath);
+        Assert.DoesNotContain(secret, audit, StringComparison.Ordinal);
+        Assert.DoesNotContain(numericSecret, audit, StringComparison.Ordinal);
+
+        var restored = SessionResume.Restore(snapshot, ws.Root, Identity, systemPrompt, contextOptions);
+        Assert.Equal(context.Position, restored.Context.Position);
+        Assert.Equal(context.State.ToJson(), restored.Context.State.ToJson());
+        var client = new FakeChatClient();
+        client.Enqueue(FakeChatClient.Text("continued"));
+        using var host = new ChatSessionHost(restored.Session, restored.Context, Options(), client,
+                                             new ToolRegistry([]), systemPrompt, sessionWriter : reopened);
+        var continued = await host.SubmitTurnAsync("continue", CancellationToken.None);
+        Assert.Equal(AgentStatus.Completed, continued.Result!.Status);
+        Assert.Null(host.PersistenceWarning);
+        var sent = client.RequestLog.Single().Messages;
+        Assert.Equal(systemPrompt, sent[0].Content);
+        Assert.Contains(sent, m => m.Role == ChatRole.User && m.Content == messages[3].Content);
+        var sentCallMessage = sent.Single(m => m.ToolCalls is { Count: > 0 });
+        var sentCall        = Assert.Single(sentCallMessage.ToolCalls!);
+        Assert.Equal(callId, sentCall.Id);
+        Assert.Equal(toolName, sentCall.FunctionName);
+        Assert.Equal(arguments, sentCall.ArgumentsJson);
+        Assert.Equal(messages[4].Content, sentCallMessage.Content);
+        Assert.Equal(messages[4].Reasoning, sentCallMessage.Reasoning);
+        var sentTool = sent.Single(m => m.Role == ChatRole.Tool);
+        Assert.Equal(toolName, sentTool.Name);
+        Assert.Equal(callId, sentTool.ToolCallId);
+        Assert.Equal(messages[5].Content, sentTool.Content);
+        if (compacted)
+        {
+            Assert.Contains(sent, m => m.Role == ChatRole.User && m.Content == state.ToJson());
+            Assert.DoesNotContain(sent, m => m.Content == messages[1].Content);
+        }
+        else
+        {
+            Assert.Contains(sent, m => m.Role == ChatRole.User && m.Content == messages[1].Content);
+        }
+    }
+
+    [Fact]
+    public void Commit_OpaqueHashCoversBothProtectedDataAndItemId()
+    {
+        Assert.Equal(PersistedReasoning.ComputeOpaqueHash("same", "one"),
+                     PersistedReasoning.ComputeOpaqueHash("same", "one"));
+        Assert.NotEqual(PersistedReasoning.ComputeOpaqueHash("same", "one"),
+                        PersistedReasoning.ComputeOpaqueHash("same", "two"));
+        Assert.NotEqual(PersistedReasoning.ComputeOpaqueHash("one", "same"),
+                        PersistedReasoning.ComputeOpaqueHash("ones", "ame"));
+        Assert.Equal(64, PersistedReasoning.ComputeOpaqueHash(null, null).Length);
+    }
+
+    /// <summary>
+    ///     构造一个结构最小但完整的可续聊快照；各参数用于定向替换其中一部分。
+    ///     Builds a minimal but complete resumable snapshot; the optional
+    ///     parameters replace individual parts for targeted cases.
+    /// </summary>
+    private static PersistedSession ValidSnapshot(PersistedConversation? conversation = null,
+                                                  string?                runStatus    = null) => new()
+    {
+        FormatVersion  = PersistedSession.CurrentFormatVersion,
+        Id             = new string('1', 32),
+        WorkspaceRoot  = WorkspaceRoot,
+        Model          = Identity,
+        CreatedUtc     = DateTimeOffset.UtcNow.AddMinutes(-5),
+        UpdatedUtc     = DateTimeOffset.UtcNow,
+        CommitSequence = 3,
+        Turns =
+        [
+            new PersistedTurn
+            {
+                Id         = new string('2', 32),
+                UserInput  = "what is here?",
+                CreatedUtc = DateTimeOffset.UtcNow.AddMinutes(-4),
+                Runs =
+                [
+                    new PersistedRun
+                    {
+                        Id             = new string('3', 32),
+                        StartedUtc     = DateTimeOffset.UtcNow.AddMinutes(-4),
+                        FinishedUtc    = DateTimeOffset.UtcNow.AddMinutes(-3),
+                        Status         = runStatus ?? nameof(AgentStatus.Completed),
+                        FinalMessage   = "it is a fixture",
+                        Steps          = 2,
+                        ToolExecutions = 1
+                    }
+                ]
+            }
+        ],
+        Conversation = conversation ?? ValidConversation()
+    };
+
+    private static PersistedConversation ValidConversation(string?                          stateJson = null,
+                                                           bool                             hasState  = false,
+                                                           int                              foldStart = -1,
+                                                           int                              foldEnd   = 0,
+                                                           IReadOnlyList<PersistedMessage>? messages  = null) => new()
+    {
+        Messages              = messages ?? DefaultMessages(),
+        StateJson             = stateJson,
+        HasState              = hasState,
+        FoldStartMessageIndex = foldStart,
+        FoldEndMessageIndex   = foldEnd
+    };
+
+    private static List<PersistedMessage> DefaultMessages() =>
+    [
+        new() { Role = ChatRole.System.ToString(), Content = SystemPrompt },
+        new() { Role = ChatRole.User.ToString(), Content   = "what is here?" },
+        new()
+        {
+            Role    = ChatRole.Assistant.ToString(),
+            Content = "it is a fixture",
+            Reasoning =
+            [
+                new PersistedReasoning
+                {
+                    Text          = "looked around",
+                    ProtectedData = "opaque-payload-1",
+                    ItemId        = "item_1",
+                    OpaqueHash    = PersistedReasoning.ComputeOpaqueHash("opaque-payload-1", "item_1")
+                }
+            ]
+        }
+    ];
+}

@@ -60,7 +60,7 @@ internal static class HelpText
 
     public const string Chat = """
         Usage:
-          tinyharness chat [--config <path>]
+          tinyharness chat [--config <path>] [--session <id>]
 
         Starts an interactive multi-turn session against the configured model and workspace.
         Each line you type is one user turn; turns share one conversation context and the
@@ -71,8 +71,17 @@ internal static class HelpText
         afterwards). Ctrl+C at the prompt or EOF (Ctrl+Z then Enter on Windows) ends the
         session. Every finished turn is committed as an atomic snapshot into the protected
         session store, where 'tinyharness session list' / 'session show <id>' can inspect
-        it strictly offline. Restarting a session in a new process is not supported yet;
-        a failed save is reported as "not reliably saved" and never presented as success.
+        it strictly offline. A failed save is reported as "not reliably saved" and never
+        presented as success. Protocol messages, tool arguments and reasoning are stored
+        verbatim, without redaction or encryption by the harness; pasted secrets can be saved.
+        Inspection output and audit remain redacted. Keep the session store private.
+
+        --session <id> resumes a stored session in a new process. The resume requires the
+        same workspace, endpoint, model and chat api as the stored session, and the stored
+        opaque reasoning payloads must pass their integrity check; any mismatch refuses the
+        resume instead of replaying changed content. Resuming a session whose last run ended
+        mid tool execution is also refused — inspect it with 'session show' first.
+        Older v1/v2 snapshots are inspection-only because their content may be redacted.
 
         chat takes no prompt argument; use `run -- "text"` for a one-shot prompt.
         """;
@@ -156,8 +165,9 @@ internal static class HelpText
           --store              save the key in the Windows Credential Manager under
                                'TinyHarness:<name>' (hidden input); JSON stores the
                                reference only
-        With no flag the command asks interactively. The key value is never written to the
-        user config, logs, sessions, or command output.
+        With no flag the command asks interactively. Authentication does not write the key
+        value to the user config, logs, sessions, or command output. Secrets pasted into chat
+        messages can still be stored verbatim as conversation content.
         """;
 
     public const string Model = """
@@ -254,7 +264,8 @@ internal static class HelpText
         commit sequence, and every turn with its run outcomes. A snapshot whose commit is
         not confirmed by its audit trail is refused with the divergence explained. Legacy
         run snapshots (<run-id>.session.json from before M13) are shown read-only and
-        cannot be resumed.
+        cannot be resumed. Only the redacted turn/run inspection view is displayed;
+        raw protocol messages and opaque reasoning are not printed.
         """;
 
     /// <summary>
