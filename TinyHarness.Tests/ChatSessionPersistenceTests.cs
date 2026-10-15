@@ -48,7 +48,7 @@ public class ChatSessionPersistenceTests
             recorderFactory : recorderFactory,
             sessionWriterFactory : sessionWriterFactory);
 
-    [Fact]
+    [Test]
     public async Task SubmitTurn_CommitsASnapshotAfterEachFinishedTurn()
     {
         using var dir    = new TestTempDir();
@@ -61,21 +61,21 @@ public class ChatSessionPersistenceTests
         var run1 = await host.SubmitTurnAsync("what is this repo?", CancellationToken.None);
         var run2 = await host.SubmitTurnAsync("and why?", CancellationToken.None);
 
-        Assert.Equal(AgentStatus.Completed, run1.Result!.Status);
-        Assert.Equal(AgentStatus.Completed, run2.Result!.Status);
-        Assert.Null(host.PersistenceWarning);
+        Assert.That(run1.Result!.Status, Is.EqualTo(AgentStatus.Completed));
+        Assert.That(run2.Result!.Status, Is.EqualTo(AgentStatus.Completed));
+        Assert.That(host.PersistenceWarning, Is.Null);
 
         var read = await SessionStoreReader.ReadAsync(dir.Root, host.Session.Id, CancellationToken.None);
-        Assert.NotNull(read);
-        Assert.Equal(2, read!.CommitSequence);
-        Assert.Equal(2, read.Turns.Count);
-        Assert.Equal("what is this repo?", read.Turns[0].UserInput);
-        Assert.Equal("first answer", read.Turns[0].Runs.Single().FinalMessage);
-        Assert.Equal("Completed", read.Turns[0].Runs.Single().Status);
-        Assert.Equal("and why?", read.Turns[1].UserInput);
+        TestAssert.NotNull(read);
+        Assert.That(read!.CommitSequence, Is.EqualTo(2));
+        Assert.That(read.Turns.Count, Is.EqualTo(2));
+        Assert.That(read.Turns[0].UserInput, Is.EqualTo("what is this repo?"));
+        Assert.That(read.Turns[0].Runs.Single().FinalMessage, Is.EqualTo("first answer"));
+        Assert.That(read.Turns[0].Runs.Single().Status, Is.EqualTo("Completed"));
+        Assert.That(read.Turns[1].UserInput, Is.EqualTo("and why?"));
     }
 
-    [Fact]
+    [Test]
     public async Task SubmitTurn_PreservesProtocolSecretsWhileInspectionAndAuditStayRedacted()
     {
         using var    dir           = new TestTempDir();
@@ -96,43 +96,43 @@ public class ChatSessionPersistenceTests
                                  id => new FileRunRecorder(runDir.Root, id, secrets));
         await host.SubmitTurnAsync("question " + secret + " " + numericSecret, CancellationToken.None);
         await host.SubmitTurnAsync("follow up", CancellationToken.None);
-        Assert.Null(host.PersistenceWarning);
+        Assert.That(host.PersistenceWarning, Is.Null);
 
         var read = await SessionStoreReader.ReadAsync(dir.Root, host.Session.Id, CancellationToken.None);
-        Assert.NotNull(read);
-        Assert.Equal(3, read.FormatVersion);
-        Assert.Equal("question [REDACTED] [REDACTED]", read.Turns[0].UserInput);
-        Assert.Equal("answer [REDACTED] [REDACTED]", read.Turns[0].Runs.Single().FinalMessage);
+        TestAssert.NotNull(read);
+        Assert.That(read.FormatVersion, Is.EqualTo(3));
+        Assert.That(read.Turns[0].UserInput, Is.EqualTo("question [REDACTED] [REDACTED]"));
+        Assert.That(read.Turns[0].Runs.Single().FinalMessage, Is.EqualTo("answer [REDACTED] [REDACTED]"));
         var conversation = read.Conversation!;
-        Assert.False(conversation.OpaqueRedacted);
-        Assert.Contains(conversation.Messages, m => m.Role    == "User" &&
-                                                    m.Content == "question " + secret + " " + numericSecret);
+        Assert.That(conversation.OpaqueRedacted, Is.False);
+        TestAssert.ContainsAll(m => m.Role    == "User" &&
+                                    m.Content == "question " + secret + " " + numericSecret, conversation.Messages);
         var stored          = conversation.Messages.Single(m => m.Content == "answer " + secret + " " + numericSecret);
-        var storedReasoning = Assert.Single(stored.Reasoning!);
-        Assert.Equal(opaque, storedReasoning.ProtectedData);
-        Assert.Equal(itemId, storedReasoning.ItemId);
-        Assert.Equal("reason " + secret, storedReasoning.Text);
+        var storedReasoning = TestAssert.Single(stored.Reasoning!);
+        Assert.That(storedReasoning.ProtectedData, Is.EqualTo(opaque));
+        Assert.That(storedReasoning.ItemId, Is.EqualTo(itemId));
+        Assert.That(storedReasoning.Text, Is.EqualTo("reason " + secret));
         var sent = client.RequestLog[1].Messages.Single(m => m.Role == ChatRole.Assistant);
-        Assert.Equal(stored.Content, sent.Content);
-        var sentReasoning = Assert.Single(sent.Reasoning!);
-        Assert.Equal(opaque, sentReasoning.ProtectedData);
-        Assert.Equal(itemId, sentReasoning.ItemId);
-        Assert.Equal("reason " + secret, sentReasoning.Text);
+        Assert.That(sent.Content, Is.EqualTo(stored.Content));
+        var sentReasoning = TestAssert.Single(sent.Reasoning!);
+        Assert.That(sentReasoning.ProtectedData, Is.EqualTo(opaque));
+        Assert.That(sentReasoning.ItemId, Is.EqualTo(itemId));
+        Assert.That(sentReasoning.Text, Is.EqualTo("reason " + secret));
         var audit = await File.ReadAllTextAsync(Path.Combine(dir.Root, $"{host.Session.Id}.audit.jsonl"));
-        Assert.DoesNotContain(secret, audit, StringComparison.Ordinal);
-        Assert.DoesNotContain(numericSecret, audit, StringComparison.Ordinal);
+        TestAssert.DoesNotContain(secret, audit, StringComparison.Ordinal);
+        TestAssert.DoesNotContain(numericSecret, audit, StringComparison.Ordinal);
         var runAudits = Directory.GetFiles(runDir.Root, "*.audit.jsonl");
-        Assert.Equal(2, runAudits.Length);
+        Assert.That(runAudits.Length, Is.EqualTo(2));
         foreach (var path in runAudits)
         {
             var runAudit = await File.ReadAllTextAsync(path);
-            Assert.DoesNotContain(secret, runAudit, StringComparison.Ordinal);
-            Assert.DoesNotContain(numericSecret, runAudit, StringComparison.Ordinal);
-            Assert.DoesNotContain("encrypted_content", runAudit, StringComparison.Ordinal);
+            TestAssert.DoesNotContain(secret, runAudit, StringComparison.Ordinal);
+            TestAssert.DoesNotContain(numericSecret, runAudit, StringComparison.Ordinal);
+            TestAssert.DoesNotContain("encrypted_content", runAudit, StringComparison.Ordinal);
         }
     }
 
-    [Fact]
+    [Test]
     public async Task SubmitTurn_FailedTurnIsStillCommittedAtItsBoundary()
     {
         using var dir    = new TestTempDir();
@@ -142,15 +142,15 @@ public class ChatSessionPersistenceTests
                                  id => new SessionStoreWriter(dir.Root, id));
         var run = await host.SubmitTurnAsync("please fail", CancellationToken.None);
 
-        Assert.Equal(AgentStatus.Failed, run.Result!.Status);
+        Assert.That(run.Result!.Status, Is.EqualTo(AgentStatus.Failed));
         var read = await SessionStoreReader.ReadAsync(dir.Root, host.Session.Id, CancellationToken.None);
-        Assert.NotNull(read);
-        Assert.Single(read.Turns);
-        Assert.Equal("Failed", read.Turns[0].Runs.Single().Status);
-        Assert.NotNull(read.Turns[0].Runs.Single().Error);
+        TestAssert.NotNull(read);
+        TestAssert.Single(read.Turns);
+        Assert.That(read.Turns[0].Runs.Single().Status, Is.EqualTo("Failed"));
+        TestAssert.NotNull(read.Turns[0].Runs.Single().Error);
     }
 
-    [Fact]
+    [Test]
     public async Task SubmitTurn_PersistenceFailureBecomesWarningAndKeepsTheTerminalState()
     {
         var client = new FakeChatClient();
@@ -160,14 +160,14 @@ public class ChatSessionPersistenceTests
         var       run  = await host.SubmitTurnAsync("anything", CancellationToken.None);
 
         // 保存故障单独报告，不把已完成的执行改写为失败。
-        Assert.Equal(AgentStatus.Completed, run.Result!.Status);
-        Assert.NotNull(host.PersistenceWarning);
-        Assert.Contains("disk on fire", host.PersistenceWarning, StringComparison.Ordinal);
+        Assert.That(run.Result!.Status, Is.EqualTo(AgentStatus.Completed));
+        TestAssert.NotNull(host.PersistenceWarning);
+        TestAssert.Contains("disk on fire", host.PersistenceWarning, StringComparison.Ordinal);
     }
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
+
+    [TestCase(false)]
+    [TestCase(true)]
     public async Task SubmitTurn_SideEffectExecuteSeesDurableInflightIntentAtACompleteBoundary(
         bool previouslyAcknowledged)
     {
@@ -189,7 +189,7 @@ public class ChatSessionPersistenceTests
         if (previouslyAcknowledged) host.Session.InspectionAcknowledgedUtc = DateTimeOffset.UtcNow;
         await host.SubmitTurnAsync("previous turn", CancellationToken.None);
         var previous = await SessionStoreReader.ReadAsync(dir.Root, sessionId, CancellationToken.None);
-        Assert.NotNull(previous);
+        TestAssert.NotNull(previous);
 
         using var        cts    = new CancellationTokenSource();
         using var        wait   = new CancellationTokenSource(TimeSpan.FromSeconds(10));
@@ -200,45 +200,45 @@ public class ChatSessionPersistenceTests
             // 在 Execute 报告启动前读取快照，模拟该边界崩溃；
             // 捕获内容不受后续结算影响，也不终止进程或重放工具。
             captured = await gate.WaitCapturedAsync(wait.Token);
-            Assert.False(active.IsCompleted);
-            Assert.Equal(1, gate.ExecuteCount);
-            Assert.True(captured.CommitSequence > previous.CommitSequence);
-            Assert.Null(captured.InspectionAcknowledgedUtc);
-            Assert.NotNull(captured.PendingInspectionReason);
+            Assert.That(active.IsCompleted, Is.False);
+            Assert.That(gate.ExecuteCount, Is.EqualTo(1));
+            Assert.That(captured.CommitSequence > previous.CommitSequence, Is.True);
+            Assert.That(captured.InspectionAcknowledgedUtc, Is.Null);
+            TestAssert.NotNull(captured.PendingInspectionReason);
             var inflight = captured.Turns[^1].Runs.Single();
-            Assert.Null(inflight.Status);
-            Assert.Null(inflight.FinishedUtc);
-            Assert.Null(inflight.FinalMessage);
-            Assert.Null(inflight.Error);
-            Assert.True(inflight.NeedsInspection);
-            Assert.Equal(2, inflight.ToolCalls!.Count);
-            Assert.Equal(nameof(ToolCallExecutionState.ConfirmedResult), inflight.ToolCalls[0].State);
+            Assert.That(inflight.Status, Is.Null);
+            Assert.That(inflight.FinishedUtc, Is.Null);
+            Assert.That(inflight.FinalMessage, Is.Null);
+            Assert.That(inflight.Error, Is.Null);
+            Assert.That(inflight.NeedsInspection, Is.True);
+            Assert.That(inflight.ToolCalls!.Count, Is.EqualTo(2));
+            Assert.That(inflight.ToolCalls[0].State, Is.EqualTo(nameof(ToolCallExecutionState.ConfirmedResult)));
             var intent = inflight.ToolCalls[1];
-            Assert.Equal("call_inflight", intent.CallId);
-            Assert.Equal("slow", intent.ToolName);
-            Assert.Equal("filesystem.write", intent.Capability);
-            Assert.True(intent.SideEffects);
-            Assert.Equal(nameof(ToolCallExecutionState.UnknownResult), intent.State);
+            Assert.That(intent.CallId, Is.EqualTo("call_inflight"));
+            Assert.That(intent.ToolName, Is.EqualTo("slow"));
+            Assert.That(intent.Capability, Is.EqualTo("filesystem.write"));
+            Assert.That(intent.SideEffects, Is.True);
+            Assert.That(intent.State, Is.EqualTo(nameof(ToolCallExecutionState.UnknownResult)));
 
             var canonical = captured.Conversation!.Messages;
-            Assert.Equal(["System", "User", "Assistant", "User", "Assistant", "Tool"],
-                         canonical.Select(m => m.Role).ToArray());
-            Assert.Equal("previous answer", canonical[2].Content);
-            Assert.Equal("call_confirmed", Assert.Single(canonical[4].ToolCalls!).Id);
-            Assert.Equal("call_confirmed", canonical[5].ToolCallId);
-            Assert.DoesNotContain(canonical, m => m.ToolCalls?.Any(c => c.Id == "call_inflight") == true);
-            Assert.DoesNotContain(canonical, m => m.ToolCallId                                   == "call_inflight");
+            Assert.That(canonical.Select(m => m.Role).ToArray(),
+                        Is.EqualTo(["System", "User", "Assistant", "User", "Assistant", "Tool"]));
+            Assert.That(canonical[2].Content, Is.EqualTo("previous answer"));
+            Assert.That(TestAssert.Single(canonical[4].ToolCalls!).Id, Is.EqualTo("call_confirmed"));
+            Assert.That(canonical[5].ToolCallId, Is.EqualTo("call_confirmed"));
+            TestAssert.DoesNotContainAny(m => m.ToolCalls?.Any(c => c.Id == "call_inflight") == true, canonical);
+            TestAssert.DoesNotContainAny(m => m.ToolCallId == "call_inflight", canonical);
 
             var restored = SessionResume.Restore(captured, ws.Root, identity, SystemPrompt);
-            Assert.False(restored.RewoundTail);
-            Assert.NotNull(restored.NeedsInspection);
+            Assert.That(restored.RewoundTail, Is.False);
+            TestAssert.NotNull(restored.NeedsInspection);
             var unfinished = restored.Session.Turns[^1].Runs.Single();
-            Assert.False(unfinished.IsFinished);
-            Assert.Null(unfinished.Result);
-            Assert.Null(unfinished.FinishedUtc);
-            Assert.Equal(ToolCallExecutionState.UnknownResult, unfinished.ExecutionRecords![1].State);
-            Assert.Equal(restored.Context.Messages.Count,
-                         ChatHistoryInvariants.LastCompleteBoundary(restored.Context.Messages));
+            Assert.That(unfinished.IsFinished, Is.False);
+            Assert.That(unfinished.Result, Is.Null);
+            Assert.That(unfinished.FinishedUtc, Is.Null);
+            Assert.That(unfinished.ExecutionRecords![1].State, Is.EqualTo(ToolCallExecutionState.UnknownResult));
+            Assert.That(ChatHistoryInvariants.LastCompleteBoundary(restored.Context.Messages),
+                        Is.EqualTo(restored.Context.Messages.Count));
 
             var nextClient = new FakeChatClient();
             nextClient.Enqueue(FakeChatClient.ToolCall("write", "{}", "call_new"));
@@ -247,12 +247,12 @@ public class ChatSessionPersistenceTests
             using var resumed = new ChatSessionHost(restored.Session, restored.Context, Options(), nextClient,
                                                     new ToolRegistry([nextWrite]), SystemPrompt,
                                                     needsInspection : restored.NeedsInspection);
-            Assert.True(resumed.InspectionPending);
+            Assert.That(resumed.InspectionPending, Is.True);
             var blocked = await resumed.SubmitTurnAsync("continue after crash", CancellationToken.None);
-            Assert.Equal(AgentStatus.Completed, blocked.Result!.Status);
-            Assert.Equal(0, nextWrite.ExecuteCount);
-            Assert.Contains("pending inspection", Assert.Single(blocked.Result.ToolCalls!).Approval,
-                            StringComparison.Ordinal);
+            Assert.That(blocked.Result!.Status, Is.EqualTo(AgentStatus.Completed));
+            Assert.That(nextWrite.ExecuteCount, Is.EqualTo(0));
+            TestAssert.Contains("pending inspection", TestAssert.Single(blocked.Result.ToolCalls!).Approval,
+                                StringComparison.Ordinal);
         }
         finally
         {
@@ -261,16 +261,16 @@ public class ChatSessionPersistenceTests
         }
 
         var terminal = await SessionStoreReader.ReadAsync(dir.Root, sessionId, CancellationToken.None);
-        Assert.NotNull(terminal);
-        Assert.True(terminal.CommitSequence > captured.CommitSequence);
-        Assert.Equal(nameof(AgentStatus.Cancelled), terminal.Turns[^1].Runs.Single().Status);
+        TestAssert.NotNull(terminal);
+        Assert.That(terminal.CommitSequence > captured.CommitSequence, Is.True);
+        Assert.That(terminal.Turns[^1].Runs.Single().Status, Is.EqualTo(nameof(AgentStatus.Cancelled)));
         // 结算不得修改已捕获的中断快照或补造终态。
-        Assert.Null(captured.Turns[^1].Runs.Single().Status);
-        Assert.Equal(nameof(ToolCallExecutionState.UnknownResult),
-                     captured.Turns[^1].Runs.Single().ToolCalls![1].State);
+        Assert.That(captured.Turns[^1].Runs.Single().Status, Is.Null);
+        Assert.That(captured.Turns[^1].Runs.Single().ToolCalls![1].State,
+                    Is.EqualTo(nameof(ToolCallExecutionState.UnknownResult)));
     }
 
-    [Fact]
+    [Test]
     public async Task SubmitTurn_CheckpointFailureNeverExecutesTheSideEffectAndRecordsKnownNotStarted()
     {
         using var ws = new TestTempDir();
@@ -285,22 +285,22 @@ public class ChatSessionPersistenceTests
 
         var run = await host.SubmitTurnAsync("write only after durable intent", CancellationToken.None);
 
-        Assert.Equal(AgentStatus.Failed, run.Result!.Status);
-        Assert.True(run.IsFinished);
-        Assert.Equal(0, run.Result.ToolExecutions);
-        Assert.Equal(0, tool.ExecuteCount);
-        Assert.Equal(1, client.Requests);
-        Assert.Contains("not reliably saved", run.Result.Error, StringComparison.Ordinal);
-        Assert.Contains("disk on fire", run.Result.Error, StringComparison.Ordinal);
-        var record = Assert.Single(run.Result.ToolCalls!);
-        Assert.True(record.SideEffects);
-        Assert.Equal(ToolCallExecutionState.KnownNotStarted, record.State);
-        Assert.False(host.InspectionPending);
-        Assert.Null(host.Session.PendingInspectionReason);
-        Assert.NotNull(host.PersistenceWarning);
+        Assert.That(run.Result!.Status, Is.EqualTo(AgentStatus.Failed));
+        Assert.That(run.IsFinished, Is.True);
+        Assert.That(run.Result.ToolExecutions, Is.EqualTo(0));
+        Assert.That(tool.ExecuteCount, Is.EqualTo(0));
+        Assert.That(client.Requests, Is.EqualTo(1));
+        TestAssert.Contains("not reliably saved", run.Result.Error, StringComparison.Ordinal);
+        TestAssert.Contains("disk on fire", run.Result.Error, StringComparison.Ordinal);
+        var record = TestAssert.Single(run.Result.ToolCalls!);
+        Assert.That(record.SideEffects, Is.True);
+        Assert.That(record.State, Is.EqualTo(ToolCallExecutionState.KnownNotStarted));
+        Assert.That(host.InspectionPending, Is.False);
+        Assert.That(host.Session.PendingInspectionReason, Is.Null);
+        TestAssert.NotNull(host.PersistenceWarning);
     }
 
-    [Fact]
+    [Test]
     public async Task SubmitTurn_PersistenceWarningIsClearedByTheNextSuccessfulCommit()
     {
         using var dir    = new TestTempDir();
@@ -310,16 +310,16 @@ public class ChatSessionPersistenceTests
 
         using var host = NewHost(client, _ => new FlakySessionWriter(dir.Root));
         await host.SubmitTurnAsync("first", CancellationToken.None);
-        Assert.NotNull(host.PersistenceWarning);
-        Assert.Contains("flaky storage", host.PersistenceWarning, StringComparison.Ordinal);
+        TestAssert.NotNull(host.PersistenceWarning);
+        TestAssert.Contains("flaky storage", host.PersistenceWarning, StringComparison.Ordinal);
 
         await host.SubmitTurnAsync("second", CancellationToken.None);
-        Assert.Null(host.PersistenceWarning);
+        Assert.That(host.PersistenceWarning, Is.Null);
 
         var read = await SessionStoreReader.ReadAsync(dir.Root, host.Session.Id, CancellationToken.None);
-        Assert.NotNull(read);
-        Assert.Equal(1, read!.CommitSequence);
-        Assert.Equal(2, read.Turns.Count);
+        TestAssert.NotNull(read);
+        Assert.That(read!.CommitSequence, Is.EqualTo(1));
+        Assert.That(read.Turns.Count, Is.EqualTo(2));
     }
 
     private sealed class SnapshotGateTool(Func<CancellationToken, Task<PersistedSession?>> readSnapshot) : ITool

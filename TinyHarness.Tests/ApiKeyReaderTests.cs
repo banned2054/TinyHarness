@@ -9,7 +9,7 @@ public class ApiKeyReaderTests
 {
     private const string EnvVariable = "TINYHARNESS_TESTS_API_KEY_READER";
 
-    [Fact]
+    [Test]
     public void CredentialTarget_TakesPrecedenceOverEnvironmentVariable()
     {
         var store = new FakeCredentialStore { ["TinyHarness:work"] = "store-secret" };
@@ -19,9 +19,9 @@ public class ApiKeyReaderTests
             var status = ApiKeyReader.Describe(EnvVariable, "TinyHarness:work", store);
             var value  = ApiKeyReader.Read(EnvVariable, "TinyHarness:work", store, "work");
 
-            Assert.Equal(ApiKeySourceKind.CredentialStore, status.Kind);
-            Assert.True(status.Available);
-            Assert.Equal("store-secret", value);
+            Assert.That(status.Kind, Is.EqualTo(ApiKeySourceKind.CredentialStore));
+            Assert.That(status.Available, Is.True);
+            Assert.That(value, Is.EqualTo("store-secret"));
         }
         finally
         {
@@ -29,7 +29,7 @@ public class ApiKeyReaderTests
         }
     }
 
-    [Fact]
+    [Test]
     public void EnvironmentVariableUsed_WhenNoCredentialTarget()
     {
         Environment.SetEnvironmentVariable(EnvVariable, "env-secret", EnvironmentVariableTarget.Process);
@@ -38,10 +38,10 @@ public class ApiKeyReaderTests
             var status = ApiKeyReader.Describe(EnvVariable, string.Empty, new FakeCredentialStore());
             var value  = ApiKeyReader.Read(EnvVariable, string.Empty, new FakeCredentialStore());
 
-            Assert.Equal(ApiKeySourceKind.EnvironmentVariable, status.Kind);
-            Assert.Equal(EnvVariable, status.SourceName);
-            Assert.True(status.Available);
-            Assert.Equal("env-secret", value);
+            Assert.That(status.Kind, Is.EqualTo(ApiKeySourceKind.EnvironmentVariable));
+            Assert.That(status.SourceName, Is.EqualTo(EnvVariable));
+            Assert.That(status.Available, Is.True);
+            Assert.That(value, Is.EqualTo("env-secret"));
         }
         finally
         {
@@ -49,41 +49,42 @@ public class ApiKeyReaderTests
         }
     }
 
-    [Fact]
+    [Test]
     public void ConfiguredCredentialThatCannotBeRead_ThrowsWithFixHints()
     {
-        var error = Assert.Throws<ConfigException>(() => ApiKeyReader
-                                                      .Read(EnvVariable, "TinyHarness:missing",
-                                                            new FakeCredentialStore(), "work"));
+        var error = TestAssert.Throws<ConfigException>(() => ApiKeyReader
+                                                          .Read(EnvVariable, "TinyHarness:missing",
+                                                                new FakeCredentialStore(), "work"));
 
-        Assert.Contains("TinyHarness:missing", error.Message);
-        Assert.Contains("auth set work", error.Message);
+        Assert.That(error.Message, Does.Contain("TinyHarness:missing"));
+        Assert.That(error.Message, Does.Contain("auth set work"));
     }
 
-    [Fact]
+    [Test]
     public void UnsupportedPlatform_ThrowsWithEnvironmentVariableHint()
     {
         var store = new FakeCredentialStore { PlatformSupported = false };
 
-        var error = Assert.Throws<ConfigException>(() => ApiKeyReader
-                                                      .Read(EnvVariable, "TinyHarness:work", store, "work"));
+        var error = TestAssert.Throws<ConfigException>(() => ApiKeyReader
+                                                          .Read(EnvVariable, "TinyHarness:work", store, "work"));
 
-        Assert.Contains("--env", error.Message);
+        Assert.That(error.Message, Does.Contain("--env"));
     }
 
-    [Fact]
+    [Test]
     public void NoSourceConfigured_ReturnsNullAndNotAvailable()
     {
         var status = ApiKeyReader.Describe(string.Empty, string.Empty, new FakeCredentialStore());
         var value  = ApiKeyReader.Read(string.Empty, string.Empty, new FakeCredentialStore());
 
-        Assert.Equal(ApiKeySourceKind.None, status.Kind);
-        Assert.False(status.Available);
-        Assert.Null(value);
+        Assert.That(status.Kind, Is.EqualTo(ApiKeySourceKind.None));
+        Assert.That(status.Available, Is.False);
+        Assert.That(value, Is.Null);
     }
 
     /// <summary>
-    ///     Fake credential store for offline tests; entries live in memory only.
+    ///     <para>离线测试用的 fake 凭据存储；条目仅存在于内存。</para>
+    ///     <para>Fake credential store for offline tests; entries live in memory only.</para>
     /// </summary>
     private sealed class FakeCredentialStore : ICredentialStore
     {

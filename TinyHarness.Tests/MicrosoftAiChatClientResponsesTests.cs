@@ -13,17 +13,21 @@ using ChatFinishReason = Microsoft.Extensions.AI.ChatFinishReason;
 namespace TinyHarness.Tests;
 
 /// <summary>
-///     Responses 协议传输契约测试：经 ModelClientFactory 以 ChatApiKind.Responses 构造的
-///     MicrosoftAiChatClient 驱动真实 OpenAI/M.E.AI SDK 打本地脚本 SSE 服务，验证流式拼装、
-///     reasoning 条目累积、无状态请求（store:false、无 previous_response_id）、reasoning 与工具
-///     结果回传、AgentLoop 两轮闭环与错误语义——全部离线，fixture 形状照抄
-///     artifacts/protocol-compat/ProviderProbe.cs 的 ResponsesSse。
-///     Contract tests for the Responses protocol transport: the MicrosoftAiChatClient built by
-///     ModelClientFactory with ChatApiKind.Responses drives the real OpenAI/M.E.AI SDK against a
-///     local scripted SSE server, verifying stream assembly, reasoning entry accumulation,
-///     stateless requests (store:false, no previous_response_id), reasoning and tool-result
-///     replay, a two-turn AgentLoop, and error semantics — all offline, with fixtures shaped
-///     after ResponsesSse in artifacts/protocol-compat/ProviderProbe.cs.
+///     <para>
+///         Responses 协议传输契约测试：经 ModelClientFactory 以 ChatApiKind.Responses 构造的
+///         MicrosoftAiChatClient 驱动真实 OpenAI/M.E.AI SDK 打本地脚本 SSE 服务，验证流式拼装、
+///         reasoning 条目累积、无状态请求（store:false、无 previous_response_id）、reasoning 与工具
+///         结果回传、AgentLoop 两轮闭环与错误语义——全部离线，fixture 形状照抄
+///         artifacts/protocol-compat/ProviderProbe.cs 的 ResponsesSse。
+///     </para>
+///     <para>
+///         Contract tests for the Responses protocol transport: the MicrosoftAiChatClient built by
+///         ModelClientFactory with ChatApiKind.Responses drives the real OpenAI/M.E.AI SDK against a
+///         local scripted SSE server, verifying stream assembly, reasoning entry accumulation,
+///         stateless requests (store:false, no previous_response_id), reasoning and tool-result
+///         replay, a two-turn AgentLoop, and error semantics — all offline, with fixtures shaped
+///         after ResponsesSse in artifacts/protocol-compat/ProviderProbe.cs.
+///     </para>
 /// </summary>
 public class MicrosoftAiChatClientResponsesTests
 {
@@ -65,11 +69,15 @@ public class MicrosoftAiChatClientResponsesTests
     }
 
     /// <summary>
-    ///     构造一轮 Responses SSE：reasoning 摘要增量 + 条目完成（encrypted_content）、文本增量、
-    ///     count 个 function_call 分片参数与完成、带 usage 的 response.completed。
-    ///     Builds one Responses SSE round: a reasoning summary delta plus item done
-    ///     (encrypted_content), text deltas, count function calls with split argument
-    ///     fragments and done events, and a response.completed carrying usage.
+    ///     <para>
+    ///         构造一轮 Responses SSE：reasoning 摘要增量 + 条目完成（encrypted_content）、文本增量、
+    ///         count 个 function_call 分片参数与完成、带 usage 的 response.completed。
+    ///     </para>
+    ///     <para>
+    ///         Builds one Responses SSE round: a reasoning summary delta plus item done
+    ///         (encrypted_content), text deltas, count function calls with split argument
+    ///         fragments and done events, and a response.completed carrying usage.
+    ///     </para>
     /// </summary>
     private static string ResponsesSse(int calls)
     {
@@ -126,7 +134,10 @@ public class MicrosoftAiChatClientResponsesTests
         return s.ToString();
     }
 
-    /// <summary>纯文本终答一轮：无 reasoning、无工具调用。A plain-text terminal round: no reasoning, no calls.</summary>
+    /// <summary>
+    ///     <para>纯文本终答一轮：无 reasoning、无工具调用。</para>
+    ///     <para>A plain-text terminal round: no reasoning, no calls.</para>
+    /// </summary>
     private static string TextSse(string text)
     {
         var s = new StringBuilder();
@@ -150,7 +161,7 @@ public class MicrosoftAiChatClientResponsesTests
 
     // ---- tests ---------------------------------------------------------------
 
-    [Fact]
+    [Test]
     public async Task StreamingReasoningTextAndTools_AreAssembled()
     {
         using var server = new MockSseServer();
@@ -167,42 +178,39 @@ public class MicrosoftAiChatClientResponsesTests
                                         });
 
         // 文本增量逐条翻译并拼接为完整正文。
-        // Text deltas are translated one-by-one and assemble into the full content.
-        Assert.Equal("Hello world",
-                     string.Concat(events.Where(e => e.Kind == ChatStreamEventKind.ContentDelta)
-                                         .Select(e => e.ContentDelta)));
+        // 文本增量逐条翻译并拼装成完整内容。
+        Assert.That(string.Concat(events.Where(e => e.Kind == ChatStreamEventKind.ContentDelta)
+                                        .Select(e => e.ContentDelta)), Is.EqualTo("Hello world"));
 
         // reasoning 增量与条目完成合并成恰一条带不透明载荷的条目。
-        // The reasoning delta and item-done merge into exactly one entry with
-        // the opaque payload.
-        var reasoning = Assert.Single(Accumulate(events).Reasoning!);
-        Assert.Equal("thought", reasoning.Text);
-        Assert.Equal("opaque", reasoning.ProtectedData);
-        Assert.Equal("rs_1", reasoning.ItemId);
+        // reasoning 增量与 item-done 合并成恰好一个携带 opaque 载荷的条目。
+        var reasoning = TestAssert.Single(Accumulate(events).Reasoning!);
+        Assert.That(reasoning.Text, Is.EqualTo("thought"));
+        Assert.That(reasoning.ProtectedData, Is.EqualTo("opaque"));
+        Assert.That(reasoning.ItemId, Is.EqualTo("rs_1"));
 
         // 两个 function_call 分片被适配器拼装后以完整调用各到达一次，参数 JSON 合法。
-        // The two function calls' split fragments are assembled by the adapter
-        // and arrive once each, complete, with valid argument JSON.
+        // 两个 function call 的分片参数由适配器拼装，各完整到达一次，参数 JSON 合法。
         var accumulator = Accumulate(events);
-        Assert.Equal(2, accumulator.ToolCalls.Count);
+        Assert.That(accumulator.ToolCalls.Count, Is.EqualTo(2));
         for (var i = 0; i < 2; i++)
         {
-            Assert.Equal($"call_{i}", accumulator.ToolCalls[i].Id);
-            Assert.Equal("read_file", accumulator.ToolCalls[i].FunctionName);
-            Assert.Equal("""{"path":"a"}""", accumulator.ToolCalls[i].ArgumentsJson);
+            Assert.That(accumulator.ToolCalls[i].Id, Is.EqualTo($"call_{i}"));
+            Assert.That(accumulator.ToolCalls[i].FunctionName, Is.EqualTo("read_file"));
+            Assert.That(accumulator.ToolCalls[i].ArgumentsJson, Is.EqualTo("""{"path":"a"}"""));
         }
 
         var end = events.Single(e => e.Kind == ChatStreamEventKind.End);
-        Assert.Equal(ChatFinishReason.ToolCalls.ToString(), end.FinishReason);
-        Assert.Equal(9, end.InputTokens);
-        Assert.Equal(5, end.OutputTokens);
+        Assert.That(end.FinishReason, Is.EqualTo(ChatFinishReason.ToolCalls.ToString()));
+        Assert.That(end.InputTokens, Is.EqualTo(9));
+        Assert.That(end.OutputTokens, Is.EqualTo(5));
 
-        var sent = Assert.Single(server.Requests);
-        Assert.Equal("POST", sent.Method);
-        Assert.Equal("/v1/responses", sent.Path);
+        var sent = TestAssert.Single(server.Requests);
+        Assert.That(sent.Method, Is.EqualTo("POST"));
+        Assert.That(sent.Path, Is.EqualTo("/v1/responses"));
     }
 
-    [Fact]
+    [Test]
     public async Task SecondRound_IsStatelessAndReplaysReasoningAndToolOutputs()
     {
         using var server = new MockSseServer();
@@ -220,8 +228,7 @@ public class MicrosoftAiChatClientResponsesTests
                                                   }));
 
         // 重放 Agent 会构建的历史：assistant（文本 + reasoning + 两个工具调用）+ 两条工具结果。
-        // Replay the history an agent would build: the assistant (text,
-        // reasoning, two tool calls) plus two tool results.
+        // 回放 agent 会构建的历史：assistant（文本、reasoning、两个工具调用）加两个工具结果。
         await CollectAsync(client, new ChatCompletionRequest
         {
             Model = Model,
@@ -235,44 +242,42 @@ public class MicrosoftAiChatClientResponsesTests
             Tools = ReadFileTool()
         });
 
-        Assert.Equal(2, server.Requests.Count);
-        Assert.All(server.Requests, r => Assert.Equal("/v1/responses", r.Path));
+        Assert.That(server.Requests.Count, Is.EqualTo(2));
+        TestAssert.All(server.Requests, r => Assert.That(r.Path, Is.EqualTo("/v1/responses")));
 
         var second = JsonNode.Parse(server.Requests[1].Body)!.AsObject();
-        Assert.Equal(Model, second["model"]!.GetValue<string>());
+        Assert.That(second["model"]!.GetValue<string>(), Is.EqualTo(Model));
 
         // 无状态：不存储输出，也不依赖 previous_response_id 会话续接。
-        // Stateless: output is not stored and no previous_response_id session
-        // continuation is used.
-        Assert.False(second["store"]!.GetValue<bool>());
-        Assert.True(!second.ContainsKey("previous_response_id") || second["previous_response_id"] is null);
+        // 无状态：不存储输出，也不使用 previous_response_id 会话延续。
+        Assert.That(second["store"]!.GetValue<bool>(), Is.False);
+        Assert.That(!second.ContainsKey("previous_response_id") || second["previous_response_id"] is null, Is.True);
 
         var input = second["input"]!.AsArray();
 
         // 恰一个 reasoning 条目，id 与加密载荷原样回传。
-        // Exactly one reasoning item with its id and encrypted payload replayed
-        // verbatim.
+        // 恰好一个 reasoning item，其 id 与加密载荷原样回传。
         var reasoningItems = input.Where(i => i?["type"]?.GetValue<string>() == "reasoning").ToArray();
-        var reasoningItem  = Assert.Single(reasoningItems)!;
-        Assert.Equal("rs_1", reasoningItem["id"]!.GetValue<string>());
-        Assert.Equal("opaque", reasoningItem["encrypted_content"]!.GetValue<string>());
+        var reasoningItem  = TestAssert.Single(reasoningItems)!;
+        Assert.That(reasoningItem["id"]!.GetValue<string>(), Is.EqualTo("rs_1"));
+        Assert.That(reasoningItem["encrypted_content"]!.GetValue<string>(), Is.EqualTo("opaque"));
 
         // 两条工具结果按 call_id 对应回传。
-        // The two tool outputs replay under their matching call ids.
+        // 两个工具输出按匹配的 call id 回传。
         var outputs = input.Where(i => i?["type"]?.GetValue<string>() == "function_call_output").ToArray();
-        Assert.Equal(2, outputs.Length);
-        Assert.Equal(["call_0", "call_1"],
-                     outputs.Select(o => o!["call_id"]!.GetValue<string>()).OrderBy(id => id).ToArray());
+        Assert.That(outputs.Length, Is.EqualTo(2));
+        Assert.That(outputs.Select(o => o!["call_id"]!.GetValue<string>()).OrderBy(id => id).ToArray(),
+                    Is.EqualTo(["call_0", "call_1"]));
     }
 
-    [Fact]
+    [Test]
     public async Task TwoTurnAgentLoop_ReplaysReasoningInSecondRequest()
     {
         using var server = new MockSseServer();
         server.Start();
 
         // 第一轮：reasoning + 文本 + 一个工具调用；第二轮：纯文本终答。
-        // Turn 1: reasoning, text, and one tool call; turn 2: a plain-text answer.
+        // 第 1 回合：reasoning、文本与一次工具调用；第 2 回合：纯文本回答。
         server.EnqueueRaw(ResponsesSse(1));
         server.EnqueueRaw(TextSse("The file read fine."));
 
@@ -287,23 +292,22 @@ public class MicrosoftAiChatClientResponsesTests
 
         var result = await loop.RunAsync("sys", "inspect a.txt", CancellationToken.None);
 
-        Assert.Equal(AgentStatus.Completed, result.Status);
-        Assert.Equal("The file read fine.", result.FinalMessage);
-        Assert.Equal(1, tool.ExecuteCount);
-        Assert.Equal(2, server.Requests.Count);
+        Assert.That(result.Status, Is.EqualTo(AgentStatus.Completed));
+        Assert.That(result.FinalMessage, Is.EqualTo("The file read fine."));
+        Assert.That(tool.ExecuteCount, Is.EqualTo(1));
+        Assert.That(server.Requests.Count, Is.EqualTo(2));
 
         // reasoning 在 AgentLoop 历史中存活并在第二轮请求中重放。
-        // The reasoning survives in the AgentLoop history and is replayed in
-        // the second request.
+        // reasoning 在 AgentLoop 历史中存活，并在第二个请求中回传。
         var second    = JsonNode.Parse(server.Requests[1].Body)!.AsObject();
         var input     = second["input"]!.AsArray();
-        var reasoning = Assert.Single(input, i => i?["type"]?.GetValue<string>() == "reasoning")!;
-        Assert.Equal("rs_1", reasoning["id"]!.GetValue<string>());
-        Assert.Equal("opaque", reasoning["encrypted_content"]!.GetValue<string>());
-        Assert.Single(input, i => i?["type"]?.GetValue<string>() == "function_call_output");
+        var reasoning = TestAssert.Single(input, i => i?["type"]?.GetValue<string>() == "reasoning")!;
+        Assert.That(reasoning["id"]!.GetValue<string>(), Is.EqualTo("rs_1"));
+        Assert.That(reasoning["encrypted_content"]!.GetValue<string>(), Is.EqualTo("opaque"));
+        TestAssert.Single(input, i => i?["type"]?.GetValue<string>() == "function_call_output");
     }
 
-    [Fact]
+    [Test]
     public async Task HttpError_SurfacesAsClientResultExceptionWithStatus()
     {
         using var server = new MockSseServer();
@@ -312,10 +316,10 @@ public class MicrosoftAiChatClientResponsesTests
         var client = NewClient(server);
 
         var ex =
-            await Assert.ThrowsAsync<ClientResultException>(() =>
-                                                                CollectAsync(client,
+            await TestAssert.ThrowsAsync<ClientResultException>(() =>
+                                                                    CollectAsync(client,
                                                                              Request(ChatMessage.User("boom"))));
 
-        Assert.Contains("404", ex.Message);
+        Assert.That(ex.Message, Does.Contain("404"));
     }
 }

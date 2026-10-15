@@ -6,157 +6,157 @@ namespace TinyHarness.Tests;
 
 public class CommandLineTests
 {
-    [Fact]
+    [Test]
     public void RootHelpFlag_ReturnsOverviewHelp()
     {
         var options = CommandLine.Parse(["--help"]);
 
-        Assert.Equal(CliCommandKind.Help, options.Kind);
-        Assert.Null(options.HelpTopic);
+        Assert.That(options.Kind, Is.EqualTo(CliCommandKind.Help));
+        Assert.That(options.HelpTopic, Is.Null);
     }
 
-    [Fact]
+    [Test]
     public void HelpCommand_ParsesTheRequestedTopic()
     {
         var options = CommandLine.Parse(["help", "doctor"]);
 
-        Assert.Equal(CliCommandKind.Help, options.Kind);
-        Assert.Equal("doctor", options.HelpTopic);
+        Assert.That(options.Kind, Is.EqualTo(CliCommandKind.Help));
+        Assert.That(options.HelpTopic, Is.EqualTo("doctor"));
     }
 
-    [Fact]
+    [Test]
     public void RunDoubleDash_PreservesCommandLookingPromptText()
     {
         var options = CommandLine.Parse(["run", "--", "init", "notes", "--dry-run"]);
 
-        Assert.Equal(CliCommandKind.Run, options.Kind);
-        Assert.Equal("init notes --dry-run", options.Prompt);
+        Assert.That(options.Kind, Is.EqualTo(CliCommandKind.Run));
+        Assert.That(options.Prompt, Is.EqualTo("init notes --dry-run"));
     }
 
-    [Fact]
+    [Test]
     public void RunWithoutPrompt_IsAUsageError()
     {
-        var error = Assert.Throws<CliUsageException>(() => CommandLine.Parse(["run"]));
+        var error = TestAssert.Throws<CliUsageException>(() => CommandLine.Parse(["run"]));
 
-        Assert.Contains("prompt is required", error.Message, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("tinyharness run", error.Usage, StringComparison.Ordinal);
+        TestAssert.Contains("prompt is required", error.Message, StringComparison.OrdinalIgnoreCase);
+        TestAssert.Contains("tinyharness run", error.Usage, StringComparison.Ordinal);
     }
 
-    [Fact]
+    [Test]
     public void ModelAdd_RequiresAnExplicitContextWindow()
     {
-        var error = Assert.Throws<CliUsageException>(() => CommandLine.Parse(["model", "add", "model-a"]));
+        var error = TestAssert.Throws<CliUsageException>(() => CommandLine.Parse(["model", "add", "model-a"]));
 
-        Assert.Contains("--context-window", error.Message, StringComparison.Ordinal);
+        TestAssert.Contains("--context-window", error.Message, StringComparison.Ordinal);
     }
 
-    [Fact]
+    [Test]
     public void DoctorConnect_IsParsedWithoutSendingAnyRequest()
     {
         var options = CommandLine.Parse(["doctor", "--connect"]);
 
-        Assert.Equal(CliCommandKind.Doctor, options.Kind);
-        Assert.True(options.Connect);
+        Assert.That(options.Kind, Is.EqualTo(CliCommandKind.Doctor));
+        Assert.That(options.Connect, Is.True);
     }
 
-    [Fact]
+    [Test]
     public void ChatCommand_ParsesWithAnOptionalConfigPath()
     {
         var options = CommandLine.Parse(["chat", "--config", "team.json"]);
 
-        Assert.Equal(CliCommandKind.Chat, options.Kind);
-        Assert.Equal("team.json", options.ConfigPath);
+        Assert.That(options.Kind, Is.EqualTo(CliCommandKind.Chat));
+        Assert.That(options.ConfigPath, Is.EqualTo("team.json"));
     }
 
-    [Fact]
+    [Test]
     public void ChatCommand_WithoutArguments_StartsTheSession()
     {
         var options = CommandLine.Parse(["chat"]);
 
-        Assert.Equal(CliCommandKind.Chat, options.Kind);
-        Assert.Null(options.ConfigPath);
+        Assert.That(options.Kind, Is.EqualTo(CliCommandKind.Chat));
+        Assert.That(options.ConfigPath, Is.Null);
     }
 
-    [Fact]
+    [Test]
     public void ChatCommand_WithAPromptArgument_IsAUsageError()
     {
-        var error = Assert.Throws<CliUsageException>(() => CommandLine.Parse(["chat", "explain the repo"]));
+        var error = TestAssert.Throws<CliUsageException>(() => CommandLine.Parse(["chat", "explain the repo"]));
 
-        Assert.Contains("takes no prompt", error.Message, StringComparison.Ordinal);
-        Assert.Contains("tinyharness chat", error.Usage, StringComparison.Ordinal);
+        TestAssert.Contains("takes no prompt", error.Message, StringComparison.Ordinal);
+        TestAssert.Contains("tinyharness chat", error.Usage, StringComparison.Ordinal);
     }
 
-    [Fact]
+    [Test]
     public void ChatCommand_HelpFlag_ReturnsTheChatTopic()
     {
         var options = CommandLine.Parse(["chat", "--help"]);
 
-        Assert.Equal(CliCommandKind.Help, options.Kind);
-        Assert.Equal("chat", options.HelpTopic);
-        Assert.True(HelpText.IsKnownCommand("chat"));
-        Assert.Equal(HelpText.Chat, HelpText.For("chat"));
-        Assert.Contains("tinyharness chat", HelpText.Overview, StringComparison.Ordinal);
+        Assert.That(options.Kind, Is.EqualTo(CliCommandKind.Help));
+        Assert.That(options.HelpTopic, Is.EqualTo("chat"));
+        Assert.That(HelpText.IsKnownCommand("chat"), Is.True);
+        Assert.That(HelpText.For("chat"), Is.EqualTo(HelpText.Chat));
+        TestAssert.Contains("tinyharness chat", HelpText.Overview, StringComparison.Ordinal);
     }
 
-    [Fact]
+    [Test]
     public void ChatCommand_SessionOptionParsesWithAnIdCaseInsensitively()
     {
         var id      = Guid.NewGuid().ToString("N");
         var options = CommandLine.Parse(["chat", "--session", id.ToUpperInvariant(), "--config", "team.json"]);
 
-        Assert.Equal(CliCommandKind.Chat, options.Kind);
-        Assert.Equal(id.ToUpperInvariant(), options.ResumeSessionId);
-        Assert.Equal("team.json", options.ConfigPath);
+        Assert.That(options.Kind, Is.EqualTo(CliCommandKind.Chat));
+        Assert.That(options.ResumeSessionId, Is.EqualTo(id.ToUpperInvariant()));
+        Assert.That(options.ConfigPath, Is.EqualTo("team.json"));
     }
 
-    [Fact]
+    [Test]
     public void ChatCommand_SessionOptionRequiresAValidIdAtMostOnce()
     {
         var id = Guid.NewGuid().ToString("N");
 
-        var missing = Assert.Throws<CliUsageException>(() => CommandLine.Parse(["chat", "--session"]));
-        Assert.Contains("requires a session id", missing.Message, StringComparison.Ordinal);
+        var missing = TestAssert.Throws<CliUsageException>(() => CommandLine.Parse(["chat", "--session"]));
+        TestAssert.Contains("requires a session id", missing.Message, StringComparison.Ordinal);
 
-        var invalid = Assert.Throws<CliUsageException>(() => CommandLine.Parse(["chat", "--session", "../escape"]));
-        Assert.Contains("not a valid session id", invalid.Message, StringComparison.Ordinal);
+        var invalid = TestAssert.Throws<CliUsageException>(() => CommandLine.Parse(["chat", "--session", "../escape"]));
+        TestAssert.Contains("not a valid session id", invalid.Message, StringComparison.Ordinal);
 
         var twice =
-            Assert.Throws<CliUsageException>(() => CommandLine.Parse(["chat", "--session", id, "--session", id]));
-        Assert.Contains("at most once", twice.Message, StringComparison.Ordinal);
+            TestAssert.Throws<CliUsageException>(() => CommandLine.Parse(["chat", "--session", id, "--session", id]));
+        TestAssert.Contains("at most once", twice.Message, StringComparison.Ordinal);
     }
 
-    [Fact]
+    [Test]
     public void SessionList_Parses()
     {
         var options = CommandLine.Parse(["session", "list"]);
 
-        Assert.Equal(CliCommandKind.Session, options.Kind);
-        Assert.Equal("list", options.Subcommand);
-        Assert.Null(options.Primary);
+        Assert.That(options.Kind, Is.EqualTo(CliCommandKind.Session));
+        Assert.That(options.Subcommand, Is.EqualTo("list"));
+        Assert.That(options.Primary, Is.Null);
     }
 
-    [Fact]
+    [Test]
     public void SessionShow_ParsesAValidSessionIdOnly()
     {
         var id      = new string('a', 32);
         var options = CommandLine.Parse(["session", "show", id]);
 
-        Assert.Equal(CliCommandKind.Session, options.Kind);
-        Assert.Equal("show", options.Subcommand);
-        Assert.Equal(id, options.Primary);
+        Assert.That(options.Kind, Is.EqualTo(CliCommandKind.Session));
+        Assert.That(options.Subcommand, Is.EqualTo("show"));
+        Assert.That(options.Primary, Is.EqualTo(id));
 
-        var escape = Assert.Throws<CliUsageException>(() => CommandLine.Parse(["session", "show", "../escape"]));
-        Assert.Contains("not a valid session id", escape.Message, StringComparison.Ordinal);
-        Assert.Contains("tinyharness session show", escape.Usage, StringComparison.Ordinal);
+        var escape = TestAssert.Throws<CliUsageException>(() => CommandLine.Parse(["session", "show", "../escape"]));
+        TestAssert.Contains("not a valid session id", escape.Message, StringComparison.Ordinal);
+        TestAssert.Contains("tinyharness session show", escape.Usage, StringComparison.Ordinal);
     }
 
-    [Fact]
+    [Test]
     public void Session_WithoutASubcommandIsAUsageError()
     {
-        var error = Assert.Throws<CliUsageException>(() => CommandLine.Parse(["session"]));
+        var error = TestAssert.Throws<CliUsageException>(() => CommandLine.Parse(["session"]));
 
-        Assert.Contains("session requires a subcommand", error.Message, StringComparison.Ordinal);
-        Assert.Throws<CliUsageException>(() => CommandLine.Parse(["session", "purge"]));
-        Assert.Throws<CliUsageException>(() => CommandLine.Parse(["session", "show"]));
+        TestAssert.Contains("session requires a subcommand", error.Message, StringComparison.Ordinal);
+        TestAssert.Throws<CliUsageException>(() => CommandLine.Parse(["session", "purge"]));
+        TestAssert.Throws<CliUsageException>(() => CommandLine.Parse(["session", "show"]));
     }
 }

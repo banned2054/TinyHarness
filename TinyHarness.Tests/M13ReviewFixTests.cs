@@ -24,9 +24,9 @@ public class M13ReviewFixTests
     private static AgentOptions Options() => new()
         { Model = "test-model", MaxAgentSteps = 8, DefaultToolTimeoutSeconds = 30 };
 
-    [Theory]
-    [InlineData("")]
-    [InlineData("same")]
+
+    [TestCase("")]
+    [TestCase("same")]
     public async Task InvalidCallIdsRejectTheWholeRoundBeforeExecution(string id)
     {
         var client = new FakeChatClient();
@@ -47,14 +47,14 @@ public class M13ReviewFixTests
         var read   = new FakeTool("read");
         var loop   = new AgentLoop(client, new ToolRegistry([write, read]), Options());
         var result = await loop.RunAsync("sys", "go", CancellationToken.None);
-        Assert.Equal(AgentStatus.Failed, result.Status);
-        Assert.Equal(0, write.ExecuteCount);
-        Assert.Equal(0, read.ExecuteCount);
-        Assert.Empty(result.ToolCalls!);
-        Assert.DoesNotContain(loop.History, message => message.ToolCalls is { Count: > 0 });
+        Assert.That(result.Status, Is.EqualTo(AgentStatus.Failed));
+        Assert.That(write.ExecuteCount, Is.EqualTo(0));
+        Assert.That(read.ExecuteCount, Is.EqualTo(0));
+        Assert.That(result.ToolCalls!, Is.Empty);
+        TestAssert.DoesNotContainAny(message => message.ToolCalls is { Count: > 0 }, loop.History);
     }
 
-    [Fact]
+    [Test]
     public async Task UncertainExecutionStopsSiblingsAndBlocksTheNextTurnWithoutAnEngine()
     {
         using var ws     = new TestTempDir();
@@ -79,21 +79,21 @@ public class M13ReviewFixTests
         using var host = new ChatSessionHost(ws.Root, Identity, Options(), client,
                                              new ToolRegistry([tool, write]), "sys");
         var first = await host.SubmitTurnAsync("go", CancellationToken.None);
-        Assert.Equal(AgentStatus.Failed, first.Result!.Status);
-        Assert.Equal(ToolCallExecutionState.UnknownResult, first.Result.ToolCalls![0].State);
-        Assert.Equal(ToolCallExecutionState.KnownNotStarted, first.Result.ToolCalls[1].State);
-        Assert.True(host.InspectionPending);
-        Assert.Equal(0, write.ExecuteCount);
+        Assert.That(first.Result!.Status, Is.EqualTo(AgentStatus.Failed));
+        Assert.That(first.Result.ToolCalls![0].State, Is.EqualTo(ToolCallExecutionState.UnknownResult));
+        Assert.That(first.Result.ToolCalls[1].State, Is.EqualTo(ToolCallExecutionState.KnownNotStarted));
+        Assert.That(host.InspectionPending, Is.True);
+        Assert.That(write.ExecuteCount, Is.EqualTo(0));
         await host.SubmitTurnAsync("continue", CancellationToken.None);
-        Assert.Equal(0, write.ExecuteCount);
-        Assert.True(host.InspectionPending);
+        Assert.That(write.ExecuteCount, Is.EqualTo(0));
+        Assert.That(host.InspectionPending, Is.True);
         await host.AcknowledgeInspectionAsync(CancellationToken.None);
-        Assert.False(host.InspectionPending);
+        Assert.That(host.InspectionPending, Is.False);
     }
 
-    [Theory]
-    [InlineData(ToolCallExecutionState.UnknownResult)]
-    [InlineData(ToolCallExecutionState.ConfirmedResult)]
+
+    [TestCase(ToolCallExecutionState.UnknownResult)]
+    [TestCase(ToolCallExecutionState.ConfirmedResult)]
     public async Task RunAndSessionInspectionRecordsRedactEveryStringAndRoundTripState(ToolCallExecutionState state)
     {
         using var    ws      = new TestTempDir();
@@ -109,11 +109,11 @@ public class M13ReviewFixTests
         var recorder = new FileRunRecorder(dir.Root, Guid.NewGuid().ToString("N"), secrets);
         await recorder.CompleteAsync(result, [], StructuredState.Empty, CancellationToken.None);
         var raw = await File.ReadAllTextAsync(recorder.SessionPath);
-        Assert.DoesNotContain(secret, raw);
+        Assert.That(raw, Does.Not.Contain(secret));
         var legacy = await SessionStoreReader.ReadLegacyAsync(dir.Root, recorder.RunId, CancellationToken.None);
-        Assert.Equal(state, legacy!.Result.ToolCalls![0].State);
-        Assert.Equal("[REDACTED]", legacy.Result.ToolCalls[0].Approval);
-        Assert.Equal(secret, record.Approval);
+        Assert.That(legacy!.Result.ToolCalls![0].State, Is.EqualTo(state));
+        Assert.That(legacy.Result.ToolCalls[0].Approval, Is.EqualTo("[REDACTED]"));
+        Assert.That(record.Approval, Is.EqualTo(secret));
 
         var session = new ChatSession(Guid.NewGuid().ToString("N"), ws.Root, Identity)
             { PendingInspectionReason = "inspect " + secret };
@@ -127,17 +127,17 @@ public class M13ReviewFixTests
         using var writer = new SessionStoreWriter(dir.Root, session.Id, secrets);
         await writer.CommitAsync(session, context, CancellationToken.None);
         var stored = await File.ReadAllTextAsync(writer.SnapshotPath);
-        Assert.DoesNotContain(secret, stored);
+        Assert.That(stored, Does.Not.Contain(secret));
         var snapshot = await SessionStoreReader.ReadAsync(dir.Root, session.Id, CancellationToken.None);
-        Assert.Equal("inspect [REDACTED]", snapshot!.PendingInspectionReason);
-        var call = Assert.Single(snapshot.Turns[0].Runs[0].ToolCalls!);
-        Assert.Equal("[REDACTED]", call.CallId);
-        Assert.Equal("[REDACTED]", call.ToolName);
-        Assert.Equal("[REDACTED]", call.Capability);
-        Assert.Equal(state.ToString(), call.State);
+        Assert.That(snapshot!.PendingInspectionReason, Is.EqualTo("inspect [REDACTED]"));
+        var call = TestAssert.Single(snapshot.Turns[0].Runs[0].ToolCalls!);
+        Assert.That(call.CallId, Is.EqualTo("[REDACTED]"));
+        Assert.That(call.ToolName, Is.EqualTo("[REDACTED]"));
+        Assert.That(call.Capability, Is.EqualTo("[REDACTED]"));
+        Assert.That(call.State, Is.EqualTo(state.ToString()));
     }
 
-    [Fact]
+    [Test]
     public async Task LegacyConservativeBlockSurvivesReadOnlyCommitAndClearsOnlyAfterAcknowledgement()
     {
         using var ws  = new TestTempDir();
@@ -165,27 +165,27 @@ public class M13ReviewFixTests
                                               needsInspection : restored.NeedsInspection))
         {
             await host.SubmitTurnAsync("discuss only", CancellationToken.None);
-            Assert.True(host.InspectionPending);
+            Assert.That(host.InspectionPending, Is.True);
         }
 
         using var writer =
             await SessionStoreWriter.OpenExistingAsync(dir.Root, snapshot.Id, null, CancellationToken.None);
         var resumed = SessionResume.Restore(writer.LoadedSnapshot!, ws.Root, Identity, "sys");
-        Assert.False(resumed.RewoundTail);
-        Assert.NotNull(resumed.NeedsInspection);
+        Assert.That(resumed.RewoundTail, Is.False);
+        TestAssert.NotNull(resumed.NeedsInspection);
         using var next = new ChatSessionHost(resumed.Session, resumed.Context, Options(), new FakeChatClient(),
                                              new ToolRegistry([]), "sys", sessionWriter : writer,
                                              needsInspection : resumed.NeedsInspection);
         await next.AcknowledgeInspectionAsync(CancellationToken.None);
         var acknowledged = await SessionStoreReader.ReadAsync(dir.Root, snapshot.Id, CancellationToken.None);
-        Assert.Null(acknowledged!.PendingInspectionReason);
-        Assert.NotNull(acknowledged.InspectionAcknowledgedUtc);
-        Assert.Null(SessionResume.Restore(acknowledged, ws.Root, Identity, "sys").NeedsInspection);
+        Assert.That(acknowledged!.PendingInspectionReason, Is.Null);
+        TestAssert.NotNull(acknowledged.InspectionAcknowledgedUtc);
+        Assert.That(SessionResume.Restore(acknowledged, ws.Root, Identity, "sys").NeedsInspection, Is.Null);
     }
 
-    [Theory]
-    [InlineData(null)]
-    [InlineData("Completed")]
+
+    [TestCase(null)]
+    [TestCase("Completed")]
     public void UnknownNumericExecutionStateIsRejectedEvenForUnfinishedRuns(string? status)
     {
         using var ws = new TestTempDir();
@@ -212,10 +212,10 @@ public class M13ReviewFixTests
                 }
             ]
         };
-        Assert.Throws<SessionStoreException>(() => SessionResume.Restore(snapshot, ws.Root, Identity, "sys"));
+        TestAssert.Throws<SessionStoreException>(() => SessionResume.Restore(snapshot, ws.Root, Identity, "sys"));
     }
 
-    [Fact]
+    [Test]
     public async Task ExecutionCheckpointReceivesDetachedIntentBeforeExecute()
     {
         var client = new FakeChatClient();
@@ -226,15 +226,16 @@ public class M13ReviewFixTests
         var loop = new AgentLoop(client, new ToolRegistry([tool]), Options(), null, null,
                                  executionCheckpoint : (records, _) =>
                                  {
-                                     Assert.Equal(0, tool.ExecuteCount);
+                                     Assert.That(tool.ExecuteCount, Is.EqualTo(0));
                                      captured = records;
-                                     Assert.Equal(ToolCallExecutionState.UnknownResult, Assert.Single(records).State);
+                                     Assert.That(TestAssert.Single(records).State,
+                                                 Is.EqualTo(ToolCallExecutionState.UnknownResult));
                                      return Task.CompletedTask;
                                  });
         var result = await loop.RunAsync("sys", "go", CancellationToken.None);
-        Assert.Equal(AgentStatus.Completed, result.Status);
-        Assert.Equal(ToolCallExecutionState.ConfirmedResult, Assert.Single(result.ToolCalls!).State);
-        Assert.Equal(ToolCallExecutionState.UnknownResult, Assert.Single(captured!).State);
+        Assert.That(result.Status, Is.EqualTo(AgentStatus.Completed));
+        Assert.That(TestAssert.Single(result.ToolCalls!).State, Is.EqualTo(ToolCallExecutionState.ConfirmedResult));
+        Assert.That(TestAssert.Single(captured!).State, Is.EqualTo(ToolCallExecutionState.UnknownResult));
     }
 
     private sealed class UncertainTool : ITool

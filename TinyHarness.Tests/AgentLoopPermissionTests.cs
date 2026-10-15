@@ -22,7 +22,7 @@ public class AgentLoopPermissionTests
 
     private static ApplyPatchTool PatchTool(TestTempDir dir) => new(dir.Workspace);
 
-    [Fact]
+    [Test]
     public async Task SessionGrant_AutoApprovesLaterWritesToSameFile()
     {
         using var dir = new TestTempDir();
@@ -41,13 +41,13 @@ public class AgentLoopPermissionTests
 
         var result = await loop.RunAsync("sys", "patch twice", CancellationToken.None);
 
-        Assert.Equal(AgentStatus.Completed, result.Status);
-        Assert.Equal(1, approver.Prompts); // the second write is auto-approved by the session grant
-        Assert.Equal("line1\nline2-fixed\nline3-fixed\n",
-                     await File.ReadAllTextAsync(Path.Combine(dir.Root, "fixme.cs")));
+        Assert.That(result.Status, Is.EqualTo(AgentStatus.Completed));
+        Assert.That(approver.Prompts, Is.EqualTo(1)); // 第二次写入由会话级授权自动批准
+        Assert.That(await File.ReadAllTextAsync(Path.Combine(dir.Root, "fixme.cs")),
+                    Is.EqualTo("line1\nline2-fixed\nline3-fixed\n"));
     }
 
-    [Fact]
+    [Test]
     public async Task Deny_ReturnsDenialToModelAndWritesNothing()
     {
         using var dir  = new TestTempDir();
@@ -65,15 +65,15 @@ public class AgentLoopPermissionTests
 
         var result = await loop.RunAsync("sys", "patch", CancellationToken.None);
 
-        Assert.Equal(AgentStatus.Completed, result.Status);
-        Assert.Equal(1, approver.Prompts);
-        Assert.Equal(0, result.ToolExecutions);
-        Assert.Equal("line1\nline2\nline3\n", await File.ReadAllTextAsync(path)); // untouched
-        Assert.Contains(loop.History,
-                        m => m.Role == ChatRole.Tool && m.Content.Contains("Permission denied by user"));
+        Assert.That(result.Status, Is.EqualTo(AgentStatus.Completed));
+        Assert.That(approver.Prompts, Is.EqualTo(1));
+        Assert.That(result.ToolExecutions, Is.EqualTo(0));
+        Assert.That(await File.ReadAllTextAsync(path), Is.EqualTo("line1\nline2\nline3\n")); // 文件未被改动
+        TestAssert.ContainsAll(m => m.Role == ChatRole.Tool && m.Content.Contains("Permission denied by user"),
+                               loop.History);
     }
 
-    [Fact]
+    [Test]
     public async Task SessionDeny_BlocksAMultiFilePatchDespiteSessionGrant()
     {
         using var dir           = new TestTempDir();
@@ -92,16 +92,16 @@ public class AgentLoopPermissionTests
 
         var result = await loop.RunAsync("sys", "patch both", CancellationToken.None);
 
-        Assert.Equal(AgentStatus.Completed, result.Status);
-        Assert.Equal(0, approver.Prompts);
-        Assert.Equal(0, result.ToolExecutions);
-        Assert.Equal("line1\nline2\nline3\n", await File.ReadAllTextAsync(protectedPath));
-        Assert.Equal("old\n", await File.ReadAllTextAsync(otherPath));
-        Assert.Contains(loop.History,
-                        message => message.Role == ChatRole.Tool && message.Content.Contains("Permission denied"));
+        Assert.That(result.Status, Is.EqualTo(AgentStatus.Completed));
+        Assert.That(approver.Prompts, Is.EqualTo(0));
+        Assert.That(result.ToolExecutions, Is.EqualTo(0));
+        Assert.That(await File.ReadAllTextAsync(protectedPath), Is.EqualTo("line1\nline2\nline3\n"));
+        Assert.That(await File.ReadAllTextAsync(otherPath), Is.EqualTo("old\n"));
+        TestAssert.ContainsAll(message => message.Role == ChatRole.Tool &&
+                                          message.Content.Contains("Permission denied"), loop.History);
     }
 
-    [Fact]
+    [Test]
     public async Task Deny_CoversOneAttempt_IdenticalCallPromptsAgain()
     {
         using var dir = new TestTempDir();
@@ -121,13 +121,14 @@ public class AgentLoopPermissionTests
 
         var result = await loop.RunAsync("sys", "patch", CancellationToken.None);
 
-        Assert.Equal(AgentStatus.Completed, result.Status);
-        Assert.Equal(2, approver.Prompts);
-        Assert.Equal(1, result.ToolExecutions);
-        Assert.Equal("line1\nline2-fixed\nline3\n", await File.ReadAllTextAsync(Path.Combine(dir.Root, "fixme.cs")));
+        Assert.That(result.Status, Is.EqualTo(AgentStatus.Completed));
+        Assert.That(approver.Prompts, Is.EqualTo(2));
+        Assert.That(result.ToolExecutions, Is.EqualTo(1));
+        Assert.That(await File.ReadAllTextAsync(Path.Combine(dir.Root, "fixme.cs")),
+                    Is.EqualTo("line1\nline2-fixed\nline3\n"));
     }
 
-    [Fact]
+    [Test]
     public async Task AllowOnce_RepromptsForADifferentInvocation()
     {
         using var dir = new TestTempDir();
@@ -147,21 +148,19 @@ public class AgentLoopPermissionTests
 
         var result = await loop.RunAsync("sys", "patch twice", CancellationToken.None);
 
-        Assert.Equal(AgentStatus.Completed, result.Status);
-        Assert.Equal(2, approver.Prompts); // different fingerprints both re-prompt
+        Assert.That(result.Status, Is.EqualTo(AgentStatus.Completed));
+        Assert.That(approver.Prompts, Is.EqualTo(2)); // 指纹不同则两次都重新询问
     }
 
-    [Fact]
+    [Test]
     public async Task AllowOnce_CoversOneAttempt_IdenticalCallPromptsAgain()
     {
         using var dir = new TestTempDir();
         dir.WriteFile("fixme.cs", "line1\nline2\nline3\n");
 
         var client = new FakeChatClient();
-        // The same patch again in a later round: same fingerprint (tool,
-        // capability, targets, arguments), different call id — call ids are not
-        // part of the fingerprint. The first "allow once" must not auto-approve
-        // this second attempt.
+        // 后续回合重复同一补丁：指纹（工具、能力、目标、参数）相同而 call id 不同——
+        // call id 不参与指纹。首次 "allow once" 不得自动批准第二次尝试。
         client.Enqueue(FakeChatClient.ToolCall("apply_patch", PatchArgs(ReplacePatch(2)), "p1"));
         client.Enqueue(FakeChatClient.ToolCall("apply_patch", PatchArgs(ReplacePatch(2)), "p2"));
         client.Enqueue(FakeChatClient.Text("done"));
@@ -175,20 +174,19 @@ public class AgentLoopPermissionTests
 
         var result = await loop.RunAsync("sys", "patch", CancellationToken.None);
 
-        Assert.Equal(AgentStatus.Completed, result.Status);
-        Assert.Equal(2, approver.Prompts); // the identical invocation is approved again
+        Assert.That(result.Status, Is.EqualTo(AgentStatus.Completed));
+        Assert.That(approver.Prompts, Is.EqualTo(2)); // 完全相同的调用再次询问审批
     }
 
-    [Fact]
+    [Test]
     public async Task InvalidSiblingCall_AbortsTheWholeRound_BeforeAnySideEffect()
     {
         using var dir  = new TestTempDir();
         var       path = dir.WriteFile("fixme.cs", "line1\nline2\nline3\n");
 
         var client = new FakeChatClient();
-        // One round with two calls: the first is a valid patch, the second
-        // escapes the workspace and fails to prepare. The valid call must not
-        // run, because the whole round is validated before anything executes.
+        // 同一回合两次调用：第一次是合法补丁，第二次逃逸工作区且准备失败。
+        // 整个回合先统一校验再执行，合法调用也不得运行。
         var round = new List<ChatStreamEvent>
         {
             new()
@@ -210,22 +208,22 @@ public class AgentLoopPermissionTests
         client.Enqueue(round);
         client.Enqueue(FakeChatClient.Text("understood"));
 
-        var approver = new ScriptedApprover(); // no actions queued: nothing may be prompted
+        var approver = new ScriptedApprover(); // 未排队任何审批动作：不得发起询问
 
         var loop = new AgentLoop(client, new ToolRegistry([PatchTool(dir)]), Options(),
                                  new PermissionEngine(dir.Root), approver);
 
         var result = await loop.RunAsync("sys", "patch", CancellationToken.None);
 
-        Assert.Equal(AgentStatus.Completed, result.Status);
-        Assert.Equal(0, approver.Prompts); // no call of an aborted round is authorized
-        Assert.Equal(0, result.ToolExecutions);
-        Assert.Equal("line1\nline2\nline3\n", await File.ReadAllTextAsync(path)); // untouched
-        Assert.Contains(loop.History, m => m.Role == ChatRole.Tool && m.Content.Contains("failed to prepare"));
-        Assert.Contains(loop.History, m => m.Role == ChatRole.Tool && m.Content.Contains("Not executed"));
+        Assert.That(result.Status, Is.EqualTo(AgentStatus.Completed));
+        Assert.That(approver.Prompts, Is.EqualTo(0)); // 被中止回合的调用都不会获得授权
+        Assert.That(result.ToolExecutions, Is.EqualTo(0));
+        Assert.That(await File.ReadAllTextAsync(path), Is.EqualTo("line1\nline2\nline3\n")); // 文件未被改动
+        TestAssert.ContainsAll(m => m.Role == ChatRole.Tool && m.Content.Contains("failed to prepare"), loop.History);
+        TestAssert.ContainsAll(m => m.Role == ChatRole.Tool && m.Content.Contains("Not executed"), loop.History);
     }
 
-    [Fact]
+    [Test]
     public async Task MultipleCalls_AreAllAuthorizedBeforeTheFirstExecution()
     {
         using var dir    = new TestTempDir();
@@ -252,7 +250,7 @@ public class AgentLoopPermissionTests
         ]);
         client.Enqueue(FakeChatClient.Text("done"));
 
-        var approver = new ScriptedApprover { OnPrompt = () => Assert.Equal(0, tool.ExecuteCount) };
+        var approver = new ScriptedApprover { OnPrompt = () => Assert.That(tool.ExecuteCount, Is.EqualTo(0)) };
         approver.Enqueue(ApprovalAction.AllowOnce);
         approver.Enqueue(ApprovalAction.AllowOnce);
 
@@ -261,13 +259,13 @@ public class AgentLoopPermissionTests
 
         var result = await loop.RunAsync("sys", "run both", CancellationToken.None);
 
-        Assert.Equal(AgentStatus.Completed, result.Status);
-        Assert.Equal(2, approver.Prompts);
-        Assert.Equal(2, tool.ExecuteCount);
-        Assert.Equal(2, result.ToolExecutions);
+        Assert.That(result.Status, Is.EqualTo(AgentStatus.Completed));
+        Assert.That(approver.Prompts, Is.EqualTo(2));
+        Assert.That(tool.ExecuteCount, Is.EqualTo(2));
+        Assert.That(result.ToolExecutions, Is.EqualTo(2));
     }
 
-    [Fact]
+    [Test]
     public async Task ReadOnlyTools_DoNotPrompt()
     {
         using var dir = new TestTempDir();
@@ -284,8 +282,8 @@ public class AgentLoopPermissionTests
 
         var result = await loop.RunAsync("sys", "read", CancellationToken.None);
 
-        Assert.Equal(AgentStatus.Completed, result.Status);
-        Assert.Equal(0, approver.Prompts);
+        Assert.That(result.Status, Is.EqualTo(AgentStatus.Completed));
+        Assert.That(approver.Prompts, Is.EqualTo(0));
     }
 
     private static string EscapePatch() =>
@@ -310,7 +308,10 @@ public class AgentLoopPermissionTests
             """;
     }
 
-    /// <summary>Returns actions from a queue and counts how many times it was asked.</summary>
+    /// <summary>
+    ///     <para>按队列顺序返回审批动作，并统计被询问次数。</para>
+    ///     <para>Returns actions from a queue and counts how many times it was asked.</para>
+    /// </summary>
     private sealed class ScriptedApprover : IApprovalProvider
     {
         private readonly Queue<ApprovalAction> _actions = new();

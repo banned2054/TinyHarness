@@ -19,16 +19,16 @@ public class WorkerResultValidatorTests
 
     // ---- legal shapes per status ---------------------------------------------
 
-    [Fact]
+    [Test]
     public void CompletedResult_WithConclusionOnly_IsValid()
     {
         var result = WorkerResultValidator.Validate(CompletedResult());
 
-        Assert.True(result.IsValid);
-        Assert.Empty(result.Errors);
+        Assert.That(result.IsValid, Is.True);
+        Assert.That(result.Errors, Is.Empty);
     }
 
-    [Fact]
+    [Test]
     public void CompletedResult_WithFullContent_IsValid()
     {
         var request = CompletedResult() with
@@ -57,110 +57,112 @@ public class WorkerResultValidatorTests
 
         var result = WorkerResultValidator.Validate(request);
 
-        Assert.True(result.IsValid);
-        Assert.Empty(result.Errors);
+        Assert.That(result.IsValid, Is.True);
+        Assert.That(result.Errors, Is.Empty);
     }
 
-    [Theory]
-    [InlineData(WorkerResultStatus.Incomplete)]
-    [InlineData(WorkerResultStatus.Failed)]
-    [InlineData(WorkerResultStatus.Cancelled)]
+
+    [TestCase(WorkerResultStatus.Incomplete)]
+    [TestCase(WorkerResultStatus.Failed)]
+    [TestCase(WorkerResultStatus.Cancelled)]
     public void NonCompletedResult_WithStatusDetailOnly_IsValid(WorkerResultStatus status)
     {
         var result = WorkerResultValidator.Validate(NonCompletedResult(status));
 
-        Assert.True(result.IsValid);
-        Assert.Empty(result.Errors);
+        Assert.That(result.IsValid, Is.True);
+        Assert.That(result.Errors, Is.Empty);
     }
 
     // ---- illegal status shapes -------------------------------------------------
 
-    [Fact]
+    [Test]
     public void CompletedResult_WithoutConclusion_IsRejected()
     {
         var candidate = CompletedResult() with { Conclusion = string.Empty };
 
         var result = WorkerResultValidator.Validate(candidate);
 
-        Assert.False(result.IsValid);
-        Assert.Contains(result.Errors, error => error.Contains("'conclusion'", StringComparison.Ordinal));
+        Assert.That(result.IsValid, Is.False);
+        TestAssert.ContainsAll(error => error.Contains("'conclusion'", StringComparison.Ordinal), result.Errors);
     }
 
-    [Fact]
+    [Test]
     public void CompletedResult_WithStatusDetail_IsRejected()
     {
         var candidate = CompletedResult() with { StatusDetail = "leftover note" };
 
         var result = WorkerResultValidator.Validate(candidate);
 
-        Assert.False(result.IsValid);
-        Assert.Contains(result.Errors, error => error.Contains("'statusDetail'", StringComparison.Ordinal));
+        Assert.That(result.IsValid, Is.False);
+        TestAssert.ContainsAll(error => error.Contains("'statusDetail'", StringComparison.Ordinal), result.Errors);
     }
 
-    [Theory]
-    [InlineData(WorkerResultStatus.Incomplete)]
-    [InlineData(WorkerResultStatus.Failed)]
-    [InlineData(WorkerResultStatus.Cancelled)]
+
+    [TestCase(WorkerResultStatus.Incomplete)]
+    [TestCase(WorkerResultStatus.Failed)]
+    [TestCase(WorkerResultStatus.Cancelled)]
     public void NonCompletedResult_WithConclusion_IsRejected(WorkerResultStatus status)
     {
         var candidate = NonCompletedResult(status) with { Conclusion = "Looks done to me." };
 
         var result = WorkerResultValidator.Validate(candidate);
 
-        Assert.False(result.IsValid);
-        Assert.Contains(result.Errors, error => error.Contains("'conclusion'", StringComparison.Ordinal));
+        Assert.That(result.IsValid, Is.False);
+        TestAssert.ContainsAll(error => error.Contains("'conclusion'", StringComparison.Ordinal), result.Errors);
     }
 
-    [Theory]
-    [InlineData(WorkerResultStatus.Incomplete)]
-    [InlineData(WorkerResultStatus.Failed)]
-    [InlineData(WorkerResultStatus.Cancelled)]
+
+    [TestCase(WorkerResultStatus.Incomplete)]
+    [TestCase(WorkerResultStatus.Failed)]
+    [TestCase(WorkerResultStatus.Cancelled)]
     public void NonCompletedResult_WithoutStatusDetail_IsRejected(WorkerResultStatus status)
     {
         var candidate = NonCompletedResult(status) with { StatusDetail = "  " };
 
         var result = WorkerResultValidator.Validate(candidate);
 
-        Assert.False(result.IsValid);
-        Assert.Contains(result.Errors, error => error.Contains("'statusDetail'", StringComparison.Ordinal));
+        Assert.That(result.IsValid, Is.False);
+        TestAssert.ContainsAll(error => error.Contains("'statusDetail'", StringComparison.Ordinal), result.Errors);
     }
 
-    [Fact]
+    [Test]
     public void UnknownStatusValue_IsRejected()
     {
         var candidate = CompletedResult() with { Status = (WorkerResultStatus)99 };
 
         var result = WorkerResultValidator.Validate(candidate);
 
-        Assert.False(result.IsValid);
-        Assert.Contains(result.Errors, error => error.Contains("'status'", StringComparison.Ordinal));
+        Assert.That(result.IsValid, Is.False);
+        TestAssert.ContainsAll(error => error.Contains("'status'", StringComparison.Ordinal), result.Errors);
     }
 
     // ---- statistics --------------------------------------------------------------
 
-    [Fact]
+    [Test]
     public void NegativeModelRequests_IsRejected()
     {
         var candidate = CompletedResult() with { Statistics = new WorkerExecutionStats { ModelRequests = -1 } };
 
         var result = WorkerResultValidator.Validate(candidate);
 
-        Assert.False(result.IsValid);
-        Assert.Contains(result.Errors, error => error.Contains("statistics.modelRequests", StringComparison.Ordinal));
+        Assert.That(result.IsValid, Is.False);
+        TestAssert.ContainsAll(error => error.Contains("statistics.modelRequests", StringComparison.Ordinal),
+                               result.Errors);
     }
 
-    [Fact]
+    [Test]
     public void NegativeToolCalls_IsRejected()
     {
         var candidate = CompletedResult() with { Statistics = new WorkerExecutionStats { ToolCalls = -1 } };
 
         var result = WorkerResultValidator.Validate(candidate);
 
-        Assert.False(result.IsValid);
-        Assert.Contains(result.Errors, error => error.Contains("statistics.toolCalls", StringComparison.Ordinal));
+        Assert.That(result.IsValid, Is.False);
+        TestAssert.ContainsAll(error => error.Contains("statistics.toolCalls", StringComparison.Ordinal),
+                               result.Errors);
     }
 
-    [Fact]
+    [Test]
     public void NegativeToolOutputCharacters_IsRejected()
     {
         var candidate = CompletedResult() with
@@ -170,12 +172,12 @@ public class WorkerResultValidatorTests
 
         var result = WorkerResultValidator.Validate(candidate);
 
-        Assert.False(result.IsValid);
-        Assert.Contains(result.Errors,
-                        error => error.Contains("statistics.toolOutputCharacters", StringComparison.Ordinal));
+        Assert.That(result.IsValid, Is.False);
+        TestAssert.ContainsAll(error => error.Contains("statistics.toolOutputCharacters", StringComparison.Ordinal),
+                               result.Errors);
     }
 
-    [Fact]
+    [Test]
     public void NegativeElapsed_IsRejected()
     {
         var candidate = CompletedResult() with
@@ -185,24 +187,24 @@ public class WorkerResultValidatorTests
 
         var result = WorkerResultValidator.Validate(candidate);
 
-        Assert.False(result.IsValid);
-        Assert.Contains(result.Errors, error => error.Contains("statistics.elapsed", StringComparison.Ordinal));
+        Assert.That(result.IsValid, Is.False);
+        TestAssert.ContainsAll(error => error.Contains("statistics.elapsed", StringComparison.Ordinal), result.Errors);
     }
 
-    [Fact]
+    [Test]
     public void NullStatistics_IsRejectedWithoutThrowing()
     {
         var candidate = CompletedResult() with { Statistics = null! };
 
         var result = WorkerResultValidator.Validate(candidate);
 
-        Assert.False(result.IsValid);
-        Assert.Contains(result.Errors, error => error.Contains("'statistics'", StringComparison.Ordinal));
+        Assert.That(result.IsValid, Is.False);
+        TestAssert.ContainsAll(error => error.Contains("'statistics'", StringComparison.Ordinal), result.Errors);
     }
 
     // ---- evidence ------------------------------------------------------------------
 
-    [Fact]
+    [Test]
     public void Evidence_AtExactCountLimit_IsValid()
     {
         var candidate = CompletedResult() with
@@ -220,11 +222,11 @@ public class WorkerResultValidatorTests
 
         var result = WorkerResultValidator.Validate(candidate);
 
-        Assert.True(result.IsValid);
-        Assert.Empty(result.Errors);
+        Assert.That(result.IsValid, Is.True);
+        Assert.That(result.Errors, Is.Empty);
     }
 
-    [Fact]
+    [Test]
     public void Evidence_OverCount_IsRejected()
     {
         var candidate = CompletedResult() with
@@ -236,35 +238,35 @@ public class WorkerResultValidatorTests
 
         var result = WorkerResultValidator.Validate(candidate);
 
-        Assert.False(result.IsValid);
-        Assert.Contains(result.Errors, error => error.Contains("'evidence'", StringComparison.Ordinal));
+        Assert.That(result.IsValid, Is.False);
+        TestAssert.ContainsAll(error => error.Contains("'evidence'", StringComparison.Ordinal), result.Errors);
     }
 
-    [Theory]
-    [InlineData("")]
-    [InlineData("   ")]
-    [InlineData("C:\\src\\file.cs")]
-    [InlineData("C:/src/file.cs")]
-    [InlineData("C:relative.txt")]
-    [InlineData("c:\\lower\\drive.cs")]
-    [InlineData("/absolute/file.cs")]
-    [InlineData("\\rooted.txt")]
-    [InlineData("\\\\server\\share\\file.cs")]
-    [InlineData("//host/share/file.cs")]
-    [InlineData("../outside.txt")]
-    [InlineData("src/../../outside.txt")]
-    [InlineData("bad\u0001path.cs")]
+
+    [TestCase("")]
+    [TestCase("   ")]
+    [TestCase("C:\\src\\file.cs")]
+    [TestCase("C:/src/file.cs")]
+    [TestCase("C:relative.txt")]
+    [TestCase("c:\\lower\\drive.cs")]
+    [TestCase("/absolute/file.cs")]
+    [TestCase("\\rooted.txt")]
+    [TestCase("\\\\server\\share\\file.cs")]
+    [TestCase("//host/share/file.cs")]
+    [TestCase("../outside.txt")]
+    [TestCase("src/../../outside.txt")]
+    [TestCase("bad\u0001path.cs")]
     public void EvidencePath_InvalidShape_IsRejectedWithIndex(string path)
     {
         var candidate = CompletedResult() with { Evidence = [new WorkerEvidence { Path = path }] };
 
         var result = WorkerResultValidator.Validate(candidate);
 
-        Assert.False(result.IsValid);
-        Assert.Contains(result.Errors, error => error.Contains("evidence[0].path", StringComparison.Ordinal));
+        Assert.That(result.IsValid, Is.False);
+        TestAssert.ContainsAll(error => error.Contains("evidence[0].path", StringComparison.Ordinal), result.Errors);
     }
 
-    [Fact]
+    [Test]
     public void EvidenceLineNumbers_ValidCombinations_AreAccepted()
     {
         var candidate = CompletedResult() with
@@ -280,13 +282,13 @@ public class WorkerResultValidatorTests
 
         var result = WorkerResultValidator.Validate(candidate);
 
-        Assert.True(result.IsValid);
-        Assert.Empty(result.Errors);
+        Assert.That(result.IsValid, Is.True);
+        Assert.That(result.Errors, Is.Empty);
     }
 
-    [Theory]
-    [InlineData(0)]
-    [InlineData(-3)]
+
+    [TestCase(0)]
+    [TestCase(-3)]
     public void EvidenceLineStart_BelowOne_IsRejected(int lineStart)
     {
         var candidate = CompletedResult() with
@@ -296,11 +298,12 @@ public class WorkerResultValidatorTests
 
         var result = WorkerResultValidator.Validate(candidate);
 
-        Assert.False(result.IsValid);
-        Assert.Contains(result.Errors, error => error.Contains("evidence[0].lineStart", StringComparison.Ordinal));
+        Assert.That(result.IsValid, Is.False);
+        TestAssert.ContainsAll(error => error.Contains("evidence[0].lineStart", StringComparison.Ordinal),
+                               result.Errors);
     }
 
-    [Fact]
+    [Test]
     public void EvidenceLineEnd_SmallerThanLineStart_IsRejected()
     {
         var candidate = CompletedResult() with
@@ -310,11 +313,11 @@ public class WorkerResultValidatorTests
 
         var result = WorkerResultValidator.Validate(candidate);
 
-        Assert.False(result.IsValid);
-        Assert.Contains(result.Errors, error => error.Contains("evidence[0].lineEnd", StringComparison.Ordinal));
+        Assert.That(result.IsValid, Is.False);
+        TestAssert.ContainsAll(error => error.Contains("evidence[0].lineEnd", StringComparison.Ordinal), result.Errors);
     }
 
-    [Fact]
+    [Test]
     public void EvidenceLineEnd_WithoutLineStart_IsRejected()
     {
         var candidate = CompletedResult() with
@@ -324,11 +327,11 @@ public class WorkerResultValidatorTests
 
         var result = WorkerResultValidator.Validate(candidate);
 
-        Assert.False(result.IsValid);
-        Assert.Contains(result.Errors, error => error.Contains("evidence[0].lineEnd", StringComparison.Ordinal));
+        Assert.That(result.IsValid, Is.False);
+        TestAssert.ContainsAll(error => error.Contains("evidence[0].lineEnd", StringComparison.Ordinal), result.Errors);
     }
 
-    [Fact]
+    [Test]
     public void EvidenceNote_OverLength_IsRejectedWithIndex()
     {
         var candidate = CompletedResult() with
@@ -345,11 +348,11 @@ public class WorkerResultValidatorTests
 
         var result = WorkerResultValidator.Validate(candidate);
 
-        Assert.False(result.IsValid);
-        Assert.Contains(result.Errors, error => error.Contains("evidence[0].note", StringComparison.Ordinal));
+        Assert.That(result.IsValid, Is.False);
+        TestAssert.ContainsAll(error => error.Contains("evidence[0].note", StringComparison.Ordinal), result.Errors);
     }
 
-    [Fact]
+    [Test]
     public void Evidence_WithPathOverLength_IsRejectedWithLimit()
     {
         var candidate = CompletedResult() with
@@ -359,25 +362,25 @@ public class WorkerResultValidatorTests
 
         var result = WorkerResultValidator.Validate(candidate);
 
-        Assert.False(result.IsValid);
-        var error = Assert.Single(result.Errors);
-        Assert.Contains("evidence[0].path", error, StringComparison.Ordinal);
-        Assert.Contains(WorkerResultLimits.MaxEvidencePathLength.ToString(), error, StringComparison.Ordinal);
+        Assert.That(result.IsValid, Is.False);
+        var error = TestAssert.Single(result.Errors);
+        TestAssert.Contains("evidence[0].path", error, StringComparison.Ordinal);
+        TestAssert.Contains(WorkerResultLimits.MaxEvidencePathLength.ToString(), error, StringComparison.Ordinal);
     }
 
     // ---- conclusion / statusDetail lengths ------------------------------------------
 
-    [Fact]
+    [Test]
     public void Conclusion_AtExactLimit_IsValid()
     {
         var candidate = CompletedResult() with { Conclusion = new string('a', WorkerResultLimits.MaxConclusionLength) };
 
         var result = WorkerResultValidator.Validate(candidate);
 
-        Assert.True(result.IsValid);
+        Assert.That(result.IsValid, Is.True);
     }
 
-    [Fact]
+    [Test]
     public void Conclusion_OverLimit_IsRejectedWithLimit()
     {
         var candidate = CompletedResult() with
@@ -387,13 +390,13 @@ public class WorkerResultValidatorTests
 
         var result = WorkerResultValidator.Validate(candidate);
 
-        Assert.False(result.IsValid);
-        var error = Assert.Single(result.Errors);
-        Assert.Contains("'conclusion'", error, StringComparison.Ordinal);
-        Assert.Contains(WorkerResultLimits.MaxConclusionLength.ToString(), error, StringComparison.Ordinal);
+        Assert.That(result.IsValid, Is.False);
+        var error = TestAssert.Single(result.Errors);
+        TestAssert.Contains("'conclusion'", error, StringComparison.Ordinal);
+        TestAssert.Contains(WorkerResultLimits.MaxConclusionLength.ToString(), error, StringComparison.Ordinal);
     }
 
-    [Fact]
+    [Test]
     public void StatusDetail_AtExactLimit_IsValid()
     {
         var candidate = NonCompletedResult(WorkerResultStatus.Incomplete) with
@@ -403,10 +406,10 @@ public class WorkerResultValidatorTests
 
         var result = WorkerResultValidator.Validate(candidate);
 
-        Assert.True(result.IsValid);
+        Assert.That(result.IsValid, Is.True);
     }
 
-    [Fact]
+    [Test]
     public void StatusDetail_OverLimit_IsRejectedWithLimit()
     {
         var candidate = NonCompletedResult(WorkerResultStatus.Incomplete) with
@@ -416,18 +419,17 @@ public class WorkerResultValidatorTests
 
         var result = WorkerResultValidator.Validate(candidate);
 
-        Assert.False(result.IsValid);
-        var error = Assert.Single(result.Errors);
-        Assert.Contains("'statusDetail'", error, StringComparison.Ordinal);
-        Assert.Contains(WorkerResultLimits.MaxStatusDetailLength.ToString(), error, StringComparison.Ordinal);
+        Assert.That(result.IsValid, Is.False);
+        var error = TestAssert.Single(result.Errors);
+        TestAssert.Contains("'statusDetail'", error, StringComparison.Ordinal);
+        TestAssert.Contains(WorkerResultLimits.MaxStatusDetailLength.ToString(), error, StringComparison.Ordinal);
     }
 
-    [Fact]
+    [Test]
     public void CompletedResult_WithLongWhitespaceStatusDetail_LengthLimitStillApplies()
     {
         // 空白 statusDetail 在形状规则中等同于“空”，因此只报长度错误；长度上限不受状态影响。
-        // Whitespace statusDetail counts as empty for the shape rule, so only the length error fires;
-        // the length limit applies regardless of status.
+        // 空白 statusDetail 按形状规则视为空，因此只触发长度错误；长度上限与状态无关。
         var candidate = CompletedResult() with
         {
             StatusDetail = new string(' ', WorkerResultLimits.MaxStatusDetailLength + 1)
@@ -435,13 +437,13 @@ public class WorkerResultValidatorTests
 
         var result = WorkerResultValidator.Validate(candidate);
 
-        Assert.False(result.IsValid);
-        var error = Assert.Single(result.Errors);
-        Assert.Contains("'statusDetail'", error, StringComparison.Ordinal);
-        Assert.Contains("exceeds the maximum length", error, StringComparison.Ordinal);
+        Assert.That(result.IsValid, Is.False);
+        var error = TestAssert.Single(result.Errors);
+        TestAssert.Contains("'statusDetail'", error, StringComparison.Ordinal);
+        TestAssert.Contains("exceeds the maximum length", error, StringComparison.Ordinal);
     }
 
-    [Fact]
+    [Test]
     public void NonCompletedResult_WithLongWhitespaceStatusDetail_IsRejectedForShapeAndLength()
     {
         var candidate = NonCompletedResult(WorkerResultStatus.Incomplete) with
@@ -451,15 +453,16 @@ public class WorkerResultValidatorTests
 
         var result = WorkerResultValidator.Validate(candidate);
 
-        Assert.False(result.IsValid);
-        Assert.Equal(2, result.Errors.Count);
-        Assert.Contains(result.Errors, error => error.Contains("is required", StringComparison.Ordinal));
-        Assert.Contains(result.Errors, error => error.Contains("exceeds the maximum length", StringComparison.Ordinal));
+        Assert.That(result.IsValid, Is.False);
+        Assert.That(result.Errors.Count, Is.EqualTo(2));
+        TestAssert.ContainsAll(error => error.Contains("is required", StringComparison.Ordinal), result.Errors);
+        TestAssert.ContainsAll(error => error.Contains("exceeds the maximum length", StringComparison.Ordinal),
+                               result.Errors);
     }
 
     // ---- suggestion / uncertainty lists ------------------------------------------------
 
-    [Fact]
+    [Test]
     public void SingleList_AtExactPerListLimits_IsValid()
     {
         var candidate = CompletedResult() with
@@ -471,11 +474,11 @@ public class WorkerResultValidatorTests
 
         var result = WorkerResultValidator.Validate(candidate);
 
-        Assert.True(result.IsValid);
-        Assert.Empty(result.Errors);
+        Assert.That(result.IsValid, Is.True);
+        Assert.That(result.Errors, Is.Empty);
     }
 
-    [Fact]
+    [Test]
     public void Lists_OverTotalBudget_AreRejectedByTotalLimit()
     {
         var fullList = Enumerable.Range(1, WorkerResultLimits.MaxListCount)
@@ -490,12 +493,12 @@ public class WorkerResultValidatorTests
 
         var result = WorkerResultValidator.Validate(candidate);
 
-        Assert.False(result.IsValid);
-        var error = Assert.Single(result.Errors);
-        Assert.Contains("maximum total", error, StringComparison.Ordinal);
+        Assert.That(result.IsValid, Is.False);
+        var error = TestAssert.Single(result.Errors);
+        TestAssert.Contains("maximum total", error, StringComparison.Ordinal);
     }
 
-    [Fact]
+    [Test]
     public void List_OverCount_IsRejected()
     {
         var candidate = CompletedResult() with
@@ -507,11 +510,11 @@ public class WorkerResultValidatorTests
 
         var result = WorkerResultValidator.Validate(candidate);
 
-        Assert.False(result.IsValid);
-        Assert.Contains(result.Errors, error => error.Contains("'suggestedChanges'", StringComparison.Ordinal));
+        Assert.That(result.IsValid, Is.False);
+        TestAssert.ContainsAll(error => error.Contains("'suggestedChanges'", StringComparison.Ordinal), result.Errors);
     }
 
-    [Fact]
+    [Test]
     public void ListEntry_OverLength_IsRejectedWithIndex()
     {
         var candidate = CompletedResult() with
@@ -521,26 +524,26 @@ public class WorkerResultValidatorTests
 
         var result = WorkerResultValidator.Validate(candidate);
 
-        Assert.False(result.IsValid);
-        var error = Assert.Single(result.Errors);
-        Assert.Contains("testSuggestions[0]", error, StringComparison.Ordinal);
-        Assert.Contains(WorkerResultLimits.MaxListEntryLength.ToString(), error, StringComparison.Ordinal);
+        Assert.That(result.IsValid, Is.False);
+        var error = TestAssert.Single(result.Errors);
+        TestAssert.Contains("testSuggestions[0]", error, StringComparison.Ordinal);
+        TestAssert.Contains(WorkerResultLimits.MaxListEntryLength.ToString(), error, StringComparison.Ordinal);
     }
 
-    [Fact]
+    [Test]
     public void BlankListEntry_IsRejectedWithIndex()
     {
         var candidate = CompletedResult() with { Uncertainties = ["real uncertainty", "   "] };
 
         var result = WorkerResultValidator.Validate(candidate);
 
-        Assert.False(result.IsValid);
-        Assert.Contains(result.Errors, error => error.Contains("uncertainties[1]", StringComparison.Ordinal));
+        Assert.That(result.IsValid, Is.False);
+        TestAssert.ContainsAll(error => error.Contains("uncertainties[1]", StringComparison.Ordinal), result.Errors);
     }
 
     // ---- total budget ---------------------------------------------------------------------
 
-    [Fact]
+    [Test]
     public void TotalText_AtExactLimit_IsValid()
     {
         var candidate = CompletedResult() with
@@ -556,11 +559,11 @@ public class WorkerResultValidatorTests
 
         var result = WorkerResultValidator.Validate(candidate);
 
-        Assert.True(result.IsValid);
-        Assert.Empty(result.Errors);
+        Assert.That(result.IsValid, Is.True);
+        Assert.That(result.Errors, Is.Empty);
     }
 
-    [Fact]
+    [Test]
     public void TotalText_OverLimit_IsRejectedAlongsideEntryLimit()
     {
         var candidate = CompletedResult() with
@@ -577,12 +580,12 @@ public class WorkerResultValidatorTests
 
         var result = WorkerResultValidator.Validate(candidate);
 
-        Assert.False(result.IsValid);
-        Assert.Contains(result.Errors, error => error.Contains("testSuggestions[6]", StringComparison.Ordinal));
-        Assert.Contains(result.Errors, error => error.Contains("maximum total", StringComparison.Ordinal));
+        Assert.That(result.IsValid, Is.False);
+        TestAssert.ContainsAll(error => error.Contains("testSuggestions[6]", StringComparison.Ordinal), result.Errors);
+        TestAssert.ContainsAll(error => error.Contains("maximum total", StringComparison.Ordinal), result.Errors);
     }
 
-    [Fact]
+    [Test]
     public void OversizedEvidence_TotalBudgetErrorCarriesExactWideTotal()
     {
         const int entryCount = 30_000;
@@ -596,15 +599,16 @@ public class WorkerResultValidatorTests
 
         var result = WorkerResultValidator.Validate(candidate);
 
-        Assert.False(result.IsValid);
-        Assert.Contains(result.Errors, error => error.Contains("'evidence'", StringComparison.Ordinal));
+        Assert.That(result.IsValid, Is.False);
+        TestAssert.ContainsAll(error => error.Contains("'evidence'", StringComparison.Ordinal), result.Errors);
         var expectedTotal = (long)entryCount * WorkerResultLimits.MaxEvidencePathLength + candidate.Conclusion.Length;
-        Assert.Contains(result.Errors, error => error.Contains($"(actual: {expectedTotal})", StringComparison.Ordinal));
+        TestAssert.ContainsAll(error => error.Contains($"(actual: {expectedTotal})", StringComparison.Ordinal),
+                               result.Errors);
     }
 
     // ---- accumulation and null handling ------------------------------------------------------
 
-    [Fact]
+    [Test]
     public void MultipleInvalidParts_AreAllReported()
     {
         var candidate = new WorkerResult
@@ -617,29 +621,30 @@ public class WorkerResultValidatorTests
 
         var result = WorkerResultValidator.Validate(candidate);
 
-        Assert.False(result.IsValid);
-        Assert.Contains(result.Errors, error => error.Contains("'conclusion'", StringComparison.Ordinal));
-        Assert.Contains(result.Errors, error => error.Contains("evidence[0].path", StringComparison.Ordinal));
-        Assert.Contains(result.Errors, error => error.Contains("statistics.toolCalls", StringComparison.Ordinal));
+        Assert.That(result.IsValid, Is.False);
+        TestAssert.ContainsAll(error => error.Contains("'conclusion'", StringComparison.Ordinal), result.Errors);
+        TestAssert.ContainsAll(error => error.Contains("evidence[0].path", StringComparison.Ordinal), result.Errors);
+        TestAssert.ContainsAll(error => error.Contains("statistics.toolCalls", StringComparison.Ordinal),
+                               result.Errors);
     }
 
-    [Fact]
+    [Test]
     public void NullResult_IsInvalidWithoutThrowing()
     {
         var result = WorkerResultValidator.Validate(null);
 
-        Assert.False(result.IsValid);
-        Assert.NotEmpty(result.Errors);
+        Assert.That(result.IsValid, Is.False);
+        Assert.That(result.Errors, Is.Not.Empty);
     }
 
-    [Fact]
+    [Test]
     public void NullEvidenceEntry_IsRejectedWithIndex()
     {
         var candidate = CompletedResult() with { Evidence = [null!] };
 
         var result = WorkerResultValidator.Validate(candidate);
 
-        Assert.False(result.IsValid);
-        Assert.Contains(result.Errors, error => error.Contains("evidence[0]", StringComparison.Ordinal));
+        Assert.That(result.IsValid, Is.False);
+        TestAssert.ContainsAll(error => error.Contains("evidence[0]", StringComparison.Ordinal), result.Errors);
     }
 }

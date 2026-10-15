@@ -21,7 +21,7 @@ public class PermissionEngineTests
         TargetPaths = targets
     };
 
-    [Fact]
+    [Test]
     public void ToolPreparation_SnapshotsMutableInputs()
     {
         using var dir     = new TestTempDir();
@@ -43,42 +43,42 @@ public class PermissionEngineTests
         args["line"] = 2;
         targets[0]   = b;
 
-        Assert.Equal(1, preparation.Arguments["line"]!.GetValue<int>());
-        Assert.Equal(a, Assert.Single(preparation.TargetPaths));
+        Assert.That(preparation.Arguments["line"]!.GetValue<int>(), Is.EqualTo(1));
+        Assert.That(TestAssert.Single(preparation.TargetPaths), Is.EqualTo(a));
     }
 
-    [Fact]
+    [Test]
     public void ReadOnlyInsideWorkspace_IsAllowedByDefault()
     {
         using var dir    = new TestTempDir();
         var       engine = new PermissionEngine(dir.Root);
         var       target = Path.Combine(dir.Root, "a.cs");
 
-        Assert.Equal(PermissionDecision.Allow, engine.Decide(Prep("filesystem.read", [target])));
-        Assert.Equal(PermissionDecision.Allow, engine.Decide(Prep("filesystem.list", [dir.Root])));
-        Assert.Equal(PermissionDecision.Allow, engine.Decide(Prep("filesystem.search", [dir.Root])));
+        Assert.That(engine.Decide(Prep("filesystem.read", [target])), Is.EqualTo(PermissionDecision.Allow));
+        Assert.That(engine.Decide(Prep("filesystem.list", [dir.Root])), Is.EqualTo(PermissionDecision.Allow));
+        Assert.That(engine.Decide(Prep("filesystem.search", [dir.Root])), Is.EqualTo(PermissionDecision.Allow));
     }
 
-    [Fact]
+    [Test]
     public void WriteInsideWorkspace_AsksByDefault()
     {
         using var dir    = new TestTempDir();
         var       engine = new PermissionEngine(dir.Root);
         var       target = Path.Combine(dir.Root, "a.cs");
 
-        Assert.Equal(PermissionDecision.Ask, engine.Decide(Prep("filesystem.write", [target])));
+        Assert.That(engine.Decide(Prep("filesystem.write", [target])), Is.EqualTo(PermissionDecision.Ask));
     }
 
-    [Fact]
+    [Test]
     public void UnknownCapability_AsksByDefault()
     {
         using var dir    = new TestTempDir();
         var       engine = new PermissionEngine(dir.Root);
 
-        Assert.Equal(PermissionDecision.Ask, engine.Decide(Prep("process.execute", [dir.Root])));
+        Assert.That(engine.Decide(Prep("process.execute", [dir.Root])), Is.EqualTo(PermissionDecision.Ask));
     }
 
-    [Fact]
+    [Test]
     public void NonReadOnlyBlock_DeniesSideEffectsWhileReadsStayAllowedAndGrantsCannotBypass()
     {
         using var dir     = new TestTempDir();
@@ -90,41 +90,41 @@ public class PermissionEngineTests
 
         // NeedsInspection 阻断所有非只读能力。
         engine.SetNonReadOnlyBlock("run x was interrupted");
-        Assert.Equal(PermissionDecision.Deny, engine.Decide(write));
-        Assert.Equal(PermissionDecision.Deny, engine.Decide(execute));
-        Assert.Equal(PermissionDecision.Allow, engine.Decide(read));
-        Assert.Equal("run x was interrupted", engine.NonReadOnlyBlockReason);
-        Assert.Equal("run x was interrupted", engine.NonReadOnlyBlock(write));
-        Assert.Null(engine.NonReadOnlyBlock(read));
+        Assert.That(engine.Decide(write), Is.EqualTo(PermissionDecision.Deny));
+        Assert.That(engine.Decide(execute), Is.EqualTo(PermissionDecision.Deny));
+        Assert.That(engine.Decide(read), Is.EqualTo(PermissionDecision.Allow));
+        Assert.That(engine.NonReadOnlyBlockReason, Is.EqualTo("run x was interrupted"));
+        Assert.That(engine.NonReadOnlyBlock(write), Is.EqualTo("run x was interrupted"));
+        Assert.That(engine.NonReadOnlyBlock(read), Is.Null);
 
         // 运行期授权和单次批准均不能绕过检查阻断。
         engine.GrantSession(write);
         engine.GrantOnce(execute);
-        Assert.Equal(PermissionDecision.Deny, engine.Decide(write));
-        Assert.Equal(PermissionDecision.Deny, engine.Decide(execute));
+        Assert.That(engine.Decide(write), Is.EqualTo(PermissionDecision.Deny));
+        Assert.That(engine.Decide(execute), Is.EqualTo(PermissionDecision.Deny));
 
         // 解除阻断后恢复正常策略，已有授权按原范围生效。
         engine.SetNonReadOnlyBlock(null);
-        Assert.Null(engine.NonReadOnlyBlockReason);
-        Assert.Equal(PermissionDecision.Allow, engine.Decide(write));
-        Assert.Equal(PermissionDecision.Allow, engine.Decide(execute));
+        Assert.That(engine.NonReadOnlyBlockReason, Is.Null);
+        Assert.That(engine.Decide(write), Is.EqualTo(PermissionDecision.Allow));
+        Assert.That(engine.Decide(execute), Is.EqualTo(PermissionDecision.Allow));
     }
 
-    [Fact]
+    [Test]
     public void WorkerMode_HardDeniesWriteProcessAndUnknownCapabilities()
     {
         using var dir    = new TestTempDir();
         var       engine = new PermissionEngine(dir.Root, denyNonReadOnlyCapabilities : true);
 
-        Assert.Equal(PermissionDecision.Allow,
-                     engine.Decide(Prep("filesystem.read", [Path.Combine(dir.Root, "a.cs")])));
-        Assert.Equal(PermissionDecision.Deny,
-                     engine.Decide(Prep("filesystem.write", [Path.Combine(dir.Root, "a.cs")])));
-        Assert.Equal(PermissionDecision.Deny, engine.Decide(Prep("process.execute", [dir.Root])));
-        Assert.Equal(PermissionDecision.Deny, engine.Decide(Prep("filesystem.unknown", [dir.Root])));
+        Assert.That(engine.Decide(Prep("filesystem.read", [Path.Combine(dir.Root, "a.cs")])),
+                    Is.EqualTo(PermissionDecision.Allow));
+        Assert.That(engine.Decide(Prep("filesystem.write", [Path.Combine(dir.Root, "a.cs")])),
+                    Is.EqualTo(PermissionDecision.Deny));
+        Assert.That(engine.Decide(Prep("process.execute", [dir.Root])), Is.EqualTo(PermissionDecision.Deny));
+        Assert.That(engine.Decide(Prep("filesystem.unknown", [dir.Root])), Is.EqualTo(PermissionDecision.Deny));
     }
 
-    [Fact]
+    [Test]
     public void TargetOutsideWorkspace_IsHardDenied()
     {
         using var inside  = new TestTempDir();
@@ -132,11 +132,11 @@ public class PermissionEngineTests
         var       engine  = new PermissionEngine(inside.Root);
         var       target  = Path.Combine(outside.Root, "secret.cs");
 
-        Assert.Equal(PermissionDecision.Deny, engine.Decide(Prep("filesystem.read", [target])));
-        Assert.Equal(PermissionDecision.Deny, engine.Decide(Prep("filesystem.write", [target])));
+        Assert.That(engine.Decide(Prep("filesystem.read", [target])), Is.EqualTo(PermissionDecision.Deny));
+        Assert.That(engine.Decide(Prep("filesystem.write", [target])), Is.EqualTo(PermissionDecision.Deny));
     }
 
-    [Fact]
+    [Test]
     public void SessionGrant_AllowsMatchingScopeOnly()
     {
         using var dir    = new TestTempDir();
@@ -146,11 +146,11 @@ public class PermissionEngineTests
 
         engine.GrantSession(Prep("filesystem.write", [a]));
 
-        Assert.Equal(PermissionDecision.Allow, engine.Decide(Prep("filesystem.write", [a])));
-        Assert.Equal(PermissionDecision.Ask, engine.Decide(Prep("filesystem.write", [b])));
+        Assert.That(engine.Decide(Prep("filesystem.write", [a])), Is.EqualTo(PermissionDecision.Allow));
+        Assert.That(engine.Decide(Prep("filesystem.write", [b])), Is.EqualTo(PermissionDecision.Ask));
     }
 
-    [Fact]
+    [Test]
     public void SessionGrant_DirectoryScopeCoversDescendants()
     {
         using var dir    = new TestTempDir();
@@ -160,10 +160,10 @@ public class PermissionEngineTests
 
         engine.GrantSession(Prep("filesystem.write", [scope]));
 
-        Assert.Equal(PermissionDecision.Allow, engine.Decide(Prep("filesystem.write", [file])));
+        Assert.That(engine.Decide(Prep("filesystem.write", [file])), Is.EqualTo(PermissionDecision.Allow));
     }
 
-    [Fact]
+    [Test]
     public void SessionDeny_WinsOverSessionGrant()
     {
         using var dir    = new TestTempDir();
@@ -174,10 +174,10 @@ public class PermissionEngineTests
         engine.DenySession(Prep("filesystem.write", [a]));
 
         // 显式拒绝和运行期拒绝优先于运行期授权。
-        Assert.Equal(PermissionDecision.Deny, engine.Decide(Prep("filesystem.write", [a])));
+        Assert.That(engine.Decide(Prep("filesystem.write", [a])), Is.EqualTo(PermissionDecision.Deny));
     }
 
-    [Fact]
+    [Test]
     public void SessionDeny_DoesNotAffectOtherScopes()
     {
         using var dir    = new TestTempDir();
@@ -187,13 +187,13 @@ public class PermissionEngineTests
 
         engine.DenySession(Prep("filesystem.write", [a]));
 
-        Assert.Equal(PermissionDecision.Deny, engine.Decide(Prep("filesystem.write", [a])));
-        Assert.Equal(PermissionDecision.Ask, engine.Decide(Prep("filesystem.write", [b])));
+        Assert.That(engine.Decide(Prep("filesystem.write", [a])), Is.EqualTo(PermissionDecision.Deny));
+        Assert.That(engine.Decide(Prep("filesystem.write", [b])), Is.EqualTo(PermissionDecision.Ask));
     }
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
+
+    [TestCase(false)]
+    [TestCase(true)]
     public void SessionDeny_BlocksAnyDeniedTargetInMultiFileCall(bool grantSession)
     {
         using var dir     = new TestTempDir();
@@ -208,10 +208,10 @@ public class PermissionEngineTests
         else
             engine.GrantOnce(call);
 
-        Assert.Equal(PermissionDecision.Deny, engine.Decide(call));
+        Assert.That(engine.Decide(call), Is.EqualTo(PermissionDecision.Deny));
     }
 
-    [Fact]
+    [Test]
     public void SessionGrant_MustCoverEveryTargetInMultiFileCall()
     {
         using var dir    = new TestTempDir();
@@ -220,10 +220,10 @@ public class PermissionEngineTests
         var       b      = Path.Combine(dir.Root, "b.cs");
         engine.GrantSession(Prep("filesystem.write", [a]));
 
-        Assert.Equal(PermissionDecision.Ask, engine.Decide(Prep("filesystem.write", [a, b])));
+        Assert.That(engine.Decide(Prep("filesystem.write", [a, b])), Is.EqualTo(PermissionDecision.Ask));
     }
 
-    [Fact]
+    [Test]
     public void AllowOnce_ApprovesExactInvocationOnly()
     {
         using var dir    = new TestTempDir();
@@ -233,14 +233,13 @@ public class PermissionEngineTests
         var invocation = Prep("filesystem.write", [a], "line", 2);
         engine.GrantOnce(invocation);
 
-        Assert.Equal(PermissionDecision.Allow, engine.Decide(invocation));
+        Assert.That(engine.Decide(invocation), Is.EqualTo(PermissionDecision.Allow));
 
         // 文件和能力相同但参数不同，仍是不同调用。
-        Assert.Equal(PermissionDecision.Ask,
-                     engine.Decide(Prep("filesystem.write", [a], "line", 3)));
+        Assert.That(engine.Decide(Prep("filesystem.write", [a], "line", 3)), Is.EqualTo(PermissionDecision.Ask));
     }
 
-    [Fact]
+    [Test]
     public void AllowOnce_IsSpentOnFirstUse()
     {
         using var dir    = new TestTempDir();
@@ -250,15 +249,15 @@ public class PermissionEngineTests
         var invocation = Prep("filesystem.write", [a], "line", 2);
         engine.GrantOnce(invocation);
 
-        Assert.Equal(PermissionDecision.Allow, engine.Decide(invocation));
+        Assert.That(engine.Decide(invocation), Is.EqualTo(PermissionDecision.Allow));
 
         // 执行提交时消耗单次批准，后续相同调用仍须重新审批。
-        Assert.True(engine.TryConsumeOnce(invocation));
-        Assert.Equal(PermissionDecision.Ask, engine.Decide(invocation));
-        Assert.False(engine.TryConsumeOnce(invocation)); // 已消耗的批准不能再次使用。
+        Assert.That(engine.TryConsumeOnce(invocation), Is.True);
+        Assert.That(engine.Decide(invocation), Is.EqualTo(PermissionDecision.Ask));
+        Assert.That(engine.TryConsumeOnce(invocation), Is.False); // 已消耗的批准不能再次使用。
     }
 
-    [Fact]
+    [Test]
     public void AllowOnce_DoesNotLeakAcrossTargets()
     {
         using var dir    = new TestTempDir();
@@ -268,11 +267,11 @@ public class PermissionEngineTests
 
         engine.GrantOnce(Prep("filesystem.write", [a]));
 
-        Assert.Equal(PermissionDecision.Allow, engine.Decide(Prep("filesystem.write", [a])));
-        Assert.Equal(PermissionDecision.Ask, engine.Decide(Prep("filesystem.write", [b])));
+        Assert.That(engine.Decide(Prep("filesystem.write", [a])), Is.EqualTo(PermissionDecision.Allow));
+        Assert.That(engine.Decide(Prep("filesystem.write", [b])), Is.EqualTo(PermissionDecision.Ask));
     }
 
-    [Fact]
+    [Test]
     public void HardDeny_BeatsOneShotApproval()
     {
         // 工作区内目标的单次批准不能授权工作区外目标。
@@ -284,10 +283,10 @@ public class PermissionEngineTests
 
         engine.GrantOnce(Prep("filesystem.write", [a]));
 
-        Assert.Equal(PermissionDecision.Deny, engine.Decide(Prep("filesystem.write", [leak])));
+        Assert.That(engine.Decide(Prep("filesystem.write", [leak])), Is.EqualTo(PermissionDecision.Deny));
     }
 
-    [Fact]
+    [Test]
     public void ConfiguredCommandRule_AllowsOnlyExactExecutableArgumentsAndWorkingDirectory()
     {
         using var dir = new TestTempDir();
@@ -298,28 +297,29 @@ public class PermissionEngineTests
                 new CommandRule { Executable = "dotnet", Arguments = ["test", "*.csproj"], WorkingDirectory = "src" }
             ]);
 
-        Assert.Equal(PermissionDecision.Allow,
-                     engine.Decide(ProcessPrep("dotnet", ["test", "TinyHarness.csproj"], src)));
-        Assert.Equal(PermissionDecision.Ask,
-                     engine.Decide(ProcessPrep("dotnet", ["build", "TinyHarness.csproj"], src)));
-        Assert.Equal(PermissionDecision.Ask, engine.Decide(ProcessPrep("git", ["test", "TinyHarness.csproj"], src)));
-        Assert.Equal(PermissionDecision.Ask,
-                     engine.Decide(ProcessPrep("dotnet", ["test", "TinyHarness.csproj"], dir.Root)));
+        Assert.That(engine.Decide(ProcessPrep("dotnet", ["test", "TinyHarness.csproj"], src)),
+                    Is.EqualTo(PermissionDecision.Allow));
+        Assert.That(engine.Decide(ProcessPrep("dotnet", ["build", "TinyHarness.csproj"], src)),
+                    Is.EqualTo(PermissionDecision.Ask));
+        Assert.That(engine.Decide(ProcessPrep("git", ["test", "TinyHarness.csproj"], src)),
+                    Is.EqualTo(PermissionDecision.Ask));
+        Assert.That(engine.Decide(ProcessPrep("dotnet", ["test", "TinyHarness.csproj"], dir.Root)),
+                    Is.EqualTo(PermissionDecision.Ask));
     }
 
-    [Fact]
+    [Test]
     public void ProcessSessionGrant_DoesNotAuthorizeDifferentCommandInSameDirectory()
     {
         using var dir    = new TestTempDir();
         var       engine = new PermissionEngine(dir.Root);
         engine.GrantSession(ProcessPrep("dotnet", ["test"], dir.Root));
 
-        Assert.Equal(PermissionDecision.Allow, engine.Decide(ProcessPrep("dotnet", ["test"], dir.Root)));
-        Assert.Equal(PermissionDecision.Ask, engine.Decide(ProcessPrep("dotnet", ["build"], dir.Root)));
-        Assert.Equal(PermissionDecision.Ask, engine.Decide(ProcessPrep("git", ["status"], dir.Root)));
+        Assert.That(engine.Decide(ProcessPrep("dotnet", ["test"], dir.Root)), Is.EqualTo(PermissionDecision.Allow));
+        Assert.That(engine.Decide(ProcessPrep("dotnet", ["build"], dir.Root)), Is.EqualTo(PermissionDecision.Ask));
+        Assert.That(engine.Decide(ProcessPrep("git", ["status"], dir.Root)), Is.EqualTo(PermissionDecision.Ask));
     }
 
-    [Fact]
+    [Test]
     public void ShellCommandRule_AllowsOnlyExactShellCommandAndNeverMatchesDirectMode()
     {
         using var    dir              = new TestTempDir();
@@ -332,17 +332,17 @@ public class PermissionEngineTests
             new CommandRule { Mode = "shell", Shell = shell, Command = command, WorkingDirectory = "." }
         ]);
 
-        Assert.Equal(PermissionDecision.Allow, engine.Decide(shellPreparation));
-        Assert.Equal(PermissionDecision.Ask,
-                     engine.Decide(tool.Prepare(ShellCall(shell, command + " && echo three"))));
+        Assert.That(engine.Decide(shellPreparation), Is.EqualTo(PermissionDecision.Allow));
+        Assert.That(engine.Decide(tool.Prepare(ShellCall(shell, command + " && echo three"))),
+                    Is.EqualTo(PermissionDecision.Ask));
 
         var directEquivalent = ProcessPrep(
                                            shellPreparation.Arguments["executable"]!.GetValue<string>(),
                                            ReadArguments(shellPreparation), dir.Root);
-        Assert.Equal(PermissionDecision.Ask, engine.Decide(directEquivalent));
+        Assert.That(engine.Decide(directEquivalent), Is.EqualTo(PermissionDecision.Ask));
     }
 
-    [Fact]
+    [Test]
     public void ShellSessionGrant_IsBoundToModeShellFlavorAndExactCommand()
     {
         using var dir     = new TestTempDir();
@@ -353,9 +353,10 @@ public class PermissionEngineTests
         engine.GrantSession(granted);
         var child = dir.CreateDirectory("child");
 
-        Assert.Equal(PermissionDecision.Allow, engine.Decide(tool.Prepare(ShellCall(shell, "echo one"))));
-        Assert.Equal(PermissionDecision.Ask, engine.Decide(tool.Prepare(ShellCall(shell, "echo two"))));
-        Assert.Equal(PermissionDecision.Ask, engine.Decide(tool.Prepare(ShellCall(shell, "echo one", child))));
+        Assert.That(engine.Decide(tool.Prepare(ShellCall(shell, "echo one"))), Is.EqualTo(PermissionDecision.Allow));
+        Assert.That(engine.Decide(tool.Prepare(ShellCall(shell, "echo two"))), Is.EqualTo(PermissionDecision.Ask));
+        Assert.That(engine.Decide(tool.Prepare(ShellCall(shell, "echo one", child))),
+                    Is.EqualTo(PermissionDecision.Ask));
     }
 
     private static ToolPreparation ProcessPrep(string executable, IReadOnlyList<string> arguments, string cwd)

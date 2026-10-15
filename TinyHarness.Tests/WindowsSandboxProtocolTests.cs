@@ -10,20 +10,24 @@ using TinyHarness.Core.Services.Runtime.WindowsSandbox;
 namespace TinyHarness.Tests;
 
 /// <summary>
-///     帧协议与 wire DTO 测试：长度前缀、版本硬校验、截断/超长、空 payload 控制帧、
-///     spawn_request/setup payload 的精确字段形状，以及 cap_sid、状态检查、凭据与策略解析。
-///     全部离线，不启动进程、不修改机器状态。
-///     Frame-protocol and wire-DTO tests: length prefixes, the hard version
-///     check, truncation/oversize, empty-payload control frames, exact field
-///     shapes of spawn_request/setup payloads, plus cap_sid, readiness checks,
-///     credentials, and policy resolution. Fully offline — no processes, no
-///     machine-state changes.
+///     <para>
+///         帧协议与 wire DTO 测试：长度前缀、版本硬校验、截断/超长、空 payload 控制帧、
+///         spawn_request/setup payload 的精确字段形状，以及 cap_sid、状态检查、凭据与策略解析。
+///         全部离线，不启动进程、不修改机器状态。
+///     </para>
+///     <para>
+///         Frame-protocol and wire-DTO tests: length prefixes, the hard version
+///         check, truncation/oversize, empty-payload control frames, exact field
+///         shapes of spawn_request/setup payloads, plus cap_sid, readiness checks,
+///         credentials, and policy resolution. Fully offline — no processes, no
+///         machine-state changes.
+///     </para>
 /// </summary>
 public class WindowsSandboxProtocolTests
 {
     // ---- RunnerFrameCodec ----
 
-    [Fact]
+    [Test]
     public async Task WriteFrame_RoundTripsThroughLengthPrefixAndVersion()
     {
         using var stream = new MemoryStream();
@@ -33,14 +37,14 @@ public class WindowsSandboxProtocolTests
 
         stream.Position = 0;
         var frame = await RunnerFrameCodec.ReadFrameAsync(stream, CancellationToken.None);
-        Assert.NotNull(frame);
-        Assert.Equal("exit", frame.Type);
+        TestAssert.NotNull(frame);
+        Assert.That(frame.Type, Is.EqualTo("exit"));
         var payload = RunnerFrameCodec.ParsePayload<RunnerExitPayload>(frame);
-        Assert.Equal(23, payload.ExitCode);
-        Assert.False(payload.TimedOut);
+        Assert.That(payload.ExitCode, Is.EqualTo(23));
+        Assert.That(payload.TimedOut, Is.False);
     }
 
-    [Fact]
+    [Test]
     public async Task WriteFrame_ProducesExactEnvelopeShape()
     {
         using var stream = new MemoryStream();
@@ -50,12 +54,12 @@ public class WindowsSandboxProtocolTests
         stream.Position = 0;
         var body     = ReadFrameBody(stream);
         var envelope = JsonNode.Parse(body)!.AsObject();
-        Assert.Equal(6, (int)envelope["version"]!);
-        Assert.Equal("spawn_ready", (string)envelope["type"]!);
-        Assert.Equal(4242, (int)envelope["payload"]!["process_id"]!);
+        Assert.That((int)envelope["version"]!, Is.EqualTo(6));
+        Assert.That((string)envelope["type"]!, Is.EqualTo("spawn_ready"));
+        Assert.That((int)envelope["payload"]!["process_id"]!, Is.EqualTo(4242));
     }
 
-    [Fact]
+    [Test]
     public async Task WriteControlFrame_KeepsEmptyPayloadObject()
     {
         using var stream = new MemoryStream();
@@ -63,15 +67,14 @@ public class WindowsSandboxProtocolTests
 
         stream.Position = 0;
         var body = ReadFrameBody(stream);
-        Assert.Equal("""{"version":6,"type":"terminate","payload":{}}""", body);
+        Assert.That(body, Is.EqualTo("""{"version":6,"type":"terminate","payload":{}}"""));
     }
 
-    [Fact]
+    [Test]
     public async Task ReadFrame_ThrowsEndOfStreamWhenDeclaredBodyTruncates()
     {
-        // The length prefix promises a full frame but the stream ends ten
-        // bytes short: a real mid-frame truncation, unlike a short-but
-        // complete frame with malformed JSON.
+        // 长度前缀承诺完整帧而流提前十个字节结束：真正的帧中截断，区别于"短但完整、
+        // JSON 非法"的帧。
         var body =
             Encoding.UTF8.GetBytes("""{"version":6,"type":"exit","payload":{"exit_code":0,"timed_out":false}}""");
         var prefix = new byte[4];
@@ -81,10 +84,10 @@ public class WindowsSandboxProtocolTests
         stream.Write(body, 0, body.Length - 10);
         stream.Position = 0;
 
-        await Assert.ThrowsAnyAsync<IOException>(() => RunnerFrameCodec.ReadFrameAsync(stream, CancellationToken.None));
+        await Assert.CatchAsync<IOException>(() => RunnerFrameCodec.ReadFrameAsync(stream, CancellationToken.None));
     }
 
-    [Fact]
+    [Test]
     public async Task WriteFrame_RejectsPayloadBeyondFrameLimitBeforeWriting()
     {
         using var stream = new MemoryStream();
@@ -94,80 +97,79 @@ public class WindowsSandboxProtocolTests
             Stream     = "stdout"
         };
 
-        await Assert.ThrowsAsync<InvalidDataException>(() => RunnerFrameCodec.WriteFrameAsync(stream, "output",
-                                                                oversized, CancellationToken.None));
-        Assert.Equal(0, stream.Length);
+        await TestAssert.ThrowsAsync<InvalidDataException>(() => RunnerFrameCodec.WriteFrameAsync(stream, "output",
+                                                                    oversized, CancellationToken.None));
+        Assert.That(stream.Length, Is.EqualTo(0));
     }
 
-    [Fact]
+    [Test]
     public async Task ReadFrame_ReturnsNullOnCleanEof()
     {
         using var stream = new MemoryStream();
-        Assert.Null(await RunnerFrameCodec.ReadFrameAsync(stream, CancellationToken.None));
+        Assert.That(await RunnerFrameCodec.ReadFrameAsync(stream, CancellationToken.None), Is.Null);
     }
 
-    [Fact]
+    [Test]
     public async Task ReadFrame_RejectsMismatchedProtocolVersion()
     {
         var body =
             Encoding.UTF8.GetBytes("""{"version":5,"type":"exit","payload":{"exit_code":0,"timed_out":false}}""");
         using var stream = FrameStream(body);
-        await Assert.ThrowsAsync<InvalidDataException>(() =>
-                                                           RunnerFrameCodec.ReadFrameAsync(stream,
-                                                                    CancellationToken.None));
+        await TestAssert.ThrowsAsync<InvalidDataException>(() =>
+                                                               RunnerFrameCodec.ReadFrameAsync(stream,
+                                                                        CancellationToken.None));
     }
 
-    [Fact]
+    [Test]
     public async Task ReadFrame_RejectsOversizedLengthPrefix()
     {
         var prefix = new byte[4];
         BinaryPrimitives.WriteUInt32LittleEndian(prefix, 8 * 1024 * 1024 + 1);
         using var stream = new MemoryStream(prefix);
-        await Assert.ThrowsAsync<InvalidDataException>(() =>
-                                                           RunnerFrameCodec.ReadFrameAsync(stream,
-                                                                    CancellationToken.None));
+        await TestAssert.ThrowsAsync<InvalidDataException>(() =>
+                                                               RunnerFrameCodec.ReadFrameAsync(stream,
+                                                                        CancellationToken.None));
     }
 
-    [Fact]
+    [Test]
     public async Task ReadFrame_RejectsTruncatedBody()
     {
         var body =
             Encoding.UTF8.GetBytes("""{"version":6,"type":"exit","payload":{"exit_code":0,"timed_out":false}}""");
         var       truncated = body[..^10];
         using var stream    = FrameStream(truncated);
-        await Assert.ThrowsAsync<InvalidDataException>(() =>
-                                                           RunnerFrameCodec.ReadFrameAsync(stream,
-                                                                    CancellationToken.None));
+        await TestAssert.ThrowsAsync<InvalidDataException>(() =>
+                                                               RunnerFrameCodec.ReadFrameAsync(stream,
+                                                                        CancellationToken.None));
     }
 
-    [Fact]
+    [Test]
     public async Task ReadFrame_RejectsMissingPayloadObject()
     {
         var       body   = Encoding.UTF8.GetBytes("""{"version":6,"type":"exit"}""");
         using var stream = FrameStream(body);
-        await Assert.ThrowsAsync<InvalidDataException>(() =>
-                                                           RunnerFrameCodec.ReadFrameAsync(stream,
-                                                                    CancellationToken.None));
+        await TestAssert.ThrowsAsync<InvalidDataException>(() =>
+                                                               RunnerFrameCodec.ReadFrameAsync(stream,
+                                                                        CancellationToken.None));
     }
 
-    [Fact]
+    [Test]
     public async Task ReadFrame_ParsesWellFormedFrameOfAnyType()
     {
         var       body   = Encoding.UTF8.GetBytes("""{"version":6,"type":"resize","payload":{"rows":10,"cols":10}}""");
         using var stream = FrameStream(body);
         var       frame  = await RunnerFrameCodec.ReadFrameAsync(stream, CancellationToken.None);
-        Assert.NotNull(frame);
-        Assert.Equal("resize", frame!.Type);
+        TestAssert.NotNull(frame);
+        Assert.That(frame!.Type, Is.EqualTo("resize"));
     }
 
-    [Fact]
+    [Test]
     public void ParsePayload_MissingRequiredExitFieldThrowsJsonException()
     {
-        // exit_code and timed_out are required; a frame missing either fails
-        // deserialization instead of silently becoming 0/false.
+        // exit_code 与 timed_out 必填：缺任一字段的帧反序列化失败，而不是静默变成 0/false。
         var frame = new RunnerFrame("exit", JsonNode.Parse("""{"timed_out":false}""")!.AsObject());
 
-        Assert.Throws<JsonException>(() => RunnerFrameCodec.ParsePayload<RunnerExitPayload>(frame));
+        TestAssert.Throws<JsonException>(() => RunnerFrameCodec.ParsePayload<RunnerExitPayload>(frame));
     }
 
     private static MemoryStream FrameStream(byte[] body)
@@ -192,7 +194,7 @@ public class WindowsSandboxProtocolTests
 
     // ---- spawn_request wire shape ----
 
-    [Fact]
+    [Test]
     public async Task SpawnRequest_SerializesExactSnakeCaseWireShape()
     {
         var request = new RunnerSpawnRequest
@@ -220,51 +222,51 @@ public class WindowsSandboxProtocolTests
         var frame   = await RunnerFrameCodec.ReadFrameAsync(stream, CancellationToken.None);
         var payload = frame!.Payload;
 
-        Assert.Equal(["cmd.exe", "/c", "whoami"],
-                     payload["command"]!.AsArray().Select(node => (string)node!).ToArray());
-        Assert.Equal(@"C:\work\repo", (string)payload["cwd"]!);
-        Assert.Equal("C:\\windows", (string)payload["env"]!["PATH"]!);
-        Assert.Equal(@"C:\work\repo", (string)payload["workspace_roots"]![0]!);
-        Assert.Equal(@"C:\harness\.codex-home\.sandbox", (string)payload["codex_home"]!);
-        Assert.Equal(@"C:\harness\.codex-home", (string)payload["real_codex_home"]!);
-        Assert.Equal("S-1-5-21-1-2-3-4", (string)payload["cap_sids"]![0]!);
-        Assert.Null(payload["network_proxy_restricting_sid"]);
-        Assert.Equal(30000, (int)payload["timeout_ms"]!);
-        Assert.False((bool)payload["tty"]!);
-        Assert.False((bool)payload["stdin_open"]!);
-        Assert.Equal("CodexSandboxDesktop-0123456789abcdef0123456789abcdef",
-                     (string)payload["private_desktop_name"]!);
+        Assert.That(payload["command"]!.AsArray().Select(node => (string)node!).ToArray(),
+                    Is.EqualTo(["cmd.exe", "/c", "whoami"]));
+        Assert.That((string)payload["cwd"]!, Is.EqualTo(@"C:\work\repo"));
+        Assert.That((string)payload["env"]!["PATH"]!, Is.EqualTo("C:\\windows"));
+        Assert.That((string)payload["workspace_roots"]![0]!, Is.EqualTo(@"C:\work\repo"));
+        Assert.That((string)payload["codex_home"]!, Is.EqualTo(@"C:\harness\.codex-home\.sandbox"));
+        Assert.That((string)payload["real_codex_home"]!, Is.EqualTo(@"C:\harness\.codex-home"));
+        Assert.That((string)payload["cap_sids"]![0]!, Is.EqualTo("S-1-5-21-1-2-3-4"));
+        Assert.That(payload["network_proxy_restricting_sid"], Is.Null);
+        Assert.That((int)payload["timeout_ms"]!, Is.EqualTo(30000));
+        Assert.That((bool)payload["tty"]!, Is.False);
+        Assert.That((bool)payload["stdin_open"]!, Is.False);
+        Assert.That((string)payload["private_desktop_name"]!,
+                    Is.EqualTo("CodexSandboxDesktop-0123456789abcdef0123456789abcdef"));
         var profile = payload["permission_profile"]!;
-        Assert.Equal("managed", (string)profile["type"]!);
-        Assert.Equal("restricted", (string)profile["network"]!);
-        Assert.Equal("restricted", (string)profile["file_system"]!["type"]!);
-        Assert.Equal("root", (string)profile["file_system"]!["entries"]![0]!["path"]!["value"]!["kind"]!);
-        Assert.Equal("read", (string)profile["file_system"]!["entries"]![0]!["access"]!);
+        Assert.That((string)profile["type"]!, Is.EqualTo("managed"));
+        Assert.That((string)profile["network"]!, Is.EqualTo("restricted"));
+        Assert.That((string)profile["file_system"]!["type"]!, Is.EqualTo("restricted"));
+        Assert.That((string)profile["file_system"]!["entries"]![0]!["path"]!["value"]!["kind"]!, Is.EqualTo("root"));
+        Assert.That((string)profile["file_system"]!["entries"]![0]!["access"]!, Is.EqualTo("read"));
 
         var decoded = RunnerFrameCodec.ParsePayload<RunnerSpawnRequest>(frame);
-        Assert.Equal(["cmd.exe", "/c", "whoami"], decoded.Command);
-        Assert.Equal(30000uL, decoded.TimeoutMilliseconds);
+        Assert.That(decoded.Command, Is.EqualTo(["cmd.exe", "/c", "whoami"]));
+        Assert.That(decoded.TimeoutMilliseconds, Is.EqualTo(30000uL));
     }
 
     // ---- permission profile shapes ----
 
-    [Fact]
+    [Test]
     public void PolicyResolver_ReadOnly_MatchesBuiltInProfile()
     {
         var policy = SandboxPolicyResolver.Resolve(SandboxPolicyKind.ReadOnly, @"C:\work\repo",
                                                    new Dictionary<string, string>());
 
-        Assert.False(policy.UsesWriteCapabilities);
-        Assert.Empty(policy.EffectiveWriteRoots);
-        Assert.Empty(policy.DenyWritePaths);
-        Assert.Empty(policy.TempWriteRoots);
-        var entry = Assert.Single(policy.SpawnProfile.FileSystem.Entries);
-        Assert.Equal(SandboxPolicyPath.Root(), entry.Path);
-        Assert.Equal("read", entry.Access);
-        Assert.Equal("restricted", policy.SpawnProfile.Network);
+        Assert.That(policy.UsesWriteCapabilities, Is.False);
+        Assert.That(policy.EffectiveWriteRoots, Is.Empty);
+        Assert.That(policy.DenyWritePaths, Is.Empty);
+        Assert.That(policy.TempWriteRoots, Is.Empty);
+        var entry = TestAssert.Single(policy.SpawnProfile.FileSystem.Entries);
+        Assert.That(entry.Path, Is.EqualTo(SandboxPolicyPath.Root()));
+        Assert.That(entry.Access, Is.EqualTo("read"));
+        Assert.That(policy.SpawnProfile.Network, Is.EqualTo("restricted"));
     }
 
-    [Fact]
+    [Test]
     public void PolicyResolver_WorkspaceWrite_MatchesBuiltInSemantics()
     {
         var environment = new Dictionary<string, string>
@@ -274,30 +276,30 @@ public class WindowsSandboxProtocolTests
         };
         var policy = SandboxPolicyResolver.Resolve(SandboxPolicyKind.WorkspaceWrite, @"C:\work\repo", environment);
 
-        Assert.True(policy.UsesWriteCapabilities);
-        Assert.Equal([@"C:\work\repo", @"C:\temp\custom"], policy.EffectiveWriteRoots);
-        Assert.Equal([@"C:\temp\custom"], policy.TempWriteRoots);
-        Assert.Equal(SandboxIsolationPolicy.ProtectedMetadataSubpaths,
-                     policy.DenyWritePaths.Select(path => Path.GetFileName(path)).ToArray());
+        Assert.That(policy.UsesWriteCapabilities, Is.True);
+        Assert.That(policy.EffectiveWriteRoots, Is.EqualTo([@"C:\work\repo", @"C:\temp\custom"]));
+        Assert.That(policy.TempWriteRoots, Is.EqualTo([@"C:\temp\custom"]));
+        Assert.That(policy.DenyWritePaths.Select(path => Path.GetFileName(path)).ToArray(),
+                    Is.EqualTo(SandboxIsolationPolicy.ProtectedMetadataSubpaths));
 
         var entries  = policy.SpawnProfile.FileSystem.Entries;
         var metadata = entries.Skip(4).ToArray();
-        Assert.Equal(8, entries.Count);
-        Assert.Equal("read", entries[0].Access);                // root
-        Assert.Equal("write", entries[1].Access);               // project_roots
-        Assert.Equal("slash_tmp", entries[2].Path.Value!.Kind); // slash_tmp write
-        Assert.Equal("tmpdir", entries[3].Path.Value!.Kind);    // tmpdir write
-        Assert.All(metadata, entry =>
+        Assert.That(entries.Count, Is.EqualTo(8));
+        Assert.That(entries[0].Access, Is.EqualTo("read"));                // root
+        Assert.That(entries[1].Access, Is.EqualTo("write"));               // project_roots
+        Assert.That(entries[2].Path.Value!.Kind, Is.EqualTo("slash_tmp")); // slash_tmp write
+        Assert.That(entries[3].Path.Value!.Kind, Is.EqualTo("tmpdir"));    // tmpdir write
+        TestAssert.All(metadata, entry =>
         {
-            Assert.Equal("read", entry.Access);
-            Assert.Equal("skip", entry.MissingPathBehavior);
-            Assert.Equal("project_roots", entry.Path.Value!.Kind);
+            Assert.That(entry.Access, Is.EqualTo("read"));
+            Assert.That(entry.MissingPathBehavior, Is.EqualTo("skip"));
+            Assert.That(entry.Path.Value!.Kind, Is.EqualTo("project_roots"));
         });
-        Assert.Equal([".git", ".agents", ".codex", ".aws"],
-                     metadata.Select(entry => entry.Path.Value!.Subpath!).ToArray());
+        Assert.That(metadata.Select(entry => entry.Path.Value!.Subpath!).ToArray(),
+                    Is.EqualTo([".git", ".agents", ".codex", ".aws"]));
     }
 
-    [Fact]
+    [Test]
     public void PolicyResolver_IgnoresRelativeAndUnsetTempValues()
     {
         var environment = new Dictionary<string, string>
@@ -306,16 +308,15 @@ public class WindowsSandboxProtocolTests
             ["TMP"]  = ""
         };
         var policy = SandboxPolicyResolver.Resolve(SandboxPolicyKind.WorkspaceWrite, @"C:\work\repo", environment);
-        Assert.Empty(policy.TempWriteRoots);
-        Assert.Equal([@"C:\work\repo"], policy.EffectiveWriteRoots);
+        Assert.That(policy.TempWriteRoots, Is.Empty);
+        Assert.That(policy.EffectiveWriteRoots, Is.EqualTo([@"C:\work\repo"]));
     }
 
-    [Fact]
+    [Test]
     public void PolicyResolver_IgnoresDriveRelativeTempValues()
     {
-        // "C:temp" is drive-relative on Windows (Path.IsPathFullyQualified is
-        // false) and relative elsewhere; resolving it against the host's
-        // current directory would freeze an unintended write root.
+        // "C:temp" 在 Windows 上是驱动器相对路径（Path.IsPathFullyQualified 为 false），
+        // 其他平台是相对路径；按宿主当前目录解析它会把非预期的写根冻结进策略。
         using var dir = new TestTempDir();
         var environment = new Dictionary<string, string>
         {
@@ -324,11 +325,11 @@ public class WindowsSandboxProtocolTests
         };
         var policy = SandboxPolicyResolver.Resolve(SandboxPolicyKind.WorkspaceWrite, dir.Root, environment);
 
-        Assert.Empty(policy.TempWriteRoots);
-        Assert.Equal([dir.Root], policy.EffectiveWriteRoots);
+        Assert.That(policy.TempWriteRoots, Is.Empty);
+        Assert.That(policy.EffectiveWriteRoots, Is.EqualTo([dir.Root]));
     }
 
-    [Fact]
+    [Test]
     public void Policy_CreateSetupPayload_RefreshOnlyCarriesResolvedRoots()
     {
         using var home = new SandboxTestHome();
@@ -339,25 +340,25 @@ public class WindowsSandboxProtocolTests
         using var document = JsonDocument.Parse(JsonSerializer.SerializeToUtf8Bytes(
                                                      payload, WindowsSandboxJsonContext.Default.SandboxSetupPayload));
         var root = document.RootElement;
-        Assert.Equal(5, root.GetProperty("version").GetInt32());
-        Assert.Equal("TinyHarnessOffline", root.GetProperty("offline_username").GetString());
-        Assert.Equal("tester", root.GetProperty("real_user").GetString());
-        Assert.True(root.GetProperty("refresh_only").GetBoolean());
-        Assert.Equal("full", root.GetProperty("mode").GetString());
-        Assert.Equal(@"C:\work\repo\sub", root.GetProperty("command_cwd").GetString());
-        Assert.Equal([@"C:\work\repo", @"C:\work\repo\sub", @"C:\temp\custom"],
-                     root.GetProperty("read_roots").EnumerateArray().Select(node => node.GetString()!).ToArray());
-        Assert.Equal([@"C:\work\repo", @"C:\temp\custom"],
-                     root.GetProperty("write_roots").EnumerateArray().Select(node => node.GetString()!).ToArray());
-        Assert.Equal([".git", ".agents", ".codex", ".aws"],
-                     root.GetProperty("deny_write_paths").EnumerateArray()
-                         .Select(node => Path.GetFileName(node.GetString()!)).ToArray());
-        Assert.Equal(0, root.GetProperty("proxy_ports").GetArrayLength());
+        Assert.That(root.GetProperty("version").GetInt32(), Is.EqualTo(5));
+        Assert.That(root.GetProperty("offline_username").GetString(), Is.EqualTo("TinyHarnessOffline"));
+        Assert.That(root.GetProperty("real_user").GetString(), Is.EqualTo("tester"));
+        Assert.That(root.GetProperty("refresh_only").GetBoolean(), Is.True);
+        Assert.That(root.GetProperty("mode").GetString(), Is.EqualTo("full"));
+        Assert.That(root.GetProperty("command_cwd").GetString(), Is.EqualTo(@"C:\work\repo\sub"));
+        Assert.That(root.GetProperty("read_roots").EnumerateArray().Select(node => node.GetString()!).ToArray(),
+                    Is.EqualTo([@"C:\work\repo", @"C:\work\repo\sub", @"C:\temp\custom"]));
+        Assert.That(root.GetProperty("write_roots").EnumerateArray().Select(node => node.GetString()!).ToArray(),
+                    Is.EqualTo([@"C:\work\repo", @"C:\temp\custom"]));
+        Assert.That(root.GetProperty("deny_write_paths").EnumerateArray()
+                        .Select(node => Path.GetFileName(node.GetString()!)).ToArray(),
+                    Is.EqualTo([".git", ".agents", ".codex", ".aws"]));
+        Assert.That(root.GetProperty("proxy_ports").GetArrayLength(), Is.EqualTo(0));
     }
 
     // ---- capability SID store ----
 
-    [Fact]
+    [Test]
     public async Task CapabilitySidStore_CreatesTableWhenMissingAndStaysStable()
     {
         using var dir = new TestTempDir();
@@ -374,13 +375,13 @@ public class WindowsSandboxProtocolTests
         var first  = await store.ResolveForPolicy(readOnly, dir.Root);
         var second = await store.ResolveForPolicy(readOnly, dir.Root);
 
-        Assert.Single(first);
-        Assert.Equal(first, second);
-        Assert.Matches(@"^S-1-5-21-\d+-\d+-\d+-\d+$", first[0]);
-        Assert.True(File.Exists(components.CapabilitySidPath));
+        TestAssert.Single(first);
+        Assert.That(second, Is.EqualTo(first));
+        Assert.That(first[0], Does.Match(@"^S-1-5-21-\d+-\d+-\d+-\d+$"));
+        Assert.That(File.Exists(components.CapabilitySidPath), Is.True);
     }
 
-    [Fact]
+    [Test]
     public async Task CapabilitySidStore_GetOrCreatePerWriteRootPersistsEntries()
     {
         using var dir = new TestTempDir();
@@ -397,19 +398,18 @@ public class WindowsSandboxProtocolTests
         var first  = await store.ResolveForPolicy(policy, dir.Root);
         var second = await store.ResolveForPolicy(policy, dir.Root);
 
-        // No TEMP/TMP in the environment, so the workspace root is the only
-        // effective write root.
-        Assert.Single(first);
-        Assert.Equal(first, second);
+        // 环境中没有 TEMP/TMP，工作区根是唯一有效写根。
+        TestAssert.Single(first);
+        Assert.That(second, Is.EqualTo(first));
         var savedTable = await new SandboxCapabilitySidStore(components).LoadOrCreate();
-        // The Rust contract (cap.rs workspace_write_cap_sid_for_root): a write
-        // root equal to the command cwd uses the per-cwd workspace table — the
-        // SID setup grants on that directory — never the per-root table.
-        Assert.Contains(SandboxCapabilitySidStore.CanonicalRootKey(dir.Root), savedTable.WorkspaceByCwd.Keys);
-        Assert.DoesNotContain(SandboxCapabilitySidStore.CanonicalRootKey(dir.Root), savedTable.WritableRootByPath.Keys);
+        // Rust 契约（cap.rs 的 workspace_write_cap_sid_for_root）：写根等于命令 cwd 时使用
+        // per-cwd workspace 表——SID setup 授权的正是该目录——绝不使用 per-root 表。
+        Assert.That(savedTable.WorkspaceByCwd.Keys, Does.Contain(SandboxCapabilitySidStore.CanonicalRootKey(dir.Root)));
+        Assert.That(savedTable.WritableRootByPath.Keys,
+                    Does.Not.Contain(SandboxCapabilitySidStore.CanonicalRootKey(dir.Root)));
     }
 
-    [Fact]
+    [Test]
     public async Task CapabilitySidStore_AdditionalWriteRootsWithDifferentCwdUsePerRootTable()
     {
         using var dir = new TestTempDir();
@@ -424,31 +424,30 @@ public class WindowsSandboxProtocolTests
                                                    new Dictionary<string, string>(),
                                                    [Path.Combine(dir.Root, "extra-cache")]);
 
-        // The command runs from a subdirectory, so the workspace root is NOT
-        // the cwd: every effective write root must take the per-root table.
+        // 命令从子目录运行，工作区根不是 cwd：所有有效写根必须使用 per-root 表。
         var resolved = await store.ResolveForPolicy(policy, Path.Combine(dir.Root, "sub"));
 
         var savedTable = await store.LoadOrCreate();
-        Assert.Equal(2, resolved.Count);
-        Assert.Contains(SandboxCapabilitySidStore.CanonicalRootKey(dir.Root), savedTable.WritableRootByPath.Keys);
-        Assert.Contains(SandboxCapabilitySidStore.CanonicalRootKey(Path.Combine(dir.Root, "extra-cache")),
-                        savedTable.WritableRootByPath.Keys);
-        Assert.Empty(savedTable.WorkspaceByCwd);
+        Assert.That(resolved.Count, Is.EqualTo(2));
+        Assert.That(savedTable.WritableRootByPath.Keys,
+                    Does.Contain(SandboxCapabilitySidStore.CanonicalRootKey(dir.Root)));
+        Assert.That(savedTable.WritableRootByPath.Keys,
+                    Does.Contain(SandboxCapabilitySidStore.CanonicalRootKey(Path.Combine(dir.Root, "extra-cache"))));
+        Assert.That(savedTable.WorkspaceByCwd, Is.Empty);
     }
 
-    [Fact]
+    [Test]
     public void CapabilitySidStore_CanonicalRootKeyMatchesRustKeyFormat()
     {
         if (!OperatingSystem.IsWindows()) return;
 
-        // Pinned to the Rust setup helper's canonical_path_key: forward
-        // slashes and lower casing, so "C:\Work\Repo" and "c:/WORK/REPO"
-        // normalize to the same table key.
-        Assert.Equal("c:/work/repo", SandboxCapabilitySidStore.CanonicalRootKey(@"C:\Work\Repo"));
-        Assert.Equal("c:/work/repo", SandboxCapabilitySidStore.CanonicalRootKey(@"c:/WORK/REPO"));
+        // 与 Rust setup 辅助的 canonical_path_key 对齐：正斜杠加小写化，
+        // "C:\Work\Repo" 与 "c:/WORK/REPO" 归一为同一表键。
+        Assert.That(SandboxCapabilitySidStore.CanonicalRootKey(@"C:\Work\Repo"), Is.EqualTo("c:/work/repo"));
+        Assert.That(SandboxCapabilitySidStore.CanonicalRootKey(@"c:/WORK/REPO"), Is.EqualTo("c:/work/repo"));
     }
 
-    [Fact]
+    [Test]
     public async Task CapabilitySidStore_RejectsLegacyTextTable()
     {
         using var dir = new TestTempDir();
@@ -460,20 +459,20 @@ public class WindowsSandboxProtocolTests
         };
         dir.WriteFile("cap_sid", "S-1-5-21-9-9-9-9");
         var store = new SandboxCapabilitySidStore(components);
-        await Assert.ThrowsAsync<InvalidOperationException>(() => store.LoadOrCreate());
+        await TestAssert.ThrowsAsync<InvalidOperationException>(() => store.LoadOrCreate());
     }
 
     // ---- state inspector ----
 
-    [Fact]
+    [Test]
     public async Task StateInspector_ReportsReadyForFullyProvisionedHome()
     {
         using var home   = new SandboxTestHome();
         var       status = await new WindowsSandboxStateInspector(home.Components).InspectAsync();
-        Assert.True(status.Ready, string.Join("; ", status.Problems));
+        Assert.That(status.Ready, Is.True, string.Join("; ", status.Problems));
     }
 
-    [Fact]
+    [Test]
     public async Task StateInspector_AggregatesEveryProblemForEmptyHome()
     {
         using var dir = new TestTempDir();
@@ -484,31 +483,31 @@ public class WindowsSandboxProtocolTests
             SandboxHome          = dir.Root
         };
         var status = await new WindowsSandboxStateInspector(components).InspectAsync();
-        Assert.False(status.Ready);
-        Assert.Equal(5, status.Problems.Count);
-        Assert.Contains(status.Problems, problem => problem.Contains("Setup executable not found"));
-        Assert.Contains(status.Problems, problem => problem.Contains("Runner executable not found"));
-        Assert.Contains(status.Problems, problem => problem.Contains("not provisioned"));
-        Assert.Contains(status.Problems, problem => problem.Contains("Capability SID table not found"));
-        Assert.Contains(status.Problems, problem => problem.Contains("credentials not found"));
+        Assert.That(status.Ready, Is.False);
+        Assert.That(status.Problems.Count, Is.EqualTo(5));
+        TestAssert.ContainsAll(problem => problem.Contains("Setup executable not found"), status.Problems);
+        TestAssert.ContainsAll(problem => problem.Contains("Runner executable not found"), status.Problems);
+        TestAssert.ContainsAll(problem => problem.Contains("not provisioned"), status.Problems);
+        TestAssert.ContainsAll(problem => problem.Contains("Capability SID table not found"), status.Problems);
+        TestAssert.ContainsAll(problem => problem.Contains("credentials not found"), status.Problems);
     }
 
-    [Fact]
+    [Test]
     public async Task StateInspector_RejectsVersionMismatchAndEmptyMarker()
     {
         using var home = new SandboxTestHome();
         File.WriteAllText(home.Components.MarkerPath, """{"version":4,"offline_username":"x","online_username":"y"}""");
         var mismatched = await new WindowsSandboxStateInspector(home.Components).InspectAsync();
-        Assert.False(mismatched.Ready);
-        Assert.Contains(mismatched.Problems, problem => problem.Contains("does not match the required 5"));
+        Assert.That(mismatched.Ready, Is.False);
+        TestAssert.ContainsAll(problem => problem.Contains("does not match the required 5"), mismatched.Problems);
 
         File.WriteAllText(home.Components.MarkerPath, "");
         var empty = await new WindowsSandboxStateInspector(home.Components).InspectAsync();
-        Assert.False(empty.Ready);
-        Assert.Contains(empty.Problems, problem => problem.Contains("did not complete"));
+        Assert.That(empty.Ready, Is.False);
+        TestAssert.ContainsAll(problem => problem.Contains("did not complete"), empty.Problems);
     }
 
-    [Fact]
+    [Test]
     public async Task StateInspector_RefusesLegacyCodexMarkerAndCredentials()
     {
         using var home = new SandboxTestHome();
@@ -518,15 +517,16 @@ public class WindowsSandboxProtocolTests
                           """{"version":5,"offline":{"username":"CodexSandboxOffline","password":"QUJDRA=="},"online":{"username":"CodexSandboxOnline","password":"QUJDRA=="}}""");
 
         var status = await new WindowsSandboxStateInspector(home.Components).InspectAsync();
-        Assert.False(status.Ready);
-        // Marker and credentials each report the legacy Codex namespace twice
-        // (offline + online) with an explicit do-not-reuse explanation.
-        Assert.Equal(4, status.Problems.Count(problem => problem.Contains("legacy Codex-release account name")));
-        Assert.Contains(status.Problems,
-                        problem => problem.Contains("Refusing to reuse it", StringComparison.Ordinal));
+        Assert.That(status.Ready, Is.False);
+        // marker 与凭据各报告两次旧 Codex 命名空间（offline + online），并附明确的
+        // 禁止复用说明。
+        Assert.That(status.Problems.Count(problem => problem.Contains("legacy Codex-release account name")),
+                    Is.EqualTo(4));
+        TestAssert.ContainsAll(problem => problem.Contains("Refusing to reuse it", StringComparison.Ordinal),
+                               status.Problems);
     }
 
-    [Fact]
+    [Test]
     public async Task StateInspector_RejectsAccountNameMismatchAgainstExpectedAccounts()
     {
         using var home = new SandboxTestHome();
@@ -534,34 +534,37 @@ public class WindowsSandboxProtocolTests
                           """{"version":5,"offline_username":"TinyHarnessOffline","online_username":"SomeOtherOnline","created_at":"2026-10-01T00:00:00Z"}""");
 
         var status = await new WindowsSandboxStateInspector(home.Components).InspectAsync();
-        Assert.False(status.Ready);
-        Assert.Contains(status.Problems,
-                        problem => problem.Contains("'SomeOtherOnline'") &&
-                                   problem.Contains("TinyHarnessOnline"));
-        // The matching offline username contributes no problem of its own.
-        Assert.DoesNotContain(status.Problems, problem => problem.Contains("TinyHarnessOffline'"));
+        Assert.That(status.Ready, Is.False);
+        TestAssert.ContainsAll(problem => problem.Contains("'SomeOtherOnline'") &&
+                                          problem.Contains("TinyHarnessOnline"), status.Problems);
+        // 匹配的 offline 用户名本身不产生问题项。
+        TestAssert.DoesNotContainAny(problem => problem.Contains("TinyHarnessOffline'"), status.Problems);
     }
 
-    [Fact]
+    [Test]
     public void SandboxHome_DefaultAndResolutionRules()
     {
-        Assert.EndsWith(Path.Combine("tinyharness", "windows-sandbox-home"),
-                        WindowsSandboxComponents.DefaultSandboxHome);
-        Assert.True(Path.IsPathFullyQualified(WindowsSandboxComponents.DefaultSandboxHome));
+        Assert.That(WindowsSandboxComponents.DefaultSandboxHome,
+                    Does.EndWith(Path.Combine("tinyharness", "windows-sandbox-home")));
+        Assert.That(Path.IsPathFullyQualified(WindowsSandboxComponents.DefaultSandboxHome), Is.True);
 
-        // Blank resolves to the independent fixed default; explicit absolute
-        // values pass through; explicitly relative values fail closed (padding
-        // is not forgiven — same rule as the other trusted path settings).
-        Assert.Equal(WindowsSandboxComponents.DefaultSandboxHome, WindowsSandboxComponents.ResolveSandboxHome(null));
-        Assert.Equal(WindowsSandboxComponents.DefaultSandboxHome, WindowsSandboxComponents.ResolveSandboxHome("  "));
-        Assert.Equal(@"C:\sb\home", WindowsSandboxComponents.ResolveSandboxHome(@"C:\sb\home"));
-        Assert.Throws<InvalidOperationException>(() => WindowsSandboxComponents.ResolveSandboxHome("relative\\home"));
-        Assert.Throws<InvalidOperationException>(() => WindowsSandboxComponents.ResolveSandboxHome("  C:\\sb\\home  "));
+        // 空白解析为独立的固定默认值；显式绝对值原样通过；显式相对值失败关闭
+        //（填充空白不豁免——与其他可信路径设置同规）。
+        Assert.That(WindowsSandboxComponents.ResolveSandboxHome(null),
+                    Is.EqualTo(WindowsSandboxComponents.DefaultSandboxHome));
+        Assert.That(WindowsSandboxComponents.ResolveSandboxHome("  "),
+                    Is.EqualTo(WindowsSandboxComponents.DefaultSandboxHome));
+        Assert.That(WindowsSandboxComponents.ResolveSandboxHome(@"C:\sb\home"), Is.EqualTo(@"C:\sb\home"));
+        TestAssert.Throws<InvalidOperationException>(() => WindowsSandboxComponents
+                                                        .ResolveSandboxHome("relative\\home"));
+        TestAssert.Throws<InvalidOperationException>(() =>
+                                                         WindowsSandboxComponents
+                                                            .ResolveSandboxHome("  C:\\sb\\home  "));
     }
 
     // ---- desktop SDDL ----
 
-    [Fact]
+    [Test]
     public void DesktopFactory_BuildSddlGrantsOwnerAllAndSandboxParticipant()
     {
         if (!OperatingSystem.IsWindows()) return;
@@ -571,20 +574,20 @@ public class WindowsSandboxProtocolTests
 
         var sddl = WindowsSandboxDesktopFactory.BuildSddl(owner, sandbox);
 
-        Assert.StartsWith("D:P", sddl); // protected DACL, no inheritance
-        // The owner ACE carries DESKTOP_ALL_ACCESS and the sandbox ACE carries
-        // DESKTOP_PARTICIPANT_ACCESS; both masks appear as lowercase hex.
-        Assert.Equal("f01ff", $"{WindowsSandboxDesktopFactory.DesktopAllAccess:x}");
-        Assert.Equal("201ff", $"{WindowsSandboxDesktopFactory.DesktopParticipantAccess:x}");
-        Assert.Contains($"""(A;;0x{WindowsSandboxDesktopFactory.DesktopAllAccess:x};;;{owner.Value})""", sddl,
-                        StringComparison.Ordinal);
-        Assert.Contains($"""(A;;0x{WindowsSandboxDesktopFactory.DesktopParticipantAccess:x};;;{sandbox.Value})""", sddl,
-                        StringComparison.Ordinal);
+        Assert.That(sddl, Does.StartWith("D:P")); // 受保护 DACL，不继承
+        // 属主 ACE 携带 DESKTOP_ALL_ACCESS，沙箱 ACE 携带 DESKTOP_PARTICIPANT_ACCESS；
+        // 两个掩码都以小写十六进制出现。
+        Assert.That($"{WindowsSandboxDesktopFactory.DesktopAllAccess:x}", Is.EqualTo("f01ff"));
+        Assert.That($"{WindowsSandboxDesktopFactory.DesktopParticipantAccess:x}", Is.EqualTo("201ff"));
+        TestAssert.Contains($"""(A;;0x{WindowsSandboxDesktopFactory.DesktopAllAccess:x};;;{owner.Value})""", sddl,
+                            StringComparison.Ordinal);
+        TestAssert.Contains($"""(A;;0x{WindowsSandboxDesktopFactory.DesktopParticipantAccess:x};;;{sandbox.Value})""",
+                            sddl, StringComparison.Ordinal);
     }
 
     // ---- credential reader (DPAPI roundtrip, Windows only) ----
 
-    [Fact]
+    [Test]
     public async Task CredentialReader_DecryptsDpapiPasswordForExistingAccount()
     {
         if (!OperatingSystem.IsWindows()) return;
@@ -592,7 +595,7 @@ public class WindowsSandboxProtocolTests
         using var home     = new SandboxTestHome();
         var       identity = WindowsIdentity.GetCurrent().Name.Split('\\');
         if (identity.Length != 2 || !identity[0].Equals(Environment.MachineName, StringComparison.OrdinalIgnoreCase))
-            // SID lookup requires a machine-local account; skip elsewhere.
+            // SID 查找需要本机账户；其他环境跳过。
             return;
 
         var secret = "sandbox-password-Ø";
@@ -602,33 +605,31 @@ public class WindowsSandboxProtocolTests
                           "\",\"password\":\""                          + Convert.ToBase64String(blob) +
                           "\"},\"online\":{\"username\":\"TinyHarnessOnline\",\"password\":\"QUJDRA==\"}}");
 
-        // The reader accepts whichever offline account the components expect;
-        // the DPAPI roundtrip itself is the point of this test.
+        // 读取器接受组件期望的任一 offline 账户；本测试的核心是 DPAPI 往返本身。
         var components = home.Components with { OfflineUsername = identity[1] };
         var account    = await new SandboxCredentialReader(components).LoadOfflineAccount();
-        Assert.Equal(identity[1], account.Username);
-        Assert.Equal(secret, account.Password);
-        Assert.StartsWith("S-1-", account.AccountSid.Value);
+        Assert.That(account.Username, Is.EqualTo(identity[1]));
+        Assert.That(account.Password, Is.EqualTo(secret));
+        Assert.That(account.AccountSid.Value, Does.StartWith("S-1-"));
     }
 
-    [Fact]
+    [Test]
     public async Task CredentialReader_RejectsLegacyCodexUsernameWithoutDecrypting()
     {
         if (!OperatingSystem.IsWindows()) return;
 
         using var home = new SandboxTestHome();
-        // The password blob is placeholder base64: the username check must
-        // refuse before any DPAPI decryption is attempted.
+        // 密码 blob 是占位 base64：用户名检查必须在尝试任何 DPAPI 解密前拒绝。
         File.WriteAllText(home.Components.UsersFilePath,
                           """{"version":5,"offline":{"username":"CodexSandboxOffline","password":"QUJDRA=="},"online":{"username":"CodexSandboxOnline","password":"QUJDRA=="}}""");
         var exception =
-            await Assert.ThrowsAsync<InvalidOperationException>(() => new SandboxCredentialReader(home.Components)
-                                                                   .LoadOfflineAccount());
-        Assert.Contains("legacy Codex account 'CodexSandboxOffline'", exception.Message);
-        Assert.Contains("refusing to reuse", exception.Message);
+            await TestAssert.ThrowsAsync<InvalidOperationException>(() => new SandboxCredentialReader(home.Components)
+                                                                       .LoadOfflineAccount());
+        Assert.That(exception.Message, Does.Contain("legacy Codex account 'CodexSandboxOffline'"));
+        Assert.That(exception.Message, Does.Contain("refusing to reuse"));
     }
 
-    [Fact]
+    [Test]
     public async Task CredentialReader_RejectsUnexpectedOfflineAccountName()
     {
         if (!OperatingSystem.IsWindows()) return;
@@ -637,13 +638,13 @@ public class WindowsSandboxProtocolTests
         File.WriteAllText(home.Components.UsersFilePath,
                           """{"version":5,"offline":{"username":"SomeOtherAccount","password":"QUJDRA=="},"online":{"username":"TinyHarnessOnline","password":"QUJDRA=="}}""");
         var exception =
-            await Assert.ThrowsAsync<InvalidOperationException>(() => new SandboxCredentialReader(home.Components)
-                                                                   .LoadOfflineAccount());
-        Assert.Contains("SomeOtherAccount", exception.Message);
-        Assert.Contains("TinyHarnessOffline", exception.Message);
+            await TestAssert.ThrowsAsync<InvalidOperationException>(() => new SandboxCredentialReader(home.Components)
+                                                                       .LoadOfflineAccount());
+        Assert.That(exception.Message, Does.Contain("SomeOtherAccount"));
+        Assert.That(exception.Message, Does.Contain("TinyHarnessOffline"));
     }
 
-    [Fact]
+    [Test]
     public async Task CredentialReader_RejectsVersionMismatch()
     {
         if (!OperatingSystem.IsWindows()) return;
@@ -651,13 +652,13 @@ public class WindowsSandboxProtocolTests
         using var home = new SandboxTestHome();
         File.WriteAllText(home.Components.UsersFilePath,
                           """{"version":4,"offline":{"username":"a","password":"QQ=="},"online":{"username":"b","password":"QQ=="}}""");
-        await Assert.ThrowsAsync<InvalidOperationException>(() => new SandboxCredentialReader(home.Components)
-                                                               .LoadOfflineAccount());
+        await TestAssert.ThrowsAsync<InvalidOperationException>(() => new SandboxCredentialReader(home.Components)
+                                                                   .LoadOfflineAccount());
     }
 
     // ---- setup invoker payload channel ----
 
-    [Fact]
+    [Test]
     public void SetupInvoker_UsesArgumentChannelForSmallPayloads()
     {
         using var home        = new SandboxTestHome();
@@ -665,11 +666,11 @@ public class WindowsSandboxProtocolTests
         var       smallBase64 = Convert.ToBase64String([1, 2, 3]);
 
         var startInfo = invoker.BuildStartInfo(smallBase64);
-        Assert.Equal(smallBase64, startInfo.Arguments);
-        Assert.False(startInfo.UseShellExecute); // refresh never elevates
+        Assert.That(startInfo.Arguments, Is.EqualTo(smallBase64));
+        Assert.That(startInfo.UseShellExecute, Is.False); // refresh 绝不提权
     }
 
-    [Fact]
+    [Test]
     public void SetupInvoker_SwitchesToChunkedEnvChannelForLargePayloads()
     {
         using var home        = new SandboxTestHome();
@@ -677,52 +678,52 @@ public class WindowsSandboxProtocolTests
         var       largeBase64 = new string('A', ProcessSandboxSetupInvoker.PayloadArgumentCharacterLimit + 5);
 
         var startInfo = invoker.BuildStartInfo(largeBase64);
-        Assert.Equal("--launch-payload-env", startInfo.Arguments);
-        Assert.Equal(largeBase64.Length.ToString(), startInfo.Environment["CODEX_SANDBOX_LAUNCH_BYTES"]);
+        Assert.That(startInfo.Arguments, Is.EqualTo("--launch-payload-env"));
+        Assert.That(startInfo.Environment["CODEX_SANDBOX_LAUNCH_BYTES"], Is.EqualTo(largeBase64.Length.ToString()));
         var chunkCount = int.Parse(startInfo.Environment["CODEX_SANDBOX_LAUNCH_COUNT"]!);
         var reassembled = string.Concat(Enumerable.Range(0, chunkCount)
                                                   .Select(index =>
                                                               startInfo.Environment[$"CODEX_SANDBOX_LAUNCH_{index}"]));
-        Assert.Equal(largeBase64, reassembled);
-        Assert.All(Enumerable.Range(0, chunkCount),
-                   index => Assert.True(startInfo.Environment[$"CODEX_SANDBOX_LAUNCH_{index}"]!.Length <= 16 * 1024));
+        Assert.That(reassembled, Is.EqualTo(largeBase64));
+        TestAssert.All(Enumerable.Range(0, chunkCount),
+                       index => Assert.That(startInfo.Environment[$"CODEX_SANDBOX_LAUNCH_{index}"]!.Length <= 16 * 1024,
+                                            Is.True));
     }
 
     // ---- runner command-line quoting ----
 
-    [Theory]
-    [InlineData("plain.exe", "plain.exe")]
-    [InlineData("", "\"\"")]
-    [InlineData("with space.exe", "\"with space.exe\"")]
-    [InlineData("quote\"inside.exe", "\"quote\\\"inside.exe\"")]
-    [InlineData(@"C:\path\endswith\", "C:\\path\\endswith\\")]
-    [InlineData("with space\\", "\"with space\\\\\"")]
-    [InlineData(@"C:\pre\""quote", "\"C:\\pre\\\\\\\"quote\"")]
+
+    [TestCase("plain.exe", "plain.exe")]
+    [TestCase("", "\"\"")]
+    [TestCase("with space.exe", "\"with space.exe\"")]
+    [TestCase("quote\"inside.exe", "\"quote\\\"inside.exe\"")]
+    [TestCase(@"C:\path\endswith\", "C:\\path\\endswith\\")]
+    [TestCase("with space\\", "\"with space\\\\\"")]
+    [TestCase(@"C:\pre\""quote", "\"C:\\pre\\\\\\\"quote\"")]
     public void RunnerLauncher_QuoteArgumentFollowsCrtRules(string value, string expected)
     {
-        Assert.Equal(expected, WindowsSandboxRunnerLauncher.QuoteArgument(value));
+        Assert.That(WindowsSandboxRunnerLauncher.QuoteArgument(value), Is.EqualTo(expected));
     }
 
-    [Fact]
+    [Test]
     public void RunnerLauncher_CommandLinePassesFullPipeNames()
     {
         var commandLine = WindowsSandboxRunnerLauncher.BuildRunnerCommandLine(@"C:\tools\codex-command-runner.exe",
                                                                               @"\\.\pipe\codex-runner-abcd-in",
                                                                               @"\\.\pipe\codex-runner-abcd-out");
-        // CRT rules add no quotes for tokens without whitespace/quotes.
-        Assert.Equal(@"C:\tools\codex-command-runner.exe"           +
-                     " --pipe-in=\\\\.\\pipe\\codex-runner-abcd-in" +
-                     " --pipe-out=\\\\.\\pipe\\codex-runner-abcd-out",
-                     commandLine);
+        // CRT 规则对不含空白或引号的 token 不加引号。
+        Assert.That(commandLine, Is.EqualTo(@"C:\tools\codex-command-runner.exe"           +
+                                            " --pipe-in=\\\\.\\pipe\\codex-runner-abcd-in" +
+                                            " --pipe-out=\\\\.\\pipe\\codex-runner-abcd-out"));
     }
 
     // ---- desktop name format ----
 
-    [Fact]
+    [Test]
     public void DesktopName_Uses32LowercaseHexDigits()
     {
         var suffix = WindowsSandboxDesktopFactory.GenerateNameSuffix();
-        Assert.Equal(32, suffix.Length);
-        Assert.All(suffix, character => Assert.True(character is >= '0' and <= '9' or >= 'a' and <= 'f'));
+        Assert.That(suffix.Length, Is.EqualTo(32));
+        TestAssert.All(suffix, character => Assert.That(character is >= '0' and <= '9' or >= 'a' and <= 'f', Is.True));
     }
 }

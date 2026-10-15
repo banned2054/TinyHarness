@@ -15,7 +15,7 @@ namespace TinyHarness.Tests;
 /// </summary>
 public class ShellToolBackendTests
 {
-    [Fact]
+    [Test]
     public async Task Execute_SendsFrozenShellModePlanToBackend()
     {
         using var dir     = new TestTempDir();
@@ -27,23 +27,26 @@ public class ShellToolBackendTests
         var preparation = tool.Prepare(ShellCall(shell, command));
         var result      = await tool.ExecuteAsync(preparation, CancellationToken.None);
 
-        var received = Assert.IsType<PreparedProcessExecution>(fake.ReceivedExecution);
-        Assert.True(result.Succeeded, result.Content);
-        Assert.Equal(OperatingSystem.IsWindows() ? "powershell.exe" : "/bin/sh", received.Executable);
-        Assert.Equal(OperatingSystem.IsWindows()
-                         ? new[] { "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command }
-                         : new[] { "-c", command },
-                     received.Arguments);
-        Assert.Equal(dir.Root, received.WorkingDirectory);
-        Assert.Equal(45, received.TimeoutSeconds);
-        Assert.False(received.WorkspaceExecutable);
-        Assert.Null(received.RawCmdCommand);
+        var received = TestAssert.TypeOf<PreparedProcessExecution>(fake.ReceivedExecution);
+        Assert.That(result.Succeeded, Is.True, result.Content);
+        Assert.That(received.Executable, Is.EqualTo(OperatingSystem.IsWindows() ? "powershell.exe" : "/bin/sh"));
+        Assert.That(received.Arguments, Is.EqualTo(OperatingSystem.IsWindows()
+                                                       ? new[]
+                                                       {
+                                                           "-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
+                                                           command
+                                                       }
+                                                       : new[] { "-c", command }));
+        Assert.That(received.WorkingDirectory, Is.EqualTo(dir.Root));
+        Assert.That(received.TimeoutSeconds, Is.EqualTo(45));
+        Assert.That(received.WorkspaceExecutable, Is.False);
+        Assert.That(received.RawCmdCommand, Is.Null);
         // 后端收到的计划必须与已审批的冻结视图一致。
-        Assert.Equal(preparation.Arguments["executable"]!.GetValue<string>(), received.Executable);
-        Assert.Equal(preparation.Arguments["timeoutSeconds"]!.GetValue<int>(), received.TimeoutSeconds);
+        Assert.That(received.Executable, Is.EqualTo(preparation.Arguments["executable"]!.GetValue<string>()));
+        Assert.That(received.TimeoutSeconds, Is.EqualTo(preparation.Arguments["timeoutSeconds"]!.GetValue<int>()));
     }
 
-    [Fact]
+    [Test]
     public async Task Execute_SendsFrozenDirectModePlanToBackend()
     {
         using var dir        = new TestTempDir();
@@ -54,15 +57,15 @@ public class ShellToolBackendTests
         var preparation = tool.Prepare(Call(executable, ["--flag value", "plain"]));
         await tool.ExecuteAsync(preparation, CancellationToken.None);
 
-        var received = Assert.IsType<PreparedProcessExecution>(fake.ReceivedExecution);
-        Assert.Equal(executable, received.Executable);
-        Assert.Equal(["--flag value", "plain"], received.Arguments);
-        Assert.Equal(dir.Root, received.WorkingDirectory);
-        Assert.True(received.WorkspaceExecutable);
-        Assert.Null(received.RawCmdCommand);
+        var received = TestAssert.TypeOf<PreparedProcessExecution>(fake.ReceivedExecution);
+        Assert.That(received.Executable, Is.EqualTo(executable));
+        Assert.That(received.Arguments, Is.EqualTo(["--flag value", "plain"]));
+        Assert.That(received.WorkingDirectory, Is.EqualTo(dir.Root));
+        Assert.That(received.WorkspaceExecutable, Is.True);
+        Assert.That(received.RawCmdCommand, Is.Null);
     }
 
-    [Fact]
+    [Test]
     public async Task Execute_SendsRawCmdTailToBackendForWindowsCmdShell()
     {
         if (!OperatingSystem.IsWindows()) return;
@@ -74,13 +77,13 @@ public class ShellToolBackendTests
 
         await tool.ExecuteAsync(tool.Prepare(ShellCall("cmd", command)), CancellationToken.None);
 
-        var received = Assert.IsType<PreparedProcessExecution>(fake.ReceivedExecution);
-        Assert.Equal(Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe", received.Executable);
-        Assert.Equal(["/d", "/s", "/c", command], received.Arguments);
-        Assert.Equal(command, received.RawCmdCommand);
+        var received = TestAssert.TypeOf<PreparedProcessExecution>(fake.ReceivedExecution);
+        Assert.That(received.Executable, Is.EqualTo(Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe"));
+        Assert.That(received.Arguments, Is.EqualTo(["/d", "/s", "/c", command]));
+        Assert.That(received.RawCmdCommand, Is.EqualTo(command));
     }
 
-    [Fact]
+    [Test]
     public async Task Execute_SeparatesBackendStdoutAndStderrStreams()
     {
         using var dir = new TestTempDir();
@@ -95,14 +98,14 @@ public class ShellToolBackendTests
 
         var result = await tool.ExecuteAsync(tool.Prepare(Call("dotnet", ["test"])), CancellationToken.None);
 
-        Assert.True(result.Succeeded, result.Content);
-        Assert.Equal("out-part-1 out-part-2", result.Stdout);
-        Assert.Equal("err-part-1 err-part-2", result.Stderr);
-        Assert.DoesNotContain("err-part", result.Stdout, StringComparison.Ordinal);
-        Assert.DoesNotContain("out-part", result.Stderr, StringComparison.Ordinal);
+        Assert.That(result.Succeeded, Is.True, result.Content);
+        Assert.That(result.Stdout, Is.EqualTo("out-part-1 out-part-2"));
+        Assert.That(result.Stderr, Is.EqualTo("err-part-1 err-part-2"));
+        TestAssert.DoesNotContain("err-part", result.Stdout, StringComparison.Ordinal);
+        TestAssert.DoesNotContain("out-part", result.Stderr, StringComparison.Ordinal);
     }
 
-    [Fact]
+    [Test]
     public async Task Execute_MapsBackendZeroExitCodeToSucceeded()
     {
         using var dir  = new TestTempDir();
@@ -111,13 +114,13 @@ public class ShellToolBackendTests
 
         var result = await tool.ExecuteAsync(tool.Prepare(Call("dotnet", ["test"])), CancellationToken.None);
 
-        Assert.True(result.Succeeded, result.Content);
-        Assert.Equal(0, result.ExitCode);
-        Assert.False(result.TimedOut);
-        Assert.Contains("Exit code: 0", result.Content);
+        Assert.That(result.Succeeded, Is.True, result.Content);
+        Assert.That(result.ExitCode, Is.EqualTo(0));
+        Assert.That(result.TimedOut, Is.False);
+        Assert.That(result.Content, Does.Contain("Exit code: 0"));
     }
 
-    [Fact]
+    [Test]
     public async Task Execute_MapsBackendNonZeroExitCodeToFailedResult()
     {
         using var dir  = new TestTempDir();
@@ -126,13 +129,13 @@ public class ShellToolBackendTests
 
         var result = await tool.ExecuteAsync(tool.Prepare(Call("dotnet", ["test"])), CancellationToken.None);
 
-        Assert.False(result.Succeeded);
-        Assert.Equal(7, result.ExitCode);
-        Assert.False(result.TimedOut);
-        Assert.Contains("Exit code: 7", result.Content);
+        Assert.That(result.Succeeded, Is.False);
+        Assert.That(result.ExitCode, Is.EqualTo(7));
+        Assert.That(result.TimedOut, Is.False);
+        Assert.That(result.Content, Does.Contain("Exit code: 7"));
     }
 
-    [Fact]
+    [Test]
     public async Task Execute_KeepsOutputAndFailsOnBackendTimeout()
     {
         using var dir = new TestTempDir();
@@ -147,14 +150,14 @@ public class ShellToolBackendTests
 
         var result = await tool.ExecuteAsync(tool.Prepare(Call("dotnet", ["test"])), CancellationToken.None);
 
-        Assert.False(result.Succeeded);
-        Assert.True(result.TimedOut);
-        Assert.Contains("partial-stdout", result.Stdout);
-        Assert.Contains("partial-stderr", result.Stderr);
-        Assert.Contains("Timed out: true (9s)", result.Content);
+        Assert.That(result.Succeeded, Is.False);
+        Assert.That(result.TimedOut, Is.True);
+        Assert.That(result.Stdout, Does.Contain("partial-stdout"));
+        Assert.That(result.Stderr, Does.Contain("partial-stderr"));
+        Assert.That(result.Content, Does.Contain("Timed out: true (9s)"));
     }
 
-    [Fact]
+    [Test]
     public async Task Execute_PropagatesBackendCancellation()
     {
         using var dir = new TestTempDir();
@@ -164,13 +167,13 @@ public class ShellToolBackendTests
         };
         var tool = new ShellTool(dir.Workspace, processBackend : fake);
 
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
-                                                                    tool.ExecuteAsync(tool.Prepare(Call("dotnet",
-                                                                                               ["test"])),
-                                                                             CancellationToken.None));
+        await Assert.CatchAsync<OperationCanceledException>(() =>
+                                                                tool.ExecuteAsync(tool.Prepare(Call("dotnet",
+                                                                                           ["test"])),
+                                                                         CancellationToken.None));
     }
 
-    [Fact]
+    [Test]
     public async Task Execute_FailsWithoutExitCodeOnBackendFailure()
     {
         using var dir = new TestTempDir();
@@ -183,16 +186,16 @@ public class ShellToolBackendTests
 
         var result = await tool.ExecuteAsync(tool.Prepare(Call("dotnet", ["test"])), CancellationToken.None);
 
-        Assert.False(result.Succeeded);
-        Assert.Null(result.ExitCode);
-        Assert.False(result.TimedOut);
-        Assert.Contains("Exit code: unavailable", result.Content);
-        Assert.Contains("sandbox runner handshake failed", result.Content);
-        Assert.Contains("partial-stderr" + Environment.NewLine +
-                        "Failure: sandbox runner handshake failed", result.Content);
+        Assert.That(result.Succeeded, Is.False);
+        Assert.That(result.ExitCode, Is.Null);
+        Assert.That(result.TimedOut, Is.False);
+        Assert.That(result.Content, Does.Contain("Exit code: unavailable"));
+        Assert.That(result.Content, Does.Contain("sandbox runner handshake failed"));
+        Assert.That(result.Content, Does.Contain("partial-stderr" + Environment.NewLine +
+                                                 "Failure: sandbox runner handshake failed"));
     }
 
-    [Fact]
+    [Test]
     public async Task Execute_MapsBackendStartFailureToFailedResult()
     {
         using var dir = new TestTempDir();
@@ -205,12 +208,12 @@ public class ShellToolBackendTests
 
         var result = await tool.ExecuteAsync(tool.Prepare(Call("dotnet", ["test"])), CancellationToken.None);
 
-        Assert.False(result.Succeeded);
-        Assert.Null(result.ExitCode);
-        Assert.Contains("Failed to start executable", result.Content);
+        Assert.That(result.Succeeded, Is.False);
+        Assert.That(result.ExitCode, Is.Null);
+        Assert.That(result.Content, Does.Contain("Failed to start executable"));
     }
 
-    [Fact]
+    [Test]
     public async Task Execute_PropagatesUnknownProcessCleanupWithoutFabricatingAResult()
     {
         using var dir     = new TestTempDir();
@@ -218,13 +221,13 @@ public class ShellToolBackendTests
         var       backend = new FakeProcessExecutionBackend { ThrowOnExecute = failure };
         var       tool    = new ShellTool(dir.Workspace, processBackend : backend);
 
-        var exception = await Assert.ThrowsAsync<ToolExecutionUncertainException>(() =>
+        var exception = await TestAssert.ThrowsAsync<ToolExecutionUncertainException>(() =>
                      tool.ExecuteAsync(tool.Prepare(Call("dotnet", ["test"])), CancellationToken.None));
 
-        Assert.Same(failure, exception);
+        Assert.That(exception, Is.SameAs(failure));
     }
 
-    [Fact]
+    [Test]
     public async Task Execute_RedactsSecretAcrossBackendChunkBoundary()
     {
         using var    dir    = new TestTempDir();
@@ -240,10 +243,10 @@ public class ShellToolBackendTests
 
         var result = await tool.ExecuteAsync(tool.Prepare(Call("dotnet", ["test"])), CancellationToken.None);
 
-        Assert.True(result.Succeeded, result.Content);
-        Assert.Contains("[REDACTED]", result.Stdout);
-        Assert.DoesNotContain(secret, result.Stdout, StringComparison.Ordinal);
-        Assert.DoesNotContain(secret, result.Content, StringComparison.Ordinal);
+        Assert.That(result.Succeeded, Is.True, result.Content);
+        Assert.That(result.Stdout, Does.Contain("[REDACTED]"));
+        TestAssert.DoesNotContain(secret, result.Stdout, StringComparison.Ordinal);
+        TestAssert.DoesNotContain(secret, result.Content, StringComparison.Ordinal);
     }
 
     private static ChatToolCall Call(string executable, IReadOnlyList<string> arguments,

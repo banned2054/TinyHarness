@@ -19,7 +19,7 @@ public class ReadOnlyToolsTests
 
     // ---- read_file ---------------------------------------------------------
 
-    [Fact]
+    [Test]
     public async Task ReadFile_ReturnsContent()
     {
         using var dir = new TestTempDir();
@@ -28,11 +28,11 @@ public class ReadOnlyToolsTests
 
         var result = await ExecuteAsync(tool, Prepare(tool, """{"path":"src/a.txt"}"""));
 
-        Assert.True(result.Succeeded);
-        Assert.Equal("hello\nworld", result.Content);
+        Assert.That(result.Succeeded, Is.True);
+        Assert.That(result.Content, Is.EqualTo("hello\nworld"));
     }
 
-    [Fact]
+    [Test]
     public async Task ReadFile_PagesWithOffsetAndLimit()
     {
         using var dir   = new TestTempDir();
@@ -42,11 +42,11 @@ public class ReadOnlyToolsTests
 
         var result = await ExecuteAsync(tool, Prepare(tool, """{"path":"big.txt","offset":95,"limit":10}"""));
 
-        Assert.True(result.Succeeded);
-        Assert.Equal("line 95\nline 96\nline 97\nline 98\nline 99\nline 100", result.Content);
+        Assert.That(result.Succeeded, Is.True);
+        Assert.That(result.Content, Is.EqualTo("line 95\nline 96\nline 97\nline 98\nline 99\nline 100"));
     }
 
-    [Fact]
+    [Test]
     public async Task ReadFile_MissingFile_ReturnsNotFound()
     {
         using var dir  = new TestTempDir();
@@ -54,11 +54,11 @@ public class ReadOnlyToolsTests
 
         var result = await ExecuteAsync(tool, Prepare(tool, """{"path":"missing.txt"}"""));
 
-        Assert.False(result.Succeeded);
-        Assert.Contains("File not found", result.Content);
+        Assert.That(result.Succeeded, Is.False);
+        Assert.That(result.Content, Does.Contain("File not found"));
     }
 
-    [Fact]
+    [Test]
     public async Task ReadFile_DirectoryPath_TellsModelToList()
     {
         using var dir = new TestTempDir();
@@ -67,11 +67,11 @@ public class ReadOnlyToolsTests
 
         var result = await ExecuteAsync(tool, Prepare(tool, """{"path":"src"}"""));
 
-        Assert.False(result.Succeeded);
-        Assert.Contains("use list_files", result.Content);
+        Assert.That(result.Succeeded, Is.False);
+        Assert.That(result.Content, Does.Contain("use list_files"));
     }
 
-    [Fact]
+    [Test]
     public async Task ReadFile_TruncatesBeyondDefaultCap()
     {
         using var dir   = new TestTempDir();
@@ -81,17 +81,16 @@ public class ReadOnlyToolsTests
 
         var result = await ExecuteAsync(tool, Prepare(tool, """{"path":"huge.txt"}"""));
 
-        Assert.True(result.Succeeded);
-        Assert.StartsWith("line 1", result.Content);
-        Assert.Contains("truncated before line 4001; continue with offset=4001", result.Content);
-        Assert.DoesNotContain("line 4001\n", result.Content); // line 4001 must not be rendered
+        Assert.That(result.Succeeded, Is.True);
+        Assert.That(result.Content, Does.StartWith("line 1"));
+        Assert.That(result.Content, Does.Contain("truncated before line 4001; continue with offset=4001"));
+        Assert.That(result.Content, Does.Not.Contain("line 4001\n")); // 第 4001 行不得渲染
     }
 
-    [Fact]
+    [Test]
     public async Task ReadFile_OneLinePastLimit_ReportsTruncation()
     {
-        // Regression: the file has exactly limit+1 lines. The last line must not
-        // be silently dropped; the truncation notice is required in this case.
+        // 文件恰好 limit+1 行：最后一行不能被静默丢弃，此时必须给出截断提示。
         using var dir   = new TestTempDir();
         var       lines = string.Concat(Enumerable.Range(1, 11).Select(i => $"line {i}\n"));
         dir.WriteFile("eleven.txt", lines);
@@ -99,13 +98,13 @@ public class ReadOnlyToolsTests
 
         var result = await ExecuteAsync(tool, Prepare(tool, """{"path":"eleven.txt","limit":10}"""));
 
-        Assert.True(result.Succeeded);
-        Assert.StartsWith("line 1", result.Content);
-        Assert.DoesNotContain("line 11\n", result.Content); // content of line 11 must not be rendered
-        Assert.Contains("truncated before line 11; continue with offset=11", result.Content);
+        Assert.That(result.Succeeded, Is.True);
+        Assert.That(result.Content, Does.StartWith("line 1"));
+        Assert.That(result.Content, Does.Not.Contain("line 11\n")); // 第 11 行内容不得渲染
+        Assert.That(result.Content, Does.Contain("truncated before line 11; continue with offset=11"));
     }
 
-    [Fact]
+    [Test]
     public async Task ReadFile_ExactFitAtLimit_NoTruncationNotice()
     {
         using var dir   = new TestTempDir();
@@ -115,23 +114,23 @@ public class ReadOnlyToolsTests
 
         var result = await ExecuteAsync(tool, Prepare(tool, """{"path":"ten.txt","limit":10}"""));
 
-        Assert.True(result.Succeeded);
-        Assert.EndsWith("line 10", result.Content);
-        Assert.DoesNotContain("truncated", result.Content);
+        Assert.That(result.Succeeded, Is.True);
+        Assert.That(result.Content, Does.EndWith("line 10"));
+        Assert.That(result.Content, Does.Not.Contain("truncated"));
     }
 
-    [Fact]
+    [Test]
     public void ReadFile_Prepare_RejectsLimitAboveHardMax()
     {
         using var dir  = new TestTempDir();
         var       tool = new ReadFileTool(dir.Workspace);
 
-        var ex = Assert.Throws<InvalidDataException>(() => Prepare(tool, """{"path":"a.txt","limit":4001}"""));
+        var ex = TestAssert.Throws<InvalidDataException>(() => Prepare(tool, """{"path":"a.txt","limit":4001}"""));
 
-        Assert.Contains("between 1 and 4000", ex.Message);
+        Assert.That(ex.Message, Does.Contain("between 1 and 4000"));
     }
 
-    [Fact]
+    [Test]
     public async Task ReadFile_TruncatesOversizedSingleLine_InPlace()
     {
         using var dir = new TestTempDir();
@@ -140,37 +139,35 @@ public class ReadOnlyToolsTests
 
         var result = await ExecuteAsync(tool, Prepare(tool, """{"path":"minified.js"}"""));
 
-        Assert.True(result.Succeeded);
-        Assert.StartsWith(new string('a', 8192), result.Content);
-        Assert.Contains("... [line 1 truncated]", result.Content);
-        Assert.DoesNotContain(new string('a', 9_000), result.Content);
-        Assert.EndsWith("tail", result.Content);
+        Assert.That(result.Succeeded, Is.True);
+        Assert.That(result.Content, Does.StartWith(new string('a', 8192)));
+        Assert.That(result.Content, Does.Contain("... [line 1 truncated]"));
+        Assert.That(result.Content, Does.Not.Contain(new string('a', 9_000)));
+        Assert.That(result.Content, Does.EndWith("tail"));
     }
 
-    [Fact]
+    [Test]
     public async Task ReadFile_TruncatedLongLine_NextPageStartsAfterIt()
     {
-        // A long line cut in place has been "consumed": the next page must start
-        // at the following line (offset 2), never by re-reading the cut line.
+        // 原地截断的长行视为已"消费"：下一页必须从其后一行（offset 2）开始，
+        // 不得重读被截断行。
         using var dir = new TestTempDir();
         dir.WriteFile("one.txt", new string('a', 20_000) + "\nsecond\nthird\n");
         var tool = new ReadFileTool(dir.Workspace);
 
         var result = await ExecuteAsync(tool, Prepare(tool, """{"path":"one.txt","limit":1}"""));
 
-        Assert.True(result.Succeeded);
-        Assert.Contains("... [line 1 truncated]", result.Content);
-        Assert.Contains("truncated before line 2; continue with offset=2", result.Content);
-        Assert.DoesNotContain("second", result.Content);
+        Assert.That(result.Succeeded, Is.True);
+        Assert.That(result.Content, Does.Contain("... [line 1 truncated]"));
+        Assert.That(result.Content, Does.Contain("truncated before line 2; continue with offset=2"));
+        Assert.That(result.Content, Does.Not.Contain("second"));
     }
 
-    [Fact]
+    [Test]
     public async Task ReadFile_StopsAtOutputCharBudget()
     {
-        // 2000 lines x 80 chars far exceed the 64 KiB output budget before the
-        // 4000-line cap ever matters. Each rendered line costs 81 chars (80 +
-        // newline); the line area keeps the trailer reserve, so exactly 808 lines
-        // fit and line 809 is the first one not shown.
+        // 2000 行 × 80 字符远超 64 KiB 输出预算，且先于 4000 行上限生效。每行渲染成本 81 字符
+        // （80 + 换行）；行区域保留尾部提示空间后恰好容纳 808 行，第 809 行是第一行未显示的行。
         using var dir = new TestTempDir();
         var       sb  = new StringBuilder();
         for (var i = 1; i <= 2_000; i++) sb.Append(i.ToString("D5")).Append(new string('x', 75)).Append('\n');
@@ -180,30 +177,30 @@ public class ReadOnlyToolsTests
 
         var result = await ExecuteAsync(tool, Prepare(tool, """{"path":"wide.txt"}"""));
 
-        Assert.True(result.Succeeded);
-        Assert.True(result.Content.Length <= 64 * 1024);
-        Assert.Contains("00808", result.Content);
-        Assert.DoesNotContain("00809", result.Content); // line 809 fully skipped
-        Assert.Contains("truncated before line 809; continue with offset=809", result.Content);
+        Assert.That(result.Succeeded, Is.True);
+        Assert.That(result.Content.Length <= 64 * 1024, Is.True);
+        Assert.That(result.Content, Does.Contain("00808"));
+        Assert.That(result.Content, Does.Not.Contain("00809")); // 第 809 行被完整跳过
+        Assert.That(result.Content, Does.Contain("truncated before line 809; continue with offset=809"));
     }
 
-    [Fact]
+    [Test]
     public async Task ReadFile_LineCut_DoesNotSplitSurrogatePair()
     {
-        // The 8 KiB cut lands between the two code units of the emoji; the cut
-        // must keep the pair together instead of emitting a dangling surrogate.
+        // 8 KiB 截断点落在 emoji 两个代码单元之间：截断必须保持代理对完整，
+        // 不能输出孤立代理项。
         using var dir = new TestTempDir();
         dir.WriteFile("emoji.txt", new string('a', 8191) + "\U0001F600" + new string('b', 10) + "\n");
         var tool = new ReadFileTool(dir.Workspace);
 
         var result = await ExecuteAsync(tool, Prepare(tool, """{"path":"emoji.txt"}"""));
 
-        Assert.True(result.Succeeded);
-        Assert.StartsWith(new string('a', 8191) + "\U0001F600", result.Content);
-        Assert.DoesNotContain(new string('a', 8192), result.Content);
+        Assert.That(result.Succeeded, Is.True);
+        Assert.That(result.Content, Does.StartWith(new string('a', 8191) + "\U0001F600"));
+        Assert.That(result.Content, Does.Not.Contain(new string('a', 8192)));
     }
 
-    [Fact]
+    [Test]
     public async Task ReadFile_FileOverMaxBytes_IsRefusedNotRead()
     {
         using var dir = new TestTempDir();
@@ -212,12 +209,12 @@ public class ReadOnlyToolsTests
 
         var result = await ExecuteAsync(tool, Prepare(tool, """{"path":"huge.txt"}"""));
 
-        Assert.True(result.Succeeded);
-        Assert.Contains("4 MiB read limit", result.Content);
-        Assert.Contains("search_text", result.Content);
+        Assert.That(result.Succeeded, Is.True);
+        Assert.That(result.Content, Does.Contain("4 MiB read limit"));
+        Assert.That(result.Content, Does.Contain("search_text"));
     }
 
-    [Fact]
+    [Test]
     public async Task ReadFile_FileJustUnderMaxBytes_IsReadNotRefused()
     {
         using var dir = new TestTempDir();
@@ -226,12 +223,12 @@ public class ReadOnlyToolsTests
 
         var result = await ExecuteAsync(tool, Prepare(tool, """{"path":"edge.txt"}"""));
 
-        Assert.True(result.Succeeded);
-        Assert.DoesNotContain("read limit", result.Content);
-        Assert.Contains("[line 1 truncated]", result.Content);
+        Assert.That(result.Succeeded, Is.True);
+        Assert.That(result.Content, Does.Not.Contain("read limit"));
+        Assert.That(result.Content, Does.Contain("[line 1 truncated]"));
     }
 
-    [Fact]
+    [Test]
     public async Task ReadFile_BinaryFile_IsReportedNotDumped()
     {
         using var dir = new TestTempDir();
@@ -240,41 +237,41 @@ public class ReadOnlyToolsTests
 
         var result = await ExecuteAsync(tool, Prepare(tool, """{"path":"blob.dat"}"""));
 
-        Assert.True(result.Succeeded);
-        Assert.Contains("binary file", result.Content);
+        Assert.That(result.Succeeded, Is.True);
+        Assert.That(result.Content, Does.Contain("binary file"));
     }
 
-    [Fact]
+    [Test]
     public void ReadFile_Prepare_RejectsMissingPath()
     {
         using var dir  = new TestTempDir();
         var       tool = new ReadFileTool(dir.Workspace);
 
-        var ex = Assert.Throws<InvalidDataException>(() => Prepare(tool, "{}"));
-        Assert.Contains("'path'", ex.Message);
+        var ex = TestAssert.Throws<InvalidDataException>(() => Prepare(tool, "{}"));
+        Assert.That(ex.Message, Does.Contain("'path'"));
     }
 
-    [Fact]
+    [Test]
     public void ReadFile_Prepare_RejectsEscape()
     {
         using var dir  = new TestTempDir();
         var       tool = new ReadFileTool(dir.Workspace);
 
-        Assert.Throws<InvalidDataException>(() => Prepare(tool, """{"path":"../secret.txt"}"""));
+        TestAssert.Throws<InvalidDataException>(() => Prepare(tool, """{"path":"../secret.txt"}"""));
     }
 
-    [Fact]
+    [Test]
     public void ReadFile_Prepare_RejectsInvalidOffset()
     {
         using var dir  = new TestTempDir();
         var       tool = new ReadFileTool(dir.Workspace);
 
-        Assert.Throws<InvalidDataException>(() => Prepare(tool, """{"path":"a.txt","offset":0}"""));
+        TestAssert.Throws<InvalidDataException>(() => Prepare(tool, """{"path":"a.txt","offset":0}"""));
     }
 
     // ---- list_files --------------------------------------------------------
 
-    [Fact]
+    [Test]
     public async Task ListFiles_ListsTopLevelEntries()
     {
         using var dir = new TestTempDir();
@@ -284,13 +281,13 @@ public class ReadOnlyToolsTests
 
         var result = await ExecuteAsync(tool, Prepare(tool, "{}"));
 
-        Assert.True(result.Succeeded);
-        Assert.Contains("README.md", result.Content);
-        Assert.Contains("src/", result.Content);
-        Assert.DoesNotContain("src/a.cs", result.Content);
+        Assert.That(result.Succeeded, Is.True);
+        Assert.That(result.Content, Does.Contain("README.md"));
+        Assert.That(result.Content, Does.Contain("src/"));
+        Assert.That(result.Content, Does.Not.Contain("src/a.cs"));
     }
 
-    [Fact]
+    [Test]
     public async Task ListFiles_Recursive_ShowsNestedFiles()
     {
         using var dir = new TestTempDir();
@@ -299,11 +296,11 @@ public class ReadOnlyToolsTests
 
         var result = await ExecuteAsync(tool, Prepare(tool, """{"recursive":true}"""));
 
-        Assert.True(result.Succeeded);
-        Assert.Contains("src/deep/a.cs", result.Content);
+        Assert.That(result.Succeeded, Is.True);
+        Assert.That(result.Content, Does.Contain("src/deep/a.cs"));
     }
 
-    [Fact]
+    [Test]
     public async Task ListFiles_OmitsBuildAndVcDirectories()
     {
         using var dir = new TestTempDir();
@@ -314,17 +311,17 @@ public class ReadOnlyToolsTests
 
         var recursive = await ExecuteAsync(tool, Prepare(tool, """{"recursive":true}"""));
 
-        Assert.Contains("src/real.cs", recursive.Content);
-        Assert.DoesNotContain("obj/", recursive.Content);
-        Assert.DoesNotContain(".git/", recursive.Content);
-        Assert.DoesNotContain("junk.cs", recursive.Content);
+        Assert.That(recursive.Content, Does.Contain("src/real.cs"));
+        Assert.That(recursive.Content, Does.Not.Contain("obj/"));
+        Assert.That(recursive.Content, Does.Not.Contain(".git/"));
+        Assert.That(recursive.Content, Does.Not.Contain("junk.cs"));
 
-        // An explicitly requested excluded directory is still reachable.
+        // 显式请求被排除的目录时仍可访问。
         var explicitResult = await ExecuteAsync(tool, Prepare(tool, """{"path":"obj"}"""));
-        Assert.Contains("junk.cs", explicitResult.Content);
+        Assert.That(explicitResult.Content, Does.Contain("junk.cs"));
     }
 
-    [Fact]
+    [Test]
     public async Task ListFiles_MissingDirectory_ReturnsNotFound()
     {
         using var dir  = new TestTempDir();
@@ -332,11 +329,11 @@ public class ReadOnlyToolsTests
 
         var result = await ExecuteAsync(tool, Prepare(tool, """{"path":"nope"}"""));
 
-        Assert.False(result.Succeeded);
-        Assert.Contains("Directory not found", result.Content);
+        Assert.That(result.Succeeded, Is.False);
+        Assert.That(result.Content, Does.Contain("Directory not found"));
     }
 
-    [Fact]
+    [Test]
     public async Task ListFiles_MaxDepth_LimitsRecursion()
     {
         using var dir = new TestTempDir();
@@ -347,13 +344,13 @@ public class ReadOnlyToolsTests
 
         var result = await ExecuteAsync(tool, Prepare(tool, """{"recursive":true,"maxDepth":1}"""));
 
-        Assert.Contains("src/a.cs", result.Content);
-        Assert.DoesNotContain("src/deep/b.cs", result.Content);
+        Assert.That(result.Content, Does.Contain("src/a.cs"));
+        Assert.That(result.Content, Does.Not.Contain("src/deep/b.cs"));
     }
 
     // ---- search_text -------------------------------------------------------
 
-    [Fact]
+    [Test]
     public async Task SearchText_FindsAcrossFiles_IgnoreCaseByDefault()
     {
         using var dir = new TestTempDir();
@@ -363,12 +360,12 @@ public class ReadOnlyToolsTests
 
         var result = await ExecuteAsync(tool, Prepare(tool, """{"pattern":"QUICK"}"""));
 
-        Assert.True(result.Succeeded);
-        Assert.Contains("a.txt:1: The quick brown fox", result.Content);
-        Assert.Contains("b.txt:2: quick AND dirty", result.Content);
+        Assert.That(result.Succeeded, Is.True);
+        Assert.That(result.Content, Does.Contain("a.txt:1: The quick brown fox"));
+        Assert.That(result.Content, Does.Contain("b.txt:2: quick AND dirty"));
     }
 
-    [Fact]
+    [Test]
     public async Task SearchText_CaseSensitive_Distinguishes()
     {
         using var dir = new TestTempDir();
@@ -377,12 +374,12 @@ public class ReadOnlyToolsTests
 
         var result = await ExecuteAsync(tool, Prepare(tool, """{"pattern":"quick","caseSensitive":true}"""));
 
-        Assert.True(result.Succeeded);
-        Assert.Contains("a.txt:2: quick", result.Content);
-        Assert.DoesNotContain("a.txt:1", result.Content);
+        Assert.That(result.Succeeded, Is.True);
+        Assert.That(result.Content, Does.Contain("a.txt:2: quick"));
+        Assert.That(result.Content, Does.Not.Contain("a.txt:1"));
     }
 
-    [Fact]
+    [Test]
     public async Task SearchText_StopsAtMaxResults()
     {
         using var dir   = new TestTempDir();
@@ -392,11 +389,11 @@ public class ReadOnlyToolsTests
 
         var result = await ExecuteAsync(tool, Prepare(tool, """{"pattern":"needle","maxResults":50}"""));
 
-        Assert.True(result.Succeeded);
-        Assert.Contains("stopped after 50 matches", result.Content);
+        Assert.That(result.Succeeded, Is.True);
+        Assert.That(result.Content, Does.Contain("stopped after 50 matches"));
     }
 
-    [Fact]
+    [Test]
     public async Task SearchText_NoMatches_ReportsCleanly()
     {
         using var dir = new TestTempDir();
@@ -405,11 +402,11 @@ public class ReadOnlyToolsTests
 
         var result = await ExecuteAsync(tool, Prepare(tool, """{"pattern":"zzz"}"""));
 
-        Assert.True(result.Succeeded);
-        Assert.Contains("no matches", result.Content);
+        Assert.That(result.Succeeded, Is.True);
+        Assert.That(result.Content, Does.Contain("no matches"));
     }
 
-    [Fact]
+    [Test]
     public async Task SearchText_SkipsBinaryFiles()
     {
         using var dir = new TestTempDir();
@@ -419,16 +416,16 @@ public class ReadOnlyToolsTests
 
         var result = await ExecuteAsync(tool, Prepare(tool, """{"pattern":"needle"}"""));
 
-        Assert.True(result.Succeeded);
-        Assert.Contains("a.txt:1: needle in text", result.Content);
-        Assert.DoesNotContain("b.bin:1", result.Content);
+        Assert.That(result.Succeeded, Is.True);
+        Assert.That(result.Content, Does.Contain("a.txt:1: needle in text"));
+        Assert.That(result.Content, Does.Not.Contain("b.bin:1"));
     }
 
-    [Fact]
+    [Test]
     public async Task SearchText_WalkOverFileCap_ReportsPartialScan()
     {
-        // More files than the walk cap: the result must say the scan was partial
-        // instead of presenting "(no matches...)" as if the whole repo was seen.
+        // 文件数超过遍历上限：结果必须说明扫描不完整，而不是给出 "(no matches...)"、
+        // 假装已看过整个仓库。
         using var dir = new TestTempDir();
         for (var i = 0; i < 3_005; i++) dir.WriteFile($"f{i:D4}.txt", "filler\n");
 
@@ -436,48 +433,46 @@ public class ReadOnlyToolsTests
 
         var result = await ExecuteAsync(tool, Prepare(tool, """{"pattern":"needle-partial-scan"}"""));
 
-        Assert.True(result.Succeeded);
-        Assert.Contains("no matches", result.Content);
-        Assert.Contains("only the first 3000 files scanned", result.Content);
+        Assert.That(result.Succeeded, Is.True);
+        Assert.That(result.Content, Does.Contain("no matches"));
+        Assert.That(result.Content, Does.Contain("only the first 3000 files scanned"));
     }
 
-    [Fact]
+    [Test]
     public async Task SearchText_FileSymlinkPointingOutside_IsSkippedNotRead()
     {
-        // A file symlink inside the workspace whose target is outside must not
-        // have its content read or surfaced (PLAN §11).
+        // 工作区内目标在工作区外的文件符号链接：其内容不得被读取或展示（PLAN §11）。
         using var workspaceDir = new TestTempDir();
         using var outsideDir   = new TestTempDir();
         var       outsideFile  = outsideDir.WriteFile("secret.txt", "TOP-SECRET-PLACEHOLDER needle-outside\n");
         var       linkPath     = Path.Combine(workspaceDir.Root, "link.txt");
-        if (!TryCreateFileSymlink(linkPath, outsideFile)) return; // No symlink privilege; nothing to verify.
+        if (!TryCreateFileSymlink(linkPath, outsideFile)) return; // 无符号链接权限；无可验证内容。
 
         var tool = new SearchTextTool(workspaceDir.Workspace);
 
         var result = await ExecuteAsync(tool, Prepare(tool, """{"pattern":"needle-outside"}"""));
 
-        Assert.True(result.Succeeded);
-        Assert.DoesNotContain("TOP-SECRET-PLACEHOLDER", result.Content);
-        Assert.Contains("file link(s) to outside the workspace", result.Content);
+        Assert.That(result.Succeeded, Is.True);
+        Assert.That(result.Content, Does.Not.Contain("TOP-SECRET-PLACEHOLDER"));
+        Assert.That(result.Content, Does.Contain("file link(s) to outside the workspace"));
     }
 
-    [Fact]
+    [Test]
     public async Task SearchText_FileSymlinkInsideWorkspace_IsFollowed()
     {
-        // A file symlink whose final target stays inside the workspace is still
-        // searchable: the boundary rule is about the resolved target, not the
-        // link itself (matches read_file semantics).
+        // 最终目标仍在工作区内的文件符号链接可被搜索：边界规则针对解析后的目标而非
+        // 链接本身（与 read_file 语义一致）。
         using var dir      = new TestTempDir();
         var       target   = dir.WriteFile("real.txt", "needle-inside\n");
         var       linkPath = Path.Combine(dir.Root, "alias.txt");
-        if (!TryCreateFileSymlink(linkPath, target)) return; // No symlink privilege; nothing to verify.
+        if (!TryCreateFileSymlink(linkPath, target)) return; // 无符号链接权限；无可验证内容。
 
         var tool = new SearchTextTool(dir.Workspace);
 
         var result = await ExecuteAsync(tool, Prepare(tool, """{"pattern":"needle-inside"}"""));
 
-        Assert.True(result.Succeeded);
-        Assert.Contains("alias.txt:1: needle-inside", result.Content);
+        Assert.That(result.Succeeded, Is.True);
+        Assert.That(result.Content, Does.Contain("alias.txt:1: needle-inside"));
     }
 
     private static bool TryCreateFileSymlink(string linkPath, string targetPath)
@@ -489,31 +484,31 @@ public class ReadOnlyToolsTests
         }
         catch (Exception ex) when (ex is UnauthorizedAccessException or IOException or PlatformNotSupportedException)
         {
-            return false; // No symlink privilege (Developer Mode/admin); skip.
+            return false; // 无符号链接权限（开发者模式/管理员）；跳过。
         }
     }
 
-    [Fact]
+    [Test]
     public void SearchText_Prepare_RejectsEmptyPattern()
     {
         using var dir  = new TestTempDir();
         var       tool = new SearchTextTool(dir.Workspace);
 
-        Assert.Throws<InvalidDataException>(() => Prepare(tool, """{"pattern":"  "}"""));
+        TestAssert.Throws<InvalidDataException>(() => Prepare(tool, """{"pattern":"  "}"""));
     }
 
-    [Fact]
+    [Test]
     public void SearchText_Prepare_RejectsEscape()
     {
         using var dir  = new TestTempDir();
         var       tool = new SearchTextTool(dir.Workspace);
 
-        Assert.Throws<InvalidDataException>(() => Prepare(tool, """{"pattern":"x","path":"../outside"}"""));
+        TestAssert.Throws<InvalidDataException>(() => Prepare(tool, """{"pattern":"x","path":"../outside"}"""));
     }
 
     // ---- Agent Loop over real read-only tools -----------------------------
 
-    [Fact]
+    [Test]
     public async Task AgentLoop_ReadToolResult_FeedsNextModelTurn()
     {
         using var dir = new TestTempDir();
@@ -525,12 +520,12 @@ public class ReadOnlyToolsTests
 
         var result = await loop.RunAsync("sys", "read data.txt", CancellationToken.None);
 
-        Assert.Equal(AgentStatus.Completed, result.Status);
-        Assert.Equal(2, client.Requests);
-        Assert.Contains(loop.History, m => m is { Role: ChatRole.Tool, Content: "alpha\nbeta" });
+        Assert.That(result.Status, Is.EqualTo(AgentStatus.Completed));
+        Assert.That(client.Requests, Is.EqualTo(2));
+        TestAssert.ContainsAll(m => m is { Role: ChatRole.Tool, Content: "alpha\nbeta" }, loop.History);
     }
 
-    [Fact]
+    [Test]
     public async Task AgentLoop_ReadFailure_IsReportedBackAndLoopContinues()
     {
         using var dir    = new TestTempDir();
@@ -541,8 +536,8 @@ public class ReadOnlyToolsTests
 
         var result = await loop.RunAsync("sys", "read missing.txt", CancellationToken.None);
 
-        Assert.Equal(AgentStatus.Completed, result.Status);
-        Assert.Contains(loop.History, m => m.Role == ChatRole.Tool && m.Content.Contains("File not found"));
+        Assert.That(result.Status, Is.EqualTo(AgentStatus.Completed));
+        TestAssert.ContainsAll(m => m.Role == ChatRole.Tool && m.Content.Contains("File not found"), loop.History);
     }
 
     private static AgentOptions Options() => new()

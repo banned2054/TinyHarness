@@ -5,7 +5,7 @@ namespace TinyHarness.Tests;
 
 public class UserConfigStoreTests
 {
-    [Fact]
+    [Test]
     public async Task SaveThenLoad_RoundTripsProfilesSettingsAndDefault()
     {
         var dir = Path.Combine(Path.GetTempPath(), $"tinyharness-{Guid.NewGuid():N}");
@@ -59,34 +59,34 @@ public class UserConfigStoreTests
             await UserConfigStore.SaveAsync(path, config, CancellationToken.None);
             var loaded = await UserConfigStore.LoadAsync(path, CancellationToken.None);
 
-            Assert.Equal("work", loaded.DefaultProfile);
-            var profile = Assert.Single(loaded.Profiles);
-            Assert.Equal("work", profile.Name);
-            Assert.Equal("https://api.example.com/v1", profile.Endpoint);
-            Assert.Equal("WORK_API_KEY", profile.ApiKeyEnvironmentVariable);
-            Assert.Equal("TinyHarness:work", profile.ApiKeyCredentialTarget);
-            Assert.Equal(ChatApiKind.Responses, profile.ChatApi);
-            Assert.Equal("model-x", profile.DefaultModel);
-            Assert.Equal(2, profile.Models.Count);
-            Assert.Equal(128_000, profile.Models[0].ContextWindowTokens);
-            Assert.Equal(200_000, profile.Models[1].ContextWindowTokens);
-            Assert.NotNull(loaded.Settings);
-            Assert.Equal(60, loaded.Settings!.MaxAgentSteps);
-            Assert.Equal(4_000, loaded.Settings.ReservedOutputTokens);
-            Assert.Equal(100_000, loaded.Settings.CompactionThreshold);
-            Assert.Equal(90, loaded.Settings.DefaultToolTimeoutSeconds);
-            Assert.Equal("custom/runs", loaded.Settings.SessionDirectory);
+            Assert.That(loaded.DefaultProfile, Is.EqualTo("work"));
+            var profile = TestAssert.Single(loaded.Profiles);
+            Assert.That(profile.Name, Is.EqualTo("work"));
+            Assert.That(profile.Endpoint, Is.EqualTo("https://api.example.com/v1"));
+            Assert.That(profile.ApiKeyEnvironmentVariable, Is.EqualTo("WORK_API_KEY"));
+            Assert.That(profile.ApiKeyCredentialTarget, Is.EqualTo("TinyHarness:work"));
+            Assert.That(profile.ChatApi, Is.EqualTo(ChatApiKind.Responses));
+            Assert.That(profile.DefaultModel, Is.EqualTo("model-x"));
+            Assert.That(profile.Models.Count, Is.EqualTo(2));
+            Assert.That(profile.Models[0].ContextWindowTokens, Is.EqualTo(128_000));
+            Assert.That(profile.Models[1].ContextWindowTokens, Is.EqualTo(200_000));
+            TestAssert.NotNull(loaded.Settings);
+            Assert.That(loaded.Settings!.MaxAgentSteps, Is.EqualTo(60));
+            Assert.That(loaded.Settings.ReservedOutputTokens, Is.EqualTo(4_000));
+            Assert.That(loaded.Settings.CompactionThreshold, Is.EqualTo(100_000));
+            Assert.That(loaded.Settings.DefaultToolTimeoutSeconds, Is.EqualTo(90));
+            Assert.That(loaded.Settings.SessionDirectory, Is.EqualTo("custom/runs"));
             var worker = loaded.Settings.Worker!;
-            Assert.Equal("C:/work/project", worker.WorkspaceRoot);
-            Assert.Equal(180, worker.RunTimeoutSeconds);
-            Assert.Equal(8, worker.MaxAgentSteps);
-            Assert.Equal(25, worker.DefaultToolTimeoutSeconds);
-            Assert.Equal(10_000, worker.MaxTaskPackageCharacters);
-            Assert.Equal(15, worker.MaxToolCalls);
-            Assert.Equal(30_000, worker.MaxToolOutputCharacters);
-            Assert.Equal(20_000, worker.MaxContextTokensPerRequest);
-            Assert.Equal(50_000, worker.MaxCumulativeContextTokens);
-            Assert.Equal(16_000, worker.MaxModelResponseCharacters);
+            Assert.That(worker.WorkspaceRoot, Is.EqualTo("C:/work/project"));
+            Assert.That(worker.RunTimeoutSeconds, Is.EqualTo(180));
+            Assert.That(worker.MaxAgentSteps, Is.EqualTo(8));
+            Assert.That(worker.DefaultToolTimeoutSeconds, Is.EqualTo(25));
+            Assert.That(worker.MaxTaskPackageCharacters, Is.EqualTo(10_000));
+            Assert.That(worker.MaxToolCalls, Is.EqualTo(15));
+            Assert.That(worker.MaxToolOutputCharacters, Is.EqualTo(30_000));
+            Assert.That(worker.MaxContextTokensPerRequest, Is.EqualTo(20_000));
+            Assert.That(worker.MaxCumulativeContextTokens, Is.EqualTo(50_000));
+            Assert.That(worker.MaxModelResponseCharacters, Is.EqualTo(16_000));
         }
         finally
         {
@@ -94,17 +94,17 @@ public class UserConfigStoreTests
         }
     }
 
-    [Fact]
+    [Test]
     public async Task LoadAsync_MissingFile_ReturnsEmptyConfig()
     {
         var config = await UserConfigStore.LoadAsync("does-not-exist.json", CancellationToken.None);
 
-        Assert.Null(config.DefaultProfile);
-        Assert.Empty(config.Profiles);
-        Assert.Null(config.Settings);
+        Assert.That(config.DefaultProfile, Is.Null);
+        Assert.That(config.Profiles, Is.Empty);
+        Assert.That(config.Settings, Is.Null);
     }
 
-    [Fact]
+    [Test]
     public async Task LoadAsync_LegacyProfileWithoutChatApi_DefaultsToChatCompletions()
     {
         var dir = Path.Combine(Path.GetTempPath(), $"tinyharness-{Guid.NewGuid():N}");
@@ -117,8 +117,8 @@ public class UserConfigStoreTests
 
             var loaded = await UserConfigStore.LoadAsync(path, CancellationToken.None);
 
-            var profile = Assert.Single(loaded.Profiles);
-            Assert.Equal(ChatApiKind.ChatCompletions, profile.ChatApi);
+            var profile = TestAssert.Single(loaded.Profiles);
+            Assert.That(profile.ChatApi, Is.EqualTo(ChatApiKind.ChatCompletions));
         }
         finally
         {
@@ -126,7 +126,7 @@ public class UserConfigStoreTests
         }
     }
 
-    [Fact]
+    [Test]
     public async Task LoadAsync_NonObjectRoot_ThrowsWithPath()
     {
         var dir = Path.Combine(Path.GetTempPath(), $"tinyharness-{Guid.NewGuid():N}");
@@ -137,11 +137,11 @@ public class UserConfigStoreTests
             await File.WriteAllTextAsync(path, "[1, 2]");
 
             var error =
-                await Assert.ThrowsAsync<InvalidDataException>(() =>
-                                                                   UserConfigStore
-                                                                      .LoadAsync(path, CancellationToken.None));
+                await TestAssert.ThrowsAsync<InvalidDataException>(() =>
+                                                                       UserConfigStore
+                                                                          .LoadAsync(path, CancellationToken.None));
 
-            Assert.Contains("user-config.json", error.Message);
+            Assert.That(error.Message, Does.Contain("user-config.json"));
         }
         finally
         {
@@ -149,18 +149,18 @@ public class UserConfigStoreTests
         }
     }
 
-    [Theory]
-    [InlineData("""{"profiles":[{"name":"a"},{"name":"a"}]}""", "duplicates profile name 'a'")]
-    [InlineData("""{"profiles":[{"endpoint":"https://x"}]}""", "'profiles[0].name'")]
-    [InlineData("""{"profiles":[{"name":"a","models":[{"contextWindowTokens":100}]}]}""", "'profiles[0].models[0].id'")]
-    [InlineData("""{"profiles":[{"name":"a","models":[{"id":"m","contextWindowTokens":0}]}]}""", "positive integer")]
-    [InlineData("""{"profiles":[{"name":"a","chatApi":"grpc"}]}""", "'profiles[0].chatApi'")]
-    [InlineData("""{"profiles":[{"name":"a","chatApi":"grpc"}]}""", "invalid value 'grpc'")]
-    [InlineData("""{"profiles":[{"name":"a","chatApi":5}]}""", "must be a string")]
-    [InlineData("""{"defaultProfile":42}""", "'defaultProfile'")]
-    [InlineData("""{"settings":{"maxAgentSteps":-1}}""", "positive integer")]
-    [InlineData("""{"settings":{"compactionThreshold":-5}}""", "non-negative integer")]
-    [InlineData("""{"profiles":"nope"}""", "must be an array")]
+
+    [TestCase("""{"profiles":[{"name":"a"},{"name":"a"}]}""", "duplicates profile name 'a'")]
+    [TestCase("""{"profiles":[{"endpoint":"https://x"}]}""", "'profiles[0].name'")]
+    [TestCase("""{"profiles":[{"name":"a","models":[{"contextWindowTokens":100}]}]}""", "'profiles[0].models[0].id'")]
+    [TestCase("""{"profiles":[{"name":"a","models":[{"id":"m","contextWindowTokens":0}]}]}""", "positive integer")]
+    [TestCase("""{"profiles":[{"name":"a","chatApi":"grpc"}]}""", "'profiles[0].chatApi'")]
+    [TestCase("""{"profiles":[{"name":"a","chatApi":"grpc"}]}""", "invalid value 'grpc'")]
+    [TestCase("""{"profiles":[{"name":"a","chatApi":5}]}""", "must be a string")]
+    [TestCase("""{"defaultProfile":42}""", "'defaultProfile'")]
+    [TestCase("""{"settings":{"maxAgentSteps":-1}}""", "positive integer")]
+    [TestCase("""{"settings":{"compactionThreshold":-5}}""", "non-negative integer")]
+    [TestCase("""{"profiles":"nope"}""", "must be an array")]
     public async Task LoadAsync_MalformedValues_ThrowActionableDiagnostics(string json, string expectedFragment)
     {
         var dir = Path.Combine(Path.GetTempPath(), $"tinyharness-{Guid.NewGuid():N}");
@@ -171,12 +171,12 @@ public class UserConfigStoreTests
             await File.WriteAllTextAsync(path, json);
 
             var error =
-                await Assert.ThrowsAsync<InvalidDataException>(() =>
-                                                                   UserConfigStore
-                                                                      .LoadAsync(path, CancellationToken.None));
+                await TestAssert.ThrowsAsync<InvalidDataException>(() =>
+                                                                       UserConfigStore
+                                                                          .LoadAsync(path, CancellationToken.None));
 
-            Assert.Contains(expectedFragment, error.Message);
-            Assert.Contains(path, error.Message);
+            Assert.That(error.Message, Does.Contain(expectedFragment));
+            Assert.That(error.Message, Does.Contain(path));
         }
         finally
         {
@@ -184,7 +184,7 @@ public class UserConfigStoreTests
         }
     }
 
-    [Fact]
+    [Test]
     public async Task SaveAsync_CommandRulesRoundTrip()
     {
         var dir = Path.Combine(Path.GetTempPath(), $"tinyharness-{Guid.NewGuid():N}");
@@ -209,9 +209,9 @@ public class UserConfigStoreTests
             await UserConfigStore.SaveAsync(path, config, CancellationToken.None);
             var loaded = await UserConfigStore.LoadAsync(path, CancellationToken.None);
 
-            var rule = Assert.Single(loaded.Settings!.CommandRules!);
-            Assert.Equal("dotnet", rule.Executable);
-            Assert.Equal(["test"], rule.Arguments);
+            var rule = TestAssert.Single(loaded.Settings!.CommandRules!);
+            Assert.That(rule.Executable, Is.EqualTo("dotnet"));
+            Assert.That(rule.Arguments, Is.EqualTo(["test"]));
         }
         finally
         {
@@ -219,7 +219,7 @@ public class UserConfigStoreTests
         }
     }
 
-    [Fact]
+    [Test]
     public async Task SaveThenLoad_RoundTripsTheSessionStoreDirectory()
     {
         var dir = Path.Combine(Path.GetTempPath(), $"tinyharness-{Guid.NewGuid():N}");
@@ -237,14 +237,13 @@ public class UserConfigStoreTests
 
             var loaded = await UserConfigStore.LoadAsync(path, CancellationToken.None);
 
-            Assert.Equal(store, loaded.Settings?.SessionStoreDirectory);
+            Assert.That(loaded.Settings?.SessionStoreDirectory, Is.EqualTo(store));
 
-            // An absent field round-trips as null: the default protected
-            // directory applies instead of a persisted empty value.
+            // 缺省字段往返为 null：应用默认受保护目录，而不是持久化空值。
             await UserConfigStore.SaveAsync(path, new UserConfig { Settings = new UserConfigSettings() },
                                             CancellationToken.None);
             var reloaded = await UserConfigStore.LoadAsync(path, CancellationToken.None);
-            Assert.Null(reloaded.Settings?.SessionStoreDirectory);
+            Assert.That(reloaded.Settings?.SessionStoreDirectory, Is.Null);
         }
         finally
         {

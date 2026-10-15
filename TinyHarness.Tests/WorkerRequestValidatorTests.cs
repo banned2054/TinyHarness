@@ -12,16 +12,16 @@ public class WorkerRequestValidatorTests
 
     // ---- valid requests ----------------------------------------------------
 
-    [Fact]
+    [Test]
     public void MinimalRequest_TaskOnly_IsValid()
     {
         var result = WorkerRequestValidator.Validate(MinimalValidRequest());
 
-        Assert.True(result.IsValid);
-        Assert.Empty(result.Errors);
+        Assert.That(result.IsValid, Is.True);
+        Assert.That(result.Errors, Is.Empty);
     }
 
-    [Fact]
+    [Test]
     public void CompleteRequest_WithAllOptionalFields_IsValid()
     {
         var request = new WorkerRequest
@@ -34,11 +34,11 @@ public class WorkerRequestValidatorTests
 
         var result = WorkerRequestValidator.Validate(request);
 
-        Assert.True(result.IsValid);
-        Assert.Empty(result.Errors);
+        Assert.That(result.IsValid, Is.True);
+        Assert.That(result.Errors, Is.Empty);
     }
 
-    [Fact]
+    [Test]
     public void FieldsAtExactLimits_AreValid()
     {
         var request = new WorkerRequest
@@ -55,37 +55,37 @@ public class WorkerRequestValidatorTests
 
         var result = WorkerRequestValidator.Validate(request);
 
-        Assert.True(result.IsValid);
-        Assert.Empty(result.Errors);
+        Assert.That(result.IsValid, Is.True);
+        Assert.That(result.Errors, Is.Empty);
     }
 
     // ---- task --------------------------------------------------------------
 
-    [Theory]
-    [InlineData("")]
-    [InlineData("   ")]
+
+    [TestCase("")]
+    [TestCase("   ")]
     public void BlankTask_IsRejected(string taskPrompt)
     {
         var request = new WorkerRequest { TaskPrompt = taskPrompt };
 
         var result = WorkerRequestValidator.Validate(request);
 
-        Assert.False(result.IsValid);
-        Assert.Contains(result.Errors, error => error.Contains("'task'", StringComparison.Ordinal));
+        Assert.That(result.IsValid, Is.False);
+        TestAssert.ContainsAll(error => error.Contains("'task'", StringComparison.Ordinal), result.Errors);
     }
 
-    [Fact]
+    [Test]
     public void NullTask_IsRejected()
     {
         var request = new WorkerRequest { TaskPrompt = null! };
 
         var result = WorkerRequestValidator.Validate(request);
 
-        Assert.False(result.IsValid);
-        Assert.Contains(result.Errors, error => error.Contains("'task'", StringComparison.Ordinal));
+        Assert.That(result.IsValid, Is.False);
+        TestAssert.ContainsAll(error => error.Contains("'task'", StringComparison.Ordinal), result.Errors);
     }
 
-    [Fact]
+    [Test]
     public void TaskOverLimit_IsRejectedWithLimitAndActualLength()
     {
         var request = new WorkerRequest
@@ -95,15 +95,15 @@ public class WorkerRequestValidatorTests
 
         var result = WorkerRequestValidator.Validate(request);
 
-        Assert.False(result.IsValid);
-        var error = Assert.Single(result.Errors);
-        Assert.Contains("'task'", error, StringComparison.Ordinal);
-        Assert.Contains(WorkerRequestLimits.MaxTaskPromptLength.ToString(), error, StringComparison.Ordinal);
+        Assert.That(result.IsValid, Is.False);
+        var error = TestAssert.Single(result.Errors);
+        TestAssert.Contains("'task'", error, StringComparison.Ordinal);
+        TestAssert.Contains(WorkerRequestLimits.MaxTaskPromptLength.ToString(), error, StringComparison.Ordinal);
     }
 
     // ---- knownFacts ----------------------------------------------------------
 
-    [Fact]
+    [Test]
     public void KnownFacts_OverCount_IsRejected()
     {
         var request = MinimalValidRequest() with
@@ -115,11 +115,11 @@ public class WorkerRequestValidatorTests
 
         var result = WorkerRequestValidator.Validate(request);
 
-        Assert.False(result.IsValid);
-        Assert.Contains(result.Errors, error => error.Contains("'knownFacts'", StringComparison.Ordinal));
+        Assert.That(result.IsValid, Is.False);
+        TestAssert.ContainsAll(error => error.Contains("'knownFacts'", StringComparison.Ordinal), result.Errors);
     }
 
-    [Fact]
+    [Test]
     public void KnownFact_OverLength_IsRejectedWithIndex()
     {
         var request = MinimalValidRequest() with
@@ -129,50 +129,50 @@ public class WorkerRequestValidatorTests
 
         var result = WorkerRequestValidator.Validate(request);
 
-        Assert.False(result.IsValid);
-        var error = Assert.Single(result.Errors);
-        Assert.Contains("knownFacts[1]", error, StringComparison.Ordinal);
-        Assert.Contains(WorkerRequestLimits.MaxKnownFactLength.ToString(), error, StringComparison.Ordinal);
+        Assert.That(result.IsValid, Is.False);
+        var error = TestAssert.Single(result.Errors);
+        TestAssert.Contains("knownFacts[1]", error, StringComparison.Ordinal);
+        TestAssert.Contains(WorkerRequestLimits.MaxKnownFactLength.ToString(), error, StringComparison.Ordinal);
     }
 
-    [Fact]
+    [Test]
     public void BlankKnownFact_IsRejectedWithIndex()
     {
         var request = MinimalValidRequest() with { KnownFacts = ["   "] };
 
         var result = WorkerRequestValidator.Validate(request);
 
-        Assert.False(result.IsValid);
-        Assert.Contains(result.Errors, error => error.Contains("knownFacts[0]", StringComparison.Ordinal));
+        Assert.That(result.IsValid, Is.False);
+        TestAssert.ContainsAll(error => error.Contains("knownFacts[0]", StringComparison.Ordinal), result.Errors);
     }
 
     // ---- focusPaths ----------------------------------------------------------
 
-    [Theory]
-    [InlineData("")]
-    [InlineData("   ")]
-    [InlineData("C:\\src\\file.cs")]
-    [InlineData("C:/src/file.cs")]
-    [InlineData("C:relative.txt")]
-    [InlineData("c:\\lower\\drive.cs")]
-    [InlineData("/absolute/path.cs")]
-    [InlineData("\\rooted.txt")]
-    [InlineData("\\\\server\\share\\file.cs")]
-    [InlineData("//host/share/file.cs")]
-    [InlineData("../outside.txt")]
-    [InlineData("src/../../outside.txt")]
-    [InlineData("bad\u0001path.cs")]
+
+    [TestCase("")]
+    [TestCase("   ")]
+    [TestCase("C:\\src\\file.cs")]
+    [TestCase("C:/src/file.cs")]
+    [TestCase("C:relative.txt")]
+    [TestCase("c:\\lower\\drive.cs")]
+    [TestCase("/absolute/path.cs")]
+    [TestCase("\\rooted.txt")]
+    [TestCase("\\\\server\\share\\file.cs")]
+    [TestCase("//host/share/file.cs")]
+    [TestCase("../outside.txt")]
+    [TestCase("src/../../outside.txt")]
+    [TestCase("bad\u0001path.cs")]
     public void InvalidFocusPath_IsRejectedWithIndex(string focusPath)
     {
         var request = MinimalValidRequest() with { FocusPaths = [focusPath] };
 
         var result = WorkerRequestValidator.Validate(request);
 
-        Assert.False(result.IsValid);
-        Assert.Contains(result.Errors, error => error.Contains("focusPaths[0]", StringComparison.Ordinal));
+        Assert.That(result.IsValid, Is.False);
+        TestAssert.ContainsAll(error => error.Contains("focusPaths[0]", StringComparison.Ordinal), result.Errors);
     }
 
-    [Fact]
+    [Test]
     public void FocusPaths_OverCount_IsRejected()
     {
         var request = MinimalValidRequest() with
@@ -184,11 +184,11 @@ public class WorkerRequestValidatorTests
 
         var result = WorkerRequestValidator.Validate(request);
 
-        Assert.False(result.IsValid);
-        Assert.Contains(result.Errors, error => error.Contains("'focusPaths'", StringComparison.Ordinal));
+        Assert.That(result.IsValid, Is.False);
+        TestAssert.ContainsAll(error => error.Contains("'focusPaths'", StringComparison.Ordinal), result.Errors);
     }
 
-    [Fact]
+    [Test]
     public void FocusPath_OverLength_IsRejectedWithLimit()
     {
         var request = MinimalValidRequest() with
@@ -198,15 +198,15 @@ public class WorkerRequestValidatorTests
 
         var result = WorkerRequestValidator.Validate(request);
 
-        Assert.False(result.IsValid);
-        var error = Assert.Single(result.Errors);
-        Assert.Contains("focusPaths[0]", error, StringComparison.Ordinal);
-        Assert.Contains(WorkerRequestLimits.MaxFocusPathLength.ToString(), error, StringComparison.Ordinal);
+        Assert.That(result.IsValid, Is.False);
+        var error = TestAssert.Single(result.Errors);
+        TestAssert.Contains("focusPaths[0]", error, StringComparison.Ordinal);
+        TestAssert.Contains(WorkerRequestLimits.MaxFocusPathLength.ToString(), error, StringComparison.Ordinal);
     }
 
     // ---- expectedOutput --------------------------------------------------------
 
-    [Fact]
+    [Test]
     public void ExpectedOutput_OverLimit_IsRejectedWithLimit()
     {
         var request = MinimalValidRequest() with
@@ -216,34 +216,34 @@ public class WorkerRequestValidatorTests
 
         var result = WorkerRequestValidator.Validate(request);
 
-        Assert.False(result.IsValid);
-        var error = Assert.Single(result.Errors);
-        Assert.Contains("'expectedOutput'", error, StringComparison.Ordinal);
-        Assert.Contains(WorkerRequestLimits.MaxExpectedOutputLength.ToString(), error, StringComparison.Ordinal);
+        Assert.That(result.IsValid, Is.False);
+        var error = TestAssert.Single(result.Errors);
+        TestAssert.Contains("'expectedOutput'", error, StringComparison.Ordinal);
+        TestAssert.Contains(WorkerRequestLimits.MaxExpectedOutputLength.ToString(), error, StringComparison.Ordinal);
     }
 
-    [Fact]
+    [Test]
     public void ExpectedOutput_Blank_IsTreatedAsAbsent()
     {
         var request = MinimalValidRequest() with { ExpectedOutput = "   " };
 
         var result = WorkerRequestValidator.Validate(request);
 
-        Assert.True(result.IsValid);
+        Assert.That(result.IsValid, Is.True);
     }
 
     // ---- request-level -------------------------------------------------------
 
-    [Fact]
+    [Test]
     public void NullRequest_IsInvalidWithoutThrowing()
     {
         var result = WorkerRequestValidator.Validate(null);
 
-        Assert.False(result.IsValid);
-        Assert.NotEmpty(result.Errors);
+        Assert.That(result.IsValid, Is.False);
+        Assert.That(result.Errors, Is.Not.Empty);
     }
 
-    [Fact]
+    [Test]
     public void MultipleInvalidFields_ReportAllErrors()
     {
         var request = new WorkerRequest
@@ -256,11 +256,11 @@ public class WorkerRequestValidatorTests
 
         var result = WorkerRequestValidator.Validate(request);
 
-        Assert.False(result.IsValid);
-        Assert.Equal(4, result.Errors.Count);
-        Assert.Contains(result.Errors, error => error.Contains("'task'", StringComparison.Ordinal));
-        Assert.Contains(result.Errors, error => error.Contains("knownFacts[0]", StringComparison.Ordinal));
-        Assert.Contains(result.Errors, error => error.Contains("focusPaths[0]", StringComparison.Ordinal));
-        Assert.Contains(result.Errors, error => error.Contains("expectedOutput", StringComparison.Ordinal));
+        Assert.That(result.IsValid, Is.False);
+        Assert.That(result.Errors.Count, Is.EqualTo(4));
+        TestAssert.ContainsAll(error => error.Contains("'task'", StringComparison.Ordinal), result.Errors);
+        TestAssert.ContainsAll(error => error.Contains("knownFacts[0]", StringComparison.Ordinal), result.Errors);
+        TestAssert.ContainsAll(error => error.Contains("focusPaths[0]", StringComparison.Ordinal), result.Errors);
+        TestAssert.ContainsAll(error => error.Contains("expectedOutput", StringComparison.Ordinal), result.Errors);
     }
 }

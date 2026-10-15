@@ -15,35 +15,39 @@ using TinyHarness.Core.Services.Runtime.WindowsSandbox;
 namespace TinyHarness.Tests;
 
 /// <summary>
-///     M11.5 隔离验收：Core 验收运行器（判定逻辑、用例过滤、总期限、报告序列化）与 CLI 入口
-///     （parser、确认门、就绪拒绝、退出码）的离线测试。后端全部为脚本化 fake——不启动真实
-///     setup/runner、不做 refresh、不修改机器账户/ACL/防火墙；host-exit 用例用 fake worker，
-///     broken-pipe 用例用复制镜像的本地短命进程模拟 runner。
-///     M11.5 isolation acceptance: offline tests of the Core acceptance runner
-///     (verdict logic, case filtering, overall deadline, report serialization)
-///     and the CLI entry (parser, confirmation gate, readiness refusal, exit
-///     codes). Every backend is a scripted fake — no real setup/runner launch,
-///     no refresh, no machine account/ACL/firewall changes; the host-exit case
-///     uses a fake worker and the broken-pipe case a short-lived local process
-///     with a copied image name simulating the runner.
+///     <para>
+///         隔离验收：Core 验收运行器（判定逻辑、用例过滤、总期限、报告序列化）与 CLI 入口
+///         （parser、确认门、就绪拒绝、退出码）的离线测试。后端全部为脚本化 fake——不启动真实
+///         setup/runner、不做 refresh、不修改机器账户/ACL/防火墙；host-exit 用例用 fake worker，
+///         broken-pipe 用例用复制镜像的本地短命进程模拟 runner。
+///     </para>
+///     <para>
+///         Isolation-acceptance tests: offline tests of the Core acceptance runner
+///         (verdict logic, case filtering, overall deadline, report serialization)
+///         and the CLI entry (parser, confirmation gate, readiness refusal, exit
+///         codes). Every backend is a scripted fake — no real setup/runner launch,
+///         no refresh, no machine account/ACL/firewall changes; the host-exit case
+///         uses a fake worker and the broken-pipe case a short-lived local process
+///         with a copied image name simulating the runner.
+///     </para>
 /// </summary>
 public sealed class WindowsSandboxAcceptanceTests
 {
     // ---- Parser ----
 
-    [Fact]
+    [Test]
     public void SandboxVerify_ParsesWithoutOptions()
     {
         var options = CommandLine.Parse(["sandbox", "verify"]);
 
-        Assert.Equal(CliCommandKind.Sandbox, options.Kind);
-        Assert.Equal("verify", options.Subcommand);
-        Assert.False(options.AssumeYes);
-        Assert.Null(options.CaseFilter);
-        Assert.Null(options.VerifyWorkspace);
+        Assert.That(options.Kind, Is.EqualTo(CliCommandKind.Sandbox));
+        Assert.That(options.Subcommand, Is.EqualTo("verify"));
+        Assert.That(options.AssumeYes, Is.False);
+        Assert.That(options.CaseFilter, Is.Null);
+        Assert.That(options.VerifyWorkspace, Is.Null);
     }
 
-    [Fact]
+    [Test]
     public void SandboxVerify_ParsesYesCaseAndWorkspace()
     {
         var options = CommandLine.Parse([
@@ -51,39 +55,39 @@ public sealed class WindowsSandboxAcceptanceTests
             "--workspace", "C:\\verify-ws"
         ]);
 
-        Assert.Equal("verify", options.Subcommand);
-        Assert.True(options.AssumeYes);
-        Assert.Equal(["deny-probe", "exit-natural-23"], options.CaseFilter);
-        Assert.Equal("C:\\verify-ws", options.VerifyWorkspace);
+        Assert.That(options.Subcommand, Is.EqualTo("verify"));
+        Assert.That(options.AssumeYes, Is.True);
+        Assert.That(options.CaseFilter, Is.EqualTo(["deny-probe", "exit-natural-23"]));
+        Assert.That(options.VerifyWorkspace, Is.EqualTo("C:\\verify-ws"));
     }
 
-    [Fact]
+    [Test]
     public void SandboxVerify_UnknownArgument_IsAUsageError()
     {
-        Assert.Throws<CliUsageException>(() => CommandLine.Parse(["sandbox", "verify", "--bogus"]));
+        TestAssert.Throws<CliUsageException>(() => CommandLine.Parse(["sandbox", "verify", "--bogus"]));
     }
 
-    [Fact]
+    [Test]
     public void SandboxVerify_CaseWithoutValue_IsAUsageError()
     {
-        Assert.Throws<CliUsageException>(() => CommandLine.Parse(["sandbox", "verify", "--case"]));
+        TestAssert.Throws<CliUsageException>(() => CommandLine.Parse(["sandbox", "verify", "--case"]));
     }
 
-    [Fact]
+    [Test]
     public void SandboxVerify_CaseWithOnlySeparators_IsAUsageError()
     {
-        Assert.Throws<CliUsageException>(() => CommandLine.Parse(["sandbox", "verify", "--case", ","]));
-        Assert.Throws<CliUsageException>(() => CommandLine.Parse(["sandbox", "verify", "--case", " "]));
+        TestAssert.Throws<CliUsageException>(() => CommandLine.Parse(["sandbox", "verify", "--case", ","]));
+        TestAssert.Throws<CliUsageException>(() => CommandLine.Parse(["sandbox", "verify", "--case", " "]));
     }
 
-    [Fact]
+    [Test]
     public void SandboxVerify_WorkspaceWithoutValue_IsAUsageError()
     {
-        Assert.Throws<CliUsageException>(() => CommandLine.Parse(["sandbox", "verify", "--workspace"]));
-        Assert.Throws<CliUsageException>(() => CommandLine.Parse(["sandbox", "verify", "--workspace", " "]));
+        TestAssert.Throws<CliUsageException>(() => CommandLine.Parse(["sandbox", "verify", "--workspace"]));
+        TestAssert.Throws<CliUsageException>(() => CommandLine.Parse(["sandbox", "verify", "--workspace", " "]));
     }
 
-    [Fact]
+    [Test]
     public void SandboxVerifyWorker_ParsesAllRequiredOptions()
     {
         var options = CommandLine.Parse([
@@ -91,50 +95,54 @@ public sealed class WindowsSandboxAcceptanceTests
             "--workspace", "C:\\ws"
         ]);
 
-        Assert.Equal("verify-worker", options.Subcommand);
-        Assert.Equal("C:\\m.txt", options.VerifyMarkerPath);
-        Assert.Equal(30, options.VerifyHoldSeconds);
-        Assert.Equal("C:\\ws", options.VerifyWorkspace);
+        Assert.That(options.Subcommand, Is.EqualTo("verify-worker"));
+        Assert.That(options.VerifyMarkerPath, Is.EqualTo("C:\\m.txt"));
+        Assert.That(options.VerifyHoldSeconds, Is.EqualTo(30));
+        Assert.That(options.VerifyWorkspace, Is.EqualTo("C:\\ws"));
     }
 
-    [Fact]
+    [Test]
     public void SandboxVerifyWorker_MissingRequiredOptions_AreUsageErrors()
     {
-        Assert.Throws<CliUsageException>(() => CommandLine.Parse(["sandbox", "verify-worker"]));
-        Assert.Throws<CliUsageException>(() => CommandLine.Parse([
+        TestAssert.Throws<CliUsageException>(() => CommandLine.Parse(["sandbox", "verify-worker"]));
+        TestAssert.Throws<CliUsageException>(() => CommandLine.Parse([
             "sandbox", "verify-worker", "--marker", "C:\\m.txt"
         ]));
-        Assert.Throws<CliUsageException>(() =>
-                                             CommandLine.Parse([
-                                                 "sandbox", "verify-worker", "--marker", "C:\\m",
-                                                 "--hold-seconds", "5"
-                                             ]));
+        TestAssert.Throws<CliUsageException>(() =>
+                                                 CommandLine.Parse([
+                                                     "sandbox", "verify-worker", "--marker", "C:\\m",
+                                                     "--hold-seconds", "5"
+                                                 ]));
     }
 
-    [Fact]
+    [Test]
     public void SandboxVerifyWorker_InvalidHoldSeconds_IsAUsageError()
     {
-        Assert.Throws<CliUsageException>(() =>
-                                             CommandLine.Parse(["sandbox", "verify-worker", "--hold-seconds", "0"]));
-        Assert.Throws<CliUsageException>(() =>
-                                             CommandLine.Parse(["sandbox", "verify-worker", "--hold-seconds", "x"]));
+        TestAssert.Throws<CliUsageException>(() =>
+                                                 CommandLine.Parse([
+                                                     "sandbox", "verify-worker", "--hold-seconds", "0"
+                                                 ]));
+        TestAssert.Throws<CliUsageException>(() =>
+                                                 CommandLine.Parse([
+                                                     "sandbox", "verify-worker", "--hold-seconds", "x"
+                                                 ]));
     }
 
-    [Fact]
+    [Test]
     public void SandboxVerifyWorker_MissingOptionValueAndUnknownArgument_AreUsageErrors()
     {
-        Assert.Throws<CliUsageException>(() =>
-                                             CommandLine.Parse([
-                                                 "sandbox", "verify-worker", "--marker", "C:\\m",
-                                                 "--hold-seconds", "5", "--workspace"
-                                             ]));
-        Assert.Throws<CliUsageException>(() =>
-                                             CommandLine.Parse(["sandbox", "verify-worker", "--extra", "1"]));
+        TestAssert.Throws<CliUsageException>(() =>
+                                                 CommandLine.Parse([
+                                                     "sandbox", "verify-worker", "--marker", "C:\\m",
+                                                     "--hold-seconds", "5", "--workspace"
+                                                 ]));
+        TestAssert.Throws<CliUsageException>(() =>
+                                                 CommandLine.Parse(["sandbox", "verify-worker", "--extra", "1"]));
     }
 
     // ---- 运行器：全矩阵与逐例判定 ----
 
-    [Fact]
+    [Test]
     public async Task FullMatrix_WithScriptedBackend_AllCasesPassAndReportIsWritten()
     {
         if (!OperatingSystem.IsWindows()) return;
@@ -146,15 +154,13 @@ public sealed class WindowsSandboxAcceptanceTests
         var sleeperCount = 0;
         var factory = new RecordingBackendFactory(home.Components, workspace.Root, (plan, ct) =>
         {
-            // Long sleepers are powershell Start-Sleep with a 300s+ command
-            // timeout; timeout-finite uses the same executable with an 8s
-            // timeout and keeps going through the happy script's timed-out
-            // verdict.
+            // 长睡眠用例是 powershell Start-Sleep 加 300 秒以上的命令超时；timeout-finite 用
+            // 同一可执行文件加 8 秒超时，并继续走 happy 脚本的超时判定。
             if (Path.GetFileName(plan.Executable) != "powershell.exe" || plan.TimeoutSeconds < 300)
                 return HappyScriptAsync(plan, ct);
 
-            // Fixed case order: terminate-active and cancel-startup observe
-            // cancellation; runner-broken-pipe gets the killable dummy runner.
+            // 固定用例顺序：terminate-active 与 cancel-startup 观察取消；runner-broken-pipe
+            // 使用可击杀的傀儡 runner。
             var index = ++sleeperCount;
             return index <= 2
                 ? WaitUntilCancelledAsync(ct)
@@ -168,29 +174,28 @@ public sealed class WindowsSandboxAcceptanceTests
                                                         limits : TestLimits());
         var report = await runner.RunAsync(null, CancellationToken.None);
 
-        Assert.All(report.Cases,
-                   result => Assert.True(result.Verdict == SandboxAcceptanceVerdict.Pass,
-                                         $"{result.Name}: {result.Verdict} {result.Detail}"));
-        Assert.Equal(WindowsSandboxAcceptanceRunner.CaseNames.Count, report.Cases.Count);
-        Assert.Contains("read-only", report.PolicyKinds);
-        Assert.Contains("workspace-write", report.PolicyKinds);
-        Assert.NotEmpty(report.Limitations);
-        Assert.Equal(WindowsSandboxComponents.DefaultOfflineUsername, report.OfflineAccountName);
+        TestAssert.All(report.Cases,
+                       result => Assert.That(result.Verdict == SandboxAcceptanceVerdict.Pass, Is.True,
+                                             $"{result.Name}: {result.Verdict} {result.Detail}"));
+        Assert.That(report.Cases.Count, Is.EqualTo(WindowsSandboxAcceptanceRunner.CaseNames.Count));
+        Assert.That(report.PolicyKinds, Does.Contain("read-only"));
+        Assert.That(report.PolicyKinds, Does.Contain("workspace-write"));
+        Assert.That(report.Limitations, Is.Not.Empty);
+        Assert.That(report.OfflineAccountName, Is.EqualTo(WindowsSandboxComponents.DefaultOfflineUsername));
 
-        // The report lands in <home>\.sandbox\tinyharness-verify-*.json.
-        Assert.NotNull(report.ReportPath);
-        Assert.True(File.Exists(report.ReportPath));
-        Assert.StartsWith(home.Components.SandboxDirectory, report.ReportPath);
-        Assert.Contains("tinyharness-verify-", report.ReportPath);
+        // 报告落在 <home>\.sandbox\tinyharness-verify-*.json。
+        TestAssert.NotNull(report.ReportPath);
+        Assert.That(File.Exists(report.ReportPath), Is.True);
+        Assert.That(report.ReportPath, Does.StartWith(home.Components.SandboxDirectory));
+        Assert.That(report.ReportPath, Does.Contain("tinyharness-verify-"));
 
-        // The deny-probe variables reached the factory through the cleaned
-        // environment seam (extraEnvironment), never a hand-built env.
-        var probeRequest = Assert.Single(factory.Requests, request => request.ExtraEnvironment is { Count: 4 });
-        Assert.Contains("CODEX_WINDOWS_ALLOWED_TEXT", probeRequest.ExtraEnvironment!.Keys);
-        Assert.Contains("CODEX_WINDOWS_DENIED_MODULE", probeRequest.ExtraEnvironment.Keys);
+        // deny-probe 变量经清理后的环境接缝（extraEnvironment）到达工厂，绝不走手工构造的 env。
+        var probeRequest = TestAssert.Single(factory.Requests, request => request.ExtraEnvironment is { Count: 4 });
+        Assert.That(probeRequest.ExtraEnvironment!.Keys, Does.Contain("CODEX_WINDOWS_ALLOWED_TEXT"));
+        Assert.That(probeRequest.ExtraEnvironment.Keys, Does.Contain("CODEX_WINDOWS_DENIED_MODULE"));
     }
 
-    [Fact]
+    [Test]
     public async Task CaseFilter_RunsOnlyTheSelectedCase()
     {
         if (!OperatingSystem.IsWindows()) return;
@@ -202,13 +207,14 @@ public sealed class WindowsSandboxAcceptanceTests
         var runner = new WindowsSandboxAcceptanceRunner(factory.Invoke, workspace.Root, limits : TestLimits());
         var report = await runner.RunAsync(["exit-natural-23"], CancellationToken.None);
 
-        var result = Assert.Single(report.Cases);
-        Assert.Equal("exit-natural-23", result.Name);
-        Assert.Equal(SandboxAcceptanceVerdict.Pass, result.Verdict);
-        Assert.All(factory.Requests, request => Assert.Equal(SandboxPolicyKind.WorkspaceWrite, request.Kind));
+        var result = TestAssert.Single(report.Cases);
+        Assert.That(result.Name, Is.EqualTo("exit-natural-23"));
+        Assert.That(result.Verdict, Is.EqualTo(SandboxAcceptanceVerdict.Pass));
+        TestAssert.All(factory.Requests,
+                       request => Assert.That(request.Kind, Is.EqualTo(SandboxPolicyKind.WorkspaceWrite)));
     }
 
-    [Fact]
+    [Test]
     public async Task UnknownCaseName_ThrowsArgumentException()
     {
         using var home      = new SandboxTestHome();
@@ -217,10 +223,11 @@ public sealed class WindowsSandboxAcceptanceTests
                                                   (plan, ct) => HappyScriptAsync(plan, ct));
         var runner = new WindowsSandboxAcceptanceRunner(factory.Invoke, workspace.Root, limits : TestLimits());
 
-        await Assert.ThrowsAsync<ArgumentException>(() => runner.RunAsync(["no-such-case"], CancellationToken.None));
+        await TestAssert.ThrowsAsync<ArgumentException>(() => runner.RunAsync(["no-such-case"],
+                                                                              CancellationToken.None));
     }
 
-    [Fact]
+    [Test]
     public async Task OverallDeadline_InterruptsCurrentCaseAndSkipsTheRest()
     {
         if (!OperatingSystem.IsWindows()) return;
@@ -232,12 +239,12 @@ public sealed class WindowsSandboxAcceptanceTests
         var       runner    = new WindowsSandboxAcceptanceRunner(factory.Invoke, workspace.Root, limits : limits);
         var       report    = await runner.RunAsync(null, CancellationToken.None);
 
-        Assert.Equal(SandboxAcceptanceVerdict.Fail, VerdictOf(report, "identity-whoami"));
-        Assert.Contains(report.Cases, result => result.Verdict == SandboxAcceptanceVerdict.Skipped);
-        Assert.Contains("总期限", CaseDetail(report, "identity-whoami")!, StringComparison.Ordinal);
+        Assert.That(VerdictOf(report, "identity-whoami"), Is.EqualTo(SandboxAcceptanceVerdict.Fail));
+        TestAssert.ContainsAll(result => result.Verdict == SandboxAcceptanceVerdict.Skipped, report.Cases);
+        TestAssert.Contains("总期限", CaseDetail(report, "identity-whoami")!, StringComparison.Ordinal);
     }
 
-    [Fact]
+    [Test]
     public async Task ExitSemantics_ExitCodeAloneNeverMeansTimeout()
     {
         if (!OperatingSystem.IsWindows()) return;
@@ -248,12 +255,11 @@ public sealed class WindowsSandboxAcceptanceTests
         {
             var command = LastArgument(plan);
             if (command.StartsWith("exit 192", StringComparison.Ordinal))
-                // A lying backend that reports 192 WITH timed_out=true for a
-                // natural exit must not fool the verdict.
+                // 自然退出却上报 192 且 timed_out=true 的撒谎后端不得骗过判定。
                 return Task.FromResult(new ScriptedOutcome(192, true));
 
             if (Path.GetFileName(plan.Executable) == "powershell.exe")
-                // The timeout case expects TimedOut=true; a plain success fails.
+                // 超时用例期望 TimedOut=true；普通成功反而失败。
                 return Task.FromResult(new ScriptedOutcome(0));
 
             return HappyScriptAsync(plan, ct);
@@ -262,13 +268,13 @@ public sealed class WindowsSandboxAcceptanceTests
         var report = await runner.RunAsync(["exit-natural-23", "exit-natural-192", "timeout-finite"],
                                            CancellationToken.None);
 
-        Assert.Equal(SandboxAcceptanceVerdict.Pass, VerdictOf(report, "exit-natural-23"));
-        Assert.Equal(SandboxAcceptanceVerdict.Fail, VerdictOf(report, "exit-natural-192"));
-        Assert.Contains("绝不", CaseDetail(report, "exit-natural-192")!, StringComparison.Ordinal);
-        Assert.Equal(SandboxAcceptanceVerdict.Fail, VerdictOf(report, "timeout-finite"));
+        Assert.That(VerdictOf(report, "exit-natural-23"), Is.EqualTo(SandboxAcceptanceVerdict.Pass));
+        Assert.That(VerdictOf(report, "exit-natural-192"), Is.EqualTo(SandboxAcceptanceVerdict.Fail));
+        TestAssert.Contains("绝不", CaseDetail(report, "exit-natural-192")!, StringComparison.Ordinal);
+        Assert.That(VerdictOf(report, "timeout-finite"), Is.EqualTo(SandboxAcceptanceVerdict.Fail));
     }
 
-    [Fact]
+    [Test]
     public async Task DenyProbe_VerdictsFollowTheExitCodeContract()
     {
         if (!OperatingSystem.IsWindows()) return;
@@ -278,63 +284,61 @@ public sealed class WindowsSandboxAcceptanceTests
         await File.WriteAllTextAsync(Path.Combine(home.Components.SandboxHome,
                                                   "codex-windows-managed-deny-probe.exe"), "MZ");
 
-        // 0 = PASS; 20 = isolation breach FAIL; throw = no-exit-code FAIL.
+        // 0 = PASS；20 = 隔离失效 FAIL；抛异常 = 无退出码 FAIL。
         var report = await RunSingleCaseAsync(home, "deny-probe", (plan, ct) =>
                                                   Task.FromResult(new ScriptedOutcome(0)));
-        Assert.Equal(SandboxAcceptanceVerdict.Pass, VerdictOf(report, "deny-probe"));
+        Assert.That(VerdictOf(report, "deny-probe"), Is.EqualTo(SandboxAcceptanceVerdict.Pass));
 
         report = await RunSingleCaseAsync(home, "deny-probe", (plan, ct) =>
                                               Task.FromResult(new ScriptedOutcome(20)));
-        Assert.Equal(SandboxAcceptanceVerdict.Fail, VerdictOf(report, "deny-probe"));
-        Assert.Contains("隔离失效", CaseDetail(report, "deny-probe")!, StringComparison.Ordinal);
+        Assert.That(VerdictOf(report, "deny-probe"), Is.EqualTo(SandboxAcceptanceVerdict.Fail));
+        TestAssert.Contains("隔离失效", CaseDetail(report, "deny-probe")!, StringComparison.Ordinal);
 
         report = await RunSingleCaseAsync(home, "deny-probe", (plan, ct) =>
                                               Task.FromResult(new ScriptedOutcome(21)));
-        Assert.Equal(SandboxAcceptanceVerdict.Fail, VerdictOf(report, "deny-probe"));
-        Assert.Contains("fixture", CaseDetail(report, "deny-probe")!, StringComparison.Ordinal);
+        Assert.That(VerdictOf(report, "deny-probe"), Is.EqualTo(SandboxAcceptanceVerdict.Fail));
+        TestAssert.Contains("fixture", CaseDetail(report, "deny-probe")!, StringComparison.Ordinal);
 
         report = await RunSingleCaseAsync(home, "deny-probe", (plan, ct) =>
                                               Task.FromResult(new ScriptedOutcome(Throw :
                                                                        new InvalidOperationException("pipe broke"))));
-        Assert.Equal(SandboxAcceptanceVerdict.Fail, VerdictOf(report, "deny-probe"));
+        Assert.That(VerdictOf(report, "deny-probe"), Is.EqualTo(SandboxAcceptanceVerdict.Fail));
     }
 
-    [Fact]
+    [Test]
     public async Task WriteProbes_AllowedAndDeniedJudgements()
     {
         if (!OperatingSystem.IsWindows()) return;
 
         using var home = new SandboxTestHome();
 
-        // Happy path: allowed write creates the file with exit 0; all deny
-        // targets fail without creating anything.
+        // happy 路径：允许的写入以 exit 0 建立文件；所有 deny 目标失败且不产生任何文件。
         var report = await RunSingleCaseAsync(home, "workspace-write-allowed", HappyScriptAsync);
-        Assert.Equal(SandboxAcceptanceVerdict.Pass, VerdictOf(report, "workspace-write-allowed"));
+        Assert.That(VerdictOf(report, "workspace-write-allowed"), Is.EqualTo(SandboxAcceptanceVerdict.Pass));
         report = await RunSingleCaseAsync(home, "readonly-workspace-write-denied", HappyScriptAsync);
-        Assert.Equal(SandboxAcceptanceVerdict.Pass, VerdictOf(report, "readonly-workspace-write-denied"));
+        Assert.That(VerdictOf(report, "readonly-workspace-write-denied"), Is.EqualTo(SandboxAcceptanceVerdict.Pass));
         report = await RunSingleCaseAsync(home, "write-denied-outside-roots", HappyScriptAsync);
-        Assert.Equal(SandboxAcceptanceVerdict.Pass, VerdictOf(report, "write-denied-outside-roots"));
+        Assert.That(VerdictOf(report, "write-denied-outside-roots"), Is.EqualTo(SandboxAcceptanceVerdict.Pass));
         report = await RunSingleCaseAsync(home, "metadata-protected", HappyScriptAsync);
-        Assert.Equal(SandboxAcceptanceVerdict.Pass, VerdictOf(report, "metadata-protected"));
-        Assert.Contains("deny-write", CaseDetail(report, "metadata-protected")!, StringComparison.Ordinal);
+        Assert.That(VerdictOf(report, "metadata-protected"), Is.EqualTo(SandboxAcceptanceVerdict.Pass));
+        TestAssert.Contains("deny-write", CaseDetail(report, "metadata-protected")!, StringComparison.Ordinal);
 
-        // A write that "succeeds" (exit 0) but leaves no file is a broken
-        // positive control.
+        // 写入"成功"（exit 0）却没留下文件属于失效的正对照。
         report = await RunSingleCaseAsync(home, "workspace-write-allowed", (plan, ct) =>
                                               Task.FromResult(new ScriptedOutcome(0)));
-        Assert.Equal(SandboxAcceptanceVerdict.Fail, VerdictOf(report, "workspace-write-allowed"));
+        Assert.That(VerdictOf(report, "workspace-write-allowed"), Is.EqualTo(SandboxAcceptanceVerdict.Fail));
 
-        // An outside-root write that creates the file means isolation failed.
+        // 写根外写入建出了文件即隔离失效。
         report = await RunSingleCaseAsync(home, "write-denied-outside-roots", (plan, ct) =>
         {
             var target = QuotedPath(LastArgument(plan));
             File.WriteAllText(target, string.Empty);
             return Task.FromResult(new ScriptedOutcome(0));
         });
-        Assert.Equal(SandboxAcceptanceVerdict.Fail, VerdictOf(report, "write-denied-outside-roots"));
+        Assert.That(VerdictOf(report, "write-denied-outside-roots"), Is.EqualTo(SandboxAcceptanceVerdict.Fail));
     }
 
-    [Fact]
+    [Test]
     public async Task NetworkCase_VerdictTriad()
     {
         if (!OperatingSystem.IsWindows()) return;
@@ -349,22 +353,22 @@ public sealed class WindowsSandboxAcceptanceTests
                                                                                   .Ordinal)
                                                                       ? new ScriptedOutcome(7)
                                                                       : new ScriptedOutcome(0)));
-        Assert.Equal(SandboxAcceptanceVerdict.Pass, VerdictOf(report, "network-denied"));
+        Assert.That(VerdictOf(report, "network-denied"), Is.EqualTo(SandboxAcceptanceVerdict.Pass));
 
         report = await RunSingleCaseAsync(home, "network-denied", (plan, ct) =>
                                               Task.FromResult(new ScriptedOutcome(0)));
-        Assert.Equal(SandboxAcceptanceVerdict.Fail, VerdictOf(report, "network-denied"));
+        Assert.That(VerdictOf(report, "network-denied"), Is.EqualTo(SandboxAcceptanceVerdict.Fail));
 
         var limits = TestLimits() with { NonLoopbackAddressResolver = () => null };
         report = await RunSingleCaseAsync(home, "network-denied", HappyScriptAsync, limits);
-        Assert.Equal(SandboxAcceptanceVerdict.Indeterminate, VerdictOf(report, "network-denied"));
+        Assert.That(VerdictOf(report, "network-denied"), Is.EqualTo(SandboxAcceptanceVerdict.Indeterminate));
 
         limits = TestLimits() with { CurlPathResolver = () => null };
         report = await RunSingleCaseAsync(home, "network-denied", HappyScriptAsync, limits);
-        Assert.Equal(SandboxAcceptanceVerdict.Indeterminate, VerdictOf(report, "network-denied"));
+        Assert.That(VerdictOf(report, "network-denied"), Is.EqualTo(SandboxAcceptanceVerdict.Indeterminate));
     }
 
-    [Fact]
+    [Test]
     public async Task LargeOutput_TruncatesModelViewAndKeepsArtifact()
     {
         if (!OperatingSystem.IsWindows()) return;
@@ -380,16 +384,16 @@ public sealed class WindowsSandboxAcceptanceTests
         var report = await runner.RunAsync(["large-output"], CancellationToken.None);
         var result = report.Cases.Single(caseResult => caseResult.Name == "large-output");
 
-        Assert.Equal(SandboxAcceptanceVerdict.Pass, result.Verdict);
-        Assert.Contains("截断", result.Detail, StringComparison.Ordinal);
+        Assert.That(result.Verdict, Is.EqualTo(SandboxAcceptanceVerdict.Pass));
+        TestAssert.Contains("截断", result.Detail, StringComparison.Ordinal);
         var artifactLine = result.Detail!.Split("完整 artifact: ")[^1];
-        Assert.True(File.Exists(artifactLine), $"artifact should exist: {artifactLine}");
+        Assert.That(File.Exists(artifactLine), Is.True, $"artifact should exist: {artifactLine}");
         var generated = Path.Combine(workspace.Root, "large-output.txt");
-        Assert.True(File.Exists(generated));
-        Assert.Equal(new FileInfo(generated).Length, new FileInfo(artifactLine).Length);
-        Assert.True(new FileInfo(artifactLine).Length >= limits.LargeOutputTargetCharacters);
+        Assert.That(File.Exists(generated), Is.True);
+        Assert.That(new FileInfo(artifactLine).Length, Is.EqualTo(new FileInfo(generated).Length));
+        Assert.That(new FileInfo(artifactLine).Length >= limits.LargeOutputTargetCharacters, Is.True);
 
-        // Tiny output that never crosses the budget must not count as truncated.
+        // 从未超过预算的极小输出不得计为截断。
         var tiny = new WindowsSandboxAcceptanceRunner(
                                                       new RecordingBackendFactory(home.Components, workspace.Root,
                                                                (plan, ct) =>
@@ -398,10 +402,10 @@ public sealed class WindowsSandboxAcceptanceTests
                                                       workspace.Root, (marker, _) => new FakeWorker(marker, true),
                                                       limits : limits);
         report = await tiny.RunAsync(["large-output"], CancellationToken.None);
-        Assert.Equal(SandboxAcceptanceVerdict.Fail, VerdictOf(report, "large-output"));
+        Assert.That(VerdictOf(report, "large-output"), Is.EqualTo(SandboxAcceptanceVerdict.Fail));
     }
 
-    [Fact]
+    [Test]
     public async Task TerminateAndCancel_CancellationOutcomeIsJudgedStrictly()
     {
         if (!OperatingSystem.IsWindows()) return;
@@ -409,22 +413,21 @@ public sealed class WindowsSandboxAcceptanceTests
         using var home = new SandboxTestHome();
         var report = await RunSingleCaseAsync(home, "terminate-active",
                                               (plan, ct) => WaitUntilCancelledAsync(ct));
-        Assert.Equal(SandboxAcceptanceVerdict.Pass, VerdictOf(report, "terminate-active"));
+        Assert.That(VerdictOf(report, "terminate-active"), Is.EqualTo(SandboxAcceptanceVerdict.Pass));
 
         report = await RunSingleCaseAsync(home, "cancel-startup",
                                           (plan, ct) => WaitUntilCancelledAsync(ct));
-        Assert.Equal(SandboxAcceptanceVerdict.Pass, VerdictOf(report, "cancel-startup"));
+        Assert.That(VerdictOf(report, "cancel-startup"), Is.EqualTo(SandboxAcceptanceVerdict.Pass));
 
-        // A backend that swallows the cancellation and returns a result fails
-        // the case: cancellation must surface as OperationCanceledException.
+        // 吞掉取消并返回结果的后端判 FAIL：取消必须以 OperationCanceledException 呈现。
         report = await RunSingleCaseAsync(home, "terminate-active",
                                           (plan, ct) => Task.FromResult(new ScriptedOutcome(1)));
-        Assert.Equal(SandboxAcceptanceVerdict.Fail, VerdictOf(report, "terminate-active"));
-        Assert.Contains("OperationCanceledException", CaseDetail(report, "terminate-active")!,
-                        StringComparison.Ordinal);
+        Assert.That(VerdictOf(report, "terminate-active"), Is.EqualTo(SandboxAcceptanceVerdict.Fail));
+        TestAssert.Contains("OperationCanceledException", CaseDetail(report, "terminate-active")!,
+                            StringComparison.Ordinal);
     }
 
-    [Fact]
+    [Test]
     public async Task BrokenPipe_NoExitCodeMayBeInvented()
     {
         if (!OperatingSystem.IsWindows()) return;
@@ -435,29 +438,28 @@ public sealed class WindowsSandboxAcceptanceTests
                                                   SimulateExternalRunnerKillAsync(workspace.Root,
                                                            new ScriptedOutcome(Failure : new ProcessExecutionFailure(
                                                                                     "The runner pipe closed before the exit frame."))));
-        Assert.Equal(SandboxAcceptanceVerdict.Pass, VerdictOf(report, "runner-broken-pipe"));
+        Assert.That(VerdictOf(report, "runner-broken-pipe"), Is.EqualTo(SandboxAcceptanceVerdict.Pass));
 
-        // The kill succeeded but the backend invented exit code 5 — a contract
-        // violation the acceptance must catch.
+        // 击杀成功但后端编造退出码 5——验收必须抓住这种契约违反。
         report = await RunSingleCaseAsync(home, "runner-broken-pipe", (plan, ct) =>
                                               SimulateExternalRunnerKillAsync(workspace.Root, new ScriptedOutcome(5)));
-        Assert.Equal(SandboxAcceptanceVerdict.Fail, VerdictOf(report, "runner-broken-pipe"));
-        Assert.Contains("补造", CaseDetail(report, "runner-broken-pipe")!, StringComparison.Ordinal);
+        Assert.That(VerdictOf(report, "runner-broken-pipe"), Is.EqualTo(SandboxAcceptanceVerdict.Fail));
+        TestAssert.Contains("补造", CaseDetail(report, "runner-broken-pipe")!, StringComparison.Ordinal);
     }
 
-    [Fact]
+    [Test]
     public async Task BrokenPipe_WithoutALocatableRunner_IsIndeterminate()
     {
         if (!OperatingSystem.IsWindows()) return;
 
         using var home = new SandboxTestHome();
-        // A plain sleeper without any runner image: the locate window expires.
+        // 不带 runner 镜像名的普通睡眠进程：定位窗口超时。
         var report = await RunSingleCaseAsync(home, "runner-broken-pipe",
                                               (plan, ct) => WaitUntilCancelledAsync(ct));
-        Assert.Equal(SandboxAcceptanceVerdict.Indeterminate, VerdictOf(report, "runner-broken-pipe"));
+        Assert.That(VerdictOf(report, "runner-broken-pipe"), Is.EqualTo(SandboxAcceptanceVerdict.Indeterminate));
     }
 
-    [Fact]
+    [Test]
     public async Task HostExit_MarkerTimeoutFailsWhileReadyMarkerPasses()
     {
         if (!OperatingSystem.IsWindows()) return;
@@ -465,17 +467,17 @@ public sealed class WindowsSandboxAcceptanceTests
         using var home      = new SandboxTestHome();
         using var workspace = new TestTempDir();
 
-        // The worker never writes the marker: the bounded wait fails the case.
+        // worker 永不写 marker：有界等待判用例失败。
         var runner = new WindowsSandboxAcceptanceRunner(
                                                         new RecordingBackendFactory(home.Components, workspace.Root,
                                                                  (plan, ct) => HappyScriptAsync(plan, ct)).Invoke,
                                                         workspace.Root, (marker, _) => new FakeWorker(marker, false),
                                                         limits : TestLimits());
         var report = await runner.RunAsync(["host-exit-reclaim"], CancellationToken.None);
-        Assert.Equal(SandboxAcceptanceVerdict.Fail, VerdictOf(report, "host-exit-reclaim"));
-        Assert.Contains("marker", CaseDetail(report, "host-exit-reclaim")!, StringComparison.Ordinal);
+        Assert.That(VerdictOf(report, "host-exit-reclaim"), Is.EqualTo(SandboxAcceptanceVerdict.Fail));
+        TestAssert.Contains("marker", CaseDetail(report, "host-exit-reclaim")!, StringComparison.Ordinal);
 
-        // A worker that writes the marker and dies on Kill leaves no survivors.
+        // 写 marker 后随 Kill 退出的 worker 不留存活进程。
         runner = new WindowsSandboxAcceptanceRunner(
                                                     new RecordingBackendFactory(home.Components, workspace.Root,
                                                                                     (plan, ct) =>
@@ -484,10 +486,10 @@ public sealed class WindowsSandboxAcceptanceTests
                                                     workspace.Root, (marker, _) => new FakeWorker(marker, true),
                                                     limits : TestLimits());
         report = await runner.RunAsync(["host-exit-reclaim"], CancellationToken.None);
-        Assert.Equal(SandboxAcceptanceVerdict.Pass, VerdictOf(report, "host-exit-reclaim"));
+        Assert.That(VerdictOf(report, "host-exit-reclaim"), Is.EqualTo(SandboxAcceptanceVerdict.Pass));
     }
 
-    [Fact]
+    [Test]
     public async Task SurvivorsAfterCancellation_FailTheCase()
     {
         if (!OperatingSystem.IsWindows()) return;
@@ -503,8 +505,7 @@ public sealed class WindowsSandboxAcceptanceTests
                                                                          "powershell.exe")
                                                                          return HappyScriptAsync(plan, ct);
 
-                                                                     // Leave a same-image process behind: the survivor scan must
-                                                                     // catch it after the cancellation.
+                                                                     // 留下同名镜像进程：幸存者扫描必须在取消后抓住它。
                                                                      var comSpec =
                                                                          Environment.GetEnvironmentVariable("ComSpec")!;
                                                                      var process =
@@ -518,13 +519,13 @@ public sealed class WindowsSandboxAcceptanceTests
                                                                  }).Invoke, workspace.Root, limits : limits);
         var report = await runner.RunAsync(["terminate-active"], CancellationToken.None);
 
-        Assert.Equal(SandboxAcceptanceVerdict.Fail, VerdictOf(report, "terminate-active"));
-        Assert.Contains("残留", CaseDetail(report, "terminate-active")!, StringComparison.Ordinal);
+        Assert.That(VerdictOf(report, "terminate-active"), Is.EqualTo(SandboxAcceptanceVerdict.Fail));
+        TestAssert.Contains("残留", CaseDetail(report, "terminate-active")!, StringComparison.Ordinal);
     }
 
     // ---- 报告序列化 ----
 
-    [Fact]
+    [Test]
     public void AcceptanceReport_RoundTripsThroughSourceGeneration()
     {
         var report = new WindowsSandboxAcceptanceReport
@@ -561,29 +562,29 @@ public sealed class WindowsSandboxAcceptanceTests
 
         var json = JsonSerializer.Serialize(report,
                                             WindowsSandboxAcceptanceJsonContext.Default.WindowsSandboxAcceptanceReport);
-        Assert.Contains("\"verdict\": \"Pass\"", json, StringComparison.Ordinal);
-        Assert.Contains("\"markerVersion\": 5", json, StringComparison.Ordinal);
-        Assert.Contains("\"setupVersion\": 5", json, StringComparison.Ordinal);
-        Assert.Contains("\"ipcVersion\": 6", json, StringComparison.Ordinal);
-        Assert.DoesNotContain("password", json, StringComparison.OrdinalIgnoreCase);
+        TestAssert.Contains("\"verdict\": \"Pass\"", json, StringComparison.Ordinal);
+        TestAssert.Contains("\"markerVersion\": 5", json, StringComparison.Ordinal);
+        TestAssert.Contains("\"setupVersion\": 5", json, StringComparison.Ordinal);
+        TestAssert.Contains("\"ipcVersion\": 6", json, StringComparison.Ordinal);
+        TestAssert.DoesNotContain("password", json, StringComparison.OrdinalIgnoreCase);
 
         var back = JsonSerializer.Deserialize(json,
                                               WindowsSandboxAcceptanceJsonContext.Default
                                                  .WindowsSandboxAcceptanceReport);
-        Assert.NotNull(back);
-        Assert.Equal(report.TimestampUtc, back.TimestampUtc);
-        Assert.Equal(report.OfflineAccountName, back.OfflineAccountName);
-        Assert.Equal(report.PolicyKinds, back.PolicyKinds);
-        Assert.Equal(report.WorkspaceRoot, back.WorkspaceRoot);
-        Assert.Equal(report.Components, back.Components);
-        var result = Assert.Single(back.Cases);
-        Assert.Equal(report.Cases[0], result);
-        Assert.Equal(report.Limitations, back.Limitations);
+        TestAssert.NotNull(back);
+        Assert.That(back.TimestampUtc, Is.EqualTo(report.TimestampUtc));
+        Assert.That(back.OfflineAccountName, Is.EqualTo(report.OfflineAccountName));
+        Assert.That(back.PolicyKinds, Is.EqualTo(report.PolicyKinds));
+        Assert.That(back.WorkspaceRoot, Is.EqualTo(report.WorkspaceRoot));
+        Assert.That(back.Components, Is.EqualTo(report.Components));
+        var result = TestAssert.Single(back.Cases);
+        Assert.That(result, Is.EqualTo(report.Cases[0]));
+        Assert.That(back.Limitations, Is.EqualTo(report.Limitations));
     }
 
     // ---- CLI：确认门、就绪与退出码 ----
 
-    [Fact]
+    [Test]
     public async Task Verify_UnconfiguredSettings_RefusesWithoutCallingTheFactory()
     {
         using var fixture   = new CliFixture();
@@ -596,12 +597,12 @@ public sealed class WindowsSandboxAcceptanceTests
                                                              CommandLine.Parse(["sandbox", "verify", "--yes"]),
                                                              CancellationToken.None, factory.Invoke);
 
-        Assert.Equal(1, result);
-        Assert.Empty(factory.Requests);
-        Assert.Contains("settings.windowsSandbox", fixture.Io.Output);
+        Assert.That(result, Is.EqualTo(1));
+        Assert.That(factory.Requests, Is.Empty);
+        Assert.That(fixture.Io.Output, Does.Contain("settings.windowsSandbox"));
     }
 
-    [Fact]
+    [Test]
     public async Task Verify_NotEnabled_RefusesWithoutCallingTheFactory()
     {
         using var home      = new SandboxTestHome();
@@ -618,12 +619,12 @@ public sealed class WindowsSandboxAcceptanceTests
                                                              CommandLine.Parse(["sandbox", "verify", "--yes"]),
                                                              CancellationToken.None, factory.Invoke);
 
-        Assert.Equal(1, result);
-        Assert.Empty(factory.Requests);
-        Assert.Contains("enabled", fixture.Io.Output);
+        Assert.That(result, Is.EqualTo(1));
+        Assert.That(factory.Requests, Is.Empty);
+        Assert.That(fixture.Io.Output, Does.Contain("enabled"));
     }
 
-    [Fact]
+    [Test]
     public async Task Verify_NotReady_SuggestsProvisioningAndRefuses()
     {
         using var home = new SandboxTestHome();
@@ -638,12 +639,12 @@ public sealed class WindowsSandboxAcceptanceTests
                                                              CommandLine.Parse(["sandbox", "verify", "--yes"]),
                                                              CancellationToken.None, factory.Invoke);
 
-        Assert.Equal(1, result);
-        Assert.Empty(factory.Requests);
-        Assert.Contains("sandbox provision", fixture.Io.Output);
+        Assert.That(result, Is.EqualTo(1));
+        Assert.That(factory.Requests, Is.Empty);
+        Assert.That(fixture.Io.Output, Does.Contain("sandbox provision"));
     }
 
-    [Fact]
+    [Test]
     public async Task Verify_NonInteractiveWithoutYes_Refuses()
     {
         using var home      = new SandboxTestHome();
@@ -658,12 +659,12 @@ public sealed class WindowsSandboxAcceptanceTests
                                                              CommandLine.Parse(["sandbox", "verify"]),
                                                              CancellationToken.None, factory.Invoke);
 
-        Assert.Equal(1, result);
-        Assert.Empty(factory.Requests);
-        Assert.Contains("--yes", fixture.Io.Output);
+        Assert.That(result, Is.EqualTo(1));
+        Assert.That(factory.Requests, Is.Empty);
+        Assert.That(fixture.Io.Output, Does.Contain("--yes"));
     }
 
-    [Fact]
+    [Test]
     public async Task Verify_InteractiveDecline_ExitsZeroWithoutRunning()
     {
         if (!OperatingSystem.IsWindows()) return;
@@ -680,12 +681,12 @@ public sealed class WindowsSandboxAcceptanceTests
                                                              CommandLine.Parse(["sandbox", "verify"]),
                                                              CancellationToken.None, factory.Invoke);
 
-        Assert.Equal(0, result);
-        Assert.Empty(factory.Requests);
-        Assert.Contains("已取消", fixture.Io.Output);
+        Assert.That(result, Is.EqualTo(0));
+        Assert.That(factory.Requests, Is.Empty);
+        Assert.That(fixture.Io.Output, Does.Contain("已取消"));
     }
 
-    [Fact]
+    [Test]
     public async Task Verify_WithYesAndCaseFilter_RunsAcceptanceAndWritesReport()
     {
         if (!OperatingSystem.IsWindows()) return;
@@ -708,18 +709,18 @@ public sealed class WindowsSandboxAcceptanceTests
                                                              CancellationToken.None, factory.Invoke,
                                                              (marker, _) => new FakeWorker(marker, true));
 
-        Assert.Equal(0, result);
-        Assert.Contains("exit-natural-23", fixture.Io.Output);
-        Assert.Contains("PASS 1", fixture.Io.Output);
-        Assert.Contains(workspace.Root, fixture.Io.Output);
+        Assert.That(result, Is.EqualTo(0));
+        Assert.That(fixture.Io.Output, Does.Contain("exit-natural-23"));
+        Assert.That(fixture.Io.Output, Does.Contain("PASS 1"));
+        Assert.That(fixture.Io.Output, Does.Contain(workspace.Root));
         var reportFiles = Directory.GetFiles(home.Components.SandboxDirectory, "tinyharness-verify-*.json");
-        var reportPath  = Assert.Single(reportFiles);
+        var reportPath  = TestAssert.Single(reportFiles);
         var json        = await File.ReadAllTextAsync(reportPath);
-        Assert.Contains("\"offlineAccountName\": \"TinyHarnessOffline\"", json);
-        Assert.Contains("limitations", json);
+        Assert.That(json, Does.Contain("\"offlineAccountName\": \"TinyHarnessOffline\""));
+        Assert.That(json, Does.Contain("limitations"));
     }
 
-    [Fact]
+    [Test]
     public async Task Verify_AnyFailureOrIndeterminate_ExitsFour()
     {
         if (!OperatingSystem.IsWindows()) return;
@@ -742,13 +743,13 @@ public sealed class WindowsSandboxAcceptanceTests
                                                              CancellationToken.None, factory.Invoke,
                                                              (marker, _) => new FakeWorker(marker, true));
 
-        Assert.Equal(4, result);
-        Assert.Contains("FAIL 1", fixture.Io.Output);
+        Assert.That(result, Is.EqualTo(4));
+        Assert.That(fixture.Io.Output, Does.Contain("FAIL 1"));
     }
 
     // ---- host-exit marker 清理与 verify-worker 的 marker 边界 ----
 
-    [Fact]
+    [Test]
     public async Task HostExit_StaleMarkerIsClearedByTheParentBeforeSpawning()
     {
         if (!OperatingSystem.IsWindows()) return;
@@ -758,8 +759,8 @@ public sealed class WindowsSandboxAcceptanceTests
         Directory.CreateDirectory(Path.Combine(workspace.Root, "artifacts"));
         var staleMarker = Path.Combine(workspace.Root, "artifacts", "host-exit-marker.txt");
         await File.WriteAllTextAsync(staleMarker, "stale");
-        // A worker that never writes: without the parent-side cleanup the stale
-        // marker would fake readiness instantly and the case would PASS.
+        // worker 永不写 marker：父侧必须先清理陈旧 marker，否则它会立即伪造就绪并让用例
+        // 错误通过。
         var runner = new WindowsSandboxAcceptanceRunner(new RecordingBackendFactory(home.Components, workspace.Root,
                                                                  (plan, ct) => HappyScriptAsync(plan, ct)).Invoke,
                                                         workspace.Root, (marker, _) => new FakeWorker(marker, false),
@@ -767,12 +768,12 @@ public sealed class WindowsSandboxAcceptanceTests
 
         var report = await runner.RunAsync(["host-exit-reclaim"], CancellationToken.None);
 
-        Assert.Equal(SandboxAcceptanceVerdict.Fail, VerdictOf(report, "host-exit-reclaim"));
-        Assert.Contains("marker", CaseDetail(report, "host-exit-reclaim")!, StringComparison.Ordinal);
-        Assert.False(File.Exists(staleMarker), "the stale marker should have been cleared by the parent");
+        Assert.That(VerdictOf(report, "host-exit-reclaim"), Is.EqualTo(SandboxAcceptanceVerdict.Fail));
+        TestAssert.Contains("marker", CaseDetail(report, "host-exit-reclaim")!, StringComparison.Ordinal);
+        Assert.That(File.Exists(staleMarker), Is.False, "the stale marker should have been cleared by the parent");
     }
 
-    [Fact]
+    [Test]
     public async Task VerifyWorker_MarkerOutsideTheWorkspaceArtifacts_IsRefused()
     {
         using var directory     = new TestTempDir();
@@ -790,12 +791,12 @@ public sealed class WindowsSandboxAcceptanceTests
                                                                    ]),
                                                                    CancellationToken.None);
 
-        Assert.Equal(1, result);
-        Assert.True(File.Exists(outsideMarker));
-        Assert.Contains("artifacts", fixture.Io.Error, StringComparison.Ordinal);
+        Assert.That(result, Is.EqualTo(1));
+        Assert.That(File.Exists(outsideMarker), Is.True);
+        TestAssert.Contains("artifacts", fixture.Io.Error, StringComparison.Ordinal);
     }
 
-    [Fact]
+    [Test]
     public async Task VerifyWorker_DoesNotTouchTheMarkerWhenRefusingEarly()
     {
         using var directory = new TestTempDir();
@@ -805,8 +806,7 @@ public sealed class WindowsSandboxAcceptanceTests
         Directory.CreateDirectory(Path.GetDirectoryName(marker)!);
         await File.WriteAllTextAsync(marker, "keep");
 
-        // No user config saved: the worker must refuse on the settings check
-        // and leave the marker untouched (the old code deleted it up front).
+        // 未保存用户配置：worker 必须在设置检查处拒绝，且不触碰 marker。
         var result = await SandboxVerifyCommand.ExecuteWorkerAsync(fixture.CreateContext(),
                                                                    CommandLine.Parse([
                                                                        "sandbox", "verify-worker", "--marker",
@@ -816,14 +816,14 @@ public sealed class WindowsSandboxAcceptanceTests
                                                                    ]),
                                                                    CancellationToken.None);
 
-        Assert.Equal(1, result);
-        Assert.True(File.Exists(marker));
-        Assert.Contains("settings.windowsSandbox", fixture.Io.Error, StringComparison.Ordinal);
+        Assert.That(result, Is.EqualTo(1));
+        Assert.That(File.Exists(marker), Is.True);
+        TestAssert.Contains("settings.windowsSandbox", fixture.Io.Error, StringComparison.Ordinal);
     }
 
     // ---- CLI 侧输出捕获 ----
 
-    [Fact]
+    [Test]
     public async Task VerifyOutputCapture_TruncatesAndKeepsTheArtifact()
     {
         using var directory    = new TestTempDir();
@@ -834,16 +834,16 @@ public sealed class WindowsSandboxAcceptanceTests
             await capture.AppendAsync(chunk.AsMemory(), CancellationToken.None);
 
         var output = capture.Complete();
-        Assert.True(output.Truncated);
-        Assert.Equal(180, output.OriginalCharacterCount);
-        Assert.Equal(artifactPath, output.ArtifactPath);
-        Assert.True(File.Exists(artifactPath));
-        Assert.StartsWith(new string('a', 50), output.Content, StringComparison.Ordinal);
-        Assert.EndsWith(new string('c', 50), output.Content, StringComparison.Ordinal);
-        Assert.Contains("[truncated 80 chars", output.Content, StringComparison.Ordinal);
+        Assert.That(output.Truncated, Is.True);
+        Assert.That(output.OriginalCharacterCount, Is.EqualTo(180));
+        Assert.That(output.ArtifactPath, Is.EqualTo(artifactPath));
+        Assert.That(File.Exists(artifactPath), Is.True);
+        Assert.That(output.Content, Does.StartWith(new string('a', 50)).Using(StringComparison.Ordinal));
+        Assert.That(output.Content, Does.EndWith(new string('c', 50)).Using(StringComparison.Ordinal));
+        TestAssert.Contains("[truncated 80 chars", output.Content, StringComparison.Ordinal);
     }
 
-    [Fact]
+    [Test]
     public async Task VerifyOutputCapture_DiscardDeletesTheArtifact()
     {
         using var directory    = new TestTempDir();
@@ -853,15 +853,19 @@ public sealed class WindowsSandboxAcceptanceTests
         await capture.AppendAsync("hello".AsMemory(), CancellationToken.None);
         capture.Discard();
 
-        Assert.False(File.Exists(artifactPath));
+        Assert.That(File.Exists(artifactPath), Is.False);
     }
 
     /// <summary>
-    ///     在一次性验收工作区里跑单个用例：每次调用使用全新工作区，避免上一个用例的残留文件
-    ///     影响文件存在性判定。
-    ///     Runs one case in a disposable acceptance workspace: every call gets a
-    ///     fresh workspace so leftover files from a previous case never affect
-    ///     the file-existence verdicts.
+    ///     <para>
+    ///         在一次性验收工作区里跑单个用例：每次调用使用全新工作区，避免上一个用例的残留文件
+    ///         影响文件存在性判定。
+    ///     </para>
+    ///     <para>
+    ///         Runs one case in a disposable acceptance workspace: every call gets a
+    ///         fresh workspace so leftover files from a previous case never affect
+    ///         the file-existence verdicts.
+    ///     </para>
     /// </summary>
     private static async Task<WindowsSandboxAcceptanceReport> RunSingleCaseAsync(
         SandboxTestHome                                                          home, string caseName,
@@ -894,11 +898,15 @@ public sealed class WindowsSandboxAcceptanceTests
     }
 
     /// <summary>
-    ///     满足全矩阵的脚本：whoami 返回 offline 账户、probe 退出 0、curl 回环成功/非回环被拒、
-    ///     cmd exit/type/copy 按目标语义应答。
-    ///     The full-matrix happy script: whoami prints the offline account, the
-    ///     probe exits 0, curl succeeds on loopback and is blocked otherwise,
-    ///     and cmd exit/type/copy answer per target semantics.
+    ///     <para>
+    ///         满足全矩阵的脚本：whoami 返回 offline 账户、probe 退出 0、curl 回环成功/非回环被拒、
+    ///         cmd exit/type/copy 按目标语义应答。
+    ///     </para>
+    ///     <para>
+    ///         The full-matrix happy script: whoami prints the offline account, the
+    ///         probe exits 0, curl succeeds on loopback and is blocked otherwise,
+    ///         and cmd exit/type/copy answer per target semantics.
+    ///     </para>
     /// </summary>
     private static Task<ScriptedOutcome> HappyScriptAsync(PreparedProcessExecution plan, CancellationToken ct)
     {
@@ -916,7 +924,7 @@ public sealed class WindowsSandboxAcceptanceTests
                                            ? new ScriptedOutcome(0)
                                            : new ScriptedOutcome(7));
             case "powershell.exe" :
-                // The timeout case: the runner reports its timeout verdict.
+                // 超时用例：runner 上报其超时判定。
                 return Task.FromResult(new ScriptedOutcome(192, true));
             case "cmd.exe" :
                 return CmdScriptAsync(plan);
@@ -977,12 +985,16 @@ public sealed class WindowsSandboxAcceptanceTests
     }
 
     /// <summary>
-    ///     在 workspaceRoot 下复制一份 cmd.exe 并以 runner 镜像名启动，等它被验收运行器击杀后返回
-    ///     afterKill——模拟“按镜像名定位本用例 runner 并外部击杀”。
-    ///     Copies cmd.exe under workspaceRoot, starts it under the runner's
-    ///     image name, waits for the acceptance runner to kill it, then returns
-    ///     afterKill — simulating "locate this case's runner by image name and
-    ///     kill it externally".
+    ///     <para>
+    ///         在 workspaceRoot 下复制一份 cmd.exe 并以 runner 镜像名启动，等它被验收运行器击杀后返回
+    ///         afterKill——模拟“按镜像名定位本用例 runner 并外部击杀”。
+    ///     </para>
+    ///     <para>
+    ///         Copies cmd.exe under workspaceRoot, starts it under the runner's
+    ///         image name, waits for the acceptance runner to kill it, then returns
+    ///         afterKill — simulating "locate this case's runner by image name and
+    ///         kill it externally".
+    ///     </para>
     /// </summary>
     private static async Task<ScriptedOutcome> SimulateExternalRunnerKillAsync(
         string workspaceRoot, ScriptedOutcome afterKill)
@@ -1008,8 +1020,7 @@ public sealed class WindowsSandboxAcceptanceTests
 
     private static string QuotedPath(string command)
     {
-        // The acceptance fixtures embed bare (quote-free) paths; a quoted form
-        // is still understood for hand-written commands.
+        // 验收 fixture 嵌入裸路径（无引号）；手写命令的带引号形式仍可解析。
         var parts = command.Split('"');
         return parts.Length > 1
             ? parts[1]
@@ -1047,9 +1058,11 @@ public sealed class WindowsSandboxAcceptanceTests
         Exception?               Throw        = null);
 
     /// <summary>
-    ///     按计划脚本化的 fake 后端：把结果/异常原样呈给运行器，不做任何真实进程操作。
-    ///     A scripted fake backend: hands the scripted result or exception to
-    ///     the runner without any real process activity.
+    ///     <para>按计划脚本化的 fake 后端：把结果/异常原样呈给运行器，不做任何真实进程操作。</para>
+    ///     <para>
+    ///         A scripted fake backend: hands the scripted result or exception to
+    ///         the runner without any real process activity.
+    ///     </para>
     /// </summary>
     private sealed class ScriptedBackend(
         Func<PreparedProcessExecution, CancellationToken, Task<ScriptedOutcome>> script) : IProcessExecutionBackend
@@ -1072,13 +1085,17 @@ public sealed class WindowsSandboxAcceptanceTests
     }
 
     /// <summary>
-    ///     录制式工厂 fake：记录每次 (策略种类, 附加环境) 请求并返回脚本化后端组合。策略用真实的
-    ///     SandboxPolicyResolver 对验收工作区解析，使读根/写根判定与生产语义一致。
-    ///     A recording factory fake: it records every (policy kind, extra
-    ///     environment) request and returns a scripted backend composition. The
-    ///     policy is resolved with the real SandboxPolicyResolver against the
-    ///     acceptance workspace so read-root/write-root verdicts match
-    ///     production semantics.
+    ///     <para>
+    ///         录制式工厂 fake：记录每次 (策略种类, 附加环境) 请求并返回脚本化后端组合。策略用真实的
+    ///         SandboxPolicyResolver 对验收工作区解析，使读根/写根判定与生产语义一致。
+    ///     </para>
+    ///     <para>
+    ///         A recording factory fake: it records every (policy kind, extra
+    ///         environment) request and returns a scripted backend composition. The
+    ///         policy is resolved with the real SandboxPolicyResolver against the
+    ///         acceptance workspace so read-root/write-root verdicts match
+    ///         production semantics.
+    ///     </para>
     /// </summary>
     private sealed class RecordingBackendFactory(
         WindowsSandboxComponents                                                 components,
@@ -1105,9 +1122,11 @@ public sealed class WindowsSandboxAcceptanceTests
     }
 
     /// <summary>
-    ///     fake verify-worker：按标志立即写 marker（或永不写）；Kill 仅记录。
-    ///     A fake verify-worker: it writes the marker immediately (or never),
-    ///     and Kill only records the call.
+    ///     <para>fake verify-worker：按标志立即写 marker（或永不写）；Kill 仅记录。</para>
+    ///     <para>
+    ///         A fake verify-worker: it writes the marker immediately (or never),
+    ///         and Kill only records the call.
+    ///     </para>
     /// </summary>
     private sealed class FakeWorker : ISandboxVerifyWorkerProcess
     {

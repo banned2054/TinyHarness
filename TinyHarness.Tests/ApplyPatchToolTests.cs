@@ -7,10 +7,9 @@ namespace TinyHarness.Tests;
 
 public class ApplyPatchToolTests
 {
-    [Theory]
-    [InlineData(0, "x\na\nb\n")]
-    [InlineData(1, "a\nx\nb\n")]
-    [InlineData(2, "a\nb\nx\n")]
+    [TestCase(0, "x\na\nb\n")]
+    [TestCase(1, "a\nx\nb\n")]
+    [TestCase(2, "a\nb\nx\n")]
     public async Task ApplyPatch_PureInsertionUsesTheLineAfterTheOldRange(int oldStart, string expected)
     {
         using var dir   = new TestTempDir();
@@ -20,11 +19,11 @@ public class ApplyPatchToolTests
 
         var result = await ExecuteAsync(tool, Prepare(tool, patch));
 
-        Assert.True(result.Succeeded, result.Content);
-        Assert.Equal(expected, await File.ReadAllTextAsync(path));
+        Assert.That(result.Succeeded, Is.True, result.Content);
+        Assert.That(await File.ReadAllTextAsync(path), Is.EqualTo(expected));
     }
 
-    [Fact]
+    [Test]
     public async Task ApplyPatch_InsertionPastEndFailsWithoutWriting()
     {
         using var dir  = new TestTempDir();
@@ -33,14 +32,14 @@ public class ApplyPatchToolTests
 
         var result = await ExecuteAsync(tool, Prepare(tool, "--- a/file.txt\n+++ b/file.txt\n@@ -3,0 +4,1 @@\n+x\n"));
 
-        Assert.False(result.Succeeded);
-        Assert.Contains("does not match", result.Content);
-        Assert.Equal("a\n", await File.ReadAllTextAsync(path));
+        Assert.That(result.Succeeded, Is.False);
+        Assert.That(result.Content, Does.Contain("does not match"));
+        Assert.That(await File.ReadAllTextAsync(path), Is.EqualTo("a\n"));
     }
 
-    [Theory]
-    [InlineData("\n")]
-    [InlineData("\r\n")]
+
+    [TestCase("\n")]
+    [TestCase("\r\n")]
     public async Task ApplyPatch_RemovingAllLinesProducesAnEmptyFile(string newline)
     {
         using var dir  = new TestTempDir();
@@ -49,11 +48,11 @@ public class ApplyPatchToolTests
 
         var result = await ExecuteAsync(tool, Prepare(tool, "--- a/file.txt\n+++ b/file.txt\n@@ -1,1 +0,0 @@\n-a\n"));
 
-        Assert.True(result.Succeeded, result.Content);
-        Assert.Empty(await File.ReadAllBytesAsync(path));
+        Assert.That(result.Succeeded, Is.True, result.Content);
+        Assert.That(await File.ReadAllBytesAsync(path), Is.Empty);
     }
 
-    [Fact]
+    [Test]
     public async Task ApplyPatch_HeaderLikeBodyLinesDoNotEndAHunk()
     {
         using var dir    = new TestTempDir();
@@ -77,14 +76,14 @@ public class ApplyPatchToolTests
                                                       +new
                                                       """));
 
-        Assert.True(result.Succeeded, result.Content);
-        Assert.Equal("++ replacement\nkept\n", await File.ReadAllTextAsync(first));
-        Assert.Equal("new\n", await File.ReadAllTextAsync(second));
+        Assert.That(result.Succeeded, Is.True, result.Content);
+        Assert.That(await File.ReadAllTextAsync(first), Is.EqualTo("++ replacement\nkept\n"));
+        Assert.That(await File.ReadAllTextAsync(second), Is.EqualTo("new\n"));
     }
 
-    [Theory]
-    [InlineData("")]
-    [InlineData("existing\n")]
+
+    [TestCase("")]
+    [TestCase("existing\n")]
     public async Task ApplyPatch_NewFileCollisionPreventsEveryWrite(string existing)
     {
         using var dir       = new TestTempDir();
@@ -104,26 +103,26 @@ public class ApplyPatchToolTests
                                                       +created
                                                       """));
 
-        Assert.False(result.Succeeded);
-        Assert.Contains("already exists", result.Content);
-        Assert.Equal("old\n", await File.ReadAllTextAsync(first));
-        Assert.Equal(existing, await File.ReadAllTextAsync(collision));
+        Assert.That(result.Succeeded, Is.False);
+        Assert.That(result.Content, Does.Contain("already exists"));
+        Assert.That(await File.ReadAllTextAsync(first), Is.EqualTo("old\n"));
+        Assert.That(await File.ReadAllTextAsync(collision), Is.EqualTo(existing));
     }
 
-    [Fact]
+    [Test]
     public void ApplyPatch_RejectsOversizedPatchBeforeParsing()
     {
         using var dir   = new TestTempDir();
         var       tool  = new ApplyPatchTool(dir.Workspace);
         var       patch = "--- /dev/null\n+++ b/new.txt\n@@ -0,0 +1 @@\n+" + new string('x', 256 * 1024);
 
-        var error = Assert.Throws<InvalidDataException>(() => Prepare(tool, patch));
+        var error = TestAssert.Throws<InvalidDataException>(() => Prepare(tool, patch));
 
-        Assert.Contains("character limit", error.Message);
-        Assert.Empty(Directory.EnumerateFileSystemEntries(dir.Root));
+        Assert.That(error.Message, Does.Contain("character limit"));
+        Assert.That(Directory.EnumerateFileSystemEntries(dir.Root), Is.Empty);
     }
 
-    [Fact]
+    [Test]
     public void ApplyPatch_RejectsTooManyFiles()
     {
         using var dir  = new TestTempDir();
@@ -131,13 +130,13 @@ public class ApplyPatchToolTests
         var patch = string.Concat(Enumerable.Range(0, 65).Select(index =>
                                                                      $"--- /dev/null\n+++ b/{index}.txt\n@@ -0,0 +1 @@\n+x\n"));
 
-        var error = Assert.Throws<InvalidDataException>(() => Prepare(tool, patch));
+        var error = TestAssert.Throws<InvalidDataException>(() => Prepare(tool, patch));
 
-        Assert.Contains("file limit", error.Message);
-        Assert.Empty(Directory.EnumerateFileSystemEntries(dir.Root));
+        Assert.That(error.Message, Does.Contain("file limit"));
+        Assert.That(Directory.EnumerateFileSystemEntries(dir.Root), Is.Empty);
     }
 
-    [Fact]
+    [Test]
     public async Task ApplyPatch_RejectsOversizedInputBeforeAnyWrite()
     {
         using var dir   = new TestTempDir();
@@ -157,13 +156,13 @@ public class ApplyPatchToolTests
                                                       +inserted
                                                       """));
 
-        Assert.False(result.Succeeded);
-        Assert.Contains("read limit", result.Content);
-        Assert.Equal("old\n", await File.ReadAllTextAsync(small));
-        Assert.Equal(new string('x', 4 * 1024 * 1024 + 1), await File.ReadAllTextAsync(large));
+        Assert.That(result.Succeeded, Is.False);
+        Assert.That(result.Content, Does.Contain("read limit"));
+        Assert.That(await File.ReadAllTextAsync(small), Is.EqualTo("old\n"));
+        Assert.That(await File.ReadAllTextAsync(large), Is.EqualTo(new string('x', 4 * 1024 * 1024 + 1)));
     }
 
-    [Fact]
+    [Test]
     public async Task ApplyPatch_RejectsOversizedOutput()
     {
         using var dir      = new TestTempDir();
@@ -174,13 +173,13 @@ public class ApplyPatchToolTests
         var result = await ExecuteAsync(tool, Prepare(tool,
                                                       "--- a/large.txt\n+++ b/large.txt\n@@ -0,0 +1 @@\n+x\n"));
 
-        Assert.False(result.Succeeded);
-        Assert.Contains("Output", result.Content);
-        Assert.Contains("file limit", result.Content);
-        Assert.Equal(original, await File.ReadAllTextAsync(path));
+        Assert.That(result.Succeeded, Is.False);
+        Assert.That(result.Content, Does.Contain("Output"));
+        Assert.That(result.Content, Does.Contain("file limit"));
+        Assert.That(await File.ReadAllTextAsync(path), Is.EqualTo(original));
     }
 
-    [Fact]
+    [Test]
     public async Task ApplyPatch_CombinedBudgetFailurePreventsEveryWrite()
     {
         using var dir      = new TestTempDir();
@@ -192,12 +191,12 @@ public class ApplyPatchToolTests
 
         var result = await ExecuteAsync(tool, Prepare(tool, patch));
 
-        Assert.False(result.Succeeded);
-        Assert.Contains("budget", result.Content);
-        foreach (var path in paths) Assert.Equal(original, await File.ReadAllTextAsync(path));
+        Assert.That(result.Succeeded, Is.False);
+        Assert.That(result.Content, Does.Contain("budget"));
+        foreach (var path in paths) Assert.That(await File.ReadAllTextAsync(path), Is.EqualTo(original));
     }
 
-    [Fact]
+    [Test]
     public async Task ApplyPatch_AllowsInputAndOutputAtTheFileLimit()
     {
         using var dir  = new TestTempDir();
@@ -208,8 +207,8 @@ public class ApplyPatchToolTests
         var result = await ExecuteAsync(tool, Prepare(tool,
                                                       "--- a/large.txt\n+++ b/large.txt\n@@ -1 +1 @@\n-old\n+new\n"));
 
-        Assert.True(result.Succeeded, result.Content);
-        Assert.Equal("new\n" + tail, await File.ReadAllTextAsync(path));
+        Assert.That(result.Succeeded, Is.True, result.Content);
+        Assert.That(await File.ReadAllTextAsync(path), Is.EqualTo("new\n" + tail));
     }
 
     private static ChatToolCall Call(string argumentsJson) => new("call_1", "apply_patch", argumentsJson);
@@ -221,7 +220,7 @@ public class ApplyPatchToolTests
     private static async Task<ToolResult> ExecuteAsync(ApplyPatchTool tool, ToolPreparation preparation) =>
         await tool.ExecuteAsync(preparation, CancellationToken.None);
 
-    [Fact]
+    [Test]
     public async Task ApplyPatch_ModifiesASingleLine()
     {
         using var dir = new TestTempDir();
@@ -236,19 +235,19 @@ public class ApplyPatchToolTests
                                   +line2-fixed
                                   """);
 
-        Assert.Equal("filesystem.write", preparation.Capability);
-        Assert.Equal([Path.Combine(dir.Root, "src", "fixme.cs")], preparation.TargetPaths);
+        Assert.That(preparation.Capability, Is.EqualTo("filesystem.write"));
+        Assert.That(preparation.TargetPaths, Is.EqualTo([Path.Combine(dir.Root, "src", "fixme.cs")]));
 
         var result = await ExecuteAsync(tool, preparation);
 
-        Assert.True(result.Succeeded);
-        Assert.Contains("Applied patch to 1 file(s)", result.Content);
-        Assert.Contains("src/fixme.cs", result.Content);
-        Assert.Equal("line1\nline2-fixed\nline3\n",
-                     await File.ReadAllTextAsync(Path.Combine(dir.Root, "src", "fixme.cs")));
+        Assert.That(result.Succeeded, Is.True);
+        Assert.That(result.Content, Does.Contain("Applied patch to 1 file(s)"));
+        Assert.That(result.Content, Does.Contain("src/fixme.cs"));
+        Assert.That(await File.ReadAllTextAsync(Path.Combine(dir.Root, "src", "fixme.cs")),
+                    Is.EqualTo("line1\nline2-fixed\nline3\n"));
     }
 
-    [Fact]
+    [Test]
     public async Task ApplyPatch_AppliesMultipleFiles()
     {
         using var dir = new TestTempDir();
@@ -269,13 +268,13 @@ public class ApplyPatchToolTests
                                                       +b2-y
                                                       """));
 
-        Assert.True(result.Succeeded);
-        Assert.Contains("2 file(s)", result.Content);
-        Assert.Equal("a1-x\na2\n", await File.ReadAllTextAsync(Path.Combine(dir.Root, "f1.txt")));
-        Assert.Equal("b1\nb2-y\n", await File.ReadAllTextAsync(Path.Combine(dir.Root, "f2.txt")));
+        Assert.That(result.Succeeded, Is.True);
+        Assert.That(result.Content, Does.Contain("2 file(s)"));
+        Assert.That(await File.ReadAllTextAsync(Path.Combine(dir.Root, "f1.txt")), Is.EqualTo("a1-x\na2\n"));
+        Assert.That(await File.ReadAllTextAsync(Path.Combine(dir.Root, "f2.txt")), Is.EqualTo("b1\nb2-y\n"));
     }
 
-    [Fact]
+    [Test]
     public async Task ApplyPatch_CreatesANewFile()
     {
         using var dir  = new TestTempDir();
@@ -289,11 +288,11 @@ public class ApplyPatchToolTests
                                                       +beta
                                                       """));
 
-        Assert.True(result.Succeeded, result.Content);
-        Assert.Equal("alpha\nbeta\n", await File.ReadAllTextAsync(Path.Combine(dir.Root, "new.cs")));
+        Assert.That(result.Succeeded, Is.True, result.Content);
+        Assert.That(await File.ReadAllTextAsync(Path.Combine(dir.Root, "new.cs")), Is.EqualTo("alpha\nbeta\n"));
     }
 
-    [Fact]
+    [Test]
     public async Task ApplyPatch_ContextMismatch_WritesNothing()
     {
         using var dir  = new TestTempDir();
@@ -308,12 +307,12 @@ public class ApplyPatchToolTests
                                                       +line2-fixed
                                                       """));
 
-        Assert.False(result.Succeeded);
-        Assert.Contains("context mismatch", result.Content);
-        Assert.Equal("line1\nline2\nline3\n", await File.ReadAllTextAsync(path)); // untouched
+        Assert.That(result.Succeeded, Is.False);
+        Assert.That(result.Content, Does.Contain("context mismatch"));
+        Assert.That(await File.ReadAllTextAsync(path), Is.EqualTo("line1\nline2\nline3\n")); // 文件未被改动
     }
 
-    [Fact]
+    [Test]
     public async Task ApplyPatch_MissingFile_ReturnsNotFound()
     {
         using var dir  = new TestTempDir();
@@ -327,11 +326,11 @@ public class ApplyPatchToolTests
                                                       +b
                                                       """));
 
-        Assert.False(result.Succeeded);
-        Assert.Contains("File not found", result.Content);
+        Assert.That(result.Succeeded, Is.False);
+        Assert.That(result.Content, Does.Contain("File not found"));
     }
 
-    [Fact]
+    [Test]
     public async Task ApplyPatch_PreservesCrlfLineEndings()
     {
         using var dir  = new TestTempDir();
@@ -346,105 +345,104 @@ public class ApplyPatchToolTests
                                                       +line2-fixed
                                                       """));
 
-        Assert.True(result.Succeeded);
-        Assert.Equal("line1\r\nline2-fixed\r\nline3\r\n", await File.ReadAllTextAsync(path));
+        Assert.That(result.Succeeded, Is.True);
+        Assert.That(await File.ReadAllTextAsync(path), Is.EqualTo("line1\r\nline2-fixed\r\nline3\r\n"));
     }
 
-    [Fact]
+    [Test]
     public void ApplyPatch_Prepare_RejectsPathEscape()
     {
         using var dir  = new TestTempDir();
         var       tool = new ApplyPatchTool(dir.Workspace);
 
-        var ex = Assert.Throws<InvalidDataException>(() => Prepare(tool, """
-                                                                   --- a/x.cs
-                                                                   +++ b/../outside.cs
-                                                                   @@ -1 +1 @@
-                                                                   -a
-                                                                   +b
-                                                                   """));
+        var ex = TestAssert.Throws<InvalidDataException>(() => Prepare(tool, """
+                                                                       --- a/x.cs
+                                                                       +++ b/../outside.cs
+                                                                       @@ -1 +1 @@
+                                                                       -a
+                                                                       +b
+                                                                       """));
 
-        Assert.Contains("escapes the workspace root", ex.Message);
+        Assert.That(ex.Message, Does.Contain("escapes the workspace root"));
     }
 
-    [Fact]
+    [Test]
     public void ApplyPatch_Prepare_RejectsFileDeletion()
     {
         using var dir  = new TestTempDir();
         var       tool = new ApplyPatchTool(dir.Workspace);
 
-        var ex = Assert.Throws<InvalidDataException>(() => Prepare(tool, """
-                                                                   --- a/fixme.cs
-                                                                   +++ /dev/null
-                                                                   @@ -1 +0,0 @@
-                                                                   -line1
-                                                                   """));
+        var ex = TestAssert.Throws<InvalidDataException>(() => Prepare(tool, """
+                                                                       --- a/fixme.cs
+                                                                       +++ /dev/null
+                                                                       @@ -1 +0,0 @@
+                                                                       -line1
+                                                                       """));
 
-        Assert.Contains("not supported", ex.Message);
+        Assert.That(ex.Message, Does.Contain("not supported"));
     }
 
-    [Fact]
+    [Test]
     public void ApplyPatch_Prepare_RejectsMissingHeader()
     {
         using var dir  = new TestTempDir();
         var       tool = new ApplyPatchTool(dir.Workspace);
 
-        Assert.Throws<InvalidDataException>(() => Prepare(tool, "no unified diff here\n"));
+        TestAssert.Throws<InvalidDataException>(() => Prepare(tool, "no unified diff here\n"));
     }
 
-    [Fact]
+    [Test]
     public void ApplyPatch_Prepare_RejectsEmptyPatch()
     {
         using var dir  = new TestTempDir();
         var       tool = new ApplyPatchTool(dir.Workspace);
 
-        Assert.Throws<InvalidDataException>(() => Prepare(tool, "   "));
+        TestAssert.Throws<InvalidDataException>(() => Prepare(tool, "   "));
     }
 
-    [Fact]
+    [Test]
     public void ApplyPatch_Prepare_RejectsNoNewlineMarker()
     {
         using var dir  = new TestTempDir();
         var       tool = new ApplyPatchTool(dir.Workspace);
 
-        var ex = Assert.Throws<InvalidDataException>(() => Prepare(tool, """
-                                                                   --- a/fixme.cs
-                                                                   +++ b/fixme.cs
-                                                                   @@ -1 +1 @@
-                                                                   -line1
-                                                                   +line1-x
-                                                                   \ No newline at end of file
-                                                                   """));
+        var ex = TestAssert.Throws<InvalidDataException>(() => Prepare(tool, """
+                                                                       --- a/fixme.cs
+                                                                       +++ b/fixme.cs
+                                                                       @@ -1 +1 @@
+                                                                       -line1
+                                                                       +line1-x
+                                                                       \ No newline at end of file
+                                                                       """));
 
-        Assert.Contains("No newline at end of file", ex.Message);
+        Assert.That(ex.Message, Does.Contain("No newline at end of file"));
     }
 
-    [Fact]
+    [Test]
     public void ApplyPatch_Prepare_RejectsDuplicateTarget()
     {
         using var dir  = new TestTempDir();
         var       tool = new ApplyPatchTool(dir.Workspace);
 
-        // Two sections for the same file: applying them sequentially from the
-        // same original content would silently overwrite the first edit, so
-        // Prepare must reject the patch instead.
-        var ex = Assert.Throws<InvalidDataException>(() => Prepare(tool, """
-                                                                   --- a/fixme.cs
-                                                                   +++ b/fixme.cs
-                                                                   @@ -1 +1 @@
-                                                                   -line1
-                                                                   +line1-x
-                                                                   --- a/fixme.cs
-                                                                   +++ b/fixme.cs
-                                                                   @@ -2 +2 @@
-                                                                   -line2
-                                                                   +line2-y
-                                                                   """));
+        // 同一文件的两个 section：从同一原始内容顺序应用会静默覆盖第一处修改，
+        // 因此 Prepare 必须拒绝该补丁。
+        var ex = TestAssert.Throws<InvalidDataException>(() => Prepare(tool, """
+                                                                       --- a/fixme.cs
+                                                                       +++ b/fixme.cs
+                                                                       @@ -1 +1 @@
+                                                                       -line1
+                                                                       +line1-x
+                                                                       --- a/fixme.cs
+                                                                       +++ b/fixme.cs
+                                                                       @@ -2 +2 @@
+                                                                       -line2
+                                                                       +line2-y
+                                                                       """));
 
-        Assert.Contains("more than once", ex.Message);
+        Assert.That(ex.Message, Does.Contain("more than once"));
     }
 
-    [Fact]
+    [Test]
     public async Task ApplyPatch_PreparedPlanIsIsolatedFromExposedArguments()
     {
         using var workspaceDir = new TestTempDir();
@@ -466,12 +464,12 @@ public class ApplyPatchToolTests
 
         var result = await ExecuteAsync(tool, preparation);
 
-        Assert.True(result.Succeeded, result.Content);
-        Assert.Equal("line1-fixed\n", await File.ReadAllTextAsync(inside));
-        Assert.Equal("outside\n", await File.ReadAllTextAsync(outside));
+        Assert.That(result.Succeeded, Is.True, result.Content);
+        Assert.That(await File.ReadAllTextAsync(inside), Is.EqualTo("line1-fixed\n"));
+        Assert.That(await File.ReadAllTextAsync(outside), Is.EqualTo("outside\n"));
     }
 
-    [Fact]
+    [Test]
     public async Task ApplyPatch_OverlappingHunks_WritesNothing()
     {
         using var dir  = new TestTempDir();
@@ -491,8 +489,8 @@ public class ApplyPatchToolTests
                                                       +z
                                                       """));
 
-        Assert.False(result.Succeeded);
-        Assert.Contains("overlap", result.Content);
-        Assert.Equal("line1\nline2\nline3\n", await File.ReadAllTextAsync(path)); // untouched
+        Assert.That(result.Succeeded, Is.False);
+        Assert.That(result.Content, Does.Contain("overlap"));
+        Assert.That(await File.ReadAllTextAsync(path), Is.EqualTo("line1\nline2\nline3\n")); // 文件未被改动
     }
 }

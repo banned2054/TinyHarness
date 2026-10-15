@@ -4,7 +4,7 @@ namespace TinyHarness.Tests;
 
 public class WorkerResultTests
 {
-    [Fact]
+    [Test]
     public void IncompleteResult_CanCarryEvidenceAndStatsWithoutConclusion()
     {
         var result = new WorkerResult
@@ -31,17 +31,17 @@ public class WorkerResultTests
             }
         };
 
-        Assert.NotEqual(WorkerResultStatus.Completed, result.Status);
-        Assert.Equal(string.Empty, result.Conclusion);
-        Assert.False(string.IsNullOrEmpty(result.StatusDetail));
-        var evidence = Assert.Single(result.Evidence);
-        Assert.Equal("src/retry.cs", evidence.Path);
-        Assert.Equal(42, evidence.LineStart);
-        Assert.Equal(58, evidence.LineEnd);
-        Assert.Equal(12, result.Statistics.ToolCalls);
+        Assert.That(result.Status, Is.Not.EqualTo(WorkerResultStatus.Completed));
+        Assert.That(result.Conclusion, Is.EqualTo(string.Empty));
+        Assert.That(string.IsNullOrEmpty(result.StatusDetail), Is.False);
+        var evidence = TestAssert.Single(result.Evidence);
+        Assert.That(evidence.Path, Is.EqualTo("src/retry.cs"));
+        Assert.That(evidence.LineStart, Is.EqualTo(42));
+        Assert.That(evidence.LineEnd, Is.EqualTo(58));
+        Assert.That(result.Statistics.ToolCalls, Is.EqualTo(12));
     }
 
-    [Fact]
+    [Test]
     public void CompletedResult_CanCarryConclusionWithSuggestions()
     {
         var result = new WorkerResult
@@ -54,11 +54,11 @@ public class WorkerResultTests
             Uncertainties    = ["Behavior on concurrent calls is unverified."]
         };
 
-        Assert.Equal(WorkerResultStatus.Completed, result.Status);
-        Assert.False(string.IsNullOrEmpty(result.Conclusion));
-        Assert.Single(result.SuggestedChanges);
-        Assert.Single(result.TestSuggestions);
-        Assert.Single(result.Uncertainties);
-        Assert.Equal(0, result.Statistics.ModelRequests);
+        Assert.That(result.Status, Is.EqualTo(WorkerResultStatus.Completed));
+        Assert.That(string.IsNullOrEmpty(result.Conclusion), Is.False);
+        TestAssert.Single(result.SuggestedChanges);
+        TestAssert.Single(result.TestSuggestions);
+        TestAssert.Single(result.Uncertainties);
+        Assert.That(result.Statistics.ModelRequests, Is.EqualTo(0));
     }
 }

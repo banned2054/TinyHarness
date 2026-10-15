@@ -28,11 +28,15 @@ public class WorkerRunnerTests
         """;
 
     /// <summary>
-    ///     取单个请求里的 tool 消息内容；模型的最后一次请求携带完整最终历史，
-    ///     因此单 run 测试传 <c>fake.RequestLog[^1]</c>，多 run 测试传各 run 的最后请求。
-    ///     Takes the tool-message contents of one request. The model's last request carries the complete
-    ///     final history, so single-run tests pass <c>fake.RequestLog[^1]</c> and multi-run tests pass
-    ///     each run's final request.
+    ///     <para>
+    ///         取单个请求里的 tool 消息内容；模型的最后一次请求携带完整最终历史，
+    ///         因此单 run 测试传 <c>fake.RequestLog[^1]</c>，多 run 测试传各 run 的最后请求。
+    ///     </para>
+    ///     <para>
+    ///         Takes the tool-message contents of one request. The model's last request carries the complete
+    ///         final history, so single-run tests pass <c>fake.RequestLog[^1]</c> and multi-run tests pass
+    ///         each run's final request.
+    ///     </para>
     /// </summary>
     private static IReadOnlyList<string> ToolMessages(ChatCompletionRequest request)
     {
@@ -59,7 +63,7 @@ public class WorkerRunnerTests
         return events;
     }
 
-    [Fact]
+    [Test]
     public async Task ValidRequest_CompletesWithEvidenceMappingStatsAndReadonlyToolset()
     {
         using var dir = new TestTempDir();
@@ -77,27 +81,27 @@ public class WorkerRunnerTests
             FocusPaths = ["docs"]
         }, CancellationToken.None);
 
-        Assert.Equal(WorkerResultStatus.Completed, result.Status);
-        Assert.Equal("The retry budget is documented in docs/note.md.", result.Conclusion);
-        var evidence = Assert.Single(result.Evidence);
-        Assert.Equal("docs/note.md", evidence.Path);
-        Assert.Equal(2, evidence.LineStart);
-        Assert.Equal(3, evidence.LineEnd);
-        Assert.Equal("States it.", evidence.Note);
-        Assert.Empty(result.TestSuggestions);
-        Assert.Empty(result.Uncertainties);
-        Assert.Equal(2, result.Statistics.ModelRequests);
-        Assert.Equal(1, result.Statistics.ToolCalls);
-        Assert.Equal("line1\nline2\nline3".Length, result.Statistics.ToolOutputCharacters);
-        Assert.True(result.Statistics.Elapsed >= TimeSpan.Zero);
+        Assert.That(result.Status, Is.EqualTo(WorkerResultStatus.Completed));
+        Assert.That(result.Conclusion, Is.EqualTo("The retry budget is documented in docs/note.md."));
+        var evidence = TestAssert.Single(result.Evidence);
+        Assert.That(evidence.Path, Is.EqualTo("docs/note.md"));
+        Assert.That(evidence.LineStart, Is.EqualTo(2));
+        Assert.That(evidence.LineEnd, Is.EqualTo(3));
+        Assert.That(evidence.Note, Is.EqualTo("States it."));
+        Assert.That(result.TestSuggestions, Is.Empty);
+        Assert.That(result.Uncertainties, Is.Empty);
+        Assert.That(result.Statistics.ModelRequests, Is.EqualTo(2));
+        Assert.That(result.Statistics.ToolCalls, Is.EqualTo(1));
+        Assert.That(result.Statistics.ToolOutputCharacters, Is.EqualTo("line1\nline2\nline3".Length));
+        Assert.That(result.Statistics.Elapsed >= TimeSpan.Zero, Is.True);
 
         var offered = fake.RequestLog[0].Tools!.Select(t => t.Name)
                           .OrderBy(name => name, StringComparer.Ordinal).ToArray();
-        Assert.Equal(new[] { "list_files", "read_file", "search_text" }, offered);
-        Assert.Equal("fake-model", fake.LastRequestModel);
+        Assert.That(offered, Is.EqualTo(new[] { "list_files", "read_file", "search_text" }));
+        Assert.That(fake.LastRequestModel, Is.EqualTo("fake-model"));
     }
 
-    [Fact]
+    [Test]
     public async Task TaskPackage_EntersUserMessageNotSystemInstructions()
     {
         using var dir  = new TestTempDir();
@@ -113,16 +117,16 @@ public class WorkerRunnerTests
         }, CancellationToken.None);
 
         var messages = fake.RequestLog[0].Messages;
-        Assert.Equal(2, messages.Count);
-        Assert.Equal(ChatRole.System, messages[0].Role);
-        Assert.DoesNotContain("retry budget", messages[0].Content, StringComparison.Ordinal);
-        Assert.Equal(ChatRole.User, messages[1].Role);
-        Assert.Contains("Where is the retry budget documented?", messages[1].Content, StringComparison.Ordinal);
-        Assert.Contains("KNOWN FACTS", messages[1].Content, StringComparison.Ordinal);
-        Assert.Contains("- docs", messages[1].Content, StringComparison.Ordinal);
+        Assert.That(messages.Count, Is.EqualTo(2));
+        Assert.That(messages[0].Role, Is.EqualTo(ChatRole.System));
+        TestAssert.DoesNotContain("retry budget", messages[0].Content, StringComparison.Ordinal);
+        Assert.That(messages[1].Role, Is.EqualTo(ChatRole.User));
+        TestAssert.Contains("Where is the retry budget documented?", messages[1].Content, StringComparison.Ordinal);
+        TestAssert.Contains("KNOWN FACTS", messages[1].Content, StringComparison.Ordinal);
+        TestAssert.Contains("- docs", messages[1].Content, StringComparison.Ordinal);
     }
 
-    [Fact]
+    [Test]
     public async Task InvalidRequest_FailsWithoutAnyModelRequest()
     {
         using var dir    = new TestTempDir();
@@ -131,15 +135,15 @@ public class WorkerRunnerTests
 
         var result = await runner.RunAsync(new WorkerRequest { TaskPrompt = "   " }, CancellationToken.None);
 
-        Assert.Equal(WorkerResultStatus.Failed, result.Status);
-        Assert.Equal(0, fake.Requests);
-        Assert.Equal(0, result.Statistics.ModelRequests);
-        Assert.Equal(0, result.Statistics.ToolCalls);
-        Assert.False(string.IsNullOrEmpty(result.StatusDetail));
-        Assert.Empty(result.Evidence);
+        Assert.That(result.Status, Is.EqualTo(WorkerResultStatus.Failed));
+        Assert.That(fake.Requests, Is.EqualTo(0));
+        Assert.That(result.Statistics.ModelRequests, Is.EqualTo(0));
+        Assert.That(result.Statistics.ToolCalls, Is.EqualTo(0));
+        Assert.That(string.IsNullOrEmpty(result.StatusDetail), Is.False);
+        Assert.That(result.Evidence, Is.Empty);
     }
 
-    [Fact]
+    [Test]
     public async Task ModelRequestsWriteAndProcessTools_RoundGatedWithoutSideEffects()
     {
         using var dir    = new TestTempDir();
@@ -157,15 +161,15 @@ public class WorkerRunnerTests
             TaskPrompt = "Inspect src/a.cs and also patch and run things for me."
         }, CancellationToken.None);
 
-        Assert.Equal(WorkerResultStatus.Completed, result.Status);
-        Assert.Equal("original content", await File.ReadAllTextAsync(target));
-        Assert.Equal(0, result.Statistics.ToolCalls);
-        Assert.Equal(2, result.Statistics.ModelRequests);
-        Assert.True(result.Statistics.ToolOutputCharacters > 0);
-        Assert.Equal("src/a.cs", Assert.Single(result.Evidence).Path);
+        Assert.That(result.Status, Is.EqualTo(WorkerResultStatus.Completed));
+        Assert.That(await File.ReadAllTextAsync(target), Is.EqualTo("original content"));
+        Assert.That(result.Statistics.ToolCalls, Is.EqualTo(0));
+        Assert.That(result.Statistics.ModelRequests, Is.EqualTo(2));
+        Assert.That(result.Statistics.ToolOutputCharacters > 0, Is.True);
+        Assert.That(TestAssert.Single(result.Evidence).Path, Is.EqualTo("src/a.cs"));
     }
 
-    [Fact]
+    [Test]
     public async Task ModelRequestsPathOutsideWorkspace_NoExecution()
     {
         using var dir  = new TestTempDir();
@@ -177,12 +181,12 @@ public class WorkerRunnerTests
         var result = await runner.RunAsync(new WorkerRequest { TaskPrompt = "Read the secrets." },
                                            CancellationToken.None);
 
-        Assert.Equal(WorkerResultStatus.Completed, result.Status);
-        Assert.Equal(0, result.Statistics.ToolCalls);
-        Assert.Equal("docs/note.md", Assert.Single(result.Evidence).Path);
+        Assert.That(result.Status, Is.EqualTo(WorkerResultStatus.Completed));
+        Assert.That(result.Statistics.ToolCalls, Is.EqualTo(0));
+        Assert.That(TestAssert.Single(result.Evidence).Path, Is.EqualTo("docs/note.md"));
     }
 
-    [Fact]
+    [Test]
     public async Task MalformedFinalJson_MapsToFailedWithDetail()
     {
         using var dir  = new TestTempDir();
@@ -193,14 +197,14 @@ public class WorkerRunnerTests
         var result = await runner.RunAsync(new WorkerRequest { TaskPrompt = "Investigate." },
                                            CancellationToken.None);
 
-        Assert.Equal(WorkerResultStatus.Failed, result.Status);
-        Assert.Contains("JSON", result.StatusDetail, StringComparison.Ordinal);
-        Assert.Equal(string.Empty, result.Conclusion);
-        Assert.Empty(result.Evidence);
-        Assert.Equal(1, result.Statistics.ModelRequests);
+        Assert.That(result.Status, Is.EqualTo(WorkerResultStatus.Failed));
+        TestAssert.Contains("JSON", result.StatusDetail, StringComparison.Ordinal);
+        Assert.That(result.Conclusion, Is.EqualTo(string.Empty));
+        Assert.That(result.Evidence, Is.Empty);
+        Assert.That(result.Statistics.ModelRequests, Is.EqualTo(1));
     }
 
-    [Fact]
+    [Test]
     public async Task DraftWithInvalidEvidence_FailedKeepingOnlyStructurallyValidEvidence()
     {
         using var dir  = new TestTempDir();
@@ -211,14 +215,14 @@ public class WorkerRunnerTests
 
         var result = await runner.RunAsync(new WorkerRequest { TaskPrompt = "Investigate." }, CancellationToken.None);
 
-        Assert.Equal(WorkerResultStatus.Failed, result.Status);
-        Assert.Contains("validation", result.StatusDetail, StringComparison.Ordinal);
-        Assert.Equal(string.Empty, result.Conclusion);
-        var evidence = Assert.Single(result.Evidence);
-        Assert.Equal("docs/good.md", evidence.Path);
+        Assert.That(result.Status, Is.EqualTo(WorkerResultStatus.Failed));
+        TestAssert.Contains("validation", result.StatusDetail, StringComparison.Ordinal);
+        Assert.That(result.Conclusion, Is.EqualTo(string.Empty));
+        var evidence = TestAssert.Single(result.Evidence);
+        Assert.That(evidence.Path, Is.EqualTo("docs/good.md"));
     }
 
-    [Fact]
+    [Test]
     public async Task ModelFailure_MapsToFailedWithShortDetail()
     {
         using var dir    = new TestTempDir();
@@ -227,14 +231,14 @@ public class WorkerRunnerTests
 
         var result = await runner.RunAsync(new WorkerRequest { TaskPrompt = "Investigate." }, CancellationToken.None);
 
-        Assert.Equal(WorkerResultStatus.Failed, result.Status);
-        Assert.False(string.IsNullOrEmpty(result.StatusDetail));
-        Assert.DoesNotContain("scripted response", result.StatusDetail, StringComparison.Ordinal);
-        Assert.Equal(string.Empty, result.Conclusion);
-        Assert.Equal(1, result.Statistics.ModelRequests);
+        Assert.That(result.Status, Is.EqualTo(WorkerResultStatus.Failed));
+        Assert.That(string.IsNullOrEmpty(result.StatusDetail), Is.False);
+        TestAssert.DoesNotContain("scripted response", result.StatusDetail, StringComparison.Ordinal);
+        Assert.That(result.Conclusion, Is.EqualTo(string.Empty));
+        Assert.That(result.Statistics.ModelRequests, Is.EqualTo(1));
     }
 
-    [Fact]
+    [Test]
     public async Task ModelFailure_StatusDetailWithholdsExceptionContentAndStaysValid()
     {
         using var dir = new TestTempDir();
@@ -250,20 +254,20 @@ public class WorkerRunnerTests
         var result = await runner.RunAsync(new WorkerRequest { TaskPrompt = "Investigate." },
                                            CancellationToken.None);
 
-        Assert.Equal(WorkerResultStatus.Failed, result.Status);
-        Assert.False(string.IsNullOrWhiteSpace(result.StatusDetail));
-        Assert.DoesNotContain("SENTINEL", result.StatusDetail, StringComparison.Ordinal);
-        Assert.DoesNotContain("secret-endpoint", result.StatusDetail, StringComparison.Ordinal);
-        Assert.DoesNotContain("response body", result.StatusDetail, StringComparison.Ordinal);
-        Assert.DoesNotContain("tenant-42", result.StatusDetail, StringComparison.Ordinal);
-        Assert.True(result.StatusDetail.Length <= WorkerResultLimits.MaxStatusDetailLength);
-        Assert.Equal(string.Empty, result.Conclusion);
-        Assert.Empty(result.Evidence);
-        Assert.Equal(1, result.Statistics.ModelRequests);
-        Assert.True(WorkerResultValidator.Validate(result).IsValid);
+        Assert.That(result.Status, Is.EqualTo(WorkerResultStatus.Failed));
+        Assert.That(string.IsNullOrWhiteSpace(result.StatusDetail), Is.False);
+        TestAssert.DoesNotContain("SENTINEL", result.StatusDetail, StringComparison.Ordinal);
+        TestAssert.DoesNotContain("secret-endpoint", result.StatusDetail, StringComparison.Ordinal);
+        TestAssert.DoesNotContain("response body", result.StatusDetail, StringComparison.Ordinal);
+        TestAssert.DoesNotContain("tenant-42", result.StatusDetail, StringComparison.Ordinal);
+        Assert.That(result.StatusDetail.Length <= WorkerResultLimits.MaxStatusDetailLength, Is.True);
+        Assert.That(result.Conclusion, Is.EqualTo(string.Empty));
+        Assert.That(result.Evidence, Is.Empty);
+        Assert.That(result.Statistics.ModelRequests, Is.EqualTo(1));
+        Assert.That(WorkerResultValidator.Validate(result).IsValid, Is.True);
     }
 
-    [Fact]
+    [Test]
     public async Task StepLimit_MapsToIncompleteWithoutConclusion()
     {
         using var dir  = new TestTempDir();
@@ -275,14 +279,14 @@ public class WorkerRunnerTests
         var result = await runner.RunAsync(new WorkerRequest { TaskPrompt = "Investigate." },
                                            CancellationToken.None);
 
-        Assert.Equal(WorkerResultStatus.Incomplete, result.Status);
-        Assert.Contains("step limit", result.StatusDetail, StringComparison.Ordinal);
-        Assert.Equal(string.Empty, result.Conclusion);
-        Assert.Equal(2, result.Statistics.ModelRequests);
-        Assert.Equal(2, result.Statistics.ToolCalls);
+        Assert.That(result.Status, Is.EqualTo(WorkerResultStatus.Incomplete));
+        TestAssert.Contains("step limit", result.StatusDetail, StringComparison.Ordinal);
+        Assert.That(result.Conclusion, Is.EqualTo(string.Empty));
+        Assert.That(result.Statistics.ModelRequests, Is.EqualTo(2));
+        Assert.That(result.Statistics.ToolCalls, Is.EqualTo(2));
     }
 
-    [Fact]
+    [Test]
     public async Task CallerCancellation_MapsToCancelled()
     {
         using var dir  = new TestTempDir();
@@ -295,13 +299,13 @@ public class WorkerRunnerTests
         var result = await runner.RunAsync(new WorkerRequest { TaskPrompt = "Investigate." },
                                            cancellation.Token);
 
-        Assert.Equal(WorkerResultStatus.Cancelled, result.Status);
-        Assert.Contains("cancel", result.StatusDetail, StringComparison.OrdinalIgnoreCase);
-        Assert.Equal(string.Empty, result.Conclusion);
-        Assert.Equal(0, result.Statistics.ModelRequests);
+        Assert.That(result.Status, Is.EqualTo(WorkerResultStatus.Cancelled));
+        TestAssert.Contains("cancel", result.StatusDetail, StringComparison.OrdinalIgnoreCase);
+        Assert.That(result.Conclusion, Is.EqualTo(string.Empty));
+        Assert.That(result.Statistics.ModelRequests, Is.EqualTo(0));
     }
 
-    [Fact]
+    [Test]
     public async Task RunTimeout_MapsToIncomplete()
     {
         using var dir  = new TestTempDir();
@@ -314,14 +318,14 @@ public class WorkerRunnerTests
         var result = await runner.RunAsync(new WorkerRequest { TaskPrompt = "Investigate." },
                                            CancellationToken.None);
 
-        Assert.Equal(WorkerResultStatus.Incomplete, result.Status);
-        Assert.Contains("timed out", result.StatusDetail, StringComparison.Ordinal);
-        Assert.Equal(string.Empty, result.Conclusion);
-        Assert.Equal(1, result.Statistics.ModelRequests);
-        Assert.True(result.Statistics.Elapsed >= TimeSpan.FromMilliseconds(50));
+        Assert.That(result.Status, Is.EqualTo(WorkerResultStatus.Incomplete));
+        TestAssert.Contains("timed out", result.StatusDetail, StringComparison.Ordinal);
+        Assert.That(result.Conclusion, Is.EqualTo(string.Empty));
+        Assert.That(result.Statistics.ModelRequests, Is.EqualTo(1));
+        Assert.That(result.Statistics.Elapsed >= TimeSpan.FromMilliseconds(50), Is.True);
     }
 
-    [Fact]
+    [Test]
     public async Task ConsecutiveCalls_DoNotInheritHistoryMessagesOrConclusions()
     {
         using var dir = new TestTempDir();
@@ -338,59 +342,61 @@ public class WorkerRunnerTests
         var second = await runner.RunAsync(new WorkerRequest { TaskPrompt = "TASK TWO unique marker beta" },
                                            CancellationToken.None);
 
-        Assert.Equal(WorkerResultStatus.Completed, first.Status);
-        Assert.Equal("First conclusion.", first.Conclusion);
-        Assert.Equal(WorkerResultStatus.Completed, second.Status);
-        Assert.Equal("Second conclusion.", second.Conclusion);
+        Assert.That(first.Status, Is.EqualTo(WorkerResultStatus.Completed));
+        Assert.That(first.Conclusion, Is.EqualTo("First conclusion."));
+        Assert.That(second.Status, Is.EqualTo(WorkerResultStatus.Completed));
+        Assert.That(second.Conclusion, Is.EqualTo("Second conclusion."));
 
-        Assert.Equal(4, fake.RequestLog.Count);
+        Assert.That(fake.RequestLog.Count, Is.EqualTo(4));
         var secondRunFirstRequest = fake.RequestLog[2];
-        Assert.Equal(2, secondRunFirstRequest.Messages.Count);
-        Assert.Equal(ChatRole.System, secondRunFirstRequest.Messages[0].Role);
-        Assert.Equal(ChatRole.User, secondRunFirstRequest.Messages[1].Role);
-        Assert.DoesNotContain("unique marker alpha", secondRunFirstRequest.Messages[1].Content,
-                              StringComparison.Ordinal);
-        Assert.Contains("unique marker beta", secondRunFirstRequest.Messages[1].Content, StringComparison.Ordinal);
+        Assert.That(secondRunFirstRequest.Messages.Count, Is.EqualTo(2));
+        Assert.That(secondRunFirstRequest.Messages[0].Role, Is.EqualTo(ChatRole.System));
+        Assert.That(secondRunFirstRequest.Messages[1].Role, Is.EqualTo(ChatRole.User));
+        TestAssert.DoesNotContain("unique marker alpha", secondRunFirstRequest.Messages[1].Content,
+                                  StringComparison.Ordinal);
+        TestAssert.Contains("unique marker beta", secondRunFirstRequest.Messages[1].Content, StringComparison.Ordinal);
         var offered = secondRunFirstRequest.Tools!.Select(t => t.Name)
                                            .OrderBy(name => name, StringComparer.Ordinal).ToArray();
-        Assert.Equal(new[] { "list_files", "read_file", "search_text" }, offered);
+        Assert.That(offered, Is.EqualTo(new[] { "list_files", "read_file", "search_text" }));
     }
 
-    [Fact]
+    [Test]
     public void Constructor_RejectsInvalidTrustedOptions()
     {
         var       fake = new FakeChatClient();
         using var dir  = new TestTempDir();
 
-        Assert.Throws<ArgumentException>(() => new WorkerRunner(fake, dir.Root,
-                                                                Options() with { RunTimeout = TimeSpan.Zero }));
-        Assert.Throws<ArgumentException>(() => new WorkerRunner(fake, dir.Root, Options() with { MaxAgentSteps = 0 }));
-        Assert.Throws<ArgumentException>(() => new WorkerRunner(fake, dir.Root,
-                                                                Options() with { DefaultToolTimeoutSeconds = 0 }));
-        Assert.Throws<ArgumentException>(() => new WorkerRunner(fake, dir.Root,
-                                                                Options() with { MaxTaskPackageCharacters = 0 }));
-        Assert.Throws<ArgumentException>(() => new WorkerRunner(fake, dir.Root, Options() with { MaxToolCalls = 0 }));
-        Assert.Throws<ArgumentException>(() => new WorkerRunner(fake, dir.Root,
-                                                                Options() with { MaxToolOutputCharacters = 0 }));
-        Assert.Throws<ArgumentException>(() => new WorkerRunner(fake, dir.Root,
-                                                                Options() with { MaxCumulativeContextTokens = 0 }));
-        Assert.Throws<ArgumentException>(() => new WorkerRunner(fake, dir.Root,
-                                                                Options() with { MaxContextTokensPerRequest = 0 }));
-        Assert.Throws<ArgumentException>(() => new WorkerRunner(fake, dir.Root,
-                                                                Options() with { MaxModelResponseCharacters = 0 }));
-        Assert.Throws<ArgumentException>(() => new WorkerRunner(fake, dir.Root,
-                                                                Options() with
-                                                                {
-                                                                    MaxModelResponseCharacters = 64_001
-                                                                }));
-        Assert.Throws<ArgumentException>(() => new WorkerRunner(fake, dir.Root,
-                                                                Options() with { Model = " " }));
-        Assert.Throws<ArgumentException>(() => new WorkerRunner(fake, " ", Options()));
+        TestAssert.Throws<ArgumentException>(() => new WorkerRunner(fake, dir.Root,
+                                                                    Options() with { RunTimeout = TimeSpan.Zero }));
+        TestAssert.Throws<ArgumentException>(() => new WorkerRunner(fake, dir.Root,
+                                                                    Options() with { MaxAgentSteps = 0 }));
+        TestAssert.Throws<ArgumentException>(() => new WorkerRunner(fake, dir.Root,
+                                                                    Options() with { DefaultToolTimeoutSeconds = 0 }));
+        TestAssert.Throws<ArgumentException>(() => new WorkerRunner(fake, dir.Root,
+                                                                    Options() with { MaxTaskPackageCharacters = 0 }));
+        TestAssert.Throws<ArgumentException>(() => new WorkerRunner(fake, dir.Root,
+                                                                    Options() with { MaxToolCalls = 0 }));
+        TestAssert.Throws<ArgumentException>(() => new WorkerRunner(fake, dir.Root,
+                                                                    Options() with { MaxToolOutputCharacters = 0 }));
+        TestAssert.Throws<ArgumentException>(() => new WorkerRunner(fake, dir.Root,
+                                                                    Options() with { MaxCumulativeContextTokens = 0 }));
+        TestAssert.Throws<ArgumentException>(() => new WorkerRunner(fake, dir.Root,
+                                                                    Options() with { MaxContextTokensPerRequest = 0 }));
+        TestAssert.Throws<ArgumentException>(() => new WorkerRunner(fake, dir.Root,
+                                                                    Options() with { MaxModelResponseCharacters = 0 }));
+        TestAssert.Throws<ArgumentException>(() => new WorkerRunner(fake, dir.Root,
+                                                                    Options() with
+                                                                    {
+                                                                        MaxModelResponseCharacters = 64_001
+                                                                    }));
+        TestAssert.Throws<ArgumentException>(() => new WorkerRunner(fake, dir.Root,
+                                                                    Options() with { Model = " " }));
+        TestAssert.Throws<ArgumentException>(() => new WorkerRunner(fake, " ", Options()));
     }
 
     // ---- focus scope ------------------------------------------------------------------
 
-    [Fact]
+    [Test]
     public async Task FocusPaths_AncestorSiblingAndAbsoluteExtensionsAreDenied()
     {
         using var dir = new TestTempDir();
@@ -412,17 +418,17 @@ public class WorkerRunnerTests
             FocusPaths = ["docs"]
         }, CancellationToken.None);
 
-        Assert.Equal(WorkerResultStatus.Completed, result.Status);
-        Assert.Equal(1, result.Statistics.ToolCalls);
+        Assert.That(result.Status, Is.EqualTo(WorkerResultStatus.Completed));
+        Assert.That(result.Statistics.ToolCalls, Is.EqualTo(1));
         var messages = ToolMessages(fake.RequestLog[^1]);
-        Assert.Equal(5, messages.Count);
-        for (var i = 0; i < 4; i++) Assert.Contains("focused read scope", messages[i], StringComparison.Ordinal);
+        Assert.That(messages.Count, Is.EqualTo(5));
+        for (var i = 0; i < 4; i++) TestAssert.Contains("focused read scope", messages[i], StringComparison.Ordinal);
 
-        Assert.Contains("needle in docs", messages[4], StringComparison.Ordinal);
-        Assert.DoesNotContain("TOPSECRET", string.Join('\n', messages), StringComparison.Ordinal);
+        TestAssert.Contains("needle in docs", messages[4], StringComparison.Ordinal);
+        TestAssert.DoesNotContain("TOPSECRET", string.Join('\n', messages), StringComparison.Ordinal);
     }
 
-    [Fact]
+    [Test]
     public async Task SensitiveFiles_DirectAccessDeniedWithoutContentLeak()
     {
         using var dir = new TestTempDir();
@@ -448,24 +454,24 @@ public class WorkerRunnerTests
         var result = await runner.RunAsync(new WorkerRequest { TaskPrompt = "Look around." },
                                            CancellationToken.None);
 
-        Assert.Equal(WorkerResultStatus.Completed, result.Status);
-        Assert.Equal(1, result.Statistics.ToolCalls);
+        Assert.That(result.Status, Is.EqualTo(WorkerResultStatus.Completed));
+        Assert.That(result.Statistics.ToolCalls, Is.EqualTo(1));
         var messages = ToolMessages(fake.RequestLog[^1]);
-        Assert.Equal(8, messages.Count);
+        Assert.That(messages.Count, Is.EqualTo(8));
         for (var i = 0; i < 7; i++)
-            Assert.Contains("excluded by the worker read policy", messages[i], StringComparison.Ordinal);
+            TestAssert.Contains("excluded by the worker read policy", messages[i], StringComparison.Ordinal);
 
-        Assert.Contains("plain text", messages[7], StringComparison.Ordinal);
+        TestAssert.Contains("plain text", messages[7], StringComparison.Ordinal);
         var joined = string.Join('\n', messages);
-        Assert.DoesNotContain("SECRET_ENV", joined, StringComparison.Ordinal);
-        Assert.DoesNotContain("SECRET_LOCAL", joined, StringComparison.Ordinal);
-        Assert.DoesNotContain("BEGIN PRIVATE KEY", joined, StringComparison.Ordinal);
-        Assert.DoesNotContain("AWSKEY123", joined, StringComparison.Ordinal);
-        Assert.DoesNotContain("OPENSSH", joined, StringComparison.Ordinal);
-        Assert.DoesNotContain("commandRules", joined, StringComparison.Ordinal);
+        TestAssert.DoesNotContain("SECRET_ENV", joined, StringComparison.Ordinal);
+        TestAssert.DoesNotContain("SECRET_LOCAL", joined, StringComparison.Ordinal);
+        TestAssert.DoesNotContain("BEGIN PRIVATE KEY", joined, StringComparison.Ordinal);
+        TestAssert.DoesNotContain("AWSKEY123", joined, StringComparison.Ordinal);
+        TestAssert.DoesNotContain("OPENSSH", joined, StringComparison.Ordinal);
+        TestAssert.DoesNotContain("commandRules", joined, StringComparison.Ordinal);
     }
 
-    [Fact]
+    [Test]
     public async Task SensitivePaths_HiddenFromRecursiveListAndSearch()
     {
         using var dir = new TestTempDir();
@@ -483,24 +489,24 @@ public class WorkerRunnerTests
         var result = await runner.RunAsync(new WorkerRequest { TaskPrompt = "Map the repo." },
                                            CancellationToken.None);
 
-        Assert.Equal(WorkerResultStatus.Completed, result.Status);
-        Assert.Equal(2, result.Statistics.ToolCalls);
+        Assert.That(result.Status, Is.EqualTo(WorkerResultStatus.Completed));
+        Assert.That(result.Statistics.ToolCalls, Is.EqualTo(2));
         var messages = ToolMessages(fake.RequestLog[^1]);
-        Assert.Equal(2, messages.Count);
+        Assert.That(messages.Count, Is.EqualTo(2));
         var listOutput = messages[0];
-        Assert.Contains("app/main.cs", listOutput, StringComparison.Ordinal);
-        Assert.Contains("readme.md", listOutput, StringComparison.Ordinal);
-        Assert.DoesNotContain(".env", listOutput, StringComparison.Ordinal);
-        Assert.DoesNotContain("secrets.json", listOutput, StringComparison.Ordinal);
-        Assert.DoesNotContain(".ssh", listOutput, StringComparison.Ordinal);
+        TestAssert.Contains("app/main.cs", listOutput, StringComparison.Ordinal);
+        TestAssert.Contains("readme.md", listOutput, StringComparison.Ordinal);
+        TestAssert.DoesNotContain(".env", listOutput, StringComparison.Ordinal);
+        TestAssert.DoesNotContain("secrets.json", listOutput, StringComparison.Ordinal);
+        TestAssert.DoesNotContain(".ssh", listOutput, StringComparison.Ordinal);
         var searchOutput = messages[1];
-        Assert.Contains("class Program", searchOutput, StringComparison.Ordinal);
-        Assert.DoesNotContain("s3cr3t", searchOutput, StringComparison.Ordinal);
-        Assert.DoesNotContain("SECRET_ENV", string.Join('\n', messages), StringComparison.Ordinal);
-        Assert.DoesNotContain("PRIVATE KEY MATERIAL", string.Join('\n', messages), StringComparison.Ordinal);
+        TestAssert.Contains("class Program", searchOutput, StringComparison.Ordinal);
+        TestAssert.DoesNotContain("s3cr3t", searchOutput, StringComparison.Ordinal);
+        TestAssert.DoesNotContain("SECRET_ENV", string.Join('\n', messages), StringComparison.Ordinal);
+        TestAssert.DoesNotContain("PRIVATE KEY MATERIAL", string.Join('\n', messages), StringComparison.Ordinal);
     }
 
-    [Fact]
+    [Test]
     public async Task SimilarLegitimateFilesRemainReadable()
     {
         using var dir = new TestTempDir();
@@ -517,17 +523,17 @@ public class WorkerRunnerTests
         var result = await runner.RunAsync(new WorkerRequest { TaskPrompt = "Inspect samples." },
                                            CancellationToken.None);
 
-        Assert.Equal(WorkerResultStatus.Completed, result.Status);
-        Assert.Equal(2, result.Statistics.ToolCalls);
+        Assert.That(result.Status, Is.EqualTo(WorkerResultStatus.Completed));
+        Assert.That(result.Statistics.ToolCalls, Is.EqualTo(2));
         var messages = ToolMessages(fake.RequestLog[^1]);
-        Assert.Equal(3, messages.Count);
-        Assert.Contains("excluded by the worker read policy", messages[0], StringComparison.Ordinal);
-        Assert.Contains("SAMPLE_OK", messages[1], StringComparison.Ordinal);
-        Assert.Contains("{}", messages[2], StringComparison.Ordinal);
-        Assert.DoesNotContain("SAMPLE_ENV", string.Join('\n', messages), StringComparison.Ordinal);
+        Assert.That(messages.Count, Is.EqualTo(3));
+        TestAssert.Contains("excluded by the worker read policy", messages[0], StringComparison.Ordinal);
+        TestAssert.Contains("SAMPLE_OK", messages[1], StringComparison.Ordinal);
+        TestAssert.Contains("{}", messages[2], StringComparison.Ordinal);
+        TestAssert.DoesNotContain("SAMPLE_ENV", string.Join('\n', messages), StringComparison.Ordinal);
     }
 
-    [Fact]
+    [Test]
     public async Task ReadPolicy_IsBuiltPerRunAndNeverInherited()
     {
         using var dir = new TestTempDir();
@@ -548,20 +554,20 @@ public class WorkerRunnerTests
         var third = await runner.RunAsync(new WorkerRequest { TaskPrompt = "three", FocusPaths = ["src"] },
                                           CancellationToken.None);
 
-        Assert.Equal(WorkerResultStatus.Completed, first.Status);
-        Assert.Equal(WorkerResultStatus.Completed, second.Status);
-        Assert.Equal(WorkerResultStatus.Completed, third.Status);
-        Assert.Equal(6, fake.RequestLog.Count);
+        Assert.That(first.Status, Is.EqualTo(WorkerResultStatus.Completed));
+        Assert.That(second.Status, Is.EqualTo(WorkerResultStatus.Completed));
+        Assert.That(third.Status, Is.EqualTo(WorkerResultStatus.Completed));
+        Assert.That(fake.RequestLog.Count, Is.EqualTo(6));
         // 每个 run 的最终历史只包含本 run 的工具消息：run 间互不继承。
-        // Each run's final history only holds its own tool messages: nothing is inherited across runs.
-        var runOne   = Assert.Single(ToolMessages(fake.RequestLog[1]));
-        var runTwo   = Assert.Single(ToolMessages(fake.RequestLog[3]));
-        var runThree = Assert.Single(ToolMessages(fake.RequestLog[5]));
-        Assert.Contains("DOCSFILE", runOne, StringComparison.Ordinal);
-        Assert.Contains("SRCFILE", runTwo, StringComparison.Ordinal);
-        Assert.Contains("focused read scope", runThree, StringComparison.Ordinal);
-        Assert.Equal(1, second.Statistics.ToolCalls);
-        Assert.Equal(0, third.Statistics.ToolCalls);
+        // 每个 run 的最终历史只含自己的工具消息：跨 run 不继承任何内容。
+        var runOne   = TestAssert.Single(ToolMessages(fake.RequestLog[1]));
+        var runTwo   = TestAssert.Single(ToolMessages(fake.RequestLog[3]));
+        var runThree = TestAssert.Single(ToolMessages(fake.RequestLog[5]));
+        TestAssert.Contains("DOCSFILE", runOne, StringComparison.Ordinal);
+        TestAssert.Contains("SRCFILE", runTwo, StringComparison.Ordinal);
+        TestAssert.Contains("focused read scope", runThree, StringComparison.Ordinal);
+        Assert.That(second.Statistics.ToolCalls, Is.EqualTo(1));
+        Assert.That(third.Statistics.ToolCalls, Is.EqualTo(0));
     }
 
     private static string AbsolutePath(string root, string relative) => root.Replace('\\', '/') + "/" + relative;
@@ -569,8 +575,8 @@ public class WorkerRunnerTests
     // ---- link boundary ------------------------------------------------------------------
 
     /// <summary>
-    ///     用 mklink /J 创建目录 junction（不需要管理员权限）。
-    ///     Creates a directory junction via mklink /J (no administrator privileges required).
+    ///     <para>用 mklink /J 创建目录 junction（不需要管理员权限）。</para>
+    ///     <para>Creates a directory junction via mklink /J (no administrator privileges required).</para>
     /// </summary>
     private static void CreateJunction(string link, string target)
     {
@@ -582,20 +588,19 @@ public class WorkerRunnerTests
         };
         using var process = Process.Start(startInfo)!;
         var       error   = process.StandardError.ReadToEnd().Trim();
-        Assert.True(process.WaitForExit(10_000), $"mklink /J did not finish in time: {error}");
-        Assert.True(process.ExitCode == 0, $"mklink /J failed: {error}");
+        Assert.That(process.WaitForExit(10_000), Is.True, $"mklink /J did not finish in time: {error}");
+        Assert.That(process.ExitCode == 0, Is.True, $"mklink /J failed: {error}");
     }
 
-    [Fact]
+    [Test]
     public async Task FocusScope_LinkedPathResolvingOutsideFocus_IsDeniedBeforeRead()
     {
         // 回归：focus 内的目录 junction 指向工作区内 focus 外目录时，最终解析落点
         // 必须在真正打开文件前被拒绝。junction 仅在 Windows 上创建；其他平台的
         // symlink 行为由相同的逐段解析代码覆盖，但本测试未在非 Windows 运行时验证。
-        // Regression: a directory junction inside the focus pointing at another workspace directory
-        // must be denied at its resolved landing path before the file is opened. Junctions are
-        // Windows-only here; non-Windows symlinks run the same segment-wise resolution code, but
-        // this test has not been executed on a non-Windows runtime.
+        // focus 内指向另一工作区目录的 junction 必须在打开文件前按解析后的落点路径拒绝。
+        // junction 仅限 Windows；非 Windows 符号链接走相同的逐段解析代码，但本测试未在
+        // 非 Windows 运行时上执行过。
         if (!OperatingSystem.IsWindows()) return;
 
         using var dir = new TestTempDir();
@@ -618,39 +623,37 @@ public class WorkerRunnerTests
             FocusPaths = ["docs"]
         }, CancellationToken.None);
 
-        Assert.Equal(WorkerResultStatus.Completed, result.Status);
+        Assert.That(result.Status, Is.EqualTo(WorkerResultStatus.Completed));
         // ToolCalls 统计"工具已运行"：链接读取在 Execute 阶段被策略拦截、搜索和成功读取
         // 各计一次；.env 尝试在 Prepare 即被拦截，不计入。全部三次都无敏感内容返回。
-        // ToolCalls counts "the tool ran": the linked read was stopped by the policy inside
-        // Execute, the search and the successful read ran; the .env attempt was stopped in Prepare
-        // and does not count. None of the three returned sensitive content.
-        Assert.Equal(3, result.Statistics.ToolCalls);
+        // ToolCalls 统计"工具已运行"：链接读取在 Execute 内被策略拦下，搜索与成功读取已运行；
+        // .env 尝试在 Prepare 被拦下、不计入。三者都未返回敏感内容。
+        Assert.That(result.Statistics.ToolCalls, Is.EqualTo(3));
         var messages = ToolMessages(fake.RequestLog[^1]);
-        Assert.Equal(4, messages.Count);
+        Assert.That(messages.Count, Is.EqualTo(4));
 
         // 链接落点在 focus 外：打开前被拒，内容不回传。
-        // The link lands outside the focus: denied before opening, content never returned.
-        Assert.Contains("outside the worker read scope", messages[0], StringComparison.Ordinal);
+        // 链接落在 focus 外：打开前拒绝，内容从未返回。
+        TestAssert.Contains("outside the worker read scope", messages[0], StringComparison.Ordinal);
         // 链接落点是敏感文件：按敏感排除拒绝（名称规则在词法阶段即命中）。
-        // The link lands on a sensitive file: rejected by the sensitive exclusion.
-        Assert.Contains("excluded by the worker read policy", messages[1], StringComparison.Ordinal);
+        // 链接落在敏感文件上：被敏感排除规则拒绝。
+        TestAssert.Contains("excluded by the worker read policy", messages[1], StringComparison.Ordinal);
         // 枚举不下钻 junction：搜索只扫 focus 内普通文件，链接后的内容不可达。
-        // Enumeration never descends through the junction: the search only scans in-focus files.
-        Assert.Contains("no matches", messages[2], StringComparison.Ordinal);
-        Assert.DoesNotContain("link", messages[2], StringComparison.Ordinal);
-        Assert.Contains("focus content", messages[3], StringComparison.Ordinal);
-        Assert.DoesNotContain("OUTSIDE-FOCUS-CONTENT", string.Join('\n', messages), StringComparison.Ordinal);
-        Assert.DoesNotContain("SECRET_ENV", string.Join('\n', messages), StringComparison.Ordinal);
+        // 枚举绝不穿过 junction 下钻：搜索只扫描 focus 内文件。
+        TestAssert.Contains("no matches", messages[2], StringComparison.Ordinal);
+        TestAssert.DoesNotContain("link", messages[2], StringComparison.Ordinal);
+        TestAssert.Contains("focus content", messages[3], StringComparison.Ordinal);
+        TestAssert.DoesNotContain("OUTSIDE-FOCUS-CONTENT", string.Join('\n', messages), StringComparison.Ordinal);
+        TestAssert.DoesNotContain("SECRET_ENV", string.Join('\n', messages), StringComparison.Ordinal);
     }
 
-    [Fact]
+    [Test]
     public async Task FocusScope_ListFilesJunctionRootDeniedAndLandingNamesNotExposed()
     {
         // 复核回归 1+2：显式列举 junction 目录被策略拒绝且不列出落点内容；递归列举
         // 不暴露落点在 focus 外/敏感目录的链接条目名称；普通 focus 内文件仍可列出。
-        // Review regressions 1+2: explicitly listing a junction is denied by the policy without
-        // enumerating the landing; a recursive listing never exposes link entries whose landing is
-        // outside the focus or sensitive; ordinary in-focus files still list.
+        // 显式列出 junction 时策略在枚举落点内容前即拒绝；递归列出不暴露落点在 focus 外或
+        // 敏感的链接项；focus 内普通文件正常列出。
         if (!OperatingSystem.IsWindows()) return;
 
         using var dir = new TestTempDir();
@@ -673,36 +676,36 @@ public class WorkerRunnerTests
             FocusPaths = ["docs"]
         }, CancellationToken.None);
 
-        Assert.Equal(WorkerResultStatus.Completed, result.Status);
+        Assert.That(result.Status, Is.EqualTo(WorkerResultStatus.Completed));
         // 被拒的列举在 Execute 阶段拦截但仍计入一次工具运行。
-        // The denied listing is stopped inside Execute and still counts as one tool run.
-        Assert.Equal(3, result.Statistics.ToolCalls);
+        // 被拒的列目录在 Execute 内被拦下，仍计为一次工具运行。
+        Assert.That(result.Statistics.ToolCalls, Is.EqualTo(3));
         var messages = ToolMessages(fake.RequestLog[^1]);
-        Assert.Equal(3, messages.Count);
+        Assert.That(messages.Count, Is.EqualTo(3));
 
         // 显式列举 junction：按落点在 focus 外拒绝，且未枚举任何落点名称。
-        // Explicit junction listing: denied by its landing, with no landing names enumerated.
-        Assert.Contains("outside the worker read scope", messages[0], StringComparison.Ordinal);
-        Assert.DoesNotContain("rootsecret", messages[0], StringComparison.Ordinal);
-        Assert.DoesNotContain(".env", messages[0], StringComparison.Ordinal);
+        // 显式列 junction：按落点拒绝，未枚举任何落点名。
+        TestAssert.Contains("outside the worker read scope", messages[0], StringComparison.Ordinal);
+        TestAssert.DoesNotContain("rootsecret", messages[0], StringComparison.Ordinal);
+        TestAssert.DoesNotContain(".env", messages[0], StringComparison.Ordinal);
 
         // 递归列举：链接条目按落点整体排除，名称不出现；focus 内文件照常列出。
-        // Recursive listing: the link entry is excluded by its landing; in-focus files list normally.
+        // 递归列出：链接项按落点被排除；focus 内文件正常列出。
         var listing = messages[1];
-        Assert.Contains("a.md", listing, StringComparison.Ordinal);
-        Assert.Contains("normal.md", listing, StringComparison.Ordinal);
-        Assert.DoesNotContain("link", listing, StringComparison.Ordinal);
-        Assert.DoesNotContain("rootsecret.txt", listing, StringComparison.Ordinal);
-        Assert.DoesNotContain(".env", listing, StringComparison.Ordinal);
+        TestAssert.Contains("a.md", listing, StringComparison.Ordinal);
+        TestAssert.Contains("normal.md", listing, StringComparison.Ordinal);
+        TestAssert.DoesNotContain("link", listing, StringComparison.Ordinal);
+        TestAssert.DoesNotContain("rootsecret.txt", listing, StringComparison.Ordinal);
+        TestAssert.DoesNotContain(".env", listing, StringComparison.Ordinal);
 
-        Assert.Contains("focus content", messages[2], StringComparison.Ordinal);
-        Assert.DoesNotContain("OUTSIDE-FOCUS-CONTENT", string.Join('\n', messages), StringComparison.Ordinal);
-        Assert.DoesNotContain("SECRET_ENV", string.Join('\n', messages), StringComparison.Ordinal);
+        TestAssert.Contains("focus content", messages[2], StringComparison.Ordinal);
+        TestAssert.DoesNotContain("OUTSIDE-FOCUS-CONTENT", string.Join('\n', messages), StringComparison.Ordinal);
+        TestAssert.DoesNotContain("SECRET_ENV", string.Join('\n', messages), StringComparison.Ordinal);
     }
 
     // ---- execution budgets ----------------------------------------------------------
 
-    [Fact]
+    [Test]
     public async Task TaskPackageOverBudget_IncompleteWithZeroModelRequests()
     {
         using var dir    = new TestTempDir();
@@ -712,16 +715,16 @@ public class WorkerRunnerTests
         var result = await runner.RunAsync(new WorkerRequest { TaskPrompt = new string('t', 120) },
                                            CancellationToken.None);
 
-        Assert.Equal(WorkerResultStatus.Incomplete, result.Status);
-        Assert.Equal("The task package exceeds the configured worker input budget.", result.StatusDetail);
-        Assert.Equal(0, fake.Requests);
-        Assert.Equal(0, result.Statistics.ModelRequests);
-        Assert.Equal(0, result.Statistics.ToolCalls);
-        Assert.Equal(string.Empty, result.Conclusion);
-        Assert.True(WorkerResultValidator.Validate(result).IsValid);
+        Assert.That(result.Status, Is.EqualTo(WorkerResultStatus.Incomplete));
+        Assert.That(result.StatusDetail, Is.EqualTo("The task package exceeds the configured worker input budget."));
+        Assert.That(fake.Requests, Is.EqualTo(0));
+        Assert.That(result.Statistics.ModelRequests, Is.EqualTo(0));
+        Assert.That(result.Statistics.ToolCalls, Is.EqualTo(0));
+        Assert.That(result.Conclusion, Is.EqualTo(string.Empty));
+        Assert.That(WorkerResultValidator.Validate(result).IsValid, Is.True);
     }
 
-    [Fact]
+    [Test]
     public async Task ToolCallBudget_AtLimitAllowed_OverLimitRefusedWithoutExecution()
     {
         using var dir = new TestTempDir();
@@ -737,20 +740,20 @@ public class WorkerRunnerTests
         var result = await runner.RunAsync(new WorkerRequest { TaskPrompt = "Read repeatedly." },
                                            CancellationToken.None);
 
-        Assert.Equal(WorkerResultStatus.Incomplete, result.Status);
-        Assert.Equal("Stopped at the configured tool-call budget before the model produced a conclusion.",
-                     result.StatusDetail);
-        Assert.Equal(2, result.Statistics.ToolCalls);
+        Assert.That(result.Status, Is.EqualTo(WorkerResultStatus.Incomplete));
+        Assert.That(result.StatusDetail,
+                    Is.EqualTo("Stopped at the configured tool-call budget before the model produced a conclusion."));
+        Assert.That(result.Statistics.ToolCalls, Is.EqualTo(2));
         var messages = ToolMessages(fake.RequestLog[^1]);
-        Assert.Equal(3, messages.Count);
-        Assert.Equal("AAA", messages[0]);
-        Assert.Equal("AAA", messages[1]);
-        Assert.Equal(string.Empty, messages[2]);
-        Assert.Equal(string.Empty, result.Conclusion);
-        Assert.True(WorkerResultValidator.Validate(result).IsValid);
+        Assert.That(messages.Count, Is.EqualTo(3));
+        Assert.That(messages[0], Is.EqualTo("AAA"));
+        Assert.That(messages[1], Is.EqualTo("AAA"));
+        Assert.That(messages[2], Is.EqualTo(string.Empty));
+        Assert.That(result.Conclusion, Is.EqualTo(string.Empty));
+        Assert.That(WorkerResultValidator.Validate(result).IsValid, Is.True);
     }
 
-    [Fact]
+    [Test]
     public async Task ToolOutputBudget_ExactlyAtLimitAllowed_ThenRefused()
     {
         using var dir = new TestTempDir();
@@ -764,19 +767,19 @@ public class WorkerRunnerTests
         var result = await runner.RunAsync(new WorkerRequest { TaskPrompt = "Read the file." },
                                            CancellationToken.None);
 
-        Assert.Equal(WorkerResultStatus.Incomplete, result.Status);
-        Assert.Equal("Stopped at the configured tool-output budget before the model produced a conclusion.",
-                     result.StatusDetail);
+        Assert.That(result.Status, Is.EqualTo(WorkerResultStatus.Incomplete));
+        Assert.That(result.StatusDetail,
+                    Is.EqualTo("Stopped at the configured tool-output budget before the model produced a conclusion."));
         var messages = ToolMessages(fake.RequestLog[^1]);
-        Assert.Equal(2, messages.Count);
-        Assert.Equal(new string('A', 20), messages[0]);
-        Assert.Equal(string.Empty, messages[1]);
-        Assert.Equal(1, result.Statistics.ToolCalls);
-        Assert.Equal(20, result.Statistics.ToolOutputCharacters);
-        Assert.Equal(string.Empty, result.Conclusion);
+        Assert.That(messages.Count, Is.EqualTo(2));
+        Assert.That(messages[0], Is.EqualTo(new string('A', 20)));
+        Assert.That(messages[1], Is.EqualTo(string.Empty));
+        Assert.That(result.Statistics.ToolCalls, Is.EqualTo(1));
+        Assert.That(result.Statistics.ToolOutputCharacters, Is.EqualTo(20));
+        Assert.That(result.Conclusion, Is.EqualTo(string.Empty));
     }
 
-    [Fact]
+    [Test]
     public async Task ContextTokenBudget_BlockedRequestNeverReachesClient()
     {
         using var dir = new TestTempDir();
@@ -795,7 +798,7 @@ public class WorkerRunnerTests
                           + (firstRequest.Tools is { Count: > 0 }
                                 ? TokenEstimator.EstimateToolDefinitions(firstRequest.Tools)
                                 : 0);
-        Assert.True(firstEstimate > 0);
+        Assert.That(firstEstimate > 0, Is.True);
 
         var fake = new FakeChatClient();
         fake.Enqueue(FakeChatClient.ToolCall("read_file", """{"path":"docs/a.md"}""", "c1"));
@@ -806,16 +809,16 @@ public class WorkerRunnerTests
         var result = await runner.RunAsync(new WorkerRequest { TaskPrompt = "Read the big file." },
                                            CancellationToken.None);
 
-        Assert.Equal(WorkerResultStatus.Incomplete, result.Status);
-        Assert.Equal("Stopped at the configured context-token budget before the model produced a conclusion.",
-                     result.StatusDetail);
-        Assert.Equal(1, fake.Requests);
-        Assert.Equal(1, result.Statistics.ModelRequests);
-        Assert.Equal(string.Empty, result.Conclusion);
-        Assert.True(WorkerResultValidator.Validate(result).IsValid);
+        Assert.That(result.Status, Is.EqualTo(WorkerResultStatus.Incomplete));
+        Assert.That(result.StatusDetail,
+                    Is.EqualTo("Stopped at the configured context-token budget before the model produced a conclusion."));
+        Assert.That(fake.Requests, Is.EqualTo(1));
+        Assert.That(result.Statistics.ModelRequests, Is.EqualTo(1));
+        Assert.That(result.Conclusion, Is.EqualTo(string.Empty));
+        Assert.That(WorkerResultValidator.Validate(result).IsValid, Is.True);
     }
 
-    [Fact]
+    [Test]
     public async Task PerRequestContextBudget_ExactFirstRequestAllowed_OverLimitNeverReachesClient()
     {
         using var dir         = new TestTempDir();
@@ -833,8 +836,8 @@ public class WorkerRunnerTests
                                            Options(2) with { MaxContextTokensPerRequest = estimate });
         var exact = await exactRunner.RunAsync(new WorkerRequest { TaskPrompt = "Measure context." },
                                                CancellationToken.None);
-        Assert.Equal(WorkerResultStatus.Completed, exact.Status);
-        Assert.Equal(1, exactFake.Requests);
+        Assert.That(exact.Status, Is.EqualTo(WorkerResultStatus.Completed));
+        Assert.That(exactFake.Requests, Is.EqualTo(1));
 
         var blockedFake = new FakeChatClient();
         blockedFake.Enqueue(FakeChatClient.Text(DraftJson("Must not run.", "docs/a.md")));
@@ -843,14 +846,14 @@ public class WorkerRunnerTests
         var blocked = await blockedRunner.RunAsync(new WorkerRequest { TaskPrompt = "Measure context." },
                                                    CancellationToken.None);
 
-        Assert.Equal(WorkerResultStatus.Incomplete, blocked.Status);
-        Assert.Equal(0, blockedFake.Requests);
-        Assert.Equal(0, blocked.Statistics.ModelRequests);
-        Assert.Equal(string.Empty, blocked.Conclusion);
-        Assert.True(WorkerResultValidator.Validate(blocked).IsValid);
+        Assert.That(blocked.Status, Is.EqualTo(WorkerResultStatus.Incomplete));
+        Assert.That(blockedFake.Requests, Is.EqualTo(0));
+        Assert.That(blocked.Statistics.ModelRequests, Is.EqualTo(0));
+        Assert.That(blocked.Conclusion, Is.EqualTo(string.Empty));
+        Assert.That(WorkerResultValidator.Validate(blocked).IsValid, Is.True);
     }
 
-    [Fact]
+    [Test]
     public async Task ModelResponseBudget_TextStreamStopsAtBoundary_MapsToIncomplete()
     {
         using var dir  = new TestTempDir();
@@ -861,15 +864,15 @@ public class WorkerRunnerTests
         var result = await runner.RunAsync(new WorkerRequest { TaskPrompt = "Investigate." },
                                            CancellationToken.None);
 
-        Assert.Equal(WorkerResultStatus.Incomplete, result.Status);
-        Assert.Equal("Stopped at the configured model-response budget before the model produced a conclusion.",
-                     result.StatusDetail);
-        Assert.Equal(string.Empty, result.Conclusion);
-        Assert.Equal(1, result.Statistics.ModelRequests);
-        Assert.True(WorkerResultValidator.Validate(result).IsValid);
+        Assert.That(result.Status, Is.EqualTo(WorkerResultStatus.Incomplete));
+        Assert.That(result.StatusDetail,
+                    Is.EqualTo("Stopped at the configured model-response budget before the model produced a conclusion."));
+        Assert.That(result.Conclusion, Is.EqualTo(string.Empty));
+        Assert.That(result.Statistics.ModelRequests, Is.EqualTo(1));
+        Assert.That(WorkerResultValidator.Validate(result).IsValid, Is.True);
     }
 
-    [Fact]
+    [Test]
     public async Task ModelResponseBudget_IncompleteToolCallNotExecuted()
     {
         using var dir         = new TestTempDir();
@@ -881,21 +884,20 @@ public class WorkerRunnerTests
 
         var result = await runner.RunAsync(new WorkerRequest { TaskPrompt = "Search." }, CancellationToken.None);
 
-        Assert.Equal(WorkerResultStatus.Incomplete, result.Status);
-        Assert.Equal("Stopped at the configured model-response budget before the model produced a conclusion.",
-                     result.StatusDetail);
+        Assert.That(result.Status, Is.EqualTo(WorkerResultStatus.Incomplete));
+        Assert.That(result.StatusDetail,
+                    Is.EqualTo("Stopped at the configured model-response budget before the model produced a conclusion."));
         // 截断的工具调用参数是非法 JSON，AgentLoop 在组装阶段即失败——调用没有执行，
         // 历史里没有任何 tool 消息，第二个脚本响应不会被消费。
-        // The truncated tool-call arguments are invalid JSON, so the AgentLoop fails while
-        // assembling the message — the call never executes, the history holds no tool messages and
-        // the second scripted response is never consumed.
-        Assert.Equal(0, result.Statistics.ToolCalls);
-        Assert.Empty(ToolMessages(fake.RequestLog[^1]));
-        Assert.Equal(1, fake.Requests);
-        Assert.Equal(string.Empty, result.Conclusion);
+        // 被截断的工具调用参数是非法 JSON，AgentLoop 在拼装消息时失败——调用从未执行，历史
+        // 不含工具消息，第二段脚本响应也从未被消费。
+        Assert.That(result.Statistics.ToolCalls, Is.EqualTo(0));
+        Assert.That(ToolMessages(fake.RequestLog[^1]), Is.Empty);
+        Assert.That(fake.Requests, Is.EqualTo(1));
+        Assert.That(result.Conclusion, Is.EqualTo(string.Empty));
     }
 
-    [Fact]
+    [Test]
     public async Task ModelResponseBudget_ReasoningItemFullTextIsNotDoubleCounted()
     {
         using var dir  = new TestTempDir();
@@ -904,10 +906,9 @@ public class WorkerRunnerTests
         // ReasoningItem 事件携带的 ReasoningDelta 是该条目的完整文本，与先前流出的增量重复：
         // 预算若把它重复计入，本流在预算 700 下于条目事件处即超限（500 增量 + 507 条目 > 700），
         // 响应被截断并映射为 Incomplete；按增量口径计费后整流 670 字符，在预算内完成。
-        // A ReasoningItem event carries the item's complete text in ReasoningDelta, duplicating
-        // the already-streamed delta: counting it twice busts the 700-char budget at the item
-        // event (500 delta + 507 item > 700), truncating the response into an Incomplete result;
-        // billing deltas only keeps the whole 670-char stream inside the budget.
+        // ReasoningItem 事件在 ReasoningDelta 中携带条目完整文本，与已流式增量重复：重复计费
+        // 会在 item 事件处撑爆 700 字符预算（500 增量 + 507 条目 > 700），把响应截断成
+        // Incomplete；只按增量计费时整条 670 字符流都在预算内。
         var reasoning = new string('R', 500);
         fake.Enqueue(
         [
@@ -931,12 +932,12 @@ public class WorkerRunnerTests
         var result = await runner.RunAsync(new WorkerRequest { TaskPrompt = "Investigate." },
                                            CancellationToken.None);
 
-        Assert.Equal(WorkerResultStatus.Completed, result.Status);
-        Assert.Equal("Done.", result.Conclusion);
-        Assert.Equal(1, result.Statistics.ModelRequests);
+        Assert.That(result.Status, Is.EqualTo(WorkerResultStatus.Completed));
+        Assert.That(result.Conclusion, Is.EqualTo("Done."));
+        Assert.That(result.Statistics.ModelRequests, Is.EqualTo(1));
     }
 
-    [Fact]
+    [Test]
     public async Task ResultConclusionOverBudget_IncompleteWithoutConclusion()
     {
         using var dir            = new TestTempDir();
@@ -950,15 +951,15 @@ public class WorkerRunnerTests
         var result = await runner.RunAsync(new WorkerRequest { TaskPrompt = "Investigate." },
                                            CancellationToken.None);
 
-        Assert.Equal(WorkerResultStatus.Incomplete, result.Status);
-        Assert.Equal("The worker result budget was exhausted before a conclusion could be delivered.",
-                     result.StatusDetail);
-        Assert.Equal(string.Empty, result.Conclusion);
-        Assert.Equal("docs/a.md", Assert.Single(result.Evidence).Path);
-        Assert.True(WorkerResultValidator.Validate(result).IsValid);
+        Assert.That(result.Status, Is.EqualTo(WorkerResultStatus.Incomplete));
+        Assert.That(result.StatusDetail,
+                    Is.EqualTo("The worker result budget was exhausted before a conclusion could be delivered."));
+        Assert.That(result.Conclusion, Is.EqualTo(string.Empty));
+        Assert.That(TestAssert.Single(result.Evidence).Path, Is.EqualTo("docs/a.md"));
+        Assert.That(WorkerResultValidator.Validate(result).IsValid, Is.True);
     }
 
-    [Fact]
+    [Test]
     public async Task ResultTotalTextOverBudget_IncompleteWithoutConclusion()
     {
         using var dir     = new TestTempDir();
@@ -972,11 +973,11 @@ public class WorkerRunnerTests
         var result = await runner.RunAsync(new WorkerRequest { TaskPrompt = "Investigate." },
                                            CancellationToken.None);
 
-        Assert.Equal(WorkerResultStatus.Incomplete, result.Status);
-        Assert.Equal("The worker result budget was exhausted before a conclusion could be delivered.",
-                     result.StatusDetail);
-        Assert.Equal(string.Empty, result.Conclusion);
-        Assert.Empty(result.Evidence);
-        Assert.True(WorkerResultValidator.Validate(result).IsValid);
+        Assert.That(result.Status, Is.EqualTo(WorkerResultStatus.Incomplete));
+        Assert.That(result.StatusDetail,
+                    Is.EqualTo("The worker result budget was exhausted before a conclusion could be delivered."));
+        Assert.That(result.Conclusion, Is.EqualTo(string.Empty));
+        Assert.That(result.Evidence, Is.Empty);
+        Assert.That(WorkerResultValidator.Validate(result).IsValid, Is.True);
     }
 }

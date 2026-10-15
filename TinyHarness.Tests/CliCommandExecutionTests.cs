@@ -9,7 +9,7 @@ namespace TinyHarness.Tests;
 
 public sealed class CliCommandExecutionTests
 {
-    [Fact]
+    [Test]
     public async Task ConfigShow_ProjectFileDisplaysTheEffectiveModel()
     {
         using var fixture = new CliFixture();
@@ -26,13 +26,13 @@ public sealed class CliCommandExecutionTests
         var result =
             await ConfigCommand.ExecuteAsync(context, CommandLine.Parse(["config", "show"]), CancellationToken.None);
 
-        Assert.Equal(0, result);
-        Assert.Contains("model           : project-model (64,000 tokens context window)", fixture.Io.Output);
-        Assert.DoesNotContain("model           : (not set)", fixture.Io.Output);
-        Assert.Contains("source          : project file", fixture.Io.Output);
+        Assert.That(result, Is.EqualTo(0));
+        Assert.That(fixture.Io.Output, Does.Contain("model           : project-model (64,000 tokens context window)"));
+        Assert.That(fixture.Io.Output, Does.Not.Contain("model           : (not set)"));
+        Assert.That(fixture.Io.Output, Does.Contain("source          : project file"));
     }
 
-    [Fact]
+    [Test]
     public async Task Init_CreatesDefaultProfileAndModel()
     {
         using var fixture = new CliFixture([
@@ -47,17 +47,17 @@ public sealed class CliCommandExecutionTests
         var result = await InitCommand.ExecuteAsync(fixture.CreateContext(), CancellationToken.None);
         var config = await UserConfigStore.LoadAsync(fixture.UserConfigPath, CancellationToken.None);
 
-        Assert.Equal(0, result);
-        Assert.Equal("work", config.DefaultProfile);
-        var profile = Assert.Single(config.Profiles);
-        Assert.Equal("https://api.example/v1", profile.Endpoint);
-        Assert.Equal("WORK_API_KEY", profile.ApiKeyEnvironmentVariable);
-        Assert.Equal("model-x", profile.DefaultModel);
-        Assert.Equal(64000, Assert.Single(profile.Models).ContextWindowTokens);
-        Assert.Contains("Saved user config", fixture.Io.Output);
+        Assert.That(result, Is.EqualTo(0));
+        Assert.That(config.DefaultProfile, Is.EqualTo("work"));
+        var profile = TestAssert.Single(config.Profiles);
+        Assert.That(profile.Endpoint, Is.EqualTo("https://api.example/v1"));
+        Assert.That(profile.ApiKeyEnvironmentVariable, Is.EqualTo("WORK_API_KEY"));
+        Assert.That(profile.DefaultModel, Is.EqualTo("model-x"));
+        Assert.That(TestAssert.Single(profile.Models).ContextWindowTokens, Is.EqualTo(64000));
+        Assert.That(fixture.Io.Output, Does.Contain("Saved user config"));
     }
 
-    [Fact]
+    [Test]
     public async Task ProviderAddAndUse_UpdatesTheSelectedProfile()
     {
         using var fixture = new CliFixture([
@@ -93,17 +93,17 @@ public sealed class CliCommandExecutionTests
                                                             CancellationToken.None);
         var config = await UserConfigStore.LoadAsync(fixture.UserConfigPath, CancellationToken.None);
 
-        Assert.Equal(0, addResult);
-        Assert.Equal(0, useResult);
-        Assert.Equal(0, listResult);
-        Assert.Equal("work", config.DefaultProfile);
-        Assert.Equal(["work", "team"], config.Profiles.Select(p => p.Name));
-        Assert.Contains("Saved profile 'team'.", fixture.Io.Output);
-        Assert.Contains("Default profile is now 'work'", fixture.Io.Output);
-        Assert.Contains("* work", fixture.Io.Output);
+        Assert.That(addResult, Is.EqualTo(0));
+        Assert.That(useResult, Is.EqualTo(0));
+        Assert.That(listResult, Is.EqualTo(0));
+        Assert.That(config.DefaultProfile, Is.EqualTo("work"));
+        Assert.That(config.Profiles.Select(p => p.Name), Is.EqualTo(["work", "team"]));
+        Assert.That(fixture.Io.Output, Does.Contain("Saved profile 'team'."));
+        Assert.That(fixture.Io.Output, Does.Contain("Default profile is now 'work'"));
+        Assert.That(fixture.Io.Output, Does.Contain("* work"));
     }
 
-    [Fact]
+    [Test]
     public async Task ConfigSet_UpdatesOnlyTheUserSettings()
     {
         using var fixture           = new CliFixture();
@@ -136,14 +136,14 @@ public sealed class CliCommandExecutionTests
                                                       CancellationToken.None);
         var config = await UserConfigStore.LoadAsync(fixture.UserConfigPath, CancellationToken.None);
 
-        Assert.Equal(0, result);
-        Assert.Equal(60, config.Settings!.MaxAgentSteps);
-        Assert.Equal("https://work.example/v1", config.Profiles[0].Endpoint);
-        Assert.Equal(projectConfigJson, await File.ReadAllTextAsync(projectConfigPath));
-        Assert.Contains("maxAgentSteps: (built-in default) -> 60", fixture.Io.Output);
+        Assert.That(result, Is.EqualTo(0));
+        Assert.That(config.Settings!.MaxAgentSteps, Is.EqualTo(60));
+        Assert.That(config.Profiles[0].Endpoint, Is.EqualTo("https://work.example/v1"));
+        Assert.That(await File.ReadAllTextAsync(projectConfigPath), Is.EqualTo(projectConfigJson));
+        Assert.That(fixture.Io.Output, Does.Contain("maxAgentSteps: (built-in default) -> 60"));
     }
 
-    [Fact]
+    [Test]
     public async Task AuthSet_StoresOnlyTheEnvironmentVariableReference()
     {
         using var fixture = new CliFixture();
@@ -154,13 +154,13 @@ public sealed class CliCommandExecutionTests
                                                     CancellationToken.None);
         var config = await UserConfigStore.LoadAsync(fixture.UserConfigPath, CancellationToken.None);
 
-        Assert.Equal(0, result);
-        Assert.Equal("WORK_API_KEY", Assert.Single(config.Profiles).ApiKeyEnvironmentVariable);
-        Assert.Empty(config.Profiles[0].ApiKeyCredentialTarget);
-        Assert.Contains("env 'WORK_API_KEY'", fixture.Io.Output);
+        Assert.That(result, Is.EqualTo(0));
+        Assert.That(TestAssert.Single(config.Profiles).ApiKeyEnvironmentVariable, Is.EqualTo("WORK_API_KEY"));
+        Assert.That(config.Profiles[0].ApiKeyCredentialTarget, Is.Empty);
+        Assert.That(fixture.Io.Output, Does.Contain("env 'WORK_API_KEY'"));
     }
 
-    [Fact]
+    [Test]
     public async Task ModelAddUseAndList_UpdatesTheProfileModelSelection()
     {
         using var fixture = new CliFixture();
@@ -178,16 +178,16 @@ public sealed class CliCommandExecutionTests
                                                          CancellationToken.None);
         var config = await UserConfigStore.LoadAsync(fixture.UserConfigPath, CancellationToken.None);
 
-        Assert.Equal(0, addResult);
-        Assert.Equal(0, useResult);
-        Assert.Equal(0, listResult);
-        var profile = Assert.Single(config.Profiles);
-        Assert.Equal("model-y", profile.DefaultModel);
-        Assert.Equal(200000, profile.Models.Single(model => model.Id == "model-y").ContextWindowTokens);
-        Assert.Contains("default model: model-y", fixture.Io.Output);
+        Assert.That(addResult, Is.EqualTo(0));
+        Assert.That(useResult, Is.EqualTo(0));
+        Assert.That(listResult, Is.EqualTo(0));
+        var profile = TestAssert.Single(config.Profiles);
+        Assert.That(profile.DefaultModel, Is.EqualTo("model-y"));
+        Assert.That(profile.Models.Single(model => model.Id == "model-y").ContextWindowTokens, Is.EqualTo(200000));
+        Assert.That(fixture.Io.Output, Does.Contain("default model: model-y"));
     }
 
-    [Fact]
+    [Test]
     public async Task Doctor_DefaultsToOfflineChecks()
     {
         using var fixture          = new CliFixture();
@@ -205,12 +205,12 @@ public sealed class CliCommandExecutionTests
             await DoctorCommand.ExecuteAsync(fixture.CreateContext(), CommandLine.Parse(["doctor"]),
                                              CancellationToken.None);
 
-        Assert.Equal(0, result);
-        Assert.True(Directory.Exists(sessionDirectory));
-        Assert.Contains("[ok]   endpoint https://api.example/v1", fixture.Io.Output);
-        Assert.Contains("[ok]   model model-x", fixture.Io.Output);
-        Assert.Contains("offline mode; pass --connect", fixture.Io.Output);
-        Assert.DoesNotContain("--connect will send one real model request", fixture.Io.Output);
+        Assert.That(result, Is.EqualTo(0));
+        Assert.That(Directory.Exists(sessionDirectory), Is.True);
+        Assert.That(fixture.Io.Output, Does.Contain("[ok]   endpoint https://api.example/v1"));
+        Assert.That(fixture.Io.Output, Does.Contain("[ok]   model model-x"));
+        Assert.That(fixture.Io.Output, Does.Contain("offline mode; pass --connect"));
+        Assert.That(fixture.Io.Output, Does.Not.Contain("--connect will send one real model request"));
     }
 
     private static UserConfig ProfileConfig(string name) => new()

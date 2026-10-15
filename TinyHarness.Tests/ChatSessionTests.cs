@@ -51,7 +51,7 @@ public class ChatSessionTests
             events : events,
             recorderFactory : recorderFactory);
 
-    [Fact]
+    [Test]
     public async Task SubmitTurn_TwoTurnsShareContextAndRecordLifecycle()
     {
         var client = new FakeChatClient();
@@ -63,41 +63,41 @@ public class ChatSessionTests
         var run2 = await host.SubmitTurnAsync("and why?", CancellationToken.None);
 
         // 运行仅记录一次由实际执行决定的终态。
-        Assert.Equal(AgentStatus.Completed, run1.Result!.Status);
-        Assert.Equal("first answer", run1.Result.FinalMessage);
-        Assert.True(run1.IsFinished);
-        Assert.NotNull(run1.FinishedUtc);
-        Assert.True(run1.FinishedUtc >= run1.StartedUtc);
-        Assert.Equal(AgentStatus.Completed, run2.Result!.Status);
+        Assert.That(run1.Result!.Status, Is.EqualTo(AgentStatus.Completed));
+        Assert.That(run1.Result.FinalMessage, Is.EqualTo("first answer"));
+        Assert.That(run1.IsFinished, Is.True);
+        TestAssert.NotNull(run1.FinishedUtc);
+        Assert.That(run1.FinishedUtc >= run1.StartedUtc, Is.True);
+        Assert.That(run2.Result!.Status, Is.EqualTo(AgentStatus.Completed));
 
         var session = host.Session;
-        Assert.NotEmpty(session.Id);
-        Assert.NotEmpty(session.WorkspaceRoot);
-        Assert.Equal("test-model", session.Model.ModelId);
-        Assert.Equal(2, session.Turns.Count);
-        Assert.Equal("what is this repo?", session.Turns[0].UserInput);
-        Assert.Equal("and why?", session.Turns[1].UserInput);
-        Assert.Same(run1, session.Turns[0].Runs.Single());
-        Assert.Same(run2, session.Turns[1].Runs.Single());
-        Assert.Equal(session.Id, run1.SessionId);
-        Assert.Equal(session.Turns[0].Id, run1.TurnId);
-        Assert.NotEqual(run1.Id, run2.Id);
+        Assert.That(session.Id, Is.Not.Empty);
+        Assert.That(session.WorkspaceRoot, Is.Not.Empty);
+        Assert.That(session.Model.ModelId, Is.EqualTo("test-model"));
+        Assert.That(session.Turns.Count, Is.EqualTo(2));
+        Assert.That(session.Turns[0].UserInput, Is.EqualTo("what is this repo?"));
+        Assert.That(session.Turns[1].UserInput, Is.EqualTo("and why?"));
+        Assert.That(session.Turns[0].Runs.Single(), Is.SameAs(run1));
+        Assert.That(session.Turns[1].Runs.Single(), Is.SameAs(run2));
+        Assert.That(run1.SessionId, Is.EqualTo(session.Id));
+        Assert.That(run1.TurnId, Is.EqualTo(session.Turns[0].Id));
+        Assert.That(run2.Id, Is.Not.EqualTo(run1.Id));
 
         // 后续请求保留旧回合且只有一条系统提示。
-        Assert.Equal(2, client.RequestLog.Count);
+        Assert.That(client.RequestLog.Count, Is.EqualTo(2));
         var first = client.RequestLog[0].Messages;
-        Assert.Equal([ChatRole.System, ChatRole.User], first.Select(m => m.Role).ToArray());
-        Assert.Equal(SystemPrompt, first[0].Content);
+        Assert.That(first.Select(m => m.Role).ToArray(), Is.EqualTo([ChatRole.System, ChatRole.User]));
+        Assert.That(first[0].Content, Is.EqualTo(SystemPrompt));
         var second = client.RequestLog[1].Messages;
-        Assert.Equal([ChatRole.System, ChatRole.User, ChatRole.Assistant, ChatRole.User],
-                     second.Select(m => m.Role).ToArray());
-        Assert.Equal("what is this repo?", second[1].Content);
-        Assert.Equal("first answer", second[2].Content);
-        Assert.Equal("and why?", second[3].Content);
-        Assert.Equal(1, second.Count(m => m.Role == ChatRole.System));
+        Assert.That(second.Select(m => m.Role).ToArray(),
+                    Is.EqualTo([ChatRole.System, ChatRole.User, ChatRole.Assistant, ChatRole.User]));
+        Assert.That(second[1].Content, Is.EqualTo("what is this repo?"));
+        Assert.That(second[2].Content, Is.EqualTo("first answer"));
+        Assert.That(second[3].Content, Is.EqualTo("and why?"));
+        Assert.That(second.Count(m => m.Role == ChatRole.System), Is.EqualTo(1));
     }
 
-    [Fact]
+    [Test]
     public async Task SubmitTurn_PublishesCorrelatedOrderedEvents()
     {
         var client = new FakeChatClient();
@@ -111,37 +111,37 @@ public class ChatSessionTests
 
         var session = host.Session;
         // 每个运行依次发布开始、文本增量和结束事件。
-        Assert.Equal(6, sink.Events.Count);
+        Assert.That(sink.Events.Count, Is.EqualTo(6));
         for (var i = 1; i < sink.Events.Count; i++)
-            Assert.True(sink.Events[i].TimestampUtc >= sink.Events[i - 1].TimestampUtc);
+            Assert.That(sink.Events[i].TimestampUtc >= sink.Events[i - 1].TimestampUtc, Is.True);
 
         // 各类事件均关联宿主身份，序号限定在当前运行。
         var first = sink.Events.Take(3).ToArray();
-        Assert.Equal(HostEventKind.RunStarted, first[0].Kind);
-        Assert.Equal(HostEventKind.AssistantTextDelta, first[1].Kind);
-        Assert.Equal(HostEventKind.RunFinished, first[2].Kind);
-        Assert.Equal(1, first[0].Sequence);
-        Assert.Equal(3, first[2].Sequence);
-        Assert.All(first, @event => Assert.Equal(session.Id, @event.SessionId));
-        Assert.All(first, @event => Assert.Equal(session.Turns[0].Id, @event.TurnId));
-        Assert.All(first, @event => Assert.Equal(run1.Id, @event.RunId));
-        Assert.Equal("one", Assert.IsType<string>(first[1].Payload));
-        Assert.Same(run1.Result, first[2].Payload);
+        Assert.That(first[0].Kind, Is.EqualTo(HostEventKind.RunStarted));
+        Assert.That(first[1].Kind, Is.EqualTo(HostEventKind.AssistantTextDelta));
+        Assert.That(first[2].Kind, Is.EqualTo(HostEventKind.RunFinished));
+        Assert.That(first[0].Sequence, Is.EqualTo(1));
+        Assert.That(first[2].Sequence, Is.EqualTo(3));
+        TestAssert.All(first, @event => Assert.That(@event.SessionId, Is.EqualTo(session.Id)));
+        TestAssert.All(first, @event => Assert.That(@event.TurnId, Is.EqualTo(session.Turns[0].Id)));
+        TestAssert.All(first, @event => Assert.That(@event.RunId, Is.EqualTo(run1.Id)));
+        Assert.That(TestAssert.TypeOf<string>(first[1].Payload), Is.EqualTo("one"));
+        Assert.That(first[2].Payload, Is.SameAs(run1.Result));
 
         // 后续运行复用身份关联规则，但独立计数事件序号。
         var second = sink.Events.Skip(3).ToArray();
-        Assert.Equal(HostEventKind.RunStarted, second[0].Kind);
-        Assert.Equal(HostEventKind.AssistantTextDelta, second[1].Kind);
-        Assert.Equal(HostEventKind.RunFinished, second[2].Kind);
-        Assert.Equal(1, second[0].Sequence);
-        Assert.Equal(3, second[2].Sequence);
-        Assert.Equal(session.Turns[1].Id, second[0].TurnId);
-        Assert.Equal(run2.Id, second[0].RunId);
-        Assert.Equal(session.Id, second[0].SessionId);
-        Assert.All(second, @event => Assert.Equal(run2.Id, @event.RunId));
+        Assert.That(second[0].Kind, Is.EqualTo(HostEventKind.RunStarted));
+        Assert.That(second[1].Kind, Is.EqualTo(HostEventKind.AssistantTextDelta));
+        Assert.That(second[2].Kind, Is.EqualTo(HostEventKind.RunFinished));
+        Assert.That(second[0].Sequence, Is.EqualTo(1));
+        Assert.That(second[2].Sequence, Is.EqualTo(3));
+        Assert.That(second[0].TurnId, Is.EqualTo(session.Turns[1].Id));
+        Assert.That(second[0].RunId, Is.EqualTo(run2.Id));
+        Assert.That(second[0].SessionId, Is.EqualTo(session.Id));
+        TestAssert.All(second, @event => Assert.That(@event.RunId, Is.EqualTo(run2.Id)));
     }
 
-    [Fact]
+    [Test]
     public async Task SubmitTurn_SecondConcurrentSubmitIsRejectedWithoutRecords()
     {
         var client = new GateChatClient();
@@ -149,27 +149,27 @@ public class ChatSessionTests
 
         var first = host.SubmitTurnAsync("first", CancellationToken.None);
         await client.WaitStartedAsync(new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);
-        Assert.True(host.HasActiveRun);
+        Assert.That(host.HasActiveRun, Is.True);
 
         var rejected =
-            await Assert.ThrowsAsync<InvalidOperationException>(() =>
-                                                                    host.SubmitTurnAsync("second",
-                                                                             CancellationToken.None));
-        Assert.Contains("active run", rejected.Message);
+            await TestAssert.ThrowsAsync<InvalidOperationException>(() =>
+                                                                        host.SubmitTurnAsync("second",
+                                                                                 CancellationToken.None));
+        Assert.That(rejected.Message, Does.Contain("active run"));
 
         client.Open();
         var run1 = await first;
-        Assert.Equal(AgentStatus.Completed, run1.Result!.Status);
-        Assert.False(host.HasActiveRun);
+        Assert.That(run1.Result!.Status, Is.EqualTo(AgentStatus.Completed));
+        Assert.That(host.HasActiveRun, Is.False);
 
         // 拒绝并发提交不产生记录，也不妨碍后续回合。
-        Assert.Single(host.Session.Turns);
+        TestAssert.Single(host.Session.Turns);
         var run2 = await host.SubmitTurnAsync("third", CancellationToken.None);
-        Assert.Equal(AgentStatus.Completed, run2.Result!.Status);
-        Assert.Equal(2, host.Session.Turns.Count);
+        Assert.That(run2.Result!.Status, Is.EqualTo(AgentStatus.Completed));
+        Assert.That(host.Session.Turns.Count, Is.EqualTo(2));
     }
 
-    [Fact]
+    [Test]
     public async Task SubmitTurn_CancelBeforeToolCalls_StillAllowsNextTurn()
     {
         var       client = new GateChatClient();
@@ -180,18 +180,18 @@ public class ChatSessionTests
         await client.WaitStartedAsync(new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);
         cts.Cancel();
         var run1 = await first;
-        Assert.Equal(AgentStatus.Cancelled, run1.Result!.Status);
-        Assert.True(run1.IsFinished);
+        Assert.That(run1.Result!.Status, Is.EqualTo(AgentStatus.Cancelled));
+        Assert.That(run1.IsFinished, Is.True);
 
         // 没有待完成工具调用时，取消后可启动新运行；不得重启旧运行。
         client.Open();
         var run2 = await host.SubmitTurnAsync("second", CancellationToken.None);
-        Assert.Equal(AgentStatus.Completed, run2.Result!.Status);
-        Assert.Equal(2, host.Session.Turns.Count);
-        Assert.Equal(2, client.Requests);
+        Assert.That(run2.Result!.Status, Is.EqualTo(AgentStatus.Completed));
+        Assert.That(host.Session.Turns.Count, Is.EqualTo(2));
+        Assert.That(client.Requests, Is.EqualTo(2));
     }
 
-    [Fact]
+    [Test]
     public async Task SubmitTurn_CancelDuringToolExecution_RewindsTheHistoryAndBlocksSideEffects()
     {
         var client = new FakeChatClient();
@@ -205,30 +205,30 @@ public class ChatSessionTests
         await tool.WaitStartedAsync(new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);
         cts.Cancel();
         var run1 = await first;
-        Assert.Equal(AgentStatus.Cancelled, run1.Result!.Status);
+        Assert.That(run1.Result!.Status, Is.EqualTo(AgentStatus.Cancelled));
 
         // 可能已执行的副作用保持结果未知，并触发检查阻断，不补造结果。
-        var record = Assert.Single(run1.Result!.ToolCalls!);
-        Assert.Equal("call_1", record.CallId);
-        Assert.Equal(ToolCallExecutionState.UnknownResult, record.State);
-        Assert.True(record.SideEffects);
-        Assert.True(host.InspectionPending);
-        Assert.Contains("unknown results", host.InspectionPendingNote, StringComparison.Ordinal);
+        var record = TestAssert.Single(run1.Result!.ToolCalls!);
+        Assert.That(record.CallId, Is.EqualTo("call_1"));
+        Assert.That(record.State, Is.EqualTo(ToolCallExecutionState.UnknownResult));
+        Assert.That(record.SideEffects, Is.True);
+        Assert.That(host.InspectionPending, Is.True);
+        TestAssert.Contains("unknown results", host.InspectionPendingNote, StringComparison.Ordinal);
 
         // 后续回合从完整边界继续，不重放工具或伪造工具结果。
         var run2 = await host.SubmitTurnAsync("second", CancellationToken.None);
-        Assert.Equal(AgentStatus.Completed, run2.Result!.Status);
-        Assert.Equal(2, client.Requests);
-        Assert.Equal(1, tool.ExecuteCount);
-        Assert.Equal(2, host.Session.Turns.Count);
+        Assert.That(run2.Result!.Status, Is.EqualTo(AgentStatus.Completed));
+        Assert.That(client.Requests, Is.EqualTo(2));
+        Assert.That(tool.ExecuteCount, Is.EqualTo(1));
+        Assert.That(host.Session.Turns.Count, Is.EqualTo(2));
         var sent = client.RequestLog[1].Messages;
-        Assert.Contains(sent, m => m.Role == ChatRole.User && m.Content == "go");
-        Assert.Contains(sent, m => m.Role == ChatRole.User && m.Content == "second");
-        Assert.DoesNotContain(sent, m => m.ToolCalls is { Count: > 0 });
-        Assert.DoesNotContain(sent, m => m.Role == ChatRole.Tool);
+        TestAssert.ContainsAll(m => m.Role == ChatRole.User && m.Content == "go", sent);
+        TestAssert.ContainsAll(m => m.Role == ChatRole.User && m.Content == "second", sent);
+        TestAssert.DoesNotContainAny(m => m.ToolCalls is { Count: > 0 }, sent);
+        TestAssert.DoesNotContainAny(m => m.Role == ChatRole.Tool, sent);
     }
 
-    [Fact]
+    [Test]
     public async Task SubmitTurn_WithoutPermissions_UnknownSideEffectDeniesTheNextWriteUntilAcknowledged()
     {
         var client = new FakeChatClient();
@@ -255,31 +255,32 @@ public class ChatSessionTests
             await active;
         }
 
-        Assert.Equal(AgentStatus.Cancelled, (await active).Result!.Status);
-        Assert.Equal(1, slow.ExecuteCount);
-        Assert.True(host.InspectionPending);
+        Assert.That((await active).Result!.Status, Is.EqualTo(AgentStatus.Cancelled));
+        Assert.That(slow.ExecuteCount, Is.EqualTo(1));
+        Assert.That(host.InspectionPending, Is.True);
         var blocked = await host.SubmitTurnAsync("try another write", CancellationToken.None);
-        Assert.Equal(AgentStatus.Completed, blocked.Result!.Status);
-        Assert.Equal(0, blocked.Result.ToolExecutions);
-        Assert.Equal(0, write.ExecuteCount);
-        var denied = Assert.Single(blocked.Result.ToolCalls!);
-        Assert.Equal(ToolCallExecutionState.KnownNotStarted, denied.State);
-        Assert.Contains("pending inspection", denied.Approval, StringComparison.Ordinal);
-        Assert.True(host.InspectionPending);
+        Assert.That(blocked.Result!.Status, Is.EqualTo(AgentStatus.Completed));
+        Assert.That(blocked.Result.ToolExecutions, Is.EqualTo(0));
+        Assert.That(write.ExecuteCount, Is.EqualTo(0));
+        var denied = TestAssert.Single(blocked.Result.ToolCalls!);
+        Assert.That(denied.State, Is.EqualTo(ToolCallExecutionState.KnownNotStarted));
+        TestAssert.Contains("pending inspection", denied.Approval, StringComparison.Ordinal);
+        Assert.That(host.InspectionPending, Is.True);
         var denialMessage = client.RequestLog[2].Messages.Single(m => m.Role == ChatRole.Tool);
-        Assert.Equal("call_denied", denialMessage.ToolCallId);
-        Assert.Contains("Blocked pending inspection", denialMessage.Content, StringComparison.Ordinal);
+        Assert.That(denialMessage.ToolCallId, Is.EqualTo("call_denied"));
+        TestAssert.Contains("Blocked pending inspection", denialMessage.Content, StringComparison.Ordinal);
 
         // 确认仅解除检查阻断；未提供权限引擎的宿主仍可直接执行新调用。
         await host.AcknowledgeInspectionAsync(CancellationToken.None);
-        Assert.False(host.InspectionPending);
+        Assert.That(host.InspectionPending, Is.False);
         var allowed = await host.SubmitTurnAsync("write after inspection", CancellationToken.None);
-        Assert.Equal(AgentStatus.Completed, allowed.Result!.Status);
-        Assert.Equal(1, write.ExecuteCount);
-        Assert.Equal(ToolCallExecutionState.ConfirmedResult, Assert.Single(allowed.Result.ToolCalls!).State);
+        Assert.That(allowed.Result!.Status, Is.EqualTo(AgentStatus.Completed));
+        Assert.That(write.ExecuteCount, Is.EqualTo(1));
+        Assert.That(TestAssert.Single(allowed.Result.ToolCalls!).State,
+                    Is.EqualTo(ToolCallExecutionState.ConfirmedResult));
     }
 
-    [Fact]
+    [Test]
     public async Task SubmitTurn_CancelDuringAReadOnlyTool_ContinuesWithoutBlocking()
     {
         var client = new FakeChatClient();
@@ -293,20 +294,20 @@ public class ChatSessionTests
         await tool.WaitStartedAsync(new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);
         cts.Cancel();
         var run1 = await first;
-        Assert.Equal(AgentStatus.Cancelled, run1.Result!.Status);
+        Assert.That(run1.Result!.Status, Is.EqualTo(AgentStatus.Cancelled));
 
         // 只读调用中断只回退历史，不触发副作用阻断。
-        var record = Assert.Single(run1.Result!.ToolCalls!);
-        Assert.Equal(ToolCallExecutionState.UnknownResult, record.State);
-        Assert.False(record.SideEffects);
-        Assert.False(host.InspectionPending);
+        var record = TestAssert.Single(run1.Result!.ToolCalls!);
+        Assert.That(record.State, Is.EqualTo(ToolCallExecutionState.UnknownResult));
+        Assert.That(record.SideEffects, Is.False);
+        Assert.That(host.InspectionPending, Is.False);
 
         var run2 = await host.SubmitTurnAsync("second", CancellationToken.None);
-        Assert.Equal(AgentStatus.Completed, run2.Result!.Status);
-        Assert.Equal(2, client.Requests);
+        Assert.That(run2.Result!.Status, Is.EqualTo(AgentStatus.Completed));
+        Assert.That(client.Requests, Is.EqualTo(2));
     }
 
-    [Fact]
+    [Test]
     public async Task SubmitTurn_CancelDuringApproval_LeavesEveryCallNotStartedAndContinues()
     {
         var client = new FakeChatClient();
@@ -331,23 +332,23 @@ public class ChatSessionTests
         await approver.WaitStartedAsync(new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);
         cts.Cancel();
         var run1 = await first;
-        Assert.Equal(AgentStatus.Cancelled, run1.Result!.Status);
-        Assert.Equal(0, tool.ExecuteCount);
+        Assert.That(run1.Result!.Status, Is.EqualTo(AgentStatus.Cancelled));
+        Assert.That(tool.ExecuteCount, Is.EqualTo(0));
 
         // 审批等待中取消属于已知未开始，不触发检查阻断。
-        var record = Assert.Single(run1.Result!.ToolCalls!);
-        Assert.Equal(ToolCallExecutionState.KnownNotStarted, record.State);
-        Assert.True(record.SideEffects);
-        Assert.Null(record.Approval);
-        Assert.False(host.InspectionPending);
-        Assert.Null(engine.NonReadOnlyBlockReason);
+        var record = TestAssert.Single(run1.Result!.ToolCalls!);
+        Assert.That(record.State, Is.EqualTo(ToolCallExecutionState.KnownNotStarted));
+        Assert.That(record.SideEffects, Is.True);
+        Assert.That(record.Approval, Is.Null);
+        Assert.That(host.InspectionPending, Is.False);
+        Assert.That(engine.NonReadOnlyBlockReason, Is.Null);
 
         var run2 = await host.SubmitTurnAsync("second", CancellationToken.None);
-        Assert.Equal(AgentStatus.Completed, run2.Result!.Status);
-        Assert.Equal(2, client.Requests);
+        Assert.That(run2.Result!.Status, Is.EqualTo(AgentStatus.Completed));
+        Assert.That(client.Requests, Is.EqualTo(2));
     }
 
-    [Fact]
+    [Test]
     public async Task AcknowledgeInspection_ClearsTheBlockAndPersistsTheAcknowledgement()
     {
         using var ws     = new TestTempDir();
@@ -372,30 +373,30 @@ public class ChatSessionTests
         await tool.WaitStartedAsync(new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);
         cts.Cancel();
         var run1 = await first;
-        Assert.Equal(AgentStatus.Cancelled, run1.Result!.Status);
-        Assert.True(host.InspectionPending);
-        Assert.NotNull(engine.NonReadOnlyBlockReason);
+        Assert.That(run1.Result!.Status, Is.EqualTo(AgentStatus.Cancelled));
+        Assert.That(host.InspectionPending, Is.True);
+        TestAssert.NotNull(engine.NonReadOnlyBlockReason);
 
         // 明确确认须落盘，避免恢复时再次阻断同一中断。
         await host.AcknowledgeInspectionAsync(CancellationToken.None);
-        Assert.False(host.InspectionPending);
-        Assert.Null(engine.NonReadOnlyBlockReason);
+        Assert.That(host.InspectionPending, Is.False);
+        Assert.That(engine.NonReadOnlyBlockReason, Is.Null);
 
         var snapshot = await SessionStoreReader.ReadAsync(dir.Root, host.Session.Id, CancellationToken.None);
-        Assert.NotNull(snapshot);
-        Assert.NotNull(snapshot!.InspectionAcknowledgedUtc);
+        TestAssert.NotNull(snapshot);
+        TestAssert.NotNull(snapshot!.InspectionAcknowledgedUtc);
         var storedRun = snapshot.Turns.Single().Runs.Single();
-        Assert.True(storedRun.NeedsInspection);
-        var stored = Assert.Single(storedRun.ToolCalls!);
-        Assert.Equal(nameof(ToolCallExecutionState.UnknownResult), stored.State);
-        Assert.True(stored.SideEffects);
+        Assert.That(storedRun.NeedsInspection, Is.True);
+        var stored = TestAssert.Single(storedRun.ToolCalls!);
+        Assert.That(stored.State, Is.EqualTo(nameof(ToolCallExecutionState.UnknownResult)));
+        Assert.That(stored.SideEffects, Is.True);
 
         // canonical 历史只提交完整边界，不保存中断工具组。
         var roles = snapshot.Conversation!.Messages.Select(message => message.Role).ToArray();
-        Assert.Equal(["System", "User"], roles);
+        Assert.That(roles, Is.EqualTo(["System", "User"]));
     }
 
-    [Fact]
+    [Test]
     public async Task SubmitTurn_PersistsExecutionRecordsRedactedForInspection()
     {
         using var    ws     = new TestTempDir();
@@ -418,20 +419,20 @@ public class ChatSessionTests
                                                                       { ["MY_API_KEY"] = secret }));
 
         var run = await host.SubmitTurnAsync($"use {secret}", CancellationToken.None);
-        Assert.Equal(AgentStatus.Completed, run.Result!.Status);
+        Assert.That(run.Result!.Status, Is.EqualTo(AgentStatus.Completed));
 
         var snapshot = await SessionStoreReader.ReadAsync(dir.Root, host.Session.Id, CancellationToken.None);
-        var stored   = Assert.Single(snapshot!.Turns.Single().Runs.Single().ToolCalls!);
+        var stored   = TestAssert.Single(snapshot!.Turns.Single().Runs.Single().ToolCalls!);
         // 检查投影脱敏，canonical 用户内容保持原样。
-        Assert.Equal("patch([REDACTED])", stored.Summary);
-        Assert.Equal(ToolCallExecutionState.ConfirmedResult,
-                     Enum.Parse<ToolCallExecutionState>(stored.State));
-        Assert.False(snapshot.Turns.Single().Runs.Single().NeedsInspection);
-        Assert.Contains(secret, snapshot.Conversation!.Messages.Single(m => m.Role == "User").Content,
-                        StringComparison.Ordinal);
+        Assert.That(stored.Summary, Is.EqualTo("patch([REDACTED])"));
+        Assert.That(Enum.Parse<ToolCallExecutionState>(stored.State),
+                    Is.EqualTo(ToolCallExecutionState.ConfirmedResult));
+        Assert.That(snapshot.Turns.Single().Runs.Single().NeedsInspection, Is.False);
+        TestAssert.Contains(secret, snapshot.Conversation!.Messages.Single(m => m.Role == "User").Content,
+                            StringComparison.Ordinal);
     }
 
-    [Fact]
+    [Test]
     public async Task SubmitTurn_CreatesOneRecorderPerRunWithTheRunId()
     {
         var client = new FakeChatClient();
@@ -448,46 +449,46 @@ public class ChatSessionTests
         var run1 = await host.SubmitTurnAsync("u1", CancellationToken.None);
         var run2 = await host.SubmitTurnAsync("u2", CancellationToken.None);
 
-        Assert.Equal([run1.Id, run2.Id], created.Select(entry => entry.RunId).ToArray());
-        Assert.All(created, entry => Assert.Single(entry.Recorder.CompletedResults));
+        Assert.That(created.Select(entry => entry.RunId).ToArray(), Is.EqualTo([run1.Id, run2.Id]));
+        TestAssert.All(created, entry => TestAssert.Single(entry.Recorder.CompletedResults));
     }
 
-    [Fact]
+    [Test]
     public async Task SubmitTurn_BlankInputIsRejectedWithoutRecords()
     {
         var host = NewHost(new FakeChatClient());
 
-        await Assert.ThrowsAsync<ArgumentException>(() => host.SubmitTurnAsync("   ", CancellationToken.None));
+        await TestAssert.ThrowsAsync<ArgumentException>(() => host.SubmitTurnAsync("   ", CancellationToken.None));
 
-        Assert.Empty(host.Session.Turns);
+        Assert.That(host.Session.Turns, Is.Empty);
     }
 
-    [Fact]
+    [Test]
     public void Constructor_ModelIdentityMismatchIsRejected()
     {
         var options = Options() with { Model = "other-model" };
 
-        Assert.Throws<ArgumentException>(() => new ChatSessionHost(Path.Combine(Path.GetTempPath(),
-                                                                                    "tinyharness-session-tests"),
-                                                                   new SessionModelIdentity("test-model",
-                                                                            "https://example.invalid/v1",
-                                                                            ChatApiKind.ChatCompletions),
-                                                                   options,
-                                                                   new FakeChatClient(),
-                                                                   new ToolRegistry([]),
-                                                                   SystemPrompt));
+        TestAssert.Throws<ArgumentException>(() => new ChatSessionHost(Path.Combine(Path.GetTempPath(),
+                                                                                "tinyharness-session-tests"),
+                                                                       new SessionModelIdentity("test-model",
+                                                                                "https://example.invalid/v1",
+                                                                                ChatApiKind.ChatCompletions),
+                                                                       options,
+                                                                       new FakeChatClient(),
+                                                                       new ToolRegistry([]),
+                                                                       SystemPrompt));
     }
 
-    [Fact]
+    [Test]
     public void SessionRun_DoubleFinishIsRejected()
     {
         var run = new SessionRun("run-1", "session-1", "turn-1");
-        Assert.False(run.IsFinished);
+        Assert.That(run.IsFinished, Is.False);
 
         run.Finish(new AgentResult { Status = AgentStatus.Completed });
 
-        Assert.True(run.IsFinished);
-        Assert.Throws<InvalidOperationException>(() => run.Finish(new AgentResult { Status = AgentStatus.Failed }));
+        Assert.That(run.IsFinished, Is.True);
+        TestAssert.Throws<InvalidOperationException>(() => run.Finish(new AgentResult { Status = AgentStatus.Failed }));
     }
 
     /// <summary>

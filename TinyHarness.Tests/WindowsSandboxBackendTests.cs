@@ -64,7 +64,7 @@ public class WindowsSandboxBackendTests
     private static string Base64(string text) => Convert.ToBase64String(Encoding.UTF8.GetBytes(text));
 
 
-    [Fact]
+    [Test]
     public async Task Execute_NormalExitAssemblesStreamsAndResult()
     {
         if (!OperatingSystem.IsWindows()) return;
@@ -77,19 +77,19 @@ public class WindowsSandboxBackendTests
         var result = await backend.ExecuteAsync(Plan(home.Components.SandboxHome), stdout, stderr,
                                                 CancellationToken.None);
 
-        Assert.Equal(0, result.ExitCode);
-        Assert.False(result.TimedOut);
-        Assert.Null(result.Failure);
-        Assert.Contains("stdout-hello 世界", stdout.Content);
-        Assert.Contains("stderr-line", stderr.Content);
-        Assert.DoesNotContain("stderr", stdout.Content, StringComparison.Ordinal);
-        Assert.All([stdout, stderr], capture => Assert.Equal(string.Empty, capture.Chunks.Last()));
+        Assert.That(result.ExitCode, Is.EqualTo(0));
+        Assert.That(result.TimedOut, Is.False);
+        Assert.That(result.Failure, Is.Null);
+        Assert.That(stdout.Content, Does.Contain("stdout-hello 世界"));
+        Assert.That(stderr.Content, Does.Contain("stderr-line"));
+        TestAssert.DoesNotContain("stderr", stdout.Content, StringComparison.Ordinal);
+        TestAssert.All([stdout, stderr], capture => Assert.That(capture.Chunks.Last(), Is.EqualTo(string.Empty)));
     }
 
     private static async Task NormalRunner(Stream downstream, Stream upstream, CancellationToken end)
     {
         var spawn = await RunnerFrameCodec.ReadFrameAsync(downstream, end);
-        Assert.NotNull(spawn);
+        TestAssert.NotNull(spawn);
         await RunnerFrameCodec.WriteFrameAsync(upstream, "spawn_ready", new RunnerSpawnReady { ProcessId = 4321 },
                                                end);
         await RunnerFrameCodec.WriteFrameAsync(upstream, "output",
@@ -108,7 +108,7 @@ public class WindowsSandboxBackendTests
                                                new RunnerExitPayload { ExitCode = 0, TimedOut = false }, end);
     }
 
-    [Fact]
+    [Test]
     public async Task Execute_TimeoutVerdictAndNatural192StayDistinct()
     {
         if (!OperatingSystem.IsWindows()) return;
@@ -127,10 +127,10 @@ public class WindowsSandboxBackendTests
                                                               new RecordingOutputCapture(),
                                                               new RecordingOutputCapture(), CancellationToken.None);
 
-        Assert.Equal(192, timedOutResult.ExitCode);
-        Assert.True(timedOutResult.TimedOut);
-        Assert.Equal(192, naturalResult.ExitCode);
-        Assert.False(naturalResult.TimedOut);
+        Assert.That(timedOutResult.ExitCode, Is.EqualTo(192));
+        Assert.That(timedOutResult.TimedOut, Is.True);
+        Assert.That(naturalResult.ExitCode, Is.EqualTo(192));
+        Assert.That(naturalResult.TimedOut, Is.False);
     }
 
     private static Func<Stream, Stream, CancellationToken, Task> ScriptedRunner(RunnerExitPayload exit)
@@ -144,7 +144,7 @@ public class WindowsSandboxBackendTests
         };
     }
 
-    [Fact]
+    [Test]
     public async Task Execute_DecodesUtf8SplitAcrossOutputFrames()
     {
         if (!OperatingSystem.IsWindows()) return;
@@ -176,10 +176,10 @@ public class WindowsSandboxBackendTests
         var stdout = new RecordingOutputCapture();
         await backend.ExecuteAsync(Plan(home.Components.SandboxHome), stdout, new RecordingOutputCapture(),
                                    CancellationToken.None);
-        Assert.Equal("世界", stdout.Content);
+        Assert.That(stdout.Content, Is.EqualTo("世界"));
     }
 
-    [Fact]
+    [Test]
     public async Task Execute_LargeOutputSurvivesManyFrames()
     {
         if (!OperatingSystem.IsWindows()) return;
@@ -208,11 +208,11 @@ public class WindowsSandboxBackendTests
         var stdout = new RecordingOutputCapture();
         await backend.ExecuteAsync(Plan(home.Components.SandboxHome), stdout, new RecordingOutputCapture(),
                                    CancellationToken.None);
-        Assert.Equal(frameCount * frameSize + frameCount, stdout.Content.Length);
+        Assert.That(stdout.Content.Length, Is.EqualTo(frameCount * frameSize + frameCount));
     }
 
 
-    [Fact]
+    [Test]
     public async Task Execute_SpawnChildErrorThrowsStartException()
     {
         if (!OperatingSystem.IsWindows()) return;
@@ -232,18 +232,18 @@ public class WindowsSandboxBackendTests
         var       stdout    = new RecordingOutputCapture();
 
         var exception =
-            await Assert.ThrowsAsync<ProcessExecutionStartException>(() =>
-                                                                         backend.ExecuteAsync(Plan(home.Components
-                                                                                              .SandboxHome), stdout,
-                                                                                  new RecordingOutputCapture(),
-                                                                                  CancellationToken.None));
-        Assert.Contains("spawn_child", exception.Message);
-        Assert.Contains("CreateProcess failed", exception.Message);
-        Assert.Contains("Win32 error 2", exception.Message);
-        Assert.True(stdout.Discarded);
+            await TestAssert.ThrowsAsync<ProcessExecutionStartException>(() =>
+                                                                             backend.ExecuteAsync(Plan(home.Components
+                                                                                                  .SandboxHome), stdout,
+                                                                                      new RecordingOutputCapture(),
+                                                                                      CancellationToken.None));
+        Assert.That(exception.Message, Does.Contain("spawn_child"));
+        Assert.That(exception.Message, Does.Contain("CreateProcess failed"));
+        Assert.That(exception.Message, Does.Contain("Win32 error 2"));
+        Assert.That(stdout.Discarded, Is.True);
     }
 
-    [Fact]
+    [Test]
     public async Task Execute_EofBeforeSpawnReadyThrowsStartException()
     {
         if (!OperatingSystem.IsWindows()) return;
@@ -256,15 +256,15 @@ public class WindowsSandboxBackendTests
         });
         using var homeScope = home;
 
-        await Assert.ThrowsAsync<ProcessExecutionStartException>(() =>
-                                                                     backend.ExecuteAsync(Plan(home.Components
-                                                                                          .SandboxHome),
-                                                                              new RecordingOutputCapture(),
-                                                                              new RecordingOutputCapture(),
-                                                                              CancellationToken.None));
+        await TestAssert.ThrowsAsync<ProcessExecutionStartException>(() =>
+                                                                         backend.ExecuteAsync(Plan(home.Components
+                                                                                              .SandboxHome),
+                                                                                  new RecordingOutputCapture(),
+                                                                                  new RecordingOutputCapture(),
+                                                                                  CancellationToken.None));
     }
 
-    [Fact]
+    [Test]
     public async Task Execute_EofBeforeExitThrowsUncertainExecution()
     {
         if (!OperatingSystem.IsWindows()) return;
@@ -285,15 +285,15 @@ public class WindowsSandboxBackendTests
         using var homeScope = home;
         var       stdout    = new RecordingOutputCapture();
 
-        var exception = await Assert.ThrowsAsync<ToolExecutionUncertainException>(() =>
+        var exception = await TestAssert.ThrowsAsync<ToolExecutionUncertainException>(() =>
                      backend.ExecuteAsync(Plan(home.Components.SandboxHome), stdout,
                                           new RecordingOutputCapture(), CancellationToken.None));
 
-        Assert.Contains("closed before the exit frame", exception.Message);
-        Assert.Contains("partial", stdout.Content);
+        Assert.That(exception.Message, Does.Contain("closed before the exit frame"));
+        Assert.That(stdout.Content, Does.Contain("partial"));
     }
 
-    [Fact]
+    [Test]
     public async Task Execute_MalformedOutputFrameThrowsUncertainExecution()
     {
         if (!OperatingSystem.IsWindows()) return;
@@ -312,14 +312,14 @@ public class WindowsSandboxBackendTests
         });
         using var homeScope = home;
 
-        var exception = await Assert.ThrowsAsync<ToolExecutionUncertainException>(() =>
+        var exception = await TestAssert.ThrowsAsync<ToolExecutionUncertainException>(() =>
                      backend.ExecuteAsync(Plan(home.Components.SandboxHome), new RecordingOutputCapture(),
                                           new RecordingOutputCapture(), CancellationToken.None));
-        Assert.Contains("protocol failure", exception.Message);
+        Assert.That(exception.Message, Does.Contain("protocol failure"));
     }
 
 
-    [Fact]
+    [Test]
     public async Task Execute_OutputBeforeSpawnReadyFailsTheHandshake()
     {
         if (!OperatingSystem.IsWindows()) return;
@@ -338,17 +338,17 @@ public class WindowsSandboxBackendTests
         var       stdout    = new RecordingOutputCapture();
 
         var exception =
-            await Assert.ThrowsAsync<ProcessExecutionStartException>(() =>
-                                                                         backend.ExecuteAsync(Plan(home.Components
-                                                                                              .SandboxHome), stdout,
-                                                                                  new RecordingOutputCapture(),
-                                                                                  CancellationToken.None));
+            await TestAssert.ThrowsAsync<ProcessExecutionStartException>(() =>
+                                                                             backend.ExecuteAsync(Plan(home.Components
+                                                                                                  .SandboxHome), stdout,
+                                                                                      new RecordingOutputCapture(),
+                                                                                      CancellationToken.None));
 
-        Assert.Contains("output before spawn_ready", exception.Message);
-        Assert.True(stdout.Discarded);
+        Assert.That(exception.Message, Does.Contain("output before spawn_ready"));
+        Assert.That(stdout.Discarded, Is.True);
     }
 
-    [Fact]
+    [Test]
     public async Task Execute_ErrorFrameAfterSpawnReadyThrowsUncertainExecution()
     {
         if (!OperatingSystem.IsWindows()) return;
@@ -367,16 +367,16 @@ public class WindowsSandboxBackendTests
         });
         using var homeScope = home;
 
-        var exception = await Assert.ThrowsAsync<ToolExecutionUncertainException>(() =>
+        var exception = await TestAssert.ThrowsAsync<ToolExecutionUncertainException>(() =>
                      backend.ExecuteAsync(Plan(home.Components.SandboxHome), new RecordingOutputCapture(),
                                           new RecordingOutputCapture(), CancellationToken.None));
 
-        Assert.Contains("protocol failure", exception.Message);
-        Assert.Contains("error frame after spawn_ready", exception.Message);
+        Assert.That(exception.Message, Does.Contain("protocol failure"));
+        Assert.That(exception.Message, Does.Contain("error frame after spawn_ready"));
     }
 
 
-    [Fact]
+    [Test]
     public async Task Execute_UserCancelSendsTerminateDiscardsOutputAndThrows()
     {
         if (!OperatingSystem.IsWindows()) return;
@@ -409,17 +409,17 @@ public class WindowsSandboxBackendTests
         var       stdout       = new RecordingOutputCapture();
         using var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(300));
 
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
-                                                                    backend.ExecuteAsync(Plan(home.Components
-                                                                                         .SandboxHome, 60), stdout,
-                                                                             new RecordingOutputCapture(),
-                                                                             cancellation.Token));
+        await Assert.CatchAsync<OperationCanceledException>(() =>
+                                                                backend.ExecuteAsync(Plan(home.Components
+                                                                                     .SandboxHome, 60), stdout,
+                                                                         new RecordingOutputCapture(),
+                                                                         cancellation.Token));
 
-        Assert.True(await terminateSeen.Task.WaitAsync(TimeSpan.FromSeconds(3)));
-        Assert.True(stdout.Discarded);
+        Assert.That(await terminateSeen.Task.WaitAsync(TimeSpan.FromSeconds(3)), Is.True);
+        Assert.That(stdout.Discarded, Is.True);
     }
 
-    [Fact]
+    [Test]
     public async Task Execute_UnresponsiveRunnerAfterTimeoutIsKilledAndReportsBackendTimeout()
     {
         if (!OperatingSystem.IsWindows()) return;
@@ -438,12 +438,12 @@ public class WindowsSandboxBackendTests
         var result = await backend.ExecuteAsync(Plan(home.Components.SandboxHome, 1), stdout,
                                                 new RecordingOutputCapture(), CancellationToken.None);
 
-        Assert.True(result.TimedOut);
-        Assert.Null(result.ExitCode);
-        Assert.Null(result.Failure);
+        Assert.That(result.TimedOut, Is.True);
+        Assert.That(result.ExitCode, Is.Null);
+        Assert.That(result.Failure, Is.Null);
     }
 
-    [Fact]
+    [Test]
     public async Task Execute_TimeoutKillKeepsCapturedOutputAndReportsBackendTimeout()
     {
         if (!OperatingSystem.IsWindows()) return;
@@ -477,16 +477,16 @@ public class WindowsSandboxBackendTests
 
         var execution = backend.ExecuteAsync(Plan(home.Components.SandboxHome, 1), stdout,
                                              new RecordingOutputCapture(), CancellationToken.None);
-        Assert.True(await silentReached.Task.WaitAsync(TimeSpan.FromSeconds(3)));
+        Assert.That(await silentReached.Task.WaitAsync(TimeSpan.FromSeconds(3)), Is.True);
         var result = await execution.WaitAsync(TimeSpan.FromSeconds(5));
 
-        Assert.True(result.TimedOut);
-        Assert.Null(result.ExitCode);
-        Assert.Null(result.Failure);
-        Assert.Contains("pre-timeout output", stdout.Content);
+        Assert.That(result.TimedOut, Is.True);
+        Assert.That(result.ExitCode, Is.Null);
+        Assert.That(result.Failure, Is.Null);
+        Assert.That(stdout.Content, Does.Contain("pre-timeout output"));
     }
 
-    [Fact]
+    [Test]
     public async Task Execute_LateExitAfterTerminateIsReportedAsBackendTimeout()
     {
         if (!OperatingSystem.IsWindows()) return;
@@ -511,12 +511,12 @@ public class WindowsSandboxBackendTests
         var result = await backend.ExecuteAsync(Plan(home.Components.SandboxHome, 1),
                                                 new RecordingOutputCapture(), new RecordingOutputCapture(),
                                                 CancellationToken.None);
-        Assert.True(result.TimedOut);
-        Assert.Equal(1, result.ExitCode);
+        Assert.That(result.TimedOut, Is.True);
+        Assert.That(result.ExitCode, Is.EqualTo(1));
     }
 
 
-    [Fact]
+    [Test]
     public async Task Execute_LauncherIOExceptionFailsClosedAsStartException()
     {
         if (!OperatingSystem.IsWindows()) return;
@@ -526,18 +526,18 @@ public class WindowsSandboxBackendTests
         using var homeScope = home;
 
         var exception =
-            await Assert.ThrowsAsync<ProcessExecutionStartException>(() =>
-                                                                         backend.ExecuteAsync(Plan(home.Components
-                                                                                              .SandboxHome),
-                                                                                  new RecordingOutputCapture(),
-                                                                                  new RecordingOutputCapture(),
-                                                                                  CancellationToken.None));
+            await TestAssert.ThrowsAsync<ProcessExecutionStartException>(() =>
+                                                                             backend.ExecuteAsync(Plan(home.Components
+                                                                                                  .SandboxHome),
+                                                                                      new RecordingOutputCapture(),
+                                                                                      new RecordingOutputCapture(),
+                                                                                      CancellationToken.None));
 
-        Assert.Contains("Failed to launch the sandbox runner", exception.Message);
-        Assert.Contains("pipe creation denied", exception.Message);
+        Assert.That(exception.Message, Does.Contain("Failed to launch the sandbox runner"));
+        Assert.That(exception.Message, Does.Contain("pipe creation denied"));
     }
 
-    [Fact]
+    [Test]
     public async Task Execute_LauncherCancellationPropagatesWithoutWrapping()
     {
         if (!OperatingSystem.IsWindows()) return;
@@ -546,16 +546,16 @@ public class WindowsSandboxBackendTests
                                                      launchError : new OperationCanceledException());
         using var homeScope = home;
 
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
-                                                                    backend.ExecuteAsync(Plan(home.Components
-                                                                                         .SandboxHome),
-                                                                             new RecordingOutputCapture(),
-                                                                             new RecordingOutputCapture(),
-                                                                             CancellationToken.None));
+        await Assert.CatchAsync<OperationCanceledException>(() =>
+                                                                backend.ExecuteAsync(Plan(home.Components
+                                                                                     .SandboxHome),
+                                                                         new RecordingOutputCapture(),
+                                                                         new RecordingOutputCapture(),
+                                                                         CancellationToken.None));
     }
 
 
-    [Fact]
+    [Test]
     public async Task Execute_SendsFrozenPlanPolicyAndCleanedEnvironment()
     {
         if (!OperatingSystem.IsWindows()) return;
@@ -593,39 +593,39 @@ public class WindowsSandboxBackendTests
             var result = await backend.ExecuteAsync(Plan(home.Components.SandboxHome, 45),
                                                     new RecordingOutputCapture(), new RecordingOutputCapture(),
                                                     CancellationToken.None);
-            Assert.Equal(0, result.ExitCode);
+            Assert.That(result.ExitCode, Is.EqualTo(0));
 
             var request = await spawnSeen.Task.WaitAsync(TimeSpan.FromSeconds(3));
-            Assert.Equal(["cmd.exe", "/c", "whoami"], request.Command);
-            Assert.Equal(home.Components.SandboxHome, request.WorkingDirectory);
-            Assert.Equal(45_000uL, request.TimeoutMilliseconds);
-            Assert.False(request.Tty);
-            Assert.False(request.StdinOpen);
-            Assert.Equal(FakeDesktopFactory.DesktopName, request.PrivateDesktopName);
-            Assert.Equal(home.Components.SandboxHome, request.WorkingDirectory);
-            Assert.Equal([home.Components.SandboxHome], request.WorkspaceRoots);
-            Assert.Equal(Path.Combine(home.Components.SandboxHome, ".sandbox"), request.SandboxDirectory);
-            Assert.Equal(home.Components.SandboxHome, request.RealSandboxHome);
-            Assert.Equal("restricted", request.PermissionProfile.Network);
-            Assert.False(request.Environment.ContainsKey("TEST_SECRET"));
+            Assert.That(request.Command, Is.EqualTo(["cmd.exe", "/c", "whoami"]));
+            Assert.That(request.WorkingDirectory, Is.EqualTo(home.Components.SandboxHome));
+            Assert.That(request.TimeoutMilliseconds, Is.EqualTo(45_000uL));
+            Assert.That(request.Tty, Is.False);
+            Assert.That(request.StdinOpen, Is.False);
+            Assert.That(request.PrivateDesktopName, Is.EqualTo(FakeDesktopFactory.DesktopName));
+            Assert.That(request.WorkingDirectory, Is.EqualTo(home.Components.SandboxHome));
+            Assert.That(request.WorkspaceRoots, Is.EqualTo([home.Components.SandboxHome]));
+            Assert.That(request.SandboxDirectory, Is.EqualTo(Path.Combine(home.Components.SandboxHome, ".sandbox")));
+            Assert.That(request.RealSandboxHome, Is.EqualTo(home.Components.SandboxHome));
+            Assert.That(request.PermissionProfile.Network, Is.EqualTo("restricted"));
+            Assert.That(request.Environment.ContainsKey("TEST_SECRET"), Is.False);
             // 启动环境必须仅含组装时冻结的 TEMP；不得继承额外宿主变量。
-            Assert.Single(request.Environment);
-            Assert.Equal(home.Components.SandboxHome, request.Environment["TEMP"]);
-            Assert.NotEmpty(request.CapabilitySids);
-            Assert.All(request.CapabilitySids, sid => Assert.Matches(@"^S-1-5-21-\d+-\d+-\d+-\d+$", sid));
+            TestAssert.Single(request.Environment);
+            Assert.That(request.Environment["TEMP"], Is.EqualTo(home.Components.SandboxHome));
+            Assert.That(request.CapabilitySids, Is.Not.Empty);
+            TestAssert.All(request.CapabilitySids, sid => Assert.That(sid, Does.Match(@"^S-1-5-21-\d+-\d+-\d+-\d+$")));
 
             // 启动账户必须与创建桌面的账户一致。
-            Assert.Equal("TinyHarnessOffline", launcher.LastRequest!.Account.Username);
+            Assert.That(launcher.LastRequest!.Account.Username, Is.EqualTo("TinyHarnessOffline"));
             if (OperatingSystem.IsWindows())
-                Assert.Equal(desktops.GrantedSids.Single(), launcher.LastRequest.Account.AccountSid.Value);
+                Assert.That(launcher.LastRequest.Account.AccountSid.Value, Is.EqualTo(desktops.GrantedSids.Single()));
 
-            Assert.Equal(home.Components.RunnerExecutablePath, launcher.LastRequest.RunnerExecutablePath);
+            Assert.That(launcher.LastRequest.RunnerExecutablePath, Is.EqualTo(home.Components.RunnerExecutablePath));
 
             // 启动前仅刷新一次，并传递已解析的根路径。
-            var refresh = Assert.Single(setup.RefreshPayloads);
-            Assert.True(refresh.RefreshOnly);
-            Assert.Equal(home.Components.SandboxHome, refresh.SandboxHome);
-            Assert.Contains(home.Components.SandboxHome, refresh.WriteRoots);
+            var refresh = TestAssert.Single(setup.RefreshPayloads);
+            Assert.That(refresh.RefreshOnly, Is.True);
+            Assert.That(refresh.SandboxHome, Is.EqualTo(home.Components.SandboxHome));
+            Assert.That(refresh.WriteRoots, Does.Contain(home.Components.SandboxHome));
         }
         finally
         {
@@ -633,7 +633,7 @@ public class WindowsSandboxBackendTests
         }
     }
 
-    [Fact]
+    [Test]
     public async Task Execute_RejectsWorkingDirectoryOutsidePolicyWorkspace()
     {
         if (!OperatingSystem.IsWindows()) return;
@@ -642,13 +642,13 @@ public class WindowsSandboxBackendTests
         var (backend, _, _, _, home) = CreateBackend(NormalRunner);
         using var homeScope = home;
 
-        await Assert.ThrowsAsync<ProcessExecutionStartException>(() => backend.ExecuteAsync(Plan(outside.Root),
-                                                                          new RecordingOutputCapture(),
-                                                                          new RecordingOutputCapture(),
-                                                                          CancellationToken.None));
+        await TestAssert.ThrowsAsync<ProcessExecutionStartException>(() => backend.ExecuteAsync(Plan(outside.Root),
+                                                                              new RecordingOutputCapture(),
+                                                                              new RecordingOutputCapture(),
+                                                                              CancellationToken.None));
     }
 
-    [Fact]
+    [Test]
     public async Task Execute_FailsClosedWhenSandboxNotReady()
     {
         if (!OperatingSystem.IsWindows()) return;
@@ -664,17 +664,17 @@ public class WindowsSandboxBackendTests
         using var homeScope = home;
 
         var exception =
-            await Assert.ThrowsAsync<ProcessExecutionStartException>(() =>
-                                                                         backend.ExecuteAsync(Plan(home.Components
-                                                                                              .SandboxHome),
-                                                                                  new RecordingOutputCapture(),
-                                                                                  new RecordingOutputCapture(),
-                                                                                  CancellationToken.None));
-        Assert.Contains("not ready", exception.Message);
-        Assert.Null(launcher.LastRequest);
+            await TestAssert.ThrowsAsync<ProcessExecutionStartException>(() =>
+                                                                             backend.ExecuteAsync(Plan(home.Components
+                                                                                                  .SandboxHome),
+                                                                                      new RecordingOutputCapture(),
+                                                                                      new RecordingOutputCapture(),
+                                                                                      CancellationToken.None));
+        Assert.That(exception.Message, Does.Contain("not ready"));
+        Assert.That(launcher.LastRequest, Is.Null);
     }
 
-    [Fact]
+    [Test]
     public async Task Execute_FailsClosedWhenRefreshFails()
     {
         if (!OperatingSystem.IsWindows()) return;
@@ -685,18 +685,18 @@ public class WindowsSandboxBackendTests
         using var homeScope = home;
 
         var exception =
-            await Assert.ThrowsAsync<ProcessExecutionStartException>(() =>
-                                                                         backend.ExecuteAsync(Plan(home.Components
-                                                                                              .SandboxHome),
-                                                                                  new RecordingOutputCapture(),
-                                                                                  new RecordingOutputCapture(),
-                                                                                  CancellationToken.None));
-        Assert.Contains("ACL refresh failed", exception.Message);
-        Assert.Contains("provisioning stale", exception.Message);
-        Assert.Null(launcher.LastRequest);
+            await TestAssert.ThrowsAsync<ProcessExecutionStartException>(() =>
+                                                                             backend.ExecuteAsync(Plan(home.Components
+                                                                                                  .SandboxHome),
+                                                                                      new RecordingOutputCapture(),
+                                                                                      new RecordingOutputCapture(),
+                                                                                      CancellationToken.None));
+        Assert.That(exception.Message, Does.Contain("ACL refresh failed"));
+        Assert.That(exception.Message, Does.Contain("provisioning stale"));
+        Assert.That(launcher.LastRequest, Is.Null);
     }
 
-    [Fact]
+    [Test]
     public async Task Execute_HandshakeTimeoutKillsRunnerAndThrows()
     {
         if (!OperatingSystem.IsWindows()) return;
@@ -713,12 +713,12 @@ public class WindowsSandboxBackendTests
         using var homeScope = home;
 
         var exception =
-            await Assert.ThrowsAsync<ProcessExecutionStartException>(() =>
-                                                                         backend.ExecuteAsync(Plan(home.Components
-                                                                                              .SandboxHome),
-                                                                                  new RecordingOutputCapture(),
-                                                                                  new RecordingOutputCapture(),
-                                                                                  CancellationToken.None));
-        Assert.Contains("spawn_ready", exception.Message);
+            await TestAssert.ThrowsAsync<ProcessExecutionStartException>(() =>
+                                                                             backend.ExecuteAsync(Plan(home.Components
+                                                                                                  .SandboxHome),
+                                                                                      new RecordingOutputCapture(),
+                                                                                      new RecordingOutputCapture(),
+                                                                                      CancellationToken.None));
+        Assert.That(exception.Message, Does.Contain("spawn_ready"));
     }
 }

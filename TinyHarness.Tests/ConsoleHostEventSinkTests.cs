@@ -9,11 +9,15 @@ using TinyHarness.Core.Models.Tools;
 namespace TinyHarness.Tests;
 
 /// <summary>
-///     run 命令事件展示契约：增量流式内联打印、跨增量密钥脱敏、控制字符转义、工具单行
-///     生命周期、非增量事件前补换行、终态事件收尾。
-///     The run command's event display contract: deltas stream inline, secrets spanning
-///     deltas are redacted, control characters are escaped, tools render as one line,
-///     line events close an open streamed line, and the terminal event tidies up.
+///     <para>
+///         run 命令事件展示契约：增量流式内联打印、跨增量密钥脱敏、控制字符转义、工具单行
+///         生命周期、非增量事件前补换行、终态事件收尾。
+///     </para>
+///     <para>
+///         The run command's event display contract: deltas stream inline, secrets spanning
+///         deltas are redacted, control characters are escaped, tools render as one line,
+///         line events close an open streamed line, and the terminal event tidies up.
+///     </para>
 /// </summary>
 public class ConsoleHostEventSinkTests
 {
@@ -67,15 +71,15 @@ public class ConsoleHostEventSinkTests
                                            })
     };
 
-    [Fact]
+    [Test]
     public async Task Deltas_StreamInlineWithoutTrailingNewline()
     {
         var output = await RenderAsync(TextDelta("Hel"), TextDelta("lo"));
 
-        Assert.Equal("Hello", output);
+        Assert.That(output, Is.EqualTo("Hello"));
     }
 
-    [Fact]
+    [Test]
     public async Task LineEvent_AfterOpenDelta_ClosesTheLineFirst()
     {
         var usage = new HostEvent
@@ -87,10 +91,10 @@ public class ConsoleHostEventSinkTests
 
         var output = await RenderAsync(TextDelta("partial answer"), usage);
 
-        Assert.Equal("partial answer\nusage: 120 in / 30 out tokens\n", output);
+        Assert.That(output, Is.EqualTo("partial answer\nusage: 120 in / 30 out tokens\n"));
     }
 
-    [Fact]
+    [Test]
     public async Task TerminalEvent_ClosesTrailingOpenLine()
     {
         var finished = new HostEvent
@@ -102,30 +106,30 @@ public class ConsoleHostEventSinkTests
 
         var output = await RenderAsync(TextDelta("still open"), finished);
 
-        Assert.Equal("still open\n", output);
+        Assert.That(output, Is.EqualTo("still open\n"));
     }
 
-    [Fact]
+    [Test]
     public async Task ToolLifecycle_RendersOneLineWithTerminalSuffix()
     {
         var output = await RenderAsync(ToolStartedEvent(), ToolFinishedEvent(exitCode : 0));
 
-        Assert.Equal("tool: read_file src/a.cs -> ok (exit 0)\n", output);
+        Assert.That(output, Is.EqualTo("tool: read_file src/a.cs -> ok (exit 0)\n"));
     }
 
-    [Fact]
+    [Test]
     public async Task ToolFailure_TimeoutAndTruncation_AreReflected()
     {
         var output = await RenderAsync(ToolStartedEvent(), ToolFinishedEvent(false, timedOut : true));
 
-        Assert.Equal("tool: read_file src/a.cs -> timed out\n", output);
+        Assert.That(output, Is.EqualTo("tool: read_file src/a.cs -> timed out\n"));
 
         var truncated = await RenderAsync(ToolStartedEvent(),
                                           ToolFinishedEvent(false, 1, truncated : true));
-        Assert.Equal("tool: read_file src/a.cs -> failed (exit 1) (output truncated)\n", truncated);
+        Assert.That(truncated, Is.EqualTo("tool: read_file src/a.cs -> failed (exit 1) (output truncated)\n"));
     }
 
-    [Fact]
+    [Test]
     public async Task InteractiveApprovals_PrintButRuleDecisionsStayQuiet()
     {
         using var output = new StringWriter { NewLine = "\n" };
@@ -146,24 +150,23 @@ public class ConsoleHostEventSinkTests
                                 },
                                 CancellationToken.None);
 
-        Assert.Equal("approval: allow once\n", output.ToString());
+        Assert.That(output.ToString(), Is.EqualTo("approval: allow once\n"));
     }
 
-    [Fact]
+    [Test]
     public async Task ApprovalRequest_ClosesTheOpenStreamedLineWithoutPrinting()
     {
-        // The approval provider draws its own prompt; the sink only retires the streamed
-        // line so the prompt never merges into the answer text.
+        // 审批提示由审批方自行绘制；sink 只结束当前流式行，避免提示与回答文本拼在一起。
         using var output = new StringWriter { NewLine = "\n" };
         var       sink   = new ConsoleHostEventSink(output : output);
         await sink.PublishAsync(TextDelta("working on it"), CancellationToken.None);
         await sink.PublishAsync(new HostEvent { Kind = HostEventKind.ApprovalRequested, Sequence = 2 },
                                 CancellationToken.None);
 
-        Assert.Equal("working on it\n", output.ToString());
+        Assert.That(output.ToString(), Is.EqualTo("working on it\n"));
     }
 
-    [Fact]
+    [Test]
     public async Task ToolFinished_AfterLineClosed_RewritesTheWholeLine()
     {
         var usage = new HostEvent
@@ -175,13 +178,12 @@ public class ConsoleHostEventSinkTests
 
         var output = await RenderAsync(ToolStartedEvent(), usage, ToolFinishedEvent(exitCode : 0));
 
-        Assert.Equal("tool: read_file src/a.cs\n"      +
-                     "usage: 120 in / 30 out tokens\n" +
-                     "tool: read_file src/a.cs -> ok (exit 0)\n",
-                     output);
+        Assert.That(output, Is.EqualTo("tool: read_file src/a.cs\n"      +
+                                       "usage: 120 in / 30 out tokens\n" +
+                                       "tool: read_file src/a.cs -> ok (exit 0)\n"));
     }
 
-    [Fact]
+    [Test]
     public async Task Deltas_AreRedactedAcrossFragments_BeforeDisplay()
     {
         using var output = new StringWriter { NewLine = "\n" };
@@ -192,15 +194,14 @@ public class ConsoleHostEventSinkTests
         await sink.PublishAsync(new HostEvent { Kind = HostEventKind.RunFinished, Sequence = 3 },
                                 CancellationToken.None);
 
-        Assert.Equal("see [REDACTED] now\n", output.ToString());
+        Assert.That(output.ToString(), Is.EqualTo("see [REDACTED] now\n"));
     }
 
-    [Fact]
+    [Test]
     public async Task Deltas_SecretSplitAcrossStreams_StayRedactedAcrossLineEvents()
     {
-        // The usage line retires the streamed line between the two model streams; the
-        // held-back "sk-secret-" prefix must not surface there raw, or the completion in
-        // the next stream would finish the secret on screen.
+        // usage 行在两段模型流之间结束当前流式行；被扣留的 "sk-secret-" 前缀不得在此原样出现，
+        // 否则下一段流的补全会把整个密钥补齐显示出来。
         using var output = new StringWriter { NewLine = "\n" };
         var sink = new ConsoleHostEventSink(new Dictionary<string, string> { ["env"] = "sk-secret-value" },
                                             output);
@@ -217,11 +218,11 @@ public class ConsoleHostEventSinkTests
                                 CancellationToken.None);
 
         var shown = output.ToString();
-        Assert.Equal("see \nusage: 1 in / 1 out tokens\n[REDACTED] now\n", shown);
-        Assert.DoesNotContain("sk-secret-value", shown);
+        Assert.That(shown, Is.EqualTo("see \nusage: 1 in / 1 out tokens\n[REDACTED] now\n"));
+        Assert.That(shown, Does.Not.Contain("sk-secret-value"));
     }
 
-    [Fact]
+    [Test]
     public async Task ErrorLines_PrintRedacted()
     {
         using var output = new StringWriter { NewLine = "\n" };
@@ -234,18 +235,18 @@ public class ConsoleHostEventSinkTests
                                 },
                                 CancellationToken.None);
 
-        Assert.Equal("error: request with [REDACTED] failed\n", output.ToString());
+        Assert.That(output.ToString(), Is.EqualTo("error: request with [REDACTED] failed\n"));
     }
 
-    [Fact]
+    [Test]
     public async Task ControlCharacters_InDeltas_AreEscaped()
     {
         var output = await RenderAsync(TextDelta("a\u001b[2Jb"));
 
-        Assert.Equal("a\\u001B[2Jb", output);
+        Assert.That(output, Is.EqualTo("a\\u001B[2Jb"));
     }
 
-    [Fact]
+    [Test]
     public async Task Compaction_KeepsTheEstablishedLineFormat()
     {
         var change = new HostEvent
@@ -257,6 +258,6 @@ public class ConsoleHostEventSinkTests
 
         var output = await RenderAsync(change);
 
-        Assert.Equal("Context: 12,345 -> 8,000 tokens after compaction\n", output);
+        Assert.That(output, Is.EqualTo("Context: 12,345 -> 8,000 tokens after compaction\n"));
     }
 }

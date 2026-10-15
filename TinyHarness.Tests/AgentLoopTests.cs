@@ -22,7 +22,7 @@ public class AgentLoopTests
         DefaultToolTimeoutSeconds = 30
     };
 
-    [Fact]
+    [Test]
     public async Task PlainText_Completes()
     {
         var client = new FakeChatClient();
@@ -31,14 +31,14 @@ public class AgentLoopTests
 
         var result = await loop.RunAsync("sys", "hi", CancellationToken.None);
 
-        Assert.Equal(AgentStatus.Completed, result.Status);
-        Assert.Equal("Hello from the model.", result.FinalMessage);
-        Assert.Equal(1, client.Requests);
-        Assert.Equal("test-model", client.LastRequestModel);
-        Assert.Contains(loop.History, m => m is { Role: ChatRole.Assistant, Content: "Hello from the model." });
+        Assert.That(result.Status, Is.EqualTo(AgentStatus.Completed));
+        Assert.That(result.FinalMessage, Is.EqualTo("Hello from the model."));
+        Assert.That(client.Requests, Is.EqualTo(1));
+        Assert.That(client.LastRequestModel, Is.EqualTo("test-model"));
+        TestAssert.ContainsAll(m => m is { Role: ChatRole.Assistant, Content: "Hello from the model." }, loop.History);
     }
 
-    [Fact]
+    [Test]
     public async Task SingleToolCall_ExecutesAndReturnsToolResult()
     {
         var client = new FakeChatClient();
@@ -49,13 +49,13 @@ public class AgentLoopTests
 
         var result = await loop.RunAsync("sys", "run it", CancellationToken.None);
 
-        Assert.Equal(AgentStatus.Completed, result.Status);
-        Assert.Equal(1, tool.ExecuteCount);
-        Assert.Equal(2, client.Requests);
-        Assert.Contains(loop.History, m => m is { Role: ChatRole.Tool, Content: "echo_test ok" });
+        Assert.That(result.Status, Is.EqualTo(AgentStatus.Completed));
+        Assert.That(tool.ExecuteCount, Is.EqualTo(1));
+        Assert.That(client.Requests, Is.EqualTo(2));
+        TestAssert.ContainsAll(m => m is { Role: ChatRole.Tool, Content: "echo_test ok" }, loop.History);
     }
 
-    [Fact]
+    [Test]
     public async Task SplitArguments_AreAssembledCorrectly()
     {
         var client = new FakeChatClient();
@@ -66,14 +66,14 @@ public class AgentLoopTests
 
         var result = await loop.RunAsync("sys", "run", CancellationToken.None);
 
-        Assert.Equal(AgentStatus.Completed, result.Status);
-        Assert.Equal(1, tool.ExecuteCount);
+        Assert.That(result.Status, Is.EqualTo(AgentStatus.Completed));
+        Assert.That(tool.ExecuteCount, Is.EqualTo(1));
 
         var toolExecution = loop.History.Single(m => m.Role == ChatRole.Tool);
-        Assert.Equal("echo_test ok", toolExecution.Content);
+        Assert.That(toolExecution.Content, Is.EqualTo("echo_test ok"));
     }
 
-    [Fact]
+    [Test]
     public async Task MultipleToolCalls_ExecuteSequentiallyInOneTurn()
     {
         var client = new FakeChatClient();
@@ -99,13 +99,13 @@ public class AgentLoopTests
 
         var result = await loop.RunAsync("sys", "go", CancellationToken.None);
 
-        Assert.Equal(AgentStatus.Completed, result.Status);
-        Assert.Equal(1, a.ExecuteCount);
-        Assert.Equal(1, b.ExecuteCount);
-        Assert.Equal(2, result.ToolExecutions);
+        Assert.That(result.Status, Is.EqualTo(AgentStatus.Completed));
+        Assert.That(a.ExecuteCount, Is.EqualTo(1));
+        Assert.That(b.ExecuteCount, Is.EqualTo(1));
+        Assert.That(result.ToolExecutions, Is.EqualTo(2));
     }
 
-    [Fact]
+    [Test]
     public async Task UnknownTool_ReturnsErrorToModelAndContinues()
     {
         var client = new FakeChatClient();
@@ -115,12 +115,12 @@ public class AgentLoopTests
 
         var result = await loop.RunAsync("sys", "go", CancellationToken.None);
 
-        Assert.Equal(AgentStatus.Completed, result.Status);
-        Assert.Equal(0, result.ToolExecutions);
-        Assert.Contains(loop.History, m => m.Role == ChatRole.Tool && m.Content.Contains("Unknown tool"));
+        Assert.That(result.Status, Is.EqualTo(AgentStatus.Completed));
+        Assert.That(result.ToolExecutions, Is.EqualTo(0));
+        TestAssert.ContainsAll(m => m.Role == ChatRole.Tool && m.Content.Contains("Unknown tool"), loop.History);
     }
 
-    [Fact]
+    [Test]
     public async Task StepLimit_IsReached()
     {
         var client = new FakeChatClient();
@@ -131,11 +131,11 @@ public class AgentLoopTests
 
         var result = await loop.RunAsync("sys", "go", CancellationToken.None);
 
-        Assert.Equal(AgentStatus.StepLimitReached, result.Status);
-        Assert.Equal(3, result.Steps);
+        Assert.That(result.Status, Is.EqualTo(AgentStatus.StepLimitReached));
+        Assert.That(result.Steps, Is.EqualTo(3));
     }
 
-    [Fact]
+    [Test]
     public async Task InvalidJson_StreamThrows()
     {
         var client = new FakeChatClient();
@@ -152,11 +152,11 @@ public class AgentLoopTests
 
         var result = await loop.RunAsync("sys", "go", CancellationToken.None);
 
-        Assert.Equal(AgentStatus.Failed, result.Status);
-        Assert.NotNull(result.Error);
+        Assert.That(result.Status, Is.EqualTo(AgentStatus.Failed));
+        TestAssert.NotNull(result.Error);
     }
 
-    [Fact]
+    [Test]
     public async Task Cancellation_ReturnsCancelled()
     {
         var client = new FakeChatClient();
@@ -167,10 +167,10 @@ public class AgentLoopTests
         await cts.CancelAsync();
         var result = await loop.RunAsync("sys", "go", cts.Token);
 
-        Assert.Equal(AgentStatus.Cancelled, result.Status);
+        Assert.That(result.Status, Is.EqualTo(AgentStatus.Cancelled));
     }
 
-    [Fact]
+    [Test]
     public async Task CancellationDuringStream_ReturnsCancelled()
     {
         var client = new FakeChatClient();
@@ -182,9 +182,9 @@ public class AgentLoopTests
 
         var result = await loop.RunAsync("sys", "go", cts.Token);
 
-        Assert.Equal(AgentStatus.Cancelled, result.Status);
-        Assert.Single(loop.History, m => m.Role         == ChatRole.User);
-        Assert.DoesNotContain(loop.History, m => m.Role == ChatRole.Assistant);
+        Assert.That(result.Status, Is.EqualTo(AgentStatus.Cancelled));
+        TestAssert.Single(loop.History, m => m.Role == ChatRole.User);
+        TestAssert.DoesNotContainAny(m => m.Role    == ChatRole.Assistant, loop.History);
     }
 
     /// <summary>
@@ -205,7 +205,7 @@ public class AgentLoopTests
     ];
 
 
-    [Fact]
+    [Test]
     public async Task ModelUsage_EndCarryingUsageIsSentToTheRecorder()
     {
         var client   = new FakeChatClient();
@@ -216,11 +216,11 @@ public class AgentLoopTests
 
         var result = await loop.RunAsync("sys", "hi", CancellationToken.None);
 
-        Assert.Equal(AgentStatus.Completed, result.Status);
-        Assert.Equal((120, 45, "stop"), Assert.Single(recorder.UsageRecords));
+        Assert.That(result.Status, Is.EqualTo(AgentStatus.Completed));
+        Assert.That(TestAssert.Single(recorder.UsageRecords), Is.EqualTo((120, 45, "stop")));
     }
 
-    [Fact]
+    [Test]
     public async Task ModelUsage_FinishReasonAloneIsStillRecorded()
     {
         var client   = new FakeChatClient();
@@ -235,12 +235,12 @@ public class AgentLoopTests
 
         var result = await loop.RunAsync("sys", "hi", CancellationToken.None);
 
-        Assert.Equal(AgentStatus.Completed, result.Status);
+        Assert.That(result.Status, Is.EqualTo(AgentStatus.Completed));
         // 任一字段非空即写审计行；缺失的 usage 保持 null。
-        Assert.Equal((null, null, "stop"), Assert.Single(recorder.UsageRecords));
+        Assert.That(TestAssert.Single(recorder.UsageRecords), Is.EqualTo(((int?)null, (int?)null, "stop")));
     }
 
-    [Fact]
+    [Test]
     public async Task ModelUsage_StreamWithoutUsageOrFinishReasonRecordsNothing()
     {
         var client   = new FakeChatClient();
@@ -251,11 +251,11 @@ public class AgentLoopTests
 
         var result = await loop.RunAsync("sys", "hi", CancellationToken.None);
 
-        Assert.Equal(AgentStatus.Completed, result.Status);
-        Assert.Empty(recorder.UsageRecords);
+        Assert.That(result.Status, Is.EqualTo(AgentStatus.Completed));
+        Assert.That(recorder.UsageRecords, Is.Empty);
     }
 
-    [Fact]
+    [Test]
     public async Task RunTurn_ContinuesSharedContextAndRejectsChangedSystemPrompt()
     {
         var client = new FakeChatClient();
@@ -267,20 +267,20 @@ public class AgentLoopTests
         await loop.RunTurnAsync("sys", "u1", CancellationToken.None);
 
         // 系统提示不一致时拒绝追加，保留上一回合的完整历史。
-        await Assert.ThrowsAsync<InvalidOperationException>(() => loop.RunTurnAsync("different", "u2",
-                                                                     CancellationToken.None));
-        Assert.Equal(3, context.Messages.Count);
-        Assert.Equal("one", context.Messages[2].Content);
+        await TestAssert.ThrowsAsync<InvalidOperationException>(() => loop.RunTurnAsync("different", "u2",
+                                                                         CancellationToken.None));
+        Assert.That(context.Messages.Count, Is.EqualTo(3));
+        Assert.That(context.Messages[2].Content, Is.EqualTo("one"));
 
         // 匹配的系统提示复用上下文；后续请求保留旧回合且只有一条系统消息。
         await loop.RunTurnAsync("sys", "u2", CancellationToken.None);
-        Assert.Equal(2, client.Requests);
-        Assert.Equal([ChatRole.System, ChatRole.User, ChatRole.Assistant, ChatRole.User],
-                     client.RequestLog[1].Messages.Select(m => m.Role).ToArray());
-        Assert.Single(client.RequestLog[1].Messages, m => m.Role == ChatRole.System);
+        Assert.That(client.Requests, Is.EqualTo(2));
+        Assert.That(client.RequestLog[1].Messages.Select(m => m.Role).ToArray(),
+                    Is.EqualTo([ChatRole.System, ChatRole.User, ChatRole.Assistant, ChatRole.User]));
+        TestAssert.Single(client.RequestLog[1].Messages, m => m.Role == ChatRole.System);
     }
 
-    [Fact]
+    [Test]
     public async Task RunTurn_RefusesToContinueWhenHistoryEndsWithoutToolResults()
     {
         var client  = new FakeChatClient();
@@ -292,16 +292,16 @@ public class AgentLoopTests
                                  context : context);
 
         var rejected =
-            await Assert.ThrowsAsync<InvalidOperationException>(() => loop.RunTurnAsync("sys", "u2",
-                                                                         CancellationToken.None));
+            await TestAssert.ThrowsAsync<InvalidOperationException>(() => loop.RunTurnAsync("sys", "u2",
+                                                                             CancellationToken.None));
 
-        Assert.Contains("call_1", rejected.Message);
-        Assert.Equal(0, client.Requests);
+        Assert.That(rejected.Message, Does.Contain("call_1"));
+        Assert.That(client.Requests, Is.EqualTo(0));
         // 被拒绝的回合不追加历史。
-        Assert.Equal(3, context.Messages.Count);
+        Assert.That(context.Messages.Count, Is.EqualTo(3));
     }
 
-    [Fact]
+    [Test]
     public void LastCompleteBoundary_ClassifiesCompleteRewindableAndDamagedHistories()
     {
         IReadOnlyList<ChatMessage> Complete() =>
@@ -312,7 +312,7 @@ public class AgentLoopTests
             ChatMessage.Assistant("done")
         ];
 
-        Assert.Equal(5, ChatHistoryInvariants.LastCompleteBoundary(Complete()));
+        Assert.That(ChatHistoryInvariants.LastCompleteBoundary(Complete()), Is.EqualTo(5));
 
         // 尾部工具组即使已有部分结果，也须整体回退到发起调用前，不能拆分原子组。
         var rewound = new List<ChatMessage>(Complete())
@@ -322,7 +322,7 @@ public class AgentLoopTests
                                   [new ChatToolCall("call_2", "t", "{}"), new ChatToolCall("call_3", "t", "{}")]),
             ChatMessage.Tool("t", "call_2", "partial")
         };
-        Assert.Equal(6, ChatHistoryInvariants.LastCompleteBoundary(rewound));
+        Assert.That(ChatHistoryInvariants.LastCompleteBoundary(rewound), Is.EqualTo(6));
 
         // 非尾部的不完整工具组属于损坏，不能按尾部回退。
         var damaged = new List<ChatMessage>
@@ -331,10 +331,10 @@ public class AgentLoopTests
             ChatMessage.Assistant(string.Empty, [new ChatToolCall("call_1", "t", "{}")]),
             ChatMessage.User("after the gap")
         };
-        Assert.Equal(-1, ChatHistoryInvariants.LastCompleteBoundary(damaged));
+        Assert.That(ChatHistoryInvariants.LastCompleteBoundary(damaged), Is.EqualTo(-1));
     }
 
-    [Fact]
+    [Test]
     public async Task RunTurn_RecordsAPrepareFailureAsKnownNotStarted()
     {
         var client = new FakeChatClient();
@@ -344,17 +344,17 @@ public class AgentLoopTests
 
         var result = await loop.RunAsync("sys", "go", CancellationToken.None);
 
-        Assert.Equal(AgentStatus.Completed, result.Status);
-        var record = Assert.Single(result.ToolCalls!);
-        Assert.Equal("missing", record.ToolName);
-        Assert.Null(record.Capability);
-        Assert.False(record.SideEffects);
-        Assert.Equal(ToolCallExecutionState.KnownNotStarted, record.State);
-        Assert.Null(record.Approval);
-        Assert.Contains("Unknown tool", record.PreparationError, StringComparison.Ordinal);
+        Assert.That(result.Status, Is.EqualTo(AgentStatus.Completed));
+        var record = TestAssert.Single(result.ToolCalls!);
+        Assert.That(record.ToolName, Is.EqualTo("missing"));
+        Assert.That(record.Capability, Is.Null);
+        Assert.That(record.SideEffects, Is.False);
+        Assert.That(record.State, Is.EqualTo(ToolCallExecutionState.KnownNotStarted));
+        Assert.That(record.Approval, Is.Null);
+        TestAssert.Contains("Unknown tool", record.PreparationError, StringComparison.Ordinal);
     }
 
-    [Fact]
+    [Test]
     public async Task RunTurn_RecordsApprovalOutcomesAndConfirmedResults()
     {
         var client = new FakeChatClient();
@@ -369,21 +369,21 @@ public class AgentLoopTests
 
         var result = await loop.RunAsync("sys", "go", CancellationToken.None);
 
-        Assert.Equal(AgentStatus.Completed, result.Status);
-        Assert.Equal(2, result.ToolCalls!.Count);
+        Assert.That(result.Status, Is.EqualTo(AgentStatus.Completed));
+        Assert.That(result.ToolCalls!.Count, Is.EqualTo(2));
 
         var approved = result.ToolCalls[0];
-        Assert.Equal(ToolCallExecutionState.ConfirmedResult, approved.State);
-        Assert.Equal("allow once", approved.Approval);
-        Assert.True(approved.SideEffects);
+        Assert.That(approved.State, Is.EqualTo(ToolCallExecutionState.ConfirmedResult));
+        Assert.That(approved.Approval, Is.EqualTo("allow once"));
+        Assert.That(approved.SideEffects, Is.True);
 
         var denied = result.ToolCalls[1];
-        Assert.Equal(ToolCallExecutionState.KnownNotStarted, denied.State);
-        Assert.Contains("Permission denied by user", denied.Approval, StringComparison.Ordinal);
-        Assert.Equal(1, tool.ExecuteCount);
+        Assert.That(denied.State, Is.EqualTo(ToolCallExecutionState.KnownNotStarted));
+        TestAssert.Contains("Permission denied by user", denied.Approval, StringComparison.Ordinal);
+        Assert.That(tool.ExecuteCount, Is.EqualTo(1));
     }
 
-    [Fact]
+    [Test]
     public async Task RunEvents_SinkFailureOnNonTerminalEventDoesNotFailTheRun()
     {
         var client = new FakeChatClient();
@@ -394,13 +394,13 @@ public class AgentLoopTests
         var result = await loop.RunAsync("sys", "go", CancellationToken.None);
 
         // 展示故障不改写执行终态；错误随终态报告，仍尝试交付终态事件。
-        Assert.Equal(AgentStatus.Completed, result.Status);
-        Assert.Equal("done", result.FinalMessage);
-        Assert.Contains("sink exploded", result.Error);
-        Assert.Equal(3, sink.Published); // 开始、失败的文本增量、结束。
+        Assert.That(result.Status, Is.EqualTo(AgentStatus.Completed));
+        Assert.That(result.FinalMessage, Is.EqualTo("done"));
+        Assert.That(result.Error, Does.Contain("sink exploded"));
+        Assert.That(sink.Published, Is.EqualTo(3)); // 开始、失败的文本增量、结束。
     }
 
-    [Fact]
+    [Test]
     public async Task RunEvents_SinkFailureOnTerminalEventPreservesTheOutcome()
     {
         var client = new FakeChatClient();
@@ -410,13 +410,13 @@ public class AgentLoopTests
 
         var result = await loop.RunAsync("sys", "go", CancellationToken.None);
 
-        Assert.Equal(AgentStatus.Completed, result.Status);
-        Assert.Equal("done", result.FinalMessage);
-        Assert.Contains("sink exploded", result.Error);
-        Assert.Equal(3, sink.Published); // 开始、文本增量、失败的结束事件。
+        Assert.That(result.Status, Is.EqualTo(AgentStatus.Completed));
+        Assert.That(result.FinalMessage, Is.EqualTo("done"));
+        Assert.That(result.Error, Does.Contain("sink exploded"));
+        Assert.That(sink.Published, Is.EqualTo(3)); // 开始、文本增量、失败的结束事件。
     }
 
-    [Fact]
+    [Test]
     public async Task RunTurn_EventSequenceRestartsAtOneForEachTurn()
     {
         var client = new FakeChatClient();
@@ -431,7 +431,7 @@ public class AgentLoopTests
         await loop.RunTurnAsync("sys", "u2", CancellationToken.None);
 
         // 事件序号按运行重置；每回合依次发布开始、文本增量和结束事件。
-        Assert.Equal([1L, 2L, 3L, 1L, 2L, 3L], sink.Events.Select(@event => @event.Sequence).ToArray());
+        Assert.That(sink.Events.Select(@event => @event.Sequence).ToArray(), Is.EqualTo([1L, 2L, 3L, 1L, 2L, 3L]));
     }
 
     /// <summary>

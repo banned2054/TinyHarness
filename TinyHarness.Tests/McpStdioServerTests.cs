@@ -8,10 +8,14 @@ using TinyHarness.Core.Services.Worker;
 namespace TinyHarness.Tests;
 
 /// <summary>
-///     MCP stdio 协议与 ask_glm 闭环的离线测试。全部通过注入的 TextReader/TextWriter 和
-///     fake worker 驱动，无进程、无网络。
-///     Offline tests for MCP stdio and the ask_glm path, driven through injected readers/writers and
-///     a fake worker — no processes and no network.
+///     <para>
+///         MCP stdio 协议与 ask_glm 闭环的离线测试。全部通过注入的 TextReader/TextWriter 和
+///         fake worker 驱动，无进程、无网络。
+///     </para>
+///     <para>
+///         Offline tests for MCP stdio and the ask_glm path, driven through injected readers/writers and
+///         a fake worker — no processes and no network.
+///     </para>
 /// </summary>
 public class McpStdioServerTests
 {
@@ -23,119 +27,120 @@ public class McpStdioServerTests
 
     // ---- handshake ---------------------------------------------------------
 
-    [Fact]
+    [Test]
     public async Task FullHandshake_AnswersInitializeAndToolsList_NotificationsStaySilent()
     {
         var responses = await RunAsync(Initialize2025, InitializedNotification,
                                        """{"jsonrpc":"2.0","id":2,"method":"tools/list"}""");
 
-        Assert.Equal(2, responses.Count);
+        Assert.That(responses.Count, Is.EqualTo(2));
 
         var initialize = responses[0];
-        Assert.Equal(1, initialize.GetProperty("id").GetInt32());
+        Assert.That(initialize.GetProperty("id").GetInt32(), Is.EqualTo(1));
         var initializeResult = initialize.GetProperty("result");
-        Assert.Equal(McpProtocolVersion.Latest, initializeResult.GetProperty("protocolVersion").GetString());
-        Assert.True(initializeResult.TryGetProperty("capabilities", out var capabilities));
-        Assert.True(capabilities.TryGetProperty("tools", out _));
-        Assert.Equal("tinyharness", initializeResult.GetProperty("serverInfo").GetProperty("name").GetString());
+        Assert.That(initializeResult.GetProperty("protocolVersion").GetString(), Is.EqualTo(McpProtocolVersion.Latest));
+        Assert.That(initializeResult.TryGetProperty("capabilities", out var capabilities), Is.True);
+        Assert.That(capabilities.TryGetProperty("tools", out _), Is.True);
+        Assert.That(initializeResult.GetProperty("serverInfo").GetProperty("name").GetString(),
+                    Is.EqualTo("tinyharness"));
 
         var tools = responses[1].GetProperty("result").GetProperty("tools").EnumerateArray();
-        Assert.Equal("ask_glm", Assert.Single(tools).GetProperty("name").GetString());
+        Assert.That(TestAssert.Single(tools).GetProperty("name").GetString(), Is.EqualTo("ask_glm"));
     }
 
-    [Fact]
+    [Test]
     public async Task Initialize_WithUnsupportedVersion_FallsBackToLatestSupported()
     {
         var responses = await RunAsync("""
                                        {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"1999-01-01","capabilities":{},"clientInfo":{"name":"codex","version":"1.0.0"}}}
                                        """);
 
-        Assert.Equal(McpProtocolVersion.Latest,
-                     responses[0].GetProperty("result").GetProperty("protocolVersion").GetString());
+        Assert.That(responses[0].GetProperty("result").GetProperty("protocolVersion").GetString(),
+                    Is.EqualTo(McpProtocolVersion.Latest));
     }
 
-    [Fact]
+    [Test]
     public async Task Initialize_WithoutProtocolVersion_FallsBackToLatestSupported()
     {
         var responses = await RunAsync("""{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}""");
 
-        Assert.Equal(McpProtocolVersion.Latest,
-                     responses[0].GetProperty("result").GetProperty("protocolVersion").GetString());
+        Assert.That(responses[0].GetProperty("result").GetProperty("protocolVersion").GetString(),
+                    Is.EqualTo(McpProtocolVersion.Latest));
     }
 
-    [Fact]
+    [Test]
     public async Task Initialize_WithStringId_PreservesIdVerbatim()
     {
         var responses = await RunAsync("""
                                        {"jsonrpc":"2.0","id":"handshake-1","method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"codex","version":"1.0.0"}}}
                                        """);
 
-        Assert.Equal(JsonValueKind.String, responses[0].GetProperty("id").ValueKind);
-        Assert.Equal("handshake-1", responses[0].GetProperty("id").GetString());
-        Assert.True(responses[0].TryGetProperty("result", out _));
+        Assert.That(responses[0].GetProperty("id").ValueKind, Is.EqualTo(JsonValueKind.String));
+        Assert.That(responses[0].GetProperty("id").GetString(), Is.EqualTo("handshake-1"));
+        Assert.That(responses[0].TryGetProperty("result", out _), Is.True);
     }
 
     // ---- tools/list --------------------------------------------------------
 
-    [Fact]
+    [Test]
     public async Task ToolsList_PublishesFixedAskGlmSchema()
     {
         var responses = await RunAsync(Initialize2025, InitializedNotification,
                                        """{"jsonrpc":"2.0","id":2,"method":"tools/list"}""");
 
-        Assert.Equal(2, responses.Count);
-        var askGlm = Assert.Single(responses[1].GetProperty("result").GetProperty("tools").EnumerateArray());
-        Assert.Equal("ask_glm", askGlm.GetProperty("name").GetString());
-        Assert.Equal("Ask GLM", askGlm.GetProperty("title").GetString());
-        Assert.False(string.IsNullOrWhiteSpace(askGlm.GetProperty("description").GetString()));
+        Assert.That(responses.Count, Is.EqualTo(2));
+        var askGlm = TestAssert.Single(responses[1].GetProperty("result").GetProperty("tools").EnumerateArray());
+        Assert.That(askGlm.GetProperty("name").GetString(), Is.EqualTo("ask_glm"));
+        Assert.That(askGlm.GetProperty("title").GetString(), Is.EqualTo("Ask GLM"));
+        Assert.That(string.IsNullOrWhiteSpace(askGlm.GetProperty("description").GetString()), Is.False);
 
         var schema = askGlm.GetProperty("inputSchema");
-        Assert.Equal("object", schema.GetProperty("type").GetString());
-        Assert.False(schema.GetProperty("additionalProperties").GetBoolean());
+        Assert.That(schema.GetProperty("type").GetString(), Is.EqualTo("object"));
+        Assert.That(schema.GetProperty("additionalProperties").GetBoolean(), Is.False);
         var required = schema.GetProperty("required").EnumerateArray()
                              .Select(value => value.GetString()).ToList();
-        Assert.Contains("task", required);
+        Assert.That(required, Does.Contain("task"));
 
         var properties = schema.GetProperty("properties");
-        Assert.Equal("string", properties.GetProperty("task").GetProperty("type").GetString());
-        Assert.Equal("string", properties.GetProperty("expectedOutput").GetProperty("type").GetString());
-        Assert.Equal("string",
-                     properties.GetProperty("knownFacts").GetProperty("items").GetProperty("type").GetString());
-        Assert.Equal("string",
-                     properties.GetProperty("focusPaths").GetProperty("items").GetProperty("type").GetString());
+        Assert.That(properties.GetProperty("task").GetProperty("type").GetString(), Is.EqualTo("string"));
+        Assert.That(properties.GetProperty("expectedOutput").GetProperty("type").GetString(), Is.EqualTo("string"));
+        Assert.That(properties.GetProperty("knownFacts").GetProperty("items").GetProperty("type").GetString(),
+                    Is.EqualTo("string"));
+        Assert.That(properties.GetProperty("focusPaths").GetProperty("items").GetProperty("type").GetString(),
+                    Is.EqualTo("string"));
     }
 
     // ---- lifecycle guardrails ----------------------------------------------
 
-    [Fact]
+    [Test]
     public async Task ToolsList_BeforeInitialize_IsRejectedAsNotInitialized()
     {
         var responses = await RunAsync("""{"jsonrpc":"2.0","id":5,"method":"tools/list"}""");
 
-        Assert.Equal(-32002, responses[0].GetProperty("error").GetProperty("code").GetInt32());
+        Assert.That(responses[0].GetProperty("error").GetProperty("code").GetInt32(), Is.EqualTo(-32002));
     }
 
-    [Fact]
+    [Test]
     public async Task Ping_BeforeInitialize_IsAnsweredWithEmptyResult()
     {
         var responses = await RunAsync("""{"jsonrpc":"2.0","id":9,"method":"ping"}""");
 
-        var response = Assert.Single(responses);
-        Assert.Equal(9, response.GetProperty("id").GetInt32());
-        Assert.Empty(response.GetProperty("result").EnumerateObject());
+        var response = TestAssert.Single(responses);
+        Assert.That(response.GetProperty("id").GetInt32(), Is.EqualTo(9));
+        Assert.That(response.GetProperty("result").EnumerateObject(), Is.Empty);
     }
 
-    [Fact]
+    [Test]
     public async Task ToolsCall_BeforeInitialize_IsRejectedAsNotInitialized()
     {
         var responses = await RunAsync(
                                        """{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"ask_glm","arguments":{"task":"test"}}}""");
 
-        Assert.Single(responses);
-        Assert.Equal(-32002, responses[0].GetProperty("error").GetProperty("code").GetInt32());
+        TestAssert.Single(responses);
+        Assert.That(responses[0].GetProperty("error").GetProperty("code").GetInt32(), Is.EqualTo(-32002));
     }
 
-    [Fact]
+    [Test]
     public async Task ToolsCall_AskGlmReturnsBoundedStructuredWorkerJson()
     {
         WorkerRequest? received = null;
@@ -162,22 +167,22 @@ public class McpStdioServerTests
                                            });
                                        });
 
-        Assert.Equal("find retry handling", received!.TaskPrompt);
-        Assert.Equal(["retry count is configurable"], received.KnownFacts);
-        Assert.Equal(["src"], received.FocusPaths);
+        Assert.That(received!.TaskPrompt, Is.EqualTo("find retry handling"));
+        Assert.That(received.KnownFacts, Is.EqualTo(["retry count is configurable"]));
+        Assert.That(received.FocusPaths, Is.EqualTo(["src"]));
         var call = responses[1].GetProperty("result");
-        Assert.False(call.GetProperty("isError").GetBoolean());
-        var block = Assert.Single(call.GetProperty("content").EnumerateArray());
-        Assert.Equal("text", block.GetProperty("type").GetString());
+        Assert.That(call.GetProperty("isError").GetBoolean(), Is.False);
+        var block = TestAssert.Single(call.GetProperty("content").EnumerateArray());
+        Assert.That(block.GetProperty("type").GetString(), Is.EqualTo("text"));
         using var workerResult = JsonDocument.Parse(block.GetProperty("text").GetString()!);
-        Assert.Equal("Completed", workerResult.RootElement.GetProperty("status").GetString());
-        Assert.Equal("Retry count is bounded in RetryPolicy.",
-                     workerResult.RootElement.GetProperty("conclusion").GetString());
-        Assert.Equal("src/RetryPolicy.cs",
-                     workerResult.RootElement.GetProperty("evidence")[0].GetProperty("path").GetString());
+        Assert.That(workerResult.RootElement.GetProperty("status").GetString(), Is.EqualTo("Completed"));
+        Assert.That(workerResult.RootElement.GetProperty("conclusion").GetString(),
+                    Is.EqualTo("Retry count is bounded in RetryPolicy."));
+        Assert.That(workerResult.RootElement.GetProperty("evidence")[0].GetProperty("path").GetString(),
+                    Is.EqualTo("src/RetryPolicy.cs"));
     }
 
-    [Fact]
+    [Test]
     public async Task ToolsCall_IgnoresMcpRequestMetadata()
     {
         var invoked = false;
@@ -196,11 +201,11 @@ public class McpStdioServerTests
                                            });
                                        });
 
-        Assert.True(invoked);
-        Assert.False(responses[1].GetProperty("result").GetProperty("isError").GetBoolean());
+        Assert.That(invoked, Is.True);
+        Assert.That(responses[1].GetProperty("result").GetProperty("isError").GetBoolean(), Is.False);
     }
 
-    [Fact]
+    [Test]
     public async Task OfflineMcpRequest_RunsFakeWorkerThroughFileToolsAndReturnsEvidence()
     {
         using var dir = new TestTempDir();
@@ -235,23 +240,25 @@ public class McpStdioServerTests
                                        ],
                                        runner.RunAsync);
 
-        Assert.Equal(4, fake.Requests);
-        Assert.Equal("public sealed class RetryPolicy { public int RetryBudget = 3; }",
-                     await File.ReadAllTextAsync(filePath));
+        Assert.That(fake.Requests, Is.EqualTo(4));
+        Assert.That(await File.ReadAllTextAsync(filePath),
+                    Is.EqualTo("public sealed class RetryPolicy { public int RetryBudget = 3; }"));
         var call = responses[1].GetProperty("result");
-        Assert.False(call.GetProperty("isError").GetBoolean());
+        Assert.That(call.GetProperty("isError").GetBoolean(), Is.False);
         var       text         = call.GetProperty("content")[0].GetProperty("text").GetString()!;
         using var workerResult = JsonDocument.Parse(text);
         var       result       = workerResult.RootElement;
-        Assert.Equal("Completed", result.GetProperty("status").GetString());
-        Assert.Equal("RetryPolicy declares a fixed retry budget of 3.", result.GetProperty("conclusion").GetString());
-        Assert.Equal("src/RetryPolicy.cs", result.GetProperty("evidence")[0].GetProperty("path").GetString());
-        Assert.Equal(3, result.GetProperty("statistics").GetProperty("toolCalls").GetInt32());
-        Assert.Equal(4, result.GetProperty("statistics").GetProperty("modelRequests").GetInt32());
-        Assert.DoesNotContain("public sealed class", text, StringComparison.Ordinal);
+        Assert.That(result.GetProperty("status").GetString(), Is.EqualTo("Completed"));
+        Assert.That(result.GetProperty("conclusion").GetString(),
+                    Is.EqualTo("RetryPolicy declares a fixed retry budget of 3."));
+        Assert.That(result.GetProperty("evidence")[0].GetProperty("path").GetString(),
+                    Is.EqualTo("src/RetryPolicy.cs"));
+        Assert.That(result.GetProperty("statistics").GetProperty("toolCalls").GetInt32(), Is.EqualTo(3));
+        Assert.That(result.GetProperty("statistics").GetProperty("modelRequests").GetInt32(), Is.EqualTo(4));
+        TestAssert.DoesNotContain("public sealed class", text, StringComparison.Ordinal);
     }
 
-    [Fact]
+    [Test]
     public async Task ToolsCall_RejectsUnknownArgumentsWithoutCallingWorker()
     {
         var invoked = false;
@@ -269,11 +276,11 @@ public class McpStdioServerTests
                                            });
                                        });
 
-        Assert.False(invoked);
-        Assert.Equal(-32602, responses[1].GetProperty("error").GetProperty("code").GetInt32());
+        Assert.That(invoked, Is.False);
+        Assert.That(responses[1].GetProperty("error").GetProperty("code").GetInt32(), Is.EqualTo(-32602));
     }
 
-    [Fact]
+    [Test]
     public async Task ToolsCall_ValidationFailureAndWorkerExceptionAreBoundedAndWithheld()
     {
         var invoked     = 0;
@@ -292,23 +299,23 @@ public class McpStdioServerTests
                                                InvalidOperationException("sk-live-MCP-SENTINEL internal response fragment");
                                        });
 
-        Assert.Equal(1, invoked);
-        var invalid = Assert.Single(responses, response => response.GetProperty("id").GetInt32() == 5)
-                            .GetProperty("result");
-        Assert.True(invalid.GetProperty("isError").GetBoolean());
+        Assert.That(invoked, Is.EqualTo(1));
+        var invalid = TestAssert.Single(responses, response => response.GetProperty("id").GetInt32() == 5)
+                                .GetProperty("result");
+        Assert.That(invalid.GetProperty("isError").GetBoolean(), Is.True);
         var invalidText = invalid.GetProperty("content")[0].GetProperty("text").GetString()!;
-        Assert.DoesNotContain(tooLongTask, invalidText, StringComparison.Ordinal);
+        TestAssert.DoesNotContain(tooLongTask, invalidText, StringComparison.Ordinal);
 
-        var failed = Assert.Single(responses, response => response.GetProperty("id").GetInt32() == 6)
-                           .GetProperty("result");
-        Assert.True(failed.GetProperty("isError").GetBoolean());
+        var failed = TestAssert.Single(responses, response => response.GetProperty("id").GetInt32() == 6)
+                               .GetProperty("result");
+        Assert.That(failed.GetProperty("isError").GetBoolean(), Is.True);
         var failedText = failed.GetProperty("content")[0].GetProperty("text").GetString()!;
-        Assert.DoesNotContain("sk-live-MCP-SENTINEL", failedText, StringComparison.Ordinal);
+        TestAssert.DoesNotContain("sk-live-MCP-SENTINEL", failedText, StringComparison.Ordinal);
         using var resultDocument = JsonDocument.Parse(failedText);
-        Assert.Equal("Failed", resultDocument.RootElement.GetProperty("status").GetString());
+        Assert.That(resultDocument.RootElement.GetProperty("status").GetString(), Is.EqualTo("Failed"));
     }
 
-    [Fact]
+    [Test]
     public async Task ToolsCall_CancelledNotificationCancelsActiveWorker()
     {
         var       input   = new ChannelTextReader();
@@ -333,73 +340,73 @@ public class McpStdioServerTests
 
         var responses = output.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(ToJsonElement)
                               .ToArray();
-        var call = Assert.Single(responses, response => response.TryGetProperty("id", out var id) &&
-                                                        id.ValueKind == JsonValueKind.Number && id.GetInt32() == 42)
-                         .GetProperty("result");
-        Assert.True(call.GetProperty("isError").GetBoolean());
+        var call = TestAssert.Single(responses, response => response.TryGetProperty("id", out var id) &&
+                                                            id.ValueKind == JsonValueKind.Number && id.GetInt32() == 42)
+                             .GetProperty("result");
+        Assert.That(call.GetProperty("isError").GetBoolean(), Is.True);
         using var result = JsonDocument.Parse(call.GetProperty("content")[0].GetProperty("text").GetString()!);
-        Assert.Equal("Cancelled", result.RootElement.GetProperty("status").GetString());
+        Assert.That(result.RootElement.GetProperty("status").GetString(), Is.EqualTo("Cancelled"));
     }
 
-    [Fact]
+    [Test]
     public async Task UnknownNotification_ProducesNoResponseAndServerKeepsWorking()
     {
         var responses = await RunAsync("""{"jsonrpc":"2.0","method":"notifications/unknown"}""",
                                        """{"jsonrpc":"2.0","id":6,"method":"ping"}""");
 
-        var response = Assert.Single(responses);
-        Assert.Equal(6, response.GetProperty("id").GetInt32());
+        var response = TestAssert.Single(responses);
+        Assert.That(response.GetProperty("id").GetInt32(), Is.EqualTo(6));
     }
 
     // ---- invalid requests --------------------------------------------------
 
-    [Fact]
+    [Test]
     public async Task MalformedJson_ReturnsParseErrorWithNullId()
     {
         var responses = await RunAsync("this is not json");
 
-        Assert.Equal(-32700, responses[0].GetProperty("error").GetProperty("code").GetInt32());
-        Assert.Equal(JsonValueKind.Null, responses[0].GetProperty("id").ValueKind);
+        Assert.That(responses[0].GetProperty("error").GetProperty("code").GetInt32(), Is.EqualTo(-32700));
+        Assert.That(responses[0].GetProperty("id").ValueKind, Is.EqualTo(JsonValueKind.Null));
     }
 
-    [Fact]
+    [Test]
     public async Task WrongJsonRpcVersion_ReturnsInvalidRequestWithEchoedId()
     {
         var responses = await RunAsync("""{"jsonrpc":"1.0","id":7,"method":"tools/list"}""");
 
-        Assert.Equal(-32600, responses[0].GetProperty("error").GetProperty("code").GetInt32());
-        Assert.Equal(7, responses[0].GetProperty("id").GetInt32());
+        Assert.That(responses[0].GetProperty("error").GetProperty("code").GetInt32(), Is.EqualTo(-32600));
+        Assert.That(responses[0].GetProperty("id").GetInt32(), Is.EqualTo(7));
     }
 
-    [Fact]
+    [Test]
     public async Task MissingMethod_ReturnsInvalidRequest()
     {
         var responses = await RunAsync("""{"jsonrpc":"2.0","id":3}""");
 
-        Assert.Equal(-32600, responses[0].GetProperty("error").GetProperty("code").GetInt32());
+        Assert.That(responses[0].GetProperty("error").GetProperty("code").GetInt32(), Is.EqualTo(-32600));
     }
 
-    [Fact]
+    [Test]
     public async Task BatchArray_ReturnsInvalidRequest()
     {
         // 2025-06-18 移除了 JSON-RPC 批处理；数组不是合法的单条消息。
         var responses = await RunAsync("""[{"jsonrpc":"2.0","id":1,"method":"ping"}]""");
 
-        Assert.Equal(-32600, responses[0].GetProperty("error").GetProperty("code").GetInt32());
+        Assert.That(responses[0].GetProperty("error").GetProperty("code").GetInt32(), Is.EqualTo(-32600));
     }
 
-    [Fact]
+    [Test]
     public async Task OversizedInputLine_IsRejectedWithoutParsingOrEchoingContent()
     {
         var sentinel  = "input-sentinel-" + new string('x', 70_000);
         var responses = await RunAsync(sentinel);
 
-        var response = Assert.Single(responses);
-        Assert.Equal(-32600, response.GetProperty("error").GetProperty("code").GetInt32());
-        Assert.DoesNotContain("input-sentinel", response.GetRawText(), StringComparison.Ordinal);
+        var response = TestAssert.Single(responses);
+        Assert.That(response.GetProperty("error").GetProperty("code").GetInt32(), Is.EqualTo(-32600));
+        TestAssert.DoesNotContain("input-sentinel", response.GetRawText(), StringComparison.Ordinal);
     }
 
-    [Fact]
+    [Test]
     public async Task ToolsCall_UnknownToolNameFailsWithoutCallingWorker()
     {
         var invoked = false;
@@ -417,11 +424,11 @@ public class McpStdioServerTests
                                            });
                                        });
 
-        Assert.False(invoked);
+        Assert.That(invoked, Is.False);
         var call = responses[1].GetProperty("result");
-        Assert.True(call.GetProperty("isError").GetBoolean());
+        Assert.That(call.GetProperty("isError").GetBoolean(), Is.True);
         using var workerResult = JsonDocument.Parse(call.GetProperty("content")[0].GetProperty("text").GetString()!);
-        Assert.Equal("Failed", workerResult.RootElement.GetProperty("status").GetString());
+        Assert.That(workerResult.RootElement.GetProperty("status").GetString(), Is.EqualTo("Failed"));
     }
 
     // ---- helpers -----------------------------------------------------------

@@ -15,7 +15,7 @@ namespace TinyHarness.Tests;
 
 public sealed class RunPersistenceTests
 {
-    [Fact]
+    [Test]
     public async Task FileRecorderWritesJsonlAuditAndCompleteSessionSnapshot()
     {
         using var temp     = new TestTempDir();
@@ -41,17 +41,17 @@ public sealed class RunPersistenceTests
         await recorder.CompleteAsync(agentResult, [ChatMessage.System("system"), ChatMessage.User("inspect")],
                                      new StructuredState { Goal = "inspect" }, CancellationToken.None);
 
-        Assert.True(File.Exists(recorder.AuditPath));
-        Assert.True(File.Exists(recorder.SessionPath));
+        Assert.That(File.Exists(recorder.AuditPath), Is.True);
+        Assert.That(File.Exists(recorder.SessionPath), Is.True);
         var auditLines = await File.ReadAllLinesAsync(recorder.AuditPath);
-        Assert.Equal(6, auditLines.Length);
+        Assert.That(auditLines.Length, Is.EqualTo(6));
         var session = await File.ReadAllTextAsync(recorder.SessionPath);
-        Assert.Contains("\"runId\":\"run-1\"", session, StringComparison.Ordinal);
-        Assert.Contains("\"goal\":\"inspect\"", session, StringComparison.Ordinal);
-        Assert.Contains("\"status\":\"Completed\"", session, StringComparison.Ordinal);
+        TestAssert.Contains("\"runId\":\"run-1\"", session, StringComparison.Ordinal);
+        TestAssert.Contains("\"goal\":\"inspect\"", session, StringComparison.Ordinal);
+        TestAssert.Contains("\"status\":\"Completed\"", session, StringComparison.Ordinal);
     }
 
-    [Fact]
+    [Test]
     public async Task FinalMessageKnownSecretIsRedactedFromEntireSession()
     {
         const string secret = "synthetic-final-secret-42";
@@ -66,11 +66,11 @@ public sealed class RunPersistenceTests
 
         var raw      = await File.ReadAllTextAsync(recorder.SessionPath);
         var snapshot = DeserializeSession(raw);
-        Assert.DoesNotContain(secret, raw, StringComparison.Ordinal);
-        Assert.Equal("answer [REDACTED]", snapshot.Result.FinalMessage);
+        TestAssert.DoesNotContain(secret, raw, StringComparison.Ordinal);
+        Assert.That(snapshot.Result.FinalMessage, Is.EqualTo("answer [REDACTED]"));
     }
 
-    [Fact]
+    [Test]
     public async Task RunErrorKnownSecretIsRedactedFromSessionAndCompletedAudit()
     {
         const string secret = "synthetic-error-secret-42";
@@ -83,13 +83,13 @@ public sealed class RunPersistenceTests
 
         var session = await File.ReadAllTextAsync(recorder.SessionPath);
         var audit   = await File.ReadAllTextAsync(recorder.AuditPath);
-        Assert.DoesNotContain(secret, session, StringComparison.Ordinal);
-        Assert.DoesNotContain(secret, audit, StringComparison.Ordinal);
-        Assert.Equal("failure [REDACTED]", DeserializeSession(session).Result.Error);
-        Assert.Contains("\"outcome\":\"failure [REDACTED]\"", audit, StringComparison.Ordinal);
+        TestAssert.DoesNotContain(secret, session, StringComparison.Ordinal);
+        TestAssert.DoesNotContain(secret, audit, StringComparison.Ordinal);
+        Assert.That(DeserializeSession(session).Result.Error, Is.EqualTo("failure [REDACTED]"));
+        TestAssert.Contains("\"outcome\":\"failure [REDACTED]\"", audit, StringComparison.Ordinal);
     }
 
-    [Fact]
+    [Test]
     public async Task KnownSecretsAreRedactedFromMessagesToolCallsSummariesPathsAndState()
     {
         const string shorterSecret = "overlap-secret";
@@ -137,12 +137,12 @@ public sealed class RunPersistenceTests
 
         var persisted = await File.ReadAllTextAsync(recorder.AuditPath)
                       + await File.ReadAllTextAsync(recorder.SessionPath);
-        Assert.DoesNotContain(longerSecret, persisted, StringComparison.Ordinal);
-        Assert.DoesNotContain(shorterSecret, persisted, StringComparison.Ordinal);
-        Assert.Contains("[REDACTED]", persisted, StringComparison.Ordinal);
+        TestAssert.DoesNotContain(longerSecret, persisted, StringComparison.Ordinal);
+        TestAssert.DoesNotContain(shorterSecret, persisted, StringComparison.Ordinal);
+        TestAssert.Contains("[REDACTED]", persisted, StringComparison.Ordinal);
     }
 
-    [Fact]
+    [Test]
     public async Task SensitiveJsonFieldsStayParseableAndNullableMessageFieldsStayNull()
     {
         using var temp = new TestTempDir();
@@ -154,18 +154,19 @@ public sealed class RunPersistenceTests
                                      StructuredState.Empty, CancellationToken.None);
 
         var snapshot         = DeserializeSession(await File.ReadAllTextAsync(recorder.SessionPath));
-        var persistedMessage = Assert.Single(snapshot.Messages);
-        Assert.Null(persistedMessage.Name);
-        Assert.Null(persistedMessage.ToolCallId);
-        Assert.Null(snapshot.Result.Error);
-        var       persistedCall = Assert.Single(persistedMessage.ToolCalls!);
+        var persistedMessage = TestAssert.Single(snapshot.Messages);
+        Assert.That(persistedMessage.Name, Is.Null);
+        Assert.That(persistedMessage.ToolCallId, Is.Null);
+        Assert.That(snapshot.Result.Error, Is.Null);
+        var       persistedCall = TestAssert.Single(persistedMessage.ToolCalls!);
         using var document      = JsonDocument.Parse(persistedCall.ArgumentsJson);
-        Assert.Equal("[REDACTED]", document.RootElement.GetProperty("password").GetString());
-        Assert.Equal("[REDACTED]", document.RootElement.GetProperty("nested").GetProperty("api_key").GetString());
-        Assert.Equal(JsonValueKind.Null, document.RootElement.GetProperty("optional").ValueKind);
+        Assert.That(document.RootElement.GetProperty("password").GetString(), Is.EqualTo("[REDACTED]"));
+        Assert.That(document.RootElement.GetProperty("nested").GetProperty("api_key").GetString(),
+                    Is.EqualTo("[REDACTED]"));
+        Assert.That(document.RootElement.GetProperty("optional").ValueKind, Is.EqualTo(JsonValueKind.Null));
     }
 
-    [Fact]
+    [Test]
     public async Task ReasoningContentSurvivesSessionSnapshotRoundTrip()
     {
         using var temp     = new TestTempDir();
@@ -177,15 +178,15 @@ public sealed class RunPersistenceTests
         await recorder.CompleteAsync(new AgentResult { Status = AgentStatus.Completed }, [message],
                                      StructuredState.Empty, CancellationToken.None);
 
-        var persistedMessage = Assert.Single(DeserializeSession(await File.ReadAllTextAsync(recorder.SessionPath))
-                                                .Messages);
-        var reasoning = Assert.Single(persistedMessage.Reasoning!);
-        Assert.Equal("thinking", reasoning.Text);
-        Assert.Equal("opaque-payload", reasoning.ProtectedData);
-        Assert.Equal("rs_1", reasoning.ItemId);
+        var persistedMessage = TestAssert.Single(DeserializeSession(await File.ReadAllTextAsync(recorder.SessionPath))
+                                                    .Messages);
+        var reasoning = TestAssert.Single(persistedMessage.Reasoning!);
+        Assert.That(reasoning.Text, Is.EqualTo("thinking"));
+        Assert.That(reasoning.ProtectedData, Is.EqualTo("opaque-payload"));
+        Assert.That(reasoning.ItemId, Is.EqualTo("rs_1"));
     }
 
-    [Fact]
+    [Test]
     public async Task ReasoningRedactsTextAndKnownSecretsButKeepsOpaqueIdentifiers()
     {
         const string secret = "synthetic-reasoning-secret-42";
@@ -203,21 +204,20 @@ public sealed class RunPersistenceTests
                                      StructuredState.Empty, CancellationToken.None);
 
         var raw = await File.ReadAllTextAsync(recorder.SessionPath);
-        Assert.DoesNotContain(secret, raw, StringComparison.Ordinal);
-        var persisted = Assert.Single(DeserializeSession(raw).Messages);
-        Assert.Equal(2, persisted.Reasoning!.Count);
+        TestAssert.DoesNotContain(secret, raw, StringComparison.Ordinal);
+        var persisted = TestAssert.Single(DeserializeSession(raw).Messages);
+        Assert.That(persisted.Reasoning!.Count, Is.EqualTo(2));
         // 文本与命中已知 secret 的字段被替换；其余不透明标识原样保留。
-        // Text and fields matching a known secret are replaced; other opaque
-        // identifiers are kept verbatim.
-        Assert.Equal("reasoned about [REDACTED]", persisted.Reasoning[0].Text);
-        Assert.Equal("[REDACTED]", persisted.Reasoning[0].ProtectedData);
-        Assert.Equal("[REDACTED]", persisted.Reasoning[0].ItemId);
-        Assert.Equal("plain", persisted.Reasoning[1].Text);
-        Assert.Equal("opaque-keep", persisted.Reasoning[1].ProtectedData);
-        Assert.Equal("rs_2", persisted.Reasoning[1].ItemId);
+        // 命中已知密钥的文本与字段被替换；其余 opaque 标识符按原样保留。
+        Assert.That(persisted.Reasoning[0].Text, Is.EqualTo("reasoned about [REDACTED]"));
+        Assert.That(persisted.Reasoning[0].ProtectedData, Is.EqualTo("[REDACTED]"));
+        Assert.That(persisted.Reasoning[0].ItemId, Is.EqualTo("[REDACTED]"));
+        Assert.That(persisted.Reasoning[1].Text, Is.EqualTo("plain"));
+        Assert.That(persisted.Reasoning[1].ProtectedData, Is.EqualTo("opaque-keep"));
+        Assert.That(persisted.Reasoning[1].ItemId, Is.EqualTo("rs_2"));
     }
 
-    [Fact]
+    [Test]
     public async Task RecorderCompletionIOExceptionPreservesRunFailureAndAttemptsFinalizationOnce()
     {
         var client   = new FakeChatClient();
@@ -227,15 +227,15 @@ public sealed class RunPersistenceTests
 
         var result = await loop.RunAsync("sys", "run", CancellationToken.None);
 
-        Assert.Equal(AgentStatus.Failed, result.Status);
-        Assert.Equal(1, result.Steps);
-        Assert.Equal(0, result.ToolExecutions);
-        Assert.Contains("No scripted response", result.Error, StringComparison.Ordinal);
-        Assert.Contains("persistence failed: injected completion failure", result.Error, StringComparison.Ordinal);
-        Assert.Equal(1, recorder.CompleteCalls);
+        Assert.That(result.Status, Is.EqualTo(AgentStatus.Failed));
+        Assert.That(result.Steps, Is.EqualTo(1));
+        Assert.That(result.ToolExecutions, Is.EqualTo(0));
+        TestAssert.Contains("No scripted response", result.Error, StringComparison.Ordinal);
+        TestAssert.Contains("persistence failed: injected completion failure", result.Error, StringComparison.Ordinal);
+        Assert.That(recorder.CompleteCalls, Is.EqualTo(1));
     }
 
-    [Fact]
+    [Test]
     public async Task ResultAuditIoExceptionKeepsToolResultInMemoryAndDoesNotReplayTool()
     {
         var client = new FakeChatClient();
@@ -247,25 +247,25 @@ public sealed class RunPersistenceTests
 
         var result = await loop.RunAsync("sys", "run", CancellationToken.None);
 
-        Assert.Equal(AgentStatus.Failed, result.Status);
-        Assert.Equal(1, result.Steps);
-        Assert.Equal(1, result.ToolExecutions);
-        Assert.Equal(1, tool.ExecuteCount);
-        Assert.Equal(1, client.Requests);
-        Assert.Equal(1, recorder.ResultCalls);
-        Assert.Equal(1, recorder.CompleteCalls);
-        Assert.Contains(loop.History, message => message is { Role: ChatRole.Tool, Content: "side_effect ok" });
+        Assert.That(result.Status, Is.EqualTo(AgentStatus.Failed));
+        Assert.That(result.Steps, Is.EqualTo(1));
+        Assert.That(result.ToolExecutions, Is.EqualTo(1));
+        Assert.That(tool.ExecuteCount, Is.EqualTo(1));
+        Assert.That(client.Requests, Is.EqualTo(1));
+        Assert.That(recorder.ResultCalls, Is.EqualTo(1));
+        Assert.That(recorder.CompleteCalls, Is.EqualTo(1));
+        TestAssert.ContainsAll(message => message is { Role: ChatRole.Tool, Content: "side_effect ok" }, loop.History);
     }
 
-    [Theory]
-    [InlineData("{\"value\":\"synthetic-\\u0073ecret\"}", "synthetic-secret", "{\"value\":\"[REDACTED]\"}")]
-    [InlineData("[null,42,true,{\"items\":[\"prefix synthetic-\\u0073ecret suffix\"]}]", "synthetic-secret",
-                "[null,42,true,{\"items\":[\"prefix [REDACTED] suffix\"]}]")]
-    [InlineData("\"synthetic-\\u0073ecret\"", "synthetic-secret", "\"[REDACTED]\"")]
-    [InlineData("{\"value\":\"synthetic-\\\"secret\"}", "synthetic-\"secret", "{\"value\":\"[REDACTED]\"}")]
-    [InlineData("{\"value\":\"synthetic-\\\\secret\"}", "synthetic-\\secret", "{\"value\":\"[REDACTED]\"}")]
-    [InlineData("{\"value\":\"synthetic-\\/secret\"}", "synthetic-/secret", "{\"value\":\"[REDACTED]\"}")]
-    [InlineData("{\"synthetic-\\u0073ecret\":\"safe\"}", "synthetic-secret", "{\"[REDACTED]\":\"safe\"}")]
+
+    [TestCase("{\"value\":\"synthetic-\\u0073ecret\"}", "synthetic-secret", "{\"value\":\"[REDACTED]\"}")]
+    [TestCase("[null,42,true,{\"items\":[\"prefix synthetic-\\u0073ecret suffix\"]}]", "synthetic-secret",
+              "[null,42,true,{\"items\":[\"prefix [REDACTED] suffix\"]}]")]
+    [TestCase("\"synthetic-\\u0073ecret\"", "synthetic-secret", "\"[REDACTED]\"")]
+    [TestCase("{\"value\":\"synthetic-\\\"secret\"}", "synthetic-\"secret", "{\"value\":\"[REDACTED]\"}")]
+    [TestCase("{\"value\":\"synthetic-\\\\secret\"}", "synthetic-\\secret", "{\"value\":\"[REDACTED]\"}")]
+    [TestCase("{\"value\":\"synthetic-\\/secret\"}", "synthetic-/secret", "{\"value\":\"[REDACTED]\"}")]
+    [TestCase("{\"synthetic-\\u0073ecret\":\"safe\"}", "synthetic-secret", "{\"[REDACTED]\":\"safe\"}")]
     public async Task EscapedKnownSecretsAreRedactedAfterJsonDecoding(string input, string secret, string expected)
     {
         using var temp = new TestTempDir();
@@ -279,8 +279,8 @@ public sealed class RunPersistenceTests
         await recorder.CompleteAsync(result, [message], state, CancellationToken.None);
 
         var snapshot         = DeserializeSession(await File.ReadAllTextAsync(recorder.SessionPath));
-        var persistedMessage = Assert.Single(snapshot.Messages);
-        var persistedCall    = Assert.Single(persistedMessage.ToolCalls!);
+        var persistedMessage = TestAssert.Single(snapshot.Messages);
+        var persistedCall    = TestAssert.Single(persistedMessage.ToolCalls!);
         var audit = (await File.ReadAllLinesAsync(recorder.AuditPath))
                    .Select(line => JsonSerializer.Deserialize(line, PersistenceJsonContext.Default.AuditRecord)!)
                    .ToArray();
@@ -293,16 +293,16 @@ public sealed class RunPersistenceTests
                  })
         {
             using var actualJson = JsonDocument.Parse(value);
-            Assert.True(JsonElement.DeepEquals(expectedJson.RootElement, actualJson.RootElement), value);
+            Assert.That(JsonElement.DeepEquals(expectedJson.RootElement, actualJson.RootElement), Is.True, value);
         }
 
-        Assert.Equal(input, message.Content);
-        Assert.Equal(input, message.ToolCalls![0].ArgumentsJson);
-        Assert.Equal(input, result.Error);
-        Assert.Equal(input, state.Goal);
+        Assert.That(message.Content, Is.EqualTo(input));
+        Assert.That(message.ToolCalls![0].ArgumentsJson, Is.EqualTo(input));
+        Assert.That(result.Error, Is.EqualTo(input));
+        Assert.That(state.Goal, Is.EqualTo(input));
     }
 
-    [Fact]
+    [Test]
     public async Task ModelUsageIsAppendedAsCamelCaseAuditJsonl()
     {
         using var temp     = new TestTempDir();
@@ -311,17 +311,17 @@ public sealed class RunPersistenceTests
         await recorder.RecordModelUsageAsync(120, 45, "stop", CancellationToken.None);
 
         var lines = await File.ReadAllLinesAsync(recorder.AuditPath);
-        Assert.Contains("\"kind\":\"model_usage\"", lines[0], StringComparison.Ordinal);
-        Assert.Contains("\"inputTokens\":120", lines[0], StringComparison.Ordinal);
-        var usage = Assert.Single(lines.Select(line =>
-                                                   JsonSerializer.Deserialize(line,
-                                                                              PersistenceJsonContext.Default
-                                                                                 .AuditRecord)!));
-        Assert.Equal("usage-1", usage.RunId);
-        Assert.Equal("model_usage", usage.Kind);
-        Assert.Equal(120, usage.InputTokens);
-        Assert.Equal(45, usage.OutputTokens);
-        Assert.Equal("stop", usage.FinishReason);
+        TestAssert.Contains("\"kind\":\"model_usage\"", lines[0], StringComparison.Ordinal);
+        TestAssert.Contains("\"inputTokens\":120", lines[0], StringComparison.Ordinal);
+        var usage = TestAssert.Single(lines.Select(line =>
+                                                       JsonSerializer.Deserialize(line,
+                                                                PersistenceJsonContext.Default
+                                                                   .AuditRecord)!));
+        Assert.That(usage.RunId, Is.EqualTo("usage-1"));
+        Assert.That(usage.Kind, Is.EqualTo("model_usage"));
+        Assert.That(usage.InputTokens, Is.EqualTo(120));
+        Assert.That(usage.OutputTokens, Is.EqualTo(45));
+        Assert.That(usage.FinishReason, Is.EqualTo("stop"));
     }
 
     private static AgentOptions Options() => new()

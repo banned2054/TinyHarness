@@ -10,7 +10,7 @@ namespace TinyHarness.Tests;
 
 public class ShellToolTests
 {
-    [Fact]
+    [Test]
     public void Prepare_NormalizesStructuredCommandAndBindsSessionConstraint()
     {
         using var dir = new TestTempDir();
@@ -19,31 +19,31 @@ public class ShellToolTests
 
         var preparation = tool.Prepare(Call("dotnet", ["test", "--no-restore"], "src"));
 
-        Assert.Equal("process.execute", preparation.Capability);
-        Assert.Equal("direct", preparation.Arguments["mode"]!.GetValue<string>());
-        Assert.Equal([Path.Combine(dir.Root, "src")], preparation.TargetPaths);
-        Assert.Equal("dotnet", preparation.Arguments["executable"]!.GetValue<string>());
-        Assert.Equal(45, preparation.Arguments["timeoutSeconds"]!.GetValue<int>());
-        Assert.Contains("dotnet", preparation.SessionConstraint);
-        Assert.Contains("--no-restore", preparation.SessionConstraint);
+        Assert.That(preparation.Capability, Is.EqualTo("process.execute"));
+        Assert.That(preparation.Arguments["mode"]!.GetValue<string>(), Is.EqualTo("direct"));
+        Assert.That(preparation.TargetPaths, Is.EqualTo([Path.Combine(dir.Root, "src")]));
+        Assert.That(preparation.Arguments["executable"]!.GetValue<string>(), Is.EqualTo("dotnet"));
+        Assert.That(preparation.Arguments["timeoutSeconds"]!.GetValue<int>(), Is.EqualTo(45));
+        Assert.That(preparation.SessionConstraint, Does.Contain("dotnet"));
+        Assert.That(preparation.SessionConstraint, Does.Contain("--no-restore"));
     }
 
-    [Fact]
+    [Test]
     public void Prepare_RejectsWorkingDirectoryEscapeAndInvalidArguments()
     {
         using var dir  = new TestTempDir();
         var       tool = new ShellTool(dir.Workspace);
 
-        Assert.Throws<InvalidDataException>(() => tool.Prepare(Call("dotnet", ["test"], "..")));
-        Assert.Throws<InvalidDataException>(() => tool.Prepare(new ChatToolCall("shell", "shell",
-                                                                                    """{"executable":"dotnet","arguments":[1]}""")));
-        Assert.Throws<ArgumentOutOfRangeException>(() => tool.Prepare(new ChatToolCall("shell", "shell",
-                                                                               """{"executable":"dotnet","timeoutSeconds":0}""")));
-        Assert.Throws<InvalidDataException>(() => tool.Prepare(new ChatToolCall("shell", "shell",
-                                                                                    """{"mode":"shell","shell":"powershell","command":"Get-Date","executable":"dotnet"}""")));
+        TestAssert.Throws<InvalidDataException>(() => tool.Prepare(Call("dotnet", ["test"], "..")));
+        TestAssert.Throws<InvalidDataException>(() => tool.Prepare(new ChatToolCall("shell", "shell",
+                                                                            """{"executable":"dotnet","arguments":[1]}""")));
+        TestAssert.Throws<ArgumentOutOfRangeException>(() => tool.Prepare(new ChatToolCall("shell", "shell",
+                                                                                   """{"executable":"dotnet","timeoutSeconds":0}""")));
+        TestAssert.Throws<InvalidDataException>(() => tool.Prepare(new ChatToolCall("shell", "shell",
+                                                                            """{"mode":"shell","shell":"powershell","command":"Get-Date","executable":"dotnet"}""")));
     }
 
-    [Fact]
+    [Test]
     public void Prepare_ShellModeFreezesInterpreterAndMarksElevatedRisk()
     {
         using var dir = new TestTempDir();
@@ -53,15 +53,15 @@ public class ShellToolTests
 
         var preparation = tool.Prepare(ShellCall(shell, command));
 
-        Assert.Equal("shell", preparation.Arguments["mode"]!.GetValue<string>());
-        Assert.Equal(shell, preparation.Arguments["shell"]!.GetValue<string>());
-        Assert.Equal(command, preparation.Arguments["command"]!.GetValue<string>());
-        Assert.Equal(ToolRiskLevel.Elevated, preparation.RiskLevel);
-        Assert.Contains(command, preparation.SessionConstraint);
-        Assert.DoesNotContain("Start-Process", preparation.SessionConstraint, StringComparison.Ordinal);
+        Assert.That(preparation.Arguments["mode"]!.GetValue<string>(), Is.EqualTo("shell"));
+        Assert.That(preparation.Arguments["shell"]!.GetValue<string>(), Is.EqualTo(shell));
+        Assert.That(preparation.Arguments["command"]!.GetValue<string>(), Is.EqualTo(command));
+        Assert.That(preparation.RiskLevel, Is.EqualTo(ToolRiskLevel.Elevated));
+        Assert.That(preparation.SessionConstraint, Does.Contain(command));
+        TestAssert.DoesNotContain("Start-Process", preparation.SessionConstraint, StringComparison.Ordinal);
     }
 
-    [Fact]
+    [Test]
     public async Task Execute_ShellModeSupportsPipelinesAndRedirection()
     {
         using var dir   = new TestTempDir();
@@ -73,12 +73,12 @@ public class ShellToolTests
 
         var result = await tool.ExecuteAsync(tool.Prepare(ShellCall(shell, command)), CancellationToken.None);
 
-        Assert.True(result.Succeeded, result.Content);
-        Assert.Contains("ALPHA", result.Stdout);
-        Assert.Equal("written", await File.ReadAllTextAsync(Path.Combine(dir.Root, "shell-result.txt")));
+        Assert.That(result.Succeeded, Is.True, result.Content);
+        Assert.That(result.Stdout, Does.Contain("ALPHA"));
+        Assert.That(await File.ReadAllTextAsync(Path.Combine(dir.Root, "shell-result.txt")), Is.EqualTo("written"));
     }
 
-    [Fact]
+    [Test]
     public async Task Execute_CmdShellPreservesQuotedCommandAndCombinationSyntax()
     {
         if (!OperatingSystem.IsWindows()) return;
@@ -90,14 +90,14 @@ public class ShellToolTests
 
         var result = await tool.ExecuteAsync(tool.Prepare(ShellCall("cmd", command)), CancellationToken.None);
 
-        Assert.True(result.Succeeded, result.Content);
-        Assert.Contains("nested-ok", result.Stdout);
-        Assert.Contains("\"a b\"", result.Stdout);
-        Assert.Contains("combined-ok", result.Stdout);
-        Assert.DoesNotContain("\\\"a b\\\"", result.Stdout, StringComparison.Ordinal);
+        Assert.That(result.Succeeded, Is.True, result.Content);
+        Assert.That(result.Stdout, Does.Contain("nested-ok"));
+        Assert.That(result.Stdout, Does.Contain("\"a b\""));
+        Assert.That(result.Stdout, Does.Contain("combined-ok"));
+        TestAssert.DoesNotContain("\\\"a b\\\"", result.Stdout, StringComparison.Ordinal);
     }
 
-    [Fact]
+    [Test]
     public async Task Execute_DirectModePreservesSpacesQuotesAndTrailingBackslash()
     {
         if (!OperatingSystem.IsWindows()) return;
@@ -119,13 +119,13 @@ public class ShellToolTests
                                              CancellationToken.None);
         var baseline = await RunWithArgumentListAsync("cscript.exe", arguments, dir.Root);
 
-        Assert.True(result.Succeeded, result.Content);
-        Assert.Equal(0, baseline.ExitCode);
-        Assert.Equal(baseline.Stdout, result.Stdout);
-        Assert.Equal(baseline.Stderr, result.Stderr);
+        Assert.That(result.Succeeded, Is.True, result.Content);
+        Assert.That(baseline.ExitCode, Is.EqualTo(0));
+        Assert.That(result.Stdout, Is.EqualTo(baseline.Stdout));
+        Assert.That(result.Stderr, Is.EqualTo(baseline.Stderr));
     }
 
-    [Fact]
+    [Test]
     public async Task Execute_SeparatesStdoutStderrAndReturnsExitCode()
     {
         using var dir          = new TestTempDir();
@@ -136,15 +136,15 @@ public class ShellToolTests
         var result = await tool.ExecuteAsync(tool.Prepare(Call(command.Executable, command.Arguments)),
                                              CancellationToken.None);
 
-        Assert.False(result.Succeeded);
-        Assert.Equal(7, result.ExitCode);
-        Assert.False(result.TimedOut);
-        Assert.Contains("stdout-message", result.Stdout);
-        Assert.Contains("stderr-message", result.Stderr);
-        Assert.Contains("Exit code: 7", result.Content);
+        Assert.That(result.Succeeded, Is.False);
+        Assert.That(result.ExitCode, Is.EqualTo(7));
+        Assert.That(result.TimedOut, Is.False);
+        Assert.That(result.Stdout, Does.Contain("stdout-message"));
+        Assert.That(result.Stderr, Does.Contain("stderr-message"));
+        Assert.That(result.Content, Does.Contain("Exit code: 7"));
     }
 
-    [Fact]
+    [Test]
     public async Task Execute_TruncatesInMemoryOutputAndKeepsFullRedactedArtifact()
     {
         using var    dir          = new TestTempDir();
@@ -153,24 +153,23 @@ public class ShellToolTests
         var tool = new ShellTool(dir.Workspace,
                                  knownSecrets : new Dictionary<string, string> { ["TEST_SECRET"] = secret },
                                  artifactRoot : artifactRoot, outputCharacterLimit : 40);
-        // Put the secret across the capture reader's 4096-character boundary to
-        // verify streaming redaction does not depend on process chunking.
+        // 把密钥放在捕获读取器 4096 字符边界两侧，验证流式脱敏不依赖进程分块。
         var command = PlatformCommand($"echo {new string('x', 4094)}{secret}abcdefghijklmnopqrstuv");
 
         var result = await tool.ExecuteAsync(tool.Prepare(Call(command.Executable, command.Arguments)),
                                              CancellationToken.None);
 
-        Assert.True(result.Succeeded);
-        Assert.True(result.OutputTruncated);
-        Assert.NotNull(result.StdoutArtifactPath);
-        Assert.Contains("[truncated", result.Stdout);
-        Assert.DoesNotContain(secret, result.Content, StringComparison.Ordinal);
+        Assert.That(result.Succeeded, Is.True);
+        Assert.That(result.OutputTruncated, Is.True);
+        TestAssert.NotNull(result.StdoutArtifactPath);
+        Assert.That(result.Stdout, Does.Contain("[truncated"));
+        TestAssert.DoesNotContain(secret, result.Content, StringComparison.Ordinal);
         var artifact = await File.ReadAllTextAsync(result.StdoutArtifactPath!);
-        Assert.DoesNotContain(secret, artifact, StringComparison.Ordinal);
-        Assert.Contains("[REDACTED]", artifact);
+        TestAssert.DoesNotContain(secret, artifact, StringComparison.Ordinal);
+        Assert.That(artifact, Does.Contain("[REDACTED]"));
     }
 
-    [Fact]
+    [Test]
     public async Task Execute_TimeoutTerminatesProcessTreeAndReturnsTimeoutResult()
     {
         using var dir         = new TestTempDir();
@@ -181,16 +180,15 @@ public class ShellToolTests
 
         var result = await tool.ExecuteAsync(preparation, CancellationToken.None);
 
-        // cmd/sh launches ping/sleep as a descendant. Because that descendant
-        // inherits the redirected handles, prompt stream completion also proves
-        // the process tree was terminated instead of only the parent shell.
-        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(5));
-        Assert.True(result.TimedOut);
-        Assert.False(result.Succeeded);
-        Assert.Contains("Timed out: true (1s)", result.Content);
+        // cmd/sh 把 ping/sleep 作为子进程启动。子进程继承重定向句柄，因此提示流完成
+        // 也证明整棵进程树被终止，而不只是父 shell。
+        Assert.That(watch.Elapsed < TimeSpan.FromSeconds(5), Is.True);
+        Assert.That(result.TimedOut, Is.True);
+        Assert.That(result.Succeeded, Is.False);
+        Assert.That(result.Content, Does.Contain("Timed out: true (1s)"));
     }
 
-    [Fact]
+    [Test]
     public async Task Execute_UserCancellationTerminatesProcessAndPropagatesCancellation()
     {
         using var dir          = new TestTempDir();
@@ -199,17 +197,17 @@ public class ShellToolTests
         using var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
         var       watch        = Stopwatch.StartNew();
 
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
-                                                                    tool.ExecuteAsync(tool.Prepare(Call(command
-                                                                                                  .Executable,
-                                                                                               command.Arguments,
-                                                                                               timeoutSeconds : 10)),
-                                                                             cancellation.Token));
+        await Assert.CatchAsync<OperationCanceledException>(() =>
+                                                                tool.ExecuteAsync(tool.Prepare(Call(command
+                                                                                              .Executable,
+                                                                                           command.Arguments,
+                                                                                           timeoutSeconds : 10)),
+                                                                         cancellation.Token));
 
-        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(5));
+        Assert.That(watch.Elapsed < TimeSpan.FromSeconds(5), Is.True);
     }
 
-    [Fact]
+    [Test]
     public async Task Execute_CancellationAfterRootExitTerminatesBackgroundChild()
     {
         if (!OperatingSystem.IsWindows()) return;
@@ -225,17 +223,17 @@ public class ShellToolTests
         await WaitForFileAsync(pidPath, TimeSpan.FromSeconds(5));
         watch.Restart();
         cancellation.Cancel();
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
-                                                                    await execution.WaitAsync(TimeSpan.FromSeconds(5)));
+        await Assert.CatchAsync<OperationCanceledException>(async () =>
+                                                                await execution.WaitAsync(TimeSpan.FromSeconds(5)));
 
-        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(4), $"Cancellation took {watch.Elapsed}.");
-        Assert.True(File.Exists(pidPath), "The background child did not write its PID before cancellation.");
+        Assert.That(watch.Elapsed < TimeSpan.FromSeconds(4), Is.True, $"Cancellation took {watch.Elapsed}.");
+        Assert.That(File.Exists(pidPath), Is.True, "The background child did not write its PID before cancellation.");
         var childId = int.Parse(await File.ReadAllTextAsync(pidPath));
-        Assert.True(WaitUntilProcessExited(childId, TimeSpan.FromSeconds(2)),
+        Assert.That(WaitUntilProcessExited(childId, TimeSpan.FromSeconds(2)), Is.True,
                     $"Background child process {childId} survived cancellation.");
     }
 
-    [Fact]
+    [Test]
     public async Task Execute_TimeoutAfterRootExitTerminatesBackgroundChild()
     {
         if (!OperatingSystem.IsWindows()) return;
@@ -250,15 +248,15 @@ public class ShellToolTests
                                                                2)), CancellationToken.None)
                           .WaitAsync(TimeSpan.FromSeconds(7));
 
-        Assert.True(result.TimedOut, result.Content);
-        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(6), $"Timeout took {watch.Elapsed}.");
-        Assert.True(File.Exists(pidPath), "The background child did not write its PID before timeout.");
+        Assert.That(result.TimedOut, Is.True, result.Content);
+        Assert.That(watch.Elapsed < TimeSpan.FromSeconds(6), Is.True, $"Timeout took {watch.Elapsed}.");
+        Assert.That(File.Exists(pidPath), Is.True, "The background child did not write its PID before timeout.");
         var childId = int.Parse(await File.ReadAllTextAsync(pidPath));
-        Assert.True(WaitUntilProcessExited(childId, TimeSpan.FromSeconds(2)),
+        Assert.That(WaitUntilProcessExited(childId, TimeSpan.FromSeconds(2)), Is.True,
                     $"Background child process {childId} survived timeout.");
     }
 
-    [Fact]
+    [Test]
     public async Task Execute_CaptureFailureImmediatelyTerminatesProcessTree()
     {
         using var dir           = new TestTempDir();
@@ -271,23 +269,22 @@ public class ShellToolTests
 
         var tool = new ShellTool(dir.Workspace, CreateCapture, 30,
                                  dir.CreateDirectory("artifacts"));
-        // Chunk-push captures surface an injected failure only when output data
-        // arrives, so the probe must keep emitting stdout instead of running
-        // silently for the whole timeout window.
+        // 分块推送式捕获只在输出数据到达时暴露注入故障，探针必须持续输出 stdout，
+        // 不能在整个超时窗口内静默运行。
         var command = OutputtingSlowCommand();
         var watch   = Stopwatch.StartNew();
 
         var error =
-            await Assert.ThrowsAsync<IOException>(() => tool
-                                                       .ExecuteAsync(tool.Prepare(Call(command.Executable,
-                                                                                       command.Arguments)),
-                                                                     CancellationToken.None)
-                                                       .WaitAsync(TimeSpan.FromSeconds(5)));
+            await TestAssert.ThrowsAsync<IOException>(() => tool
+                                                           .ExecuteAsync(tool.Prepare(Call(command.Executable,
+                                                                                           command.Arguments)),
+                                                                         CancellationToken.None)
+                                                           .WaitAsync(TimeSpan.FromSeconds(5)));
 
-        Assert.Contains("capturing output", error.Message, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("injected capture failure", error.InnerException?.Message ?? string.Empty,
-                        StringComparison.OrdinalIgnoreCase);
-        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(4), $"Capture failure cleanup took {watch.Elapsed}.");
+        TestAssert.Contains("capturing output", error.Message, StringComparison.OrdinalIgnoreCase);
+        TestAssert.Contains("injected capture failure", error.InnerException?.Message ?? string.Empty,
+                            StringComparison.OrdinalIgnoreCase);
+        Assert.That(watch.Elapsed < TimeSpan.FromSeconds(4), Is.True, $"Capture failure cleanup took {watch.Elapsed}.");
     }
 
     private static ChatToolCall Call(string executable, IReadOnlyList<string> arguments, string workingDirectory = ".",

@@ -4,30 +4,30 @@ namespace TinyHarness.Tests;
 
 public class WindowsCredentialStoreTests
 {
-    [Fact]
+    [Test]
     public void SaveReadOverwriteDelete_RoundTripsSecretInWindowsCredentialManager()
     {
         if (!OperatingSystem.IsWindows())
-            // Only win-x64 is a verified NativeAOT RID; skip elsewhere.
+            // 仅 win-x64 是已验证的 NativeAOT RID；其他平台跳过。
             return;
 
         var store = new WindowsCredentialStore();
-        Assert.True(store.IsSupported);
+        Assert.That(store.IsSupported, Is.True);
 
         var target = $"TinyHarness.Tests:{Guid.NewGuid():N}";
         try
         {
-            Assert.Null(store.Read(target));
+            Assert.That(store.Read(target), Is.Null);
 
             store.Save(target, "secret-one");
-            Assert.Equal("secret-one", store.Read(target));
+            Assert.That(store.Read(target), Is.EqualTo("secret-one"));
 
             store.Save(target, "secret-two");
-            Assert.Equal("secret-two", store.Read(target));
+            Assert.That(store.Read(target), Is.EqualTo("secret-two"));
 
-            Assert.True(store.Delete(target));
-            Assert.Null(store.Read(target));
-            Assert.False(store.Delete(target));
+            Assert.That(store.Delete(target), Is.True);
+            Assert.That(store.Read(target), Is.Null);
+            Assert.That(store.Delete(target), Is.False);
         }
         finally
         {
@@ -37,17 +37,17 @@ public class WindowsCredentialStoreTests
             }
             catch (Exception ex) when (ex is InvalidOperationException or PlatformNotSupportedException)
             {
-                // Best-effort cleanup of the test credential.
+                // 尽力清理测试凭据。
             }
         }
     }
 
-    [Fact]
+    [Test]
     public void ReadMissingEntry_ReturnsNull()
     {
         if (!OperatingSystem.IsWindows()) return;
 
         var store = new WindowsCredentialStore();
-        Assert.Null(store.Read($"TinyHarness.Tests:{Guid.NewGuid():N}"));
+        Assert.That(store.Read($"TinyHarness.Tests:{Guid.NewGuid():N}"), Is.Null);
     }
 }

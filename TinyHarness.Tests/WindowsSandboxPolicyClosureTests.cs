@@ -16,13 +16,17 @@ using TinyHarness.Core.Services.Tools;
 namespace TinyHarness.Tests;
 
 /// <summary>
-///     M11.3 策略闭环：可信设置 → 冻结策略与环境 → 策略身份进入指纹/授权/审批展示/审计 →
-///     fake model + fake backend 的完整工具调用闭环。所有测试离线运行，不触碰机器账户、ACL
-///     或防火墙。
-///     M11.3 policy closure: trusted settings → frozen policy and environment →
-///     the policy identity flowing into fingerprints, grants, approval display,
-///     and audit → a complete tool-call loop over the fake model and fake backend.
-///     Everything runs offline without touching machine accounts, ACLs, or the firewall.
+///     <para>
+///         策略闭环：可信设置 → 冻结策略与环境 → 策略身份进入指纹/授权/审批展示/审计 →
+///         fake model + fake backend 的完整工具调用闭环。所有测试离线运行，不触碰机器账户、ACL
+///         或防火墙。
+///     </para>
+///     <para>
+///         Policy closure: trusted settings → frozen policy and environment →
+///         the policy identity flowing into fingerprints, grants, approval display,
+///         and audit → a complete tool-call loop over the fake model and fake backend.
+///         Everything runs offline without touching machine accounts, ACLs, or the firewall.
+///     </para>
 /// </summary>
 public class WindowsSandboxPolicyClosureTests
 {
@@ -50,7 +54,7 @@ public class WindowsSandboxPolicyClosureTests
 
     // ---- 指纹/授权绑定：无权限扩大、拒绝不失效 ----
 
-    [Fact]
+    [Test]
     public void PermissionEngine_SessionGrantDoesNotCrossExecutionPolicies()
     {
         using var dir       = new TestTempDir();
@@ -60,13 +64,13 @@ public class WindowsSandboxPolicyClosureTests
         var       call      = ShellCall("dotnet", "test");
 
         engine.GrantSession(hostTool.Prepare(call));
-        Assert.Equal(PermissionDecision.Ask, engine.Decide(sandboxed.Prepare(call)));
+        Assert.That(engine.Decide(sandboxed.Prepare(call)), Is.EqualTo(PermissionDecision.Ask));
 
         engine.GrantOnce(hostTool.Prepare(call));
-        Assert.Equal(PermissionDecision.Ask, engine.Decide(sandboxed.Prepare(call)));
+        Assert.That(engine.Decide(sandboxed.Prepare(call)), Is.EqualTo(PermissionDecision.Ask));
     }
 
-    [Fact]
+    [Test]
     public void PermissionEngine_SessionDenySurvivesExecutionPolicyChange()
     {
         using var dir       = new TestTempDir();
@@ -76,10 +80,10 @@ public class WindowsSandboxPolicyClosureTests
         var       call      = ShellCall("dotnet", "test");
 
         engine.DenySession(hostTool.Prepare(call));
-        Assert.Equal(PermissionDecision.Deny, engine.Decide(sandboxed.Prepare(call)));
+        Assert.That(engine.Decide(sandboxed.Prepare(call)), Is.EqualTo(PermissionDecision.Deny));
     }
 
-    [Fact]
+    [Test]
     public void PermissionEngine_GrantWithinSamePolicyStillCoversRepeatedCalls()
     {
         using var dir    = new TestTempDir();
@@ -88,20 +92,19 @@ public class WindowsSandboxPolicyClosureTests
         var       call   = ShellCall("dotnet", "test");
 
         engine.GrantSession(tool.Prepare(call));
-        Assert.Equal(PermissionDecision.Allow, engine.Decide(tool.Prepare(call)));
+        Assert.That(engine.Decide(tool.Prepare(call)), Is.EqualTo(PermissionDecision.Allow));
 
-        // A different sandbox policy identity (e.g. an added write root) must
-        // not inherit the approval.
+        // 不同的沙箱策略身份（如新增写根）不得继承既有授权。
         engine.GrantSession(tool.Prepare(call));
         var widened = new ShellTool(dir.Workspace,
                                     executionPolicy :
                                     SandboxExecutionPolicy("backend=windows-sandbox\npolicyVersion=1\nkind=workspace-write\nextra-root"));
-        Assert.Equal(PermissionDecision.Ask, engine.Decide(widened.Prepare(call)));
+        Assert.That(engine.Decide(widened.Prepare(call)), Is.EqualTo(PermissionDecision.Ask));
     }
 
     // ---- Prepare 展示与冻结 ----
 
-    [Fact]
+    [Test]
     public void ShellTool_PrepareBindsPolicyToSummaryGrantConstraintAndAuditIdentity()
     {
         using var dir    = new TestTempDir();
@@ -110,18 +113,18 @@ public class WindowsSandboxPolicyClosureTests
 
         var preparation = tool.Prepare(ShellCall("dotnet", "test"));
 
-        Assert.Contains(policy.DisplayName, preparation.Summary, StringComparison.Ordinal);
-        Assert.Equal(policy.PolicyIdentity, preparation.ExecutionPolicy);
-        Assert.NotNull(preparation.SessionGrantConstraint);
-        Assert.Contains(preparation.SessionConstraint!, preparation.SessionGrantConstraint!,
-                        StringComparison.Ordinal);
-        Assert.DoesNotContain("windows-sandbox", preparation.SessionConstraint!, StringComparison.Ordinal);
-        // Command identity must stay parseable and policy-free: denies match it.
+        TestAssert.Contains(policy.DisplayName, preparation.Summary, StringComparison.Ordinal);
+        Assert.That(preparation.ExecutionPolicy, Is.EqualTo(policy.PolicyIdentity));
+        TestAssert.NotNull(preparation.SessionGrantConstraint);
+        TestAssert.Contains(preparation.SessionConstraint!, preparation.SessionGrantConstraint!,
+                            StringComparison.Ordinal);
+        TestAssert.DoesNotContain("windows-sandbox", preparation.SessionConstraint!, StringComparison.Ordinal);
+        // 命令身份必须保持可解析且不含策略：拒绝规则按它匹配。
         var identity = JsonNode.Parse(preparation.SessionConstraint!)!.AsObject();
-        Assert.Equal("dotnet", identity["executable"]!.GetValue<string>());
+        Assert.That(identity["executable"]!.GetValue<string>(), Is.EqualTo("dotnet"));
     }
 
-    [Fact]
+    [Test]
     public void ShellTool_PrepareWithoutPolicyKeepsLegacyShape()
     {
         using var dir  = new TestTempDir();
@@ -129,14 +132,14 @@ public class WindowsSandboxPolicyClosureTests
 
         var preparation = tool.Prepare(ShellCall("dotnet", "test"));
 
-        Assert.Null(preparation.SessionGrantConstraint);
-        Assert.Null(preparation.ExecutionPolicy);
-        Assert.DoesNotContain("[", preparation.Summary, StringComparison.Ordinal);
+        Assert.That(preparation.SessionGrantConstraint, Is.Null);
+        Assert.That(preparation.ExecutionPolicy, Is.Null);
+        TestAssert.DoesNotContain("[", preparation.Summary, StringComparison.Ordinal);
     }
 
-    // ---- fake model 完整闭环（M11.3 验收门槛）----
+    // ---- fake model 完整闭环（验收门槛）----
 
-    [Fact]
+    [Test]
     public async Task AgentLoop_ShellUnderSandboxPolicy_ApprovesExecutesAndAuditsPolicyIdentity()
     {
         using var dir     = new TestTempDir();
@@ -170,33 +173,34 @@ public class WindowsSandboxPolicyClosureTests
 
         var result = await loop.RunAsync("sys", "check the version", CancellationToken.None);
 
-        Assert.Equal(AgentStatus.Completed, result.Status);
-        Assert.Equal(1, approver.Prompts);
-        // The approval prompt must show the real isolation the command will run under.
-        Assert.Contains("windows-sandbox", approver.SeenSummaries.Single(), StringComparison.Ordinal);
-        // The approved plan is exactly the plan executed.
-        Assert.NotNull(backend.ReceivedExecution);
-        Assert.Equal("dotnet", backend.ReceivedExecution!.Executable);
-        Assert.Equal(dir.Root, backend.ReceivedExecution.WorkingDirectory);
+        Assert.That(result.Status, Is.EqualTo(AgentStatus.Completed));
+        Assert.That(approver.Prompts, Is.EqualTo(1));
+        // 审批提示必须展示命令将运行的真实隔离环境。
+        TestAssert.Contains("windows-sandbox", approver.SeenSummaries.Single(), StringComparison.Ordinal);
+        // 批准的计划与执行的计划完全一致。
+        TestAssert.NotNull(backend.ReceivedExecution);
+        Assert.That(backend.ReceivedExecution!.Executable, Is.EqualTo("dotnet"));
+        Assert.That(backend.ReceivedExecution.WorkingDirectory, Is.EqualTo(dir.Root));
 
         var records  = ReadAuditRecords(recorder.AuditPath);
-        var prepared = Assert.Single(records, record => record!["kind"]!.GetValue<string>() == "tool.prepared")!;
-        Assert.Contains("backend=windows-sandbox", prepared["executionPolicy"]!.GetValue<string>(),
-                        StringComparison.Ordinal);
-        var permission = Assert.Single(records, record => record!["kind"]!.GetValue<string>() == "tool.permission")!;
-        Assert.Equal("Ask", permission["decision"]!.GetValue<string>());
-        Assert.Equal("allow once", permission["outcome"]!.GetValue<string>());
-        Assert.Contains("backend=windows-sandbox", permission["executionPolicy"]!.GetValue<string>(),
-                        StringComparison.Ordinal);
-        var toolResult = Assert.Single(records, record => record!["kind"]!.GetValue<string>() == "tool.result")!;
-        Assert.True(toolResult["succeeded"]!.GetValue<bool>());
-        Assert.Contains("backend=windows-sandbox", toolResult["executionPolicy"]!.GetValue<string>(),
-                        StringComparison.Ordinal);
+        var prepared = TestAssert.Single(records, record => record!["kind"]!.GetValue<string>() == "tool.prepared")!;
+        TestAssert.Contains("backend=windows-sandbox", prepared["executionPolicy"]!.GetValue<string>(),
+                            StringComparison.Ordinal);
+        var permission =
+            TestAssert.Single(records, record => record!["kind"]!.GetValue<string>() == "tool.permission")!;
+        Assert.That(permission["decision"]!.GetValue<string>(), Is.EqualTo("Ask"));
+        Assert.That(permission["outcome"]!.GetValue<string>(), Is.EqualTo("allow once"));
+        TestAssert.Contains("backend=windows-sandbox", permission["executionPolicy"]!.GetValue<string>(),
+                            StringComparison.Ordinal);
+        var toolResult = TestAssert.Single(records, record => record!["kind"]!.GetValue<string>() == "tool.result")!;
+        Assert.That(toolResult["succeeded"]!.GetValue<bool>(), Is.True);
+        TestAssert.Contains("backend=windows-sandbox", toolResult["executionPolicy"]!.GetValue<string>(),
+                            StringComparison.Ordinal);
     }
 
     // ---- 目标环境治理 ----
 
-    [Fact]
+    [Test]
     public void SandboxTargetEnvironment_BuildUsesAllowlistAndRedirectsTemp()
     {
         using var dir      = new TestTempDir();
@@ -205,21 +209,22 @@ public class WindowsSandboxPolicyClosureTests
 
         var environment = SandboxTargetEnvironment.Build(tempRoot);
 
-        Assert.Equal(tempRoot, environment["TEMP"]);
-        Assert.Equal(tempRoot, environment["TMP"]);
-        Assert.Equal(tempRoot, environment["USERPROFILE"]);
-        Assert.Equal(tempRoot, environment["HOME"]);
-        // Only the fixed allowlist plus redirects may come from the host.
+        Assert.That(environment["TEMP"], Is.EqualTo(tempRoot));
+        Assert.That(environment["TMP"], Is.EqualTo(tempRoot));
+        Assert.That(environment["USERPROFILE"], Is.EqualTo(tempRoot));
+        Assert.That(environment["HOME"], Is.EqualTo(tempRoot));
+        // 来自宿主的只有固定 allowlist 加重定向。
         var allowed = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
             "PATH", "PATHEXT", "SystemRoot", "SystemDrive", "ComSpec", "OS", "NUMBER_OF_PROCESSORS",
             "PROCESSOR_ARCHITECTURE", "TEMP", "TMP", "USERPROFILE", "HOME"
         };
-        Assert.All(environment.Keys, name => Assert.Contains(name, allowed));
-        if (Environment.GetEnvironmentVariable("PATH") is { } hostPath) Assert.Equal(hostPath, environment["PATH"]);
+        TestAssert.All(environment.Keys, name => Assert.That(allowed, Does.Contain(name)));
+        if (Environment.GetEnvironmentVariable("PATH") is { } hostPath)
+            Assert.That(environment["PATH"], Is.EqualTo(hostPath));
     }
 
-    [Fact]
+    [Test]
     public void SandboxTargetEnvironment_ExtraVariablesApplyAndSecretsNeverLeak()
     {
         using var dir      = new TestTempDir();
@@ -236,19 +241,19 @@ public class WindowsSandboxPolicyClosureTests
                                                          new Dictionary<string, string>
                                                              { ["SECRET_KEY"] = "api-key-value" });
 
-        Assert.Equal("X:\\nuget", environment["NUGET_PACKAGES"]);
-        Assert.False(environment.ContainsKey("SECRET_KEY"));
+        Assert.That(environment["NUGET_PACKAGES"], Is.EqualTo("X:\\nuget"));
+        Assert.That(environment.ContainsKey("SECRET_KEY"), Is.False);
     }
 
-    [Fact]
+    [Test]
     public void SandboxTargetEnvironment_RejectsRelativeTempRoot()
     {
-        Assert.Throws<ArgumentException>(() => SandboxTargetEnvironment.Build("relative-tmp"));
+        TestAssert.Throws<ArgumentException>(() => SandboxTargetEnvironment.Build("relative-tmp"));
     }
 
     // ---- 策略解析：额外写根 ----
 
-    [Fact]
+    [Test]
     public void SandboxPolicyResolver_WorkspaceWriteMergesAdditionalWriteRoots()
     {
         using var dir   = new TestTempDir();
@@ -259,17 +264,17 @@ public class WindowsSandboxPolicyClosureTests
         var policy = SandboxPolicyResolver.Resolve(SandboxPolicyKind.WorkspaceWrite, dir.Root, env,
                                                    [extra.Root, dir.Root]);
 
-        Assert.Contains(extra.Root, policy.EffectiveWriteRoots);
-        Assert.Single(policy.EffectiveWriteRoots,
-                      root => string.Equals(root, dir.Root, StringComparison.OrdinalIgnoreCase));
+        Assert.That(policy.EffectiveWriteRoots, Does.Contain(extra.Root));
+        TestAssert.Single(policy.EffectiveWriteRoots,
+                          root => string.Equals(root, dir.Root, StringComparison.OrdinalIgnoreCase));
         var writeEntries = policy.SpawnProfile.FileSystem.Entries
                                  .Where(entry => entry.Access == "write" && entry.Path.ExplicitPath is not null)
                                  .Select(entry => entry.Path.ExplicitPath)
                                  .ToList();
-        Assert.Contains(extra.Root, writeEntries);
+        Assert.That(writeEntries, Does.Contain(extra.Root));
     }
 
-    [Fact]
+    [Test]
     public void SandboxPolicyResolver_ReadOnlyGrantsOnlyDeclaredWriteRoots()
     {
         using var dir   = new TestTempDir();
@@ -278,26 +283,26 @@ public class WindowsSandboxPolicyClosureTests
 
         var policy = SandboxPolicyResolver.Resolve(SandboxPolicyKind.ReadOnly, dir.Root, env, [extra.Root]);
 
-        Assert.Equal([extra.Root], policy.EffectiveWriteRoots);
-        Assert.Equal([extra.Root],
-                     policy.SpawnProfile.FileSystem.Entries
-                           .Where(entry => entry.Access == "write")
-                           .Select(entry => entry.Path.ExplicitPath)
-                           .ToList());
+        Assert.That(policy.EffectiveWriteRoots, Is.EqualTo([extra.Root]));
+        Assert.That(policy.SpawnProfile.FileSystem.Entries
+                          .Where(entry => entry.Access == "write")
+                          .Select(entry => entry.Path.ExplicitPath)
+                          .ToList(), Is.EqualTo([extra.Root]));
     }
 
-    [Fact]
+    [Test]
     public void SandboxPolicyResolver_RejectsRelativeAdditionalWriteRoot()
     {
         using var dir = new TestTempDir();
-        Assert.Throws<ArgumentException>(() => SandboxPolicyResolver.Resolve(SandboxPolicyKind.WorkspaceWrite, dir.Root,
-                                                                             new Dictionary<string, string>(),
-                                                                             ["relative-root"]));
+        TestAssert.Throws<ArgumentException>(() => SandboxPolicyResolver.Resolve(SandboxPolicyKind.WorkspaceWrite,
+                                                      dir.Root,
+                                                      new Dictionary<string, string>(),
+                                                      ["relative-root"]));
     }
 
     // ---- 组合器：fail closed、身份稳定 ----
 
-    [Fact]
+    [Test]
     public void WindowsSandboxComposer_ComposesFrozenPolicyEnvironmentAndIdentity()
     {
         if (!OperatingSystem.IsWindows()) return;
@@ -317,19 +322,19 @@ public class WindowsSandboxPolicyClosureTests
         var composed = WindowsSandboxComposer.Compose(settings, workspace.Root);
 
         var expectedTemp = Path.Combine(home.Root, "tmp");
-        Assert.True(Directory.Exists(expectedTemp));
-        Assert.Equal(expectedTemp, composed.TargetEnvironment["TEMP"]);
-        Assert.Equal(workspace.Root, composed.Policy.WorkspaceRoot);
-        Assert.Contains("workspace-write", composed.ExecutionPolicy.DisplayName, StringComparison.Ordinal);
-        Assert.StartsWith("backend=windows-sandbox", composed.ExecutionPolicy.PolicyIdentity,
-                          StringComparison.Ordinal);
-        Assert.Contains("network=restricted", composed.ExecutionPolicy.PolicyIdentity, StringComparison.Ordinal);
+        Assert.That(Directory.Exists(expectedTemp), Is.True);
+        Assert.That(composed.TargetEnvironment["TEMP"], Is.EqualTo(expectedTemp));
+        Assert.That(composed.Policy.WorkspaceRoot, Is.EqualTo(workspace.Root));
+        TestAssert.Contains("workspace-write", composed.ExecutionPolicy.DisplayName, StringComparison.Ordinal);
+        Assert.That(composed.ExecutionPolicy.PolicyIdentity,
+                    Does.StartWith("backend=windows-sandbox").Using(StringComparison.Ordinal));
+        TestAssert.Contains("network=restricted", composed.ExecutionPolicy.PolicyIdentity, StringComparison.Ordinal);
 
         var again = WindowsSandboxComposer.Compose(settings, workspace.Root);
-        Assert.Equal(composed.ExecutionPolicy.PolicyIdentity, again.ExecutionPolicy.PolicyIdentity);
+        Assert.That(again.ExecutionPolicy.PolicyIdentity, Is.EqualTo(composed.ExecutionPolicy.PolicyIdentity));
     }
 
-    [Fact]
+    [Test]
     public void WindowsSandboxComposer_IdentityBindsAdditionalWriteRoots()
     {
         if (!OperatingSystem.IsWindows()) return;
@@ -349,10 +354,10 @@ public class WindowsSandboxPolicyClosureTests
         var withRoot = WindowsSandboxComposer.Compose(baseSettings with { AdditionalWriteRoots = [extra.Root] },
                                                       workspace.Root)
                                              .ExecutionPolicy.PolicyIdentity;
-        Assert.NotEqual(withoutRoot, withRoot);
+        Assert.That(withRoot, Is.Not.EqualTo(withoutRoot));
     }
 
-    [Fact]
+    [Test]
     public void WindowsSandboxComposer_FailsClosedWhenComponentsAreMissing()
     {
         if (!OperatingSystem.IsWindows()) return;
@@ -368,11 +373,12 @@ public class WindowsSandboxPolicyClosureTests
         };
 
         var error =
-            Assert.Throws<InvalidOperationException>(() => WindowsSandboxComposer.Compose(settings, workspace.Root));
-        Assert.Contains("refusing to fall back", error.Message, StringComparison.Ordinal);
+            TestAssert.Throws<InvalidOperationException>(() => WindowsSandboxComposer
+                                                            .Compose(settings, workspace.Root));
+        TestAssert.Contains("refusing to fall back", error.Message, StringComparison.Ordinal);
     }
 
-    [Fact]
+    [Test]
     public void WindowsSandboxComposer_FailsClosedOnRelativeComponentPath()
     {
         if (!OperatingSystem.IsWindows()) return;
@@ -386,10 +392,10 @@ public class WindowsSandboxPolicyClosureTests
             SandboxHome          = "C:\\absolute\\home"
         };
 
-        Assert.Throws<InvalidOperationException>(() => WindowsSandboxComposer.Compose(settings, workspace.Root));
+        TestAssert.Throws<InvalidOperationException>(() => WindowsSandboxComposer.Compose(settings, workspace.Root));
     }
 
-    [Fact]
+    [Test]
     public void WindowsSandboxComposer_FailsClosedWhenTempRootIsInsideWorkspace()
     {
         if (!OperatingSystem.IsWindows()) return;
@@ -405,10 +411,10 @@ public class WindowsSandboxPolicyClosureTests
             SandboxTempRoot      = Path.Combine(workspace.Root, "tmp")
         };
 
-        Assert.Throws<InvalidOperationException>(() => WindowsSandboxComposer.Compose(settings, workspace.Root));
+        TestAssert.Throws<InvalidOperationException>(() => WindowsSandboxComposer.Compose(settings, workspace.Root));
     }
 
-    [Fact]
+    [Test]
     public void WindowsSandboxComposer_FailsClosedWhenSandboxHomeIsInsideWorkspace()
     {
         if (!OperatingSystem.IsWindows()) return;
@@ -424,11 +430,12 @@ public class WindowsSandboxPolicyClosureTests
         };
 
         var error =
-            Assert.Throws<InvalidOperationException>(() => WindowsSandboxComposer.Compose(settings, workspace.Root));
-        Assert.Contains("sandbox home", error.Message, StringComparison.Ordinal);
+            TestAssert.Throws<InvalidOperationException>(() => WindowsSandboxComposer
+                                                            .Compose(settings, workspace.Root));
+        TestAssert.Contains("sandbox home", error.Message, StringComparison.Ordinal);
     }
 
-    [Fact]
+    [Test]
     public void WindowsSandboxComposer_FailsClosedWhenComponentExecutableIsInsideWorkspace()
     {
         if (!OperatingSystem.IsWindows()) return;
@@ -444,11 +451,12 @@ public class WindowsSandboxPolicyClosureTests
         };
 
         var error =
-            Assert.Throws<InvalidOperationException>(() => WindowsSandboxComposer.Compose(settings, workspace.Root));
-        Assert.Contains("setup executable", error.Message, StringComparison.Ordinal);
+            TestAssert.Throws<InvalidOperationException>(() => WindowsSandboxComposer
+                                                            .Compose(settings, workspace.Root));
+        TestAssert.Contains("setup executable", error.Message, StringComparison.Ordinal);
     }
 
-    [Fact]
+    [Test]
     public void WindowsSandboxComposer_FailsClosedWhenTrustedPathLiesInsideAdditionalWriteRoot()
     {
         if (!OperatingSystem.IsWindows()) return;
@@ -464,16 +472,16 @@ public class WindowsSandboxPolicyClosureTests
             AdditionalWriteRoots = [home.Root]
         };
 
-        // Declaring the sandbox home as an additional write root makes every
-        // trusted path tamperable; the message must name the hit write root.
+        // 把沙箱 home 声明为附加写根会使所有可信路径可被篡改；错误信息必须点名命中的写根。
         var error =
-            Assert.Throws<InvalidOperationException>(() => WindowsSandboxComposer.Compose(settings, workspace.Root));
-        Assert.Contains(home.Root, error.Message, StringComparison.Ordinal);
+            TestAssert.Throws<InvalidOperationException>(() => WindowsSandboxComposer
+                                                            .Compose(settings, workspace.Root));
+        TestAssert.Contains(home.Root, error.Message, StringComparison.Ordinal);
     }
 
     // ---- 可信设置的存储边界 ----
 
-    [Fact]
+    [Test]
     public async Task UserConfigStore_RoundTripsWindowsSandboxSettings()
     {
         using var dir  = new TestTempDir();
@@ -500,30 +508,30 @@ public class WindowsSandboxPolicyClosureTests
         var loaded = await UserConfigStore.LoadAsync(path, CancellationToken.None);
 
         var sandbox = loaded.Settings!.WindowsSandbox!;
-        Assert.True(sandbox.Enabled);
-        Assert.Equal("C:\\sb\\setup.exe", sandbox.SetupExecutablePath);
-        Assert.Equal("C:\\sb\\runner.exe", sandbox.RunnerExecutablePath);
-        Assert.Equal("C:\\sb-home", sandbox.SandboxHome);
-        Assert.Equal(SandboxPolicyKind.ReadOnly, sandbox.Policy);
-        Assert.Equal("C:\\sb-home\\tmp", sandbox.SandboxTempRoot);
-        Assert.Equal(["C:\\cache\\nuget"], sandbox.AdditionalWriteRoots);
-        Assert.Equal("C:\\cache\\nuget", sandbox.ExtraEnvironment!["NUGET_PACKAGES"]);
+        Assert.That(sandbox.Enabled, Is.True);
+        Assert.That(sandbox.SetupExecutablePath, Is.EqualTo("C:\\sb\\setup.exe"));
+        Assert.That(sandbox.RunnerExecutablePath, Is.EqualTo("C:\\sb\\runner.exe"));
+        Assert.That(sandbox.SandboxHome, Is.EqualTo("C:\\sb-home"));
+        Assert.That(sandbox.Policy, Is.EqualTo(SandboxPolicyKind.ReadOnly));
+        Assert.That(sandbox.SandboxTempRoot, Is.EqualTo("C:\\sb-home\\tmp"));
+        Assert.That(sandbox.AdditionalWriteRoots, Is.EqualTo(["C:\\cache\\nuget"]));
+        Assert.That(sandbox.ExtraEnvironment!["NUGET_PACKAGES"], Is.EqualTo("C:\\cache\\nuget"));
     }
 
-    [Fact]
+    [Test]
     public async Task UserConfigStore_AbsentWindowsSandboxYieldsNullAndInvalidValuesFail()
     {
         using var dir  = new TestTempDir();
         var       path = Path.Combine(dir.Root, "user-config.json");
         await File.WriteAllTextAsync(path, """{"settings":{}}""");
         var loaded = await UserConfigStore.LoadAsync(path, CancellationToken.None);
-        Assert.Null(loaded.Settings!.WindowsSandbox);
+        Assert.That(loaded.Settings!.WindowsSandbox, Is.Null);
 
         var invalid = Path.Combine(dir.Root, "invalid.json");
         await File.WriteAllTextAsync(invalid,
                                      """{"settings":{"windowsSandbox":{"enabled":true,"policy":"unrestricted"}}}""");
-        await Assert.ThrowsAsync<InvalidDataException>(() => UserConfigStore
-                                                          .LoadAsync(invalid, CancellationToken.None));
+        await TestAssert.ThrowsAsync<InvalidDataException>(() => UserConfigStore
+                                                              .LoadAsync(invalid, CancellationToken.None));
     }
 
     private static List<JsonObject?> ReadAuditRecords(string auditPath)
@@ -534,7 +542,10 @@ public class WindowsSandboxPolicyClosureTests
                    .ToList();
     }
 
-    /// <summary>记录审批摘要并按脚本回复的审批器。</summary>
+    /// <summary>
+    ///     <para>记录审批摘要并按脚本回复的审批器。</para>
+    ///     <para>An approver that records approval summaries and replies from a script.</para>
+    /// </summary>
     private sealed class RecordingApprover : IApprovalProvider
     {
         private readonly Queue<ApprovalAction> _actions = new();

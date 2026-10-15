@@ -27,7 +27,7 @@ namespace TinyHarness.Tests;
 /// </summary>
 public class SessionCommandTests
 {
-    [Fact]
+    [Test]
     public async Task List_ShowsStoredSessionsAndLegacySnapshotsOffline()
     {
         using var fixture = new SessionCliFixture();
@@ -36,13 +36,13 @@ public class SessionCommandTests
 
         var exit = await SessionCommand.ExecuteAsync(fixture.CreateContext(), Options("list"), CancellationToken.None);
 
-        Assert.Equal(0, exit);
-        Assert.Contains(session.Id, fixture.Io.Output, StringComparison.Ordinal);
-        Assert.Contains("turns 1", fixture.Io.Output, StringComparison.Ordinal);
-        Assert.Contains("Run snapshots (legacy, read-only)", fixture.Io.Output, StringComparison.Ordinal);
+        Assert.That(exit, Is.EqualTo(0));
+        TestAssert.Contains(session.Id, fixture.Io.Output, StringComparison.Ordinal);
+        TestAssert.Contains("turns 1", fixture.Io.Output, StringComparison.Ordinal);
+        TestAssert.Contains("Run snapshots (legacy, read-only)", fixture.Io.Output, StringComparison.Ordinal);
     }
 
-    [Fact]
+    [Test]
     public async Task List_ReportsDamagedEntriesInsteadOfFailing()
     {
         using var fixture = new SessionCliFixture();
@@ -52,11 +52,11 @@ public class SessionCommandTests
 
         var exit = await SessionCommand.ExecuteAsync(fixture.CreateContext(), Options("list"), CancellationToken.None);
 
-        Assert.Equal(0, exit);
-        Assert.Contains("damaged", fixture.Io.Output, StringComparison.Ordinal);
+        Assert.That(exit, Is.EqualTo(0));
+        TestAssert.Contains("damaged", fixture.Io.Output, StringComparison.Ordinal);
     }
 
-    [Fact]
+    [Test]
     public async Task List_ReportsLegacyFilesWhoseNameIsNotASessionId()
     {
         using var fixture = new SessionCliFixture();
@@ -65,13 +65,13 @@ public class SessionCommandTests
 
         var exit = await SessionCommand.ExecuteAsync(fixture.CreateContext(), Options("list"), CancellationToken.None);
 
-        Assert.Equal(0, exit);
-        Assert.Contains("not-a-session-id.session.json", fixture.Io.Output, StringComparison.Ordinal);
-        Assert.Contains("skipped: file name is not a session id", fixture.Io.Output, StringComparison.Ordinal);
-        Assert.DoesNotContain("(none)", fixture.Io.Output, StringComparison.Ordinal);
+        Assert.That(exit, Is.EqualTo(0));
+        TestAssert.Contains("not-a-session-id.session.json", fixture.Io.Output, StringComparison.Ordinal);
+        TestAssert.Contains("skipped: file name is not a session id", fixture.Io.Output, StringComparison.Ordinal);
+        TestAssert.DoesNotContain("(none)", fixture.Io.Output, StringComparison.Ordinal);
     }
 
-    [Fact]
+    [Test]
     public async Task Show_PrintsTheStoredSessionDetails()
     {
         using var fixture = new SessionCliFixture();
@@ -80,20 +80,20 @@ public class SessionCommandTests
         var exit = await SessionCommand.ExecuteAsync(fixture.CreateContext(), Options("show", session.Id),
                                                      CancellationToken.None);
 
-        Assert.Equal(0, exit);
-        Assert.Contains($"session         : {session.Id}", fixture.Io.Output, StringComparison.Ordinal);
-        Assert.Contains($"format version  : {PersistedSession.CurrentFormatVersion}", fixture.Io.Output,
-                        StringComparison.Ordinal);
-        Assert.Contains("conversation    : 0 messages (verbatim protocol stored; resume checks required)",
-                        fixture.Io.Output, StringComparison.Ordinal);
-        Assert.Contains("input : why did it fail?", fixture.Io.Output, StringComparison.Ordinal);
-        Assert.Contains("final : the fix", fixture.Io.Output, StringComparison.Ordinal);
+        Assert.That(exit, Is.EqualTo(0));
+        TestAssert.Contains($"session         : {session.Id}", fixture.Io.Output, StringComparison.Ordinal);
+        TestAssert.Contains($"format version  : {PersistedSession.CurrentFormatVersion}", fixture.Io.Output,
+                            StringComparison.Ordinal);
+        TestAssert.Contains("conversation    : 0 messages (verbatim protocol stored; resume checks required)",
+                            fixture.Io.Output, StringComparison.Ordinal);
+        TestAssert.Contains("input : why did it fail?", fixture.Io.Output, StringComparison.Ordinal);
+        TestAssert.Contains("final : the fix", fixture.Io.Output, StringComparison.Ordinal);
     }
 
-    [Theory]
-    [InlineData(2, false)]
-    [InlineData(2, true)]
-    [InlineData(3, true)]
+
+    [TestCase(2, false)]
+    [TestCase(2, true)]
+    [TestCase(3, true)]
     public async Task Show_LegacyRedactedConversationIsInspectionOnly(int formatVersion, bool opaqueRedacted)
     {
         using var fixture = new SessionCliFixture();
@@ -110,12 +110,12 @@ public class SessionCommandTests
         var exit = await SessionCommand.ExecuteAsync(fixture.CreateContext(), Options("show", session.Id),
                                                      CancellationToken.None);
 
-        Assert.Equal(0, exit);
-        Assert.Contains("inspection only; legacy redaction", fixture.Io.Output, StringComparison.Ordinal);
-        Assert.DoesNotContain("verbatim protocol stored", fixture.Io.Output, StringComparison.Ordinal);
+        Assert.That(exit, Is.EqualTo(0));
+        TestAssert.Contains("inspection only; legacy redaction", fixture.Io.Output, StringComparison.Ordinal);
+        TestAssert.DoesNotContain("verbatim protocol stored", fixture.Io.Output, StringComparison.Ordinal);
     }
 
-    [Fact]
+    [Test]
     public async Task Show_NeverPrintsVerbatimConversationSecrets()
     {
         using var    fixture = new SessionCliFixture();
@@ -136,13 +136,13 @@ public class SessionCommandTests
         var exit = await SessionCommand.ExecuteAsync(fixture.CreateContext(), Options("show", session.Id),
                                                      CancellationToken.None);
 
-        Assert.Equal(0, exit);
-        Assert.DoesNotContain(secret, fixture.Io.Output, StringComparison.Ordinal);
-        Assert.DoesNotContain(secret, fixture.Io.Error, StringComparison.Ordinal);
-        Assert.Contains("input : question", fixture.Io.Output, StringComparison.Ordinal);
+        Assert.That(exit, Is.EqualTo(0));
+        TestAssert.DoesNotContain(secret, fixture.Io.Output, StringComparison.Ordinal);
+        TestAssert.DoesNotContain(secret, fixture.Io.Error, StringComparison.Ordinal);
+        TestAssert.Contains("input : question", fixture.Io.Output, StringComparison.Ordinal);
     }
 
-    [Fact]
+    [Test]
     public async Task Show_PrintsExecutionRecordsAndTheNeedsInspectionState()
     {
         using var fixture = new SessionCliFixture();
@@ -196,18 +196,17 @@ public class SessionCommandTests
         var exit = await SessionCommand.ExecuteAsync(fixture.CreateContext(), Options("show", session.Id),
                                                      CancellationToken.None);
 
-        Assert.Equal(0, exit);
-        Assert.Contains("inspection      : needs inspection (pending; side effects blocked until confirmed on resume)",
-                        fixture.Io.Output, StringComparison.Ordinal);
-        Assert.Contains("inspection : a side effect was possibly executed with an unknown result",
-                        fixture.Io.Output, StringComparison.Ordinal);
-        Assert.Contains("tool apply_patch: allow once — result unknown; side effect possible",
-                        fixture.Io.Output, StringComparison.Ordinal);
-        Assert.Contains("tool read_file: allow — known not started",
-                        fixture.Io.Output, StringComparison.Ordinal);
+        Assert.That(exit, Is.EqualTo(0));
+        TestAssert.Contains("inspection      : needs inspection (pending; side effects blocked until confirmed on resume)",
+                            fixture.Io.Output, StringComparison.Ordinal);
+        TestAssert.Contains("inspection : a side effect was possibly executed with an unknown result",
+                            fixture.Io.Output, StringComparison.Ordinal);
+        TestAssert.Contains("tool apply_patch: allow once — result unknown; side effect possible", fixture.Io.Output,
+                            StringComparison.Ordinal);
+        TestAssert.Contains("tool read_file: allow — known not started", fixture.Io.Output, StringComparison.Ordinal);
     }
 
-    [Fact]
+    [Test]
     public async Task Show_FallsBackToALegacyRunSnapshotReadonlyView()
     {
         using var fixture  = new SessionCliFixture();
@@ -216,13 +215,13 @@ public class SessionCommandTests
         var exit = await SessionCommand.ExecuteAsync(fixture.CreateContext(), Options("show", legacyId),
                                                      CancellationToken.None);
 
-        Assert.Equal(0, exit);
-        Assert.Contains("legacy run snapshot (read-only; cannot be resumed)", fixture.Io.Output,
-                        StringComparison.Ordinal);
-        Assert.Contains($"run id          : {legacyId}", fixture.Io.Output, StringComparison.Ordinal);
+        Assert.That(exit, Is.EqualTo(0));
+        TestAssert.Contains("legacy run snapshot (read-only; cannot be resumed)", fixture.Io.Output,
+                            StringComparison.Ordinal);
+        TestAssert.Contains($"run id          : {legacyId}", fixture.Io.Output, StringComparison.Ordinal);
     }
 
-    [Fact]
+    [Test]
     public async Task Show_AcknowledgedInspectionDoesNotClaimCurrentBlocking()
     {
         using var fixture = new SessionCliFixture();
@@ -235,14 +234,14 @@ public class SessionCommandTests
         await File.WriteAllTextAsync(Path.Combine(fixture.StoreDirectory, $"{session.Id}.session.json"),
                                      JsonSerializer.Serialize(snapshot,
                                                               SessionStoreJsonContext.Default.PersistedSession));
-        Assert.Equal(0, await SessionCommand.ExecuteAsync(fixture.CreateContext(), Options("show", session.Id),
-                                                          CancellationToken.None));
-        Assert.Contains("acknowledged", fixture.Io.Output);
-        Assert.Contains("historical fact", fixture.Io.Output);
-        Assert.DoesNotContain("blocked on resume until", fixture.Io.Output);
+        Assert.That(await SessionCommand.ExecuteAsync(fixture.CreateContext(), Options("show", session.Id),
+                                                      CancellationToken.None), Is.EqualTo(0));
+        Assert.That(fixture.Io.Output, Does.Contain("acknowledged"));
+        Assert.That(fixture.Io.Output, Does.Contain("historical fact"));
+        Assert.That(fixture.Io.Output, Does.Not.Contain("blocked on resume until"));
     }
 
-    [Fact]
+    [Test]
     public async Task Show_LegacyRunRendersNumericExecutionStateAndApprovalAfterRoundTrip()
     {
         using var fixture  = new SessionCliFixture();
@@ -259,12 +258,12 @@ public class SessionCommandTests
                 }
             ]
         }, [], StructuredState.Empty, CancellationToken.None);
-        Assert.Equal(0, await SessionCommand.ExecuteAsync(fixture.CreateContext(), Options("show", id),
-                                                          CancellationToken.None));
-        Assert.Contains("tool shell: allow once — result unknown; side effect possible", fixture.Io.Output);
+        Assert.That(await SessionCommand.ExecuteAsync(fixture.CreateContext(), Options("show", id),
+                                                      CancellationToken.None), Is.EqualTo(0));
+        Assert.That(fixture.Io.Output, Does.Contain("tool shell: allow once — result unknown; side effect possible"));
     }
 
-    [Fact]
+    [Test]
     public async Task Show_InconsistentSnapshotIsRefusedWithItsReason()
     {
         using var fixture    = new SessionCliFixture();
@@ -277,11 +276,11 @@ public class SessionCommandTests
         var exit = await SessionCommand.ExecuteAsync(fixture.CreateContext(), Options("show", session.Id),
                                                      CancellationToken.None);
 
-        Assert.Equal(1, exit);
-        Assert.Contains("inconsistent", fixture.Io.Error, StringComparison.Ordinal);
+        Assert.That(exit, Is.EqualTo(1));
+        TestAssert.Contains("inconsistent", fixture.Io.Error, StringComparison.Ordinal);
     }
 
-    [Fact]
+    [Test]
     public async Task Show_UnknownIdFailsWithBothLocations()
     {
         using var fixture = new SessionCliFixture();
@@ -289,10 +288,10 @@ public class SessionCommandTests
         var exit = await SessionCommand.ExecuteAsync(fixture.CreateContext(), Options("show", new string('0', 32)),
                                                      CancellationToken.None);
 
-        Assert.Equal(1, exit);
-        Assert.Contains("No session", fixture.Io.Error, StringComparison.Ordinal);
-        Assert.Contains(fixture.StoreDirectory, fixture.Io.Error, StringComparison.Ordinal);
-        Assert.Contains(fixture.LegacyDirectory, fixture.Io.Error, StringComparison.Ordinal);
+        Assert.That(exit, Is.EqualTo(1));
+        TestAssert.Contains("No session", fixture.Io.Error, StringComparison.Ordinal);
+        TestAssert.Contains(fixture.StoreDirectory, fixture.Io.Error, StringComparison.Ordinal);
+        TestAssert.Contains(fixture.LegacyDirectory, fixture.Io.Error, StringComparison.Ordinal);
     }
 
     private static CliOptions Options(string subcommand, string? primary = null) =>

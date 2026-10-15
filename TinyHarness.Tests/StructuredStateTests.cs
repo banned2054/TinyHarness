@@ -4,7 +4,7 @@ namespace TinyHarness.Tests;
 
 public class StructuredStateTests
 {
-    [Fact]
+    [Test]
     public void ToJson_And_TryParse_RoundTripAllFields()
     {
         var state = new StructuredState
@@ -20,57 +20,57 @@ public class StructuredStateTests
 
         var json = state.ToJson();
 
-        Assert.True(StructuredState.TryParse(json, out var parsed));
-        // StructuredState is a record of lists, so equality is structural field-by-field.
-        Assert.Equal(state.Goal, parsed.Goal);
-        Assert.Equal(state.Constraints, parsed.Constraints);
-        Assert.Equal(state.Decisions, parsed.Decisions);
-        Assert.Equal(state.FilesInspected, parsed.FilesInspected);
-        Assert.Equal(state.FilesModified, parsed.FilesModified);
-        Assert.Equal(state.CommandsAndResults, parsed.CommandsAndResults);
-        Assert.Equal(state.PendingWork, parsed.PendingWork);
+        Assert.That(StructuredState.TryParse(json, out var parsed), Is.True);
+        // StructuredState 是列表组成的 record，相等性按字段逐项比较。
+        Assert.That(parsed.Goal, Is.EqualTo(state.Goal));
+        Assert.That(parsed.Constraints, Is.EqualTo(state.Constraints));
+        Assert.That(parsed.Decisions, Is.EqualTo(state.Decisions));
+        Assert.That(parsed.FilesInspected, Is.EqualTo(state.FilesInspected));
+        Assert.That(parsed.FilesModified, Is.EqualTo(state.FilesModified));
+        Assert.That(parsed.CommandsAndResults, Is.EqualTo(state.CommandsAndResults));
+        Assert.That(parsed.PendingWork, Is.EqualTo(state.PendingWork));
     }
 
-    [Fact]
+    [Test]
     public void TryParse_RejectsNonJson()
     {
-        Assert.False(StructuredState.TryParse("not json", out _));
-        Assert.False(StructuredState.TryParse("", out _));
-        Assert.False(StructuredState.TryParse("   ", out _));
+        Assert.That(StructuredState.TryParse("not json", out _), Is.False);
+        Assert.That(StructuredState.TryParse("", out _), Is.False);
+        Assert.That(StructuredState.TryParse("   ", out _), Is.False);
     }
 
-    [Fact]
+    [Test]
     public void TryParse_RejectsMistypedFields()
     {
-        // "decisions" must be an array of strings, not a bare string.
+        // "decisions" 必须是字符串数组，不能是裸字符串。
         const string mistyped =
             """{"goal":"g","constraints":[],"decisions":"nope","filesInspected":[],"filesModified":[],"commandsAndResults":[],"pendingWork":[]}""";
 
-        Assert.False(StructuredState.TryParse(mistyped, out _));
+        Assert.That(StructuredState.TryParse(mistyped, out _), Is.False);
     }
 
-    [Fact]
+    [Test]
     public void TryParse_AcceptsMissingOptionalFieldsAsEmpty()
     {
         const string minimal = """{"goal":"g"}""";
 
-        Assert.True(StructuredState.TryParse(minimal, out var state));
-        Assert.Equal("g", state.Goal);
-        Assert.Empty(state.Decisions);
-        Assert.Empty(state.PendingWork);
+        Assert.That(StructuredState.TryParse(minimal, out var state), Is.True);
+        Assert.That(state.Goal, Is.EqualTo("g"));
+        Assert.That(state.Decisions, Is.Empty);
+        Assert.That(state.PendingWork, Is.Empty);
     }
 
-    [Fact]
+    [Test]
     public void BlankEntries_AreNormalizedAndDoNotMakeTheStateNonEmpty()
     {
         const string blank =
             """{"goal":"  ","constraints":["  "],"decisions":[null],"filesInspected":[],"filesModified":[],"commandsAndResults":[],"pendingWork":[""]}""";
 
-        Assert.True(StructuredState.TryParse(blank, out var state));
-        Assert.True(state.IsEmpty);
-        Assert.Empty(state.Constraints);
-        Assert.Empty(state.Decisions);
-        Assert.Empty(state.PendingWork);
-        Assert.DoesNotContain("isEmpty", state.ToJson(), StringComparison.OrdinalIgnoreCase);
+        Assert.That(StructuredState.TryParse(blank, out var state), Is.True);
+        Assert.That(state.IsEmpty, Is.True);
+        Assert.That(state.Constraints, Is.Empty);
+        Assert.That(state.Decisions, Is.Empty);
+        Assert.That(state.PendingWork, Is.Empty);
+        TestAssert.DoesNotContain("isEmpty", state.ToJson(), StringComparison.OrdinalIgnoreCase);
     }
 }

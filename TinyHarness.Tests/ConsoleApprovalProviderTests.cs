@@ -8,12 +8,11 @@ namespace TinyHarness.Tests;
 
 public class ConsoleApprovalProviderTests
 {
-    [Theory]
-    [InlineData("a", ApprovalAction.AllowOnce)]
-    [InlineData("s", ApprovalAction.AllowSession)]
-    [InlineData("d", ApprovalAction.Deny)]
-    [InlineData("", ApprovalAction.Deny)]
-    [InlineData("unknown", ApprovalAction.Deny)]
+    [TestCase("a", ApprovalAction.AllowOnce)]
+    [TestCase("s", ApprovalAction.AllowSession)]
+    [TestCase("d", ApprovalAction.Deny)]
+    [TestCase("", ApprovalAction.Deny)]
+    [TestCase("unknown", ApprovalAction.Deny)]
     public async Task Prompt_ShowsDiffAndScopeBeforeReadingDecision(string answer, ApprovalAction expected)
     {
         using var    dir   = new TestTempDir();
@@ -25,19 +24,19 @@ public class ConsoleApprovalProviderTests
         using var input = new InspectingReader(answer, () =>
         {
             var shown = output.ToString();
-            Assert.Contains(patch, shown);
-            Assert.Contains(Path.Combine(dir.Root, "file.txt"), shown);
-            Assert.Contains("Run approval ('s') grants 'filesystem.write' for the target paths above", shown);
-            Assert.Contains("later changes in this scope may run without asking", shown);
+            Assert.That(shown, Does.Contain(patch));
+            Assert.That(shown, Does.Contain(Path.Combine(dir.Root, "file.txt")));
+            Assert.That(shown, Does.Contain("Run approval ('s') grants 'filesystem.write' for the target paths above"));
+            Assert.That(shown, Does.Contain("later changes in this scope may run without asking"));
         });
         var provider = new ConsoleApprovalProvider(input, output);
 
         var result = await provider.PromptAsync(preparation, CancellationToken.None);
 
-        Assert.Equal(expected, result);
+        Assert.That(result, Is.EqualTo(expected));
     }
 
-    [Fact]
+    [Test]
     public async Task Prompt_EscapesTerminalControlSequencesInPatch()
     {
         using var    dir   = new TestTempDir();
@@ -50,11 +49,11 @@ public class ConsoleApprovalProviderTests
 
         await new ConsoleApprovalProvider(input, output).PromptAsync(preparation, CancellationToken.None);
 
-        Assert.DoesNotContain("\u001b", output.ToString(), StringComparison.Ordinal);
-        Assert.Contains("+\\u001B[2Jhidden", output.ToString());
+        TestAssert.DoesNotContain("\u001b", output.ToString(), StringComparison.Ordinal);
+        Assert.That(output.ToString(), Does.Contain("+\\u001B[2Jhidden"));
     }
 
-    [Fact]
+    [Test]
     public async Task Prompt_ExplainsThatProcessSessionGrantKeepsCommandConstraint()
     {
         using var dir = new TestTempDir();
@@ -66,11 +65,11 @@ public class ConsoleApprovalProviderTests
 
         await new ConsoleApprovalProvider(input, output).PromptAsync(preparation, CancellationToken.None);
 
-        Assert.Contains("this exact executable/argument shape", output.ToString());
-        Assert.Contains("dotnet test", output.ToString());
+        Assert.That(output.ToString(), Does.Contain("this exact executable/argument shape"));
+        Assert.That(output.ToString(), Does.Contain("dotnet test"));
     }
 
-    [Fact]
+    [Test]
     public async Task Prompt_StatesRunScopedApprovalAndLegacySessionInputMeaning()
     {
         using var dir = new TestTempDir();
@@ -87,16 +86,15 @@ public class ConsoleApprovalProviderTests
 
         await new ConsoleApprovalProvider(input, output).PromptAsync(preparation, CancellationToken.None);
 
-        // The 's' grant is explicitly run-scoped (PLAN §4.2): it never extends to
-        // future runs, and a saved session does not inherit it. The legacy
-        // '[s]ession' input is named as still accepted with the same meaning.
+        // 's' 授权显式限定在本次 run 内（PLAN §4.2）：不延伸到后续 run，保存的会话也不继承。
+        // 旧输入 '[s]ession' 仍按同名接受、语义相同。
         var shown = output.ToString();
-        Assert.Contains("It lasts for the remainder of this run only", shown);
-        Assert.Contains("future runs and a saved session do not inherit it", shown);
-        Assert.Contains("The legacy '[s]ession' input keeps the same run-scoped meaning", shown);
+        Assert.That(shown, Does.Contain("It lasts for the remainder of this run only"));
+        Assert.That(shown, Does.Contain("future runs and a saved session do not inherit it"));
+        Assert.That(shown, Does.Contain("The legacy '[s]ession' input keeps the same run-scoped meaning"));
     }
 
-    [Fact]
+    [Test]
     public async Task Prompt_RedactsKnownSecretsFromSummaryAndPatchPreview()
     {
         using var dir = new TestTempDir();
@@ -117,14 +115,13 @@ public class ConsoleApprovalProviderTests
                                           new Dictionary<string, string> { ["env"] = "sk-secret-value" })
            .PromptAsync(preparation, CancellationToken.None);
 
-        // The approval UI is a display surface like any other: a known secret embedded
-        // in the prepared patch preview must not reach the terminal raw.
+        // 审批界面与其他展示面一样：补丁预览中嵌入的已知密钥不得原样出现在终端。
         var shown = output.ToString();
-        Assert.Contains("[REDACTED]", shown);
-        Assert.DoesNotContain("sk-secret-value", shown);
+        Assert.That(shown, Does.Contain("[REDACTED]"));
+        Assert.That(shown, Does.Not.Contain("sk-secret-value"));
     }
 
-    [Fact]
+    [Test]
     public async Task Prompt_ShellModeShowsElevatedRiskAndExactSessionScope()
     {
         using var dir   = new TestTempDir();
@@ -142,9 +139,9 @@ public class ConsoleApprovalProviderTests
 
         await new ConsoleApprovalProvider(input, output).PromptAsync(preparation, CancellationToken.None);
 
-        Assert.Contains("RISK: elevated", output.ToString());
-        Assert.Contains("exact shell type, command text, and working directory", output.ToString());
-        Assert.Contains("echo one && echo two", output.ToString());
+        Assert.That(output.ToString(), Does.Contain("RISK: elevated"));
+        Assert.That(output.ToString(), Does.Contain("exact shell type, command text, and working directory"));
+        Assert.That(output.ToString(), Does.Contain("echo one && echo two"));
     }
 
     private sealed class InspectingReader(string answer, Action inspect) : StringReader(answer)

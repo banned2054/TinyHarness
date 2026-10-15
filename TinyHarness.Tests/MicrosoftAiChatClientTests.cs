@@ -15,14 +15,18 @@ using MicrosoftChatMessage = Microsoft.Extensions.AI.ChatMessage;
 namespace TinyHarness.Tests;
 
 /// <summary>
-///     M.E.AI 传输层契约测试：经 ModelClientFactory 构造的 MicrosoftAiChatClient 驱动真实
-///     OpenAI/M.E.AI SDK 打本地脚本 SSE 服务，验证请求形状、流式翻译、工具调用拼装、usage、
-///     结束原因与错误/取消语义——全部离线，无真实 key，无 loopback 之外的网络。
-///     Contract tests for the M.E.AI transport: the MicrosoftAiChatClient built by
-///     ModelClientFactory drives the real OpenAI/M.E.AI SDK against a local scripted
-///     SSE server, verifying request shape, streaming translation, tool-call assembly,
-///     usage, finish reason, and error/cancellation semantics — all offline, no key,
-///     no network beyond loopback.
+///     <para>
+///         M.E.AI 传输层契约测试：经 ModelClientFactory 构造的 MicrosoftAiChatClient 驱动真实
+///         OpenAI/M.E.AI SDK 打本地脚本 SSE 服务，验证请求形状、流式翻译、工具调用拼装、usage、
+///         结束原因与错误/取消语义——全部离线，无真实 key，无 loopback 之外的网络。
+///     </para>
+///     <para>
+///         Contract tests for the M.E.AI transport: the MicrosoftAiChatClient built by
+///         ModelClientFactory drives the real OpenAI/M.E.AI SDK against a local scripted
+///         SSE server, verifying request shape, streaming translation, tool-call assembly,
+///         usage, finish reason, and error/cancellation semantics — all offline, no key,
+///         no network beyond loopback.
+///     </para>
 /// </summary>
 public class MicrosoftAiChatClientTests
 {
@@ -91,7 +95,7 @@ public class MicrosoftAiChatClientTests
 
     // ---- tests ---------------------------------------------------------------
 
-    [Fact]
+    [Test]
     public async Task StreamingText_TranslatesToContentDeltasAndEnd()
     {
         using var server = new MockSseServer();
@@ -101,25 +105,25 @@ public class MicrosoftAiChatClientTests
 
         var events = await CollectAsync(client, Request(ChatMessage.User("Hi there")));
 
-        Assert.Equal(3, events.Count);
-        Assert.Equal(ChatStreamEventKind.ContentDelta, events[0].Kind);
-        Assert.Equal("Hello from ", events[0].ContentDelta);
-        Assert.Equal(ChatStreamEventKind.ContentDelta, events[1].Kind);
-        Assert.Equal("the mock.", events[1].ContentDelta);
-        Assert.Equal(ChatStreamEventKind.End, events[2].Kind);
+        Assert.That(events.Count, Is.EqualTo(3));
+        Assert.That(events[0].Kind, Is.EqualTo(ChatStreamEventKind.ContentDelta));
+        Assert.That(events[0].ContentDelta, Is.EqualTo("Hello from "));
+        Assert.That(events[1].Kind, Is.EqualTo(ChatStreamEventKind.ContentDelta));
+        Assert.That(events[1].ContentDelta, Is.EqualTo("the mock."));
+        Assert.That(events[2].Kind, Is.EqualTo(ChatStreamEventKind.End));
 
-        // The accumulator still assembles the same text it would for a fake client.
+        // 累加器仍拼装出与 fake client 场景相同的文本。
         var accumulator = Accumulate(events);
-        Assert.Equal("Hello from the mock.", accumulator.Content);
+        Assert.That(accumulator.Content, Is.EqualTo("Hello from the mock."));
 
-        // The request reached the right path and carried model + messages.
-        var sent = Assert.Single(server.Requests);
-        Assert.EndsWith("/chat/completions", sent.Path);
-        Assert.Contains("mock-model", sent.Body);
-        Assert.Contains("Hi there", sent.Body);
+        // 请求到达正确路径并携带 model 与 messages。
+        var sent = TestAssert.Single(server.Requests);
+        Assert.That(sent.Path, Does.EndWith("/chat/completions"));
+        Assert.That(sent.Body, Does.Contain("mock-model"));
+        Assert.That(sent.Body, Does.Contain("Hi there"));
     }
 
-    [Fact]
+    [Test]
     public async Task ToolCall_SplitWireArguments_ArriveAssembledAndValid()
     {
         using var server = new MockSseServer();
@@ -131,32 +135,30 @@ public class MicrosoftAiChatClientTests
 
         var events = await CollectAsync(client, Request(ChatMessage.User("read it")));
 
-        // The M.E.AI adapter assembles the wire fragments itself, so the adapter
-        // surfaces one complete call event plus the terminal event.
-        Assert.Equal(2, events.Count);
-        Assert.Equal(ChatStreamEventKind.ToolCallDelta, events[0].Kind);
-        Assert.Equal(ChatStreamEventKind.End, events[1].Kind);
-        Assert.Equal(0, events[0].ToolCallIndex);
-        Assert.Equal("call_1", events[0].ToolCallId);
-        Assert.Equal("read_file", events[0].ToolCallFunctionName);
+        // M.E.AI 适配器自行拼装 wire 分片，因此适配层呈现一个完整调用事件加终态事件。
+        Assert.That(events.Count, Is.EqualTo(2));
+        Assert.That(events[0].Kind, Is.EqualTo(ChatStreamEventKind.ToolCallDelta));
+        Assert.That(events[1].Kind, Is.EqualTo(ChatStreamEventKind.End));
+        Assert.That(events[0].ToolCallIndex, Is.EqualTo(0));
+        Assert.That(events[0].ToolCallId, Is.EqualTo("call_1"));
+        Assert.That(events[0].ToolCallFunctionName, Is.EqualTo("read_file"));
 
-        // The single fragment already carries the complete, valid argument JSON.
-        var call = Assert.Single(Accumulate(events).ToolCalls);
-        Assert.Equal("call_1", call.Id);
-        Assert.Equal("read_file", call.FunctionName);
+        // 单个分片已携带完整、合法的参数 JSON。
+        var call = TestAssert.Single(Accumulate(events).ToolCalls);
+        Assert.That(call.Id, Is.EqualTo("call_1"));
+        Assert.That(call.FunctionName, Is.EqualTo("read_file"));
         using var expected = JsonDocument.Parse("""{"path":"/tmp/a.txt"}""");
         using var actual   = JsonDocument.Parse(call.ArgumentsJson);
-        Assert.True(JsonElement.DeepEquals(expected.RootElement, actual.RootElement), call.ArgumentsJson);
+        Assert.That(JsonElement.DeepEquals(expected.RootElement, actual.RootElement), Is.True, call.ArgumentsJson);
     }
 
-    [Fact]
+    [Test]
     public async Task MultipleToolCalls_AreAccumulatedPerIndex()
     {
         using var server = new MockSseServer();
         server.Start();
 
-        // Both calls announce in one chunk; argument fragments then interleave
-        // per index, as real providers do.
+        // 两个调用在同一块中声明；参数分片随后按 index 交错，与真实供应商一致。
         server.EnqueueRaw(Sse(RoleDelta(),
                               Chunk("""{"tool_calls":[{"index":0,"id":"a","type":"function","function":{"name":"tool_a","arguments":""}},{"index":1,"id":"b","type":"function","function":{"name":"tool_b","arguments":""}}]}"""),
                               ToolArgumentsDelta(0, """{"x":1}"""), ToolArgumentsDelta(1, """{"y":2}"""),
@@ -166,20 +168,20 @@ public class MicrosoftAiChatClientTests
         var events = await CollectAsync(client, Request(ChatMessage.User("run both")));
 
         var toolCallEvents = events.Where(e => e.Kind == ChatStreamEventKind.ToolCallDelta).ToArray();
-        Assert.Equal(2, toolCallEvents.Length);
-        Assert.Equal([0, 1], toolCallEvents.Select(e => e.ToolCallIndex).OrderBy(i => i).ToArray());
+        Assert.That(toolCallEvents.Length, Is.EqualTo(2));
+        Assert.That(toolCallEvents.Select(e => e.ToolCallIndex).OrderBy(i => i).ToArray(), Is.EqualTo([0, 1]));
 
         var accumulator = Accumulate(events);
-        Assert.Equal(2, accumulator.ToolCalls.Count);
-        Assert.Equal("a", accumulator.ToolCalls[0].Id);
-        Assert.Equal("tool_a", accumulator.ToolCalls[0].FunctionName);
-        Assert.Equal("""{"x":1}""", accumulator.ToolCalls[0].ArgumentsJson);
-        Assert.Equal("b", accumulator.ToolCalls[1].Id);
-        Assert.Equal("tool_b", accumulator.ToolCalls[1].FunctionName);
-        Assert.Equal("""{"y":2}""", accumulator.ToolCalls[1].ArgumentsJson);
+        Assert.That(accumulator.ToolCalls.Count, Is.EqualTo(2));
+        Assert.That(accumulator.ToolCalls[0].Id, Is.EqualTo("a"));
+        Assert.That(accumulator.ToolCalls[0].FunctionName, Is.EqualTo("tool_a"));
+        Assert.That(accumulator.ToolCalls[0].ArgumentsJson, Is.EqualTo("""{"x":1}"""));
+        Assert.That(accumulator.ToolCalls[1].Id, Is.EqualTo("b"));
+        Assert.That(accumulator.ToolCalls[1].FunctionName, Is.EqualTo("tool_b"));
+        Assert.That(accumulator.ToolCalls[1].ArgumentsJson, Is.EqualTo("""{"y":2}"""));
     }
 
-    [Fact]
+    [Test]
     public async Task ToolCallsWithoutCallId_GetDistinctIndexesAndValidJson()
     {
         // MockSseServer 与真实 SDK 在 wire 上无法产生缺失 id 的工具调用，这里用直接产出
@@ -188,13 +190,11 @@ public class MicrosoftAiChatClientTests
         // 参数 JSON 被拼接成非法文本。M.E.AI 的 FunctionCallContent 构造器拒绝 null CallId
         // （ArgumentNullException），空串是可构造的等价"无 id"形态。
         //
-        // MockSseServer and the real SDK cannot produce a tool call without an id on the wire,
-        // so an IChatClient fake yielding prebuilt ChatResponseUpdate instances constructs two
-        // calls with an empty CallId: an absent id registers nothing, so before the fix the
-        // second allocation read a stuck counter and both calls folded into one accumulator
-        // buffer, concatenating their argument JSON into invalid text. The M.E.AI
-        // FunctionCallContent constructor rejects a null CallId (ArgumentNullException); the
-        // empty string is the constructible equivalent of "no id".
+        // MockSseServer 与真实 SDK 无法在 wire 上产生没有 id 的工具调用，因此用逐条回放预构造
+        // ChatResponseUpdate 的 IChatClient fake 构造两个 CallId 为空的调用：缺失 id 时不登记
+        // 任何内容，两个调用必须各自获得独立累加缓冲，折叠进同一缓冲会把参数 JSON 拼接成非法
+        // 文本。M.E.AI 的 FunctionCallContent 构造函数拒绝 null CallId（ArgumentNullException），
+        // 空字符串是"无 id"的可构造等价物。
         var updates = new List<ChatResponseUpdate>
         {
             new(null, new List<AIContent>
@@ -211,18 +211,18 @@ public class MicrosoftAiChatClientTests
         var events = await CollectAsync(client, Request(ChatMessage.User("run both")));
 
         var toolCallEvents = events.Where(e => e.Kind == ChatStreamEventKind.ToolCallDelta).ToArray();
-        Assert.Equal(2, toolCallEvents.Length);
-        Assert.NotEqual(toolCallEvents[0].ToolCallIndex, toolCallEvents[1].ToolCallIndex);
+        Assert.That(toolCallEvents.Length, Is.EqualTo(2));
+        Assert.That(toolCallEvents[1].ToolCallIndex, Is.Not.EqualTo(toolCallEvents[0].ToolCallIndex));
 
         var accumulator = Accumulate(events);
-        Assert.Equal(2, accumulator.ToolCalls.Count);
-        Assert.Equal("tool_a", accumulator.ToolCalls[0].FunctionName);
-        Assert.Equal("""{"x":1}""", accumulator.ToolCalls[0].ArgumentsJson);
-        Assert.Equal("tool_b", accumulator.ToolCalls[1].FunctionName);
-        Assert.Equal("""{"y":2}""", accumulator.ToolCalls[1].ArgumentsJson);
+        Assert.That(accumulator.ToolCalls.Count, Is.EqualTo(2));
+        Assert.That(accumulator.ToolCalls[0].FunctionName, Is.EqualTo("tool_a"));
+        Assert.That(accumulator.ToolCalls[0].ArgumentsJson, Is.EqualTo("""{"x":1}"""));
+        Assert.That(accumulator.ToolCalls[1].FunctionName, Is.EqualTo("tool_b"));
+        Assert.That(accumulator.ToolCalls[1].ArgumentsJson, Is.EqualTo("""{"y":2}"""));
     }
 
-    [Fact]
+    [Test]
     public async Task RequestsCarryToolsStreamFlagAndToolResultRoundTrip()
     {
         using var server = new MockSseServer();
@@ -240,8 +240,7 @@ public class MicrosoftAiChatClientTests
             Tools    = [tool]
         });
 
-        // Replay the round an Agent loop would build: the assistant's tool call
-        // plus the tool result linked to the same call id.
+        // 回放 Agent 循环会构建的回合：assistant 的工具调用加同一 call id 的工具结果。
         await CollectAsync(client, new ChatCompletionRequest
         {
             Model = "mock-model",
@@ -255,36 +254,36 @@ public class MicrosoftAiChatClientTests
             Tools = [tool]
         });
 
-        Assert.Equal(2, server.Requests.Count);
-        Assert.All(server.Requests, r => Assert.Equal("POST", r.Method));
-        Assert.All(server.Requests, r => Assert.Equal("/v1/chat/completions", r.Path));
+        Assert.That(server.Requests.Count, Is.EqualTo(2));
+        TestAssert.All(server.Requests, r => Assert.That(r.Method, Is.EqualTo("POST")));
+        TestAssert.All(server.Requests, r => Assert.That(r.Path, Is.EqualTo("/v1/chat/completions")));
 
-        // Round 1 declared the tool, enabled streaming, and kept the schema.
+        // 第 1 轮声明了工具、启用流式并保留 schema。
         var first = JsonNode.Parse(server.Requests[0].Body)!.AsObject();
-        Assert.True(first["stream"]!.GetValue<bool>());
+        Assert.That(first["stream"]!.GetValue<bool>(), Is.True);
         var tools = first["tools"]!.AsArray();
-        var tool0 = Assert.Single(tools)!;
-        Assert.Equal("read_file", tool0["function"]!["name"]!.GetValue<string>());
-        Assert.Equal("Read a text file.", tool0["function"]!["description"]!.GetValue<string>());
+        var tool0 = TestAssert.Single(tools)!;
+        Assert.That(tool0["function"]!["name"]!.GetValue<string>(), Is.EqualTo("read_file"));
+        Assert.That(tool0["function"]!["description"]!.GetValue<string>(), Is.EqualTo("Read a text file."));
         var parameters = tool0["function"]!["parameters"]!.AsObject();
-        Assert.Equal("object", parameters["type"]!.GetValue<string>());
-        Assert.Equal("string", parameters["properties"]!["path"]!["type"]!.GetValue<string>());
+        Assert.That(parameters["type"]!.GetValue<string>(), Is.EqualTo("object"));
+        Assert.That(parameters["properties"]!["path"]!["type"]!.GetValue<string>(), Is.EqualTo("string"));
 
-        // Round 2 replayed the assistant tool call and the matching tool result.
+        // 第 2 轮回放了 assistant 工具调用与匹配的工具结果。
         var second   = JsonNode.Parse(server.Requests[1].Body)!.AsObject();
         var messages = second["messages"]!.AsArray();
-        Assert.Equal(3, messages.Count);
+        Assert.That(messages.Count, Is.EqualTo(3));
         var assistant = messages[1]!;
-        Assert.Equal("assistant", assistant["role"]!.GetValue<string>());
-        var wireCall = Assert.Single(assistant["tool_calls"]!.AsArray())!;
-        Assert.Equal("call_1", wireCall["id"]!.GetValue<string>());
-        Assert.Equal("read_file", wireCall["function"]!["name"]!.GetValue<string>());
+        Assert.That(assistant["role"]!.GetValue<string>(), Is.EqualTo("assistant"));
+        var wireCall = TestAssert.Single(assistant["tool_calls"]!.AsArray())!;
+        Assert.That(wireCall["id"]!.GetValue<string>(), Is.EqualTo("call_1"));
+        Assert.That(wireCall["function"]!["name"]!.GetValue<string>(), Is.EqualTo("read_file"));
         var wireArguments = JsonNode.Parse(wireCall["function"]!["arguments"]!.GetValue<string>())!.AsObject();
-        Assert.Equal("/tmp/a.txt", wireArguments["path"]!.GetValue<string>());
+        Assert.That(wireArguments["path"]!.GetValue<string>(), Is.EqualTo("/tmp/a.txt"));
         var toolMessage = messages[2]!;
-        Assert.Equal("tool", toolMessage["role"]!.GetValue<string>());
-        Assert.Equal("call_1", toolMessage["tool_call_id"]!.GetValue<string>());
-        Assert.Equal("read_file ok", toolMessage["content"]!.GetValue<string>());
+        Assert.That(toolMessage["role"]!.GetValue<string>(), Is.EqualTo("tool"));
+        Assert.That(toolMessage["tool_call_id"]!.GetValue<string>(), Is.EqualTo("call_1"));
+        Assert.That(toolMessage["content"]!.GetValue<string>(), Is.EqualTo("read_file ok"));
     }
 
     private static ToolDefinition ReadFileTool() => new()
@@ -296,7 +295,7 @@ public class MicrosoftAiChatClientTests
                 JsonObject ?? throw new InvalidOperationException("bad fixture")
     };
 
-    [Fact]
+    [Test]
     public async Task FinalUsageChunk_FillsAccumulatorTokenCounts()
     {
         using var server = new MockSseServer();
@@ -307,13 +306,13 @@ public class MicrosoftAiChatClientTests
         var events = await CollectAsync(client, Request(ChatMessage.User("count")));
 
         var accumulator = Accumulate(events);
-        Assert.Equal("counted", accumulator.Content);
-        Assert.Equal(12, accumulator.InputTokens);
-        Assert.Equal(7, accumulator.OutputTokens);
-        Assert.Equal("stop", accumulator.FinishReason);
+        Assert.That(accumulator.Content, Is.EqualTo("counted"));
+        Assert.That(accumulator.InputTokens, Is.EqualTo(12));
+        Assert.That(accumulator.OutputTokens, Is.EqualTo(7));
+        Assert.That(accumulator.FinishReason, Is.EqualTo("stop"));
     }
 
-    [Fact]
+    [Test]
     public async Task ToolCallsFinishReason_IsCarriedOnTheEndEvent()
     {
         using var server = new MockSseServer();
@@ -325,10 +324,10 @@ public class MicrosoftAiChatClientTests
         var events = await CollectAsync(client, Request(ChatMessage.User("read")));
 
         var end = events.Single(e => e.Kind == ChatStreamEventKind.End);
-        Assert.Equal("tool_calls", end.FinishReason);
+        Assert.That(end.FinishReason, Is.EqualTo("tool_calls"));
     }
 
-    [Fact]
+    [Test]
     public async Task HttpError_SurfacesAsClientResultExceptionWithStatus()
     {
         using var server = new MockSseServer();
@@ -337,19 +336,19 @@ public class MicrosoftAiChatClientTests
         var client = NewClient(server);
 
         var ex =
-            await Assert.ThrowsAsync<ClientResultException>(() =>
-                                                                CollectAsync(client,
+            await TestAssert.ThrowsAsync<ClientResultException>(() =>
+                                                                    CollectAsync(client,
                                                                              Request(ChatMessage.User("boom"))));
 
-        Assert.Contains("404", ex.Message);
+        Assert.That(ex.Message, Does.Contain("404"));
     }
 
-    [Fact]
+    [Test]
     public async Task CancellationMidRequest_ThrowsOperationCanceled()
     {
         using var server = new MockSseServer();
         server.Start();
-        // The server stalls before answering so the client is still waiting.
+        // 服务端应答前停顿，客户端仍在等待。
         server.Enqueue(_ =>
         {
             Thread.Sleep(TimeSpan.FromSeconds(15));
@@ -363,22 +362,22 @@ public class MicrosoftAiChatClientTests
         await cts.CancelAsync();
 
         var completed = await Task.WhenAny(collect, Task.Delay(TimeSpan.FromSeconds(10)));
-        Assert.Same(collect, completed);
+        Assert.That(completed, Is.SameAs(collect));
 
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => collect);
+        await Assert.CatchAsync<OperationCanceledException>(() => collect);
     }
 
-    [Fact]
+    [Test]
     public async Task TwoTurnAgentLoop_RunsOverTheRealTransport()
     {
         using var server = new MockSseServer();
         server.Start();
 
-        // Turn 1: the model requests a tool call.
+        // 第 1 回合：模型请求工具调用。
         server.EnqueueRaw(Sse(RoleDelta(), ContentDelta("I will read it."), ToolCallHead(0, "call_1", "read_file"),
                               ToolArgumentsDelta(0, """{"path":"/tmp/a.txt"}"""), ToolCallsFinishDelta()));
 
-        // Turn 2: after the tool result it answers in plain text.
+        // 第 2 回合：收到工具结果后以纯文本回答。
         server.EnqueueRaw(Sse(RoleDelta(), ContentDelta("The file read fine."), StopDelta()));
 
         var client = NewClient(server);
@@ -392,27 +391,31 @@ public class MicrosoftAiChatClientTests
 
         var result = await loop.RunAsync("sys", "inspect /tmp/a.txt", CancellationToken.None);
 
-        Assert.Equal(AgentStatus.Completed, result.Status);
-        Assert.Equal("The file read fine.", result.FinalMessage);
-        Assert.Equal(1, tool.ExecuteCount);
-        Assert.Equal(2, server.Requests.Count);
+        Assert.That(result.Status, Is.EqualTo(AgentStatus.Completed));
+        Assert.That(result.FinalMessage, Is.EqualTo("The file read fine."));
+        Assert.That(tool.ExecuteCount, Is.EqualTo(1));
+        Assert.That(server.Requests.Count, Is.EqualTo(2));
 
-        // The second request carries the tool result back to the model.
+        // 第二个请求把工具结果回传给模型。
         var second = server.Requests[1];
-        Assert.Contains("\"role\":\"tool\"", second.Body);
-        Assert.Contains("\"tool_call_id\":\"call_1\"", second.Body);
-        Assert.Contains("read_file ok", second.Body);
+        Assert.That(second.Body, Does.Contain("\"role\":\"tool\""));
+        Assert.That(second.Body, Does.Contain("\"tool_call_id\":\"call_1\""));
+        Assert.That(second.Body, Does.Contain("read_file ok"));
 
-        // The first request declared the tool to the model.
-        Assert.Contains("read_file", server.Requests[0].Body);
+        // 第一个请求向模型声明了工具。
+        Assert.That(server.Requests[0].Body, Does.Contain("read_file"));
     }
 
     /// <summary>
-    ///     逐条回放预构造 <see cref="ChatResponseUpdate" /> 的最小 IChatClient：用于 wire 协议无法
-    ///     表达的离线场景（如缺失工具调用 id），绕过 SSE 与真实 SDK。
-    ///     A minimal IChatClient replaying prebuilt <see cref="ChatResponseUpdate" /> instances
-    ///     one by one; used for offline shapes the wire protocol cannot express (such as a
-    ///     missing tool-call id), bypassing SSE and the real SDK.
+    ///     <para>
+    ///         逐条回放预构造 <see cref="ChatResponseUpdate" /> 的最小 IChatClient：用于 wire 协议无法
+    ///         表达的离线场景（如缺失工具调用 id），绕过 SSE 与真实 SDK。
+    ///     </para>
+    ///     <para>
+    ///         A minimal IChatClient replaying prebuilt <see cref="ChatResponseUpdate" /> instances
+    ///         one by one; used for offline shapes the wire protocol cannot express (such as a
+    ///         missing tool-call id), bypassing SSE and the real SDK.
+    ///     </para>
     /// </summary>
     private sealed class ScriptedUpdateChatClient(IReadOnlyList<ChatResponseUpdate> updates) : IChatClient
     {

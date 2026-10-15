@@ -8,7 +8,7 @@ namespace TinyHarness.Tests;
 
 public class McpWorkerHostConfigurationTests
 {
-    [Fact]
+    [Test]
     public async Task ResolveAsync_UsesOnlyUserProfileAndWorkerSettings_NotProjectConfig()
     {
         using var dir       = new TestTempDir();
@@ -58,24 +58,24 @@ public class McpWorkerHostConfigurationTests
         var resolved = await McpWorkerHostConfiguration.ResolveAsync(CancellationToken.None, userConfigPath,
                                                                      dir.Root, new FakeCredentialStore());
 
-        Assert.Equal("glm-flash", resolved.Model);
-        Assert.Equal("https://glm.example/v1", resolved.Endpoint);
-        Assert.Equal(ChatApiKind.Responses, resolved.ChatApi);
-        Assert.Equal("HTTPS", resolved.EndpointType);
-        Assert.Equal("test-api-key", resolved.ApiKey);
-        Assert.Equal(workspace, resolved.WorkspaceRoot);
-        Assert.Equal("glm-flash", resolved.ExecutionOptions.Model);
-        Assert.Equal(150, resolved.ExecutionOptions.RunTimeout.TotalSeconds);
-        Assert.Equal(4, resolved.ExecutionOptions.MaxAgentSteps);
-        Assert.Equal(9_000, resolved.ExecutionOptions.MaxTaskPackageCharacters);
-        Assert.Equal(10, resolved.ExecutionOptions.MaxToolCalls);
-        Assert.Equal(19_000, resolved.ExecutionOptions.MaxToolOutputCharacters);
-        Assert.Equal(20_000, resolved.ExecutionOptions.MaxContextTokensPerRequest);
-        Assert.Equal(30_000, resolved.ExecutionOptions.MaxCumulativeContextTokens);
-        Assert.Equal(11_000, resolved.ExecutionOptions.MaxModelResponseCharacters);
+        Assert.That(resolved.Model, Is.EqualTo("glm-flash"));
+        Assert.That(resolved.Endpoint, Is.EqualTo("https://glm.example/v1"));
+        Assert.That(resolved.ChatApi, Is.EqualTo(ChatApiKind.Responses));
+        Assert.That(resolved.EndpointType, Is.EqualTo("HTTPS"));
+        Assert.That(resolved.ApiKey, Is.EqualTo("test-api-key"));
+        Assert.That(resolved.WorkspaceRoot, Is.EqualTo(workspace));
+        Assert.That(resolved.ExecutionOptions.Model, Is.EqualTo("glm-flash"));
+        Assert.That(resolved.ExecutionOptions.RunTimeout.TotalSeconds, Is.EqualTo(150));
+        Assert.That(resolved.ExecutionOptions.MaxAgentSteps, Is.EqualTo(4));
+        Assert.That(resolved.ExecutionOptions.MaxTaskPackageCharacters, Is.EqualTo(9_000));
+        Assert.That(resolved.ExecutionOptions.MaxToolCalls, Is.EqualTo(10));
+        Assert.That(resolved.ExecutionOptions.MaxToolOutputCharacters, Is.EqualTo(19_000));
+        Assert.That(resolved.ExecutionOptions.MaxContextTokensPerRequest, Is.EqualTo(20_000));
+        Assert.That(resolved.ExecutionOptions.MaxCumulativeContextTokens, Is.EqualTo(30_000));
+        Assert.That(resolved.ExecutionOptions.MaxModelResponseCharacters, Is.EqualTo(11_000));
     }
 
-    [Fact]
+    [Test]
     public async Task ResolveAsync_RejectsWorkerBudgetAboveStableCeiling()
     {
         using var dir       = new TestTempDir();
@@ -99,13 +99,13 @@ public class McpWorkerHostConfigurationTests
             }
         }, CancellationToken.None);
 
-        var error = await Assert.ThrowsAsync<ConfigException>(() =>
-                                                                  McpWorkerHostConfiguration
-                                                                     .ResolveAsync(CancellationToken.None, path,
-                                                                               dir.Root,
-                                                                               new FakeCredentialStore()));
+        var error = await TestAssert.ThrowsAsync<ConfigException>(() =>
+                                                                      McpWorkerHostConfiguration
+                                                                         .ResolveAsync(CancellationToken.None, path,
+                                                                                   dir.Root,
+                                                                                   new FakeCredentialStore()));
 
-        Assert.Contains("settings.worker.maxAgentSteps", error.Message, StringComparison.Ordinal);
+        TestAssert.Contains("settings.worker.maxAgentSteps", error.Message, StringComparison.Ordinal);
     }
 
     private sealed class FakeCredentialStore : ICredentialStore

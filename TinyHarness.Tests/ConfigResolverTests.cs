@@ -6,7 +6,7 @@ namespace TinyHarness.Tests;
 
 public class ConfigResolverTests
 {
-    [Fact]
+    [Test]
     public async Task ExplicitPathMissing_ThrowsUsageErrorWithoutFallingBack()
     {
         var dir = Path.Combine(Path.GetTempPath(), $"tinyharness-{Guid.NewGuid():N}");
@@ -15,13 +15,13 @@ public class ConfigResolverTests
         {
             var missing = Path.Combine(dir, "missing.json");
 
-            var error = await Assert.ThrowsAsync<ConfigException>(() => ConfigResolver.ResolveAsync(missing,
-                                                                           CancellationToken.None,
-                                                                           dir,
-                                                                           Path.Combine(dir, "user-config.json")));
+            var error = await TestAssert.ThrowsAsync<ConfigException>(() => ConfigResolver.ResolveAsync(missing,
+                                                                               CancellationToken.None,
+                                                                               dir,
+                                                                               Path.Combine(dir, "user-config.json")));
 
-            Assert.True(error.IsUsageError);
-            Assert.Contains(missing, error.Message);
+            Assert.That(error.IsUsageError, Is.True);
+            Assert.That(error.Message, Does.Contain(missing));
         }
         finally
         {
@@ -29,7 +29,7 @@ public class ConfigResolverTests
         }
     }
 
-    [Fact]
+    [Test]
     public async Task ExplicitPath_UsesThatFileAndIgnoresEverythingElse()
     {
         var dir = Path.Combine(Path.GetTempPath(), $"tinyharness-{Guid.NewGuid():N}");
@@ -44,12 +44,12 @@ public class ConfigResolverTests
                                                                dir,
                                                                Path.Combine(dir, "user-config.json"));
 
-            Assert.Equal(ConfigSourceKind.ExplicitFile, resolution.Source);
-            Assert.Equal(Path.GetFullPath(explicitPath), resolution.SourcePath);
-            Assert.Equal("https://explicit.test/v1", resolution.Config.Endpoint);
-            Assert.Equal("m-explicit", resolution.Config.Model);
-            Assert.Equal(7, resolution.Config.MaxAgentSteps);
-            Assert.Null(resolution.ProfileName);
+            Assert.That(resolution.Source, Is.EqualTo(ConfigSourceKind.ExplicitFile));
+            Assert.That(resolution.SourcePath, Is.EqualTo(Path.GetFullPath(explicitPath)));
+            Assert.That(resolution.Config.Endpoint, Is.EqualTo("https://explicit.test/v1"));
+            Assert.That(resolution.Config.Model, Is.EqualTo("m-explicit"));
+            Assert.That(resolution.Config.MaxAgentSteps, Is.EqualTo(7));
+            Assert.That(resolution.ProfileName, Is.Null);
         }
         finally
         {
@@ -57,7 +57,7 @@ public class ConfigResolverTests
         }
     }
 
-    [Fact]
+    [Test]
     public async Task ProjectFileInWorkingDirectory_TakesPrecedenceOverUserConfig()
     {
         var dir = Path.Combine(Path.GetTempPath(), $"tinyharness-{Guid.NewGuid():N}");
@@ -73,11 +73,11 @@ public class ConfigResolverTests
                                                                dir,
                                                                userPath);
 
-            Assert.Equal(ConfigSourceKind.ProjectFile, resolution.Source);
-            Assert.Equal(Path.Combine(dir, "tinyharness.json"), resolution.SourcePath);
-            Assert.Equal("https://project.test/v1", resolution.Config.Endpoint);
-            Assert.True(resolution.ProjectConfigExists);
-            Assert.True(resolution.UserConfigExists);
+            Assert.That(resolution.Source, Is.EqualTo(ConfigSourceKind.ProjectFile));
+            Assert.That(resolution.SourcePath, Is.EqualTo(Path.Combine(dir, "tinyharness.json")));
+            Assert.That(resolution.Config.Endpoint, Is.EqualTo("https://project.test/v1"));
+            Assert.That(resolution.ProjectConfigExists, Is.True);
+            Assert.That(resolution.UserConfigExists, Is.True);
         }
         finally
         {
@@ -85,7 +85,7 @@ public class ConfigResolverTests
         }
     }
 
-    [Fact]
+    [Test]
     public async Task UserConfig_MapsDefaultProfileModelAndSettings()
     {
         var dir = Path.Combine(Path.GetTempPath(), $"tinyharness-{Guid.NewGuid():N}");
@@ -116,18 +116,19 @@ public class ConfigResolverTests
                                                                dir,
                                                                userPath);
 
-            Assert.Equal(ConfigSourceKind.UserConfig, resolution.Source);
-            Assert.Equal(userPath, resolution.SourcePath);
-            Assert.Equal("work", resolution.ProfileName);
-            Assert.Equal("model-x", resolution.ModelName);
-            Assert.Equal("https://work.test/v1", resolution.Config.Endpoint);
-            Assert.Equal(ChatApiKind.Responses, resolution.Config.ChatApi);
-            Assert.Equal("model-x", resolution.Config.Model);
-            Assert.Equal(64_000, resolution.Config.ContextWindowTokens);
-            Assert.Equal("TinyHarness:work", resolution.Config.ApiKeyCredentialTarget);
-            Assert.Equal(12, resolution.Config.MaxAgentSteps);
-            Assert.Equal(8_000, resolution.Config.ReservedOutputTokens); // setting absent -> built-in default
-            Assert.True(Path.IsPathRooted(resolution.Config.SessionDirectory));
+            Assert.That(resolution.Source, Is.EqualTo(ConfigSourceKind.UserConfig));
+            Assert.That(resolution.SourcePath, Is.EqualTo(userPath));
+            Assert.That(resolution.ProfileName, Is.EqualTo("work"));
+            Assert.That(resolution.ModelName, Is.EqualTo("model-x"));
+            Assert.That(resolution.Config.Endpoint, Is.EqualTo("https://work.test/v1"));
+            Assert.That(resolution.Config.ChatApi, Is.EqualTo(ChatApiKind.Responses));
+            Assert.That(resolution.Config.Model, Is.EqualTo("model-x"));
+            Assert.That(resolution.Config.ContextWindowTokens, Is.EqualTo(64_000));
+            Assert.That(resolution.Config.ApiKeyCredentialTarget, Is.EqualTo("TinyHarness:work"));
+            Assert.That(resolution.Config.MaxAgentSteps, Is.EqualTo(12));
+            Assert.That(resolution.Config.ReservedOutputTokens,
+                        Is.EqualTo(8_000)); // 未配置该设置 -> 使用内置默认值
+            Assert.That(Path.IsPathRooted(resolution.Config.SessionDirectory), Is.True);
         }
         finally
         {
@@ -135,7 +136,7 @@ public class ConfigResolverTests
         }
     }
 
-    [Fact]
+    [Test]
     public async Task UserConfigWithNoDefaultProfile_KeepsEmptyConfigForDisplay()
     {
         var dir = Path.Combine(Path.GetTempPath(), $"tinyharness-{Guid.NewGuid():N}");
@@ -149,10 +150,10 @@ public class ConfigResolverTests
                                                                dir,
                                                                userPath);
 
-            Assert.Equal(ConfigSourceKind.UserConfig, resolution.Source);
-            Assert.Null(resolution.ProfileName);
-            Assert.Empty(resolution.Config.Endpoint);
-            Assert.Empty(resolution.Config.Model);
+            Assert.That(resolution.Source, Is.EqualTo(ConfigSourceKind.UserConfig));
+            Assert.That(resolution.ProfileName, Is.Null);
+            Assert.That(resolution.Config.Endpoint, Is.Empty);
+            Assert.That(resolution.Config.Model, Is.Empty);
         }
         finally
         {
@@ -160,7 +161,7 @@ public class ConfigResolverTests
         }
     }
 
-    [Fact]
+    [Test]
     public async Task UserConfig_DefaultProfileWithoutChatApi_DefaultsToChatCompletions()
     {
         var dir = Path.Combine(Path.GetTempPath(), $"tinyharness-{Guid.NewGuid():N}");
@@ -181,7 +182,7 @@ public class ConfigResolverTests
                                                                dir,
                                                                userPath);
 
-            Assert.Equal(ChatApiKind.ChatCompletions, resolution.Config.ChatApi);
+            Assert.That(resolution.Config.ChatApi, Is.EqualTo(ChatApiKind.ChatCompletions));
         }
         finally
         {
@@ -189,7 +190,7 @@ public class ConfigResolverTests
         }
     }
 
-    [Fact]
+    [Test]
     public async Task UserConfigWithMissingDefaultProfile_ThrowsActionableError()
     {
         var dir = Path.Combine(Path.GetTempPath(), $"tinyharness-{Guid.NewGuid():N}");
@@ -200,14 +201,14 @@ public class ConfigResolverTests
             await File.WriteAllTextAsync(userPath, """{"defaultProfile":"ghost","profiles":[]}""");
 
             var error =
-                await Assert.ThrowsAsync<ConfigException>(() => ConfigResolver.ResolveAsync(null,
-                                                                   CancellationToken.None,
-                                                                   dir,
-                                                                   userPath));
+                await TestAssert.ThrowsAsync<ConfigException>(() => ConfigResolver.ResolveAsync(null,
+                                                                       CancellationToken.None,
+                                                                       dir,
+                                                                       userPath));
 
-            Assert.False(error.IsUsageError);
-            Assert.Contains("ghost", error.Message);
-            Assert.Contains("provider use", error.Message);
+            Assert.That(error.IsUsageError, Is.False);
+            Assert.That(error.Message, Does.Contain("ghost"));
+            Assert.That(error.Message, Does.Contain("provider use"));
         }
         finally
         {
@@ -215,7 +216,7 @@ public class ConfigResolverTests
         }
     }
 
-    [Fact]
+    [Test]
     public async Task UserConfigWithUnknownDefaultModel_ThrowsActionableError()
     {
         var dir = Path.Combine(Path.GetTempPath(), $"tinyharness-{Guid.NewGuid():N}");
@@ -233,14 +234,14 @@ public class ConfigResolverTests
                                          """);
 
             var error =
-                await Assert.ThrowsAsync<ConfigException>(() => ConfigResolver.ResolveAsync(null,
-                                                                   CancellationToken.None,
-                                                                   dir,
-                                                                   userPath));
+                await TestAssert.ThrowsAsync<ConfigException>(() => ConfigResolver.ResolveAsync(null,
+                                                                       CancellationToken.None,
+                                                                       dir,
+                                                                       userPath));
 
-            Assert.False(error.IsUsageError);
-            Assert.Contains("ghost-model", error.Message);
-            Assert.Contains("model add", error.Message);
+            Assert.That(error.IsUsageError, Is.False);
+            Assert.That(error.Message, Does.Contain("ghost-model"));
+            Assert.That(error.Message, Does.Contain("model add"));
         }
         finally
         {
@@ -248,7 +249,7 @@ public class ConfigResolverTests
         }
     }
 
-    [Fact]
+    [Test]
     public async Task NoFilesAtAll_ReturnsDefaultsAndLookupPaths()
     {
         var dir = Path.Combine(Path.GetTempPath(), $"tinyharness-{Guid.NewGuid():N}");
@@ -261,12 +262,12 @@ public class ConfigResolverTests
                                                                dir,
                                                                userPath);
 
-            Assert.Equal(ConfigSourceKind.Defaults, resolution.Source);
-            Assert.Null(resolution.SourcePath);
-            Assert.False(resolution.ProjectConfigExists);
-            Assert.False(resolution.UserConfigExists);
-            Assert.Equal(128_000, resolution.Config.ContextWindowTokens);
-            Assert.Equal(Path.Combine(dir, "tinyharness.json"), resolution.ProjectConfigPath);
+            Assert.That(resolution.Source, Is.EqualTo(ConfigSourceKind.Defaults));
+            Assert.That(resolution.SourcePath, Is.Null);
+            Assert.That(resolution.ProjectConfigExists, Is.False);
+            Assert.That(resolution.UserConfigExists, Is.False);
+            Assert.That(resolution.Config.ContextWindowTokens, Is.EqualTo(128_000));
+            Assert.That(resolution.ProjectConfigPath, Is.EqualTo(Path.Combine(dir, "tinyharness.json")));
         }
         finally
         {

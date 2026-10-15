@@ -6,23 +6,26 @@ using TinyHarness.Core.Models.Tools;
 using TinyHarness.Core.Services.Agent;
 using TinyHarness.Core.Services.Context;
 using TinyHarness.Core.Services.Tools;
-using Xunit.Sdk;
+using NUnit.Framework.Internal;
 
 namespace TinyHarness.Tests;
 
 /// <summary>
-///     M6 Context Manager 集成测试：压缩触发、tools 禁用、原子组完整性、失败回滚、跨轮累积、
-///     模型视图裁剪，以及压缩仍无法容纳窗口时主循环的显式失败（PLAN §13/§17）。
-///     M6 context-manager integration tests: compaction triggering, disabled tools,
-///     atomic-group integrity, rollback on failure, cross-round accumulation, model-view
-///     trimming, and the explicit failure when compaction still cannot fit the window
-///     (PLAN §13/§17).
+///     <para>
+///         上下文压缩集成测试：压缩触发、tools 禁用、原子组完整性、失败回滚、跨轮累积、
+///         模型视图裁剪，以及压缩仍无法容纳窗口时主循环的显式失败（PLAN §13/§17）。
+///     </para>
+///     <para>
+///         Context-compaction integration tests: compaction triggering, disabled tools,
+///         atomic-group integrity, rollback on failure, cross-round accumulation, model-view
+///         trimming, and the explicit failure when compaction still cannot fit the window
+///         (PLAN §13/§17).
+///     </para>
 /// </summary>
 public class ContextCompactionTests
 {
-    // Tight enough that three oversized rounds trigger compaction, yet wide enough
-    // that the post-compaction view (head + structured state + newest turns) fits the
-    // window; the loop refuses to send a request that still exceeds the window.
+    // 窗口取值要足够紧，使三个超限回合触发压缩；又要足够宽，让压缩后视图（头部 + 结构化状态 +
+    // 最新回合）容纳在窗口内；主循环拒发仍超出窗口的请求。
     private const int TightWindow = 1000;
 
     private static AgentOptions TightBudgetOptions(int maxSteps = 10) => new()
@@ -131,10 +134,10 @@ public class ContextCompactionTests
                                     afterD + fixedCost, afterFirst, afterSecond);
         }
 
-        throw new XunitException("No deterministic two-batch compaction fixture was found.");
+        throw new AssertionException("No deterministic two-batch compaction fixture was found.");
     }
 
-    [Fact]
+    [Test]
     public async Task Compaction_DisablesTools_FoldsOldestTurnAndKeepsNewestCompleteTurn()
     {
         var tool   = new FakeTool("t") { ResultContent = new string('x', 1600) };
@@ -151,57 +154,53 @@ public class ContextCompactionTests
         var result  = await loop.RunAsync("sys", "go", CancellationToken.None);
         var changes = sink.Compactions();
 
-        Assert.True(result.Status == AgentStatus.Completed,
+        Assert.That(result.Status == AgentStatus.Completed, Is.True,
                     $"{result.Error} requests={client.Requests} compactions={result.Compactions} steps={result.Steps}");
-        Assert.Equal(3, result.ToolExecutions);
-        Assert.Equal(1, result.Compactions);
-        Assert.Equal(5, client.Requests);
+        Assert.That(result.ToolExecutions, Is.EqualTo(3));
+        Assert.That(result.Compactions, Is.EqualTo(1));
+        Assert.That(client.Requests, Is.EqualTo(5));
 
-        // The summarizer request must disable tools (PLAN §13), carry the original
-        // task and constraints on the first fold, and fold exactly the oldest
-        // complete turn: assistant a_1 plus its capped tool message.
+        // 摘要请求必须禁用 tools（PLAN §13），首次折叠携带原始任务与约束，且恰好折叠最旧的
+        // 完整回合：assistant a_1 及其被截断的工具消息。
         var summaryRequest = client.RequestLog[3];
-        Assert.Null(summaryRequest.Tools);
-        Assert.Equal([ChatRole.System, ChatRole.User, ChatRole.User, ChatRole.Assistant, ChatRole.Tool],
-                     summaryRequest.Messages.Select(m => m.Role).ToArray());
-        Assert.Contains("Original task", summaryRequest.Messages[2].Content);
-        Assert.Equal("a_1", summaryRequest.Messages[3].ToolCalls!.Single().Id);
-        Assert.Contains("#1", summaryRequest.Messages[4].Content);
+        Assert.That(summaryRequest.Tools, Is.Null);
+        Assert.That(summaryRequest.Messages.Select(m => m.Role).ToArray(),
+                    Is.EqualTo([ChatRole.System, ChatRole.User, ChatRole.User, ChatRole.Assistant, ChatRole.Tool]));
+        Assert.That(summaryRequest.Messages[2].Content, Does.Contain("Original task"));
+        Assert.That(summaryRequest.Messages[3].ToolCalls!.Single().Id, Is.EqualTo("a_1"));
+        Assert.That(summaryRequest.Messages[4].Content, Does.Contain("#1"));
 
-        // The next agent request keeps tools, replaces the folded turn with the state
-        // message, and retains the newest complete turn (b_2) plus the in-progress
-        // tail (c_3) verbatim and in order.
+        // 下一个 agent 请求保留 tools，用状态消息替换被折叠回合，并按原样、原顺序保留
+        // 最新完整回合（b_2）与进行中尾部（c_3）。
         var nextRequest = client.RequestLog[4];
-        Assert.NotNull(nextRequest.Tools);
-        var toolDefinition = Assert.Single(nextRequest.Tools!);
-        Assert.Equal([
-                         ChatRole.System, ChatRole.User, ChatRole.User, ChatRole.Assistant, ChatRole.Tool,
-                         ChatRole.Assistant, ChatRole.Tool
-                     ],
-                     nextRequest.Messages.Select(m => m.Role).ToArray());
+        TestAssert.NotNull(nextRequest.Tools);
+        var toolDefinition = TestAssert.Single(nextRequest.Tools!);
+        Assert.That(nextRequest.Messages.Select(m => m.Role).ToArray(), Is.EqualTo([
+            ChatRole.System, ChatRole.User, ChatRole.User, ChatRole.Assistant, ChatRole.Tool,
+            ChatRole.Assistant, ChatRole.Tool
+        ]));
 
-        Assert.True(StructuredState.TryParse(nextRequest.Messages[2].Content, out var state));
-        Assert.Equal("goal-one", state.Goal);
-        Assert.Equal(["a.cs"], state.FilesModified);
-        Assert.Equal(["decision-x"], state.Decisions);
+        Assert.That(StructuredState.TryParse(nextRequest.Messages[2].Content, out var state), Is.True);
+        Assert.That(state.Goal, Is.EqualTo("goal-one"));
+        Assert.That(state.FilesModified, Is.EqualTo(["a.cs"]));
+        Assert.That(state.Decisions, Is.EqualTo(["decision-x"]));
 
-        Assert.Equal("b_2", nextRequest.Messages[3].ToolCalls!.Single().Id);
-        Assert.Equal("c_3", nextRequest.Messages[5].ToolCalls!.Single().Id);
+        Assert.That(nextRequest.Messages[3].ToolCalls!.Single().Id, Is.EqualTo("b_2"));
+        Assert.That(nextRequest.Messages[5].ToolCalls!.Single().Id, Is.EqualTo("c_3"));
         var joined = string.Join('\n', nextRequest.Messages.Select(m => m.Content));
-        Assert.Contains("#2", joined);
-        Assert.Contains("#3", joined);
-        Assert.DoesNotContain("#1", joined);
+        Assert.That(joined, Does.Contain("#2"));
+        Assert.That(joined, Does.Contain("#3"));
+        Assert.That(joined, Does.Not.Contain("#1"));
 
-        // The local full history is untouched: all three rounds, the head, and the
-        // final plain-text assistant message remain.
-        Assert.Equal(9, loop.History.Count);
-        Assert.Contains(loop.History, m => m.Role == ChatRole.Tool && m.Content.Contains("#1"));
+        // 本地完整历史不受影响：三个回合、头部与最终纯文本 assistant 消息都保留。
+        Assert.That(loop.History.Count, Is.EqualTo(9));
+        TestAssert.ContainsAll(m => m.Role == ChatRole.Tool && m.Content.Contains("#1"), loop.History);
 
-        var change = Assert.Single(changes);
-        Assert.True(change.BeforeTokens > change.AfterTokens && change.AfterTokens > 0);
+        var change = TestAssert.Single(changes);
+        Assert.That(change.BeforeTokens > change.AfterTokens && change.AfterTokens > 0, Is.True);
     }
 
-    [Fact]
+    [Test]
     public async Task CompactionFailure_OverWindowView_FailsRunWithClearError()
     {
         var tool   = new FakeTool("t") { ResultContent = new string('x', 1600) };
@@ -209,23 +208,22 @@ public class ContextCompactionTests
         client.Enqueue(FakeChatClient.ToolCall("t", "{}", ToolCallId("a", 1)));
         client.Enqueue(FakeChatClient.ToolCall("t", "{}", ToolCallId("b", 2)));
         client.Enqueue(FakeChatClient.ToolCall("t", "{}", ToolCallId("c", 3)));
-        client.Enqueue(FakeChatClient.Text("not json at all")); // summarizer produces garbage
+        client.Enqueue(FakeChatClient.Text("not json at all")); // 摘要模型返回垃圾内容
         client.Enqueue(FakeChatClient.Text("done"));
 
         var loop   = new AgentLoop(client, new ToolRegistry([tool]), TightBudgetOptions());
         var result = await loop.RunAsync("sys", "go", CancellationToken.None);
 
-        // The compaction failed (latched, never retried) and the view still exceeds
-        // the window, so the loop refuses to send the over-window request and fails
-        // with an explicit error instead of silently continuing.
-        Assert.Equal(AgentStatus.Failed, result.Status);
-        Assert.Equal(0, result.Compactions);
-        Assert.Equal(4, client.Requests); // three agent requests + exactly one failed summary attempt
-        Assert.Contains("window", result.Error);
-        Assert.Equal(8, loop.History.Count); // head + three rounds, untouched
+        // 压缩已失败（闩锁，不再重试）且视图仍超出窗口：主循环拒绝发送超窗请求，
+        // 以显式错误失败，而不是静默继续。
+        Assert.That(result.Status, Is.EqualTo(AgentStatus.Failed));
+        Assert.That(result.Compactions, Is.EqualTo(0));
+        Assert.That(client.Requests, Is.EqualTo(4)); // 三次 agent 请求 + 恰好一次失败的摘要尝试
+        Assert.That(result.Error, Does.Contain("window"));
+        Assert.That(loop.History.Count, Is.EqualTo(8)); // 头部 + 三个回合，未改动
     }
 
-    [Fact]
+    [Test]
     public async Task CompactionFailure_RollsBackAndContinues_WhenViewStillFitsTheWindow()
     {
         var tool   = new FakeTool("t") { ResultContent = new string('x', 1600) };
@@ -233,12 +231,11 @@ public class ContextCompactionTests
         client.Enqueue(FakeChatClient.ToolCall("t", "{}", ToolCallId("a", 1)));
         client.Enqueue(FakeChatClient.ToolCall("t", "{}", ToolCallId("b", 2)));
         client.Enqueue(FakeChatClient.ToolCall("t", "{}", ToolCallId("c", 3)));
-        client.Enqueue(FakeChatClient.Text("not json at all")); // summarizer produces garbage
+        client.Enqueue(FakeChatClient.Text("not json at all")); // 摘要模型返回垃圾内容
         client.Enqueue(FakeChatClient.Text("done"));
 
-        // Compaction triggers below the window (threshold 400) so a failed summary
-        // can roll back and let the loop continue: the over-threshold view still
-        // fits the declared window and is sent as-is.
+        // 压缩阈值（400）低于窗口，失败摘要可以回滚并让主循环继续：超阈值的视图
+        // 仍容纳在声明的窗口内，按原样发送。
         var options = new AgentOptions
         {
             Model                     = "test-model",
@@ -254,22 +251,21 @@ public class ContextCompactionTests
         var loop   = new AgentLoop(client, new ToolRegistry([tool]), options);
         var result = await loop.RunAsync("sys", "go", CancellationToken.None);
 
-        Assert.True(result.Status == AgentStatus.Completed,
+        Assert.That(result.Status == AgentStatus.Completed, Is.True,
                     $"{result.Error} requests={client.Requests} steps={result.Steps} compactions={result.Compactions}");
-        Assert.Equal(0, result.Compactions);
-        Assert.Equal(5, client.Requests); // exactly one failed summary attempt, never retried
+        Assert.That(result.Compactions, Is.EqualTo(0));
+        Assert.That(client.Requests, Is.EqualTo(5)); // 恰好一次失败的摘要尝试，不再重试
 
-        // The failed compaction leaves the previous view intact: no state message was
-        // inserted and the oldest turn is still sent verbatim.
+        // 失败的压缩保持原视图不变：未插入状态消息，最旧回合仍按原样发送。
         var nextRequest = client.RequestLog[4];
-        Assert.Equal(1, nextRequest.Messages.Count(m => m.Role == ChatRole.User));
+        Assert.That(nextRequest.Messages.Count(m => m.Role == ChatRole.User), Is.EqualTo(1));
         var joined = string.Join('\n', nextRequest.Messages.Select(m => m.Content));
-        Assert.Contains("#1", joined);
-        Assert.DoesNotContain("goal-one", joined);
-        Assert.Equal(9, loop.History.Count); // three rounds + head + final assistant message
+        Assert.That(joined, Does.Contain("#1"));
+        Assert.That(joined, Does.Not.Contain("goal-one"));
+        Assert.That(loop.History.Count, Is.EqualTo(9)); // 三个回合 + 头部 + 最终 assistant 消息
     }
 
-    [Fact]
+    [Test]
     public async Task TwoCompactions_FeedPreviousStateForwardAndAccumulate()
     {
         var tool   = new FakeTool("t") { ResultContent = new string('x', 1600) };
@@ -279,8 +275,7 @@ public class ContextCompactionTests
         client.Enqueue(FakeChatClient.ToolCall("t", "{}", ToolCallId("c", 3)));
         client.Enqueue(FakeChatClient.Text(StateJson("goal-one", "a.cs", "decision-x")));
         client.Enqueue(FakeChatClient.ToolCall("t", "{}", ToolCallId("d", 4)));
-        // The second summary must carry the first state's facts forward (the lists
-        // accumulate), otherwise the commit would be rejected for dropping them.
+        // 第二次摘要必须延续首个状态的事实（列表累积），否则提交会因丢失事实被拒绝。
         client.Enqueue(FakeChatClient.Text(new JsonObject
         {
             ["goal"]               = "goal-two",
@@ -299,50 +294,47 @@ public class ContextCompactionTests
         var result  = await loop.RunAsync("sys", "go", CancellationToken.None);
         var changes = sink.Compactions();
 
-        Assert.Equal(AgentStatus.Completed, result.Status);
-        Assert.Equal(4, result.ToolExecutions);
-        Assert.Equal(2, result.Compactions);
-        Assert.Equal(7, client.Requests);
+        Assert.That(result.Status, Is.EqualTo(AgentStatus.Completed));
+        Assert.That(result.ToolExecutions, Is.EqualTo(4));
+        Assert.That(result.Compactions, Is.EqualTo(2));
+        Assert.That(client.Requests, Is.EqualTo(7));
 
-        // The first summarization sees the original task and folds a_1; the second
-        // summarization sees the first state as input (accumulation) and folds the
-        // next oldest complete turn b_2.
+        // 首次摘要看到原始任务并折叠 a_1；第二次摘要以首个状态为输入（累积），
+        // 折叠下一个最旧完整回合 b_2。
         var firstSummary = client.RequestLog[3];
-        Assert.Equal([ChatRole.System, ChatRole.User, ChatRole.User, ChatRole.Assistant, ChatRole.Tool],
-                     firstSummary.Messages.Select(m => m.Role).ToArray());
+        Assert.That(firstSummary.Messages.Select(m => m.Role).ToArray(),
+                    Is.EqualTo([ChatRole.System, ChatRole.User, ChatRole.User, ChatRole.Assistant, ChatRole.Tool]));
 
         var secondSummary = client.RequestLog[5];
-        Assert.Null(secondSummary.Tools);
-        Assert.Contains("goal-one", secondSummary.Messages[1].Content);
-        Assert.Equal("b_2", secondSummary.Messages[2].ToolCalls!.Single().Id);
-        Assert.Contains("#2", secondSummary.Messages[3].Content);
+        Assert.That(secondSummary.Tools, Is.Null);
+        Assert.That(secondSummary.Messages[1].Content, Does.Contain("goal-one"));
+        Assert.That(secondSummary.Messages[2].ToolCalls!.Single().Id, Is.EqualTo("b_2"));
+        Assert.That(secondSummary.Messages[3].Content, Does.Contain("#2"));
 
-        // The final agent view carries the accumulated second state: facts from the
-        // first summary survive (goal carried over, a.cs and decision-x retained) and
-        // raw turns folded into it (a_1, b_2) are gone while the retained turns remain.
+        // 最终 agent 视图携带累积后的第二个状态：首次摘要的事实存活（goal 延续、a.cs 与
+        // decision-x 保留），被折叠的原始回合（a_1、b_2）消失，保留的回合仍在。
         var finalRequest = client.RequestLog[6];
-        Assert.Equal([
-                         ChatRole.System, ChatRole.User, ChatRole.User, ChatRole.Assistant, ChatRole.Tool,
-                         ChatRole.Assistant, ChatRole.Tool
-                     ],
-                     finalRequest.Messages.Select(m => m.Role).ToArray());
-        Assert.True(StructuredState.TryParse(finalRequest.Messages[2].Content, out var state));
-        Assert.Equal("goal-two", state.Goal);
-        Assert.Contains("a.cs", state.FilesModified);
-        Assert.Contains("b.cs", state.FilesModified);
-        Assert.Contains("decision-x", state.Decisions);
-        Assert.Contains("decision-y", state.Decisions);
+        Assert.That(finalRequest.Messages.Select(m => m.Role).ToArray(), Is.EqualTo([
+            ChatRole.System, ChatRole.User, ChatRole.User, ChatRole.Assistant, ChatRole.Tool,
+            ChatRole.Assistant, ChatRole.Tool
+        ]));
+        Assert.That(StructuredState.TryParse(finalRequest.Messages[2].Content, out var state), Is.True);
+        Assert.That(state.Goal, Is.EqualTo("goal-two"));
+        Assert.That(state.FilesModified, Does.Contain("a.cs"));
+        Assert.That(state.FilesModified, Does.Contain("b.cs"));
+        Assert.That(state.Decisions, Does.Contain("decision-x"));
+        Assert.That(state.Decisions, Does.Contain("decision-y"));
 
         var joined = string.Join('\n', finalRequest.Messages.Select(m => m.Content));
-        Assert.Contains("#3", joined);
-        Assert.Contains("#4", joined);
-        Assert.DoesNotContain("#1", joined);
-        Assert.DoesNotContain("#2", joined);
+        Assert.That(joined, Does.Contain("#3"));
+        Assert.That(joined, Does.Contain("#4"));
+        Assert.That(joined, Does.Not.Contain("#1"));
+        Assert.That(joined, Does.Not.Contain("#2"));
 
-        Assert.Equal(2, changes.Count);
+        Assert.That(changes.Count, Is.EqualTo(2));
     }
 
-    [Fact]
+    [Test]
     public async Task MultipleToolCallRounds_CompactionThenCompleteSuccessfully()
     {
         var tool          = new FakeTool("t") { ResultContent = new string('x', 1400) };
@@ -383,29 +375,28 @@ public class ContextCompactionTests
         var result  = await loop.RunAsync("sys", "go", CancellationToken.None);
         var changes = sink.Compactions();
 
-        Assert.True(result.Status == AgentStatus.Completed,
+        Assert.That(result.Status == AgentStatus.Completed, Is.True,
                     $"{result.Error} requests={client.Requests} compactions={result.Compactions} steps={result.Steps}");
-        Assert.Equal(9, result.ToolExecutions);
-        Assert.Equal(1, result.Compactions);
-        Assert.Equal(4, result.Steps);    // 3 tool requests + 1 final text request.
-        Assert.Equal(5, client.Requests); // 3 tool + summary + final.
-        Assert.Single(changes);
+        Assert.That(result.ToolExecutions, Is.EqualTo(9));
+        Assert.That(result.Compactions, Is.EqualTo(1));
+        Assert.That(result.Steps, Is.EqualTo(4));    // 3 次工具请求 + 1 次最终文本请求。
+        Assert.That(client.Requests, Is.EqualTo(5)); // 3 次工具 + 摘要 + 最终。
+        TestAssert.Single(changes);
 
-        // The summary request does not advance Agent steps and never receives tools;
-        // the request after it is the first normal request again.
-        Assert.Null(client.RequestLog[3].Tools);
-        Assert.NotNull(client.RequestLog[4].Tools);
-        Assert.Equal("done", result.FinalMessage);
-        Assert.Equal(15, loop.History.Count); // head + 3 complete rounds + final assistant.
-        Assert.Contains(loop.History, m => m.Role             == ChatRole.Assistant &&
-                                           m.ToolCalls!.Count == 3                  &&
-                                           m.ToolCalls.All(call => call.FunctionName == "t"));
-        Assert.Equal(9, loop.History.Count(m => m.Role == ChatRole.Tool));
-        Assert.All(loop.History.Where(m => m.Role == ChatRole.Tool), message =>
-                       Assert.Contains("#", message.Content));
+        // 摘要请求不推进 Agent 步数且永不携带 tools；其后第一个请求恢复正常形态。
+        Assert.That(client.RequestLog[3].Tools, Is.Null);
+        TestAssert.NotNull(client.RequestLog[4].Tools);
+        Assert.That(result.FinalMessage, Is.EqualTo("done"));
+        Assert.That(loop.History.Count, Is.EqualTo(15)); // 头部 + 3 个完整回合 + 最终 assistant。
+        TestAssert.ContainsAll(m => m.Role             == ChatRole.Assistant &&
+                                    m.ToolCalls!.Count == 3                  &&
+                                    m.ToolCalls.All(call => call.FunctionName == "t"), loop.History);
+        Assert.That(loop.History.Count(m => m.Role == ChatRole.Tool), Is.EqualTo(9));
+        TestAssert.All(loop.History.Where(m => m.Role == ChatRole.Tool), message =>
+                           Assert.That(message.Content, Does.Contain("#")));
     }
 
-    [Fact]
+    [Test]
     public async Task SameStep_TwoCompactionBatches_CompleteSuccessfully()
     {
         var definitions = (new FakeTool("long"), new FakeTool("short"));
@@ -433,49 +424,49 @@ public class ContextCompactionTests
 
         var result = await loop.RunAsync("sys", "go", CancellationToken.None);
 
-        Assert.True(result.Status == AgentStatus.Completed,
+        Assert.That(result.Status == AgentStatus.Completed, Is.True,
                     $"{result.Error} requests={client.Requests} steps={result.Steps} compactions={result.Compactions}");
-        Assert.Equal(5, result.Steps);
-        Assert.Equal(2, result.Compactions);
-        Assert.Equal(7, client.Requests);
-        Assert.Equal("done", result.FinalMessage);
+        Assert.That(result.Steps, Is.EqualTo(5));
+        Assert.That(result.Compactions, Is.EqualTo(2));
+        Assert.That(client.Requests, Is.EqualTo(7));
+        Assert.That(result.FinalMessage, Is.EqualTo("done"));
 
-        Assert.Null(client.RequestLog[4].Tools);
-        Assert.Null(client.RequestLog[5].Tools);
-        Assert.NotNull(client.RequestLog[6].Tools);
+        Assert.That(client.RequestLog[4].Tools, Is.Null);
+        Assert.That(client.RequestLog[5].Tools, Is.Null);
+        TestAssert.NotNull(client.RequestLog[6].Tools);
         var firstSummaryInput = string.Join('\n', client.RequestLog[4].Messages.Select(m => m.Content));
-        Assert.Contains(fixture.A, firstSummaryInput);
-        Assert.DoesNotContain(fixture.B, firstSummaryInput);
+        Assert.That(firstSummaryInput, Does.Contain(fixture.A));
+        Assert.That(firstSummaryInput, Does.Not.Contain(fixture.B));
         var secondSummaryInput = string.Join('\n', client.RequestLog[5].Messages.Select(m => m.Content));
-        Assert.Contains(summaryJson, secondSummaryInput);
-        Assert.Contains(fixture.B, secondSummaryInput);
+        Assert.That(secondSummaryInput, Does.Contain(summaryJson));
+        Assert.That(secondSummaryInput, Does.Contain(fixture.B));
 
-        Assert.True(TokenEstimator.EstimateMessages(client.RequestLog[4].Messages) +
-                    fixture.Options.ReservedOutputTokens <= fixture.Options.ContextWindowTokens);
-        Assert.True(TokenEstimator.EstimateMessages(client.RequestLog[5].Messages) +
-                    fixture.Options.ReservedOutputTokens <= fixture.Options.ContextWindowTokens);
-        Assert.True(fixture.BeforeD     <= fixture.Options.CompactionThresholdTokens);
-        Assert.True(fixture.AfterD      > fixture.Options.CompactionThresholdTokens);
-        Assert.True(fixture.AfterFirst  > fixture.Options.CompactionThresholdTokens);
-        Assert.True(fixture.AfterSecond <= fixture.Options.CompactionThresholdTokens);
+        Assert.That(TokenEstimator.EstimateMessages(client.RequestLog[4].Messages) +
+                    fixture.Options.ReservedOutputTokens <= fixture.Options.ContextWindowTokens, Is.True);
+        Assert.That(TokenEstimator.EstimateMessages(client.RequestLog[5].Messages) +
+                    fixture.Options.ReservedOutputTokens <= fixture.Options.ContextWindowTokens, Is.True);
+        Assert.That(fixture.BeforeD     <= fixture.Options.CompactionThresholdTokens, Is.True);
+        Assert.That(fixture.AfterD      > fixture.Options.CompactionThresholdTokens, Is.True);
+        Assert.That(fixture.AfterFirst  > fixture.Options.CompactionThresholdTokens, Is.True);
+        Assert.That(fixture.AfterSecond <= fixture.Options.CompactionThresholdTokens, Is.True);
 
-        Assert.Contains(loop.History, m => m.Role                              == ChatRole.Assistant &&
-                                           m.ToolCalls!.Single().Id            == "a"                &&
-                                           m.ToolCalls!.Single().ArgumentsJson == fixture.Arguments);
-        Assert.Contains(loop.History, m => m.Role                              == ChatRole.Assistant &&
-                                           m.ToolCalls!.Single().Id            == "b"                &&
-                                           m.ToolCalls!.Single().ArgumentsJson == fixture.Arguments);
-        Assert.Contains(loop.History,
-                        m => m is { Role: ChatRole.Tool, ToolCallId: "a" } && m.Content == fixture.A + "#1");
-        Assert.Contains(loop.History,
-                        m => m is { Role: ChatRole.Tool, ToolCallId: "b" } && m.Content == fixture.B + "#1");
-        Assert.Contains(loop.History,
-                        m => m is { Role: ChatRole.Tool, ToolCallId: "c" } && m.Content == fixture.B + "#2");
-        Assert.Contains(loop.History,
-                        m => m is { Role: ChatRole.Tool, ToolCallId: "d" } && m.Content == fixture.A + "#2");
+        TestAssert.ContainsAll(m => m.Role                              == ChatRole.Assistant &&
+                                    m.ToolCalls!.Single().Id            == "a"                &&
+                                    m.ToolCalls!.Single().ArgumentsJson == fixture.Arguments, loop.History);
+        TestAssert.ContainsAll(m => m.Role                              == ChatRole.Assistant &&
+                                    m.ToolCalls!.Single().Id            == "b"                &&
+                                    m.ToolCalls!.Single().ArgumentsJson == fixture.Arguments, loop.History);
+        TestAssert.ContainsAll(m => m is { Role: ChatRole.Tool, ToolCallId: "a" } && m.Content == fixture.A + "#1",
+                               loop.History);
+        TestAssert.ContainsAll(m => m is { Role: ChatRole.Tool, ToolCallId: "b" } && m.Content == fixture.B + "#1",
+                               loop.History);
+        TestAssert.ContainsAll(m => m is { Role: ChatRole.Tool, ToolCallId: "c" } && m.Content == fixture.B + "#2",
+                               loop.History);
+        TestAssert.ContainsAll(m => m is { Role: ChatRole.Tool, ToolCallId: "d" } && m.Content == fixture.A + "#2",
+                               loop.History);
     }
 
-    [Fact]
+    [Test]
     public async Task ViewTruncatesOversizedToolResult_WhileHistoryKeepsTheFullText()
     {
         var tool   = new FakeTool("t") { ResultContent = new string('x', 5000) };
@@ -499,19 +490,19 @@ public class ContextCompactionTests
 
         var result = await loop.RunAsync("sys", "go", CancellationToken.None);
 
-        Assert.Equal(AgentStatus.Completed, result.Status);
-        Assert.Equal(0, result.Compactions);
+        Assert.That(result.Status, Is.EqualTo(AgentStatus.Completed));
+        Assert.That(result.Compactions, Is.EqualTo(0));
 
         var modelView = client.RequestLog[1].Messages.Single(m => m.Role == ChatRole.Tool).Content;
-        Assert.Contains("[model view truncated to 96 of 5002 chars", modelView);
-        Assert.True(modelView.Length < 5002, "the model view must be bounded");
+        Assert.That(modelView, Does.Contain("[model view truncated to 96 of 5002 chars"));
+        Assert.That(modelView.Length < 5002, Is.True, "the model view must be bounded");
 
         var retained = loop.History.Single(m => m.Role == ChatRole.Tool).Content;
-        Assert.Equal(5002, retained.Length); // 5000 filler + "#1"
-        Assert.Contains("#1", retained);
+        Assert.That(retained.Length, Is.EqualTo(5002)); // 5000 个填充字符 + "#1"
+        Assert.That(retained, Does.Contain("#1"));
     }
 
-    [Fact]
+    [Test]
     public async Task FittingHistory_IsSentWithoutCompaction()
     {
         var tool   = new FakeTool("t");
@@ -532,13 +523,13 @@ public class ContextCompactionTests
 
         var result = await loop.RunAsync("sys", "go", CancellationToken.None);
 
-        Assert.Equal(AgentStatus.Completed, result.Status);
-        Assert.Equal(0, result.Compactions);
-        Assert.Equal(4, client.Requests);    // no extra summarizer request
-        Assert.Equal(9, loop.History.Count); // three rounds + head + final assistant message
+        Assert.That(result.Status, Is.EqualTo(AgentStatus.Completed));
+        Assert.That(result.Compactions, Is.EqualTo(0));
+        Assert.That(client.Requests, Is.EqualTo(4));    // 无额外摘要请求
+        Assert.That(loop.History.Count, Is.EqualTo(9)); // 三个回合 + 头部 + 最终 assistant 消息
     }
 
-    [Fact]
+    [Test]
     public async Task WithoutContextOptions_HistoryIsSentVerbatim()
     {
         var tool   = new FakeTool("t");
@@ -551,16 +542,18 @@ public class ContextCompactionTests
 
         var result = await loop.RunAsync("sys", "go", CancellationToken.None);
 
-        Assert.Equal(AgentStatus.Completed, result.Status);
-        Assert.Equal(0, result.Compactions);
-        Assert.Equal(3, client.Requests);
-        Assert.Equal(7, loop.History.Count); // two rounds + head + final assistant message
+        Assert.That(result.Status, Is.EqualTo(AgentStatus.Completed));
+        Assert.That(result.Compactions, Is.EqualTo(0));
+        Assert.That(client.Requests, Is.EqualTo(3));
+        Assert.That(loop.History.Count, Is.EqualTo(7)); // 两个回合 + 头部 + 最终 assistant 消息
     }
 
     /// <summary>
-    ///     把一段脚本化响应的末尾 End 事件替换为携带 usage 的版本，模拟服务端实测数据。
-    ///     Replaces the trailing End event of a scripted response with one carrying usage,
-    ///     simulating server-measured data.
+    ///     <para>把一段脚本化响应的末尾 End 事件替换为携带 usage 的版本，模拟服务端实测数据。</para>
+    ///     <para>
+    ///         Replaces the trailing End event of a scripted response with one carrying usage,
+    ///         simulating server-measured data.
+    ///     </para>
     /// </summary>
     private static IReadOnlyList<ChatStreamEvent> WithUsage(IReadOnlyList<ChatStreamEvent> events,
                                                             int inputTokens, int outputTokens, string finishReason)
@@ -573,18 +566,17 @@ public class ContextCompactionTests
         return withUsage;
     }
 
-    [Fact]
+    [Test]
     public async Task CalibratedUsageEstimates_StillCompactAndCompleteWithTheShrinkInvariant()
     {
         var tool   = new FakeTool("t") { ResultContent = new string('x', 1600) };
         var client = new FakeChatClient();
-        // Every agent response reports input usage at exactly twice the harness
-        // estimate, so from the first stream on the budget scale is calibrated 2.0.
+        // 每个 agent 响应上报的输入 usage 都恰好是 harness 估算的两倍，因此从第一条流起
+        // 预算刻度被校准为 2.0。
         client.Enqueue(WithUsage(FakeChatClient.ToolCall("t", "{}", ToolCallId("a", 1)), 50, 10, "tool_calls"));
         client.Enqueue(WithUsage(FakeChatClient.ToolCall("t", "{}", ToolCallId("b", 2)), 878, 10, "tool_calls"));
         client.Enqueue(WithUsage(FakeChatClient.ToolCall("t", "{}", ToolCallId("c", 3)), 1706, 10, "tool_calls"));
-        // The summary stream carries no usage: the calibration keeps its last
-        // observation, exactly like a service that omits usage on summary calls.
+        // 摘要流不带 usage：校准保持最近一次观测，与摘要调用省略 usage 的服务行为一致。
         client.Enqueue(FakeChatClient.Text(StateJson("goal-one", "a.cs", "decision-x")));
         client.Enqueue(WithUsage(FakeChatClient.Text("done"), 1790, 6, "stop"));
 
@@ -605,19 +597,17 @@ public class ContextCompactionTests
         var result  = await loop.RunAsync("sys", "go", CancellationToken.None);
         var changes = sink.Compactions();
 
-        Assert.True(result.Status == AgentStatus.Completed,
+        Assert.That(result.Status == AgentStatus.Completed, Is.True,
                     $"{result.Error} requests={client.Requests} compactions={result.Compactions} steps={result.Steps}");
-        Assert.Equal(3, result.ToolExecutions);
-        Assert.Equal(5, client.Requests);        // three agent requests + one summary + final
-        Assert.Null(client.RequestLog[3].Tools); // request 4 is the tools-disabled summary
+        Assert.That(result.ToolExecutions, Is.EqualTo(3));
+        Assert.That(client.Requests, Is.EqualTo(5));      // 三次 agent 请求 + 一次摘要 + 最终
+        Assert.That(client.RequestLog[3].Tools, Is.Null); // 第 4 个请求是禁用 tools 的摘要请求
 
-        // Without calibration the raw estimate after three rounds stays below the
-        // 1400 threshold, so this single compaction is driven by the calibrated
-        // (2x) estimate; the strictly-smaller-view invariant still holds on the
-        // calibrated scale.
-        Assert.Equal(1, result.Compactions);
-        var change = Assert.Single(changes);
-        Assert.True(change.BeforeTokens > change.AfterTokens && change.AfterTokens > 0,
+        // 不校准时三个回合后的原始估算仍低于 1400 阈值，因此这次压缩由校准（2x）估算驱动；
+        // 严格变小不变量在校准刻度上仍然成立。
+        Assert.That(result.Compactions, Is.EqualTo(1));
+        var change = TestAssert.Single(changes);
+        Assert.That(change.BeforeTokens > change.AfterTokens && change.AfterTokens > 0, Is.True,
                     $"calibrated compaction must still shrink the view: {change.BeforeTokens} -> {change.AfterTokens}");
     }
 
