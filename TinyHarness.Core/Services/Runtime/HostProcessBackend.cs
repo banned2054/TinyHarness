@@ -5,23 +5,33 @@ using TinyHarness.Core.Models.Runtime;
 namespace TinyHarness.Core.Services.Runtime;
 
 /// <summary>
-///     宿主侧进程执行后端：直接在宿主上启动受约束的子进程，把两条重定向流按块推入捕获器，
-///     并按计划的时限终止进程树。启动、等待、终止、排空与宽限语义自 ShellTool 原样迁入，
-///     可观察行为不变。
-///     Host-side process-execution backend: starts the constrained child process
-///     directly on the host machine, pumps both redirected streams into captures as
-///     chunks, and terminates the process tree at the plan's timeout. The start,
-///     wait, terminate, drain, and grace semantics were moved verbatim from
-///     ShellTool; observable behavior is unchanged.
+///     <para>在宿主上执行已准备的进程计划，捕获输出并在超时或取消时回收进程树。</para>
+///     <para>
+///         Executes a prepared process plan on the host, captures output,
+///         and reclaims the process tree on timeout or cancellation.
+///     </para>
 /// </summary>
+/// <remarks>
+///     <para>
+///         取消后丢弃输出；清理使用独立宽限。
+///         无法确认进程树回收时抛出 <see cref="ToolExecutionUncertainException" />，不返回已确认结果。
+///     </para>
+///     <para>
+///         Output is discarded on cancellation; cleanup uses an independent grace period.
+///         Unconfirmed process-tree reclamation throws <see cref="ToolExecutionUncertainException" />
+///         instead of returning a confirmed result.
+///     </para>
+/// </remarks>
 public sealed class HostProcessBackend : IProcessExecutionBackend
 {
     private readonly IReadOnlyDictionary<string, string> _knownSecrets;
 
     /// <summary>
-    ///     用已知 secret 集合构造宿主后端；secret 的环境变量名会从子进程环境中移除。
-    ///     Constructs the host backend with the known-secret set; each secret's
-    ///     environment variable name is removed from the child environment.
+    ///     <para>构造宿主后端，并从子进程环境移除已知秘密对应的环境变量。</para>
+    ///     <para>
+    ///         Constructs the host backend and removes environment variables
+    ///         associated with known secrets from the child environment.
+    ///     </para>
     /// </summary>
     public HostProcessBackend(IReadOnlyDictionary<string, string>? knownSecrets = null) =>
         _knownSecrets = knownSecrets ?? new Dictionary<string, string>(StringComparer.Ordinal);
@@ -86,9 +96,9 @@ public sealed class HostProcessBackend : IProcessExecutionBackend
                 catch (Exception cleanupError)
                 {
                     throw new
-                        InvalidOperationException($"Process execution failed ({executionError.Message}) and process-tree cleanup also failed " +
-                                                  $"({cleanupError.Message}).",
-                                                  new AggregateException(executionError, cleanupError));
+                        ToolExecutionUncertainException($"Process execution failed ({executionError.Message}) and process-tree cleanup also failed " +
+                                                        $"({cleanupError.Message}).",
+                                                        new AggregateException(executionError, cleanupError));
                 }
 
                 stdoutCapture.Discard();
@@ -122,12 +132,19 @@ public sealed class HostProcessBackend : IProcessExecutionBackend
     }
 
     /// <summary>
-    ///     把一条重定向进程流按 4096 字符块推入捕获器；跨块 secret 脱敏依赖该块大小。
-    ///     流读到结尾后追加一个空块，触发捕获器的尾部冲刷。
-    ///     Pumps one redirected process stream into its capture in 4096-character
-    ///     chunks; cross-chunk secret redaction depends on that chunk size. After
-    ///     end-of-stream an empty chunk is appended to flush the capture's tail.
+    ///     <para>分块捕获一条重定向进程流，并在流结束时冲刷捕获器尾部。</para>
+    ///     <para>
+    ///         Captures a redirected process stream in chunks
+    ///         and flushes the capture's tail at end-of-stream.
+    ///     </para>
     /// </summary>
+    /// <remarks>
+    ///     <para>块大小固定为 4096 字符，以满足跨块秘密脱敏的约束；空块触发尾部冲刷。</para>
+    ///     <para>
+    ///         The fixed 4096-character chunk size satisfies cross-chunk secret-redaction constraints;
+    ///         an empty chunk triggers the final flush.
+    ///     </para>
+    /// </remarks>
     private static async Task PumpAsync(
         StreamReader reader, IProcessOutputCapture capture, CancellationToken cancellationToken)
     {
@@ -185,15 +202,15 @@ public sealed class HostProcessBackend : IProcessExecutionBackend
             }
             catch (Exception)
             {
-                // The contextual cleanup error below is authoritative. All
-                // component tasks are observed by Task.WhenAll.
+                // 以随后抛出的上下文清理错误为准；Task.WhenAll 已观察所有子任务。
             }
 
             throw new
-                TimeoutException($"Timed out draining process output after {reason}; the process tree was termination-requested" +
-                                 (terminationError is null
-                                     ? "."
-                                     : $", but termination failed: {terminationError.Message}"), terminationError);
+                ToolExecutionUncertainException($"Timed out draining process output after {reason}; the process tree was termination-requested" +
+                                                (terminationError is null
+                                                    ? "."
+                                                    : $", but termination failed: {terminationError.Message}"),
+                                                terminationError);
         }
         catch (Exception drainError)
         {
@@ -207,16 +224,16 @@ public sealed class HostProcessBackend : IProcessExecutionBackend
                 if (terminationError is not null) cleanupErrors.Insert(0, terminationError);
 
                 throw new
-                    InvalidOperationException($"Process-tree cleanup encountered an additional failure after {reason}: " +
-                                              string.Join("; ", cleanupErrors.Select(error => error.Message)),
-                                              new AggregateException(cleanupErrors));
+                    ToolExecutionUncertainException($"Process-tree cleanup encountered an additional failure after {reason}: " +
+                                                    string.Join("; ", cleanupErrors.Select(error => error.Message)),
+                                                    new AggregateException(cleanupErrors));
             }
         }
 
         if (terminationError is not null)
             throw new
-                InvalidOperationException($"Failed to terminate the process tree after {reason}: {terminationError.Message}",
-                                          terminationError);
+                ToolExecutionUncertainException($"Failed to terminate the process tree after {reason}: {terminationError.Message}",
+                                                terminationError);
     }
 
     private sealed class ProcessExecution : IDisposable

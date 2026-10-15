@@ -6,6 +6,7 @@ using TinyHarness.Core.Models.Configuration;
 using TinyHarness.Core.Models.Session;
 using TinyHarness.Core.Models.Tools;
 using TinyHarness.Core.Services.ChatCompletions;
+using TinyHarness.Core.Services.Context;
 using TinyHarness.Core.Services.Permissions;
 using TinyHarness.Core.Services.Session;
 using TinyHarness.Core.Services.Tools;
@@ -13,13 +14,14 @@ using TinyHarness.Core.Services.Tools;
 namespace TinyHarness.Tests;
 
 /// <summary>
-///     M12.3 交互 chat 会话测试：连续用户回合共享上下文、当前目标变化、流式回答不重复打印、
-///     Ctrl+C 的回合/空闲分发、EOF、重复提交拒绝与拒绝工具后的完成链（PLAN §10 M12.3 与
-///     M12 验收：解释 → 追问 → 要求修改 → 拒绝一个工具 → 完成）。
-///     M12.3 interactive chat tests: continuous user turns sharing one context, current-goal
-///     changes, answer text streamed exactly once, Ctrl+C turn/idle dispatch, EOF, duplicate
-///     submission rejection, and the M12 acceptance chain (explain → follow-up → modify →
-///     deny one tool → complete) (PLAN §10 M12.3).
+///     <para>
+///         验证交互会话的共享上下文、当前目标、单次流式展示、取消与 EOF 分发，
+///         以及审批输入隔离和拒绝工具后继续完成回合。
+///     </para>
+///     <para>
+///         Verifies shared context, current goals, single-pass streaming, cancellation and EOF dispatch,
+///         and approval-input isolation with turn completion after a tool denial.
+///     </para>
 /// </summary>
 public class ChatSessionConsoleTests
 {
@@ -62,18 +64,17 @@ public class ChatSessionConsoleTests
         var exit = await console.RunAsync();
 
         Assert.Equal(0, exit);
-        // Each answer is streamed by the event display exactly once; the footer never repeats it.
+        // 流式回答只展示一次，回合尾部不重复输出。
         Assert.Equal(1, Count(output.ToString(), "first answer"));
         Assert.Equal(1, Count(output.ToString(), "second answer"));
-        // Two turns plus the final prompt that observes EOF before exiting.
+        // 两个回合后还需一次提示以读取 EOF。
         Assert.Equal(3, Count(output.ToString(), "you> "));
         Assert.Contains("turn 1 finished: completed (steps: 1, tools: 0)", output.ToString());
         Assert.Contains("turn 2 finished: completed (steps: 1, tools: 0)", output.ToString());
         Assert.Contains("Session ended.", output.ToString());
         Assert.Equal(2, host.Session.Turns.Count);
 
-        // The second request continues the first exchange: one system prompt, full prior
-        // history, and the newest input as the current goal.
+        // 后续请求保留完整旧历史和单条系统提示，并以最新输入作为当前目标。
         Assert.Equal(2, client.RequestLog.Count);
         var second = client.RequestLog[1].Messages;
         Assert.Equal([ChatRole.System, ChatRole.User, ChatRole.Assistant, ChatRole.User],
@@ -111,13 +112,13 @@ public class ChatSessionConsoleTests
         var exit = await console.RunAsync();
 
         Assert.Equal(0, exit);
-        // The approval answer "d" was consumed by the approval prompt, never as a user turn.
+        // 审批选择由审批提示消费，不能成为用户回合。
         Assert.Equal(3, host.Session.Turns.Count);
         Assert.All(host.Session.Turns, turn => Assert.Single(turn.Runs));
         Assert.Equal(4, client.RequestLog.Count);
         Assert.Equal(0, tool.ExecuteCount);
 
-        // Turn 2 keeps turn 1's facts and reasoning; Responses opaque content rides verbatim.
+        // 旧回合的事实和 reasoning 保留，Responses opaque 内容原样传递。
         var second = client.RequestLog[1].Messages;
         Assert.Equal([ChatRole.System, ChatRole.User, ChatRole.Assistant, ChatRole.User],
                      second.Select(m => m.Role).ToArray());
@@ -127,22 +128,20 @@ public class ChatSessionConsoleTests
         Assert.Equal("enc_1", reasoning.ProtectedData);
         Assert.Equal("用户想了解仓库结构", reasoning.Text);
 
-        // Turn 3's request carries the whole history; the modification request is the newest
-        // user message (the current goal), not a replacement of earlier turns.
+        // 修改请求作为最新目标追加，不替换旧回合。
         var third = client.RequestLog[2].Messages;
         Assert.Equal("按这个方案修复它", third[^1].Content);
         Assert.Contains("解释一下这个仓库的结构", third.Select(m => m.Content));
         Assert.Contains("这是一个本地 coding harness 仓库。", third.Select(m => m.Content));
 
-        // The user denial is returned to the model as the tool result; the tool group stays
-        // complete and the turn finishes with a plain-text completion.
+        // 拒绝以工具结果回传，保持工具组完整并允许回合结束。
         var fourth = client.RequestLog[3].Messages;
         var denial = fourth.Last(m => m.Role == ChatRole.Tool);
         Assert.Equal("call_fix", denial.ToolCallId);
         Assert.Contains("Permission denied by user", denial.Content);
         Assert.Contains("turn 3 finished: completed", output.ToString());
 
-        // The streamed answers appear exactly once; the approval UI drew its own prompt.
+        // 审批提示不应造成流式回答重复。
         Assert.Equal(1, Count(output.ToString(), "这是一个本地 coding harness 仓库。"));
         Assert.Equal(1, Count(output.ToString(), "已收到拒绝；改用手工步骤完成修复。"));
         Assert.Contains("! Agent requests a side effect:", output.ToString());
@@ -219,7 +218,43 @@ public class ChatSessionConsoleTests
     }
 
     [Fact]
-    public async Task RunAsync_CancelDuringToolExecution_NextTurnIsRefusedAndSessionContinues()
+    public async Task RunAsync_CancelDuringToolExecution_PromptsInspectionAndContinuesBlocked()
+    {
+        var client = new FakeChatClient();
+        client.Enqueue(FakeChatClient.ToolCall("slow_tool", "{}"));
+        client.Enqueue(FakeChatClient.Text("second answer"));
+        var       tool = new GateTool();
+        var       output = new StringWriter();
+        var       host = NewHost(client, new ToolRegistry([tool]), events : new ConsoleHostEventSink(null, output));
+        var       input = new ScriptedInput("go");
+        using var cancellation = new ChatCancellation(false);
+        var       console = new ChatSessionConsole(host, input, output, cancellation);
+
+        var runTask = console.RunAsync();
+        await tool.WaitStartedAsync(TestToken());
+        cancellation.RaiseCancel();
+
+        // 取消后先消费保留阻断的选择，再从完整边界处理追问，最后由 EOF 退出。
+        input.Enqueue("k", "second");
+        input.Complete();
+        var exit = await runTask;
+
+        Assert.Equal(0, exit);
+        // 中断工具不得重放；保留副作用阻断仍允许从完整边界请求模型。
+        Assert.Equal(1, tool.ExecuteCount);
+        Assert.Equal(2, client.Requests);
+        Assert.Equal(2, host.Session.Turns.Count);
+        Assert.Equal(AgentStatus.Cancelled, host.Session.Turns[0].Runs.Single().Result!.Status);
+        Assert.Equal(AgentStatus.Completed, host.Session.Turns[1].Runs.Single().Result!.Status);
+        Assert.True(host.InspectionPending);
+        var text = output.ToString();
+        Assert.Contains("Needs inspection", text);
+        Assert.Contains("side effects stay blocked", text);
+        Assert.Contains("turn 2 finished: completed", text);
+    }
+
+    [Fact]
+    public async Task RunAsync_InspectionConfirmationUnblocksSideEffects()
     {
         var client = new FakeChatClient();
         client.Enqueue(FakeChatClient.ToolCall("slow_tool", "{}"));
@@ -234,21 +269,40 @@ public class ChatSessionConsoleTests
         await tool.WaitStartedAsync(TestToken());
         cancellation.RaiseCancel();
 
-        input.Enqueue("second");
+        input.Enqueue("c");
         input.Complete();
         var exit = await runTask;
 
         Assert.Equal(0, exit);
-        // The interrupted tool is never re-executed and the refused turn never reaches the
-        // model; the failed run records the explicit boundary error.
-        Assert.Equal(1, tool.ExecuteCount);
-        Assert.Equal(1, client.Requests);
-        Assert.Equal(2, host.Session.Turns.Count);
-        Assert.Equal(AgentStatus.Cancelled, host.Session.Turns[0].Runs.Single().Result!.Status);
-        var refused = host.Session.Turns[1].Runs.Single().Result!;
-        Assert.Equal(AgentStatus.Failed, refused.Status);
-        Assert.Contains("incomplete tool round", refused.Error);
-        Assert.Contains("turn 2 finished: failed", output.ToString());
+        // 明确确认解除阻断；确认状态须保留供后续恢复使用。
+        Assert.False(host.InspectionPending);
+        Assert.Contains("inspection confirmed; side effects are allowed again", output.ToString());
+    }
+
+    [Fact]
+    public async Task RunAsync_RestoredKeepBlockedPromptsOnceAndDoesNotConsumeFollowUp()
+    {
+        var client = new FakeChatClient();
+        client.Enqueue(FakeChatClient.Text("one"));
+        client.Enqueue(FakeChatClient.Text("two"));
+        var session = new ChatSession(Guid.NewGuid().ToString("N"), Path.GetTempPath(),
+                                      new SessionModelIdentity("test-model", "https://example.invalid/v1",
+                                                               ChatApiKind.ChatCompletions))
+            { PendingInspectionReason = "old interrupted operation" };
+        using var host = new ChatSessionHost(session, new ConversationContext(),
+                                             new AgentOptions
+                                             {
+                                                 Model = "test-model", MaxAgentSteps = 8, DefaultToolTimeoutSeconds = 30
+                                             }, client, new ToolRegistry([]), SystemPrompt);
+        var input = new ScriptedInput("k", "first", "yes");
+        input.Complete();
+        var       output       = new StringWriter();
+        using var cancellation = new ChatCancellation(false);
+        var       console      = new ChatSessionConsole(host, input, output, cancellation);
+        Assert.Equal(0, await console.RunAsync());
+        Assert.Equal(1, Count(output.ToString(), "Needs inspection"));
+        Assert.Equal(["first", "yes"], host.Session.Turns.Select(turn => turn.UserInput).ToArray());
+        Assert.True(host.InspectionPending);
     }
 
     [Fact]
@@ -319,11 +373,14 @@ public class ChatSessionConsoleTests
     }
 
     /// <summary>
-    ///     按行分发的脚本输入：逐行返回预置行；行耗尽且未标记完成时挂起，直到新的输入、EOF
-    ///     标记或取消。测试用它控制回合执行中途的输入时机。
-    ///     A line-dispatched scripted input: returns the prepared lines one by one; suspends
-    ///     when the lines run out until new input, the EOF mark, or cancellation arrives.
-    ///     Tests use it to time input around mid-turn control flow.
+    ///     <para>
+    ///         逐行返回预置输入；耗尽后等待新输入、EOF 标记或取消，
+    ///         用于控制回合执行期间的输入时机。
+    ///     </para>
+    ///     <para>
+    ///         Returns preset lines, then waits for new input, an EOF marker or cancellation
+    ///         to control input timing during a turn.
+    ///     </para>
     /// </summary>
     private sealed class ScriptedInput : TextReader
     {
@@ -387,9 +444,8 @@ public class ChatSessionConsoleTests
     }
 
     /// <summary>
-    ///     永不产出输入的读取器：首次读取报告已开始后挂起，直到取消。用于复现空闲 Ctrl+C。
-    ///     A reader that never yields input: reports the first read and suspends until
-    ///     cancellation, reproducing the idle Ctrl+C path.
+    ///     <para>报告首次读取后等待取消，不产生输入，用于模拟空闲 Ctrl+C。</para>
+    ///     <para>Reports the first read, then waits for cancellation without yielding input to simulate idle Ctrl+C.</para>
     /// </summary>
     private sealed class BlockingInput : TextReader
     {
@@ -406,8 +462,8 @@ public class ChatSessionConsoleTests
     }
 
     /// <summary>
-    ///     门控工具：开始执行后挂起，直到取消令牌触发，用于复现"执行中途取消"。
-    ///     A gate tool: suspends after starting execution until the cancellation token fires.
+    ///     <para>报告执行开始后等待取消，用于模拟执行中途取消。</para>
+    ///     <para>Reports execution start, then waits for cancellation to simulate mid-execution cancellation.</para>
     /// </summary>
     private sealed class GateTool : ITool
     {

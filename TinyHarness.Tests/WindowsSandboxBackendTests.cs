@@ -7,15 +7,15 @@ using TinyHarness.Core.Services.Runtime.WindowsSandbox;
 namespace TinyHarness.Tests;
 
 /// <summary>
-///     WindowsSandboxBackend 的模拟管道会话测试：fake runner 通过内存双管道讲完整 v6 帧协议，
-///     覆盖正常终态、超时判定、自然退出 192、错误帧、断管道、用户取消、无响应回收、启动失败
-///     映射、会话乱序与冻结计划/清理后环境的传递。不启动进程、不修改机器状态。
-///     Simulated-pipe session tests for WindowsSandboxBackend: a fake runner
-///     speaks the complete v6 frame protocol over in-memory pipes, covering
-///     normal terminal states, timeout verdicts, natural 192 exits, error
-///     frames, broken pipes, user cancellation, unresponsive-runner reclamation,
-///     launch-failure mapping, session frame ordering, and the frozen plan plus
-///     cleaned environment. No processes start and no machine state changes.
+///     <para>
+///         使用内存管道与模拟 runner 验证 v6 协议的终态、错误、乱序、取消和回收边界，
+///         以及冻结计划与清理后环境的传递；不启动真实进程或修改机器状态。
+///     </para>
+///     <para>
+///         Uses in-memory pipes and a fake runner to verify v6 terminal, error, ordering, cancellation and reclamation
+///         boundaries,
+///         plus frozen-plan and cleaned-environment delivery; starts no real processes and changes no machine state.
+///     </para>
 /// </summary>
 public class WindowsSandboxBackendTests
 {
@@ -46,7 +46,7 @@ public class WindowsSandboxBackendTests
             Exception?                                    launchError   = null)
     {
         var home              = new SandboxTestHome();
-        var workspace         = workspaceRoot ?? home.Components.SandboxHome; // arbitrary inside-policy root
+        var workspace         = workspaceRoot ?? home.Components.SandboxHome; // 策略范围内的测试根。
         var targetEnvironment = new Dictionary<string, string> { ["TEMP"] = workspace };
         var policy            = SandboxPolicyResolver.Resolve(kind, workspace, targetEnvironment);
         var setup             = new FakeSetupInvoker { ThrowOnRefresh = refreshError };
@@ -63,7 +63,6 @@ public class WindowsSandboxBackendTests
 
     private static string Base64(string text) => Convert.ToBase64String(Encoding.UTF8.GetBytes(text));
 
-    // ---- 正常终态 ----
 
     [Fact]
     public async Task Execute_NormalExitAssemblesStreamsAndResult()
@@ -150,8 +149,7 @@ public class WindowsSandboxBackendTests
     {
         if (!OperatingSystem.IsWindows()) return;
 
-        // "世界" is 6 UTF-8 bytes; split 4|2 across frames to force the
-        // incremental decoder to carry a partial sequence over.
+        // 将“世界”的 6 个 UTF-8 字节按 4/2 拆帧，验证解码器跨帧保留不完整序列。
         var bytes = Encoding.UTF8.GetBytes("世界");
         var (backend, _, _, _, home) = CreateBackend(async (downstream, upstream, end) =>
         {
@@ -213,7 +211,6 @@ public class WindowsSandboxBackendTests
         Assert.Equal(frameCount * frameSize + frameCount, stdout.Content.Length);
     }
 
-    // ---- 错误帧与断管道 ----
 
     [Fact]
     public async Task Execute_SpawnChildErrorThrowsStartException()
@@ -255,7 +252,7 @@ public class WindowsSandboxBackendTests
         {
             await RunnerFrameCodec.ReadFrameAsync(downstream, end);
             await Task.Yield();
-            // Exit without any frame: the runner died before the handshake.
+            // 不发送帧即退出，模拟握手前 runner 终止。
         });
         using var homeScope = home;
 
@@ -268,7 +265,7 @@ public class WindowsSandboxBackendTests
     }
 
     [Fact]
-    public async Task Execute_EofBeforeExitReturnsFailureWithoutExitCode()
+    public async Task Execute_EofBeforeExitThrowsUncertainExecution()
     {
         if (!OperatingSystem.IsWindows()) return;
 
@@ -283,23 +280,21 @@ public class WindowsSandboxBackendTests
                                                        DataBase64 = Base64("partial"),
                                                        Stream     = "stdout"
                                                    }, end);
-            await upstream.DisposeAsync(); // pipe closes without an exit frame
+            await upstream.DisposeAsync(); // 无退出帧即关闭管道。
         });
         using var homeScope = home;
         var       stdout    = new RecordingOutputCapture();
 
-        var result = await backend.ExecuteAsync(Plan(home.Components.SandboxHome), stdout,
-                                                new RecordingOutputCapture(), CancellationToken.None);
+        var exception = await Assert.ThrowsAsync<ToolExecutionUncertainException>(() =>
+                     backend.ExecuteAsync(Plan(home.Components.SandboxHome), stdout,
+                                          new RecordingOutputCapture(), CancellationToken.None));
 
-        Assert.Null(result.ExitCode);
-        Assert.False(result.TimedOut);
-        Assert.NotNull(result.Failure);
-        Assert.Contains("closed before the exit frame", result.Failure.Message);
+        Assert.Contains("closed before the exit frame", exception.Message);
         Assert.Contains("partial", stdout.Content);
     }
 
     [Fact]
-    public async Task Execute_MalformedOutputFrameYieldsProtocolFailureResult()
+    public async Task Execute_MalformedOutputFrameThrowsUncertainExecution()
     {
         if (!OperatingSystem.IsWindows()) return;
 
@@ -317,14 +312,12 @@ public class WindowsSandboxBackendTests
         });
         using var homeScope = home;
 
-        var result = await backend.ExecuteAsync(Plan(home.Components.SandboxHome), new RecordingOutputCapture(),
-                                                new RecordingOutputCapture(), CancellationToken.None);
-        Assert.Null(result.ExitCode);
-        Assert.False(result.TimedOut);
-        Assert.Contains("protocol failure", result.Failure!.Message);
+        var exception = await Assert.ThrowsAsync<ToolExecutionUncertainException>(() =>
+                     backend.ExecuteAsync(Plan(home.Components.SandboxHome), new RecordingOutputCapture(),
+                                          new RecordingOutputCapture(), CancellationToken.None));
+        Assert.Contains("protocol failure", exception.Message);
     }
 
-    // ---- 会话乱序 ----
 
     [Fact]
     public async Task Execute_OutputBeforeSpawnReadyFailsTheHandshake()
@@ -356,7 +349,7 @@ public class WindowsSandboxBackendTests
     }
 
     [Fact]
-    public async Task Execute_ErrorFrameAfterSpawnReadyYieldsProtocolFailureResult()
+    public async Task Execute_ErrorFrameAfterSpawnReadyThrowsUncertainExecution()
     {
         if (!OperatingSystem.IsWindows()) return;
 
@@ -374,17 +367,14 @@ public class WindowsSandboxBackendTests
         });
         using var homeScope = home;
 
-        var result = await backend.ExecuteAsync(Plan(home.Components.SandboxHome), new RecordingOutputCapture(),
-                                                new RecordingOutputCapture(), CancellationToken.None);
+        var exception = await Assert.ThrowsAsync<ToolExecutionUncertainException>(() =>
+                     backend.ExecuteAsync(Plan(home.Components.SandboxHome), new RecordingOutputCapture(),
+                                          new RecordingOutputCapture(), CancellationToken.None));
 
-        Assert.Null(result.ExitCode);
-        Assert.False(result.TimedOut);
-        Assert.NotNull(result.Failure);
-        Assert.Contains("protocol failure", result.Failure!.Message);
-        Assert.Contains("error frame after spawn_ready", result.Failure.Message);
+        Assert.Contains("protocol failure", exception.Message);
+        Assert.Contains("error frame after spawn_ready", exception.Message);
     }
 
-    // ---- 用户取消与无响应回收 ----
 
     [Fact]
     public async Task Execute_UserCancelSendsTerminateDiscardsOutputAndThrows()
@@ -406,7 +396,7 @@ public class WindowsSandboxBackendTests
             while (true)
             {
                 var frame = await RunnerFrameCodec.ReadFrameAsync(downstream, end);
-                if (frame is null) return; // the connection dropped; stop reading
+                if (frame is null) return; // 连接关闭后停止读取。
 
                 if (frame.Type != "terminate") continue;
                 terminateSeen.TrySetResult(true);
@@ -444,8 +434,7 @@ public class WindowsSandboxBackendTests
         using var homeScope = home;
         var       stdout    = new RecordingOutputCapture();
 
-        // 1s command timeout + 300ms grace; the runner ignores terminate and
-        // never reports exit, so the backend must kill it and still return.
+        // 命令超时 1 秒并经过 300 毫秒宽限后，仍无退出帧；后端须回收 runner 并返回。
         var result = await backend.ExecuteAsync(Plan(home.Components.SandboxHome, 1), stdout,
                                                 new RecordingOutputCapture(), CancellationToken.None);
 
@@ -459,11 +448,8 @@ public class WindowsSandboxBackendTests
     {
         if (!OperatingSystem.IsWindows()) return;
 
-        // The fake runner emits spawn_ready and output frames, then goes
-        // silent: it never reports an exit and never answers terminate. The
-        // TCS marks the moment it reached that state so the run is
-        // deterministic without sleeps; the connection's Kill releases the
-        // wait and reports the fake process as exited.
+        // runner 输出后保持静默且不响应 terminate；用完成信号固定该边界，避免延时竞态。
+        // 模拟 Kill 解除等待并确认进程退出。
         var silentReached = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var (backend, _, _, _, home) = CreateBackend(async (downstream, upstream, end) =>
         {
@@ -505,20 +491,18 @@ public class WindowsSandboxBackendTests
     {
         if (!OperatingSystem.IsWindows()) return;
 
-        // The watchdog fires (runner silent past the deadline); the runner
-        // then answers terminate with a non-timeout exit, and the backend
-        // still enforces its own timeout verdict.
+        // 看门狗超时后即使 runner 返回非超时退出帧，后端超时判定仍须生效。
         var (backend, _, _, _, home) = CreateBackend(async (downstream, upstream, end) =>
         {
             await RunnerFrameCodec.ReadFrameAsync(downstream, end);
             await RunnerFrameCodec.WriteFrameAsync(upstream, "spawn_ready", new RunnerSpawnReady { ProcessId = 12 },
                                                    end);
-            // Stay silent past the watchdog deadline…
+            // 保持静默直到看门狗发送 terminate。
             while (await RunnerFrameCodec.ReadFrameAsync(downstream, end) is { } frame)
                 if (frame.Type == "terminate")
                     break;
 
-            // …then report a natural exit after being terminated.
+            // 收到 terminate 后返回非超时退出帧。
             await RunnerFrameCodec.WriteFrameAsync(upstream, "exit",
                                                    new RunnerExitPayload { ExitCode = 1, TimedOut = false }, end);
         });
@@ -531,7 +515,6 @@ public class WindowsSandboxBackendTests
         Assert.Equal(1, result.ExitCode);
     }
 
-    // ---- 启动失败映射 ----
 
     [Fact]
     public async Task Execute_LauncherIOExceptionFailsClosedAsStartException()
@@ -571,7 +554,6 @@ public class WindowsSandboxBackendTests
                                                                              CancellationToken.None));
     }
 
-    // ---- 冻结计划、环境清理与前置失败 ----
 
     [Fact]
     public async Task Execute_SendsFrozenPlanPolicyAndCleanedEnvironment()
@@ -626,22 +608,20 @@ public class WindowsSandboxBackendTests
             Assert.Equal(home.Components.SandboxHome, request.RealSandboxHome);
             Assert.Equal("restricted", request.PermissionProfile.Network);
             Assert.False(request.Environment.ContainsKey("TEST_SECRET"));
-            // The spawn environment must be exactly the composition-frozen target
-            // environment ({ TEMP = workspace }); any additional key would mean the
-            // backend regressed to inheriting host variables.
+            // 启动环境必须仅含组装时冻结的 TEMP；不得继承额外宿主变量。
             Assert.Single(request.Environment);
             Assert.Equal(home.Components.SandboxHome, request.Environment["TEMP"]);
             Assert.NotEmpty(request.CapabilitySids);
             Assert.All(request.CapabilitySids, sid => Assert.Matches(@"^S-1-5-21-\d+-\d+-\d+-\d+$", sid));
 
-            // The launcher got the same account the desktop was created for.
+            // 启动账户必须与创建桌面的账户一致。
             Assert.Equal("TinyHarnessOffline", launcher.LastRequest!.Account.Username);
             if (OperatingSystem.IsWindows())
                 Assert.Equal(desktops.GrantedSids.Single(), launcher.LastRequest.Account.AccountSid.Value);
 
             Assert.Equal(home.Components.RunnerExecutablePath, launcher.LastRequest.RunnerExecutablePath);
 
-            // One refresh before launch, carrying the resolved roots.
+            // 启动前仅刷新一次，并传递已解析的根路径。
             var refresh = Assert.Single(setup.RefreshPayloads);
             Assert.True(refresh.RefreshOnly);
             Assert.Equal(home.Components.SandboxHome, refresh.SandboxHome);

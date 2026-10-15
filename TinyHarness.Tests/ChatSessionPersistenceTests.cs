@@ -1,8 +1,12 @@
+using System.Text.Json.Nodes;
 using TinyHarness.Core.Exceptions;
 using TinyHarness.Core.Models.Agent;
 using TinyHarness.Core.Models.ChatCompletions;
 using TinyHarness.Core.Models.Configuration;
+using TinyHarness.Core.Models.Persistence;
 using TinyHarness.Core.Models.Session;
+using TinyHarness.Core.Models.Tools;
+using TinyHarness.Core.Services.Agent;
 using TinyHarness.Core.Services.ChatCompletions;
 using TinyHarness.Core.Services.Context;
 using TinyHarness.Core.Services.Persistence;
@@ -12,14 +16,14 @@ using TinyHarness.Core.Services.Tools;
 namespace TinyHarness.Tests;
 
 /// <summary>
-///     M13.1 会话持久化集成测试：ChatSessionHost 在每个回合唱到终态后把版本化快照提交到
-///     受保护存储（完整回合边界，PLAN §7.1）；保存失败只成为 PersistenceWarning，
-///     不改写回合终态、不中断会话。
-///     M13.1 session-persistence integration tests: ChatSessionHost commits a
-///     versioned snapshot to the protected store after every turn reaches its
-///     terminal state (the complete turn boundary, PLAN §7.1); a failed save
-///     only becomes a PersistenceWarning — it never rewrites the turn's terminal
-///     state or interrupts the session.
+///     <para>
+///         验证回合终态后的版本化快照提交；保存失败单独报告为 PersistenceWarning，
+///         不改写执行终态或中断会话。
+///     </para>
+///     <para>
+///         Verifies versioned snapshot commits after turn completion; save failures become PersistenceWarning
+///         without changing the execution outcome or interrupting the session.
+///     </para>
 /// </summary>
 public class ChatSessionPersistenceTests
 {
@@ -155,11 +159,145 @@ public class ChatSessionPersistenceTests
         using var host = NewHost(client, _ => new ThrowingSessionWriter());
         var       run  = await host.SubmitTurnAsync("anything", CancellationToken.None);
 
-        // The turn's terminal state is the execution truth; the storage fault is
-        // reported separately and never turns a completed turn into a failure.
+        // 保存故障单独报告，不把已完成的执行改写为失败。
         Assert.Equal(AgentStatus.Completed, run.Result!.Status);
         Assert.NotNull(host.PersistenceWarning);
         Assert.Contains("disk on fire", host.PersistenceWarning, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task SubmitTurn_SideEffectExecuteSeesDurableInflightIntentAtACompleteBoundary(
+        bool previouslyAcknowledged)
+    {
+        using var ws  = new TestTempDir();
+        using var dir = new TestTempDir();
+        var identity =
+            new SessionModelIdentity("test-model", "https://example.invalid/v1", ChatApiKind.ChatCompletions);
+        var client = new FakeChatClient();
+        client.Enqueue(FakeChatClient.Text("previous answer"));
+        client.Enqueue(FakeChatClient.ToolCall("write", "{}", "call_confirmed"));
+        client.Enqueue(FakeChatClient.ToolCall("slow", "{}", "call_inflight"));
+        var     write     = new FakeTool("write");
+        string? sessionId = null;
+        var     gate      = new SnapshotGateTool(token => SessionStoreReader.ReadAsync(dir.Root, sessionId!, token));
+        using var host = new ChatSessionHost(ws.Root, identity, Options(), client,
+                                             new ToolRegistry([write, gate]), SystemPrompt,
+                                             sessionWriterFactory : id => new SessionStoreWriter(dir.Root, id));
+        sessionId = host.Session.Id;
+        if (previouslyAcknowledged) host.Session.InspectionAcknowledgedUtc = DateTimeOffset.UtcNow;
+        await host.SubmitTurnAsync("previous turn", CancellationToken.None);
+        var previous = await SessionStoreReader.ReadAsync(dir.Root, sessionId, CancellationToken.None);
+        Assert.NotNull(previous);
+
+        using var        cts    = new CancellationTokenSource();
+        using var        wait   = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var              active = host.SubmitTurnAsync("write twice", cts.Token);
+        PersistedSession captured;
+        try
+        {
+            // 在 Execute 报告启动前读取快照，模拟该边界崩溃；
+            // 捕获内容不受后续结算影响，也不终止进程或重放工具。
+            captured = await gate.WaitCapturedAsync(wait.Token);
+            Assert.False(active.IsCompleted);
+            Assert.Equal(1, gate.ExecuteCount);
+            Assert.True(captured.CommitSequence > previous.CommitSequence);
+            Assert.Null(captured.InspectionAcknowledgedUtc);
+            Assert.NotNull(captured.PendingInspectionReason);
+            var inflight = captured.Turns[^1].Runs.Single();
+            Assert.Null(inflight.Status);
+            Assert.Null(inflight.FinishedUtc);
+            Assert.Null(inflight.FinalMessage);
+            Assert.Null(inflight.Error);
+            Assert.True(inflight.NeedsInspection);
+            Assert.Equal(2, inflight.ToolCalls!.Count);
+            Assert.Equal(nameof(ToolCallExecutionState.ConfirmedResult), inflight.ToolCalls[0].State);
+            var intent = inflight.ToolCalls[1];
+            Assert.Equal("call_inflight", intent.CallId);
+            Assert.Equal("slow", intent.ToolName);
+            Assert.Equal("filesystem.write", intent.Capability);
+            Assert.True(intent.SideEffects);
+            Assert.Equal(nameof(ToolCallExecutionState.UnknownResult), intent.State);
+
+            var canonical = captured.Conversation!.Messages;
+            Assert.Equal(["System", "User", "Assistant", "User", "Assistant", "Tool"],
+                         canonical.Select(m => m.Role).ToArray());
+            Assert.Equal("previous answer", canonical[2].Content);
+            Assert.Equal("call_confirmed", Assert.Single(canonical[4].ToolCalls!).Id);
+            Assert.Equal("call_confirmed", canonical[5].ToolCallId);
+            Assert.DoesNotContain(canonical, m => m.ToolCalls?.Any(c => c.Id == "call_inflight") == true);
+            Assert.DoesNotContain(canonical, m => m.ToolCallId                                   == "call_inflight");
+
+            var restored = SessionResume.Restore(captured, ws.Root, identity, SystemPrompt);
+            Assert.False(restored.RewoundTail);
+            Assert.NotNull(restored.NeedsInspection);
+            var unfinished = restored.Session.Turns[^1].Runs.Single();
+            Assert.False(unfinished.IsFinished);
+            Assert.Null(unfinished.Result);
+            Assert.Null(unfinished.FinishedUtc);
+            Assert.Equal(ToolCallExecutionState.UnknownResult, unfinished.ExecutionRecords![1].State);
+            Assert.Equal(restored.Context.Messages.Count,
+                         ChatHistoryInvariants.LastCompleteBoundary(restored.Context.Messages));
+
+            var nextClient = new FakeChatClient();
+            nextClient.Enqueue(FakeChatClient.ToolCall("write", "{}", "call_new"));
+            nextClient.Enqueue(FakeChatClient.Text("blocked after crash"));
+            var nextWrite = new FakeTool("write");
+            using var resumed = new ChatSessionHost(restored.Session, restored.Context, Options(), nextClient,
+                                                    new ToolRegistry([nextWrite]), SystemPrompt,
+                                                    needsInspection : restored.NeedsInspection);
+            Assert.True(resumed.InspectionPending);
+            var blocked = await resumed.SubmitTurnAsync("continue after crash", CancellationToken.None);
+            Assert.Equal(AgentStatus.Completed, blocked.Result!.Status);
+            Assert.Equal(0, nextWrite.ExecuteCount);
+            Assert.Contains("pending inspection", Assert.Single(blocked.Result.ToolCalls!).Approval,
+                            StringComparison.Ordinal);
+        }
+        finally
+        {
+            cts.Cancel();
+            await active;
+        }
+
+        var terminal = await SessionStoreReader.ReadAsync(dir.Root, sessionId, CancellationToken.None);
+        Assert.NotNull(terminal);
+        Assert.True(terminal.CommitSequence > captured.CommitSequence);
+        Assert.Equal(nameof(AgentStatus.Cancelled), terminal.Turns[^1].Runs.Single().Status);
+        // 结算不得修改已捕获的中断快照或补造终态。
+        Assert.Null(captured.Turns[^1].Runs.Single().Status);
+        Assert.Equal(nameof(ToolCallExecutionState.UnknownResult),
+                     captured.Turns[^1].Runs.Single().ToolCalls![1].State);
+    }
+
+    [Fact]
+    public async Task SubmitTurn_CheckpointFailureNeverExecutesTheSideEffectAndRecordsKnownNotStarted()
+    {
+        using var ws = new TestTempDir();
+        var identity =
+            new SessionModelIdentity("test-model", "https://example.invalid/v1", ChatApiKind.ChatCompletions);
+        var client = new FakeChatClient();
+        client.Enqueue(FakeChatClient.ToolCall("write", "{}"));
+        var tool = new FakeTool("write");
+        using var host = new ChatSessionHost(ws.Root, identity, Options(), client,
+                                             new ToolRegistry([tool]), SystemPrompt,
+                                             sessionWriterFactory : _ => new ThrowingSessionWriter());
+
+        var run = await host.SubmitTurnAsync("write only after durable intent", CancellationToken.None);
+
+        Assert.Equal(AgentStatus.Failed, run.Result!.Status);
+        Assert.True(run.IsFinished);
+        Assert.Equal(0, run.Result.ToolExecutions);
+        Assert.Equal(0, tool.ExecuteCount);
+        Assert.Equal(1, client.Requests);
+        Assert.Contains("not reliably saved", run.Result.Error, StringComparison.Ordinal);
+        Assert.Contains("disk on fire", run.Result.Error, StringComparison.Ordinal);
+        var record = Assert.Single(run.Result.ToolCalls!);
+        Assert.True(record.SideEffects);
+        Assert.Equal(ToolCallExecutionState.KnownNotStarted, record.State);
+        Assert.False(host.InspectionPending);
+        Assert.Null(host.Session.PendingInspectionReason);
+        Assert.NotNull(host.PersistenceWarning);
     }
 
     [Fact]
@@ -184,6 +322,36 @@ public class ChatSessionPersistenceTests
         Assert.Equal(2, read.Turns.Count);
     }
 
+    private sealed class SnapshotGateTool(Func<CancellationToken, Task<PersistedSession?>> readSnapshot) : ITool
+    {
+        private readonly TaskCompletionSource<PersistedSession> _captured =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public int ExecuteCount { get; private set; }
+
+        public ToolDefinition Definition { get; } = new()
+        {
+            Name = "slow", Description = "Capture durable intent", Parameters = new JsonObject { ["type"] = "object" }
+        };
+
+        public ToolPreparation Prepare(ChatToolCall call) => new()
+        {
+            ToolName   = Definition.Name, CallId     = call.Id, Arguments = new JsonObject(),
+            Capability = "filesystem.write", Summary = "slow()"
+        };
+
+        public async Task<ToolResult> ExecuteAsync(ToolPreparation preparation, CancellationToken cancellationToken)
+        {
+            ExecuteCount++;
+            _captured.TrySetResult(await readSnapshot(cancellationToken) ??
+                                   throw new InvalidOperationException("No snapshot"));
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            return new ToolResult { Succeeded = true, Content = "unreachable" };
+        }
+
+        public Task<PersistedSession> WaitCapturedAsync(CancellationToken token) => _captured.Task.WaitAsync(token);
+    }
+
     private sealed class ThrowingSessionWriter : ISessionStoreWriter
     {
         public string SnapshotPath => throw new NotSupportedException();
@@ -200,9 +368,8 @@ public class ChatSessionPersistenceTests
     }
 
     /// <summary>
-    ///     首次提交失败的写入端：故障先成为 PersistenceWarning，第二次提交成功后警告必须被清除。
-    ///     A writer whose first commit fails: the fault becomes the PersistenceWarning first,
-    ///     and the warning must be cleared once the second commit succeeds.
+    ///     <para>首次提交失败、后续提交成功的写入端，用于验证成功保存后清除警告。</para>
+    ///     <para>Fails the first commit and succeeds thereafter to verify that a successful save clears the warning.</para>
     /// </summary>
     private sealed class FlakySessionWriter(string directory) : ISessionStoreWriter
     {

@@ -25,18 +25,19 @@ using WindowsCredentialStore = TinyHarness.Core.Services.Runtime.WindowsCredenti
 namespace TinyHarness.Cli;
 
 /// <summary>
-///     TinyHarness 命令行应用的组合根与入口调度器。
-///     Composition root and entry-point dispatcher for the TinyHarness command-line application.
+///     <para>TinyHarness 命令行应用的组合根与入口调度器。</para>
+///     <para>Composition root and entry-point dispatcher for the TinyHarness command-line application.</para>
 /// </summary>
 internal static class Program
 {
     /// <summary>
-    ///     run 与 chat 共享的工作区系统提示：会话内指令固定，跨回合续聊要求同一条提示
-    ///     （ChatSessionHost 的续聊一致性校验）。
-    ///     The workspace system prompt shared by run and chat: instructions are fixed per
-    ///     session, and cross-turn continuation requires the same prompt (enforced by
-    ///     ChatSessionHost's continuation check).
+    ///     <para>run 与 chat 共享的工作区系统提示。</para>
+    ///     <para>The workspace system prompt shared by run and chat.</para>
     /// </summary>
+    /// <remarks>
+    ///     <para>会话内提示固定；续聊必须通过系统提示一致性校验。</para>
+    ///     <para>The prompt is fixed within a session; continuation must pass prompt consistency checks.</para>
+    /// </remarks>
     private const string WorkspaceSystemPrompt =
         "You are TinyHarness, a local coding harness that inspects and modifies a workspace. " +
         "Use list_files, search_text and read_file to inspect, apply_patch to modify files, and shell to run commands. " +
@@ -48,10 +49,16 @@ internal static class Program
         "Writes and commands may require the user's approval before they run; a denial is returned to you so you can adjust.";
 
     /// <summary>
-    ///     CLI 入口。解析管理命令、smoke、run 或无动词调用方式，并把退出码交还操作系统。
-    ///     CLI entry point that dispatches management commands, smoke, run, or verbless invocation forms and
-    ///     returns an OS exit code.
+    ///     <para>调度 CLI 命令，并将入口异常转换为诊断输出和退出码。</para>
+    ///     <para>Dispatches CLI commands and converts entry-point exceptions into diagnostics and exit codes.</para>
     /// </summary>
+    /// <returns>
+    ///     <para>命令退出码；入口捕获的用法错误为 2，取消为 130，其他失败为 1。</para>
+    ///     <para>
+    ///         The command's exit code; caught usage errors return 2,
+    ///         cancellation returns 130, and other failures return 1.
+    ///     </para>
+    /// </returns>
     public static async Task<int> Main(string[] args)
     {
         try
@@ -79,9 +86,7 @@ internal static class Program
         }
         catch (Exception ex)
         {
-            // Convert boundary failures (configuration, fixture setup, persistence
-            // construction, and similar startup errors) into normal CLI output so
-            // Windows never presents a CLR application-error dialog.
+            // 将启动边界异常转换为 CLI 诊断，避免 Windows 弹出 CLR 错误对话框。
             await Console.Error.WriteLineAsync($"TinyHarness failed: {ex.Message}");
             return 1;
         }
@@ -119,9 +124,8 @@ internal static class Program
     }
 
     /// <summary>
-    ///     执行管理命令（init/config/provider/auth/model/doctor/sandbox）；这些命令绝不把输入发给模型。
-    ///     Executes management commands (init/config/provider/auth/model/doctor/sandbox); their input is never sent to a
-    ///     model.
+    ///     <para>执行管理命令；绝不把输入发送给模型。</para>
+    ///     <para>Executes management commands without sending their input to a model.</para>
     /// </summary>
     private static async Task<int> RunManagementCommandAsync(CliOptions options)
     {
@@ -153,12 +157,16 @@ internal static class Program
     }
 
     /// <summary>
-    ///     加载生效配置并运行一次 Agent 任务：组合经 <see cref="ComposeAgentAsync" /> 共享，
-    ///     stdin 经单一输入协调分发（PLAN §6），输出事件流与摘要。
-    ///     Loads the effective configuration and runs one agent task: composition is shared
-    ///     via <see cref="ComposeAgentAsync" />, stdin is dispatched through the single input
-    ///     coordinator (PLAN §6), and the event stream plus summary are printed.
+    ///     <para>使用共享执行栈运行单次 Agent 任务，输出事件流与终态摘要。</para>
+    ///     <para>Runs one agent task with the shared execution stack and prints events and a terminal summary.</para>
     /// </summary>
+    /// <remarks>
+    ///     <para>配置与工具由 <see cref="ComposeAgentAsync" /> 组合；审批通过单一输入读取器接收。</para>
+    ///     <para>
+    ///         <see cref="ComposeAgentAsync" /> composes configuration and tools;
+    ///         approvals use a single input reader.
+    ///     </para>
+    /// </remarks>
     private static async Task<int> RunAsync(string prompt, string? configPath)
     {
         using var cts                = new CancellationTokenSource();
@@ -167,9 +175,7 @@ internal static class Program
 
         await WriteHeaderAsync("TinyHarness run", composition).ConfigureAwait(false);
 
-        // Assemble the interactive permission flow used by normal CLI runs. stdin is
-        // dispatched through the single input coordinator (PLAN §6), so approval prompts
-        // never race another read loop; the M12.3 chat input joins the same outlet.
+        // 审批通过单一读取器接收，避免多个循环争抢 stdin。
         IApprovalProvider approver = new ConsoleApprovalProvider(new ExclusiveInputReader(Console.In), Console.Out,
                                                                  composition.KnownSecrets);
 
@@ -206,30 +212,31 @@ internal static class Program
     }
 
     /// <summary>
-    ///     加载生效配置并启动交互式多回合 chat 会话（M12.3，PLAN §10）。执行栈与 run 完全共享
-    ///     （<see cref="ComposeAgentAsync" />）；回合输入与审批提示共享同一个
-    ///     <see cref="ExclusiveInputReader" /> 单一出口，Ctrl+C 的回合/会话分发由
-    ///     <see cref="ChatCancellation" /> 承担。M13.1 起每个回合唱到终态后，会话以版本化快照
-    ///     原子提交到受保护用户级存储（<see cref="SessionStoreWriter" />），供严格离线的
-    ///     `session list` / `session show` 查看；保存失败按“本次未可靠保存”报告，不把运行终态
-    ///     当作落盘成功。M13.2 起 <c>--session &lt;id&gt;</c> 打开已保存会话续聊：先取锁并严格
-    ///     读取（含审计对账），再做工作区/模型/协议身份与 opaque 完整性检查
-    ///     （<see cref="SessionResume" />），任一不过即以退出码 1 拒绝，不降级放行。
-    ///     Loads the effective configuration and starts the interactive multi-turn chat
-    ///     session (M12.3, PLAN §10). The execution stack is shared with run exactly
-    ///     (<see cref="ComposeAgentAsync" />); the turn input and approval prompts share one
-    ///     <see cref="ExclusiveInputReader" /> outlet, and Ctrl+C's turn/session dispatch lives
-    ///     in <see cref="ChatCancellation" />. Since M13.1, after every turn reaches its
-    ///     terminal state the session is atomically committed as a versioned snapshot into
-    ///     the protected user-level store (<see cref="SessionStoreWriter" />) for strictly
-    ///     offline `session list` / `session show` inspection; a failed save is reported as
-    ///     "not reliably saved" and a run's terminal state never counts as proof of
-    ///     persistence. Since M13.2 `--session &lt;id&gt;` opens a stored session and resumes
-    ///     it: the lock is taken and the snapshot strictly read (audit reconciliation
-    ///     included) first, then the workspace/model/protocol identity and opaque
-    ///     integrity checks run (<see cref="SessionResume" />); any failure refuses the
-    ///     resume with exit code 1 instead of degrading it.
+    ///     <para>使用与 run 共享的执行栈，创建或恢复交互式多回合会话。</para>
+    ///     <para>Creates or resumes an interactive multi-turn session using the execution stack shared with run.</para>
     /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         回合、审批与检查确认共享一个 <see cref="ExclusiveInputReader" />；
+    ///         <see cref="ChatCancellation" /> 区分活动回合取消与空闲会话退出。
+    ///         终态回合原子保存到受保护存储供离线查看；保存失败必须报告，终态不代表保存成功。
+    ///     </para>
+    ///     <para>
+    ///         Turns, approvals, and inspection confirmation share one <see cref="ExclusiveInputReader" />;
+    ///         <see cref="ChatCancellation" /> distinguishes active-turn cancellation from idle-session exit.
+    ///         Terminal turns are saved atomically to protected storage for offline inspection;
+    ///         save failures must be reported, and a terminal state does not prove persistence.
+    ///     </para>
+    ///     <para>
+    ///         恢复时先取锁并严格读取、核对审计，再校验工作区、模型、协议身份与 opaque 完整性；
+    ///         校验失败由入口报告退出码 1，不降级放行。会话宿主持有并释放存储写入器。
+    ///     </para>
+    ///     <para>
+    ///         Resume takes the lock, strictly reads and reconciles the audit, then validates
+    ///         workspace, model, protocol identity, and opaque integrity. Validation failures
+    ///         reach the entry point as exit code 1 without fallback. The session host owns and disposes the store writer.
+    ///     </para>
+    /// </remarks>
     private static async Task<int> RunChatAsync(string? configPath, string? resumeSessionId)
     {
         using var cancellation = new ChatCancellation();
@@ -237,8 +244,7 @@ internal static class Program
            .ConfigureAwait(false);
         var config = composition.Config;
 
-        // One single-input outlet serves both the turn prompts and the inline approval
-        // prompts (PLAN §6); the console and the approver must wrap the same instance.
+        // 回合、审批与检查确认必须共享同一个读取器，不能另开 stdin 循环。
         var reader = new ExclusiveInputReader(Console.In);
 
         ChatSessionHost host;
@@ -261,9 +267,7 @@ internal static class Program
         }
         else
         {
-            // Open the stored session (lock + strict read + sequence seed) before any
-            // restoration; the writer is handed to the host only after every resume
-            // check passes, and stays ours to release when they do not.
+            // 先取锁、严格读取并续种提交序号；恢复成功后转交写入器，否则由此处释放。
             var writer = await SessionStoreWriter.OpenExistingAsync(composition.SessionStoreDirectory!,
                                                                     resumeSessionId, composition.KnownSecrets,
                                                                     cancellation.SessionToken).ConfigureAwait(false);
@@ -275,13 +279,15 @@ internal static class Program
                                                      WorkspaceSystemPrompt, composition.Options.Context);
                 resumedNote = $"resumed    : {restored.Session.Turns.Count} turns from commit " +
                               $"{writer.CommitSequence} ({writer.LoadedSnapshot!.UpdatedUtc.LocalDateTime:yyyy-MM-dd HH:mm:ss})";
+                if (restored.RewoundTail)
+                    resumedNote += "\n  rewound    : the last incomplete tool round was dropped from the model view";
                 host = new ChatSessionHost(restored.Session, restored.Context, composition.Options, composition.Model,
                                            composition.Tools, WorkspaceSystemPrompt, composition.Permissions,
                                            new ConsoleApprovalProvider(reader, Console.Out, composition.KnownSecrets),
                                            new ConsoleHostEventSink(composition.KnownSecrets),
                                            runId => new FileRunRecorder(config.SessionDirectory, runId,
                                                                         composition.KnownSecrets),
-                                           writer);
+                                           writer, restored.NeedsInspection);
             }
             catch
             {
@@ -299,11 +305,11 @@ internal static class Program
                        .WriteLineAsync("  storage   : protocol history is saved verbatim without harness encryption; " +
                                        "pasted secrets may be stored. Keep the session store private.");
 
+            // 启动与后续中断确认均交给会话循环，避免保持阻断后多读一次回合输入。
             var console = new ChatSessionConsole(host, reader, Console.Out, cancellation, composition.KnownSecrets);
             var exit    = await console.RunAsync().ConfigureAwait(false);
 
-            // Report only artifacts that actually exist (the same rule as run) and surface
-            // an unreliable last save instead of presenting the terminal state as saved.
+            // 只报告存在的产物；末次保存不可靠时明确警告，不以终态代替保存证据。
             if (host.Session.Turns.Count > 0 && File.Exists(host.PersistencePath))
                 await Console.Out.WriteLineAsync($"session    : {host.PersistencePath}");
             if (host.PersistenceWarning is { Length: > 0 } warning)
@@ -314,19 +320,24 @@ internal static class Program
     }
 
     /// <summary>
-    ///     run 与 chat 共享的执行栈组合：解析配置、校验模型与 endpoint、按引用解析 API key、
-    ///     组合沙箱执行要素，并构建模型客户端、工作区工具、权限引擎与 Agent 选项。审批器与
-    ///     事件展示由各入口自行组装（chat 的审批必须与回合输入共享同一读取出口）。配置缺失
-    ///     模型/endpoint 或找不到 API key 时抛出 <see cref="ConfigException" />，由入口以
-    ///     退出码 1 报告，与原 run 行为一致。
-    ///     The execution-stack composition shared by run and chat: resolve the config, validate
-    ///     the model and endpoint, resolve the API key by reference, compose the sandbox
-    ///     execution pieces, and build the model client, workspace tools, permission engine and
-    ///     agent options. The approver and event display stay with each entry point (the chat
-    ///     approver must share the turn-input reader outlet). A missing model/endpoint or API
-    ///     key throws <see cref="ConfigException" />, reported by the entry with exit code 1 —
-    ///     matching the previous run behavior.
+    ///     <para>解析配置与凭据，组合 run 和 chat 共享的模型、工具、权限与执行策略。</para>
+    ///     <para>
+    ///         Resolves configuration and credentials and composes the model, tools,
+    ///         permissions, and policy shared by run and chat.
+    ///     </para>
     /// </summary>
+    /// <remarks>
+    ///     <para>审批器与事件展示由入口组装；chat 审批器必须与回合输入共享读取器。</para>
+    ///     <para>Entry points compose approvals and event display; chat approvals must share the turn-input reader.</para>
+    /// </remarks>
+    /// <param name="persistSessions">
+    ///     <para>是否从可信用户设置解析并校验受保护会话存储目录。</para>
+    ///     <para>Whether to resolve and validate the protected session-store directory from trusted user settings.</para>
+    /// </param>
+    /// <exception cref="ConfigException">
+    ///     <para>模型或 endpoint 缺失，或无法解析 API key。</para>
+    ///     <para>The model or endpoint is missing, or the API key cannot be resolved.</para>
+    /// </exception>
     private static async Task<AgentComposition> ComposeAgentAsync(
         string? configPath, CancellationToken cancellationToken, bool persistSessions = false)
     {
@@ -348,11 +359,7 @@ internal static class Program
                 ConfigException("No API key found. Run 'tinyharness auth set <profile>' or set the environment variable " +
                                 $"'{config.ApiKeyEnvironmentVariable}' before running.");
 
-        // The resumable-session store directory is resolved from trusted user
-        // settings only (never the target project's config chain) and must pass
-        // the protection checks before the session may start (PLAN §7.1); a
-        // failure fails the chat startup rather than degrading to an unprotected
-        // location.
+        // 续聊存储仅取可信用户设置，不接受项目配置；保护校验失败即拒绝启动，不降级目录。
         string? sessionStoreDirectory = null;
         if (persistSessions)
         {
@@ -362,11 +369,7 @@ internal static class Program
                                                                        config.WorkspaceRoot);
         }
 
-        // The sandbox composition reads trusted user settings only — never the
-        // target project's config chain. Any validation failure (missing
-        // components, invalid paths, wrong platform, session directory inside
-        // the workspace) throws and fails the run; host execution is never a
-        // silent fallback.
+        // 沙箱仅取可信用户设置，不接受项目配置；组件、路径、平台或存储保护校验失败均不回退宿主。
         var knownSecrets = SandboxCliComposition.KnownSecrets(config, apiKey);
         var sandbox =
             await TryComposeWindowsSandboxAsync(config, knownSecrets, cancellationToken, sessionStoreDirectory)
@@ -395,11 +398,11 @@ internal static class Program
     }
 
     /// <summary>
-    ///     打印 run 与 chat 共享的头部：配置来源、模型、endpoint、协议、工作区、沙箱与工具。
-    ///     chat 额外携带会话 ID 行。单一格式避免两条头部路径漂移。
-    ///     Prints the header shared by run and chat: config source, model, endpoint, protocol,
-    ///     workspace, sandbox and tools. Chat adds the session-id line. One format keeps the
-    ///     two header paths from drifting.
+    ///     <para>打印配置、模型、工作区、沙箱与工具头部；提供会话 ID 时一并显示。</para>
+    ///     <para>
+    ///         Prints the configuration, model, workspace, sandbox, and tool header;
+    ///         includes the session ID when supplied.
+    ///     </para>
     /// </summary>
     private static async Task WriteHeaderAsync(string title, AgentComposition composition, string? sessionId = null)
     {
@@ -424,12 +427,13 @@ internal static class Program
     }
 
     /// <summary>
-    ///     启动本机 stdio MCP 服务端：stdout 只承载协议消息，诊断写 stderr；stdin 关闭即正常退出，
-    ///     Ctrl+C 静默退出，均不污染协议输出。
-    ///     Starts the local stdio MCP server: stdout carries protocol messages only and diagnostics
-    ///     go to stderr. Closing stdin exits cleanly and Ctrl+C exits silently, keeping the protocol
-    ///     output unpolluted.
+    ///     <para>运行本机 stdio MCP 服务端；stdout 仅承载协议，诊断写入 stderr。</para>
+    ///     <para>Runs the local stdio MCP server; stdout carries only protocol messages and stderr carries diagnostics.</para>
     /// </summary>
+    /// <remarks>
+    ///     <para>stdin 关闭或 Ctrl+C 均正常退出，不向协议输出写入取消提示。</para>
+    ///     <para>Closed stdin and Ctrl+C both exit cleanly without writing cancellation notices to protocol output.</para>
+    /// </remarks>
     private static async Task<int> RunMcpServerAsync()
     {
         using var cts                = new CancellationTokenSource();
@@ -439,7 +443,7 @@ internal static class Program
                                               hostConfig.ApiKey, hostConfig.ChatApi);
         var runner = new WorkerRunner(model, hostConfig.WorkspaceRoot, hostConfig.ExecutionOptions);
 
-        // 只输出不含凭据的启动摘要到 stderr。文件内容会发送到配置的模型 endpoint。
+        // 启动摘要不含凭据；stderr 提醒用户获准读取的文件内容会发送到模型 endpoint。
         await Console.Error.WriteLineAsync($"TinyHarness MCP worker ready: model={hostConfig.Model}; "        +
                                            $"endpointType={hostConfig.EndpointType}; "                        +
                                            $"chatApi={ChatApiKindParser.ToValueString(hostConfig.ChatApi)}; " +
@@ -447,8 +451,7 @@ internal static class Program
         await Console.Error.WriteLineAsync("Read-permitted file contents are sent to the selected model endpoint; " +
                                            "the worker cannot modify files or run commands.");
 
-        // 直接包装字节流并显式使用无 BOM 的 UTF-8：MCP stdio 分帧固定为 UTF-8，
-        // 而 Console.In/Out 在 Windows 上会套用传统的 OEM/ANSI 代码页。
+        // MCP stdio 要求 UTF-8；直接包装字节流并禁用 BOM，避开 Windows Console 的 OEM/ANSI 代码页。
         using var input = new StreamReader(Console.OpenStandardInput(),
                                            new UTF8Encoding(false),
                                            false);
@@ -468,8 +471,8 @@ internal static class Program
     }
 
     /// <summary>
-    ///     把完整的只读与写入工具集合绑定到同一个工作区。
-    ///     Binds the complete read/write tool set to one workspace.
+    ///     <para>把完整的只读与写入工具集合绑定到同一个工作区。</para>
+    ///     <para>Binds the complete read/write tool set to one workspace.</para>
     /// </summary>
     private static ToolRegistry BuildTools(Workspace workspace, TinyHarnessConfig config, string? apiKey = null,
                                            ProcessExecutionPolicy? executionPolicy = null,
@@ -487,16 +490,26 @@ internal static class Program
     }
 
     /// <summary>
-    ///     读取可信用户设置并在显式启用时组合 Windows 沙箱执行要素；未启用返回 null（保持宿主
-    ///     执行并明示无 OS 隔离）。启用后的任何组合失败都抛出，由入口转换为失败退出——绝不回退。
-    ///     逻辑位于 <see cref="SandboxCliComposition" />，与 sandbox verify 共享。
-    ///     Reads the trusted user settings and, when explicitly enabled, composes
-    ///     the Windows sandbox execution pieces; disabled returns null (host
-    ///     execution with an explicit "no OS isolation" notice). Any composition
-    ///     failure throws and the entry point turns it into a failing exit — never
-    ///     a fallback. The logic lives in <see cref="SandboxCliComposition" /> and
-    ///     is shared with sandbox verify.
+    ///     <para>通过共享的 <see cref="SandboxCliComposition" /> 从可信用户设置组合 Windows 沙箱。</para>
+    ///     <para>
+    ///         Composes the Windows sandbox from trusted user settings through the shared
+    ///         <see cref="SandboxCliComposition" />.
+    ///     </para>
     /// </summary>
+    /// <remarks>
+    ///     <para>显式启用后的组合失败向上传播，由入口报告失败；绝不回退宿主执行。</para>
+    ///     <para>
+    ///         Composition failures after explicit enablement propagate to the entry point; host execution is never a
+    ///         fallback.
+    ///     </para>
+    /// </remarks>
+    /// <returns>
+    ///     <para>启用时返回沙箱执行要素；未启用时返回 null，使用明确标注无 OS 隔离的宿主执行。</para>
+    ///     <para>
+    ///         Sandbox execution components when enabled; otherwise null for host execution
+    ///         explicitly marked as having no OS isolation.
+    ///     </para>
+    /// </returns>
     private static async Task<WindowsSandboxExecution?> TryComposeWindowsSandboxAsync(
         TinyHarnessConfig config, IReadOnlyDictionary<string, string> knownSecrets, CancellationToken cancellationToken,
         string?           sessionStoreDirectory = null)
@@ -507,9 +520,11 @@ internal static class Program
     }
 
     /// <summary>
-    ///     使用脚本模型和临时工作区运行离线冒烟流程，检查读写工具闭环及审批流程。
-    ///     Runs an offline smoke flow with a scripted model and disposable workspace,
-    ///     exercising the read/write tool loop and approval flow without network access.
+    ///     <para>使用脚本模型与临时工作区，离线检查读写工具闭环及审批流程。</para>
+    ///     <para>
+    ///         Uses a scripted model and disposable workspace to exercise
+    ///         the read/write tool loop and approval flow offline.
+    ///     </para>
     /// </summary>
     private static async Task<int> RunSmokeAsync(string? configPath)
     {
@@ -535,8 +550,7 @@ internal static class Program
         var script    = new SmokeScriptClient(plan.Steps);
         var workspace = new Workspace(fixture.Root);
         var tools     = BuildTools(workspace, config);
-        // Smoke intentionally uses the default policy so its side-effect
-        // approvals remain deterministic regardless of the user's live rules.
+        // 冒烟使用默认策略，确保副作用审批不受用户现行规则影响。
         var permissions = new PermissionEngine(fixture.Root);
         var approver    = new SmokeApprover();
         var options = new AgentOptions
@@ -574,12 +588,7 @@ internal static class Program
 
         if (result.Status != AgentStatus.Completed) return 1;
 
-        // The scripted client throws on any closure or content mismatch, which the
-        // Agent loop surfaces as Failed above; a Completed run with the expected
-        // tool count and expected approval prompts (apply_patch, direct process,
-        // and explicit shell) mean every
-        // tool really executed inside the native artifact through the permission
-        // flow.
+        // 脚本客户端拒绝工具闭环或内容不匹配；还需核对工具与审批次数，防止跳过补丁或进程执行。
         return result.ToolExecutions == plan.ExpectedToolExecutions &&
                approver.Prompts      == plan.ExpectedApprovalPrompts
             ? 0
@@ -587,8 +596,8 @@ internal static class Program
     }
 
     /// <summary>
-    ///     只报告实际存在的持久化产物，避免保存失败时把预期路径误报为已成功生成。
-    ///     Reports only persistence artifacts that actually exist, so an expected path is never presented as saved.
+    ///     <para>只报告实际存在的持久化产物，不把预期路径当作保存成功的证据。</para>
+    ///     <para>Reports only existing persistence artifacts, not expected paths as evidence of a successful save.</para>
     /// </summary>
     private static async Task WritePersistencePathsAsync(FileRunRecorder recorder, string prefix = "")
     {
@@ -600,8 +609,8 @@ internal static class Program
     }
 
     /// <summary>
-    ///     构造调用当前 CLI 隐藏 probe 动词的结构化命令；兼容 framework-dependent 与原生发布入口。
-    ///     Builds a structured invocation of this CLI's hidden probe verb for both framework-dependent and native hosts.
+    ///     <para>构造当前 CLI 隐藏 probe 命令的结构化调用，兼容依赖框架与原生入口。</para>
+    ///     <para>Builds a structured invocation of this CLI's hidden probe command for framework-dependent and native hosts.</para>
     /// </summary>
     private static ProcessProbe ProcessProbeCommand()
     {
@@ -616,12 +625,13 @@ internal static class Program
     }
 
     /// <summary>
-    ///     run 与 chat 共享的组合结果：除审批器与事件展示外的全部执行栈要素。chat 额外携带
-    ///     受保护会话存储目录（run 或未启用持久化时为 null）。
-    ///     The shared composition result: every execution-stack element except the
-    ///     approver and the event display. Chat additionally carries the protected
-    ///     session-store directory (null for run or when persistence is disabled).
+    ///     <para>run 与 chat 共享的执行栈组合结果，不含审批器与事件展示。</para>
+    ///     <para>The execution-stack composition shared by run and chat, excluding approvals and event display.</para>
     /// </summary>
+    /// <remarks>
+    ///     <para>chat 携带受保护会话存储目录；未启用持久化时该目录为 null。</para>
+    ///     <para>Chat carries the protected session-store directory; it is null when persistence is disabled.</para>
+    /// </remarks>
     private sealed record AgentComposition(
         ConfigResolution                    Resolution,
         TinyHarnessConfig                   Config,
@@ -635,8 +645,8 @@ internal static class Program
         string?                             SessionStoreDirectory);
 
     /// <summary>
-    ///     将 Ctrl+C 转换为任务取消，并在运行结束时可靠移除全局事件处理器。
-    ///     Converts Ctrl+C into task cancellation and reliably detaches the global handler afterward.
+    ///     <para>将 Ctrl+C 转换为任务取消；释放时移除全局事件处理器。</para>
+    ///     <para>Converts Ctrl+C into task cancellation and detaches the global handler on disposal.</para>
     /// </summary>
     private sealed class ConsoleCancellation : IDisposable
     {
@@ -664,21 +674,17 @@ internal static class Program
 }
 
 /// <summary>
-///     run 与 sandbox verify 共享的沙箱组合逻辑：加载可信设置、会话目录保护检查与 Compose 调用，
-///     以及与 run 一致的 knownSecrets 解析。verify 用独立工作区复用同一套语义，绝不漂移出第二条
-///     组合路径。
-///     The sandbox composition logic shared by run and sandbox verify: loading
-///     the trusted settings, the session-directory guard, the Compose call,
-///     and the knownSecrets resolution identical to run's. Verify reuses the
-///     same semantics with its own workspace so no second composition path
-///     ever drifts apart.
+///     <para>为 run、chat 与 sandbox verify 共享可信设置、存储保护和已知密钥的沙箱组合规则。</para>
+///     <para>
+///         Shares sandbox composition rules for trusted settings, storage protection,
+///         and known secrets across run, chat, and sandbox verify.
+///     </para>
 /// </summary>
 internal static class SandboxCliComposition
 {
     /// <summary>
-    ///     加载用户配置中的 settings.windowsSandbox（与 run 的组合路径一致：固定默认位置）。
-    ///     Loads settings.windowsSandbox from the user config (identical to
-    ///     run's composition path: the fixed default location).
+    ///     <para>从固定默认位置的用户配置加载 settings.windowsSandbox。</para>
+    ///     <para>Loads settings.windowsSandbox from user configuration at the fixed default location.</para>
     /// </summary>
     public static async Task<WindowsSandboxSettings?> LoadSettingsAsync(CancellationToken cancellationToken)
     {
@@ -688,16 +694,24 @@ internal static class SandboxCliComposition
     }
 
     /// <summary>
-    ///     显式启用时组合沙箱执行要素；未启用返回 null。会话目录位于组合工作区内时抛异常（审计
-    ///     记录可被沙箱命令篡改），受保护会话存储目录位于工作区或任一附加写根内时同样抛异常（可续聊
-    ///     快照可被篡改）；两者都绝不静默回退宿主执行。
-    ///     Composes the sandbox execution pieces when explicitly enabled;
-    ///     disabled returns null. A session directory inside the composition
-    ///     workspace throws (sandboxed commands could tamper with audit
-    ///     records), and so does a protected session-store directory inside the
-    ///     workspace or any additional write root (resumable snapshots could be
-    ///     tampered with); host execution is never a silent fallback.
+    ///     <para>显式启用时校验存储边界并组合沙箱；失败不回退宿主执行。</para>
+    ///     <para>Validates storage boundaries and composes an explicitly enabled sandbox without host fallback on failure.</para>
     /// </summary>
+    /// <returns>
+    ///     <para>启用时返回沙箱执行要素；未启用时返回 null。</para>
+    ///     <para>Sandbox execution components when enabled; otherwise null.</para>
+    /// </returns>
+    /// <exception cref="InvalidOperationException">
+    ///     <para>
+    ///         启用沙箱时，运行快照目录位于工作区内，或受保护会话存储目录位于工作区或附加写根内；
+    ///         这些位置会允许沙箱命令篡改审计或续聊快照。
+    ///     </para>
+    ///     <para>
+    ///         With the sandbox enabled, the run-snapshot directory lies inside the workspace,
+    ///         or the protected session store lies inside the workspace or an additional write root;
+    ///         these locations would let sandboxed commands tamper with audits or resumable snapshots.
+    ///     </para>
+    /// </exception>
     public static WindowsSandboxExecution? TryCompose(
         WindowsSandboxSettings?             settings,
         string                              sessionDirectory,
@@ -732,12 +746,16 @@ internal static class SandboxCliComposition
     }
 
     /// <summary>
-    ///     为进程环境清理与输出脱敏提供已知 secret；不记录 secret 值。凭据存储来源时用目标名占位，
-    ///     该名称不存在于子进程环境中，仅让脱敏继续覆盖密钥值本身。
-    ///     Supplies known secrets for child-environment removal and output redaction without logging their values.
-    ///     For credential-store keys the target name stands in; no such environment variable exists in children, it
-    ///     only keeps redaction covering the secret value itself.
+    ///     <para>为子进程环境清理与输出脱敏提供已知密钥，不记录密钥值。</para>
+    ///     <para>Supplies known secrets for child-environment removal and output redaction without logging their values.</para>
     /// </summary>
+    /// <remarks>
+    ///     <para>凭据存储目标名仅作映射键，不创建子进程环境变量；密钥值仍参与脱敏。</para>
+    ///     <para>
+    ///         A credential-store target name is only a mapping key and creates no child environment variable;
+    ///         its secret value still participates in redaction.
+    ///     </para>
+    /// </remarks>
     public static IReadOnlyDictionary<string, string> KnownSecrets(TinyHarnessConfig config, string? apiKey)
     {
         var name = !string.IsNullOrWhiteSpace(config.ApiKeyEnvironmentVariable)

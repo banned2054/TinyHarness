@@ -24,8 +24,8 @@ public interface IRunRecorder
 
     Task RecordCompactionAsync(ContextChange change, CancellationToken cancellationToken);
 
-    Task RecordModelUsageAsync(int?              inputTokens, int? outputTokens, string? finishReason,
-                               CancellationToken cancellationToken);
+    Task RecordModelUsageAsync(
+        int? inputTokens, int? outputTokens, string? finishReason, CancellationToken cancellationToken);
 
     Task CompleteAsync(AgentResult       result, IReadOnlyList<ChatMessage> messages, StructuredState state,
                        CancellationToken cancellationToken);
@@ -137,12 +137,11 @@ public sealed class FileRunRecorder : IRunRecorder
         var safeResult = result with
         {
             FinalMessage = _redactor.Redact(result.FinalMessage),
-            Error = _redactor.RedactNullable(result.Error)
+            Error = _redactor.RedactNullable(result.Error),
+            ToolCalls = result.ToolCalls?.Select(_redactor.Redact).ToArray()
         };
 
-        // run.completed means that Agent execution reached a terminal result. It is
-        // intentionally written before the snapshot and is not proof that every
-        // persistence file was saved successfully.
+        // run.completed 先于快照写入，仅证明执行已到终态，不证明持久化成功。
         await AppendAsync(new AuditRecord
         {
             RunId   = RunId,
@@ -241,6 +240,18 @@ internal sealed class SecretRedactor
         PendingWork        = state.PendingWork.Select(Redact).ToArray()
     };
 
+    public ToolCallRecord Redact(ToolCallRecord record) => new()
+    {
+        CallId           = Redact(record.CallId),
+        ToolName         = Redact(record.ToolName),
+        Capability       = RedactNullable(record.Capability),
+        SideEffects      = record.SideEffects,
+        Summary          = Redact(record.Summary),
+        PreparationError = RedactNullable(record.PreparationError),
+        Approval         = RedactNullable(record.Approval),
+        State            = record.State
+    };
+
     public ChatMessage Redact(ChatMessage message) => new()
     {
         Role       = message.Role,
@@ -250,11 +261,7 @@ internal sealed class SecretRedactor
         ToolCalls = message.ToolCalls
                           ?.Select(call => new ChatToolCall(Redact(call.Id), Redact(call.FunctionName),
                                                             Redact(call.ArgumentsJson))).ToArray(),
-        // ProtectedData/ItemId 是不透明标识，沿用与 ToolCallId 相同的脱敏规则：
-        // 正常原样保留，但与已知 secret 匹配时必须替换。
-        //
-        // ProtectedData/ItemId are opaque identifiers redacted with the same
-        // rule as ToolCallId: kept verbatim unless they match a known secret.
+        // 检查投影中的 opaque 字段同样必须脱敏；此投影不能用于无损续聊。
         Reasoning = message.Reasoning?.Select(entry => new ReasoningContent(RedactNullable(entry.Text),
                                                                             RedactNullable(entry.ProtectedData),
                                                                             RedactNullable(entry.ItemId))).ToArray()
@@ -287,8 +294,7 @@ internal sealed class SecretRedactor
         return true;
     }
 
-    // Decode JSON before matching known secrets, then let the writer escape the
-    // replacement. Never replace raw JSON syntax or reparse decoded string values.
+    // 在解码后的 JSON 值上匹配秘密，由 writer 转义替换值，避免破坏语法或重解析字符串。
     private void WriteRedactedJson(JsonElement element, Utf8JsonWriter writer)
     {
         switch (element.ValueKind)
@@ -334,6 +340,7 @@ internal sealed class SecretRedactor
 [JsonSerializable(typeof(AuditRecord))]
 [JsonSerializable(typeof(SessionSnapshot))]
 [JsonSerializable(typeof(AgentResult))]
+[JsonSerializable(typeof(ToolCallRecord))]
 [JsonSerializable(typeof(ChatMessage))]
 [JsonSerializable(typeof(ChatToolCall))]
 [JsonSerializable(typeof(ReasoningContent))]

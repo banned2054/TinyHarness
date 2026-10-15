@@ -7,10 +7,19 @@ using System.Text;
 namespace TinyHarness.Core.Services.Runtime;
 
 /// <summary>
-///     Starts a Windows process suspended, assigns it to a kill-on-close Job Object,
-///     then resumes its primary thread. Descendants therefore enter the Job before
-///     user code can run, including commands whose root process exits immediately.
+///     <para>将 Windows 进程挂起启动并加入关闭即终止的 Job Object，再恢复主线程。</para>
+///     <para>
+///         Starts a Windows process suspended, assigns it to a kill-on-close Job Object,
+///         then resumes its primary thread.
+///     </para>
 /// </summary>
+/// <remarks>
+///     <para>用户代码运行前已建立后代进程归属；即使根进程立即退出，后代仍受 Job 管理。</para>
+///     <para>
+///         Descendant containment is established before user code runs;
+///         descendants remain managed by the Job even if the root process exits immediately.
+///     </para>
+/// </remarks>
 internal static class WindowsJobProcess
 {
     private const uint CreateNoWindow                = 0x08000000;
@@ -80,9 +89,7 @@ internal static class WindowsJobProcess
                 processHandle = new SafeFileHandle(processInformation.Process, true);
                 threadHandle  = new SafeFileHandle(processInformation.Thread, true);
                 process       = Process.GetProcessById(checked((int)processInformation.ProcessId));
-                // Force Process to open and retain its own handle while the native
-                // process is guaranteed to exist in suspended state. Waiting and
-                // ExitCode remain valid even if it exits immediately after resume.
+                // 挂起时保留 Process 自有句柄，保证恢复后立即退出仍可等待并读取 ExitCode。
                 _ = process.SafeHandle;
             }
             finally
@@ -90,8 +97,7 @@ internal static class WindowsJobProcess
                 Marshal.FreeHGlobal(environment);
             }
 
-            // The parent must not retain the child-side pipe handles, otherwise
-            // EOF would never be observable after the Job exits.
+            // 父进程须释放子端管道句柄，否则 Job 退出后仍无法观察 EOF。
             stdoutWrite.Dispose();
             stdoutWrite = null;
             stderrWrite.Dispose();
@@ -104,8 +110,7 @@ internal static class WindowsJobProcess
 
             assignedToJob = true;
             var encoding = startInfo.StandardOutputEncoding ?? Console.OutputEncoding;
-            // CreatePipe produces synchronous handles. FileStream must reflect
-            // that mode; marking them overlapped would make ReadFile invalid.
+            // CreatePipe 产生同步句柄；FileStream 若声明 overlapped 模式，ReadFile 将无效。
             stdout = new StreamReader(new FileStream(stdoutRead, FileAccess.Read, 4096, false),
                                       encoding, true);
             stdoutRead = null;
@@ -134,7 +139,7 @@ internal static class WindowsJobProcess
             Exception? cleanupError = null;
             if (assignedToJob)
             {
-                // Closing a configured Job is the authoritative tree cleanup.
+                // 已配置的 Job 关闭时负责终止整棵进程树。
                 job?.Dispose();
             }
             else if (processHandle is { IsInvalid: false, IsClosed: false })
@@ -158,8 +163,8 @@ internal static class WindowsJobProcess
 
             if (cleanupError is not null)
                 throw new
-                    InvalidOperationException("Process launch failed and cleanup of the suspended process also failed.",
-                                              new AggregateException(startException, cleanupError));
+                    ToolExecutionUncertainException("Process launch failed and cleanup of the suspended process also failed.",
+                                                    new AggregateException(startException, cleanupError));
 
             throw;
         }

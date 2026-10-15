@@ -7,6 +7,7 @@ using TinyHarness.Core.Models.Permissions;
 using TinyHarness.Core.Models.Session;
 using TinyHarness.Core.Models.Tools;
 using TinyHarness.Core.Services.ChatCompletions;
+using TinyHarness.Core.Services.Permissions;
 using TinyHarness.Core.Services.Persistence;
 using TinyHarness.Core.Services.Session;
 using TinyHarness.Core.Services.Tools;
@@ -14,12 +15,14 @@ using TinyHarness.Core.Services.Tools;
 namespace TinyHarness.Tests;
 
 /// <summary>
-///     M12.1 会话生命周期测试：Session/Turn/Run 记录、跨回合共享上下文、单一活动运行、
-///     取消后的安全边界（不完整工具组拒绝续聊）与宿主事件契约（PLAN §5/§6/§10 M12.1）。
-///     M12.1 session lifecycle tests: Session/Turn/Run records, context shared across
-///     turns, the single-active-run rule, the post-cancel safety boundary (incomplete
-///     tool rounds refuse continuation) and the host event contract
-///     (PLAN §5/§6/§10 M12.1).
+///     <para>
+///         验证 Session/Turn/Run 生命周期、共享上下文、单一活动运行和宿主事件，
+///         以及取消后的完整边界回退、副作用阻断与明确确认。
+///     </para>
+///     <para>
+///         Verifies Session/Turn/Run lifecycles, shared context, a single active run and host events,
+///         plus complete-boundary rewind, side-effect blocking and explicit acknowledgement after cancellation.
+///     </para>
 /// </summary>
 public class ChatSessionTests
 {
@@ -59,7 +62,7 @@ public class ChatSessionTests
         var run1 = await host.SubmitTurnAsync("what is this repo?", CancellationToken.None);
         var run2 = await host.SubmitTurnAsync("and why?", CancellationToken.None);
 
-        // Every run records exactly one terminal result derived from the real execution.
+        // 运行仅记录一次由实际执行决定的终态。
         Assert.Equal(AgentStatus.Completed, run1.Result!.Status);
         Assert.Equal("first answer", run1.Result.FinalMessage);
         Assert.True(run1.IsFinished);
@@ -80,8 +83,7 @@ public class ChatSessionTests
         Assert.Equal(session.Turns[0].Id, run1.TurnId);
         Assert.NotEqual(run1.Id, run2.Id);
 
-        // The second request continues the first turn's exchange with exactly one
-        // system prompt, proving the context is shared across turns.
+        // 后续请求保留旧回合且只有一条系统提示。
         Assert.Equal(2, client.RequestLog.Count);
         var first = client.RequestLog[0].Messages;
         Assert.Equal([ChatRole.System, ChatRole.User], first.Select(m => m.Role).ToArray());
@@ -108,14 +110,12 @@ public class ChatSessionTests
         var run2 = await host.SubmitTurnAsync("u2", CancellationToken.None);
 
         var session = host.Session;
-        // M12.2: each turn now also publishes its streamed content deltas between the
-        // lifecycle events, so one scripted text answer yields three events per run.
+        // 每个运行依次发布开始、文本增量和结束事件。
         Assert.Equal(6, sink.Events.Count);
         for (var i = 1; i < sink.Events.Count; i++)
             Assert.True(sink.Events[i].TimestampUtc >= sink.Events[i - 1].TimestampUtc);
 
-        // Run 1: started, its one text delta, then finished — run-scoped sequence 1..3,
-        // identity stamped by the host on every kind.
+        // 各类事件均关联宿主身份，序号限定在当前运行。
         var first = sink.Events.Take(3).ToArray();
         Assert.Equal(HostEventKind.RunStarted, first[0].Kind);
         Assert.Equal(HostEventKind.AssistantTextDelta, first[1].Kind);
@@ -128,7 +128,7 @@ public class ChatSessionTests
         Assert.Equal("one", Assert.IsType<string>(first[1].Payload));
         Assert.Same(run1.Result, first[2].Payload);
 
-        // Run 2 keeps the same identity scheme with its own run-scoped sequence.
+        // 后续运行复用身份关联规则，但独立计数事件序号。
         var second = sink.Events.Skip(3).ToArray();
         Assert.Equal(HostEventKind.RunStarted, second[0].Kind);
         Assert.Equal(HostEventKind.AssistantTextDelta, second[1].Kind);
@@ -162,7 +162,7 @@ public class ChatSessionTests
         Assert.Equal(AgentStatus.Completed, run1.Result!.Status);
         Assert.False(host.HasActiveRun);
 
-        // The rejected submission created no records; a follow-up turn still works.
+        // 拒绝并发提交不产生记录，也不妨碍后续回合。
         Assert.Single(host.Session.Turns);
         var run2 = await host.SubmitTurnAsync("third", CancellationToken.None);
         Assert.Equal(AgentStatus.Completed, run2.Result!.Status);
@@ -183,8 +183,7 @@ public class ChatSessionTests
         Assert.Equal(AgentStatus.Cancelled, run1.Result!.Status);
         Assert.True(run1.IsFinished);
 
-        // The cancelled turn ended on a complete protocol boundary (no pending tool
-        // calls), so a NEW run may continue the session; the old run is never restarted.
+        // 没有待完成工具调用时，取消后可启动新运行；不得重启旧运行。
         client.Open();
         var run2 = await host.SubmitTurnAsync("second", CancellationToken.None);
         Assert.Equal(AgentStatus.Completed, run2.Result!.Status);
@@ -193,10 +192,11 @@ public class ChatSessionTests
     }
 
     [Fact]
-    public async Task SubmitTurn_CancelDuringToolExecution_BlocksNextTurnWithExplicitError()
+    public async Task SubmitTurn_CancelDuringToolExecution_RewindsTheHistoryAndBlocksSideEffects()
     {
         var client = new FakeChatClient();
         client.Enqueue(FakeChatClient.ToolCall("slow", "{}"));
+        client.Enqueue(FakeChatClient.Text("recovered"));
         var       tool = new GateTool();
         using var cts  = new CancellationTokenSource();
         var       host = NewHost(client, new ToolRegistry([tool]));
@@ -207,17 +207,228 @@ public class ChatSessionTests
         var run1 = await first;
         Assert.Equal(AgentStatus.Cancelled, run1.Result!.Status);
 
-        // The history now ends with an assistant tool call that never received a result.
-        // Continuation is refused at the boundary and recorded as a failed run; nothing
-        // is fabricated, and the tool is not re-executed.
-        Assert.Equal(1, tool.ExecuteCount);
+        // 可能已执行的副作用保持结果未知，并触发检查阻断，不补造结果。
+        var record = Assert.Single(run1.Result!.ToolCalls!);
+        Assert.Equal("call_1", record.CallId);
+        Assert.Equal(ToolCallExecutionState.UnknownResult, record.State);
+        Assert.True(record.SideEffects);
+        Assert.True(host.InspectionPending);
+        Assert.Contains("unknown results", host.InspectionPendingNote, StringComparison.Ordinal);
+
+        // 后续回合从完整边界继续，不重放工具或伪造工具结果。
         var run2 = await host.SubmitTurnAsync("second", CancellationToken.None);
-        Assert.Equal(AgentStatus.Failed, run2.Result!.Status);
-        Assert.Contains("incomplete tool round", run2.Result.Error);
-        Assert.Contains("call_1", run2.Result.Error);
-        Assert.Equal(1, client.Requests);
+        Assert.Equal(AgentStatus.Completed, run2.Result!.Status);
+        Assert.Equal(2, client.Requests);
         Assert.Equal(1, tool.ExecuteCount);
         Assert.Equal(2, host.Session.Turns.Count);
+        var sent = client.RequestLog[1].Messages;
+        Assert.Contains(sent, m => m.Role == ChatRole.User && m.Content == "go");
+        Assert.Contains(sent, m => m.Role == ChatRole.User && m.Content == "second");
+        Assert.DoesNotContain(sent, m => m.ToolCalls is { Count: > 0 });
+        Assert.DoesNotContain(sent, m => m.Role == ChatRole.Tool);
+    }
+
+    [Fact]
+    public async Task SubmitTurn_WithoutPermissions_UnknownSideEffectDeniesTheNextWriteUntilAcknowledged()
+    {
+        var client = new FakeChatClient();
+        client.Enqueue(FakeChatClient.ToolCall("slow", "{}"));
+        client.Enqueue(FakeChatClient.ToolCall("write", "{}", "call_denied"));
+        client.Enqueue(FakeChatClient.Text("write was blocked"));
+        client.Enqueue(FakeChatClient.ToolCall("write", "{}", "call_allowed"));
+        client.Enqueue(FakeChatClient.Text("write completed"));
+        var       slow  = new GateTool("filesystem.write");
+        var       write = new FakeTool("write");
+        using var cts   = new CancellationTokenSource();
+        using var wait  = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var host  = NewHost(client, new ToolRegistry([slow, write]));
+
+        // 未提供权限引擎且无检查阻断时，保留直接执行的宿主兼容行为。
+        var active = host.SubmitTurnAsync("start a write", cts.Token);
+        try
+        {
+            await slow.WaitStartedAsync(wait.Token);
+        }
+        finally
+        {
+            cts.Cancel();
+            await active;
+        }
+
+        Assert.Equal(AgentStatus.Cancelled, (await active).Result!.Status);
+        Assert.Equal(1, slow.ExecuteCount);
+        Assert.True(host.InspectionPending);
+        var blocked = await host.SubmitTurnAsync("try another write", CancellationToken.None);
+        Assert.Equal(AgentStatus.Completed, blocked.Result!.Status);
+        Assert.Equal(0, blocked.Result.ToolExecutions);
+        Assert.Equal(0, write.ExecuteCount);
+        var denied = Assert.Single(blocked.Result.ToolCalls!);
+        Assert.Equal(ToolCallExecutionState.KnownNotStarted, denied.State);
+        Assert.Contains("pending inspection", denied.Approval, StringComparison.Ordinal);
+        Assert.True(host.InspectionPending);
+        var denialMessage = client.RequestLog[2].Messages.Single(m => m.Role == ChatRole.Tool);
+        Assert.Equal("call_denied", denialMessage.ToolCallId);
+        Assert.Contains("Blocked pending inspection", denialMessage.Content, StringComparison.Ordinal);
+
+        // 确认仅解除检查阻断；未提供权限引擎的宿主仍可直接执行新调用。
+        await host.AcknowledgeInspectionAsync(CancellationToken.None);
+        Assert.False(host.InspectionPending);
+        var allowed = await host.SubmitTurnAsync("write after inspection", CancellationToken.None);
+        Assert.Equal(AgentStatus.Completed, allowed.Result!.Status);
+        Assert.Equal(1, write.ExecuteCount);
+        Assert.Equal(ToolCallExecutionState.ConfirmedResult, Assert.Single(allowed.Result.ToolCalls!).State);
+    }
+
+    [Fact]
+    public async Task SubmitTurn_CancelDuringAReadOnlyTool_ContinuesWithoutBlocking()
+    {
+        var client = new FakeChatClient();
+        client.Enqueue(FakeChatClient.ToolCall("slow", "{}"));
+        client.Enqueue(FakeChatClient.Text("recovered"));
+        var       tool = new GateTool("filesystem.read");
+        using var cts  = new CancellationTokenSource();
+        var       host = NewHost(client, new ToolRegistry([tool]));
+
+        var first = host.SubmitTurnAsync("go", cts.Token);
+        await tool.WaitStartedAsync(new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);
+        cts.Cancel();
+        var run1 = await first;
+        Assert.Equal(AgentStatus.Cancelled, run1.Result!.Status);
+
+        // 只读调用中断只回退历史，不触发副作用阻断。
+        var record = Assert.Single(run1.Result!.ToolCalls!);
+        Assert.Equal(ToolCallExecutionState.UnknownResult, record.State);
+        Assert.False(record.SideEffects);
+        Assert.False(host.InspectionPending);
+
+        var run2 = await host.SubmitTurnAsync("second", CancellationToken.None);
+        Assert.Equal(AgentStatus.Completed, run2.Result!.Status);
+        Assert.Equal(2, client.Requests);
+    }
+
+    [Fact]
+    public async Task SubmitTurn_CancelDuringApproval_LeavesEveryCallNotStartedAndContinues()
+    {
+        var client = new FakeChatClient();
+        client.Enqueue(FakeChatClient.ToolCall("slow", "{}"));
+        client.Enqueue(FakeChatClient.Text("recovered"));
+        var       tool     = new GateTool();
+        var       approver = new GateApprover();
+        using var cts      = new CancellationTokenSource();
+        using var ws       = new TestTempDir();
+        var       engine   = new PermissionEngine(ws.Root);
+        var host = new ChatSessionHost(ws.Root,
+                                       new SessionModelIdentity("test-model", "https://example.invalid/v1",
+                                                                ChatApiKind.ChatCompletions),
+                                       Options(),
+                                       client,
+                                       new ToolRegistry([tool]),
+                                       SystemPrompt,
+                                       engine,
+                                       approver);
+
+        var first = host.SubmitTurnAsync("go", cts.Token);
+        await approver.WaitStartedAsync(new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);
+        cts.Cancel();
+        var run1 = await first;
+        Assert.Equal(AgentStatus.Cancelled, run1.Result!.Status);
+        Assert.Equal(0, tool.ExecuteCount);
+
+        // 审批等待中取消属于已知未开始，不触发检查阻断。
+        var record = Assert.Single(run1.Result!.ToolCalls!);
+        Assert.Equal(ToolCallExecutionState.KnownNotStarted, record.State);
+        Assert.True(record.SideEffects);
+        Assert.Null(record.Approval);
+        Assert.False(host.InspectionPending);
+        Assert.Null(engine.NonReadOnlyBlockReason);
+
+        var run2 = await host.SubmitTurnAsync("second", CancellationToken.None);
+        Assert.Equal(AgentStatus.Completed, run2.Result!.Status);
+        Assert.Equal(2, client.Requests);
+    }
+
+    [Fact]
+    public async Task AcknowledgeInspection_ClearsTheBlockAndPersistsTheAcknowledgement()
+    {
+        using var ws     = new TestTempDir();
+        using var dir    = new TestTempDir();
+        var       client = new FakeChatClient();
+        client.Enqueue(FakeChatClient.ToolCall("slow", "{}"));
+        var       tool   = new GateTool();
+        using var cts    = new CancellationTokenSource();
+        var       engine = new PermissionEngine(ws.Root);
+        var host = new ChatSessionHost(ws.Root,
+                                       new SessionModelIdentity("test-model", "https://example.invalid/v1",
+                                                                ChatApiKind.ChatCompletions),
+                                       Options(),
+                                       client,
+                                       new ToolRegistry([tool]),
+                                       SystemPrompt,
+                                       engine,
+                                       new InlineApprover(ApprovalAction.AllowOnce),
+                                       sessionWriterFactory : id => new SessionStoreWriter(dir.Root, id));
+
+        var first = host.SubmitTurnAsync("go", cts.Token);
+        await tool.WaitStartedAsync(new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);
+        cts.Cancel();
+        var run1 = await first;
+        Assert.Equal(AgentStatus.Cancelled, run1.Result!.Status);
+        Assert.True(host.InspectionPending);
+        Assert.NotNull(engine.NonReadOnlyBlockReason);
+
+        // 明确确认须落盘，避免恢复时再次阻断同一中断。
+        await host.AcknowledgeInspectionAsync(CancellationToken.None);
+        Assert.False(host.InspectionPending);
+        Assert.Null(engine.NonReadOnlyBlockReason);
+
+        var snapshot = await SessionStoreReader.ReadAsync(dir.Root, host.Session.Id, CancellationToken.None);
+        Assert.NotNull(snapshot);
+        Assert.NotNull(snapshot!.InspectionAcknowledgedUtc);
+        var storedRun = snapshot.Turns.Single().Runs.Single();
+        Assert.True(storedRun.NeedsInspection);
+        var stored = Assert.Single(storedRun.ToolCalls!);
+        Assert.Equal(nameof(ToolCallExecutionState.UnknownResult), stored.State);
+        Assert.True(stored.SideEffects);
+
+        // canonical 历史只提交完整边界，不保存中断工具组。
+        var roles = snapshot.Conversation!.Messages.Select(message => message.Role).ToArray();
+        Assert.Equal(["System", "User"], roles);
+    }
+
+    [Fact]
+    public async Task SubmitTurn_PersistsExecutionRecordsRedactedForInspection()
+    {
+        using var    ws     = new TestTempDir();
+        using var    dir    = new TestTempDir();
+        const string secret = "sk-test-secret-value";
+        var          client = new FakeChatClient();
+        client.Enqueue(FakeChatClient.ToolCall("slow", "{}"));
+        client.Enqueue(FakeChatClient.Text("done"));
+        var tool = new FakeTool("slow", summary : $"patch({secret})");
+        var host = new ChatSessionHost(ws.Root,
+                                       new SessionModelIdentity("test-model", "https://example.invalid/v1",
+                                                                ChatApiKind.ChatCompletions),
+                                       Options(),
+                                       client,
+                                       new ToolRegistry([tool]),
+                                       SystemPrompt,
+                                       sessionWriterFactory : id =>
+                                           new SessionStoreWriter(dir.Root, id,
+                                                                  new Dictionary<string, string>(StringComparer.Ordinal)
+                                                                      { ["MY_API_KEY"] = secret }));
+
+        var run = await host.SubmitTurnAsync($"use {secret}", CancellationToken.None);
+        Assert.Equal(AgentStatus.Completed, run.Result!.Status);
+
+        var snapshot = await SessionStoreReader.ReadAsync(dir.Root, host.Session.Id, CancellationToken.None);
+        var stored   = Assert.Single(snapshot!.Turns.Single().Runs.Single().ToolCalls!);
+        // 检查投影脱敏，canonical 用户内容保持原样。
+        Assert.Equal("patch([REDACTED])", stored.Summary);
+        Assert.Equal(ToolCallExecutionState.ConfirmedResult,
+                     Enum.Parse<ToolCallExecutionState>(stored.State));
+        Assert.False(snapshot.Turns.Single().Runs.Single().NeedsInspection);
+        Assert.Contains(secret, snapshot.Conversation!.Messages.Single(m => m.Role == "User").Content,
+                        StringComparison.Ordinal);
     }
 
     [Fact]
@@ -280,11 +491,13 @@ public class ChatSessionTests
     }
 
     /// <summary>
-    ///     门控工具：开始执行后挂起，直到取消令牌触发，用于复现"执行中途取消"。
-    ///     A gate tool: suspends after starting execution until the cancellation token
-    ///     fires, reproducing a mid-execution cancellation.
+    ///     <para>报告执行开始后等待取消；可配置能力以区分只读调用与副作用调用。</para>
+    ///     <para>
+    ///         Reports execution start, then waits for cancellation; configurable capabilities distinguish reads from side
+    ///         effects.
+    ///     </para>
     /// </summary>
-    private sealed class GateTool : ITool
+    private sealed class GateTool(string capability = "test.slow", string? summary = null) : ITool
     {
         private readonly TaskCompletionSource _started = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -302,8 +515,8 @@ public class ChatSessionTests
             ToolName   = Definition.Name,
             CallId     = call.Id,
             Arguments  = new JsonObject(),
-            Capability = $"test.{Definition.Name}",
-            Summary    = $"{Definition.Name}()"
+            Capability = capability,
+            Summary    = summary ?? $"{Definition.Name}()"
         };
 
         public async Task<ToolResult> ExecuteAsync(ToolPreparation preparation, CancellationToken cancellationToken)
@@ -318,8 +531,36 @@ public class ChatSessionTests
     }
 
     /// <summary>
-    ///     记录启动与完成调用的空转 recorder，其余方法均为无操作。
-    ///     A no-op recorder capturing start/complete calls; every other method is a no-op.
+    ///     <para>进入审批提示后等待取消，用于模拟审批等待中取消。</para>
+    ///     <para>Waits for cancellation inside the approval prompt to simulate cancellation while approval is pending.</para>
+    /// </summary>
+    private sealed class GateApprover : IApprovalProvider
+    {
+        private readonly TaskCompletionSource _started = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async Task<ApprovalAction> PromptAsync(ToolPreparation preparation, CancellationToken cancellationToken)
+        {
+            _started.TrySetResult();
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken).ConfigureAwait(false);
+            return ApprovalAction.Deny;
+        }
+
+        public Task WaitStartedAsync(CancellationToken cancellationToken) => _started.Task.WaitAsync(cancellationToken);
+    }
+
+    /// <summary>
+    ///     <para>每次审批均返回同一预置选择。</para>
+    ///     <para>Returns the same preset choice for every approval prompt.</para>
+    /// </summary>
+    private sealed class InlineApprover(ApprovalAction action) : IApprovalProvider
+    {
+        public Task<ApprovalAction> PromptAsync(ToolPreparation preparation, CancellationToken cancellationToken) =>
+            Task.FromResult(action);
+    }
+
+    /// <summary>
+    ///     <para>捕获运行完成结果；其余记录方法不执行操作。</para>
+    ///     <para>Captures completed run results; all other recorder methods are no-ops.</para>
     /// </summary>
     private sealed class CapturingRunRecorder : IRunRecorder
     {

@@ -15,21 +15,15 @@ using TinyHarness.Core.Services.Tools;
 namespace TinyHarness.Tests;
 
 /// <summary>
-///     M13.2 会话续聊测试（PLAN §7.2/§7.3）：跨进程往返——一个宿主提交带 Responses reasoning 的
-///     回合后退出，另一个宿主经 <see cref="SessionStoreWriter.OpenExistingAsync" /> 与
-///     <see cref="SessionResume.Restore" /> 打开同一会话继续——旧回合、目标与 opaque 协议内容
-///     必须原样进入后续请求；恢复的拒绝路径（v1 无内容、v1/v2 旧脱敏格式、opaque 被脱敏改动、哈希不符、工作区/
-///     模型/协议身份不一致、系统提示不同、不完整工具组、损坏的状态/折叠/终态）逐一验证。
-///     M13.2 session-resume tests (PLAN §7.2/§7.3): the cross-process round trip —
-///     one host commits a turn carrying Responses reasoning and exits, another
-///     opens the same stored session through
-///     <see cref="SessionStoreWriter.OpenExistingAsync" /> and
-///     <see cref="SessionResume.Restore" /> to continue — must replay earlier
-///     turns, the goal and the opaque protocol content verbatim into later
-///     requests; every refusal path of the restoration (v1 without conversation
-///     content, v1/v2 legacy redacted formats, opaque touched by redaction, hash mismatches, workspace/model/
-///     protocol identity divergence, a different system prompt, incomplete tool
-///     groups, damaged state/fold/terminal records) is verified individually.
+///     <para>
+///         验证保存后重建宿主的续聊保真：旧回合、目标和 Responses opaque 内容原样传递。
+///         覆盖身份、格式与完整性拒绝边界，以及中断工具组回退和检查阻断。
+///     </para>
+///     <para>
+///         Verifies resume fidelity after rebuilding the host: earlier turns, goals and Responses opaque content remain
+///         verbatim.
+///         Covers identity, format and integrity rejection, interrupted-group rewind and inspection blocking.
+///     </para>
 /// </summary>
 public class SessionResumeTests
 {
@@ -72,8 +66,7 @@ public class SessionResumeTests
             Assert.Equal(AgentStatus.Completed, run.Result!.Status);
         }
 
-        // "New process": open the stored session exclusively, seed the sequence,
-        // restore, and continue with a fresh client.
+        // 用新宿主模拟重启：排他打开存储、续种提交序号、恢复上下文后继续。
         using var writer =
             await SessionStoreWriter.OpenExistingAsync(dir.Root, sessionId, null, CancellationToken.None);
         var restored = SessionResume.Restore(writer.LoadedSnapshot!, ws.Root, Identity, SystemPrompt);
@@ -88,8 +81,7 @@ public class SessionResumeTests
         var run2 = await host2.SubmitTurnAsync("and why?", CancellationToken.None);
         Assert.Equal(AgentStatus.Completed, run2.Result!.Status);
 
-        // The earlier turn's user input, the assistant answer and the opaque
-        // reasoning payloads must reach the next request verbatim (PLAN §7.2).
+        // 旧用户输入、回答和 opaque reasoning 载荷须原样进入后续请求。
         var messages = client2.RequestLog.Single().Messages;
         Assert.Contains(messages, m => m.Role == ChatRole.System && m.Content == SystemPrompt);
         Assert.Contains(messages, m => m.Role == ChatRole.User   && m.Content == "what is this repo?");
@@ -101,8 +93,7 @@ public class SessionResumeTests
         Assert.Equal("opaque-payload-1", reasoning.ProtectedData);
         Assert.Equal("item_1", reasoning.ItemId);
 
-        // The resumed commit continues the sequence and keeps both turns in the
-        // inspection view — a resume must never overwrite the earlier history.
+        // 续聊提交递增序号并保留旧回合，不能覆盖既有历史。
         Assert.Equal(2, writer.CommitSequence);
         var read = await SessionStoreReader.ReadAsync(dir.Root, sessionId, CancellationToken.None);
         Assert.NotNull(read);
@@ -139,7 +130,7 @@ public class SessionResumeTests
             Assert.Contains("already open", second.Message, StringComparison.Ordinal);
         }
 
-        // The handle is released; the session may be reopened for another resume.
+        // 释放排他句柄后允许再次打开会话。
         using (var reopened =
                await SessionStoreWriter.OpenExistingAsync(dir.Root, sessionId, null, CancellationToken.None))
         {
@@ -169,9 +160,7 @@ public class SessionResumeTests
             await host.SubmitTurnAsync("turn", CancellationToken.None);
         }
 
-        // Tamper with the stored opaque payload. The commit sequence is untouched,
-        // so audit reconciliation still passes — only the resume-side hash check
-        // can catch this (PLAN §7.2).
+        // 只篡改 opaque 载荷而不改提交序号；审计对账通过后仍须由恢复哈希校验拒绝。
         var snapshotPath = Path.Combine(dir.Root, $"{sessionId}.session.json");
         var root         = JsonNode.Parse(await File.ReadAllTextAsync(snapshotPath))!.AsObject();
         root["conversation"]!["messages"]!.AsArray()
@@ -271,8 +260,9 @@ public class SessionResumeTests
     }
 
     [Fact]
-    public void Restore_RejectsHistoryEndingInAnIncompleteToolGroup()
+    public void Restore_RewindsAnIncompleteLegacyTailAndBlocksPendingInspection()
     {
+        // 旧快照尾部缺少工具结果且无执行记录，无法确认副作用是否发生。
         var conversation = ValidConversation(messages :
         [
             .. DefaultMessages(),
@@ -284,9 +274,125 @@ public class SessionResumeTests
             }
         ]);
 
+        var restored = SessionResume.Restore(ValidSnapshot(conversation), WorkspaceRoot, Identity, SystemPrompt);
+
+        // 整体移除不完整工具原子组，保留该回合用户输入并回到最近完整边界。
+        Assert.True(restored.RewoundTail);
+        Assert.Equal(4, restored.Context.Messages.Count);
+        Assert.Equal(ChatRole.User, restored.Context.Messages[^1].Role);
+        Assert.Equal("run something", restored.Context.Messages[^1].Content);
+
+        // 无执行记录时不能证明没有副作用，须保守触发检查阻断。
+        Assert.NotNull(restored.NeedsInspection);
+        Assert.Contains("cannot be proven absent", restored.NeedsInspection, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Restore_DerivesPendingInspectionFromExecutionRecordsAndHonoursAcknowledgement()
+    {
+        PersistedRun RunWithRecords(bool sideEffects) => new()
+        {
+            Id              = new string('3', 32),
+            StartedUtc      = DateTimeOffset.UtcNow.AddMinutes(-4),
+            FinishedUtc     = DateTimeOffset.UtcNow.AddMinutes(-3),
+            Status          = nameof(AgentStatus.Cancelled),
+            NeedsInspection = true,
+            ToolCalls =
+            [
+                new PersistedToolCallRecord
+                {
+                    CallId      = "call_9",
+                    ToolName    = "apply_patch",
+                    Capability  = "filesystem.write",
+                    SideEffects = sideEffects,
+                    Summary     = "write src/a.cs",
+                    Approval    = "allow once",
+                    State       = nameof(ToolCallExecutionState.UnknownResult)
+                }
+            ]
+        };
+
+        PersistedSession Snapshot(PersistedRun run, DateTimeOffset? acknowledged) => ValidSnapshot() with
+        {
+            InspectionAcknowledgedUtc = acknowledged,
+            Turns = [ValidSnapshot().Turns[0] with { Runs = [run] }]
+        };
+
+        var pending = SessionResume.Restore(Snapshot(RunWithRecords(true), null), WorkspaceRoot, Identity,
+                                            SystemPrompt);
+        Assert.False(pending.RewoundTail);
+        Assert.NotNull(pending.NeedsInspection);
+        Assert.Contains("apply_patch", pending.NeedsInspection, StringComparison.Ordinal);
+        Assert.Contains("unknown results", pending.NeedsInspection, StringComparison.Ordinal);
+        var rebuilt = Assert.Single(pending.Session.Turns[0].Runs[0].Result!.ToolCalls!);
+        Assert.Equal(ToolCallExecutionState.UnknownResult, rebuilt.State);
+        Assert.Equal("filesystem.write", rebuilt.Capability);
+        Assert.Equal("allow once", rebuilt.Approval);
+
+        // 明确确认覆盖已有中断，不重复触发阻断。
+        var acknowledged = SessionResume.Restore(Snapshot(RunWithRecords(true), DateTimeOffset.UtcNow),
+                                                 WorkspaceRoot, Identity, SystemPrompt);
+        Assert.Null(acknowledged.NeedsInspection);
+
+        // 没有副作用的未知结果不触发阻断。
+        var readOnly = SessionResume.Restore(Snapshot(RunWithRecords(false), null), WorkspaceRoot, Identity,
+                                             SystemPrompt);
+        Assert.Null(readOnly.NeedsInspection);
+    }
+
+    [Fact]
+    public void Restore_RejectsAnIncompleteToolGroupThatIsNotTheTrailingRound()
+    {
+        var conversation = ValidConversation(messages :
+        [
+            .. DefaultMessages(),
+            new PersistedMessage
+            {
+                Role      = ChatRole.Assistant.ToString(),
+                ToolCalls = [new PersistedToolCall("call_9", "shell", "{}")]
+            },
+            new PersistedMessage { Role = ChatRole.User.ToString(), Content = "after the gap" }
+        ]);
+
         var error = Assert.Throws<SessionStoreException>(() => SessionResume.Restore(ValidSnapshot(conversation),
                                                                   WorkspaceRoot, Identity, SystemPrompt));
-        Assert.Contains("incomplete tool round", error.Message, StringComparison.Ordinal);
+        Assert.Contains("not the trailing round", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Restore_RejectsAnUnrecognizableExecutionState()
+    {
+        var snapshot = ValidSnapshot() with
+        {
+            Turns =
+            [
+                ValidSnapshot().Turns[0] with
+                {
+                    Runs =
+                    [
+                        new PersistedRun
+                        {
+                            Id          = new string('3', 32),
+                            StartedUtc  = DateTimeOffset.UtcNow.AddMinutes(-4),
+                            FinishedUtc = DateTimeOffset.UtcNow.AddMinutes(-3),
+                            Status      = nameof(AgentStatus.Completed),
+                            ToolCalls =
+                            [
+                                new PersistedToolCallRecord
+                                {
+                                    CallId = "call_9", ToolName = "shell", State = "Exploded"
+                                }
+                            ]
+                        }
+                    ]
+                }
+            ]
+        };
+
+        var error = Assert.Throws<SessionStoreException>(() =>
+                                                             SessionResume.Restore(snapshot, WorkspaceRoot,
+                                                                      Identity, SystemPrompt));
+        Assert.Contains("unknown execution state", error.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -348,7 +454,7 @@ public class SessionResumeTests
                                                  ContextWindowTokens = 100_000, ReservedOutputTokens = 1_000
                                              });
 
-        // Turns and run terminals come back, unfinished runs stay unfinished.
+        // 恢复回合和已记录的运行终态，不补造终态。
         var turn = Assert.Single(restored.Session.Turns);
         var run  = Assert.Single(turn.Runs);
         Assert.True(run.IsFinished);
@@ -356,8 +462,7 @@ public class SessionResumeTests
         Assert.Equal("it is a fixture", run.Result.FinalMessage);
         Assert.Equal(2, run.Result.Steps);
 
-        // The compaction position survives: the model view carries the head, the
-        // state message and the unfolded tail (the folded middle stays local-only).
+        // 恢复折叠位置；模型视图只含头部、状态和未折叠尾部，中间历史仅本地保留。
         Assert.Equal(new ConversationContext.CompactionPosition(true, 1, 2), restored.Context.Position);
         var view = restored.Context.BuildModelView();
         Assert.Equal(ChatRole.System, view[0].Role);
@@ -605,9 +710,11 @@ public class SessionResumeTests
     }
 
     /// <summary>
-    ///     构造一个结构最小但完整的可续聊快照；各参数用于定向替换其中一部分。
-    ///     Builds a minimal but complete resumable snapshot; the optional
-    ///     parameters replace individual parts for targeted cases.
+    ///     <para>构造最小完整的可续聊快照；可替换会话内容或运行状态以验证指定边界。</para>
+    ///     <para>
+    ///         Builds a minimal complete resumable snapshot; conversation content or run status
+    ///         can be replaced for targeted cases.
+    ///     </para>
     /// </summary>
     private static PersistedSession ValidSnapshot(PersistedConversation? conversation = null,
                                                   string?                runStatus    = null) => new()

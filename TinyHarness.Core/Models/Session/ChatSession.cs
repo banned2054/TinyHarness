@@ -1,18 +1,23 @@
 namespace TinyHarness.Core.Models.Session;
 
 /// <summary>
-///     一次连续会话的最小身份与状态（PLAN §5）：固定工作区、稳定会话 ID、模型身份引用和
-///     全部用户回合。认证凭据不主动存入会话（由调用方按引用解析），但用户粘贴、文件读取或
-///     模型返回的内容可能携带秘密；会话不存储也不恢复任何可执行授权。持久化与跨进程恢复
-///     不在本类型职责内。
-///     The minimal identity and state of one continuous session (PLAN §5): a fixed
-///     workspace, a stable session id, the referenced model identity and every user
-///     turn. Authentication credentials are never stored proactively (the caller
-///     resolves them by reference), but content pasted by the user, read from files
-///     or returned by the model may carry secrets. The session never stores or
-///     restores executable authorization; persistence and cross-process resume are
-///     outside this type's responsibility.
+///     <para>连续会话的内存状态：稳定身份、固定工作区与模型身份、全部用户回合。</para>
+///     <para>
+///         In-memory state of a continuous session: stable identity, fixed workspace and model identity,
+///         and all user turns.
+///     </para>
 /// </summary>
+/// <remarks>
+///     <para>
+///         认证凭据由调用方按引用解析，不主动存入会话；对话内容仍可能含秘密。
+///         不存储或恢复可执行授权；持久化与跨进程恢复由其他服务负责。
+///     </para>
+///     <para>
+///         The caller resolves credentials by reference; they are not proactively stored, though conversation
+///         content may contain secrets. Executable authorization is never stored or restored;
+///         other services handle persistence and cross-process resume.
+///     </para>
+/// </remarks>
 public sealed class ChatSession
 {
     private readonly List<SessionTurn> _turns = [];
@@ -31,15 +36,35 @@ public sealed class ChatSession
 
     public string Id { get; }
 
-    /// <summary>会话固定的工作区根（绝对路径）。The session's fixed workspace root (absolute path).</summary>
+    /// <summary>
+    ///     <para>会话固定的工作区根绝对路径。</para>
+    ///     <para>The session's fixed absolute workspace root.</para>
+    /// </summary>
     public string WorkspaceRoot { get; }
 
-    /// <summary>会话创建时固定的模型身份。The model identity fixed at session creation.</summary>
+    /// <summary>
+    ///     <para>会话创建时固定的模型身份。</para>
+    ///     <para>The model identity fixed at session creation.</para>
+    /// </summary>
     public SessionModelIdentity Model { get; }
 
     public DateTimeOffset CreatedUtc { get; }
 
-    /// <summary>已提交的用户回合，按提交顺序排列。Every submitted user turn, in submission order.</summary>
+    /// <summary>
+    ///     <para>用户最近一次确认 NeedsInspection 检查的时间；未确认时为 null，新的未知结果中断清空旧确认。</para>
+    ///     <para>
+    ///         When the user last acknowledged NeedsInspection; null before acknowledgement,
+    ///         and cleared by a new unknown-result interruption.
+    ///     </para>
+    /// </summary>
+    public DateTimeOffset? InspectionAcknowledgedUtc { get; internal set; }
+
+    public string? PendingInspectionReason { get; internal set; }
+
+    /// <summary>
+    ///     <para>按提交顺序排列的用户回合。</para>
+    ///     <para>User turns in submission order.</para>
+    /// </summary>
     public IReadOnlyList<SessionTurn> Turns => _turns;
 
     internal void AddTurn(SessionTurn turn)

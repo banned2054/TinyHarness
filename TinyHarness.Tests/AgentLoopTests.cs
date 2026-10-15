@@ -6,6 +6,7 @@ using TinyHarness.Core.Models.Session;
 using TinyHarness.Core.Models.Tools;
 using TinyHarness.Core.Services.Agent;
 using TinyHarness.Core.Services.Context;
+using TinyHarness.Core.Services.Permissions;
 using TinyHarness.Core.Services.Persistence;
 using TinyHarness.Core.Services.Session;
 using TinyHarness.Core.Services.Tools;
@@ -159,7 +160,7 @@ public class AgentLoopTests
     public async Task Cancellation_ReturnsCancelled()
     {
         var client = new FakeChatClient();
-        client.Enqueue(FakeChatClient.Text("never replied")); // cancelled before consumed
+        client.Enqueue(FakeChatClient.Text("never replied")); // 响应消费前已取消。
         var loop = new AgentLoop(client, new ToolRegistry([]), Options());
 
         using var cts = new CancellationTokenSource();
@@ -187,8 +188,8 @@ public class AgentLoopTests
     }
 
     /// <summary>
-    ///     一个文本片段加携带 usage 的 End 事件的脚本化响应；用于验证审计链。
-    ///     One text fragment plus an End event carrying usage; drives the audit chain.
+    ///     <para>生成含文本片段与 usage 终态事件的响应，用于验证审计记录。</para>
+    ///     <para>Creates a response with text and a terminal usage event to verify audit records.</para>
     /// </summary>
     private static IReadOnlyList<ChatStreamEvent> TextWithUsage(
         string text, int inputTokens, int outputTokens, string finishReason) =>
@@ -235,8 +236,7 @@ public class AgentLoopTests
         var result = await loop.RunAsync("sys", "hi", CancellationToken.None);
 
         Assert.Equal(AgentStatus.Completed, result.Status);
-        // 只要有任一字段非空就写审计行；usage 缺失保持 null。
-        // Any non-null field writes the audit line; missing usage stays null.
+        // 任一字段非空即写审计行；缺失的 usage 保持 null。
         Assert.Equal((null, null, "stop"), Assert.Single(recorder.UsageRecords));
     }
 
@@ -245,7 +245,7 @@ public class AgentLoopTests
     {
         var client   = new FakeChatClient();
         var recorder = new CapturingRecorder();
-        client.Enqueue(FakeChatClient.Text("hello")); // plain End: no usage, no finish reason
+        client.Enqueue(FakeChatClient.Text("hello")); // 终态不含 usage 或结束原因。
         var loop = new AgentLoop(client, new ToolRegistry([]), Options(), null, null,
                                  recorder);
 
@@ -266,15 +266,13 @@ public class AgentLoopTests
 
         await loop.RunTurnAsync("sys", "u1", CancellationToken.None);
 
-        // A different system prompt is refused before anything is appended; the
-        // context still ends with turn 1's assistant reply.
+        // 系统提示不一致时拒绝追加，保留上一回合的完整历史。
         await Assert.ThrowsAsync<InvalidOperationException>(() => loop.RunTurnAsync("different", "u2",
                                                                      CancellationToken.None));
         Assert.Equal(3, context.Messages.Count);
         Assert.Equal("one", context.Messages[2].Content);
 
-        // The matching system prompt continues on the shared context: the second
-        // request carries the first exchange and only one system message.
+        // 匹配的系统提示复用上下文；后续请求保留旧回合且只有一条系统消息。
         await loop.RunTurnAsync("sys", "u2", CancellationToken.None);
         Assert.Equal(2, client.Requests);
         Assert.Equal([ChatRole.System, ChatRole.User, ChatRole.Assistant, ChatRole.User],
@@ -299,8 +297,90 @@ public class AgentLoopTests
 
         Assert.Contains("call_1", rejected.Message);
         Assert.Equal(0, client.Requests);
-        // Nothing was appended for the rejected turn.
+        // 被拒绝的回合不追加历史。
         Assert.Equal(3, context.Messages.Count);
+    }
+
+    [Fact]
+    public void LastCompleteBoundary_ClassifiesCompleteRewindableAndDamagedHistories()
+    {
+        IReadOnlyList<ChatMessage> Complete() =>
+        [
+            ChatMessage.System("sys"), ChatMessage.User("u"),
+            ChatMessage.Assistant(string.Empty, [new ChatToolCall("call_1", "t", "{}")]),
+            ChatMessage.Tool("t", "call_1", "ok"),
+            ChatMessage.Assistant("done")
+        ];
+
+        Assert.Equal(5, ChatHistoryInvariants.LastCompleteBoundary(Complete()));
+
+        // 尾部工具组即使已有部分结果，也须整体回退到发起调用前，不能拆分原子组。
+        var rewound = new List<ChatMessage>(Complete())
+        {
+            ChatMessage.User("u2"),
+            ChatMessage.Assistant(string.Empty,
+                                  [new ChatToolCall("call_2", "t", "{}"), new ChatToolCall("call_3", "t", "{}")]),
+            ChatMessage.Tool("t", "call_2", "partial")
+        };
+        Assert.Equal(6, ChatHistoryInvariants.LastCompleteBoundary(rewound));
+
+        // 非尾部的不完整工具组属于损坏，不能按尾部回退。
+        var damaged = new List<ChatMessage>
+        {
+            ChatMessage.System("sys"),
+            ChatMessage.Assistant(string.Empty, [new ChatToolCall("call_1", "t", "{}")]),
+            ChatMessage.User("after the gap")
+        };
+        Assert.Equal(-1, ChatHistoryInvariants.LastCompleteBoundary(damaged));
+    }
+
+    [Fact]
+    public async Task RunTurn_RecordsAPrepareFailureAsKnownNotStarted()
+    {
+        var client = new FakeChatClient();
+        client.Enqueue(FakeChatClient.ToolCall("missing", "{}"));
+        client.Enqueue(FakeChatClient.Text("done"));
+        var loop = new AgentLoop(client, new ToolRegistry([]), Options());
+
+        var result = await loop.RunAsync("sys", "go", CancellationToken.None);
+
+        Assert.Equal(AgentStatus.Completed, result.Status);
+        var record = Assert.Single(result.ToolCalls!);
+        Assert.Equal("missing", record.ToolName);
+        Assert.Null(record.Capability);
+        Assert.False(record.SideEffects);
+        Assert.Equal(ToolCallExecutionState.KnownNotStarted, record.State);
+        Assert.Null(record.Approval);
+        Assert.Contains("Unknown tool", record.PreparationError, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task RunTurn_RecordsApprovalOutcomesAndConfirmedResults()
+    {
+        var client = new FakeChatClient();
+        client.Enqueue(FakeChatClient.ToolCall("t", "{}"));
+        client.Enqueue(FakeChatClient.ToolCall("t", "{}"));
+        client.Enqueue(FakeChatClient.Text("done"));
+        using var dir      = new TestTempDir();
+        var       tool     = new FakeTool("t");
+        var       engine   = new PermissionEngine(dir.Root);
+        var       approver = new ScriptedApprover(ApprovalAction.AllowOnce, ApprovalAction.Deny);
+        var       loop     = new AgentLoop(client, new ToolRegistry([tool]), Options(), engine, approver);
+
+        var result = await loop.RunAsync("sys", "go", CancellationToken.None);
+
+        Assert.Equal(AgentStatus.Completed, result.Status);
+        Assert.Equal(2, result.ToolCalls!.Count);
+
+        var approved = result.ToolCalls[0];
+        Assert.Equal(ToolCallExecutionState.ConfirmedResult, approved.State);
+        Assert.Equal("allow once", approved.Approval);
+        Assert.True(approved.SideEffects);
+
+        var denied = result.ToolCalls[1];
+        Assert.Equal(ToolCallExecutionState.KnownNotStarted, denied.State);
+        Assert.Contains("Permission denied by user", denied.Approval, StringComparison.Ordinal);
+        Assert.Equal(1, tool.ExecuteCount);
     }
 
     [Fact]
@@ -313,12 +393,11 @@ public class AgentLoopTests
 
         var result = await loop.RunAsync("sys", "go", CancellationToken.None);
 
-        // A display failure never aborts the run: the real outcome is preserved, the
-        // fault is surfaced on the terminal result, and the terminal delivery happens.
+        // 展示故障不改写执行终态；错误随终态报告，仍尝试交付终态事件。
         Assert.Equal(AgentStatus.Completed, result.Status);
         Assert.Equal("done", result.FinalMessage);
         Assert.Contains("sink exploded", result.Error);
-        Assert.Equal(3, sink.Published); // RunStarted, the failing delta, RunFinished.
+        Assert.Equal(3, sink.Published); // 开始、失败的文本增量、结束。
     }
 
     [Fact]
@@ -334,7 +413,7 @@ public class AgentLoopTests
         Assert.Equal(AgentStatus.Completed, result.Status);
         Assert.Equal("done", result.FinalMessage);
         Assert.Contains("sink exploded", result.Error);
-        Assert.Equal(3, sink.Published); // RunStarted, the delta, the failing terminal.
+        Assert.Equal(3, sink.Published); // 开始、文本增量、失败的结束事件。
     }
 
     [Fact]
@@ -351,15 +430,25 @@ public class AgentLoopTests
         await loop.RunTurnAsync("sys", "u1", CancellationToken.None);
         await loop.RunTurnAsync("sys", "u2", CancellationToken.None);
 
-        // Each turn is one run: the run-scoped sequence restarts at 1 instead of
-        // accumulating across turns on a reused loop. A text answer now yields
-        // started + one delta + finished per turn.
+        // 事件序号按运行重置；每回合依次发布开始、文本增量和结束事件。
         Assert.Equal([1L, 2L, 3L, 1L, 2L, 3L], sink.Events.Select(@event => @event.Sequence).ToArray());
     }
 
     /// <summary>
-    ///     在指定事件种类上抛出的 sink，用于钉住发布点的容错规则。
-    ///     A sink that throws on one event kind, pinning the publish-site fault rules.
+    ///     <para>按序返回预置审批选择；耗尽后拒绝。</para>
+    ///     <para>Returns preset approval choices in order; denies once they are exhausted.</para>
+    /// </summary>
+    private sealed class ScriptedApprover(params ApprovalAction[] actions) : IApprovalProvider
+    {
+        private int _next;
+
+        public Task<ApprovalAction> PromptAsync(ToolPreparation preparation, CancellationToken cancellationToken) =>
+            Task.FromResult(_next < actions.Length ? actions[_next++] : ApprovalAction.Deny);
+    }
+
+    /// <summary>
+    ///     <para>在指定事件种类上抛出异常，用于验证事件发布的容错边界。</para>
+    ///     <para>Throws for a selected event kind to verify fault handling at the publishing boundary.</para>
     /// </summary>
     private sealed class ThrowingSink(HostEventKind failOn) : IHostEventSink
     {
@@ -375,8 +464,8 @@ public class AgentLoopTests
     }
 
     /// <summary>
-    ///     捕获 model_usage 审计调用的 recorder；其余方法均为空实现。
-    ///     Captures model-usage audit calls; every other recorder method is a no-op.
+    ///     <para>捕获模型 usage 审计调用；其余方法不执行操作。</para>
+    ///     <para>Captures model usage audit calls; all other methods are no-ops.</para>
     /// </summary>
     private sealed class CapturingRecorder : IRunRecorder
     {

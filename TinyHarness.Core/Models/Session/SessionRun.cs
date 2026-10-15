@@ -3,11 +3,11 @@ using TinyHarness.Core.Models.Agent;
 namespace TinyHarness.Core.Models.Session;
 
 /// <summary>
-///     处理某一回合的一次执行尝试（PLAN §5）：独立 ID、启动时间与终态结果。运行恰好记录
-///     一个终态；取消之后继续产生新运行，绝不重启或改写已结束的运行。
-///     One execution attempt processing a turn (PLAN §5): its own id, start time and
-///     terminal result. A run records exactly one terminal outcome; after a cancellation
-///     new runs continue — a finished run is never restarted or rewritten.
+///     <para>处理一个回合的独立执行尝试，记录启动时间与唯一终态；已结束的运行不重启或改写。</para>
+///     <para>
+///         An independent attempt to process a turn, recording its start time and a single terminal outcome;
+///         a finished run is never restarted or rewritten.
+///     </para>
 /// </summary>
 public sealed class SessionRun
 {
@@ -30,25 +30,42 @@ public sealed class SessionRun
 
     public DateTimeOffset StartedUtc { get; }
 
-    /// <summary>终态写入时间；尚未结束时为 <see langword="null" />。When the terminal result was recorded; null until finished.</summary>
+    /// <summary>
+    ///     <para>终态写入时间；尚未结束时为 <see langword="null" />。</para>
+    ///     <para>When the terminal result was recorded; <see langword="null" /> until finished.</para>
+    /// </summary>
     public DateTimeOffset? FinishedUtc { get; private set; }
 
     /// <summary>
-    ///     由执行栈产生的终态结果；尚未结束时为 <see langword="null" />。The terminal result produced by the execution stack; null until
-    ///     finished.
+    ///     <para>执行栈产生的终态结果；尚未结束时为 <see langword="null" />。</para>
+    ///     <para>The terminal result produced by the execution stack; <see langword="null" /> until finished.</para>
     /// </summary>
     public AgentResult? Result { get; private set; }
 
-    /// <summary>运行是否已到达终态。Whether the run has reached a terminal result.</summary>
-    public bool IsFinished => Result is not null;
+    internal IReadOnlyList<ToolCallRecord>? ExecutionRecords { get; private set; }
 
     /// <summary>
-    ///     记录唯一一次终态；重复结束是生命周期违规。恢复持久会话时可用
-    ///     <paramref name="finishedUtc" /> 保留快照里记录的原始终态时间。
-    ///     Records the single terminal result; finishing twice is a lifecycle
-    ///     violation. When restoring a persisted session, <paramref name="finishedUtc" />
-    ///     keeps the original terminal time recorded in the snapshot.
+    ///     <para>运行是否已到达终态。</para>
+    ///     <para>Whether the run has reached a terminal result.</para>
     /// </summary>
+    public bool IsFinished => Result is not null;
+
+    internal void RecordExecutionIntent(IReadOnlyList<ToolCallRecord> records)
+    {
+        if (IsFinished)
+            throw new InvalidOperationException($"Run '{Id}' already finished; execution intent cannot change.");
+
+        ExecutionRecords = records;
+    }
+
+    /// <summary>
+    ///     <para>记录唯一终态；重复结束违反运行生命周期。</para>
+    ///     <para>Records the single terminal result; finishing twice violates the run lifecycle.</para>
+    /// </summary>
+    /// <param name="finishedUtc">
+    ///     <para>恢复时保留的原始终态时间；省略时使用当前时间。</para>
+    ///     <para>The original terminal time retained during restoration; defaults to the current time.</para>
+    /// </param>
     internal void Finish(AgentResult result, DateTimeOffset? finishedUtc = null)
     {
         ArgumentNullException.ThrowIfNull(result);

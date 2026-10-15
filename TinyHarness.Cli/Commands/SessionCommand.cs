@@ -1,6 +1,7 @@
 using TinyHarness.Cli.Models;
 using TinyHarness.Cli.Services;
 using TinyHarness.Core.Exceptions;
+using TinyHarness.Core.Models.Agent;
 using TinyHarness.Core.Models.Configuration;
 using TinyHarness.Core.Models.Persistence;
 using TinyHarness.Core.Services.Configuration;
@@ -9,18 +10,22 @@ using TinyHarness.Core.Services.Persistence;
 namespace TinyHarness.Cli.Commands;
 
 /// <summary>
-///     `tinyharness session`（M13.1，PLAN §7.1）：受保护会话存储的严格离线查看入口——
-///     不解析 API key、不调用模型、不启动工具、不打开工作区文件写入。list 容错枚举
-///     （损坏条目报告不隐藏），show 严格校验（损坏、未知版本、审计与快照不一致均拒绝）；
-///     旧 <c>.session.json</c> run 快照只读兼容展示，不能恢复为续聊会话（PLAN §7.2）。
-///     `tinyharness session` (M13.1, PLAN §7.1): the strictly offline inspection
-///     entry of the protected session store — no API key is resolved, no model
-///     is called, no tool runs and no workspace file is opened for writing.
-///     list tolerates damaged entries (reported, never hidden); show is strict
-///     (damage, unknown versions and snapshot/audit divergence are refused);
-///     legacy <c>.session.json</c> run snapshots are displayed read-only and are
-///     never restored into resumable sessions (PLAN §7.2).
+///     <para>提供会话存储与旧运行快照的严格离线检查入口。</para>
+///     <para>Provides strictly offline inspection of stored sessions and legacy run snapshots.</para>
 /// </summary>
+/// <remarks>
+///     <para>
+///         不解析 API key、不调用模型、不启动工具，也不写入工作区文件。
+///         list 报告损坏条目并继续；show 拒绝损坏、未知版本或审计与快照不一致的会话。
+///         旧 <c>.session.json</c> 运行快照仅供只读查看，不能用于续聊。
+///     </para>
+///     <para>
+///         Does not resolve API keys, call models, start tools, or write workspace files.
+///         list reports damaged entries and continues; show rejects damage, unknown versions,
+///         or snapshot/audit divergence. Legacy <c>.session.json</c> run snapshots are
+///         read-only inspection data, not resumable sessions.
+///     </para>
+/// </remarks>
 internal static class SessionCommand
 {
     public static async Task<int> ExecuteAsync(
@@ -32,9 +37,11 @@ internal static class SessionCommand
     };
 
     /// <summary>
-    ///     列出受保护存储中的持久会话与 run 快照目录中的旧格式条目；单个条目损坏不终止列举。
-    ///     Lists the persisted sessions in the protected store and the legacy entries in
-    ///     the run-snapshot directory; one damaged entry does not stop the listing.
+    ///     <para>列出持久会话与旧运行快照；报告损坏条目后继续列举。</para>
+    ///     <para>
+    ///         Lists persisted sessions and legacy run snapshots;
+    ///         reports damaged entries and continues listing.
+    ///     </para>
     /// </summary>
     private static async Task<int> ListAsync(CommandContext context, CancellationToken cancellationToken)
     {
@@ -66,8 +73,7 @@ internal static class SessionCommand
                 var id = Path.GetFileName(path)[..^".session.json".Length];
                 if (!SessionStorePaths.IsValidSessionId(id))
                 {
-                    // Damaged-looking legacy names are reported, never hidden —
-                    // the same rule the protected store's listing follows.
+                    // 与受保护存储一致，报告无效旧文件名，不静默隐藏。
                     legacyCount++;
                     await io.WriteLineAsync($"  {Path.GetFileName(path)}  skipped: file name is not a session id",
                                             cancellationToken).ConfigureAwait(false);
@@ -99,12 +105,16 @@ internal static class SessionCommand
     }
 
     /// <summary>
-    ///     显示一个存储会话的完整检查视图；新存储中不存在时回退到旧 run 快照的只读展示。
-    ///     两处都不存在时返回 1。
-    ///     Shows the full inspection view of one stored session; falls back to the
-    ///     read-only view of a legacy run snapshot when absent from the store.
-    ///     Returns 1 when neither location holds the id.
+    ///     <para>显示会话检查视图；存储中不存在时尝试只读展示旧运行快照。</para>
+    ///     <para>
+    ///         Shows a session inspection view; tries a read-only legacy run snapshot
+    ///         when the session is absent from the store.
+    ///     </para>
     /// </summary>
+    /// <returns>
+    ///     <para>展示成功返回 0；找不到会话或存储读取被拒绝时返回 1。</para>
+    ///     <para>0 on successful display; 1 if the session is missing or a store read is rejected.</para>
+    /// </returns>
     private static async Task<int> ShowAsync(
         CommandContext context, string sessionId, CancellationToken cancellationToken)
     {
@@ -144,12 +154,20 @@ internal static class SessionCommand
     }
 
     /// <summary>
-    ///     解析两个查看位置：受保护存储目录（用户配置或默认）与 run 快照目录（生效配置）。
-    ///     显式存储目录不满足保护要求时在这里拒绝。
-    ///     Resolves both inspection locations: the protected store directory (user
-    ///     config or default) and the run-snapshot directory (effective config). An
-    ///     explicit store directory that fails the protection checks is refused here.
+    ///     <para>解析受保护会话存储目录与旧运行快照目录。</para>
+    ///     <para>Resolves the protected session-store directory and legacy run-snapshot directory.</para>
     /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         会话存储目录仅取用户配置或默认值，旧快照目录取生效配置；
+    ///         显式存储目录必须通过保护检查。
+    ///     </para>
+    ///     <para>
+    ///         The session-store directory comes only from user settings or the default;
+    ///         the legacy directory comes from effective configuration.
+    ///         An explicit store directory must pass protection checks.
+    ///     </para>
+    /// </remarks>
     private static async Task<(string StoreDirectory, string LegacyDirectory)> ResolveDirectoriesAsync(
         CommandContext context, CancellationToken cancellationToken)
     {
@@ -195,6 +213,22 @@ internal static class SessionCommand
                              cancellationToken)
              .ConfigureAwait(false);
 
+        // 区分历史未知副作用与当前确认状态；待检查的会话续聊时仍阻断副作用。
+        if (session.PendingInspectionReason is not null || session.InspectionAcknowledgedUtc is not null ||
+            session.Turns.SelectMany(turn => turn.Runs).Any(run => run.NeedsInspection == true))
+        {
+            await io.WriteLineAsync(session.InspectionAcknowledgedUtc is { } acknowledged
+                                        ? $"inspection      : acknowledged {acknowledged.LocalDateTime:yyyy-MM-dd HH:mm:ss}; " +
+                                          "side effects are not blocked by this inspection"
+                                        : "inspection      : needs inspection (pending; side effects blocked until " +
+                                          "confirmed on resume)",
+                                    cancellationToken)
+                    .ConfigureAwait(false);
+            if (session.InspectionAcknowledgedUtc is null && session.PendingInspectionReason is { } reason)
+                await io.WriteLineAsync($"  reason        : {TerminalDisplay.Format(reason, redactor)}",
+                                        cancellationToken).ConfigureAwait(false);
+        }
+
         for (var i = 0; i < session.Turns.Count; i++)
         {
             var turn = session.Turns[i];
@@ -229,7 +263,44 @@ internal static class SessionCommand
         if (!string.IsNullOrEmpty(run.Error))
             await io.WriteLineAsync($"    error : {TerminalDisplay.Format(run.Error, redactor)}", cancellationToken)
                     .ConfigureAwait(false);
+        if (run.NeedsInspection == true)
+            await io
+                 .WriteLineAsync("    inspection : a side effect was possibly executed with an unknown result in this run " +
+                                 "(historical fact; current inspection state is shown above)",
+                                 cancellationToken).ConfigureAwait(false);
+
+        // 从脱敏检查投影展示执行记录；未知结果不得补造成功、失败或退出码。
+        if (run.ToolCalls is not { Count: > 0 }) return;
+
+        foreach (var call in run.ToolCalls)
+            await WriteToolCallAsync(io, call.ToolName, call.Approval, call.State, call.SideEffects,
+                                     redactor, cancellationToken).ConfigureAwait(false);
     }
+
+    private static Task WriteToolCallAsync(ICliConsole io, string toolName, string? approval, string state,
+                                           bool sideEffects, DisplaySecretRedactor redactor,
+                                           CancellationToken cancellationToken) =>
+        io.WriteLineAsync($"    tool {TerminalDisplay.Format(toolName, redactor)}: " +
+                          (approval is null ? "(not authorized)" : TerminalDisplay.Format(approval, redactor)) +
+                          " — " + ExecutionStateText(state, sideEffects, redactor), cancellationToken);
+
+    /// <summary>
+    ///     <para>格式化执行状态；不识别的值经脱敏和转义后展示，不猜测其含义。</para>
+    ///     <para>
+    ///         Formats an execution state; redacts and escapes unrecognized values
+    ///         without guessing their meaning.
+    ///     </para>
+    /// </summary>
+    private static string ExecutionStateText(string state, bool sideEffects, DisplaySecretRedactor redactor) =>
+        state switch
+        {
+            nameof(ToolCallExecutionState.KnownNotStarted) => "known not started",
+            nameof(ToolCallExecutionState.ConfirmedResult) => "confirmed result",
+            nameof(ToolCallExecutionState.UnknownResult) => sideEffects
+                ? "result unknown; side effect possible"
+                : "result unknown",
+            _ => $"unrecognized state '{TerminalDisplay.Format(state, redactor)}'"
+        };
 
     private static async Task WriteLegacySnapshotAsync(
         ICliConsole       io, SessionSnapshot snapshot, string legacyDirectory, DisplaySecretRedactor redactor,
@@ -261,5 +332,10 @@ internal static class SessionCommand
         if (!string.IsNullOrWhiteSpace(snapshot.Result.Error))
             await io.WriteLineAsync($"error           : {TerminalDisplay.Format(snapshot.Result.Error, redactor)}",
                                     cancellationToken).ConfigureAwait(false);
+        if (snapshot.Result.ToolCalls is { Count: > 0 } calls)
+            foreach (var call in calls)
+                // 旧快照中的数字枚举经源生成读取器还原后，共用此展示路径。
+                await WriteToolCallAsync(io, call.ToolName, call.Approval, call.State.ToString(), call.SideEffects,
+                                         redactor, cancellationToken).ConfigureAwait(false);
     }
 }

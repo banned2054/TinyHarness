@@ -10,61 +10,91 @@ using TinyHarness.Core.Services.Context;
 namespace TinyHarness.Core.Services.Session;
 
 /// <summary>
-///     一次成功恢复的结果：重建的会话（身份、全部历史回合与运行终态）与回填了完整历史、
-///     压缩状态和折叠边界的对话上下文。两者交给 <see cref="ChatSessionHost" /> 的恢复构造
-///     路径继续服务。
-///     One successful restoration: the rebuilt session (identity, every past turn
-///     with its run terminals) and the conversation context rehydrated with the
-///     full history, compaction state and fold boundaries. Both are handed to
-///     <see cref="ChatSessionHost" />'s resume construction to keep serving.
+///     <para>已恢复的会话与上下文，供 <see cref="ChatSessionHost" /> 接管续聊。</para>
+///     <para>A restored session and context for <see cref="ChatSessionHost" /> to take over and continue.</para>
 /// </summary>
-public sealed record SessionRestoration(ChatSession Session, ConversationContext Context);
+/// <remarks>
+///     <para>
+///         <see cref="NeedsInspection" /> 非空表示仍须用户检查确认，由宿主建立非只读阻断；
+///         <see cref="RewoundTail" /> 表示不完整尾部工具组已整体移出模型视图。
+///     </para>
+///     <para>
+///         A non-null <see cref="NeedsInspection" /> requires user inspection and acknowledgement,
+///         prompting the host to block non-read-only capabilities. <see cref="RewoundTail" /> indicates
+///         an incomplete trailing tool group was removed whole from the model view.
+///     </para>
+/// </remarks>
+public sealed record SessionRestoration(
+    ChatSession         Session,
+    ConversationContext Context,
+    string?             NeedsInspection = null,
+    bool                RewoundTail     = false);
 
 /// <summary>
-///     会话续聊的恢复端（M13.2，PLAN §7.2/§7.3）：把受保护存储中的版本化快照重建为可继续的
-///     会话与上下文。恢复是纯函数——不解析凭据、不调用模型、不启动工具、不写任何文件；所有
-///     检查失败都转换为有上下文的 <see cref="SessionStoreException" />，绝不猜测解释或降级放行。
-///     检查覆盖：opaque 完整性哈希、工作区与模型/协议身份、系统提示一致、完整工具原子组、
-///     压缩边界与状态可解析、回合终态可识别。仅 v3 的保真协议内容用于续聊；旧 v1/v2 可能
-///     已被脱敏，无法反推出原值，明确拒绝恢复。旧 <see cref="PersistedConversation.OpaqueRedacted" />
-///     标记仍拒绝续传被改变的 opaque 值；检查视图可经 `session show` 离线查看并手工交接。
-///     以不完整工具组结尾的会话（最后一次运行取消或失败于执行中途）同样拒绝：恢复到最近
-///     完整协议边界与中断检查属于 M13.3，本切片不重放状态不明的执行。
-///     The resume side of session continuation (M13.2, PLAN §7.2/§7.3): rebuilds
-///     a versioned snapshot from the protected store into a continuable session
-///     and context. Restoration is a pure function — it resolves no credentials,
-///     calls no model, starts no tool and writes no file; every failed check
-///     becomes a contextual <see cref="SessionStoreException" /> instead of a
-///     guess or a silent downgrade. The checks cover the opaque integrity
-///     hashes, the workspace and model/protocol identity, the system prompt,
-///     complete tool groups, parseable compaction boundaries and state, and
-///     recognizable run terminals. Only v3's verbatim protocol content can
-///     resume; older v1/v2 snapshots may have been redacted and cannot recover
-///     their original values. The legacy
-///     <see cref="PersistedConversation.OpaqueRedacted" /> marker still refuses
-///     replay of changed opaque values. Inspection stays available offline via
-///     `session show` for an explicit manual handover. A
-///     session ending in an incomplete tool group (its last run was cancelled or
-///     failed mid-execution) is refused as well: recovery to the nearest
-///     complete protocol boundary with interruption inspection belongs to M13.3,
-///     and this slice never replays execution of unknown state.
+///     <para>校验版本化快照并重建可续聊的会话与上下文，不解析凭据、调用模型、启动工具或读写文件。</para>
+///     <para>
+///         Validates versioned snapshots and rebuilds resumable sessions and contexts without resolving
+///         credentials, calling models, starting tools or reading or writing files.
+///     </para>
 /// </summary>
+/// <remarks>
+///     <para>
+///         仅接受 v3 保真协议内容；v1/v2 仅供检查，opaque 脱敏标记或哈希不符均拒绝续聊，
+///         不伪造原值。模型视图使用校验后的 canonical 历史，不以脱敏检查投影替代。
+///     </para>
+///     <para>
+///         Only v3 verbatim protocol content can resume; v1/v2 remain inspection-only.
+///         Opaque redaction markers or hash mismatches refuse resume without forging original values.
+///         The model view uses validated canonical history, never a redacted inspection projection.
+///     </para>
+///     <para>
+///         不完整尾部工具组整体回退到最近完整边界；历史中段不完整则按损坏拒绝。
+///         未知副作用或旧 v3 中断尾部缺少执行记录时保守阻断，不补造结果或退出码。
+///     </para>
+///     <para>
+///         Incomplete trailing tool groups rewind whole to the last complete boundary;
+///         incomplete groups within history are rejected as damage. Unknown side effects or interrupted tails
+///         without records in older v3 snapshots block conservatively, without fabricated results or exit codes.
+///     </para>
+/// </remarks>
 public static class SessionResume
 {
     /// <summary>
-    ///     校验快照并重建会话与上下文。当前工作区与模型身份必须与快照一致（会话固定工作区与
-    ///     模型协议身份，PLAN §5）；系统提示必须与快照首条 system 消息完全一致。快照来自
-    ///     <see cref="Persistence.SessionStoreWriter.OpenExistingAsync" /> 时已通过严格读取与审计
-    ///     对账，本方法不再读盘。
-    ///     Validates the snapshot and rebuilds the session and context. The
-    ///     current workspace and model identity must match the snapshot (a session
-    ///     is fixed to one workspace and one model/protocol identity, PLAN §5);
-    ///     the system prompt must equal the snapshot's first system message
-    ///     verbatim. Snapshots coming from
-    ///     <see cref="Persistence.SessionStoreWriter.OpenExistingAsync" /> already
-    ///     passed the strict read with audit reconciliation; this method reads no
-    ///     files itself.
+    ///     <para>校验快照身份、协议与压缩状态，重建会话及安全边界内的上下文。</para>
+    ///     <para>
+    ///         Validates snapshot identity, protocol and compaction state, rebuilding the session
+    ///         and context within a safe boundary.
+    ///     </para>
     /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         当前工作区、模型与协议身份须匹配快照，系统提示须与首条 system 消息完全一致。
+    ///         工具组、opaque 哈希、折叠边界、结构化状态与运行记录均须有效。
+    ///     </para>
+    ///     <para>
+    ///         The current workspace, model and protocol identity must match the snapshot;
+    ///         the system prompt must exactly match its first system message. Tool groups, opaque hashes,
+    ///         fold boundaries, structured state and run records must be valid.
+    ///     </para>
+    /// </remarks>
+    /// <param name="snapshot">
+    ///     <para>
+    ///         应由 <see cref="Persistence.SessionStoreWriter.OpenExistingAsync" /> 严格读取并完成审计对账；
+    ///         本方法不读盘或复核审计。
+    ///     </para>
+    ///     <para>
+    ///         Should be strictly read and audit-reconciled by
+    ///         <see cref="Persistence.SessionStoreWriter.OpenExistingAsync" />;
+    ///         this method neither reads files nor rechecks the audit.
+    ///     </para>
+    /// </param>
+    /// <exception cref="SessionStoreException">
+    ///     <para>快照不可续聊、身份不一致或恢复内容校验失败；不降级放行。</para>
+    ///     <para>
+    ///         The snapshot is not resumable, identity differs, or restored content fails validation;
+    ///         no fallback is allowed.
+    ///     </para>
+    /// </exception>
     public static SessionRestoration Restore(
         PersistedSession snapshot, string workspaceRoot, SessionModelIdentity model, string systemPrompt,
         ContextOptions?  contextOptions = null)
@@ -157,17 +187,16 @@ public static class SessionResume
                 SessionStoreException($"Stored session '{snapshot.Id}' was recorded under different session instructions; " +
                                       "continuing a session requires the same system prompt. Start a new session instead.");
 
-        try
-        {
-            ChatHistoryInvariants.EnsureCompleteToolGroups(messages);
-        }
-        catch (InvalidOperationException ex)
-        {
+        var boundary = ChatHistoryInvariants.LastCompleteBoundary(messages);
+        if (boundary < 0)
             throw new
-                SessionStoreException($"Stored session '{snapshot.Id}' ends with an incomplete tool round: its last run " +
-                                      "was cancelled or failed mid-execution, and resuming would send malformed history " +
-                                      $"to the model. {ex.Message}", ex);
-        }
+                SessionStoreException($"Stored session '{snapshot.Id}' is damaged: it contains an incomplete tool " +
+                                      "group that is not the trailing round, so no complete protocol boundary "     +
+                                      "exists to resume from.");
+        var rewoundTail = boundary < messages.Count;
+        if (rewoundTail) messages.RemoveRange(boundary, messages.Count - boundary);
+
+        var needsInspection = PendingInspectionReason(snapshot, rewoundTail);
 
         var state = StructuredState.Empty;
         if (conversation.HasState &&
@@ -190,25 +219,84 @@ public static class SessionResume
                                       $"the stored message history. {ex.Message}", ex);
         }
 
-        return new SessionRestoration(RebuildSession(snapshot), context);
+        var session = RebuildSession(snapshot);
+        session.PendingInspectionReason = needsInspection;
+        if (needsInspection is not null) session.InspectionAcknowledgedUtc = null;
+        return new SessionRestoration(session, context, needsInspection, rewoundTail);
     }
 
     /// <summary>
-    ///     从检查视图重建会话与全部历史回合/运行：终态枚举不可识别的快照按损坏拒绝；
-    ///     未结束的运行按原样恢复（不补造终态）。
-    ///     Rebuilds the session with every past turn and run from the inspection
-    ///     view: an unrecognizable terminal status rejects the snapshot as damaged;
-    ///     unfinished runs are restored as-is (terminals are never fabricated).
+    ///     <para>从持久阻断原因、用户确认与执行事实推导 NeedsInspection，不依据模型输出。</para>
+    ///     <para>
+    ///         Derives NeedsInspection from the persisted blocking reason, user acknowledgement
+    ///         and execution facts, never model output.
+    ///     </para>
     /// </summary>
+    /// <returns>
+    ///     <para>优先保留持久阻断原因；否则已确认时为 null，未知副作用或回退尾部缺少记录时返回阻断原因。</para>
+    ///     <para>
+    ///         The persisted blocking reason takes precedence; otherwise acknowledgement returns null,
+    ///         and unknown side effects or a rewound tail without records return a blocking reason.
+    ///     </para>
+    /// </returns>
+    private static string? PendingInspectionReason(PersistedSession snapshot, bool rewoundTail)
+    {
+        if (!string.IsNullOrWhiteSpace(snapshot.PendingInspectionReason)) return snapshot.PendingInspectionReason;
+        if (snapshot.InspectionAcknowledgedUtc is not null) return null;
+
+        var unknown               = new List<string>();
+        var trailingRunHasRecords = snapshot.Turns.LastOrDefault()?.Runs.LastOrDefault()?.ToolCalls is { Count: > 0 };
+        foreach (var call in snapshot.Turns.SelectMany(turn => turn.Runs)
+                                     .SelectMany(run => run.ToolCalls ?? []))
+        {
+            if (!string.Equals(call.State, nameof(ToolCallExecutionState.UnknownResult), StringComparison.Ordinal))
+                continue;
+
+            if (call.SideEffects) unknown.Add($"{call.ToolName} ({call.Summary})");
+        }
+
+        if (unknown.Count > 0)
+            return "an interrupted run left side-effect tools with unknown results — " +
+                   string.Join("; ", unknown)                                          +
+                   ". The workspace may carry their effects; inspect it before allowing more side effects.";
+        if (rewoundTail && !trailingRunHasRecords)
+            return "the stored conversation ends in an interrupted tool round whose execution was not recorded " +
+                   "(older snapshot format); its side effects cannot be proven absent. Inspect the workspace "   +
+                   "before allowing more side effects.";
+        return null;
+    }
+
+    /// <summary>
+    ///     <para>从检查视图重建会话、历史回合、运行记录与检查确认状态。</para>
+    ///     <para>
+    ///         Rebuilds the session, past turns, run records and inspection acknowledgement
+    ///         from the inspection view.
+    ///     </para>
+    /// </summary>
+    /// <remarks>
+    ///     <para>不补造未结束运行的终态；原样重建执行记录，不可识别的终态或执行状态按损坏拒绝。</para>
+    ///     <para>
+    ///         Unfinished runs receive no fabricated terminal result; execution records are rebuilt as stored,
+    ///         and unrecognized terminal or execution states are rejected as damage.
+    ///     </para>
+    /// </remarks>
     private static ChatSession RebuildSession(PersistedSession snapshot)
     {
-        var session = new ChatSession(snapshot.Id, snapshot.WorkspaceRoot, snapshot.Model!, snapshot.CreatedUtc);
+        var session = new ChatSession(snapshot.Id, snapshot.WorkspaceRoot, snapshot.Model!, snapshot.CreatedUtc)
+        {
+            InspectionAcknowledgedUtc = snapshot.InspectionAcknowledgedUtc,
+            PendingInspectionReason   = snapshot.PendingInspectionReason
+        };
         foreach (var turn in snapshot.Turns)
         {
             var restoredTurn = new SessionTurn(turn.Id, turn.UserInput, turn.CreatedUtc);
             foreach (var run in turn.Runs)
             {
                 var restoredRun = new SessionRun(run.Id, snapshot.Id, turn.Id, run.StartedUtc);
+                var records = run.ToolCalls is { Count: > 0 } calls
+                    ? calls.Select(call => RebuildToolCallRecord(snapshot.Id, call)).ToArray()
+                    : null;
+                if (records is not null) restoredRun.RecordExecutionIntent(records);
                 if (run.Status is not null)
                 {
                     if (!Enum.TryParse<AgentStatus>(run.Status, out var status))
@@ -224,7 +312,8 @@ public static class SessionResume
                         Steps          = run.Steps,
                         ToolExecutions = run.ToolExecutions,
                         InputTokens    = run.InputTokens,
-                        OutputTokens   = run.OutputTokens
+                        OutputTokens   = run.OutputTokens,
+                        ToolCalls      = records
                     }, run.FinishedUtc ?? run.StartedUtc);
                 }
 
@@ -235,6 +324,30 @@ public static class SessionResume
         }
 
         return session;
+    }
+
+    /// <summary>
+    ///     <para>重建工具执行记录；不可识别的执行状态按损坏拒绝。</para>
+    ///     <para>Rebuilds a tool-execution record; unrecognized execution states are rejected as damage.</para>
+    /// </summary>
+    private static ToolCallRecord RebuildToolCallRecord(string sessionId, PersistedToolCallRecord call)
+    {
+        if (!Enum.TryParse<ToolCallExecutionState>(call.State, out var state) || !Enum.IsDefined(state))
+            throw new
+                SessionStoreException($"Stored session '{sessionId}' is damaged: tool call '{call.CallId}' carries " +
+                                      $"unknown execution state '{call.State}'.");
+
+        return new ToolCallRecord
+        {
+            CallId           = call.CallId,
+            ToolName         = call.ToolName,
+            Capability       = call.Capability,
+            SideEffects      = call.SideEffects,
+            Summary          = call.Summary,
+            PreparationError = call.PreparationError,
+            Approval         = call.Approval,
+            State            = state
+        };
     }
 
     private static bool SamePath(string left, string right)

@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using TinyHarness.Core.Exceptions;
+using TinyHarness.Core.Models.Agent;
 using TinyHarness.Core.Models.Configuration;
 using TinyHarness.Core.Models.Persistence;
 using TinyHarness.Core.Models.Session;
@@ -11,31 +12,53 @@ using TinyHarness.Core.Services.Runtime;
 namespace TinyHarness.Core.Services.Persistence;
 
 /// <summary>
-///     受保护会话存储的路径与目录规则（M13.1，PLAN §7.1）：默认目录是用户级受保护目录；
-///     显式配置的目录必须是绝对路径，且经词法与链接解析后都不得落入组合工作区——
-///     沙箱目标命令可写的地方不能存放可续聊会话（PLAN §4.3）。
-///     Path and directory rules of the protected session store (M13.1, PLAN §7.1):
-///     the default directory is a user-level protected location; an explicitly
-///     configured directory must be absolute and must resolve — lexically and
-///     through links — outside the composition workspace, because a place
-///     writable by sandboxed commands must never hold resumable sessions
-///     (PLAN §4.3).
+///     <para>解析受保护会话存储路径，校验工作区边界与会话标识。</para>
+///     <para>
+///         Resolves protected session-store paths
+///         and validates workspace boundaries and session identifiers.
+///     </para>
 /// </summary>
+/// <remarks>
+///     <para>
+///         显式目录必须为绝对路径；词法路径和链接解析结果均不得落入工作区。
+///         沙箱目标命令可写的位置不能存放可续聊会话。
+///     </para>
+///     <para>
+///         Explicit directories must be absolute; both lexical and link-resolved paths
+///         must stay outside the workspace. Resumable sessions must not reside where sandboxed commands can write.
+///     </para>
+/// </remarks>
 public static class SessionStorePaths
 {
     /// <summary>
-    ///     覆盖会话存储目录的环境变量；用于便携部署与测试，普通用户无需设置。
-    ///     Environment variable that overrides the session store directory; used for portable setups and tests.
+    ///     <para>覆盖默认会话存储目录的环境变量，供便携部署与测试使用。</para>
+    ///     <para>
+    ///         Environment variable overriding the default session-store directory
+    ///         for portable setups and tests.
+    ///     </para>
     /// </summary>
     public const string DirectoryOverrideVariable = "TINYHARNESS_SESSION_STORE_DIR";
 
     /// <summary>
-    ///     返回默认的用户级会话存储目录：优先环境变量覆盖；Windows 使用 %LOCALAPPDATA%\tinyharness\sessions，
-    ///     其他平台使用 XDG_DATA_HOME 或 ~/.local/share；目录 API 不可用时退回当前目录下的 tinyharness\sessions。
-    ///     Returns the default user-level session store directory: the environment override first; on Windows
-    ///     %LOCALAPPDATA%\tinyharness\sessions; elsewhere XDG_DATA_HOME or ~/.local/share; the current directory's
-    ///     tinyharness\sessions when the folder APIs are unavailable.
+    ///     <para>按环境覆盖与平台约定选择默认会话存储目录。</para>
+    ///     <para>
+    ///         Selects the default session-store directory
+    ///         using the environment override and platform conventions.
+    ///     </para>
     /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         优先环境覆盖；Windows 使用 %LOCALAPPDATA%\tinyharness\sessions，
+    ///         其他平台使用 XDG_DATA_HOME 或 ~/.local/share。
+    ///         用户目录不可用时退回当前目录下的 tinyharness\sessions；受保护边界由调用方另行校验。
+    ///     </para>
+    ///     <para>
+    ///         The environment override takes precedence; Windows uses %LOCALAPPDATA%\tinyharness\sessions,
+    ///         while other platforms use XDG_DATA_HOME or ~/.local/share.
+    ///         Unavailable user directories fall back to tinyharness\sessions under the current directory;
+    ///         callers validate protected boundaries separately.
+    ///     </para>
+    /// </remarks>
     public static string DefaultDirectory()
     {
         var overrideDirectory = Environment.GetEnvironmentVariable(DirectoryOverrideVariable);
@@ -63,12 +86,20 @@ public static class SessionStorePaths
     }
 
     /// <summary>
-    ///     解析生效的受保护存储目录：未配置时使用默认目录；显式目录必须是绝对路径，并且经
-    ///     <see cref="EnsureOutsideWorkspace" /> 检查后才被接受。返回规范化绝对路径（不创建目录）。
-    ///     Resolves the effective protected store directory: the default when unset; an explicit
-    ///     directory must be absolute and pass <see cref="EnsureOutsideWorkspace" />. Returns the
-    ///     normalized absolute path (no directory is created).
+    ///     <para>解析并校验工作区之外的会话存储目录，不创建目录。</para>
+    ///     <para>
+    ///         Resolves and validates a session-store directory outside the workspace
+    ///         without creating it.
+    ///     </para>
     /// </summary>
+    /// <param name="configuredDirectory">
+    ///     <para>显式绝对路径；未配置时使用默认目录。</para>
+    ///     <para>An explicit absolute path; the default directory is used when unset.</para>
+    /// </param>
+    /// <returns>
+    ///     <para>通过 <see cref="EnsureOutsideWorkspace" /> 校验的规范化绝对路径。</para>
+    ///     <para>The normalized absolute path validated by <see cref="EnsureOutsideWorkspace" />.</para>
+    /// </returns>
     public static string ResolveProtected(string? configuredDirectory, string workspaceRoot)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
@@ -90,8 +121,7 @@ public static class SessionStorePaths
             directory = Path.GetFullPath(trimmed);
         }
 
-        // The remediation hint must name where the offending directory came from:
-        // an explicit setting, or the environment override behind the default.
+        // 错误提示须指出目录来源，避免环境覆盖导致用户修改错误的配置。
         EnsureOutsideWorkspace(directory, workspaceRoot,
                                string.IsNullOrWhiteSpace(configuredDirectory)
                                    ? $"the '{DirectoryOverrideVariable}' environment variable or settings.sessionStoreDirectory"
@@ -100,13 +130,19 @@ public static class SessionStorePaths
     }
 
     /// <summary>
-    ///     拒绝位于组合工作区内（词法判断或经符号链接/junction 解析后落入）的存储目录。
-    ///     逐级解析已存在的路径段，因此链接指向工作区内部也算逃逸。供存储解析与沙箱组合守卫共用。
-    ///     Rejects a store directory located inside the composition workspace, either lexically or after
-    ///     resolving symlinks/junctions into it. Existing path segments are resolved level by level, so a link
-    ///     landing inside the workspace counts as an escape. Shared by the store resolution and the sandbox
-    ///     composition guard.
+    ///     <para>拒绝词法路径或符号链接/junction 解析结果位于工作区内的存储目录。</para>
+    ///     <para>
+    ///         Rejects store directories whose lexical or symlink/junction-resolved paths
+    ///         lie inside the workspace.
+    ///     </para>
     /// </summary>
+    /// <remarks>
+    ///     <para>逐级解析已存在路径段，供存储解析与沙箱组合守卫共用。</para>
+    ///     <para>
+    ///         Resolves existing path segments individually;
+    ///         shared by store resolution and the sandbox composition guard.
+    ///     </para>
+    /// </remarks>
     public static void EnsureOutsideWorkspace(string directory, string workspaceRoot, string settingName)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(directory);
@@ -128,22 +164,32 @@ public static class SessionStorePaths
     }
 
     /// <summary>
-    ///     会话 ID 是标识符而不是路径片段：仅接受 32 位十六进制（Guid 的 "N" 形态），输入大小写
-    ///     不敏感，但盘上统一存储为小写；读取端与写入端共用同一校验，杜绝路径逃逸与通配。
-    ///     A session id is an identifier, never a path fragment: exactly 32 hex
-    ///     characters (the Guid "N" form). Input is case-insensitive while the
-    ///     on-disk form is canonically lower-case. Readers and writers share this
-    ///     check, which rules out path escapes and wildcards.
+    ///     <para>校验会话 ID 是否为 32 位十六进制标识符，而非路径片段。</para>
+    ///     <para>
+    ///         Validates a session ID as a 32-character hexadecimal identifier,
+    ///         never a path fragment.
+    ///     </para>
     /// </summary>
+    /// <remarks>
+    ///     <para>读写端共用此校验以排除路径逃逸与通配；输入大小写不敏感，盘上统一为小写。</para>
+    ///     <para>
+    ///         Readers and writers share this check to exclude path escapes and wildcards;
+    ///         input is case-insensitive and the on-disk form is lowercase.
+    ///     </para>
+    /// </remarks>
     public static bool IsValidSessionId(string id) => id.Length == 32 && id.All(char.IsAsciiHexDigit);
 
     /// <summary>
-    ///     从盘符根向下解析已存在路径段的链接目标；不存在的尾部保持词法路径。链接解析失败时
-    ///     保持词法结果，由外层的词法检查兜底。
-    ///     Resolves link targets of existing path segments from the drive root down; a nonexistent tail stays
-    ///     lexical. A link that cannot be resolved keeps the lexical result, leaving the outer lexical check
-    ///     as the backstop.
+    ///     <para>从文件系统根向下解析已存在路径段的链接目标。</para>
+    ///     <para>Resolves link targets of existing path segments from the filesystem root down.</para>
     /// </summary>
+    /// <remarks>
+    ///     <para>遇到不存在的段即返回当前路径；链接解析失败时保留当前词法路径，外层词法检查仍适用。</para>
+    ///     <para>
+    ///         Returns the current path at the first nonexistent segment;
+    ///         failed link resolution retains the current lexical path, still subject to the outer lexical check.
+    ///     </para>
+    /// </remarks>
     private static string ResolveExistingAncestors(string directory)
     {
         var root      = Path.GetPathRoot(directory);
@@ -167,8 +213,7 @@ public static class SessionStorePaths
             }
             catch (IOException)
             {
-                // An unresolvable link keeps the lexical path; the caller's lexical
-                // check still applies to it.
+                // 无法解析的链接保留词法路径，调用方的词法检查仍适用。
             }
         }
 
@@ -177,67 +222,93 @@ public static class SessionStorePaths
 }
 
 /// <summary>
-///     会话快照的写入端（M13.1 起）：排他持有会话锁文件，在完整回合边界原子替换版本化快照并追加
-///     提交审计。M13.2 起快照同时携带消息级会话内容（<see cref="ConversationContext" /> 的完整
-///     历史与压缩形态）；v3 原样保存协议内容，可能包含秘密，只有回合/运行检查投影脱敏。
-///     写入失败抛 <see cref="SessionStoreException" />，调用方必须
-///     按“本次未可靠保存”报告，不得把运行终态当作落盘成功的证明（PLAN §7.1）。
-///     The write side of session snapshots (since M13.1): holds the session's
-///     lock file exclusively, atomically replaces the versioned snapshot at
-///     complete turn boundaries and appends the commit audit. Since M13.2 the
-///     snapshot also carries the message-level conversation content (the full
-///     history and compaction shape of a <see cref="ConversationContext" />).
-///     Format v3 preserves protocol content verbatim and may contain secrets;
-///     only the turn/run inspection projection is redacted. A failed write throws
-///     <see cref="SessionStoreException" />; callers must report "not reliably
-///     saved" and never present a run's terminal state as proof of persistence
-///     (PLAN §7.1).
+///     <para>排他写入版本化会话快照并追加提交审计。</para>
+///     <para>Exclusively writes versioned session snapshots and appends commit audit records.</para>
 /// </summary>
+/// <remarks>
+///     <para>
+///         调用方在完整回合或已验证的安全边界提交。
+///         v3 原样保存完整协议历史与压缩状态，可能包含秘密；回合/运行检查投影保持脱敏。
+///         保存失败必须报告“本次未可靠保存”，运行终态不证明落盘成功。
+///     </para>
+///     <para>
+///         Callers commit at complete-turn or verified safe boundaries.
+///         Format v3 preserves full protocol history and compaction state verbatim and may contain secrets;
+///         turn/run inspection projections remain redacted.
+///         Save failures must be reported as "not reliably saved"; a terminal run does not prove persistence.
+///     </para>
+/// </remarks>
 public interface ISessionStoreWriter : IDisposable
 {
-    /// <summary>快照文件绝对路径。The absolute path of the snapshot file.</summary>
+    /// <summary>
+    ///     <para>快照文件的绝对路径。</para>
+    ///     <para>The absolute path of the snapshot file.</para>
+    /// </summary>
     string SnapshotPath { get; }
 
-    /// <summary>最近一次成功提交的序号；尚未提交过时为 0。The last successfully committed sequence; 0 before the first commit.</summary>
+    /// <summary>
+    ///     <para>最近一次成功提交的序号；首次提交前为 0。</para>
+    ///     <para>The last successfully committed sequence; zero before the first commit.</para>
+    /// </summary>
     long CommitSequence { get; }
 
     /// <summary>
-    ///     序列化会话的当前完整状态（回合检查视图 + 对话内容）并以原子替换落盘（序号加一），
-    ///     随后追加提交审计。
-    ///     Serializes the session's current complete state (the turn inspection
-    ///     view plus the conversation content), persists it by atomic replacement
-    ///     (sequence + 1), then appends the commit audit.
+    ///     <para>原子替换当前会话快照，追加审计后递增提交序号。</para>
+    ///     <para>
+    ///         Atomically replaces the current session snapshot
+    ///         and advances the commit sequence after appending the audit.
+    ///     </para>
     /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         快照包含检查视图与 canonical 对话；调用方须先保证对话位于完整协议边界。
+    ///         快照替换后不再响应取消，继续尝试写入审计以完成一致提交。
+    ///     </para>
+    ///     <para>
+    ///         The snapshot includes inspection views and the canonical conversation;
+    ///         callers must first ensure the conversation ends at a complete protocol boundary.
+    ///         After replacement, audit writing proceeds independently of cancellation to complete a consistent commit.
+    ///     </para>
+    /// </remarks>
+    /// <exception cref="SessionStoreException">
+    ///     <para>快照超限、写入失败或审计追加失败；本次保存不能视为可靠成功。</para>
+    ///     <para>
+    ///         The snapshot exceeds its limit, writing fails, or audit appending fails;
+    ///         the save cannot be considered reliably successful.
+    ///     </para>
+    /// </exception>
     Task CommitAsync(ChatSession session, ConversationContext context, CancellationToken cancellationToken);
 }
 
 /// <summary>
-///     <see cref="ISessionStoreWriter" /> 的文件实现：同一持久会话同一时刻只允许一个写入者——
-///     打开端以独占共享模式持有 <c>&lt;id&gt;.lock</c> 直到 <see cref="Dispose" />，第二个进程
-///     （或同进程第二个实例）打开同一会话立即失败（PLAN §5 的跨进程排他写入）。新会话经构造器
-///     创建；已保存会话经 <see cref="OpenExistingAsync" /> 打开——先取锁、再做严格读取与审计
-///     对账，并把提交序号续种为快照的当前值。提交顺序为“同目录临时文件 → 原子替换快照 →
-///     追加审计提交行”：替换前的任何失败都保留上一有效快照；替换后、审计前失败会留下领先于
-///     审计的快照，由读取端的提交序号对账检出。
-///     The file implementation of <see cref="ISessionStoreWriter" />: one writer
-///     per stored session at a time — the opened side holds <c>&lt;id&gt;.lock</c>
-///     with exclusive sharing until <see cref="Dispose" />, so a second process
-///     (or a second instance in the same process) fails immediately
-///     (cross-process exclusive writing, PLAN §5). A brand-new session is
-///     created through the constructor; a stored one is opened through
-///     <see cref="OpenExistingAsync" /> — lock first, then the strict read with
-///     audit reconciliation, seeding the commit sequence from the snapshot. The
-///     commit order is "same-directory temp file → atomic snapshot replacement →
-///     appended commit audit": any failure before the replacement keeps the
-///     previous valid snapshot; a failure between replacement and audit leaves a
-///     snapshot ahead of the audit, which the reader's sequence reconciliation
-///     detects.
+///     <para>通过文件锁、原子快照替换与提交审计实现排他会话存储。</para>
+///     <para>
+///         Implements exclusive session storage
+///         using a file lock, atomic snapshot replacement, and commit auditing.
+///     </para>
 /// </summary>
+/// <remarks>
+///     <para>
+///         独占持有 <c>&lt;id&gt;.lock</c> 至 <see cref="Dispose" />；同进程或跨进程的第二个写入者立即失败。
+///         提交顺序为同目录临时文件、原子替换、追加审计。
+///         替换前失败保留上一快照；替换后审计失败留下的不一致由读取端对账检出。
+///     </para>
+///     <para>
+///         Holds <c>&lt;id&gt;.lock</c> exclusively until <see cref="Dispose" />;
+///         a second writer in the same or another process fails immediately.
+///         Commits use a same-directory temporary file, atomic replacement, then audit appending.
+///         Pre-replacement failures retain the previous snapshot;
+///         post-replacement audit failures leave divergence detected by reader reconciliation.
+///     </para>
+/// </remarks>
 public sealed class SessionStoreWriter : ISessionStoreWriter
 {
     /// <summary>
-    ///     快照文件大小上限；超过即拒绝写入或读取，防止失控会话拖垮存储与查看。Upper bound for a snapshot file; larger files are refused on write and read
-    ///     so a runaway session cannot overwhelm storage or inspection.
+    ///     <para>会话快照的读写大小上限，防止失控会话耗尽存储与查看资源。</para>
+    ///     <para>
+    ///         Snapshot size limit for reading and writing,
+    ///         preventing runaway sessions from exhausting storage and inspection resources.
+    ///     </para>
     /// </summary>
     public const int MaxSnapshotBytes = 16 * 1024 * 1024;
 
@@ -246,10 +317,16 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
     private readonly SecretRedactor _redactor;
 
     /// <summary>
-    ///     创建（且只创建）新会话的写入端：校验会话 ID、拒绝已存在的快照、独占打开锁文件并创建存储目录。
-    ///     Creates the writer for a brand-new session: validates the session id, refuses an existing snapshot,
-    ///     opens the lock file exclusively and creates the store directory.
+    ///     <para>创建新会话的排他写入端，不打开已有快照。</para>
+    ///     <para>Creates an exclusive writer for a new session without opening an existing snapshot.</para>
     /// </summary>
+    /// <remarks>
+    ///     <para>校验会话 ID，创建存储目录并独占持有锁文件；已有快照被拒绝。</para>
+    ///     <para>
+    ///         Validates the session ID, creates the store directory,
+    ///         and holds the lock file exclusively; existing snapshots are rejected.
+    ///     </para>
+    /// </remarks>
     public SessionStoreWriter(
         string directory, string sessionId, IReadOnlyDictionary<string, string>? knownSecrets = null)
         : this(directory, sessionId, true, knownSecrets)
@@ -257,12 +334,16 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
     }
 
     /// <summary>
-    ///     共享构造核心：<paramref name="requireNewSnapshot" /> 为 true 时拒绝已存在的快照
-    ///     （新会话语义），为 false 时要求它存在（打开已保存会话的调用方在取锁后自行读取校验）。
-    ///     The shared construction core: a true <paramref name="requireNewSnapshot" /> refuses an
-    ///     existing snapshot (new-session semantics); false expects it to stay (the open-existing
-    ///     caller reads and validates after taking the lock).
+    ///     <para>为新建或打开会话建立文件路径并取得排他锁。</para>
+    ///     <para>Establishes file paths and acquires an exclusive lock for creating or opening a session.</para>
     /// </summary>
+    /// <param name="requireNewSnapshot">
+    ///     <para>为 true 时拒绝已有快照；为 false 时由调用方在取锁后严格读取校验。</para>
+    ///     <para>
+    ///         When true, rejects an existing snapshot;
+    ///         when false, the caller strictly reads and validates it after locking.
+    ///     </para>
+    /// </param>
     private SessionStoreWriter(
         string directory, string sessionId, bool requireNewSnapshot, IReadOnlyDictionary<string, string>? knownSecrets)
     {
@@ -274,9 +355,7 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
                                   nameof(sessionId));
 
         Directory.CreateDirectory(directory);
-        // The on-disk canonical form is lower-case hex (the Guid "N" form): the
-        // snapshot, audit and lock names — and the snapshot's id field — all use
-        // it, so case-sensitive file systems resolve every id spelling.
+        // 文件名与快照 ID 统一为小写，避免大小写敏感文件系统产生不同会话或锁。
         SessionId    = sessionId.ToLowerInvariant();
         SnapshotPath = Path.Combine(directory, $"{SessionId}.session.json");
         AuditPath    = Path.Combine(directory, $"{SessionId}.audit.jsonl");
@@ -301,21 +380,30 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
                                       ex);
         }
 
-        // Diagnostic content only; the lock is held by the open handle, not by this file's existence.
+        // 文件内容仅供诊断；排他性来自打开的句柄，而非锁文件是否存在。
         var lockNote = $"pid={Environment.ProcessId} openedUtc={DateTimeOffset.UtcNow:O}";
         _lockStream.Write(Encoding.UTF8.GetBytes(lockNote));
         _lockStream.Flush();
     }
 
-    /// <summary>写入端持有的会话 ID。The session id held by this writer.</summary>
+    /// <summary>
+    ///     <para>写入端持有的小写规范会话 ID。</para>
+    ///     <para>The canonical lowercase session ID held by this writer.</para>
+    /// </summary>
     public string SessionId { get; }
 
-    /// <summary>会话提交审计文件绝对路径。The absolute path of the session's commit audit file.</summary>
+    /// <summary>
+    ///     <para>会话提交审计文件的绝对路径。</para>
+    ///     <para>The absolute path of the session's commit audit file.</para>
+    /// </summary>
     public string AuditPath { get; }
 
     /// <summary>
-    ///     经 <see cref="OpenExistingAsync" /> 打开时读取到的快照；新会话写入端为 null。
-    ///     The snapshot read by <see cref="OpenExistingAsync" />; null for a new-session writer.
+    ///     <para>由 <see cref="OpenExistingAsync" /> 读取的快照；新会话写入端为 null。</para>
+    ///     <para>
+    ///         The snapshot read by <see cref="OpenExistingAsync" />;
+    ///         null for a new-session writer.
+    ///     </para>
     /// </summary>
     public PersistedSession? LoadedSnapshot { get; private set; }
 
@@ -327,8 +415,7 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
     {
         ArgumentNullException.ThrowIfNull(session);
         ArgumentNullException.ThrowIfNull(context);
-        // The id comparison is case-insensitive: the canonical storage form is
-        // the lower-case of the same id.
+        // 输入 ID 大小写不影响身份，盘上使用同一 ID 的小写规范形态。
         if (!string.Equals(session.Id, SessionId, StringComparison.OrdinalIgnoreCase))
             throw new
                 ArgumentException($"The snapshot writer belongs to session '{SessionId}' but was asked to commit session " +
@@ -356,8 +443,7 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
                                       "the previous valid snapshot is kept.", ex);
         }
 
-        // The snapshot now leads the audit until this record lands; readers detect
-        // the divergence if it never does.
+        // 替换后快照暂时领先审计；追加失败时读取端须通过序号对账拒绝不一致状态。
         var record = new SessionStoreAuditRecord
         {
             SessionId = SessionId,
@@ -383,26 +469,31 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
 
     public void Dispose()
     {
-        // The lock file itself is deliberately left in place: exclusivity comes
-        // from the open handle, and deleting on close would race another process
-        // re-creating the lock in between.
+        // 保留锁文件，避免关闭时删除与另一进程重建锁之间的竞态；排他性由句柄保证。
         _lockStream.Dispose();
     }
 
     /// <summary>
-    ///     打开一个已保存会话继续写入（M13.2 续聊）：先以同一独占规则取锁，再用严格读取端
-    ///     （含审计对账）加载快照，最后把提交序号续种为快照当前值——后续提交从快照继续单调递增。
-    ///     快照不存在、损坏、版本未知或与审计不一致都在这里失败，绝不猜测解释。返回的写入端
-    ///     通过 <see cref="LoadedSnapshot" /> 暴露刚读取的快照供恢复流程校验。
-    ///     Opens an already-stored session for continued writing (M13.2 resume):
-    ///     takes the lock under the same exclusive rule first, then loads the
-    ///     snapshot through the strict reader (audit reconciliation included) and
-    ///     seeds the commit sequence with the snapshot's current value — later
-    ///     commits keep increasing monotonically from there. A missing, damaged,
-    ///     unknown-version or audit-inconsistent snapshot fails here instead of
-    ///     being guessed at. The returned writer exposes the freshly read
-    ///     snapshot as <see cref="LoadedSnapshot" /> for the resume flow to validate.
+    ///     <para>先取排他锁，再严格读取已有会话并续种提交序号。</para>
+    ///     <para>
+    ///         Acquires the exclusive lock before strictly reading an existing session
+    ///         and seeding its commit sequence.
+    ///     </para>
     /// </summary>
+    /// <returns>
+    ///     <para>持锁写入端；<see cref="LoadedSnapshot" /> 供恢复流程继续校验兼容性，后续提交序号单调递增。</para>
+    ///     <para>
+    ///         A locked writer whose <see cref="LoadedSnapshot" /> requires further resume compatibility validation;
+    ///         subsequent commit sequences increase monotonically.
+    ///     </para>
+    /// </returns>
+    /// <exception cref="SessionStoreException">
+    ///     <para>快照缺失、损坏、版本未知、审计不一致或锁不可用；不猜测或降级放行。</para>
+    ///     <para>
+    ///         The snapshot is missing, damaged, unknown-version, audit-inconsistent, or the lock is unavailable;
+    ///         no guessing or permissive fallback is performed.
+    ///     </para>
+    /// </exception>
     public static async Task<SessionStoreWriter> OpenExistingAsync(
         string            directory, string sessionId, IReadOnlyDictionary<string, string>? knownSecrets,
         CancellationToken cancellationToken)
@@ -439,13 +530,15 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
 
     private PersistedSession BuildSnapshot(ChatSession session, ConversationContext context, long sequence) => new()
     {
-        FormatVersion  = PersistedSession.CurrentFormatVersion,
-        Id             = SessionId,
-        WorkspaceRoot  = session.WorkspaceRoot,
-        Model          = session.Model,
-        CreatedUtc     = session.CreatedUtc,
-        UpdatedUtc     = DateTimeOffset.UtcNow,
-        CommitSequence = sequence,
+        FormatVersion             = PersistedSession.CurrentFormatVersion,
+        Id                        = SessionId,
+        WorkspaceRoot             = session.WorkspaceRoot,
+        Model                     = session.Model,
+        CreatedUtc                = session.CreatedUtc,
+        UpdatedUtc                = DateTimeOffset.UtcNow,
+        CommitSequence            = sequence,
+        InspectionAcknowledgedUtc = session.InspectionAcknowledgedUtc,
+        PendingInspectionReason   = _redactor.RedactNullable(session.PendingInspectionReason),
         Turns = session.Turns.Select(turn => new PersistedTurn
         {
             Id         = turn.Id,
@@ -462,25 +555,49 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
                 Steps          = run.Result?.Steps          ?? 0,
                 ToolExecutions = run.Result?.ToolExecutions ?? 0,
                 InputTokens    = run.Result?.InputTokens,
-                OutputTokens   = run.Result?.OutputTokens
+                OutputTokens   = run.Result?.OutputTokens,
+                // 与恢复端使用同一执行记录推导检查标记；旧运行无记录时保留 null，不能推定安全。
+                NeedsInspection = (run.Result?.ToolCalls ?? run.ExecutionRecords) is { Count: > 0 } calls
+                    ? calls.Any(call => call is { State: ToolCallExecutionState.UnknownResult, SideEffects: true })
+                    : null,
+                ToolCalls = (run.Result?.ToolCalls ?? run.ExecutionRecords)?
+                           .Select(call => new PersistedToolCallRecord
+                            {
+                                CallId           = _redactor.Redact(call.CallId),
+                                ToolName         = _redactor.Redact(call.ToolName),
+                                Capability       = _redactor.RedactNullable(call.Capability),
+                                SideEffects      = call.SideEffects,
+                                Summary          = _redactor.Redact(call.Summary),
+                                PreparationError = _redactor.RedactNullable(call.PreparationError),
+                                Approval         = _redactor.RedactNullable(call.Approval),
+                                State            = call.State.ToString()
+                            })
+                           .ToArray()
             }).ToArray()
         }).ToArray(),
         Conversation = BuildConversation(context)
     };
 
     /// <summary>
-    ///     构建保真的消息级会话内容：完整历史的所有协议字段与压缩状态原样保存，不经过脱敏器，
-    ///     因而可能包含秘密，只能写入受保护存储。opaque 载荷（ProtectedData/ItemId）逐条记录
-    ///     完整性哈希；新写入的 <see cref="PersistedConversation.OpaqueRedacted" /> 始终为 false。
-    ///     折叠边界随消息一起保存，恢复端重建同一模型视图；检查投影的脱敏与审计逻辑保持独立。
-    ///     Builds faithful message-level conversation content: all protocol fields
-    ///     of the complete history and the compaction state are saved verbatim,
-    ///     without redaction, so they may contain secrets and require protected
-    ///     storage. Each opaque payload (ProtectedData/ItemId) receives an integrity
-    ///     hash; new writes always set <see cref="PersistedConversation.OpaqueRedacted" />
-    ///     to false. Fold boundaries are saved alongside to rebuild the same model
-    ///     view; inspection-projection redaction and the audit remain independent.
+    ///     <para>构建保真 canonical 对话，保存协议历史、压缩状态与折叠边界。</para>
+    ///     <para>
+    ///         Builds a faithful canonical conversation
+    ///         preserving protocol history, compaction state, and fold boundaries.
+    ///     </para>
     /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         内容不经过脱敏器，可能包含秘密，须写入受保护存储；保护不等于加密。
+    ///         ProtectedData/ItemId 逐条记录完整性哈希，<see cref="PersistedConversation.OpaqueRedacted" /> 为 false。
+    ///         检查投影与审计继续独立脱敏，不能替代此恢复内容。
+    ///     </para>
+    ///     <para>
+    ///         Content bypasses redaction, may contain secrets, and requires protected storage;
+    ///         protection does not imply encryption. ProtectedData/ItemId receive per-entry integrity hashes,
+    ///         and <see cref="PersistedConversation.OpaqueRedacted" /> is false.
+    ///         Inspection projections and audits remain independently redacted and cannot replace this resume content.
+    ///     </para>
+    /// </remarks>
     private PersistedConversation BuildConversation(ConversationContext context)
     {
         var position = context.Position;
@@ -530,50 +647,65 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
         }
         catch (IOException)
         {
-            // Best effort only; a leftover temp/lock file never blocks a later
-            // commit (temp names are overwritten, locks are re-created).
+            // 临时文件清理尽力而为；后续提交可覆盖残留临时文件，不改变原始保存错误。
         }
     }
 }
 
 /// <summary>
-///     会话存储的一个列表条目：读取成功的会话或损坏原因（list 容错展示，show 严格报错）。
-///     One list entry of the session store: the session when it read
-///     successfully, or the damage reason (list reports and continues, show is
-///     strict).
+///     <para>会话列表条目，携带读取成功的会话或该条目的错误原因。</para>
+///     <para>
+///         A session-list entry containing either the successfully read session
+///         or the entry's error reason.
+///     </para>
 /// </summary>
 public sealed record SessionStoreEntry(string Id, PersistedSession? Session, string? Error);
 
 /// <summary>
-///     会话存储的严格离线读取端（M13.1，PLAN §7.1）：校验会话 ID、文件大小、JSON 深度与格式版本，
-///     并把快照提交序号与审计提交记录对账。任何损坏、未知版本、路径逃逸或不一致都以
-///     <see cref="SessionStoreException" /> 报告，绝不猜测解释内容。本类型不解析凭据、不调用模型、
-///     不启动工具。旧 <c>.session.json</c> run 快照经 <see cref="ReadLegacyAsync" /> 只读兼容展示。
-///     The strictly offline read side of the session store (M13.1, PLAN §7.1):
-///     it validates session ids, file sizes, JSON depth and the format version,
-///     and reconciles the snapshot's commit sequence against the commit audit.
-///     Damage, unknown versions, path escapes and divergence are reported as
-///     <see cref="SessionStoreException" /> — content is never guessed. This
-///     type resolves no credentials, calls no model and starts no tool. Legacy
-///     <c>.session.json</c> run snapshots are shown read-only via
-///     <see cref="ReadLegacyAsync" />.
+///     <para>严格离线读取会话快照，校验标识、大小、JSON 深度、格式版本与提交审计。</para>
+///     <para>
+///         Strictly reads session snapshots offline,
+///         validating identifiers, size, JSON depth, format version, and commit auditing.
+///     </para>
 /// </summary>
+/// <remarks>
+///     <para>
+///         不解析凭据、不调用模型、不启动工具。
+///         损坏、未知版本或审计不一致不猜测解释；旧 run 快照仅经 <see cref="ReadLegacyAsync" /> 只读展示。
+///         格式读取成功不代表已通过续聊兼容性校验。
+///     </para>
+///     <para>
+///         Resolves no credentials, calls no model, and starts no tool.
+///         Damaged, unknown-version, or audit-inconsistent content is never guessed;
+///         legacy run snapshots are inspected read-only via <see cref="ReadLegacyAsync" />.
+///         Successful format reading does not establish resume compatibility.
+///     </para>
+/// </remarks>
 public static class SessionStoreReader
 {
-    /// <summary>读取时允许的最大 JSON 深度；更深的输入按损坏拒绝。The maximum JSON depth accepted when reading; deeper input is rejected as damaged.</summary>
+    /// <summary>
+    ///     <para>读取时的最大 JSON 深度；更深输入按损坏拒绝。</para>
+    ///     <para>Maximum JSON depth accepted when reading; deeper input is rejected as damaged.</para>
+    /// </summary>
     public const int MaxJsonDepth = 32;
 
     /// <summary>
-    ///     会话快照文件的统一后缀（新旧格式同名，按所在目录区分）。The shared suffix of session snapshot files (both formats use it; the directory
-    ///     tells them apart).
+    ///     <para>会话与旧 run 快照共用的文件后缀；两种格式按目录区分。</para>
+    ///     <para>
+    ///         File suffix shared by session and legacy run snapshots;
+    ///         their directories distinguish the formats.
+    ///     </para>
     /// </summary>
     private const string SessionSnapshotFileSuffix = ".session.json";
 
     /// <summary>
-    ///     读取一个存储会话并完成全部校验与对账；文件缺失返回 null（调用方区分“不存在”与“损坏”）。
-    ///     Reads one stored session with full validation and reconciliation; a missing file returns null
-    ///     (callers distinguish "absent" from "damaged").
+    ///     <para>读取存储会话并完成存储格式校验与审计对账。</para>
+    ///     <para>Reads a stored session with storage-format validation and audit reconciliation.</para>
     /// </summary>
+    /// <returns>
+    ///     <para>读取的快照；文件缺失时为 null，以区分不存在与损坏。</para>
+    ///     <para>The read snapshot, or null for a missing file to distinguish absence from damage.</para>
+    /// </returns>
     public static async Task<PersistedSession?> ReadAsync(
         string directory, string sessionId, CancellationToken cancellationToken)
     {
@@ -582,8 +714,7 @@ public static class SessionStoreReader
             throw new
                 SessionStoreException($"'{sessionId}' is not a valid session id: exactly 32 hex characters are required.");
 
-        // Id input is case-insensitive; lookups go through the lower-case
-        // canonical form so case-sensitive file systems find every stored session.
+        // 查找使用小写规范 ID，兼容大小写敏感文件系统。
         sessionId = sessionId.ToLowerInvariant();
         var snapshotPath = Path.Combine(directory, $"{sessionId}{SessionSnapshotFileSuffix}");
         if (!File.Exists(snapshotPath)) return null;
@@ -609,8 +740,7 @@ public static class SessionStoreReader
         PersistedSession snapshot;
         try
         {
-            // Parse first with a bounded depth so hostile deep nesting fails here
-            // instead of inside type binding.
+            // 绑定类型前先限制 JSON 深度，拒绝恶意嵌套。
             using (JsonDocument.Parse(json, new JsonDocumentOptions { MaxDepth = MaxJsonDepth }))
             {
             }
@@ -641,12 +771,16 @@ public static class SessionStoreReader
     }
 
     /// <summary>
-    ///     枚举存储目录中的会话；单个条目损坏不终止列举，而是以 <see cref="SessionStoreEntry.Error" /> 报告。
-    ///     结果按更新时间从新到旧排列。
-    ///     Enumerates the sessions in the store directory; one damaged entry does
-    ///     not stop the listing — it is reported through <see cref="SessionStoreEntry.Error" />. Entries
-    ///     are ordered newest first by updated time.
+    ///     <para>枚举存储会话，单个损坏条目不终止列举。</para>
+    ///     <para>Lists stored sessions without aborting on an individual damaged entry.</para>
     /// </summary>
+    /// <returns>
+    ///     <para>按更新时间从新到旧排列的条目；读取错误通过 <see cref="SessionStoreEntry.Error" /> 报告。</para>
+    ///     <para>
+    ///         Entries ordered newest first by update time;
+    ///         read errors are reported through <see cref="SessionStoreEntry.Error" />.
+    ///     </para>
+    /// </returns>
     public static async Task<IReadOnlyList<SessionStoreEntry>> ListAsync(
         string directory, CancellationToken cancellationToken)
     {
@@ -682,12 +816,16 @@ public static class SessionStoreReader
     }
 
     /// <summary>
-    ///     读取旧版 run 快照（<c>&lt;runId&gt;.session.json</c>，M13 之前的脱敏检查产物）用于只读展示；
-    ///     文件缺失返回 null。旧格式不能恢复为续聊会话（PLAN §7.2）。
-    ///     Reads a legacy run snapshot (<c>&lt;runId&gt;.session.json</c>, the redacted inspection artifact from
-    ///     before M13) for read-only display; a missing file returns null. The legacy format is never restored
-    ///     into a resumable session (PLAN §7.2).
+    ///     <para>读取旧版脱敏 run 快照，仅供只读检查，不能用于续聊恢复。</para>
+    ///     <para>
+    ///         Reads a legacy redacted run snapshot for read-only inspection,
+    ///         never for session resumption.
+    ///     </para>
     /// </summary>
+    /// <returns>
+    ///     <para>旧版 <c>&lt;runId&gt;.session.json</c> 快照；文件缺失时为 null。</para>
+    ///     <para>The legacy <c>&lt;runId&gt;.session.json</c> snapshot, or null when the file is missing.</para>
+    /// </returns>
     public static async Task<SessionSnapshot?> ReadLegacyAsync(
         string directory, string sessionId, CancellationToken cancellationToken)
     {
@@ -696,7 +834,7 @@ public static class SessionStoreReader
             throw new
                 SessionStoreException($"'{sessionId}' is not a valid session id: exactly 32 hex characters are required.");
 
-        // Same canonical lower-case lookup as the protected store.
+        // 与会话存储共用小写规范 ID，兼容大小写敏感文件系统。
         sessionId = sessionId.ToLowerInvariant();
         var snapshotPath = Path.Combine(directory, $"{sessionId}{SessionSnapshotFileSuffix}");
         if (!File.Exists(snapshotPath)) return null;
@@ -708,9 +846,7 @@ public static class SessionStoreReader
             {
             }
 
-            // The non-null property defaults do not protect against an explicit
-            // JSON null; a snapshot without its result or messages is damaged,
-            // never a crash in the display layer.
+            // JSON 显式 null 会覆盖非空默认值；应在读取边界拒绝，避免展示层崩溃。
             var snapshot = JsonSerializer.Deserialize(json, PersistenceJsonContext.Default.SessionSnapshot);
             if (snapshot?.Result is null || snapshot.Messages is null)
                 throw new
@@ -727,13 +863,16 @@ public static class SessionStoreReader
     }
 
     /// <summary>
-    ///     对账：审计中最大已提交序号必须等于快照的提交序号。快照领先（替换后、审计前中断）或审计
-    ///     缺失/损坏都说明本次保存未验证完成，按不一致拒绝展示。
-    ///     Reconciliation: the audit's maximum committed sequence must equal the
-    ///     snapshot's commit sequence. A snapshot ahead of the audit (interrupted
-    ///     between replacement and audit), a missing or a corrupt audit all mean
-    ///     the save was never verified — the entry is rejected as inconsistent.
+    ///     <para>校验审计中最大已提交序号与快照提交序号一致。</para>
+    ///     <para>Validates that the audit's maximum committed sequence matches the snapshot sequence.</para>
     /// </summary>
+    /// <remarks>
+    ///     <para>序号不一致或审计缺失、损坏均拒绝；原子替换成功本身不足以证明一致保存。</para>
+    ///     <para>
+    ///         Rejects sequence divergence or a missing or corrupt audit;
+    ///         successful atomic replacement alone does not prove a consistent save.
+    ///     </para>
+    /// </remarks>
     private static async Task ReconcileAuditTrailAsync(
         string directory, string sessionId, PersistedSession snapshot, CancellationToken cancellationToken)
     {
@@ -786,6 +925,7 @@ public static class SessionStoreReader
 [JsonSerializable(typeof(PersistedSession))]
 [JsonSerializable(typeof(PersistedTurn))]
 [JsonSerializable(typeof(PersistedRun))]
+[JsonSerializable(typeof(PersistedToolCallRecord))]
 [JsonSerializable(typeof(PersistedConversation))]
 [JsonSerializable(typeof(PersistedMessage))]
 [JsonSerializable(typeof(PersistedToolCall))]

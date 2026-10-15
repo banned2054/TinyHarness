@@ -38,13 +38,13 @@
 - **工具** — `list_files`、`search_text`、`read_file`、`apply_patch` 与 `shell`（直接进程/显式 shell 模式），带超时、进程树终止和输出裁剪。
 - **权限** — 每次调用经过 `Prepare → Authorize → Execute`：工作区内读取默认放行，补丁与进程默认询问（`a` 单次 / `s` 本次运行 / `d` 拒绝），可配置命令允许规则。
 - **上下文** — token 预算按真实 usage 校准、工具结果裁剪、旧回合压缩为经过校验的结构化摘要。
-- **持久化** — 每次运行写入 JSONL 审计和脱敏 session 快照；`chat` 会话原子提交到受保护存储，可严格离线查看，并可在新进程经工作区/模型/协议与 opaque 完整性检查后续聊（`chat --session <id>`）。格式 v3 为保真续聊原样保存会话内容：会话文件因此可能包含秘密且不被 Harness 加密；`session list` / `session show` 只输出脱敏检查视图，不展示 canonical 消息或 opaque 载荷。
+- **持久化** — 每次运行写入 JSONL 审计和脱敏 session 快照；`chat` 会话原子提交到受保护存储，可严格离线查看，并可在新进程经工作区/模型/协议与 opaque 完整性检查后续聊（`chat --session <id>`）。格式 v3 为保真续聊原样保存会话内容：会话文件因此可能包含秘密且不被 Harness 加密；`session list` / `session show` 只输出脱敏检查视图，不展示 canonical 消息或 opaque 载荷。`chat` 在每个副作用工具开始前，于完整协议边界保存执行意图检查点；保存失败不启动工具，宿主直接退出后仍保留待检查状态。在工具执行中途结束（取消或失败）的运行会在回合边界结算：逐调用执行记录区分已知未开始 / 有确认终态 / 结果未知，模型视图回退到最近完整工具边界，结果未知的副作用会阻断写入与进程执行直到用户检查确认；`session show` 离线展示这些记录。
 - **MCP worker** — `tinyharness mcp` 启动本机只读 stdio 服务，向 Codex 等客户端提供 `ask_glm`。
 - **Windows 沙箱** — 可选的机器级 `shell` 进程隔离，通过 `sandbox status / provision / verify` 显式管理。
 
 ## 🗺️ 限制
 
-- 最后一次运行在工具执行中途结束（取消或失败）的会话，在中断恢复落地前拒绝续聊；v3 之前格式版本（v1/v2）存储的会话仅支持查看（inspection-only），拒绝续聊。
+- 最后一次运行在工具执行中途结束（取消或失败）的会话，续聊时模型视图回退到最近完整工具边界，副作用工具保持阻断直到用户检查工作区并确认（恢复时的 `c` / `k` 提示）；v3 之前格式版本（v1/v2）存储的会话仅支持查看（inspection-only），拒绝续聊。
 - Windows 沙箱只在单台机器上验证过，与 Codex 发布版共存未验收。
 - NativeAOT 只验证了 `win-x64`；协议验证基于本地模拟 SSE 服务加上上述唯一真实 endpoint。
 - `chat` 尚未用真实模型服务验证。

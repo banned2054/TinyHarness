@@ -6,21 +6,35 @@ using TinyHarness.Core.Services.Tools;
 namespace TinyHarness.Tests;
 
 /// <summary>
-///     A scripted tool used to observe Prepare/Execute flow in loop tests.
+///     <para>用于观察主循环 Prepare/Execute 流程的可配置测试工具。</para>
+///     <para>A configurable test tool for observing the loop's Prepare/Execute flow.</para>
 /// </summary>
-internal sealed class FakeTool(string name, string description = "Fake tool") : ITool
+internal sealed class FakeTool(string name, string description = "Fake tool", string? summary = null) : ITool
 {
     public int ExecuteCount { get; private set; }
 
     public bool ThrowOnExecute { get; init; }
 
     /// <summary>
-    ///     设置后作为固定结果内容返回（并追加按执行计数的 “#n” 后缀），用于模拟超出预算的
-    ///     大输出并让测试区分同一工具的多次调用结果。
-    ///     When set, returned verbatim (with a per-execution "#n" suffix) to simulate
-    ///     oversized output and let tests tell repeated calls to one tool apart.
+    ///     <para>
+    ///         指定结果内容，并追加每次执行的 #n 后缀，
+    ///         用于区分重复调用或模拟超大输出。
+    ///     </para>
+    ///     <para>
+    ///         Uses the specified result content with a per-execution #n suffix
+    ///         to distinguish calls or simulate oversized output.
+    ///     </para>
     /// </summary>
     public string? ResultContent { get; init; }
+
+    /// <summary>
+    ///     <para>覆盖准备计划摘要；缺省为工具名加参数 JSON，用于验证展示与脱敏。</para>
+    ///     <para>
+    ///         Overrides the prepared summary; defaults to the tool name plus argument JSON
+    ///         for display and redaction tests.
+    ///     </para>
+    /// </summary>
+    public string? Summary { get; init; } = summary;
 
     public ToolDefinition Definition { get; } = new()
     {
@@ -42,7 +56,7 @@ internal sealed class FakeTool(string name, string description = "Fake tool") : 
             CallId     = call.Id,
             Arguments  = args,
             Capability = $"test.{Definition.Name}",
-            Summary    = $"{Definition.Name}({args.ToJsonString()})"
+            Summary    = Summary ?? $"{Definition.Name}({args.ToJsonString()})"
         };
     }
 

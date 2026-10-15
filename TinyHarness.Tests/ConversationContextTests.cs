@@ -6,13 +6,14 @@ using TinyHarness.Core.Services.Context;
 namespace TinyHarness.Tests;
 
 /// <summary>
-///     ConversationContext 直接 API 回归测试，覆盖 M6 review 修复：首次规划计入头部消息、
-///     空摘要与丢事实摘要被拒绝、提交前收益校验、计划后追加消息拒绝、摘要请求裁剪与自身预算、
-///     首次摘要携带原始任务，以及阈值/窗口配置校验。
-///     Direct ConversationContext API regression tests for the M6 review fixes: first-plan
-///     head accounting, rejection of empty or fact-dropping summaries, the pre-commit
-///     benefit check, rejection after plan-time appends, summary-request capping and its
-///     own budget, the original task on the first fold, and threshold/window validation.
+///     <para>
+///         验证上下文压缩的头部计费、原始任务与历史事实保留、提交前收益和计划有效性，
+///         以及摘要请求裁剪、自身预算和阈值配置边界。
+///     </para>
+///     <para>
+///         Verifies head-token accounting, original-task and historical-fact retention, pre-commit benefit
+///         and plan validity, plus summary capping, request budgets and threshold boundaries.
+///     </para>
 /// </summary>
 public class ConversationContextTests
 {
@@ -67,21 +68,19 @@ public class ConversationContextTests
         var context = ContextWithRounds(1000, 30, 3, new string('x', 1600));
         Assert.True(context.RequiresCompaction([]));
 
-        // First fold: instructions, "no previous summary", the original task and
-        // constraints, then the capped fold turns.
+        // 首次摘要请求须包含原始任务和约束，并裁剪待折叠消息。
         var summaryRequest = context.BuildCompactionMessages([]);
         Assert.Equal([ChatRole.System, ChatRole.User, ChatRole.User, ChatRole.Assistant, ChatRole.Tool],
                      summaryRequest.Select(m => m.Role).ToArray());
         Assert.Contains("Original task", summaryRequest[2].Content);
         Assert.Contains("[User] go", summaryRequest[2].Content);
 
-        // An all-empty summary would wipe the folded tool work from the model view:
-        // it must be rejected and leave the current view untouched.
+        // 全空摘要会抹去工具工作，必须拒绝且保留当前视图。
         var viewBefore = context.EstimateViewTokens();
         Assert.False(context.TryApplyCompaction("{}"));
         Assert.Equal(viewBefore, context.EstimateViewTokens());
-        Assert.Single(context.BuildModelView(), m => m.Role == ChatRole.User); // no state message inserted
-        Assert.False(context.RequiresCompaction([])); // failure is latched until new messages arrive
+        Assert.Single(context.BuildModelView(), m => m.Role == ChatRole.User); // 不插入状态消息。
+        Assert.False(context.RequiresCompaction([]));                          // 新消息到来前不重试失败的压缩。
     }
 
     [Fact]
@@ -90,11 +89,10 @@ public class ConversationContextTests
         var context = ContextWithRounds(1000, 30, 3, new string('x', 1600));
         Assert.NotEmpty(context.BuildCompactionMessages([]));
 
-        // A goal-only summary is not degenerate (the goal is present), so it is
-        // accepted: the task survives even when no list facts were gathered yet.
+        // 尚无列表事实时，仅含目标的摘要仍有效，不能丢失任务。
         Assert.True(context.TryApplyCompaction("""{"goal":"g"}"""));
         var view = context.BuildModelView();
-        Assert.Equal(2, view.Count(m => m.Role == ChatRole.User)); // head user + state message
+        Assert.Equal(2, view.Count(m => m.Role == ChatRole.User)); // 原始用户输入与状态消息。
         Assert.Contains("\"goal\":\"g\"", view[2].Content);
     }
 
@@ -118,10 +116,9 @@ public class ConversationContextTests
         AppendRound(context, "c4", new string('x', 1600));
         Assert.True(context.RequiresCompaction([]));
         var secondRequest = context.BuildCompactionMessages([]);
-        Assert.Contains("run tests", secondRequest[1].Content); // prior state is forwarded to the summarizer
+        Assert.Contains("run tests", secondRequest[1].Content); // 先前状态须传给摘要模型。
 
-        // Constraints and pending work may be replaced by a non-empty current state,
-        // while prior decisions and historical facts must still be carried forward.
+        // 当前约束和待办可更新；历史决策、文件与命令事实必须保留。
         var completed = new JsonObject
         {
             ["goal"]               = "goal-g",
@@ -201,8 +198,7 @@ public class ConversationContextTests
         var context = ContextWithRounds(1000, 30, 3, new string('x', 1600));
         Assert.NotEmpty(context.BuildCompactionMessages([]));
 
-        // A structurally valid but enormous summary would grow the view instead of
-        // shrinking it, so committing it must fail and keep the original view.
+        // 结构合法但不能缩小视图的摘要不得提交。
         var viewBefore = context.EstimateViewTokens();
         var bloated = $"{{\"goal\":\"{new string('g', 5000)}\",\"constraints\":[],\"decisions\":[]," +
                       $"\"filesInspected\":[],\"filesModified\":[],\"commandsAndResults\":[],\"pendingWork\":[]}}";
@@ -217,8 +213,7 @@ public class ConversationContextTests
         var context = ContextWithRounds(1000, 30, 3, new string('x', 1600));
         Assert.NotEmpty(context.BuildCompactionMessages([]));
 
-        // The fold plan addresses raw message indexes; an append after planning
-        // invalidates it, so the commit is refused and nothing is committed.
+        // 折叠计划绑定原始消息索引；规划后追加消息必须使计划失效。
         context.Append(ChatMessage.User("late"));
         var viewBefore = context.EstimateViewTokens();
         Assert.False(context.TryApplyCompaction("""{"goal":"g"}"""));
@@ -229,11 +224,7 @@ public class ConversationContextTests
     [Fact]
     public void FirstCompaction_ChargesHeadTokens_WhenDecidingWhetherToFold()
     {
-        // Before the first fold the head (system + user) stays in the model view after
-        // the fold, so planning must charge it. With a large head the planner must
-        // conclude there is something to fold instead of assuming everything fits:
-        // the total estimate exceeds the window but would previously have been
-        // misjudged as foldable-nothing because the head was not charged.
+        // 首次折叠后仍保留头部消息，规划必须计入其 token，不能误判为无需折叠。
         var context = ContextWithRounds(1000, 30, 3,
                                         new string('x', 1600), new string('x', 400));
         Assert.True(context.EstimateViewTokens() + 30 > 1000, "the total estimate must exceed the window");
@@ -253,17 +244,14 @@ public class ConversationContextTests
         Assert.True(context.RequiresCompaction([]));
         var summary = context.BuildCompactionMessages([]);
 
-        // The summarizer input must not re-send the raw oversized tool outputs:
-        // every folded message is capped like the model view, while the local
-        // history keeps the full text.
+        // 摘要请求裁剪超大工具输出，本地完整历史保持原样。
         var toolMessage = Assert.Single(summary, m => m.Role == ChatRole.Tool);
         Assert.Contains("truncated", toolMessage.Content);
         Assert.True(toolMessage.Content.Length < 5000);
         Assert.All(context.Messages.Where(m => m.Role == ChatRole.Tool),
                    m => Assert.Equal(200_000, m.Content.Length));
 
-        // The summary request is budgeted on its own: its estimated input stays
-        // within the declared window.
+        // 摘要请求按自身窗口预算，不能只检查主模型视图。
         Assert.True(TokenEstimator.EstimateMessages(summary) + 30 <= 1000,
                     "the summarizer input must fit its own window");
     }
@@ -323,15 +311,14 @@ public class ConversationContextTests
         var context = new ConversationContext();
         context.Append(ChatMessage.System("sys"));
         context.Append(ChatMessage.User("go"));
-        var uncalibrated = context.EstimateViewTokens(); // calibration starts at 1.0
+        var uncalibrated = context.EstimateViewTokens(); // 初始校准系数为 1.0。
         Assert.True(uncalibrated > 0);
 
-        // 估算 100 实测 150 → 后续估算 = 原值 × 1.5（向上取整）。
-        // Estimate 100 vs actual 150 → later estimates scale by 1.5, rounded up.
+        // 实测与估算比为 1.5 时，后续估算按该比率缩放并向上取整。
         context.RecordModelUsage(100, 150);
         Assert.Equal((int)Math.Ceiling(uncalibrated * 1.5), context.EstimateViewTokens());
 
-        // 只有最近一次观测生效。Only the most recent observation applies.
+        // 仅最近一次有效观测参与校准。
         context.RecordModelUsage(100, 300);
         Assert.Equal((int)Math.Ceiling(uncalibrated * 3.0), context.EstimateViewTokens());
     }
@@ -343,10 +330,10 @@ public class ConversationContextTests
         context.Append(ChatMessage.User("go"));
         var uncalibrated = context.EstimateViewTokens();
 
-        context.RecordModelUsage(100, 20); // ratio 0.2 → clamped down to 0.5
+        context.RecordModelUsage(100, 20); // 比率 0.2 限制为 0.5。
         Assert.Equal((int)Math.Ceiling(uncalibrated * 0.5), context.EstimateViewTokens());
 
-        context.RecordModelUsage(100, 900); // ratio 9.0 → clamped up to 4.0
+        context.RecordModelUsage(100, 900); // 比率 9.0 限制为 4.0。
         Assert.Equal((int)Math.Ceiling(uncalibrated * 4.0), context.EstimateViewTokens());
     }
 
@@ -357,13 +344,13 @@ public class ConversationContextTests
         context.Append(ChatMessage.User("go"));
         var before = context.EstimateViewTokens();
 
-        context.RecordModelUsage(100, null); // no reliable usage reported
+        context.RecordModelUsage(100, null); // 未报告可靠 usage。
         context.RecordModelUsage(100, 0);
         context.RecordModelUsage(100, -5);
-        context.RecordModelUsage(0, 150); // non-positive estimate
+        context.RecordModelUsage(0, 150); // 非正估算不可用于校准。
         context.RecordModelUsage(-10, 150);
 
-        Assert.Equal(before, context.EstimateViewTokens()); // calibration stays 1.0
+        Assert.Equal(before, context.EstimateViewTokens()); // 无效观测不改变校准系数。
     }
 
     [Fact]
@@ -372,12 +359,39 @@ public class ConversationContextTests
         var context = ContextWithRounds(1000, 30, 3, new string('x', 1600));
         Assert.NotEmpty(context.BuildCompactionMessages([]));
 
-        // A 4x calibration inflates both sides of the pre-commit benefit check by
-        // the same monotone factor, so a valid summary must still shrink the view.
+        // 校准同时缩放收益检查两端，不能破坏压缩必须缩小视图的约束。
         context.RecordModelUsage(100, 400);
         var before = context.EstimateViewTokens();
         Assert.True(context.TryApplyCompaction("""{"goal":"g"}"""));
         var after = context.EstimateViewTokens();
         Assert.True(after < before, $"calibrated compaction must still shrink the view: {after} >= {before}");
+    }
+
+    [Fact]
+    public void TruncateToMessageCount_RemovesTheTailWithoutTouchingTheFoldRegion()
+    {
+        var context = new ConversationContext(Options(100_000, 1_000));
+        context.Restore(
+        [
+            ChatMessage.System("sys"),
+            ChatMessage.User("u1"),
+            ChatMessage.Assistant(string.Empty, [new ChatToolCall("c1", "t", "{}")]),
+            ChatMessage.Tool("t", "c1", "r1"),
+            ChatMessage.Assistant("a1"),
+            ChatMessage.User("u2"),
+            ChatMessage.Assistant(string.Empty, [new ChatToolCall("c2", "t", "{}")]),
+            ChatMessage.Tool("t", "c2", "partial")
+        ], new StructuredState { Goal = "g" }, true, 2, 4);
+
+        // 中断尾部整体回退到完整边界，不能改动较早的完整折叠区。
+        context.TruncateToMessageCount(6);
+
+        Assert.Equal(6, context.Messages.Count);
+        Assert.Equal(ChatRole.User, context.Messages[^1].Role);
+        Assert.Equal(new ConversationContext.CompactionPosition(true, 2, 4), context.Position);
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => context.TruncateToMessageCount(0));
+        Assert.Throws<ArgumentOutOfRangeException>(() => context.TruncateToMessageCount(6));
+        Assert.Throws<ArgumentException>(() => context.TruncateToMessageCount(3));
     }
 }

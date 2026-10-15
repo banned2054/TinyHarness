@@ -3,23 +3,33 @@ using TinyHarness.Core.Models.ChatCompletions;
 namespace TinyHarness.Core.Services.Agent;
 
 /// <summary>
-///     对话历史必须满足的协议不变量，由执行前校验（<see cref="AgentLoop" />）与跨进程恢复
-///     （会话续聊）共用同一实现，避免两处规则漂移。
-///     Protocol invariants a conversation history must satisfy, shared by the
-///     pre-execution check (<see cref="AgentLoop" />) and the cross-process
-///     restoration (session resume) so the two rules can never drift apart.
+///     <para>
+///         提供执行前与会话恢复共享的对话协议不变量，避免校验规则漂移。
+///     </para>
+///     <para>
+///         Provides shared conversation protocol invariants for execution and session restoration
+///         to prevent validation drift.
+///     </para>
 /// </summary>
 internal static class ChatHistoryInvariants
 {
     /// <summary>
-    ///     校验历史中不存在不完整的工具原子组：每个 assistant tool_calls 的每个调用都必须
-    ///     有对应的 tool 结果消息。取消或失败可能留下已请求但未回传结果的调用；把这样的
-    ///     历史继续发给模型是无效请求，必须在新输入追加前拒绝。
-    ///     Verifies the history carries no incomplete tool group: every assistant
-    ///     tool call must have a matching tool-result message. A cancel or failure
-    ///     can leave calls whose results never arrived; continuing would send
-    ///     invalid history, so this is refused before any new input is appended.
+    ///     <para>
+    ///         要求历史中每个 assistant 工具调用都有对应结果，拒绝不完整工具原子组。
+    ///     </para>
+    ///     <para>
+    ///         Requires a matching result for every historical assistant tool call, rejecting incomplete atomic groups.
+    ///     </para>
     /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         须在追加新输入前校验；取消或失败留下的缺失结果不能补造或继续发给模型。
+    ///     </para>
+    ///     <para>
+    ///         Validate before appending new input; results missing after cancellation or failure
+    ///         must neither be fabricated nor sent on as invalid history.
+    ///     </para>
+    /// </remarks>
     public static void EnsureCompleteToolGroups(IReadOnlyList<ChatMessage> messages)
     {
         HashSet<string>? pending = null;
@@ -52,5 +62,63 @@ internal static class ChatHistoryInvariants
                 " have no tool result. The previous run was cancelled or failed mid-round, so the executed " +
                 "work may have an unknown state; continuing would send malformed history to the model. "     +
                 "Inspect the workspace before starting new work.");
+    }
+
+    /// <summary>
+    ///     <para>
+    ///         计算不拆分工具原子组的最近完整协议边界。
+    ///     </para>
+    ///     <para>
+    ///         Finds the latest complete protocol boundary without splitting atomic tool groups.
+    ///     </para>
+    /// </summary>
+    /// <returns>
+    ///     <para>
+    ///         完整历史返回消息总数；仅尾组缺结果时返回开启该组的 assistant 下标，
+    ///         供调用方整体回退到该组之前；非尾部出现不完整组时返回 -1，须按损坏处理。
+    ///     </para>
+    ///     <para>
+    ///         Returns the message count for complete history, or the opening assistant index
+    ///         when only the trailing group lacks results, so callers rewind before the whole group.
+    ///         Returns -1 for a non-trailing incomplete group, which must be treated as corruption.
+    ///     </para>
+    /// </returns>
+    public static int LastCompleteBoundary(IReadOnlyList<ChatMessage> messages)
+    {
+        var              pendingStart = -1;
+        HashSet<string>? pending      = null;
+        for (var index = 0; index < messages.Count; index++)
+        {
+            var message = messages[index];
+            switch (message.Role)
+            {
+                case ChatRole.Assistant :
+                    if (pending is { Count: > 0 }) return -1;
+
+                    if (message.ToolCalls is { Count: > 0 })
+                    {
+                        pending = new HashSet<string>(message.ToolCalls.Select(call => call.Id),
+                                                      StringComparer.Ordinal);
+                        pendingStart = index;
+                    }
+                    else
+                    {
+                        pending      = null;
+                        pendingStart = -1;
+                    }
+
+                    break;
+
+                case ChatRole.Tool :
+                    if (pending is not null && message.ToolCallId is { } id) pending.Remove(id);
+                    break;
+
+                case ChatRole.User or ChatRole.System :
+                    if (pending is { Count: > 0 }) return -1;
+                    break;
+            }
+        }
+
+        return pending is { Count: > 0 } ? pendingStart : messages.Count;
     }
 }

@@ -7,8 +7,11 @@ using TinyHarness.Core.Services.Tools;
 namespace TinyHarness.Tests;
 
 /// <summary>
-///     ShellTool 与 IProcessExecutionBackend 之间契约的映射测试：使用 fake backend
-///     验证冻结计划的传递、输出块到 ToolResult 的组装，以及终态映射，不启动真实进程。
+///     <para>使用模拟后端验证冻结计划传递、输出组装和终态映射，不启动真实进程。</para>
+///     <para>
+///         Uses a fake backend to verify frozen-plan delivery, output assembly and terminal mapping without starting
+///         processes.
+///     </para>
 /// </summary>
 public class ShellToolBackendTests
 {
@@ -35,7 +38,7 @@ public class ShellToolBackendTests
         Assert.Equal(45, received.TimeoutSeconds);
         Assert.False(received.WorkspaceExecutable);
         Assert.Null(received.RawCmdCommand);
-        // The backend plan and the approved preparation must stay the same frozen view.
+        // 后端收到的计划必须与已审批的冻结视图一致。
         Assert.Equal(preparation.Arguments["executable"]!.GetValue<string>(), received.Executable);
         Assert.Equal(preparation.Arguments["timeoutSeconds"]!.GetValue<int>(), received.TimeoutSeconds);
     }
@@ -205,6 +208,20 @@ public class ShellToolBackendTests
         Assert.False(result.Succeeded);
         Assert.Null(result.ExitCode);
         Assert.Contains("Failed to start executable", result.Content);
+    }
+
+    [Fact]
+    public async Task Execute_PropagatesUnknownProcessCleanupWithoutFabricatingAResult()
+    {
+        using var dir     = new TestTempDir();
+        var       failure = new ToolExecutionUncertainException("runner could not be reclaimed");
+        var       backend = new FakeProcessExecutionBackend { ThrowOnExecute = failure };
+        var       tool    = new ShellTool(dir.Workspace, processBackend : backend);
+
+        var exception = await Assert.ThrowsAsync<ToolExecutionUncertainException>(() =>
+                     tool.ExecuteAsync(tool.Prepare(Call("dotnet", ["test"])), CancellationToken.None));
+
+        Assert.Same(failure, exception);
     }
 
     [Fact]

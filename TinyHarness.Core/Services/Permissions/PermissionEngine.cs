@@ -9,40 +9,32 @@ using TinyHarness.Core.Services.Runtime;
 namespace TinyHarness.Core.Services.Permissions;
 
 /// <summary>
-///     应用层权限引擎。依据工作区硬边界、会话规则、一次性授权和默认策略，
-///     对已准备的工具调用给出允许、询问或拒绝结论。它属于策略与审批层，不是 OS 沙箱。
-///     Application-layer permission engine. It decides, for each prepared
-///     tool invocation, whether to allow, ask or deny based on the current policy and
-///     the session's recorded approvals.
-///     Decision priority, most authoritative first:
-///     <list type="number">
-///         <item>hard deny — any target outside the workspace root;</item>
-///         <item>session deny — an explicit host rule recorded for a capability + scope;</item>
-///         <item>
-///             one-shot approval — a user "allow once" for this exact invocation (spent
-///             the first time the covered invocation executes, see
-///             <see cref="TryConsumeOnce" />);
-///         </item>
-///         <item>session grant — a user "allow session" for a capability + scope;</item>
-///         <item>configured command rule — a mode-specific direct-command pattern or exact shell-command/cwd match;</item>
-///         <item>
-///             default policy — read-only capabilities inside the workspace allow,
-///             write capabilities ask;
-///         </item>
-///         <item>ask — anything not otherwise allowed.</item>
-///     </list>
-///     This is policy/approval, not an OS sandbox; the runtime enforces the actual
-///     filesystem boundary separately.
+///     <para>
+///         对不可变准备计划应用硬边界、临时授权与配置策略，给出 Allow、Ask 或 Deny。
+///     </para>
+///     <para>
+///         Applies hard boundaries, temporary grants and configured policy to immutable prepared plans,
+///         returning Allow, Ask or Deny.
+///     </para>
 /// </summary>
+/// <remarks>
+///     <para>
+///         优先级为只读 worker 硬限制、工作区边界、显式拒绝、NeedsInspection 阻断、
+///         一次性授权、能力与范围授权、配置命令规则、默认策略；未知能力默认询问。
+///         这是应用层策略，不是 OS 沙箱；运行时另行强制文件系统边界。
+///         Session 命名保留兼容用语，宿主须把临时授权状态限制为本次运行，不跨未来回合复活。
+///     </para>
+///     <para>
+///         Priority is read-only worker restrictions, workspace boundaries, explicit denies,
+///         NeedsInspection blocking, one-shot grants, capability-and-scope grants, configured command rules
+///         and default policy; unknown capabilities default to Ask.
+///         This is application policy, not an OS sandbox; the runtime enforces filesystem boundaries separately.
+///         Session naming is retained for compatibility; the host must limit temporary grant state
+///         to the current run rather than revive it across future turns.
+///     </para>
+/// </remarks>
 public sealed class PermissionEngine
 {
-    private static readonly HashSet<string> WorkerReadOnlyCapabilities = new(StringComparer.Ordinal)
-    {
-        "filesystem.list",
-        "filesystem.search",
-        "filesystem.read"
-    };
-
     private static readonly IReadOnlyDictionary<string, PermissionDecision> DefaultInsidePolicy =
         new Dictionary<string, PermissionDecision>(StringComparer.Ordinal)
         {
@@ -58,12 +50,16 @@ public sealed class PermissionEngine
     private readonly HashSet<string>      _oneShotApprovals = new(StringComparer.Ordinal);
     private readonly List<PermissionRule> _sessionDenies    = [];
     private readonly List<PermissionRule> _sessionGrants    = [];
+    private readonly string               _workspaceRoot;
 
-    private readonly string _workspaceRoot;
 
     /// <summary>
-    ///     为指定工作区建立独立的会话权限状态。
-    ///     Creates isolated session permission state for the specified workspace.
+    ///     <para>
+    ///         为指定工作区建立独立权限状态。
+    ///     </para>
+    ///     <para>
+    ///         Creates isolated permission state for the specified workspace.
+    ///     </para>
     /// </summary>
     public PermissionEngine(
         string workspaceRoot, IEnumerable<CommandRule>? commandRules = null, bool denyNonReadOnlyCapabilities = false)
@@ -78,124 +74,231 @@ public sealed class PermissionEngine
     }
 
     /// <summary>
-    ///     只读地计算当前调用的权限结论；重复调用不会消费一次性授权或改变会话状态。
-    ///     Decides how to treat a prepared invocation without mutating state. Safe to
-    ///     call repeatedly; the loop may re-run a decision after each state change.
+    ///     <para>
+    ///         当前 NeedsInspection 非只读阻断原因；未阻断时为 null。
+    ///     </para>
+    ///     <para>
+    ///         The current NeedsInspection reason for blocking non-read-only capabilities; null when unblocked.
+    ///     </para>
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         仅由宿主依据中断事实设置，并在用户确认检查后清除；模型输出不能建立或解除阻断。
+    ///     </para>
+    ///     <para>
+    ///         Only the host sets it from interruption facts and clears it after user inspection confirmation;
+    ///         model output cannot create or remove the block.
+    ///     </para>
+    /// </remarks>
+    public string? NonReadOnlyBlockReason { get; private set; }
+
+    /// <summary>
+    ///     <para>
+    ///         只读地计算当前调用的权限结论；重复调用不会消费一次性授权或改变会话状态。
+    ///     </para>
+    ///     <para>
+    ///         Decides how to treat a prepared invocation without mutating state. Safe to
+    ///         call repeatedly; the loop may re-run a decision after each state change.
+    ///     </para>
     /// </summary>
     public PermissionDecision Decide(ToolPreparation preparation)
     {
-        // Worker mode is an explicit hard deny: unlisted capabilities, including filesystem.write
-        // and process.execute, cannot be approved by a grant or command rule. The normal CLI leaves
-        // this opt-in flag off and retains its existing policy.
-        if (_denyNonReadOnlyCapabilities && !WorkerReadOnlyCapabilities.Contains(preparation.Capability))
+        // 只读 worker 限制是硬拒绝，未知能力也不能被 grant 或命令规则放行；普通 CLI 不启用此限制。
+        if (_denyNonReadOnlyCapabilities && !ToolCapabilities.IsReadOnly(preparation.Capability))
             return PermissionDecision.Deny;
 
-        // 1. Hard deny: a target outside the workspace is never allowed, even if
-        // the tool failed to reject it at Prepare time (defense in depth).
+        // 即使 Prepare 漏检，越界目标仍须拒绝。
         if (preparation.TargetPaths.Any(target => !Workspace.IsInside(_workspaceRoot, target)))
             return PermissionDecision.Deny;
 
-        // 2. Explicit/session deny wins over any earlier approval.
         if (_sessionDenies.Any(rule => rule.Matches(preparation, true))) return PermissionDecision.Deny;
 
-        // 3. One-shot approval for this exact invocation.
+        // NeedsInspection 优先于所有授权与命令规则；仅由宿主在用户确认检查后解除。
+        if (NonReadOnlyBlock(preparation) is not null) return PermissionDecision.Deny;
+
         if (_oneShotApprovals.Contains(Fingerprint(preparation))) return PermissionDecision.Allow;
 
-        // 4. Session grant for this capability + scope.
         if (_sessionGrants.Any(rule => rule.Matches(preparation))) return PermissionDecision.Allow;
 
-        // Precisely configured process rules are the only commands that bypass
-        // interactive approval. They match executable, each argument pattern,
-        // and one exact normalized working directory.
+        // 命令免审批必须精确匹配模式与规范化 cwd；direct 逐参数匹配，shell 精确匹配完整命令。
         if (string.Equals(preparation.Capability, "process.execute", StringComparison.Ordinal) &&
             _commandRules.Any(rule => rule.Matches(preparation)))
             return PermissionDecision.Allow;
 
-        // 6/7. Default policy, then ask.
         return DefaultInsidePolicy.GetValueOrDefault(preparation.Capability, PermissionDecision.Ask);
     }
 
     /// <summary>
-    ///     记录对该完整调用指纹的一次性预授权，须在实际执行时由
-    ///     <see cref="TryConsumeOnce" /> 消费。
-    ///     Records an "allow once" approval for this exact invocation. Use only for
-    ///     pre-authorization, i.e. when the caller grants before a later
-    ///     <see cref="Decide" />/execution cycle; an approval that is followed
-    ///     immediately by the execution it covers should not be persisted at all.
-    ///     The caller must spend the approval via <see cref="TryConsumeOnce" /> when
-    ///     the covered invocation executes, otherwise it would approve every later
-    ///     identical invocation for the rest of the session.
+    ///     <para>
+    ///         记录绑定完整调用指纹的一次性预授权。
+    ///     </para>
+    ///     <para>
+    ///         Records a one-shot preauthorization bound to the complete invocation fingerprint.
+    ///     </para>
     /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         仅供先授权、后 Decide 的调用使用；在授权阶段用 TryConsumeOnce 预留消费，
+    ///         不得等到执行后才消费，否则同轮相同调用可重复获批。
+    ///         当前调用的交互批准无需存入引擎，避免误批后续调用。
+    ///     </para>
+    ///     <para>
+    ///         Use only when authorization precedes Decide; reserve it with TryConsumeOnce during authorization,
+    ///         not after execution, so identical calls in one round cannot reuse the grant.
+    ///         Do not store an interactive approval for the current call, which could approve a later call accidentally.
+    ///     </para>
+    /// </remarks>
     public void GrantOnce(ToolPreparation preparation)
     {
         _oneShotApprovals.Add(Fingerprint(preparation));
     }
 
     /// <summary>
-    ///     消费完全匹配的一次性授权并返回是否成功消费；没有对应授权时不改变状态。
-    ///     Spends a one-shot approval for this exact invocation when one is present,
-    ///     and reports whether one was spent. The Agent Loop calls this as an
-    ///     approved execution commits, so an "allow once" covers exactly one attempt
-    ///     and an identical later invocation must be approved again. A no-op when the
-    ///     execution was approved through another mechanism (session grant,
-    ///     default policy), because no one-shot entry exists for it.
+    ///     <para>
+    ///         消费完全匹配的一次性预授权并返回是否成功；不存在时不改变状态。
+    ///     </para>
+    ///     <para>
+    ///         Consumes a matching one-shot preauthorization, returning whether it was spent;
+    ///         does not change state if absent.
+    ///     </para>
     /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         Agent Loop 在授权阶段消费，使一次批准只覆盖一次尝试；未用一次性授权批准时为无操作。
+    ///     </para>
+    ///     <para>
+    ///         Agent Loop consumes it during authorization so one approval covers one attempt;
+    ///         this is a no-op for approvals made without a one-shot grant.
+    ///     </para>
+    /// </remarks>
     public bool TryConsumeOnce(ToolPreparation preparation) => _oneShotApprovals.Remove(Fingerprint(preparation));
 
     /// <summary>
-    ///     记录覆盖该能力与资源范围的会话级允许规则。规则约束绑定命令身份加执行策略身份
-    ///     （<see cref="ToolPreparation.SessionGrantConstraint" />）：同一命令的授权不能跨后端、
-    ///     跨隔离策略或跨环境复用。
-    ///     Records a session-wide allow rule for this capability and resource scope.
-    ///     The rule constraint binds the command identity plus the execution policy
-    ///     identity (<see cref="ToolPreparation.SessionGrantConstraint" />): an
-    ///     approval for one command can never be reused across backends, isolation
-    ///     policies, or environments.
+    ///     <para>
+    ///         记录绑定能力、资源范围与执行策略身份的临时允许规则。
+    ///     </para>
+    ///     <para>
+    ///         Records a temporary allow rule bound to capability, resource scope and execution-policy identity.
+    ///     </para>
     /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         SessionGrantConstraint 绑定命令及策略；授权不能跨后端、隔离策略或环境复用。
+    ///         宿主限定状态为本次运行，Session 命名不表示长期会话授权。
+    ///     </para>
+    ///     <para>
+    ///         SessionGrantConstraint binds command and policy; grants cannot cross backends, isolation policies
+    ///         or environments. The host limits state to the current run; Session naming does not grant future turns.
+    ///     </para>
+    /// </remarks>
     public void GrantSession(ToolPreparation preparation)
     {
         _sessionGrants.Add(ToRule(preparation, false));
     }
 
     /// <summary>
-    ///     记录覆盖该能力与资源范围的会话级拒绝规则。规则约束只绑定命令身份，使拒绝不因
-    ///     执行后端变化意外失效。
-    ///     Records a session-wide deny rule for this capability and resource scope.
-    ///     The rule constraint binds the bare command identity so a denial survives
-    ///     execution-backend changes.
+    ///     <para>
+    ///         记录绑定能力、资源范围与命令身份的显式拒绝规则。
+    ///     </para>
+    ///     <para>
+    ///         Records an explicit deny rule bound to capability, resource scope and command identity.
+    ///     </para>
     /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         拒绝不绑定执行策略，避免切换后端使其失效。
+    ///     </para>
+    ///     <para>
+    ///         Denials do not bind execution policy, so switching backends cannot invalidate them.
+    ///     </para>
+    /// </remarks>
     public void DenySession(ToolPreparation preparation)
     {
         _sessionDenies.Add(ToRule(preparation, true));
     }
 
     /// <summary>
-    ///     从不可变准备计划提取能力和规范化目标，生成会话规则；允许规则绑定授权约束，
-    ///     拒绝规则绑定命令约束。
-    ///     Creates a session rule from a prepared plan's capability and normalized
-    ///     targets; grants bind the grant constraint, denies the command constraint.
+    ///     <para>
+    ///         设置或清除非只读阻断，任何授权或命令规则均不得绕过。
+    ///     </para>
+    ///     <para>
+    ///         Sets or clears non-read-only blocking, which no grant or command rule may bypass.
+    ///     </para>
     /// </summary>
-    private static PermissionRule ToRule(ToolPreparation preparation, bool deny) => new(preparation.Capability,
+    /// <param name="reason">
+    ///     <para>
+    ///         null 或空白表示清除；宿主仅在用户明确确认检查后清除。
+    ///         非空时写入、进程执行及未知能力均拒绝。
+    ///     </para>
+    ///     <para>
+    ///         Null or whitespace clears the block; the host clears it only after explicit user inspection confirmation.
+    ///         A nonempty reason blocks writes, process execution and unknown capabilities.
+    ///     </para>
+    /// </param>
+    public void SetNonReadOnlyBlock(string? reason) =>
+        NonReadOnlyBlockReason = string.IsNullOrWhiteSpace(reason) ? null : reason;
+
+    /// <summary>
+    ///     <para>
+    ///         返回本次调用被 NeedsInspection 阻断的原因；未被阻断时为 null。主循环用它把阻断
+    ///         原因带回给模型，而不是让它猜测拒绝理由。
+    ///     </para>
+    ///     <para>
+    ///         Returns the NeedsInspection-block reason applying to this invocation, or
+    ///         null when it is not blocked. The agent loop uses it to carry the reason
+    ///         back to the model instead of leaving it guessing.
+    ///     </para>
+    /// </summary>
+    public string? NonReadOnlyBlock(ToolPreparation preparation) =>
+        NonReadOnlyBlockReason is null || ToolCapabilities.IsReadOnly(preparation.Capability)
+            ? null
+            : NonReadOnlyBlockReason;
+
+    /// <summary>
+    ///     <para>
+    ///         从不可变准备计划提取能力和规范化目标，生成会话规则；允许规则绑定授权约束，
+    ///         拒绝规则绑定命令约束。
+    ///     </para>
+    ///     <para>
+    ///         Creates a session rule from a prepared plan's capability and normalized
+    ///         targets; grants bind the grant constraint, denies the command constraint.
+    ///     </para>
+    /// </summary>
+    private static PermissionRule ToRule(ToolPreparation preparation, bool deny) => new(
+                                                                                        preparation.Capability,
                                                                                         preparation.TargetPaths.ToArray(),
                                                                                         deny ? preparation.SessionConstraint : GrantConstraint(preparation));
 
     /// <summary>
-    ///     会话授权与一次性授权使用的约束：优先执行策略绑定的授权约束，缺省回落到命令约束。
-    ///     The constraint used by session grants and one-shot approvals: the
-    ///     policy-bound grant constraint when present, otherwise the command constraint.
+    ///     <para>
+    ///         会话授权与一次性授权使用的约束：优先执行策略绑定的授权约束，缺省回落到命令约束。
+    ///     </para>
+    ///     <para>
+    ///         The constraint used by session grants and one-shot approvals: the
+    ///         policy-bound grant constraint when present, otherwise the command constraint.
+    ///     </para>
     /// </summary>
     private static string? GrantConstraint(ToolPreparation preparation) =>
         preparation.SessionGrantConstraint ?? preparation.SessionConstraint;
 
     /// <summary>
-    ///     对工具名、能力、排序后的目标路径、授权约束和规范化参数生成稳定 SHA-256 指纹，
-    ///     保证单次授权只匹配完全相同的调用——包括同一执行策略下的调用；切换后端或策略后
-    ///     旧授权不再命中。
-    ///     A stable fingerprint of the full prepared invocation: tool name,
-    ///     capability, normalized target paths, the grant constraint, and normalized
-    ///     arguments. "Allow once" matches only the exact same call under the same
-    ///     execution policy; switching backend or policy never reuses an old approval.
+    ///     <para>
+    ///         对完整准备调用生成稳定 SHA-256 指纹，限制一次性授权精确匹配。
+    ///     </para>
+    ///     <para>
+    ///         Generates a stable SHA-256 fingerprint of the complete prepared invocation
+    ///         for exact one-shot approval matching.
+    ///     </para>
     /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         指纹包含工具名、能力、排序目标路径、授权约束与规范化参数；后端或策略变化不得命中旧授权。
+    ///     </para>
+    ///     <para>
+    ///         Includes tool name, capability, sorted target paths, grant constraint and normalized arguments;
+    ///         backend or policy changes must not match old approvals.
+    ///     </para>
+    /// </remarks>
     private static string Fingerprint(ToolPreparation preparation)
     {
         var canonical =
@@ -209,9 +312,22 @@ public sealed class PermissionEngine
     }
 
     /// <summary>
-    ///     已规范化的命令允许规则。direct 参数 pattern 只在单个参数内支持 '*' 与 '?'；shell
-    ///     规则则精确匹配 flavor、完整命令文本和工作目录，不接受 wildcard。
+    ///     <para>
+    ///         已规范化的命令允许规则，区分 direct 参数模式与 shell 精确命令。
+    ///     </para>
+    ///     <para>
+    ///         A normalized command allow rule distinguishing direct argument patterns from exact shell commands.
+    ///     </para>
     /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         direct 仅在单个参数内支持 * 与 ?；shell 精确匹配 flavor、完整命令与 cwd，不接受通配符。
+    ///     </para>
+    ///     <para>
+    ///         Direct mode supports * and ? only within individual arguments; shell mode matches flavor,
+    ///         full command and cwd exactly, without wildcards.
+    ///     </para>
+    /// </remarks>
     private sealed record ConfiguredCommandRule(
         string                Mode,
         string                Executable,

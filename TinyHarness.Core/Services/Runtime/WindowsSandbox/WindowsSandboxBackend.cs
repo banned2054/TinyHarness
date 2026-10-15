@@ -7,13 +7,19 @@ using TinyHarness.Core.Models.Runtime.WindowsSandbox;
 namespace TinyHarness.Core.Services.Runtime.WindowsSandbox;
 
 /// <summary>
-///     后端各阶段的独立期限：refresh、spawn_ready、命令通信（超时后的宽限）、终止排空、
-///     runner 回收与终止后的杀除宽限。取消后的清理使用独立期限，不复用已取消的 token。
-///     Independent deadlines for every backend stage: refresh, spawn_ready,
-///     command communication (grace past the command timeout), termination drain,
-///     runner reclamation, and the post-kill grace. Cancellation cleanup uses its
-///     own deadline and never reuses an already-cancelled token.
+///     <para>定义沙箱后端各执行与清理阶段的独立期限。</para>
+///     <para>Defines independent deadlines for sandbox execution and cleanup stages.</para>
 /// </summary>
+/// <remarks>
+///     <para>
+///         涵盖 refresh、spawn_ready、命令通信宽限、终止排空与 runner 回收。
+///         取消后的清理不复用已取消的 token。
+///     </para>
+///     <para>
+///         Covers refresh, spawn_ready, command communication grace, termination drain,
+///         and runner reclamation. Cancellation cleanup never reuses an already-cancelled token.
+///     </para>
+/// </remarks>
 public sealed record WindowsSandboxBackendLimits
 {
     public static readonly WindowsSandboxBackendLimits Default = new();
@@ -23,9 +29,11 @@ public sealed record WindowsSandboxBackendLimits
     public TimeSpan SpawnReadyTimeout { get; init; } = TimeSpan.FromSeconds(15);
 
     /// <summary>
-    ///     命令超时后等待 runner 终态的额外宽限；runner 自身执行超时判定。
-    ///     Extra grace past the command timeout while waiting for the runner's
-    ///     verdict; the runner enforces the command timeout itself.
+    ///     <para>命令超时后等待 runner 终态的额外宽限；命令超时由 runner 自行判定。</para>
+    ///     <para>
+    ///         Extra grace for the runner's verdict after the command timeout;
+    ///         the runner enforces the command timeout itself.
+    ///     </para>
     /// </summary>
     public TimeSpan CommunicationGrace { get; init; } = TimeSpan.FromSeconds(30);
 
@@ -39,18 +47,25 @@ public sealed record WindowsSandboxBackendLimits
 }
 
 /// <summary>
-///     Windows 沙箱执行后端：编排状态检查 → ACL refresh → 凭据/capability SID → 私有桌面 →
-///     runner 启动与 v6 帧协议会话。任何前置失败、组件缺失或协议失败均 fail closed（抛
-///     ProcessExecutionStartException / 带上下文异常），绝不静默回退宿主执行。命令结果只来自
-///     runner 的 exit 帧（exit_code + timed_out 独立保留）；缺 exit 不补造退出码。
-///     The Windows sandbox execution backend: orchestrates the readiness check →
-///     ACL refresh → credentials/capability SIDs → private desktop → runner
-///     launch and the v6 frame session. Any preflight failure, missing component,
-///     or protocol failure fails closed (throwing ProcessExecutionStartException
-///     or a contextual exception) and never falls back to host execution. Command
-///     results come only from the runner's exit frame (exit_code and timed_out
-///     kept independent); a missing exit never invents an exit code.
+///     <para>通过 Windows 沙箱 runner 的 v6 帧协议执行已准备的进程计划，失败时不回退宿主。</para>
+///     <para>
+///         Executes prepared process plans through the Windows sandbox runner's v6 frame protocol,
+///         without falling back to the host on failure.
+///     </para>
 /// </summary>
+/// <remarks>
+///     <para>
+///         启动前检查状态、刷新 ACL、加载凭据与 capability SID，并创建私有桌面。
+///         退出码仅来自 exit 帧，超时标志独立保留；缺失终态不补造退出码。
+///         运行期协议失败或回收无法确认时保留执行不确定性，停止后续工具。
+///     </para>
+///     <para>
+///         Before launch, checks readiness, refreshes ACLs, loads credentials and capability SIDs,
+///         and creates a private desktop. Exit codes come only from exit frames;
+///         timeout flags remain independent and missing verdicts never fabricate exit codes.
+///         Runtime protocol failures or unconfirmed reclamation preserve execution uncertainty and stop subsequent tools.
+///     </para>
+/// </remarks>
 public sealed class WindowsSandboxBackend : IProcessExecutionBackend
 {
     private const ulong MaximumRunnerTimeoutMilliseconds = 4_294_967_294;
@@ -89,9 +104,7 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
 
         _components = components;
         _policy     = policy;
-        // The frozen target environment comes from composition (built from
-        // trusted settings); it is the same instance the policy's temp roots
-        // were derived from, so ACLs and the spawned env cannot drift apart.
+        // 与策略临时根共用可信配置构建的冻结环境，避免 ACL 与实际进程环境漂移。
         _targetEnvironment  = targetEnvironment;
         _knownSecrets       = knownSecrets ?? new Dictionary<string, string>(StringComparer.Ordinal);
         _stateInspector     = new WindowsSandboxStateInspector(components);
@@ -101,8 +114,7 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
         _desktopFactory     = desktopFactory     ?? new WindowsSandboxDesktopFactory();
         _runnerLauncher     = runnerLauncher     ?? new WindowsSandboxRunnerLauncher();
         _limits             = limits             ?? WindowsSandboxBackendLimits.Default;
-        // The NUL device ACE is machine-level shared state; tests inject a
-        // no-op so the default suite never modifies host ACLs.
+        // NUL 设备 ACE 是机器级共享状态；默认测试注入空操作，避免修改宿主 ACL。
         _allowNullDeviceAccess = allowNullDeviceAccess ?? SandboxNullDeviceAcl.AllowCapabilitySid;
     }
 
@@ -267,15 +279,12 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
 
         try
         {
-            // The command cwd must match the refresh payload's command_cwd so
-            // the per-cwd workspace SID (the directory's actual ACE) lands in
-            // the spawn token — the same contract as cap.rs's
-            // workspace_write_cap_sid_for_root on the Rust side.
+            // cwd 必须与 refresh 的 command_cwd 一致，使 spawn token 的工作区 SID 匹配目录 ACE。
+            // 此约束与 Rust 的 workspace_write_cap_sid_for_root 保持一致。
             var capabilitySids = await _capabilitySidStore
                                       .ResolveForPolicy(_policy, execution.WorkingDirectory, cancellationToken)
                                       .ConfigureAwait(false);
-            // Mirror the library's NUL device allowance using the first
-            // capability SID; the runner repeats this for the child.
+            // 使用首个 capability SID 维持库的 NUL 访问契约；runner 还会为子进程设置。
             _allowNullDeviceAccess(new SecurityIdentifier(capabilitySids[0]));
             return capabilitySids;
         }
@@ -327,15 +336,22 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
     }
 
     /// <summary>
-    ///     从组合期冻结的目标环境构造 spawn 环境字典（wire 模型要求可变 Dictionary）。已知
-    ///     secret 键最后再移除一次：环境本就由可信 allowlist 构建，这里是防止密键复用的防线，
-    ///     不是唯一的清理点。
-    ///     Builds the spawn environment dictionary from the composition-time frozen
-    ///     target environment (the wire model requires a mutable Dictionary). Known
-    ///     secret keys are removed once more at the end: the environment is already
-    ///     built from a trusted allowlist, so this is a defense against key reuse,
-    ///     not the only cleanup point.
+    ///     <para>从冻结目标环境构造 spawn 字典，并移除已知秘密对应的环境变量。</para>
+    ///     <para>
+    ///         Builds the spawn dictionary from the frozen target environment
+    ///         and removes environment variables associated with known secrets.
+    ///     </para>
     /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         wire 模型要求可变 Dictionary；原环境已由可信 allowlist 构建，
+    ///         再次移除秘密键用于防止键复用，不替代前置清理。
+    ///     </para>
+    ///     <para>
+    ///         The wire model requires a mutable Dictionary; the source environment already uses a trusted allowlist.
+    ///         Removing secret keys again guards against key reuse and does not replace earlier cleanup.
+    ///     </para>
+    /// </remarks>
     private Dictionary<string, string> BuildSpawnEnvironment()
     {
         var environment = new Dictionary<string, string>(_targetEnvironment, StringComparer.OrdinalIgnoreCase);
@@ -372,26 +388,40 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
 
         if (!await ReclaimRunnerAsync(connection).ConfigureAwait(false))
             throw new
-                InvalidOperationException($"The sandbox runner did not exit within {(int)_limits.RunnerExitTimeout.TotalSeconds}s " +
-                                          "after reporting the command exit and could not be reclaimed.");
+                ToolExecutionUncertainException($"The sandbox runner did not exit within {(int)_limits.RunnerExitTimeout.TotalSeconds}s " +
+                                                "after reporting the command exit and could not be reclaimed.");
 
         await AwaitReadLoopAsync(session).ConfigureAwait(false);
         await session.FlushDecodersAsync().ConfigureAwait(false);
         await CompleteCapturesAsync(stdoutCapture, stderrCapture).ConfigureAwait(false);
 
-        return outcome.FailureMessage is { } failure
-            ? new ProcessExecutionResult(null, false, new ProcessExecutionFailure(failure))
-            : new ProcessExecutionResult(outcome.ExitCode, outcome.TimedOut, null);
+        if (outcome.FailureMessage is { } failure)
+            throw new ToolExecutionUncertainException(failure);
+
+        return new ProcessExecutionResult(outcome.ExitCode, outcome.TimedOut, null);
     }
 
     /// <summary>
-    ///     命令超时后 runner 无响应：发送 terminate、限期等待终态；仍无终态则杀 runner 并按
-    ///     后端超时语义返回（保留已捕获输出）。杀除失败或无法回收抛异常。
-    ///     The runner is unresponsive past the command timeout: send terminate,
-    ///     wait a bounded time for the verdict, and kill the runner if none
-    ///     arrives, returning with backend timeout semantics (captured output
-    ///     kept). Kill or reclamation failures throw.
+    ///     <para>终止超时后无响应的 runner，限时回收并保留已捕获输出。</para>
+    ///     <para>
+    ///         Terminates an unresponsive runner after timeout,
+    ///         reclaims it within deadlines, and retains captured output.
+    ///     </para>
     /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         先发送 terminate 并等待终态，超时后强制杀除。
+    ///         后端超时标志始终为 true；缺少 exit 帧时退出码为 null，不补造结果。
+    ///     </para>
+    ///     <para>
+    ///         Sends terminate and waits for a verdict before forcing a kill on deadline expiry.
+    ///         The backend timeout flag remains true; without an exit frame the exit code is null, never fabricated.
+    ///     </para>
+    /// </remarks>
+    /// <exception cref="ToolExecutionUncertainException">
+    ///     <para>无法确认 runner 已回收。</para>
+    ///     <para>Runner reclamation cannot be confirmed.</para>
+    /// </exception>
     private async Task<ProcessExecutionResult> HandleUnresponsiveRunnerAsync(
         SandboxRunnerConnection connection,    RunnerSession         session, SemaphoreSlim writerGate,
         IProcessOutputCapture   stdoutCapture, IProcessOutputCapture stderrCapture)
@@ -413,15 +443,14 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
 
         if (!await ReclaimRunnerAsync(connection).ConfigureAwait(false))
             throw new
-                InvalidOperationException($"The sandbox runner did not exit within {(int)_limits.RunnerExitTimeout.TotalSeconds}s " +
-                                          "after the command timeout and could not be reclaimed.");
+                ToolExecutionUncertainException($"The sandbox runner did not exit within {(int)_limits.RunnerExitTimeout.TotalSeconds}s " +
+                                                "after the command timeout and could not be reclaimed.");
 
         await AwaitReadLoopAsync(session).ConfigureAwait(false);
         await session.FlushDecodersAsync().ConfigureAwait(false);
         await CompleteCapturesAsync(stdoutCapture, stderrCapture).ConfigureAwait(false);
 
-        // The backend enforced the timeout itself; a non-timeout verdict from a
-        // terminated run still means the command did not finish on its own.
+        // 后端已强制超时；即使 runner 未标超时，被终止的命令也不是自然完成。
         return new ProcessExecutionResult(outcome.ExitCode, true,
                                           outcome.FailureMessage is { } failure
                                               ? new ProcessExecutionFailure(failure)
@@ -433,7 +462,7 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
         IProcessOutputCapture   stdoutCapture, IProcessOutputCapture stderrCapture,
         CancellationToken       cancellationToken)
     {
-        // Cleanup uses its own deadline, never the cancelled token.
+        // 清理使用独立期限，不能被用户已取消的 token 跳过。
         await TrySendTerminateAsync(connection, writerGate).ConfigureAwait(false);
         try
         {
@@ -446,8 +475,8 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
 
         if (!await ReclaimRunnerAsync(connection).ConfigureAwait(false))
             throw new
-                InvalidOperationException($"The sandbox runner did not exit within {(int)_limits.RunnerExitTimeout.TotalSeconds}s " +
-                                          "after cancellation and could not be reclaimed.");
+                ToolExecutionUncertainException($"The sandbox runner did not exit within {(int)_limits.RunnerExitTimeout.TotalSeconds}s " +
+                                                "after cancellation and could not be reclaimed.");
 
         await AwaitReadLoopAsync(session).ConfigureAwait(false);
         stdoutCapture.Discard();
@@ -457,11 +486,19 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
     }
 
     /// <summary>
-    ///     限时回收 runner：先等自然退出，超时后终止（已退出的竞态不视为失败）再等杀除宽限。
-    ///     Reclaims the runner within its deadline: wait for a natural exit, then
-    ///     terminate on timeout (losing the exit race is not a failure) and wait
-    ///     out the kill grace.
+    ///     <para>限时等待 runner 自然退出，超时后终止并等待杀除宽限。</para>
+    ///     <para>
+    ///         Waits for the runner to exit within its deadline,
+    ///         then terminates it on timeout and waits through the kill grace.
+    ///     </para>
     /// </summary>
+    /// <returns>
+    ///     <para>仅在等待确认退出后返回 true；终止时的退出竞态由后续等待确认。</para>
+    ///     <para>
+    ///         True only when a wait confirms exit;
+    ///         an exit race during termination is resolved by the subsequent wait.
+    ///     </para>
+    /// </returns>
     private async Task<bool> ReclaimRunnerAsync(SandboxRunnerConnection connection)
     {
         if (await connection.WaitForExitAsync(_limits.RunnerExitTimeout).ConfigureAwait(false)) return true;
@@ -472,7 +509,7 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
         }
         catch (Exception ex) when (ex is InvalidOperationException or Win32Exception)
         {
-            // The process exited between the wait and the kill.
+            // 可能与自然退出竞态；后续等待仍须确认退出。
         }
 
         return await connection.WaitForExitAsync(_limits.TerminationKillGrace).ConfigureAwait(false);
@@ -486,28 +523,32 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
         }
         catch (Exception ex) when (ex is InvalidOperationException or Win32Exception)
         {
-            // Already gone; the wait below confirms.
+            // 可能已经退出，但仍须由后续等待确认。
         }
 
         if (!await connection.WaitForExitAsync(_limits.TerminationKillGrace).ConfigureAwait(false))
             throw new
-                TimeoutException($"Terminating the unresponsive sandbox runner did not complete within {(int)_limits.TerminationKillGrace.TotalSeconds}s.");
+                ToolExecutionUncertainException($"Terminating the unresponsive sandbox runner did not complete within {(int)_limits.TerminationKillGrace.TotalSeconds}s.");
     }
 
     /// <summary>
-    ///     限时等待会话读循环退出后再操作捕获器：消除 fire-and-forget 读循环与结束路径对捕获器
-    ///     的并发 Append 竞态。读循环内部捕获全部异常不会 fault，等待超时被有意吞掉——循环可能
-    ///     只是未在期限内确认退出，继续按后续兜底路径收尾；任何等待异常同样不外抛，不掩盖原有
-    ///     结束语义。
-    ///     Waits a bounded time for the session read loop to exit before touching
-    ///     the captures, removing the concurrent-Append race between the
-    ///     fire-and-forget loop and the teardown paths. The loop catches every
-    ///     exception internally and never faults; a wait timeout is deliberately
-    ///     swallowed — the loop merely failed to confirm its exit within the
-    ///     deadline, so the fallback teardown below proceeds — and any other wait
-    ///     failure is equally contained so it never masks the original teardown
-    ///     semantics.
+    ///     <para>在收尾操作捕获器前限时等待会话读循环，不以等待异常覆盖原结束语义。</para>
+    ///     <para>
+    ///         Waits a bounded time for the session read loop before capture teardown,
+    ///         without replacing the original termination semantics with wait failures.
+    ///     </para>
     /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         读循环内部将异常转换为会话状态，不会 fault。
+    ///         正常等待结束后不再有并发 Append；超时不证明循环已退出，仍继续兜底收尾。
+    ///     </para>
+    ///     <para>
+    ///         The read loop converts exceptions to session state and never faults.
+    ///         Normal completion ends concurrent appends; a timeout does not confirm loop exit,
+    ///         but fallback teardown still proceeds.
+    ///     </para>
+    /// </remarks>
     private async Task AwaitReadLoopAsync(RunnerSession session)
     {
         try
@@ -516,12 +557,11 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
         }
         catch (TimeoutException)
         {
-            // Deliberate: continue with the fallback teardown.
+            // 未确认读循环退出也继续兜底收尾，不覆盖原结束语义。
         }
         catch (Exception)
         {
-            // Defensive: ReadFramesAsync never faults by design; a wait failure
-            // must not introduce a new exception during teardown.
+            // ReadFramesAsync 内部处理异常；防御性等待失败不得改变收尾结果。
         }
     }
 
@@ -552,12 +592,7 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
         catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidOperationException
                                       or TimeoutException or OperationCanceledException)
         {
-            // OperationCanceledException here is the terminate frame's bounded
-            // write deadline (TerminateWriteTimeout) firing, not user
-            // cancellation — treat it as any other send failure. The
-            // spawn_request path passes the user token, and ExecuteAsync
-            // re-raises user cancellation via ThrowIfCancellationRequested,
-            // so cancellation semantics stay intact.
+            // terminate 写入期限取消按发送失败处理；spawn_request 路径由 ExecuteAsync 重新抛出用户取消。
             return false;
         }
         finally
@@ -576,15 +611,26 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
     }
 
     /// <summary>
-    ///     一次 runner 会话的读循环：spawn_ready/error 完成 HandshakeTask，exit 完成 ExitTask；
-    ///     output 帧经 base64 解码与跨帧 UTF-8 增量解码推入捕获器。循环不被用户 token 取消，
-    ///     只随流关闭/Dispose 结束。
-    ///     The read loop of one runner session: spawn_ready/error complete the
-    ///     HandshakeTask and exit completes the ExitTask; output frames are
-    ///     base64-decoded and incrementally UTF-8-decoded across frames into the
-    ///     captures. The loop is never cancelled by user tokens — it ends with
-    ///     the stream closing or Dispose.
+    ///     <para>读取一次 runner 会话的握手、输出与终态帧，并维护对应任务状态。</para>
+    ///     <para>
+    ///         Reads handshake, output, and terminal frames for one runner session
+    ///         and maintains the corresponding task states.
+    ///     </para>
     /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         output 经 base64 与跨帧 UTF-8 增量解码送入捕获器。
+    ///         循环不受用户 token 取消，以便排空终态；exit、流关闭或 Dispose 结束读取。
+    ///         握手前失败使握手任务失败，握手后缺失 exit 或协议损坏记录无退出码的失败终态。
+    ///     </para>
+    ///     <para>
+    ///         Output is base64-decoded and incrementally UTF-8-decoded across frames into captures.
+    ///         User cancellation does not cancel the loop, allowing terminal draining;
+    ///         exit, stream closure, or Dispose ends reading.
+    ///         Pre-handshake failures fault the handshake task;
+    ///         missing exit or protocol damage after handshake records a failed end state without an exit code.
+    ///     </para>
+    /// </remarks>
     private sealed class RunnerSession : IDisposable
     {
         private readonly CancellationTokenSource _disposeSource = new();
@@ -613,9 +659,11 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
         public Task<RunnerExitOutcome> ExitTask => _exit.Task;
 
         /// <summary>
-        ///     读循环任务；未启动时为 CompletedTask。读循环内部捕获全部异常，不会进入 Faulted。
-        ///     The read-loop task; CompletedTask before start. The loop catches
-        ///     every exception internally and never faults.
+        ///     <para>读循环任务；未启动时已完成，循环异常转为会话状态而不使此任务 fault。</para>
+        ///     <para>
+        ///         The read-loop task, completed before startup;
+        ///         loop exceptions become session state instead of faulting this task.
+        ///     </para>
         /// </summary>
         public Task ReadTask { get; private set; } = Task.CompletedTask;
 
@@ -633,13 +681,19 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
         }
 
         /// <summary>
-        ///     冲刷两条流残留的 UTF-8 解码状态（flush 收尾），剩余字符（含替换符）推入对应捕获器；
-        ///     仅在读循环退出后调用一次。
-        ///     Flushes the residual UTF-8 decoder state of both streams (final
-        ///     flush), pushing any remaining characters (including replacement
-        ///     characters) into the matching captures; call once, after the read
-        ///     loop has exited.
+        ///     <para>冲刷两条流的 UTF-8 解码尾部，将剩余字符送入对应捕获器。</para>
+        ///     <para>
+        ///         Flushes the UTF-8 decoder tails of both streams
+        ///         into their corresponding captures.
+        ///     </para>
         /// </summary>
+        /// <remarks>
+        ///     <para>仅在读循环退出后调用一次；不完整字符序列可能产生替换符。</para>
+        ///     <para>
+        ///         Call once after the read loop exits;
+        ///         incomplete character sequences may produce replacement characters.
+        ///     </para>
+        /// </remarks>
         public async Task FlushDecodersAsync()
         {
             await FlushDecoderAsync(_stdoutDecoder, _stdoutCapture).ConfigureAwait(false);
@@ -648,8 +702,7 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
 
         private static async Task FlushDecoderAsync(Decoder decoder, IProcessOutputCapture capture)
         {
-            // An empty final flush can only emit the replacement character for
-            // a trailing incomplete sequence.
+            // 空输入的最终 flush 只可能为尾部不完整序列产生替换符。
             var characters = new char[Encoding.UTF8.GetMaxCharCount(0)];
             var decoded    = decoder.GetChars(ReadOnlySpan<byte>.Empty, characters, true);
             if (decoded > 0)
@@ -780,15 +833,19 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
 }
 
 /// <summary>
-///     runner 握手结果：spawn_ready（进程 PID）或 error 帧（启动阶段失败）。
-///     The runner handshake result: spawn_ready (with the process PID) or an
-///     error frame (a launch-stage failure).
+///     <para>runner 握手结果：spawn_ready 的进程 PID 或 error 的启动失败信息。</para>
+///     <para>
+///         The runner handshake result: a process PID from spawn_ready
+///         or launch-failure details from error.
+///     </para>
 /// </summary>
 internal sealed record RunnerHandshake(uint? ProcessId, RunnerErrorPayload? Error);
 
 /// <summary>
-///     会话终态：exit 帧（退出码 + 超时标志）或带 FailureMessage 的协议终态（无退出码）。
-///     The session end state: an exit frame (exit code plus timeout flag) or a
-///     protocol end with a FailureMessage and no exit code.
+///     <para>会话终态：exit 帧的退出码与超时标志，或无退出码的协议失败信息。</para>
+///     <para>
+///         The session end state: exit-frame code and timeout flag,
+///         or protocol-failure details without an exit code.
+///     </para>
 /// </summary>
 internal sealed record RunnerExitOutcome(int? ExitCode, bool TimedOut, string? FailureMessage);

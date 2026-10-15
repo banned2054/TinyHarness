@@ -79,6 +79,38 @@ public class PermissionEngineTests
     }
 
     [Fact]
+    public void NonReadOnlyBlock_DeniesSideEffectsWhileReadsStayAllowedAndGrantsCannotBypass()
+    {
+        using var dir     = new TestTempDir();
+        var       engine  = new PermissionEngine(dir.Root);
+        var       target  = Path.Combine(dir.Root, "a.cs");
+        var       write   = Prep("filesystem.write", [target]);
+        var       read    = Prep("filesystem.read", [target]);
+        var       execute = Prep("process.execute", [target]);
+
+        // NeedsInspection 阻断所有非只读能力。
+        engine.SetNonReadOnlyBlock("run x was interrupted");
+        Assert.Equal(PermissionDecision.Deny, engine.Decide(write));
+        Assert.Equal(PermissionDecision.Deny, engine.Decide(execute));
+        Assert.Equal(PermissionDecision.Allow, engine.Decide(read));
+        Assert.Equal("run x was interrupted", engine.NonReadOnlyBlockReason);
+        Assert.Equal("run x was interrupted", engine.NonReadOnlyBlock(write));
+        Assert.Null(engine.NonReadOnlyBlock(read));
+
+        // 运行期授权和单次批准均不能绕过检查阻断。
+        engine.GrantSession(write);
+        engine.GrantOnce(execute);
+        Assert.Equal(PermissionDecision.Deny, engine.Decide(write));
+        Assert.Equal(PermissionDecision.Deny, engine.Decide(execute));
+
+        // 解除阻断后恢复正常策略，已有授权按原范围生效。
+        engine.SetNonReadOnlyBlock(null);
+        Assert.Null(engine.NonReadOnlyBlockReason);
+        Assert.Equal(PermissionDecision.Allow, engine.Decide(write));
+        Assert.Equal(PermissionDecision.Allow, engine.Decide(execute));
+    }
+
+    [Fact]
     public void WorkerMode_HardDeniesWriteProcessAndUnknownCapabilities()
     {
         using var dir    = new TestTempDir();
@@ -141,7 +173,7 @@ public class PermissionEngineTests
         engine.GrantSession(Prep("filesystem.write", [a]));
         engine.DenySession(Prep("filesystem.write", [a]));
 
-        // Priority: explicit/session deny > session grant (PLAN §10).
+        // 显式拒绝和运行期拒绝优先于运行期授权。
         Assert.Equal(PermissionDecision.Deny, engine.Decide(Prep("filesystem.write", [a])));
     }
 
@@ -203,7 +235,7 @@ public class PermissionEngineTests
 
         Assert.Equal(PermissionDecision.Allow, engine.Decide(invocation));
 
-        // Same file and capability but different arguments: a different invocation.
+        // 文件和能力相同但参数不同，仍是不同调用。
         Assert.Equal(PermissionDecision.Ask,
                      engine.Decide(Prep("filesystem.write", [a], "line", 3)));
     }
@@ -220,11 +252,10 @@ public class PermissionEngineTests
 
         Assert.Equal(PermissionDecision.Allow, engine.Decide(invocation));
 
-        // Spending it at execution commit makes an identical later invocation
-        // ask again instead of riding the one-shot for the whole session.
+        // 执行提交时消耗单次批准，后续相同调用仍须重新审批。
         Assert.True(engine.TryConsumeOnce(invocation));
         Assert.Equal(PermissionDecision.Ask, engine.Decide(invocation));
-        Assert.False(engine.TryConsumeOnce(invocation)); // nothing left to spend
+        Assert.False(engine.TryConsumeOnce(invocation)); // 已消耗的批准不能再次使用。
     }
 
     [Fact]
@@ -244,8 +275,7 @@ public class PermissionEngineTests
     [Fact]
     public void HardDeny_BeatsOneShotApproval()
     {
-        // A one-shot approval for an inside target must not authorize the same
-        // capability for a target outside the workspace.
+        // 工作区内目标的单次批准不能授权工作区外目标。
         using var inside  = new TestTempDir();
         using var outside = new TestTempDir();
         var       engine  = new PermissionEngine(inside.Root);

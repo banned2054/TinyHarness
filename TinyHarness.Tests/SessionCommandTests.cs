@@ -16,13 +16,14 @@ using TinyHarness.Core.Services.Runtime;
 namespace TinyHarness.Tests;
 
 /// <summary>
-///     M13.1 `session list` / `session show` 命令测试（严格离线，PLAN §7.1）：不解析凭据、
-///     不调用模型、不启动工具；list 报告损坏条目，show 拒绝损坏/不一致，旧 run 快照只读展示，
-///     找不到时返回 1。
-///     M13.1 `session list` / `session show` command tests (strictly offline,
-///     PLAN §7.1): no credentials are resolved, no model is called and no tool
-///     runs; list reports damaged entries, show refuses damaged or inconsistent
-///     ones, legacy run snapshots render read-only, and a missing id exits 1.
+///     <para>
+///         验证严格离线的 session list/show：不解析凭据、调用模型或启动工具；
+///         报告或拒绝损坏条目，旧 run 快照只读展示，缺失 ID 返回 1。
+///     </para>
+///     <para>
+///         Verifies strictly offline session list/show without resolving credentials, calling models or starting tools;
+///         reports or rejects damaged entries, renders legacy run snapshots read-only and returns 1 for missing IDs.
+///     </para>
 /// </summary>
 public class SessionCommandTests
 {
@@ -142,6 +143,71 @@ public class SessionCommandTests
     }
 
     [Fact]
+    public async Task Show_PrintsExecutionRecordsAndTheNeedsInspectionState()
+    {
+        using var fixture = new SessionCliFixture();
+        var       session = await CommitStoredSessionAsync(fixture.StoreDirectory, "fix it", "interrupted work");
+        var stored = session with
+        {
+            Turns =
+            [
+                session.Turns[0] with
+                {
+                    Runs =
+                    [
+                        new PersistedRun
+                        {
+                            Id              = session.Turns[0].Runs[0].Id,
+                            StartedUtc      = DateTimeOffset.UtcNow.AddMinutes(-4),
+                            FinishedUtc     = DateTimeOffset.UtcNow.AddMinutes(-3),
+                            Status          = nameof(AgentStatus.Cancelled),
+                            NeedsInspection = true,
+                            ToolCalls =
+                            [
+                                new PersistedToolCallRecord
+                                {
+                                    CallId      = "call_1",
+                                    ToolName    = "apply_patch",
+                                    Capability  = "filesystem.write",
+                                    SideEffects = true,
+                                    Summary     = "write src/a.cs",
+                                    Approval    = "allow once",
+                                    State       = nameof(ToolCallExecutionState.UnknownResult)
+                                },
+                                new PersistedToolCallRecord
+                                {
+                                    CallId     = "call_2",
+                                    ToolName   = "read_file",
+                                    Capability = "filesystem.read",
+                                    Summary    = "read src/b.cs",
+                                    Approval   = "allow",
+                                    State      = nameof(ToolCallExecutionState.KnownNotStarted)
+                                }
+                            ]
+                        }
+                    ]
+                }
+            ]
+        };
+        await File.WriteAllTextAsync(Path.Combine(fixture.StoreDirectory, $"{session.Id}.session.json"),
+                                     JsonSerializer.Serialize(stored,
+                                                              SessionStoreJsonContext.Default.PersistedSession));
+
+        var exit = await SessionCommand.ExecuteAsync(fixture.CreateContext(), Options("show", session.Id),
+                                                     CancellationToken.None);
+
+        Assert.Equal(0, exit);
+        Assert.Contains("inspection      : needs inspection (pending; side effects blocked until confirmed on resume)",
+                        fixture.Io.Output, StringComparison.Ordinal);
+        Assert.Contains("inspection : a side effect was possibly executed with an unknown result",
+                        fixture.Io.Output, StringComparison.Ordinal);
+        Assert.Contains("tool apply_patch: allow once — result unknown; side effect possible",
+                        fixture.Io.Output, StringComparison.Ordinal);
+        Assert.Contains("tool read_file: allow — known not started",
+                        fixture.Io.Output, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Show_FallsBackToALegacyRunSnapshotReadonlyView()
     {
         using var fixture  = new SessionCliFixture();
@@ -154,6 +220,48 @@ public class SessionCommandTests
         Assert.Contains("legacy run snapshot (read-only; cannot be resumed)", fixture.Io.Output,
                         StringComparison.Ordinal);
         Assert.Contains($"run id          : {legacyId}", fixture.Io.Output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Show_AcknowledgedInspectionDoesNotClaimCurrentBlocking()
+    {
+        using var fixture = new SessionCliFixture();
+        var       session = await CommitStoredSessionAsync(fixture.StoreDirectory, "q", "a");
+        var snapshot = session with
+        {
+            InspectionAcknowledgedUtc = DateTimeOffset.UtcNow,
+            Turns = [session.Turns[0] with { Runs = [session.Turns[0].Runs[0] with { NeedsInspection = true }] }]
+        };
+        await File.WriteAllTextAsync(Path.Combine(fixture.StoreDirectory, $"{session.Id}.session.json"),
+                                     JsonSerializer.Serialize(snapshot,
+                                                              SessionStoreJsonContext.Default.PersistedSession));
+        Assert.Equal(0, await SessionCommand.ExecuteAsync(fixture.CreateContext(), Options("show", session.Id),
+                                                          CancellationToken.None));
+        Assert.Contains("acknowledged", fixture.Io.Output);
+        Assert.Contains("historical fact", fixture.Io.Output);
+        Assert.DoesNotContain("blocked on resume until", fixture.Io.Output);
+    }
+
+    [Fact]
+    public async Task Show_LegacyRunRendersNumericExecutionStateAndApprovalAfterRoundTrip()
+    {
+        using var fixture  = new SessionCliFixture();
+        var       id       = Guid.NewGuid().ToString("N");
+        var       recorder = new FileRunRecorder(fixture.LegacyDirectory, id);
+        await recorder.CompleteAsync(new AgentResult
+        {
+            Status = AgentStatus.Failed, ToolCalls =
+            [
+                new ToolCallRecord
+                {
+                    CallId = "call", ToolName = "shell", SideEffects = true, Approval = "allow once",
+                    State  = ToolCallExecutionState.UnknownResult
+                }
+            ]
+        }, [], StructuredState.Empty, CancellationToken.None);
+        Assert.Equal(0, await SessionCommand.ExecuteAsync(fixture.CreateContext(), Options("show", id),
+                                                          CancellationToken.None));
+        Assert.Contains("tool shell: allow once — result unknown; side effect possible", fixture.Io.Output);
     }
 
     [Fact]
@@ -210,8 +318,8 @@ public class SessionCommandTests
     }
 
     /// <summary>
-    ///     写入一个旧格式 run 快照（M13 之前的脱敏检查产物），返回其 run id。
-    ///     Writes one legacy run snapshot (the pre-M13 redacted inspection artifact) and returns its run id.
+    ///     <para>写入只供脱敏检查的旧格式 run 快照，返回 run ID。</para>
+    ///     <para>Writes a legacy run snapshot for redacted inspection only and returns its run ID.</para>
     /// </summary>
     private static string WriteLegacySnapshot(string legacyDirectory)
     {
@@ -248,9 +356,8 @@ public class SessionCommandTests
             Io              = new FakeCliConsole();
             Directory.CreateDirectory(Workspace);
 
-            // The project config pins workspaceRoot and the legacy run-snapshot
-            // directory; the user config (the trusted layer) pins the protected
-            // session store, which sits outside the workspace as a sibling.
+            // 项目配置指定工作区和旧 run 快照目录；
+            // 可信用户配置指定工作区外的受保护会话存储。
             File.WriteAllText(Path.Combine(Root, "tinyharness.json"),
                               $$"""
                               {
