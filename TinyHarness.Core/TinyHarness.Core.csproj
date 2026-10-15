@@ -16,12 +16,12 @@
 
 	<ItemGroup>
 		<!-- PLAN §21：模型调用统一经 Microsoft.Extensions.AI 的 IChatClient，底层保留
-             OpenAI 官方 SDK。两个包都被 Core 直接使用：M.E.AI.OpenAI 提供
-             ChatClient → IChatClient 适配，OpenAI 提供传输构造。离线 mock 与
-             win-x64 NativeAOT 探针均已验证零 trim/AOT 警告。 -->
-		<PackageReference Include="Microsoft.Extensions.AI.OpenAI" Version="10.10.1" />
+		     OpenAI 官方 SDK。两个包都被 Core 直接使用：M.E.AI.OpenAI 提供
+		     ChatClient → IChatClient 适配，OpenAI 提供传输构造。生产依赖路径已通过
+		     离线 mock 与 win-x64 NativeAOT 验证；协议兼容探针还覆盖非生产供应商 SDK。 -->
+		<PackageReference Include="Microsoft.Extensions.AI.OpenAI" Version="10.11.0" />
 		<PackageReference Include="OpenAI" Version="2.14.0" />
-		<PackageReference Include="System.Security.Cryptography.ProtectedData" Version="10.0.12" />
+		<PackageReference Include="System.Security.Cryptography.ProtectedData" Version="10.0.13" />
 	</ItemGroup>
 
 </Project>
