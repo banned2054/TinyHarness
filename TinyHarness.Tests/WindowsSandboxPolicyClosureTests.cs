@@ -2,6 +2,7 @@ using System.Text.Json.Nodes;
 using TinyHarness.Core.Models.Agent;
 using TinyHarness.Core.Models.ChatCompletions;
 using TinyHarness.Core.Models.Configuration;
+using TinyHarness.Core.Models.Context;
 using TinyHarness.Core.Models.Permissions;
 using TinyHarness.Core.Models.Runtime;
 using TinyHarness.Core.Models.Runtime.WindowsSandbox;
@@ -140,10 +141,9 @@ public class WindowsSandboxPolicyClosureTests
     // ---- fake model 完整闭环（验收门槛）----
 
     [Test]
-    public async Task AgentLoop_ShellUnderSandboxPolicy_ApprovesExecutesAndAuditsPolicyIdentity()
+    public async Task AgentLoop_ShellUnderSandboxPolicy_PassesPolicyIdentityToRecorder()
     {
         using var dir     = new TestTempDir();
-        using var runsDir = new TestTempDir();
         var       policy  = SandboxExecutionPolicy();
         var       backend = new FakeProcessExecutionBackend { ExitCode = 0, StdoutChunks = ["ok"] };
         var       client  = new FakeChatClient();
@@ -162,7 +162,7 @@ public class WindowsSandboxPolicyClosureTests
             new ShellTool(dir.Workspace, 30,
                           processBackend : backend, executionPolicy : policy)
         ]);
-        var recorder = new FileRunRecorder(runsDir.Root);
+        var recorder = new PolicyCaptureRecorder();
         var loop = new AgentLoop(client, tools, new AgentOptions
                                  {
                                      Model                     = "test-model",
@@ -182,20 +182,15 @@ public class WindowsSandboxPolicyClosureTests
         Assert.That(backend.ReceivedExecution!.Executable, Is.EqualTo("dotnet"));
         Assert.That(backend.ReceivedExecution.WorkingDirectory, Is.EqualTo(dir.Root));
 
-        var records  = ReadAuditRecords(recorder.AuditPath);
-        var prepared = TestAssert.Single(records, record => record!["kind"]!.GetValue<string>() == "tool.prepared")!;
-        TestAssert.Contains("backend=windows-sandbox", prepared["executionPolicy"]!.GetValue<string>(),
+        TestAssert.Contains("backend=windows-sandbox", TestAssert.Single(recorder.PreparedPolicies),
                             StringComparison.Ordinal);
-        var permission =
-            TestAssert.Single(records, record => record!["kind"]!.GetValue<string>() == "tool.permission")!;
-        Assert.That(permission["decision"]!.GetValue<string>(), Is.EqualTo("Ask"));
-        Assert.That(permission["outcome"]!.GetValue<string>(), Is.EqualTo("allow once"));
-        TestAssert.Contains("backend=windows-sandbox", permission["executionPolicy"]!.GetValue<string>(),
-                            StringComparison.Ordinal);
-        var toolResult = TestAssert.Single(records, record => record!["kind"]!.GetValue<string>() == "tool.result")!;
-        Assert.That(toolResult["succeeded"]!.GetValue<bool>(), Is.True);
-        TestAssert.Contains("backend=windows-sandbox", toolResult["executionPolicy"]!.GetValue<string>(),
-                            StringComparison.Ordinal);
+        var permission = TestAssert.Single(recorder.PermissionRecords);
+        Assert.That(permission.Decision, Is.EqualTo(PermissionDecision.Ask));
+        Assert.That(permission.Outcome, Is.EqualTo("allow once"));
+        TestAssert.Contains("backend=windows-sandbox", permission.ExecutionPolicy, StringComparison.Ordinal);
+        var toolResult = TestAssert.Single(recorder.ResultRecords);
+        Assert.That(toolResult.Succeeded, Is.True);
+        TestAssert.Contains("backend=windows-sandbox", toolResult.ExecutionPolicy, StringComparison.Ordinal);
     }
 
     // ---- 目标环境治理 ----
@@ -534,12 +529,47 @@ public class WindowsSandboxPolicyClosureTests
                                                               .LoadAsync(invalid, CancellationToken.None));
     }
 
-    private static List<JsonObject?> ReadAuditRecords(string auditPath)
+    private sealed class PolicyCaptureRecorder : IRunRecorder
     {
-        return File.ReadAllLines(auditPath)
-                   .Where(line => !string.IsNullOrWhiteSpace(line))
-                   .Select(line => JsonNode.Parse(line) as JsonObject)
-                   .ToList();
+        public List<string?> PreparedPolicies { get; } = [];
+
+        public List<(PermissionDecision Decision, string Outcome, string? ExecutionPolicy)> PermissionRecords { get; }
+            = [];
+
+        public List<(bool Succeeded, string? ExecutionPolicy)> ResultRecords { get; } = [];
+
+        public Task StartAsync(string systemPrompt, string userInput, CancellationToken cancellationToken) =>
+            Task.CompletedTask;
+
+        public Task RecordPreparedAsync(ToolPreparation preparation, CancellationToken cancellationToken)
+        {
+            PreparedPolicies.Add(preparation.ExecutionPolicy);
+            return Task.CompletedTask;
+        }
+
+        public Task RecordPermissionAsync(ToolPreparation   preparation, PermissionDecision decision, string outcome,
+                                          CancellationToken cancellationToken)
+        {
+            PermissionRecords.Add((decision, outcome, preparation.ExecutionPolicy));
+            return Task.CompletedTask;
+        }
+
+        public Task RecordResultAsync(
+            ToolPreparation preparation, ToolResult result, CancellationToken cancellationToken)
+        {
+            ResultRecords.Add((result.Succeeded, preparation.ExecutionPolicy));
+            return Task.CompletedTask;
+        }
+
+        public Task RecordCompactionAsync(ContextChange change, CancellationToken cancellationToken) =>
+            Task.CompletedTask;
+
+        public Task RecordModelUsageAsync(
+            int? inputTokens, int? outputTokens, string? finishReason, CancellationToken cancellationToken) =>
+            Task.CompletedTask;
+
+        public Task CompleteAsync(AgentResult       result, IReadOnlyList<ChatMessage> messages, StructuredState state,
+                                  CancellationToken cancellationToken) => Task.CompletedTask;
     }
 
     /// <summary>

@@ -10,20 +10,14 @@ using TinyHarness.Core.Services.Persistence;
 namespace TinyHarness.Cli.Commands;
 
 /// <summary>
-///     <para>提供会话存储与旧运行快照的严格离线检查入口。</para>
-///     <para>Provides strictly offline inspection of stored sessions and legacy run snapshots.</para>
+///     <para>提供会话日志的严格离线检查入口。</para>
+///     <para>Provides strictly offline inspection of session logs.</para>
 /// </summary>
 /// <remarks>
+///     <para>不解析 API key、不调用模型、不启动工具或写入工作区；list 报告损坏条目，show 拒绝损坏与未知格式。</para>
 ///     <para>
-///         不解析 API key、不调用模型、不启动工具，也不写入工作区文件。
-///         list 报告损坏条目并继续；show 拒绝损坏、未知版本或审计与快照不一致的会话。
-///         旧 <c>.session.json</c> 运行快照仅供只读查看，不能用于续聊。
-///     </para>
-///     <para>
-///         Does not resolve API keys, call models, start tools, or write workspace files.
-///         list reports damaged entries and continues; show rejects damage, unknown versions,
-///         or snapshot/audit divergence. Legacy <c>.session.json</c> run snapshots are
-///         read-only inspection data, not resumable sessions.
+///         Resolves no API keys, calls no models, starts no tools, and writes no workspace files;
+///         list reports damaged entries, while show rejects damage and unknown formats.
 ///     </para>
 /// </remarks>
 internal static class SessionCommand
@@ -37,17 +31,13 @@ internal static class SessionCommand
     };
 
     /// <summary>
-    ///     <para>列出持久会话与旧运行快照；报告损坏条目后继续列举。</para>
-    ///     <para>
-    ///         Lists persisted sessions and legacy run snapshots;
-    ///         reports damaged entries and continues listing.
-    ///     </para>
+    ///     <para>列出持久会话；报告损坏条目后继续列举。</para>
+    ///     <para>Lists persisted sessions, reporting damaged entries without stopping the list.</para>
     /// </summary>
     private static async Task<int> ListAsync(CommandContext context, CancellationToken cancellationToken)
     {
-        var io = context.Io;
-        var (storeDir, legacyDir) = await ResolveDirectoriesAsync(context, cancellationToken).ConfigureAwait(false);
-
+        var io       = context.Io;
+        var storeDir = await ResolveStoreDirectoryAsync(context, cancellationToken).ConfigureAwait(false);
         await io.WriteLineAsync($"Session store: {storeDir}", cancellationToken).ConfigureAwait(false);
         var entries = await SessionStoreReader.ListAsync(storeDir, cancellationToken).ConfigureAwait(false);
         if (entries.Count == 0)
@@ -62,82 +52,26 @@ internal static class SessionCommand
             else
                 await io.WriteLineAsync($"  {entry.Id}  damaged: {entry.Error}", cancellationToken)
                         .ConfigureAwait(false);
-
-        await io.WriteLineAsync($"Run snapshots (legacy, read-only): {legacyDir}", cancellationToken)
-                .ConfigureAwait(false);
-        var legacyCount = 0;
-        if (Directory.Exists(legacyDir))
-            foreach (var path in Directory.EnumerateFiles(legacyDir, "*.session.json"))
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                var id = Path.GetFileName(path)[..^".session.json".Length];
-                if (!SessionStorePaths.IsValidSessionId(id))
-                {
-                    // 与受保护存储一致，报告无效旧文件名，不静默隐藏。
-                    legacyCount++;
-                    await io.WriteLineAsync($"  {Path.GetFileName(path)}  skipped: file name is not a session id",
-                                            cancellationToken).ConfigureAwait(false);
-                    continue;
-                }
-
-                legacyCount++;
-                string summary;
-                try
-                {
-                    var snapshot = await SessionStoreReader.ReadLegacyAsync(legacyDir, id, cancellationToken)
-                                                           .ConfigureAwait(false);
-                    summary = snapshot is null
-                        ? "unreadable"
-                        : $"{snapshot.Result.Status} {snapshot.CompletedUtc.LocalDateTime:yyyy-MM-dd HH:mm:ss}  messages {snapshot.Messages.Count}";
-                }
-                catch (SessionStoreException ex)
-                {
-                    summary = $"damaged: {ex.Message}";
-                }
-
-                await io.WriteLineAsync($"  {id}  {summary}", cancellationToken).ConfigureAwait(false);
-            }
-
-        if (legacyCount == 0)
-            await io.WriteLineAsync("  (none)", cancellationToken).ConfigureAwait(false);
-
         return 0;
     }
 
     /// <summary>
-    ///     <para>显示会话检查视图；存储中不存在时尝试只读展示旧运行快照。</para>
-    ///     <para>
-    ///         Shows a session inspection view; tries a read-only legacy run snapshot
-    ///         when the session is absent from the store.
-    ///     </para>
+    ///     <para>显示会话日志的检查视图；不存在或读取被拒绝时返回 1。</para>
+    ///     <para>Shows a session-log inspection view; returns 1 if absent or reading is rejected.</para>
     /// </summary>
-    /// <returns>
-    ///     <para>展示成功返回 0；找不到会话或存储读取被拒绝时返回 1。</para>
-    ///     <para>0 on successful display; 1 if the session is missing or a store read is rejected.</para>
-    /// </returns>
     private static async Task<int> ShowAsync(
         CommandContext context, string sessionId, CancellationToken cancellationToken)
     {
-        var io = context.Io;
-        var (storeDir, legacyDir) = await ResolveDirectoriesAsync(context, cancellationToken).ConfigureAwait(false);
+        var io       = context.Io;
+        var storeDir = await ResolveStoreDirectoryAsync(context, cancellationToken).ConfigureAwait(false);
         var redactor = new DisplaySecretRedactor(null);
-
         try
         {
             var session = await SessionStoreReader.ReadAsync(storeDir, sessionId, cancellationToken)
                                                   .ConfigureAwait(false);
             if (session is not null)
             {
-                await WriteStoredSessionAsync(io, session, redactor, cancellationToken).ConfigureAwait(false);
-                return 0;
-            }
-
-            var legacy = await SessionStoreReader.ReadLegacyAsync(legacyDir, sessionId, cancellationToken)
-                                                 .ConfigureAwait(false);
-            if (legacy is not null)
-            {
-                await WriteLegacySnapshotAsync(io, legacy, legacyDir, redactor, cancellationToken)
-                   .ConfigureAwait(false);
+                await WriteStoredSessionAsync(io, storeDir, session, redactor, cancellationToken).ConfigureAwait(false);
                 return 0;
             }
         }
@@ -147,46 +81,40 @@ internal static class SessionCommand
             return 1;
         }
 
-        await io.WriteErrorLineAsync($"No session '{sessionId}' found in '{storeDir}' or '{legacyDir}'.",
-                                     cancellationToken)
+        await io.WriteErrorLineAsync($"No session '{sessionId}' found in '{storeDir}'.", cancellationToken)
                 .ConfigureAwait(false);
         return 1;
     }
 
     /// <summary>
-    ///     <para>解析受保护会话存储目录与旧运行快照目录。</para>
-    ///     <para>Resolves the protected session-store directory and legacy run-snapshot directory.</para>
+    ///     <para>解析用户配置或默认的受保护存储目录，并校验工作区边界。</para>
+    ///     <para>Resolves the protected store from user settings or defaults and validates workspace boundaries.</para>
     /// </summary>
-    /// <remarks>
-    ///     <para>
-    ///         会话存储目录仅取用户配置或默认值，旧快照目录取生效配置；
-    ///         显式存储目录必须通过保护检查。
-    ///     </para>
-    ///     <para>
-    ///         The session-store directory comes only from user settings or the default;
-    ///         the legacy directory comes from effective configuration.
-    ///         An explicit store directory must pass protection checks.
-    ///     </para>
-    /// </remarks>
-    private static async Task<(string StoreDirectory, string LegacyDirectory)> ResolveDirectoriesAsync(
+    private static async Task<string> ResolveStoreDirectoryAsync(
         CommandContext context, CancellationToken cancellationToken)
     {
-        var resolution = await ConfigResolver
-                              .ResolveAsync(null, cancellationToken,
-                                            context.ResolveWorkingDirectory(), context.ResolveUserConfigPath())
-                              .ConfigureAwait(false);
+        var resolution = await ConfigResolver.ResolveAsync(null, cancellationToken,
+                                                           context.ResolveWorkingDirectory(),
+                                                           context.ResolveUserConfigPath()).ConfigureAwait(false);
         var userConfig = await UserConfigStore.LoadAsync(context.ResolveUserConfigPath(), cancellationToken)
                                               .ConfigureAwait(false);
-        var storeDirectory = SessionStorePaths.ResolveProtected(userConfig.Settings?.SessionStoreDirectory,
-                                                                resolution.Config.WorkspaceRoot);
-        return (storeDirectory, resolution.Config.SessionDirectory);
+        return SessionStorePaths.ResolveProtected(userConfig.Settings?.SessionStoreDirectory,
+                                                  resolution.Config.WorkspaceRoot);
     }
 
     private static async Task WriteStoredSessionAsync(
-        ICliConsole io, PersistedSession session, DisplaySecretRedactor redactor, CancellationToken cancellationToken)
+        ICliConsole       io, string storeDirectory, PersistedSession session, DisplaySecretRedactor redactor,
+        CancellationToken cancellationToken)
     {
+        var historyReader = new SessionHistoryReader();
+        var firstHistoryPage = await historyReader.ReadPageAsync(storeDirectory, session.Id,
+                                                                 SessionHistoryReader.MaxPageItems, null,
+                                                                 cancellationToken).ConfigureAwait(false);
+
+        var hasHistory = firstHistoryPage is { Items.Count: > 0 };
         await io.WriteLineAsync($"session         : {session.Id}", cancellationToken).ConfigureAwait(false);
-        await io.WriteLineAsync($"format version  : {session.FormatVersion}", cancellationToken).ConfigureAwait(false);
+        await io.WriteLineAsync($"format          : {SessionLogFormat.FormatName}", cancellationToken)
+                .ConfigureAwait(false);
         await io.WriteLineAsync($"workspace       : {session.WorkspaceRoot}", cancellationToken).ConfigureAwait(false);
         var chatApi = session.Model is null
             ? string.Empty
@@ -205,11 +133,8 @@ internal static class SessionCommand
         await io
              .WriteLineAsync(session.Conversation is { } conversation
                                  ? $"conversation    : {conversation.Messages.Count} messages " +
-                                   (session.FormatVersion < PersistedSession.CurrentFormatVersion ||
-                                    conversation.OpaqueRedacted
-                                       ? "(inspection only; legacy redaction)"
-                                       : "(verbatim protocol stored; resume checks required)")
-                                 : "conversation    : not stored by this format version (inspection only)",
+                                   "(verbatim protocol stored; resume checks required)"
+                                 : "conversation    : not stored",
                              cancellationToken)
              .ConfigureAwait(false);
 
@@ -235,16 +160,35 @@ internal static class SessionCommand
             await io.WriteLineAsync(string.Empty, cancellationToken).ConfigureAwait(false);
             await io.WriteLineAsync($"turn {i + 1} <{turn.Id}> {turn.CreatedUtc.LocalDateTime:yyyy-MM-dd HH:mm:ss}",
                                     cancellationToken).ConfigureAwait(false);
-            await io.WriteLineAsync($"  input : {TerminalDisplay.Format(turn.UserInput, redactor)}", cancellationToken)
-                    .ConfigureAwait(false);
+            if (!hasHistory)
+                await io.WriteLineAsync($"  input : {TerminalDisplay.Format(turn.UserInput, redactor)}",
+                                        cancellationToken)
+                        .ConfigureAwait(false);
 
             foreach (var run in turn.Runs)
-                await WriteRunSummaryAsync(io, run, redactor, cancellationToken).ConfigureAwait(false);
+                await WriteRunSummaryAsync(io, run, redactor, !hasHistory, cancellationToken).ConfigureAwait(false);
+        }
+
+        if (!hasHistory) return;
+        await io.WriteLineAsync(string.Empty, cancellationToken).ConfigureAwait(false);
+        await io.WriteLineAsync("history (append-only JSONL):", cancellationToken).ConfigureAwait(false);
+        var page = firstHistoryPage;
+        while (true)
+        {
+            foreach (var item in page.Items)
+                await WriteHistoryItemAsync(io, item, redactor, cancellationToken).ConfigureAwait(false);
+            if (page.Warning is { Length: > 0 } pageWarning)
+                await io.WriteLineAsync($"  history warning: {TerminalDisplay.Format(pageWarning, redactor)}",
+                                        cancellationToken).ConfigureAwait(false);
+            if (page.NextCursor is null) break;
+            page = await historyReader.ReadPageAsync(storeDirectory, session.Id,
+                                                     SessionHistoryReader.MaxPageItems, page.NextCursor,
+                                                     cancellationToken).ConfigureAwait(false);
         }
     }
 
-    private static async Task WriteRunSummaryAsync(
-        ICliConsole io, PersistedRun run, DisplaySecretRedactor redactor, CancellationToken cancellationToken)
+    private static async Task WriteRunSummaryAsync(ICliConsole io, PersistedRun run, DisplaySecretRedactor redactor,
+                                                   bool        includeDetails, CancellationToken cancellationToken)
     {
         var status = run.Status ?? "running";
         var line = $"  run <{run.Id}>: {status.ToLowerInvariant()}" +
@@ -256,7 +200,7 @@ internal static class SessionCommand
             line += $"  tokens {run.InputTokens ?? 0:N0} in / {run.OutputTokens ?? 0:N0} out";
         await io.WriteLineAsync(line, cancellationToken).ConfigureAwait(false);
 
-        if (!string.IsNullOrEmpty(run.FinalMessage))
+        if (includeDetails && !string.IsNullOrEmpty(run.FinalMessage))
             await io.WriteLineAsync($"    final : {TerminalDisplay.Format(run.FinalMessage, redactor)}",
                                     cancellationToken)
                     .ConfigureAwait(false);
@@ -270,11 +214,74 @@ internal static class SessionCommand
                                  cancellationToken).ConfigureAwait(false);
 
         // 从脱敏检查投影展示执行记录；未知结果不得补造成功、失败或退出码。
-        if (run.ToolCalls is not { Count: > 0 }) return;
+        if (!includeDetails || run.ToolCalls is not { Count: > 0 }) return;
 
         foreach (var call in run.ToolCalls)
             await WriteToolCallAsync(io, call.ToolName, call.Approval, call.State, call.SideEffects,
                                      redactor, cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async Task WriteHistoryItemAsync(
+        ICliConsole io, SessionHistoryItem item, DisplaySecretRedactor redactor, CancellationToken cancellationToken)
+    {
+        var identity                                      = $"  {item.Kind} <{item.Id}> seq {item.Sequence}";
+        if (item.RunId is { Length: > 0 } runId) identity += $" run <{runId}>";
+        await io.WriteLineAsync(identity, cancellationToken).ConfigureAwait(false);
+        if (!string.IsNullOrEmpty(item.Text))
+            await io.WriteLineAsync($"    text       : {TerminalDisplay.Format(item.Text, redactor)}",
+                                    cancellationToken).ConfigureAwait(false);
+        if (item.Kind != SessionHistoryKind.Tool) return;
+
+        if (item.ToolName is { Length: > 0 } toolName)
+            await io.WriteLineAsync($"    tool       : {TerminalDisplay.Format(toolName, redactor)}",
+                                    cancellationToken).ConfigureAwait(false);
+        if (item.State is { Length: > 0 } state)
+            await io.WriteLineAsync($"    state      : {ExecutionStateText(state, true, redactor)}",
+                                    cancellationToken).ConfigureAwait(false);
+        if (item.Succeeded is { } succeeded)
+            await io.WriteLineAsync($"    succeeded  : {succeeded}", cancellationToken).ConfigureAwait(false);
+        if (item.ExitCode is { } exitCode)
+            await io.WriteLineAsync($"    exit code  : {exitCode}", cancellationToken).ConfigureAwait(false);
+        if (item.TimedOut)
+            await io.WriteLineAsync("    timed out  : true", cancellationToken).ConfigureAwait(false);
+        if (item.Approval is { Length: > 0 } approval)
+            await io.WriteLineAsync($"    approval   : {TerminalDisplay.Format(approval, redactor)}",
+                                    cancellationToken).ConfigureAwait(false);
+        if (item.Capability is { Length: > 0 } capability)
+            await io.WriteLineAsync($"    capability : {TerminalDisplay.Format(capability, redactor)}",
+                                    cancellationToken).ConfigureAwait(false);
+        if (item.ExecutionPolicy is { Length: > 0 } policy)
+            await io.WriteLineAsync($"    policy     : {TerminalDisplay.Format(policy, redactor)}",
+                                    cancellationToken).ConfigureAwait(false);
+        if (item.Summary is { Length: > 0 } summary)
+            await io.WriteLineAsync($"    summary    : {TerminalDisplay.Format(summary, redactor)}",
+                                    cancellationToken).ConfigureAwait(false);
+        if (item.ArgumentsJson is { Length: > 0 } arguments)
+            await io.WriteLineAsync($"    arguments  : {TerminalDisplay.Format(arguments, redactor)}",
+                                    cancellationToken).ConfigureAwait(false);
+        if (item.TargetPaths is { Count: > 0 } paths)
+            foreach (var path in paths)
+                await io.WriteLineAsync($"    target     : {TerminalDisplay.Format(path, redactor)}",
+                                        cancellationToken).ConfigureAwait(false);
+        if (item.Stdout is { Length: > 0 } stdout)
+            await io.WriteLineAsync($"    stdout     : {TerminalDisplay.Format(stdout, redactor)}",
+                                    cancellationToken).ConfigureAwait(false);
+        if (item.Stderr is { Length: > 0 } stderr)
+            await io.WriteLineAsync($"    stderr     : {TerminalDisplay.Format(stderr, redactor)}",
+                                    cancellationToken).ConfigureAwait(false);
+        if (item.OutputIncomplete)
+            await io
+                 .WriteLineAsync($"    output     : incomplete{(item.OutputWarning is { Length: > 0 } warning ? "; " + TerminalDisplay.Format(warning, redactor) : string.Empty)}",
+                                 cancellationToken).ConfigureAwait(false);
+        if (item.PatchChanges is { Count: > 0 } changes)
+            foreach (var change in changes)
+            {
+                await io.WriteLineAsync($"    diff {TerminalDisplay.Format(change.Path, redactor)} " +
+                                        $"({TerminalDisplay.Format(change.Operation, redactor)}; {TerminalDisplay.Format(change.State, redactor)}):",
+                                        cancellationToken).ConfigureAwait(false);
+                await io.WriteLineAsync(TerminalDisplay.Format(change.Diff, redactor), cancellationToken)
+                        .ConfigureAwait(false);
+            }
     }
 
     private static Task WriteToolCallAsync(ICliConsole io, string toolName, string? approval, string state,
@@ -301,41 +308,4 @@ internal static class SessionCommand
                 : "result unknown",
             _ => $"unrecognized state '{TerminalDisplay.Format(state, redactor)}'"
         };
-
-    private static async Task WriteLegacySnapshotAsync(
-        ICliConsole       io, SessionSnapshot snapshot, string legacyDirectory, DisplaySecretRedactor redactor,
-        CancellationToken cancellationToken)
-    {
-        await io.WriteLineAsync("legacy run snapshot (read-only; cannot be resumed)", cancellationToken)
-                .ConfigureAwait(false);
-        await io.WriteLineAsync($"run id          : {snapshot.RunId}", cancellationToken).ConfigureAwait(false);
-        await io.WriteLineAsync($"directory       : {legacyDirectory}", cancellationToken).ConfigureAwait(false);
-        await io.WriteLineAsync($"started         : {snapshot.StartedUtc.LocalDateTime:yyyy-MM-dd HH:mm:ss}",
-                                cancellationToken)
-                .ConfigureAwait(false);
-        await io.WriteLineAsync($"completed       : {snapshot.CompletedUtc.LocalDateTime:yyyy-MM-dd HH:mm:ss}",
-                                cancellationToken)
-                .ConfigureAwait(false);
-        await io.WriteLineAsync($"status          : {snapshot.Result.Status}", cancellationToken).ConfigureAwait(false);
-        await io.WriteLineAsync($"messages        : {snapshot.Messages.Count}", cancellationToken)
-                .ConfigureAwait(false);
-        await io.WriteLineAsync($"steps / tools   : {snapshot.Result.Steps} / {snapshot.Result.ToolExecutions}",
-                                cancellationToken).ConfigureAwait(false);
-        if (snapshot.Result.InputTokens is not null || snapshot.Result.OutputTokens is not null)
-            await io.WriteLineAsync($"tokens          : {snapshot.Result.InputTokens ?? 0:N0} in / " +
-                                    $"{snapshot.Result.OutputTokens                  ?? 0:N0} out",
-                                    cancellationToken).ConfigureAwait(false);
-        if (!string.IsNullOrWhiteSpace(snapshot.Result.FinalMessage))
-            await io
-                 .WriteLineAsync($"final           : {TerminalDisplay.Format(snapshot.Result.FinalMessage, redactor)}",
-                                 cancellationToken).ConfigureAwait(false);
-        if (!string.IsNullOrWhiteSpace(snapshot.Result.Error))
-            await io.WriteLineAsync($"error           : {TerminalDisplay.Format(snapshot.Result.Error, redactor)}",
-                                    cancellationToken).ConfigureAwait(false);
-        if (snapshot.Result.ToolCalls is { Count: > 0 } calls)
-            foreach (var call in calls)
-                // 旧快照中的数字枚举经源生成读取器还原后，共用此展示路径。
-                await WriteToolCallAsync(io, call.ToolName, call.Approval, call.State.ToString(), call.SideEffects,
-                                         redactor, cancellationToken).ConfigureAwait(false);
-    }
 }

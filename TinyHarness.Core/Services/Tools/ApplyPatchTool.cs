@@ -7,14 +7,18 @@ using TinyHarness.Core.Services.Runtime;
 namespace TinyHarness.Core.Services.Tools;
 
 /// <summary>
-///     项目唯一的写入工具。在 Prepare 阶段解析 unified diff、解析所有目标路径并生成不可变计划；
-///     权限引擎审批该计划，Execute 只应用同一计划。全部目标先在内存中匹配，任一 hunk 失败都不会写文件。
-///     The apply_patch write tool accepts a unified diff, parses
-///     it in Prepare, resolves every target path into the workspace and records the
-///     resulting immutable plan in the prepared arguments. The Permission Engine
-///     approves the plan's target paths; Execute applies exactly that plan and never
-///     re-parses or re-resolves raw model input. All targets are matched in memory
-///     before the first write, so a failed hunk leaves every file untouched.
+///     <para>
+///         项目唯一的写入工具。在 Prepare 阶段解析 unified diff、把所有目标路径解析进工作区并生成不可变计划；
+///         权限引擎审批该计划，Execute 只应用同一计划，执行期不再重新解析原始模型输入。全部目标先在内存中匹配，
+///         任一 hunk 失败都不会写文件。
+///     </para>
+///     <para>
+///         The apply_patch write tool accepts a unified diff, parses it in Prepare, resolves every
+///         target path into the workspace and records the resulting immutable plan in the prepared
+///         arguments. The Permission Engine approves the plan's target paths; Execute applies exactly
+///         that plan and never re-parses or re-resolves raw model input. All targets are matched in
+///         memory before the first write, so a failed hunk leaves every file untouched.
+///     </para>
 /// </summary>
 public sealed class ApplyPatchTool(Workspace workspace) : ITool
 {
@@ -23,8 +27,7 @@ public sealed class ApplyPatchTool(Workspace workspace) : ITool
     private const int MaxFileBytes  = 4  * 1024 * 1024;
     private const int MaxTotalBytes = 16 * 1024 * 1024;
 
-    // Path identity follows the OS rules used by Workspace.IsInside, so a
-    // duplicate declared with different casing is still detected on Windows.
+    // 路径同一性沿用 Workspace.IsInside 的 OS 规则，Windows 上仍能检出仅大小写不同的重复目标。
     private static readonly StringComparer PathComparer =
         OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
 
@@ -49,6 +52,15 @@ public sealed class ApplyPatchTool(Workspace workspace) : ITool
         ["required"] = new JsonArray("patch")
     };
 
+    // 测试专用注入点；只在写入尝试登记 unknown 后、打开文件前触发。
+    internal Action<string>? WriteAttemptStarting { get; init; }
+
+    /// <summary>
+    ///     <para>测试注入点，在单文件事实确认为已写入后调用。</para>
+    ///     <para>A test hook invoked after a file fact has been confirmed written.</para>
+    /// </summary>
+    internal Action<string>? WriteCompleted { get; init; }
+
     public ToolDefinition Definition { get; } = new()
     {
         Name        = "apply_patch",
@@ -57,8 +69,11 @@ public sealed class ApplyPatchTool(Workspace workspace) : ITool
     };
 
     /// <summary>
-    ///     校验补丁大小和文件数、解析所有 hunk、规范化目标路径，并序列化权威执行计划供审批。
-    ///     Validates patch/file limits, parses hunks, normalizes targets, and serializes the authoritative plan for approval.
+    ///     <para>校验补丁大小和文件数、解析所有 hunk、规范化目标路径，并序列化权威执行计划供审批。</para>
+    ///     <para>
+    ///         Validates patch/file limits, parses hunks, normalizes targets, and serializes the authoritative plan
+    ///         for approval.
+    ///     </para>
     /// </summary>
     public ToolPreparation Prepare(ChatToolCall call)
     {
@@ -104,8 +119,8 @@ public sealed class ApplyPatchTool(Workspace workspace) : ITool
             });
         }
 
-        args["patch"] = patchText; // Original input kept verbatim for audit/display.
-        args["_plan"] = plan;      // Authoritative resolved plan; Execute reads only this.
+        args["patch"] = patchText; // 原样保留原始输入，供审计与展示。
+        args["_plan"] = plan;      // 已解析的权威计划；Execute 只读此字段。
 
         var display = targets.Select(workspace.ToDisplay).ToList();
         return new ToolPreparation
@@ -120,17 +135,20 @@ public sealed class ApplyPatchTool(Workspace workspace) : ITool
     }
 
     /// <summary>
-    ///     分两阶段执行准备计划：先读取并在内存中应用全部文件，再在全部成功后顺序提交写入。
-    ///     Executes the prepared plan in two phases: apply every file in memory, then commit writes only after all succeed.
+    ///     <para>分两阶段执行准备计划：先读取并在内存中应用全部文件，再在全部成功后顺序提交写入。</para>
+    ///     <para>
+    ///         Executes the prepared plan in two phases: apply every file in memory, then commit writes only after
+    ///         all succeed.
+    ///     </para>
     /// </summary>
     public async Task<ToolResult> ExecuteAsync(ToolPreparation preparation, CancellationToken cancellationToken)
     {
-        var plan = ReadPlan(preparation);
+        var plan    = ReadPlan(preparation);
+        var changes = new List<PatchChange>();
 
         try
         {
-            // Phase 1: read every target and apply its hunks in memory. Any
-            // mismatch throws before a single byte is written.
+            // 第一阶段：逐目标读取并在内存中应用 hunk；任何不匹配都在写入前抛出。
             var applied    = new List<(string Path, string Text, bool IsNew)>(plan.Count);
             var totalBytes = 0;
             foreach (var file in plan)
@@ -160,10 +178,8 @@ public sealed class ApplyPatchTool(Workspace workspace) : ITool
                             Succeeded = false,
                             Content   = $"File not found: {workspace.ToDisplay(absolute)}"
                         };
-                    // Re-check the final target at execution time. The leaf itself
-                    // only exists for a modification; a new file is verified
-                    // through its nearest existing ancestor directory, because link
-                    // resolution throws for a path that does not exist yet.
+                    // 执行期复检最终目标：修改场景叶子已存在可直接检查；新文件路径尚不存在
+                    // （链接解析会抛出），改经最近存在的祖先目录校验。
                     case true :
                         workspace.EnsureFinalTargetInside(absolute, false, "File");
                         break;
@@ -196,9 +212,10 @@ public sealed class ApplyPatchTool(Workspace workspace) : ITool
                 applied.Add((absolute, text, file.IsNewFile));
             }
 
-            // Phase 2: every target matched, so commit the writes.
-            foreach (var (path, text, isNew) in applied)
+            // 第二阶段：全部目标匹配成功，开始提交写入。
+            for (var index = 0; index < applied.Count; index++)
             {
+                var (path, text, isNew) = applied[index];
                 cancellationToken.ThrowIfCancellationRequested();
                 if (isNew)
                 {
@@ -211,35 +228,126 @@ public sealed class ApplyPatchTool(Workspace workspace) : ITool
                     workspace.EnsureFinalTargetInside(path, false, "File");
                 }
 
-                // CreateNew also prevents overwriting a file created after the
-                // validation phase (including a competing process's file).
-                await using var stream = new FileStream(path, isNew ? FileMode.CreateNew : FileMode.Create,
-                                                        FileAccess.Write, FileShare.None, 64 * 1024,
-                                                        FileOptions.Asynchronous);
-                await using var writer = new StreamWriter(stream, new UTF8Encoding(false));
-                await writer.WriteAsync(text.AsMemory(), cancellationToken).ConfigureAwait(false);
-                await writer.FlushAsync(cancellationToken).ConfigureAwait(false);
+                var file   = plan[index];
+                var change = CreateChange(file, PatchChange.UnknownState);
+                changes.Add(change);
+                WriteAttemptStarting?.Invoke(path);
+
+                // CreateNew 同时防止覆盖校验阶段之后才出现的文件（含并发进程创建的文件）。
+                await using (var stream = new FileStream(path, isNew ? FileMode.CreateNew : FileMode.Create,
+                                                         FileAccess.Write, FileShare.None, 64 * 1024,
+                                                         FileOptions.Asynchronous))
+                {
+                    await using var writer = new StreamWriter(stream, new UTF8Encoding(false));
+                    await writer.WriteAsync(text.AsMemory(), cancellationToken).ConfigureAwait(false);
+                    await writer.FlushAsync(cancellationToken).ConfigureAwait(false);
+                }
+
+                // writer 和 stream 都成功释放后，才能升级为 confirmed。
+                changes[^1] = change with { State = PatchChange.ConfirmedState };
+                WriteCompleted?.Invoke(path);
             }
 
             var changed = plan.Select(f => workspace.ToDisplay(f.Path)).ToList();
             return new ToolResult
             {
-                Succeeded = true,
-                Content   = $"Applied patch to {changed.Count} file(s): {string.Join(", ", changed)}"
+                Succeeded    = true,
+                Content      = $"Applied patch to {changed.Count} file(s): {string.Join(", ", changed)}",
+                PatchChanges = changes.ToArray()
             };
+        }
+        catch (OperationCanceledException ex) when (cancellationToken.IsCancellationRequested)
+        {
+            if (changes.Count == 0) throw;
+
+            // 只有写入已开始才携带结果；无副作用取消保持普通取消语义。
+            throw new ToolExecutionCanceledException(new ToolResult
+            {
+                Succeeded           = false,
+                ExecutionIncomplete = true,
+                Content =
+                    "apply_patch was cancelled; recorded file states may be partial.",
+                PatchChanges = changes.ToArray()
+            }, cancellationToken, ex);
         }
         catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException)
         {
-            return new ToolResult { Succeeded = false, Content = $"apply_patch failed: {ex.Message}" };
+            return new ToolResult
+            {
+                Succeeded           = false,
+                ExecutionIncomplete = changes.Count > 0,
+                Content             = $"apply_patch failed: {ex.Message}",
+                PatchChanges        = changes.Count == 0 ? null : changes.ToArray()
+            };
         }
     }
 
     /// <summary>
-    ///     在单文件及调用总预算内异步读取原文件，并额外探测一个字节以发现读取期间增长。
-    ///     Reads the original file within per-file/aggregate budgets and probes one extra byte to detect concurrent growth.
+    ///     <para>从已解析计划生成一个带当时 unified diff 的文件变更事实。</para>
+    ///     <para>Creates one file-change fact with its original unified diff from the resolved plan.</para>
     /// </summary>
-    private static async Task<(string Text, int Bytes)> ReadOriginalAsync(string            path, int byteLimit,
-                                                                          CancellationToken cancellationToken)
+    private PatchChange CreateChange(ResolvedPatchFile file, string state)
+    {
+        var display = workspace.ToDisplay(file.Path);
+        return new PatchChange(
+                               display,
+                               file.IsNewFile ? PatchChange.CreateOperation : PatchChange.ModifyOperation,
+                               BuildDiff(display, file.IsNewFile, file.Hunks),
+                               state);
+    }
+
+    /// <summary>
+    ///     <para>从 hunk 计划重建每个文件的统一差异，使结果不依赖后来的工作区内容。</para>
+    ///     <para>Rebuilds each file’s unified diff from planned hunks so facts do not depend on later workspace contents.</para>
+    /// </summary>
+    private static string BuildDiff(string displayPath, bool isNewFile, IReadOnlyList<PatchHunk> hunks)
+    {
+        var builder = new StringBuilder();
+        builder.Append("--- ").Append(isNewFile ? "/dev/null" : $"a/{displayPath}").Append('\n');
+        builder.Append("+++ b/").Append(displayPath).Append('\n');
+
+        foreach (var hunk in hunks)
+        {
+            builder.Append("@@ -").Append(hunk.OldStart).Append(',').Append(hunk.OldCount)
+                   .Append(" +").Append(hunk.NewStart).Append(',').Append(hunk.NewCount)
+                   .Append(" @@\n");
+
+            // 先匹配公共前后缀；中间按删除加新增重建，首尾显式输出上下文。
+            var prefix = 0;
+            while (prefix < hunk.OldLines.Count && prefix < hunk.NewLines.Count &&
+                   string.Equals(hunk.OldLines[prefix], hunk.NewLines[prefix], StringComparison.Ordinal))
+                prefix++;
+
+            var suffix = 0;
+            while (suffix < hunk.OldLines.Count - prefix && suffix < hunk.NewLines.Count - prefix &&
+                   string.Equals(hunk.OldLines[^(suffix + 1)], hunk.NewLines[^(suffix + 1)], StringComparison.Ordinal))
+                suffix++;
+
+            for (var index = 0; index < prefix; index++)
+                builder.Append(' ').Append(hunk.OldLines[index]).Append('\n');
+
+            for (var index = prefix; index < hunk.OldLines.Count - suffix; index++)
+                builder.Append('-').Append(hunk.OldLines[index]).Append('\n');
+
+            for (var index = prefix; index < hunk.NewLines.Count - suffix; index++)
+                builder.Append('+').Append(hunk.NewLines[index]).Append('\n');
+
+            for (var index = hunk.OldLines.Count - suffix; index < hunk.OldLines.Count; index++)
+                builder.Append(' ').Append(hunk.OldLines[index]).Append('\n');
+        }
+
+        return builder.ToString();
+    }
+
+    /// <summary>
+    ///     <para>在单文件及调用总预算内异步读取原文件，并额外探测一个字节以发现读取期间增长。</para>
+    ///     <para>
+    ///         Reads the original file within per-file/aggregate budgets and probes one extra byte to detect
+    ///         concurrent growth.
+    ///     </para>
+    /// </summary>
+    private static async Task<(string Text, int Bytes)> ReadOriginalAsync(
+        string path, int byteLimit, CancellationToken cancellationToken)
     {
         await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read,
                                                 64 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
@@ -251,8 +359,7 @@ public sealed class ApplyPatchTool(Workspace workspace) : ITool
         var       buffer = new byte[64 * 1024];
         while (true)
         {
-            // Probe one byte beyond the remaining budget, so growth cannot
-            // turn a length check into an unbounded read or silent truncation.
+            // 比剩余预算多探测一个字节，文件增长不会把长度检查变成无限读取或静默截断。
             var count = Math.Min(buffer.Length, byteLimit - (int)bytes.Length + 1);
             var read  = await stream.ReadAsync(buffer.AsMemory(0, count), cancellationToken).ConfigureAwait(false);
             if (read == 0) break;
@@ -269,8 +376,8 @@ public sealed class ApplyPatchTool(Workspace workspace) : ITool
     }
 
     /// <summary>
-    ///     从准备参数反序列化内部权威计划；字段缺失或结构损坏会拒绝执行。
-    ///     Deserializes the authoritative internal plan and rejects missing or malformed fields.
+    ///     <para>从准备参数反序列化内部权威计划；字段缺失或结构损坏会拒绝执行。</para>
+    ///     <para>Deserializes the authoritative internal plan and rejects missing or malformed fields.</para>
     /// </summary>
     private static IReadOnlyList<ResolvedPatchFile> ReadPlan(ToolPreparation preparation)
     {
@@ -311,8 +418,8 @@ public sealed class ApplyPatchTool(Workspace workspace) : ITool
     }
 
     /// <summary>
-    ///     从准备好的 hunk 对象复制字符串行数组。
-    ///     Copies a string-line array from a prepared hunk object.
+    ///     <para>从准备好的 hunk 对象复制字符串行数组。</para>
+    ///     <para>Copies a string-line array from a prepared hunk object.</para>
     /// </summary>
     private static IReadOnlyList<string> ReadStringArray(JsonObject hunk, string key)
     {
@@ -324,23 +431,29 @@ public sealed class ApplyPatchTool(Workspace workspace) : ITool
     }
 
     /// <summary>
-    ///     对尚不存在的新文件检查最近的已有祖先目录，防止经符号链接或 junction 逃逸工作区。
-    ///     Verifies that a not-yet-existing file cannot escape the workspace through a
-    ///     symlinked ancestor directory. The lexical path was already confined by
-    ///     Prepare; this re-checks the nearest existing ancestor's link chain, since
-    ///     the leaf itself cannot be a link before it is created.
+    ///     <para>
+    ///         对尚不存在的新文件检查最近的已有祖先目录，防止经符号链接或 junction 逃逸工作区；
+    ///         词法范围已由 Prepare 约束，这里复检最近存在祖先的链接链（叶子创建前不可能是链接）。
+    ///     </para>
+    ///     <para>
+    ///         Verifies that a not-yet-existing file cannot escape the workspace through a symlinked
+    ///         ancestor directory. The lexical path was already confined by Prepare; this re-checks
+    ///         the nearest existing ancestor's link chain, since the leaf itself cannot be a link
+    ///         before it is created.
+    ///     </para>
     /// </summary>
     private static void EnsureNewFileInside(Workspace workspace, string absolute)
     {
-        var ancestor                                                         = Path.GetDirectoryName(absolute);
+        var ancestor = Path.GetDirectoryName(absolute);
+
         while (ancestor is not null && !Directory.Exists(ancestor)) ancestor = Path.GetDirectoryName(ancestor);
 
         if (ancestor is not null) workspace.EnsureFinalTargetInside(ancestor, true, "Directory");
     }
 
     /// <summary>
-    ///     把文本行复制为独立 JSON 数组，供不可变准备计划保存。
-    ///     Copies text lines into an independent JSON array for the immutable prepared plan.
+    ///     <para>把文本行复制为独立 JSON 数组，供不可变准备计划保存。</para>
+    ///     <para>Copies text lines into an independent JSON array for the immutable prepared plan.</para>
     /// </summary>
     private static JsonArray ToArray(IEnumerable<string> lines)
     {

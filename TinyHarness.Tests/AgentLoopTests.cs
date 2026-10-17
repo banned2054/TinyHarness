@@ -106,6 +106,114 @@ public class AgentLoopTests
     }
 
     [Test]
+    public async Task ResultJournalFailure_StopsTheNextToolAndKeepsUnknownState()
+    {
+        var client   = new FakeChatClient();
+        var first    = new FakeTool("tool_a");
+        var second   = new FakeTool("tool_b");
+        var recorder = new CapturingRecorder { FailResultRecording = true };
+        client.Enqueue([
+            new ChatStreamEvent
+            {
+                Kind                 = ChatStreamEventKind.ToolCallDelta, ToolCallIndex = 0, ToolCallId = "a",
+                ToolCallFunctionName = "tool_a", ToolCallArgumentsDelta                 = "{}"
+            },
+            new ChatStreamEvent
+            {
+                Kind                 = ChatStreamEventKind.ToolCallDelta, ToolCallIndex = 1, ToolCallId = "b",
+                ToolCallFunctionName = "tool_b", ToolCallArgumentsDelta                 = "{}"
+            },
+            new ChatStreamEvent { Kind = ChatStreamEventKind.End }
+        ]);
+        var loop = new AgentLoop(client, new ToolRegistry([first, second]), Options(), null, null,
+                                 recorder);
+
+        var result = await loop.RunAsync("sys", "run", CancellationToken.None);
+
+        Assert.That(first.ExecuteCount, Is.EqualTo(1));
+        Assert.That(second.ExecuteCount, Is.Zero);
+        Assert.That(result.Status, Is.EqualTo(AgentStatus.Failed));
+        Assert.That(result.PersistenceWarning, Is.EqualTo("injected result journal failure"));
+        Assert.That(result.ToolCalls!.Single(call => call.CallId == "a").State,
+                    Is.EqualTo(ToolCallExecutionState.UnknownResult));
+    }
+
+    [Test]
+    public async Task UnknownPatchChange_RecordsPartialFactAndStopsTheNextTool()
+    {
+        var client = new FakeChatClient();
+        var first = new FakeTool("patch_tool")
+        {
+            ResultOverride = new ToolResult
+            {
+                Succeeded    = false,
+                Content      = "second file write outcome is unknown",
+                PatchChanges = [new PatchChange("two.cs", "modify", "@@ partial @@", PatchChange.UnknownState)]
+            }
+        };
+        var second   = new FakeTool("tool_b");
+        var recorder = new CapturingRecorder();
+        client.Enqueue([
+            new ChatStreamEvent
+            {
+                Kind                 = ChatStreamEventKind.ToolCallDelta, ToolCallIndex = 0, ToolCallId = "a",
+                ToolCallFunctionName = "patch_tool", ToolCallArgumentsDelta             = "{}"
+            },
+            new ChatStreamEvent
+            {
+                Kind                 = ChatStreamEventKind.ToolCallDelta, ToolCallIndex = 1, ToolCallId = "b",
+                ToolCallFunctionName = "tool_b", ToolCallArgumentsDelta                 = "{}"
+            },
+            new ChatStreamEvent { Kind = ChatStreamEventKind.End }
+        ]);
+        var loop = new AgentLoop(client, new ToolRegistry([first, second]), Options(), null, null, recorder);
+
+        var result = await loop.RunAsync("sys", "run", CancellationToken.None);
+
+        Assert.That(result.Status, Is.EqualTo(AgentStatus.Failed));
+        Assert.That(first.ExecuteCount, Is.EqualTo(1));
+        Assert.That(second.ExecuteCount, Is.Zero);
+        Assert.That(result.ToolCalls!.Single(call => call.CallId == "a").State,
+                    Is.EqualTo(ToolCallExecutionState.UnknownResult));
+        Assert.That(recorder.ResultRecords.Single().PatchChanges!.Single().State, Is.EqualTo(PatchChange.UnknownState));
+    }
+
+    [Test]
+    public async Task TypedToolCancellation_RecordsPartialFactsAndKeepsCancelledStatus()
+    {
+        var       client       = new FakeChatClient();
+        var       first        = new FakeTool("patch_tool");
+        var       second       = new FakeTool("tool_b");
+        var       recorder     = new CapturingRecorder();
+        using var cancellation = new CancellationTokenSource();
+        first = new FakeTool("patch_tool")
+        {
+            ExecuteOverride = token =>
+            {
+                cancellation.Cancel();
+                throw new ToolExecutionCanceledException(new ToolResult
+                {
+                    Succeeded    = false,
+                    Content      = "partial write facts",
+                    PatchChanges = [new PatchChange("one.cs", "modify", "@@ partial @@", PatchChange.ConfirmedState)]
+                }, token);
+            }
+        };
+        client.Enqueue(FakeChatClient.ToolCall("patch_tool", "{}", "a"));
+        var loop = new AgentLoop(client, new ToolRegistry([first, second]), Options(), null, null, recorder);
+
+        var result = await loop.RunAsync("sys", "run", cancellation.Token);
+
+        Assert.That(result.Status, Is.EqualTo(AgentStatus.Cancelled));
+        Assert.That(first.ExecuteCount, Is.EqualTo(1));
+        Assert.That(second.ExecuteCount, Is.Zero);
+        Assert.That(result.ToolCalls!.Single(call => call.CallId == "a").State,
+                    Is.EqualTo(ToolCallExecutionState.UnknownResult));
+        Assert.That(recorder.ResultRecords.Single().PatchChanges!.Single().State,
+                    Is.EqualTo(PatchChange.ConfirmedState));
+    }
+
+    [Test]
     public async Task UnknownTool_ReturnsErrorToModelAndContinues()
     {
         var client = new FakeChatClient();
@@ -471,6 +579,10 @@ public class AgentLoopTests
     {
         public List<(int? InputTokens, int? OutputTokens, string? FinishReason)> UsageRecords { get; } = [];
 
+        public List<ToolResult> ResultRecords { get; } = [];
+
+        public bool FailResultRecording { get; init; }
+
         public Task StartAsync(string systemPrompt, string userInput, CancellationToken cancellationToken) =>
             Task.CompletedTask;
 
@@ -480,8 +592,13 @@ public class AgentLoopTests
         public Task RecordPermissionAsync(ToolPreparation   preparation, PermissionDecision decision, string outcome,
                                           CancellationToken cancellationToken) => Task.CompletedTask;
 
-        public Task RecordResultAsync(
-            ToolPreparation preparation, ToolResult result, CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task RecordResultAsync(ToolPreparation   preparation, ToolResult result,
+                                      CancellationToken cancellationToken)
+        {
+            if (FailResultRecording) throw new IOException("injected result journal failure");
+            ResultRecords.Add(result);
+            return Task.CompletedTask;
+        }
 
         public Task RecordCompactionAsync(ContextChange change, CancellationToken cancellationToken) =>
             Task.CompletedTask;

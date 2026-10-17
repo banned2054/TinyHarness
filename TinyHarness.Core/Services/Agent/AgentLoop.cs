@@ -1,4 +1,3 @@
-using System.Text.Json;
 using TinyHarness.Core.Models.Agent;
 using TinyHarness.Core.Models.ChatCompletions;
 using TinyHarness.Core.Models.Context;
@@ -72,6 +71,7 @@ public sealed class AgentLoop
     private readonly ToolRegistry _tools;
 
     private long _eventSequence;
+    private long _nextInvocationSequence;
 
     /// <summary>
     ///     <para>
@@ -229,6 +229,7 @@ public sealed class AgentLoop
         _reportedInputTokens  = null;
         _reportedOutputTokens = null;
         _toolCallRecords.Clear();
+        _nextInvocationSequence = 0;
 
         _context.Append(ChatMessage.User(userInput));
 
@@ -281,6 +282,8 @@ public sealed class AgentLoop
 
                 ValidateCallIds(assistant.ToolCalls);
                 _context.Append(assistant);
+                if (_recorder is not null)
+                    await _recorder.RecordAssistantAsync(assistant, cancellationToken).ConfigureAwait(false);
 
                 if (assistant.ToolCalls is null || assistant.ToolCalls.Count == 0)
                     return await FinishAsync(new AgentResult
@@ -311,6 +314,12 @@ public sealed class AgentLoop
                     foreach (var item in round)
                         _context.Append(ChatMessage.Tool(item.Call.FunctionName, item.Call.Id,
                                                          item.Error ?? NotExecutedReason(invalid)));
+
+                    if (_recorder is not null)
+                        foreach (var item in round)
+                            await _recorder
+                                 .RecordNotStartedAsync(roundRecords[item.Call.Id].Snapshot(), cancellationToken)
+                                 .ConfigureAwait(false);
 
                     continue;
                 }
@@ -355,20 +364,96 @@ public sealed class AgentLoop
                     }
 
                     toolExecutions++;
-                    var result = await ExecutePreparedAsync(item.RoundCall.Tool!, item.RoundCall.Preparation!,
+                    ToolResult result;
+                    try
+                    {
+                        result = await ExecutePreparedAsync(item.RoundCall.Tool!, item.RoundCall.Preparation!,
                                                             cancellationToken);
+                    }
+                    catch (ToolExecutionCanceledException ex)
+                    {
+                        result       = ex.Result;
+                        record.State = ToolCallExecutionState.UnknownResult;
+                        _context.Append(ChatMessage.Tool(item.RoundCall.Call.FunctionName, item.RoundCall.Call.Id,
+                                                         result.Content));
+                        string? persistenceWarning = null;
+                        if (_recorder is not null)
+                            try
+                            {
+                                await _recorder.RecordResultAsync(item.RoundCall.Preparation!, result,
+                                                                  CancellationToken.None).ConfigureAwait(false);
+                            }
+                            catch (Exception writeError)
+                            {
+                                persistenceWarning = writeError.Message;
+                            }
+
+                        await PublishEventAsync(HostEventKind.ToolFinished,
+                                                new ToolExecutionOutcome(item.RoundCall.Preparation!, result),
+                                                CancellationToken.None).ConfigureAwait(false);
+                        return await FinishAsync(new AgentResult
+                        {
+                            Status = AgentStatus.Cancelled,
+                            Error =
+                                "Run cancelled after tool execution started; partial results were retained for inspection.",
+                            PersistenceWarning = persistenceWarning,
+                            Steps              = steps,
+                            ToolExecutions     = toolExecutions,
+                            Compactions        = compactions
+                        }).ConfigureAwait(false);
+                    }
 
                     // 副作用已发生，先保留结果再写审计，避免审计失败抹去结果或诱发重放。
                     _context.Append(ChatMessage.Tool(item.RoundCall.Call.FunctionName, item.RoundCall.Call.Id,
                                                      result.Content));
+                    // 持久化确认失败时仍保持 UnknownResult，调用链立即结束且后续工具不会启动。
+                    if (_recorder is not null)
+                        try
+                        {
+                            await _recorder.RecordResultAsync(item.RoundCall.Preparation!, result, cancellationToken)
+                                           .ConfigureAwait(false);
+                        }
+                        catch (Exception ex)
+                        {
+                            return await FinishAsync(new AgentResult
+                            {
+                                Status = cancellationToken.IsCancellationRequested
+                                    ? AgentStatus.Cancelled
+                                    : AgentStatus.Failed,
+                                Error =
+                                    "The tool ran but its result was not reliably recorded; later tools were stopped.",
+                                PersistenceWarning = ex.Message,
+                                Steps              = steps,
+                                ToolExecutions     = toolExecutions,
+                                Compactions        = compactions
+                            }).ConfigureAwait(false);
+                        }
+
+                    if (result.ExecutionIncomplete ||
+                        result.PatchChanges?.Any(change => change.State == PatchChange.UnknownState) == true)
+                    {
+                        MarkRecordState(roundRecords, item.RoundCall.Call.Id, ToolCallExecutionState.UnknownResult);
+                        await PublishEventAsync(HostEventKind.ToolFinished,
+                                                new ToolExecutionOutcome(item.RoundCall.Preparation!, result),
+                                                CancellationToken.None).ConfigureAwait(false);
+                        return await FinishAsync(new AgentResult
+                        {
+                            Status = cancellationToken.IsCancellationRequested
+                                ? AgentStatus.Cancelled
+                                : AgentStatus.Failed,
+                            Error =
+                                "The tool execution is incomplete or left file outcomes unknown; later tools were stopped pending inspection.",
+                            Steps          = steps,
+                            ToolExecutions = toolExecutions,
+                            Compactions    = compactions
+                        }).ConfigureAwait(false);
+                    }
+
                     MarkRecordState(roundRecords, item.RoundCall.Call.Id, ToolCallExecutionState.ConfirmedResult);
                     await PublishEventAsync(HostEventKind.ToolFinished,
                                             new ToolExecutionOutcome(item.RoundCall.Preparation!, result),
                                             cancellationToken)
                        .ConfigureAwait(false);
-                    if (_recorder is not null)
-                        await _recorder.RecordResultAsync(item.RoundCall.Preparation!, result, cancellationToken)
-                                       .ConfigureAwait(false);
                 }
             }
 
@@ -421,14 +506,13 @@ public sealed class AgentLoop
             await _recorder.CompleteAsync(result, _context.Messages, _context.State, CancellationToken.None)
                            .ConfigureAwait(false);
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        catch (Exception ex)
         {
             result = result with
             {
-                Status = AgentStatus.Failed,
-                Error = string.IsNullOrWhiteSpace(result.Error)
-                    ? $"Run completed but persistence failed: {ex.Message}"
-                    : $"{result.Error}; persistence failed: {ex.Message}"
+                PersistenceWarning = string.IsNullOrWhiteSpace(result.PersistenceWarning)
+                    ? ex.Message
+                    : $"{result.PersistenceWarning}; {ex.Message}"
             };
         }
 
@@ -861,15 +945,17 @@ public sealed class AgentLoop
             var record = item.Preparation is { } preparation
                 ? new ToolCallRecord
                 {
-                    CallId      = item.Call.Id,
-                    ToolName    = item.Call.FunctionName,
-                    Capability  = preparation.Capability,
-                    SideEffects = !ToolCapabilities.IsReadOnly(preparation.Capability),
-                    Summary     = preparation.Summary
+                    CallId       = item.Call.Id,
+                    InvocationId = NextInvocationId(),
+                    ToolName     = item.Call.FunctionName,
+                    Capability   = preparation.Capability,
+                    SideEffects  = !ToolCapabilities.IsReadOnly(preparation.Capability),
+                    Summary      = preparation.Summary
                 }
                 : new ToolCallRecord
                 {
                     CallId           = item.Call.Id,
+                    InvocationId     = NextInvocationId(),
                     ToolName         = item.Call.FunctionName,
                     Summary          = $"{item.Call.FunctionName}()",
                     PreparationError = item.Error
@@ -880,6 +966,12 @@ public sealed class AgentLoop
 
         return records;
     }
+
+    /// <summary>
+    ///     <para>按本次运行中的出现顺序分配调用标识，准备失败也占用序号。</para>
+    ///     <para>Assigns an invocation identity in run appearance order, including failed preparations.</para>
+    /// </summary>
+    private string NextInvocationId() => $"call-{checked(++_nextInvocationSequence):D8}";
 
     /// <summary>
     ///     <para>
@@ -943,7 +1035,7 @@ public sealed class AgentLoop
 
             case PermissionDecision.Ask :
                 var approvalProvider = _approver ?? throw new InvalidOperationException(
-                     "An approval provider is required when the permission engine returns Ask.");
+                 "An approval provider is required when the permission engine returns Ask.");
                 await PublishEventAsync(HostEventKind.ApprovalRequested, preparation, cancellationToken)
                    .ConfigureAwait(false);
                 var action = await approvalProvider.PromptAsync(preparation, cancellationToken);

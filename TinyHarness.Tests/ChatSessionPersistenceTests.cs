@@ -1,14 +1,17 @@
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using TinyHarness.Core.Exceptions;
 using TinyHarness.Core.Models.Agent;
 using TinyHarness.Core.Models.ChatCompletions;
 using TinyHarness.Core.Models.Configuration;
+using TinyHarness.Core.Models.Permissions;
 using TinyHarness.Core.Models.Persistence;
 using TinyHarness.Core.Models.Session;
 using TinyHarness.Core.Models.Tools;
 using TinyHarness.Core.Services.Agent;
 using TinyHarness.Core.Services.ChatCompletions;
 using TinyHarness.Core.Services.Context;
+using TinyHarness.Core.Services.Permissions;
 using TinyHarness.Core.Services.Persistence;
 using TinyHarness.Core.Services.Session;
 using TinyHarness.Core.Services.Tools;
@@ -38,15 +41,163 @@ public class ChatSessionPersistenceTests
 
     private static ChatSessionHost NewHost(IChatCompletionClient              client,
                                            Func<string, ISessionStoreWriter>? sessionWriterFactory,
-                                           Func<string, IRunRecorder>?        recorderFactory = null) =>
+                                           Func<string, IRunRecorder>?        recorderFactory = null,
+                                           IHostEventSink?                    events          = null,
+                                           ToolRegistry?                      tools           = null,
+                                           PermissionEngine?                  permissions     = null,
+                                           IApprovalProvider?                 approver        = null) =>
         new(Path.Combine(Path.GetTempPath(), "tinyharness-session-persistence-tests"),
             new SessionModelIdentity("test-model", "https://example.invalid/v1", ChatApiKind.ChatCompletions),
             Options(),
             client,
-            new ToolRegistry([]),
+            tools ?? new ToolRegistry([]),
             SystemPrompt,
-            recorderFactory : recorderFactory,
-            sessionWriterFactory : sessionWriterFactory);
+            permissions,
+            approver,
+            events,
+            recorderFactory,
+            sessionWriterFactory);
+
+    [Test]
+    public async Task SubmitTurn_HistoryEventsMatchPagedJournalItemsFieldForField()
+    {
+        using var dir    = new TestTempDir();
+        var       client = new FakeChatClient();
+        client.Enqueue(FakeChatClient.Text("stored answer"));
+        var       events = new TestHostEventSink();
+        using var host   = NewHost(client, id => new SessionStoreWriter(dir.Root, id), events : events);
+
+        var run = await host.SubmitTurnAsync("question", CancellationToken.None);
+        var page = await new SessionHistoryReader().ReadPageAsync(dir.Root, host.Session.Id,
+                                                                  SessionHistoryReader.MaxPageItems, null,
+                                                                  CancellationToken.None);
+        var liveItems = events.Events.Where(@event => @event.Kind == HostEventKind.HistoryItemCompleted)
+                              .Select(@event => TestAssert.TypeOf<SessionHistoryItem>(@event.Payload)).ToArray();
+
+        Assert.That(run.Result!.Status, Is.EqualTo(AgentStatus.Completed));
+        Assert.That(page.Items.Select(item => item.Kind), Is.EqualTo(new[] { "user", "final" }));
+        Assert.That(liveItems, Is.EqualTo(page.Items));
+        Assert.That(page.Items.All(item => item.Sequence > 0 && item.Id.Length > 0), Is.True);
+        Assert.That(host.PersistenceWarning, Is.Null);
+        Assert.That(host.DisplayWarning, Is.Null);
+    }
+
+    [Test]
+    public async Task SubmitTurn_HistoryDisplayFailureIsRedactedAndSeparateFromPersistence()
+    {
+        using var    dir    = new TestTempDir();
+        const string secret = "display-only-secret";
+        var          client = new FakeChatClient();
+        client.Enqueue(FakeChatClient.Text("stored answer"));
+        var secrets = new Dictionary<string, string> { ["KEY"] = secret };
+        using var host = NewHost(client, id => new SessionStoreWriter(dir.Root, id, secrets),
+                                 events : new ThrowOnHistoryItemSink(secret));
+
+        var run = await host.SubmitTurnAsync("question", CancellationToken.None);
+        var page = await new SessionHistoryReader().ReadPageAsync(dir.Root, host.Session.Id,
+                                                                  SessionHistoryReader.MaxPageItems, null,
+                                                                  CancellationToken.None);
+
+        Assert.That(run.Result!.Status, Is.EqualTo(AgentStatus.Completed));
+        Assert.That(host.PersistenceWarning, Is.Null);
+        Assert.That(host.DisplayWarning, Does.Contain("[REDACTED]"));
+        TestAssert.DoesNotContain(secret, host.DisplayWarning!, StringComparison.Ordinal);
+        Assert.That(page.Items.Select(item => item.Kind), Is.EqualTo(new[] { "user", "final" }));
+        Assert.That(page.Items[^1].Text, Is.EqualTo("stored answer"));
+    }
+
+    [Test]
+    public async Task SubmitTurn_PreparationFailureIsSavedAsKnownNotStartedHistoryAfterRestart()
+    {
+        using var dir    = new TestTempDir();
+        var       client = new FakeChatClient();
+        client.Enqueue(FakeChatClient.ToolCall("missing", "{\"token\":\"hidden\"}"));
+        client.Enqueue(FakeChatClient.Text("tool unavailable"));
+        var host      = NewHost(client, id => new SessionStoreWriter(dir.Root, id));
+        var run       = await host.SubmitTurnAsync("try missing tool", CancellationToken.None);
+        var callId    = run.Result!.ToolCalls!.Single().CallId;
+        var sessionId = host.Session.Id;
+        host.Dispose();
+
+        var page = await new SessionHistoryReader().ReadPageAsync(dir.Root, sessionId,
+                                                                  SessionHistoryReader.MaxPageItems, null,
+                                                                  CancellationToken.None);
+        var toolItem = page.Items.Single(item => item.Kind == SessionHistoryKind.Tool);
+
+        Assert.That(run.Result.Status, Is.EqualTo(AgentStatus.Completed));
+        Assert.That(run.Result.ToolExecutions, Is.Zero);
+        Assert.That(toolItem.CallId, Is.EqualTo(callId));
+        Assert.That(toolItem.State, Is.EqualTo(nameof(ToolCallExecutionState.KnownNotStarted)));
+        Assert.That(toolItem.PreparationError, Does.Contain("Unknown tool"));
+        Assert.That(toolItem.Succeeded, Is.Null);
+        Assert.That(toolItem.ExitCode, Is.Null);
+        TestAssert.DoesNotContain("hidden", toolItem.ArgumentsJson, StringComparison.Ordinal);
+    }
+
+    [Test]
+    public async Task SubmitTurn_DenialIsSavedImmediatelyAndToolNeverStarts()
+    {
+        using var dir    = new TestTempDir();
+        var       client = new FakeChatClient();
+        client.Enqueue(FakeChatClient.ToolCall("write_test", "{\"path\":\"file.txt\"}"));
+        client.Enqueue(FakeChatClient.Text("permission denied"));
+        var tool = new AuditTestTool(dir.Root, "filesystem.write");
+        var host = NewHost(client, id => new SessionStoreWriter(dir.Root, id),
+                           tools : new ToolRegistry([tool]), permissions : new PermissionEngine(dir.Root),
+                           approver : new DenyApprover());
+
+        var run       = await host.SubmitTurnAsync("try write", CancellationToken.None);
+        var sessionId = host.Session.Id;
+        host.Dispose();
+        var page = await new SessionHistoryReader().ReadPageAsync(dir.Root, sessionId,
+                                                                  SessionHistoryReader.MaxPageItems, null,
+                                                                  CancellationToken.None);
+        var denied = page.Items.Single(item => item.Kind == SessionHistoryKind.Tool);
+
+        Assert.That(run.Result!.Status, Is.EqualTo(AgentStatus.Completed));
+        Assert.That(tool.ExecuteCount, Is.Zero);
+        Assert.That(denied.State, Is.EqualTo(nameof(ToolCallExecutionState.KnownNotStarted)));
+        Assert.That(denied.Approval, Does.Contain("Permission denied by user"));
+        Assert.That(denied.Succeeded, Is.Null);
+        Assert.That(denied.ExitCode, Is.Null);
+    }
+
+    [Test]
+    public async Task SubmitTurn_PersistsHostToolPolicyPermissionAndResultAuditInSharedLog()
+    {
+        using var dir    = new TestTempDir();
+        var       client = new FakeChatClient();
+        client.Enqueue(FakeChatClient.ToolCall("audit_test", "{}"));
+        client.Enqueue(FakeChatClient.Text("done"));
+        var tool = new AuditTestTool(dir.Root, "filesystem.read");
+        var host = NewHost(client, id => new SessionStoreWriter(dir.Root, id),
+                           tools : new ToolRegistry([tool]), permissions : new PermissionEngine(dir.Root));
+
+        var run       = await host.SubmitTurnAsync("run read", CancellationToken.None);
+        var sessionId = host.Session.Id;
+        host.Dispose();
+        var log = await File.ReadAllTextAsync(Path.Combine(dir.Root, sessionId + SessionStoreWriter.LogFileSuffix));
+        var auditRecords = log.Split('\n', StringSplitOptions.RemoveEmptyEntries)
+                              .Select(line =>
+                                          JsonSerializer.Deserialize(line,
+                                                                     SessionLogJsonContext.Default.SessionLogBatch)!)
+                              .SelectMany(batch => batch.Records)
+                              .Where(record => record.Kind == "audit")
+                              .Select(record => record.Payload.Deserialize(PersistenceJsonContext.Default.AuditRecord)!)
+                              .ToArray();
+
+        Assert.That(run.Result!.Status, Is.EqualTo(AgentStatus.Completed));
+        Assert.That(tool.ExecuteCount, Is.EqualTo(1));
+        Assert.That(auditRecords.Any(record => record.Kind == "tool.prepared" &&
+                                               record.Capability == "filesystem.read" &&
+                                               record.ExecutionPolicy == "backend=test"), Is.True);
+        Assert.That(auditRecords.Any(record => record.Kind     == "tool.permission" &&
+                                               record.Decision == "Allow" && record.ExecutionPolicy == "backend=test"),
+                    Is.True);
+        Assert.That(auditRecords.Any(record => record.Kind      == "tool.result" &&
+                                               record.Succeeded == true && record.ExecutionPolicy == "backend=test"),
+                    Is.True);
+    }
 
     [Test]
     public async Task SubmitTurn_CommitsASnapshotAfterEachFinishedTurn()
@@ -67,7 +218,7 @@ public class ChatSessionPersistenceTests
 
         var read = await SessionStoreReader.ReadAsync(dir.Root, host.Session.Id, CancellationToken.None);
         TestAssert.NotNull(read);
-        Assert.That(read!.CommitSequence, Is.EqualTo(2));
+        Assert.That(read!.CommitSequence, Is.GreaterThan(2));
         Assert.That(read.Turns.Count, Is.EqualTo(2));
         Assert.That(read.Turns[0].UserInput, Is.EqualTo("what is this repo?"));
         Assert.That(read.Turns[0].Runs.Single().FinalMessage, Is.EqualTo("first answer"));
@@ -79,7 +230,6 @@ public class ChatSessionPersistenceTests
     public async Task SubmitTurn_PreservesProtocolSecretsWhileInspectionAndAuditStayRedacted()
     {
         using var    dir           = new TestTempDir();
-        using var    runDir        = new TestTempDir();
         const string secret        = "sk-test-secret-value";
         const string numericSecret = "424242";
         const string opaque        = " \n{ \"encrypted_content\" : \"sk-test-secret-value\", \"number\" : 424242 }\n ";
@@ -92,19 +242,16 @@ public class ChatSessionPersistenceTests
         client.Enqueue(FakeChatClient.ReasonedText("reason " + secret, itemId, opaque,
                                                    "answer " + secret + " " + numericSecret));
         client.Enqueue(FakeChatClient.Text("next answer"));
-        using var host = NewHost(client, id => new SessionStoreWriter(dir.Root, id, secrets),
-                                 id => new FileRunRecorder(runDir.Root, id, secrets));
+        using var host = NewHost(client, id => new SessionStoreWriter(dir.Root, id, secrets));
         await host.SubmitTurnAsync("question " + secret + " " + numericSecret, CancellationToken.None);
         await host.SubmitTurnAsync("follow up", CancellationToken.None);
         Assert.That(host.PersistenceWarning, Is.Null);
 
         var read = await SessionStoreReader.ReadAsync(dir.Root, host.Session.Id, CancellationToken.None);
         TestAssert.NotNull(read);
-        Assert.That(read.FormatVersion, Is.EqualTo(3));
         Assert.That(read.Turns[0].UserInput, Is.EqualTo("question [REDACTED] [REDACTED]"));
         Assert.That(read.Turns[0].Runs.Single().FinalMessage, Is.EqualTo("answer [REDACTED] [REDACTED]"));
         var conversation = read.Conversation!;
-        Assert.That(conversation.OpaqueRedacted, Is.False);
         TestAssert.ContainsAll(m => m.Role    == "User" &&
                                     m.Content == "question " + secret + " " + numericSecret, conversation.Messages);
         var stored          = conversation.Messages.Single(m => m.Content == "answer " + secret + " " + numericSecret);
@@ -117,19 +264,30 @@ public class ChatSessionPersistenceTests
         var sentReasoning = TestAssert.Single(sent.Reasoning!);
         Assert.That(sentReasoning.ProtectedData, Is.EqualTo(opaque));
         Assert.That(sentReasoning.ItemId, Is.EqualTo(itemId));
-        Assert.That(sentReasoning.Text, Is.EqualTo("reason " + secret));
-        var audit = await File.ReadAllTextAsync(Path.Combine(dir.Root, $"{host.Session.Id}.audit.jsonl"));
-        TestAssert.DoesNotContain(secret, audit, StringComparison.Ordinal);
-        TestAssert.DoesNotContain(numericSecret, audit, StringComparison.Ordinal);
-        var runAudits = Directory.GetFiles(runDir.Root, "*.audit.jsonl");
-        Assert.That(runAudits.Length, Is.EqualTo(2));
-        foreach (var path in runAudits)
+        Assert.That(sentReasoning.Text, Is.EqualTo("reason "     + secret));
+        var journalPath = Path.Combine(dir.Root, host.Session.Id + SessionStoreWriter.LogFileSuffix);
+        Assert.That(File.Exists(journalPath), Is.True);
+        var journal = await ReadSharedTextAsync(journalPath);
+        var lines   = journal.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        foreach (var line in lines)
         {
-            var runAudit = await File.ReadAllTextAsync(path);
-            TestAssert.DoesNotContain(secret, runAudit, StringComparison.Ordinal);
-            TestAssert.DoesNotContain(numericSecret, runAudit, StringComparison.Ordinal);
-            TestAssert.DoesNotContain("encrypted_content", runAudit, StringComparison.Ordinal);
+            var batch = JsonNode.Parse(line)!;
+            foreach (var record in batch["records"]!.AsArray())
+            {
+                if (record!["kind"]!.GetValue<string>() is not ("audit" or "history")) continue;
+                var payload = record["payload"]!.ToJsonString();
+                TestAssert.DoesNotContain(secret, payload, StringComparison.Ordinal);
+                TestAssert.DoesNotContain(numericSecret, payload, StringComparison.Ordinal);
+                TestAssert.DoesNotContain("encrypted_content", payload, StringComparison.Ordinal);
+            }
         }
+    }
+
+    private static async Task<string> ReadSharedTextAsync(string path)
+    {
+        await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        using var       reader = new StreamReader(stream);
+        return await reader.ReadToEndAsync();
     }
 
     [Test]
@@ -320,6 +478,51 @@ public class ChatSessionPersistenceTests
         TestAssert.NotNull(read);
         Assert.That(read!.CommitSequence, Is.EqualTo(1));
         Assert.That(read.Turns.Count, Is.EqualTo(2));
+    }
+
+    private sealed class ThrowOnHistoryItemSink(string secret) : IHostEventSink
+    {
+        public ValueTask PublishAsync(HostEvent @event, CancellationToken cancellationToken)
+        {
+            if (@event.Kind == HostEventKind.HistoryItemCompleted)
+                throw new InvalidOperationException("display failed: " + secret);
+            return ValueTask.CompletedTask;
+        }
+    }
+
+    private sealed class DenyApprover : IApprovalProvider
+    {
+        public Task<ApprovalAction> PromptAsync(ToolPreparation preparation, CancellationToken cancellationToken) =>
+            Task.FromResult(ApprovalAction.Deny);
+    }
+
+    private sealed class AuditTestTool(string workspaceRoot, string capability) : ITool
+    {
+        public int ExecuteCount { get; private set; }
+
+        public ToolDefinition Definition { get; } = new()
+        {
+            Name        = capability == "filesystem.read" ? "audit_test" : "write_test",
+            Description = "Test tool for persistent audit coverage.",
+            Parameters  = new JsonObject { ["type"] = "object" }
+        };
+
+        public ToolPreparation Prepare(ChatToolCall call) => new()
+        {
+            ToolName        = Definition.Name,
+            CallId          = call.Id,
+            Arguments       = new JsonObject(),
+            Capability      = capability,
+            Summary         = "test operation",
+            TargetPaths     = [Path.Combine(workspaceRoot, "file.txt")],
+            ExecutionPolicy = "backend=test"
+        };
+
+        public Task<ToolResult> ExecuteAsync(ToolPreparation preparation, CancellationToken cancellationToken)
+        {
+            ExecuteCount++;
+            return Task.FromResult(new ToolResult { Succeeded = true, Content = "executed", ExitCode = 0 });
+        }
     }
 
     private sealed class SnapshotGateTool(Func<CancellationToken, Task<PersistedSession?>> readSnapshot) : ITool

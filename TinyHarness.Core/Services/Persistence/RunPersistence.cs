@@ -13,12 +13,21 @@ namespace TinyHarness.Core.Services.Persistence;
 
 public interface IRunRecorder
 {
+    string? DisplayWarning => null;
+
     Task StartAsync(string systemPrompt, string userInput, CancellationToken cancellationToken);
 
     Task RecordPreparedAsync(ToolPreparation preparation, CancellationToken cancellationToken);
 
-    Task RecordPermissionAsync(ToolPreparation   preparation, PermissionDecision decision, string outcome,
-                               CancellationToken cancellationToken);
+    /// <summary>
+    ///     <para>在继续请求模型前记录已知未启动的调用；默认不执行操作。</para>
+    ///     <para>Records a known-not-started invocation before the next model request; the default is a no-op.</para>
+    /// </summary>
+    Task RecordNotStartedAsync(ToolCallRecord record, CancellationToken cancellationToken) =>
+        Task.CompletedTask;
+
+    Task RecordPermissionAsync(
+        ToolPreparation preparation, PermissionDecision decision, string outcome, CancellationToken cancellationToken);
 
     Task RecordResultAsync(ToolPreparation preparation, ToolResult result, CancellationToken cancellationToken);
 
@@ -27,159 +36,15 @@ public interface IRunRecorder
     Task RecordModelUsageAsync(
         int? inputTokens, int? outputTokens, string? finishReason, CancellationToken cancellationToken);
 
+    /// <summary>
+    ///     <para>记录模型完成拼装的 assistant 正文与工具调用，供实时与历史展示共用。</para>
+    ///     <para>Records the assembled assistant text and tool calls for shared live and historical display.</para>
+    /// </summary>
+    Task RecordAssistantAsync(ChatMessage assistantMessage, CancellationToken cancellationToken) =>
+        Task.CompletedTask;
+
     Task CompleteAsync(AgentResult       result, IReadOnlyList<ChatMessage> messages, StructuredState state,
                        CancellationToken cancellationToken);
-}
-
-public sealed class FileRunRecorder : IRunRecorder
-{
-    private readonly SemaphoreSlim  _gate = new(1, 1);
-    private readonly SecretRedactor _redactor;
-    private readonly DateTimeOffset _startedUtc = DateTimeOffset.UtcNow;
-
-    public FileRunRecorder(
-        string directory, string? runId = null, IReadOnlyDictionary<string, string>? knownSecrets = null)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(directory);
-        RunId     = string.IsNullOrWhiteSpace(runId) ? Guid.NewGuid().ToString("N") : runId;
-        _redactor = new SecretRedactor(knownSecrets);
-        if (RunId.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
-            throw new ArgumentException("Run id contains invalid filename characters.", nameof(runId));
-
-        Directory.CreateDirectory(directory);
-        AuditPath   = Path.Combine(directory, $"{RunId}.audit.jsonl");
-        SessionPath = Path.Combine(directory, $"{RunId}.session.json");
-    }
-
-    public string RunId { get; }
-
-    public string AuditPath { get; }
-
-    public string SessionPath { get; }
-
-    public Task StartAsync(string systemPrompt, string userInput, CancellationToken cancellationToken) =>
-        AppendAsync(new AuditRecord
-        {
-            RunId        = RunId,
-            Kind         = "run.started",
-            SystemPrompt = _redactor.Redact(systemPrompt),
-            UserInput    = _redactor.Redact(userInput)
-        }, cancellationToken);
-
-    public Task RecordPreparedAsync(ToolPreparation preparation, CancellationToken cancellationToken) =>
-        AppendAsync(new AuditRecord
-        {
-            RunId           = RunId,
-            Kind            = "tool.prepared",
-            ToolName        = _redactor.Redact(preparation.ToolName),
-            CallId          = _redactor.Redact(preparation.CallId),
-            Capability      = _redactor.Redact(preparation.Capability),
-            Summary         = _redactor.Redact(preparation.Summary),
-            TargetPaths     = RedactPaths(preparation.TargetPaths),
-            ExecutionPolicy = _redactor.RedactNullable(preparation.ExecutionPolicy)
-        }, cancellationToken);
-
-    public Task RecordPermissionAsync(
-        ToolPreparation   preparation, PermissionDecision decision, string outcome,
-        CancellationToken cancellationToken) => AppendAsync(new AuditRecord
-    {
-        RunId           = RunId,
-        Kind            = "tool.permission",
-        ToolName        = _redactor.Redact(preparation.ToolName),
-        CallId          = _redactor.Redact(preparation.CallId),
-        Capability      = _redactor.Redact(preparation.Capability),
-        Summary         = _redactor.Redact(preparation.Summary),
-        TargetPaths     = RedactPaths(preparation.TargetPaths),
-        Decision        = _redactor.Redact(decision.ToString()),
-        Outcome         = _redactor.Redact(outcome),
-        ExecutionPolicy = _redactor.RedactNullable(preparation.ExecutionPolicy)
-    }, cancellationToken);
-
-    public Task RecordResultAsync(
-        ToolPreparation preparation, ToolResult result, CancellationToken cancellationToken) =>
-        AppendAsync(new AuditRecord
-        {
-            RunId           = RunId,
-            Kind            = "tool.result",
-            ToolName        = _redactor.Redact(preparation.ToolName),
-            CallId          = _redactor.Redact(preparation.CallId),
-            Succeeded       = result.Succeeded,
-            ExitCode        = result.ExitCode,
-            TimedOut        = result.TimedOut,
-            OutputTruncated = result.OutputTruncated,
-            Outcome         = result.Succeeded ? "tool completed" : "tool failed",
-            ExecutionPolicy = _redactor.RedactNullable(preparation.ExecutionPolicy)
-        }, cancellationToken);
-
-    public Task RecordCompactionAsync(ContextChange change, CancellationToken cancellationToken) =>
-        AppendAsync(new AuditRecord
-        {
-            RunId        = RunId,
-            Kind         = "context.compacted",
-            BeforeTokens = change.BeforeTokens,
-            AfterTokens  = change.AfterTokens
-        }, cancellationToken);
-
-    public Task RecordModelUsageAsync(
-        int? inputTokens, int? outputTokens, string? finishReason, CancellationToken cancellationToken) =>
-        AppendAsync(new AuditRecord
-        {
-            RunId        = RunId,
-            Kind         = "model_usage",
-            InputTokens  = inputTokens,
-            OutputTokens = outputTokens,
-            FinishReason = _redactor.RedactNullable(finishReason)
-        }, cancellationToken);
-
-    public async Task CompleteAsync(AgentResult result, IReadOnlyList<ChatMessage> messages, StructuredState state,
-                                    CancellationToken cancellationToken)
-    {
-        var safeResult = result with
-        {
-            FinalMessage = _redactor.Redact(result.FinalMessage),
-            Error = _redactor.RedactNullable(result.Error),
-            ToolCalls = result.ToolCalls?.Select(_redactor.Redact).ToArray()
-        };
-
-        // run.completed 先于快照写入，仅证明执行已到终态，不证明持久化成功。
-        await AppendAsync(new AuditRecord
-        {
-            RunId   = RunId,
-            Kind    = "run.completed",
-            Status  = _redactor.Redact(safeResult.Status.ToString()),
-            Outcome = safeResult.Error
-        }, cancellationToken).ConfigureAwait(false);
-
-        var snapshot = new SessionSnapshot
-        {
-            RunId        = RunId,
-            StartedUtc   = _startedUtc,
-            CompletedUtc = DateTimeOffset.UtcNow,
-            Messages     = messages.Select(_redactor.Redact).ToArray(),
-            State        = _redactor.Redact(state),
-            Result       = safeResult
-        };
-        var json          = JsonSerializer.Serialize(snapshot, PersistenceJsonContext.Default.SessionSnapshot);
-        var temporaryPath = SessionPath + ".tmp";
-        await File.WriteAllTextAsync(temporaryPath, json, cancellationToken).ConfigureAwait(false);
-        File.Move(temporaryPath, SessionPath, true);
-    }
-
-    private IReadOnlyList<string> RedactPaths(IReadOnlyList<string> paths) => paths.Select(_redactor.Redact).ToArray();
-
-    private async Task AppendAsync(AuditRecord record, CancellationToken cancellationToken)
-    {
-        var json = JsonSerializer.Serialize(record, PersistenceJsonContext.Default.AuditRecord) + Environment.NewLine;
-        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
-        {
-            await File.AppendAllTextAsync(AuditPath, json, cancellationToken).ConfigureAwait(false);
-        }
-        finally
-        {
-            _gate.Release();
-        }
-    }
 }
 
 internal sealed class SecretRedactor
@@ -243,6 +108,7 @@ internal sealed class SecretRedactor
     public ToolCallRecord Redact(ToolCallRecord record) => new()
     {
         CallId           = Redact(record.CallId),
+        InvocationId     = record.InvocationId,
         ToolName         = Redact(record.ToolName),
         Capability       = RedactNullable(record.Capability),
         SideEffects      = record.SideEffects,
@@ -338,13 +204,6 @@ internal sealed class SecretRedactor
 }
 
 [JsonSerializable(typeof(AuditRecord))]
-[JsonSerializable(typeof(SessionSnapshot))]
-[JsonSerializable(typeof(AgentResult))]
-[JsonSerializable(typeof(ToolCallRecord))]
-[JsonSerializable(typeof(ChatMessage))]
-[JsonSerializable(typeof(ChatToolCall))]
-[JsonSerializable(typeof(ReasoningContent))]
-[JsonSerializable(typeof(StructuredState))]
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase,
                              GenerationMode = JsonSourceGenerationMode.Metadata |
                                               JsonSourceGenerationMode.Serialization)]

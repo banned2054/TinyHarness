@@ -6,40 +6,25 @@ using TinyHarness.Core.Models.Session;
 namespace TinyHarness.Core.Models.Persistence;
 
 /// <summary>
-///     <para>版本化会话快照，保存固定身份、提交序号、脱敏检查视图及可续聊的协议内容。</para>
+///     <para>由会话日志重建的内存投影，保存身份、提交序号、脱敏检查视图及可续聊协议内容。</para>
 ///     <para>
-///         A versioned session snapshot containing fixed identity, commit sequence, redacted inspection
+///         An in-memory session-log projection containing fixed identity, commit sequence, redacted inspection
 ///         views and resumable protocol content.
 ///     </para>
 /// </summary>
 /// <remarks>
 ///     <para>
-///         v3 的 <see cref="Conversation" /> 原样保存消息与压缩边界，可能含对话中的秘密；
-///         认证凭据不主动注入，不保存可执行授权。受保护存储不代表加密，v1/v2 仅供只读检查。
+///         <see cref="Conversation" /> 原样保存消息与压缩边界，可能含对话中的秘密；
+///         认证凭据不主动注入，不保存可执行授权。受保护存储不代表加密。
 ///     </para>
 ///     <para>
-///         In v3, <see cref="Conversation" /> preserves messages and compaction boundaries verbatim
+///         <see cref="Conversation" /> preserves messages and compaction boundaries verbatim
 ///         and may contain conversation secrets. Credentials are not proactively injected,
-///         and executable authorization is not stored. Protected storage does not imply encryption;
-///         v1/v2 remain inspection-only.
+///         and executable authorization is not stored. Protected storage does not imply encryption.
 ///     </para>
 /// </remarks>
 public sealed record PersistedSession
 {
-    /// <summary>
-    ///     <para>
-    ///         当前格式版本；读取端拒绝未知版本。v1 仅有检查视图，v2 消息可能被脱敏，
-    ///         v3 保真保存续聊协议内容。
-    ///     </para>
-    ///     <para>
-    ///         The current format version; readers reject unknown versions. v1 carries inspection only,
-    ///         v2 messages may be redacted, and v3 preserves resumable protocol content verbatim.
-    ///     </para>
-    /// </summary>
-    public const int CurrentFormatVersion = 3;
-
-    public int FormatVersion { get; init; } = CurrentFormatVersion;
-
     public string Id { get; init; } = string.Empty;
 
     public string WorkspaceRoot { get; init; } = string.Empty;
@@ -49,16 +34,15 @@ public sealed record PersistedSession
     public DateTimeOffset CreatedUtc { get; init; }
 
     /// <summary>
-    ///     <para>本快照最后一次成功原子替换的时间。</para>
-    ///     <para>When this snapshot was last successfully atomically replaced.</para>
+    ///     <para>日志最近一次成功提交的时间。</para>
+    ///     <para>When the log was last successfully committed.</para>
     /// </summary>
     public DateTimeOffset UpdatedUtc { get; init; }
 
     /// <summary>
-    ///     <para>每次原子替换递增的提交序号，与审计中的同值记录对账；检查点也提交，因此不等同回合数。</para>
+    ///     <para>日志最近一次成功提交的批次序号；检查点也提交，因此不等同回合数。</para>
     ///     <para>
-    ///         A commit sequence incremented on each atomic replacement and reconciled with the matching
-    ///         audit record; checkpoints also commit, so it is not a turn count.
+    ///         The last successfully committed log batch sequence; checkpoints also commit, so it is not a turn count.
     ///     </para>
     /// </summary>
     public long CommitSequence { get; init; }
@@ -78,11 +62,11 @@ public sealed record PersistedSession
 
     /// <summary>
     ///     <para>
-    ///         消息级会话内容；仅 v3 保证协议字段不脱敏、不规范化，opaque 载荷逐条带完整性哈希。
+    ///         消息级会话内容；保证协议字段不脱敏、不规范化，opaque 载荷逐条带完整性哈希。
     ///         检查命令不输出此节原文。
     ///     </para>
     ///     <para>
-    ///         Message-level conversation content; only v3 guarantees unredacted, unnormalized protocol fields
+    ///         Message-level conversation content; preserves unredacted, unnormalized protocol fields
     ///         with per-entry opaque integrity hashes. Inspection commands never print this section verbatim.
     ///     </para>
     /// </summary>
@@ -98,11 +82,11 @@ public sealed record PersistedSession
 /// </summary>
 /// <remarks>
 ///     <para>
-///         v3 原样保存字段，恢复端校验后才发送模型。内容可能含秘密，不作为检查输出；
+///         原样保存字段，恢复端校验后才发送模型。内容可能含秘密，不作为检查输出；
 ///         不保存批准或可执行计划，新调用仍须 Prepare / Authorize / Execute。
 ///     </para>
 ///     <para>
-///         v3 preserves fields verbatim; restoration validates them before model requests.
+///         Preserves fields verbatim; restoration validates them before model requests.
 ///         Content may contain secrets and is not inspection output. Approvals and executable plans are not stored;
 ///         new calls still require Prepare / Authorize / Execute.
 ///     </para>
@@ -112,8 +96,8 @@ public sealed record PersistedConversation
     public IReadOnlyList<PersistedMessage> Messages { get; init; } = [];
 
     /// <summary>
-    ///     <para>压缩后的结构化状态 JSON；v3 不脱敏，未发生压缩时为 null。</para>
-    ///     <para>The compacted structured-state JSON; unredacted in v3 and null before any compaction.</para>
+    ///     <para>压缩后的结构化状态 JSON；不脱敏，未发生压缩时为 null。</para>
+    ///     <para>The compacted structured-state JSON; unredacted and null before any compaction.</para>
     /// </summary>
     public string? StateJson { get; init; }
 
@@ -130,15 +114,6 @@ public sealed record PersistedConversation
     ///     <para>The exclusive fold-region end index; 0 before any folding.</para>
     /// </summary>
     public int FoldEndMessageIndex { get; init; }
-
-    /// <summary>
-    ///     <para>v2 opaque 载荷曾被脱敏的兼容标记，恢复端据此拒绝续聊；v3 不脱敏协议内容，写入 false。</para>
-    ///     <para>
-    ///         A compatibility marker for redacted v2 opaque payloads, used to refuse resume;
-    ///         v3 preserves protocol content unredacted and writes false.
-    ///     </para>
-    /// </summary>
-    public bool OpaqueRedacted { get; init; }
 }
 
 /// <summary>
@@ -272,19 +247,19 @@ public sealed record PersistedRun
     public long? OutputTokens { get; init; }
 
     /// <summary>
-    ///     <para>从执行记录推导的未知副作用标记；旧 v3 快照缺少记录且尾部中断时，恢复端保守阻断。</para>
+    ///     <para>从执行记录推导的未知副作用标记；尾部中断且缺少记录时，恢复端保守阻断。</para>
     ///     <para>
     ///         An unknown-side-effect marker derived from execution records; restoration conservatively
-    ///         blocks older v3 snapshots with an interrupted tail and no records.
+    ///         blocks interrupted tails without records.
     ///     </para>
     /// </summary>
     public bool? NeedsInspection { get; init; }
 
     /// <summary>
-    ///     <para>请求的工具调用的脱敏执行意图与确认事实；旧快照可为 null，不含可重放计划或授权。</para>
+    ///     <para>请求的工具调用的脱敏执行意图与确认事实；没有调用时可为 null，不含可重放计划或授权。</para>
     ///     <para>
-    ///         Redacted execution intent and confirmation facts for requested tool calls; may be null in
-    ///         older snapshots and carry no replayable plan or authorization.
+    ///         Redacted execution intent and confirmation facts for requested tool calls; may be null when no
+    ///         calls exist and carry no replayable plan or authorization.
     ///     </para>
     /// </summary>
     public IReadOnlyList<PersistedToolCallRecord>? ToolCalls { get; init; }
@@ -300,6 +275,12 @@ public sealed record PersistedRun
 public sealed record PersistedToolCallRecord
 {
     public string CallId { get; init; } = string.Empty;
+
+    /// <summary>
+    ///     <para>未脱敏的本次运行调用序号；旧日志缺失时按 CallId 关联。</para>
+    ///     <para>The unredacted per-run invocation ordinal; older logs without it correlate by CallId.</para>
+    /// </summary>
+    public string? InvocationId { get; init; }
 
     public string ToolName { get; init; } = string.Empty;
 

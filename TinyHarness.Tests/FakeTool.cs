@@ -15,6 +15,10 @@ internal sealed class FakeTool(string name, string description = "Fake tool", st
 
     public bool ThrowOnExecute { get; init; }
 
+    public ToolResult? ResultOverride { get; init; }
+
+    public Func<CancellationToken, Task<ToolResult>>? ExecuteOverride { get; init; }
+
     /// <summary>
     ///     <para>
     ///         指定结果内容，并追加每次执行的 #n 后缀，
@@ -60,13 +64,14 @@ internal sealed class FakeTool(string name, string description = "Fake tool", st
         };
     }
 
-    public Task<ToolResult> ExecuteAsync(ToolPreparation preparation, CancellationToken _)
+    public Task<ToolResult> ExecuteAsync(ToolPreparation preparation, CancellationToken cancellationToken)
     {
         ExecuteCount++;
+        if (ExecuteOverride is not null) return ExecuteOverride(cancellationToken);
         if (ThrowOnExecute)
             return Task.FromResult(new ToolResult { Succeeded = false, Content = $"{Definition.Name} exploded" });
 
         var content = ResultContent is null ? $"{Definition.Name} ok" : $"{ResultContent}#{ExecuteCount}";
-        return Task.FromResult(new ToolResult { Succeeded = true, Content = content });
+        return Task.FromResult(ResultOverride ?? new ToolResult { Succeeded = true, Content = content });
     }
 }

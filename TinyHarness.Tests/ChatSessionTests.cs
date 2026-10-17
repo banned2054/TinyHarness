@@ -154,7 +154,7 @@ public class ChatSessionTests
         var rejected =
             await TestAssert.ThrowsAsync<InvalidOperationException>(() =>
                                                                         host.SubmitTurnAsync("second",
-                                                                                 CancellationToken.None));
+                                                                            CancellationToken.None));
         Assert.That(rejected.Message, Does.Contain("active run"));
 
         client.Open();
@@ -430,6 +430,15 @@ public class ChatSessionTests
         Assert.That(snapshot.Turns.Single().Runs.Single().NeedsInspection, Is.False);
         TestAssert.Contains(secret, snapshot.Conversation!.Messages.Single(m => m.Role == "User").Content,
                             StringComparison.Ordinal);
+
+        host.Dispose();
+        using var reopened = await SessionStoreWriter.OpenExistingAsync(dir.Root, host.Session.Id, null,
+                                                                        CancellationToken.None);
+        var restoration = SessionResume.Restore(reopened.LoadedSnapshot!, ws.Root,
+                                                new SessionModelIdentity("test-model", "https://example.invalid/v1",
+                                                                         ChatApiKind.ChatCompletions),
+                                                SystemPrompt);
+        Assert.That(restoration.NeedsInspection, Is.Null);
     }
 
     [Test]
@@ -469,10 +478,10 @@ public class ChatSessionTests
         var options = Options() with { Model = "other-model" };
 
         TestAssert.Throws<ArgumentException>(() => new ChatSessionHost(Path.Combine(Path.GetTempPath(),
-                                                                                "tinyharness-session-tests"),
+                                                                           "tinyharness-session-tests"),
                                                                        new SessionModelIdentity("test-model",
-                                                                                "https://example.invalid/v1",
-                                                                                ChatApiKind.ChatCompletions),
+                                                                           "https://example.invalid/v1",
+                                                                           ChatApiKind.ChatCompletions),
                                                                        options,
                                                                        new FakeChatClient(),
                                                                        new ToolRegistry([]),

@@ -1,14 +1,17 @@
 namespace TinyHarness.Cli.Commands;
 
 /// <summary>
-///     TinyHarness 的帮助文本。CLI 与文档共用同一套命令含义，避免两处各自漂移。
-///     Help text for TinyHarness. The CLI and documentation share one set of command meanings so they cannot drift apart.
+///     <para>TinyHarness 的帮助文本。CLI 与文档共用同一套命令含义，避免两处各自漂移。</para>
+///     <para>
+///         Help text for TinyHarness. The CLI and documentation share one set of command meanings
+///         so they cannot drift apart.
+///     </para>
 /// </summary>
 internal static class HelpText
 {
     /// <summary>
-    ///     顶层用法总览。
-    ///     The top-level usage overview.
+    ///     <para>顶层用法总览。</para>
+    ///     <para>The top-level usage overview.</para>
     /// </summary>
     public const string Overview = """
         TinyHarness - a local coding-agent harness (Chat Completions)
@@ -250,27 +253,22 @@ internal static class HelpText
           tinyharness session list
           tinyharness session show <session-id>
 
-        Strictly offline inspection of stored chat sessions (M13.1): no API key is
-        read, no model is called, no tool runs, and no workspace file is opened for
-        writing.
+        Strictly offline inspection of tinyharness.session-log/1 sessions: no API key
+        is read, no model is called, no tool runs, and no workspace file is opened for writing.
 
-        session list prints the sessions in the protected session store (default
+        session list prints sessions in the protected session store (default
         %LOCALAPPDATA%\tinyharness\sessions, overridden by settings.sessionStoreDirectory
-        in the user config or the TINYHARNESS_SESSION_STORE_DIR environment variable),
-        plus the legacy run snapshots in the run-output directory. Damaged, unknown-version
-        or audit-inconsistent entries are reported instead of hidden.
+        in the user config or the TINYHARNESS_SESSION_STORE_DIR environment variable).
+        Damaged entries are reported without stopping the list.
 
-        session show prints one stored session: format version, workspace, model identity,
-        commit sequence, and every turn with its run outcomes. A snapshot whose commit is
-        not confirmed by its audit trail is refused with the divergence explained. Legacy
-        run snapshots (<run-id>.session.json from before M13) are shown read-only and
-        cannot be resumed. Only the redacted turn/run inspection view is displayed;
-        raw protocol messages and opaque reasoning are not printed.
+        session show prints session history and the turn/run inspection summary.
+        Damaged or unknown log formats are rejected. Raw protocol messages and opaque
+        reasoning are not printed.
         """;
 
     /// <summary>
-    ///     判断是否为已知 help 主题。
-    ///     Whether a name is a known help topic.
+    ///     <para>判断是否为已知 help 主题。</para>
+    ///     <para>Whether a name is a known help topic.</para>
     /// </summary>
     public static bool IsKnownCommand(string name)
     {
@@ -294,8 +292,8 @@ internal static class HelpText
     }
 
     /// <summary>
-    ///     返回某个主题的帮助文本；未知主题返回总览。
-    ///     Returns the help text for a topic; the overview for unknown topics.
+    ///     <para>返回某个主题的帮助文本；未知主题返回总览。</para>
+    ///     <para>Returns the help text for a topic; the overview for unknown topics.</para>
     /// </summary>
     public static string For(string? topic)
     {

@@ -150,6 +150,16 @@ public class CommandLineTests
         TestAssert.Contains("tinyharness session show", escape.Usage, StringComparison.Ordinal);
     }
 
+    [TestCase("migrate")]
+    [TestCase("migrate", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")]
+    [TestCase("migrate", "../escape")]
+    public void SessionMigrate_IsAnUnknownSubcommand(params string[] arguments)
+    {
+        var error = TestAssert.Throws<CliUsageException>(() => CommandLine.Parse(["session", .. arguments]));
+        TestAssert.Contains("Unknown session subcommand", error.Message, StringComparison.Ordinal);
+        TestAssert.DoesNotContain("session migrate", HelpText.Session, StringComparison.Ordinal);
+    }
+
     [Test]
     public void Session_WithoutASubcommandIsAUsageError()
     {

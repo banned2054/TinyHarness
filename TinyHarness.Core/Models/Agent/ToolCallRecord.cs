@@ -24,6 +24,12 @@ public sealed class ToolCallRecord
 {
     public required string CallId { get; init; }
 
+    /// <summary>
+    ///     <para>本次运行内按 assistant 工具调用出现顺序分配的稳定执行标识。</para>
+    ///     <para>A stable execution identity assigned by assistant tool-call appearance order within this run.</para>
+    /// </summary>
+    public string? InvocationId { get; init; }
+
     public required string ToolName { get; init; }
 
     /// <summary>
@@ -72,6 +78,7 @@ public sealed class ToolCallRecord
     internal ToolCallRecord Snapshot() => new()
     {
         CallId           = CallId,
+        InvocationId     = InvocationId,
         ToolName         = ToolName,
         Capability       = Capability,
         SideEffects      = SideEffects,

@@ -61,6 +61,12 @@ public sealed record AgentResult
     public string? Error { get; init; }
 
     /// <summary>
+    ///     <para>持久化链路失败说明，与工具或模型执行终态分开。</para>
+    ///     <para>Persistence failure details, kept separate from the tool or model execution outcome.</para>
+    /// </summary>
+    public string? PersistenceWarning { get; init; }
+
+    /// <summary>
     ///     <para>本次运行请求的工具调用的执行意图与确认记录，不可用于重放执行或恢复授权。</para>
     ///     <para>
     ///         Execution intent and confirmation records for requested tool calls; never used to replay

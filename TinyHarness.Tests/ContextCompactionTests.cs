@@ -1,3 +1,4 @@
+using NUnit.Framework.Internal;
 using System.Text.Json.Nodes;
 using TinyHarness.Core.Models.Agent;
 using TinyHarness.Core.Models.ChatCompletions;
@@ -6,20 +7,18 @@ using TinyHarness.Core.Models.Tools;
 using TinyHarness.Core.Services.Agent;
 using TinyHarness.Core.Services.Context;
 using TinyHarness.Core.Services.Tools;
-using NUnit.Framework.Internal;
 
 namespace TinyHarness.Tests;
 
 /// <summary>
 ///     <para>
 ///         上下文压缩集成测试：压缩触发、tools 禁用、原子组完整性、失败回滚、跨轮累积、
-///         模型视图裁剪，以及压缩仍无法容纳窗口时主循环的显式失败（PLAN §13/§17）。
+///         模型视图裁剪，以及压缩仍无法容纳窗口时主循环的显式失败。
 ///     </para>
 ///     <para>
 ///         Context-compaction integration tests: compaction triggering, disabled tools,
 ///         atomic-group integrity, rollback on failure, cross-round accumulation, model-view
-///         trimming, and the explicit failure when compaction still cannot fit the window
-///         (PLAN §13/§17).
+///         trimming, and the explicit failure when compaction still cannot fit the window.
 ///     </para>
 /// </summary>
 public class ContextCompactionTests
@@ -160,7 +159,7 @@ public class ContextCompactionTests
         Assert.That(result.Compactions, Is.EqualTo(1));
         Assert.That(client.Requests, Is.EqualTo(5));
 
-        // 摘要请求必须禁用 tools（PLAN §13），首次折叠携带原始任务与约束，且恰好折叠最旧的
+        // 摘要请求必须禁用 tools，首次折叠携带原始任务与约束，且恰好折叠最旧的
         // 完整回合：assistant a_1 及其被截断的工具消息。
         var summaryRequest = client.RequestLog[3];
         Assert.That(summaryRequest.Tools, Is.Null);

@@ -31,30 +31,30 @@ public sealed record SessionRestoration(
     bool                RewoundTail     = false);
 
 /// <summary>
-///     <para>校验版本化快照并重建可续聊的会话与上下文，不解析凭据、调用模型、启动工具或读写文件。</para>
+///     <para>校验会话日志投影并重建可续聊的会话与上下文，不解析凭据、调用模型、启动工具或读写文件。</para>
 ///     <para>
-///         Validates versioned snapshots and rebuilds resumable sessions and contexts without resolving
+///         Validates session-log projections and rebuilds resumable sessions and contexts without resolving
 ///         credentials, calling models, starting tools or reading or writing files.
 ///     </para>
 /// </summary>
 /// <remarks>
 ///     <para>
-///         仅接受 v3 保真协议内容；v1/v2 仅供检查，opaque 脱敏标记或哈希不符均拒绝续聊，
+///         仅接受保真协议内容；opaque 哈希不符时拒绝续聊，
 ///         不伪造原值。模型视图使用校验后的 canonical 历史，不以脱敏检查投影替代。
 ///     </para>
 ///     <para>
-///         Only v3 verbatim protocol content can resume; v1/v2 remain inspection-only.
-///         Opaque redaction markers or hash mismatches refuse resume without forging original values.
+///         Only verbatim protocol content can resume.
+///         Opaque hash mismatches refuse resume without forging original values.
 ///         The model view uses validated canonical history, never a redacted inspection projection.
 ///     </para>
 ///     <para>
 ///         不完整尾部工具组整体回退到最近完整边界；历史中段不完整则按损坏拒绝。
-///         未知副作用或旧 v3 中断尾部缺少执行记录时保守阻断，不补造结果或退出码。
+///         未知副作用或中断尾部缺少执行记录时保守阻断，不补造结果或退出码。
 ///     </para>
 ///     <para>
 ///         Incomplete trailing tool groups rewind whole to the last complete boundary;
 ///         incomplete groups within history are rejected as damage. Unknown side effects or interrupted tails
-///         without records in older v3 snapshots block conservatively, without fabricated results or exit codes.
+///         without records in session-log projections block conservatively, without fabricated results or exit codes.
 ///     </para>
 /// </remarks>
 public static class SessionResume
@@ -79,13 +79,13 @@ public static class SessionResume
     /// </remarks>
     /// <param name="snapshot">
     ///     <para>
-    ///         应由 <see cref="Persistence.SessionStoreWriter.OpenExistingAsync" /> 严格读取并完成审计对账；
-    ///         本方法不读盘或复核审计。
+    ///         应由 <see cref="Persistence.SessionStoreWriter.OpenExistingAsync" /> 严格读取并完成日志校验；
+    ///         本方法不读盘或复核日志。
     ///     </para>
     ///     <para>
-    ///         Should be strictly read and audit-reconciled by
+    ///         Should be strictly read and log-validated by
     ///         <see cref="Persistence.SessionStoreWriter.OpenExistingAsync" />;
-    ///         this method neither reads files nor rechecks the audit.
+    ///         this method neither reads files nor rechecks the log.
     ///     </para>
     /// </param>
     /// <exception cref="SessionStoreException">
@@ -95,9 +95,9 @@ public static class SessionResume
     ///         no fallback is allowed.
     ///     </para>
     /// </exception>
-    public static SessionRestoration Restore(
-        PersistedSession snapshot, string workspaceRoot, SessionModelIdentity model, string systemPrompt,
-        ContextOptions?  contextOptions = null)
+    public static SessionRestoration Restore(PersistedSession     snapshot, string workspaceRoot,
+                                             SessionModelIdentity model,    string systemPrompt,
+                                             ContextOptions?      contextOptions = null)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
@@ -106,23 +106,9 @@ public static class SessionResume
 
         var conversation = snapshot.Conversation
                         ?? throw new
-                               SessionStoreException($"Stored session '{snapshot.Id}' (format version {snapshot.FormatVersion}) carries " +
+                               SessionStoreException($"Stored session '{snapshot.Id}' carries " +
                                                      "no resumable conversation; it was stored without message content and stays " +
                                                      "inspection-only. Start a new session instead.");
-
-        if (conversation.OpaqueRedacted)
-            throw new
-                SessionStoreException($"Stored session '{snapshot.Id}' cannot be resumed losslessly: known-secret " +
-                                      "redaction touched its opaque reasoning payloads, and replaying a changed value " +
-                                      "would forge it (PLAN §7.2). Inspect it with 'session show' and hand the needed " +
-                                      "context over explicitly in a new session.");
-
-        if (snapshot.FormatVersion < PersistedSession.CurrentFormatVersion)
-            throw new
-                SessionStoreException($"Stored session '{snapshot.Id}' (format version {snapshot.FormatVersion}) stays " +
-                                      "inspection-only: its conversation may have been redacted before saving, so " +
-                                      "verbatim protocol replay cannot be guaranteed. Inspect it with 'session show' " +
-                                      "and start a new session instead.");
 
         foreach (var message in conversation.Messages)
         {
@@ -261,7 +247,7 @@ public static class SessionResume
                    ". The workspace may carry their effects; inspect it before allowing more side effects.";
         if (rewoundTail && !trailingRunHasRecords)
             return "the stored conversation ends in an interrupted tool round whose execution was not recorded " +
-                   "(older snapshot format); its side effects cannot be proven absent. Inspect the workspace "   +
+                   "and its side effects cannot be proven absent. Inspect the workspace "                        +
                    "before allowing more side effects.";
         return null;
     }
@@ -340,6 +326,7 @@ public static class SessionResume
         return new ToolCallRecord
         {
             CallId           = call.CallId,
+            InvocationId     = call.InvocationId,
             ToolName         = call.ToolName,
             Capability       = call.Capability,
             SideEffects      = call.SideEffects,

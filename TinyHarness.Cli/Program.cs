@@ -7,9 +7,10 @@ using TinyHarness.Core.Exceptions;
 using TinyHarness.Core.Models.Agent;
 using TinyHarness.Core.Models.Configuration;
 using TinyHarness.Core.Models.Context;
+using TinyHarness.Core.Models.Persistence;
 using TinyHarness.Core.Models.Runtime;
 using TinyHarness.Core.Models.Session;
-using TinyHarness.Core.Services.Agent;
+using TinyHarness.Core.Models.Tools;
 using TinyHarness.Core.Services.ChatCompletions;
 using TinyHarness.Core.Services.Configuration;
 using TinyHarness.Core.Services.Mcp;
@@ -38,7 +39,7 @@ internal static class Program
     ///     <para>会话内提示固定；续聊必须通过系统提示一致性校验。</para>
     ///     <para>The prompt is fixed within a session; continuation must pass prompt consistency checks.</para>
     /// </remarks>
-    private const string WorkspaceSystemPrompt =
+    internal const string WorkspaceSystemPrompt =
         "You are TinyHarness, a local coding harness that inspects and modifies a workspace. " +
         "Use list_files, search_text and read_file to inspect, apply_patch to modify files, and shell to run commands. " +
         "For ordinary commands use shell mode 'direct' with executable and an arguments array. Use mode 'shell' " +
@@ -171,7 +172,7 @@ internal static class Program
     {
         using var cts                = new CancellationTokenSource();
         using var cancelRegistration = new ConsoleCancellation(cts);
-        var       composition        = await ComposeAgentAsync(configPath, cts.Token).ConfigureAwait(false);
+        var       composition        = await ComposeAgentAsync(configPath, cts.Token, true).ConfigureAwait(false);
 
         await WriteHeaderAsync("TinyHarness run", composition).ConfigureAwait(false);
 
@@ -179,13 +180,24 @@ internal static class Program
         IApprovalProvider approver = new ConsoleApprovalProvider(new ExclusiveInputReader(Console.In), Console.Out,
                                                                  composition.KnownSecrets);
 
-        var recorder = new FileRunRecorder(composition.Config.SessionDirectory,
-                                           knownSecrets : composition.KnownSecrets);
-        var loop = new AgentLoop(composition.Model, composition.Tools, composition.Options,
-                                 composition.Permissions, approver, recorder,
-                                 new ConsoleHostEventSink(composition.KnownSecrets));
+        using var host = new ChatSessionHost(composition.Config.WorkspaceRoot,
+                                             new SessionModelIdentity(composition.Config.Model,
+                                                                      composition.Config.Endpoint,
+                                                                      composition.Config.ChatApi),
+                                             composition.Options,
+                                             composition.Model,
+                                             composition.Tools,
+                                             WorkspaceSystemPrompt,
+                                             composition.Permissions,
+                                             approver,
+                                             new ConsoleHostEventSink(composition.KnownSecrets),
+                                             sessionWriterFactory : sessionId =>
+                                                 new SessionStoreWriter(composition.SessionStoreDirectory!,
+                                                                        sessionId, composition.KnownSecrets));
 
-        var result = await loop.RunAsync(WorkspaceSystemPrompt, prompt, cts.Token).ConfigureAwait(false);
+        var run      = await host.SubmitTurnAsync(prompt, cts.Token).ConfigureAwait(false);
+        var result   = run.Result!;
+        var redactor = new DisplaySecretRedactor(composition.KnownSecrets);
 
         await Console.Out.WriteLineAsync();
         await Console.Out.WriteLineAsync($"status     : {result.Status}");
@@ -199,9 +211,18 @@ internal static class Program
                          .WriteLineAsync($"usage      : {inputTokens} in / {outputTokens} out tokens (server-reported; absent requests not counted)");
         }
 
-        await Console.Out.WriteLineAsync($"final      : {result.FinalMessage}");
-        await WritePersistencePathsAsync(recorder).ConfigureAwait(false);
-        if (!string.IsNullOrWhiteSpace(result.Error)) await Console.Out.WriteLineAsync($"error      : {result.Error}");
+        await Console.Out.WriteLineAsync($"final      : {TerminalDisplay.Format(result.FinalMessage, redactor)}");
+        await Console.Out.WriteLineAsync("storage    : append-only JSONL session log");
+        if (host.PersistencePath is { } persistencePath && File.Exists(persistencePath))
+            await Console.Out.WriteLineAsync($"session    : {persistencePath}").ConfigureAwait(false);
+        if (host.PersistenceWarning is { Length: > 0 } warning)
+            await Console.Out.WriteLineAsync($"warning    : {TerminalDisplay.Format(warning, redactor)}")
+                         .ConfigureAwait(false);
+        if (host.DisplayWarning is { Length: > 0 } displayWarning)
+            await Console.Out.WriteLineAsync($"display    : {TerminalDisplay.Format(displayWarning, redactor)}")
+                         .ConfigureAwait(false);
+        if (!string.IsNullOrWhiteSpace(result.Error))
+            await Console.Out.WriteLineAsync($"error      : {TerminalDisplay.Format(result.Error, redactor)}");
 
         return result.Status switch
         {
@@ -219,12 +240,12 @@ internal static class Program
     ///     <para>
     ///         回合、审批与检查确认共享一个 <see cref="ExclusiveInputReader" />；
     ///         <see cref="ChatCancellation" /> 区分活动回合取消与空闲会话退出。
-    ///         终态回合原子保存到受保护存储供离线查看；保存失败必须报告，终态不代表保存成功。
+    ///         终态回合追加到受保护 JSONL 会话日志供离线查看；保存失败必须报告，终态不代表保存成功。
     ///     </para>
     ///     <para>
     ///         Turns, approvals, and inspection confirmation share one <see cref="ExclusiveInputReader" />;
     ///         <see cref="ChatCancellation" /> distinguishes active-turn cancellation from idle-session exit.
-    ///         Terminal turns are saved atomically to protected storage for offline inspection;
+    ///         Terminal turns are appended to the protected JSONL session log for offline inspection;
     ///         save failures must be reported, and a terminal state does not prove persistence.
     ///     </para>
     ///     <para>
@@ -260,8 +281,7 @@ internal static class Program
                                        composition.Permissions,
                                        new ConsoleApprovalProvider(reader, Console.Out, composition.KnownSecrets),
                                        new ConsoleHostEventSink(composition.KnownSecrets),
-                                       runId => new FileRunRecorder(config.SessionDirectory, runId,
-                                                                    composition.KnownSecrets),
+                                       null,
                                        sessionId => new SessionStoreWriter(composition.SessionStoreDirectory!,
                                                                            sessionId, composition.KnownSecrets));
         }
@@ -285,8 +305,7 @@ internal static class Program
                                            composition.Tools, WorkspaceSystemPrompt, composition.Permissions,
                                            new ConsoleApprovalProvider(reader, Console.Out, composition.KnownSecrets),
                                            new ConsoleHostEventSink(composition.KnownSecrets),
-                                           runId => new FileRunRecorder(config.SessionDirectory, runId,
-                                                                        composition.KnownSecrets),
+                                           null,
                                            writer, restored.NeedsInspection);
             }
             catch
@@ -302,18 +321,20 @@ internal static class Program
             if (resumedNote is not null) await Console.Out.WriteLineAsync($"  {resumedNote}");
             await
                 Console.Out
-                       .WriteLineAsync("  storage   : protocol history is saved verbatim without harness encryption; " +
-                                       "pasted secrets may be stored. Keep the session store private.");
+                       .WriteLineAsync("  storage   : append-only JSONL session log; protocol history is saved verbatim " +
+                                       "without harness encryption, so pasted secrets may be stored. Keep the session store private.");
 
             // 启动与后续中断确认均交给会话循环，避免保持阻断后多读一次回合输入。
             var console = new ChatSessionConsole(host, reader, Console.Out, cancellation, composition.KnownSecrets);
             var exit    = await console.RunAsync().ConfigureAwait(false);
 
             // 只报告存在的产物；末次保存不可靠时明确警告，不以终态代替保存证据。
-            if (host.Session.Turns.Count > 0 && File.Exists(host.PersistencePath))
-                await Console.Out.WriteLineAsync($"session    : {host.PersistencePath}");
+            if (host.Session.Turns.Count > 0 && host.PersistencePath is { } path && File.Exists(path))
+                await Console.Out.WriteLineAsync($"session    : {path}");
             if (host.PersistenceWarning is { Length: > 0 } warning)
                 await Console.Out.WriteLineAsync($"warning    : {warning}");
+            if (host.DisplayWarning is { Length: > 0 } displayWarning)
+                await Console.Out.WriteLineAsync($"display    : {displayWarning}");
 
             return exit;
         }
@@ -566,46 +587,131 @@ internal static class Program
             }
         };
 
-        var recorder = new FileRunRecorder(Path.Combine(Path.GetTempPath(), "tinyharness-smoke-runs"));
-        var loop = new AgentLoop(script, tools, options, permissions, approver, recorder);
+        var sessionDirectory = Path.Combine(Path.GetTempPath(), $"tinyharness-smoke-session-{Guid.NewGuid():N}");
         const string systemPrompt =
             "You are TinyHarness, a local coding harness that inspects and modifies a workspace. " +
             "Use list_files, search_text and read_file to inspect, apply_patch to modify files, and shell to run commands. " +
             "Use shell mode 'direct' for executable/arguments and mode 'shell' only for shell syntax. " +
             "Tool paths are relative to the workspace root. " +
             "Writes may require the user's approval before they are applied.";
-        var result = await loop
-                          .RunAsync(systemPrompt, "smoke: inspect the fixture workspace and apply one patch.",
-                                    cts.Token).ConfigureAwait(false);
+        AgentResult result;
+        string?     persistenceWarning;
+        string?     sessionId;
+        string?     sessionLogPath;
+        using (var host = new ChatSessionHost(fixture.Root,
+                                              new SessionModelIdentity(config.Model,
+                                                                       config.Endpoint ?? "offline-smoke://local",
+                                                                       config.ChatApi),
+                                              options,
+                                              script,
+                                              tools,
+                                              systemPrompt,
+                                              permissions,
+                                              approver,
+                                              sessionWriterFactory : sessionId =>
+                                                  new SessionStoreWriter(sessionDirectory, sessionId)))
+        {
+            result = (await host.SubmitTurnAsync("smoke: inspect the fixture workspace and apply one patch.",
+                                                 cts.Token).ConfigureAwait(false)).Result!;
+            persistenceWarning = host.PersistenceWarning;
+            sessionId          = host.Session.Id;
+            sessionLogPath     = host.PersistencePath;
+        }
 
         await Console.Out.WriteLineAsync($"  status       : {result.Status}");
         await Console.Out.WriteLineAsync($"  steps        : {result.Steps}");
         await Console.Out.WriteLineAsync($"  toolExecs    : {result.ToolExecutions}");
         await Console.Out.WriteLineAsync($"  finalMessage : {result.FinalMessage}");
-        await WritePersistencePathsAsync(recorder, "  ").ConfigureAwait(false);
+        if (persistenceWarning is { Length: > 0 })
+            await Console.Out.WriteLineAsync($"  warning      : {persistenceWarning}");
         if (!string.IsNullOrWhiteSpace(result.Error))
             await Console.Out.WriteLineAsync($"  error        : {result.Error}");
 
-        if (result.Status != AgentStatus.Completed) return 1;
+        if (result.Status != AgentStatus.Completed || persistenceWarning is not null || sessionId is null ||
+            sessionLogPath is null)
+        {
+            TryDeleteSmokeDirectory(sessionDirectory);
+            return 1;
+        }
+
+        try
+        {
+            var logFiles = Directory.Exists(sessionDirectory)
+                ? Directory.GetFiles(sessionDirectory, "*" + SessionStoreWriter.LogFileSuffix)
+                : [];
+            if (logFiles.Length != 1 || !string.Equals(Path.GetFullPath(logFiles[0]),
+                                                       Path.GetFullPath(sessionLogPath),
+                                                       StringComparison.OrdinalIgnoreCase))
+                throw new SessionStoreException("Smoke expected one authoritative session JSONL file.");
+
+            var restoredSnapshot = await SessionStoreReader.ReadAsync(sessionDirectory, sessionId, cts.Token)
+                                                           .ConfigureAwait(false)
+                                ?? throw new SessionStoreException("Smoke session log could not be read back.");
+            var modelIdentity = new SessionModelIdentity(config.Model, config.Endpoint ?? "offline-smoke://local",
+                                                         config.ChatApi);
+            var restoration = SessionResume.Restore(restoredSnapshot, fixture.Root, modelIdentity, systemPrompt,
+                                                    options.Context);
+            var historyReader = new SessionHistoryReader();
+            var historyPage = await historyReader.ReadPageAsync(sessionDirectory, sessionId,
+                                                                SessionHistoryReader.MaxPageItems, null, cts.Token)
+                                                 .ConfigureAwait(false);
+            if (historyPage.Warning is { Length: > 0 } firstPageWarning)
+                throw new SessionStoreException($"Smoke history read was incomplete: {firstPageWarning}");
+            var history = historyPage.Items.ToList();
+            while (historyPage.NextCursor is { } cursor)
+            {
+                historyPage = await historyReader.ReadPageAsync(sessionDirectory, sessionId,
+                                                                SessionHistoryReader.MaxPageItems, cursor, cts.Token)
+                                                 .ConfigureAwait(false);
+                if (historyPage.Warning is { Length: > 0 } pageWarning)
+                    throw new SessionStoreException($"Smoke history read was incomplete: {pageWarning}");
+                history.AddRange(historyPage.Items);
+            }
+
+            var toolItems = history.Where(item => item.Kind == SessionHistoryKind.Tool).ToArray();
+            var confirmedDiff = toolItems.SelectMany(item => item.PatchChanges ?? [])
+                                         .Any(change => change.State == PatchChange.ConfirmedState &&
+                                                        !string.IsNullOrWhiteSpace(change.Diff));
+            if (restoration.Session.Id != sessionId || toolItems.Length != plan.ExpectedToolExecutions ||
+                !confirmedDiff)
+                throw new
+                    SessionStoreException("Smoke journal restore/history did not contain the expected tools and confirmed patch diff.");
+
+            var legacyArtifacts = Directory.GetFiles(sessionDirectory, "*.session.json")
+                                           .Concat(Directory.GetFiles(sessionDirectory, "*.audit.jsonl")).ToArray();
+            if (legacyArtifacts.Length != 0)
+                throw new
+                    SessionStoreException("Smoke found a legacy snapshot or separate audit sidecar beside the journal.");
+
+            await
+                Console.Out.WriteLineAsync("  session log  : verified read, restore, history and confirmed patch diff");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or SessionStoreException
+                                      or InvalidOperationException)
+        {
+            await Console.Error.WriteLineAsync($"  session log verification failed: {ex.Message}");
+            TryDeleteSmokeDirectory(sessionDirectory);
+            return 1;
+        }
 
         // 脚本客户端拒绝工具闭环或内容不匹配；还需核对工具与审批次数，防止跳过补丁或进程执行。
-        return result.ToolExecutions == plan.ExpectedToolExecutions &&
-               approver.Prompts      == plan.ExpectedApprovalPrompts
-            ? 0
-            : 1;
+        var passed = result.ToolExecutions == plan.ExpectedToolExecutions &&
+                     approver.Prompts      == plan.ExpectedApprovalPrompts;
+        TryDeleteSmokeDirectory(sessionDirectory);
+        return passed ? 0 : 1;
     }
 
-    /// <summary>
-    ///     <para>只报告实际存在的持久化产物，不把预期路径当作保存成功的证据。</para>
-    ///     <para>Reports only existing persistence artifacts, not expected paths as evidence of a successful save.</para>
-    /// </summary>
-    private static async Task WritePersistencePathsAsync(FileRunRecorder recorder, string prefix = "")
+    private static void TryDeleteSmokeDirectory(string path)
     {
-        if (File.Exists(recorder.SessionPath))
-            await Console.Out.WriteLineAsync($"{prefix}session    : {recorder.SessionPath}");
-
-        if (File.Exists(recorder.AuditPath))
-            await Console.Out.WriteLineAsync($"{prefix}audit      : {recorder.AuditPath}");
+        var target         = Path.GetFullPath(path);
+        var expectedPrefix = Path.GetFullPath(Path.GetTempPath());
+        if (!target.StartsWith(expectedPrefix, OperatingSystem.IsWindows()
+                                   ? StringComparison.OrdinalIgnoreCase
+                                   : StringComparison.Ordinal) || !Path.GetFileName(target)
+                                                                       .StartsWith("tinyharness-smoke-session-",
+                                                                                 StringComparison.Ordinal))
+            throw new InvalidOperationException($"Refusing to delete unexpected smoke session directory '{target}'.");
+        if (Directory.Exists(target)) Directory.Delete(target, true);
     }
 
     /// <summary>

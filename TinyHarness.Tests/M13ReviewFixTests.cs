@@ -1,9 +1,9 @@
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using TinyHarness.Core.Exceptions;
 using TinyHarness.Core.Models.Agent;
 using TinyHarness.Core.Models.ChatCompletions;
 using TinyHarness.Core.Models.Configuration;
-using TinyHarness.Core.Models.Context;
 using TinyHarness.Core.Models.Persistence;
 using TinyHarness.Core.Models.Session;
 using TinyHarness.Core.Models.Tools;
@@ -105,14 +105,11 @@ public class M13ReviewFixTests
             CallId           = secret, ToolName = secret, Capability  = secret, Summary = secret,
             PreparationError = secret, Approval = secret, SideEffects = true, State     = state
         };
-        var result   = new AgentResult { Status = AgentStatus.Failed, ToolCalls = [record] };
-        var recorder = new FileRunRecorder(dir.Root, Guid.NewGuid().ToString("N"), secrets);
-        await recorder.CompleteAsync(result, [], StructuredState.Empty, CancellationToken.None);
-        var raw = await File.ReadAllTextAsync(recorder.SessionPath);
-        Assert.That(raw, Does.Not.Contain(secret));
-        var legacy = await SessionStoreReader.ReadLegacyAsync(dir.Root, recorder.RunId, CancellationToken.None);
-        Assert.That(legacy!.Result.ToolCalls![0].State, Is.EqualTo(state));
-        Assert.That(legacy.Result.ToolCalls[0].Approval, Is.EqualTo("[REDACTED]"));
+        var redactor       = new SecretRedactor(secrets);
+        var redactedRecord = redactor.Redact(record);
+        Assert.That(JsonSerializer.Serialize(redactedRecord), Does.Not.Contain(secret));
+        Assert.That(redactedRecord.State, Is.EqualTo(state));
+        Assert.That(redactedRecord.Approval, Is.EqualTo("[REDACTED]"));
         Assert.That(record.Approval, Is.EqualTo(secret));
 
         var session = new ChatSession(Guid.NewGuid().ToString("N"), ws.Root, Identity)
@@ -121,12 +118,16 @@ public class M13ReviewFixTests
         var run  = new SessionRun(Guid.NewGuid().ToString("N"), session.Id, turn.Id);
         turn.AddRun(run);
         session.AddTurn(turn);
-        run.Finish(result);
+        run.Finish(new AgentResult { Status = AgentStatus.Failed, ToolCalls = [record] });
         var context = new ConversationContext();
         context.Append(ChatMessage.System("sys"));
-        using var writer = new SessionStoreWriter(dir.Root, session.Id, secrets);
-        await writer.CommitAsync(session, context, CancellationToken.None);
-        var stored = await File.ReadAllTextAsync(writer.SnapshotPath);
+        string stored;
+        using (var writer = new SessionStoreWriter(dir.Root, session.Id, secrets))
+        {
+            await writer.CommitAsync(session, context, CancellationToken.None);
+            stored = await ReadSharedTextAsync(writer.SnapshotPath);
+        }
+
         Assert.That(stored, Does.Not.Contain(secret));
         var snapshot = await SessionStoreReader.ReadAsync(dir.Root, session.Id, CancellationToken.None);
         Assert.That(snapshot!.PendingInspectionReason, Is.EqualTo("inspect [REDACTED]"));
@@ -177,10 +178,18 @@ public class M13ReviewFixTests
                                              new ToolRegistry([]), "sys", sessionWriter : writer,
                                              needsInspection : resumed.NeedsInspection);
         await next.AcknowledgeInspectionAsync(CancellationToken.None);
+        writer.Dispose();
         var acknowledged = await SessionStoreReader.ReadAsync(dir.Root, snapshot.Id, CancellationToken.None);
         Assert.That(acknowledged!.PendingInspectionReason, Is.Null);
         TestAssert.NotNull(acknowledged.InspectionAcknowledgedUtc);
         Assert.That(SessionResume.Restore(acknowledged, ws.Root, Identity, "sys").NeedsInspection, Is.Null);
+    }
+
+    private static async Task<string> ReadSharedTextAsync(string path)
+    {
+        await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        using var       reader = new StreamReader(stream);
+        return await reader.ReadToEndAsync();
     }
 
 

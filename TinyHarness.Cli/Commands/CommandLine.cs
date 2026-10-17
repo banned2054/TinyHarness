@@ -5,20 +5,23 @@ using TinyHarness.Core.Services.Persistence;
 namespace TinyHarness.Cli.Commands;
 
 /// <summary>
-///     TinyHarness 命令行解析器。管理命令（init/config/provider/auth/model/doctor/sandbox）永远不作为
-///     提示词发送给模型；与命令名冲突的普通文本使用 `run -- "文本"`，`--` 之后全部按提示词处理。
-///     `chat` 启动交互会话，不接受提示词参数。
-///     The TinyHarness command-line parser. Management commands
-///     (init/config/provider/auth/model/doctor/sandbox) are never
-///     sent to the model as a prompt; plain text that collides with a command name uses `run -- "text"`, and
-///     everything after `--` is treated as the prompt. `chat` starts an interactive session and takes no prompt
-///     argument.
+///     <para>
+///         TinyHarness 命令行解析器。管理命令（init/config/provider/auth/model/doctor/sandbox）永远不作为
+///         提示词发送给模型；与命令名冲突的普通文本使用 `run -- "文本"`，`--` 之后全部按提示词处理。
+///         `chat` 启动交互会话，不接受提示词参数。
+///     </para>
+///     <para>
+///         The TinyHarness command-line parser. Management commands
+///         (init/config/provider/auth/model/doctor/sandbox) are never sent to the model as a prompt;
+///         plain text that collides with a command name uses `run -- "text"`, and everything after `--`
+///         is treated as the prompt. `chat` starts an interactive session and takes no prompt argument.
+///     </para>
 /// </summary>
 internal static class CommandLine
 {
     /// <summary>
-    ///     解析参数；失败抛出 <see cref="CliUsageException" />。
-    ///     Parses the arguments; throws <see cref="CliUsageException" /> on failure.
+    ///     <para>解析参数；失败抛出 <see cref="CliUsageException" />。</para>
+    ///     <para>Parses the arguments; throws <see cref="CliUsageException" /> on failure.</para>
     /// </summary>
     public static CliOptions Parse(string[] args)
     {
@@ -68,15 +71,13 @@ internal static class CommandLine
         if (first.StartsWith('-') && first.Length > 1)
             throw new CliUsageException($"Unknown option '{first}'.", HelpText.Overview);
 
-        // Verbless invocation: the whole argument list is a prompt with optional --config.
+        // 无动词调用：整串参数即提示词，仅允许可选的 --config。
         return ParsePromptArgs(args, false);
     }
 
     /// <summary>
-    ///     解析 session 子命令：list 或 show &lt;sessionId&gt;；show 的会话 ID 在解析期即校验
-    ///     （32 位十六进制），路径逃逸输入按使用错误处理。
-    ///     Parses the session subcommands: list or show &lt;sessionId&gt;; the session id of show is
-    ///     validated at parse time (32 hex characters), so path-escape input is a usage error.
+    ///     <para>解析 session list/show；会话 ID 必须为 32 位十六进制，路径逃逸输入按使用错误处理。</para>
+    ///     <para>Parses session list/show; IDs must be 32 hex characters, and path escapes are usage errors.</para>
     /// </summary>
     private static CliOptions ParseSessionArgs(string[] args)
     {
@@ -111,8 +112,8 @@ internal static class CommandLine
     }
 
     /// <summary>
-    ///     解析 help 主题；未知主题按使用错误处理。
-    ///     Parses the help topic; unknown topics are usage errors.
+    ///     <para>解析 help 主题；未知主题按使用错误处理。</para>
+    ///     <para>Parses the help topic; unknown topics are usage errors.</para>
     /// </summary>
     private static CliOptions ParseHelpArgs(string[] args)
     {
@@ -130,9 +131,11 @@ internal static class CommandLine
     }
 
     /// <summary>
-    ///     解析 run/无动词形式：`--` 之前只接受 --config 与 help 标志，`--` 之后全部是提示词。
-    ///     Parses run/verbless forms: before `--` only --config and help flags are accepted; after `--` everything is the
-    ///     prompt.
+    ///     <para>解析 run/无动词形式：`--` 之前只接受 --config 与 help 标志，`--` 之后全部是提示词。</para>
+    ///     <para>
+    ///         Parses run/verbless forms: before `--` only --config and help flags are accepted; after `--`
+    ///         everything is the prompt.
+    ///     </para>
     /// </summary>
     private static CliOptions ParsePromptArgs(string[] args, bool withRunVerb)
     {
@@ -144,7 +147,7 @@ internal static class CommandLine
         {
             if (string.Equals(args[i], "--", StringComparison.Ordinal))
             {
-                // Everything after `--` is the prompt, including tokens that look like options.
+                // `--` 之后全部归入提示词，包括形似选项的 token。
                 promptParts.AddRange(args[(i + 1)..]);
                 return FinishPrompt(configPath, promptParts, usage);
             }
@@ -173,8 +176,8 @@ internal static class CommandLine
     }
 
     /// <summary>
-    ///     合并提示词片段；缺失提示词按使用错误处理。
-    ///     Joins prompt fragments; a missing prompt is a usage error.
+    ///     <para>合并提示词片段；缺失提示词按使用错误处理。</para>
+    ///     <para>Joins prompt fragments; a missing prompt is a usage error.</para>
     /// </summary>
     private static CliOptions FinishPrompt(string? configPath, List<string> promptParts, string usage)
     {
@@ -185,14 +188,18 @@ internal static class CommandLine
     }
 
     /// <summary>
-    ///     解析 chat 参数；接受 --config、--session &lt;id&gt; 与 help 标志。chat 不接受提示词：
-    ///     每个回合都在交互中逐行输入，把文本作为参数传入是重复的启动请求，按使用错误处理。
-    ///     会话 ID 在解析期即校验（32 位十六进制），路径逃逸输入按使用错误处理。
-    ///     Parses chat arguments; --config, --session &lt;id&gt; and help flags are
-    ///     accepted. Chat takes no prompt — every turn is typed interactively, so
-    ///     passing text as an argument is a duplicate start request and a usage
-    ///     error. The session id is validated at parse time (32 hex characters),
-    ///     so path-escape input is a usage error.
+    ///     <para>
+    ///         解析 chat 参数；接受 --config、--session &lt;id&gt; 与 help 标志。chat 不接受提示词：
+    ///         每个回合都在交互中逐行输入，把文本作为参数传入是重复的启动请求，按使用错误处理。
+    ///         会话 ID 在解析期即校验（32 位十六进制），路径逃逸输入按使用错误处理。
+    ///     </para>
+    ///     <para>
+    ///         Parses chat arguments; --config, --session &lt;id&gt; and help flags are
+    ///         accepted. Chat takes no prompt — every turn is typed interactively, so
+    ///         passing text as an argument is a duplicate start request and a usage
+    ///         error. The session id is validated at parse time (32 hex characters),
+    ///         so path-escape input is a usage error.
+    ///     </para>
     /// </summary>
     private static CliOptions ParseChatArgs(string[] args)
     {
@@ -236,8 +243,8 @@ internal static class CommandLine
     }
 
     /// <summary>
-    ///     解析 smoke 参数；只接受 --config 与 help 标志。
-    ///     Parses smoke arguments; only --config and help flags are accepted.
+    ///     <para>解析 smoke 参数；只接受 --config 与 help 标志。</para>
+    ///     <para>Parses smoke arguments; only --config and help flags are accepted.</para>
     /// </summary>
     private static CliOptions ParseSmokeArgs(string[] args)
     {
@@ -258,8 +265,8 @@ internal static class CommandLine
     }
 
     /// <summary>
-    ///     解析 mcp 参数；不接受任何额外参数。
-    ///     Parses mcp arguments; no extra arguments are accepted.
+    ///     <para>解析 mcp 参数；不接受任何额外参数。</para>
+    ///     <para>Parses mcp arguments; no extra arguments are accepted.</para>
     /// </summary>
     private static CliOptions ParseMcpArgs(string[] args)
     {
@@ -271,8 +278,8 @@ internal static class CommandLine
     }
 
     /// <summary>
-    ///     解析 init 参数；不接受任何额外参数。
-    ///     Parses init arguments; no extra arguments are accepted.
+    ///     <para>解析 init 参数；不接受任何额外参数。</para>
+    ///     <para>Parses init arguments; no extra arguments are accepted.</para>
     /// </summary>
     private static CliOptions ParseInitArgs(string[] args)
     {
@@ -284,8 +291,8 @@ internal static class CommandLine
     }
 
     /// <summary>
-    ///     解析 config 子命令：show 或 set &lt;key&gt; &lt;value&gt;。
-    ///     Parses the config subcommands: show or set &lt;key&gt; &lt;value&gt;.
+    ///     <para>解析 config 子命令：show 或 set &lt;key&gt; &lt;value&gt;。</para>
+    ///     <para>Parses the config subcommands: show or set &lt;key&gt; &lt;value&gt;.</para>
     /// </summary>
     private static CliOptions ParseConfigArgs(string[] args)
     {
@@ -309,8 +316,8 @@ internal static class CommandLine
     }
 
     /// <summary>
-    ///     解析 provider 子命令：list / add &lt;name&gt; / use &lt;name&gt;。
-    ///     Parses the provider subcommands: list / add &lt;name&gt; / use &lt;name&gt;.
+    ///     <para>解析 provider 子命令：list / add &lt;name&gt; / use &lt;name&gt;。</para>
+    ///     <para>Parses the provider subcommands: list / add &lt;name&gt; / use &lt;name&gt;.</para>
     /// </summary>
     private static CliOptions ParseProviderArgs(string[] args)
     {
@@ -337,8 +344,8 @@ internal static class CommandLine
     }
 
     /// <summary>
-    ///     解析 auth set：profile 名加上 --env 或 --store 之一。
-    ///     Parses auth set: a profile name plus either --env or --store.
+    ///     <para>解析 auth set：profile 名加上 --env 或 --store 之一。</para>
+    ///     <para>Parses auth set: a profile name plus either --env or --store.</para>
     /// </summary>
     private static CliOptions ParseAuthArgs(string[] args)
     {
@@ -392,9 +399,11 @@ internal static class CommandLine
     }
 
     /// <summary>
-    ///     解析 model 子命令：list / add &lt;id&gt; --context-window &lt;n&gt; / use &lt;id&gt;，均可选 --provider。
-    ///     Parses the model subcommands: list / add &lt;id&gt; --context-window &lt;n&gt; / use &lt;id&gt;, all with optional
-    ///     --provider.
+    ///     <para>解析 model 子命令：list / add &lt;id&gt; --context-window &lt;n&gt; / use &lt;id&gt;，均可选 --provider。</para>
+    ///     <para>
+    ///         Parses the model subcommands: list / add &lt;id&gt; --context-window &lt;n&gt; / use &lt;id&gt;,
+    ///         all with optional --provider.
+    ///     </para>
     /// </summary>
     private static CliOptions ParseModelArgs(string[] args)
     {
@@ -475,8 +484,8 @@ internal static class CommandLine
     }
 
     /// <summary>
-    ///     解析 doctor 参数；只接受可选的 --connect。
-    ///     Parses doctor arguments; only the optional --connect flag is accepted.
+    ///     <para>解析 doctor 参数；只接受可选的 --connect。</para>
+    ///     <para>Parses doctor arguments; only the optional --connect flag is accepted.</para>
     /// </summary>
     private static CliOptions ParseDoctorArgs(string[] args)
     {
@@ -494,11 +503,15 @@ internal static class CommandLine
     }
 
     /// <summary>
-    ///     解析 sandbox 子命令：status、provision [--yes]、verify [--yes] [--case &lt;name&gt;[,&lt;name&gt;...]]
-    ///     [--workspace &lt;path&gt;]，以及隐藏的 verify-worker（内部使用，不进公开帮助）。
-    ///     Parses the sandbox subcommands: status, provision [--yes], verify
-    ///     [--yes] [--case &lt;name&gt;[,&lt;name&gt;...]] [--workspace &lt;path&gt;], plus the
-    ///     hidden verify-worker (internal use, absent from the public help).
+    ///     <para>
+    ///         解析 sandbox 子命令：status、provision [--yes]、verify [--yes] [--case &lt;name&gt;[,&lt;name&gt;...]]
+    ///         [--workspace &lt;path&gt;]，以及隐藏的 verify-worker（内部使用，不进公开帮助）。
+    ///     </para>
+    ///     <para>
+    ///         Parses the sandbox subcommands: status, provision [--yes], verify
+    ///         [--yes] [--case &lt;name&gt;[,&lt;name&gt;...]] [--workspace &lt;path&gt;], plus the
+    ///         hidden verify-worker (internal use, absent from the public help).
+    ///     </para>
     /// </summary>
     private static CliOptions ParseSandboxArgs(string[] args)
     {
@@ -540,8 +553,8 @@ internal static class CommandLine
     }
 
     /// <summary>
-    ///     解析 sandbox verify：[--yes] [--case &lt;name&gt;[,&lt;name&gt;...]] [--workspace &lt;path&gt;]。
-    ///     Parses sandbox verify: [--yes] [--case &lt;name&gt;[,&lt;name&gt;...]] [--workspace &lt;path&gt;].
+    ///     <para>解析 sandbox verify：[--yes] [--case &lt;name&gt;[,&lt;name&gt;...]] [--workspace &lt;path&gt;]。</para>
+    ///     <para>Parses sandbox verify: [--yes] [--case &lt;name&gt;[,&lt;name&gt;...]] [--workspace &lt;path&gt;].</para>
     /// </summary>
     private static CliOptions ParseSandboxVerifyArgs(string[] args, string usage)
     {
@@ -592,11 +605,15 @@ internal static class CommandLine
     }
 
     /// <summary>
-    ///     解析隐藏的 sandbox verify-worker：--marker &lt;path&gt; --hold-seconds &lt;n&gt; --workspace &lt;path&gt;
-    ///     全部必填（由父 verify 进程构造，不面向用户）。
-    ///     Parses the hidden sandbox verify-worker: --marker &lt;path&gt;
-    ///     --hold-seconds &lt;n&gt; --workspace &lt;path&gt;, all required (constructed by
-    ///     the parent verify process, not user facing).
+    ///     <para>
+    ///         解析隐藏的 sandbox verify-worker：--marker &lt;path&gt; --hold-seconds &lt;n&gt; --workspace &lt;path&gt;
+    ///         全部必填（由父 verify 进程构造，不面向用户）。
+    ///     </para>
+    ///     <para>
+    ///         Parses the hidden sandbox verify-worker: --marker &lt;path&gt;
+    ///         --hold-seconds &lt;n&gt; --workspace &lt;path&gt;, all required (constructed by
+    ///         the parent verify process, not user facing).
+    ///     </para>
     /// </summary>
     private static CliOptions ParseSandboxVerifyWorkerArgs(string[] args, string usage)
     {
@@ -653,8 +670,8 @@ internal static class CommandLine
     }
 
     /// <summary>
-    ///     从位置开始读取可选的 --provider 选项。
-    ///     Reads the optional --provider option starting at a position.
+    ///     <para>从位置开始读取可选的 --provider 选项。</para>
+    ///     <para>Reads the optional --provider option starting at a position.</para>
     /// </summary>
     private static string? ReadProviderOption(string[] args, int start, string usage)
     {
@@ -673,9 +690,11 @@ internal static class CommandLine
     }
 
     /// <summary>
-    ///     判断 profile 名称是否合法：字母、数字、点、下划线、连字符，不以 - 或 . 开头，长度 1-64。
-    ///     Whether a profile name is valid: letters, digits, dot, underscore, hyphen; must not start with '-' or '.', length
-    ///     1-64.
+    ///     <para>判断 profile 名称是否合法：字母、数字、点、下划线、连字符，不以 - 或 . 开头，长度 1-64。</para>
+    ///     <para>
+    ///         Whether a profile name is valid: letters, digits, dot, underscore, hyphen; must not start with
+    ///         '-' or '.', length 1-64.
+    ///     </para>
     /// </summary>
     public static bool IsValidProfileName(string name) =>
         name.Length is >= 1 and <= 64 && name[0] is not '-' and not '.' &&
@@ -683,15 +702,18 @@ internal static class CommandLine
 
 
     /// <summary>
-    ///     判断模型 id 是否合法：非空、无空白、长度不超过 200。
-    ///     Whether a model id is valid: non-empty, no whitespace, at most 200 characters.
+    ///     <para>判断模型 id 是否合法：非空、无空白、长度不超过 200。</para>
+    ///     <para>Whether a model id is valid: non-empty, no whitespace, at most 200 characters.</para>
     /// </summary>
     public static bool IsValidModelId(string id) => id.Length is >= 1 and <= 200 && !id.Any(char.IsWhiteSpace);
 
 
     /// <summary>
-    ///     校验 profile 名称：字母、数字、点、下划线、连字符，不以 - 或 . 开头，长度 1-64。
-    ///     Validates a profile name: letters, digits, dot, underscore, hyphen; must not start with '-' or '.', length 1-64.
+    ///     <para>校验 profile 名称：字母、数字、点、下划线、连字符，不以 - 或 . 开头，长度 1-64。</para>
+    ///     <para>
+    ///         Validates a profile name: letters, digits, dot, underscore, hyphen; must not start with '-' or '.',
+    ///         length 1-64.
+    ///     </para>
     /// </summary>
     private static void ValidateProfileName(string name, string usage)
     {
@@ -702,8 +724,8 @@ internal static class CommandLine
     }
 
     /// <summary>
-    ///     校验模型 id：非空、无空白、长度不超过 200。
-    ///     Validates a model id: non-empty, no whitespace, at most 200 characters.
+    ///     <para>校验模型 id：非空、无空白、长度不超过 200。</para>
+    ///     <para>Validates a model id: non-empty, no whitespace, at most 200 characters.</para>
     /// </summary>
     private static void ValidateModelId(string id, string usage)
     {
@@ -712,8 +734,8 @@ internal static class CommandLine
     }
 
     /// <summary>
-    ///     判断参数是否为 help 标志。
-    ///     Whether an argument is a help flag.
+    ///     <para>判断参数是否为 help 标志。</para>
+    ///     <para>Whether an argument is a help flag.</para>
     /// </summary>
     private static bool IsHelpFlag(string argument) => string.Equals(argument, "--help", StringComparison.Ordinal) ||
                                                        string.Equals(argument, "-h", StringComparison.Ordinal);

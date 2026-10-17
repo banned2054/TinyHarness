@@ -1,5 +1,6 @@
 using TinyHarness.Core.Models.Agent;
 using TinyHarness.Core.Models.ChatCompletions;
+using TinyHarness.Core.Models.Persistence;
 using TinyHarness.Core.Models.Session;
 using TinyHarness.Core.Services.Agent;
 using TinyHarness.Core.Services.ChatCompletions;
@@ -22,20 +23,21 @@ namespace TinyHarness.Core.Services.Session;
 /// </summary>
 /// <remarks>
 ///     <para>
-///         终态后结算中断并提交快照；未知副作用触发 NeedsInspection，
+///         副作用前提交安全意图，终态后结算中断并追加会话事实；未知副作用触发 NeedsInspection，
 ///         仅用户检查确认可解除，模型输出不能建立或解除阻断。
 ///     </para>
 ///     <para>
-///         Settles interruptions and commits snapshots after terminal results; unknown side effects
+///         Commits safe intent before side effects, then settles interruptions and appends session facts;
+///         unknown side effects
 ///         trigger NeedsInspection, cleared only by user inspection and acknowledgement, never model output.
 ///     </para>
 ///     <para>
-///         不主动存储凭据或恢复可执行授权；v3 canonical 历史可能含秘密并原样落盘，检查视图另行脱敏。
+///         不主动存储凭据或恢复可执行授权；canonical 历史可能含秘密并原样追加到日志，检查视图另行脱敏。
 ///         恢复时沿用已校验的会话、上下文与写入端，在原身份和提交序号上继续。
 ///     </para>
 ///     <para>
 ///         Credentials are not proactively stored and executable authorization is not restored;
-///         v3 canonical history may contain secrets and is persisted verbatim, with separately redacted inspection views.
+///         canonical history may contain secrets and is appended verbatim, with separately redacted inspection views.
 ///         Resume continues the validated session, context and writer under the existing identity and commit sequence.
 ///     </para>
 /// </remarks>
@@ -51,6 +53,7 @@ public sealed class ChatSessionHost : IDisposable
     private readonly ISessionStoreWriter?        _sessionWriter;
     private readonly string                      _systemPrompt;
     private readonly ToolRegistry                _tools;
+    private          IRunRecorder?               _activeRecorder;
 
     private int _activeRuns;
 
@@ -205,20 +208,26 @@ public sealed class ChatSessionHost : IDisposable
 
     /// <summary>
     ///     <para>
-    ///         最近一次快照提交失败的说明；成功提交时清空。非空须向用户报告“本次未可靠保存”，
-    ///         上一有效快照仍保留，回合终态不证明落盘成功。
+    ///         最近一次日志提交失败的说明；成功提交时清空。非空须向用户报告“本次未可靠保存”，
+    ///         有效前缀仍可检查，不确定写入后的 writer 停止追加，回合终态不证明落盘成功。
     ///     </para>
     ///     <para>
-    ///         The last snapshot-commit failure, cleared by a successful commit. A non-null value must be
-    ///         reported as "not reliably saved this time"; the previous valid snapshot remains,
-    ///         and a turn's terminal result does not prove persistence.
+    ///         The last journal-commit failure, cleared by a successful commit. A non-null value must be
+    ///         reported as "not reliably saved this time"; the valid prefix remains inspectable and an uncertain
+    ///         writer stops appending. A turn's terminal result does not prove persistence.
     ///     </para>
     /// </summary>
     public string? PersistenceWarning { get; private set; }
 
     /// <summary>
-    ///     <para>快照文件绝对路径；未注入写入端时为 null。</para>
-    ///     <para>The absolute snapshot path; null without an injected writer.</para>
+    ///     <para>实时历史展示故障；与日志保存警告分开，且不会改变工具执行确认。</para>
+    ///     <para>Live-history display failures, separate from persistence warnings and execution confirmation.</para>
+    /// </summary>
+    public string? DisplayWarning { get; private set; }
+
+    /// <summary>
+    ///     <para>权威 JSONL 会话日志绝对路径；未注入写入端时为 null。</para>
+    ///     <para>The absolute path of the authoritative JSONL session log; null without a writer.</para>
     /// </summary>
     public string? PersistencePath => _sessionWriter?.SnapshotPath;
 
@@ -228,10 +237,10 @@ public sealed class ChatSessionHost : IDisposable
         new((options ?? throw new ArgumentNullException(nameof(options))).Context);
 
     /// <summary>
-    ///     <para>提交新用户回合，执行至终态，结算中断并尝试保存快照。</para>
+    ///     <para>提交新用户回合，执行至终态，结算中断并尝试追加会话事实。</para>
     ///     <para>
     ///         Submits a new user turn, executes to a terminal result, settles interruptions
-    ///         and attempts to save a snapshot.
+    ///         and attempts to append session facts.
     ///     </para>
     /// </summary>
     /// <remarks>
@@ -256,6 +265,7 @@ public sealed class ChatSessionHost : IDisposable
             throw new
                 InvalidOperationException("This session already has an active run; a session processes one run at a time (PLAN §5). " +
                                           "Wait for the current turn to finish before submitting another one.");
+        DisplayWarning = null;
 
         var turn = new SessionTurn(NewId(), userInput);
         var run  = new SessionRun(NewId(), Session.Id, turn.Id);
@@ -265,6 +275,8 @@ public sealed class ChatSessionHost : IDisposable
         {
             var loop   = ComposeRunLoop(run);
             var result = await loop.RunTurnAsync(_systemPrompt, userInput, cancellationToken).ConfigureAwait(false);
+            if (!string.IsNullOrWhiteSpace(result.PersistenceWarning))
+                PersistenceWarning = result.PersistenceWarning;
             run.Finish(result);
             return run;
         }
@@ -289,12 +301,14 @@ public sealed class ChatSessionHost : IDisposable
         {
             try
             {
-                // 先回退不完整尾部再保存，避免快照携带无法续传的工具组。
+                // 先回退不完整尾部再提交，避免 canonical 历史携带无法续传的工具组。
                 SettleInterruption(run);
                 await CommitSnapshotAsync().ConfigureAwait(false);
             }
             finally
             {
+                DisplayWarning  = _activeRecorder?.DisplayWarning;
+                _activeRecorder = null;
                 Interlocked.Exchange(ref _activeRuns, 0);
             }
         }
@@ -309,13 +323,13 @@ public sealed class ChatSessionHost : IDisposable
     /// </summary>
     /// <remarks>
     ///     <para>
-    ///         保存成功后恢复不重复阻断；保存失败仅记录警告，内存中的解除仍有效。
-    ///         取消在解除前检查，确认后的保存不受取消影响。
+    ///         确认可靠保存后才解除阻断，恢复时不重复阻断；保存失败保留内存阻断并报告失败。
+    ///         取消在确认前检查，确认保存不受后续取消影响。
     ///     </para>
     ///     <para>
-    ///         A successful save prevents repeated blocking on resume; a failed save records a warning
-    ///         while the in-memory unblock remains. Cancellation is checked before unblocking,
-    ///         not during persistence of the acknowledgement.
+    ///         Unblocks only after the acknowledgement is reliably saved, preventing repeated blocking on resume.
+    ///         A failed save retains the in-memory block and reports failure. Cancellation is checked before
+    ///         acknowledgement and does not interrupt its persistence afterward.
     ///     </para>
     /// </remarks>
     /// <exception cref="InvalidOperationException">
@@ -332,11 +346,20 @@ public sealed class ChatSessionHost : IDisposable
 
         try
         {
+            var previousAcknowledgement = Session.InspectionAcknowledgedUtc;
+            var previousReason          = Session.PendingInspectionReason;
             Session.InspectionAcknowledgedUtc = DateTimeOffset.UtcNow;
             Session.PendingInspectionReason   = null;
-            _inspectionNote                   = null;
+            if (!await CommitSnapshotAsync().ConfigureAwait(false))
+            {
+                Session.InspectionAcknowledgedUtc = previousAcknowledgement;
+                Session.PendingInspectionReason   = previousReason;
+                throw new
+                    InvalidOperationException("Inspection acknowledgement was not reliably saved; non-read-only actions remain blocked.");
+            }
+
+            _inspectionNote = null;
             _permissions?.SetNonReadOnlyBlock(null);
-            await CommitSnapshotAsync().ConfigureAwait(false);
         }
         finally
         {
@@ -367,7 +390,8 @@ public sealed class ChatSessionHost : IDisposable
             Session.PendingInspectionReason = $"run '{run.Id}' may have started side-effect tools whose results " +
                                               "were not reliably saved; inspect the workspace before continuing.";
             Session.InspectionAcknowledgedUtc = null;
-            await _sessionWriter.CommitAsync(Session, safeContext, cancellationToken).ConfigureAwait(false);
+            await _sessionWriter.CommitExecutionIntentAsync(Session, safeContext, cancellationToken)
+                                .ConfigureAwait(false);
             PersistenceWarning = null;
         }
         catch (Exception ex)
@@ -392,11 +416,11 @@ public sealed class ChatSessionHost : IDisposable
     /// </summary>
     /// <remarks>
     ///     <para>
-    ///         在快照提交前仅修改内存，保留执行记录，不拆分工具原子组或补造结果。
+    ///         在日志提交前仅修改内存，保留执行记录，不拆分工具原子组或补造结果。
     ///         无法判定时阻断副作用，不抛出异常掩盖终态或阻止保存。
     ///     </para>
     ///     <para>
-    ///         Changes memory only before snapshot commit, retaining execution records without splitting
+    ///         Changes memory only before journal commit, retaining execution records without splitting
     ///         atomic tool groups or fabricating results. Unclassifiable interruptions block side effects;
     ///         no exception escapes to mask the terminal result or prevent saving.
     ///     </para>
@@ -454,24 +478,33 @@ public sealed class ChatSessionHost : IDisposable
     }
 
     /// <summary>
-    ///     <para>提交当前快照；失败转换为 <see cref="PersistenceWarning" />，不掩盖终态或中断内存会话。</para>
+    ///     <para>追加当前会话增量；失败转换为 <see cref="PersistenceWarning" />，不掩盖执行终态。</para>
     ///     <para>
-    ///         Commits the current snapshot; failures become <see cref="PersistenceWarning" /> without
-    ///         masking the terminal result or interrupting the in-memory session.
+    ///         Appends current session increments; failures become <see cref="PersistenceWarning" /> without
+    ///         masking the execution outcome.
     ///     </para>
     /// </summary>
-    private async Task CommitSnapshotAsync()
+    private async Task<bool> CommitSnapshotAsync()
     {
-        if (_sessionWriter is null) return;
+        if (_sessionWriter is null) return true;
+
+        if (!_sessionWriter.IsHealthy)
+        {
+            PersistenceWarning = _sessionWriter.WriteFailure ??
+                                 "The session journal is poisoned after an earlier write failure.";
+            return false;
+        }
 
         try
         {
             await _sessionWriter.CommitAsync(Session, _context, CancellationToken.None).ConfigureAwait(false);
             PersistenceWarning = null;
+            return true;
         }
         catch (Exception ex)
         {
             PersistenceWarning = ex.Message;
+            return false;
         }
     }
 
@@ -484,8 +517,12 @@ public sealed class ChatSessionHost : IDisposable
     /// </summary>
     private AgentLoop ComposeRunLoop(SessionRun run)
     {
-        var recorder    = _recorderFactory?.Invoke(run.Id);
-        var events      = _events is null ? null : new RunEventCorrelator(Session.Id, run.TurnId, run.Id, _events);
+        var events = _events is null ? null : new RunEventCorrelator(Session.Id, run.TurnId, run.Id, _events);
+        var recorder = _recorderFactory?.Invoke(run.Id) ?? _sessionWriter?.CreateRunRecorder(
+             Session.Id, run.TurnId, run.Id,
+             token => _sessionWriter.CommitAsync(Session, _context, token),
+             events is null ? null : events.PublishHistoryItemAsync);
+        _activeRecorder = recorder;
         var permissions = _permissions;
         if (!InspectionPending || permissions is not null)
             return new AgentLoop(_modelClient, _tools, _options, permissions, _approver, recorder, events, _context,
@@ -513,10 +550,13 @@ public sealed class ChatSessionHost : IDisposable
     private sealed class RunEventCorrelator(string sessionId, string turnId, string runId, IHostEventSink inner)
         : IHostEventSink
     {
+        private long _sequence;
+
         public async ValueTask PublishAsync(HostEvent @event, CancellationToken cancellationToken)
         {
             await inner.PublishAsync(@event with
                                      {
+                                         Sequence = Interlocked.Increment(ref _sequence),
                                          SessionId = sessionId,
                                          TurnId = turnId,
                                          RunId = runId
@@ -524,5 +564,16 @@ public sealed class ChatSessionHost : IDisposable
                                      cancellationToken)
                        .ConfigureAwait(false);
         }
+
+        public ValueTask PublishHistoryItemAsync(SessionHistoryItem item, CancellationToken cancellationToken) =>
+            inner.PublishAsync(new HostEvent
+            {
+                Kind      = HostEventKind.HistoryItemCompleted,
+                Sequence  = Interlocked.Increment(ref _sequence),
+                SessionId = sessionId,
+                TurnId    = turnId,
+                RunId     = runId,
+                Payload   = item
+            }, cancellationToken);
     }
 }

@@ -2,23 +2,32 @@ namespace TinyHarness.Core.Models.Persistence;
 
 public sealed record AuditRecord
 {
-    public string                 RunId        { get; init; } = string.Empty;
-    public DateTimeOffset         TimestampUtc { get; init; } = DateTimeOffset.UtcNow;
-    public string                 Kind         { get; init; } = string.Empty;
-    public string?                SystemPrompt { get; init; }
-    public string?                UserInput    { get; init; }
-    public string?                ToolName     { get; init; }
-    public string?                CallId       { get; init; }
-    public string?                Capability   { get; init; }
-    public string?                Summary      { get; init; }
-    public IReadOnlyList<string>? TargetPaths  { get; init; }
-    public string?                Decision     { get; init; }
-    public string?                Outcome      { get; init; }
+    public string         RunId        { get; init; } = string.Empty;
+    public DateTimeOffset TimestampUtc { get; init; } = DateTimeOffset.UtcNow;
+    public string         Kind         { get; init; } = string.Empty;
+    public string?        SystemPrompt { get; init; }
+    public string?        UserInput    { get; init; }
+    public string?        ToolName     { get; init; }
+    public string?        CallId       { get; init; }
 
     /// <summary>
-    ///     工具执行使用的策略身份（backend=host 或完整沙箱身份串）；非工具记录为空。
-    ///     The execution policy identity used by a tool invocation (backend=host or
-    ///     the full sandbox identity); empty for non-tool records.
+    ///     <para>本次运行内稳定的调用序号；旧审计记录可以缺失。</para>
+    ///     <para>The stable invocation ordinal within this run; older audit records may omit it.</para>
+    /// </summary>
+    public string? InvocationId { get; init; }
+
+    public string?                Capability  { get; init; }
+    public string?                Summary     { get; init; }
+    public IReadOnlyList<string>? TargetPaths { get; init; }
+    public string?                Decision    { get; init; }
+    public string?                Outcome     { get; init; }
+
+    /// <summary>
+    ///     <para>工具执行使用的策略身份（backend=host 或完整沙箱身份串）；非工具记录为空。</para>
+    ///     <para>
+    ///         The execution policy identity used by a tool invocation (backend=host or the full sandbox
+    ///         identity); empty for non-tool records.
+    ///     </para>
     /// </summary>
     public string? ExecutionPolicy { get; init; }
 

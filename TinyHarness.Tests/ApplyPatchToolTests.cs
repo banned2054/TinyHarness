@@ -293,6 +293,187 @@ public class ApplyPatchToolTests
     }
 
     [Test]
+    public async Task ApplyPatch_RecordsOriginalConfirmedDiffs()
+    {
+        using var dir = new TestTempDir();
+        dir.WriteFile("f1.txt", "a1\na2\n");
+        var tool = new ApplyPatchTool(dir.Workspace);
+
+        var result = await ExecuteAsync(tool, Prepare(tool, """
+                                                      --- a/f1.txt
+                                                      +++ b/f1.txt
+                                                      @@ -1 +1 @@
+                                                      -a1
+                                                      +a1-x
+                                                      --- /dev/null
+                                                      +++ b/new.txt
+                                                      @@ -0,0 +1 @@
+                                                      +created
+                                                      """));
+
+        Assert.That(result.Succeeded, Is.True, result.Content);
+        Assert.That(result.PatchChanges, Is.Not.Null);
+        Assert.That(result.PatchChanges!, Has.Count.EqualTo(2));
+        Assert.That(result.PatchChanges![0].Path, Is.EqualTo("f1.txt"));
+        Assert.That(result.PatchChanges[0].Operation, Is.EqualTo(PatchChange.ModifyOperation));
+        Assert.That(result.PatchChanges[0].State, Is.EqualTo(PatchChange.ConfirmedState));
+        Assert.That(result.PatchChanges[0].Diff, Is.EqualTo(
+                                                            "--- a/f1.txt\n+++ b/f1.txt\n@@ -1,1 +1,1 @@\n-a1\n+a1-x\n"));
+        Assert.That(result.PatchChanges[1].Path, Is.EqualTo("new.txt"));
+        Assert.That(result.PatchChanges[1].Operation, Is.EqualTo(PatchChange.CreateOperation));
+        Assert.That(result.PatchChanges[1].State, Is.EqualTo(PatchChange.ConfirmedState));
+        Assert.That(result.PatchChanges[1].Diff, Is.EqualTo(
+                                                            "--- /dev/null\n+++ b/new.txt\n@@ -0,0 +1,1 @@\n+created\n"));
+
+        // 后续工作区变化不能改变工具结果中已捕获的原始事实。
+        await File.WriteAllTextAsync(Path.Combine(dir.Root, "f1.txt"), "changed\n");
+        File.Delete(Path.Combine(dir.Root, "new.txt"));
+        Assert.That(result.PatchChanges[0].Diff, Is.EqualTo(
+                                                            "--- a/f1.txt\n+++ b/f1.txt\n@@ -1,1 +1,1 @@\n-a1\n+a1-x\n"));
+        Assert.That(result.PatchChanges[1].Diff, Is.EqualTo(
+                                                            "--- /dev/null\n+++ b/new.txt\n@@ -0,0 +1,1 @@\n+created\n"));
+    }
+
+    [Test]
+    public async Task ApplyPatch_MidWriteFailureKeepsConfirmedAndUnknownOnly()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        using var dir    = new TestTempDir();
+        var       first  = dir.WriteFile("first.txt", "one\n");
+        var       second = dir.WriteFile("second.txt", "two\n");
+        var       third  = dir.WriteFile("third.txt", "three\n");
+        File.SetAttributes(second, FileAttributes.ReadOnly);
+        var tool = new ApplyPatchTool(dir.Workspace);
+
+        try
+        {
+            var result = await ExecuteAsync(tool, Prepare(tool, """
+                                                          --- a/first.txt
+                                                          +++ b/first.txt
+                                                          @@ -1 +1 @@
+                                                          -one
+                                                          +one-x
+                                                          --- a/second.txt
+                                                          +++ b/second.txt
+                                                          @@ -1 +1 @@
+                                                          -two
+                                                          +two-x
+                                                          --- a/third.txt
+                                                          +++ b/third.txt
+                                                          @@ -1 +1 @@
+                                                          -three
+                                                          +three-x
+                                                          """));
+
+            Assert.That(result.Succeeded, Is.False);
+            Assert.That(result.PatchChanges, Is.Not.Null);
+            Assert.That(result.PatchChanges!, Has.Count.EqualTo(2));
+            Assert.That(result.PatchChanges![0].Path, Is.EqualTo("first.txt"));
+            Assert.That(result.PatchChanges[0].State, Is.EqualTo(PatchChange.ConfirmedState));
+            Assert.That(result.PatchChanges[1].Path, Is.EqualTo("second.txt"));
+            Assert.That(result.PatchChanges[1].State, Is.EqualTo(PatchChange.UnknownState));
+            Assert.That(await File.ReadAllTextAsync(first), Is.EqualTo("one-x\n"));
+            Assert.That(await File.ReadAllTextAsync(second), Is.EqualTo("two\n"));
+            Assert.That(await File.ReadAllTextAsync(third), Is.EqualTo("three\n"));
+        }
+        finally
+        {
+            File.SetAttributes(second, FileAttributes.Normal);
+        }
+    }
+
+    [Test]
+    public async Task ApplyPatch_PreValidationFailureRecordsNoChanges()
+    {
+        using var dir  = new TestTempDir();
+        var       path = dir.WriteFile("fixme.cs", "line1\nline2\nline3\n");
+        var       tool = new ApplyPatchTool(dir.Workspace);
+
+        var result = await ExecuteAsync(tool, Prepare(tool, """
+                                                      --- a/fixme.cs
+                                                      +++ b/fixme.cs
+                                                      @@ -2 +2 @@
+                                                      -lineX
+                                                      +line2-fixed
+                                                      """));
+
+        Assert.That(result.Succeeded, Is.False);
+        Assert.That(result.PatchChanges, Is.Null);
+        Assert.That(await File.ReadAllTextAsync(path), Is.EqualTo("line1\nline2\nline3\n"));
+    }
+
+    [Test]
+    public async Task ApplyPatch_GeneratedContextDiffRemainsApplicable()
+    {
+        using var    dir      = new TestTempDir();
+        const string original = "line1\nline2\nline3\n";
+        var          path     = dir.WriteFile("file.txt", original);
+        var          tool     = new ApplyPatchTool(dir.Workspace);
+
+        var result = await ExecuteAsync(tool, Prepare(tool, """
+                                                      --- a/file.txt
+                                                      +++ b/file.txt
+                                                      @@ -1,3 +1,3 @@
+                                                       line1
+                                                      -line2
+                                                      +LINE2
+                                                       line3
+                                                      """));
+
+        const string expected = "--- a/file.txt\n+++ b/file.txt\n@@ -1,3 +1,3 @@\n" +
+                                " line1\n-line2\n+LINE2\n line3\n";
+        Assert.That(result.Succeeded, Is.True, result.Content);
+        Assert.That(result.PatchChanges, Is.Not.Null);
+        Assert.That(result.PatchChanges![0].Diff, Is.EqualTo(expected));
+
+        // 用结果中的 diff 重放，验证首尾 context 保留且可再次应用。
+        await File.WriteAllTextAsync(path, original);
+        var replay = await ExecuteAsync(tool, Prepare(tool, result.PatchChanges[0].Diff));
+
+        Assert.That(replay.Succeeded, Is.True, replay.Content);
+        Assert.That(await File.ReadAllTextAsync(path), Is.EqualTo("line1\nLINE2\nline3\n"));
+    }
+
+    [Test]
+    public async Task ApplyPatch_CancelAfterWriteStartedCarriesPartialFacts()
+    {
+        using var cts = new CancellationTokenSource();
+        using var dir = new TestTempDir();
+        dir.WriteFile("first.txt", "x\n");
+        dir.WriteFile("second.txt", "x\n");
+        var tool = new ApplyPatchTool(dir.Workspace)
+        {
+            WriteAttemptStarting = path =>
+            {
+                if (path.EndsWith("first.txt", StringComparison.Ordinal)) cts.Cancel();
+            }
+        };
+
+        var preparation = Prepare(tool, """
+                                  --- a/first.txt
+                                  +++ b/first.txt
+                                  @@ -1 +1 @@
+                                  -x
+                                  +first-x
+                                  --- a/second.txt
+                                  +++ b/second.txt
+                                  @@ -1 +1 @@
+                                  -x
+                                  +second-x
+                                  """);
+        var execution = tool.ExecuteAsync(preparation, cts.Token);
+
+        var exception = await TestAssert.ThrowsAsync<ToolExecutionCanceledException>(() => execution);
+        Assert.That(exception.CancellationToken, Is.EqualTo(cts.Token));
+        Assert.That(exception.Result.Succeeded, Is.False);
+        Assert.That(exception.Result.PatchChanges, Is.Not.Null);
+        Assert.That(exception.Result.PatchChanges!, Is.Not.Empty);
+        Assert.That(exception.Result.PatchChanges![0].Path, Is.EqualTo("first.txt"));
+        Assert.That(exception.Result.PatchChanges[0].State, Is.EqualTo(PatchChange.UnknownState));
+    }
+
+    [Test]
     public async Task ApplyPatch_ContextMismatch_WritesNothing()
     {
         using var dir  = new TestTempDir();
