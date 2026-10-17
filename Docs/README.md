@@ -30,7 +30,9 @@
 
 早期开发中，命令、配置和存储格式可能随里程碑变化。
 
-目前已实现：单任务 `run`、交互式多轮 `chat`、受保护会话存储（严格离线的 `session list` / `session show`，并支持 `chat --session <id>` 跨进程续聊）、离线优先的配置管理、只读 MCP worker 和可选的 Windows 沙箱管理。项目指令（`AGENTS.md`）加载和宿主强制的只读/实施模式属于计划，尚未实现。默认测试与构建不调用付费模型；真实链路只验证过一组组合（`glm-5.3` + 单个 HTTPS endpoint）。
+目前已实现：单任务 `run`、交互式多轮 `chat`、受保护会话存储（严格离线的 `session list` / `session show`，并支持 `chat --session <id>` 跨进程续聊）、离线优先的配置管理、只读 MCP worker 和可选的 Windows 沙箱管理。统一会话日志已实现，旧持久化读取器与迁移命令已移除。项目指令（`AGENTS.md`）加载和宿主强制的只读/实施模式属于计划，尚未实现。默认测试与构建不调用付费模型；新日志上的真实模型续聊未验证。
+
+移除未使用的旧持久化兼容层后，离线回归通过：775 总、774 通过、1 项因文件符号链接权限跳过、0 失败；scale 独立 1/1 通过，原预算不变。NativeAOT 编译与仓库外 smoke 通过，验证恢复、历史和已确认 patch diff。当前证据：`artifacts/test-results/journal-only-regression.trx`、`artifacts/test-results/journal-only-scale.trx`、`artifacts/journal-only-scale-results.json`、`artifacts/journal-only-native-smoke.txt`。命令、测量及上轮历史验收见[持久化设计](session-persistence-design.md#73-移除旧兼容层后的本地复验)。
 
 ## ✨ 特性
 
@@ -38,16 +40,16 @@
 - **工具** — `list_files`、`search_text`、`read_file`、`apply_patch` 与 `shell`（直接进程/显式 shell 模式），带超时、进程树终止和输出裁剪。
 - **权限** — 每次调用经过 `Prepare → Authorize → Execute`：工作区内读取默认放行，补丁与进程默认询问（`a` 单次 / `s` 本次运行 / `d` 拒绝），可配置命令允许规则。
 - **上下文** — token 预算按真实 usage 校准、工具结果裁剪、旧回合压缩为经过校验的结构化摘要。
-- **持久化** — 每次运行写入 JSONL 审计和脱敏 session 快照；`chat` 会话原子提交到受保护存储，可严格离线查看，并可在新进程经工作区/模型/协议与 opaque 完整性检查后续聊（`chat --session <id>`）。格式 v3 为保真续聊原样保存会话内容：会话文件因此可能包含秘密且不被 Harness 加密；`session list` / `session show` 只输出脱敏检查视图，不展示 canonical 消息或 opaque 载荷。`chat` 在每个副作用工具开始前，于完整协议边界保存执行意图检查点；保存失败不启动工具，宿主直接退出后仍保留待检查状态。在工具执行中途结束（取消或失败）的运行会在回合边界结算：逐调用执行记录区分已知未开始 / 有确认终态 / 结果未知，模型视图回退到最近完整工具边界，结果未知的副作用会阻断写入与进程执行直到用户检查确认；`session show` 离线展示这些记录。
+- **持久化** — `run` 和新会话 `chat` 共用受保护会话存储中的 `tinyharness.session-log/1` 追加日志，默认不再输出旧的全量 run snapshot/audit。历史 DTO 确定性保存 process／final 分类、有界脱敏工具输出，以及逐文件 patch 事实；工作区后来变化后仍能读取当时 diff，并区分 `confirmed` 与 `unknown`。执行意图保存失败不启动副作用；副作用结果未知时设置 NeedsInspection，模型视图回退到最近完整工具边界，未知副作用阻断写入与进程执行直到用户检查确认。历史按序号游标经共享 scanner 分页（每页最多返回 200 条 items，序列化 UTF-8 累计预算 8 MiB；扫描可读取整个捕获范围）；artifact 内容内联保存，单个上限 2 MiB、stdout/stderr 合计 4 MiB；批次上限 8 MiB，日志总量上限 256 MiB。不确定写入使 writer poison，strict 续聊读取拒绝尾部半行，历史检查可返回可靠前缀并给出 warning。会话可严格离线查看，并可在新进程经工作区/模型/协议与 opaque 完整性检查后续聊（`chat --session <id>`）。会话可能包含秘密且不被 Harness 加密；`session list` / `session show` 只输出脱敏检查视图，不展示 canonical 消息或 opaque 载荷。
 - **MCP worker** — `tinyharness mcp` 启动本机只读 stdio 服务，向 Codex 等客户端提供 `ask_glm`。
 - **Windows 沙箱** — 可选的机器级 `shell` 进程隔离，通过 `sandbox status / provision / verify` 显式管理。
 
 ## 🗺️ 限制
 
-- 最后一次运行在工具执行中途结束（取消或失败）的会话，续聊时模型视图回退到最近完整工具边界，副作用工具保持阻断直到用户检查工作区并确认（恢复时的 `c` / `k` 提示）；v3 之前格式版本（v1/v2）存储的会话仅支持查看（inspection-only），拒绝续聊。
+- 中断后仍有未知副作用结果的会话，续聊时模型视图回退到最近完整工具边界，副作用工具保持阻断直到用户检查工作区并确认（恢复时的 `c` / `k` 提示）。当前仅支持 `tinyharness.session-log/1`；旧 `.session.json` 快照和独立 audit 文件不再读取，也不提供迁移命令。
 - Windows 沙箱只在单台机器上验证过，与 Codex 发布版共存未验收。
-- NativeAOT 只验证了 `win-x64`；协议验证基于本地模拟 SSE 服务加上上述唯一真实 endpoint。
-- `chat` 尚未用真实模型服务验证。
+- NativeAOT 只验证了 `win-x64`；当前仅日志实现的 publish 和原生 smoke 已通过。协议验证基于本地模拟 SSE 服务，旧实现另有单个真实 endpoint 的历史验证。
+- 统一会话日志上的 `chat` 尚未用真实模型服务验证；GUI 历史消费、断电持久性及实际 OS 隔离也未在本轮验证。
 
 ## 🚀 构建与运行
 
@@ -61,7 +63,7 @@ dotnet test TinyHarness.Tests/TinyHarness.Tests.csproj --no-restore
 dotnet run --project TinyHarness.Cli -- smoke --config tinyharness.json
 ```
 
-仓库自带的 [tinyharness.json](../tinyharness.json) 使用占位 endpoint：smoke 中脚本模型检查并修复一个刻意损坏的 fixture，重新构建后运行以 `status : Completed` 结束。
+仓库自带的 [tinyharness.json](../tinyharness.json) 使用占位 endpoint：smoke 的目标是由脚本模型检查并修复一个刻意损坏的 fixture，重新构建并以 `status : Completed` 结束；本次 native smoke 结果见项目状态。
 
 原生发布（另需 MSVC C++ 构建工具和 Windows SDK）：
 
@@ -85,7 +87,7 @@ tinyharness sandbox status | provision | verify    Windows 沙箱管理
 
 ### 配置
 
-首次使用不需要手工编辑 JSON。`init` 会把 provider profile、endpoint、密钥引用、模型和上下文窗口写入用户配置（Windows 为 `%APPDATA%\tinyharness\user-config.json`）。认证配置只保存密钥引用——环境变量或 Windows Credential Manager——不保存密钥本体，密钥也不会被主动注入 `chat` 会话。会话文件则不同：格式 v3 为保真续聊原样保存对话内容，粘贴进会话的文本、会话读取的文件或模型返回的内容都可能包含秘密；Harness 不加密会话文件——“受保护”的存储位置只是路径与排他写约定，不代表加密、也不承诺其他本地进程不可读写。v1/v2 旧格式会话仅支持查看（inspection-only）。
+首次使用不需要手工编辑 JSON。`init` 会把 provider profile、endpoint、密钥引用、模型和上下文窗口写入用户配置（Windows 为 `%APPDATA%\tinyharness\user-config.json`）。认证配置只保存密钥引用——环境变量或 Windows Credential Manager——不保存密钥本体，密钥也不会被主动注入 `chat` 会话。会话默认使用受保护存储（`%LOCALAPPDATA%\tinyharness\sessions`），可通过 `settings.sessionStoreDirectory` 或 `TINYHARNESS_SESSION_STORE_DIR` 覆盖；`config.sessionDirectory` 不是默认位置。会话为保真续聊原样保存 canonical 对话内容，粘贴进会话的文本、会话读取的文件或模型返回的内容都可能包含秘密；Harness 不加密会话文件——“受保护”的存储位置只是路径与排他写约定，不代表加密、也不承诺其他本地进程不可读写。当前仅支持 `tinyharness.session-log/1`，不读取或迁移旧持久化格式。
 
 ```powershell
 dotnet run --project TinyHarness.Cli -- init
@@ -121,13 +123,14 @@ dotnet run --project TinyHarness.Cli -- run --config artifacts/live.json "检查
 
 | 平台 | 状态 |
 | --- | --- |
-| Windows x64 | 主要开发平台；离线测试与 `win-x64` NativeAOT 发布已验证 |
+| Windows x64 | 主要开发平台；本地统一验收完成：离线回归、scale、`win-x64` NativeAOT 发布与原生 smoke |
 | 其他 RID | 尚未验证 |
 
 ## 📚 文档
 
 - [PLAN.md](../PLAN.md) — 当前产品范围与 M12+ 路线
 - [PAST_PLAN.md](../PAST_PLAN.md) — 归档的 MVP 与 M1–M11 计划
+- [会话持久化设计](session-persistence-design.md) — 当前契约与本地验收矩阵
 - [Windows 沙箱管理与验收记录](windows-sandbox-management.md)
 - [Windows 沙箱接入方案](windows-sandbox-dotnet-integration.md)
 - [M9 验证记录](m9-demo.md)、[M10 验证记录](m10-model-protocol.md)

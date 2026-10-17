@@ -30,7 +30,9 @@ The goal is a small, complete, and explainable execution loop. The CLI is the cu
 
 Early development; commands, configuration, and storage formats may change between milestones.
 
-Implemented today: one-shot `run`, interactive multi-turn `chat`, a protected session store with strictly offline `session list` / `session show` and cross-process resume via `chat --session <id>`, offline-first configuration management, a read-only MCP worker, and opt-in Windows sandbox management. Project-instruction (`AGENTS.md`) loading and host-enforced read-only/implement modes are planned but not implemented. Default tests and builds never call a paid model; only one live combination (`glm-5.3` over a single HTTPS endpoint) has been verified.
+Implemented today: one-shot `run`, interactive multi-turn `chat`, a protected session store with strictly offline `session list` / `session show` and cross-process resume via `chat --session <id>`, offline-first configuration management, a read-only MCP worker, and opt-in Windows sandbox management. The unified session log is implemented and local unified acceptance is complete; the old persistence readers and migration command have been removed. Project-instruction (`AGENTS.md`) loading and host-enforced read-only/implement modes are planned but not implemented. Default tests and builds never call a paid model; real-model continuation over the new log is unverified.
+
+After removing the unused persistence compatibility layer, offline regression passed: 775 total / 774 passed / 1 skipped because file symbolic links cannot be created / 0 failed. Scale passed separately (1/1) within the original budgets. NativeAOT publish and smoke outside the repository passed, verifying restore, history, and confirmed patch diffs. Current evidence: `artifacts/test-results/journal-only-regression.trx`, `artifacts/test-results/journal-only-scale.trx`, `artifacts/journal-only-scale-results.json`, and `artifacts/journal-only-native-smoke.txt`. See the [persistence design](Docs/session-persistence-design.md#73-移除旧兼容层后的本地复验) for commands, measurements, and the earlier acceptance record.
 
 ## ✨ Features
 
@@ -38,16 +40,16 @@ Implemented today: one-shot `run`, interactive multi-turn `chat`, a protected se
 - **Tools** — `list_files`, `search_text`, `read_file`, `apply_patch`, and `shell` (direct process or explicit shell mode) with timeouts, process-tree termination, and output trimming.
 - **Permissions** — every call follows `Prepare → Authorize → Execute`: workspace reads are allowed by default, patches and processes ask for approval (`a` once / `s` this run / `d` deny), and command allow rules can be configured.
 - **Context** — token budgets calibrated by real usage, tool-result trimming, and compaction of older turns into validated structured summaries.
-- **Persistence** — every run writes a JSONL audit and a redacted session snapshot; `chat` sessions are committed atomically to a protected store, can be inspected strictly offline, and can be resumed in a new process (`chat --session <id>`) after workspace/model/protocol and opaque-data integrity checks. Format v3 stores the conversation verbatim for faithful resume, so session files may contain secrets and are not encrypted; `session list` / `session show` print only redacted inspection views, never the canonical messages or opaque payloads. Before each side-effect tool starts, `chat` saves an execution-intent checkpoint at a complete protocol boundary; a failed checkpoint prevents execution, and an abrupt host exit leaves the saved operation pending inspection. A run that ends mid tool execution settles at the turn boundary: per-call execution records distinguish known-not-started / confirmed / unknown results, the model view rewinds to the last complete tool boundary, and an unknown side effect blocks writes and process execution until the user inspects and confirms; `session show` renders the records offline.
+- **Persistence** — `run` and new `chat` sessions share the append-only `tinyharness.session-log/1` format in the protected session store; the old full run snapshot/audit pair is no longer the default output. History DTOs keep deterministic process/final classification, bounded redacted tool output, and per-file patch facts whose diffs distinguish `confirmed` from `unknown` after a later workspace change. An execution-intent failure prevents a side effect; an unknown side-effect result sets NeedsInspection, the model view rewinds to the last complete tool boundary, and an unknown side effect blocks writes and process execution until the user inspects and confirms. Session histories page by sequence cursor through a shared scanner (up to 200 returned items with an 8 MiB cumulative serialized UTF-8 budget; scanning may read the captured log range), artifact content is inlined up to 2 MiB per artifact and 4 MiB across stdout/stderr, batches are capped at 8 MiB, and a log at 256 MiB. An uncertain write poisons the writer and strict resume rejects a truncated final line; history inspection may return a reliable prefix with a warning. Sessions can be inspected strictly offline and resumed (`chat --session <id>`) after workspace/model/protocol and opaque-data integrity checks. Session files may contain secrets and are not encrypted; `session list` / `session show` print only redacted inspection views, never canonical messages or opaque payloads.
 - **MCP worker** — `tinyharness mcp` runs a local read-only stdio server exposing `ask_glm` for clients such as Codex.
 - **Windows sandbox** — opt-in machine-level isolation for `shell` processes with explicit `sandbox status / provision / verify` management.
 
 ## 🗺️ Limitations
 
-- A session whose last run ended mid tool execution (cancel or failure) resumes with the model view rewound to the last complete tool boundary and side-effect tools blocked until the user inspects the workspace and confirms (`c` / `k` prompt at resume); sessions stored by format versions older than v3 (v1/v2) are inspection-only and refused for resume.
+- A session with an unknown side-effect result after interruption resumes with the model view rewound to the last complete tool boundary and side-effect tools blocked until the user inspects the workspace and confirms (`c` / `k` prompt at resume). Only `tinyharness.session-log/1` is supported. Old `.session.json` snapshots and separate audit files are ignored; no migration command is provided.
 - The Windows sandbox is verified on a single machine, and coexistence with a Codex release install is unverified.
-- Only `win-x64` NativeAOT is verified; protocol coverage comes from a local simulated SSE service plus the one live endpoint above.
-- `chat` has not been verified against a real model service.
+- Only `win-x64` NativeAOT has been verified; the final publish and native smoke passed for the current journal-only implementation. Protocol coverage comes from a local simulated SSE service, with historical validation against one live endpoint for the earlier implementation.
+- `chat` with the unified session log has not been verified against a real model service; GUI history consumption, power-loss durability and actual OS isolation are also unverified in this acceptance run.
 
 ## 🚀 Build and Run
 
@@ -61,7 +63,7 @@ dotnet test TinyHarness.Tests/TinyHarness.Tests.csproj --no-restore
 dotnet run --project TinyHarness.Cli -- smoke --config tinyharness.json
 ```
 
-The bundled [tinyharness.json](tinyharness.json) uses a placeholder endpoint. In the smoke test a scripted model inspects and patches a deliberately broken fixture, rebuilds it, and the run finishes with `status : Completed`.
+The bundled [tinyharness.json](tinyharness.json) uses a placeholder endpoint. The smoke test is intended to have a scripted model inspect and patch a deliberately broken fixture, rebuild it, and finish with `status : Completed`; the current native smoke result is recorded under Project Status.
 
 Native publish (also needs MSVC C++ build tools and the Windows SDK):
 
@@ -85,7 +87,7 @@ tinyharness sandbox status | provision | verify    Windows sandbox management
 
 ### Configure
 
-First-time setup does not require hand-editing JSON. `init` stores the provider profile, endpoint, key reference, model, and context window in the user config (`%APPDATA%\tinyharness\user-config.json` on Windows). The authentication configuration stores only key references — an environment variable or a Windows Credential Manager entry — never the key material itself, and keys are not proactively injected into `chat` sessions. Session files are different: format v3 preserves conversation content verbatim so resume stays faithful, which means anything pasted into the chat, read from files, or returned by the model may contain secrets. The harness does not encrypt session files — the protected store location is a path and exclusive-write convention, not encryption and not a promise that other local processes cannot read it. Sessions stored by older format versions (v1/v2) are inspection-only.
+First-time setup does not require hand-editing JSON. `init` stores the provider profile, endpoint, key reference, model, and context window in the user config (`%APPDATA%\tinyharness\user-config.json` on Windows). The authentication configuration stores only key references — an environment variable or a Windows Credential Manager entry — never the key material itself, and keys are not proactively injected into `chat` sessions. Sessions use the protected store by default (`%LOCALAPPDATA%\tinyharness\sessions`), overridden by `settings.sessionStoreDirectory` or `TINYHARNESS_SESSION_STORE_DIR`; `config.sessionDirectory` is not the default. Session files preserve canonical conversation content verbatim so resume stays faithful, which means anything pasted into the chat, read from files, or returned by the model may contain secrets. The harness does not encrypt session files — the protected store location is a path and exclusive-write convention, not encryption and not a promise that other local processes cannot read it. Only `tinyharness.session-log/1` is supported; older persistence formats are neither read nor migrated.
 
 ```powershell
 dotnet run --project TinyHarness.Cli -- init
@@ -121,13 +123,14 @@ dotnet run --project TinyHarness.Cli -- run --config artifacts/live.json "Find o
 
 | Platform | Status |
 | --- | --- |
-| Windows x64 | Primary development platform; offline tests and `win-x64` NativeAOT publish verified |
+| Windows x64 | Primary development platform; local unified acceptance completed: offline regression, scale, `win-x64` NativeAOT publish and native smoke |
 | Other RIDs | Not yet verified |
 
 ## 📚 Documentation
 
 - [PLAN.md](PLAN.md) — current product scope and the M12+ roadmap
 - [PAST_PLAN.md](PAST_PLAN.md) — archived MVP and M1–M11 plan
+- [Session persistence design](Docs/session-persistence-design.md) (Chinese)
 - [Windows sandbox management and acceptance records](Docs/windows-sandbox-management.md) (Chinese)
 - [Windows sandbox integration design](Docs/windows-sandbox-dotnet-integration.md) (Chinese)
 - [M9](Docs/m9-demo.md) and [M10](Docs/m10-model-protocol.md) validation records
