@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json.Nodes;
 using TinyHarness.Core.Models.ChatCompletions;
+using TinyHarness.Core.Models.ProjectInstructions;
 using TinyHarness.Core.Models.Tools;
 using TinyHarness.Core.Services.Runtime;
 
@@ -93,7 +94,12 @@ public sealed class SearchTextTool(Workspace workspace, WorkerReadPolicy? worker
             Arguments   = args,
             Capability  = "filesystem.search",
             Summary     = $"search_text \"{pattern}\" in {workspace.ToDisplay(absolute)}",
-            TargetPaths = [absolute]
+            TargetPaths = [absolute],
+            InstructionScopes =
+            [
+                new InstructionScope(absolute, InstructionScopeKind.RecursiveDirectory,
+                                     MaxEntries : MaxFilesScanned, FilesOnly : true)
+            ]
         };
     }
 
@@ -132,7 +138,10 @@ public sealed class SearchTextTool(Workspace workspace, WorkerReadPolicy? worker
             var walk = DirectoryWalker.CollectFiles(absolute, MaxFilesScanned, cancellationToken,
                                                     workerPolicy is null
                                                         ? null
-                                                        : child => !workerPolicy.IsEntryAllowed(child));
+                                                        : child => !workerPolicy.IsEntryAllowed(child),
+                                                    preparation.Coverage is { } coverage
+                                                        ? coverage.EnsureCoveredDirectory
+                                                        : null);
             files.AddRange(walk.Entries);
             walkLimited = walk.Truncated;
         }
@@ -148,6 +157,7 @@ public sealed class SearchTextTool(Workspace workspace, WorkerReadPolicy? worker
         foreach (var file in files)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            preparation.Coverage?.EnsureCoveredDirectory(Path.GetDirectoryName(file)!);
             if (output.Count >= maxResults)
             {
                 stoppedAtCap = true;

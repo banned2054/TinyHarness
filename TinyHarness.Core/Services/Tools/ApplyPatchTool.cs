@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json.Nodes;
 using TinyHarness.Core.Models.ChatCompletions;
+using TinyHarness.Core.Models.ProjectInstructions;
 using TinyHarness.Core.Models.Tools;
 using TinyHarness.Core.Services.Runtime;
 
@@ -125,12 +126,13 @@ public sealed class ApplyPatchTool(Workspace workspace) : ITool
         var display = targets.Select(workspace.ToDisplay).ToList();
         return new ToolPreparation
         {
-            ToolName    = Definition.Name,
-            CallId      = call.Id,
-            Arguments   = args,
-            Capability  = "filesystem.write",
-            Summary     = $"apply_patch: modify {display.Count} file(s): {string.Join(", ", display)}",
-            TargetPaths = targets
+            ToolName          = Definition.Name,
+            CallId            = call.Id,
+            Arguments         = args,
+            Capability        = "filesystem.write",
+            Summary           = $"apply_patch: modify {display.Count} file(s): {string.Join(", ", display)}",
+            TargetPaths       = targets,
+            InstructionScopes = targets.Select(path => new InstructionScope(path, InstructionScopeKind.File)).ToArray()
         };
     }
 
@@ -148,6 +150,8 @@ public sealed class ApplyPatchTool(Workspace workspace) : ITool
 
         try
         {
+            foreach (var file in plan)
+                preparation.Coverage?.EnsureCoveredDirectory(Path.GetDirectoryName(file.Path)!);
             // 第一阶段：逐目标读取并在内存中应用 hunk；任何不匹配都在写入前抛出。
             var applied    = new List<(string Path, string Text, bool IsNew)>(plan.Count);
             var totalBytes = 0;

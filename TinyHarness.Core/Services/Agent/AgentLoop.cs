@@ -2,6 +2,7 @@ using TinyHarness.Core.Models.Agent;
 using TinyHarness.Core.Models.ChatCompletions;
 using TinyHarness.Core.Models.Context;
 using TinyHarness.Core.Models.Permissions;
+using TinyHarness.Core.Models.ProjectInstructions;
 using TinyHarness.Core.Models.Session;
 using TinyHarness.Core.Models.Tools;
 using TinyHarness.Core.Services.ChatCompletions;
@@ -13,6 +14,41 @@ using TinyHarness.Core.Services.Session;
 using TinyHarness.Core.Services.Tools;
 
 namespace TinyHarness.Core.Services.Agent;
+
+internal enum InstructionBoundaryStatus
+{
+    Unchanged,
+    Updated,
+    Failed
+}
+
+internal readonly record struct InstructionBoundaryCheck(
+    InstructionBoundaryStatus Status,
+    string?                   Error,
+    string?                   NewRevision,
+    InstructionCoverage?      Coverage);
+
+/// <summary>
+///     <para>宿主提供给循环的项目指令边界；所有可靠提交和生效仍由宿主协调。</para>
+///     <para>The project-instruction boundary supplied by the host; reliable commits and activation remain host-owned.</para>
+/// </summary>
+internal interface IAgentInstructionBoundary
+{
+    Task PrepareUserContextAsync(CancellationToken cancellationToken);
+
+    Task<ProjectInstructionsChanged?> ConfirmInitialCommitAsync(CancellationToken cancellationToken);
+
+    Task<ProjectInstructionsChanged?> RefreshBeforeModelRequestAsync(CancellationToken cancellationToken);
+
+    Task<InstructionBoundaryCheck> CheckToolRoundAsync(
+        IReadOnlyList<ToolPreparation> preparations, CancellationToken cancellationToken);
+
+    Task<InstructionBoundaryCheck> RecheckBeforeDispatchAsync(
+        IReadOnlyList<ToolPreparation> preparations, CancellationToken cancellationToken);
+
+    Task<ProjectInstructionsChanged?> ApplyToolRoundUpdateAsync(
+        IReadOnlyList<ToolCallRecord> records, CancellationToken cancellationToken);
+}
 
 /// <summary>
 ///     <para>
@@ -44,10 +80,11 @@ public sealed class AgentLoop
 
     private readonly Func<IReadOnlyList<ToolCallRecord>, CancellationToken, Task>? _executionCheckpoint;
 
-    private readonly IChatCompletionClient _model;
-    private readonly AgentOptions          _options;
-    private readonly PermissionEngine?     _permissions;
-    private readonly IRunRecorder?         _recorder;
+    private readonly IAgentInstructionBoundary? _instructionBoundary;
+    private readonly IChatCompletionClient      _model;
+    private readonly AgentOptions               _options;
+    private readonly PermissionEngine?          _permissions;
+    private readonly IRunRecorder?              _recorder;
 
     /// <summary>
     ///     <para>
@@ -107,6 +144,15 @@ public sealed class AgentLoop
                      PermissionEngine? permissions, IApprovalProvider? approver, IRunRecorder? recorder = null,
                      IHostEventSink? events = null, ConversationContext? context = null,
                      Func<IReadOnlyList<ToolCallRecord>, CancellationToken, Task>? executionCheckpoint = null)
+        : this(model, tools, options, permissions, approver, recorder, events, context, executionCheckpoint, null)
+    {
+    }
+
+    internal AgentLoop(IChatCompletionClient model, ToolRegistry tools, AgentOptions options,
+                       PermissionEngine? permissions, IApprovalProvider? approver, IRunRecorder? recorder,
+                       IHostEventSink? events, ConversationContext? context,
+                       Func<IReadOnlyList<ToolCallRecord>, CancellationToken, Task>? executionCheckpoint,
+                       IAgentInstructionBoundary? instructionBoundary)
     {
         ArgumentNullException.ThrowIfNull(model);
         ArgumentNullException.ThrowIfNull(tools);
@@ -120,6 +166,7 @@ public sealed class AgentLoop
         _events              = events;
         _context             = context ?? new ConversationContext(options.Context);
         _executionCheckpoint = executionCheckpoint;
+        _instructionBoundary = instructionBoundary;
     }
 
     /// <summary>
@@ -231,16 +278,28 @@ public sealed class AgentLoop
         _toolCallRecords.Clear();
         _nextInvocationSequence = 0;
 
+        if (_instructionBoundary is not null)
+            await _instructionBoundary.PrepareUserContextAsync(cancellationToken).ConfigureAwait(false);
+
+        ProjectInstructionsChanged? initialInstructionEvent = null;
         _context.Append(ChatMessage.User(userInput));
 
-        var steps          = 0;
-        var toolExecutions = 0;
-        var compactions    = 0;
+        var steps                              = 0;
+        var toolExecutions                     = 0;
+        var compactions                        = 0;
+        var instructionDeferralsSinceExecution = 0;
 
         try
         {
             if (_recorder is not null)
                 await _recorder.StartAsync(systemPrompt, userInput, cancellationToken).ConfigureAwait(false);
+
+            if (_instructionBoundary is not null)
+            {
+                initialInstructionEvent = await _instructionBoundary.ConfirmInitialCommitAsync(cancellationToken)
+                                                                    .ConfigureAwait(false);
+                await PublishInstructionChangedAsync(initialInstructionEvent, cancellationToken).ConfigureAwait(false);
+            }
 
             await PublishEventAsync(HostEventKind.RunStarted, null, cancellationToken).ConfigureAwait(false);
 
@@ -251,7 +310,27 @@ public sealed class AgentLoop
 
                 // 摘要输入也受预算限制，可能需多批压缩；只在模型请求之间进行。
                 var definitions = CurrentToolDefinitions() ?? [];
-                while (await CompactIfNeededAsync(definitions, cancellationToken).ConfigureAwait(false)) compactions++;
+                while (true)
+                {
+                    if (_instructionBoundary is not null)
+                    {
+                        var beforeCompactionEvent = await _instructionBoundary
+                                                         .RefreshBeforeModelRequestAsync(cancellationToken)
+                                                         .ConfigureAwait(false);
+                        await PublishInstructionChangedAsync(beforeCompactionEvent, cancellationToken)
+                           .ConfigureAwait(false);
+                    }
+
+                    if (!await CompactIfNeededAsync(definitions, cancellationToken).ConfigureAwait(false)) break;
+                    compactions++;
+                }
+
+                if (_instructionBoundary is not null)
+                {
+                    var beforeRequestEvent = await _instructionBoundary.RefreshBeforeModelRequestAsync(
+                         cancellationToken).ConfigureAwait(false);
+                    await PublishInstructionChangedAsync(beforeRequestEvent, cancellationToken).ConfigureAwait(false);
+                }
 
                 // 摘要失败或不可再折叠时仍须拒绝超窗口请求，不能依赖模型服务兜底。
                 if (_options.Context is { } context)
@@ -296,7 +375,69 @@ public sealed class AgentLoop
                     }).ConfigureAwait(false);
 
                 // 整轮先做无副作用准备；任一调用无效时整轮不执行，避免留下部分副作用。
-                var round        = PrepareRound(_tools, assistant.ToolCalls);
+                var round = PrepareRound(_tools, assistant.ToolCalls);
+                if (_instructionBoundary is not null && round.Any(item => item.Preparation is not null))
+                {
+                    var instructionCheck = await _instructionBoundary.CheckToolRoundAsync(
+                                                                           round.Where(item =>
+                                                                                            item.Preparation is not
+                                                                                                null)
+                                                                              .Select(item => item.Preparation!)
+                                                                              .ToArray(),
+                                                                           cancellationToken)
+                                                                     .ConfigureAwait(false);
+                    switch (instructionCheck.Status)
+                    {
+                        case InstructionBoundaryStatus.Failed :
+                        {
+                            var records = RecordRound(round);
+                            AppendDeferredToolResults(round,
+                                                      "The tool round was not started because project instructions could not be refreshed. " +
+                                                      instructionCheck.Error);
+                            await RecordNotStartedRoundAsync(records, cancellationToken).ConfigureAwait(false);
+                            return await FinishAsync(new AgentResult
+                            {
+                                Status         = AgentStatus.Failed,
+                                Error          = instructionCheck.Error,
+                                Steps          = steps,
+                                ToolExecutions = toolExecutions,
+                                Compactions    = compactions
+                            }).ConfigureAwait(false);
+                        }
+                        case InstructionBoundaryStatus.Updated :
+                        {
+                            var records = RecordRound(round);
+                            AppendDeferredToolResults(round,
+                                                      $"Not started because project instructions changed to revision {instructionCheck.NewRevision}; the tool round will be retried.");
+                            if (instructionDeferralsSinceExecution >= 1)
+                            {
+                                await RecordNotStartedRoundAsync(records, cancellationToken).ConfigureAwait(false);
+                                return await FinishAsync(new AgentResult
+                                {
+                                    Status = AgentStatus.Failed,
+                                    Error =
+                                        "Project instructions changed again after the tool round was already deferred once.",
+                                    Steps          = steps,
+                                    ToolExecutions = toolExecutions,
+                                    Compactions    = compactions
+                                }).ConfigureAwait(false);
+                            }
+
+                            await RecordNotStartedRoundAsync(records, cancellationToken).ConfigureAwait(false);
+                            var changedEvent = await _instructionBoundary
+                                                    .ApplyToolRoundUpdateAsync(records.Values.ToArray(),
+                                                                               cancellationToken)
+                                                    .ConfigureAwait(false);
+                            await PublishInstructionChangedAsync(changedEvent, cancellationToken).ConfigureAwait(false);
+                            instructionDeferralsSinceExecution++;
+                            continue;
+                        }
+                        default :
+                            round = BindInstructionCoverage(round, instructionCheck.Coverage);
+                            break;
+                    }
+                }
+
                 var roundRecords = RecordRound(round);
                 if (_recorder is not null)
                     foreach (var prepared in round)
@@ -325,17 +466,122 @@ public sealed class AgentLoop
                 }
 
                 // 整轮完成授权后才顺序执行获批调用，审批期间不提前产生副作用。
-                var authorized = new List<AuthorizedRoundCall>(round.Count);
+                var                       authorized      = new List<AuthorizedRoundCall>(round.Count);
+                InstructionBoundaryCheck? approvalRefresh = null;
                 foreach (var item in round)
                 {
                     var authorization = _permissions is null
                         ? AuthorizationOutcome.Granted
                         : await AuthorizeAsync(item.Preparation!, roundRecords, cancellationToken);
                     authorized.Add(new AuthorizedRoundCall(item, authorization));
+                    if (_instructionBoundary is null || _permissions is null) continue;
+                    var check = await _instructionBoundary.RecheckBeforeDispatchAsync(
+                                                                round.Select(candidate => candidate.Preparation!)
+                                                                     .ToArray(), cancellationToken)
+                                                          .ConfigureAwait(false);
+                    if (check.Status == InstructionBoundaryStatus.Unchanged) continue;
+                    approvalRefresh = check;
+                    break;
                 }
 
-                foreach (var item in authorized)
+                if (approvalRefresh is { } approvalChange && _instructionBoundary is { } approvalBoundary)
                 {
+                    var reason = approvalChange.Status == InstructionBoundaryStatus.Updated
+                        ? $"Not started because project instructions changed to revision {approvalChange.NewRevision}; approval is obsolete."
+                        : "Not started because project instructions could not be refreshed. " + approvalChange.Error;
+                    AppendDeferredToolResults(round, reason);
+                    await RecordNotStartedRoundAsync(roundRecords, cancellationToken).ConfigureAwait(false);
+                    if (approvalChange.Status              == InstructionBoundaryStatus.Failed ||
+                        instructionDeferralsSinceExecution >= 1)
+                        return await FinishAsync(new AgentResult
+                        {
+                            Status = AgentStatus.Failed,
+                            Error = approvalChange.Error ??
+                                    "Project instructions changed again after the tool round was already deferred once.",
+                            Steps          = steps,
+                            ToolExecutions = toolExecutions,
+                            Compactions    = compactions
+                        }).ConfigureAwait(false);
+                    var changedEvent = await approvalBoundary
+                                            .ApplyToolRoundUpdateAsync(roundRecords.Values.ToArray(), cancellationToken)
+                                            .ConfigureAwait(false);
+                    await PublishInstructionChangedAsync(changedEvent, cancellationToken).ConfigureAwait(false);
+                    instructionDeferralsSinceExecution++;
+                    continue;
+                }
+
+                var dispatchDeferred = false;
+                for (var dispatchIndex = 0; dispatchIndex < authorized.Count && !dispatchDeferred; dispatchIndex++)
+                {
+                    var item = authorized[dispatchIndex];
+                    if (_instructionBoundary is not null)
+                    {
+                        var dispatchCheck = await _instructionBoundary
+                                                 .RecheckBeforeDispatchAsync(round.Where(candidate =>
+                                                                                              candidate.Preparation is
+                                                                                                  not
+                                                                                                  null)
+                                                                                .Select(candidate =>
+                                                                                              candidate.Preparation!)
+                                                                                .ToArray(), cancellationToken)
+                                                 .ConfigureAwait(false);
+                        if (dispatchCheck.Status is InstructionBoundaryStatus.Failed
+                                                 or InstructionBoundaryStatus.Updated)
+                        {
+                            var deferred = authorized.SkipWhile(candidate => !ReferenceEquals(candidate, item))
+                                                     .ToArray();
+                            var deferredCalls = deferred.Select(candidate => candidate.RoundCall).ToArray();
+                            var reason = dispatchCheck.Status == InstructionBoundaryStatus.Updated
+                                ? $"Not started because project instructions changed to revision {dispatchCheck.NewRevision}; the tool round will be retried."
+                                : "The tool was not started because project instructions could not be refreshed. " +
+                                  dispatchCheck.Error;
+                            AppendDeferredToolResults(deferredCalls, reason);
+
+                            if (dispatchCheck.Status == InstructionBoundaryStatus.Updated)
+                            {
+                                if (instructionDeferralsSinceExecution >= 1)
+                                {
+                                    await RecordNotStartedCallsAsync(roundRecords, deferredCalls, cancellationToken)
+                                       .ConfigureAwait(false);
+                                    return await FinishAsync(new AgentResult
+                                    {
+                                        Status = AgentStatus.Failed,
+                                        Error =
+                                            "Project instructions changed again after the tool round was already deferred once.",
+                                        Steps          = steps,
+                                        ToolExecutions = toolExecutions,
+                                        Compactions    = compactions
+                                    }).ConfigureAwait(false);
+                                }
+
+                                await RecordNotStartedCallsAsync(roundRecords, deferredCalls, cancellationToken)
+                                   .ConfigureAwait(false);
+                                var changedEvent = await _instructionBoundary
+                                                        .ApplyToolRoundUpdateAsync(deferred.Select(candidate =>
+                                                                                   roundRecords
+                                                                                       [candidate.RoundCall.Call.Id])
+                                                                     .ToArray(), cancellationToken)
+                                                        .ConfigureAwait(false);
+                                await PublishInstructionChangedAsync(changedEvent, cancellationToken)
+                                   .ConfigureAwait(false);
+                                instructionDeferralsSinceExecution++;
+                                dispatchDeferred = true;
+                                break;
+                            }
+
+                            await RecordNotStartedCallsAsync(roundRecords, deferredCalls, cancellationToken)
+                               .ConfigureAwait(false);
+                            return await FinishAsync(new AgentResult
+                            {
+                                Status         = AgentStatus.Failed,
+                                Error          = dispatchCheck.Error,
+                                Steps          = steps,
+                                ToolExecutions = toolExecutions,
+                                Compactions    = compactions
+                            }).ConfigureAwait(false);
+                        }
+                    }
+
                     if (!item.Authorization.Allowed)
                     {
                         _context.Append(ChatMessage.Tool(item.RoundCall.Call.FunctionName, item.RoundCall.Call.Id,
@@ -363,6 +609,8 @@ public sealed class AgentLoop
                         throw;
                     }
 
+                    // 首个真实启动构成新的安全推进边界；后续规则变化重新获得一次延期预算。
+                    instructionDeferralsSinceExecution = 0;
                     toolExecutions++;
                     ToolResult result;
                     try
@@ -455,6 +703,9 @@ public sealed class AgentLoop
                                             cancellationToken)
                        .ConfigureAwait(false);
                 }
+
+                if (dispatchDeferred)
+                    continue;
             }
 
             return await FinishAsync(new AgentResult
@@ -640,6 +891,62 @@ public sealed class AgentLoop
     ///     </para>
     /// </summary>
     private void EnsureCompleteToolGroups() => ChatHistoryInvariants.EnsureCompleteToolGroups(_context.Messages);
+
+    /// <summary>
+    ///     <para>发布已可靠提交的项目指令元数据事件；null 表示本次边界没有生效变化。</para>
+    ///     <para>Publishes metadata for a reliably committed instruction change; null means no effective change.</para>
+    /// </summary>
+    private async ValueTask PublishInstructionChangedAsync(
+        ProjectInstructionsChanged? payload, CancellationToken cancellationToken)
+    {
+        if (payload is null) return;
+        await PublishEventAsync(HostEventKind.ProjectInstructionsChanged, payload, cancellationToken)
+           .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    ///     <para>为整轮准备对象绑定同一指令覆盖凭据，保留工具私有执行计划。</para>
+    ///     <para>Binds one instruction-coverage credential to every prepared plan while preserving tool-private state.</para>
+    /// </summary>
+    private static IReadOnlyList<RoundCall> BindInstructionCoverage(
+        IReadOnlyList<RoundCall> round, InstructionCoverage? coverage)
+    {
+        if (coverage is null) return round;
+
+        var bound = new List<RoundCall>(round.Count);
+        foreach (var item in round)
+            bound.Add(item.Preparation is null
+                          ? item
+                          : RoundCall.Ready(item.Call, item.Tool!, item.Preparation.WithInstructionCoverage(coverage)));
+
+        return bound;
+    }
+
+    private void AppendDeferredToolResults(IReadOnlyList<RoundCall> round, string reason)
+    {
+        foreach (var item in round)
+        {
+            _toolCallRecords.Last(record => record.CallId == item.Call.Id).NotStartedReason = reason;
+            _context.Append(ChatMessage.Tool(item.Call.FunctionName, item.Call.Id, reason));
+        }
+    }
+
+    private async Task RecordNotStartedRoundAsync(
+        Dictionary<string, ToolCallRecord> records, CancellationToken cancellationToken)
+    {
+        if (_recorder is null) return;
+        foreach (var record in records.Values)
+            await _recorder.RecordNotStartedAsync(record.Snapshot(), cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task RecordNotStartedCallsAsync(
+        Dictionary<string, ToolCallRecord> records, IReadOnlyList<RoundCall> calls, CancellationToken cancellationToken)
+    {
+        if (_recorder is null) return;
+        foreach (var call in calls)
+            await _recorder.RecordNotStartedAsync(records[call.Call.Id].Snapshot(), cancellationToken)
+                           .ConfigureAwait(false);
+    }
 
     /// <summary>
     ///     <para>
@@ -1035,7 +1342,7 @@ public sealed class AgentLoop
 
             case PermissionDecision.Ask :
                 var approvalProvider = _approver ?? throw new InvalidOperationException(
-                 "An approval provider is required when the permission engine returns Ask.");
+                     "An approval provider is required when the permission engine returns Ask.");
                 await PublishEventAsync(HostEventKind.ApprovalRequested, preparation, cancellationToken)
                    .ConfigureAwait(false);
                 var action = await approvalProvider.PromptAsync(preparation, cancellationToken);

@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json.Nodes;
 using TinyHarness.Core.Models.ChatCompletions;
+using TinyHarness.Core.Models.ProjectInstructions;
 using TinyHarness.Core.Models.Runtime;
 using TinyHarness.Core.Models.Tools;
 using TinyHarness.Core.Services.Runtime;
@@ -204,6 +205,13 @@ public sealed class ShellTool : ITool
             SessionGrantConstraint = grantConstraint,
             ExecutionPolicy        = _executionPolicy?.PolicyIdentity,
             TargetPaths            = [workingDirectory],
+            InstructionScopes = workspaceExecutable
+                ?
+                [
+                    new InstructionScope(workingDirectory, InstructionScopeKind.Directory),
+                    new InstructionScope(command.Executable, InstructionScopeKind.File)
+                ]
+                : [new InstructionScope(workingDirectory, InstructionScopeKind.Directory)],
             ExecutionPlan = new PreparedProcessExecution(command.Executable,
                                                          Array.AsReadOnly(command.Arguments.ToArray()),
                                                          workingDirectory, timeoutSeconds, workspaceExecutable,
@@ -222,12 +230,14 @@ public sealed class ShellTool : ITool
             return Failed($"Working directory not found: {_workspace.ToDisplay(plan.WorkingDirectory)}");
 
         _workspace.EnsureFinalTargetInside(plan.WorkingDirectory, true, "Working directory");
+        preparation.Coverage?.EnsureCoveredDirectory(plan.WorkingDirectory);
         if (plan.WorkspaceExecutable)
         {
             if (!File.Exists(plan.Executable))
                 return Failed($"Executable not found: {_workspace.ToDisplay(plan.Executable)}");
 
             _workspace.EnsureFinalTargetInside(plan.Executable, false, "Executable");
+            preparation.Coverage?.EnsureCoveredDirectory(Path.GetDirectoryName(plan.Executable)!);
         }
 
         cancellationToken.ThrowIfCancellationRequested();

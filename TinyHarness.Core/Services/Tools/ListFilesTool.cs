@@ -1,5 +1,6 @@
 using System.Text.Json.Nodes;
 using TinyHarness.Core.Models.ChatCompletions;
+using TinyHarness.Core.Models.ProjectInstructions;
 using TinyHarness.Core.Models.Tools;
 using TinyHarness.Core.Services.Runtime;
 
@@ -79,7 +80,15 @@ public sealed class ListFilesTool(Workspace workspace, WorkerReadPolicy? workerP
             Summary = $"list_files {workspace.ToDisplay(absolute)}" + (recursive
                 ? maxDepth is null ? " (recursive)" : $" (recursive, depth {maxDepth})"
                 : string.Empty),
-            TargetPaths = [absolute]
+            TargetPaths = [absolute],
+            InstructionScopes =
+            [
+                new InstructionScope(absolute,
+                                     recursive
+                                         ? InstructionScopeKind.RecursiveDirectory
+                                         : InstructionScopeKind.Directory,
+                                     maxDepth ?? int.MaxValue, MaxEntries)
+            ]
         };
     }
 
@@ -112,7 +121,10 @@ public sealed class ListFilesTool(Workspace workspace, WorkerReadPolicy? workerP
         var result = DirectoryWalker.CollectEntries(absolute, recursive, maxDepth, MaxEntries, cancellationToken,
                                                     workerPolicy is null
                                                         ? null
-                                                        : child => !workerPolicy.IsEntryAllowed(child));
+                                                        : child => !workerPolicy.IsEntryAllowed(child),
+                                                    preparation.Coverage is { } coverage
+                                                        ? coverage.EnsureCoveredDirectory
+                                                        : null);
         if (result.Entries.Count == 0)
             return Task.FromResult(new ToolResult
             {

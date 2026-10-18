@@ -219,6 +219,32 @@ public sealed class PermissionEngine
 
     /// <summary>
     ///     <para>
+    ///         清理本次运行内的临时允许状态；保留显式拒绝和 NeedsInspection 阻断。
+    ///     </para>
+    ///     <para>
+    ///         Clears temporary allow state for the current run while retaining explicit denials
+    ///         and the NeedsInspection block.
+    ///     </para>
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         用于项目指令版本变化等使旧计划失效的安全边界。一次性预授权和运行期 allow 一并失效；
+    ///         deny 与阻断不因规则刷新被移除，后续计划必须重新授权。
+    ///     </para>
+    ///     <para>
+    ///         Used at safety boundaries such as a project-instruction revision invalidating an old plan.
+    ///         One-shot and run-scoped allows both lapse; denials and blocking survive, and later plans
+    ///         must be authorized again.
+    ///     </para>
+    /// </remarks>
+    public void ClearTemporaryAllows()
+    {
+        _oneShotApprovals.Clear();
+        _sessionGrants.Clear();
+    }
+
+    /// <summary>
+    ///     <para>
     ///         设置或清除非只读阻断，任何授权或命令规则均不得绕过。
     ///     </para>
     ///     <para>

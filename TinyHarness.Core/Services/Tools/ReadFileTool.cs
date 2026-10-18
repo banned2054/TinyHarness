@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json.Nodes;
 using TinyHarness.Core.Models.ChatCompletions;
+using TinyHarness.Core.Models.ProjectInstructions;
 using TinyHarness.Core.Models.Tools;
 using TinyHarness.Core.Services.Runtime;
 
@@ -130,7 +131,8 @@ public sealed class ReadFileTool(Workspace workspace, WorkerReadPolicy? workerPo
             Summary = $"read_file {workspace.ToDisplay(absolute)}"           +
                       (offset > 1 ? $" (from line {offset})" : string.Empty) +
                       (limit is not null ? $" (up to {limit} lines)" : string.Empty),
-            TargetPaths = [absolute]
+            TargetPaths       = [absolute],
+            InstructionScopes = [new InstructionScope(absolute, InstructionScopeKind.File)]
         };
     }
 
@@ -163,6 +165,7 @@ public sealed class ReadFileTool(Workspace workspace, WorkerReadPolicy? workerPo
         // A second layer beyond the workspace link boundary: the resolved final target must also be
         // inside the worker read scope.
         workerPolicy?.EnsureFinalAccessAllowed(absolute);
+        preparation.Coverage?.EnsureCoveredDirectory(Path.GetDirectoryName(absolute)!);
 
         var display    = workspace.ToDisplay(absolute);
         var fileLength = new FileInfo(absolute).Length;

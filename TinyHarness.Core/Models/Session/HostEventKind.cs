@@ -156,5 +156,17 @@ public enum HostEventKind
     ///         .
     ///     </para>
     /// </summary>
-    HistoryItemCompleted = 12
+    HistoryItemCompleted = 12,
+
+    /// <summary>
+    ///     <para>
+    ///         一组项目指令已在统一日志可靠提交并生效；负载为
+    ///         <see cref="ProjectInstructionsChanged" /> 的元数据摘要，不包含规则正文。
+    ///     </para>
+    ///     <para>
+    ///         A project-instruction set was reliably committed and became effective; the payload is the
+    ///         metadata-only <see cref="ProjectInstructionsChanged" /> summary and never includes rule text.
+    ///     </para>
+    /// </summary>
+    ProjectInstructionsChanged = 13
 }

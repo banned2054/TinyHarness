@@ -37,3 +37,25 @@ public sealed record ModelUsage(
     int?    OutputTokens,
     string? FinishReason,
     bool    SummaryRequest);
+
+/// <summary>
+///     <para>
+///         项目指令生效事件的负载（<see cref="HostEventKind.ProjectInstructionsChanged" />）：
+///         只携带版本、来源数量和探测摘要，不携带规则正文或授权语义。
+///     </para>
+///     <para>
+///         Payload for <see cref="HostEventKind.ProjectInstructionsChanged" />: revision, source count
+///         and discovery metadata only, never rule text or authorization semantics.
+///     </para>
+/// </summary>
+public sealed record ProjectInstructionsChanged(
+    string                 Action,
+    string                 Revision,
+    string?                PreviousRevision,
+    string                 Reason,
+    int                    DocumentCount,
+    int                    ProbedDirectoryCount,
+    string                 DiscoveryFingerprint,
+    string                 RenderedHash,
+    string                 RendererVersion,
+    IReadOnlyList<string>? Sources = null);

@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using TinyHarness.Core.Models.ProjectInstructions;
 using TinyHarness.Core.Services.Tools;
 
 namespace TinyHarness.Core.Models.Tools;
@@ -95,8 +96,9 @@ public sealed record ToolResult
 /// </summary>
 public sealed class ToolPreparation
 {
-    private readonly JsonObject            _arguments   = new();
-    private readonly IReadOnlyList<string> _targetPaths = [];
+    private readonly JsonObject                      _arguments         = new();
+    private readonly IReadOnlyList<InstructionScope> _instructionScopes = [];
+    private readonly IReadOnlyList<string>           _targetPaths       = [];
 
     /// <summary>
     ///     <para>工具私有的不可变执行状态；审批后不可信 JSON 无法选择内部执行路径。</para>
@@ -106,6 +108,19 @@ public sealed class ToolPreparation
     ///     </para>
     /// </summary>
     internal object? ExecutionPlan { get; init; }
+
+    /// <summary>
+    ///     <para>
+    ///         一次工具轮预检生成的指令覆盖凭据；仅由 Agent Loop 通过
+    ///         <see cref="WithInstructionCoverage" /> 绑定，工具执行期消费，不序列化。
+    ///     </para>
+    ///     <para>
+    ///         Instruction coverage credential created by one tool-round preflight; bound only by
+    ///         the Agent Loop through <see cref="WithInstructionCoverage" />, consumed at execution
+    ///         time, and never serialized.
+    ///     </para>
+    /// </summary>
+    internal InstructionCoverage? Coverage { get; init; }
 
     public required string ToolName { get; init; }
 
@@ -211,5 +226,57 @@ public sealed class ToolPreparation
             ArgumentNullException.ThrowIfNull(value);
             _targetPaths = Array.AsReadOnly(value.ToArray());
         }
+    }
+
+    /// <summary>
+    ///     <para>
+    ///         Prepare 阶段声明的指令作用域：仅描述本次调用将访问的文件／目录／递归范围，
+    ///         不读取规则，也不包含授权。
+    ///     </para>
+    ///     <para>
+    ///         Instruction scopes declared during Prepare. They describe only the file, directory,
+    ///         or recursive range this invocation will access; they read no rules and carry no authority.
+    ///     </para>
+    /// </summary>
+    public IReadOnlyList<InstructionScope> InstructionScopes
+    {
+        get => _instructionScopes;
+        init
+        {
+            ArgumentNullException.ThrowIfNull(value);
+            _instructionScopes = Array.AsReadOnly(value.ToArray());
+        }
+    }
+
+    /// <summary>
+    ///     <para>
+    ///         生成绑定指令覆盖凭据的不可变派生计划；保留原参数、能力、摘要、约束、目标路径、
+    ///         私有执行计划与已声明作用域，原对象保持不变。
+    ///     </para>
+    ///     <para>
+    ///         Returns an immutable derivation bound to an instruction coverage credential while
+    ///         preserving the original arguments, capability, summary, constraints, target paths,
+    ///         private execution plan, and declared scopes; the source instance is left unchanged.
+    ///     </para>
+    /// </summary>
+    public ToolPreparation WithInstructionCoverage(InstructionCoverage coverage)
+    {
+        ArgumentNullException.ThrowIfNull(coverage);
+        return new ToolPreparation
+        {
+            ToolName               = ToolName,
+            CallId                 = CallId,
+            Arguments              = _arguments,
+            Capability             = Capability,
+            Summary                = Summary,
+            RiskLevel              = RiskLevel,
+            SessionConstraint      = SessionConstraint,
+            SessionGrantConstraint = SessionGrantConstraint,
+            ExecutionPolicy        = ExecutionPolicy,
+            TargetPaths            = _targetPaths,
+            InstructionScopes      = _instructionScopes,
+            ExecutionPlan          = ExecutionPlan,
+            Coverage               = coverage
+        };
     }
 }
