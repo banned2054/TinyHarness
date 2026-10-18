@@ -30,9 +30,11 @@
 
 早期开发中，命令、配置和存储格式可能随里程碑变化。
 
-目前已实现：单任务 `run`、交互式多轮 `chat`、受保护会话存储（严格离线的 `session list` / `session show`，并支持 `chat --session <id>` 跨进程续聊）、离线优先的配置管理、只读 MCP worker 和可选的 Windows 沙箱管理。M14.1 已加入有界的根／局部 `AGENTS.md` 加载、工具边界与续聊刷新，以及首次非空发送才创建新 chat 会话。宿主强制的只读/实施模式仍属于后续计划。默认测试与构建不调用付费模型；统一日志上的真实模型续聊未验证。
+目前已实现：单任务 `run`、交互式多轮 `chat`、受保护会话存储（严格离线的 `session list` / `session show`，并支持 `chat --session <id>` 跨进程续聊）、离线优先的配置管理、只读 MCP worker 和可选的 Windows 沙箱管理。M14.1 已加入有界的根／局部 `AGENTS.md` 加载、工具边界与续聊刷新，以及首次非空发送才创建新 chat 会话。M14.2 加入统一基础行为提示词，覆盖自然语言任务范围、工具策略、验证与交付。默认测试与构建不调用付费模型；真实模型的指令遵循和统一日志续聊未验证。
 
 M14.1 离线回归通过：**853 总、851 通过、2 项因符号链接创建权限跳过、0 失败**；scale 独立 1/1 通过，原预算不变。NativeAOT 编译与仓库外 smoke 通过，验证规则初始加载、更新、续聊来源完整性、历史和已确认 patch diff。证据：`artifacts/test-results/m14-regression.trx`、`artifacts/test-results/m14-scale.trx`、`artifacts/m14-instructions-scale-results.json`、`artifacts/m14-instructions-native-smoke.txt`。兼容、命令及未验证边界见[实施与验收记录](project-instructions-design.md#14-实施结果与本地验证)。
+
+M14.2 工程验证通过：**860 总、858 通过、2 跳过、0 失败**，包含 7 个提示词接入用例；NativeAOT 与仓库外原生 smoke 也已通过。只维护当前内置提示词，创建和续聊均使用它；提示词不一致时仍严格拒绝续聊。详见[系统提示词设计与证据](system-prompt-design.md)，模型遵循能力尚待单独评估。
 
 ## ✨ 特性
 

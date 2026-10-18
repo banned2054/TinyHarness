@@ -9,7 +9,7 @@
 - 源码核查基线：TinyHarness `10a697ab26967cdf2d4a1196e7f88de892f8738b`，核查时工作区干净。
 - 本地参考：`C:\Code\Rust\codex`，HEAD `1343180d6c83a7d58e20dc4394678570aabde79a`；结论来自该 checkout 的源码阅读，不代表在线最新版或运行验证。
 - [PLAN.md](../PLAN.md) 决定全局范围和顺序；本文细化其 §8.1。已有日志、协议和中断契约继续以[会话持久化设计](session-persistence-design.md)为准；[AGENTS.md](../AGENTS.md)规定工作授权。
-- 本阶段只实现项目指令能力。Analyze / Implement 模式属于 M14 后续切片；任务中补充输入属于 M15，Git 差异与完整交付报告属于 M16，均不借本设计提前实现。
+- 本阶段只实现项目指令能力。用户后续确认 M14.2 聚焦[基础系统提示词](system-prompt-design.md)，不引入 Analyze / Implement 切换；任务中补充输入属于 M15，Git 差异与完整交付报告属于 M16，均不借本设计提前实现。
 
 阅读顺序：§2–§3 保留实施前源码核查与设计依据，§4–§13 定义契约和验收要求，§14 记录实际实施与本地证据。拟议名称与实际 API 的差异以 §14 为准，不把历史缺口当作当前缺陷。
 
@@ -336,7 +336,7 @@ rules-applied 与对应 canonical message 在同一 CommitCore 批次提交；�
 
 加载是宿主为工作区执行的受限读取，不是模型工具调用，也不每次询问“是否读取 AGENTS”。这不授予 shell、写文件、Git 或联网权限。规则中的“自动提交／发布／读取密钥”等文字都不能改变 PermissionEngine、沙箱设置或用户授权。
 
-M14.1 完成不等于已经有 Analyze / Implement 强制模式。后续模式接入仍在既有权限引擎和宿主中实现，不创建另一条可绕过指令检查的执行路径。
+M14.1 不提供讨论／实施的语义判断。后续 M14.2 通过基础系统提示词规范自然对话行为，不引入 Analyze / Implement 强制模式；既有权限与指令检查链路继续有效。
 
 ## 10. 推荐实施切片与文件影响
 
@@ -349,7 +349,7 @@ M14.1 完成不等于已经有 Analyze / Implement 强制模式。后续模式�
 | C：局部规则与执行边界 | 指令作用域、递归 coverage、延期工具轮、审批后和 dispatch 检查 | ITool／ToolPreparation、五个工具、DirectoryWalker、AgentLoop、PermissionEngine 的临时 grant 生命周期 | 多目标／递归／AGENTS 自修改有证据；不破坏工具原子组和审批 |
 | D：展示与统一验收 | 规则历史／事件、离线检查、回归与 NativeAOT smoke | SessionHistoryItem、recorder、reader、ConsoleHostEventSink、测试 fixture | 全部矩阵通过且旧路径退出，才将 M14.1 标为完成 |
 
-A、B 可先取得局部证据，但 C、D 未完成前不能宣称完整支持局部 AGENTS；不能先在 README 宣布“自动遵守全部项目规则”。后续 M14 模式切片另行规划。
+A、B 可先取得局部证据，但 C、D 未完成前不能宣称完整支持局部 AGENTS；不能先在 README 宣布“自动遵守全部项目规则”。后续 M14.2 系统提示词的工程接入与模型遵循评估分别验收。
 
 ## 11. 过时设计、替换及清理清单
 
@@ -462,4 +462,4 @@ dotnet publish TinyHarness.Cli/TinyHarness.Cli.csproj -c Release -r win-x64 --se
 - 两项符号链接创建测试因本机权限跳过：新 loader 的规则 leaf／目录 link 场景，以及既有 lock/log leaf link 场景；不能把跳过计作通过，实际 junction／ACL 权限矩阵仍需对应环境复验。
 - 真实模型、GUI、断电持久性及实际 Windows OS 隔离没有在本轮验证；只读 MCP worker 仍使用既有 focus／敏感排除任务包。
 - 文件读取前后观测和 dispatch 检查不能提供文件系统原子快照；恶意宿主进程仍可能在检查后制造竞态。shell 只覆盖 cwd 与明确识别的工作区内 executable 作用域，不声称推断脚本的全部文件访问。
-- 本地验证完成不表示整个 M14、Analyze/Implement 强制模式或 M15–M17 已完成；本轮未执行 Git 写操作、远端、发包或部署。
+- M14.1 本地验证不代表后续 M14.2 的模型遵循评估或 M15–M17 已完成；M14 的最新范围见 PLAN §8.2。本轮未执行 Git 写操作、远端、发包或部署。

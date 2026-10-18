@@ -2,6 +2,7 @@ using System.Text;
 using TinyHarness.Cli.Commands;
 using TinyHarness.Cli.Exceptions;
 using TinyHarness.Cli.Models;
+using TinyHarness.Cli.Prompts;
 using TinyHarness.Cli.Services;
 using TinyHarness.Core.Exceptions;
 using TinyHarness.Core.Models.Agent;
@@ -32,24 +33,6 @@ namespace TinyHarness.Cli;
 /// </summary>
 internal static class Program
 {
-    /// <summary>
-    ///     <para>run 与 chat 共享的工作区系统提示。</para>
-    ///     <para>The workspace system prompt shared by run and chat.</para>
-    /// </summary>
-    /// <remarks>
-    ///     <para>会话内提示固定；续聊必须通过系统提示一致性校验。</para>
-    ///     <para>The prompt is fixed within a session; continuation must pass prompt consistency checks.</para>
-    /// </remarks>
-    internal const string WorkspaceSystemPrompt =
-        "You are TinyHarness, a local coding harness that inspects and modifies a workspace. " +
-        "Use list_files, search_text and read_file to inspect, apply_patch to modify files, and shell to run commands. " +
-        "For ordinary commands use shell mode 'direct' with executable and an arguments array. Use mode 'shell' " +
-        "with a shell flavor and command string only when pipelines, redirection, or other shell syntax is required. " +
-        "Tool paths are relative to the workspace root. " +
-        "apply_patch takes a unified diff: '--- a/path' and '+++ b/path' headers, then '@@ -s[,c] +s[,c] @@' " +
-        "hunks with ' ' (context), '-' (remove) and '+' (add) line prefixes. New files use '--- /dev/null'. " +
-        "Writes and commands may require the user's approval before they run; a denial is returned to you so you can adjust.";
-
     /// <summary>
     ///     <para>调度 CLI 命令，并将入口异常转换为诊断输出和退出码。</para>
     ///     <para>Dispatches CLI commands and converts entry-point exceptions into diagnostics and exit codes.</para>
@@ -190,7 +173,7 @@ internal static class Program
                                              composition.Options,
                                              composition.Model,
                                              composition.Tools,
-                                             WorkspaceSystemPrompt,
+                                             WorkspacePrompts.Current,
                                              composition.Permissions,
                                              approver,
                                              new ConsoleHostEventSink(composition.KnownSecrets),
@@ -289,7 +272,7 @@ internal static class Program
                                            composition.Options,
                                            composition.Model,
                                            composition.Tools,
-                                           WorkspaceSystemPrompt,
+                                           WorkspacePrompts.Current,
                                            composition.Permissions,
                                            new ConsoleApprovalProvider(reader, Console.Out, composition.KnownSecrets),
                                            new ConsoleHostEventSink(composition.KnownSecrets),
@@ -312,13 +295,13 @@ internal static class Program
                 var restored = SessionResume.Restore(writer.LoadedSnapshot!, config.WorkspaceRoot,
                                                      new SessionModelIdentity(config.Model, config.Endpoint,
                                                                               config.ChatApi),
-                                                     WorkspaceSystemPrompt, composition.Options.Context);
+                                                     WorkspacePrompts.Current, composition.Options.Context);
                 resumedNote = $"resumed    : {restored.Session.Turns.Count} turns from commit " +
                               $"{writer.CommitSequence} ({writer.LoadedSnapshot!.UpdatedUtc.LocalDateTime:yyyy-MM-dd HH:mm:ss})";
                 if (restored.RewoundTail)
                     resumedNote += "\n  rewound    : the last incomplete tool round was dropped from the model view";
                 host = new ChatSessionHost(restored.Session, restored.Context, composition.Options, composition.Model,
-                                           composition.Tools, WorkspaceSystemPrompt, composition.Permissions,
+                                           composition.Tools, WorkspacePrompts.Current, composition.Permissions,
                                            new ConsoleApprovalProvider(reader, Console.Out, composition.KnownSecrets),
                                            new ConsoleHostEventSink(composition.KnownSecrets),
                                            null,
@@ -609,18 +592,13 @@ internal static class Program
         };
 
         var sessionDirectory = Path.Combine(Path.GetTempPath(), $"tinyharness-smoke-session-{Guid.NewGuid():N}");
-        const string systemPrompt =
-            "You are TinyHarness, a local coding harness that inspects and modifies a workspace. " +
-            "Use list_files, search_text and read_file to inspect, apply_patch to modify files, and shell to run commands. " +
-            "Use shell mode 'direct' for executable/arguments and mode 'shell' only for shell syntax. " +
-            "Tool paths are relative to the workspace root. " +
-            "Writes may require the user's approval before they are applied.";
+        const string systemPrompt = WorkspacePrompts.Current;
         AgentResult result;
-        string?     persistenceWarning;
-        string?     sessionId;
-        string?     sessionLogPath;
-        var         instructionLoader   = new ProjectInstructionLoader(workspace);
-        var         initialInstructions = await instructionLoader.LoadAsync(null, [], cts.Token).ConfigureAwait(false);
+        string? persistenceWarning;
+        string? sessionId;
+        string? sessionLogPath;
+        var instructionLoader = new ProjectInstructionLoader(workspace);
+        var initialInstructions = await instructionLoader.LoadAsync(null, [], cts.Token).ConfigureAwait(false);
         using (var host = new ChatSessionHost(fixture.Root,
                                               new SessionModelIdentity(config.Model,
                                                                        config.Endpoint ?? "offline-smoke://local",
@@ -676,6 +654,8 @@ internal static class Program
                                                          config.ChatApi);
             var restoration = SessionResume.Restore(restoredSnapshot, fixture.Root, modelIdentity, systemPrompt,
                                                     options.Context);
+            if (restoration.Context.BuildModelView()[0].Content != WorkspacePrompts.Current)
+                throw new SessionStoreException("Smoke did not retain the current workspace behavior prompt.");
             var historyReader = new SessionHistoryReader();
             var historyPage = await historyReader.ReadPageAsync(sessionDirectory, sessionId,
                                                                 SessionHistoryReader.MaxPageItems, null, cts.Token)
@@ -714,7 +694,7 @@ internal static class Program
                                          "Smoke refreshed project rules: preserve confirmed file facts.\n", cts.Token)
                       .ConfigureAwait(false);
             using (var resumedWriter = await SessionStoreWriter.OpenExistingAsync(sessionDirectory, sessionId,
-                       null, cts.Token).ConfigureAwait(false))
+                            null, cts.Token).ConfigureAwait(false))
             using (var refreshedHost = new ChatSessionHost(restoration.Session, restoration.Context, options,
                                                            new SmokeScriptClient([new SmokeStep()]), tools,
                                                            systemPrompt, permissions, approver,
@@ -744,8 +724,11 @@ internal static class Program
 
             await
                 Console.Out.WriteLineAsync("  session log  : verified read, restore, history and confirmed patch diff");
+            await Console.Out.WriteLineAsync("  prompt       : verified current behavior prompt after journal restore");
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or SessionStoreException
+        catch (Exception ex) when (ex is IOException
+                                      or UnauthorizedAccessException
+                                      or SessionStoreException
                                       or InvalidOperationException)
         {
             await Console.Error.WriteLineAsync($"  session log verification failed: {ex.Message}");
@@ -768,7 +751,7 @@ internal static class Program
                                    ? StringComparison.OrdinalIgnoreCase
                                    : StringComparison.Ordinal) || !Path.GetFileName(target)
                                                                        .StartsWith("tinyharness-smoke-session-",
-                                                                            StringComparison.Ordinal))
+                                                                                 StringComparison.Ordinal))
             throw new InvalidOperationException($"Refusing to delete unexpected smoke session directory '{target}'.");
         if (Directory.Exists(target)) Directory.Delete(target, true);
     }
