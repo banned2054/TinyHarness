@@ -101,6 +101,14 @@ internal sealed class ConsoleHostEventSink(
                    .ConfigureAwait(false);
                 break;
 
+            case HostEventKind.ProjectInstructionsChanged when @event.Payload is ProjectInstructionsChanged rules :
+                await WriteLineAsync($"project instructions: {rules.DocumentCount} document(s), " +
+                                     $"revision {rules.Revision} ({rules.Reason})", cancellationToken)
+                   .ConfigureAwait(false);
+                foreach (var source in rules.Sources ?? [])
+                    await WriteLineAsync($"  source: {source}", cancellationToken).ConfigureAwait(false);
+                break;
+
             case HostEventKind.RunError when @event.Payload is string error :
                 await WriteLineAsync($"error: {error}", cancellationToken).ConfigureAwait(false);
                 break;

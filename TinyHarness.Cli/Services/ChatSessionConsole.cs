@@ -33,10 +33,11 @@ namespace TinyHarness.Cli.Services;
 ///         each interruption prompts once.
 ///     </para>
 /// </remarks>
-internal sealed class ChatSessionConsole
+internal sealed class ChatSessionConsole : IDisposable
 {
-    private readonly ChatCancellation      _cancellation;
-    private readonly ChatSessionHost       _host;
+    private readonly ChatCancellation                                _cancellation;
+    private readonly Func<CancellationToken, Task<ChatSessionHost>>? _hostFactory;
+
     private readonly TextReader            _input;
     private readonly TextWriter            _output;
     private readonly DisplaySecretRedactor _redactor;
@@ -59,7 +60,26 @@ internal sealed class ChatSessionConsole
         ArgumentNullException.ThrowIfNull(input);
         ArgumentNullException.ThrowIfNull(output);
         ArgumentNullException.ThrowIfNull(cancellation);
-        _host         = host;
+        Host          = host;
+        _input        = input;
+        _output       = output;
+        _cancellation = cancellation;
+        _redactor     = new DisplaySecretRedactor(knownSecrets);
+    }
+
+    /// <summary>
+    ///     <para>建立等待首次非空发送的入口；工厂须先预检规则再创建宿主。</para>
+    ///     <para>Creates an entry awaiting its first nonblank submission; the factory checks rules before creating a host.</para>
+    /// </summary>
+    public ChatSessionConsole(Func<CancellationToken, Task<ChatSessionHost>> hostFactory, TextReader       input,
+                              TextWriter                                     output,      ChatCancellation cancellation,
+                              IReadOnlyDictionary<string, string>?           knownSecrets = null)
+    {
+        ArgumentNullException.ThrowIfNull(hostFactory);
+        ArgumentNullException.ThrowIfNull(input);
+        ArgumentNullException.ThrowIfNull(output);
+        ArgumentNullException.ThrowIfNull(cancellation);
+        _hostFactory  = hostFactory;
         _input        = input;
         _output       = output;
         _cancellation = cancellation;
@@ -70,7 +90,30 @@ internal sealed class ChatSessionConsole
     ///     <para>本控制台服务的会话。</para>
     ///     <para>The session served by this console.</para>
     /// </summary>
-    public ChatSession Session => _host.Session;
+    public ChatSession Session => Host?.Session ??
+                                  throw new
+                                      InvalidOperationException("No session exists before the first accepted submission.");
+
+    internal ChatSessionHost? Host { get; private set; }
+
+    /// <summary>
+    ///     <para>释放本入口通过工厂创建的宿主。</para>
+    ///     <para>Disposes the host created by this entry's factory.</para>
+    /// </summary>
+    public void Dispose()
+    {
+        if (_hostFactory is not null) Host?.Dispose();
+    }
+
+    /// <summary>
+    ///     <para>查询已创建的会话，不触发工厂。</para>
+    ///     <para>Queries the created session without invoking the factory.</para>
+    /// </summary>
+    public bool TryGetSession(out ChatSession? session)
+    {
+        session = Host?.Session;
+        return session is not null;
+    }
 
     /// <summary>
     ///     <para>运行输入循环，直到 EOF、空闲 Ctrl+C 或会话取消。</para>
@@ -147,14 +190,20 @@ internal sealed class ChatSessionConsole
     /// </remarks>
     private async Task SubmitTurnAsync(string userInput, CancellationToken cancellationToken)
     {
-        var        turnNumber = _host.Session.Turns.Count + 1;
+        var        turnNumber = (Host?.Session.Turns.Count ?? 0) + 1;
         var        turnToken  = _cancellation.BeginTurn(cancellationToken);
         SessionRun run;
         try
         {
             try
             {
-                run = await _host.SubmitTurnAsync(userInput, turnToken);
+                if (Host is null)
+                {
+                    Host = await _hostFactory!(turnToken).ConfigureAwait(false);
+                    await _output.WriteLineAsync($"session    : {Host.Session.Id}").ConfigureAwait(false);
+                }
+
+                run = await Host.SubmitTurnAsync(userInput, turnToken);
             }
             catch (ArgumentException ex)
             {
@@ -167,6 +216,16 @@ internal sealed class ChatSessionConsole
                 await _output.WriteLineAsync(TerminalDisplay.Format($"cannot start a turn: {ex.Message}", _redactor));
                 return;
             }
+            catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException)
+            {
+                await _output.WriteLineAsync(TerminalDisplay.Format($"cannot start a turn: {ex.Message}", _redactor));
+                return;
+            }
+            catch (OperationCanceledException) when (Host is null)
+            {
+                await _output.WriteLineAsync("First submission cancelled before a session was created.");
+                return;
+            }
         }
         finally
         {
@@ -175,7 +234,7 @@ internal sealed class ChatSessionConsole
 
         await WriteTurnFooterAsync(turnNumber, run.Result!);
         // 保存不可靠必须在所属回合立即告知用户，不能以运行终态代替保存证据。
-        if (_host.PersistenceWarning is { Length: > 0 } warning)
+        if (Host.PersistenceWarning is { Length: > 0 } warning)
             await _output.WriteLineAsync(TerminalDisplay.Format($"warning: this turn was not reliably saved: {warning}",
                                                                 _redactor));
 
@@ -187,7 +246,7 @@ internal sealed class ChatSessionConsole
 
     private async Task PromptInspectionIfNeededAsync(CancellationToken cancellationToken)
     {
-        if (!_host.InspectionPending)
+        if (Host is null || !Host.InspectionPending)
         {
             _promptedInspectionNote  = null;
             _promptedInspectionRunId = null;
@@ -202,14 +261,14 @@ internal sealed class ChatSessionConsole
                                 State: ToolCallExecutionState
                                    .UnknownResult
                             }) == true)?.Id;
-        var note = _host.InspectionPendingNote;
+        var note = Host.InspectionPendingNote;
         if (note == _promptedInspectionNote && runId == _promptedInspectionRunId) return;
 
         _promptedInspectionNote  = note;
         _promptedInspectionRunId = runId;
-        if (await InspectionPrompt.ConfirmAsync(_host, _input, _output, _redactor, _cancellation.SessionToken))
+        if (await InspectionPrompt.ConfirmAsync(Host, _input, _output, _redactor, _cancellation.SessionToken))
         {
-            await _host.AcknowledgeInspectionAsync(cancellationToken);
+            await Host.AcknowledgeInspectionAsync(cancellationToken);
             _promptedInspectionNote  = null;
             _promptedInspectionRunId = null;
         }

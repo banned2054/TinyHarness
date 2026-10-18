@@ -81,6 +81,9 @@ internal sealed class SmokeWorkspace : IDisposable
         var workspace = new SmokeWorkspace(root);
         try
         {
+            await workspace.WriteAsync("AGENTS.md", "Smoke project rules: inspect before changing files.\n",
+                                       cancellationToken)
+                           .ConfigureAwait(false);
             await workspace.WriteAsync("sample.txt", "alpha needle\nbeta\ngamma needle", cancellationToken)
                            .ConfigureAwait(false);
             await workspace.WriteAsync("long.txt", new string('x', 20_000) + "\ntail", cancellationToken)

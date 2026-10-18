@@ -8,6 +8,8 @@ using TinyHarness.Core.Models.Tools;
 using TinyHarness.Core.Services.ChatCompletions;
 using TinyHarness.Core.Services.Context;
 using TinyHarness.Core.Services.Permissions;
+using TinyHarness.Core.Services.Persistence;
+using TinyHarness.Core.Services.ProjectInstructions;
 using TinyHarness.Core.Services.Session;
 using TinyHarness.Core.Services.Tools;
 
@@ -47,6 +49,100 @@ public class ChatSessionConsoleTests
             events);
 
     private static int Count(string text, string needle) => text.Split(needle).Length - 1;
+
+    [TestCase("")]
+    [TestCase("\n  \n\t\n")]
+    public async Task PendingEntry_EofAndBlankInputNeverCreateSession(string input)
+    {
+        var       creations    = 0;
+        using var cancellation = new ChatCancellation(false);
+        using var console = new ChatSessionConsole(_ =>
+        {
+            creations++;
+            return Task.FromResult(NewHost(new FakeChatClient()));
+        }, new StringReader(input), new StringWriter(), cancellation);
+        Assert.That(console.TryGetSession(out _), Is.False);
+        Assert.Throws<InvalidOperationException>(() => _ = console.Session);
+        Assert.That(await console.RunAsync(), Is.Zero);
+        Assert.That(creations, Is.Zero);
+        Assert.That(console.TryGetSession(out _), Is.False);
+    }
+
+    [Test]
+    public async Task PendingEntry_IdleCancellationDoesNotInvokeFactory()
+    {
+        var       creations    = 0;
+        using var cancellation = new ChatCancellation(false);
+        using var console = new ChatSessionConsole(_ =>
+        {
+            creations++;
+            return Task.FromResult(NewHost(new FakeChatClient()));
+        }, new StringReader("must not submit"), new StringWriter(), cancellation);
+        cancellation.RaiseCancel();
+        Assert.That(await console.RunAsync(), Is.EqualTo(130));
+        Assert.That(creations, Is.Zero);
+    }
+
+    [Test]
+    public async Task PendingEntry_FailedPreflightReturnsInputAndCreatesOnlyOnSuccessfulResend()
+    {
+        var attempts = 0;
+        var client   = new FakeChatClient();
+        client.Enqueue(FakeChatClient.Text("accepted"));
+        client.Enqueue(FakeChatClient.Text("followup"));
+        using var cancellation = new ChatCancellation(false);
+        var       output       = new StringWriter();
+        using var console = new ChatSessionConsole(_ =>
+        {
+            if (++attempts == 1) throw new InvalidDataException("AGENTS.md: invalid UTF-8");
+            return Task.FromResult(NewHost(client));
+        }, new StringReader("rejected\naccepted\nfollowup\n"), output, cancellation);
+        Assert.That(await console.RunAsync(), Is.Zero);
+        Assert.That(attempts, Is.EqualTo(2));
+        Assert.That(console.Session.Turns.Select(turn => turn.UserInput), Is.EqualTo(new[] { "accepted", "followup" }));
+        Assert.That(client.Requests, Is.EqualTo(2));
+        Assert.That(output.ToString(), Does.Contain("invalid UTF-8"));
+    }
+
+    [Test]
+    public async Task PendingEntry_FirstModelFailureStillRetainsOneRealTurn()
+    {
+        var       client       = new FakeChatClient { ThrownError = new IOException("model failure") };
+        using var cancellation = new ChatCancellation(false);
+        using var console = new ChatSessionConsole(_ => Task.FromResult(NewHost(client)),
+                                                   new StringReader("first input\n"), new StringWriter(), cancellation);
+        Assert.That(await console.RunAsync(), Is.Zero);
+        Assert.That(console.Session.Turns.Count, Is.EqualTo(1));
+        Assert.That(console.Session.Turns[0].Runs[0].Result!.Status, Is.EqualTo(AgentStatus.Failed));
+    }
+
+    [Test]
+    public async Task PendingEntry_InvalidRootRulesNeverCreateStoreOrCallModel()
+    {
+        using var workspace = new TestTempDir();
+        using var storage   = new TestTempDir();
+        workspace.WriteBytes("AGENTS.md", [0xC3, 0x28]);
+        var       store        = Path.Combine(storage.Root, "sessions");
+        var       client       = new FakeChatClient();
+        var       loader       = new ProjectInstructionLoader(workspace.Workspace);
+        using var cancellation = new ChatCancellation(false);
+        using var console = new ChatSessionConsole(async token =>
+        {
+            var initial = await loader.LoadAsync(null, [], token);
+            return new ChatSessionHost(workspace.Root,
+                                       new SessionModelIdentity("test-model", "https://example.invalid/v1",
+                                                                ChatApiKind.ChatCompletions),
+                                       new AgentOptions
+                                           { Model = "test-model", MaxAgentSteps = 8, DefaultToolTimeoutSeconds = 30 },
+                                       client, new ToolRegistry([]), SystemPrompt,
+                                       sessionWriterFactory : id => new SessionStoreWriter(store, id),
+                                       instructionLoader : loader, initialInstructions : initial);
+        }, new StringReader("first input\n"), new StringWriter(), cancellation);
+        Assert.That(await console.RunAsync(), Is.Zero);
+        Assert.That(console.TryGetSession(out _), Is.False);
+        Assert.That(client.Requests, Is.Zero);
+        Assert.That(Directory.Exists(store), Is.False);
+    }
 
     [Test]
     public async Task RunAsync_TwoTurns_StreamAnswerOnceAndShareContext()
@@ -292,7 +388,9 @@ public class ChatSessionConsoleTests
         using var host = new ChatSessionHost(session, new ConversationContext(),
                                              new AgentOptions
                                              {
-                                                 Model = "test-model", MaxAgentSteps = 8, DefaultToolTimeoutSeconds = 30
+                                                 Model                     = "test-model",
+                                                 MaxAgentSteps             = 8,
+                                                 DefaultToolTimeoutSeconds = 30
                                              }, client, new ToolRegistry([]), SystemPrompt);
         var input = new ScriptedInput("k", "first", "yes");
         input.Complete();

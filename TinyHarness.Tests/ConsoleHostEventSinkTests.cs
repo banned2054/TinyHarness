@@ -21,6 +21,22 @@ namespace TinyHarness.Tests;
 /// </summary>
 public class ConsoleHostEventSinkTests
 {
+    [Test]
+    public async Task ProjectInstructionNoticeDisplaysOnlyRedactedSourceMetadata()
+    {
+        var output = new StringWriter();
+        var sink   = new ConsoleHostEventSink(new Dictionary<string, string> { ["test"] = "synthetic-secret" }, output);
+        await sink.PublishAsync(new HostEvent
+        {
+            Kind = HostEventKind.ProjectInstructionsChanged,
+            Payload = new ProjectInstructionsChanged("rules-applied", "revision", null, "changed", 1, 2,
+                                                     "discovery", "hash", "tinyharness.project-instructions-renderer/1",
+                                                     ["src/synthetic-secret/AGENTS.md (scope: src/synthetic-secret)"])
+        }, CancellationToken.None);
+        Assert.That(output.ToString(), Does.Contain("revision revision").And.Contain("AGENTS.md"));
+        Assert.That(output.ToString(), Does.Not.Contain("synthetic-secret"));
+    }
+
     private static HostEvent TextDelta(string delta) => new()
         { Kind = HostEventKind.AssistantTextDelta, Sequence = 1, Payload = delta };
 

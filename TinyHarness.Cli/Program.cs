@@ -16,6 +16,7 @@ using TinyHarness.Core.Services.Configuration;
 using TinyHarness.Core.Services.Mcp;
 using TinyHarness.Core.Services.Permissions;
 using TinyHarness.Core.Services.Persistence;
+using TinyHarness.Core.Services.ProjectInstructions;
 using TinyHarness.Core.Services.Runtime;
 using TinyHarness.Core.Services.Runtime.WindowsSandbox;
 using TinyHarness.Core.Services.Session;
@@ -179,6 +180,8 @@ internal static class Program
         // 审批通过单一读取器接收，避免多个循环争抢 stdin。
         IApprovalProvider approver = new ConsoleApprovalProvider(new ExclusiveInputReader(Console.In), Console.Out,
                                                                  composition.KnownSecrets);
+        var instructionLoader   = new ProjectInstructionLoader(new Workspace(composition.Config.WorkspaceRoot));
+        var initialInstructions = await instructionLoader.LoadAsync(null, [], cts.Token).ConfigureAwait(false);
 
         using var host = new ChatSessionHost(composition.Config.WorkspaceRoot,
                                              new SessionModelIdentity(composition.Config.Model,
@@ -193,7 +196,10 @@ internal static class Program
                                              new ConsoleHostEventSink(composition.KnownSecrets),
                                              sessionWriterFactory : sessionId =>
                                                  new SessionStoreWriter(composition.SessionStoreDirectory!,
-                                                                        sessionId, composition.KnownSecrets));
+                                                                        sessionId, composition.KnownSecrets),
+                                             instructionLoader : instructionLoader,
+                                             initialInstructions : initialInstructions,
+                                             knownSecrets : composition.KnownSecrets);
 
         var run      = await host.SubmitTurnAsync(prompt, cts.Token).ConfigureAwait(false);
         var result   = run.Result!;
@@ -268,22 +274,32 @@ internal static class Program
         // 回合、审批与检查确认必须共享同一个读取器，不能另开 stdin 循环。
         var reader = new ExclusiveInputReader(Console.In);
 
-        ChatSessionHost host;
-        string?         resumedNote = null;
+        ChatSessionHost? host = null;
+        Func<CancellationToken, Task<ChatSessionHost>>? hostFactory = null;
+        var instructionLoader = new ProjectInstructionLoader(new Workspace(config.WorkspaceRoot));
+        string? resumedNote = null;
         if (resumeSessionId is null)
         {
-            host = new ChatSessionHost(config.WorkspaceRoot,
-                                       new SessionModelIdentity(config.Model, config.Endpoint, config.ChatApi),
-                                       composition.Options,
-                                       composition.Model,
-                                       composition.Tools,
-                                       WorkspaceSystemPrompt,
-                                       composition.Permissions,
-                                       new ConsoleApprovalProvider(reader, Console.Out, composition.KnownSecrets),
-                                       new ConsoleHostEventSink(composition.KnownSecrets),
-                                       null,
-                                       sessionId => new SessionStoreWriter(composition.SessionStoreDirectory!,
-                                                                           sessionId, composition.KnownSecrets));
+            hostFactory = async token =>
+            {
+                var initialInstructions = await instructionLoader.LoadAsync(null, [], token).ConfigureAwait(false);
+                token.ThrowIfCancellationRequested();
+                return new ChatSessionHost(config.WorkspaceRoot,
+                                           new SessionModelIdentity(config.Model, config.Endpoint, config.ChatApi),
+                                           composition.Options,
+                                           composition.Model,
+                                           composition.Tools,
+                                           WorkspaceSystemPrompt,
+                                           composition.Permissions,
+                                           new ConsoleApprovalProvider(reader, Console.Out, composition.KnownSecrets),
+                                           new ConsoleHostEventSink(composition.KnownSecrets),
+                                           null,
+                                           sessionId => new SessionStoreWriter(composition.SessionStoreDirectory!,
+                                                                               sessionId, composition.KnownSecrets),
+                                           instructionLoader,
+                                           initialInstructions,
+                                           composition.KnownSecrets);
+            };
         }
         else
         {
@@ -306,7 +322,9 @@ internal static class Program
                                            new ConsoleApprovalProvider(reader, Console.Out, composition.KnownSecrets),
                                            new ConsoleHostEventSink(composition.KnownSecrets),
                                            null,
-                                           writer, restored.NeedsInspection);
+                                           writer, restored.NeedsInspection,
+                                           instructionLoader,
+                                           knownSecrets : composition.KnownSecrets);
             }
             catch
             {
@@ -317,7 +335,7 @@ internal static class Program
 
         using (host)
         {
-            await WriteHeaderAsync("TinyHarness chat", composition, host.Session.Id).ConfigureAwait(false);
+            await WriteHeaderAsync("TinyHarness chat", composition, host?.Session.Id).ConfigureAwait(false);
             if (resumedNote is not null) await Console.Out.WriteLineAsync($"  {resumedNote}");
             await
                 Console.Out
@@ -325,15 +343,18 @@ internal static class Program
                                        "without harness encryption, so pasted secrets may be stored. Keep the session store private.");
 
             // 启动与后续中断确认均交给会话循环，避免保持阻断后多读一次回合输入。
-            var console = new ChatSessionConsole(host, reader, Console.Out, cancellation, composition.KnownSecrets);
-            var exit    = await console.RunAsync().ConfigureAwait(false);
+            using var console = host is null
+                ? new ChatSessionConsole(hostFactory!, reader, Console.Out, cancellation, composition.KnownSecrets)
+                : new ChatSessionConsole(host, reader, Console.Out, cancellation, composition.KnownSecrets);
+            var exit         = await console.RunAsync().ConfigureAwait(false);
+            var attachedHost = console.Host;
 
             // 只报告存在的产物；末次保存不可靠时明确警告，不以终态代替保存证据。
-            if (host.Session.Turns.Count > 0 && host.PersistencePath is { } path && File.Exists(path))
+            if (attachedHost?.Session.Turns.Count > 0 && attachedHost.PersistencePath is { } path && File.Exists(path))
                 await Console.Out.WriteLineAsync($"session    : {path}");
-            if (host.PersistenceWarning is { Length: > 0 } warning)
+            if (attachedHost?.PersistenceWarning is { Length: > 0 } warning)
                 await Console.Out.WriteLineAsync($"warning    : {warning}");
-            if (host.DisplayWarning is { Length: > 0 } displayWarning)
+            if (attachedHost?.DisplayWarning is { Length: > 0 } displayWarning)
                 await Console.Out.WriteLineAsync($"display    : {displayWarning}");
 
             return exit;
@@ -598,6 +619,8 @@ internal static class Program
         string?     persistenceWarning;
         string?     sessionId;
         string?     sessionLogPath;
+        var         instructionLoader   = new ProjectInstructionLoader(workspace);
+        var         initialInstructions = await instructionLoader.LoadAsync(null, [], cts.Token).ConfigureAwait(false);
         using (var host = new ChatSessionHost(fixture.Root,
                                               new SessionModelIdentity(config.Model,
                                                                        config.Endpoint ?? "offline-smoke://local",
@@ -609,7 +632,9 @@ internal static class Program
                                               permissions,
                                               approver,
                                               sessionWriterFactory : sessionId =>
-                                                  new SessionStoreWriter(sessionDirectory, sessionId)))
+                                                  new SessionStoreWriter(sessionDirectory, sessionId),
+                                              instructionLoader : instructionLoader,
+                                              initialInstructions : initialInstructions))
         {
             result = (await host.SubmitTurnAsync("smoke: inspect the fixture workspace and apply one patch.",
                                                  cts.Token).ConfigureAwait(false)).Result!;
@@ -683,6 +708,40 @@ internal static class Program
                 throw new
                     SessionStoreException("Smoke found a legacy snapshot or separate audit sidecar beside the journal.");
 
+            if (restoration.Context.ProjectInstructions?.Revision != initialInstructions.Revision)
+                throw new SessionStoreException("Smoke did not restore the initial project instruction sources.");
+            await File.WriteAllTextAsync(Path.Combine(fixture.Root, "AGENTS.md"),
+                                         "Smoke refreshed project rules: preserve confirmed file facts.\n", cts.Token)
+                      .ConfigureAwait(false);
+            using (var resumedWriter = await SessionStoreWriter.OpenExistingAsync(sessionDirectory, sessionId,
+                       null, cts.Token).ConfigureAwait(false))
+            using (var refreshedHost = new ChatSessionHost(restoration.Session, restoration.Context, options,
+                                                           new SmokeScriptClient([new SmokeStep()]), tools,
+                                                           systemPrompt, permissions, approver,
+                                                           sessionWriter : resumedWriter,
+                                                           instructionLoader : instructionLoader))
+            {
+                var refreshRun = await refreshedHost
+                                      .SubmitTurnAsync("smoke: verify refreshed project instructions.", cts.Token)
+                                      .ConfigureAwait(false);
+                if (refreshRun.Result?.Status != AgentStatus.Completed ||
+                    refreshedHost.PersistenceWarning is not null       ||
+                    restoration.Context.ProjectInstructions?.Revision == initialInstructions.Revision)
+                    throw new SessionStoreException("Smoke did not reliably refresh resumed project instructions.");
+            }
+
+            var refreshedSnapshot = await SessionStoreReader.ReadAsync(sessionDirectory, sessionId, cts.Token)
+                                                            .ConfigureAwait(false)
+                                 ?? throw new SessionStoreException("Smoke refreshed log could not be read.");
+            var refreshedRestore = SessionResume.Restore(refreshedSnapshot, fixture.Root, modelIdentity, systemPrompt,
+                                                         options.Context);
+            if (refreshedRestore.Context.ProjectInstructions?.Revision !=
+                restoration.Context.ProjectInstructions?.Revision)
+                throw new SessionStoreException("Smoke refreshed instruction sources did not survive another restore.");
+            await
+                Console.Out
+                       .WriteLineAsync("  instructions : verified initial load, update and resumed source integrity");
+
             await
                 Console.Out.WriteLineAsync("  session log  : verified read, restore, history and confirmed patch diff");
         }
@@ -709,7 +768,7 @@ internal static class Program
                                    ? StringComparison.OrdinalIgnoreCase
                                    : StringComparison.Ordinal) || !Path.GetFileName(target)
                                                                        .StartsWith("tinyharness-smoke-session-",
-                                                                                 StringComparison.Ordinal))
+                                                                            StringComparison.Ordinal))
             throw new InvalidOperationException($"Refusing to delete unexpected smoke session directory '{target}'.");
         if (Directory.Exists(target)) Directory.Delete(target, true);
     }

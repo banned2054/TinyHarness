@@ -263,6 +263,9 @@ internal static class SessionCommand
             foreach (var path in paths)
                 await io.WriteLineAsync($"    target     : {TerminalDisplay.Format(path, redactor)}",
                                         cancellationToken).ConfigureAwait(false);
+        if (item.NotStartedReason is { Length: > 0 } notStartedReason)
+            await io.WriteLineAsync($"    not started: {TerminalDisplay.Format(notStartedReason, redactor)}",
+                                    cancellationToken).ConfigureAwait(false);
         if (item.Stdout is { Length: > 0 } stdout)
             await io.WriteLineAsync($"    stdout     : {TerminalDisplay.Format(stdout, redactor)}",
                                     cancellationToken).ConfigureAwait(false);
