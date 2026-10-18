@@ -1,3 +1,5 @@
+using TinyHarness.Core.Models.ProjectInstructions;
+
 namespace TinyHarness.Core.Services.Runtime;
 
 /// <summary>
@@ -41,9 +43,10 @@ internal static class DirectoryWalker
     ///     递归收集普通文件，供 search_text 使用。
     ///     Recursively collects files only for search_text.
     /// </summary>
-    public static WalkResult CollectFiles(
-        string rootAbs, int cap, CancellationToken cancellationToken, Func<string, bool>? excludeEntry = null) =>
-        Collect(rootAbs, true, null, cap, false, cancellationToken, excludeEntry);
+    public static WalkResult CollectFiles(string              rootAbs, int cap, CancellationToken cancellationToken,
+                                          Func<string, bool>? excludeEntry   = null,
+                                          Action<string>?     enterDirectory = null, bool strictErrors = false) =>
+        Collect(rootAbs, true, null, cap, false, cancellationToken, excludeEntry, enterDirectory, strictErrors);
 
     /// <summary>
     ///     按递归与深度设置收集文件和目录，供 list_files 使用。
@@ -51,18 +54,23 @@ internal static class DirectoryWalker
     /// </summary>
     public static WalkResult CollectEntries(string              rootAbs, bool recursive, int? maxDepth, int cap,
                                             CancellationToken   cancellationToken,
-                                            Func<string, bool>? excludeEntry = null) =>
-        Collect(rootAbs, recursive, maxDepth, cap, true, cancellationToken, excludeEntry);
+                                            Func<string, bool>? excludeEntry   = null,
+                                            Action<string>?     enterDirectory = null, bool strictErrors = false) =>
+        Collect(rootAbs, recursive, maxDepth, cap, true, cancellationToken, excludeEntry, enterDirectory, strictErrors);
 
     /// <summary>
     ///     执行实际遍历，在条目上限内返回排序结果，并标记是否因上限提前停止。
     ///     Performs the bounded walk, returns sorted entries, and reports whether the cap stopped enumeration.
     /// </summary>
     private static WalkResult Collect(string rootAbs, bool recursive, int? maxDepth, int cap, bool includeDirectories,
-                                      CancellationToken cancellationToken, Func<string, bool>? excludeEntry)
+                                      CancellationToken cancellationToken, Func<string, bool>? excludeEntry,
+                                      Action<string>? enterDirectory, bool strictErrors)
     {
-        var entries   = new List<string>();
-        var truncated = false;
+        var entries            = new List<string>();
+        var truncated          = false;
+        var enumerationLimited = false;
+        var enumerated         = 0;
+        var visitedDirectories = new List<string>();
 
         var stack = new Stack<(string Dir, int Depth)>();
         stack.Push((rootAbs, 0));
@@ -77,13 +85,37 @@ internal static class DirectoryWalker
                 break;
             }
 
+            if (enumerated >= ProjectInstructionLimits.MaxDiscoveryEntries)
+            {
+                enumerationLimited = truncated = true;
+                break;
+            }
+
+            enterDirectory?.Invoke(dir);
+            visitedDirectories.Add(dir);
+
             string[] children;
             try
             {
-                children = Directory.GetFileSystemEntries(dir);
+                var boundedChildren = new List<string>();
+                foreach (var child in Directory.EnumerateFileSystemEntries(dir))
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (enumerated == ProjectInstructionLimits.MaxDiscoveryEntries)
+                    {
+                        enumerationLimited = truncated = true;
+                        break;
+                    }
+
+                    enumerated++;
+                    boundedChildren.Add(child);
+                }
+
+                children = boundedChildren.ToArray();
             }
             catch (Exception ex) when (ex is UnauthorizedAccessException or IOException)
             {
+                if (strictErrors) throw;
                 continue; // Unreadable directory: keep walking the rest.
             }
 
@@ -134,7 +166,7 @@ internal static class DirectoryWalker
         }
 
         entries.Sort(StringComparer.Ordinal);
-        return new WalkResult(entries, truncated);
+        return new WalkResult(entries, truncated, visitedDirectories, enumerationLimited);
     }
 
     /// <summary>
@@ -153,5 +185,9 @@ internal static class DirectoryWalker
         }
     }
 
-    public sealed record WalkResult(IReadOnlyList<string> Entries, bool Truncated);
+    public sealed record WalkResult(
+        IReadOnlyList<string> Entries,
+        bool                  Truncated,
+        IReadOnlyList<string> VisitedDirectories,
+        bool                  EnumerationLimited);
 }
