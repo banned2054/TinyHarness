@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using TinyHarness.Core.Models.ChatCompletions;
+using TinyHarness.Core.Models.ProjectInstructions;
 using TinyHarness.Core.Models.Session;
 
 namespace TinyHarness.Core.Models.Persistence;
@@ -94,6 +95,8 @@ public sealed record PersistedSession
 public sealed record PersistedConversation
 {
     public IReadOnlyList<PersistedMessage> Messages { get; init; } = [];
+
+    public IReadOnlyList<ProjectInstructionRecord> ProjectInstructionRecords { get; init; } = [];
 
     /// <summary>
     ///     <para>压缩后的结构化状态 JSON；不脱敏，未发生压缩时为 null。</para>
@@ -303,6 +306,15 @@ public sealed record PersistedToolCallRecord
     public string Summary { get; init; } = string.Empty;
 
     public string? PreparationError { get; init; }
+
+    /// <summary>
+    ///     <para>工具已知未开始的原因；与准备错误及授权结论分别保存。</para>
+    ///     <para>
+    ///         The reason a tool is known not to have started, stored separately from preparation errors and permission
+    ///         outcomes.
+    ///     </para>
+    /// </summary>
+    public string? NotStartedReason { get; init; }
 
     /// <summary>
     ///     <para>脱敏后的授权结论；尚未授权时为 null。</para>

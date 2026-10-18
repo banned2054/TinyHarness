@@ -2,6 +2,7 @@ using System.Buffers;
 using System.Text.Json;
 using TinyHarness.Core.Exceptions;
 using TinyHarness.Core.Models.Persistence;
+using TinyHarness.Core.Models.ProjectInstructions;
 
 namespace TinyHarness.Core.Services.Persistence;
 
@@ -20,8 +21,8 @@ internal static class SessionLogScanner
 
     private static readonly string[] HistoryStringProperties =
     [
-        "runId", "text", "callId", "toolName", "argumentsJson", "capability", "summary",
-        "executionPolicy", "approval", "preparationError", "state", "stdout", "stderr", "outputWarning"
+        "runId", "text", "callId", "toolName", "argumentsJson", "capability", "summary", "executionPolicy", "approval",
+        "preparationError", "notStartedReason", "state", "stdout", "stderr", "outputWarning"
     ];
 
     private static readonly string[] HistoryBooleanProperties = ["timedOut", "outputTruncated", "outputIncomplete"];
@@ -167,23 +168,20 @@ internal static class SessionLogScanner
                 }
             }
 
-            if (upperSequence is not null && expectedSequence <= upperSequence)
+            if (expectedSequence <= upperSequence)
                 throw new
                     SessionStoreException($"Session log '{path}' ends before requested sequence {upperSequence}; valid prefix ends at sequence {expectedSequence - 1}.");
             if (expectedSequence == 1)
                 throw new
                     SessionStoreException($"Session log '{path}' contains no committed history batch; reliable prefix ends at sequence 0.");
-            if (lineLength != 0)
-            {
-                var warning =
-                    $"Session log ends with an incomplete line; reliable prefix ends at sequence {expectedSequence - 1}.";
-                if (!allowIncompleteTail)
-                    throw new
-                        SessionStoreException($"Session log '{path}' ends with an incomplete line; valid prefix ends at sequence {expectedSequence - 1}.");
-                return new SessionLogScanResult(capturedLength, bytesFetched, expectedSequence - 1, warning);
-            }
-
-            return new SessionLogScanResult(capturedLength, bytesFetched, expectedSequence - 1, null);
+            if (lineLength == 0)
+                return new SessionLogScanResult(capturedLength, bytesFetched, expectedSequence - 1, null);
+            var warning =
+                $"Session log ends with an incomplete line; reliable prefix ends at sequence {expectedSequence - 1}.";
+            if (!allowIncompleteTail)
+                throw new
+                    SessionStoreException($"Session log '{path}' ends with an incomplete line; valid prefix ends at sequence {expectedSequence - 1}.");
+            return new SessionLogScanResult(capturedLength, bytesFetched, expectedSequence - 1, warning);
         }
         finally
         {
@@ -209,8 +207,7 @@ internal static class SessionLogScanner
         foreach (var recordElement in recordsElement.EnumerateArray())
         {
             RequireObject(recordElement, "record");
-            records.Add(new SessionLogRecord(
-                                             RequiredString(recordElement, "id"),
+            records.Add(new SessionLogRecord(RequiredString(recordElement, "id"),
                                              RequiredString(recordElement, "kind"),
                                              Required(recordElement, "payload")));
         }
@@ -271,10 +268,13 @@ internal static class SessionLogScanner
         if (batch.Records is null || batch.Records.Count == 0)
             throw new
                 SessionStoreException($"Session log '{path}' contains an empty record batch at sequence {sequence}.");
-        if (sequence == 1 && batch.Records[0]?.Kind != "identity")
-            throw new SessionStoreException($"Session log '{path}' must begin with an identity record.");
-        if (sequence > 1 && batch.Records.Any(record => record?.Kind == "identity"))
-            throw new SessionStoreException($"Session log '{path}' repeats its identity record.");
+        switch (sequence)
+        {
+            case 1 when (batch.Records[0]?.Kind != "identity") :
+                throw new SessionStoreException($"Session log '{path}' must begin with an identity record.");
+            case > 1 when batch.Records.Any(record => record?.Kind == "identity") :
+                throw new SessionStoreException($"Session log '{path}' repeats its identity record.");
+        }
 
         for (var i = 0; i < batch.Records.Count; i++)
         {
@@ -344,6 +344,21 @@ internal static class SessionLogScanner
                 case "message" :
                     RequireObject(record.Payload, "message payload");
                     _ = Required(record.Payload, "message");
+                    break;
+                case "project-instructions" :
+                    RequireObject(record.Payload, "project-instructions payload");
+                    var instruction = record.Payload.Deserialize(SessionLogJsonContext.Default.ProjectInstructionRecord)
+                                   ?? throw new
+                                          SessionStoreException("A project-instructions record must contain a typed payload.");
+                    if (instruction.Schema != "tinyharness.project-instructions/1" ||
+                        instruction.Action is not ("rules-applied" or "scopes-tracked") ||
+                        string.IsNullOrWhiteSpace(instruction.Revision) ||
+                        string.IsNullOrWhiteSpace(instruction.TurnId) ||
+                        string.IsNullOrWhiteSpace(instruction.RunId) ||
+                        string.IsNullOrWhiteSpace(instruction.Reason) || instruction.Snapshot is null ||
+                        instruction.CanonicalMessageIndex is < 0)
+                        throw new
+                            SessionStoreException($"Session log '{path}' contains an invalid project-instructions record.");
                     break;
                 case "checkpoint" :
                     RequireObject(record.Payload, "checkpoint payload");

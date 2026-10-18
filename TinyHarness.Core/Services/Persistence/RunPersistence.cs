@@ -114,6 +114,7 @@ internal sealed class SecretRedactor
         SideEffects      = record.SideEffects,
         Summary          = Redact(record.Summary),
         PreparationError = RedactNullable(record.PreparationError),
+        NotStartedReason = RedactNullable(record.NotStartedReason),
         Approval         = RedactNullable(record.Approval),
         State            = record.State
     };

@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -7,8 +9,10 @@ using TinyHarness.Core.Models.Agent;
 using TinyHarness.Core.Models.ChatCompletions;
 using TinyHarness.Core.Models.Configuration;
 using TinyHarness.Core.Models.Persistence;
+using TinyHarness.Core.Models.ProjectInstructions;
 using TinyHarness.Core.Models.Session;
 using TinyHarness.Core.Models.Tools;
+using TinyHarness.Core.Services.Agent;
 using TinyHarness.Core.Services.Context;
 
 namespace TinyHarness.Core.Services.Persistence;
@@ -40,15 +44,21 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
     private readonly FileStream     _logStream;
     private readonly SecretRedactor _redactor;
 
-    private string?                 _checkpointFingerprint;
+    private string? _checkpointFingerprint;
+
+    private Func<SessionHistoryItem, CancellationToken, ValueTask>? _historyItemCommitted;
+
+    private Action<Exception>?      _historyPublishError;
     private string?                 _lastRunId;
     private string?                 _lastRunJson;
     private SessionLogSessionState? _lastSessionState;
-    private long                    _persistedMessageCount;
-    private int                     _persistedTurnCount;
-    private bool                    _poisoned;
-    private string?                 _trackedTurnId;
-    private int                     _trackedTurnRunCount;
+
+    private long    _persistedMessageCount;
+    private int     _persistedProjectInstructionRecordCount;
+    private int     _persistedTurnCount;
+    private bool    _poisoned;
+    private string? _trackedTurnId;
+    private int     _trackedTurnRunCount;
 
     public SessionStoreWriter(
         string directory, string sessionId, IReadOnlyDictionary<string, string>? knownSecrets = null)
@@ -133,8 +143,7 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
                                           Func<CancellationToken, Task> commitInitialContext,
                                           Func<SessionHistoryItem, CancellationToken, ValueTask>?
                                               historyItemCommitted) =>
-        new SessionLogRunRecorder(this, sessionId, turnId, runId, commitInitialContext, _knownSecrets,
-                                  historyItemCommitted);
+        CreateBoundRunRecorder(sessionId, turnId, runId, commitInitialContext, historyItemCommitted);
 
     public Task CommitAsync(ChatSession session, ConversationContext context, CancellationToken cancellationToken) =>
         CommitCoreAsync(session, context, false, cancellationToken);
@@ -180,13 +189,17 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
                             if (!string.Equals(item.SessionId, SessionId, StringComparison.Ordinal))
                                 throw new
                                     SessionStoreException($"History item session '{item.SessionId}' does not match '{SessionId}'.");
+                            if (item.Kind is not (SessionHistoryKind.User or SessionHistoryKind.Process or
+                                                  SessionHistoryKind.Final or SessionHistoryKind.Tool))
+                                throw new
+                                    SessionStoreException($"History kind '{item.Kind}' cannot be appended through the generic journal API.");
                             var boundItem = item with { Id = recordId, Sequence = sequence };
                             normalized[i] = record with
                             {
                                 Id = recordId,
-                                Payload = JsonSerializer.SerializeToElement(boundItem,
-                                                                            SessionHistoryJsonContext.Default
-                                                                               .SessionHistoryItem)
+                                Payload =
+                                JsonSerializer.SerializeToElement(boundItem,
+                                                                  SessionHistoryJsonContext.Default.SessionHistoryItem)
                             };
                         }
                         else
@@ -244,6 +257,17 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
         _gate.Dispose();
     }
 
+    private IRunRecorder CreateBoundRunRecorder(
+        string sessionId, string turnId, string runId, Func<CancellationToken, Task> commitInitialContext,
+        Func<SessionHistoryItem, CancellationToken, ValueTask>? historyItemCommitted)
+    {
+        _historyItemCommitted = historyItemCommitted;
+        var recorder = new SessionLogRunRecorder(this, sessionId, turnId, runId, commitInitialContext, _knownSecrets,
+                                                 historyItemCommitted);
+        _historyPublishError = recorder.ReportHistoryPublishError;
+        return recorder;
+    }
+
     private async Task CommitCoreAsync(
         ChatSession session, ConversationContext context, bool executionIntent, CancellationToken cancellationToken)
     {
@@ -251,6 +275,9 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
         ArgumentNullException.ThrowIfNull(context);
         if (!string.Equals(session.Id, SessionId, StringComparison.OrdinalIgnoreCase))
             throw new ArgumentException("The writer and session ids differ.", nameof(session));
+        List<SessionHistoryItem>? committedHistoryItems = null;
+        var                       historyCallback       = _historyItemCommitted;
+        var                       historyPublishError   = _historyPublishError;
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
@@ -340,6 +367,37 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
             for (var i = (int)_persistedMessageCount; i < context.Messages.Count; i++)
                 Add("message", new SessionLogMessage(PersistMessage(context.Messages[i])));
 
+            var projectInstructionRecords = context.ProjectInstructionRecords;
+            if (projectInstructionRecords.Count < _persistedProjectInstructionRecordCount)
+                throw new
+                    SessionStoreException("The in-memory project-instruction record list rewound behind the committed journal prefix.");
+            for (var i = _persistedProjectInstructionRecordCount; i < projectInstructionRecords.Count; i++)
+            {
+                var instructionRecord = projectInstructionRecords[i];
+                var persistedInstructionRecord = instructionRecord.Action == "scopes-tracked"
+                    ? instructionRecord with
+                    {
+                        Snapshot = instructionRecord.Snapshot with { Documents = [] }
+                    }
+                    : instructionRecord;
+                Add("project-instructions", persistedInstructionRecord);
+                if (instructionRecord.Action != "rules-applied") continue;
+                var item = new SessionHistoryItem
+                {
+                    Id        = RecordId(SessionId, nextSequence, records.Count),
+                    Sequence  = nextSequence,
+                    SessionId = SessionId,
+                    TurnId    = instructionRecord.TurnId,
+                    RunId     = instructionRecord.RunId,
+                    Kind      = SessionHistoryKind.ProjectInstructions,
+                    Text      = ProjectInstructionHistorySummary(instructionRecord)
+                };
+                records.Add(new SessionLogRecord(item.Id, "history",
+                                                 JsonSerializer.SerializeToElement(item,
+                                                          SessionHistoryJsonContext.Default.SessionHistoryItem)));
+                (committedHistoryItems ??= []).Add(item);
+            }
+
             var position = context.Position;
             var nextCheckpointFingerprint =
                 $"{position.HasState}:{position.FoldStartMessageIndex}:{position.FoldEndMessageIndex}:" +
@@ -383,20 +441,71 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
 
             await WriteBatchAsync(batch, bytes, cancellationToken).ConfigureAwait(false);
 
-            CommitSequence         = nextSequence;
-            _persistedMessageCount = context.Messages.Count;
-            _persistedTurnCount    = persistedTurnCount;
-            _trackedTurnId         = trackedTurnId;
-            _trackedTurnRunCount   = trackedTurnRunCount;
-            _lastRunId             = lastRunId;
-            _lastRunJson           = lastRunJson;
-            _checkpointFingerprint = checkpointFingerprint;
-            _lastSessionState      = lastSessionState;
+            CommitSequence                          = nextSequence;
+            _persistedMessageCount                  = context.Messages.Count;
+            _persistedProjectInstructionRecordCount = projectInstructionRecords.Count;
+            _persistedTurnCount                     = persistedTurnCount;
+            _trackedTurnId                          = trackedTurnId;
+            _trackedTurnRunCount                    = trackedTurnRunCount;
+            _lastRunId                              = lastRunId;
+            _lastRunJson                            = lastRunJson;
+            _checkpointFingerprint                  = checkpointFingerprint;
+            _lastSessionState                       = lastSessionState;
         }
         finally
         {
             _gate.Release();
         }
+
+        if (committedHistoryItems is not null)
+            await PublishCommittedHistoryItemsAsync(historyCallback, historyPublishError, committedHistoryItems,
+                                                    cancellationToken)
+               .ConfigureAwait(false);
+    }
+
+    private string ProjectInstructionHistorySummary(ProjectInstructionRecord instructionRecord)
+    {
+        var sources = instructionRecord.Snapshot.Documents.Count == 0
+            ? "no source documents (empty rules)"
+            : string.Join("; ", instructionRecord.Snapshot.Documents.Select(document =>
+                                                                                $"source: {_redactor.Redact(document.SourcePath)} (scope: {_redactor.Redact(document.ScopeDirectory)})"));
+        return
+            _redactor.Redact($"Project instructions {instructionRecord.Action}: revision {instructionRecord.Revision}; " +
+                             $"{instructionRecord.Snapshot.Documents.Count} document(s); {sources}; reason {instructionRecord.Reason}.");
+    }
+
+    private async Task PublishCommittedHistoryItemsAsync(
+        Func<SessionHistoryItem, CancellationToken, ValueTask>? callback,
+        Action<Exception>?                                      historyPublishError,
+        IReadOnlyList<SessionHistoryItem>                       items, CancellationToken cancellationToken)
+    {
+        if (callback is null) return;
+        foreach (var item in items)
+            try
+            {
+                await callback(item, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                try
+                {
+                    if (historyPublishError is { } reportError)
+                    {
+                        reportError(ex);
+                    }
+                    else
+                    {
+                        var safeMessage                           = _redactor.Redact(ex.Message);
+                        if (safeMessage.Length > 512) safeMessage = safeMessage[..512];
+                        Trace.TraceError("Committed session history live publication failed: {0}", safeMessage);
+                    }
+                }
+                catch (Exception reportException)
+                {
+                    Trace.TraceError("Committed session history error reporting failed: {0}",
+                                     _redactor.Redact(reportException.Message));
+                }
+            }
     }
 
     public static async Task<SessionStoreWriter> OpenExistingAsync(string directory, string sessionId,
@@ -424,6 +533,8 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
             writer._trackedTurnId         = snapshot.Turns.LastOrDefault()?.Id;
             writer._trackedTurnRunCount   = snapshot.Turns.LastOrDefault()?.Runs.Count ?? 0;
             writer._persistedMessageCount = snapshot.Conversation?.Messages.Count      ?? 0;
+            writer._persistedProjectInstructionRecordCount =
+                snapshot.Conversation?.ProjectInstructionRecords.Count ?? 0;
             writer._lastSessionState = new SessionLogSessionState(snapshot.InspectionAcknowledgedUtc,
                                                                   snapshot.PendingInspectionReason);
             if (snapshot.Conversation is { } conversation)
@@ -431,11 +542,9 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
                                                 $"{conversation.FoldEndMessageIndex}:" + (conversation.HasState
                                                     ? conversation.StateJson
                                                     : string.Empty);
-            if (snapshot.Turns.LastOrDefault()?.Runs.LastOrDefault() is { } lastRun)
-            {
-                writer._lastRunId   = lastRun.Id;
-                writer._lastRunJson = JsonSerializer.Serialize(lastRun, SessionLogJsonContext.Default.PersistedRun);
-            }
+            if (snapshot.Turns.LastOrDefault()?.Runs.LastOrDefault() is not { } lastRun) return writer;
+            writer._lastRunId   = lastRun.Id;
+            writer._lastRunJson = JsonSerializer.Serialize(lastRun, SessionLogJsonContext.Default.PersistedRun);
 
             return writer;
         }
@@ -464,11 +573,16 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
             NeedsInspection = toolCalls?.Any(c => c.SideEffects && c.State == ToolCallExecutionState.UnknownResult),
             ToolCalls = toolCalls?.Select(c => new PersistedToolCallRecord
             {
-                CallId = _redactor.Redact(c.CallId), InvocationId = c.InvocationId,
-                ToolName = _redactor.Redact(c.ToolName),
-                Capability = _redactor.RedactNullable(c.Capability), SideEffects = c.SideEffects,
-                Summary = _redactor.Redact(c.Summary), PreparationError = _redactor.RedactNullable(c.PreparationError),
-                Approval = _redactor.RedactNullable(c.Approval), State = c.State.ToString()
+                CallId           = _redactor.Redact(c.CallId),
+                InvocationId     = c.InvocationId,
+                ToolName         = _redactor.Redact(c.ToolName),
+                Capability       = _redactor.RedactNullable(c.Capability),
+                SideEffects      = c.SideEffects,
+                Summary          = _redactor.Redact(c.Summary),
+                PreparationError = _redactor.RedactNullable(c.PreparationError),
+                NotStartedReason = _redactor.RedactNullable(c.NotStartedReason),
+                Approval         = _redactor.RedactNullable(c.Approval),
+                State            = c.State.ToString()
             }).ToArray()
         };
     }
@@ -497,13 +611,18 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
 
     private static PersistedMessage PersistMessage(ChatMessage message) => new()
     {
-        Role = message.Role.ToString(), Content = message.Content, ToolCallId = message.ToolCallId, Name = message.Name,
+        Role       = message.Role.ToString(),
+        Content    = message.Content,
+        ToolCallId = message.ToolCallId,
+        Name       = message.Name,
         ToolCalls = message.ToolCalls?.Select(c => new PersistedToolCall(c.Id, c.FunctionName, c.ArgumentsJson))
                            .ToArray(),
         Reasoning = message.Reasoning?.Select(r => new PersistedReasoning
         {
-            Text       = r.Text, ProtectedData = r.ProtectedData, ItemId = r.ItemId,
-            OpaqueHash = PersistedReasoning.ComputeOpaqueHash(r.ProtectedData, r.ItemId)
+            Text          = r.Text,
+            ProtectedData = r.ProtectedData,
+            ItemId        = r.ItemId,
+            OpaqueHash    = PersistedReasoning.ComputeOpaqueHash(r.ProtectedData, r.ItemId)
         }).ToArray()
     };
 
@@ -539,7 +658,7 @@ public static class SessionStoreReader
             throw new
                 SessionStoreException($"Session log '{path}' exceeds the {SessionStoreWriter.MaxLogBytes:N0}-byte limit.");
 
-        var builder = new ProjectionBuilder(sessionId);
+        var builder = new ProjectionBuilder(sessionId, path);
         SessionStorePaths.EnsureStoreLeaf(directory, path);
         var scan = await SessionLogScanner.ScanAsync(path, sessionId, length, null, false,
                                                      (batch, _) =>
@@ -573,22 +692,32 @@ public static class SessionStoreReader
         return entries.OrderByDescending(e => e.Session?.UpdatedUtc ?? DateTimeOffset.MinValue).ToArray();
     }
 
-    private sealed class ProjectionBuilder(string sessionId)
+    private sealed class ProjectionBuilder(string sessionId, string logPath)
     {
         private readonly Dictionary<string, PersistedToolCallRecord> _completedToolFacts = new(StringComparer.Ordinal);
         private readonly List<PersistedMessage> _messages = [];
+        private readonly List<ProjectInstructionRecord> _projectInstructionRecords = [];
         private readonly List<PersistedTurn> _turns = [];
         private readonly HashSet<string> _unknownSideEffectCalls = new(StringComparer.Ordinal);
         private          long _acknowledgedThroughSequence;
         private          SessionLogCheckpoint? _checkpoint;
-        private          SessionLogIdentity? _identity;
-        private          SessionLogSessionState? _state;
-        private          DateTimeOffset _updatedUtc;
+
+        private (string Id, long Sequence, string TurnId, string RunId, string Revision, int DocumentCount)?
+            _expectedInstructionHistory;
+
+        private SessionLogIdentity?     _identity;
+        private SessionLogSessionState? _state;
+        private DateTimeOffset          _updatedUtc;
 
         public void Apply(SessionLogBatch batch)
         {
             _updatedUtc = batch.WrittenUtc;
-            foreach (var record in batch.Records)
+            for (var recordIndex = 0; recordIndex < batch.Records.Count; recordIndex++)
+            {
+                var record = batch.Records[recordIndex];
+                if (_expectedInstructionHistory is not null && record.Kind != "history")
+                    throw new
+                        SessionStoreException($"Session '{sessionId}' is missing the history item bound to a project-instructions record.");
                 switch (record.Kind)
                 {
                     case "history" :
@@ -657,6 +786,13 @@ public static class SessionStoreReader
                         _messages.Add(Read<SessionLogMessage>(record.Payload,
                                                               SessionLogJsonContext.Default.SessionLogMessage).Message);
                         break;
+                    case "project-instructions" :
+                        ApplyProjectInstructions(Read<ProjectInstructionRecord>(record.Payload,
+                                                                                    SessionLogJsonContext.Default
+                                                                                       .ProjectInstructionRecord),
+                                                 batch.Sequence, recordIndex,
+                                                 batch.Records.Count);
+                        break;
                     case "checkpoint" :
                         _checkpoint =
                             Read<SessionLogCheckpoint>(record.Payload,
@@ -676,6 +812,11 @@ public static class SessionStoreReader
                         throw new
                             SessionStoreException($"Session '{sessionId}' contains unknown required record kind '{record.Kind}'.");
                 }
+            }
+
+            if (_expectedInstructionHistory is not null)
+                throw new
+                    SessionStoreException($"Session '{sessionId}' ends a batch without the history item bound to a project-instructions record.");
         }
 
         public PersistedSession Build(long sequence)
@@ -695,17 +836,24 @@ public static class SessionStoreReader
                         : _state?.PendingInspectionReason;
             return new PersistedSession
             {
-                Id = _identity.Id, WorkspaceRoot = _identity.WorkspaceRoot, Model = _identity.Model,
-                CreatedUtc = _identity.CreatedUtc, UpdatedUtc = _updatedUtc, CommitSequence = sequence,
+                Id                      = _identity.Id,
+                WorkspaceRoot           = _identity.WorkspaceRoot,
+                Model                   = _identity.Model,
+                CreatedUtc              = _identity.CreatedUtc,
+                UpdatedUtc              = _updatedUtc,
+                CommitSequence          = sequence,
                 PendingInspectionReason = pendingReason,
                 InspectionAcknowledgedUtc =
                     hasUnknownSideEffects || _state?.ExecutionIntent == true ? null : acknowledged,
                 Turns = _turns,
                 Conversation = new PersistedConversation
                 {
-                    Messages              = _messages, StateJson = checkpoint.StateJson, HasState = checkpoint.HasState,
-                    FoldStartMessageIndex = checkpoint.FoldStartMessageIndex,
-                    FoldEndMessageIndex   = checkpoint.FoldEndMessageIndex
+                    Messages                  = _messages,
+                    StateJson                 = checkpoint.StateJson,
+                    HasState                  = checkpoint.HasState,
+                    ProjectInstructionRecords = _projectInstructionRecords,
+                    FoldStartMessageIndex     = checkpoint.FoldStartMessageIndex,
+                    FoldEndMessageIndex       = checkpoint.FoldEndMessageIndex
                 }
             };
         }
@@ -713,8 +861,29 @@ public static class SessionStoreReader
         private void ApplyHistory(SessionHistoryItem item)
         {
             if (item.Kind is not (SessionHistoryKind.User or SessionHistoryKind.Process or
-                                  SessionHistoryKind.Final or SessionHistoryKind.Tool))
+                                  SessionHistoryKind.Final or SessionHistoryKind.Tool or
+                                  SessionHistoryKind.ProjectInstructions))
                 throw new SessionStoreException($"Session '{sessionId}' contains unknown history kind '{item.Kind}'.");
+            if (item.Kind == SessionHistoryKind.ProjectInstructions)
+            {
+                var expected = _expectedInstructionHistory;
+                if (string.IsNullOrWhiteSpace(item.TurnId) || string.IsNullOrWhiteSpace(item.RunId) ||
+                    string.IsNullOrWhiteSpace(item.Text) || _turns.All(turn => turn.Id != item.TurnId) ||
+                    _turns.Where(turn => turn.Id == item.TurnId).SelectMany(turn => turn.Runs)
+                          .All(run => run.Id     != item.RunId) || expected is null ||
+                    item.Id     != expected.Value.Id || item.Sequence != expected.Value.Sequence ||
+                    item.TurnId != expected.Value.TurnId || item.RunId != expected.Value.RunId ||
+                    !item.Text.Contains($"revision {expected.Value.Revision}", StringComparison.Ordinal) ||
+                    !item.Text.Contains($"{expected.Value.DocumentCount} document(s)", StringComparison.Ordinal) ||
+                    (expected.Value.DocumentCount > 0 &&
+                     (!item.Text.Contains("source:", StringComparison.Ordinal) ||
+                      !item.Text.Contains("(scope:", StringComparison.Ordinal))))
+                    throw new
+                        SessionStoreException($"Session '{sessionId}' contains an unbound project-instructions history item.");
+                _expectedInstructionHistory = null;
+                return;
+            }
+
             if (item.Kind != SessionHistoryKind.Tool) return;
             if (string.IsNullOrWhiteSpace(item.RunId) || string.IsNullOrWhiteSpace(item.CallId) ||
                 string.IsNullOrWhiteSpace(item.State))
@@ -729,6 +898,11 @@ public static class SessionStoreReader
                 _ => throw new
                     SessionStoreException($"Session '{sessionId}' contains an invalid terminal tool state '{item.State}'.")
             };
+            if (item.NotStartedReason is { } notStartedReason &&
+                (callState != nameof(ToolCallExecutionState.KnownNotStarted) ||
+                 string.IsNullOrWhiteSpace(notStartedReason)))
+                throw new
+                    SessionStoreException($"Session '{sessionId}' contains an invalid not-started reason for call '{item.CallId}'.");
             var turnIndex = _turns.FindIndex(turn => turn.Id == item.TurnId);
             if (turnIndex < 0)
                 throw new
@@ -766,6 +940,7 @@ public static class SessionStoreReader
                     SideEffects      = item.Capability is not null && !ToolCapabilities.IsReadOnly(item.Capability),
                     Summary          = item.Summary ?? string.Empty,
                     PreparationError = item.PreparationError,
+                    NotStartedReason = item.NotStartedReason,
                     Approval         = item.Approval,
                     State            = callState
                 });
@@ -783,15 +958,25 @@ public static class SessionStoreReader
                         SessionStoreException($"Session '{sessionId}', run '{item.RunId}', invocation '{item.InvocationId}' has no pending side-effect execution intent.");
             }
 
-            calls[callIndex] = calls[callIndex] with { State = callState };
+            calls[callIndex] = calls[callIndex] with
+            {
+                State = callState,
+                NotStartedReason = item.NotStartedReason
+            };
             _completedToolFacts.Add(factKey, calls[callIndex]);
             var key = factKey;
-            if (callState     == nameof(ToolCallExecutionState.UnknownResult) && calls[callIndex].SideEffects &&
-                item.Sequence > _acknowledgedThroughSequence)
-                _unknownSideEffectCalls.Add(key);
-            else if (callState is nameof(ToolCallExecutionState.ConfirmedResult) or
-                                  nameof(ToolCallExecutionState.KnownNotStarted))
-                _unknownSideEffectCalls.Remove(key);
+            switch (callState)
+            {
+                case nameof(ToolCallExecutionState.UnknownResult) when calls[callIndex].SideEffects &&
+                                                                       item.Sequence > _acknowledgedThroughSequence :
+                    _unknownSideEffectCalls.Add(key);
+                    break;
+                case nameof(ToolCallExecutionState.ConfirmedResult) or
+                     nameof(ToolCallExecutionState.KnownNotStarted) :
+                    _unknownSideEffectCalls.Remove(key);
+                    break;
+            }
+
             runs[runIndex] = run with
             {
                 ToolCalls = calls,
@@ -799,6 +984,206 @@ public static class SessionStoreReader
                                                     call.State == nameof(ToolCallExecutionState.UnknownResult))
             };
             _turns[turnIndex] = turn with { Runs = runs };
+        }
+
+        private void ApplyProjectInstructions(
+            ProjectInstructionRecord instructionRecord, long sequence, int recordIndex, int recordCount)
+        {
+            if (instructionRecord is null || instructionRecord.Schema != "tinyharness.project-instructions/1" ||
+                instructionRecord.Action is not ("rules-applied" or "scopes-tracked") ||
+                string.IsNullOrWhiteSpace(instructionRecord.Revision) ||
+                string.IsNullOrWhiteSpace(instructionRecord.TurnId) ||
+                string.IsNullOrWhiteSpace(instructionRecord.RunId) ||
+                string.IsNullOrWhiteSpace(instructionRecord.Reason) || instructionRecord.Snapshot is null)
+                throw InvalidProjectInstruction("record has a missing or unsupported required field");
+
+            ValidateProjectInstructionSnapshot(instructionRecord.Snapshot,
+                                               instructionRecord.Action == "rules-applied");
+            if (!string.Equals(instructionRecord.Revision, instructionRecord.Snapshot.Revision,
+                               StringComparison.Ordinal))
+                throw InvalidProjectInstruction("record revision does not match the snapshot revision");
+
+            if (_turns.All(turn => turn.Id != instructionRecord.TurnId) ||
+                _turns.Where(turn => turn.Id == instructionRecord.TurnId).SelectMany(turn => turn.Runs)
+                      .All(run => run.Id     != instructionRecord.RunId))
+                throw InvalidProjectInstruction("record references an unknown turn or run");
+
+            try
+            {
+                var previousInstructionRecord = _projectInstructionRecords.LastOrDefault();
+                if (instructionRecord.Action == "scopes-tracked")
+                {
+                    if (previousInstructionRecord is null || instructionRecord.Snapshot.Documents.Count != 0)
+                        throw
+                            InvalidProjectInstruction("scopes-tracked must reference an existing revision and omit document bodies");
+                    instructionRecord = instructionRecord with
+                    {
+                        Snapshot = instructionRecord.Snapshot with
+                        {
+                            Documents = previousInstructionRecord.Snapshot.Documents
+                        }
+                    };
+                }
+
+                ValidateProjectInstructionSnapshot(instructionRecord.Snapshot, true);
+                var prior = previousInstructionRecord;
+                switch (instructionRecord.Action)
+                {
+                    case "rules-applied" :
+                        if (prior is null
+                                ? instructionRecord.PreviousRevision is not null
+                                : !string.Equals(instructionRecord.PreviousRevision, prior.Revision,
+                                                 StringComparison.Ordinal) ||
+                                  string.Equals(instructionRecord.Revision, prior.Revision, StringComparison.Ordinal))
+                            throw InvalidProjectInstruction("revision does not continue the previous revision chain");
+                        if (instructionRecord.CanonicalMessageIndex is not { } messageIndex ||
+                            messageIndex < 0 || messageIndex >= _messages.Count)
+                            throw InvalidProjectInstruction("record has an invalid canonical message index");
+                        var message  = _messages[messageIndex];
+                        var rendered = ProjectInstructionRenderer.Render(instructionRecord.Snapshot);
+                        var priorMessageIndex = _projectInstructionRecords
+                                               .Where(existing => existing.Action == "rules-applied")
+                                               .Select(existing => existing.CanonicalMessageIndex ?? -1)
+                                               .DefaultIfEmpty(-1).Max();
+                        if (message.Role != nameof(ChatRole.User) || message.Content != rendered ||
+                            messageIndex <= priorMessageIndex     ||
+                            ChatHistoryInvariants.LastCompleteBoundary(_messages.Select(ToChatMessage).ToArray()) !=
+                            _messages.Count)
+                            throw
+                                InvalidProjectInstruction("record is not bound to its exact canonical user message outside a tool group");
+                        if (recordIndex + 1 >= recordCount)
+                            throw
+                                InvalidProjectInstruction("record cannot be bound to its history item in the same batch");
+                        _expectedInstructionHistory =
+                            ($"{sessionId}:{sequence:D20}:{recordIndex + 1:D4}", sequence,
+                             instructionRecord.TurnId, instructionRecord.RunId, instructionRecord.Revision,
+                             instructionRecord.Snapshot.Documents.Count);
+                        break;
+                    case "scopes-tracked" :
+                        if (prior is null || instructionRecord.CanonicalMessageIndex is not null ||
+                            !string.Equals(instructionRecord.Revision, prior.Revision, StringComparison.Ordinal) ||
+                            !string.Equals(instructionRecord.PreviousRevision, prior.Revision,
+                                           StringComparison.Ordinal)                                  ||
+                            instructionRecord.Snapshot.RenderedHash    != prior.Snapshot.RenderedHash ||
+                            instructionRecord.Snapshot.RendererVersion != prior.Snapshot.RendererVersion)
+                            throw
+                                InvalidProjectInstruction("scopes-tracked must reference the current revision without a message binding");
+                        break;
+                    default :
+                        throw InvalidProjectInstruction($"contains unknown action '{instructionRecord.Action}'");
+                }
+            }
+            catch (SessionStoreException)
+            {
+                throw;
+            }
+            catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or InvalidDataException or
+                                             FormatException or OverflowException)
+            {
+                throw InvalidProjectInstruction($"contains invalid data: {ex.Message}", ex);
+            }
+
+            _projectInstructionRecords.Add(instructionRecord);
+        }
+
+        private void ValidateProjectInstructionSnapshot(ProjectInstructionSnapshot snapshot, bool validateRenderer)
+        {
+            if (snapshot is null)
+                throw InvalidProjectInstruction("snapshot is null");
+            if (snapshot.Documents is null || snapshot.ProbedDirectories is null)
+                throw InvalidProjectInstruction("snapshot documents or probed-directories collection is null");
+            if (string.IsNullOrWhiteSpace(snapshot.Revision)             ||
+                string.IsNullOrWhiteSpace(snapshot.DiscoveryFingerprint) ||
+                string.IsNullOrWhiteSpace(snapshot.RenderedHash)         ||
+                string.IsNullOrWhiteSpace(snapshot.RendererVersion))
+                throw
+                    InvalidProjectInstruction("snapshot has a missing revision, fingerprint, rendered hash, or renderer version");
+
+            foreach (var directory in snapshot.ProbedDirectories)
+            {
+                if (directory is null)
+                    throw InvalidProjectInstruction("snapshot contains a null probed directory");
+                ValidateRelativePath(directory, "probed directory", true);
+            }
+
+            foreach (var document in snapshot.Documents)
+            {
+                if (document is null)
+                    throw InvalidProjectInstruction("snapshot contains a null document");
+                if (string.IsNullOrWhiteSpace(document.SourcePath)     ||
+                    string.IsNullOrWhiteSpace(document.ScopeDirectory) || document.Content is null ||
+                    string.IsNullOrWhiteSpace(document.ContentHash)    || document.ByteCount < 0)
+                    throw
+                        InvalidProjectInstruction("snapshot document has a null or invalid source, scope, content, hash, or byte count");
+
+                ValidateRelativePath(document.SourcePath, "source path");
+                ValidateRelativePath(document.ScopeDirectory, "scope directory", true);
+                if (!string.Equals(Path.GetFileName(document.SourcePath), "AGENTS.md",
+                                   OperatingSystem.IsWindows()
+                                       ? StringComparison.OrdinalIgnoreCase
+                                       : StringComparison.Ordinal))
+                    throw InvalidProjectInstruction($"source '{document.SourcePath}' does not name AGENTS.md");
+                var sourceDirectory = Path
+                                     .GetDirectoryName(document.SourcePath.Replace('/', Path.DirectorySeparatorChar))
+                                    ?.Replace(Path.DirectorySeparatorChar, '/');
+                if (string.IsNullOrEmpty(sourceDirectory)) sourceDirectory = ".";
+                if (!string.Equals(sourceDirectory, document.ScopeDirectory, StringComparison.Ordinal))
+                    throw
+                        InvalidProjectInstruction($"source '{document.SourcePath}' does not match scope '{document.ScopeDirectory}'");
+
+                if (document.ContentHash.Length != 64 || document.ContentHash.Any(character =>
+                                 character is not (>= '0' and <= '9') and not (>= 'a' and <= 'f') and
+                                              not (>= 'A' and <= 'F')))
+                    throw
+                        InvalidProjectInstruction($"source '{document.SourcePath}' has a malformed SHA-256 content hash");
+
+                byte[] contentBytes;
+                try
+                {
+                    contentBytes = new UTF8Encoding(false, true).GetBytes(document.Content);
+                }
+                catch (EncoderFallbackException ex)
+                {
+                    throw InvalidProjectInstruction($"source '{document.SourcePath}' contains invalid UTF-16 text", ex);
+                }
+
+                if (document.HasUtf8Bom)
+                    contentBytes = [0xEF, 0xBB, 0xBF, .. contentBytes];
+                var actualHash = Convert.ToHexString(SHA256.HashData(contentBytes));
+                if (document.ByteCount != contentBytes.Length ||
+                    !string.Equals(actualHash, document.ContentHash, StringComparison.OrdinalIgnoreCase))
+                    throw
+                        InvalidProjectInstruction($"source '{document.SourcePath}' does not match its raw-byte hash or byte count");
+            }
+
+            if (!validateRenderer) return;
+            try
+            {
+                ProjectInstructionRenderer.Validate(snapshot);
+            }
+            catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or InvalidDataException or
+                                             FormatException or OverflowException)
+            {
+                throw InvalidProjectInstruction($"snapshot validation failed: {ex.Message}", ex);
+            }
+        }
+
+        private SessionStoreException InvalidProjectInstruction(string detail, Exception? innerException = null)
+        {
+            var message =
+                $"Session '{sessionId}' log '{logPath}' contains invalid project-instructions data: {detail}.";
+            return innerException is null
+                ? new SessionStoreException(message)
+                : new SessionStoreException(message, innerException);
+        }
+
+        private void ValidateRelativePath(string path, string field, bool allowRoot = false)
+        {
+            if (allowRoot && path == ".") return;
+            if (string.IsNullOrWhiteSpace(path) || path.StartsWith('/') || path.Contains('\\') || path.Contains(':') ||
+                path.Any(char.IsControl)        ||
+                Path.IsPathRooted(path)         || path.Split('/').Any(segment => segment is "" or "." or ".."))
+                throw InvalidProjectInstruction($"{field} '{path}' is not a normalized workspace-relative path");
         }
 
         /// <summary>
@@ -816,9 +1201,10 @@ public static class SessionStoreReader
                         SessionStoreException($"Session '{sessionId}', run '{incoming.Id}' repeats or omits an invocation identity.");
                 var key = UnknownCallKey(turnId, incoming.Id, call.InvocationId, call.CallId);
                 if (!_completedToolFacts.TryGetValue(key, out var terminal)) continue;
-                if (call.State      != terminal.State      || call.CallId != terminal.CallId ||
-                    call.ToolName   != terminal.ToolName   ||
-                    call.Capability != terminal.Capability || call.SideEffects != terminal.SideEffects)
+                if (call.State            != terminal.State      || call.CallId != terminal.CallId ||
+                    call.ToolName         != terminal.ToolName   ||
+                    call.Capability       != terminal.Capability || call.SideEffects != terminal.SideEffects ||
+                    call.NotStartedReason != terminal.NotStartedReason)
                     throw new
                         SessionStoreException($"Session '{sessionId}', run '{incoming.Id}', invocation '{call.InvocationId}' contradicts its terminal history fact.");
             }
@@ -835,6 +1221,16 @@ public static class SessionStoreReader
             payload.Deserialize(typeInfo) ??
             throw new SessionStoreException($"Session '{sessionId}' has an empty {typeof(T).Name} payload.");
 
+        private static ChatMessage ToChatMessage(PersistedMessage message) => new()
+        {
+            Role       = Enum.Parse<ChatRole>(message.Role),
+            Content    = message.Content,
+            ToolCallId = message.ToolCallId,
+            Name       = message.Name,
+            ToolCalls = message.ToolCalls?.Select(call => new ChatToolCall(call.Id, call.Name, call.Arguments))
+                               .ToArray()
+        };
+
         private static string UnknownCallKey(string turnId, string runId, string? invocationId, string callId) =>
             $"{turnId}\u001f{runId}\u001f{(invocationId is null ? "call:" + callId : "invocation:" + invocationId)}";
     }
@@ -848,6 +1244,8 @@ public static class SessionStoreReader
 [JsonSerializable(typeof(SessionLogMessage))]
 [JsonSerializable(typeof(SessionLogCheckpoint))]
 [JsonSerializable(typeof(SessionLogSessionState))]
+[JsonSerializable(typeof(ProjectInstructionSnapshot))]
+[JsonSerializable(typeof(ProjectInstructionRecord))]
 [JsonSerializable(typeof(PersistedRun))]
 [JsonSerializable(typeof(PersistedTurn))]
 [JsonSerializable(typeof(PersistedMessage))]

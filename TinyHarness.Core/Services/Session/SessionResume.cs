@@ -197,12 +197,13 @@ public static class SessionResume
         {
             context.Restore(messages, state, conversation.HasState, conversation.FoldStartMessageIndex,
                             conversation.FoldEndMessageIndex);
+            context.RestoreProjectInstructions(conversation.ProjectInstructionRecords);
         }
-        catch (ArgumentException ex)
+        catch (Exception ex) when (ex is ArgumentException or InvalidDataException)
         {
             throw new
-                SessionStoreException($"Stored session '{snapshot.Id}' is damaged: its fold position does not agree with " +
-                                      $"the stored message history. {ex.Message}", ex);
+                SessionStoreException($"Stored session '{snapshot.Id}' is damaged: its conversation, fold boundaries, or " +
+                                      $"project-instruction source records are inconsistent. {ex.Message}", ex);
         }
 
         var session = RebuildSession(snapshot);
@@ -332,6 +333,7 @@ public static class SessionResume
             SideEffects      = call.SideEffects,
             Summary          = call.Summary,
             PreparationError = call.PreparationError,
+            NotStartedReason = call.NotStartedReason,
             Approval         = call.Approval,
             State            = state
         };

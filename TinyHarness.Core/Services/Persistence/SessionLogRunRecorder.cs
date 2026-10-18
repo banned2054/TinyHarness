@@ -245,17 +245,17 @@ public sealed class SessionLogRunRecorder : IRunRecorder
                                                     cancellationToken, record).ConfigureAwait(false);
         var audit = new AuditRecord
         {
-            RunId           = RunId,
-            Kind            = "tool.not-started",
-            InvocationId    = invocationId,
-            CallId          = _redactor.Redact(record.CallId),
-            ToolName        = _redactor.Redact(record.ToolName),
-            Capability      = _redactor.RedactNullable(record.Capability),
-            Summary         = _redactor.Redact(record.Summary),
-            TargetPaths     = pending.Preparation is null ? null : RedactPaths(pending.Preparation.TargetPaths),
+            RunId = RunId,
+            Kind = "tool.not-started",
+            InvocationId = invocationId,
+            CallId = _redactor.Redact(record.CallId),
+            ToolName = _redactor.Redact(record.ToolName),
+            Capability = _redactor.RedactNullable(record.Capability),
+            Summary = _redactor.Redact(record.Summary),
+            TargetPaths = pending.Preparation is null ? null : RedactPaths(pending.Preparation.TargetPaths),
             ExecutionPolicy = _redactor.RedactNullable(pending.Preparation?.ExecutionPolicy),
-            Status          = nameof(ToolCallExecutionState.KnownNotStarted),
-            Outcome         = _redactor.RedactNullable(record.PreparationError ?? record.Approval)
+            Status = nameof(ToolCallExecutionState.KnownNotStarted),
+            Outcome = _redactor.RedactNullable(record.NotStartedReason ?? record.PreparationError ?? record.Approval)
         };
         var appended = await AppendBatchAsync([AuditRecord(audit), HistoryRecord(item)], cancellationToken)
            .ConfigureAwait(false);
@@ -406,22 +406,28 @@ public sealed class SessionLogRunRecorder : IRunRecorder
             }
             catch (Exception ex)
             {
-                var safeMessage                           = _redactor.Redact(ex.Message);
-                if (safeMessage.Length > 512) safeMessage = safeMessage[..512];
-                _displayFailureCount++;
-                DisplayWarning = $"Live history display failed for {_displayFailureCount} item(s): {safeMessage}";
-                var safeException = new InvalidOperationException(safeMessage);
-                try
-                {
-                    if (_historyPublishError is not null) _historyPublishError(safeException);
-                    else Trace.TraceError("Session history display callback failed: {0}", safeMessage);
-                }
-                catch (Exception reportError)
-                {
-                    Trace.TraceError("Session history display error reporter failed: {0}",
-                                     _redactor.Redact(reportError.Message));
-                }
+                ReportHistoryPublishError(ex);
             }
+        }
+    }
+
+    internal void ReportHistoryPublishError(Exception exception)
+    {
+        ArgumentNullException.ThrowIfNull(exception);
+        var safeMessage                           = _redactor.Redact(exception.Message);
+        if (safeMessage.Length > 512) safeMessage = safeMessage[..512];
+        _displayFailureCount++;
+        DisplayWarning = $"Live history display failed for {_displayFailureCount} item(s): {safeMessage}";
+        var safeException = new InvalidOperationException(safeMessage);
+        try
+        {
+            if (_historyPublishError is not null) _historyPublishError(safeException);
+            else Trace.TraceError("Session history display callback failed: {0}", safeMessage);
+        }
+        catch (Exception reportError)
+        {
+            Trace.TraceError("Session history display error reporter failed: {0}",
+                             _redactor.Redact(reportError.Message));
         }
     }
 
@@ -473,6 +479,7 @@ public sealed class SessionLogRunRecorder : IRunRecorder
                               approval : _redactor.RedactNullable(pending.Outcome ?? execution?.Approval),
                               state : state,
                               preparationError : _redactor.RedactNullable(execution?.PreparationError),
+                              notStartedReason : _redactor.RedactNullable(execution?.NotStartedReason),
                               succeeded : result?.Succeeded,
                               exitCode : result?.ExitCode,
                               timedOut : result?.TimedOut               ?? false,
@@ -541,7 +548,7 @@ public sealed class SessionLogRunRecorder : IRunRecorder
                                               IReadOnlyList<PatchChange>? patchChanges = null,
                                               bool outputIncomplete = false,
                                               string? outputWarning = null, string? preparationError = null,
-                                              string? invocationId = null) => new()
+                                              string? invocationId = null, string? notStartedReason = null) => new()
     {
         Id               = string.Empty,
         Sequence         = 0,
@@ -560,6 +567,7 @@ public sealed class SessionLogRunRecorder : IRunRecorder
         ExecutionPolicy  = executionPolicy,
         Approval         = approval,
         PreparationError = preparationError,
+        NotStartedReason = notStartedReason,
         State            = state,
         Succeeded        = succeeded,
         ExitCode         = exitCode,

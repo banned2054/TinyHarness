@@ -1,7 +1,9 @@
 using System.Text;
 using TinyHarness.Core.Models.ChatCompletions;
 using TinyHarness.Core.Models.Context;
+using TinyHarness.Core.Models.ProjectInstructions;
 using TinyHarness.Core.Models.Tools;
+using TinyHarness.Core.Services.Agent;
 
 namespace TinyHarness.Core.Services.Context;
 
@@ -16,14 +18,16 @@ namespace TinyHarness.Core.Services.Context;
 /// <remarks>
 ///     <para>
 ///         assistant tool_calls 与相邻 tool 结果是不可拆分的原子组；最新进行中组与最新完整组不折叠。
-///         视图及摘要输入可裁剪工具结果，但不改写本地原始消息；未启用预算时视图直通完整历史。
+///         视图及摘要输入可裁剪工具结果，但不改写本地原始消息；当前项目规则独立保留，旧版本按来源过滤。
+///         未启用预算时仍应用规则投影，未管理规则时直通完整历史。
 ///         摘要输入按独立预算从最旧完整组开始分批；提交须保留事实、使视图严格缩小且计划仍有效。
 ///     </para>
 ///     <para>
 ///         Assistant tool_calls and adjacent tool results form indivisible atomic groups;
 ///         the latest in-progress and latest complete groups are never folded.
 ///         View and summary input may cap tool results without rewriting local messages;
-///         without budgeting the view passes through the full history.
+///         current project rules remain present and source bindings filter superseded versions.
+///         Without budgeting the rules projection still applies; unmanaged history passes through unchanged.
 ///         Summary input is batched oldest-first within its own budget; commits require preserved facts,
 ///         a strictly smaller view and a valid fold plan.
 ///     </para>
@@ -48,6 +52,9 @@ public sealed class ConversationContext
         "summary.') and, on the first fold, the run's original task and constraints; use them "           +
         "to fill goal, constraints and pendingWork accurately.";
 
+    private readonly HashSet<int>                   _instructionMessageIndices = [];
+    private readonly List<ProjectInstructionRecord> _instructionRecords        = [];
+
     private readonly List<ChatMessage> _messages = [];
 
     private readonly ContextOptions? _options;
@@ -60,7 +67,8 @@ public sealed class ConversationContext
     // 失败尝试锁定到当前消息数，避免原地重试；成功不锁定，以便继续分批压缩。
     private int _messagesAtLastAttempt = -1;
 
-    private FoldSelection? _pendingFold;
+    private FoldSelection?            _pendingFold;
+    private ProjectInstructionRecord? _pendingInstructions;
 
     // 用最近一次请求输入比值校准视图估算，并钳位到 [0.5, 4.0] 防止异常 usage 主导预算。
     // 校准仍是估算，Reset 保留它，因为偏差属于估算器而非单次任务。
@@ -69,15 +77,27 @@ public sealed class ConversationContext
     /// <summary>
     ///     <para>
     ///         创建上下文管理器。<paramref name="options" /> 为 <see langword="null" /> 时不启用预算
-    ///         与压缩，视图等于完整历史（向后兼容的直通模式）。
+    ///         与压缩；未管理规则时视图等于完整历史，已管理的规则仍投影当前版本。
     ///     </para>
     ///     <para>
     ///         Creates the context manager. A <see langword="null" /> <paramref name="options" />
-    ///         disables budgeting and compaction: the view equals the full history (pass-through
-    ///         mode kept for backward compatibility).
+    ///         disables budgeting and compaction; unmanaged history passes through unchanged,
+    ///         while managed project instructions still project the current revision.
     ///     </para>
     /// </summary>
     public ConversationContext(ContextOptions? options = null) => _options = options?.Validate();
+
+    /// <summary>
+    ///     <para>已确认提交的当前项目规则；null 表示尚未纳入宿主管理。</para>
+    ///     <para>The current reliably committed project rules; null means unmanaged.</para>
+    /// </summary>
+    public ProjectInstructionSnapshot? ProjectInstructions { get; private set; }
+
+    /// <summary>
+    ///     <para>结构化来源事实，含待提交候选；仅由权威写入端增量保存。</para>
+    ///     <para>Structured source facts, including a pending candidate, saved incrementally by the authoritative writer.</para>
+    /// </summary>
+    public IReadOnlyList<ProjectInstructionRecord> ProjectInstructionRecords => _instructionRecords.AsReadOnly();
 
     /// <summary>
     ///     <para>
@@ -117,6 +137,122 @@ public sealed class ConversationContext
         : _options.ContextWindowTokens;
 
     /// <summary>
+    ///     <para>暂存完整规则及来源绑定，等待同批日志确认后生效。</para>
+    ///     <para>Stages complete rules and their source binding until the same journal batch is confirmed.</para>
+    /// </summary>
+    public ProjectInstructionRecord StageProjectInstructions(
+        ProjectInstructionSnapshot snapshot, string reason, string turnId, string runId)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        ProjectInstructionRenderer.Validate(snapshot);
+        if (_pendingInstructions is not null)
+            throw new InvalidOperationException("A project instruction update is already pending.");
+        if (_messages.Count                                       == 0 || _messages[0].Role != ChatRole.System ||
+            ChatHistoryInvariants.LastCompleteBoundary(_messages) != _messages.Count)
+            throw new InvalidOperationException("Project instructions require a complete conversation boundary.");
+        var rulesChanged = ProjectInstructions?.Revision != snapshot.Revision;
+        var record = new ProjectInstructionRecord
+        {
+            Action                = rulesChanged ? "rules-applied" : "scopes-tracked",
+            Revision              = snapshot.Revision,
+            PreviousRevision      = ProjectInstructions?.Revision,
+            TurnId                = turnId,
+            RunId                 = runId,
+            Reason                = reason,
+            Snapshot              = snapshot,
+            CanonicalMessageIndex = rulesChanged ? _messages.Count : null
+        };
+        if (record.CanonicalMessageIndex is { } index)
+        {
+            Append(ChatMessage.User(ProjectInstructionRenderer.Render(snapshot)));
+            _instructionMessageIndices.Add(index);
+        }
+
+        _instructionRecords.Add(record);
+        _pendingInstructions = record;
+        _pendingFold         = null;
+        return record;
+    }
+
+    /// <summary>
+    ///     <para>同批日志可靠提交后发布暂存规则。</para>
+    ///     <para>Publishes staged rules after their journal batch has committed reliably.</para>
+    /// </summary>
+    public void ConfirmProjectInstructions()
+    {
+        if (_pendingInstructions is null) return;
+        ProjectInstructions    = _pendingInstructions.Snapshot;
+        _pendingInstructions   = null;
+        _messagesAtLastAttempt = -1;
+    }
+
+    /// <summary>
+    ///     <para>提交失败时丢弃暂存投影，不修改磁盘或已生效规则。</para>
+    ///     <para>Discards a failed candidate without changing disk or the effective rules.</para>
+    /// </summary>
+    public void RejectProjectInstructions()
+    {
+        if (_pendingInstructions is not { } pending) return;
+        if (pending.CanonicalMessageIndex is { } index)
+        {
+            _messages.RemoveAt(index);
+            _instructionMessageIndices.Remove(index);
+        }
+
+        _instructionRecords.RemoveAt(_instructionRecords.Count - 1);
+        _pendingInstructions   = null;
+        _pendingFold           = null;
+        _messagesAtLastAttempt = -1;
+    }
+
+    /// <summary>
+    ///     <para>从已校验的统一日志恢复来源链；正文标记不能生成宿主身份。</para>
+    ///     <para>Restores source bindings from the validated journal; content markers never establish host identity.</para>
+    /// </summary>
+    public void RestoreProjectInstructions(IReadOnlyList<ProjectInstructionRecord> records)
+    {
+        ArgumentNullException.ThrowIfNull(records);
+        var                         restoredRecords      = records.ToArray();
+        var                         indices              = new HashSet<int>();
+        var                         previousMessageIndex = -1;
+        ProjectInstructionSnapshot? current              = null;
+        foreach (var record in restoredRecords)
+        {
+            ProjectInstructionRenderer.Validate(record.Snapshot);
+            if (record.Schema   != "tinyharness.project-instructions/1" ||
+                record.Revision != record.Snapshot.Revision || record.PreviousRevision != current?.Revision ||
+                string.IsNullOrWhiteSpace(record.TurnId) || string.IsNullOrWhiteSpace(record.RunId) ||
+                string.IsNullOrWhiteSpace(record.Reason))
+                throw new InvalidDataException("Invalid project instruction revision chain.");
+            if (record.Action == "rules-applied")
+            {
+                if (current?.Revision == record.Revision || record.CanonicalMessageIndex is not { } index ||
+                    index < 1 || index >= _messages.Count || !indices.Add(index) ||
+                    index <= previousMessageIndex ||
+                    _messages[index].Role != ChatRole.User ||
+                    _messages[index].Content != ProjectInstructionRenderer.Render(record.Snapshot) ||
+                    ChatHistoryInvariants.LastCompleteBoundary(_messages.Take(index).ToArray()) != index)
+                    throw new InvalidDataException("Invalid project instruction canonical message binding.");
+                previousMessageIndex = index;
+            }
+            else if (record.Action   != "scopes-tracked" || current is null ||
+                     record.Revision != current.Revision || record.CanonicalMessageIndex is not null)
+            {
+                throw new InvalidDataException("Invalid project instruction discovery record.");
+            }
+
+            current = record.Snapshot;
+        }
+
+        _instructionRecords.Clear();
+        _instructionRecords.AddRange(restoredRecords);
+        _instructionMessageIndices.Clear();
+        _instructionMessageIndices.UnionWith(indices);
+        ProjectInstructions  = current;
+        _pendingInstructions = null;
+    }
+
+    /// <summary>
     ///     <para>
     ///         追加一条消息；任何追加都会解除上次压缩尝试的重试锁。
     ///     </para>
@@ -142,6 +278,10 @@ public sealed class ConversationContext
     public void Reset()
     {
         _messages.Clear();
+        _instructionRecords.Clear();
+        _instructionMessageIndices.Clear();
+        ProjectInstructions    = null;
+        _pendingInstructions   = null;
         State                  = StructuredState.Empty;
         _hasState              = false;
         _foldStartMessageIndex = -1;
@@ -168,8 +308,8 @@ public sealed class ConversationContext
     ///         a folded position requires state and 0 ≤ start &lt; end ≤ message count.
     ///     </para>
     /// </remarks>
-    public void Restore(IReadOnlyList<ChatMessage> messages, StructuredState state,
-                        bool                       hasState, int foldStartMessageIndex, int foldEndMessageIndex)
+    public void Restore(IReadOnlyList<ChatMessage> messages,              StructuredState state, bool hasState,
+                        int                        foldStartMessageIndex, int             foldEndMessageIndex)
     {
         ArgumentNullException.ThrowIfNull(messages);
         ArgumentNullException.ThrowIfNull(state);
@@ -184,7 +324,7 @@ public sealed class ConversationContext
             throw new ArgumentException("The fold position does not agree with the restored message history.");
         }
 
-        _messages.Clear();
+        Reset();
         _messages.AddRange(messages);
         State                  = state;
         _hasState              = hasState;
@@ -233,6 +373,10 @@ public sealed class ConversationContext
                                   nameof(messageCount));
 
         _messages.RemoveRange(messageCount, _messages.Count - messageCount);
+        var retained = _instructionRecords.TakeWhile(record =>
+                                                         record.CanonicalMessageIndex is not { } index ||
+                                                         index < messageCount).ToArray();
+        RestoreProjectInstructions(retained);
         _pendingFold           = null;
         _messagesAtLastAttempt = -1;
     }
@@ -298,25 +442,35 @@ public sealed class ConversationContext
     /// <summary>
     ///     <para>
     ///         构建本次请求发送给模型的视图：头部 + （如有）结构化状态消息 + 未折叠回合；
-    ///         在直通模式下等于完整历史。
+    ///         未启用预算时仍过滤过期宿主规则，未管理规则时直通完整历史。
     ///     </para>
     ///     <para>
     ///         Builds the view sent to the model on the next request: retained head, the
     ///         structured-state message when present, then all not-yet-folded turns. In
-    ///         pass-through mode this equals the full history.
+    ///         pass-through mode source bindings still filter superseded rules; unmanaged history stays unchanged.
     ///     </para>
     /// </summary>
-    public IReadOnlyList<ChatMessage> BuildModelView()
+    public IReadOnlyList<ChatMessage> BuildModelView() =>
+        BuildProjectedView(_hasState ? State : null,
+                           Enabled ? _foldStartMessageIndex : -1,
+                           Enabled ? _foldEndMessageIndex : 0);
+
+    /// <summary>
+    ///     <para>以同一来源过滤和规则插入逻辑构建实际视图及预算候选。</para>
+    ///     <para>Builds actual and budget candidate views with identical source filtering and rule insertion.</para>
+    /// </summary>
+    private IReadOnlyList<ChatMessage> BuildProjectedView(StructuredState? state, int foldStart, int foldEnd)
     {
-        if (!Enabled) return _messages.ToList();
-
-        var view      = new List<ChatMessage>(_messages.Count + 1);
-        var prefixEnd = _foldStartMessageIndex < 0 ? 0 : _foldStartMessageIndex;
-        for (var i = 0; i < prefixEnd; i++) view.Add(CapViewMessage(_messages[i]));
-
-        if (_hasState) view.Add(ChatMessage.User(State.ToJson()));
-
-        for (var i = _foldEndMessageIndex; i < _messages.Count; i++) view.Add(CapViewMessage(_messages[i]));
+        var view = new List<ChatMessage>(_messages.Count + 2);
+        for (var i = 0; i < _messages.Count; i++)
+        {
+            if (state is not null && i == foldStart)
+                view.Add(ChatMessage.User(state.ToJson()));
+            if ((i >= foldStart && i < foldEnd) || _instructionMessageIndices.Contains(i)) continue;
+            view.Add(Enabled ? CapViewMessage(_messages[i]) : _messages[i]);
+            if (i == 0 && ProjectInstructions is { } snapshot)
+                view.Add(ChatMessage.User(ProjectInstructionRenderer.Render(snapshot)));
+        }
 
         return view;
     }
@@ -362,10 +516,13 @@ public sealed class ConversationContext
 
         // 首次压缩没有旧状态可推导目标，需提供头部任务与约束，不能仅凭工具记录猜测。
         if (!_hasState && BuildOriginalTaskMessage() is { } originalTask) result.Add(originalTask);
+        if (ProjectInstructions is { } instructions)
+            result.Add(ChatMessage.User(ProjectInstructionRenderer.Render(instructions)));
 
         foreach (var span in selection.Spans)
             for (var i = span.Start; i < span.Start + span.Count; i++)
-                result.Add(CapViewMessage(_messages[i]));
+                if (!_instructionMessageIndices.Contains(i))
+                    result.Add(CapViewMessage(_messages[i]));
 
         return result;
     }
@@ -569,6 +726,8 @@ public sealed class ConversationContext
             TokenEstimator.EstimateMessage(ChatMessage.User(_hasState ? State.ToJson() : "No previous summary."));
         if (!_hasState && BuildOriginalTaskMessage() is { } originalTask)
             budget -= TokenEstimator.EstimateMessage(originalTask);
+        if (ProjectInstructions is { } instructions)
+            budget -= TokenEstimator.EstimateMessage(ChatMessage.User(ProjectInstructionRenderer.Render(instructions)));
 
         return budget;
     }
@@ -598,6 +757,7 @@ public sealed class ConversationContext
         var appended = false;
         for (var i = 0; i < HeadEndIndex(); i++)
         {
+            if (_instructionMessageIndices.Contains(i)) continue;
             var message = _messages[i];
             if (string.IsNullOrWhiteSpace(message.Content)) continue;
 
@@ -621,8 +781,16 @@ public sealed class ConversationContext
     /// </summary>
     private IReadOnlyList<ChatMessage> HeadMessages()
     {
-        var end = HeadEndIndex();
-        return end == 0 ? [] : _messages.GetRange(0, end);
+        var end  = HeadEndIndex();
+        var head = new List<ChatMessage>();
+        for (var i = 0; i < end; i++)
+        {
+            if (!_instructionMessageIndices.Contains(i)) head.Add(_messages[i]);
+            if (i == 0 && ProjectInstructions is { } snapshot)
+                head.Add(ChatMessage.User(ProjectInstructionRenderer.Render(snapshot)));
+        }
+
+        return head;
     }
 
     /// <summary>
@@ -728,13 +896,7 @@ public sealed class ConversationContext
     /// </summary>
     private int EstimateCandidateViewTokens(StructuredState state, int foldStart, int foldEnd)
     {
-        var tokens                                 = 0;
-        for (var i = 0; i < foldStart; i++) tokens += TokenEstimator.EstimateMessage(CapViewMessage(_messages[i]));
-
-        tokens += TokenEstimator.EstimateMessage(ChatMessage.User(state.ToJson()));
-        for (var i = foldEnd; i < _messages.Count; i++)
-            tokens += TokenEstimator.EstimateMessage(CapViewMessage(_messages[i]));
-
+        var tokens = TokenEstimator.EstimateMessages(BuildProjectedView(state, foldStart, foldEnd));
         return (int)Math.Ceiling(tokens * _usageCalibration);
     }
 
@@ -753,15 +915,16 @@ public sealed class ConversationContext
     /// </summary>
     private List<MessageSpan> AssistantSpans()
     {
-        var spans = new List<MessageSpan>();
+        var spans  = new List<MessageSpan>();
+        var starts = new List<int>();
         for (var i = 0; i < _messages.Count; i++)
+            if (_messages[i].Role == ChatRole.Assistant)
+                starts.Add(i);
+        for (var i = 0; i < starts.Count; i++)
         {
-            if (_messages[i].Role != ChatRole.Assistant) continue;
-
-            var start = i;
-            while (i + 1 < _messages.Count && _messages[i + 1].Role == ChatRole.Tool) i++;
-
-            spans.Add(new MessageSpan(start, i - start + 1));
+            // 相邻 assistant 之间的真实输入与宿主消息也属于连续折叠区。
+            var end = i + 1 < starts.Count ? starts[i + 1] : _messages.Count;
+            spans.Add(new MessageSpan(starts[i], end - starts[i]));
         }
 
         return spans;
@@ -771,7 +934,8 @@ public sealed class ConversationContext
     {
         var tokens = 0;
         for (var i = span.Start; i < span.Start + span.Count; i++)
-            tokens += TokenEstimator.EstimateMessage(CapViewMessage(_messages[i]));
+            if (!_instructionMessageIndices.Contains(i))
+                tokens += TokenEstimator.EstimateMessage(CapViewMessage(_messages[i]));
 
         return tokens;
     }

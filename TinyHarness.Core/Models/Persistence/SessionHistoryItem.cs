@@ -24,24 +24,35 @@ public sealed record SessionHistoryItem
     /// </summary>
     public string? InvocationId { get; init; }
 
-    public string?                     ToolName         { get; init; }
-    public string?                     ArgumentsJson    { get; init; }
-    public string?                     Capability       { get; init; }
-    public string?                     Summary          { get; init; }
-    public IReadOnlyList<string>?      TargetPaths      { get; init; }
-    public string?                     ExecutionPolicy  { get; init; }
-    public string?                     Approval         { get; init; }
-    public string?                     PreparationError { get; init; }
-    public string?                     State            { get; init; }
-    public bool?                       Succeeded        { get; init; }
-    public int?                        ExitCode         { get; init; }
-    public bool                        TimedOut         { get; init; }
-    public bool                        OutputTruncated  { get; init; }
-    public string?                     Stdout           { get; init; }
-    public string?                     Stderr           { get; init; }
-    public IReadOnlyList<PatchChange>? PatchChanges     { get; init; }
-    public bool                        OutputIncomplete { get; init; }
-    public string?                     OutputWarning    { get; init; }
+    public string? ToolName      { get; init; }
+    public string? ArgumentsJson { get; init; }
+    public string? Capability    { get; init; }
+    public string? Summary       { get; init; }
+
+    public IReadOnlyList<string>? TargetPaths { get; init; }
+
+    public string? ExecutionPolicy  { get; init; }
+    public string? Approval         { get; init; }
+    public string? PreparationError { get; init; }
+
+    /// <summary>
+    ///     <para>工具未开始的独立原因，不与准备错误或授权拒绝混淆。</para>
+    ///     <para>The separate reason a tool did not start, distinct from preparation errors and permission denials.</para>
+    /// </summary>
+    public string? NotStartedReason { get; init; }
+
+    public string? State           { get; init; }
+    public bool?   Succeeded       { get; init; }
+    public int?    ExitCode        { get; init; }
+    public bool    TimedOut        { get; init; }
+    public bool    OutputTruncated { get; init; }
+    public string? Stdout          { get; init; }
+    public string? Stderr          { get; init; }
+
+    public IReadOnlyList<PatchChange>? PatchChanges { get; init; }
+
+    public bool    OutputIncomplete { get; init; }
+    public string? OutputWarning    { get; init; }
 }
 
 /// <summary>
@@ -50,10 +61,11 @@ public sealed record SessionHistoryItem
 /// </summary>
 public static class SessionHistoryKind
 {
-    public const string User    = "user";
-    public const string Process = "process";
-    public const string Final   = "final";
-    public const string Tool    = "tool";
+    public const string User                = "user";
+    public const string Process             = "process";
+    public const string Final               = "final";
+    public const string Tool                = "tool";
+    public const string ProjectInstructions = "project-instructions";
 }
 
 [JsonSerializable(typeof(SessionHistoryItem))]

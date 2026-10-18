@@ -63,6 +63,16 @@ public sealed class ToolCallRecord
     public string? PreparationError { get; init; }
 
     /// <summary>
+    ///     <para>工具未开始的原因，例如项目规则变化导致延期；与准备失败及授权拒绝分开记录。</para>
+    ///     <para>
+    ///         Why the tool did not start, such as deferral after project-rule changes; distinct from preparation failure
+    ///         and permission denial.
+    ///     </para>
+    /// </summary>
+    [JsonInclude]
+    public string? NotStartedReason { get; internal set; }
+
+    /// <summary>
     ///     <para>授权结论或拒绝原因；尚未授权时为 null。“allow session”仅表示本次运行期授权。</para>
     ///     <para>
     ///         The authorization outcome or denial reason; null before authorization.
@@ -84,6 +94,7 @@ public sealed class ToolCallRecord
         SideEffects      = SideEffects,
         Summary          = Summary,
         PreparationError = PreparationError,
+        NotStartedReason = NotStartedReason,
         Approval         = Approval,
         State            = State
     };
