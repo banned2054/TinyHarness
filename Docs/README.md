@@ -30,9 +30,9 @@
 
 早期开发中，命令、配置和存储格式可能随里程碑变化。
 
-目前已实现：单任务 `run`、交互式多轮 `chat`、受保护会话存储（严格离线的 `session list` / `session show`，并支持 `chat --session <id>` 跨进程续聊）、离线优先的配置管理、只读 MCP worker 和可选的 Windows 沙箱管理。统一会话日志已实现，旧持久化读取器与迁移命令已移除。项目指令（`AGENTS.md`）加载和宿主强制的只读/实施模式属于计划，尚未实现。默认测试与构建不调用付费模型；新日志上的真实模型续聊未验证。
+目前已实现：单任务 `run`、交互式多轮 `chat`、受保护会话存储（严格离线的 `session list` / `session show`，并支持 `chat --session <id>` 跨进程续聊）、离线优先的配置管理、只读 MCP worker 和可选的 Windows 沙箱管理。M14.1 已加入有界的根／局部 `AGENTS.md` 加载、工具边界与续聊刷新，以及首次非空发送才创建新 chat 会话。宿主强制的只读/实施模式仍属于后续计划。默认测试与构建不调用付费模型；统一日志上的真实模型续聊未验证。
 
-移除未使用的旧持久化兼容层后，离线回归通过：775 总、774 通过、1 项因文件符号链接权限跳过、0 失败；scale 独立 1/1 通过，原预算不变。NativeAOT 编译与仓库外 smoke 通过，验证恢复、历史和已确认 patch diff。当前证据：`artifacts/test-results/journal-only-regression.trx`、`artifacts/test-results/journal-only-scale.trx`、`artifacts/journal-only-scale-results.json`、`artifacts/journal-only-native-smoke.txt`。命令、测量及上轮历史验收见[持久化设计](session-persistence-design.md#73-移除旧兼容层后的本地复验)。
+M14.1 离线回归通过：**853 总、851 通过、2 项因符号链接创建权限跳过、0 失败**；scale 独立 1/1 通过，原预算不变。NativeAOT 编译与仓库外 smoke 通过，验证规则初始加载、更新、续聊来源完整性、历史和已确认 patch diff。证据：`artifacts/test-results/m14-regression.trx`、`artifacts/test-results/m14-scale.trx`、`artifacts/m14-instructions-scale-results.json`、`artifacts/m14-instructions-native-smoke.txt`。兼容、命令及未验证边界见[实施与验收记录](project-instructions-design.md#14-实施结果与本地验证)。
 
 ## ✨ 特性
 
@@ -40,6 +40,7 @@
 - **工具** — `list_files`、`search_text`、`read_file`、`apply_patch` 与 `shell`（直接进程/显式 shell 模式），带超时、进程树终止和输出裁剪。
 - **权限** — 每次调用经过 `Prepare → Authorize → Execute`：工作区内读取默认放行，补丁与进程默认询问（`a` 单次 / `s` 本次运行 / `d` 拒绝），可配置命令允许规则。
 - **上下文** — token 预算按真实 usage 校准、工具结果裁剪、旧回合压缩为经过校验的结构化摘要。
+- **项目指令** — 按固定预算加载根／局部 `AGENTS.md`，压缩后保留当前规则，在请求、审批和派发边界重新检查；规则变化使未启动的旧计划与批准失效，项目文件不能授予权限。新 `chat` 打开、空输入或 EOF 不创建会话，首次真实发送通过规则预检后才创建。
 - **持久化** — `run` 和新会话 `chat` 共用受保护会话存储中的 `tinyharness.session-log/1` 追加日志，默认不再输出旧的全量 run snapshot/audit。历史 DTO 确定性保存 process／final 分类、有界脱敏工具输出，以及逐文件 patch 事实；工作区后来变化后仍能读取当时 diff，并区分 `confirmed` 与 `unknown`。执行意图保存失败不启动副作用；副作用结果未知时设置 NeedsInspection，模型视图回退到最近完整工具边界，未知副作用阻断写入与进程执行直到用户检查确认。历史按序号游标经共享 scanner 分页（每页最多返回 200 条 items，序列化 UTF-8 累计预算 8 MiB；扫描可读取整个捕获范围）；artifact 内容内联保存，单个上限 2 MiB、stdout/stderr 合计 4 MiB；批次上限 8 MiB，日志总量上限 256 MiB。不确定写入使 writer poison，strict 续聊读取拒绝尾部半行，历史检查可返回可靠前缀并给出 warning。会话可严格离线查看，并可在新进程经工作区/模型/协议与 opaque 完整性检查后续聊（`chat --session <id>`）。会话可能包含秘密且不被 Harness 加密；`session list` / `session show` 只输出脱敏检查视图，不展示 canonical 消息或 opaque 载荷。
 - **MCP worker** — `tinyharness mcp` 启动本机只读 stdio 服务，向 Codex 等客户端提供 `ask_glm`。
 - **Windows 沙箱** — 可选的机器级 `shell` 进程隔离，通过 `sandbox status / provision / verify` 显式管理。
@@ -48,7 +49,7 @@
 
 - 中断后仍有未知副作用结果的会话，续聊时模型视图回退到最近完整工具边界，副作用工具保持阻断直到用户检查工作区并确认（恢复时的 `c` / `k` 提示）。当前仅支持 `tinyharness.session-log/1`；旧 `.session.json` 快照和独立 audit 文件不再读取，也不提供迁移命令。
 - Windows 沙箱只在单台机器上验证过，与 Codex 发布版共存未验收。
-- NativeAOT 只验证了 `win-x64`；当前仅日志实现的 publish 和原生 smoke 已通过。协议验证基于本地模拟 SSE 服务，旧实现另有单个真实 endpoint 的历史验证。
+- NativeAOT 只验证了 `win-x64`；M14.1 的 publish 和原生 smoke 已通过。本机规则 leaf／目录链接创建测试因权限跳过。协议验证基于本地模拟 SSE 服务，旧实现另有单个真实 endpoint 的历史验证。
 - 统一会话日志上的 `chat` 尚未用真实模型服务验证；GUI 历史消费、断电持久性及实际 OS 隔离也未在本轮验证。
 
 ## 🚀 构建与运行

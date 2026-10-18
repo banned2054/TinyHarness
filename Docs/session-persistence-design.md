@@ -72,6 +72,14 @@
 - 当前 diff 与工具输出内联保存在历史条目中；从临时 artifact 读取内容的边界为单个 2 MiB、stdout/stderr 合计 4 MiB，并在保存前脱敏。artifact 缺失、不可读或超限时保留可用输出并明确 outputIncomplete／warning，不冒充完整归档，也不把临时路径作为长期可读引用。
 - 可执行批准、凭据值和旧计划对象不落盘；审批与策略身份只作为历史事实。协议内容可能包含秘密，不加密的事实不能因换格式而消失。
 
+M14.1 在相同 envelope 中扩展必需记录族，详细来源契约见[项目指令设计 §8](project-instructions-design.md#8-统一日志来源与版本演进)：
+
+| 记录族 | payload schema | 兼容边界 |
+|---|---|---|
+| `project-instructions` | `tinyharness.project-instructions/1` | `rules-applied` 绑定同批 canonical 宿主消息和完整规则；`scopes-tracked` 仅更新完整探测集合，引用当前 revision，不重复正文 |
+
+外层仍为 `tinyharness.session-log/1`，批次、顺序、锁与资源上限保持原契约。没有项目规则记录的统一日志仍可读取，规则状态为尚未管理；下一次真实发送才加载当前规则。首次写入此必需记录后，旧二进制按未知必需 kind 明确拒绝；新 reader 拒绝未知 payload schema、renderer 或损坏来源绑定，不忽略规则后继续执行。此扩展不重新引入旧快照读取、迁移或独立规则文件。
+
 ### 4.2 写入边界与故障
 
 - 复用受保护用户级目录、词法与最终路径／链接检查、沙箱写保护及跨进程排他；一个会话只有一个串行写入者。
