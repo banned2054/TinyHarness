@@ -728,8 +728,9 @@ public sealed class AgentLoop
                 Error          = "Run cancelled"
             }).ConfigureAwait(false);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (Exception ex)
         {
+            // SDK 超时也可能抛取消异常；只有调用方令牌已取消才进入上面的取消分支。
             return await FinishAsync(new AgentResult
             {
                 Status         = AgentStatus.Failed,

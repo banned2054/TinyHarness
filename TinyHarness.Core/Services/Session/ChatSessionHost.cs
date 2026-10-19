@@ -300,9 +300,9 @@ public sealed class ChatSessionHost : IDisposable
             run.Finish(result);
             return run;
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            // 循环之外的取消也必须留下唯一终态与已有执行记录。
+            // 循环之外的调用方取消也须留下终态；其他取消异常交由失败分支保留原因。
             run.Finish(new AgentResult
             {
                 Status    = AgentStatus.Cancelled,
