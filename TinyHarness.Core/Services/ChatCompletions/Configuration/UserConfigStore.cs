@@ -193,6 +193,8 @@ public static class UserConfigStore
             if (settings.WindowsSandbox is { } sandbox)
             {
                 var sandboxNode = new JsonObject();
+                if (sandbox.AllowTcpLoopback)
+                    sandboxNode["allowTcpLoopback"] = true;
                 if (sandbox.Enabled)
                     sandboxNode["enabled"] = true;
                 if (!string.IsNullOrWhiteSpace(sandbox.SetupExecutablePath))
@@ -421,6 +423,8 @@ public static class UserConfigStore
             return new WindowsSandboxSettings
             {
                 Enabled = ReadBool(sandboxNode, "enabled", filePath, "settings.windowsSandbox.enabled") ?? false,
+                AllowTcpLoopback = ReadBool(sandboxNode, "allowTcpLoopback", filePath,
+                                            "settings.windowsSandbox.allowTcpLoopback") ?? false,
                 SetupExecutablePath  = ReadString(sandboxNode, "setupExecutablePath", filePath)  ?? string.Empty,
                 RunnerExecutablePath = ReadString(sandboxNode, "runnerExecutablePath", filePath) ?? string.Empty,
                 SandboxHome          = ReadString(sandboxNode, "sandboxHome", filePath)          ?? string.Empty,
@@ -451,6 +455,9 @@ public static class UserConfigStore
         return new WindowsSandboxSettings
         {
             Enabled = ReadBool(sandboxNode, "enabled", filePath, "settings.windowsSandbox.enabled") ?? false,
+            AllowTcpLoopback =
+                ReadBool(sandboxNode, "allowTcpLoopback", filePath, "settings.windowsSandbox.allowTcpLoopback") ??
+                false,
             SetupExecutablePath  = ReadString(sandboxNode, "setupExecutablePath", filePath)  ?? string.Empty,
             RunnerExecutablePath = ReadString(sandboxNode, "runnerExecutablePath", filePath) ?? string.Empty,
             SandboxHome          = ReadString(sandboxNode, "sandboxHome", filePath)          ?? string.Empty,

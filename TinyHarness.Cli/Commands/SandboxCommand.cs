@@ -8,15 +8,18 @@ using TinyHarness.Core.Services.Runtime.WindowsSandbox;
 namespace TinyHarness.Cli.Commands;
 
 /// <summary>
-///     `tinyharness sandbox`：Windows 沙箱的管理入口。status 严格只读（不创建任何目录/文件、
-///     不提权、绝不调用组合器）；provision 是唯一的机器级修改路径——展示副作用、过确认门后经
-///     UAC 运行 setup.exe 一次。两个子命令都绝不把输入发送给模型。
-///     `tinyharness sandbox`: the management entry for the Windows sandbox.
-///     status is strictly read-only (it creates no directory or file, never
-///     elevates, and never touches the composer); provision is the only
-///     machine-level mutation path — it presents the side effects, passes the
-///     confirmation gate, then runs setup.exe elevated once. Neither
-///     subcommand ever sends input to a model.
+///     <para>
+///         `tinyharness sandbox`：Windows 沙箱的管理入口。status 严格只读（不创建任何目录/文件、不提权、绝不调用组合器）；provision 是唯一的机器级修改路径——展示副作用、过确认门后经
+///         UAC 运行 setup.exe 一次。两个子命令都绝不把输入发送给模型。
+///     </para>
+///     <para>
+///         `tinyharness sandbox`: the management entry for the Windows sandbox.
+///         status is strictly read-only (it creates no directory or file, never
+///         elevates, and never touches the composer); provision is the only
+///         machine-level mutation path — it presents the side effects, passes the
+///         confirmation gate, then runs setup.exe elevated once. Neither
+///         subcommand ever sends input to a model.
+///     </para>
 /// </summary>
 internal static class SandboxCommand
 {
@@ -36,9 +39,11 @@ internal static class SandboxCommand
     };
 
     /// <summary>
-    ///     严格只读的状态检查。未配置或就绪返回 0；有任何问题返回 1。不要求 enabled=true。
-    ///     The strictly read-only status check. Not configured or ready returns
-    ///     0; any reported problem returns 1. enabled=true is not required.
+    ///     <para>严格只读的状态检查。未配置或就绪返回 0；有任何问题返回 1。不要求 enabled=true。</para>
+    ///     <para>
+    ///         The strictly read-only status check. Not configured or ready returns
+    ///         0; any reported problem returns 1. enabled=true is not required.
+    ///     </para>
     /// </summary>
     private static async Task<int> StatusAsync(CommandContext context, CancellationToken cancellationToken)
     {
@@ -71,20 +76,22 @@ internal static class SandboxCommand
                 .ConfigureAwait(false);
         await io.WriteLineAsync($"  policy   : {PolicyDisplay(settings.Policy)}", cancellationToken)
                 .ConfigureAwait(false);
+        await io.WriteLineAsync(settings.AllowTcpLoopback
+                                    ? "  network  : external-blocked; TCP loopback allowed (host services included); UDP blocked"
+                                    : "  network  : restricted; TCP loopback blocked", cancellationToken)
+                .ConfigureAwait(false);
         await io.WriteLineAsync($"  setup    : {settings.SetupExecutablePath}", cancellationToken)
                 .ConfigureAwait(false);
         await io.WriteLineAsync($"  runner   : {settings.RunnerExecutablePath}", cancellationToken)
                 .ConfigureAwait(false);
-        // A relative home is reported by the problems section below instead of
-        // throwing here, so status stays a read-only diagnostic for bad input.
+        // 相对 home 不在此抛出，改由下方问题清单报告，status 对错误输入保持只读诊断。
         await io.WriteLineAsync(string.IsNullOrWhiteSpace(settings.SandboxHome)
-                                    ? $"  home     : {WindowsSandboxComponents.DefaultSandboxHome}（sandboxHome 未设置，使用固定默认）"
+                                    ? $"  home     : {WindowsSandboxComponents.ResolveSandboxHome(null, settings.AllowTcpLoopback)}（sandboxHome 未设置，使用固定默认）"
                                     : $"  home     : {settings.SandboxHome}",
                                 cancellationToken)
                 .ConfigureAwait(false);
         await io
-             .WriteLineAsync(
-                             $"  versions : 本 build 期望 setup v{WindowsSandboxComponents.SetupVersion} / ipc v{WindowsSandboxComponents.IpcVersion}",
+             .WriteLineAsync($"  versions : 本 build 期望 setup v{(settings.AllowTcpLoopback ? WindowsSandboxComponents.TcpLoopbackSetupVersion : WindowsSandboxComponents.SetupVersion)} / ipc v{WindowsSandboxComponents.IpcVersion}",
                              cancellationToken)
              .ConfigureAwait(false);
 
@@ -108,9 +115,10 @@ internal static class SandboxCommand
 
         var components = new WindowsSandboxComponents
         {
-            SetupExecutablePath  = settings.SetupExecutablePath.Trim(),
+            AllowTcpLoopback = settings.AllowTcpLoopback,
+            SetupExecutablePath = settings.SetupExecutablePath.Trim(),
             RunnerExecutablePath = settings.RunnerExecutablePath.Trim(),
-            SandboxHome          = WindowsSandboxComponents.ResolveSandboxHome(settings.SandboxHome)
+            SandboxHome = WindowsSandboxComponents.ResolveSandboxHome(settings.SandboxHome, settings.AllowTcpLoopback)
         };
         var status = await new WindowsSandboxStateInspector(components).InspectAsync(cancellationToken)
                                                                        .ConfigureAwait(false);
@@ -133,12 +141,13 @@ internal static class SandboxCommand
     }
 
     /// <summary>
-    ///     显式 provisioning：校验并构造 payload（不提权）→ 展示机器级副作用 → 确认门 → UAC 运行
-    ///     setup.exe → 事后重新检查。exit 0 仅当 helper 成功且事后检查就绪。
-    ///     Explicit provisioning: validate and build the payload (no elevation) →
-    ///     present the machine-level side effects → confirmation gate → run
-    ///     setup.exe via UAC → re-inspect afterward. exit 0 only when the helper
-    ///     succeeded and the re-inspection is ready.
+    ///     <para>显式 provisioning：校验并构造 payload（不提权）→ 展示机器级副作用 → 确认门 → UAC 运行 setup.exe → 事后重新检查。exit 0 仅当 helper 成功且事后检查就绪。</para>
+    ///     <para>
+    ///         Explicit provisioning: validate and build the payload (no elevation) →
+    ///         present the machine-level side effects → confirmation gate → run
+    ///         setup.exe via UAC → re-inspect afterward. exit 0 only when the helper
+    ///         succeeded and the re-inspection is ready.
+    ///     </para>
     /// </summary>
     private static async Task<int> ProvisionAsync(
         CommandContext             context,
@@ -241,9 +250,11 @@ internal static class SandboxCommand
     }
 
     /// <summary>
-    ///     打印机器级副作用清单（固定文案，来自接入文档 §4）与重复 provisioning 警告。
-    ///     Prints the machine-level side-effect list (fixed wording from the
-    ///     integration document §4) and the re-provisioning warning.
+    ///     <para>打印机器级副作用清单（固定文案，来自接入文档 §4）与重复 provisioning 警告。</para>
+    ///     <para>
+    ///         Prints the machine-level side-effect list (fixed wording from the
+    ///         integration document §4) and the re-provisioning warning.
+    ///     </para>
     /// </summary>
     private static async Task PrintSideEffectsAsync(
         ICliConsole io, WindowsSandboxProvisionPlan plan, CancellationToken cancellationToken)
@@ -260,23 +271,26 @@ internal static class SandboxCommand
         await io.WriteLineAsync("  本命令将以 UAC 提权运行 setup.exe 一次，修改以下机器级状态：", cancellationToken)
                 .ConfigureAwait(false);
         await io.WriteLineAsync("    - 本地组 TinyHarnessUsers", cancellationToken).ConfigureAwait(false);
-        await io.WriteLineAsync("    - 本地账户 TinyHarnessOffline / TinyHarnessOnline（随机密码、永不过期）",
-                                cancellationToken)
-                .ConfigureAwait(false);
+        await io
+             .WriteLineAsync($"    - 本地账户 {plan.Components.OfflineUsername} / {plan.Components.OnlineUsername}（随机密码、永不过期）",
+                             cancellationToken)
+             .ConfigureAwait(false);
         await io.WriteLineAsync("    - 注册表条目隐藏上述账户", cancellationToken).ConfigureAwait(false);
-        await io.WriteLineAsync("    - 防火墙规则，以及 offline 账户的 WFP BLOCK 过滤器（断网）", cancellationToken)
+        await io.WriteLineAsync(plan.Components.AllowTcpLoopback
+                                    ? "    - 独立防火墙/WFP 规则：阻断外部网络和 UDP，允许 TCP 环回访问宿主服务"
+                                    : "    - 防火墙规则，以及 offline 账户的 WFP BLOCK 过滤器（断网）", cancellationToken)
                 .ConfigureAwait(false);
         await io.WriteLineAsync("    - sandbox home 目录 ACL 与上述 write roots 的授权", cancellationToken)
                 .ConfigureAwait(false);
         await io
-             .WriteLineAsync("  警告：重复 provisioning 会重置本命名空间账户（TinyHarnessOffline/TinyHarnessOnline）的密码，" +
-                             "同机共用这套 fork 命名空间的其他 home 会受影响。本 fork 与 Codex 发布版使用独立命名空间"                  +
+             .WriteLineAsync($"  警告：重复 provisioning 会重置所选账户（{plan.Components.OfflineUsername}/{plan.Components.OnlineUsername}）的密码，" +
+                             "同机共用这套 fork 命名空间的其他 home 会受影响。本 fork 与 Codex 发布版使用独立命名空间" +
                              "（账户、组、防火墙、WFP 互不共享），但其共存尚未验收。本命令没有卸载或回滚。", cancellationToken)
              .ConfigureAwait(false);
     }
 
-    private static async Task<int> ReportProvisionResultAsync(ICliConsole io, WindowsSandboxProvisionResult result,
-                                                              CancellationToken cancellationToken)
+    private static async Task<int> ReportProvisionResultAsync(
+        ICliConsole io, WindowsSandboxProvisionResult result, CancellationToken cancellationToken)
     {
         switch (result.Outcome)
         {
@@ -318,6 +332,7 @@ internal static class SandboxCommand
     }
 
     private static bool IsBlankSettings(WindowsSandboxSettings settings) =>
+        !settings.AllowTcpLoopback                               &&
         string.IsNullOrWhiteSpace(settings.SetupExecutablePath)  &&
         string.IsNullOrWhiteSpace(settings.RunnerExecutablePath) &&
         string.IsNullOrWhiteSpace(settings.SandboxHome);
@@ -326,9 +341,11 @@ internal static class SandboxCommand
         string.IsNullOrWhiteSpace(value) || !Path.IsPathFullyQualified(value);
 
     /// <summary>
-    ///     显式设置但非绝对（home 可留空使用固定默认，只有显式相对路径才是错误）。
-    ///     Explicitly set but not absolute (the home may stay blank for the fixed
-    ///     default; only an explicitly relative value is an error).
+    ///     <para>显式设置但非绝对（home 可留空使用固定默认，只有显式相对路径才是错误）。</para>
+    ///     <para>
+    ///         Explicitly set but not absolute (the home may stay blank for the fixed
+    ///         default; only an explicitly relative value is an error).
+    ///     </para>
     /// </summary>
     private static bool IsExplicitRelative(string? value) =>
         !string.IsNullOrWhiteSpace(value) && !Path.IsPathFullyQualified(value);

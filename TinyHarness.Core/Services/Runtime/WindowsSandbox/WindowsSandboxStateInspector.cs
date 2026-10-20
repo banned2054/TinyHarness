@@ -4,15 +4,19 @@ using TinyHarness.Core.Models.Runtime.WindowsSandbox;
 namespace TinyHarness.Core.Services.Runtime.WindowsSandbox;
 
 /// <summary>
-///     沙箱就绪状态检查：setup/runner 组件存在、setup marker 完成且版本一致、marker 与凭据文件
-///     的账户名与本 build 期望一致（仍为旧 Codex 用户名时明确拒绝复用）、cap_sid 可解析、凭据文件
-///     可解析。聚合全部问题返回，不做任何修复；执行路径据此 fail closed。
-///     Sandbox readiness check: setup/runner components exist, the setup marker
-///     is complete with a matching version, the marker's and credentials' account
-///     names match this build's expectations (legacy Codex usernames are
-///     explicitly refused), cap_sid parses, and the credentials file parses. All
-///     problems are aggregated; nothing is repaired, and the execution path fails
-///     closed on the result.
+///     <para>
+///         沙箱就绪状态检查：setup/runner 组件存在、setup marker 完成且版本一致、marker 与凭据文件
+///         的账户名与本 build 期望一致（仍为旧 Codex 用户名时明确拒绝复用）、cap_sid 可解析、凭据文件
+///         可解析。聚合全部问题返回，不做任何修复；执行路径据此 fail closed。
+///     </para>
+///     <para>
+///         Sandbox readiness check: setup/runner components exist, the setup marker
+///         is complete with a matching version, the marker's and credentials' account
+///         names match this build's expectations (legacy Codex usernames are
+///         explicitly refused), cap_sid parses, and the credentials file parses. All
+///         problems are aggregated; nothing is repaired, and the execution path fails
+///         closed on the result.
+///     </para>
 /// </summary>
 public sealed class WindowsSandboxStateInspector(WindowsSandboxComponents components)
 {
@@ -47,16 +51,17 @@ public sealed class WindowsSandboxStateInspector(WindowsSandboxComponents compon
         {
             if (new FileInfo(Components.MarkerPath).Length == 0)
             {
-                // The helper creates the marker with CREATE_NEW and writes the JSON
-                // only after success, so an empty file means unfinished setup.
+                // helper 以 CREATE_NEW 创建 marker 且仅在成功后写入 JSON，空文件意味着 setup 未完成。
                 problems.Add("Sandbox setup marker exists but is empty; provisioning did not complete.");
                 return;
             }
 
             var content = await File.ReadAllTextAsync(Components.MarkerPath, cancellationToken).ConfigureAwait(false);
             var marker  = JsonSerializer.Deserialize(content, WindowsSandboxJsonContext.Default.SandboxSetupMarker);
-            if (marker?.Version != WindowsSandboxComponents.SetupVersion)
-                problems.Add($"Sandbox setup marker version {marker?.Version.ToString() ?? "unknown"} does not match the required {WindowsSandboxComponents.SetupVersion}.");
+            if (marker?.Version != Components.RequiredSetupVersion)
+                problems.Add($"Sandbox setup marker version {marker?.Version.ToString() ?? "unknown"} does not match the required {Components.RequiredSetupVersion}.");
+            if (marker is not null && marker.AllowTcpLoopback != Components.AllowTcpLoopback)
+                problems.Add("Sandbox setup marker TCP-loopback mode does not match the trusted settings; use a separate sandbox home.");
 
             InspectAccountName(problems, "Sandbox setup marker offline_username", marker?.OfflineUsername,
                                Components.OfflineUsername);
@@ -141,14 +146,18 @@ public sealed class WindowsSandboxStateInspector(WindowsSandboxComponents compon
     }
 
     /// <summary>
-    ///     校验 marker/凭据中的账户名与本 build 期望一致。仍为旧 Codex 用户名时给出明确的
-    ///     拒绝复用说明（该 home 由 Codex 发布版 provisioning，必须换独立 home 重新 provision）；
-    ///     其余不匹配按版本/命名漂移报告。两者都 fail closed。
-    ///     Checks that an account name from the marker or credentials matches
-    ///     this build's expectation. A legacy Codex username gets an explicit
-    ///     do-not-reuse explanation (that home was provisioned by a Codex
-    ///     release and must be re-provisioned into an independent home); any
-    ///     other mismatch is reported as namespace drift. Both fail closed.
+    ///     <para>
+    ///         校验 marker/凭据中的账户名与本 build 期望一致。仍为旧 Codex 用户名时给出明确的
+    ///         拒绝复用说明（该 home 由 Codex 发布版 provisioning，必须换独立 home 重新 provision）；
+    ///         其余不匹配按版本/命名漂移报告。两者都 fail closed。
+    ///     </para>
+    ///     <para>
+    ///         Checks that an account name from the marker or credentials matches
+    ///         this build's expectation. A legacy Codex username gets an explicit
+    ///         do-not-reuse explanation (that home was provisioned by a Codex
+    ///         release and must be re-provisioned into an independent home); any
+    ///         other mismatch is reported as namespace drift. Both fail closed.
+    ///     </para>
     /// </summary>
     private void InspectAccountName(List<string> problems, string label, string? actual, string expected)
     {

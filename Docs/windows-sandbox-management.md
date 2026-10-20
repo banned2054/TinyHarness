@@ -4,7 +4,7 @@
 
 ## Windows 沙箱管理命令
 
-`tinyharness sandbox` 是 Windows 工具进程沙箱的显式管理入口，只读取用户配置中的可信设置 `settings.windowsSandbox`，不发送任何输入给模型。普通入口（`run`、`smoke`、`doctor`、`mcp`）不会触发 provisioning、账户修复或 UAC；机器级修改只能通过 `sandbox provision` 显式发生。
+`tinyharness sandbox` 是 Windows 工具进程沙箱的显式管理入口，只读取用户配置中的可信设置 `settings.windowsSandbox`，不发送任何输入给模型。普通工具执行不会自动 provisioning、提权或修复账户；账户、密码和网络规则的机器级设置仍只能通过 `sandbox provision` 显式发生。
 
 ### sandbox status（严格只读）
 
@@ -12,7 +12,7 @@
 tinyharness sandbox status
 ```
 
-打印 Enabled、policy、setup/runner/home 路径、本 build 期望的协议版本（setup v5 / IPC v6），并运行就绪检查：setup/runner 组件文件、`.sandbox\setup_marker.json`（version==5）、`cap_sid` 表与 `.sandbox-secrets\sandbox_users.json`。不创建任何目录或文件、不提权。退出码：未配置或就绪为 `0`；报告任何问题为 `1`。未配置 windowsSandbox 时打印启用指引。
+打印 Enabled、policy、setup/runner/home 路径、本 build 期望的协议版本（严格模式 setup v5、TCP 环回模式 setup v6 / IPC v6），并运行就绪检查：setup/runner 组件文件、`.sandbox\setup_marker.json`（严格模式 version==5；TCP 环回模式 version==6 且模式字段匹配）、`cap_sid` 表与 `.sandbox-secrets\sandbox_users.json`。不创建任何目录或文件、不提权。退出码：未配置或就绪为 `0`；报告任何问题为 `1`。未配置 windowsSandbox 时打印启用指引。
 
 ### sandbox provision（显式机器级修改）
 
@@ -38,11 +38,37 @@ tinyharness sandbox verify [--yes] [--case <name>[,<name>...]] [--workspace <pat
 
 ### 组件打包约定
 
-两个日常组件 exe 文件名固定为 `codex-windows-sandbox-setup.exe` 与 `codex-command-runner.exe`，来自 Codex 仓库 Windows 沙箱的 **TinyHarness 独立命名空间 fork** 构建（文件名、payload 字段、DPAPI、IPC 协议与上游一致；机器级账户/组/防火墙/WFP/桌面前缀为 TinyHarness 专属；验收另用 `codex-windows-managed-deny-probe.exe`；`codex-windows-sandbox-service.exe` 首期不使用、不安装服务）。TinyHarness 不安装、不搜索它们：用户把 exe 放在任意自选的绝对路径，并在 user-config.json 的 `settings.windowsSandbox` 配置 `setupExecutablePath`、`runnerExecutablePath`；`sandboxHome` 可省略，缺省使用独立固定默认 `%LOCALAPPDATA%\tinyharness\windows-sandbox-home`（与 Codex 的 home 完全独立），也可显式指定绝对路径。配置后运行 `sandbox provision`；`enabled: true` 后 `run` 才会使用沙箱。marker 或凭据中仍为旧 Codex 用户名（`CodexSandboxOffline`/`CodexSandboxOnline`）的 home 会被状态检查、执行与 provisioning 一律拒绝复用（fail closed），需换独立 home 重新 provisioning。组件 exe 没有 PE 版本资源（ProductVersion/FileVersion 为空），因此版本权威校验是三处 JSON 数值：payload `version==5`（SETUP_VERSION）、runner 帧协议 `version==6`（IPC_PROTOCOL_VERSION）、setup marker `version==5`，加上 `cap_sid` 与 `sandbox_users.json` 的可解析检查；不匹配一律拒绝执行（fail closed，不回退宿主）。UAC 启动路径（`UseShellExecute=true`）无法使用环境分块通道，payload base64 超过约 23000 字符时 provision 直接拒绝并提示减少 `additionalWriteRoots`。技术细节见 [Windows 沙箱接入方案](windows-sandbox-dotnet-integration.md)。
+两个日常组件 exe 文件名固定为 `codex-windows-sandbox-setup.exe` 与 `codex-command-runner.exe`，来自 Codex 仓库 Windows 沙箱的 **TinyHarness 独立命名空间 fork** 构建（文件名、payload 字段、DPAPI、IPC 协议与上游一致；机器级账户/组/防火墙/WFP/桌面前缀为 TinyHarness 专属；验收另用 `codex-windows-managed-deny-probe.exe`；`codex-windows-sandbox-service.exe` 首期不使用、不安装服务）。TinyHarness 不安装、不搜索它们：用户把 exe 放在任意自选的绝对路径，并在 user-config.json 的 `settings.windowsSandbox` 配置 `setupExecutablePath`、`runnerExecutablePath`；`sandboxHome` 可省略，缺省使用独立固定默认 `%LOCALAPPDATA%\tinyharness\windows-sandbox-home`（与 Codex 的 home 完全独立），也可显式指定绝对路径。配置后运行 `sandbox provision`；`enabled: true` 后 `run` 才会使用沙箱。marker 或凭据中仍为旧 Codex 用户名（`CodexSandboxOffline`/`CodexSandboxOnline`）的 home 会被状态检查、执行与 provisioning 一律拒绝复用（fail closed），需换独立 home 重新 provisioning。组件 exe 没有 PE 版本资源（ProductVersion/FileVersion 为空），因此版本权威校验是三处 JSON 数值：payload `version==5`（严格模式）或 `6`（TCP 环回模式）、runner 帧协议 `version==6`（IPC_PROTOCOL_VERSION）、setup marker 版本/模式/账户匹配（严格模式 v5；TCP 环回模式 v6），加上 `cap_sid` 与 `sandbox_users.json` 的可解析检查；不匹配一律拒绝执行（fail closed，不回退宿主）。UAC 启动路径（`UseShellExecute=true`）无法使用环境分块通道，payload base64 超过约 23000 字符时 provision 直接拒绝并提示减少 `additionalWriteRoots`。技术细节见 [Windows 沙箱接入方案](windows-sandbox-dotnet-integration.md)。
 
 ## 沙箱目标环境
 
 目标环境保留显式白名单，APPDATA/LOCALAPPDATA 分别位于声明 tempRoot 的 AppData/Roaming、AppData/Local，DOTNET_CLI_HOME 指向 tempRoot；ProgramFiles、ProgramFiles(x86)、ProgramData 仅从系统白名单复制。可信 extras 可覆盖，knownSecrets 最后移除。路径解析的离线回归不等于真实 NuGet/PriceLab 已通过。
+
+## TCP 环回兼容模式（2026-10-20）
+
+以下先记录准备阶段的设计与当时限制；后续真实结果和当前工具边界见下一节。准备阶段“尚未执行”不否定后来的真实结果。
+
+SDK 10.0.401 的 VSTest/testhost 使用 `127.0.0.1` TCP 通信。现有严格模式的 WFP 通用 TCP BLOCK 覆盖环回，与这一通信需求冲突。最新一次 PriceLab 实机结果已完成两个项目构建，但 testhost 连接等待 90 秒后中止；没有用例执行结果。当前没有此次 connect 的底层跟踪，不能把特定 WFP 命中或唯一根因写成已现场证明。
+
+用户已明确授权准备可信设置 `settings.windowsSandbox.allowTcpLoopback: true`，缺省仍为 false。该模式允许 IPv4 `127.0.0.0/8` 和 IPv6 `::1` 的 TCP，包括宿主环回服务；不是仅允许同一沙箱内部 IPC。外部/LAN TCP、UDP、DNS 和 SMB 阻断继续保留。IPv4-mapped IPv6 不作为 IPv6 环回例外。`allow_local_binding` 仍为 false，proxy 端口仍为空。
+
+两个模式采用不同账户及规则标识，避免安装新模式时改绑旧严格规则或轮换严格账户密码：
+
+| 契约 | 严格模式 | TCP 环回模式 |
+| --- | --- | --- |
+| `allowTcpLoopback` | false | true |
+| 账户 | TinyHarnessOffline / TinyHarnessOnline | TinyHarnessTcpOff / TinyHarnessTcpOn |
+| 缺省 home（位于 `%LOCALAPPDATA%\tinyharness`） | windows-sandbox-home | windows-sandbox-tcp-loopback-home |
+| setup payload / marker | v5 | v6，且 marker 记录 allow_tcp_loopback=true |
+| runner IPC / 凭据 JSON 格式 | v6 / v5 | v6 / v5 |
+| WFP filters | 原 16 个 key | 独立 17 个 key，IPv4 非环回分两段 |
+| Firewall 规则名 | 原名称 | 原名称加 `_tcp_loopback` |
+
+组仍为 TinyHarnessUsers；读写根和元数据保护契约不因网络选项扩大。新模式拒绝旧 helper/marker；provisioning 在提权前检查已有 marker 和凭据的模式/账户，Rust helper 在开始修改前也检查。同模式不同 home 仍共享该模式账户及密码，不能把这一设计解释为每个 home 独立账户。Rust 库和注册服务入口保持严格模式，本选项只支持现有 Legacy setup/runner 接入；没有安装服务。
+
+策略身份版本为 4，绑定模式和相应 setup 版本；界面显示 `network: external-blocked, tcp-loopback: allowed (host services included), udp: blocked`。旧版 `network-denied` 除了非环回连接拒绝，还要求 IPv4 TCP 环回成功；当时不覆盖 IPv6、UDP/DNS。当前覆盖及未验证边界见下一节。
+
+准备阶段当时仅准备源代码、锁定依赖构建、离线回归、NativeAOT 和离线 smoke，没有切换实际设置或运行真实沙箱。当时待办是另行授权切换、新 home provisioning 和复验，不能直接复用旧 home。详见历史产物 `artifacts/sandbox-vstest-ipc/verification.md` 及 `manual-acceptance.md`。后续已取得的真实结果见下一节，当前不要求重复 provisioning 或 PriceLab。原有 M11 严格模式记录不能作为新模式完整验收证据。
 
 ## M11 验收记录
 

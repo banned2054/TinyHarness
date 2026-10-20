@@ -3,20 +3,25 @@ using System.Text.Json.Serialization;
 namespace TinyHarness.Core.Models.Runtime.WindowsSandbox;
 
 /// <summary>
-///     传给 codex-windows-sandbox-setup.exe 的 payload（serde snake_case，version 必须 == 5）。
-///     日常执行只以 refresh_only=true 调用（普通权限，不提权）；首次 provisioning 是独立
-///     管理入口的职责，不在本模型的使用路径中。
-///     The payload handed to codex-windows-sandbox-setup.exe (serde snake_case;
-///     version must equal 5). Routine execution only calls it with
-///     refresh_only=true at normal privilege; first-time provisioning belongs to
-///     the separate management entry point.
+///     <para>
+///         传给 setup helper 的 snake_case payload：严格模式版本 5，TCP 环回模式版本 6。
+///         日常执行只以 refresh_only=true 在普通权限下调用；首次 provisioning 属于独立管理入口。
+///     </para>
+///     <para>
+///         The snake_case setup-helper payload: version 5 for strict mode and 6 for TCP loopback.
+///         Routine execution uses refresh_only=true at normal privilege; initial provisioning
+///         belongs to the separate management entry point.
+///     </para>
 /// </summary>
 public sealed record SandboxSetupPayload
 {
     public const uint RequiredVersion = 5;
 
     [JsonPropertyName("version")]
-    public uint Version => RequiredVersion;
+    public uint Version => AllowTcpLoopback ? WindowsSandboxComponents.TcpLoopbackSetupVersion : RequiredVersion;
+
+    [JsonPropertyName("allow_tcp_loopback")]
+    public bool AllowTcpLoopback { get; init; }
 
     [JsonPropertyName("offline_username")]
     public required string OfflineUsername { get; init; }
@@ -52,9 +57,11 @@ public sealed record SandboxSetupPayload
     public required string RealUser { get; init; }
 
     /// <summary>
-    ///     "full"（默认）、"interactive-provision"、"provision-only" 或 "read-acls-only"，kebab-case。
-    ///     Either "full" (default), "interactive-provision", "provision-only", or
-    ///     "read-acls-only", in kebab-case.
+    ///     <para>"full"（默认）、"interactive-provision"、"provision-only" 或 "read-acls-only"，kebab-case。</para>
+    ///     <para>
+    ///         Either "full" (default), "interactive-provision", "provision-only", or
+    ///         "read-acls-only", in kebab-case.
+    ///     </para>
     /// </summary>
     [JsonPropertyName("mode")]
     public string Mode { get; init; } = "full";
