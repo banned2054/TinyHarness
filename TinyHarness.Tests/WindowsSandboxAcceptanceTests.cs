@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Net;
+using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
 using TinyHarness.Cli.Commands;
@@ -33,7 +35,7 @@ namespace TinyHarness.Tests;
 /// </summary>
 public sealed class WindowsSandboxAcceptanceTests
 {
-    // ---- Parser ----
+    // ---- 命令行解析 ----
 
     [Test]
     public void SandboxVerify_ParsesWithoutOptions()
@@ -338,34 +340,244 @@ public sealed class WindowsSandboxAcceptanceTests
         Assert.That(VerdictOf(report, "write-denied-outside-roots"), Is.EqualTo(SandboxAcceptanceVerdict.Fail));
     }
 
-    [Test]
-    public async Task NetworkCase_VerdictTriad()
+    [TestCase(false, "network-denied")]
+    [TestCase(true, "network-denied")]
+    [TestCase(false, "network-udp")]
+    [TestCase(true, "network-udp")]
+    [TestCase(false, "network-dns")]
+    [TestCase(true, "network-dns")]
+    public async Task NetworkCases_RequireHostControlsAndEnforceMode(bool allowLoopback, string caseName)
     {
-        if (!OperatingSystem.IsWindows()) return;
+        using var home      = new SandboxTestHome();
+        using var workspace = new TestTempDir();
+        var       targets   = new List<(string Transport, string Address, int Port)>();
+        var limits = TestLimits() with
+        {
+            HostNetworkExchange = (transport, address, port, nonce, _) =>
+            {
+                targets.Add((transport, address.ToString(), port));
+                return Task.FromResult(Matched(transport, address, port, nonce));
+            }
+        };
+        var factory = new RecordingBackendFactory(home.Components with { AllowTcpLoopback = allowLoopback },
+                                                  workspace.Root,
+                                                  (plan, _) => Task.FromResult(NetworkOutcome(plan, allowLoopback)));
+        var report = await new WindowsSandboxAcceptanceRunner(factory.Invoke, workspace.Root, limits : limits)
+           .RunAsync([caseName]);
+        var result = report.Cases.Single();
+        Assert.That(result.Verdict, Is.EqualTo(SandboxAcceptanceVerdict.Pass), result.Detail);
+        Assert.That(result.NetworkChecks!.All(check => check.HostBefore?.Status == "matched" &&
+                                                       check.HostAfter?.Status  == "matched" &&
+                                                       check.Sandbox is not null), Is.True);
+        Assert.That(targets.Count, Is.EqualTo(result.NetworkChecks!.Count * 2));
+        Assert.That(result.NetworkChecks.Any(check => check.Target.Contains("::1")), Is.True);
+        if (caseName == "network-dns")
+        {
+            Assert.That(result.NetworkChecks.Count, Is.EqualTo(8));
+            Assert.That(targets.Select(target => target.Port).Distinct(), Is.EquivalentTo(new[] { 53, 853 }));
+            Assert.That(targets.Select(target => target.Transport).Distinct(), Is.EquivalentTo(new[] { "tcp", "udp" }));
+        }
 
-        using var home = new SandboxTestHome();
+        var json = await File.ReadAllTextAsync(report.ReportPath!);
+        var restored = JsonSerializer.Deserialize(json,
+                                                  WindowsSandboxAcceptanceJsonContext.Default
+                                                     .WindowsSandboxAcceptanceReport)!;
+        Assert.That(restored.Cases.Single().NetworkChecks, Is.EqualTo(result.NetworkChecks));
+    }
 
-        var report = await RunSingleCaseAsync(home, "network-denied", (plan, ct) =>
-                                                  Task.FromResult(Path.GetFileName(plan.Executable) == "curl.exe" &&
-                                                                  !LastArgument(plan)
-                                                                     .Contains("127.0.0.1",
-                                                                               StringComparison
-                                                                                  .Ordinal)
-                                                                      ? new ScriptedOutcome(7)
-                                                                      : new ScriptedOutcome(0)));
-        Assert.That(VerdictOf(report, "network-denied"), Is.EqualTo(SandboxAcceptanceVerdict.Pass));
+    [TestCase("host-unreachable", "network-denied", SandboxAcceptanceVerdict.Indeterminate)]
+    [TestCase("host-after-failed", "network-denied", SandboxAcceptanceVerdict.Indeterminate)]
+    [TestCase("external-connected", "network-denied", SandboxAcceptanceVerdict.Fail)]
+    [TestCase("external-connected-no-ack", "network-denied", SandboxAcceptanceVerdict.Fail)]
+    [TestCase("loopback-denied", "network-denied", SandboxAcceptanceVerdict.Fail)]
+    [TestCase("strict-loopback-connected", "network-denied", SandboxAcceptanceVerdict.Fail)]
+    [TestCase("ipv6-unavailable", "network-denied", SandboxAcceptanceVerdict.Indeterminate)]
+    [TestCase("sandbox-ipv6-unavailable", "network-denied", SandboxAcceptanceVerdict.Indeterminate)]
+    [TestCase("address-missing", "network-denied", SandboxAcceptanceVerdict.Indeterminate)]
+    [TestCase("probe-missing", "network-denied", SandboxAcceptanceVerdict.Indeterminate)]
+    [TestCase("udp-send-only", "network-udp", SandboxAcceptanceVerdict.Pass)]
+    [TestCase("udp-ack", "network-udp", SandboxAcceptanceVerdict.Fail)]
+    [TestCase("wrong-nonce", "network-udp", SandboxAcceptanceVerdict.Fail)]
+    [TestCase("mismatch", "network-udp", SandboxAcceptanceVerdict.Fail)]
+    [TestCase("invalid-json", "network-denied", SandboxAcceptanceVerdict.Fail)]
+    [TestCase("truncated-output", "network-denied", SandboxAcceptanceVerdict.Fail)]
+    [TestCase("invalid-status", "network-denied", SandboxAcceptanceVerdict.Fail)]
+    [TestCase("missing-fields", "network-denied", SandboxAcceptanceVerdict.Fail)]
+    [TestCase("extra-fields", "network-denied", SandboxAcceptanceVerdict.Fail)]
+    [TestCase("nonzero-diagnostic", "network-denied", SandboxAcceptanceVerdict.Fail)]
+    [TestCase("wrong-target", "network-denied", SandboxAcceptanceVerdict.Fail)]
+    [TestCase("unsupported-socket", "network-denied", SandboxAcceptanceVerdict.Fail)]
+    [TestCase("probe-crash", "network-denied", SandboxAcceptanceVerdict.Fail)]
+    [TestCase("backend-failure", "network-denied", SandboxAcceptanceVerdict.Fail)]
+    [TestCase("outer-timeout", "network-denied", SandboxAcceptanceVerdict.Fail)]
+    [TestCase("probe-exception", "network-denied", SandboxAcceptanceVerdict.Fail)]
+    [TestCase("dns-port-busy", "network-dns", SandboxAcceptanceVerdict.Indeterminate)]
+    [TestCase("listener-crash", "network-udp", SandboxAcceptanceVerdict.Indeterminate)]
+    public async Task NetworkCases_DoNotConfuseFixtureFailuresWithIsolation(
+        string scenario, string caseName, SandboxAcceptanceVerdict expected)
+    {
+        using var home         = new SandboxTestHome();
+        using var workspace    = new TestTempDir();
+        var       sandboxCalls = 0;
+        var       controlCalls = new Dictionary<string, int>();
+        var limits = TestLimits() with
+        {
+            NonLoopbackAddressResolver = () => scenario  == "address-missing" ? null : "10.255.255.1",
+            NetworkProbeCommandResolver = () => scenario == "probe-missing" ? null : ("C:\\fake\\TinyHarness.exe", []),
+            NetworkResponderFactory = (transport, address, port, _) =>
+            {
+                if (scenario == "ipv6-unavailable" && address.AddressFamily == AddressFamily.InterNetworkV6)
+                    throw new SocketException((int)SocketError.AddressFamilyNotSupported);
+                if (scenario == "dns-port-busy" && port == 53)
+                    throw new SocketException((int)SocketError.AddressAlreadyInUse);
+                return new FakeNetworkResponder(port     == 0 ? 49152 : port,
+                                                scenario == "listener-crash" ? "listener crashed" : null);
+            },
+            HostNetworkExchange = (transport, address, port, nonce, _) =>
+            {
+                var key = $"{transport}:{address}:{port}";
+                controlCalls.TryGetValue(key, out var count);
+                controlCalls[key] = count + 1;
+                return Task.FromResult(scenario == "host-unreachable" || (scenario == "host-after-failed" && count > 0)
+                                           ? new SandboxNetworkObservation(transport, address.ToString(), port, nonce,
+                                                                           "wait-expired")
+                                           : Matched(transport, address, port, nonce));
+            }
+        };
+        var allowLoopback = scenario != "strict-loopback-connected";
+        var factory = new RecordingBackendFactory(home.Components with { AllowTcpLoopback = allowLoopback },
+                                                  workspace.Root,
+                                                  (plan, _) =>
+                                                  {
+                                                      sandboxCalls++;
+                                                      if (scenario == "probe-exception")
+                                                          throw new IOException("fixture exception");
+                                                      if (scenario == "probe-crash")
+                                                          return Task.FromResult(new ScriptedOutcome(3));
+                                                      if (scenario == "outer-timeout")
+                                                          return Task.FromResult(new ScriptedOutcome(192, true));
+                                                      if (scenario == "backend-failure")
+                                                          return Task.FromResult(new ScriptedOutcome(0,
+                                                                            Failure : new
+                                                                                ProcessExecutionFailure("pipe damaged")));
+                                                      if (scenario == "invalid-json")
+                                                          return Task.FromResult(new ScriptedOutcome(0, StdoutChunks :
+                                                                            ["{broken"]));
+                                                      if (scenario == "truncated-output")
+                                                          return Task.FromResult(new ScriptedOutcome(0,
+                                                                            StdoutChunks : [new string('x', 10000)]));
+                                                      var observation = NetworkObservation(plan, allowLoopback);
+                                                      var loopback =
+                                                          IPAddress.IsLoopback(IPAddress.Parse(observation.Address));
+                                                      observation = scenario switch
+                                                      {
+                                                          "external-connected" when !loopback => observation with
+                                                          {
+                                                              Status = "matched", Connected = true, Sent = true
+                                                          },
+                                                          "external-connected-no-ack" when !loopback => observation with
+                                                          {
+                                                              Status = "wait-expired", Connected = true
+                                                          },
+                                                          "loopback-denied" => observation with
+                                                          {
+                                                              Status = "socket-denied", Connected = false,
+                                                              Sent = false, SocketError = "AccessDenied"
+                                                          },
+                                                          "strict-loopback-connected" when loopback => observation with
+                                                          {
+                                                              Status = "matched", Connected = true, Sent = true
+                                                          },
+                                                          "udp-send-only" => observation with
+                                                          {
+                                                              Status = "wait-expired", Connected = false,
+                                                              Sent = true
+                                                          },
+                                                          "udp-ack" => observation with
+                                                          {
+                                                              Status = "matched", Sent = true
+                                                          },
+                                                          "wrong-nonce" => observation with
+                                                          {
+                                                              Nonce = new string('0', 32)
+                                                          },
+                                                          "wrong-target"   => observation with { Port = 1 },
+                                                          "mismatch"       => observation with { Status = "mismatch" },
+                                                          "invalid-status" => observation with { Status = "garbage" },
+                                                          "unsupported-socket" => observation with
+                                                          {
+                                                              Status = "socket-denied",
+                                                              SocketError = "AddressFamilyNotSupported"
+                                                          },
+                                                          "sandbox-ipv6-unavailable" when observation.Address == "::1"
+                                                              => observation with
+                                                              {
+                                                                  Status = "error",
+                                                                  SocketError = "AddressFamilyNotSupported",
+                                                                  NativeError = 10047
+                                                              },
+                                                          _ => observation
+                                                      };
+                                                      var outcome = ObservationOutcome(observation);
+                                                      if (scenario == "missing-fields")
+                                                          outcome = outcome with
+                                                          {
+                                                              StdoutChunks =
+                                                              [
+                                                                  outcome.StdoutChunks![0]
+                                                                         .Replace("  \"Connected\": true,", "")
+                                                                         .Replace("  \"Connected\": false,", "")
+                                                              ]
+                                                          };
+                                                      if (scenario == "extra-fields")
+                                                          outcome = outcome with
+                                                          {
+                                                              StdoutChunks =
+                                                              [
+                                                                  outcome.StdoutChunks![0]
+                                                                         .Replace("{", "{\"Unknown\":1,")
+                                                              ]
+                                                          };
+                                                      if (scenario == "nonzero-diagnostic")
+                                                          outcome = outcome with { ExitCode = 3 };
+                                                      if (scenario            == "sandbox-ipv6-unavailable" &&
+                                                          observation.Address == "::1")
+                                                          outcome = outcome with { ExitCode = 3 };
+                                                      return Task.FromResult(outcome);
+                                                  });
+        var report = await new WindowsSandboxAcceptanceRunner(factory.Invoke, workspace.Root, limits : limits)
+           .RunAsync([caseName]);
+        var result = report.Cases.Single();
+        Assert.That(result.Verdict, Is.EqualTo(expected), result.Detail);
+        if (scenario == "host-unreachable") Assert.That(sandboxCalls, Is.Zero);
+        if (scenario == "udp-send-only")
+            Assert.That(result.NetworkChecks!.All(check =>
+                                                      check.Sandbox is { Sent: true, Status: "wait-expired" } &&
+                                                      !check.OuterTimedOut), Is.True);
+        if (scenario == "dns-port-busy") Assert.That(result.Detail, Does.Contain("AddressAlreadyInUse"));
+        if (scenario == "nonzero-diagnostic")
+            Assert.That(result.NetworkChecks!.All(check =>
+                                                      check.Sandbox?.NativeError == 10013 ||
+                                                      check.Sandbox?.Status      == "matched"), Is.True);
+        if (scenario == "outer-timeout") Assert.That(result.NetworkChecks!.All(check => check.OuterTimedOut), Is.True);
+    }
 
-        report = await RunSingleCaseAsync(home, "network-denied", (plan, ct) =>
-                                              Task.FromResult(new ScriptedOutcome(0)));
-        Assert.That(VerdictOf(report, "network-denied"), Is.EqualTo(SandboxAcceptanceVerdict.Fail));
-
-        var limits = TestLimits() with { NonLoopbackAddressResolver = () => null };
-        report = await RunSingleCaseAsync(home, "network-denied", HappyScriptAsync, limits);
-        Assert.That(VerdictOf(report, "network-denied"), Is.EqualTo(SandboxAcceptanceVerdict.Indeterminate));
-
-        limits = TestLimits() with { CurlPathResolver = () => null };
-        report = await RunSingleCaseAsync(home, "network-denied", HappyScriptAsync, limits);
-        Assert.That(VerdictOf(report, "network-denied"), Is.EqualTo(SandboxAcceptanceVerdict.Indeterminate));
+    [Test]
+    public async Task NetworkProbe_InvalidArgumentsDoNotConnect()
+    {
+        foreach (var arguments in new[]
+                 {
+                     Array.Empty<string>(), new[] { "tcp", "localhost", "53", new string('a', 32) },
+                     new[] { "tcp", "0.0.0.0", "53", new string('a', 32) },
+                     new[] { "udp", "::1", "0", new string('a', 32) },
+                     new[] { "tcp", "127.0.0.1", "53", "bad-nonce" }
+                 })
+        {
+            using var output = new StringWriter();
+            Assert.That(await SandboxNetworkProbe.RunCommandAsync(arguments, output, CancellationToken.None),
+                        Is.EqualTo(2));
+            Assert.That(output.ToString(), Is.Empty);
+        }
     }
 
     [Test]
@@ -893,18 +1105,21 @@ public sealed class WindowsSandboxAcceptanceTests
             LargeOutputTargetCharacters = 60_000,
             ModelOutputCharacterLimit   = 4_096,
             NonLoopbackAddressResolver  = () => "10.255.255.1",
-            CurlPathResolver            = () => "C:\\fake\\curl.exe"
+            NetworkProbeCommandResolver = () => ("C:\\fake\\TinyHarness.exe", []),
+            NetworkResponderFactory     = (_, _, port, _) => new FakeNetworkResponder(port == 0 ? 49152 : port),
+            HostNetworkExchange = (transport, address, port, nonce, _) =>
+                Task.FromResult(Matched(transport, address, port, nonce))
         };
     }
 
     /// <summary>
     ///     <para>
-    ///         满足全矩阵的脚本：whoami 返回 offline 账户、probe 退出 0、curl 回环成功/非回环被拒、
+    ///         满足全矩阵的脚本：whoami 返回 offline 账户、probe 退出 0、网络通信按严格模式被拒、
     ///         cmd exit/type/copy 按目标语义应答。
     ///     </para>
     ///     <para>
     ///         The full-matrix happy script: whoami prints the offline account, the
-    ///         probe exits 0, curl succeeds on loopback and is blocked otherwise,
+    ///         probe exits 0, network communication follows strict-mode denial,
     ///         and cmd exit/type/copy answer per target semantics.
     ///     </para>
     /// </summary>
@@ -919,10 +1134,8 @@ public sealed class WindowsSandboxAcceptanceTests
                 ]));
             case "codex-windows-managed-deny-probe.exe" :
                 return Task.FromResult(new ScriptedOutcome(0));
-            case "curl.exe" :
-                return Task.FromResult(LastArgument(plan).Contains("127.0.0.1", StringComparison.Ordinal)
-                                           ? new ScriptedOutcome(0)
-                                           : new ScriptedOutcome(7));
+            case "TinyHarness.exe" :
+                return Task.FromResult(NetworkOutcome(plan, false));
             case "powershell.exe" :
                 // 超时用例：runner 上报其超时判定。
                 return Task.FromResult(new ScriptedOutcome(192, true));
@@ -1015,6 +1228,31 @@ public sealed class WindowsSandboxAcceptanceTests
         return afterKill;
     }
 
+    private static SandboxNetworkObservation Matched(string transport, IPAddress address, int port, string nonce) =>
+        new(transport, address.ToString(), port, nonce, "matched", transport == "tcp", true);
+
+    private static SandboxNetworkObservation NetworkObservation(PreparedProcessExecution plan, bool allowLoopback)
+    {
+        var transport = plan.Arguments[^4];
+        var address   = IPAddress.Parse(plan.Arguments[^3]);
+        var port      = int.Parse(plan.Arguments[^2]);
+        var nonce     = plan.Arguments[^1];
+        return allowLoopback && transport == "tcp" && IPAddress.IsLoopback(address) && port is not (53 or 853)
+            ? Matched(transport, address, port, nonce)
+            : new SandboxNetworkObservation(transport, address.ToString(), port, nonce, "socket-denied",
+                                            SocketError : "AccessDenied", NativeError : 10013);
+    }
+
+    private static ScriptedOutcome NetworkOutcome(PreparedProcessExecution plan, bool allowLoopback) =>
+        ObservationOutcome(NetworkObservation(plan, allowLoopback));
+
+    private static ScriptedOutcome ObservationOutcome(SandboxNetworkObservation observation) => new(0,
+             StdoutChunks :
+             [
+                 JsonSerializer.Serialize(observation,
+                                          WindowsSandboxAcceptanceJsonContext.Default.SandboxNetworkObservation)
+             ]);
+
     private static string LastArgument(PreparedProcessExecution plan) =>
         plan.Arguments.Count > 0 ? plan.Arguments[^1] : string.Empty;
 
@@ -1047,6 +1285,13 @@ public sealed class WindowsSandboxAcceptanceTests
 
     private static UserConfig SandboxConfig(SandboxTestHome home, bool enabled = true) => new()
         { Settings = new UserConfigSettings { WindowsSandbox = SandboxSettings(home, enabled) } };
+
+    private sealed class FakeNetworkResponder(int port, string? failure = null) : ISandboxNetworkResponder
+    {
+        public int       Port           => port;
+        public string?   Failure        => failure;
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
 
     // ---- 脚本与 fixture ----
 
@@ -1115,7 +1360,8 @@ public sealed class WindowsSandboxAcceptanceTests
                 ["TEMP"] = tempRoot,
                 ["TMP"]  = tempRoot
             };
-            var policy = SandboxPolicyResolver.Resolve(kind, workspaceRoot, targetEnvironment);
+            var policy = SandboxPolicyResolver.Resolve(kind, workspaceRoot, targetEnvironment,
+                                                       allowTcpLoopback : components.AllowTcpLoopback);
             return new WindowsSandboxExecution(components, policy, targetEnvironment,
                                                ProcessExecutionPolicy.Host(), new ScriptedBackend(script));
         }

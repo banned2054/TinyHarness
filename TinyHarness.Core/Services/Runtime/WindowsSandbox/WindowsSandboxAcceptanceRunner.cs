@@ -1,7 +1,6 @@
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Net;
-using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
 using TinyHarness.Core.Models.Runtime;
@@ -10,26 +9,33 @@ using TinyHarness.Core.Models.Runtime.WindowsSandbox;
 namespace TinyHarness.Core.Services.Runtime.WindowsSandbox;
 
 /// <summary>
-///     按策略种类与用例附加环境组合一次沙箱执行的工厂。extraTargetEnvironment 必须经与 ShellTool
-///     一致的清理环境路径进入目标命令——实现方应把它合并进可信设置的 extraEnvironment 再走
-///     <see cref="WindowsSandboxComposer.Compose" />，绝不旁路拼 spawn env。
-///     Composes one sandbox execution for a policy kind plus case-scoped extra
-///     environment. The extra variables must reach the target command through
-///     the same cleaned-environment path ShellTool uses — implementations merge
-///     them into the trusted settings' extraEnvironment and call
-///     <see cref="WindowsSandboxComposer.Compose" />; bypassing that path to
-///     hand-build the spawn env is never acceptable.
+///     <para>
+///         按策略种类与用例附加环境组合一次沙箱执行的工厂。extraTargetEnvironment 必须经与 ShellTool
+///         一致的清理环境路径进入目标命令——实现方应把它合并进可信设置的 extraEnvironment 再走
+///         <see cref="WindowsSandboxComposer.Compose" />，绝不旁路拼 spawn env。
+///     </para>
+///     <para>
+///         Composes one sandbox execution for a policy kind plus case-scoped extra
+///         environment. The extra variables must reach the target command through
+///         the same cleaned-environment path ShellTool uses — implementations merge
+///         them into the trusted settings' extraEnvironment and call
+///         <see cref="WindowsSandboxComposer.Compose" />; bypassing that path to
+///         hand-build the spawn env is never acceptable.
+///     </para>
 /// </summary>
 public delegate WindowsSandboxExecution WindowsSandboxBackendFactory(
-    SandboxPolicyKind                    policyKind,
-    IReadOnlyDictionary<string, string>? extraTargetEnvironment);
+    SandboxPolicyKind policyKind, IReadOnlyDictionary<string, string>? extraTargetEnvironment);
 
 /// <summary>
-///     host-exit-reclaim 用例可控杀除的 worker 进程句柄。Kill 只终止该进程本身（不杀进程树），
-///     用于模拟宿主异常退出后遗弃 runner/目标进程的场景。
-///     A controllable worker process handle for the host-exit-reclaim case.
-///     Kill terminates only this process (never the tree), simulating a host
-///     that dies and abandons the runner and target processes.
+///     <para>
+///         host-exit-reclaim 用例可控杀除的 worker 进程句柄。Kill 只终止该进程本身（不杀进程树），
+///         用于模拟宿主异常退出后遗弃 runner/目标进程的场景。
+///     </para>
+///     <para>
+///         A controllable worker process handle for the host-exit-reclaim case.
+///         Kill terminates only this process (never the tree), simulating a host
+///         that dies and abandons the runner and target processes.
+///     </para>
 /// </summary>
 public interface ISandboxVerifyWorkerProcess
 {
@@ -37,106 +43,156 @@ public interface ISandboxVerifyWorkerProcess
 }
 
 /// <summary>
-///     启动隐藏的 verify-worker 子进程：就绪后写 marker，再保持 holdSeconds 秒。真实实现是本 CLI
-///     自身的 `sandbox verify-worker` 进程；离线测试注入 fake。
-///     Spawns the hidden verify-worker child process: it writes the marker once
-///     ready, then stays alive for holdSeconds. The real implementation is this
-///     CLI's own `sandbox verify-worker` process; offline tests inject a fake.
+///     <para>
+///         启动隐藏的 verify-worker 子进程：就绪后写 marker，再保持 holdSeconds 秒。真实实现是本 CLI
+///         自身的 `sandbox verify-worker` 进程；离线测试注入 fake。
+///     </para>
+///     <para>
+///         Spawns the hidden verify-worker child process: it writes the marker once
+///         ready, then stays alive for holdSeconds. The real implementation is this
+///         CLI's own `sandbox verify-worker` process; offline tests inject a fake.
+///     </para>
 /// </summary>
 public delegate ISandboxVerifyWorkerProcess SandboxVerifyWorkerSpawner(string markerPath, int holdSeconds);
 
 /// <summary>
-///     验收运行的期限与可调参数。默认值面向真实沙箱（每命令一次 refresh + runner）；离线测试注入
-///     缩短的期限与替换的地址/curl 解析器。
-///     Deadlines and tunables of an acceptance run. Defaults target the real
-///     sandbox (one refresh + runner per command); offline tests inject
-///     shortened deadlines and replacement address/curl resolvers.
+///     <para>
+///         验收运行的期限与可调参数。默认值面向真实沙箱（每命令一次 refresh + runner）；离线测试注入
+///         缩短的期限与受控地址、回应器及宿主通信替身。
+///     </para>
+///     <para>
+///         Deadlines and tunables of an acceptance run. Defaults target the real
+///         sandbox (one refresh + runner per command); offline tests inject
+///         shortened deadlines and fake addresses, responders, and host exchanges.
+///     </para>
 /// </summary>
 public sealed record WindowsSandboxAcceptanceLimits
 {
     public static readonly WindowsSandboxAcceptanceLimits Default = new();
 
-    /// <summary>整个验收矩阵的总期限；到期后未开始的用例记 SKIPPED、被中断的用例记 FAIL。</summary>
+    /// <summary>
+    ///     <para>整个验收矩阵的总期限；到期后未开始的用例记 SKIPPED、被中断的用例记 FAIL。</para>
+    ///     <para>
+    ///         The overall deadline of the acceptance matrix; on expiry, cases not yet started become SKIPPED and an
+    ///         interrupted case becomes FAIL.
+    ///     </para>
+    /// </summary>
     public TimeSpan OverallDeadline { get; init; } = TimeSpan.FromMinutes(15);
 
-    /// <summary>回收/遗弃用例等待镜像消失的扫描窗口。</summary>
+    /// <summary>
+    ///     <para>回收/遗弃用例等待镜像消失的扫描窗口。</para>
+    ///     <para>The scan window the reclamation/abandonment cases wait for images to disappear.</para>
+    /// </summary>
     public TimeSpan ProcessScanTimeout { get; init; } = TimeSpan.FromSeconds(30);
 
     public TimeSpan ProcessScanInterval { get; init; } = TimeSpan.FromMilliseconds(500);
 
-    /// <summary>host-exit-reclaim 等待 worker marker 就绪的期限。</summary>
+    /// <summary>
+    ///     <para>host-exit-reclaim 等待 worker marker 就绪的期限。</para>
+    ///     <para>The deadline the host-exit-reclaim case waits for the worker marker to appear.</para>
+    /// </summary>
     public TimeSpan MarkerWaitTimeout { get; init; } = TimeSpan.FromSeconds(30);
 
-    /// <summary>terminate-active 启动后到取消之间的等待。</summary>
+    /// <summary>
+    ///     <para>terminate-active 启动后到取消之间的等待。</para>
+    ///     <para>The wait between starting and cancelling the terminate-active case.</para>
+    /// </summary>
     public TimeSpan TerminateCancelDelay { get; init; } = TimeSpan.FromSeconds(3);
 
-    /// <summary>verify-worker 保持存活的秒数（须大于父进程 kill + 扫描窗口）。</summary>
+    /// <summary>
+    ///     <para>verify-worker 保持存活的秒数（须大于父进程 kill + 扫描窗口）。</para>
+    ///     <para>How many seconds the verify-worker stays alive (must exceed the parent kill plus the scan window).</para>
+    /// </summary>
     public int WorkerHoldSeconds { get; init; } = 300;
 
-    /// <summary>large-output 用例生成的目标字符数。</summary>
+    /// <summary>
+    ///     <para>large-output 用例生成的目标字符数。</para>
+    ///     <para>The target character count the large-output case generates.</para>
+    /// </summary>
     public int LargeOutputTargetCharacters { get; init; } = 4_000_000;
 
-    /// <summary>模型输出视图的字符上限（head+tail 截断，与 ShellTool 缺省一致）。</summary>
+    /// <summary>
+    ///     <para>模型输出视图的字符上限（head+tail 截断，与 ShellTool 缺省一致）。</para>
+    ///     <para>The character limit of the model output view (head+tail truncation, matching the ShellTool default).</para>
+    /// </summary>
     public int ModelOutputCharacterLimit { get; init; } = 16 * 1024;
 
-    /// <summary>外部击杀与回收扫描针对的 runner 镜像名（不含 .exe）。</summary>
+    /// <summary>
+    ///     <para>外部击杀与回收扫描针对的 runner 镜像名（不含 .exe）。</para>
+    ///     <para>The runner image name targeted by the external kill and reclamation scans (without .exe).</para>
+    /// </summary>
     public string RunnerImageName { get; init; } = "codex-command-runner";
 
     /// <summary>
-    ///     回收/遗弃扫描覆盖的镜像名（不含 .exe）；测试可替换以模拟残留。sleeper 用 powershell
-    ///     （Start-Sleep 不依赖网络；waitfor 走 SMB mailslot，会被断网过滤秒退，不是有效 sleeper）。
-    ///     Survivor image names covered by the reclamation/abandonment scans
-    ///     (without .exe); tests replace them to simulate leftovers. The sleeper
-    ///     is powershell (Start-Sleep needs no network; waitfor uses SMB
-    ///     mailslots and dies instantly under the network block, so it is not a
-    ///     valid sleeper inside the sandbox).
+    ///     <para>
+    ///         回收/遗弃扫描覆盖的镜像名（不含 .exe）；测试可替换以模拟残留。sleeper 用 powershell
+    ///         （Start-Sleep 不依赖网络；waitfor 走 SMB mailslot，会被断网过滤秒退，不是有效 sleeper）。
+    ///     </para>
+    ///     <para>
+    ///         Survivor image names covered by the reclamation/abandonment scans
+    ///         (without .exe); tests replace them to simulate leftovers. The sleeper
+    ///         is powershell (Start-Sleep needs no network; waitfor uses SMB
+    ///         mailslots and dies instantly under the network block, so it is not a
+    ///         valid sleeper inside the sandbox).
+    ///     </para>
     /// </summary>
     public IReadOnlyList<string> SurvivorImageNames { get; init; } = ["codex-command-runner", "powershell"];
 
     /// <summary>
-    ///     断网用例的本机非回环地址解析；null 时用 Dns.GetHostAddresses 解析。测试注入以稳定
-    ///     INDETERMINATE/PASS/FAIL 三态。
-    ///     The non-loopback local address resolver for the network case; null
-    ///     resolves via Dns.GetHostAddresses. Tests inject it to stabilize the
-    ///     INDETERMINATE/PASS/FAIL triad.
+    ///     <para>本机非环回地址解析；未指定时枚举本机接口，解析器返回 null 表示不可用。</para>
+    ///     <para>Resolves a local non-loopback address; defaults to interface enumeration; a null result means unavailable.</para>
     /// </summary>
     public Func<string?>? NonLoopbackAddressResolver { get; init; }
 
-    /// <summary>curl.exe 绝对路径解析；null 时按 %SystemRoot%\System32\curl.exe 探测。</summary>
-    public Func<string?>? CurlPathResolver { get; init; }
+    /// <summary>
+    ///     <para>在绑定及通信前显示明确目标；端口 0 表示即将分配独占随机端口。</para>
+    ///     <para>Displays the explicit target before binding and communication; port 0 requests an exclusive ephemeral port.</para>
+    /// </summary>
+    public Func<string, CancellationToken, Task>? NetworkTargetObserver { get; init; }
+
+    internal Func<(string Executable, IReadOnlyList<string> Prefix)?>?       NetworkProbeCommandResolver { get; init; }
+    internal Func<string, IPAddress, int, string, ISandboxNetworkResponder>? NetworkResponderFactory     { get; init; }
+
+    internal Func<string, IPAddress, int, string, CancellationToken, Task<SandboxNetworkObservation>>?
+        HostNetworkExchange { get; init; }
 }
 
 /// <summary>
-///     M11.5 Windows 沙箱隔离验收运行器：在专用验收工作区内按固定矩阵执行真实沙箱命令，逐例判定
-///     PASS/FAIL/INDETERMINATE/SKIPPED 并写 source-gen JSON 报告到 &lt;sandbox home&gt;\.sandbox\。
-///     每用例独立组合/执行（每命令一次 refresh + runner 是已知开销，正确性优先）；单用例失败记录后
-///     继续其余用例。后端经 <see cref="WindowsSandboxBackendFactory" /> 注入——真实运行由 CLI 传调用
-///     Compose 的工厂，离线测试传 fake。绝不自动 provisioning、绝不回退宿主执行。
-///     The M11.5 Windows sandbox isolation acceptance runner: it executes real
-///     sandboxed commands from a fixed matrix inside a dedicated acceptance
-///     workspace, judges each case PASS/FAIL/INDETERMINATE/SKIPPED, and writes a
-///     source-generated JSON report into &lt;sandbox home&gt;\.sandbox\. Every case
-///     composes and executes on its own (one refresh + runner per command is a
-///     known cost; correctness first); a failed case is recorded and the matrix
-///     continues. The backend arrives via <see cref="WindowsSandboxBackendFactory" />
-///     — the CLI passes a factory calling Compose, offline tests pass a fake. It
-///     never provisions and never falls back to host execution.
+///     <para>
+///         Windows 沙箱隔离验收运行器：在专用验收工作区内按固定矩阵执行真实沙箱命令，逐例判定
+///         PASS/FAIL/INDETERMINATE/SKIPPED 并写 source-gen JSON 报告到 &lt;sandbox home&gt;\.sandbox\。
+///         每用例独立组合/执行（每命令一次 refresh + runner 是已知开销，正确性优先）；单用例失败记录后
+///         继续其余用例。后端经 <see cref="WindowsSandboxBackendFactory" /> 注入——真实运行由 CLI 传调用
+///         Compose 的工厂，离线测试传 fake。绝不自动 provisioning、绝不回退宿主执行。
+///     </para>
+///     <para>
+///         The Windows sandbox isolation acceptance runner: it executes real
+///         sandboxed commands from a fixed matrix inside a dedicated acceptance
+///         workspace, judges each case PASS/FAIL/INDETERMINATE/SKIPPED, and writes a
+///         source-generated JSON report into &lt;sandbox home&gt;\.sandbox\. Every case
+///         composes and executes on its own (one refresh + runner per command is a
+///         known cost; correctness first); a failed case is recorded and the matrix
+///         continues. The backend arrives via <see cref="WindowsSandboxBackendFactory" />
+///         — the CLI passes a factory calling Compose, offline tests pass a fake. It
+///         never provisions and never falls back to host execution.
+///     </para>
 /// </summary>
-public sealed class WindowsSandboxAcceptanceRunner
+public sealed partial class WindowsSandboxAcceptanceRunner
 {
-    private const int IdentityTimeoutSeconds     = 60;
-    private const int DenyProbeTimeoutSeconds    = 120;
-    private const int WriteProbeTimeoutSeconds   = 60;
-    private const int NetworkProbeTimeoutSeconds = 30;
-    private const int ExitProbeTimeoutSeconds    = 30;
-    private const int TimeoutCaseCommandSeconds  = 8;
-    private const int SleeperDurationSeconds     = 300;
-    private const int LargeOutputTimeoutSeconds  = 120;
+    private const int IdentityTimeoutSeconds    = 60;
+    private const int DenyProbeTimeoutSeconds   = 120;
+    private const int WriteProbeTimeoutSeconds  = 60;
+    private const int ExitProbeTimeoutSeconds   = 30;
+    private const int TimeoutCaseCommandSeconds = 8;
+    private const int SleeperDurationSeconds    = 300;
+    private const int LargeOutputTimeoutSeconds = 120;
 
     private static readonly IReadOnlyList<string> BaseLimitations =
     [
         "进程存活扫描按镜像名 + 启动时间过滤识别：同名无关进程可能被误判为残留，改名或复用 PID 的目标进程无法识别。",
-        "断网观测语义：非回环阻断由 connect 失败推断（对照 host 侧全接口监听）；回环可达性仅作观测记录、不构成门控；WFP 的 ICMP/DNS 过滤未被直接探测。",
+        "网络判定要求同一目标的宿主前后 nonce ACK 正对照成功；TCP 环回按所选模式门控，非环回 TCP 与全部 UDP、53/853 端口通信须被阻断。失败仅证明本机路径未完成通信，不能唯一归因于 WFP。",
+        "53/853 使用受控回应检查 IPv4/IPv6 的 TCP/UDP 端口可达性，不执行 DNS/TLS 协议；不覆盖系统解析器、服务代发、缓存、DoH、ICMP、SMB 或完整 DNS 泄漏防护。IPv6 不可用、固定端口占用、宿主对照失败均为未验证。",
+        "监听只绑定明确本机地址，仍可能触发 Windows 防火墙提示；用户选择可能保存规则。本工具不配置 Firewall/WFP，不要求开放公用网络。",
         "断网对照使用本机地址：Windows 对连接本机 IP 的流量走环回快速路径，可能绕过按远程地址匹配的防火墙规则；按用户作用域（LocalUserAuthorizedList）的 BLOCK 规则是否对沙箱账户进程生效依赖防火墙的归因行为，本用例无法区分这两种未拦截原因。",
         "192,true 只是 runner 的超时判定，不构成进程树已完整回收的证明。",
         "deny-probe 退出 21 属探针/harness fixture 配置问题，不代表隔离失效；20 才是隔离失效信号。",
@@ -177,24 +233,32 @@ public sealed class WindowsSandboxAcceptanceRunner
         _limits         = limits ?? WindowsSandboxAcceptanceLimits.Default;
     }
 
-    /// <summary>固定矩阵的稳定用例名（--case 过滤与命令数预告的依据）。</summary>
+    /// <summary>
+    ///     <para>固定矩阵的稳定用例名（--case 过滤与命令数预告的依据）。</para>
+    ///     <para>The stable case names of the fixed matrix (the basis for --case filtering and the announced command count).</para>
+    /// </summary>
     public static IReadOnlyList<string> CaseNames =>
     [
         "identity-whoami", "deny-probe", "write-denied-outside-roots", "readonly-workspace-write-denied",
-        "metadata-protected", "workspace-write-allowed", "network-denied", "exit-natural-23", "exit-natural-192",
+        "metadata-protected", "workspace-write-allowed", "network-denied", "network-udp", "network-dns",
+        "exit-natural-23", "exit-natural-192",
         "timeout-finite", "terminate-active", "cancel-startup", "runner-broken-pipe", "large-output",
         "host-exit-reclaim"
     ];
 
     /// <summary>
-    ///     执行选定的用例并写报告。caseFilter 为 null 或空时执行全矩阵；未知名称抛
-    ///     ArgumentException。调用方取消以 OperationCanceledException 向上传播；总期限到期不抛出，
-    ///     改为把剩余用例记 SKIPPED、被中断的用例记 FAIL。
-    ///     Runs the selected cases and writes the report. A null or empty
-    ///     caseFilter runs the full matrix; unknown names throw
-    ///     ArgumentException. Caller cancellation propagates as
-    ///     OperationCanceledException; the overall deadline never throws — the
-    ///     remaining cases become SKIPPED and the interrupted one FAIL.
+    ///     <para>
+    ///         执行选定的用例并写报告。caseFilter 为 null 或空时执行全矩阵；未知名称抛
+    ///         ArgumentException。调用方取消以 OperationCanceledException 向上传播；总期限到期不抛出，
+    ///         改为把剩余用例记 SKIPPED、被中断的用例记 FAIL。
+    ///     </para>
+    ///     <para>
+    ///         Runs the selected cases and writes the report. A null or empty
+    ///         caseFilter runs the full matrix; unknown names throw
+    ///         ArgumentException. Caller cancellation propagates as
+    ///         OperationCanceledException; the overall deadline never throws — the
+    ///         remaining cases become SKIPPED and the interrupted one FAIL.
+    ///     </para>
     /// </summary>
     public async Task<WindowsSandboxAcceptanceReport> RunAsync(
         IReadOnlyList<string>? caseFilter = null, CancellationToken cancellationToken = default)
@@ -205,9 +269,7 @@ public sealed class WindowsSandboxAcceptanceRunner
         _artifactDirectory = Path.Combine(_workspaceRoot, "artifacts");
         Directory.CreateDirectory(_artifactDirectory);
 
-        // Snapshot composition validates composition up front and supplies the
-        // component/policy evidence, the offline account name, and the
-        // deny-probe derivation root for the whole report.
+        // 先用快照组合前置验证组合路径，并为整份报告提供组件/策略证据、离线账户名与 deny-probe 推导根。
         _snapshotExecution = _backendFactory(SandboxPolicyKind.WorkspaceWrite, null);
         var snapshot = await BuildComponentSnapshotAsync(_snapshotExecution, cancellationToken).ConfigureAwait(false);
 
@@ -246,7 +308,7 @@ public sealed class WindowsSandboxAcceptanceRunner
             }
             catch (Exception ex)
             {
-                // A failed case is recorded; the matrix continues.
+                // 单用例失败仅记录，矩阵继续执行。
                 results.Add(Result(definition, SandboxAcceptanceVerdict.Fail, null, $"用例执行异常：{ex.Message}",
                                    stopwatch));
             }
@@ -298,8 +360,15 @@ public sealed class WindowsSandboxAcceptanceRunner
             "workspace-write 策略下向工作区普通路径写入成功（正对照）", "cmd /c copy NUL <工作区普通路径>",
             WorkspaceWriteAllowedAsync),
         new("network-denied", SandboxPolicyKind.WorkspaceWrite,
-            "沙箱内对本机非回环 IP 的连接被阻断；回环结果仅作观测", "curl.exe → 127.0.0.1 / 本机非回环 IP",
-            NetworkDeniedAsync),
+            "宿主前后正对照成功；IPv4/IPv6 TCP 环回按模式门控，非环回 TCP 阻断", "nonce TCP → 127.0.0.1 / ::1 / 本机非环回 IPv4",
+            token => NetworkAsync("network-denied", token)),
+        new("network-udp", SandboxPolicyKind.WorkspaceWrite,
+            "宿主前后 ACK 正对照成功；IPv4/IPv6 UDP 环回及非环回 IPv4 不收到匹配 ACK",
+            "nonce UDP 请求/回应", token => NetworkAsync("network-udp", token)),
+        new("network-dns", SandboxPolicyKind.WorkspaceWrite,
+            "宿主前后 ACK 正对照成功；IPv4/IPv6 TCP/UDP 的 53/853 固定端口通信阻断",
+            "nonce TCP/UDP → 127.0.0.1 / ::1 : 53 / 853（端口检查）",
+            token => NetworkAsync("network-dns", token)),
         new("exit-natural-23", SandboxPolicyKind.WorkspaceWrite,
             "自然退出 23：ExitCode=23 且 TimedOut=false",
             "cmd /c exit 23", ExitNaturalAsync(23)),
@@ -364,9 +433,8 @@ public sealed class WindowsSandboxAcceptanceRunner
             return Result(definition, SandboxAcceptanceVerdict.Indeterminate, null,
                           "host 缺少 System32\\version.dll，无法布置探针模块 fixture。", stopwatch);
 
-        // The denied fixtures must sit outside the read roots of the policy that
-        // actually runs: the fixed profiles carry no explicit deny-read entries,
-        // so deny-read semantics is "no ACL grant outside the read roots".
+        // denied fixture 必须位于实际执行策略的读根之外：固定 profile 没有显式 deny-read 条目，
+        // deny-read 语义即“读根之外不授予 ACL”。
         var execution = _backendFactory(SandboxPolicyKind.WorkspaceWrite, null);
         var readRoots = execution.Policy.CreateSetupPayload(execution.Components, _workspaceRoot,
                                                             Environment.UserName, true).ReadRoots;
@@ -391,9 +459,7 @@ public sealed class WindowsSandboxAcceptanceRunner
         File.Copy(versionDll, deniedModule, true);
         File.Copy(probeSource, probeCopy, true);
 
-        // The probe variables enter the spawn env through the same cleaned
-        // environment path as every other sandboxed command: the factory merges
-        // them into the trusted extraEnvironment before composition.
+        // 探针变量与其他沙箱命令一样经同一清理环境路径进入 spawn env：工厂先把它合并进可信 extraEnvironment 再组合。
         var probeEnvironment = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
             ["CODEX_WINDOWS_ALLOWED_TEXT"]   = allowedText,
@@ -482,49 +548,6 @@ public sealed class WindowsSandboxAcceptanceRunner
                       "正对照：失败说明 harness 或沙箱配置损坏。", stopwatch);
     }
 
-    private async Task<SandboxAcceptanceCaseResult> NetworkDeniedAsync(CancellationToken cancellationToken)
-    {
-        var definition = Definition("network-denied");
-        var stopwatch  = Stopwatch.StartNew();
-        // The resolvers are authoritative when provided: a null result means
-        // "no curl / no observable address" and records INDETERMINATE.
-        var curl = _limits.CurlPathResolver is { } curlResolver ? curlResolver() : SystemTool("curl.exe");
-        var nonLoopback = _limits.NonLoopbackAddressResolver is { } addressResolver
-            ? addressResolver()
-            : ResolveNonLoopbackAddress();
-        if (curl is null)
-            return Result(definition, SandboxAcceptanceVerdict.Indeterminate, null,
-                          "缺少 curl.exe（System32），无法执行断网对照。", stopwatch);
-
-        if (nonLoopback is null)
-            return Result(definition, SandboxAcceptanceVerdict.Indeterminate, null,
-                          "无法解析本机非回环地址，无法执行门控断网对照。", stopwatch);
-
-        using var listener = new TcpListenerProbe();
-        var       port     = listener.Start();
-        var loopbackRun = await CurlAsync(curl, $"http://127.0.0.1:{port}/", "network-denied-loopback",
-                                          cancellationToken).ConfigureAwait(false);
-        var nonLoopbackRun = await CurlAsync(curl, $"http://{nonLoopback}:{port}/", "network-denied-nonloopback",
-                                             cancellationToken).ConfigureAwait(false);
-
-        var loopbackExit    = ExitOf(loopbackRun);
-        var nonLoopbackExit = ExitOf(nonLoopbackRun);
-        var curlError       = FirstLine(nonLoopbackRun.Stderr?.Content);
-        var actual =
-            $"回环 127.0.0.1 exit={loopbackExit?.ToString() ?? "无"}（观测）；非回环 {nonLoopback} exit={nonLoopbackExit?.ToString() ?? "无"}（门控）" +
-            (string.IsNullOrEmpty(curlError) ? string.Empty : $"；非回环 stderr: {curlError}");
-        var verdict = nonLoopbackRun.Exception is not null || nonLoopbackExit is null
-            ? SandboxAcceptanceVerdict.Fail
-            : nonLoopbackExit is 7 or 28
-                ? SandboxAcceptanceVerdict.Pass
-                : nonLoopbackExit == 0
-                    ? SandboxAcceptanceVerdict.Fail
-                    : SandboxAcceptanceVerdict.Indeterminate;
-        return Result(definition, verdict, actual,
-                      "exit 7=连接失败、28=超时（判为被阻断）；0=连接成功并收到数据（隔离失效）；其余视为不确定。",
-                      stopwatch);
-    }
-
     private Func<CancellationToken, Task<SandboxAcceptanceCaseResult>> ExitNaturalAsync(int expectedExitCode) =>
         async cancellationToken =>
         {
@@ -605,8 +628,7 @@ public sealed class WindowsSandboxAcceptanceRunner
         using var caseCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         var runTask = ExecuteOnceAsync(SandboxPolicyKind.WorkspaceWrite, null, SleeperPlan(sleeper), "cancel-startup",
                                        caseCancellation.Token);
-        // Cancel immediately after the call is in flight: the backend observes
-        // cancellation during its startup stages.
+        // 调用进入执行后立即取消：让后端在启动阶段观察到取消。
         await caseCancellation.CancelAsync().ConfigureAwait(false);
         var run = await AwaitAsOutcomeAsync(runTask, true).ConfigureAwait(false);
 
@@ -635,8 +657,7 @@ public sealed class WindowsSandboxAcceptanceRunner
         var runTask = ExecuteOnceAsync(SandboxPolicyKind.WorkspaceWrite, null, SleeperPlan(sleeper),
                                        "runner-broken-pipe", caseCancellation.Token);
 
-        // Locate THIS case's runner by image name plus the case's start window;
-        // the baseline excludes runners of earlier cases.
+        // 按镜像名加本用例启动时间窗定位本用例的 runner；基线已排除更早用例的 runner。
         var      locateDeadline = DateTimeOffset.UtcNow + _limits.ProcessScanTimeout;
         Process? runner         = null;
         while (runner is null && DateTimeOffset.UtcNow < locateDeadline)
@@ -669,8 +690,7 @@ public sealed class WindowsSandboxAcceptanceRunner
             runner.Kill();
         }
 
-        // Either a result without an exit code or an exception means no exit
-        // code was invented; both satisfy the contract.
+        // 结果无退出码或抛出异常都表示后端未补造退出码；两者均满足契约。
         var run              = await AwaitAsOutcomeAsync(runTask, false).ConfigureAwait(false);
         var survivors        = await WaitForNoSurvivorsAsync(cancellationToken).ConfigureAwait(false);
         var actual           = Describe(run, null);
@@ -718,9 +738,7 @@ public sealed class WindowsSandboxAcceptanceRunner
                           "未提供 verify-worker 启动器，无法执行宿主异常退出用例。", stopwatch);
 
         var markerPath = Path.Combine(_artifactDirectory, "host-exit-marker.txt");
-        // The parent clears a stale marker before spawning: the worker never
-        // deletes caller-supplied paths, and a stale file would fake readiness
-        // before the worker even started.
+        // 父进程在启动前清除残留 marker：worker 不会删除调用方提供的路径，残留文件会在 worker 启动前伪造就绪。
         File.Delete(markerPath);
         var worker = _workerSpawner(markerPath, _limits.WorkerHoldSeconds);
         if (!await WaitForFileAsync(markerPath, _limits.MarkerWaitTimeout, _limits.ProcessScanInterval,
@@ -741,13 +759,17 @@ public sealed class WindowsSandboxAcceptanceRunner
     }
 
     /// <summary>
-    ///     组合一次执行并跑完：命令超时由后端按计划实施；任何异常先丢弃输出再上抛（调用方决定按
-    ///     用例语义捕获）。捕获器默认是 Core 的增量 artifact 实现（head+tail 截断）。
-    ///     Composes and runs one execution: the backend enforces the plan's
-    ///     command timeout; any exception discards the captures first and
-    ///     rethrows (callers decide what their case semantics expect). The
-    ///     default capture is Core's incremental artifact implementation
-    ///     (head+tail truncation).
+    ///     <para>
+    ///         组合一次执行并跑完：命令超时由后端按计划实施；任何异常先丢弃输出再上抛（调用方决定按
+    ///         用例语义捕获）。捕获器默认是 Core 的增量 artifact 实现（head+tail 截断）。
+    ///     </para>
+    ///     <para>
+    ///         Composes and runs one execution: the backend enforces the plan's
+    ///         command timeout; any exception discards the captures first and
+    ///         rethrows (callers decide what their case semantics expect). The
+    ///         default capture is Core's incremental artifact implementation
+    ///         (head+tail truncation).
+    ///     </para>
     /// </summary>
     private async Task<SandboxRun> ExecuteOnceAsync(SandboxPolicyKind                    kind,
                                                     IReadOnlyDictionary<string, string>? environment,
@@ -773,12 +795,16 @@ public sealed class WindowsSandboxAcceptanceRunner
     }
 
     /// <summary>
-    ///     以“结果或异常皆为准出”的方式等待一次执行：仅当用例自身已发起取消时把取消折叠为
-    ///     SandboxRun.Exception；总期限/调用方取消仍向上传播，由外层记 FAIL/SKIPPED 或重抛。
-    ///     Awaits one execution treating a result or an exception as an
-    ///     outcome: cancellation folds into SandboxRun.Exception only when the
-    ///     case itself initiated it; overall-deadline and caller cancellation
-    ///     still propagate for the outer loop to record or rethrow.
+    ///     <para>
+    ///         以“结果或异常皆为准出”的方式等待一次执行：仅当用例自身已发起取消时把取消折叠为
+    ///         SandboxRun.Exception；总期限/调用方取消仍向上传播，由外层记 FAIL/SKIPPED 或重抛。
+    ///     </para>
+    ///     <para>
+    ///         Awaits one execution treating a result or an exception as an
+    ///         outcome: cancellation folds into SandboxRun.Exception only when the
+    ///         case itself initiated it; overall-deadline and caller cancellation
+    ///         still propagate for the outer loop to record or rethrow.
+    ///     </para>
     /// </summary>
     private static async Task<SandboxRun> AwaitAsOutcomeAsync(Task<SandboxRun> runTask, bool caseCancelled)
     {
@@ -813,28 +839,17 @@ public sealed class WindowsSandboxAcceptanceRunner
                       stopwatch);
     }
 
-    private async Task<SandboxRun> CurlAsync(
-        string curl, string url, string artifactPrefix, CancellationToken cancellationToken) =>
-        await ExecuteOnceAsync(SandboxPolicyKind.WorkspaceWrite, null,
-                               new PreparedProcessExecution(curl,
-                                                            [
-                                                                "-sS", "-o", "NUL",
-                                                                "--connect-timeout", "3",
-                                                                "--max-time", "5", url
-                                                            ],
-                                                            _workspaceRoot,
-                                                            NetworkProbeTimeoutSeconds, false,
-                                                            null),
-                               artifactPrefix, cancellationToken)
-           .ConfigureAwait(false);
-
     /// <summary>
-    ///     长 sleeper 计划：powershell Start-Sleep。与 waitfor 不同，它不依赖网络（waitfor 走
-    ///     SMB mailslot，会被断网过滤秒退），timeout-finite 用例已验证它在沙箱内可长期运行。
-    ///     The long-sleeper plan: powershell Start-Sleep. Unlike waitfor it
-    ///     needs no network (waitfor uses SMB mailslots and dies instantly
-    ///     under the network block); the timeout-finite case proved it runs
-    ///     long inside the sandbox.
+    ///     <para>
+    ///         长 sleeper 计划：powershell Start-Sleep。与 waitfor 不同，它不依赖网络（waitfor 走
+    ///         SMB mailslot，会被断网过滤秒退），是沙箱内可长期运行的有效 sleeper。
+    ///     </para>
+    ///     <para>
+    ///         The long-sleeper plan: powershell Start-Sleep. Unlike waitfor it
+    ///         needs no network (waitfor uses SMB mailslots and dies instantly
+    ///         under the network block); it is a valid sleeper that runs long
+    ///         inside the sandbox.
+    ///     </para>
     /// </summary>
     private PreparedProcessExecution SleeperPlan(string powershell) =>
         new(powershell, ["-NoProfile", "-NonInteractive", "-Command", $"Start-Sleep -Seconds {SleeperDurationSeconds}"],
@@ -845,16 +860,20 @@ public sealed class WindowsSandboxAcceptanceRunner
                                                                                  _limits.ModelOutputCharacterLimit, []);
 
     /// <summary>
-    ///     cmd /c 载荷内的裸路径约束。runner 会按 CRT 规则重组 argv：含空格/引号的路径经双层
-    ///     转义变成 cmd 无法解析的 \" 形式（宿主进程与沙箱在该语义上完全一致，实测均 exit 1），
-    ///     因此验收 fixture 的路径必须由 cmd 安全字符组成；否则抛出，把 fixture 问题明确暴露，
-    ///     而不是被误读为隔离结果。
-    ///     Constraint for bare paths inside a cmd /c payload. The runner re-joins
-    ///     argv with CRT rules: a path containing whitespace or quotes becomes a
-    ///     \" form cmd cannot parse (host processes and the sandbox share this
-    ///     exact semantics — measured exit 1 on both), so fixture paths must
-    ///     consist of cmd-safe characters; anything else throws, surfacing a
-    ///     fixture problem explicitly instead of a misread isolation verdict.
+    ///     <para>
+    ///         cmd /c 载荷内的裸路径约束。runner 会按 CRT 规则重组 argv：含空格/引号的路径经双层
+    ///         转义变成 cmd 无法解析的 \" 形式（宿主进程与沙箱在该语义上完全一致），因此验收
+    ///         fixture 的路径必须由 cmd 安全字符组成；否则抛出，把 fixture 问题明确暴露，
+    ///         而不是被误读为隔离结果。
+    ///     </para>
+    ///     <para>
+    ///         Constraint for bare paths inside a cmd /c payload. The runner re-joins
+    ///         argv with CRT rules: a path containing whitespace or quotes becomes a
+    ///         \" form cmd cannot parse (host processes and the sandbox share this
+    ///         exact semantics), so fixture paths must consist of cmd-safe
+    ///         characters; anything else throws, surfacing a fixture problem
+    ///         explicitly instead of a misread isolation verdict.
+    ///     </para>
     /// </summary>
     private static string CmdSafePath(string path)
     {
@@ -892,23 +911,6 @@ public sealed class WindowsSandboxAcceptanceRunner
 
         var path = Path.Combine(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
         return File.Exists(path) ? path : null;
-    }
-
-    private static string? ResolveNonLoopbackAddress()
-    {
-        try
-        {
-            return Dns.GetHostAddresses(Dns.GetHostName())
-                      .FirstOrDefault(address => address.AddressFamily == AddressFamily.InterNetwork &&
-                                                 !IPAddress.IsLoopback(address))
-                     ?.ToString();
-        }
-        catch (SocketException)
-        {
-            // Hostname resolution itself failed: no non-loopback address is
-            // observable, which the network case records as INDETERMINATE.
-            return null;
-        }
     }
 
     private static string BuildLargeOutput(int targetCharacters)
@@ -984,7 +986,7 @@ public sealed class WindowsSandboxAcceptanceRunner
         }
         catch (ArgumentException)
         {
-            // The survivor exited between the scan and this lookup.
+            // 幸存进程在扫描与本次查询之间已退出。
             return null;
         }
     }
@@ -1027,8 +1029,6 @@ public sealed class WindowsSandboxAcceptanceRunner
         if (extra is not null) parts.Add(extra);
         return string.Join("; ", parts);
     }
-
-    private static int? ExitOf(SandboxRun run) => run.Exception is null ? run.Result?.ExitCode : null;
 
     private static string FirstLine(string? text)
     {
@@ -1084,7 +1084,7 @@ public sealed class WindowsSandboxAcceptanceRunner
             DenyProbeExecutable = File.Exists(probePath) ? DescribeFile(probePath!) : null,
             SandboxHome         = execution.Components.SandboxHome,
             MarkerVersion       = markerVersion,
-            SetupVersion        = WindowsSandboxComponents.SetupVersion,
+            SetupVersion        = execution.Components.RequiredSetupVersion,
             IpcVersion          = WindowsSandboxComponents.IpcVersion
         };
         return new ComponentSnapshotResult(snapshot, markerError);
@@ -1109,16 +1109,18 @@ public sealed class WindowsSandboxAcceptanceRunner
             var directory = _snapshotExecution!.Components.SandboxDirectory;
             Directory.CreateDirectory(directory);
             var path = Path.Combine(directory,
-                                    $"tinyharness-verify-{startedAtUtc.LocalDateTime:yyyyMMdd-HHmmss}.json");
+                                    $"tinyharness-verify-{startedAtUtc.LocalDateTime:yyyyMMdd-HHmmss}-{Guid.NewGuid():N}.json");
             var json = JsonSerializer.Serialize(report,
                                                 WindowsSandboxAcceptanceJsonContext.Default
                                                    .WindowsSandboxAcceptanceReport);
-            await File.WriteAllTextAsync(path, json, cancellationToken).ConfigureAwait(false);
+            await using var stream = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.Read,
+                                                    4096, FileOptions.Asynchronous);
+            await stream.WriteAsync(Encoding.UTF8.GetBytes(json), cancellationToken).ConfigureAwait(false);
             return path;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            // The report path stays null; the CLI surfaces the missing report.
+            // 报告路径保持 null；由 CLI 提示报告缺失。
             return null;
         }
     }
@@ -1141,112 +1143,31 @@ public sealed class WindowsSandboxAcceptanceRunner
         CapturedProcessOutput?  Stderr);
 
     private sealed record ComponentSnapshotResult(SandboxAcceptanceComponentSnapshot Snapshot, string? MarkerError);
-
-    /// <summary>
-    ///     host 侧一次性 HTTP 对照监听：绑定全部接口的随机端口，对每个连接回一个最小合法 HTTP/1.0
-    ///     应答后关闭，使"连接成功并收到数据"（curl exit 0）与"被阻断"（exit 7/28）映射到无歧义的
-    ///     退出码。回环与非回环连接同一个监听，因此连接失败只能来自网络隔离，而不是没有监听。
-    ///     不要回裸字节：现代 curl 会按 HTTP/0.9 拒绝并 exit 1，污染退出码映射。
-    ///     A host-side one-shot HTTP probe listener: it binds a random port on
-    ///     all interfaces, answers every connection with a minimal valid
-    ///     HTTP/1.0 response, then closes, so "connected and received data"
-    ///     (curl exit 0) and "blocked" (exit 7/28) map to unambiguous exit
-    ///     codes. Loopback and non-loopback connections target the same
-    ///     listener, so a connection failure can only come from the network
-    ///     isolation, not from a missing listener. Never answer with raw
-    ///     bytes: modern curl rejects them as HTTP/0.9 with exit 1, which
-    ///     pollutes the exit-code mapping.
-    /// </summary>
-    private sealed class TcpListenerProbe : IDisposable
-    {
-        private Task?                    _acceptLoop;
-        private CancellationTokenSource? _acceptSource;
-        private TcpListener?             _listener;
-
-        public void Dispose()
-        {
-            Stop();
-        }
-
-        public int Start()
-        {
-            _listener     = new TcpListener(IPAddress.Any, 0);
-            _acceptSource = new CancellationTokenSource();
-            _listener.Start();
-            _acceptLoop = Task.Run(() => AcceptLoopAsync(_listener, _acceptSource.Token));
-            return ((IPEndPoint)_listener.LocalEndpoint).Port;
-        }
-
-        public void Stop()
-        {
-            _acceptSource?.Cancel();
-            try
-            {
-                _listener?.Stop();
-            }
-            catch (SocketException)
-            {
-                // Best-effort teardown of this harness-owned listener.
-            }
-
-            _acceptSource?.Dispose();
-            _acceptSource = null;
-        }
-
-        private static async Task AcceptLoopAsync(TcpListener listener, CancellationToken cancellationToken)
-        {
-            while (!cancellationToken.IsCancellationRequested)
-            {
-                TcpClient client;
-                try
-                {
-                    client = await listener.AcceptTcpClientAsync(cancellationToken).ConfigureAwait(false);
-                }
-                catch (OperationCanceledException)
-                {
-                    return;
-                }
-                catch (Exception ex) when (ex is SocketException or ObjectDisposedException)
-                {
-                    // The listener was stopped; the probe is over.
-                    return;
-                }
-
-                using (client)
-                {
-                    try
-                    {
-                        var stream = client.GetStream();
-                        await stream
-                             .WriteAsync("HTTP/1.0 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nOK"u8
-                                            .ToArray(), CancellationToken.None).ConfigureAwait(false);
-                        await stream.FlushAsync(CancellationToken.None).ConfigureAwait(false);
-                    }
-                    catch (Exception ex) when (ex is SocketException or ObjectDisposedException)
-                    {
-                        // The client vanished mid-handshake; keep accepting.
-                    }
-                }
-            }
-        }
-    }
 }
 
 /// <summary>
-///     进程存活扫描的小工具：按镜像名 + 启动时间过滤并限期轮询，供 terminate/cancel/broken-pipe/
-///     host-exit 用例复用。识别局限（同名进程、PID 复用、改名）记录在报告 limitations 中。
-///     A small process-survival scan utility: filters by image name plus start
-///     time with a bounded polling deadline, shared by the
-///     terminate/cancel/broken-pipe/host-exit cases. Its identification limits
-///     (same-image processes, PID reuse, renaming) are recorded in the report
-///     limitations.
+///     <para>
+///         进程存活扫描的小工具：按镜像名 + 启动时间过滤并限期轮询，供 terminate/cancel/broken-pipe/
+///         host-exit 用例复用。识别局限（同名进程、PID 复用、改名）记录在报告 limitations 中。
+///     </para>
+///     <para>
+///         A small process-survival scan utility: filters by image name plus start
+///         time with a bounded polling deadline, shared by the
+///         terminate/cancel/broken-pipe/host-exit cases. Its identification limits
+///         (same-image processes, PID reuse, renaming) are recorded in the report
+///         limitations.
+///     </para>
 /// </summary>
 internal static class SandboxSurvivorScan
 {
     /// <summary>
-    ///     记录验收开始前已存在的目标镜像 PID；扫描把它们从“残留”中排除。
-    ///     Records target-image PIDs that exist before the run; scans exclude
-    ///     them from the survivor set.
+    ///     <para>
+    ///         记录验收开始前已存在的目标镜像 PID；扫描把它们从“残留”中排除。
+    ///     </para>
+    ///     <para>
+    ///         Records target-image PIDs that exist before the run; scans exclude
+    ///         them from the survivor set.
+    ///     </para>
     /// </summary>
     internal static HashSet<int> CaptureBaseline(IReadOnlyList<string> imageNames)
     {
@@ -1274,7 +1195,7 @@ internal static class SandboxSurvivorScan
             }
             catch (Exception ex) when (ex is Win32Exception or InvalidOperationException)
             {
-                // The process exited between enumeration and the StartTime query.
+                // 进程在枚举与 StartTime 查询之间已退出。
             }
             finally
             {
@@ -1313,7 +1234,7 @@ internal static class SandboxSurvivorScan
         }
         catch (InvalidOperationException)
         {
-            // Process enumeration is unavailable on this platform state; report none.
+            // 当前平台状态下进程枚举不可用；按无进程报告。
             return [];
         }
     }

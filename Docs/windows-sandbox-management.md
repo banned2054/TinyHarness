@@ -4,7 +4,7 @@
 
 ## Windows 沙箱管理命令
 
-`tinyharness sandbox` 是 Windows 工具进程沙箱的显式管理入口，只读取用户配置中的可信设置 `settings.windowsSandbox`，不发送任何输入给模型。普通工具执行不会自动 provisioning、提权或修复账户；账户、密码和网络规则的机器级设置仍只能通过 `sandbox provision` 显式发生。
+`tinyharness sandbox` 是 Windows 工具进程沙箱的显式管理入口，只读取用户配置中的可信设置 `settings.windowsSandbox`，不发送任何输入给模型。普通工具执行不会自动 provisioning、提权或修复账户；账户、密码和网络规则的机器级设置仍只能通过 `sandbox provision` 显式发生。`run` / `chat` 的工作区目录授权是独立的用户确认流程，见下文。
 
 ### 工作区信任与目录授权
 
@@ -56,19 +56,15 @@ tinyharness sandbox provision [--yes]
 tinyharness sandbox verify [--yes] [--case <name>[,<name>...]] [--workspace <path>]
 ```
 
-这是真实系统测试：在专用验收工作区（默认 `%TEMP%\TinyHarness\sandbox-verify-<时间戳>`，`--workspace` 可覆盖）内按固定矩阵执行真实沙箱命令，每条命令一次 ACL refresh（普通权限）与一个 runner 进程。前置条件：沙箱已配置、`enabled: true` 且就绪检查通过；否则拒绝执行并提示先 `sandbox provision`，绝不自动 provisioning、绝不回退宿主执行，本命令自身也不修改机器配置（账户/ACL/注册表/防火墙）。应在获得授权、可丢弃或受控的 Windows 环境执行。
+这是真实系统测试：在专用验收工作区（默认 `%TEMP%\TinyHarness\sandbox-verify-<时间戳>`，`--workspace` 可覆盖）内按固定矩阵执行真实沙箱命令，每条命令一次 ACL refresh（普通权限）与一个 runner 进程。前置条件：沙箱已配置、`enabled: true` 且就绪检查通过；否则拒绝执行并提示先 `sandbox provision`，绝不自动 provisioning、绝不回退宿主执行。普通 refresh 会准备验收目录 ACL，可能保存当前工作区 capability 映射；不自动配置账户、注册表或 Firewall/WFP。应在获得授权、可丢弃或受控的 Windows 环境执行。
 
-固定矩阵 15 个用例（`--case` 按稳定名称选择子集，逗号分隔）：`identity-whoami`（沙箱内 whoami 为 offline 账户）、`deny-probe`（deny-read ACL 探针：退出 0=生效、20=隔离失效、21=探针配置错误）、`write-denied-outside-roots`（写根之外写入被拒）、`readonly-workspace-write-denied`（只读策略拒工作区写入）、`metadata-protected`（`.git` 等元数据目录只读）、`workspace-write-allowed`（写入正对照）、`network-denied`（非回环连接被阻为门控，回环仅作观测）、`exit-natural-23`、`exit-natural-192`（自然退出绝不判为超时）、`timeout-finite`（有限超时 192,true）、`terminate-active`（运行中取消）、`cancel-startup`（启动阶段取消）、`runner-broken-pipe`（runner 被外部击杀后不补造退出码）、`large-output`（大输出截断与完整 artifact）、`host-exit-reclaim`（宿主被 Kill 后无镜像幸存）。全矩阵有总期限；单用例失败记录后继续其余用例。
+当前固定矩阵 17 个用例（`--case` 按稳定名称选择子集，逗号分隔）：`identity-whoami`（沙箱内 whoami 为 offline 账户）、`deny-probe`（deny-read ACL 探针：退出 0=生效、20=隔离失效、21=探针配置错误）、`write-denied-outside-roots`（写根之外写入被拒）、`readonly-workspace-write-denied`（只读策略拒工作区写入）、`metadata-protected`（`.git` 等元数据目录只读）、`workspace-write-allowed`（写入正对照）、`network-denied`（宿主正对照、IPv4/IPv6 TCP 环回按模式门控、非环回 IPv4 阻断）、`network-udp`（UDP 请求回应阻断）、`network-dns`（IPv4/IPv6 TCP/UDP 53/853 固定端口阻断）、`exit-natural-23`、`exit-natural-192`（自然退出绝不判为超时）、`timeout-finite`（有限超时 192,true）、`terminate-active`（运行中取消）、`cancel-startup`（启动阶段取消）、`runner-broken-pipe`（runner 被外部击杀后不补造退出码）、`large-output`（大输出截断与完整 artifact）、`host-exit-reclaim`（宿主被 Kill 后无镜像幸存）。全矩阵有总期限；单用例失败记录后继续其余用例。
 
 确认语义与 provision 一致：默认交互确认（默认否）；`--yes` 跳过；非交互且无 `--yes` 直接报错退出。退出码：`0` 仅当全部所选用例 PASS 且无 INDETERMINATE/SKIPPED；`4` 存在 FAIL、INDETERMINATE 或 SKIPPED；`1` 未配置/未启用/未就绪/组合失败；`2` 参数用法错误。控制台打印逐例结果表与工作区产物路径；完整报告（时间戳、机器与 OS、离线账户名、策略种类、组件路径/大小/mtime 与 marker/setup/IPC 版本、逐例判定、limitations 局限清单）写入 `<sandboxHome>\.sandbox\tinyharness-verify-<时间戳>.json`。验收报告仅作为“新二进制已通过最小测试”的依据，不构成完整隔离验收或与 Codex 共存已验证的证明。另有一个隐藏的 `sandbox verify-worker` 子命令供 host-exit 用例内部使用，不面向用户。
 
 ### 组件打包约定
 
 两个日常组件 exe 文件名固定为 `codex-windows-sandbox-setup.exe` 与 `codex-command-runner.exe`，来自 Codex 仓库 Windows 沙箱的 **TinyHarness 独立命名空间 fork** 构建（文件名、payload 字段、DPAPI、IPC 协议与上游一致；机器级账户/组/防火墙/WFP/桌面前缀为 TinyHarness 专属；验收另用 `codex-windows-managed-deny-probe.exe`；`codex-windows-sandbox-service.exe` 首期不使用、不安装服务）。TinyHarness 不安装、不搜索它们：用户把 exe 放在任意自选的绝对路径，并在 user-config.json 的 `settings.windowsSandbox` 配置 `setupExecutablePath`、`runnerExecutablePath`；`sandboxHome` 可省略，缺省使用独立固定默认 `%LOCALAPPDATA%\tinyharness\windows-sandbox-home`（与 Codex 的 home 完全独立），也可显式指定绝对路径。配置后运行 `sandbox provision`；`enabled: true` 后 `run` 才会使用沙箱。marker 或凭据中仍为旧 Codex 用户名（`CodexSandboxOffline`/`CodexSandboxOnline`）的 home 会被状态检查、执行与 provisioning 一律拒绝复用（fail closed），需换独立 home 重新 provisioning。组件 exe 没有 PE 版本资源（ProductVersion/FileVersion 为空），因此版本权威校验是三处 JSON 数值：payload `version==5`（严格模式）或 `6`（TCP 环回模式）、runner 帧协议 `version==6`（IPC_PROTOCOL_VERSION）、setup marker 版本/模式/账户匹配（严格模式 v5；TCP 环回模式 v6），加上 `cap_sid` 与 `sandbox_users.json` 的可解析检查；不匹配一律拒绝执行（fail closed，不回退宿主）。UAC 启动路径（`UseShellExecute=true`）无法使用环境分块通道，payload base64 超过约 23000 字符时 provision 直接拒绝并提示减少 `additionalWriteRoots`。技术细节见 [Windows 沙箱接入方案](windows-sandbox-dotnet-integration.md)。
-
-## 沙箱目标环境
-
-目标环境保留显式白名单，APPDATA/LOCALAPPDATA 分别位于声明 tempRoot 的 AppData/Roaming、AppData/Local，DOTNET_CLI_HOME 指向 tempRoot；ProgramFiles、ProgramFiles(x86)、ProgramData 仅从系统白名单复制。可信 extras 可覆盖，knownSecrets 最后移除。路径解析的离线回归不等于真实 NuGet/PriceLab 已通过。
 
 ## TCP 环回兼容模式（2026-10-20）
 
@@ -94,7 +90,35 @@ SDK 10.0.401 的 VSTest/testhost 使用 `127.0.0.1` TCP 通信。现有严格模
 
 策略身份版本为 4，绑定模式和相应 setup 版本；界面显示 `network: external-blocked, tcp-loopback: allowed (host services included), udp: blocked`。旧版 `network-denied` 除了非环回连接拒绝，还要求 IPv4 TCP 环回成功；当时不覆盖 IPv6、UDP/DNS。当前覆盖及未验证边界见下一节。
 
+目标环境保留显式白名单，APPDATA/LOCALAPPDATA 分别位于声明 tempRoot 的 AppData/Roaming、AppData/Local，DOTNET_CLI_HOME 指向 tempRoot；ProgramFiles、ProgramFiles(x86)、ProgramData 仅从系统白名单复制。可信 extras 可覆盖，knownSecrets 最后移除。路径解析的离线回归不等于真实 NuGet/PriceLab 已通过。
+
 准备阶段当时仅准备源代码、锁定依赖构建、离线回归、NativeAOT 和离线 smoke，没有切换实际设置或运行真实沙箱。当时待办是另行授权切换、新 home provisioning 和复验，不能直接复用旧 home。详见历史产物 `artifacts/sandbox-vstest-ipc/verification.md` 及 `manual-acceptance.md`。后续已取得的真实结果见下一节，当前不要求重复 provisioning 或 PriceLab。原有 M11 严格模式记录不能作为新模式完整验收证据。
+
+## 网络验收工具改进与验证边界（2026-10-20）
+
+此前真实结果保留：用户已完成 TCP 环回模式切换、provisioning 和聊天重启；PriceLab 一次 `dotnet test PriceLab.slnx --no-restore` 退出 0，汇总 5 通过，Explicit 收据用例跳过。旧版 verify 为 **15 PASS / 0 FAIL / 0 INDETERMINATE / 0 SKIPPED**，证据为 `artifacts/sandbox-vstest-ipc/real-verify-20261020-346ab5/`。其 IPv4 TCP 网络项缺少宿主非环回正对照，不能将 PASS 扩大为全部网络隔离已验证。旧报告及其中过时的 limitations 原样保存；本轮不重跑 PriceLab，不改写历史结果。
+
+当前 C# 工具以同一有界探针对同一目标执行宿主前后正对照和沙箱通信，用随机 nonce 请求和匹配 ACK 确认回应。前置没有匹配 ACK 时不启动对应沙箱命令；后置失效时不接受阻断结论。报告 `networkChecks` 分开记录宿主前置、沙箱、宿主后置、退出码、外层超时、socket 错误及逐目标判定。报告使用唯一文件名和 CreateNew，不覆盖旧报告。
+
+| 用例 | 明确监听目标 | 沙箱期望 |
+| --- | --- | --- |
+| network-denied | 127.0.0.1、::1、一个本机非环回 IPv4；TCP 独占随机端口 | 严格模式全部阻断；TCP 环回模式前两个须匹配 ACK，非环回须阻断 |
+| network-udp | 同上三个地址；UDP 独占随机端口 | 两种模式均不得收到匹配 ACK；发送成功本身不能证明可达 |
+| network-dns | 127.0.0.1、::1；分别独占 TCP/UDP 53 和 853 | 两种模式均阻断，包括 TCP 环回模式 |
+
+53/853 的协议范围来自实际 fork `windows-sandbox-rs/src/wfp/filter_specs.rs` 的 `User + RemotePort` 条件，没有 TCP/UDP 限定。这里使用自定义 ACK 检查固定端口可达性，不执行 DNS/TLS 协议；不覆盖非环回 IPv6、远端公网/LAN 服务、Windows 系统解析器或 DNS Client 服务代发、缓存、DoH、完整 DNS 泄漏防护、ICMP 或 SMB。本机路径失败也不能唯一归因于 WFP。
+
+地址不可用、IPv6 不支持、固定端口占用、宿主没有匹配 ACK 均记 INDETERMINATE，不停系统服务、不接管已有服务、不改系统 DNS，不退到高端口宣称 DNS 已验证。探针异常、非零退出、错误 nonce、无效/缺字段/截断 JSON、协议失败及 Harness 外层超时均不计为隔离成功。探针内部 3 秒等待单独报告；UDP 发送但没有匹配回应，只有宿主前后对照成功且监听健康时才满足该路径的阻断观测。
+
+CLI 确认页说明监听范围；每目标在绑定前显示地址和请求端口（0=随机），绑定后、通信前显示实际端口。明确地址仍可能触发防火墙提示，用户选择可能保存规则；工具不自动创建/删除 Firewall/WFP 规则，不要求开放公用网络。普通 refresh 会准备验收目录 ACL，可能保存当前工作区 capability 映射，报告写入现有 home 的 `.sandbox`。此前弹窗后生成的两条规则已按单独授权清理，记录 `artifacts/sandbox-vstest-ipc/firewall-cleanup-20261020-adb83e.json`；该授权不延续到新复验。
+
+本轮仅实施和离线验证，新探针真实专项复验尚未执行。NativeAOT 产物、哈希、离线证据和待授权命令见 `artifacts/sandbox-network-acceptance-20261020/verification.md`。默认网络测试全部使用 fake backend、fake responder 和宿主通信替身，不启动真实网络监听或沙箱，不触发 UAC 或配置机器规则。未修改 Rust fork，不推进 M14/M15。
+
+### 同日后续：新探针真实专项
+
+工程交付后，用户另行明确授权运行一次 `sandbox verify --yes --case network-denied,network-udp,network-dns`。结果 **3 PASS / 0 FAIL / 0 INDETERMINATE / 0 SKIPPED，退出 0**；14/14 个目标通过，28 个宿主前后匹配 ACK 均核对了 nonce 和目标一致。IPv4/IPv6 TCP 环回成功；其余 TCP 目标为 AccessDenied/10013；7 个 UDP 目标均发送 API 成功但内部 3 秒内无匹配 ACK，宿主前后对照成功，无 Harness 外层超时。真实报告与审计见 `artifacts/sandbox-network-acceptance-20261020/real-20261020-870c1a/`，原报告逐字节保存，没有重跑 PriceLab 或完整矩阵。
+
+本次非环回目标实际是 Meta 接口 `198.18.0.1`，不代表物理 LAN `192.168.8.248`、远端公网或非环回 IPv6 已验证；53/853 仍只证明直接端口通信观测，不证明系统 DNS 解析器/服务代发或完整泄漏防护。用户确认网络授权后，新 exe 从 0 条应用规则变为两条持久 Public / Inbound / Allow 规则（TCP、UDP 各一条，端口/地址均 Any）。只读核对并记录于 `firewall-after.json`、`firewall-persistent.json`，本 chat 未代点弹窗、未执行配置规则命令，也未自行删除规则。实际用户配置和受保护的 1,055 个既有文件哈希不变。旧 PriceLab 5 通过、旧矩阵 15/15 与此次专项分别计数，不宣称 M14 或全部沙箱管理完成。
 
 ## M11 验收记录
 

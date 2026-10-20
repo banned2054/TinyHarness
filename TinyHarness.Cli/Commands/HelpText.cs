@@ -245,14 +245,24 @@ internal static class HelpText
         covering identity, deny-read/deny-write probes, network blocking, exit-code
         and timeout semantics, cancellation, runner protocol failure, large output,
         and host-abandonment reclamation. It requires the sandbox to be configured,
-        enabled, and provisioned; it never provisions, never changes machine
-        configuration, and never falls back to host execution. Run it only in an
+        enabled, and provisioned; it never provisions or configures Firewall/WFP.
+        Ordinary refresh prepares acceptance-directory ACLs. It never falls back
+        to host execution. Run it only in an
         environment authorized for such testing. It prints a per-case table and
         writes a JSON report to <sandboxHome>\.sandbox\tinyharness-verify-*.json.
         --case selects a subset of cases by stable name; --workspace overrides the
         acceptance workspace. The command asks for confirmation first; --yes skips
         it (non-interactive use requires --yes). Exit 0 only when every selected
         gated case passed with no INDETERMINATE result; exit 4 otherwise.
+        Network cases: network-denied (IPv4/IPv6 TCP loopback gated by mode,
+        non-loopback IPv4 denied), network-udp (IPv4/IPv6 loopback and non-loopback
+        IPv4 denied), network-dns (TCP/UDP 53/853 on IPv4/IPv6 loopback denied).
+        Each target requires host nonce-ACK controls before and after the sandbox
+        probe. Listeners bind explicit local addresses only, using ephemeral ports
+        or exclusive 53/853; unavailable targets remain INDETERMINATE. Windows may
+        show a firewall prompt and user choices may persist rules. Do not open
+        public-network access for the test. DNS coverage is direct port reachability,
+        not system-resolver/service-proxy behavior or complete leak prevention.
         (An internal verify-worker subcommand exists for the host-abandonment case;
         it is not part of the public interface.)
         """;

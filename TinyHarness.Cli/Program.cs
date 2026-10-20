@@ -80,6 +80,14 @@ internal static class Program
 
     private static async Task<int> DispatchAsync(string[] args)
     {
+        if (args is ["sandbox", "verify-network-probe", ..])
+        {
+            using var probeCancellation = new CancellationTokenSource();
+            using var registration      = new ConsoleCancellation(probeCancellation);
+            return await SandboxNetworkProbe.RunCommandAsync(args[2..], Console.Out, probeCancellation.Token)
+                                            .ConfigureAwait(false);
+        }
+
         if (args.FirstOrDefault() == ProcessWorkspaceAclGrant.HelperArgument)
         {
             if (args.Length != 2) throw new CliUsageException("The workspace ACL helper requires exactly one payload.");

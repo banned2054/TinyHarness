@@ -13,28 +13,33 @@ using TinyHarness.Core.Services.Runtime.WindowsSandbox;
 namespace TinyHarness.Cli.Commands;
 
 /// <summary>
-///     `tinyharness sandbox verify`：opt-in 的 Windows 沙箱隔离验收（真实系统测试）。要求沙箱已配置、
-///     已启用且就绪——否则拒绝执行并提示先 provision；绝不自动 provisioning、绝不回退宿主执行。
-///     组合逻辑与 run 共享（<see cref="SandboxCliComposition" />），knownSecrets 解析一致；每个用例按
-///     策略种类克隆可信设置后走 <see cref="WindowsSandboxComposer.Compose" />，探针环境变量经
-///     extraEnvironment 进入同一条清理环境路径。隐藏子命令 `sandbox verify-worker` 是宿主异常退出
-///     用例的子进程模式。两个入口都不把输入发送给模型。
-///     `tinyharness sandbox verify`: the opt-in Windows sandbox isolation
-///     acceptance (a real system test). It requires the sandbox to be
-///     configured, enabled, and ready — otherwise it refuses and suggests
-///     provisioning first; it never provisions and never falls back to host
-///     execution. Composition is shared with run
-///     (<see cref="SandboxCliComposition" />) including the knownSecrets
-///     resolution; every case clones the trusted settings per policy kind and
-///     goes through <see cref="WindowsSandboxComposer.Compose" />, with the
-///     probe variables entering the same cleaned-environment path via
-///     extraEnvironment. The hidden `sandbox verify-worker` subcommand is the
-///     child-process mode of the host-abnormal-exit case. Neither entry sends
-///     input to a model.
+///     <para>
+///         `tinyharness sandbox verify`：opt-in 的 Windows 沙箱隔离验收（真实系统测试）。要求沙箱已配置、已启用且就绪——否则拒绝执行并提示先 provision；绝不自动
+///         provisioning、绝不回退宿主执行。组合逻辑与 run 共享（<see cref="SandboxCliComposition" />），knownSecrets 解析一致；每个用例按策略种类克隆可信设置后走
+///         <see cref="WindowsSandboxComposer.Compose" />，探针环境变量经 extraEnvironment 进入同一条清理环境路径。隐藏子命令 `sandbox
+///         verify-worker` 是宿主异常退出用例的子进程模式。两个入口都不把输入发送给模型。
+///     </para>
+///     <para>
+///         `tinyharness sandbox verify`: the opt-in Windows sandbox isolation
+///         acceptance (a real system test). It requires the sandbox to be
+///         configured, enabled, and ready — otherwise it refuses and suggests
+///         provisioning first; it never provisions and never falls back to host
+///         execution. Composition is shared with run
+///         (<see cref="SandboxCliComposition" />) including the knownSecrets
+///         resolution; every case clones the trusted settings per policy kind and
+///         goes through <see cref="WindowsSandboxComposer.Compose" />, with the
+///         probe variables entering the same cleaned-environment path via
+///         extraEnvironment. The hidden `sandbox verify-worker` subcommand is the
+///         child-process mode of the host-abnormal-exit case. Neither entry sends
+///         input to a model.
+///     </para>
 /// </summary>
 internal static class SandboxVerifyCommand
 {
-    /// <summary>存在 FAIL / INDETERMINATE / SKIPPED 时的退出码（0 仅当全部所选用例 PASS）。</summary>
+    /// <summary>
+    ///     <para>存在 FAIL / INDETERMINATE / SKIPPED 时的退出码（0 仅当全部所选用例 PASS）。</para>
+    ///     <para>The exit code when any FAIL / INDETERMINATE / SKIPPED exists (0 only when every selected case passes).</para>
+    /// </summary>
     private const int AcceptanceFailedExitCode = 4;
 
     private const int WorkerRunnerStartupDelaySeconds = 5;
@@ -93,9 +98,10 @@ internal static class SandboxVerifyCommand
 
         var components = new WindowsSandboxComponents
         {
-            SetupExecutablePath  = settings.SetupExecutablePath.Trim(),
+            AllowTcpLoopback = settings.AllowTcpLoopback,
+            SetupExecutablePath = settings.SetupExecutablePath.Trim(),
             RunnerExecutablePath = settings.RunnerExecutablePath.Trim(),
-            SandboxHome          = WindowsSandboxComponents.ResolveSandboxHome(settings.SandboxHome)
+            SandboxHome = WindowsSandboxComponents.ResolveSandboxHome(settings.SandboxHome, settings.AllowTcpLoopback)
         };
         var readiness = await new WindowsSandboxStateInspector(components).InspectAsync(cancellationToken)
                                                                           .ConfigureAwait(false);
@@ -129,16 +135,13 @@ internal static class SandboxVerifyCommand
         var caseCount     = (caseFilter ?? WindowsSandboxAcceptanceRunner.CaseNames).Count;
         var workspaceRoot = ResolveWorkspace(options.VerifyWorkspace);
 
-        // knownSecrets resolution is identical to run's so the acceptance
-        // environment matches production composition semantics. An unavailable
-        // key source (e.g. a credential store unreadable here) only means no
-        // known secrets: verify never calls a model and must not be blocked by
-        // the key.
+        // knownSecrets 的解析与 run 完全一致，使验收环境匹配生产组合语义。
+        // 密钥源不可用（如凭据存储在当前环境不可读）只意味着没有已知 secret：
+        // verify 不调用模型，不得被密钥可用性阻塞。
         var resolution   = await ConfigResolver.ResolveAsync(null, cancellationToken).ConfigureAwait(false);
         var knownSecrets = ResolveKnownSecrets(context, resolution, cancellationToken);
 
-        // The shared composition path (session-directory guard + Compose) also
-        // validates the acceptance workspace before the confirmation gate.
+        // 共享组合路径（session 目录守卫 + Compose）会在确认门之前校验验收工作区。
         WindowsSandboxExecution preview;
         try
         {
@@ -178,7 +181,12 @@ internal static class SandboxVerifyCommand
             ComposeCase(settings, kind, extraEnvironment, workspaceRoot, knownSecrets));
         var spawner = workerSpawner ?? ((markerPath, holdSeconds) =>
             StartWorkerProcess(markerPath, holdSeconds, workspaceRoot));
-        var runner = new WindowsSandboxAcceptanceRunner(factory, workspaceRoot, spawner);
+        var runner = new WindowsSandboxAcceptanceRunner(factory, workspaceRoot, spawner,
+                                                        limits : new WindowsSandboxAcceptanceLimits
+                                                        {
+                                                            NetworkTargetObserver = (message, token) =>
+                                                                io.WriteLineAsync($"  network: {message}", token)
+                                                        });
 
         WindowsSandboxAcceptanceReport report;
         try
@@ -195,20 +203,22 @@ internal static class SandboxVerifyCommand
     }
 
     /// <summary>
-    ///     隐藏子命令 `sandbox verify-worker`：组合沙箱并启动长 sleeper，就绪后写 marker 并保持
-    ///     holdSeconds 秒，供父进程 Kill 以检验遗弃回收。marker 只在 runner 启动稳定后写出；写出前
-    ///     的任何失败都不写 marker（父进程按 marker 超时记 FAIL）。marker 路径必须位于 --workspace
-    ///     的 artifacts 目录内，并由父进程在 spawn 前清理——本命令不删除任何传入路径。
-    ///     绝不提权、绝不 provisioning。
-    ///     The hidden `sandbox verify-worker` subcommand: composes the sandbox,
-    ///     starts a long sleeper, writes the marker once the runner is settled,
-    ///     and stays alive for holdSeconds so the parent can Kill it and check
-    ///     abandoned-process reclamation. The marker is written only after the
-    ///     runner startup settles; any earlier failure leaves no marker (the
-    ///     parent records a marker timeout as FAIL). The marker path must stay
-    ///     inside --workspace's artifacts directory and is cleared by the parent
-    ///     before spawning — this command never deletes a caller-supplied path.
-    ///     It never elevates and never provisions.
+    ///     <para>
+    ///         隐藏子命令 `sandbox verify-worker`：组合沙箱并启动长 sleeper，就绪后写 marker 并保持 holdSeconds 秒，供父进程 Kill 以检验遗弃回收。marker 只在
+    ///         runner 启动稳定后写出；写出前的任何失败都不写 marker（父进程按 marker 超时记 FAIL）。marker 路径必须位于 --workspace 的 artifacts 目录内，并由父进程在 spawn
+    ///         前清理——本命令不删除任何传入路径。绝不提权、绝不 provisioning。
+    ///     </para>
+    ///     <para>
+    ///         The hidden `sandbox verify-worker` subcommand: composes the sandbox,
+    ///         starts a long sleeper, writes the marker once the runner is settled,
+    ///         and stays alive for holdSeconds so the parent can Kill it and check
+    ///         abandoned-process reclamation. The marker is written only after the
+    ///         runner startup settles; any earlier failure leaves no marker (the
+    ///         parent records a marker timeout as FAIL). The marker path must stay
+    ///         inside --workspace's artifacts directory and is cleared by the parent
+    ///         before spawning — this command never deletes a caller-supplied path.
+    ///         It never elevates and never provisions.
+    ///     </para>
     /// </summary>
     public static async Task<int> ExecuteWorkerAsync(
         CommandContext context, CliOptions options, CancellationToken cancellationToken)
@@ -216,10 +226,9 @@ internal static class SandboxVerifyCommand
         var markerPath    = Path.GetFullPath(options.VerifyMarkerPath!);
         var holdSeconds   = options.VerifyHoldSeconds!.Value;
         var workspaceRoot = Path.GetFullPath(options.VerifyWorkspace!);
-        // The worker only ever writes the marker; the parent clears a stale one
-        // before spawning. Constraining the marker to the acceptance
-        // workspace's artifacts directory keeps a manually invoked worker from
-        // writing outside the expected layout.
+        // worker 只写 marker；陈旧 marker 由父进程在 spawn 前清理。把 marker
+        // 限制在验收工作区的 artifacts 目录内，防止手工调用的 worker 写到
+        // 预期布局之外。
         var markerDirectory = Path.Combine(workspaceRoot, "artifacts");
         if (!Workspace.IsInside(markerDirectory, markerPath))
         {
@@ -253,8 +262,7 @@ internal static class SandboxVerifyCommand
                 return 1;
             }
 
-            // Composition matches the parent verify: the same session-directory
-            // guard and knownSecrets resolution as run.
+            // 组合方式与父进程 verify 一致：与 run 相同的 session 目录守卫和 knownSecrets 解析。
             var resolution   = await ConfigResolver.ResolveAsync(null, cancellationToken).ConfigureAwait(false);
             var knownSecrets = ResolveKnownSecrets(context, resolution, cancellationToken);
             var execution = SandboxCliComposition.TryCompose(settings, resolution.Config.SessionDirectory,
@@ -289,7 +297,7 @@ internal static class SandboxVerifyCommand
             }
             catch (TimeoutException)
             {
-                // The parent never arrived; clean up instead of lingering.
+                // 父进程始终没有到来；清理退出，而不是继续滞留。
                 await workerCancellation.CancelAsync().ConfigureAwait(false);
                 try
                 {
@@ -298,7 +306,7 @@ internal static class SandboxVerifyCommand
                 }
                 catch (TimeoutException)
                 {
-                    // Best-effort bounded cleanup of this worker's own run.
+                    // 对本 worker 自身的 run 做有界的尽力清理。
                 }
             }
 
@@ -315,12 +323,13 @@ internal static class SandboxVerifyCommand
     }
 
     /// <summary>
-    ///     与 run 一致地解析 knownSecrets；密钥源不可读（如凭据存储在当前平台不可用）只意味着没有
-    ///     已知 secret——verify 不调用模型，不得被密钥可用性阻塞。
-    ///     Resolves knownSecrets exactly like run; an unreadable key source (for
-    ///     example a credential store unavailable on this platform) merely means
-    ///     no known secrets — verify never calls a model and must not be blocked
-    ///     by key availability.
+    ///     <para>与 run 一致地解析 knownSecrets；密钥源不可读（如凭据存储在当前平台不可用）只意味着没有已知 secret——verify 不调用模型，不得被密钥可用性阻塞。</para>
+    ///     <para>
+    ///         Resolves knownSecrets exactly like run; an unreadable key source (for
+    ///         example a credential store unavailable on this platform) merely means
+    ///         no known secrets — verify never calls a model and must not be blocked
+    ///         by key availability.
+    ///     </para>
     /// </summary>
     private static IReadOnlyDictionary<string, string> ResolveKnownSecrets(
         CommandContext context, ConfigResolution resolution, CancellationToken cancellationToken)
@@ -339,13 +348,17 @@ internal static class SandboxVerifyCommand
     }
 
     /// <summary>
-    ///     按策略种类与用例附加环境克隆可信设置并组合：探针变量并入 extraEnvironment，与 run 走同一条
-    ///     清理环境组合路径（allowlist + TEMP/TMP 重定向 + secret 移除），绝不旁路拼 spawn env。
-    ///     Clones the trusted settings per policy kind plus case-scoped extra
-    ///     environment and composes: probe variables merge into
-    ///     extraEnvironment, going through the same cleaned-environment
-    ///     composition path as run (allowlist + TEMP/TMP redirect + secret
-    ///     removal); the spawn env is never hand-built around it.
+    ///     <para>
+    ///         按策略种类与用例附加环境克隆可信设置并组合：探针变量并入 extraEnvironment，与 run 走同一条清理环境组合路径（allowlist + TEMP/TMP 重定向 + secret 移除），绝不旁路拼
+    ///         spawn env。
+    ///     </para>
+    ///     <para>
+    ///         Clones the trusted settings per policy kind plus case-scoped extra
+    ///         environment and composes: probe variables merge into
+    ///         extraEnvironment, going through the same cleaned-environment
+    ///         composition path as run (allowlist + TEMP/TMP redirect + secret
+    ///         removal); the spawn env is never hand-built around it.
+    ///     </para>
     /// </summary>
     private static WindowsSandboxExecution ComposeCase(
         WindowsSandboxSettings               settings,
@@ -388,8 +401,7 @@ internal static class SandboxVerifyCommand
             UseShellExecute = false,
             CreateNoWindow  = true
         };
-        // Mirror the process-probe precedent: a dotnet host needs the entry
-        // assembly as the first argument.
+        // 与进程探针的先例一致：dotnet host 需要把入口程序集作为第一个参数。
         if (string.Equals(Path.GetFileNameWithoutExtension(executable), "dotnet", StringComparison.OrdinalIgnoreCase))
             startInfo.ArgumentList.Add(Environment.GetCommandLineArgs()[0]);
 
@@ -422,30 +434,36 @@ internal static class SandboxVerifyCommand
                                 cancellationToken)
                 .ConfigureAwait(false);
         await io
-             .WriteLineAsync(
-                             $"  versions : 本 build 期望 setup v{WindowsSandboxComponents.SetupVersion} / ipc v{WindowsSandboxComponents.IpcVersion}",
+             .WriteLineAsync($"  versions : 本 build 期望 setup v{components.RequiredSetupVersion} / ipc v{WindowsSandboxComponents.IpcVersion}",
                              cancellationToken)
              .ConfigureAwait(false);
-        await io.WriteLineAsync($"  account  : {components.OfflineUsername}（offline，断网）", cancellationToken)
-                .ConfigureAwait(false);
+        await io
+             .WriteLineAsync($"  account  : {components.OfflineUsername}（外部网络阻断，TCP 环回{(components.AllowTcpLoopback ? "允许" : "阻断")}）",
+                             cancellationToken)
+             .ConfigureAwait(false);
         await io.WriteLineAsync($"  workspace: {workspaceRoot}（host 侧布置 fixture，产物保留）", cancellationToken)
                 .ConfigureAwait(false);
         await io.WriteLineAsync("  policies : read-only 与 workspace-write 两种都会被执行", cancellationToken)
                 .ConfigureAwait(false);
         await io
-             .WriteLineAsync($"  将执行 {caseCount} 条真实沙箱命令：每条命令一次 ACL refresh（普通权限）与一个 runner 进程。",
+             .WriteLineAsync($"  将执行 {caseCount} 个验收用例（网络用例各含多条命令）：每条命令一次 ACL refresh（普通权限）与一个 runner 进程。",
                              cancellationToken)
              .ConfigureAwait(false);
         await io
-             .WriteLineAsync("  本命令不执行 provisioning、不修改机器配置（账户/ACL/注册表/防火墙），也不回退宿主执行；" +
+             .WriteLineAsync("  本命令不执行 provisioning、不自动配置账户或 Firewall/WFP；普通 refresh 会准备验收目录 ACL，也不回退宿主执行；" +
                              "这是真实系统测试，应在获得授权、可接受该测试的环境执行。",
                              cancellationToken)
              .ConfigureAwait(false);
+        await io.WriteLineAsync("  网络监听范围：仅 127.0.0.1、::1 和枚举的一个本机非环回 IPv4；TCP/UDP 随机独占端口，" +
+                                "DNS 端口检查仅在 127.0.0.1 / ::1 独占绑定 TCP/UDP 53、853，已占用则未验证。", cancellationToken)
+                .ConfigureAwait(false);
+        await io.WriteLineAsync("  每个目标先后执行宿主 nonce ACK 正对照，再判定沙箱观测；可能出现 Windows 防火墙提示，" +
+                                "用户选择可能保存规则。不要为通过测试开放公用网络；无法建立正对照则未验证。", cancellationToken)
+                .ConfigureAwait(false);
     }
 
-    private static async Task<int> ReportAsync(
-        ICliConsole       io, WindowsSandboxAcceptanceReport report, string workspaceRoot,
-        CancellationToken cancellationToken)
+    private static async Task<int> ReportAsync(ICliConsole io,            WindowsSandboxAcceptanceReport report,
+                                               string      workspaceRoot, CancellationToken cancellationToken)
     {
         await io.WriteLineAsync($"  workspace: {workspaceRoot}（产物保留）", cancellationToken).ConfigureAwait(false);
         foreach (var result in report.Cases)
@@ -501,8 +519,7 @@ internal static class SandboxVerifyCommand
                 problems.Add($"settings.windowsSandbox.{field} 缺失或不是绝对路径" +
                              (string.IsNullOrWhiteSpace(value) ? "。" : $"：'{value}'。"));
 
-        // The home may stay blank (fixed independent default); only an
-        // explicitly relative value is a configuration error.
+        // home 可留空（使用固定的独立默认值）；只有显式相对路径才是配置错误。
         if (!string.IsNullOrWhiteSpace(settings.SandboxHome) && !Path.IsPathFullyQualified(settings.SandboxHome))
             problems.Add($"settings.windowsSandbox.sandboxHome 不是绝对路径（留空则使用固定默认 home）：'{settings.SandboxHome}'。");
 
@@ -510,11 +527,12 @@ internal static class SandboxVerifyCommand
     }
 
     /// <summary>
-    ///     verify-worker 的进程句柄：Kill 只终止 worker 本身（不杀树）——遗弃的 runner/目标进程正是
-    ///     host-exit-reclaim 用例要观测的对象。
-    ///     The verify-worker process handle: Kill terminates only the worker
-    ///     itself (never the tree) — the abandoned runner/target processes are
-    ///     exactly what the host-exit-reclaim case observes.
+    ///     <para>verify-worker 的进程句柄：Kill 只终止 worker 本身（不杀树）——遗弃的 runner/目标进程正是 host-exit-reclaim 用例要观测的对象。</para>
+    ///     <para>
+    ///         The verify-worker process handle: Kill terminates only the worker
+    ///         itself (never the tree) — the abandoned runner/target processes are
+    ///         exactly what the host-exit-reclaim case observes.
+    ///     </para>
     /// </summary>
     private sealed class WorkerProcessHandle(Process process) : ISandboxVerifyWorkerProcess
     {
@@ -611,7 +629,7 @@ internal sealed class VerifyOutputCapture(string artifactPath, int modelCharacte
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            // A stale temporary artifact is safer than masking the command result.
+            // 留下陈旧的临时 artifact 比掩盖命令结果更安全。
         }
     }
 }
