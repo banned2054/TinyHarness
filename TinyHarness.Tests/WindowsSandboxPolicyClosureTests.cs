@@ -11,6 +11,7 @@ using TinyHarness.Core.Services.Agent;
 using TinyHarness.Core.Services.ChatCompletions.Configuration;
 using TinyHarness.Core.Services.Permissions;
 using TinyHarness.Core.Services.Persistence;
+using TinyHarness.Core.Services.Runtime;
 using TinyHarness.Core.Services.Runtime.WindowsSandbox;
 using TinyHarness.Core.Services.Tools;
 
@@ -208,15 +209,22 @@ public class WindowsSandboxPolicyClosureTests
         Assert.That(environment["TMP"], Is.EqualTo(tempRoot));
         Assert.That(environment["USERPROFILE"], Is.EqualTo(tempRoot));
         Assert.That(environment["HOME"], Is.EqualTo(tempRoot));
+        Assert.That(environment["DOTNET_CLI_HOME"], Is.EqualTo(tempRoot));
+        Assert.That(environment["APPDATA"], Is.EqualTo(Path.Combine(tempRoot, "AppData", "Roaming")));
+        Assert.That(environment["LOCALAPPDATA"], Is.EqualTo(Path.Combine(tempRoot, "AppData", "Local")));
         // 来自宿主的只有固定 allowlist 加重定向。
         var allowed = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
             "PATH", "PATHEXT", "SystemRoot", "SystemDrive", "ComSpec", "OS", "NUMBER_OF_PROCESSORS",
-            "PROCESSOR_ARCHITECTURE", "TEMP", "TMP", "USERPROFILE", "HOME"
+            "PROCESSOR_ARCHITECTURE", "ProgramFiles", "ProgramFiles(x86)", "ProgramData",
+            "TEMP", "TMP", "USERPROFILE", "HOME", "DOTNET_CLI_HOME", "APPDATA", "LOCALAPPDATA"
         };
         TestAssert.All(environment.Keys, name => Assert.That(allowed, Does.Contain(name)));
         if (Environment.GetEnvironmentVariable("PATH") is { } hostPath)
             Assert.That(environment["PATH"], Is.EqualTo(hostPath));
+        foreach (var name in new[] { "ProgramFiles", "ProgramFiles(x86)", "ProgramData" })
+            if (Environment.GetEnvironmentVariable(name) is { Length: > 0 } hostValue)
+                Assert.That(environment[name], Is.EqualTo(hostValue));
     }
 
     [Test]
@@ -226,8 +234,7 @@ public class WindowsSandboxPolicyClosureTests
         var       tempRoot = Path.Combine(dir.Root, "sandbox-tmp");
         Directory.CreateDirectory(tempRoot);
 
-        var environment = SandboxTargetEnvironment.Build(
-                                                         tempRoot,
+        var environment = SandboxTargetEnvironment.Build(tempRoot,
                                                          new Dictionary<string, string>
                                                          {
                                                              ["NUGET_PACKAGES"] = "X:\\nuget",
@@ -263,7 +270,7 @@ public class WindowsSandboxPolicyClosureTests
         TestAssert.Single(policy.EffectiveWriteRoots,
                           root => string.Equals(root, dir.Root, StringComparison.OrdinalIgnoreCase));
         var writeEntries = policy.SpawnProfile.FileSystem.Entries
-                                 .Where(entry => entry.Access == "write" && entry.Path.ExplicitPath is not null)
+                                 .Where(entry => entry is { Access: "write", Path.ExplicitPath: not null })
                                  .Select(entry => entry.Path.ExplicitPath)
                                  .ToList();
         Assert.That(writeEntries, Does.Contain(extra.Root));
@@ -319,6 +326,14 @@ public class WindowsSandboxPolicyClosureTests
         var expectedTemp = Path.Combine(home.Root, "tmp");
         Assert.That(Directory.Exists(expectedTemp), Is.True);
         Assert.That(composed.TargetEnvironment["TEMP"], Is.EqualTo(expectedTemp));
+        Assert.That(composed.Policy.TempWriteRoots, Is.EqualTo([expectedTemp]));
+        Assert.That(composed.Policy.EffectiveWriteRoots, Is.EqualTo([workspace.Root, expectedTemp]));
+        foreach (var name in new[] { "USERPROFILE", "HOME", "DOTNET_CLI_HOME", "APPDATA", "LOCALAPPDATA" })
+        {
+            Assert.That(Workspace.IsInside(expectedTemp, composed.TargetEnvironment[name]), Is.True);
+            Assert.That(Workspace.IsInside(workspace.Root, composed.TargetEnvironment[name]), Is.False);
+        }
+
         Assert.That(composed.Policy.WorkspaceRoot, Is.EqualTo(workspace.Root));
         TestAssert.Contains("workspace-write", composed.ExecutionPolicy.DisplayName, StringComparison.Ordinal);
         Assert.That(composed.ExecutionPolicy.PolicyIdentity,
@@ -327,6 +342,19 @@ public class WindowsSandboxPolicyClosureTests
 
         var again = WindowsSandboxComposer.Compose(settings, workspace.Root);
         Assert.That(again.ExecutionPolicy.PolicyIdentity, Is.EqualTo(composed.ExecutionPolicy.PolicyIdentity));
+
+        var overridden = WindowsSandboxComposer.Compose(settings with
+        {
+            ExtraEnvironment = new Dictionary<string, string> { ["APPDATA"] = Path.Combine(expectedTemp, "custom") }
+        }, workspace.Root);
+        Assert.That(overridden.ExecutionPolicy.PolicyIdentity, Is.Not.EqualTo(composed.ExecutionPolicy.PolicyIdentity));
+        Assert.That(overridden.Policy.EffectiveWriteRoots, Is.EqualTo(composed.Policy.EffectiveWriteRoots));
+
+        var filtered = WindowsSandboxComposer.Compose(settings with
+        {
+            ExtraEnvironment = new Dictionary<string, string> { ["SYNTHETIC_SECRET"] = "test-only" }
+        }, workspace.Root, new Dictionary<string, string> { ["synthetic_secret"] = "test-only" });
+        Assert.That(filtered.ExecutionPolicy.PolicyIdentity, Is.EqualTo(composed.ExecutionPolicy.PolicyIdentity));
     }
 
     [Test]

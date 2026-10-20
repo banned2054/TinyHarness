@@ -1,47 +1,44 @@
 namespace TinyHarness.Core.Services.Runtime.WindowsSandbox;
 
 /// <summary>
-///     构造沙箱目标命令的清理环境：只从宿主复制固定 allowlist（PATH、系统基础变量），把
-///     TEMP/TMP/USERPROFILE/HOME 重定向到沙箱临时写根，再叠加可信设置的附加变量，最后移除
-///     已知 secret 键。绝不继承全量宿主环境——沙箱执行的是不可信命令，宿主环境的其余部分
-///     （凭据、内部主机名、任意工具变量）对其不可见。
-///     Builds the cleaned environment for sandboxed target commands: it copies
-///     only a fixed host allowlist (PATH and system basics), redirects
-///     TEMP/TMP/USERPROFILE/HOME to the sandbox temp write root, appends the
-///     trusted settings' extra variables, and finally removes known secret keys.
-///     It never inherits the full host environment — the sandbox runs untrusted
-///     commands, and the rest of the host environment (credentials, internal
-///     hostnames, arbitrary tool variables) stays invisible to them.
+///     <para>构造沙箱目标环境：白名单复制系统变量，用户目录默认限制在临时根内，可信附加变量覆盖后移除已知密钥。</para>
+///     <para>
+///         Builds the sandbox target environment: copies allowlisted system variables, defaults user directories
+///         to the temp root, applies trusted overrides, then removes known secret keys.
+///     </para>
 /// </summary>
 public static class SandboxTargetEnvironment
 {
     /// <summary>
-    ///     允许从宿主复制的变量名（大小写不敏感查找）。PATH 是命令发现所必需；其余是
-    ///     Windows 程序普遍依赖的系统基础。任何其他宿主变量都必须经可信设置的
-    ///     extraEnvironment 显式声明。
-    ///     Variable names allowed to be copied from the host (case-insensitive
-    ///     lookup). PATH is required for command discovery; the rest are system
-    ///     basics most Windows programs depend on. Any other host variable must be
-    ///     declared explicitly through the trusted settings' extraEnvironment.
+    ///     <para>只复制命令发现和系统路径基础变量；其他宿主变量须经可信 extraEnvironment 显式声明。</para>
+    ///     <para>
+    ///         Copies only command discovery and system path basics; other host variables require explicit
+    ///         declaration through trusted extraEnvironment settings.
+    ///     </para>
     /// </summary>
     private static readonly string[] HostAllowList =
     [
         "PATH", "PATHEXT", "SystemRoot", "SystemDrive", "ComSpec", "OS", "NUMBER_OF_PROCESSORS",
-        "PROCESSOR_ARCHITECTURE"
+        "PROCESSOR_ARCHITECTURE", "ProgramFiles", "ProgramFiles(x86)", "ProgramData"
     ];
 
     /// <summary>
-    ///     构造目标环境。tempRoot 必须是已存在的绝对临时写根（由组合器创建）；附加变量覆盖
-    ///     同名默认项；knownSecrets 的键在最后移除，保证密钥值不进入 spawn 请求。
-    ///     Builds the target environment. tempRoot must be an existing absolute
-    ///     temp write root (created by the composer); extra variables override
-    ///     same-named defaults; knownSecrets keys are removed last so secret
-    ///     values never reach the spawn request.
+    ///     <para>从绝对临时根构造目标环境；只推导路径，不创建目录，供策略规划与执行共用。</para>
+    ///     <para>
+    ///         Builds the target environment from an absolute temp root; derives paths without creating
+    ///         directories so policy planning and execution share the same environment.
+    ///     </para>
     /// </summary>
-    public static IReadOnlyDictionary<string, string> Build(
-        string                               tempRoot,
-        IReadOnlyDictionary<string, string>? extraVariables = null,
-        IReadOnlyDictionary<string, string>? knownSecrets   = null)
+    /// <remarks>
+    ///     <para>可信附加变量覆盖同名默认项；knownSecrets 的键最后移除，即使覆盖默认目录也不额外授予读写根。</para>
+    ///     <para>
+    ///         Trusted extras override defaults; knownSecrets keys are removed last. Overriding a default
+    ///         directory does not itself grant additional read or write roots.
+    ///     </para>
+    /// </remarks>
+    public static IReadOnlyDictionary<string, string> Build(string                               tempRoot,
+                                                            IReadOnlyDictionary<string, string>? extraVariables = null,
+                                                            IReadOnlyDictionary<string, string>? knownSecrets   = null)
     {
         if (string.IsNullOrWhiteSpace(tempRoot) || !Path.IsPathFullyQualified(tempRoot))
             throw new ArgumentException($"The sandbox temp root must be a fully qualified absolute path: '{tempRoot}'.",
@@ -54,14 +51,15 @@ public static class SandboxTargetEnvironment
             if (!string.IsNullOrEmpty(value)) environment[name] = value;
         }
 
-        // Temp and profile lookups stay inside the sandbox temp write root: the
-        // host user's TEMP and profile must not become writable (or readable
-        // beyond policy) for untrusted commands, and tools resolving ~ land in
-        // a contained, policy-declared location.
-        environment["TEMP"]        = tempRoot;
-        environment["TMP"]         = tempRoot;
-        environment["USERPROFILE"] = tempRoot;
-        environment["HOME"]        = tempRoot;
+        // NuGet 在 Windows 上直接读取 APPDATA/LOCALAPPDATA；home 则优先使用 DOTNET_CLI_HOME，
+        // 否则调用账户的已知文件夹 API，不能只依赖 USERPROFILE 环境变量重定向。
+        environment["TEMP"]            = tempRoot;
+        environment["TMP"]             = tempRoot;
+        environment["USERPROFILE"]     = tempRoot;
+        environment["HOME"]            = tempRoot;
+        environment["DOTNET_CLI_HOME"] = tempRoot;
+        environment["APPDATA"]         = Path.Combine(tempRoot, "AppData", "Roaming");
+        environment["LOCALAPPDATA"]    = Path.Combine(tempRoot, "AppData", "Local");
 
         if (extraVariables is not null)
             foreach (var (name, value) in extraVariables)
@@ -73,9 +71,7 @@ public static class SandboxTargetEnvironment
                 environment[name.Trim()] = value;
             }
 
-        // Trusted extras win over host values, but known secret keys never do:
-        // remove them last so an API-key environment variable can never leak
-        // into the spawn request regardless of how it was named.
+        // 密钥键最后移除，可信覆盖也不能把它们带入 spawn 请求。
         if (knownSecrets is null) return environment;
         foreach (var secret in knownSecrets)
             environment.Remove(secret.Key);

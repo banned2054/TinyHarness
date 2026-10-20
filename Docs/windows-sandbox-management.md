@@ -40,6 +40,10 @@ tinyharness sandbox verify [--yes] [--case <name>[,<name>...]] [--workspace <pat
 
 两个日常组件 exe 文件名固定为 `codex-windows-sandbox-setup.exe` 与 `codex-command-runner.exe`，来自 Codex 仓库 Windows 沙箱的 **TinyHarness 独立命名空间 fork** 构建（文件名、payload 字段、DPAPI、IPC 协议与上游一致；机器级账户/组/防火墙/WFP/桌面前缀为 TinyHarness 专属；验收另用 `codex-windows-managed-deny-probe.exe`；`codex-windows-sandbox-service.exe` 首期不使用、不安装服务）。TinyHarness 不安装、不搜索它们：用户把 exe 放在任意自选的绝对路径，并在 user-config.json 的 `settings.windowsSandbox` 配置 `setupExecutablePath`、`runnerExecutablePath`；`sandboxHome` 可省略，缺省使用独立固定默认 `%LOCALAPPDATA%\tinyharness\windows-sandbox-home`（与 Codex 的 home 完全独立），也可显式指定绝对路径。配置后运行 `sandbox provision`；`enabled: true` 后 `run` 才会使用沙箱。marker 或凭据中仍为旧 Codex 用户名（`CodexSandboxOffline`/`CodexSandboxOnline`）的 home 会被状态检查、执行与 provisioning 一律拒绝复用（fail closed），需换独立 home 重新 provisioning。组件 exe 没有 PE 版本资源（ProductVersion/FileVersion 为空），因此版本权威校验是三处 JSON 数值：payload `version==5`（SETUP_VERSION）、runner 帧协议 `version==6`（IPC_PROTOCOL_VERSION）、setup marker `version==5`，加上 `cap_sid` 与 `sandbox_users.json` 的可解析检查；不匹配一律拒绝执行（fail closed，不回退宿主）。UAC 启动路径（`UseShellExecute=true`）无法使用环境分块通道，payload base64 超过约 23000 字符时 provision 直接拒绝并提示减少 `additionalWriteRoots`。技术细节见 [Windows 沙箱接入方案](windows-sandbox-dotnet-integration.md)。
 
+## 沙箱目标环境
+
+目标环境保留显式白名单，APPDATA/LOCALAPPDATA 分别位于声明 tempRoot 的 AppData/Roaming、AppData/Local，DOTNET_CLI_HOME 指向 tempRoot；ProgramFiles、ProgramFiles(x86)、ProgramData 仅从系统白名单复制。可信 extras 可覆盖，knownSecrets 最后移除。路径解析的离线回归不等于真实 NuGet/PriceLab 已通过。
+
 ## M11 验收记录
 
 M11 Windows 沙箱（2026-10-10，M11.1–M11.4）：M11.4 交付 `sandbox status`/`sandbox provision` 管理入口（见上文“Windows 沙箱管理命令”）。默认测试 **532/532 通过**（新增 28 个管理入口测试，全部离线，不启动真实 setup.exe、不触发 UAC）；`TinyHarness.Cli` 构建 0 警告；`win-x64` NativeAOT publish 无 trimming/AOT warning；发布产物从仓库外通过 `--help`、`sandbox status`（只读，本机未配置 windowsSandbox 如实报告并退出 0）、离线 `doctor` 与既有 smoke（Completed/17 steps/16 toolExecs），全程无 UAC、无机器修改；`sandbox provision --yes` 在未配置时于提权前拒绝（exit 1）。隔离验收（M11.5）未开始，完成前不宣称沙箱可用。
