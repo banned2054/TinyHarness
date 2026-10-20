@@ -89,7 +89,8 @@ public sealed record SandboxIsolationPolicy
             CommandWorkingDirectory = commandWorkingDirectory,
             ReadRoots               = Deduplicate(readRoots),
             WriteRoots              = Deduplicate(EffectiveWriteRoots),
-            DenyWritePaths = Deduplicate(DenyWritePaths),
+            // 内置元数据保护遵守 skip-if-missing，避免 helper 创建占位目录。
+            DenyWritePaths = Deduplicate(DenyWritePaths.Where(path => File.Exists(path) || Directory.Exists(path))),
             RealUser       = realUser,
             RefreshOnly    = refreshOnly
         };

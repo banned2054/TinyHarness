@@ -146,6 +146,7 @@ public static class WindowsSandboxComposer
         canonical.Append("metadataProtection=")
                  .Append(string.Join("|", SandboxIsolationPolicy.ProtectedMetadataSubpaths))
                  .Append('\n');
+        canonical.Append("metadataMissing=skip\n");
         canonical.Append("environment=").Append(ComputeEnvironmentHash(targetEnvironment));
         return canonical.ToString();
     }

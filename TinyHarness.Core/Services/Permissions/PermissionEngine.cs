@@ -19,15 +19,15 @@ namespace TinyHarness.Core.Services.Permissions;
 /// </summary>
 /// <remarks>
 ///     <para>
-///         优先级为只读 worker 硬限制、工作区边界、显式拒绝、NeedsInspection 阻断、
+///         优先级为只读 worker 与未信任工作区的硬限制、工作区边界、显式拒绝、NeedsInspection 阻断、
 ///         一次性授权、能力与范围授权、配置命令规则、默认策略；未知能力默认询问。
 ///         这是应用层策略，不是 OS 沙箱；运行时另行强制文件系统边界。
 ///         Session 命名保留兼容用语，宿主须把临时授权状态限制为本次运行，不跨未来回合复活。
 ///     </para>
 ///     <para>
-///         Priority is read-only worker restrictions, workspace boundaries, explicit denies,
-///         NeedsInspection blocking, one-shot grants, capability-and-scope grants, configured command rules
-///         and default policy; unknown capabilities default to Ask.
+///         Priority is read-only worker and untrusted-workspace restrictions, workspace boundaries, explicit
+///         denies, NeedsInspection blocking, one-shot grants, capability-and-scope grants, configured command
+///         rules and default policy; unknown capabilities default to Ask.
 ///         This is application policy, not an OS sandbox; the runtime enforces filesystem boundaries separately.
 ///         Session naming is retained for compatibility; the host must limit temporary grant state
 ///         to the current run rather than revive it across future turns.
@@ -50,6 +50,7 @@ public sealed class PermissionEngine
     private readonly HashSet<string>      _oneShotApprovals = new(StringComparer.Ordinal);
     private readonly List<PermissionRule> _sessionDenies    = [];
     private readonly List<PermissionRule> _sessionGrants    = [];
+    private readonly Func<bool>?          _workspaceReadOnly;
     private readonly string               _workspaceRoot;
 
 
@@ -61,8 +62,16 @@ public sealed class PermissionEngine
     ///         Creates isolated permission state for the specified workspace.
     ///     </para>
     /// </summary>
-    public PermissionEngine(
-        string workspaceRoot, IEnumerable<CommandRule>? commandRules = null, bool denyNonReadOnlyCapabilities = false)
+    /// <param name="workspaceReadOnly">
+    ///     <para>返回 true 时非只读能力一律硬拒绝，优先于所有授权与命令规则。</para>
+    ///     <para>
+    ///         When it returns true, non-read-only capabilities are hard-denied ahead of every
+    ///         grant and command rule.
+    ///     </para>
+    /// </param>
+    public PermissionEngine(string      workspaceRoot, IEnumerable<CommandRule>? commandRules = null,
+                            bool        denyNonReadOnlyCapabilities = false,
+                            Func<bool>? workspaceReadOnly           = null)
     {
         if (string.IsNullOrWhiteSpace(workspaceRoot))
             throw new ArgumentException("A workspace root is required.", nameof(workspaceRoot));
@@ -71,6 +80,7 @@ public sealed class PermissionEngine
         _commandRules = (commandRules ?? []).Select(rule => ConfiguredCommandRule.Create(rule, _workspaceRoot))
                                             .ToArray();
         _denyNonReadOnlyCapabilities = denyNonReadOnlyCapabilities;
+        _workspaceReadOnly           = workspaceReadOnly;
     }
 
     /// <summary>
@@ -103,8 +113,9 @@ public sealed class PermissionEngine
     /// </summary>
     public PermissionDecision Decide(ToolPreparation preparation)
     {
-        // 只读 worker 限制是硬拒绝，未知能力也不能被 grant 或命令规则放行；普通 CLI 不启用此限制。
-        if (_denyNonReadOnlyCapabilities && !ToolCapabilities.IsReadOnly(preparation.Capability))
+        // worker 和未信任工作区的限制优先于 grant、命令规则及中断检查确认。
+        if ((_denyNonReadOnlyCapabilities || _workspaceReadOnly?.Invoke() == true) &&
+            !ToolCapabilities.IsReadOnly(preparation.Capability))
             return PermissionDecision.Deny;
 
         // 即使 Prepare 漏检，越界目标仍须拒绝。
@@ -116,9 +127,9 @@ public sealed class PermissionEngine
         // NeedsInspection 优先于所有授权与命令规则；仅由宿主在用户确认检查后解除。
         if (NonReadOnlyBlock(preparation) is not null) return PermissionDecision.Deny;
 
-        if (_oneShotApprovals.Contains(Fingerprint(preparation))) return PermissionDecision.Allow;
-
-        if (_sessionGrants.Any(rule => rule.Matches(preparation))) return PermissionDecision.Allow;
+        if (_oneShotApprovals.Contains(Fingerprint(preparation)) ||
+            _sessionGrants.Any(rule => rule.Matches(preparation)))
+            return PermissionDecision.Allow;
 
         // 命令免审批必须精确匹配模式与规范化 cwd；direct 逐参数匹配，shell 精确匹配完整命令。
         if (string.Equals(preparation.Capability, "process.execute", StringComparison.Ordinal) &&
@@ -290,10 +301,9 @@ public sealed class PermissionEngine
     ///         targets; grants bind the grant constraint, denies the command constraint.
     ///     </para>
     /// </summary>
-    private static PermissionRule ToRule(ToolPreparation preparation, bool deny) => new(
-                                                                                        preparation.Capability,
-                                                                                        preparation.TargetPaths.ToArray(),
-                                                                                        deny ? preparation.SessionConstraint : GrantConstraint(preparation));
+    private static PermissionRule ToRule(ToolPreparation preparation, bool deny) =>
+        new(preparation.Capability, preparation.TargetPaths.ToArray(),
+            deny ? preparation.SessionConstraint : GrantConstraint(preparation));
 
     /// <summary>
     ///     <para>

@@ -6,6 +6,32 @@
 
 `tinyharness sandbox` 是 Windows 工具进程沙箱的显式管理入口，只读取用户配置中的可信设置 `settings.windowsSandbox`，不发送任何输入给模型。普通工具执行不会自动 provisioning、提权或修复账户；账户、密码和网络规则的机器级设置仍只能通过 `sandbox provision` 显式发生。
 
+### 工作区信任与目录授权
+
+首次在一个目录启动交互式 `run` / `chat` 时，宿主显示工作区并询问 `[t]` 信任、`[r]` 只读（默认）、`[q]` 退出。非交互输入下，未知工作区保持只读，不读取重定向输入作为授权。只读允许内置的列举、搜索和读取工具，拒绝 `apply_patch` 和全部 `shell`，也不初始化沙箱或刷新 ACL；已有命令规则和临时授权不能覆盖此限制。
+
+信任决定保存在用户配置文件旁的 `workspace-trust.json`（独立版本 1，最多 1 MiB），绑定精确绝对路径和 Windows 卷／文件标识，不继承父目录的信任，也不从项目配置或模型输出接收授权。工作区祖先含链接或重解析点时拒绝使用；信任文件必须位于工作区和全部附加写根之外，损坏或版本不支持时拒绝覆盖。
+
+信任不等于 ACL 已就绪。启用 Windows `workspace-write` 时，宿主只读检查既有子项的继承状态。若当前沙箱组、工作区 capability 和子项继承已就绪，无需再次取得 ACL 管理权限；首次准备则还检查普通 helper 能否管理需要传播的既有对象。不能只根据根目录已有 `WRITE_DAC` 就宣称准备完成。
+
+需要修复时，宿主另行显示范围并询问 `[y/N]`。确认后，普通权限父进程通过现有 `cap_sid` 存储解析当前工作区映射（缺少该工作区项时可能保存新映射），再以 UAC 启动专用 C# 子进程。子进程重新核对本机 `TinyHarnessUsers` SID 和可信表中的精确 capability 映射，只为当前工作区合并这两个 SID 的可继承 Modify ACE（与 fork 的 `WRITE_ALLOW_MASK` 一致），并给**原调用账户 SID** 保留**仅工作区根目录**的 `WRITE_DAC`。随后重新提交根 DACL，触发对既有、未关闭继承的子项的 Windows 继承传播，再检查结果。即使根 ACE 已存在，也不能跳过重新传播。
+
+修复不向原账户递归授予 `WRITE_DAC`，不接管 Owner，不授予 FullControl，不执行 setup/runner、provisioning 或项目命令，不改机器账户、密码和网络规则。既有显式子项规则和元数据 deny 保留；独立受保护 DACL 不被强制重置，继承一致也不等于所有路径均有有效写权限。修复前拒绝重解析点、硬链接文件，以及可能因新父级授权改变优先顺序的普通子项继承 deny；普通只读检查不跟随链接。树检查最多 200,000 个条目，超限明确报错，不静默截断。修复失败可能已产生部分 ACL 变更，保持只读不等于回滚。父进程保持普通权限，工具仍需原有审批。
+
+目录授权要求发布后的 TinyHarness 可执行文件位于全部沙箱写根之外，不能从 `dotnet TinyHarness.dll` 发起。子进程通过受访问限制的命名管道接收有界请求，双方核对 PID，子进程再核对原进程启动时间、可执行路径和账户 SID，并在持有目录及祖先句柄时核对目录身份。卷根、UNC、用户主目录或其祖先、系统安装目录，以及覆盖配置、会话存储或沙箱组件的目录均拒绝授权。UAC 使用其他管理员账户时，授权目标仍是原账户；原 DACL 或提升后的账户若仍不允许修改，保持只读，不接管所有权。
+
+在 `chat` 空闲输入边界使用 `/trust` 可重新确认或切换，只由宿主处理，不形成模型回合。切换清除临时允许并废弃旧工具准备结果，仍须另行处理已有的中断检查要求。降为只读不会撤销已存在的 Windows ACE。拒绝或失败保持只读；提权子进程超时／取消后若结果未知，本进程禁止再次授权，须检查并重启后再试，不自动执行或重放此前失败的命令。
+
+普通 ACL refresh 只传递当前存在的 `.git`、`.agents`、`.codex`、`.aws` deny-write 目标，保留缺失即跳过的语义，避免 helper 为缺失目标创建目录；策略身份版本现为 4（包含目标环境及 TCP 环回模式）。refresh 成功后另行只读检查有效写根的既有子项继承，发现缺口时在加载凭据、启动 runner 和目标命令之前阻断，报告具体路径并提示宿主 `/trust`，不自动 UAC 或重试。此授权修复只覆盖当前工作区，附加写根的异常需单独诊断。refresh 失败包含 cwd、setup、home 和日志位置，不能把失败等同于完全没有 ACL 副作用。
+
+初版默认验证使用离线替身，未触发真实 UAC 或 ACL 写入；当时真实授权和 PriceLab 验收尚未执行。后续实机进展见下一段，不能据离线测试宣称原故障已在 Windows 上修复。
+
+后续用户实机验收：原账户 UAC 已补授仅根目录的 `WRITE_DAC`，Owner 保持不变，重启自动恢复 `trusted` 和 Windows workspace-write 策略；这条成功路径通过。随后用户仅批准一次 `dotnet test PriceLab.slnx --no-restore`，日志确认 refresh `errors=[]`、runner 与 .NET SDK 10.0.401 已启动，但 MSB3491 报 `src/PriceLab/obj/Debug/net10.0` 临时文件写入拒绝，退出 1、未超时，测试未开始。只读 ACL 核对发现根有 TinyHarness 组及 capability ACE，既有子项未继承。本文新增的继承修复与执行前检查尚未进行真实 UAC 或 PriceLab 复测；跨管理员验收按用户要求不继续。此记录只覆盖沙箱验收，不替代 M14 模型行为评估。
+
+继承修复的本轮工程验证：完整回归 **905 总／903 通过／2 项链接权限跳过／0 失败**（`artifacts/test-results/workspace-inheritance-regression-final.trx`）；随后补充的沙箱就绪前置检查与其余相关用例合计 **55/55**（`workspace-inheritance-acceptance-final.trx`）。此前一次完整运行仍触发原有日志体积差值断言波动（`workspace-inheritance-regression.trx`），未修改日志实现或预算。最新 `artifacts/workspace-inheritance-nativeaot/TinyHarness.exe` NativeAOT 发布无 trimming/AOT 警告，仓库外 `--help`、`chat --help`、非法授权通道拒绝及离线 smoke 通过（Completed／17 steps／16 toolExecs）。新版只读检查在原副本报告首个缺口 `workspace/AGENTS.md`，修复树预检查通过；本轮没有写实际 ACL、启动真实沙箱或调用真实模型，原副本仍仅两个已授权源码／测试文件与初始哈希不同。复验须换用新产物，并另行确认覆盖既有子项的目录授权；初版已授予的仅根权限不会自动完成本次修复。
+
+2026-10-20 本地验证：相关测试 **115/115**；完整回归最终 **891 通过／2 项链接权限跳过／0 失败**（`artifacts/test-results/workspace-access-final.trx`），另一次完整运行曾触发未修改的 `SessionJournalScaleTests.AppendAndRecovery_MeetsLockedScaleBudgets` 体积差值断言失败，保留于 `workspace-access-regression.trx`，未修改预算或将其视为已修复。`win-x64` NativeAOT publish 无 trimming/AOT 警告；仓库外运行原生产物 `--help`、`chat --help` 和离线 smoke 通过（Completed／17 steps／16 toolExecs）。原测试副本与初始哈希相比仍仅有已授权的两个 PriceCalculator 文件变化，PriceLab 测试没有执行。
+
 ### sandbox status（严格只读）
 
 ```powershell

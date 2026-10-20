@@ -59,6 +59,10 @@ internal static class HelpText
           1. .\tinyharness.json in the current directory (project config)
           2. the user config (tinyharness init creates it)
           3. built-in defaults
+
+        A workspace without saved trust is read-only in noninteractive runs. Interactive
+        startup asks whether to trust it; trust permits normal approval prompts, not automatic
+        command execution. Directory authorization may require Windows UAC.
         """;
 
     public const string Chat = """
@@ -87,6 +91,11 @@ internal static class HelpText
         Older v1/v2 snapshots are inspection-only because their content may be redacted.
 
         chat takes no prompt argument; use `run -- "text"` for a one-shot prompt.
+
+        /trust is a host command at the input prompt. It changes workspace trust without
+        sending a model request. Read-only workspaces permit list/search/read only; patch
+        and shell are disabled. Trust is saved per exact directory identity outside sandbox
+        write roots. Windows directory authorization is separate from sandbox provisioning.
         """;
 
     public const string Smoke = """

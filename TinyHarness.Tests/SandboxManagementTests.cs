@@ -497,9 +497,8 @@ public sealed class SandboxManagementTests
         var expectedTemp = Path.Combine(home.Components.SandboxHome, "tmp");
         Assert.That(plan.Payload.ReadRoots, Is.EqualTo([workspace.Root, expectedTemp]));
         Assert.That(plan.Payload.WriteRoots, Is.EqualTo([workspace.Root, expectedTemp]));
-        Assert.That(plan.Payload.DenyWritePaths, Is.EqualTo(SandboxIsolationPolicy.ProtectedMetadataSubpaths
-                                                               .Select(subpath => Path.Combine(workspace.Root, subpath))
-                                                               .ToArray()));
+        Assert.That(plan.Payload.DenyWritePaths, Is.Empty,
+                    "Missing metadata paths must not be materialized by the setup helper.");
 
         Assert.That(plan.TempRoot, Is.EqualTo(expectedTemp));
         Assert.That(Directory.Exists(expectedTemp), Is.False, "BuildPlan must not create the temp root");

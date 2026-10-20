@@ -192,7 +192,7 @@ public class WindowsSandboxProtocolTests
         return Encoding.UTF8.GetString(body);
     }
 
-    // ---- spawn_request wire shape ----
+    // ---- spawn_request wire 形状 ----
 
     [Test]
     public async Task SpawnRequest_SerializesExactSnakeCaseWireShape()
@@ -248,7 +248,7 @@ public class WindowsSandboxProtocolTests
         Assert.That(decoded.TimeoutMilliseconds, Is.EqualTo(30000uL));
     }
 
-    // ---- permission profile shapes ----
+    // ---- permission profile 形状 ----
 
     [Test]
     public void PolicyResolver_ReadOnly_MatchesBuiltInProfile()
@@ -352,11 +352,11 @@ public class WindowsSandboxProtocolTests
                     Is.EqualTo([@"C:\work\repo", @"C:\temp\custom"]));
         Assert.That(root.GetProperty("deny_write_paths").EnumerateArray()
                         .Select(node => Path.GetFileName(node.GetString()!)).ToArray(),
-                    Is.EqualTo([".git", ".agents", ".codex", ".aws"]));
+                    Is.Empty, "Missing metadata paths must not be materialized by the setup helper.");
         Assert.That(root.GetProperty("proxy_ports").GetArrayLength(), Is.EqualTo(0));
     }
 
-    // ---- capability SID store ----
+    // ---- capability SID 存储 ----
 
     [Test]
     public async Task CapabilitySidStore_CreatesTableWhenMissingAndStaysStable()
@@ -462,7 +462,7 @@ public class WindowsSandboxProtocolTests
         await TestAssert.ThrowsAsync<InvalidOperationException>(() => store.LoadOrCreate());
     }
 
-    // ---- state inspector ----
+    // ---- 状态检查器 ----
 
     [Test]
     public async Task StateInspector_ReportsReadyForFullyProvisionedHome()
@@ -562,7 +562,7 @@ public class WindowsSandboxProtocolTests
                                                             .ResolveSandboxHome("  C:\\sb\\home  "));
     }
 
-    // ---- desktop SDDL ----
+    // ---- 桌面 SDDL ----
 
     [Test]
     public void DesktopFactory_BuildSddlGrantsOwnerAllAndSandboxParticipant()
@@ -585,7 +585,7 @@ public class WindowsSandboxProtocolTests
                             sddl, StringComparison.Ordinal);
     }
 
-    // ---- credential reader (DPAPI roundtrip, Windows only) ----
+    // ---- 凭据读取器（DPAPI 往返，仅 Windows）----
 
     [Test]
     public async Task CredentialReader_DecryptsDpapiPasswordForExistingAccount()
@@ -656,7 +656,7 @@ public class WindowsSandboxProtocolTests
                                                                    .LoadOfflineAccount());
     }
 
-    // ---- setup invoker payload channel ----
+    // ---- setup invoker 的 payload 通道 ----
 
     [Test]
     public void SetupInvoker_UsesArgumentChannelForSmallPayloads()
@@ -690,7 +690,7 @@ public class WindowsSandboxProtocolTests
                                             Is.True));
     }
 
-    // ---- runner command-line quoting ----
+    // ---- runner 命令行引号处理 ----
 
 
     [TestCase("plain.exe", "plain.exe")]
@@ -717,7 +717,7 @@ public class WindowsSandboxProtocolTests
                                             " --pipe-out=\\\\.\\pipe\\codex-runner-abcd-out"));
     }
 
-    // ---- desktop name format ----
+    // ---- 桌面名格式 ----
 
     [Test]
     public void DesktopName_Uses32LowercaseHexDigits()

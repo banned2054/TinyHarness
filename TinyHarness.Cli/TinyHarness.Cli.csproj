@@ -1,12 +1,14 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
 	<PropertyGroup>
 		<OutputType>Exe</OutputType>
 		<TargetFramework>net10.0</TargetFramework>
 		<ImplicitUsings>enable</ImplicitUsings>
 		<Nullable>enable</Nullable>
+		<!-- LibraryImport 为经过身份验证的 UAC helper 通道生成本机 stub。 -->
+		<AllowUnsafeBlocks>true</AllowUnsafeBlocks>
 
-		<!-- NativeAOT is a hard MVP requirement; published as a single native binary. -->
+		<!-- NativeAOT 是必须持续满足的产品约束；以单个本机二进制发布。 -->
 		<PublishAot>true</PublishAot>
 		<PublishTrimmed>true</PublishTrimmed>
 		<PublishSingleFile>true</PublishSingleFile>

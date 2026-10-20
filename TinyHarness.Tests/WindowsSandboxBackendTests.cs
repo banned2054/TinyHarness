@@ -36,14 +36,15 @@ public class WindowsSandboxBackendTests
 
     private static (WindowsSandboxBackend Backend, FakeSetupInvoker Setup, FakeDesktopFactory Desktops,
         FakeSandboxRunnerLauncher Launcher, SandboxTestHome Home) CreateBackend(
-            Func<Stream, Stream, CancellationToken, Task> runnerBody,
-            string?                                       workspaceRoot = null,
-            SandboxPolicyKind                             kind          = SandboxPolicyKind.WorkspaceWrite,
-            IReadOnlyDictionary<string, string>?          knownSecrets  = null,
-            Exception?                                    refreshError  = null,
-            WindowsSandboxComponents?                     components    = null,
-            WindowsSandboxBackendLimits?                  limits        = null,
-            Exception?                                    launchError   = null)
+            Func<Stream, Stream, CancellationToken, Task>       runnerBody,
+            string?                                             workspaceRoot     = null,
+            SandboxPolicyKind                                   kind              = SandboxPolicyKind.WorkspaceWrite,
+            IReadOnlyDictionary<string, string>?                knownSecrets      = null,
+            Exception?                                          refreshError      = null,
+            WindowsSandboxComponents?                           components        = null,
+            WindowsSandboxBackendLimits?                        limits            = null,
+            Exception?                                          launchError       = null,
+            Func<SandboxSetupPayload, CancellationToken, Task>? validateWriteAcls = null)
     {
         var home              = new SandboxTestHome();
         var workspace         = workspaceRoot ?? home.Components.SandboxHome; // 策略范围内的测试根。
@@ -57,11 +58,38 @@ public class WindowsSandboxBackendTests
                                                 knownSecrets,
                                                 setup, new FakeCredentialSource(),
                                                 desktopFactory : desktops, runnerLauncher : launcher,
-                                                limits : limits ?? TestLimits, allowNullDeviceAccess : _ => { });
+                                                limits : limits ?? TestLimits, allowNullDeviceAccess : _ => { },
+                                                validateWriteAcls : validateWriteAcls ??
+                                                                    ((_, _) => Task.CompletedTask));
         return (backend, setup, desktops, launcher, home);
     }
 
     private static string Base64(string text) => Convert.ToBase64String(Encoding.UTF8.GetBytes(text));
+
+    [Test]
+    public async Task Execute_IncompleteChildInheritanceBlocksBeforeCredentialsAndRunner()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var validations = 0;
+        var (backend, setup, desktops, launcher, home) = CreateBackend(NormalRunner,
+                                                                       validateWriteAcls : (payload, _) =>
+                                                                       {
+                                                                           validations++;
+                                                                           Assert.That(payload.RefreshOnly, Is.True);
+                                                                           throw new
+                                                                               InvalidOperationException("inheritance missing at src/PriceLab/obj");
+                                                                       });
+        using (home)
+        {
+            var error = await TestAssert.ThrowsAsync<ProcessExecutionStartException>(() => backend.ExecuteAsync(
+                          Plan(home.Components.SandboxHome), new RecordingOutputCapture(), new RecordingOutputCapture(),
+                          CancellationToken.None));
+            Assert.That(validations, Is.EqualTo(1));
+            Assert.That(error.Message, Does.Contain("src/PriceLab/obj"));
+            Assert.That(launcher.LastRequest, Is.Null);
+            Assert.That(setup.RefreshPayloads, Has.Count.EqualTo(1));
+        }
+    }
 
 
     [Test]

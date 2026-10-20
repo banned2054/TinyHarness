@@ -97,6 +97,12 @@ internal sealed class ChatSessionConsole : IDisposable
     internal ChatSessionHost? Host { get; private set; }
 
     /// <summary>
+    ///     <para>仅由宿主在空闲边界处理工作区信任，不产生模型回合。</para>
+    ///     <para>Handles workspace trust only at an idle host boundary without creating a model turn.</para>
+    /// </summary>
+    internal Func<CancellationToken, Task>? WorkspaceTrustHandler { get; set; }
+
+    /// <summary>
     ///     <para>释放本入口通过工厂创建的宿主。</para>
     ///     <para>Disposes the host created by this entry's factory.</para>
     /// </summary>
@@ -165,6 +171,28 @@ internal sealed class ChatSessionConsole : IDisposable
 
             var userInput = line.Trim();
             if (userInput.Length == 0) continue;
+
+            if (userInput == "/trust" && WorkspaceTrustHandler is not null)
+            {
+                try
+                {
+                    await WorkspaceTrustHandler(_cancellation.SessionToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
+                catch (Exception ex) when
+                    (ex is IOException or InvalidOperationException or UnauthorizedAccessException)
+                {
+                    await
+                        _output.WriteLineAsync(TerminalDisplay
+                                                  .Format($"Workspace trust update failed; access may have been restricted: {ex.Message}",
+                                                          _redactor));
+                }
+
+                continue;
+            }
 
             await SubmitTurnAsync(userInput, cancellationToken);
         }

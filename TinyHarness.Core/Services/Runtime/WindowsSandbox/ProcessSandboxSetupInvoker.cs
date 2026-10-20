@@ -6,34 +6,48 @@ using TinyHarness.Core.Models.Runtime.WindowsSandbox;
 namespace TinyHarness.Core.Services.Runtime.WindowsSandbox;
 
 /// <summary>
-///     每命令 ACL 刷新：以 refresh_only=true 调用 setup.exe（普通权限，绝不提权，失败不自动
-///     转 UAC 或 provisioning）。只表达 refresh 语义；provisioning 属于独立管理入口。
-///     Per-command ACL refresh: invokes setup.exe with refresh_only=true at
-///     normal privilege (never elevating, never falling back to UAC or
-///     provisioning on failure). It models refresh semantics only; provisioning
-///     belongs to the separate management entry point.
+///     <para>
+///         每命令 ACL 刷新：以 refresh_only=true 调用 setup.exe（普通权限，绝不提权，失败不自动
+///         转 UAC 或 provisioning）。
+///     </para>
+///     <para>
+///         Per-command ACL refresh: invokes setup.exe with refresh_only=true at normal privilege
+///         (never elevating, never falling back to UAC or provisioning on failure).
+///     </para>
 /// </summary>
+/// <remarks>
+///     <para>只表达 refresh 语义；provisioning 属于独立管理入口。</para>
+///     <para>It models refresh semantics only; provisioning belongs to the separate management entry point.</para>
+/// </remarks>
 public interface ISandboxSetupInvoker
 {
     Task RefreshAsync(SandboxSetupPayload payload, CancellationToken cancellationToken);
 }
 
 /// <summary>
-///     setup.exe 的进程实现：payload base64 后作为唯一位置参数；超过 argv 安全阈值时切换
-///     --launch-payload-env 分块环境通道。失败读取 setup_error.json 报告具体错误。
-///     Process-backed implementation for setup.exe: the base64 payload is passed
-///     as the single positional argument, switching to the --launch-payload-env
-///     chunked environment channel past the argv safety threshold. Failures read
-///     setup_error.json for the concrete error report.
+///     <para>
+///         setup.exe 的进程实现：payload base64 后作为唯一位置参数；超过 argv 安全阈值时切换
+///         --launch-payload-env 分块环境通道。
+///     </para>
+///     <para>
+///         Process-backed implementation for setup.exe: the base64 payload is passed as the single
+///         positional argument, switching to the --launch-payload-env chunked environment channel
+///         past the argv safety threshold.
+///     </para>
 /// </summary>
-public sealed class ProcessSandboxSetupInvoker(
-    WindowsSandboxComponents components,
-    TimeSpan?                refreshTimeout = null) : ISandboxSetupInvoker
+/// <remarks>
+///     <para>失败读取 setup_error.json 报告具体错误。</para>
+///     <para>Failures read setup_error.json for the concrete error report.</para>
+/// </remarks>
+public sealed class ProcessSandboxSetupInvoker(WindowsSandboxComponents components, TimeSpan? refreshTimeout = null)
+    : ISandboxSetupInvoker
 {
     /// <summary>
-    ///     base64 超过约 24000 个 UTF-16 单元必须走分块通道；留安全余量。
-    ///     Past roughly 24000 UTF-16 units of base64 the chunked channel is
-    ///     mandatory; this threshold keeps a safety margin.
+    ///     <para>base64 超过约 24000 个 UTF-16 单元必须走分块通道；此阈值留安全余量。</para>
+    ///     <para>
+    ///         Past roughly 24000 UTF-16 units of base64 the chunked channel is mandatory;
+    ///         this threshold keeps a safety margin.
+    ///     </para>
     /// </summary>
     internal const int PayloadArgumentCharacterLimit = 23_000;
 
@@ -47,8 +61,8 @@ public sealed class ProcessSandboxSetupInvoker(
                 ArgumentException("The process invoker runs refreshes only; provisioning must go through the management entry point.",
                                   nameof(payload));
 
-        var payloadJson = JsonSerializer.SerializeToUtf8Bytes(payload,
-                                                              WindowsSandboxJsonContext.Default.SandboxSetupPayload);
+        var payloadJson =
+            JsonSerializer.SerializeToUtf8Bytes(payload, WindowsSandboxJsonContext.Default.SandboxSetupPayload);
         var base64Payload = Convert.ToBase64String(payloadJson);
 
         using var timeoutSource = new CancellationTokenSource(refreshTimeout ?? DefaultRefreshTimeout);
@@ -85,14 +99,15 @@ public sealed class ProcessSandboxSetupInvoker(
 
         if (process.ExitCode != 0)
             throw new InvalidOperationException($"Sandbox ACL refresh failed with exit code {process.ExitCode}: " +
-                                                $"{await SandboxSetupErrorReader.DescribeAsync(components.SetupErrorPath).ConfigureAwait(false)}");
+                                                $"{await SandboxSetupErrorReader.DescribeAsync(components.SetupErrorPath).ConfigureAwait(false)}; " +
+                                                $"command cwd: '{payload.CommandWorkingDirectory}'; helper: '{components.SetupExecutablePath}'; " +
+                                                $"home: '{components.SandboxHome}'; see '{components.SandboxDirectory}\\sandbox.<UTC-date>.log'. " +
+                                                "Refresh does not request UAC or retry provisioning; use /trust to inspect directory authorization.");
     }
 
     internal ProcessStartInfo BuildStartInfo(string base64Payload)
     {
-        // The helper does not use stdin/stdout for its protocol; leaving the
-        // streams unredirected avoids both buffer deadlocks and accidental
-        // output capture of machine-level details.
+        // helper 协议不使用 stdin/stdout；不重定向流可避免缓冲死锁与机器级信息被意外捕获。
         if (base64Payload.Length <= PayloadArgumentCharacterLimit)
             return new ProcessStartInfo(components.SetupExecutablePath)
             {
@@ -102,8 +117,7 @@ public sealed class ProcessSandboxSetupInvoker(
                 WorkingDirectory = Path.GetDirectoryName(components.SetupExecutablePath)!
             };
 
-        // Large payloads travel through the chunked environment channel
-        // (CODEX_SANDBOX_LAUNCH_*); the helper reads them instead of argv.
+        // 大型 payload 走分块环境通道（CODEX_SANDBOX_LAUNCH_*），helper 改从环境变量读取而非 argv。
         var startInfo = new ProcessStartInfo(components.SetupExecutablePath)
         {
             Arguments        = "--launch-payload-env",
@@ -131,7 +145,7 @@ public sealed class ProcessSandboxSetupInvoker(
         }
         catch (InvalidOperationException)
         {
-            // The process already exited between the cancellation and the kill.
+            // 取消与 kill 之间进程已自行退出。
         }
 
         try
@@ -140,7 +154,7 @@ public sealed class ProcessSandboxSetupInvoker(
         }
         catch (Exception ex) when (ex is InvalidOperationException or Win32Exception)
         {
-            // The handle closed; nothing further to wait for.
+            // 句柄已关闭，无可继续等待。
         }
     }
 }

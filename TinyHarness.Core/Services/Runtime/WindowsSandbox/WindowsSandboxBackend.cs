@@ -84,18 +84,21 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
     private readonly WindowsSandboxStateInspector        _stateInspector;
     private readonly IReadOnlyDictionary<string, string> _targetEnvironment;
 
+    private readonly Func<SandboxSetupPayload, CancellationToken, Task> _validateWriteAcls;
+
     public WindowsSandboxBackend(
-        WindowsSandboxComponents             components,
-        SandboxIsolationPolicy               policy,
-        IReadOnlyDictionary<string, string>  targetEnvironment,
-        IReadOnlyDictionary<string, string>? knownSecrets          = null,
-        ISandboxSetupInvoker?                setupInvoker          = null,
-        ISandboxCredentialSource?            credentialSource      = null,
-        SandboxCapabilitySidStore?           capabilitySidStore    = null,
-        ISandboxDesktopFactory?              desktopFactory        = null,
-        ISandboxRunnerLauncher?              runnerLauncher        = null,
-        WindowsSandboxBackendLimits?         limits                = null,
-        Action<SecurityIdentifier>?          allowNullDeviceAccess = null)
+        WindowsSandboxComponents                            components,
+        SandboxIsolationPolicy                              policy,
+        IReadOnlyDictionary<string, string>                 targetEnvironment,
+        IReadOnlyDictionary<string, string>?                knownSecrets          = null,
+        ISandboxSetupInvoker?                               setupInvoker          = null,
+        ISandboxCredentialSource?                           credentialSource      = null,
+        SandboxCapabilitySidStore?                          capabilitySidStore    = null,
+        ISandboxDesktopFactory?                             desktopFactory        = null,
+        ISandboxRunnerLauncher?                             runnerLauncher        = null,
+        WindowsSandboxBackendLimits?                        limits                = null,
+        Action<SecurityIdentifier>?                         allowNullDeviceAccess = null,
+        Func<SandboxSetupPayload, CancellationToken, Task>? validateWriteAcls     = null)
     {
         if (!OperatingSystem.IsWindows())
             throw new PlatformNotSupportedException("The Windows sandbox backend is available on Windows only.");
@@ -116,6 +119,7 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
         _limits             = limits             ?? WindowsSandboxBackendLimits.Default;
         // NUL 设备 ACE 是机器级共享状态；默认测试注入空操作，避免修改宿主 ACL。
         _allowNullDeviceAccess = allowNullDeviceAccess ?? SandboxNullDeviceAcl.AllowCapabilitySid;
+        _validateWriteAcls     = validateWriteAcls     ?? WorkspaceAclInheritance.ValidateAsync;
     }
 
     public async Task<ProcessExecutionResult> ExecuteAsync(
@@ -238,11 +242,12 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
                                                      new
                                                          InvalidOperationException("Sandbox readiness check failed; failing closed without fallback."));
 
+        var payload = _policy.CreateSetupPayload(_components, execution.WorkingDirectory, Environment.UserName, true);
         try
         {
             await _setupInvoker
-                 .RefreshAsync(_policy.CreateSetupPayload(_components, execution.WorkingDirectory, Environment.UserName,
-                                                          true), cancellationToken).ConfigureAwait(false);
+                 .RefreshAsync(payload, cancellationToken).ConfigureAwait(false);
+            await _validateWriteAcls(payload, cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {

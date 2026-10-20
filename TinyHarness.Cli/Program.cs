@@ -10,6 +10,7 @@ using TinyHarness.Core.Models.Configuration;
 using TinyHarness.Core.Models.Context;
 using TinyHarness.Core.Models.Persistence;
 using TinyHarness.Core.Models.Runtime;
+using TinyHarness.Core.Models.Runtime.WindowsSandbox;
 using TinyHarness.Core.Models.Session;
 using TinyHarness.Core.Models.Tools;
 using TinyHarness.Core.Services.ChatCompletions;
@@ -79,6 +80,12 @@ internal static class Program
 
     private static async Task<int> DispatchAsync(string[] args)
     {
+        if (args.FirstOrDefault() == ProcessWorkspaceAclGrant.HelperArgument)
+        {
+            if (args.Length != 2) throw new CliUsageException("The workspace ACL helper requires exactly one payload.");
+            return await ProcessWorkspaceAclGrant.ExecuteHelperAsync(args[1]).ConfigureAwait(false);
+        }
+
         var options = CommandLine.Parse(args);
         switch (options.Kind)
         {
@@ -154,16 +161,16 @@ internal static class Program
     /// </remarks>
     private static async Task<int> RunAsync(string prompt, string? configPath)
     {
-        using var cts                = new CancellationTokenSource();
+        using var cts = new CancellationTokenSource();
         using var cancelRegistration = new ConsoleCancellation(cts);
-        var       composition        = await ComposeAgentAsync(configPath, cts.Token, true).ConfigureAwait(false);
+        var       reader = new ExclusiveInputReader(Console.In);
+        var       composition = await ComposeAgentAsync(configPath, cts.Token, true, reader).ConfigureAwait(false);
 
         await WriteHeaderAsync("TinyHarness run", composition).ConfigureAwait(false);
 
         // 审批通过单一读取器接收，避免多个循环争抢 stdin。
-        IApprovalProvider approver = new ConsoleApprovalProvider(new ExclusiveInputReader(Console.In), Console.Out,
-                                                                 composition.KnownSecrets);
-        var instructionLoader   = new ProjectInstructionLoader(new Workspace(composition.Config.WorkspaceRoot));
+        IApprovalProvider approver = new ConsoleApprovalProvider(reader, Console.Out, composition.KnownSecrets);
+        var instructionLoader = new ProjectInstructionLoader(new Workspace(composition.Config.WorkspaceRoot));
         var initialInstructions = await instructionLoader.LoadAsync(null, [], cts.Token).ConfigureAwait(false);
 
         using var host = new ChatSessionHost(composition.Config.WorkspaceRoot,
@@ -178,8 +185,8 @@ internal static class Program
                                              approver,
                                              new ConsoleHostEventSink(composition.KnownSecrets),
                                              sessionWriterFactory : sessionId =>
-                                                 new SessionStoreWriter(composition.SessionStoreDirectory!,
-                                                                        sessionId, composition.KnownSecrets),
+                                                 new SessionStoreWriter(composition.SessionStoreDirectory!, sessionId,
+                                                                        composition.KnownSecrets),
                                              instructionLoader : instructionLoader,
                                              initialInstructions : initialInstructions,
                                              knownSecrets : composition.KnownSecrets);
@@ -250,12 +257,12 @@ internal static class Program
     private static async Task<int> RunChatAsync(string? configPath, string? resumeSessionId)
     {
         using var cancellation = new ChatCancellation();
-        var composition = await ComposeAgentAsync(configPath, cancellation.SessionToken, true)
+        var       reader       = new ExclusiveInputReader(Console.In);
+        var composition = await ComposeAgentAsync(configPath, cancellation.SessionToken, true, reader)
            .ConfigureAwait(false);
         var config = composition.Config;
 
         // 回合、审批与检查确认必须共享同一个读取器，不能另开 stdin 循环。
-        var reader = new ExclusiveInputReader(Console.In);
 
         ChatSessionHost? host = null;
         Func<CancellationToken, Task<ChatSessionHost>>? hostFactory = null;
@@ -329,6 +336,7 @@ internal static class Program
             using var console = host is null
                 ? new ChatSessionConsole(hostFactory!, reader, Console.Out, cancellation, composition.KnownSecrets)
                 : new ChatSessionConsole(host, reader, Console.Out, cancellation, composition.KnownSecrets);
+            console.WorkspaceTrustHandler = composition.Access.ChangeAsync;
             var exit         = await console.RunAsync().ConfigureAwait(false);
             var attachedHost = console.Host;
 
@@ -359,12 +367,19 @@ internal static class Program
     ///     <para>是否从可信用户设置解析并校验受保护会话存储目录。</para>
     ///     <para>Whether to resolve and validate the protected session-store directory from trusted user settings.</para>
     /// </param>
+    /// <param name="input">
+    ///     <para>工作区信任确认等宿主交互共用的输入读取器；为 null 时使用控制台标准输入。</para>
+    ///     <para>
+    ///         The shared reader for host interactions such as workspace-trust consent;
+    ///         null falls back to the console standard input.
+    ///     </para>
+    /// </param>
     /// <exception cref="ConfigException">
     ///     <para>模型或 endpoint 缺失，或无法解析 API key。</para>
     ///     <para>The model or endpoint is missing, or the API key cannot be resolved.</para>
     /// </exception>
     private static async Task<AgentComposition> ComposeAgentAsync(
-        string? configPath, CancellationToken cancellationToken, bool persistSessions = false)
+        string? configPath, CancellationToken cancellationToken, bool persistSessions = false, TextReader? input = null)
     {
         var resolution = await ConfigResolver.ResolveAsync(configPath, cancellationToken).ConfigureAwait(false);
         var config     = resolution.Config;
@@ -385,26 +400,63 @@ internal static class Program
                                 $"'{config.ApiKeyEnvironmentVariable}' before running.");
 
         // 续聊存储仅取可信用户设置，不接受项目配置；保护校验失败即拒绝启动，不降级目录。
+        var userConfig = await UserConfigStore.LoadAsync(UserConfigStore.DefaultFilePath(), cancellationToken)
+                                              .ConfigureAwait(false);
         string? sessionStoreDirectory = null;
         if (persistSessions)
-        {
-            var userConfig = await UserConfigStore.LoadAsync(UserConfigStore.DefaultFilePath(), cancellationToken)
-                                                  .ConfigureAwait(false);
             sessionStoreDirectory = SessionStorePaths.ResolveProtected(userConfig.Settings?.SessionStoreDirectory,
                                                                        config.WorkspaceRoot);
-        }
 
         // 沙箱仅取可信用户设置，不接受项目配置；组件、路径、平台或存储保护校验失败均不回退宿主。
         var knownSecrets = SandboxCliComposition.KnownSecrets(config, apiKey);
-        var sandbox =
-            await TryComposeWindowsSandboxAsync(config, knownSecrets, cancellationToken, sessionStoreDirectory)
-               .ConfigureAwait(false);
-        var executionPolicy = sandbox?.ExecutionPolicy ?? ProcessExecutionPolicy.Host();
+        var settings     = userConfig.Settings?.WindowsSandbox;
+        var accessState  = new WorkspaceAccessState(WorkspaceDirectoryIdentity.Capture(config.WorkspaceRoot));
+        var permissions = new PermissionEngine(config.WorkspaceRoot, config.CommandRules,
+                                               workspaceReadOnly : () => accessState.IsReadOnly);
+        var trustPath = Path.Combine(Path.GetDirectoryName(UserConfigStore.DefaultFilePath())!, "workspace-trust.json");
+        IReadOnlyList<string> writeRoots = [config.WorkspaceRoot, .. settings?.AdditionalWriteRoots ?? []];
+        var protectedPaths = new List<string> { trustPath, UserConfigStore.DefaultFilePath() };
+        if (sessionStoreDirectory is not null) protectedPaths.Add(sessionStoreDirectory);
+        if (settings is { Enabled: true })
+        {
+            protectedPaths.Add(settings.SetupExecutablePath);
+            protectedPaths.Add(settings.RunnerExecutablePath);
+            protectedPaths.Add(WindowsSandboxComponents.ResolveSandboxHome(settings.SandboxHome,
+                                                                           settings.AllowTcpLoopback));
+        }
 
-        var model       = ModelClientFactory.Create(config.Model, config.Endpoint, apiKey, config.ChatApi);
-        var workspace   = new Workspace(config.WorkspaceRoot);
-        var tools       = BuildTools(workspace, config, apiKey, executionPolicy, sandbox?.Backend, knownSecrets);
-        var permissions = new PermissionEngine(config.WorkspaceRoot, config.CommandRules);
+        WindowsSandboxExecution? sandbox = null;
+        var access = new WorkspaceAccessCoordinator(accessState, new WorkspaceTrustStore(trustPath, writeRoots),
+                                                    permissions, input ?? new ExclusiveInputReader(Console.In),
+                                                    Console.Out, !Console.IsInputRedirected,
+                                                    OperatingSystem.IsWindows() && settings is
+                                                        { Enabled: true, Policy: SandboxPolicyKind.WorkspaceWrite },
+                                                    new ProcessWorkspaceAclGrant(protectedPaths, writeRoots, settings),
+                                                    () =>
+                                                    {
+                                                        sandbox = SandboxCliComposition.TryCompose(settings,
+                                                            config.SessionDirectory, config.WorkspaceRoot,
+                                                            knownSecrets, sessionStoreDirectory);
+                                                        var policy = sandbox?.ExecutionPolicy ??
+                                                                     ProcessExecutionPolicy.Host();
+                                                        return
+                                                            Task.FromResult((new ShellTool(new Workspace(config
+                                                                                    .WorkspaceRoot),
+                                                                                 config.DefaultToolTimeoutSeconds,
+                                                                                 knownSecrets,
+                                                                                 processBackend :
+                                                                                 sandbox?.Backend ??
+                                                                                 new
+                                                                                     HostProcessBackend(knownSecrets),
+                                                                                 executionPolicy : policy),
+                                                                             policy));
+                                                    });
+        await access.InitializeAsync(cancellationToken).ConfigureAwait(false);
+        var executionPolicy = access.Policy;
+
+        var model     = ModelClientFactory.Create(config.Model, config.Endpoint, apiKey, config.ChatApi);
+        var workspace = new Workspace(config.WorkspaceRoot);
+        var tools     = BuildTools(workspace, config, apiKey, executionPolicy, sandbox?.Backend, knownSecrets, access);
         var options = new AgentOptions
         {
             Model                     = config.Model,
@@ -419,7 +471,7 @@ internal static class Program
         };
 
         return new AgentComposition(resolution, config, knownSecrets, sandbox, executionPolicy, model, tools,
-                                    permissions, options, sessionStoreDirectory);
+                                    permissions, options, sessionStoreDirectory, access);
     }
 
     /// <summary>
@@ -502,16 +554,23 @@ internal static class Program
     private static ToolRegistry BuildTools(Workspace workspace, TinyHarnessConfig config, string? apiKey = null,
                                            ProcessExecutionPolicy? executionPolicy = null,
                                            IProcessExecutionBackend? processBackend = null,
-                                           IReadOnlyDictionary<string, string>? knownSecrets = null)
+                                           IReadOnlyDictionary<string, string>? knownSecrets = null,
+                                           WorkspaceAccessCoordinator? access = null)
     {
         var secrets = knownSecrets ?? SandboxCliComposition.KnownSecrets(config, apiKey);
-        return new ToolRegistry([
+        ITool[] tools =
+        [
             new ListFilesTool(workspace), new SearchTextTool(workspace), new ReadFileTool(workspace),
             new ApplyPatchTool(workspace),
             new ShellTool(workspace, config.DefaultToolTimeoutSeconds, secrets,
                           processBackend : processBackend ?? new HostProcessBackend(secrets),
                           executionPolicy : executionPolicy)
-        ]);
+        ];
+        return new ToolRegistry(access is null
+                                    ? tools
+                                    : tools.Select(tool => access.State.Guard(() => tool.Definition.Name == "shell"
+                                                                                  ? access.Shell
+                                                                                  : tool)));
     }
 
     /// <summary>
@@ -694,7 +753,7 @@ internal static class Program
                                          "Smoke refreshed project rules: preserve confirmed file facts.\n", cts.Token)
                       .ConfigureAwait(false);
             using (var resumedWriter = await SessionStoreWriter.OpenExistingAsync(sessionDirectory, sessionId,
-                            null, cts.Token).ConfigureAwait(false))
+                       null, cts.Token).ConfigureAwait(false))
             using (var refreshedHost = new ChatSessionHost(restoration.Session, restoration.Context, options,
                                                            new SmokeScriptClient([new SmokeStep()]), tools,
                                                            systemPrompt, permissions, approver,
@@ -751,7 +810,7 @@ internal static class Program
                                    ? StringComparison.OrdinalIgnoreCase
                                    : StringComparison.Ordinal) || !Path.GetFileName(target)
                                                                        .StartsWith("tinyharness-smoke-session-",
-                                                                                 StringComparison.Ordinal))
+                                                                            StringComparison.Ordinal))
             throw new InvalidOperationException($"Refusing to delete unexpected smoke session directory '{target}'.");
         if (Directory.Exists(target)) Directory.Delete(target, true);
     }
@@ -790,7 +849,8 @@ internal static class Program
         ToolRegistry                        Tools,
         PermissionEngine                    Permissions,
         AgentOptions                        Options,
-        string?                             SessionStoreDirectory);
+        string?                             SessionStoreDirectory,
+        WorkspaceAccessCoordinator          Access);
 
     /// <summary>
     ///     <para>将 Ctrl+C 转换为任务取消；释放时移除全局事件处理器。</para>
