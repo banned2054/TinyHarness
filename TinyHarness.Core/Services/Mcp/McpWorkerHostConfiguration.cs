@@ -1,17 +1,21 @@
 using TinyHarness.Core.Exceptions;
 using TinyHarness.Core.Models.Configuration;
 using TinyHarness.Core.Models.Worker;
-using TinyHarness.Core.Services.Configuration;
+using TinyHarness.Core.Services.ChatCompletions.Configuration;
 using TinyHarness.Core.Services.Runtime;
 
 namespace TinyHarness.Core.Services.Mcp;
 
 /// <summary>
-///     只从 TinyHarness 用户配置组装 MCP worker 的可信启动参数。不会读取当前工作区里的
-///     tinyharness.json，也不会使用其中的 commandRules。工作区与模型 profile 在服务启动时固定。
-///     Resolves trusted MCP worker startup settings exclusively from TinyHarness user config. It never
-///     reads a target workspace's tinyharness.json or adopts its commandRules. Workspace and model
-///     profile are fixed for the lifetime of the server.
+///     <para>
+///         只从 TinyHarness 用户配置组装 MCP worker 的可信启动参数。不会读取当前工作区里的
+///         tinyharness.json，也不会使用其中的 commandRules。工作区与模型 profile 在服务启动时固定。
+///     </para>
+///     <para>
+///         Resolves trusted MCP worker startup settings exclusively from TinyHarness user config. It never
+///         reads a target workspace's tinyharness.json or adopts its commandRules. Workspace and model
+///         profile are fixed for the lifetime of the server.
+///     </para>
 /// </summary>
 public sealed class McpWorkerHostConfiguration
 {
@@ -34,15 +38,21 @@ public sealed class McpWorkerHostConfiguration
     public string Endpoint { get; }
 
     /// <summary>
-    ///     启动时固定的 Chat API 协议选择，来自默认 profile；不按模型名猜测。The chat API protocol fixed at startup, from the default profile;
-    ///     never guessed from model names.
+    ///     <para>启动时固定的 Chat API 协议选择，来自默认 profile；不按模型名猜测。</para>
+    ///     <para>The chat API protocol fixed at startup, from the default profile; never guessed from model names.</para>
     /// </summary>
     public ChatApiKind ChatApi { get; }
 
-    /// <summary>仅用于启动诊断与验收记录，不包含 endpoint URL 或凭据。The scheme only; no URL or credential.</summary>
+    /// <summary>
+    ///     <para>仅用于启动诊断与验收记录，不包含 endpoint URL 或凭据。</para>
+    ///     <para>The scheme only; no URL or credential.</para>
+    /// </summary>
     public string EndpointType { get; }
 
-    /// <summary>只用于构造模型 client；调用方不得写入日志、协议响应或审计。Used only to construct the model client.</summary>
+    /// <summary>
+    ///     <para>只用于构造模型 client；调用方不得写入日志、协议响应或审计。</para>
+    ///     <para>Used only to construct the model client.</para>
+    /// </summary>
     public string ApiKey { get; }
 
     public string WorkspaceRoot { get; }
@@ -52,11 +62,15 @@ public sealed class McpWorkerHostConfiguration
     public WorkerExecutionOptions ExecutionOptions { get; }
 
     /// <summary>
-    ///     从给定用户配置解析默认 profile 和其中显式选择的模型。显式参数只供离线测试/嵌入调用；
-    ///     MCP CLI 入口固定使用 <see cref="UserConfigStore.DefaultFilePath" />，忽略项目配置文件。
-    ///     Resolves the default profile and its explicitly selected model from the user config. Explicit
-    ///     paths are for offline tests/embedded callers; the MCP CLI always uses the standard user config
-    ///     path and ignores project config files.
+    ///     <para>
+    ///         从给定用户配置解析默认 profile 和其中显式选择的模型。显式参数只供离线测试/嵌入调用；
+    ///         MCP CLI 入口固定使用 <see cref="UserConfigStore.DefaultFilePath" />，忽略项目配置文件。
+    ///     </para>
+    ///     <para>
+    ///         Resolves the default profile and its explicitly selected model from the user config. Explicit
+    ///         paths are for offline tests/embedded callers; the MCP CLI always uses the standard user config
+    ///         path and ignores project config files.
+    ///     </para>
     /// </summary>
     public static async Task<McpWorkerHostConfiguration> ResolveAsync(
         CancellationToken cancellationToken,

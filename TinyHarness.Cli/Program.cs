@@ -13,7 +13,7 @@ using TinyHarness.Core.Models.Runtime;
 using TinyHarness.Core.Models.Session;
 using TinyHarness.Core.Models.Tools;
 using TinyHarness.Core.Services.ChatCompletions;
-using TinyHarness.Core.Services.Configuration;
+using TinyHarness.Core.Services.ChatCompletions.Configuration;
 using TinyHarness.Core.Services.Mcp;
 using TinyHarness.Core.Services.Permissions;
 using TinyHarness.Core.Services.Persistence;

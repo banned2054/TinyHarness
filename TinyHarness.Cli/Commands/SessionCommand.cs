@@ -4,7 +4,7 @@ using TinyHarness.Core.Exceptions;
 using TinyHarness.Core.Models.Agent;
 using TinyHarness.Core.Models.Configuration;
 using TinyHarness.Core.Models.Persistence;
-using TinyHarness.Core.Services.Configuration;
+using TinyHarness.Core.Services.ChatCompletions.Configuration;
 using TinyHarness.Core.Services.Persistence;
 
 namespace TinyHarness.Cli.Commands;

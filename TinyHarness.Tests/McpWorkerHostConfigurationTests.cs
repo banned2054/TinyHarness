@@ -1,6 +1,6 @@
 using TinyHarness.Core.Exceptions;
 using TinyHarness.Core.Models.Configuration;
-using TinyHarness.Core.Services.Configuration;
+using TinyHarness.Core.Services.ChatCompletions.Configuration;
 using TinyHarness.Core.Services.Mcp;
 using TinyHarness.Core.Services.Runtime;
 

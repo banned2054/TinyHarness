@@ -2,7 +2,7 @@ using System.Text;
 using TinyHarness.Cli.Commands;
 using TinyHarness.Cli.Services;
 using TinyHarness.Core.Models.Configuration;
-using TinyHarness.Core.Services.Configuration;
+using TinyHarness.Core.Services.ChatCompletions.Configuration;
 using TinyHarness.Core.Services.Runtime;
 
 namespace TinyHarness.Tests;

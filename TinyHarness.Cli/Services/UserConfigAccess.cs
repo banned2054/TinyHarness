@@ -1,18 +1,18 @@
 using TinyHarness.Cli.Commands;
 using TinyHarness.Core.Models.Configuration;
-using TinyHarness.Core.Services.Configuration;
+using TinyHarness.Core.Services.ChatCompletions.Configuration;
 
 namespace TinyHarness.Cli.Services;
 
 /// <summary>
-///     管理命令共享的用户配置访问：加载、查找 profile、更新与保存。
-///     Shared user-config access for management commands: load, find profiles, update, and save.
+///     <para>管理命令共享的用户配置访问：加载、查找 profile、更新与保存。</para>
+///     <para>Shared user-config access for management commands: load, find profiles, update, and save.</para>
 /// </summary>
 internal static class UserConfigAccess
 {
     /// <summary>
-    ///     加载用户配置，同时返回文件是否存在。
-    ///     Loads the user config and reports whether the file exists.
+    ///     <para>加载用户配置，同时返回文件是否存在。</para>
+    ///     <para>Loads the user config and reports whether the file exists.</para>
     /// </summary>
     public static async Task<(UserConfig Config, bool Exists)> LoadAsync(
         CommandContext context, CancellationToken cancellationToken)
@@ -24,8 +24,8 @@ internal static class UserConfigAccess
     }
 
     /// <summary>
-    ///     保存用户配置并输出文件路径。
-    ///     Saves the user config and reports the file path.
+    ///     <para>保存用户配置并输出文件路径。</para>
+    ///     <para>Saves the user config and reports the file path.</para>
     /// </summary>
     public static async Task SaveAsync(CommandContext context, UserConfig config, CancellationToken cancellationToken)
     {
@@ -34,8 +34,8 @@ internal static class UserConfigAccess
     }
 
     /// <summary>
-    ///     按名称查找 profile。
-    ///     Finds a profile by name.
+    ///     <para>按名称查找 profile。</para>
+    ///     <para>Finds a profile by name.</para>
     /// </summary>
     public static UserProfile? FindProfile(UserConfig config, string? name)
     {
@@ -45,15 +45,17 @@ internal static class UserConfigAccess
     }
 
     /// <summary>
-    ///     返回默认 profile；未选择时返回 <see langword="null" />。
-    ///     Returns the default profile; <see langword="null" /> when none is selected.
+    ///     <para>返回默认 profile；未选择时返回 <see langword="null" />。</para>
+    ///     <para>Returns the default profile; <see langword="null" /> when none is selected.</para>
     /// </summary>
     public static UserProfile? DefaultProfile(UserConfig config) => FindProfile(config, config.DefaultProfile);
 
     /// <summary>
-    ///     解析命令的目标 profile：显式 --provider 名称或默认 profile；失败时给出可操作的错误。
-    ///     Resolves the target profile of a command: an explicit --provider name or the default profile; failures produce
-    ///     actionable errors.
+    ///     <para>解析命令的目标 profile：显式 --provider 名称或默认 profile；失败时给出可操作的错误。</para>
+    ///     <para>
+    ///         Resolves the target profile of a command: an explicit --provider name or the default profile;
+    ///         failures produce actionable errors.
+    ///     </para>
     /// </summary>
     public static async Task<(UserConfig Config, UserProfile Profile)> RequireProfileAsync(
         CommandContext context, string? providerName, CancellationToken cancellationToken)
@@ -82,8 +84,8 @@ internal static class UserConfigAccess
     }
 
     /// <summary>
-    ///     替换同名 profile 或追加新 profile，保持原有顺序。
-    ///     Replaces the profile with the same name or appends a new one, preserving order.
+    ///     <para>替换同名 profile 或追加新 profile，保持原有顺序。</para>
+    ///     <para>Replaces the profile with the same name or appends a new one, preserving order.</para>
     /// </summary>
     public static UserConfig UpsertProfile(UserConfig config, UserProfile profile)
     {
@@ -98,8 +100,8 @@ internal static class UserConfigAccess
     }
 
     /// <summary>
-    ///     描述 profile 的 API key 来源，用于列表显示；不包含密钥值。
-    ///     Describes a profile's API key source for listings; never includes the secret value.
+    ///     <para>描述 profile 的 API key 来源，用于列表显示；不包含密钥值。</para>
+    ///     <para>Describes a profile's API key source for listings; never includes the secret value.</para>
     /// </summary>
     public static string DescribeKeySource(UserProfile profile) =>
         !string.IsNullOrWhiteSpace(profile.ApiKeyCredentialTarget)

@@ -1,21 +1,22 @@
 using TinyHarness.Cli.Models;
 using TinyHarness.Cli.Services;
 using TinyHarness.Core.Models.Configuration;
-using TinyHarness.Core.Services.Configuration;
+using TinyHarness.Core.Services.ChatCompletions.Configuration;
 
 namespace TinyHarness.Cli.Commands;
 
 /// <summary>
-///     `tinyharness config`：显示生效配置的值、来源与查找路径（密钥只显示可用性），
-///     以及更新用户配置中的非敏感默认值。
-///     `tinyharness config`: shows the effective values, their source, and lookup paths (API key availability
-///     only, never the value), and updates non-sensitive defaults in the user config.
+///     <para>`tinyharness config`：显示生效配置的值、来源与查找路径（密钥只显示可用性），以及更新用户配置中的非敏感默认值。</para>
+///     <para>
+///         `tinyharness config`: shows the effective values, their source, and lookup paths (API key availability
+///         only, never the value), and updates non-sensitive defaults in the user config.
+///     </para>
 /// </summary>
 internal static class ConfigCommand
 {
     /// <summary>
-    ///     config set 支持的键。
-    ///     Keys supported by config set.
+    ///     <para>config set 支持的键。</para>
+    ///     <para>Keys supported by config set.</para>
     /// </summary>
     internal static readonly string[] SettableKeys =
     [
@@ -24,8 +25,8 @@ internal static class ConfigCommand
     ];
 
     /// <summary>
-    ///     执行 config 子命令。
-    ///     Executes a config subcommand.
+    ///     <para>执行 config 子命令。</para>
+    ///     <para>Executes a config subcommand.</para>
     /// </summary>
     public static async Task<int> ExecuteAsync(
         CommandContext context, CliOptions options, CancellationToken cancellationToken) => options.Subcommand switch
@@ -38,8 +39,8 @@ internal static class ConfigCommand
 
 
     /// <summary>
-    ///     显示生效值、来源、绝对路径与密钥可用性。
-    ///     Shows effective values, sources, absolute paths, and API key availability.
+    ///     <para>显示生效值、来源、绝对路径与密钥可用性。</para>
+    ///     <para>Shows effective values, sources, absolute paths, and API key availability.</para>
     /// </summary>
     private static async Task<int> ShowAsync(CommandContext context, CancellationToken cancellationToken)
     {
@@ -100,8 +101,11 @@ internal static class ConfigCommand
     }
 
     /// <summary>
-    ///     更新用户配置中的非敏感默认值；只写入用户配置，不触碰项目配置。
-    ///     Updates a non-sensitive default in the user config; only the user config is written, never the project config.
+    ///     <para>更新用户配置中的非敏感默认值；只写入用户配置，不触碰项目配置。</para>
+    ///     <para>
+    ///         Updates a non-sensitive default in the user config; only the user config is written, never the project
+    ///         config.
+    ///     </para>
     /// </summary>
     private static async Task<int> SetAsync(
         CommandContext context, string key, string value, CancellationToken cancellationToken)
@@ -144,7 +148,7 @@ internal static class ConfigCommand
                 settings = settings with { SessionStoreDirectory = value.Trim() };
                 oldValue = config.Settings?.SessionStoreDirectory ?? "(built-in default)";
                 break;
-            default : // sessionDirectory
+            default : // 默认分支：sessionDirectory
                 if (string.IsNullOrWhiteSpace(value))
                     throw new InvalidOperationException("'sessionDirectory' cannot be empty.");
 
@@ -163,8 +167,8 @@ internal static class ConfigCommand
     }
 
     /// <summary>
-    ///     解析正整数配置值；非法输入给出包含合法范围的错误。
-    ///     Parses a positive-integer config value; invalid input errors with the accepted range.
+    ///     <para>解析正整数配置值；非法输入给出包含合法范围的错误。</para>
+    ///     <para>Parses a positive-integer config value; invalid input errors with the accepted range.</para>
     /// </summary>
     private static int ParsePositiveInt(string key, string value)
     {
@@ -176,8 +180,11 @@ internal static class ConfigCommand
     }
 
     /// <summary>
-    ///     解析非负整数配置值；0 是合法值（例如 compactionThreshold=0 表示使用窗口大小）。
-    ///     Parses a non-negative-integer config value; 0 is legal (e.g. compactionThreshold=0 means "use the window size").
+    ///     <para>解析非负整数配置值；0 是合法值（例如 compactionThreshold=0 表示使用窗口大小）。</para>
+    ///     <para>
+    ///         Parses a non-negative-integer config value; 0 is legal (e.g. compactionThreshold=0 means "use the window
+    ///         size").
+    ///     </para>
     /// </summary>
     private static int ParseNonNegativeInt(string key, string value)
     {
@@ -191,8 +198,8 @@ internal static class ConfigCommand
     private static string DescribeOptionalInt(int? value) => value is { } v ? v.ToString() : "(built-in default)";
 
     /// <summary>
-    ///     描述配置来源；总是带上绝对路径。
-    ///     Describes the config source; always includes the absolute path.
+    ///     <para>描述配置来源；总是带上绝对路径。</para>
+    ///     <para>Describes the config source; always includes the absolute path.</para>
     /// </summary>
     private static string DescribeSource(ConfigResolution resolution) => resolution.Source switch
     {
@@ -203,8 +210,8 @@ internal static class ConfigCommand
     };
 
     /// <summary>
-    ///     描述密钥可用性；绝不包含密钥值。
-    ///     Describes key availability; never includes the secret value.
+    ///     <para>描述密钥可用性；绝不包含密钥值。</para>
+    ///     <para>Describes key availability; never includes the secret value.</para>
     /// </summary>
     private static string DescribeKey(ApiKeyStatus key) => key.Kind switch
     {

@@ -1,19 +1,23 @@
 using System.Text.Json.Nodes;
 using TinyHarness.Core.Models.Configuration;
 
-namespace TinyHarness.Core.Services.Configuration;
+namespace TinyHarness.Core.Services.ChatCompletions.Configuration;
 
 /// <summary>
-///     命令允许规则的 JSON 绑定与写出。配置加载与用户配置读写共用同一份无反射实现，保证两侧校验一致。
-///     JSON binding and writing for command allow rules. The project config loader and the user config store share
-///     this reflection-free implementation so both sides validate identically.
+///     <para>命令允许规则的 JSON 绑定与写出。配置加载与用户配置读写共用同一份无反射实现，保证两侧校验一致。</para>
+///     <para>
+///         JSON binding and writing for command allow rules. The project config loader and the user config store
+///         share this reflection-free implementation so both sides validate identically.
+///     </para>
 /// </summary>
 internal static class CommandRuleJson
 {
     /// <summary>
-    ///     手工绑定命令允许规则数组；字段缺失时返回 <see langword="null" />，错误诊断包含来源与字段路径。
-    ///     Manually binds a command allow rule array; returns <see langword="null" /> when the property is absent and
-    ///     diagnoses wrong types with the source and field path.
+    ///     <para>手工绑定命令允许规则数组；字段缺失时返回 <see langword="null" />，错误诊断包含来源与字段路径。</para>
+    ///     <para>
+    ///         Manually binds a command allow rule array; returns <see langword="null" /> when the property is absent
+    ///         and diagnoses wrong types with the source and field path.
+    ///     </para>
     /// </summary>
     public static IReadOnlyList<CommandRule>? Read(JsonObject root, string property, string source)
     {
@@ -86,8 +90,8 @@ internal static class CommandRuleJson
     }
 
     /// <summary>
-    ///     把命令允许规则写成 JSON 数组，与绑定格式互逆。
-    ///     Writes command allow rules as a JSON array, the inverse of the binding format.
+    ///     <para>把命令允许规则写成 JSON 数组，与绑定格式互逆。</para>
+    ///     <para>Writes command allow rules as a JSON array, the inverse of the binding format.</para>
     /// </summary>
     public static JsonArray Write(IReadOnlyList<CommandRule> rules)
     {
@@ -103,8 +107,7 @@ internal static class CommandRuleJson
             {
                 var arguments = new JsonArray();
                 foreach (var argument in rule.Arguments)
-                    // Cast to JsonNode? so the non-generic JsonArray.Add binds; the
-                    // generic Add<T> overload is not trimming/AOT-safe.
+                    // 强转为 JsonNode? 以绑定非泛型 JsonArray.Add；泛型 Add<T> 重载不满足 trimming/AOT 约束。
                     arguments.Add((JsonNode?)JsonValue.Create(argument));
 
                 item["arguments"] = arguments;
@@ -123,8 +126,8 @@ internal static class CommandRuleJson
     }
 
     /// <summary>
-    ///     读取可选字符串字段，字段缺失时返回 <see langword="null" />。
-    ///     Reads an optional string property and returns <see langword="null" /> when absent.
+    ///     <para>读取可选字符串字段，字段缺失时返回 <see langword="null" />。</para>
+    ///     <para>Reads an optional string property and returns <see langword="null" /> when absent.</para>
     /// </summary>
     private static string? ReadString(JsonObject node, string property)
     {

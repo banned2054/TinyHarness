@@ -2,18 +2,20 @@ using TinyHarness.Core.Exceptions;
 using TinyHarness.Core.Models.Configuration;
 using TinyHarness.Core.Services.Runtime;
 
-namespace TinyHarness.Core.Services.Configuration;
+namespace TinyHarness.Core.Services.ChatCompletions.Configuration;
 
 /// <summary>
-///     按固定优先级解析 API key：凭据存储条目 → 环境变量。只报告存在性，不在日志或消息中输出密钥值。
-///     Resolves the API key in a fixed precedence: credential-store entry, then environment variable. Only
-///     presence is reported; the secret value never appears in logs or messages.
+///     <para>按固定优先级解析 API key：凭据存储条目 → 环境变量。只报告存在性，不在日志或消息中输出密钥值。</para>
+///     <para>
+///         Resolves the API key in a fixed precedence: credential-store entry, then environment variable. Only
+///         presence is reported; the secret value never appears in logs or messages.
+///     </para>
 /// </summary>
 public static class ApiKeyReader
 {
     /// <summary>
-    ///     返回生效的 API key 来源及其可用性，不读取密钥值本身。
-    ///     Describes the effective API key source and whether it can produce a key, without reading the value.
+    ///     <para>返回生效的 API key 来源及其可用性，不读取密钥值本身。</para>
+    ///     <para>Describes the effective API key source and whether it can produce a key, without reading the value.</para>
     /// </summary>
     public static ApiKeyStatus Describe(string environmentVariable, string credentialTarget, ICredentialStore store)
     {
@@ -30,11 +32,15 @@ public static class ApiKeyReader
     }
 
     /// <summary>
-    ///     读取生效的 API key 值；没有可用来源时返回 <see langword="null" />。
-    ///     凭据存储已配置但无法提供密钥时抛出带修复指引的 <see cref="ConfigException" />，不静默回退到环境变量。
-    ///     Reads the effective API key value; returns <see langword="null" /> when no source is available. A configured
-    ///     but unusable credential-store entry throws a <see cref="ConfigException" /> with fix hints instead of
-    ///     silently falling back to the environment variable.
+    ///     <para>
+    ///         读取生效的 API key 值；没有可用来源时返回 <see langword="null" />。
+    ///         凭据存储已配置但无法提供密钥时抛出带修复指引的 <see cref="ConfigException" />，不静默回退到环境变量。
+    ///     </para>
+    ///     <para>
+    ///         Reads the effective API key value; returns <see langword="null" /> when no source is available. A
+    ///         configured but unusable credential-store entry throws a <see cref="ConfigException" /> with fix hints
+    ///         instead of silently falling back to the environment variable.
+    ///     </para>
     /// </summary>
     public static string? Read(string  environmentVariable, string credentialTarget, ICredentialStore store,
                                string? profileName = null)
@@ -62,8 +68,8 @@ public static class ApiKeyReader
     }
 
     /// <summary>
-    ///     从凭据存储读取条目，读取失败视为不存在；不记录密钥值。
-    ///     Reads a credential-store entry, treating read failures as absence; never logs the secret value.
+    ///     <para>从凭据存储读取条目，读取失败视为不存在；不记录密钥值。</para>
+    ///     <para>Reads a credential-store entry, treating read failures as absence; never logs the secret value.</para>
     /// </summary>
     private static string? ReadCredential(ICredentialStore store, string targetName)
     {

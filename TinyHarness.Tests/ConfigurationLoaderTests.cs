@@ -1,5 +1,5 @@
 using TinyHarness.Core.Models.Configuration;
-using TinyHarness.Core.Services.Configuration;
+using TinyHarness.Core.Services.ChatCompletions.Configuration;
 
 namespace TinyHarness.Tests;
 

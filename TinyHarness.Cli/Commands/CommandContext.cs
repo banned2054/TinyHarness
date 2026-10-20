@@ -1,13 +1,15 @@
 using TinyHarness.Cli.Services;
-using TinyHarness.Core.Services.Configuration;
+using TinyHarness.Core.Services.ChatCompletions.Configuration;
 using TinyHarness.Core.Services.Runtime;
 
 namespace TinyHarness.Cli.Commands;
 
 /// <summary>
-///     管理命令的共享依赖：终端 I/O、凭据存储与可选的用户配置路径覆盖（测试与便携部署使用）。
-///     Shared dependencies for management commands: console I/O, the credential store, and an optional user config
-///     path override (for tests and portable setups).
+///     <para>管理命令的共享依赖：终端 I/O、凭据存储与可选的用户配置路径覆盖（测试与便携部署使用）。</para>
+///     <para>
+///         Shared dependencies for management commands: console I/O, the credential store, and an optional
+///         user config path override (for tests and portable setups).
+///     </para>
 /// </summary>
 internal sealed class CommandContext
 {
@@ -15,26 +17,32 @@ internal sealed class CommandContext
 
     public required ICredentialStore Credentials { get; init; }
 
-    /// <summary>用户配置文件路径；null 表示使用固定默认位置。User config path; null means the fixed default location.</summary>
+    /// <summary>
+    ///     <para>用户配置文件路径；null 表示使用固定默认位置。</para>
+    ///     <para>User config path; null means the fixed default location.</para>
+    /// </summary>
     public string? UserConfigPath { get; init; }
 
     /// <summary>
-    ///     项目配置与相对路径解析所使用的工作目录；null 表示进程当前目录。
-    ///     Working directory used for project-config and relative-path resolution; null means the process current directory.
+    ///     <para>项目配置与相对路径解析所使用的工作目录；null 表示进程当前目录。</para>
+    ///     <para>
+    ///         Working directory used for project-config and relative-path resolution; null means the process current
+    ///         directory.
+    ///     </para>
     /// </summary>
     public string? WorkingDirectory { get; init; }
 
     /// <summary>
-    ///     解析实际使用的用户配置路径。
-    ///     Resolves the user config path actually in effect.
+    ///     <para>解析实际使用的用户配置路径。</para>
+    ///     <para>Resolves the user config path actually in effect.</para>
     /// </summary>
     public string ResolveUserConfigPath() => string.IsNullOrWhiteSpace(UserConfigPath)
         ? UserConfigStore.DefaultFilePath()
         : Path.GetFullPath(UserConfigPath);
 
     /// <summary>
-    ///     返回规范化的命令工作目录。
-    ///     Returns the normalized command working directory.
+    ///     <para>返回规范化的命令工作目录。</para>
+    ///     <para>Returns the normalized command working directory.</para>
     /// </summary>
     public string ResolveWorkingDirectory() => string.IsNullOrWhiteSpace(WorkingDirectory)
         ? Environment.CurrentDirectory

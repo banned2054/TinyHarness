@@ -4,21 +4,22 @@ using TinyHarness.Core.Exceptions;
 using TinyHarness.Core.Models.ChatCompletions;
 using TinyHarness.Core.Models.Configuration;
 using TinyHarness.Core.Services.ChatCompletions;
-using TinyHarness.Core.Services.Configuration;
+using TinyHarness.Core.Services.ChatCompletions.Configuration;
 
 namespace TinyHarness.Cli.Commands;
 
 /// <summary>
-///     `tinyharness doctor`：默认离线检查配置字段、路径与凭据可用性；只有显式 `--connect`
-///     才发送一次最小模型请求，并在联网前明确提示可能产生费用。
-///     `tinyharness doctor`: checks config fields, paths, and credential availability offline by default; only an
-///     explicit `--connect` sends one minimal model request, with a clear notice beforehand that it may incur charges.
+///     <para>`tinyharness doctor`：默认离线检查配置字段、路径与凭据可用性；只有显式 `--connect` 才发送一次最小模型请求，并在联网前明确提示可能产生费用。</para>
+///     <para>
+///         `tinyharness doctor`: checks config fields, paths, and credential availability offline by default; only an
+///         explicit `--connect` sends one minimal model request, with a clear notice beforehand that it may incur charges.
+///     </para>
 /// </summary>
 internal static class DoctorCommand
 {
     /// <summary>
-    ///     执行 doctor 检查；存在失败项时返回 1，警告不影响退出码。
-    ///     Runs the doctor checks; returns 1 when any check fails, warnings do not affect the exit code.
+    ///     <para>执行 doctor 检查；存在失败项时返回 1，警告不影响退出码。</para>
+    ///     <para>Runs the doctor checks; returns 1 when any check fails, warnings do not affect the exit code.</para>
     /// </summary>
     public static async Task<int> ExecuteAsync(
         CommandContext context, CliOptions options, CancellationToken cancellationToken)
@@ -41,7 +42,7 @@ internal static class DoctorCommand
                                     cancellationToken)
                     .ConfigureAwait(false);
 
-        // Endpoint: must be set and a syntactically valid absolute http(s) URL for live runs.
+        // Endpoint：live 运行必须已设置，且是语法有效的绝对 http(s) URL。
         var endpointValid = ProfileEditor.IsValidEndpoint(config.Endpoint, out var normalizedEndpoint);
         if (config.Endpoint.Length == 0)
         {
@@ -60,11 +61,11 @@ internal static class DoctorCommand
             await io.WriteLineAsync($"  [ok]   endpoint {normalizedEndpoint}", cancellationToken).ConfigureAwait(false);
         }
 
-        // Chat API protocol: an explicit config choice; never guessed from the model name.
+        // Chat API 协议：来自显式配置选择，绝不从模型名猜测。
         await io.WriteLineAsync($"  [ok]   chat api {ChatApiKindParser.ToValueString(config.ChatApi)}",
                                 cancellationToken).ConfigureAwait(false);
 
-        // Model: required for live runs and the offline smoke path.
+        // Model：live 运行与离线 smoke 路径都必需。
         if (config.Model.Length == 0)
         {
             await io.WriteLineAsync("  [fail] model is not configured", cancellationToken).ConfigureAwait(false);
@@ -77,13 +78,13 @@ internal static class DoctorCommand
                                  cancellationToken).ConfigureAwait(false);
         }
 
-        // Budget sanity.
+        // 预算合理性：保留输出预算不得吃满整个上下文窗口。
         if (config.ReservedOutputTokens >= config.ContextWindowTokens)
             await io.WriteLineAsync($"  [warn] reservedOutputTokens ({config.ReservedOutputTokens:N0}) leaves no room" +
                                     " inside the context window; live runs will stop before sending",
                                     cancellationToken).ConfigureAwait(false);
 
-        // Workspace.
+        // 工作区：目录必须存在。
         if (!Directory.Exists(config.WorkspaceRoot))
         {
             await io.WriteLineAsync($"  [fail] workspace directory does not exist: {config.WorkspaceRoot}",
@@ -97,7 +98,7 @@ internal static class DoctorCommand
                     .ConfigureAwait(false);
         }
 
-        // Session directory: must be creatable/writable; creation is the same step the run recorder performs.
+        // Session directory：必须可创建/可写；此处的创建动作与 run 记录器执行的是同一步骤。
         try
         {
             Directory.CreateDirectory(config.SessionDirectory);
@@ -112,7 +113,7 @@ internal static class DoctorCommand
             failures++;
         }
 
-        // API key availability (offline): presence only, never the value.
+        // API key 可用性（离线）：只检查是否存在，绝不输出密钥值。
         var key = ApiKeyReader.Describe(config.ApiKeyEnvironmentVariable, config.ApiKeyCredentialTarget,
                                         context.Credentials);
         switch (key.Kind)
@@ -155,8 +156,8 @@ internal static class DoctorCommand
     }
 
     /// <summary>
-    ///     发送一次最小模型请求；联网与计费提示先行，工具定义不随请求发送。
-    ///     Sends one minimal model request; the network/charge notice comes first and no tool definitions are sent.
+    ///     <para>发送一次最小模型请求；联网与计费提示先行，工具定义不随请求发送。</para>
+    ///     <para>Sends one minimal model request; the network/charge notice comes first and no tool definitions are sent.</para>
     /// </summary>
     private static async Task<bool> ConnectAsync(CommandContext context, TinyHarnessConfig config, bool endpointValid,
                                                  ApiKeyStatus   key,     CancellationToken cancellationToken)

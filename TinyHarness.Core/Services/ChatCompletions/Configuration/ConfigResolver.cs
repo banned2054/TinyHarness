@@ -1,30 +1,38 @@
 using TinyHarness.Core.Exceptions;
 using TinyHarness.Core.Models.Configuration;
 
-namespace TinyHarness.Core.Services.Configuration;
+namespace TinyHarness.Core.Services.ChatCompletions.Configuration;
 
 /// <summary>
-///     按固定顺序解析生效配置：显式 `--config` → 当前目录 tinyharness.json → 用户配置 → 内置默认值。
-///     不隐式合并多份文件；旧文件的相对路径继续按当前工作目录解释。
-///     Resolves the effective configuration in a fixed order: explicit `--config` → current-directory
-///     tinyharness.json → user config → built-in defaults. Multiple files are never merged implicitly, and
-///     relative paths in older files keep being interpreted against the current working directory.
+///     <para>
+///         按固定顺序解析生效配置：显式 `--config` → 当前目录 tinyharness.json → 用户配置 → 内置默认值。
+///         不隐式合并多份文件；旧文件的相对路径继续按当前工作目录解释。
+///     </para>
+///     <para>
+///         Resolves the effective configuration in a fixed order: explicit `--config` → current-directory
+///         tinyharness.json → user config → built-in defaults. Multiple files are never merged implicitly, and
+///         relative paths in older files keep being interpreted against the current working directory.
+///     </para>
 /// </summary>
 public static class ConfigResolver
 {
     /// <summary>
-    ///     当前目录项目配置文件名。
-    ///     The project config file name in the current directory.
+    ///     <para>当前目录项目配置文件名。</para>
+    ///     <para>The project config file name in the current directory.</para>
     /// </summary>
     public const string ProjectConfigFileName = "tinyharness.json";
 
     /// <summary>
-    ///     解析生效配置与来源信息。显式指定但不存在的配置文件抛出使用错误，不发模型请求。
-    ///     工作目录与用户配置路径可注入，供测试与嵌入式调用使用；省略时使用进程当前目录与默认用户配置路径。
-    ///     Resolves the effective configuration and its source. An explicitly specified but missing file throws a
-    ///     usage error before any model request is made. The working directory and user config path can be injected
-    ///     for tests and embedded callers; omitted values mean the process current directory and the default user
-    ///     config path.
+    ///     <para>
+    ///         解析生效配置与来源信息。显式指定但不存在的配置文件抛出使用错误，不发模型请求。
+    ///         工作目录与用户配置路径可注入，供测试与嵌入式调用使用；省略时使用进程当前目录与默认用户配置路径。
+    ///     </para>
+    ///     <para>
+    ///         Resolves the effective configuration and its source. An explicitly specified but missing file throws
+    ///         a usage error before any model request is made. The working directory and user config path can be
+    ///         injected for tests and embedded callers; omitted values mean the process current directory and the
+    ///         default user config path.
+    ///     </para>
     /// </summary>
     public static async Task<ConfigResolution> ResolveAsync(
         string? explicitConfigPath, CancellationToken cancellationToken, string? workingDirectory = null,
@@ -106,11 +114,15 @@ public static class ConfigResolver
     }
 
     /// <summary>
-    ///     把用户配置映射为运行配置：endpoint 与凭据引用来自默认 profile，上下文窗口来自所选模型，
-    ///     其余字段来自用户设置；缺省部分沿用内置默认值。
-    ///     Maps the user config onto the runtime config: endpoint and credential references come from the default
-    ///     profile, the context window from the selected model, other fields from user settings; absent parts keep
-    ///     built-in defaults.
+    ///     <para>
+    ///         把用户配置映射为运行配置：endpoint 与凭据引用来自默认 profile，上下文窗口来自所选模型，
+    ///         其余字段来自用户设置；缺省部分沿用内置默认值。
+    ///     </para>
+    ///     <para>
+    ///         Maps the user config onto the runtime config: endpoint and credential references come from the
+    ///         default profile, the context window from the selected model, other fields from user settings; absent
+    ///         parts keep built-in defaults.
+    ///     </para>
     /// </summary>
     private static TinyHarnessConfig FromUserConfig(UserConfig userConfig, string userConfigPath)
     {
