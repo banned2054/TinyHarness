@@ -93,6 +93,7 @@
 - 不手工改写生成的 DotSettings 来猜测 JetBrains key；需要调整时通过 ReSharper/Rider 的 team-shared 设置保存。
 - 只格式化本轮修改的文件或代码范围，不批量重排无关代码。
 - 没有 JetBrains formatter 时，不声称已经完全复现 ReSharper Code Cleanup；遵守 `.editorconfig` 并保持邻近代码风格。
+- Agent 编写或整理 C# 时，须先完整读取并遵循 [.NET / C# 代码排版约定](Docs/code-style.md)：结合整个函数判断换行，优先保留表达式整体性；长条件按条件拆行、连接符放行尾，链式调用避免无意义拆分和阶梯式缩进。该文档补充人工判断，不替代上述工具设置，也不扩大本轮格式化范围。
 
 ## 注释规范
 
