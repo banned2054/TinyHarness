@@ -59,8 +59,7 @@ public class HostEventStreamTests
 
         Assert.That(result.Status, Is.EqualTo(AgentStatus.Completed));
         var deltas = sink.Events.Where(@event => @event.Kind == HostEventKind.AssistantTextDelta)
-                         .Select(@event => TestAssert.TypeOf<string>(@event.Payload))
-                         .ToArray();
+                         .Select(@event => TestAssert.TypeOf<string>(@event.Payload)).ToArray();
         Assert.That(deltas, Is.EqualTo(["He", "llo ", "world"]));
         // 运行内各事件种类的序号保持严格递增。
         Assert.That(sink.Events.Select(@event => @event.Sequence),
@@ -79,8 +78,7 @@ public class HostEventStreamTests
                                                    {
                                                        ["patch"] = "--- a/f.txt\n+++ b/f.txt\n@@ -1 +1 @@\n" +
                                                                    "-old\n+new\n"
-                                                   }
-                                                  .ToJsonString(),
+                                                   }.ToJsonString(),
                                                "p1"));
         client.Enqueue(FakeChatClient.Text("patched"));
         var approver = new ScriptedApprover();
@@ -140,8 +138,8 @@ public class HostEventStreamTests
 
         // filesystem.read 被默认策略允许：结论以 null action 发布，之前没有 ApprovalRequested。
         TestAssert.DoesNotContainAny(@event => @event.Kind == HostEventKind.ApprovalRequested, sink.Events);
-        var resolution = TestAssert.TypeOf<ApprovalResolution>(sink.Events.Single(@event => @event.Kind ==
-                                                                                 HostEventKind.ApprovalResolved)
+        var resolution = TestAssert.TypeOf<ApprovalResolution>(sink.Events.Single(@event =>
+            @event.Kind == HostEventKind.ApprovalResolved)
                                                                    .Payload);
         Assert.That(resolution.Decision, Is.EqualTo(PermissionDecision.Allow));
         Assert.That(resolution.Action, Is.Null);
@@ -159,8 +157,7 @@ public class HostEventStreamTests
                                                    {
                                                        ["patch"] = "--- a/f.txt\n+++ b/f.txt\n@@ -1 +1 @@\n" +
                                                                    "-old\n+new\n"
-                                                   }
-                                                  .ToJsonString()));
+                                                   }.ToJsonString()));
         client.Enqueue(FakeChatClient.Text("understood"));
         var approver = new ScriptedApprover();
         approver.Enqueue(ApprovalAction.Deny);
@@ -175,14 +172,13 @@ public class HostEventStreamTests
         var result = await loop.RunAsync("sys", "patch", CancellationToken.None);
 
         Assert.That(result.ToolExecutions, Is.EqualTo(0));
-        var resolution = TestAssert.TypeOf<ApprovalResolution>(sink.Events.Single(@event => @event.Kind ==
-                                                                                 HostEventKind.ApprovalResolved)
+        var resolution = TestAssert.TypeOf<ApprovalResolution>(sink.Events.Single(@event =>
+            @event.Kind == HostEventKind.ApprovalResolved)
                                                                    .Payload);
         Assert.That(resolution.Decision, Is.EqualTo(PermissionDecision.Ask));
         Assert.That(resolution.Action, Is.EqualTo(ApprovalAction.Deny));
         Assert.That(resolution.Outcome, Does.StartWith("Permission denied by user:"));
-        TestAssert.DoesNotContainAny(@event => @event.Kind is HostEventKind.ToolStarted
-                                                           or HostEventKind.ToolFinished, sink.Events);
+        TestAssert.DoesNotContainAny(@event => @event.Kind is HostEventKind.ToolStarted or HostEventKind.ToolFinished, sink.Events);
     }
 
     [Test]
@@ -214,8 +210,7 @@ public class HostEventStreamTests
         var result = await loop.RunAsync("sys", "go", CancellationToken.None);
 
         var usages = sink.Events.Where(@event => @event.Kind == HostEventKind.ModelUsage)
-                         .Select(@event => TestAssert.TypeOf<ModelUsage>(@event.Payload))
-                         .ToArray();
+                         .Select(@event => TestAssert.TypeOf<ModelUsage>(@event.Payload)).ToArray();
         Assert.That(usages.Length, Is.EqualTo(2));
         TestAssert.All(usages, usage => Assert.That(usage.SummaryRequest, Is.False));
         Assert.That(usages[0].InputTokens, Is.EqualTo(120));
@@ -322,7 +317,7 @@ public class HostEventStreamTests
         client.Enqueue(FakeChatClient.ToolCall("t", "{}", "b_2"));
         client.Enqueue(FakeChatClient.ToolCall("t", "{}", "c_3"));
         // 摘要回答是内部文本：其 usage 必须以摘要请求标记发布，其流不得作为回答增量展示。
-        client.Enqueue(TextWithUsage(StateJson("goal-one", "a.cs", "decision-x"), 500, 40));
+        client.Enqueue(TextWithUsage(Handoff("goal-one", "a.cs", "decision-x"), 500, 40));
         client.Enqueue(TextWithUsage("done", 300, 25));
         var sink = new TestHostEventSink();
         var loop = new AgentLoop(client, new ToolRegistry([tool]), TightBudgetOptions(), null, null, events : sink);
@@ -331,15 +326,13 @@ public class HostEventStreamTests
 
         Assert.That(result.Status, Is.EqualTo(AgentStatus.Completed));
         var usages = sink.Events.Where(@event => @event.Kind == HostEventKind.ModelUsage)
-                         .Select(@event => TestAssert.TypeOf<ModelUsage>(@event.Payload))
-                         .ToArray();
+                         .Select(@event => TestAssert.TypeOf<ModelUsage>(@event.Payload)).ToArray();
         Assert.That(usages.Length, Is.EqualTo(2));
         Assert.That(usages[0].SummaryRequest, Is.True);
         Assert.That(usages[1].SummaryRequest, Is.False);
-        // 只有最终回答自身的增量被展示；摘要 JSON 从未出现。
+        // 只有最终回答自身的增量被展示；内部交接摘要 从未出现。
         Assert.That(sink.Events.Where(@event => @event.Kind == HostEventKind.AssistantTextDelta)
-                        .Select(@event => TestAssert.TypeOf<string>(@event.Payload))
-                        .ToArray(), Is.EqualTo(["done"]));
+                        .Select(@event => TestAssert.TypeOf<string>(@event.Payload)).ToArray(), Is.EqualTo(["done"]));
         Assert.That(result.InputTokens, Is.EqualTo(800));
         Assert.That(result.OutputTokens, Is.EqualTo(65));
     }
@@ -356,16 +349,8 @@ public class HostEventStreamTests
         }
     };
 
-    private static string StateJson(string goal, string modified, string decision) => new JsonObject
-    {
-        ["goal"]               = goal,
-        ["constraints"]        = new JsonArray(),
-        ["decisions"]          = new JsonArray(decision),
-        ["filesInspected"]     = new JsonArray("src"),
-        ["filesModified"]      = new JsonArray(modified),
-        ["commandsAndResults"] = new JsonArray(),
-        ["pendingWork"]        = new JsonArray()
-    }.ToJsonString();
+    private static string Handoff(string goal, string modified, string decision) =>
+        $"Goal: {goal}. Modified: {modified}. Decision: {decision}. Continue pending work.";
 
     private sealed class ScriptedApprover : IApprovalProvider
     {

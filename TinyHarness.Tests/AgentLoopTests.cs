@@ -333,8 +333,7 @@ public class AgentLoopTests
     {
         var client   = new FakeChatClient();
         var recorder = new CapturingRecorder();
-        client.Enqueue(
-        [
+        client.Enqueue([
             new ChatStreamEvent { Kind = ChatStreamEventKind.ContentDelta, ContentDelta = "hello" },
             new ChatStreamEvent { Kind = ChatStreamEventKind.End, FinishReason          = "stop" }
         ]);
@@ -375,8 +374,8 @@ public class AgentLoopTests
         await loop.RunTurnAsync("sys", "u1", CancellationToken.None);
 
         // 系统提示不一致时拒绝追加，保留上一回合的完整历史。
-        await TestAssert.ThrowsAsync<InvalidOperationException>(() => loop.RunTurnAsync("different", "u2",
-                                                                         CancellationToken.None));
+        await TestAssert.ThrowsAsync<InvalidOperationException>(() =>
+            loop.RunTurnAsync("different", "u2", CancellationToken.None));
         Assert.That(context.Messages.Count, Is.EqualTo(3));
         Assert.That(context.Messages[2].Content, Is.EqualTo("one"));
 
@@ -400,8 +399,8 @@ public class AgentLoopTests
                                  context : context);
 
         var rejected =
-            await TestAssert.ThrowsAsync<InvalidOperationException>(() => loop.RunTurnAsync("sys", "u2",
-                                                                             CancellationToken.None));
+            await TestAssert.ThrowsAsync<InvalidOperationException>(() =>
+                loop.RunTurnAsync("sys", "u2", CancellationToken.None));
 
         Assert.That(rejected.Message, Does.Contain("call_1"));
         Assert.That(client.Requests, Is.EqualTo(0));
@@ -610,7 +609,7 @@ public class AgentLoopTests
             return Task.CompletedTask;
         }
 
-        public Task CompleteAsync(AgentResult       result, IReadOnlyList<ChatMessage> messages, StructuredState state,
+        public Task CompleteAsync(AgentResult       result, IReadOnlyList<ChatMessage> messages,
                                   CancellationToken cancellationToken) => Task.CompletedTask;
     }
 }

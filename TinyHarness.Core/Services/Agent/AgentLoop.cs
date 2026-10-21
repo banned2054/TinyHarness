@@ -327,8 +327,9 @@ public sealed class AgentLoop
 
                 if (_instructionBoundary is not null)
                 {
-                    var beforeRequestEvent = await _instructionBoundary.RefreshBeforeModelRequestAsync(
-                         cancellationToken).ConfigureAwait(false);
+                    var beforeRequestEvent =
+                        await _instructionBoundary.RefreshBeforeModelRequestAsync(cancellationToken)
+                                                  .ConfigureAwait(false);
                     await PublishInstructionChangedAsync(beforeRequestEvent, cancellationToken).ConfigureAwait(false);
                 }
 
@@ -378,14 +379,11 @@ public sealed class AgentLoop
                 var round = PrepareRound(_tools, assistant.ToolCalls);
                 if (_instructionBoundary is not null && round.Any(item => item.Preparation is not null))
                 {
-                    var instructionCheck = await _instructionBoundary.CheckToolRoundAsync(
-                                                                           round.Where(item =>
-                                                                                            item.Preparation is not
-                                                                                                null)
-                                                                              .Select(item => item.Preparation!)
-                                                                              .ToArray(),
-                                                                           cancellationToken)
-                                                                     .ConfigureAwait(false);
+                    var instructionCheck =
+                        await _instructionBoundary
+                              .CheckToolRoundAsync(round.Where(item => item.Preparation is not null)
+                                                        .Select(item => item.Preparation!).ToArray(),
+                                                   cancellationToken).ConfigureAwait(false);
                     switch (instructionCheck.Status)
                     {
                         case InstructionBoundaryStatus.Failed :
@@ -426,8 +424,7 @@ public sealed class AgentLoop
                             await RecordNotStartedRoundAsync(records, cancellationToken).ConfigureAwait(false);
                             var changedEvent = await _instructionBoundary
                                                     .ApplyToolRoundUpdateAsync(records.Values.ToArray(),
-                                                                               cancellationToken)
-                                                    .ConfigureAwait(false);
+                                                                               cancellationToken).ConfigureAwait(false);
                             await PublishInstructionChangedAsync(changedEvent, cancellationToken).ConfigureAwait(false);
                             instructionDeferralsSinceExecution++;
                             continue;
@@ -475,10 +472,10 @@ public sealed class AgentLoop
                         : await AuthorizeAsync(item.Preparation!, roundRecords, cancellationToken);
                     authorized.Add(new AuthorizedRoundCall(item, authorization));
                     if (_instructionBoundary is null || _permissions is null) continue;
-                    var check = await _instructionBoundary.RecheckBeforeDispatchAsync(
-                                                                round.Select(candidate => candidate.Preparation!)
-                                                                     .ToArray(), cancellationToken)
-                                                          .ConfigureAwait(false);
+                    var check =
+                        await _instructionBoundary
+                              .RecheckBeforeDispatchAsync(round.Select(candidate => candidate.Preparation!).ToArray(),
+                                                          cancellationToken).ConfigureAwait(false);
                     if (check.Status == InstructionBoundaryStatus.Unchanged) continue;
                     approvalRefresh = check;
                     break;
@@ -516,15 +513,11 @@ public sealed class AgentLoop
                     var item = authorized[dispatchIndex];
                     if (_instructionBoundary is not null)
                     {
-                        var dispatchCheck = await _instructionBoundary
-                                                 .RecheckBeforeDispatchAsync(round.Where(candidate =>
-                                                                                              candidate.Preparation is
-                                                                                                  not
-                                                                                                  null)
-                                                                                .Select(candidate =>
-                                                                                              candidate.Preparation!)
-                                                                                .ToArray(), cancellationToken)
-                                                 .ConfigureAwait(false);
+                        var dispatchCheck =
+                            await _instructionBoundary
+                                  .RecheckBeforeDispatchAsync(round.Where(candidate => candidate.Preparation is not null)
+                                                                  .Select(candidate => candidate.Preparation!).ToArray(),
+                                                              cancellationToken).ConfigureAwait(false);
                         if (dispatchCheck.Status is InstructionBoundaryStatus.Failed
                                                  or InstructionBoundaryStatus.Updated)
                         {
@@ -556,12 +549,12 @@ public sealed class AgentLoop
 
                                 await RecordNotStartedCallsAsync(roundRecords, deferredCalls, cancellationToken)
                                    .ConfigureAwait(false);
-                                var changedEvent = await _instructionBoundary
-                                                        .ApplyToolRoundUpdateAsync(deferred.Select(candidate =>
-                                                                                   roundRecords
-                                                                                       [candidate.RoundCall.Call.Id])
-                                                                     .ToArray(), cancellationToken)
-                                                        .ConfigureAwait(false);
+                                var changedEvent =
+                                    await _instructionBoundary
+                                          .ApplyToolRoundUpdateAsync(deferred.Select(candidate =>
+                                                                                roundRecords[candidate.RoundCall.Call.Id])
+                                                                            .ToArray(),
+                                                                     cancellationToken).ConfigureAwait(false);
                                 await PublishInstructionChangedAsync(changedEvent, cancellationToken)
                                    .ConfigureAwait(false);
                                 instructionDeferralsSinceExecution++;
@@ -599,8 +592,7 @@ public sealed class AgentLoop
                             await _executionCheckpoint(_toolCallRecords.Select(call => call.Snapshot()).ToArray(),
                                                        cancellationToken).ConfigureAwait(false);
                         await PublishEventAsync(HostEventKind.ToolStarted, item.RoundCall.Preparation!,
-                                                cancellationToken)
-                           .ConfigureAwait(false);
+                                                cancellationToken).ConfigureAwait(false);
                         cancellationToken.ThrowIfCancellationRequested();
                     }
                     catch (Exception)
@@ -700,8 +692,7 @@ public sealed class AgentLoop
                     MarkRecordState(roundRecords, item.RoundCall.Call.Id, ToolCallExecutionState.ConfirmedResult);
                     await PublishEventAsync(HostEventKind.ToolFinished,
                                             new ToolExecutionOutcome(item.RoundCall.Preparation!, result),
-                                            cancellationToken)
-                       .ConfigureAwait(false);
+                                            cancellationToken).ConfigureAwait(false);
                 }
 
                 if (dispatchDeferred)
@@ -755,8 +746,7 @@ public sealed class AgentLoop
         if (_recorder is null) return await PublishRunFinishedAsync(result).ConfigureAwait(false);
         try
         {
-            await _recorder.CompleteAsync(result, _context.Messages, _context.State, CancellationToken.None)
-                           .ConfigureAwait(false);
+            await _recorder.CompleteAsync(result, _context.Messages, CancellationToken.None).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -1016,7 +1006,6 @@ public sealed class AgentLoop
 
         if (!_context.RequiresCompaction(definitions)) return false;
 
-        var before       = _context.EstimateViewTokens();
         var foldMessages = _context.BuildCompactionMessages(definitions);
         if (foldMessages.Count == 0) return false;
 
@@ -1033,23 +1022,34 @@ public sealed class AgentLoop
             // 摘要按自身输入校准并累计 usage，但内部文本不得作为回答展示。
             var estimatedSummaryTokens = TokenEstimator.EstimateMessages(foldMessages);
             summary = await RequestAssistantMessageAsync(summaryRequest, cancellationToken, estimatedSummaryTokens,
-                                                         false)
-               .ConfigureAwait(false);
+                                                         false).ConfigureAwait(false);
             if (summary.ToolCalls is { Count: > 0 })
-                throw new InvalidOperationException("The compaction summary unexpectedly requested tools.");
+            {
+                _context.MarkCompactionAttempted(CompactionFailureReason.ToolCallsNotAllowed);
+                await PublishCompactionFailureAsync(cancellationToken).ConfigureAwait(false);
+                return false;
+            }
         }
         catch (OperationCanceledException)
         {
             throw;
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            // 锁定失败尝试直到对话增长，防止原地反复请求摘要。
-            _context.MarkCompactionAttempted();
+            _context.MarkCompactionAttempted(ex is InvalidDataException
+                                                 ? CompactionFailureReason.IncompleteResponse
+                                                 : CompactionFailureReason.ModelRequestFailed);
+            await PublishCompactionFailureAsync(cancellationToken).ConfigureAwait(false);
             return false;
         }
 
-        if (!_context.TryApplyCompaction(summary.Content)) return false;
+        // 摘要 usage 可能更新校准；前后估算使用同一口径。
+        var before = _context.EstimateViewTokens();
+        if (!_context.TryApplyCompaction(summary.Content))
+        {
+            await PublishCompactionFailureAsync(cancellationToken).ConfigureAwait(false);
+            return false;
+        }
 
         var after  = _context.EstimateViewTokens();
         var change = new ContextChange(before, after);
@@ -1058,6 +1058,18 @@ public sealed class AgentLoop
             await _recorder.RecordCompactionAsync(change, cancellationToken).ConfigureAwait(false);
 
         return true;
+    }
+
+    /// <summary>
+    ///     <para>向宿主和同一权威日志发布具体拒绝原因，不泄露模型内部正文。</para>
+    ///     <para>Publishes the rejection reason to the host and the same authoritative log without internal model text.</para>
+    /// </summary>
+    private async Task PublishCompactionFailureAsync(CancellationToken cancellationToken)
+    {
+        var reason = _context.LastCompactionFailure;
+        await PublishEventAsync(HostEventKind.CompactionFailed, reason, cancellationToken).ConfigureAwait(false);
+        if (_recorder is not null)
+            await _recorder.RecordCompactionFailedAsync(reason, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -1093,11 +1105,13 @@ public sealed class AgentLoop
                                                                  bool                  publishTextDeltas)
     {
         var accumulator = new StreamAccumulator();
+        var ended       = false;
 
         await foreach (var @event in _model.CompleteAsync(request, cancellationToken))
         {
             cancellationToken.ThrowIfCancellationRequested();
             accumulator.Append(@event);
+            if (@event.Kind == ChatStreamEventKind.End) ended = true;
             if (publishTextDeltas && @event.Kind == ChatStreamEventKind.ContentDelta)
                 await PublishEventAsync(HostEventKind.AssistantTextDelta, @event.ContentDelta, cancellationToken)
                    .ConfigureAwait(false);
@@ -1106,7 +1120,7 @@ public sealed class AgentLoop
         accumulator.Finish();
 
         // 摘要与普通请求共用 usage 审计路径，避免漏计摘要开销。
-        if (accumulator.InputTokens is not null  ||
+        if (accumulator.InputTokens is not null ||
             accumulator.OutputTokens is not null ||
             accumulator.FinishReason is not null)
         {
@@ -1129,6 +1143,14 @@ public sealed class AgentLoop
         // 无可靠输入 usage 时保持已有校准，不把缺失值当作实测。
         if (accumulator.InputTokens is { } actualInputTokens)
             _context.RecordModelUsage(estimatedPromptTokens, actualInputTokens);
+
+        if (!publishTextDeltas &&
+            (!ended ||
+             (accumulator.ToolCalls.Count == 0 &&
+              accumulator.FinishReason is { } reason &&
+              !string.Equals(reason, "stop", StringComparison.OrdinalIgnoreCase))))
+            throw
+                new InvalidDataException("Compaction response was incomplete or stopped without a usable completion.");
 
         return ChatMessage.Assistant(accumulator.Content, accumulator.ToolCalls, accumulator.Reasoning);
     }
@@ -1343,7 +1365,7 @@ public sealed class AgentLoop
 
             case PermissionDecision.Ask :
                 var approvalProvider = _approver ?? throw new InvalidOperationException(
-                     "An approval provider is required when the permission engine returns Ask.");
+                 "An approval provider is required when the permission engine returns Ask.");
                 await PublishEventAsync(HostEventKind.ApprovalRequested, preparation, cancellationToken)
                    .ConfigureAwait(false);
                 var action = await approvalProvider.PromptAsync(preparation, cancellationToken);
@@ -1374,8 +1396,7 @@ public sealed class AgentLoop
                         await RecordPermissionAsync(preparation, decision, userDenied.Reason, cancellationToken)
                            .ConfigureAwait(false);
                         await PublishResolutionAsync(decision, ApprovalAction.Deny, userDenied.Reason,
-                                                     cancellationToken)
-                           .ConfigureAwait(false);
+                                                     cancellationToken).ConfigureAwait(false);
                         return userDenied;
                 }
 
@@ -1399,8 +1420,7 @@ public sealed class AgentLoop
         PermissionDecision decision, ApprovalAction? action, string outcome, CancellationToken cancellationToken)
     {
         await PublishEventAsync(HostEventKind.ApprovalResolved, new ApprovalResolution(decision, action, outcome),
-                                cancellationToken)
-           .ConfigureAwait(false);
+                                cancellationToken).ConfigureAwait(false);
     }
 
     private async Task RecordPermissionAsync(ToolPreparation   preparation, PermissionDecision decision, string outcome,

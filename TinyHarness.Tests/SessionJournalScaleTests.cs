@@ -34,8 +34,7 @@ public class SessionJournalScaleTests
         var scale1000  = await RunScaleAsync(1_000);
         var scale10000 = await RunScaleAsync(10_000);
         var scales     = new[] { scale100, scale1000, scale10000 };
-        var report = new JournalScaleReport(
-                                            DateTimeOffset.UtcNow,
+        var report = new JournalScaleReport(DateTimeOffset.UtcNow,
                                             CreateEnvironment(),
                                             scales,
                                             warmup.MedianAppendAllocatedBytes,
@@ -47,8 +46,8 @@ public class SessionJournalScaleTests
         Assert.That(scale10000.MedianAppendAllocatedBytes,
                     Is.LessThanOrEqualTo(scale100.MedianAppendAllocatedBytes * 4),
                     "10000-message allocation exceeded 4x the 100-message allocation");
-        Assert.That(scales.Max(scale => scale.Appends.Max(item => item.FileBytes) -
-                                        scales.Min(scale => scale.Appends.Min(item => item.FileBytes))),
+        Assert.That(scales.Max(scale =>
+            scale.Appends.Max(item => item.FileBytes) - scales.Min(scale => scale.Appends.Min(item => item.FileBytes))),
                     Is.LessThanOrEqualTo(4),
                     "append bytes depended on history size beyond sequence digits");
         Assert.That(scale10000.RecoveryMilliseconds, Is.LessThanOrEqualTo(RecoveryLimitMs),
@@ -99,14 +98,13 @@ public class SessionJournalScaleTests
             }
 
             var checkpointMessages = context.Messages.ToArray();
-            context.Restore(checkpointMessages, new StructuredState { Goal = "scale checkpoint" },
+            context.Restore(checkpointMessages, new CompactionState { Summary = "scale checkpoint" },
                             true, 1, 2);
             var checkpointBeforeBytes     = new FileInfo(writer.SnapshotPath).Length;
             var checkpointBeforeAllocated = GC.GetTotalAllocatedBytes(true);
             var checkpointStarted         = Stopwatch.GetTimestamp();
             await writer.CommitAsync(session, context, CancellationToken.None);
-            var checkpoint = new JournalMeasurement(
-                                                    writer.CommitSequence,
+            var checkpoint = new JournalMeasurement(writer.CommitSequence,
                                                     Stopwatch.GetElapsedTime(checkpointStarted,
                                                                              Stopwatch.GetTimestamp())
                                                              .TotalMilliseconds,
@@ -132,7 +130,8 @@ public class SessionJournalScaleTests
                         Text      = Message(i)
                     };
                     records.Add(new SessionLogRecord(string.Empty, "history",
-                                                     JsonSerializer.SerializeToElement(item,
+                                                     JsonSerializer.SerializeToElement(
+                                                              item,
                                                               SessionHistoryJsonContext.Default.SessionHistoryItem)));
                 }
 
@@ -164,8 +163,7 @@ public class SessionJournalScaleTests
                 var historyPageMilliseconds =
                     Stopwatch.GetElapsedTime(pageStarted, Stopwatch.GetTimestamp()).TotalMilliseconds;
                 var historyPageAllocated = GC.GetTotalAllocatedBytes(true) - beforePageAllocated;
-                historyPage = new JournalHistoryPageResult(
-                                                           historyAppendMilliseconds,
+                historyPage = new JournalHistoryPageResult(historyAppendMilliseconds,
                                                            historyAppendAllocated,
                                                            historyAppendFileBytes,
                                                            appendBatchCount,
@@ -177,13 +175,14 @@ public class SessionJournalScaleTests
                                                            page.UpperSequence,
                                                            page.NextCursor is not null,
                                                            page.Warning,
-                                                           page.Items.All(item => item.Kind ==
-                                                                              SessionHistoryKind.Process         &&
-                                                                              item.Text?.Length == MessageLength &&
-                                                                              item.Id.Length    > 0              &&
-                                                                              item.Sequence     > 0              &&
-                                                                              item.TurnId       == turnId        &&
-                                                                              item.RunId        == runId));
+                                                           page.Items.All(item =>
+                    item.Kind ==
+                    SessionHistoryKind.Process &&
+                    item.Text?.Length == MessageLength &&
+                    item.Id.Length    > 0 &&
+                    item.Sequence     > 0 &&
+                    item.TurnId       == turnId &&
+                    item.RunId        == runId));
             }
 
             var beforeRecoveryAllocated = GC.GetTotalAllocatedBytes(true);
@@ -194,8 +193,7 @@ public class SessionJournalScaleTests
                 Stopwatch.GetElapsedTime(recoveryStarted, Stopwatch.GetTimestamp()).TotalMilliseconds;
             var recoveryAllocated = GC.GetTotalAllocatedBytes(true) - beforeRecoveryAllocated;
 
-            return new JournalScaleResult(
-                                          scale,
+            return new JournalScaleResult(scale,
                                           sessionId,
                                           finalBytes,
                                           measurements,
@@ -237,8 +235,7 @@ public class SessionJournalScaleTests
         return ordered[ordered.Length / 2];
     }
 
-    private static JournalEnvironment CreateEnvironment() => new(
-                                                                 Environment.OSVersion.VersionString,
+    private static JournalEnvironment CreateEnvironment() => new(Environment.OSVersion.VersionString,
                                                                  RuntimeInformation.ProcessArchitecture.ToString(),
                                                                  "10.0.401",
                                                                  RuntimeInformation.FrameworkDescription,

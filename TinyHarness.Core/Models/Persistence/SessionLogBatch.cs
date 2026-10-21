@@ -1,4 +1,5 @@
 using System.Text.Json;
+using TinyHarness.Core.Models.Context;
 using TinyHarness.Core.Models.Session;
 
 namespace TinyHarness.Core.Models.Persistence;
@@ -36,10 +37,10 @@ public sealed record SessionLogRun(string TurnId, PersistedRun Run);
 public sealed record SessionLogMessage(PersistedMessage Message);
 
 public sealed record SessionLogCheckpoint(
-    string? StateJson,
-    bool    HasState,
-    int     FoldStartMessageIndex,
-    int     FoldEndMessageIndex);
+    CompactionState? State,
+    bool             HasState,
+    int              FoldStartMessageIndex,
+    int              FoldEndMessageIndex);
 
 public sealed record SessionLogSessionState(
     DateTimeOffset? InspectionAcknowledgedUtc,

@@ -1,6 +1,7 @@
 using System.Buffers;
 using System.Text.Json;
 using TinyHarness.Core.Exceptions;
+using TinyHarness.Core.Models.Context;
 using TinyHarness.Core.Models.Persistence;
 using TinyHarness.Core.Models.ProjectInstructions;
 
@@ -261,7 +262,8 @@ internal static class SessionLogScanner
     {
         if (batch.Format != SessionLogFormat.FormatName)
             throw new SessionStoreException($"Session log '{path}' uses unknown format '{batch.Format}'.");
-        if (batch.SessionId != sessionId || batch.Sequence != sequence ||
+        if (batch.SessionId != sessionId ||
+            batch.Sequence != sequence ||
             batch.BatchId   != $"{sessionId}:{sequence:D20}")
             throw new
                 SessionStoreException($"Session log '{path}' has a duplicate, mismatched, or out-of-order batch at sequence {sequence}.");
@@ -279,7 +281,8 @@ internal static class SessionLogScanner
         for (var i = 0; i < batch.Records.Count; i++)
         {
             var record = batch.Records[i];
-            if (record is null                         || record.Id != $"{sessionId}:{sequence:D20}:{i:D4}" ||
+            if (record is null ||
+                record.Id != $"{sessionId}:{sequence:D20}:{i:D4}" ||
                 string.IsNullOrWhiteSpace(record.Kind) ||
                 record.Payload.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
                 throw new
@@ -355,17 +358,29 @@ internal static class SessionLogScanner
                         string.IsNullOrWhiteSpace(instruction.Revision) ||
                         string.IsNullOrWhiteSpace(instruction.TurnId) ||
                         string.IsNullOrWhiteSpace(instruction.RunId) ||
-                        string.IsNullOrWhiteSpace(instruction.Reason) || instruction.Snapshot is null ||
+                        string.IsNullOrWhiteSpace(instruction.Reason) ||
+                        instruction.Snapshot is null ||
                         instruction.CanonicalMessageIndex is < 0)
                         throw new
                             SessionStoreException($"Session log '{path}' contains an invalid project-instructions record.");
                     break;
                 case "checkpoint" :
+                    throw new
+                        SessionStoreException("Legacy structured-state compaction checkpoints are unsupported; original data was not changed.");
+                case "compaction-checkpoint" :
                     RequireObject(record.Payload, "checkpoint payload");
                     RequireBoolean(record.Payload, "hasState");
                     RequireInteger(record.Payload, "foldStartMessageIndex");
                     RequireInteger(record.Payload, "foldEndMessageIndex");
-                    RequireNullableString(record.Payload, "stateJson");
+                    var checkpoint = record.Payload.Deserialize(SessionLogJsonContext.Default.SessionLogCheckpoint)
+                                  ?? throw new JsonException("missing compaction checkpoint");
+                    if (checkpoint.HasState &&
+                        (checkpoint.State is null ||
+                         RequiredString(Required(record.Payload, "state"), "schema") !=
+                                                CompactionState.CurrentSchema ||
+                         string.IsNullOrWhiteSpace(checkpoint.State.Summary) ||
+                         checkpoint.State.RetainedUserMessages is null))
+                        throw new SessionStoreException("Unsupported or invalid compaction checkpoint schema.");
                     break;
                 case "session-state" :
                     RequireObject(record.Payload, "session-state payload");
@@ -382,8 +397,8 @@ internal static class SessionLogScanner
                 case "history" :
                     ValidateHistoryPayload(record.Payload);
                     if (RequiredString(record.Payload, "sessionId") != batch.SessionId ||
-                        RequiredString(record.Payload, "id")        != record.Id       ||
-                        RequiredInt64(record.Payload, "sequence")   != batch.Sequence  ||
+                        RequiredString(record.Payload, "id")        != record.Id ||
+                        RequiredInt64(record.Payload, "sequence")   != batch.Sequence ||
                         string.IsNullOrWhiteSpace(RequiredString(record.Payload, "kind")))
                         throw new
                             SessionStoreException($"Session log '{path}' contains an unbound history item at sequence {batch.Sequence}, record {index}.");
@@ -493,7 +508,8 @@ internal static class SessionLogScanner
 
     private static void RequireOptionalInteger(JsonElement element, string name)
     {
-        if (element.TryGetProperty(name, out var value) && value.ValueKind != JsonValueKind.Null &&
+        if (element.TryGetProperty(name, out var value) &&
+            value.ValueKind != JsonValueKind.Null &&
             !value.TryGetInt32(out _))
             throw new JsonException($"'{name}' must be a nullable integer");
     }

@@ -162,7 +162,7 @@ public sealed class SessionLogRunRecorder : IRunRecorder
             Outcome         = _redactor.Redact(outcome),
             ExecutionPolicy = _redactor.RedactNullable(preparation.ExecutionPolicy)
         };
-        var isDenied = decision == PermissionDecision.Deny                                         ||
+        var isDenied = decision == PermissionDecision.Deny ||
                        outcome.StartsWith("Permission denied", StringComparison.OrdinalIgnoreCase) ||
                        outcome.StartsWith("Blocked pending inspection", StringComparison.OrdinalIgnoreCase);
         if (!isDenied || pending is null)
@@ -276,6 +276,15 @@ public sealed class SessionLogRunRecorder : IRunRecorder
             AfterTokens  = change.AfterTokens
         }, cancellationToken);
 
+    /// <summary>
+    ///     <para>只记录压缩拒绝的固定原因，不保存内部摘要或异常正文。</para>
+    ///     <para>Records only the fixed compaction failure reason, excluding internal summaries and exception text.</para>
+    /// </summary>
+    public Task RecordCompactionFailedAsync(CompactionFailureReason reason, CancellationToken cancellationToken) =>
+        AppendAuditAsync(new AuditRecord
+                             { RunId = RunId, Kind = "context.compaction-failed", Outcome = reason.ToString() },
+                         cancellationToken);
+
     public Task RecordModelUsageAsync(
         int? inputTokens, int? outputTokens, string? finishReason, CancellationToken cancellationToken) =>
         AppendAuditAsync(new AuditRecord
@@ -320,7 +329,7 @@ public sealed class SessionLogRunRecorder : IRunRecorder
         await PublishHistoryItemsAsync(appended, cancellationToken).ConfigureAwait(false);
     }
 
-    public async Task CompleteAsync(AgentResult result, IReadOnlyList<ChatMessage> messages, StructuredState state,
+    public async Task CompleteAsync(AgentResult       result, IReadOnlyList<ChatMessage> messages,
                                     CancellationToken cancellationToken)
     {
         var records = new List<SessionLogRecord>

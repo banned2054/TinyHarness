@@ -40,8 +40,7 @@ public class ChatSessionTests
                                            IHostEventSink?             events          = null,
                                            Func<string, IRunRecorder>? recorderFactory = null,
                                            int                         maxSteps        = 10) =>
-        new(
-            Path.Combine(Path.GetTempPath(), "tinyharness-session-tests"),
+        new(Path.Combine(Path.GetTempPath(), "tinyharness-session-tests"),
             new SessionModelIdentity("test-model", "https://example.invalid/v1",
                                      ChatApiKind.ChatCompletions),
             Options(maxSteps),
@@ -153,8 +152,7 @@ public class ChatSessionTests
 
         var rejected =
             await TestAssert.ThrowsAsync<InvalidOperationException>(() =>
-                                                                        host.SubmitTurnAsync("second",
-                                                                            CancellationToken.None));
+                host.SubmitTurnAsync("second", CancellationToken.None));
         Assert.That(rejected.Message, Does.Contain("active run"));
 
         client.Open();
@@ -414,9 +412,9 @@ public class ChatSessionTests
                                        new ToolRegistry([tool]),
                                        SystemPrompt,
                                        sessionWriterFactory : id =>
-                                           new SessionStoreWriter(dir.Root, id,
-                                                                  new Dictionary<string, string>(StringComparer.Ordinal)
-                                                                      { ["MY_API_KEY"] = secret }));
+            new SessionStoreWriter(dir.Root, id,
+                                   new Dictionary<string, string>(StringComparer.Ordinal)
+                                       { ["MY_API_KEY"] = secret }));
 
         var run = await host.SubmitTurnAsync($"use {secret}", CancellationToken.None);
         Assert.That(run.Result!.Status, Is.EqualTo(AgentStatus.Completed));
@@ -477,15 +475,15 @@ public class ChatSessionTests
     {
         var options = Options() with { Model = "other-model" };
 
-        TestAssert.Throws<ArgumentException>(() => new ChatSessionHost(Path.Combine(Path.GetTempPath(),
-                                                                           "tinyharness-session-tests"),
-                                                                       new SessionModelIdentity("test-model",
-                                                                           "https://example.invalid/v1",
-                                                                           ChatApiKind.ChatCompletions),
-                                                                       options,
-                                                                       new FakeChatClient(),
-                                                                       new ToolRegistry([]),
-                                                                       SystemPrompt));
+        TestAssert.Throws<ArgumentException>(() =>
+            new ChatSessionHost(Path.Combine(Path.GetTempPath(), "tinyharness-session-tests"),
+                                new SessionModelIdentity("test-model",
+                                                         "https://example.invalid/v1",
+                                                         ChatApiKind.ChatCompletions),
+                                options,
+                                new FakeChatClient(),
+                                new ToolRegistry([]),
+                                SystemPrompt));
     }
 
     [Test]
@@ -597,7 +595,7 @@ public class ChatSessionTests
             Task.CompletedTask;
 
         public Task CompleteAsync(
-            AgentResult       result, IReadOnlyList<ChatMessage> messages, StructuredState state,
+            AgentResult       result, IReadOnlyList<ChatMessage> messages,
             CancellationToken cancellationToken)
         {
             CompletedResults.Add(result);

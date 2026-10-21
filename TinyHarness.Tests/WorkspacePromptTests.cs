@@ -19,7 +19,10 @@ namespace TinyHarness.Tests;
 
 /// <summary>
 ///     <para>检查内置提示词在工具轮、多轮、压缩和续聊中的接入，不评估模型的语义遵循能力。</para>
-///     <para>Checks built-in prompt delivery across tools, turns, compaction and resume, without evaluating model adherence.</para>
+///     <para>
+///         Checks built-in prompt delivery across tools, turns, compaction and resume, without evaluating model
+///         adherence.
+///     </para>
 /// </summary>
 public class WorkspacePromptTests
 {
@@ -35,7 +38,7 @@ public class WorkspacePromptTests
         client.Enqueue(FakeChatClient.ToolCall("read_file", """{"path":"sample.txt"}"""));
         client.Enqueue(FakeChatClient.Text("scripted assessment"));
         var tools = new ToolRegistry([new ReadFileTool(workspace.Workspace)]);
-        var loop = new AgentLoop(client, tools, Options(), new PermissionEngine(workspace.Root), null);
+        var loop  = new AgentLoop(client, tools, Options(), new PermissionEngine(workspace.Root), null);
 
         var result = await loop.RunAsync(WorkspacePrompts.Current, "只分析这个文件，不修改。", CancellationToken.None);
 
@@ -48,23 +51,23 @@ public class WorkspacePromptTests
         }
 
         Assert.That(client.RequestLog[1].Messages.Any(message =>
-                        message.Role == ChatRole.Tool && message.Content.Contains("file evidence")), Is.True);
+            message.Role == ChatRole.Tool && message.Content.Contains("file evidence")), Is.True);
     }
 
     [Test]
     public async Task Chat_RoundTripKeepsCurrentPromptAndSeparatelySourcedProjectRules()
     {
         using var workspace = new TestTempDir();
-        using var store = new TestTempDir();
+        using var store     = new TestTempDir();
         workspace.WriteFile("AGENTS.md", "PROJECT_RULE_FOR_PROMPT_TEST");
         workspace.WriteFile("sample.txt", "file evidence");
         const string prompt = WorkspacePrompts.Current;
-        var loader = new ProjectInstructionLoader(workspace.Workspace);
-        var client = new FakeChatClient();
+        var          loader = new ProjectInstructionLoader(workspace.Workspace);
+        var          client = new FakeChatClient();
         client.Enqueue(FakeChatClient.ToolCall("read_file", """{"path":"sample.txt"}"""));
         client.Enqueue(FakeChatClient.Text("scripted assessment"));
         client.Enqueue(FakeChatClient.Text("scripted follow-up"));
-        var tools = new ToolRegistry([new ReadFileTool(workspace.Workspace)]);
+        var    tools = new ToolRegistry([new ReadFileTool(workspace.Workspace)]);
         string sessionId;
         using (var cancellation = new ChatCancellation(false))
         using (var console = new ChatSessionConsole(async token =>
@@ -72,8 +75,8 @@ public class WorkspacePromptTests
                    var initial = await loader.LoadAsync(null, [], token);
                    return new ChatSessionHost(workspace.Root, Identity, Options(), client, tools, prompt,
                                               new PermissionEngine(workspace.Root),
-                                              sessionWriterFactory: id => new SessionStoreWriter(store.Root, id),
-                                              instructionLoader: loader, initialInstructions: initial);
+                                              sessionWriterFactory : id => new SessionStoreWriter(store.Root, id),
+                                              instructionLoader : loader, initialInstructions : initial);
                }, new StringReader("只分析，不修改。\n继续讨论。\n"), new StringWriter(), cancellation))
         {
             Assert.That(await console.RunAsync(), Is.EqualTo(0));
@@ -90,16 +93,16 @@ public class WorkspacePromptTests
         }
 
         using var writer = await SessionStoreWriter.OpenExistingAsync(store.Root, sessionId, null,
-                                                                       CancellationToken.None);
+                                                                      CancellationToken.None);
         var snapshot = writer.LoadedSnapshot!;
         Assert.That(snapshot.Conversation!.Messages[0].Content, Is.EqualTo(prompt));
-        var canonical = snapshot.Conversation.Messages.ToArray();
-        var restored = SessionResume.Restore(snapshot, workspace.Root, Identity, prompt, new ContextOptions());
+        var canonical     = snapshot.Conversation.Messages.ToArray();
+        var restored      = SessionResume.Restore(snapshot, workspace.Root, Identity, prompt, new ContextOptions());
         var resumedClient = new FakeChatClient();
         resumedClient.Enqueue(FakeChatClient.Text("scripted resumed answer"));
         using var host = new ChatSessionHost(restored.Session, restored.Context, Options(), resumedClient, tools,
-                                              prompt, new PermissionEngine(workspace.Root), sessionWriter: writer,
-                                              instructionLoader: loader);
+                                             prompt, new PermissionEngine(workspace.Root), sessionWriter : writer,
+                                             instructionLoader : loader);
 
         var run = await host.SubmitTurnAsync("上次读到了什么？", CancellationToken.None);
 
@@ -107,8 +110,9 @@ public class WorkspacePromptTests
         AssertPrompt(resumedClient.RequestLog.Single(), prompt);
         Assert.That(restored.Context.Messages.Take(canonical.Length).Select(message => message.Content),
                     Is.EqualTo(canonical.Select(message => message.Content)));
-        Assert.That(resumedClient.RequestLog.Single().Messages.Count(message =>
-                        message.Content.Contains("PROJECT_RULE_FOR_PROMPT_TEST")), Is.EqualTo(1));
+        Assert.That(resumedClient.RequestLog.Single().Messages
+                                 .Count(message => message.Content.Contains("PROJECT_RULE_FOR_PROMPT_TEST")),
+                    Is.EqualTo(1));
     }
 
     [Test]
@@ -128,7 +132,7 @@ public class WorkspacePromptTests
         var canonical = context.Messages.ToArray();
         Assert.That(context.RequiresCompaction([]), Is.True);
         Assert.That(context.BuildCompactionMessages([]), Is.Not.Empty);
-        Assert.That(context.TryApplyCompaction("""{"goal":"只分析，不修改。","constraints":["不要修改文件"]}"""),
+        Assert.That(context.TryApplyCompaction("只分析，不修改；不要修改文件。"),
                     Is.True);
         Assert.That(context.Messages, Is.EqualTo(canonical));
         var view = context.BuildModelView();
@@ -152,18 +156,21 @@ public class WorkspacePromptTests
         var snapshot = new PersistedSession
         {
             WorkspaceRoot = workspace.Root,
-            Model = Identity,
+            Model         = Identity,
             Conversation = new PersistedConversation
             {
-                Messages = kind == "empty" ? [] :
-                [
-                    new PersistedMessage
-                    {
-                        Role = kind == "forged-role" ? nameof(ChatRole.User) : nameof(ChatRole.System),
-                        Content = kind == "unknown" ? "unrecognized prompt" :
-                            WorkspacePrompts.Current + (kind == "changed-current" ? " changed" : "")
-                    }
-                ]
+                Messages = kind == "empty"
+                    ? []
+                    :
+                    [
+                        new PersistedMessage
+                        {
+                            Role = kind == "forged-role" ? nameof(ChatRole.User) : nameof(ChatRole.System),
+                            Content = kind == "unknown"
+                                ? "unrecognized prompt"
+                                : WorkspacePrompts.Current + (kind == "changed-current" ? " changed" : "")
+                        }
+                    ]
             }
         };
 
@@ -177,8 +184,8 @@ public class WorkspacePromptTests
     /// </summary>
     private static AgentOptions Options() => new()
     {
-        Model = Identity.ModelId,
-        MaxAgentSteps = 10,
+        Model                     = Identity.ModelId,
+        MaxAgentSteps             = 10,
         DefaultToolTimeoutSeconds = 30
     };
 

@@ -63,8 +63,7 @@ internal sealed class ConsoleHostEventSink(
             case HostEventKind.ToolStarted when @event.Payload is ToolPreparation started :
                 await CloseOpenLineAsync(cancellationToken).ConfigureAwait(false);
                 await _output.WriteAsync(TerminalDisplay.Format($"tool: {started.Summary}", _redactor).AsMemory(),
-                                         cancellationToken)
-                             .ConfigureAwait(false);
+                                         cancellationToken).ConfigureAwait(false);
                 _lineOpen     = true;
                 _toolLineOpen = true;
                 break;
@@ -90,14 +89,17 @@ internal sealed class ConsoleHostEventSink(
                 var inputTokens  = (usage.InputTokens  ?? 0).ToString("N0");
                 var outputTokens = (usage.OutputTokens ?? 0).ToString("N0");
                 await WriteLineAsync($"usage: {inputTokens} in / {outputTokens} out tokens{summaryNote}",
-                                     cancellationToken)
-                   .ConfigureAwait(false);
+                                     cancellationToken).ConfigureAwait(false);
                 break;
 
             case HostEventKind.CompactionApplied when @event.Payload is ContextChange change :
                 await WriteLineAsync($"Context: {change.BeforeTokens:N0} -> " +
                                      $"{change.AfterTokens:N0} tokens after compaction",
-                                     cancellationToken)
+                                     cancellationToken).ConfigureAwait(false);
+                break;
+
+            case HostEventKind.CompactionFailed when @event.Payload is CompactionFailureReason reason :
+                await WriteLineAsync($"Context compaction not applied: {reason}", cancellationToken)
                    .ConfigureAwait(false);
                 break;
 

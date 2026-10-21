@@ -168,5 +168,11 @@ public enum HostEventKind
     ///         metadata-only <see cref="ProjectInstructionsChanged" /> summary and never includes rule text.
     ///     </para>
     /// </summary>
-    ProjectInstructionsChanged = 13
+    ProjectInstructionsChanged = 13,
+
+    /// <summary>
+    ///     <para>压缩未提交；负载为不含模型正文的 CompactionFailureReason。</para>
+    ///     <para>Compaction was not committed; payload is CompactionFailureReason without model text.</para>
+    /// </summary>
+    CompactionFailed = 14
 }

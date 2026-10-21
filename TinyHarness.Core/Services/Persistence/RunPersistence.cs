@@ -33,6 +33,13 @@ public interface IRunRecorder
 
     Task RecordCompactionAsync(ContextChange change, CancellationToken cancellationToken);
 
+    /// <summary>
+    ///     <para>记录不含模型正文的压缩拒绝原因。</para>
+    ///     <para>Records a compaction rejection reason without model text.</para>
+    /// </summary>
+    Task RecordCompactionFailedAsync(CompactionFailureReason reason, CancellationToken cancellationToken) =>
+        Task.CompletedTask;
+
     Task RecordModelUsageAsync(
         int? inputTokens, int? outputTokens, string? finishReason, CancellationToken cancellationToken);
 
@@ -43,7 +50,7 @@ public interface IRunRecorder
     Task RecordAssistantAsync(ChatMessage assistantMessage, CancellationToken cancellationToken) =>
         Task.CompletedTask;
 
-    Task CompleteAsync(AgentResult       result, IReadOnlyList<ChatMessage> messages, StructuredState state,
+    Task CompleteAsync(AgentResult       result, IReadOnlyList<ChatMessage> messages,
                        CancellationToken cancellationToken);
 }
 
@@ -63,10 +70,8 @@ internal sealed class SecretRedactor
     public SecretRedactor(IReadOnlyDictionary<string, string>? knownSecrets)
     {
         _knownSecrets = (knownSecrets ?? new Dictionary<string, string>(StringComparer.Ordinal)).Values
-           .Where(secret => !string.IsNullOrEmpty(secret))
-           .Distinct(StringComparer.Ordinal)
-           .OrderByDescending(secret => secret.Length)
-           .ToArray();
+           .Where(secret => !string.IsNullOrEmpty(secret)).Distinct(StringComparer.Ordinal).OrderByDescending(secret =>
+               secret.Length).ToArray();
     }
 
     public string Redact(string value)
@@ -94,17 +99,6 @@ internal sealed class SecretRedactor
         return value;
     }
 
-    public StructuredState Redact(StructuredState state) => new()
-    {
-        Goal               = Redact(state.Goal),
-        Constraints        = state.Constraints.Select(Redact).ToArray(),
-        Decisions          = state.Decisions.Select(Redact).ToArray(),
-        FilesInspected     = state.FilesInspected.Select(Redact).ToArray(),
-        FilesModified      = state.FilesModified.Select(Redact).ToArray(),
-        CommandsAndResults = state.CommandsAndResults.Select(Redact).ToArray(),
-        PendingWork        = state.PendingWork.Select(Redact).ToArray()
-    };
-
     public ToolCallRecord Redact(ToolCallRecord record) => new()
     {
         CallId           = Redact(record.CallId),
@@ -126,8 +120,8 @@ internal sealed class SecretRedactor
         Name       = RedactNullable(message.Name),
         ToolCallId = RedactNullable(message.ToolCallId),
         ToolCalls = message.ToolCalls
-                          ?.Select(call => new ChatToolCall(Redact(call.Id), Redact(call.FunctionName),
-                                                            Redact(call.ArgumentsJson))).ToArray(),
+                          ?.Select(call =>
+                              new ChatToolCall(Redact(call.Id), Redact(call.FunctionName), Redact(call.ArgumentsJson))).ToArray(),
         // 检查投影中的 opaque 字段同样必须脱敏；此投影不能用于无损续聊。
         Reasoning = message.Reasoning?.Select(entry => new ReasoningContent(RedactNullable(entry.Text),
                                                                             RedactNullable(entry.ProtectedData),

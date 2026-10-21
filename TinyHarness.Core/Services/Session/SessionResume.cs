@@ -69,12 +69,12 @@ public static class SessionResume
     /// <remarks>
     ///     <para>
     ///         当前工作区、模型与协议身份须匹配快照，系统提示须与首条 system 消息完全一致。
-    ///         工具组、opaque 哈希、折叠边界、结构化状态与运行记录均须有效。
+    ///         工具组、opaque 哈希、折叠边界、交接摘要来源与运行记录均须有效。
     ///     </para>
     ///     <para>
     ///         The current workspace, model and protocol identity must match the snapshot;
     ///         the system prompt must exactly match its first system message. Tool groups, opaque hashes,
-    ///         fold boundaries, structured state and run records must be valid.
+    ///         fold boundaries, handoff sources and run records must be valid.
     ///     </para>
     /// </remarks>
     /// <param name="snapshot">
@@ -153,13 +153,9 @@ public static class SessionResume
                 Content    = persisted.Content ?? string.Empty,
                 ToolCallId = persisted.ToolCallId,
                 Name       = persisted.Name,
-                ToolCalls = persisted.ToolCalls?
-                                     .Select(call => new ChatToolCall(call.Id, call.Name, call.Arguments))
-                                     .ToArray(),
-                Reasoning = persisted.Reasoning?
-                                     .Select(entry => new ReasoningContent(entry.Text, entry.ProtectedData,
-                                                                           entry.ItemId))
-                                     .ToArray()
+                ToolCalls = persisted.ToolCalls?.Select(call => new ChatToolCall(call.Id, call.Name, call.Arguments)).ToArray(),
+                Reasoning = persisted.Reasoning?.Select(entry =>
+                    new ReasoningContent(entry.Text, entry.ProtectedData, entry.ItemId)).ToArray()
             });
         }
 
@@ -184,13 +180,7 @@ public static class SessionResume
 
         var needsInspection = PendingInspectionReason(snapshot, rewoundTail);
 
-        var state = StructuredState.Empty;
-        if (conversation.HasState &&
-            (string.IsNullOrWhiteSpace(conversation.StateJson) ||
-             !StructuredState.TryParse(conversation.StateJson, out state)))
-            throw new
-                SessionStoreException($"Stored session '{snapshot.Id}' is damaged: its compacted state cannot be parsed " +
-                                      "back, so the fold boundaries cannot be restored.");
+        var state = conversation.State ?? CompactionState.Empty;
 
         var context = new ConversationContext(contextOptions);
         try
@@ -233,8 +223,7 @@ public static class SessionResume
 
         var unknown               = new List<string>();
         var trailingRunHasRecords = snapshot.Turns.LastOrDefault()?.Runs.LastOrDefault()?.ToolCalls is { Count: > 0 };
-        foreach (var call in snapshot.Turns.SelectMany(turn => turn.Runs)
-                                     .SelectMany(run => run.ToolCalls ?? []))
+        foreach (var call in snapshot.Turns.SelectMany(turn => turn.Runs).SelectMany(run => run.ToolCalls ?? []))
         {
             if (!string.Equals(call.State, nameof(ToolCallExecutionState.UnknownResult), StringComparison.Ordinal))
                 continue;

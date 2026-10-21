@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using TinyHarness.Core.Models.Context;
 using System.Text;
 using TinyHarness.Core.Models.ChatCompletions;
 using TinyHarness.Core.Models.ProjectInstructions;
@@ -99,10 +100,10 @@ public sealed record PersistedConversation
     public IReadOnlyList<ProjectInstructionRecord> ProjectInstructionRecords { get; init; } = [];
 
     /// <summary>
-    ///     <para>压缩后的结构化状态 JSON；不脱敏，未发生压缩时为 null。</para>
-    ///     <para>The compacted structured-state JSON; unredacted and null before any compaction.</para>
+    ///     <para>已提交的交接摘要和原话来源；不脱敏，未压缩时为 null。</para>
+    ///     <para>The committed handoff and original-user sources; unredacted and null before compaction.</para>
     /// </summary>
-    public string? StateJson { get; init; }
+    public CompactionState? State { get; init; }
 
     public bool HasState { get; init; }
 

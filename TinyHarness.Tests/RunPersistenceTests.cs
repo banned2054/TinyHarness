@@ -19,17 +19,17 @@ public sealed class RunPersistenceTests
         var          redactor = new SecretRedactor(new Dictionary<string, string> { ["TEST_KEY"] = secret });
         var message = ChatMessage.Assistant("answer " + secret,
                                             [new ChatToolCall("call", "shell", $$"""{"password":"{{secret}}"}""")]);
-        var state = new StructuredState { Goal = "goal " + secret };
+        var summary = "handoff " + secret;
 
         var redactedMessage = redactor.Redact(message);
-        var redactedState   = redactor.Redact(state);
+        var redactedSummary = redactor.Redact(summary);
 
         Assert.That(redactedMessage.Content, Is.EqualTo("answer [REDACTED]"));
         using var arguments = JsonDocument.Parse(redactedMessage.ToolCalls![0].ArgumentsJson);
         Assert.That(arguments.RootElement.GetProperty("password").GetString(), Is.EqualTo("[REDACTED]"));
-        Assert.That(redactedState.Goal, Is.EqualTo("goal [REDACTED]"));
+        Assert.That(redactedSummary, Is.EqualTo("handoff [REDACTED]"));
         Assert.That(message.Content, Is.EqualTo("answer " + secret));
-        Assert.That(state.Goal, Is.EqualTo("goal "        + secret));
+        Assert.That(summary, Is.EqualTo("handoff "        + secret));
     }
 
     [TestCase("{\"value\":\"synthetic-\\u0073ecret\"}", "synthetic-secret", "{\"value\":\"[REDACTED]\"}")]
@@ -131,7 +131,7 @@ public sealed class RunPersistenceTests
         public Task RecordModelUsageAsync(int?              inputTokens, int? outputTokens, string? finishReason,
                                           CancellationToken cancellationToken) => Task.CompletedTask;
 
-        public Task CompleteAsync(AgentResult       result, IReadOnlyList<ChatMessage> messages, StructuredState state,
+        public Task CompleteAsync(AgentResult       result, IReadOnlyList<ChatMessage> messages,
                                   CancellationToken cancellationToken)
         {
             CompleteCalls++;

@@ -136,9 +136,11 @@ public class SessionCommandTests
                                             PatchChange.ConfirmedState)
                         ]
                     }
-                }.Select(item => new SessionLogRecord("", "history",
-                                                      JsonSerializer.SerializeToElement(item,
-                                                               SessionHistoryJsonContext.Default.SessionHistoryItem)))
+                }.Select(item =>
+                new SessionLogRecord("", "history",
+                                     JsonSerializer.SerializeToElement(
+                                              item,
+                                              SessionHistoryJsonContext.Default.SessionHistoryItem)))
                  .ToArray();
             await writer.AppendRecordsAsync(items, CancellationToken.None);
         }
@@ -167,8 +169,8 @@ public class SessionCommandTests
         {
             Conversation = new PersistedConversation
             {
-                Messages  = [new PersistedMessage { Role = nameof(ChatRole.User), Content = secret }],
-                StateJson = new StructuredState { Goal = secret }.ToJson()
+                Messages = [new PersistedMessage { Role = nameof(ChatRole.User), Content = secret }],
+                State    = new CompactionState { Summary = secret }
             }
         };
         DeleteJournal(session.Id, fixture.StoreDirectory);
@@ -363,11 +365,10 @@ public class SessionCommandTests
     {
         var records = new List<SessionLogRecord>
         {
-            new("", "identity", JsonSerializer.SerializeToElement(
-                                                                  new SessionLogIdentity(session.Id,
-                                                                           session.WorkspaceRoot, session.Model!,
-                                                                           session.CreatedUtc),
-                                                                  SessionLogJsonContext.Default.SessionLogIdentity))
+            new("", "identity",
+                JsonSerializer.SerializeToElement(
+                    new SessionLogIdentity(session.Id, session.WorkspaceRoot, session.Model!, session.CreatedUtc),
+                    SessionLogJsonContext.Default.SessionLogIdentity))
         };
         foreach (var turn in session.Turns)
         {
@@ -386,8 +387,8 @@ public class SessionCommandTests
                 records.Add(new SessionLogRecord("", "message", JsonSerializer.SerializeToElement(
                                                       new SessionLogMessage(message),
                                                       SessionLogJsonContext.Default.SessionLogMessage)));
-            records.Add(new SessionLogRecord("", "checkpoint", JsonSerializer.SerializeToElement(
-                                                  new SessionLogCheckpoint(conversation.StateJson,
+            records.Add(new SessionLogRecord("", "compaction-checkpoint", JsonSerializer.SerializeToElement(
+                                                  new SessionLogCheckpoint(conversation.State,
                                                                            conversation.HasState,
                                                                            conversation.FoldStartMessageIndex,
                                                                            conversation.FoldEndMessageIndex),
@@ -401,11 +402,15 @@ public class SessionCommandTests
         // CLI 读取测试直接构造完整日志批次，避免借用旧快照格式。
         var batch = new SessionLogBatch
         {
-            Format  = SessionLogFormat.FormatName, SessionId                = session.Id, Sequence = 1,
-            BatchId = SessionStoreWriter.BatchId(session.Id, 1), WrittenUtc = session.UpdatedUtc,
-            Records = records.Select((record, index) => record with
+            Format     = SessionLogFormat.FormatName,
+            SessionId  = session.Id,
+            Sequence   = 1,
+            BatchId    = SessionStoreWriter.BatchId(session.Id, 1),
+            WrittenUtc = session.UpdatedUtc,
+            Records = records.Select((record, index) =>
+            record with
             {
-                Id = SessionStoreWriter.RecordId(session.Id, 1, index)
+            Id = SessionStoreWriter.RecordId(session.Id, 1, index)
             }).ToArray()
         };
         await File.WriteAllTextAsync(Path.Combine(directory, session.Id + SessionStoreWriter.LogFileSuffix),

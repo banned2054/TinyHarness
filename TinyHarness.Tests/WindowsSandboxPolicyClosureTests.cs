@@ -271,8 +271,7 @@ public class WindowsSandboxPolicyClosureTests
                           root => string.Equals(root, dir.Root, StringComparison.OrdinalIgnoreCase));
         var writeEntries = policy.SpawnProfile.FileSystem.Entries
                                  .Where(entry => entry is { Access: "write", Path.ExplicitPath: not null })
-                                 .Select(entry => entry.Path.ExplicitPath)
-                                 .ToList();
+                                 .Select(entry => entry.Path.ExplicitPath).ToList();
         Assert.That(writeEntries, Does.Contain(extra.Root));
     }
 
@@ -286,20 +285,17 @@ public class WindowsSandboxPolicyClosureTests
         var policy = SandboxPolicyResolver.Resolve(SandboxPolicyKind.ReadOnly, dir.Root, env, [extra.Root]);
 
         Assert.That(policy.EffectiveWriteRoots, Is.EqualTo([extra.Root]));
-        Assert.That(policy.SpawnProfile.FileSystem.Entries
-                          .Where(entry => entry.Access == "write")
-                          .Select(entry => entry.Path.ExplicitPath)
-                          .ToList(), Is.EqualTo([extra.Root]));
+        Assert.That(policy.SpawnProfile.FileSystem.Entries.Where(entry => entry.Access == "write").Select(entry =>
+            entry.Path.ExplicitPath).ToList(), Is.EqualTo([extra.Root]));
     }
 
     [Test]
     public void SandboxPolicyResolver_RejectsRelativeAdditionalWriteRoot()
     {
         using var dir = new TestTempDir();
-        TestAssert.Throws<ArgumentException>(() => SandboxPolicyResolver.Resolve(SandboxPolicyKind.WorkspaceWrite,
-                                                      dir.Root,
-                                                      new Dictionary<string, string>(),
-                                                      ["relative-root"]));
+        TestAssert.Throws<ArgumentException>(() =>
+            SandboxPolicyResolver.Resolve(SandboxPolicyKind.WorkspaceWrite, dir.Root,
+                                          new Dictionary<string, string>(), ["relative-root"]));
     }
 
     // ---- 组合器：fail closed、身份稳定 ----
@@ -375,8 +371,7 @@ public class WindowsSandboxPolicyClosureTests
 
         var withoutRoot = WindowsSandboxComposer.Compose(baseSettings, workspace.Root).ExecutionPolicy.PolicyIdentity;
         var withRoot = WindowsSandboxComposer.Compose(baseSettings with { AdditionalWriteRoots = [extra.Root] },
-                                                      workspace.Root)
-                                             .ExecutionPolicy.PolicyIdentity;
+                                                      workspace.Root).ExecutionPolicy.PolicyIdentity;
         Assert.That(withRoot, Is.Not.EqualTo(withoutRoot));
     }
 
@@ -396,8 +391,7 @@ public class WindowsSandboxPolicyClosureTests
         };
 
         var error =
-            TestAssert.Throws<InvalidOperationException>(() => WindowsSandboxComposer
-                                                            .Compose(settings, workspace.Root));
+            TestAssert.Throws<InvalidOperationException>(() => WindowsSandboxComposer.Compose(settings, workspace.Root));
         TestAssert.Contains("refusing to fall back", error.Message, StringComparison.Ordinal);
     }
 
@@ -453,8 +447,7 @@ public class WindowsSandboxPolicyClosureTests
         };
 
         var error =
-            TestAssert.Throws<InvalidOperationException>(() => WindowsSandboxComposer
-                                                            .Compose(settings, workspace.Root));
+            TestAssert.Throws<InvalidOperationException>(() => WindowsSandboxComposer.Compose(settings, workspace.Root));
         TestAssert.Contains("sandbox home", error.Message, StringComparison.Ordinal);
     }
 
@@ -474,8 +467,7 @@ public class WindowsSandboxPolicyClosureTests
         };
 
         var error =
-            TestAssert.Throws<InvalidOperationException>(() => WindowsSandboxComposer
-                                                            .Compose(settings, workspace.Root));
+            TestAssert.Throws<InvalidOperationException>(() => WindowsSandboxComposer.Compose(settings, workspace.Root));
         TestAssert.Contains("setup executable", error.Message, StringComparison.Ordinal);
     }
 
@@ -497,8 +489,7 @@ public class WindowsSandboxPolicyClosureTests
 
         // 把沙箱 home 声明为附加写根会使所有可信路径可被篡改；错误信息必须点名命中的写根。
         var error =
-            TestAssert.Throws<InvalidOperationException>(() => WindowsSandboxComposer
-                                                            .Compose(settings, workspace.Root));
+            TestAssert.Throws<InvalidOperationException>(() => WindowsSandboxComposer.Compose(settings, workspace.Root));
         TestAssert.Contains(home.Root, error.Message, StringComparison.Ordinal);
     }
 
@@ -553,8 +544,8 @@ public class WindowsSandboxPolicyClosureTests
         var invalid = Path.Combine(dir.Root, "invalid.json");
         await File.WriteAllTextAsync(invalid,
                                      """{"settings":{"windowsSandbox":{"enabled":true,"policy":"unrestricted"}}}""");
-        await TestAssert.ThrowsAsync<InvalidDataException>(() => UserConfigStore
-                                                              .LoadAsync(invalid, CancellationToken.None));
+        await TestAssert.ThrowsAsync<InvalidDataException>(() =>
+            UserConfigStore.LoadAsync(invalid, CancellationToken.None));
     }
 
     private sealed class PolicyCaptureRecorder : IRunRecorder
@@ -596,7 +587,7 @@ public class WindowsSandboxPolicyClosureTests
             int? inputTokens, int? outputTokens, string? finishReason, CancellationToken cancellationToken) =>
             Task.CompletedTask;
 
-        public Task CompleteAsync(AgentResult       result, IReadOnlyList<ChatMessage> messages, StructuredState state,
+        public Task CompleteAsync(AgentResult       result, IReadOnlyList<ChatMessage> messages,
                                   CancellationToken cancellationToken) => Task.CompletedTask;
     }
 

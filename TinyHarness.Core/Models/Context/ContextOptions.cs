@@ -23,9 +23,11 @@ public sealed record ContextOptions
     public int ReservedOutputTokens { get; init; } = 8_000;
 
     /// <summary>
-    ///     触发压缩的总估算阈值。0 表示自动取 <see cref="ContextWindowTokens" />。
-    ///     Total estimated-token level that triggers compaction. Zero selects the
-    ///     automatic default equal to <see cref="ContextWindowTokens" />.
+    ///     <para>触发压缩的总估算阈值。0 表示自动取声明窗口的 90%。</para>
+    ///     <para>
+    ///         Total estimated-token level that triggers compaction. Zero selects the
+    ///         automatic default at 90% of <see cref="ContextWindowTokens" />.
+    ///     </para>
     /// </summary>
     public int CompactionThresholdTokens { get; init; }
 
@@ -37,6 +39,18 @@ public sealed record ContextOptions
     ///     compaction only affects the view sent to the model).
     /// </summary>
     public int ToolResultViewCharacters { get; init; } = 12_000;
+
+    /// <summary>
+    ///     <para>交接摘要的估算 token 上限，同时限制为可用窗口的四分之一。</para>
+    ///     <para>Estimated handoff-token cap, also limited to one quarter of the available window.</para>
+    /// </summary>
+    public int SummaryTokens { get; init; } = 2000;
+
+    /// <summary>
+    ///     <para>独立保留用户原话的估算预算，同时限制为可用窗口的八分之一。</para>
+    ///     <para>Independent estimated budget for user originals, limited to one eighth of the available window.</para>
+    /// </summary>
+    public int RetainedUserMessageTokens { get; init; } = 2000;
 
     /// <summary>
     ///     校验并返回自洽的选项；非法值抛出带上下文的异常。
@@ -63,6 +77,9 @@ public sealed record ContextOptions
         if (ToolResultViewCharacters < 16)
             throw new ArgumentOutOfRangeException(nameof(ToolResultViewCharacters),
                                                   "The tool-result view cap must be at least 16 characters.");
+
+        if (SummaryTokens             <= 0) throw new ArgumentOutOfRangeException(nameof(SummaryTokens));
+        if (RetainedUserMessageTokens < 0) throw new ArgumentOutOfRangeException(nameof(RetainedUserMessageTokens));
 
         return this;
     }

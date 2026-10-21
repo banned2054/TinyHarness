@@ -1,5 +1,4 @@
 using NUnit.Framework.Internal;
-using System.Text.Json.Nodes;
 using TinyHarness.Core.Models.Agent;
 using TinyHarness.Core.Models.ChatCompletions;
 using TinyHarness.Core.Models.Context;
@@ -12,18 +11,18 @@ namespace TinyHarness.Tests;
 
 /// <summary>
 ///     <para>
-///         上下文压缩集成测试：压缩触发、tools 禁用、原子组完整性、失败回滚、跨轮累积、
+///         上下文压缩集成测试：压缩触发、tools 禁用、原子组完整性、失败回滚、交接替换、
 ///         模型视图裁剪，以及压缩仍无法容纳窗口时主循环的显式失败。
 ///     </para>
 ///     <para>
 ///         Context-compaction integration tests: compaction triggering, disabled tools,
-///         atomic-group integrity, rollback on failure, cross-round accumulation, model-view
+///         atomic-group integrity, rollback on failure, handoff replacement, model-view
 ///         trimming, and the explicit failure when compaction still cannot fit the window.
 ///     </para>
 /// </summary>
 public class ContextCompactionTests
 {
-    // 窗口取值要足够紧，使三个超限回合触发压缩；又要足够宽，让压缩后视图（头部 + 结构化状态 +
+    // 窗口取值要足够紧，使三个超限回合触发压缩；又要足够宽，让压缩后视图（头部 + 交接摘要 +
     // 最新回合）容纳在窗口内；主循环拒发仍超出窗口的请求。
     private const int TightWindow = 1000;
 
@@ -46,16 +45,8 @@ public class ContextCompactionTests
         DefaultToolTimeoutSeconds = 30
     };
 
-    private static string StateJson(string goal, string modified, string decision) => new JsonObject
-    {
-        ["goal"]               = goal,
-        ["constraints"]        = new JsonArray(),
-        ["decisions"]          = new JsonArray(decision),
-        ["filesInspected"]     = new JsonArray("src"),
-        ["filesModified"]      = new JsonArray(modified),
-        ["commandsAndResults"] = new JsonArray(),
-        ["pendingWork"]        = new JsonArray()
-    }.ToJsonString();
+    private static string Handoff(string goal, string modified, string decision) =>
+        $"Goal: {goal}. Modified: {modified}. Decision: {decision}. Continue pending work.";
 
     private static string ToolCallId(string prefix, int round) => $"{prefix}_{round}";
 
@@ -68,8 +59,8 @@ public class ContextCompactionTests
 
     private static TwoBatchCase FindTwoBatchCase(ToolDefinition longTool, ToolDefinition shortTool)
     {
-        const string arguments   = "{\"path\":\"src/file.cs\"}";
-        var          summaryJson = StateJson("goal", "a.cs", "decision");
+        const string arguments = "{\"path\":\"src/file.cs\"}";
+        var          handoff   = Handoff("goal", "a.cs", "decision");
 
         for (var window = 700; window <= 5000; window += 50)
         for (var longLength = 80; longLength <= 1600; longLength += 20)
@@ -114,7 +105,7 @@ public class ContextCompactionTests
                 window)
                 continue;
 
-            if (!context.TryApplyCompaction(summaryJson)) continue;
+            if (!context.TryApplyCompaction(handoff)) continue;
 
             var afterFirst = context.EstimateViewTokens() + fixedCost;
             if (afterFirst <= options.CompactionThresholdTokens) continue;
@@ -124,7 +115,7 @@ public class ContextCompactionTests
                 TokenEstimator.EstimateMessages(second) + options.ReservedOutputTokens > window)
                 continue;
 
-            if (!context.TryApplyCompaction(summaryJson)) continue;
+            if (!context.TryApplyCompaction(handoff)) continue;
 
             var afterSecond = context.EstimateViewTokens() + fixedCost;
             if (afterSecond > options.ContextWindowTokens) continue;
@@ -144,7 +135,7 @@ public class ContextCompactionTests
         client.Enqueue(FakeChatClient.ToolCall("t", "{}", ToolCallId("a", 1)));
         client.Enqueue(FakeChatClient.ToolCall("t", "{}", ToolCallId("b", 2)));
         client.Enqueue(FakeChatClient.ToolCall("t", "{}", ToolCallId("c", 3)));
-        client.Enqueue(FakeChatClient.Text(StateJson("goal-one", "a.cs", "decision-x")));
+        client.Enqueue(FakeChatClient.Text(Handoff("goal-one", "a.cs", "decision-x")));
         client.Enqueue(FakeChatClient.Text("done"));
 
         var sink = new TestHostEventSink();
@@ -164,10 +155,10 @@ public class ContextCompactionTests
         var summaryRequest = client.RequestLog[3];
         Assert.That(summaryRequest.Tools, Is.Null);
         Assert.That(summaryRequest.Messages.Select(m => m.Role).ToArray(),
-                    Is.EqualTo([ChatRole.System, ChatRole.User, ChatRole.User, ChatRole.Assistant, ChatRole.Tool]));
-        Assert.That(summaryRequest.Messages[2].Content, Does.Contain("Original task"));
-        Assert.That(summaryRequest.Messages[3].ToolCalls!.Single().Id, Is.EqualTo("a_1"));
-        Assert.That(summaryRequest.Messages[4].Content, Does.Contain("#1"));
+                    Is.EqualTo([ChatRole.System, ChatRole.User, ChatRole.Assistant, ChatRole.Tool, ChatRole.User]));
+        Assert.That(summaryRequest.Messages[^1].Content, Does.Contain("CONTEXT CHECKPOINT COMPACTION"));
+        Assert.That(summaryRequest.Messages[2].ToolCalls!.Single().Id, Is.EqualTo("a_1"));
+        Assert.That(summaryRequest.Messages[3].Content, Does.Contain("#1"));
 
         // 下一个 agent 请求保留 tools，用状态消息替换被折叠回合，并按原样、原顺序保留
         // 最新完整回合（b_2）与进行中尾部（c_3）。
@@ -179,10 +170,7 @@ public class ContextCompactionTests
             ChatRole.Assistant, ChatRole.Tool
         ]));
 
-        Assert.That(StructuredState.TryParse(nextRequest.Messages[2].Content, out var state), Is.True);
-        Assert.That(state.Goal, Is.EqualTo("goal-one"));
-        Assert.That(state.FilesModified, Is.EqualTo(["a.cs"]));
-        Assert.That(state.Decisions, Is.EqualTo(["decision-x"]));
+        Assert.That(nextRequest.Messages[2].Content, Does.Contain(Handoff("goal-one", "a.cs", "decision-x")));
 
         Assert.That(nextRequest.Messages[3].ToolCalls!.Single().Id, Is.EqualTo("b_2"));
         Assert.That(nextRequest.Messages[5].ToolCalls!.Single().Id, Is.EqualTo("c_3"));
@@ -207,7 +195,7 @@ public class ContextCompactionTests
         client.Enqueue(FakeChatClient.ToolCall("t", "{}", ToolCallId("a", 1)));
         client.Enqueue(FakeChatClient.ToolCall("t", "{}", ToolCallId("b", 2)));
         client.Enqueue(FakeChatClient.ToolCall("t", "{}", ToolCallId("c", 3)));
-        client.Enqueue(FakeChatClient.Text("not json at all")); // 摘要模型返回垃圾内容
+        client.Enqueue(FakeChatClient.Text("   ")); // 摘要为空，必须拒绝
         client.Enqueue(FakeChatClient.Text("done"));
 
         var loop   = new AgentLoop(client, new ToolRegistry([tool]), TightBudgetOptions());
@@ -230,7 +218,7 @@ public class ContextCompactionTests
         client.Enqueue(FakeChatClient.ToolCall("t", "{}", ToolCallId("a", 1)));
         client.Enqueue(FakeChatClient.ToolCall("t", "{}", ToolCallId("b", 2)));
         client.Enqueue(FakeChatClient.ToolCall("t", "{}", ToolCallId("c", 3)));
-        client.Enqueue(FakeChatClient.Text("not json at all")); // 摘要模型返回垃圾内容
+        client.Enqueue(FakeChatClient.Text("   ")); // 摘要为空，必须拒绝
         client.Enqueue(FakeChatClient.Text("done"));
 
         // 压缩阈值（400）低于窗口，失败摘要可以回滚并让主循环继续：超阈值的视图
@@ -265,26 +253,17 @@ public class ContextCompactionTests
     }
 
     [Test]
-    public async Task TwoCompactions_FeedPreviousStateForwardAndAccumulate()
+    public async Task TwoCompactions_FeedPreviousHandoffForwardAndReplaceIt()
     {
         var tool   = new FakeTool("t") { ResultContent = new string('x', 1600) };
         var client = new FakeChatClient();
         client.Enqueue(FakeChatClient.ToolCall("t", "{}", ToolCallId("a", 1)));
         client.Enqueue(FakeChatClient.ToolCall("t", "{}", ToolCallId("b", 2)));
         client.Enqueue(FakeChatClient.ToolCall("t", "{}", ToolCallId("c", 3)));
-        client.Enqueue(FakeChatClient.Text(StateJson("goal-one", "a.cs", "decision-x")));
+        client.Enqueue(FakeChatClient.Text(Handoff("goal-one", "a.cs", "decision-x")));
         client.Enqueue(FakeChatClient.ToolCall("t", "{}", ToolCallId("d", 4)));
-        // 第二次摘要必须延续首个状态的事实（列表累积），否则提交会因丢失事实被拒绝。
-        client.Enqueue(FakeChatClient.Text(new JsonObject
-        {
-            ["goal"]               = "goal-two",
-            ["constraints"]        = new JsonArray(),
-            ["decisions"]          = new JsonArray("decision-x", "decision-y"),
-            ["filesInspected"]     = new JsonArray("src"),
-            ["filesModified"]      = new JsonArray("a.cs", "b.cs"),
-            ["commandsAndResults"] = new JsonArray(),
-            ["pendingWork"]        = new JsonArray()
-        }.ToJsonString()));
+        // 新摘要可合并旧事实和待办，不要求逐字复制列表。
+        client.Enqueue(FakeChatClient.Text(Handoff("goal-two", "a.cs b.cs", "decision-x decision-y")));
         client.Enqueue(FakeChatClient.Text("done"));
 
         var sink = new TestHostEventSink();
@@ -298,31 +277,27 @@ public class ContextCompactionTests
         Assert.That(result.Compactions, Is.EqualTo(2));
         Assert.That(client.Requests, Is.EqualTo(7));
 
-        // 首次摘要看到原始任务并折叠 a_1；第二次摘要以首个状态为输入（累积），
+        // 首次摘要看到原始任务并折叠 a_1；第二次摘要以首个交接为输入，
         // 折叠下一个最旧完整回合 b_2。
         var firstSummary = client.RequestLog[3];
         Assert.That(firstSummary.Messages.Select(m => m.Role).ToArray(),
-                    Is.EqualTo([ChatRole.System, ChatRole.User, ChatRole.User, ChatRole.Assistant, ChatRole.Tool]));
+                    Is.EqualTo([ChatRole.System, ChatRole.User, ChatRole.Assistant, ChatRole.Tool, ChatRole.User]));
 
         var secondSummary = client.RequestLog[5];
         Assert.That(secondSummary.Tools, Is.Null);
-        Assert.That(secondSummary.Messages[1].Content, Does.Contain("goal-one"));
-        Assert.That(secondSummary.Messages[2].ToolCalls!.Single().Id, Is.EqualTo("b_2"));
-        Assert.That(secondSummary.Messages[3].Content, Does.Contain("#2"));
+        Assert.That(secondSummary.Messages[2].Content, Does.Contain("goal-one"));
+        Assert.That(secondSummary.Messages[3].ToolCalls!.Single().Id, Is.EqualTo("b_2"));
+        Assert.That(secondSummary.Messages[4].Content, Does.Contain("#2"));
 
-        // 最终 agent 视图携带累积后的第二个状态：首次摘要的事实存活（goal 延续、a.cs 与
-        // decision-x 保留），被折叠的原始回合（a_1、b_2）消失，保留的回合仍在。
+        // 第二个交接替换第一个；示例模型选择合并文件与决策，宿主不逐字校验旧列表。
+        // 被折叠的原始回合（a_1、b_2）退出模型视图，近期回合仍在。
         var finalRequest = client.RequestLog[6];
         Assert.That(finalRequest.Messages.Select(m => m.Role).ToArray(), Is.EqualTo([
             ChatRole.System, ChatRole.User, ChatRole.User, ChatRole.Assistant, ChatRole.Tool,
             ChatRole.Assistant, ChatRole.Tool
         ]));
-        Assert.That(StructuredState.TryParse(finalRequest.Messages[2].Content, out var state), Is.True);
-        Assert.That(state.Goal, Is.EqualTo("goal-two"));
-        Assert.That(state.FilesModified, Does.Contain("a.cs"));
-        Assert.That(state.FilesModified, Does.Contain("b.cs"));
-        Assert.That(state.Decisions, Does.Contain("decision-x"));
-        Assert.That(state.Decisions, Does.Contain("decision-y"));
+        Assert.That(finalRequest.Messages[2].Content,
+                    Does.Contain(Handoff("goal-two", "a.cs b.cs", "decision-x decision-y")));
 
         var joined = string.Join('\n', finalRequest.Messages.Select(m => m.Content));
         Assert.That(joined, Does.Contain("#3"));
@@ -342,16 +317,7 @@ public class ContextCompactionTests
         for (var round = 1; round <= 3; round++)
             client.Enqueue(FakeChatClient.ToolCalls("t", 3, $"round{round}", argumentsJson));
 
-        var summary = new JsonObject
-        {
-            ["goal"] = "goal",
-            ["constraints"] = new JsonArray(),
-            ["decisions"] = new JsonArray(Enumerable.Range(1, 18).Select(i => (JsonNode?)$"decision-{i}").ToArray()),
-            ["filesInspected"] = new JsonArray(Enumerable.Range(1, 5).Select(i => (JsonNode?)$"file-{i}.cs").ToArray()),
-            ["filesModified"] = new JsonArray("file.cs"),
-            ["commandsAndResults"] = new JsonArray(),
-            ["pendingWork"] = new JsonArray()
-        }.ToJsonString();
+        var summary = Handoff("goal", "file.cs", "inspect the remaining files");
 
         client.Enqueue(FakeChatClient.Text(summary));
 
@@ -387,12 +353,13 @@ public class ContextCompactionTests
         TestAssert.NotNull(client.RequestLog[4].Tools);
         Assert.That(result.FinalMessage, Is.EqualTo("done"));
         Assert.That(loop.History.Count, Is.EqualTo(15)); // 头部 + 3 个完整回合 + 最终 assistant。
-        TestAssert.ContainsAll(m => m.Role             == ChatRole.Assistant &&
-                                    m.ToolCalls!.Count == 3                  &&
-                                    m.ToolCalls.All(call => call.FunctionName == "t"), loop.History);
+        TestAssert.ContainsAll(m =>
+            m.Role             == ChatRole.Assistant &&
+            m.ToolCalls!.Count == 3 &&
+            m.ToolCalls.All(call => call.FunctionName == "t"), loop.History);
         Assert.That(loop.History.Count(m => m.Role == ChatRole.Tool), Is.EqualTo(9));
         TestAssert.All(loop.History.Where(m => m.Role == ChatRole.Tool), message =>
-                           Assert.That(message.Content, Does.Contain("#")));
+            Assert.That(message.Content, Does.Contain("#")));
     }
 
     [Test]
@@ -408,9 +375,9 @@ public class ContextCompactionTests
         client.Enqueue(FakeChatClient.ToolCall("short", fixture.Arguments, "b"));
         client.Enqueue(FakeChatClient.ToolCall("short", fixture.Arguments, "c"));
         client.Enqueue(FakeChatClient.ToolCall("long", fixture.Arguments, "d"));
-        var summaryJson = StateJson("goal", "a.cs", "decision");
-        client.Enqueue(FakeChatClient.Text(summaryJson));
-        client.Enqueue(FakeChatClient.Text(summaryJson));
+        var handoff = Handoff("goal", "a.cs", "decision");
+        client.Enqueue(FakeChatClient.Text(handoff));
+        client.Enqueue(FakeChatClient.Text(handoff));
         client.Enqueue(FakeChatClient.Text("done"));
 
         var loop = new AgentLoop(client, new ToolRegistry([longTool, shortTool]), new AgentOptions
@@ -437,7 +404,7 @@ public class ContextCompactionTests
         Assert.That(firstSummaryInput, Does.Contain(fixture.A));
         Assert.That(firstSummaryInput, Does.Not.Contain(fixture.B));
         var secondSummaryInput = string.Join('\n', client.RequestLog[5].Messages.Select(m => m.Content));
-        Assert.That(secondSummaryInput, Does.Contain(summaryJson));
+        Assert.That(secondSummaryInput, Does.Contain(handoff));
         Assert.That(secondSummaryInput, Does.Contain(fixture.B));
 
         Assert.That(TokenEstimator.EstimateMessages(client.RequestLog[4].Messages) +
@@ -449,12 +416,14 @@ public class ContextCompactionTests
         Assert.That(fixture.AfterFirst  > fixture.Options.CompactionThresholdTokens, Is.True);
         Assert.That(fixture.AfterSecond <= fixture.Options.CompactionThresholdTokens, Is.True);
 
-        TestAssert.ContainsAll(m => m.Role                              == ChatRole.Assistant &&
-                                    m.ToolCalls!.Single().Id            == "a"                &&
-                                    m.ToolCalls!.Single().ArgumentsJson == fixture.Arguments, loop.History);
-        TestAssert.ContainsAll(m => m.Role                              == ChatRole.Assistant &&
-                                    m.ToolCalls!.Single().Id            == "b"                &&
-                                    m.ToolCalls!.Single().ArgumentsJson == fixture.Arguments, loop.History);
+        TestAssert.ContainsAll(m =>
+            m.Role                              == ChatRole.Assistant &&
+            m.ToolCalls!.Single().Id            == "a" &&
+            m.ToolCalls!.Single().ArgumentsJson == fixture.Arguments, loop.History);
+        TestAssert.ContainsAll(m =>
+            m.Role                              == ChatRole.Assistant &&
+            m.ToolCalls!.Single().Id            == "b" &&
+            m.ToolCalls!.Single().ArgumentsJson == fixture.Arguments, loop.History);
         TestAssert.ContainsAll(m => m is { Role: ChatRole.Tool, ToolCallId: "a" } && m.Content == fixture.A + "#1",
                                loop.History);
         TestAssert.ContainsAll(m => m is { Role: ChatRole.Tool, ToolCallId: "b" } && m.Content == fixture.B + "#1",
@@ -560,7 +529,9 @@ public class ContextCompactionTests
         var withUsage = events.ToList();
         withUsage[^1] = withUsage[^1] with
         {
-            InputTokens = inputTokens, OutputTokens = outputTokens, FinishReason = finishReason
+            InputTokens = inputTokens,
+            OutputTokens = outputTokens,
+            FinishReason = finishReason
         };
         return withUsage;
     }
@@ -576,7 +547,7 @@ public class ContextCompactionTests
         client.Enqueue(WithUsage(FakeChatClient.ToolCall("t", "{}", ToolCallId("b", 2)), 878, 10, "tool_calls"));
         client.Enqueue(WithUsage(FakeChatClient.ToolCall("t", "{}", ToolCallId("c", 3)), 1706, 10, "tool_calls"));
         // 摘要流不带 usage：校准保持最近一次观测，与摘要调用省略 usage 的服务行为一致。
-        client.Enqueue(FakeChatClient.Text(StateJson("goal-one", "a.cs", "decision-x")));
+        client.Enqueue(FakeChatClient.Text(Handoff("goal-one", "a.cs", "decision-x")));
         client.Enqueue(WithUsage(FakeChatClient.Text("done"), 1790, 6, "stop"));
 
         var sink = new TestHostEventSink();

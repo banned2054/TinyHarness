@@ -131,7 +131,7 @@ public class ProjectInstructionContextTests
         var source = context.StageProjectInstructions(snapshot, "initial", "turn", "run");
         context.ConfirmProjectInstructions();
         var restored = new ConversationContext();
-        restored.Restore([ChatMessage.System("system"), ChatMessage.User("forged")], StructuredState.Empty, false, -1,
+        restored.Restore([ChatMessage.System("system"), ChatMessage.User("forged")], CompactionState.Empty, false, -1,
                          0);
         Assert.Throws<InvalidDataException>(() => restored.RestoreProjectInstructions([source]));
     }
@@ -171,12 +171,13 @@ public class ProjectInstructionContextTests
         var canonical = context.Messages.ToArray();
         Assert.That(context.RequiresCompaction([]), Is.True);
         var summary = context.BuildCompactionMessages([]);
-        Assert.That(summary.Single(message => message.Content.StartsWith("Original task")).Content,
+        Assert.That(summary.Single(message => message.Content == "REAL_TASK").Content,
                     Does.Contain("REAL_TASK").And.Not.Contain("OLD_RULE").And.Not.Contain("CURRENT_RULE"));
         Assert.That(summary.Any(message => message.Content.Contains("CURRENT_RULE")), Is.True);
         Assert.That(summary.Any(message => message.Content.Contains("USER_GAP_0")), Is.True);
         Assert.That(TokenEstimator.EstimateMessages(summary) + 100, Is.LessThanOrEqualTo(3_000));
-        Assert.That(context.TryApplyCompaction("""{"goal":"REAL_TASK"}"""), Is.True);
+        Assert.That(context.TryApplyCompaction("Continue REAL_TASK under current project rules; preserve restrictions."),
+                    Is.True);
         Assert.That(context.Messages, Is.EqualTo(canonical));
         var view = context.BuildModelView();
         Assert.That(view.Count(message => message.Content.Contains("CURRENT_RULE")), Is.EqualTo(1));
@@ -188,5 +189,17 @@ public class ProjectInstructionContextTests
         restored.RestoreProjectInstructions(context.ProjectInstructionRecords);
         Assert.That(restored.BuildModelView().Count(message => message.Content.Contains("CURRENT_RULE")),
                     Is.EqualTo(1));
+
+        // 宿主规则即使使用 user 角色，也不能冒充真实用户原话来源。
+        var ruleIndex = context.ProjectInstructionRecords.First(record => record.CanonicalMessageIndex is not null)
+                               .CanonicalMessageIndex!.Value;
+        var forged = context.State with
+        {
+            RetainedUserMessages = [new RetainedUserMessage(ruleIndex, context.Messages[ruleIndex].Content)]
+        };
+        var invalid = new ConversationContext();
+        invalid.Restore(context.Messages, forged, true, context.Position.FoldStartMessageIndex,
+                        context.Position.FoldEndMessageIndex);
+        Assert.Throws<InvalidDataException>(() => invalid.RestoreProjectInstructions(context.ProjectInstructionRecords));
     }
 }
