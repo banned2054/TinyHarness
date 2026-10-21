@@ -8,9 +8,10 @@ namespace TinyHarness.Core.Models.Tools;
 ///     </para>
 /// </summary>
 /// <remarks>
-///     <para>只读能力不修改工作区或启动进程；其他能力（含未知能力）均按可能产生副作用处理。</para>
+///     <para>只读能力不修改工作区或启动进程；session.work 只记录会话陈述。其他能力（含未知能力）均按可能产生副作用处理。</para>
 ///     <para>
-///         Read-only capabilities neither modify the workspace nor start processes;
+///         Read-only capabilities neither modify the workspace nor start processes; session.work records session claims
+///         only.
 ///         all others, including unknown capabilities, are treated as potentially side-effecting.
 ///     </para>
 /// </remarks>
@@ -20,7 +21,8 @@ public static class ToolCapabilities
     {
         "filesystem.list",
         "filesystem.search",
-        "filesystem.read"
+        "filesystem.read",
+        "session.work"
     };
 
     /// <summary>

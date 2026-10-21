@@ -70,13 +70,16 @@ internal static class HelpText
           tinyharness chat [--config <path>] [--session <id>]
 
         Starts an interactive multi-turn session against the configured model and workspace.
-        Each line you type is one user turn; turns share one conversation context and the
-        latest input is the current goal. Tool approvals are prompted inline and scoped to
-        the current run only.
+        At the input prompt, each line starts a user turn. During an active run, ordinary
+        text is saved as an amendment and applied at a safe boundary; obsolete unstarted
+        plans require replanning and fresh approval. Approval replies stay separate.
+        /pause waits at a model/tool boundary, /resume continues, /cancel requests cleanup,
+        and /work inspects work-item claims and the number of unapplied amendments.
+        Tool approvals are scoped to the current run only.
 
         Ctrl+C cancels the active turn (the session keeps running; start a new turn
         afterwards). Ctrl+C at the prompt or EOF (Ctrl+Z then Enter on Windows) ends the
-        session. Every finished turn is committed as an atomic snapshot into the protected
+        session. Every finished turn is appended to the single JSONL log in the protected
         session store, where 'tinyharness session list' / 'session show <id>' can inspect
         it strictly offline. A failed save is reported as "not reliably saved" and never
         presented as success. Protocol messages, tool arguments and reasoning are stored
@@ -86,11 +89,18 @@ internal static class HelpText
         --session <id> resumes a stored session in a new process. The resume requires the
         same workspace, endpoint, model and chat api as the stored session, and the stored
         opaque reasoning payloads must pass their integrity check; any mismatch refuses the
-        resume instead of replaying changed content. Resuming a session whose last run ended
-        mid tool execution is also refused — inspect it with 'session show' first.
-        Older v1/v2 snapshots are inspection-only because their content may be redacted.
+        resume instead of replaying changed content. Incomplete trailing tool groups are
+        rewound; unknown side effects block further writes/process execution until inspected
+        and acknowledged. Only tinyharness.session-log/1 is supported.
 
         chat takes no prompt argument; use `run -- "text"` for a one-shot prompt.
+
+        Trusted cumulative limits live in user-config settings.runBudget: maxModelRequests
+        (including summaries), maxToolExecutions, maxWallClockSeconds and maxTotalTokens.
+        Project configuration cannot override them. Missing usage is estimated; budget
+        tokens are not exact charges. BudgetLimitReached preserves its reason and counters.
+        Work-item completion is a claim, not test evidence. Saved unapplied amendments
+        remain inspectable after cancellation/restart and are not automatically replayed.
 
         /trust is a host command at the input prompt. It changes workspace trust without
         sending a model request. Read-only workspaces permit list/search/read only; patch

@@ -1,3 +1,5 @@
+using TinyHarness.Core.Models.Agent;
+
 namespace TinyHarness.Core.Models.Configuration;
 
 /// <summary>
@@ -50,6 +52,12 @@ public sealed record UserProfile
 /// </summary>
 public sealed record UserConfigSettings
 {
+    /// <summary>
+    ///     <para>可信运行预算；项目配置不能覆盖。</para>
+    ///     <para>Trusted run budget; project configuration cannot override it.</para>
+    /// </summary>
+    public RunBudgetLimits? RunBudget { get; init; }
+
     public int? MaxAgentSteps { get; init; }
 
     public int? ReservedOutputTokens { get; init; }

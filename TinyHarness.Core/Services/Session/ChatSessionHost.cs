@@ -44,7 +44,7 @@ namespace TinyHarness.Core.Services.Session;
 ///         Resume continues the validated session, context and writer under the existing identity and commit sequence.
 ///     </para>
 /// </remarks>
-public sealed class ChatSessionHost : IDisposable
+public sealed partial class ChatSessionHost : IDisposable
 {
     private readonly IApprovalProvider?          _approver;
     private readonly ConversationContext         _context;
@@ -291,10 +291,12 @@ public sealed class ChatSessionHost : IDisposable
         var run  = new SessionRun(NewId(), Session.Id, turn.Id);
         Session.AddTurn(turn);
         turn.AddRun(run);
+        using var control = CreateRunControl(run, cancellationToken);
+        _activeControl = control;
         try
         {
             var loop   = ComposeRunLoop(run);
-            var result = await loop.RunTurnAsync(_systemPrompt, userInput, cancellationToken).ConfigureAwait(false);
+            var result = await loop.RunTurnAsync(_systemPrompt, userInput, control.Token).ConfigureAwait(false);
             if (!string.IsNullOrWhiteSpace(result.PersistenceWarning))
                 PersistenceWarning = result.PersistenceWarning;
             run.Finish(result);
@@ -323,6 +325,7 @@ public sealed class ChatSessionHost : IDisposable
         }
         finally
         {
+            await control.SealAsync().ConfigureAwait(false);
             try
             {
                 // 先回退不完整尾部再提交，避免 canonical 历史携带无法续传的工具组。
@@ -333,6 +336,8 @@ public sealed class ChatSessionHost : IDisposable
             {
                 DisplayWarning  = _activeRecorder?.DisplayWarning;
                 _activeRecorder = null;
+                _activeControl  = null;
+                _permissions?.ClearTemporaryAllows();
                 Interlocked.Exchange(ref _activeRuns, 0);
             }
         }
@@ -397,16 +402,7 @@ public sealed class ChatSessionHost : IDisposable
         if (_sessionWriter is null) return;
 
         // 副作用前必须可靠保存执行意图；只截取完整协议边界，不为活动运行补造终态。
-        var boundary = ChatHistoryInvariants.LastCompleteBoundary(_context.Messages);
-        if (boundary < 0)
-            throw new
-                InvalidOperationException("Execution intent cannot be saved without a complete protocol boundary.");
-
-        var position    = _context.Position;
-        var safeContext = ContextFor(_options);
-        safeContext.Restore(_context.Messages.Take(boundary).ToArray(), _context.State, position.HasState,
-                            position.FoldStartMessageIndex, position.FoldEndMessageIndex);
-        safeContext.RestoreProjectInstructions(RetainedInstructionRecords(boundary));
+        var safeContext = CompleteContextSnapshot();
         run.RecordExecutionIntent(records);
         var previousReason          = Session.PendingInspectionReason;
         var previousAcknowledgement = Session.InspectionAcknowledgedUtc;
@@ -543,10 +539,10 @@ public sealed class ChatSessionHost : IDisposable
     private AgentLoop ComposeRunLoop(SessionRun run)
     {
         var events = _events is null ? null : new RunEventCorrelator(Session.Id, run.TurnId, run.Id, _events);
-        var recorder = _recorderFactory?.Invoke(run.Id) ?? _sessionWriter?.CreateRunRecorder(
-             Session.Id, run.TurnId, run.Id,
-             token => _sessionWriter.CommitAsync(Session, _context, token),
-             events is null ? null : events.PublishHistoryItemAsync);
+        var recorder = _recorderFactory?.Invoke(run.Id) ??
+                       _sessionWriter?.CreateRunRecorder(Session.Id, run.TurnId, run.Id,
+                                                         token => _sessionWriter.CommitAsync(Session, _context, token),
+                                                         events is null ? null : events.PublishHistoryItemAsync);
         _activeRecorder = recorder;
         var permissions = _permissions;
         if (InspectionPending && permissions is null)
@@ -559,11 +555,20 @@ public sealed class ChatSessionHost : IDisposable
             ? null
             : new ProjectInstructionBoundary(this, run, _instructionLoader);
 
-        return new AgentLoop(_modelClient, _tools, _options, permissions, _approver, recorder, events, _context,
+        var tools = _options.EnableWorkItems
+            ? new ToolRegistry([
+                .. _tools.Values, new SessionWorkItemTool(() => Session.WorkItems,
+                                                          WorkEvidenceCandidates,
+                                                          (id, title, status, evidence, token) =>
+                                                              UpdateWorkItemAsync(run, id, title,
+                                                                  status, evidence, token))
+            ])
+            : _tools;
+        return new AgentLoop(_modelClient, tools, _options, permissions, _approver, recorder, events, _context,
                              _sessionWriter is null
                                  ? null
                                  : (records, token) => CheckpointExecutionAsync(run, records, token),
-                             instructions);
+                             instructions, _activeControl);
     }
 
     private IReadOnlyList<ProjectInstructionRecord> RetainedInstructionRecords(int boundary)
@@ -590,9 +595,7 @@ public sealed class ChatSessionHost : IDisposable
     ///     </para>
     /// </summary>
     private sealed class ProjectInstructionBoundary(
-        ChatSessionHost          host,
-        SessionRun               run,
-        ProjectInstructionLoader loader) : IAgentInstructionBoundary
+        ChatSessionHost host, SessionRun run, ProjectInstructionLoader loader) : IAgentInstructionBoundary
     {
         private ProjectInstructionRecord?   _pendingRecord;
         private ProjectInstructionSnapshot? _toolRoundSnapshot;

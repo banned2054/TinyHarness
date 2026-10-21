@@ -207,6 +207,11 @@ internal static class Program
         await Console.Out.WriteLineAsync($"status     : {result.Status}");
         await Console.Out.WriteLineAsync($"steps      : {result.Steps}");
         await Console.Out.WriteLineAsync($"toolExecs  : {result.ToolExecutions}");
+        if (result.Budget is { } budget)
+            await
+                Console.Out
+                       .WriteLineAsync($"budget     : {budget.ModelRequests} requests; {budget.AccountedTokens:N0} " +
+                                       $"{(budget.HasEstimatedTokens ? "estimated/mixed" : "reported")} tokens; {budget.ElapsedMilliseconds} ms; limit={budget.LimitReason ?? "none"}");
         if (result.InputTokens is not null || result.OutputTokens is not null)
         {
             var inputTokens  = (result.InputTokens  ?? 0).ToString("N0");
@@ -265,7 +270,7 @@ internal static class Program
     private static async Task<int> RunChatAsync(string? configPath, string? resumeSessionId)
     {
         using var cancellation = new ChatCancellation();
-        var       reader       = new ExclusiveInputReader(Console.In);
+        using var reader       = new ChatInputRouter(new ExclusiveInputReader(Console.In));
         var composition = await ComposeAgentAsync(configPath, cancellation.SessionToken, true, reader)
            .ConfigureAwait(false);
         var config = composition.Config;
@@ -313,6 +318,10 @@ internal static class Program
                                                      WorkspacePrompts.Current, composition.Options.Context);
                 resumedNote = $"resumed    : {restored.Session.Turns.Count} turns from commit " +
                               $"{writer.CommitSequence} ({writer.LoadedSnapshot!.UpdatedUtc.LocalDateTime:yyyy-MM-dd HH:mm:ss})";
+                var pendingAmendments = restored.Session.Amendments.Count(item => item.CanonicalMessageIndex is null);
+                if (pendingAmendments > 0)
+                    resumedNote +=
+                        $"\n  amendments : {pendingAmendments} saved but unapplied; inspect with session show and resubmit to continue";
                 if (restored.RewoundTail)
                     resumedNote += "\n  rewound    : the last incomplete tool round was dropped from the model view";
                 host = new ChatSessionHost(restored.Session, restored.Context, composition.Options, composition.Model,
@@ -469,6 +478,8 @@ internal static class Program
         {
             Model                     = config.Model,
             MaxAgentSteps             = config.MaxAgentSteps,
+            Budget                    = userConfig.Settings?.RunBudget ?? new RunBudgetLimits(),
+            EnableWorkItems           = true,
             DefaultToolTimeoutSeconds = config.DefaultToolTimeoutSeconds,
             Context = new ContextOptions
             {
@@ -508,7 +519,8 @@ internal static class Program
         await Console.Out.WriteLineAsync(composition.Sandbox is null
                                              ? $"  sandbox   : {composition.ExecutionPolicy.DisplayName}"
                                              : $"  sandbox   : {composition.ExecutionPolicy.DisplayName}; home: {composition.Sandbox.Components.SandboxHome}");
-        await Console.Out.WriteLineAsync("  tools     : list_files, search_text, read_file, apply_patch, shell");
+        await
+            Console.Out.WriteLineAsync("  tools     : list_files, search_text, read_file, apply_patch, shell, work_items");
     }
 
     /// <summary>
@@ -697,7 +709,9 @@ internal static class Program
         if (!string.IsNullOrWhiteSpace(result.Error))
             await Console.Out.WriteLineAsync($"  error        : {result.Error}");
 
-        if (result.Status != AgentStatus.Completed || persistenceWarning is not null || sessionId is null ||
+        if (result.Status != AgentStatus.Completed ||
+            persistenceWarning is not null         ||
+            sessionId is null                      ||
             sessionLogPath is null)
         {
             TryDeleteSmokeDirectory(sessionDirectory);
@@ -709,9 +723,10 @@ internal static class Program
             var logFiles = Directory.Exists(sessionDirectory)
                 ? Directory.GetFiles(sessionDirectory, "*" + SessionStoreWriter.LogFileSuffix)
                 : [];
-            if (logFiles.Length != 1 || !string.Equals(Path.GetFullPath(logFiles[0]),
-                                                       Path.GetFullPath(sessionLogPath),
-                                                       StringComparison.OrdinalIgnoreCase))
+            if (logFiles.Length != 1 ||
+                !string.Equals(Path.GetFullPath(logFiles[0]),
+                               Path.GetFullPath(sessionLogPath),
+                               StringComparison.OrdinalIgnoreCase))
                 throw new SessionStoreException("Smoke expected one authoritative session JSONL file.");
 
             var restoredSnapshot = await SessionStoreReader.ReadAsync(sessionDirectory, sessionId, cts.Token)
@@ -744,7 +759,8 @@ internal static class Program
             var confirmedDiff = toolItems.SelectMany(item => item.PatchChanges ?? [])
                                          .Any(change => change.State == PatchChange.ConfirmedState &&
                                                         !string.IsNullOrWhiteSpace(change.Diff));
-            if (restoration.Session.Id != sessionId || toolItems.Length != plan.ExpectedToolExecutions ||
+            if (restoration.Session.Id != sessionId                   ||
+                toolItems.Length       != plan.ExpectedToolExecutions ||
                 !confirmedDiff)
                 throw new
                     SessionStoreException("Smoke journal restore/history did not contain the expected tools and confirmed patch diff.");
@@ -806,6 +822,18 @@ internal static class Program
         // 脚本客户端拒绝工具闭环或内容不匹配；还需核对工具与审批次数，防止跳过补丁或进程执行。
         var passed = result.ToolExecutions == plan.ExpectedToolExecutions &&
                      approver.Prompts      == plan.ExpectedApprovalPrompts;
+        if (passed)
+        {
+            await M15OfflineSmoke.RunAsync(fixture.Root, sessionDirectory,
+                                           new SessionModelIdentity(config.Model,
+                                                                    config.Endpoint ?? "offline-smoke://local",
+                                                                    config.ChatApi), cts.Token)
+                                 .ConfigureAwait(false);
+            await
+                Console.Out
+                       .WriteLineAsync("  m15          : control/work/budget/restore passed (separate offline session)");
+        }
+
         TryDeleteSmokeDirectory(sessionDirectory);
         return passed ? 0 : 1;
     }
@@ -816,9 +844,10 @@ internal static class Program
         var expectedPrefix = Path.GetFullPath(Path.GetTempPath());
         if (!target.StartsWith(expectedPrefix, OperatingSystem.IsWindows()
                                    ? StringComparison.OrdinalIgnoreCase
-                                   : StringComparison.Ordinal) || !Path.GetFileName(target)
-                                                                       .StartsWith("tinyharness-smoke-session-",
-                                                                            StringComparison.Ordinal))
+                                   : StringComparison.Ordinal) ||
+            !Path.GetFileName(target)
+                 .StartsWith("tinyharness-smoke-session-",
+                             StringComparison.Ordinal))
             throw new InvalidOperationException($"Refusing to delete unexpected smoke session directory '{target}'.");
         if (Directory.Exists(target)) Directory.Delete(target, true);
     }

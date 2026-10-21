@@ -30,18 +30,22 @@
 
 早期开发中，命令、配置和存储格式可能随里程碑变化。
 
-目前已实现：单任务 `run`、交互式多轮 `chat`、受保护会话存储（严格离线的 `session list` / `session show`，并支持 `chat --session <id>` 跨进程续聊）、离线优先的配置管理、只读 MCP worker 和可选的 Windows 沙箱管理。M14.1 已加入有界的根／局部 `AGENTS.md` 加载、工具边界与续聊刷新，以及首次非空发送才创建新 chat 会话。M14.2 加入统一基础行为提示词，覆盖自然语言任务范围、工具策略、验证与交付。默认测试与构建不调用付费模型；真实模型的指令遵循和统一日志续聊未验证。
+目前已实现：单任务 `run`、交互式多轮 `chat`、受保护会话存储（严格离线的 `session list` / `session show`，并支持 `chat --session <id>` 跨进程续聊）、离线优先的配置管理、只读 MCP worker 和可选的 Windows 沙箱管理。M14.1 已加入有界的根／局部 `AGENTS.md` 加载、工具边界与续聊刷新，以及首次非空发送才创建新 chat 会话。M14.2 加入统一基础行为提示词，覆盖自然语言任务范围、工具策略、验证与交付。默认测试与构建不调用付费模型；各阶段的证据与限制分别见下文。
 
 M14.1 离线回归通过：**853 总、851 通过、2 项因符号链接创建权限跳过、0 失败**；scale 独立 1/1 通过，原预算不变。NativeAOT 编译与仓库外 smoke 通过，验证规则初始加载、更新、续聊来源完整性、历史和已确认 patch diff。证据：`artifacts/test-results/m14-regression.trx`、`artifacts/test-results/m14-scale.trx`、`artifacts/m14-instructions-scale-results.json`、`artifacts/m14-instructions-native-smoke.txt`。兼容、命令及未验证边界见[实施与验收记录](project-instructions-design.md#14-实施结果与本地验证)。
 
 M14.2 工程验证通过：**860 总、858 通过、2 跳过、0 失败**，包含 7 个提示词接入用例；NativeAOT 与仓库外原生 smoke 也已通过。只维护当前内置提示词，创建和续聊均使用它；提示词不一致时仍严格拒绝续聊。详见[系统提示词设计与证据](system-prompt-design.md)，模型遵循能力尚待单独评估。
+
+M15 已加入安全边界补充、暂停／继续／取消、带来源的 `work_items` 与可信累计运行预算。最终离线回归 **1013 总／1011 通过／2 项链接权限跳过／0 失败**；scale 独立通过，`win-x64` NativeAOT 与仓库外原生 smoke 通过。详见[任务控制与验收](task-control-design.md)。M15 的真实模型遵循尚未评估；M14 后续指定样本的验收见[压缩设计](context-compaction-design.md)。
 
 ## ✨ 特性
 
 - **Agent Loop** — 流式回复、一轮多个顺序工具调用、步数上限、失败与取消处理。
 - **工具** — `list_files`、`search_text`、`read_file`、`apply_patch` 与 `shell`（直接进程/显式 shell 模式），带超时、进程树终止和输出裁剪。
 - **权限** — 每次调用经过 `Prepare → Authorize → Execute`：工作区内读取默认放行，补丁与进程默认询问（`a` 单次 / `s` 本次运行 / `d` 拒绝），可配置命令允许规则。
-- **上下文** — token 预算按真实 usage 校准、工具结果裁剪、旧回合压缩为经过校验的结构化摘要。
+- **上下文** — token 预算按真实 usage 校准、工具结果裁剪、有界文本交接和带来源的真实用户原话。
+- **运行控制与工作项** — 运行中输入文本作为已保存的补充，`/pause`、`/resume`、`/cancel`、`/work` 提供可选宿主控制；工作项完成陈述与实际工具事实分开。
+- **累计预算** — 可信用户 `settings.runBudget` 限制逻辑模型请求（含摘要）、工具执行、墙钟与累计 token；usage 缺失时明确估算，`BudgetLimitReached` 保留原因和计数。
 - **项目指令** — 按固定预算加载根／局部 `AGENTS.md`，压缩后保留当前规则，在请求、审批和派发边界重新检查；规则变化使未启动的旧计划与批准失效，项目文件不能授予权限。新 `chat` 打开、空输入或 EOF 不创建会话，首次真实发送通过规则预检后才创建。
 - **持久化** — `run` 和新会话 `chat` 共用受保护会话存储中的 `tinyharness.session-log/1` 追加日志，默认不再输出旧的全量 run snapshot/audit。历史 DTO 确定性保存 process／final 分类、有界脱敏工具输出，以及逐文件 patch 事实；工作区后来变化后仍能读取当时 diff，并区分 `confirmed` 与 `unknown`。执行意图保存失败不启动副作用；副作用结果未知时设置 NeedsInspection，模型视图回退到最近完整工具边界，未知副作用阻断写入与进程执行直到用户检查确认。历史按序号游标经共享 scanner 分页（每页最多返回 200 条 items，序列化 UTF-8 累计预算 8 MiB；扫描可读取整个捕获范围）；artifact 内容内联保存，单个上限 2 MiB、stdout/stderr 合计 4 MiB；批次上限 8 MiB，日志总量上限 256 MiB。不确定写入使 writer poison，strict 续聊读取拒绝尾部半行，历史检查可返回可靠前缀并给出 warning。会话可严格离线查看，并可在新进程经工作区/模型/协议与 opaque 完整性检查后续聊（`chat --session <id>`）。会话可能包含秘密且不被 Harness 加密；`session list` / `session show` 只输出脱敏检查视图，不展示 canonical 消息或 opaque 载荷。
 - **MCP worker** — `tinyharness mcp` 启动本机只读 stdio 服务，向 Codex 等客户端提供 `ask_glm`。
@@ -52,7 +56,7 @@ M14.2 工程验证通过：**860 总、858 通过、2 跳过、0 失败**，包�
 - 中断后仍有未知副作用结果的会话，续聊时模型视图回退到最近完整工具边界，副作用工具保持阻断直到用户检查工作区并确认（恢复时的 `c` / `k` 提示）。当前仅支持 `tinyharness.session-log/1`；旧 `.session.json` 快照和独立 audit 文件不再读取，也不提供迁移命令。
 - Windows 沙箱只在单台机器上验证过，与 Codex 发布版共存未验收。
 - NativeAOT 只验证了 `win-x64`；M14.1 的 publish 和原生 smoke 已通过。本机规则 leaf／目录链接创建测试因权限跳过。协议验证基于本地模拟 SSE 服务，旧实现另有单个真实 endpoint 的历史验证。
-- 统一会话日志上的 `chat` 尚未用真实模型服务验证；GUI 历史消费、断电持久性及实际 OS 隔离也未在本轮验证。
+- M15 控制和工作项的真实模型遵循未验证；GUI 历史消费、断电持久性及新的 OS 隔离场景也未在本轮验证。已保存但未生效的补充可检查，不会在重启时自动重放。
 
 ## 🚀 构建与运行
 
@@ -86,7 +90,7 @@ tinyharness init / config / provider / model / auth / doctor
 tinyharness sandbox status | provision | verify    Windows 沙箱管理
 ```
 
-`Ctrl+C` 取消当前执行；在 `chat` 中先取消当前回合，空闲时再按结束会话。退出码：`0` 完成、`1` 失败或步数达限、`2` 缺少提示词、`130` 取消。`doctor` 默认离线，`doctor --connect` 才联网检查。完整语法见 `--help` 或 `help <命令>`。
+`Ctrl+C` 取消当前执行；在 `chat` 中先取消当前回合，空闲时再按结束会话。退出码：`0` 完成、`1` 失败或步数／累计预算达限、`2` 缺少提示词、`130` 取消。`doctor` 默认离线，`doctor --connect` 才联网检查。完整语法见 `--help` 或 `help <命令>`。
 
 ### 配置
 
@@ -134,6 +138,7 @@ dotnet run --project TinyHarness.Cli -- run --config artifacts/live.json "检查
 - [PLAN.md](../PLAN.md) — 当前产品范围与 M12+ 路线
 - [PAST_PLAN.md](../PAST_PLAN.md) — 归档的 MVP 与 M1–M11 计划
 - [会话持久化设计](session-persistence-design.md) — 当前契约与本地验收矩阵
+- [任务控制与运行预算](task-control-design.md) — M15 契约、兼容与本地验收
 - [Windows 沙箱管理与验收记录](windows-sandbox-management.md)
 - [Windows 沙箱接入方案](windows-sandbox-dotnet-integration.md)
 - [M9 验证记录](m9-demo.md)、[M10 验证记录](m10-model-protocol.md)

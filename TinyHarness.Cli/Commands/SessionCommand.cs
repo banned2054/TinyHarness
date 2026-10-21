@@ -130,6 +130,21 @@ internal static class SessionCommand
              .WriteLineAsync($"updated         : {session.UpdatedUtc.LocalDateTime:yyyy-MM-dd HH:mm:ss} (commit {session.CommitSequence})",
                              cancellationToken).ConfigureAwait(false);
         await io.WriteLineAsync($"turns           : {session.Turns.Count}", cancellationToken).ConfigureAwait(false);
+        if (session.WorkItems.Count > 0)
+        {
+            await io.WriteLineAsync("work items (claims, not verified outcomes):", cancellationToken)
+                    .ConfigureAwait(false);
+            foreach (var item in session.WorkItems)
+                await io.WriteLineAsync(TerminalDisplay.Format($"  {item.Id} [{item.Status}] {item.DisplayTitle} " +
+                                                               $"(author {item.Source}; source turn {item.SourceTurnId})",
+                                                               redactor),
+                                        cancellationToken).ConfigureAwait(false);
+        }
+
+        foreach (var amendment in session.Amendments)
+            await io.WriteLineAsync(TerminalDisplay.Format($"amendment {amendment.Id}: " +
+                                                           $"{(amendment.CanonicalMessageIndex is null ? "accepted, not applied; resubmit to continue" : "applied")} — {amendment.DisplayText}",
+                                                           redactor), cancellationToken).ConfigureAwait(false);
         await io
              .WriteLineAsync(session.Conversation is { } conversation
                                  ? $"conversation    : {conversation.Messages.Count} messages " +
@@ -139,7 +154,8 @@ internal static class SessionCommand
              .ConfigureAwait(false);
 
         // 区分历史未知副作用与当前确认状态；待检查的会话续聊时仍阻断副作用。
-        if (session.PendingInspectionReason is not null || session.InspectionAcknowledgedUtc is not null ||
+        if (session.PendingInspectionReason is not null ||
+            session.InspectionAcknowledgedUtc is not null ||
             session.Turns.SelectMany(turn => turn.Runs).Any(run => run.NeedsInspection == true))
         {
             await io.WriteLineAsync(session.InspectionAcknowledgedUtc is { } acknowledged
@@ -198,6 +214,10 @@ internal static class SessionCommand
                    $"  steps {run.Steps}  tools {run.ToolExecutions}";
         if (run.InputTokens is not null || run.OutputTokens is not null)
             line += $"  tokens {run.InputTokens ?? 0:N0} in / {run.OutputTokens ?? 0:N0} out";
+        if (run.Budget is { } budget)
+            line += $"  requests {budget.ModelRequests}  budget tokens {budget.AccountedTokens:N0}" +
+                    $" ({(budget.HasEstimatedTokens ? "estimated/mixed" : "reported")})  elapsed {budget.ElapsedMilliseconds} ms" +
+                    $"  limit {budget.LimitReason ?? "none"}";
         await io.WriteLineAsync(line, cancellationToken).ConfigureAwait(false);
 
         if (includeDetails && !string.IsNullOrEmpty(run.FinalMessage))

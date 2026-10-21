@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using TinyHarness.Core.Models.Context;
+using TinyHarness.Core.Models.Agent;
 using System.Text;
 using TinyHarness.Core.Models.ChatCompletions;
 using TinyHarness.Core.Models.ProjectInstructions;
@@ -61,6 +62,9 @@ public sealed record PersistedSession
     public string? PendingInspectionReason { get; init; }
 
     public IReadOnlyList<PersistedTurn> Turns { get; init; } = [];
+
+    public IReadOnlyList<RunAmendment>    Amendments { get; init; } = [];
+    public IReadOnlyList<SessionWorkItem> WorkItems  { get; init; } = [];
 
     /// <summary>
     ///     <para>
@@ -222,6 +226,8 @@ public sealed record PersistedTurn
 /// </remarks>
 public sealed record PersistedRun
 {
+    public RunBudgetSnapshot? Budget { get; init; }
+
     public string Id { get; init; } = string.Empty;
 
     public DateTimeOffset StartedUtc { get; init; }

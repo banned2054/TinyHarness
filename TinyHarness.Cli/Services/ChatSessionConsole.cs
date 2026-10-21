@@ -147,6 +147,9 @@ internal sealed class ChatSessionConsole : IDisposable
     {
         await _output.WriteLineAsync("Type one request per line; each line starts a new turn in this session.");
         await _output.WriteLineAsync("Ctrl+C cancels the active turn; Ctrl+C at the prompt or EOF ends the session.");
+        if (_input is ChatInputRouter)
+            await
+                _output.WriteLineAsync("During a run, text adds an amendment. Controls: /pause /resume /cancel /work. Approval replies stay separate.");
         await PromptInspectionIfNeededAsync(cancellationToken);
 
         while (!_cancellation.IsSessionCancelled)
@@ -171,6 +174,12 @@ internal sealed class ChatSessionConsole : IDisposable
 
             var userInput = line.Trim();
             if (userInput.Length == 0) continue;
+
+            if (userInput is "/pause" or "/resume" or "/cancel" or "/work")
+            {
+                await HandleRunInputAsync(userInput).ConfigureAwait(false);
+                continue;
+            }
 
             if (userInput == "/trust" && WorkspaceTrustHandler is not null)
             {
@@ -231,7 +240,16 @@ internal sealed class ChatSessionConsole : IDisposable
                     await _output.WriteLineAsync($"session    : {Host.Session.Id}").ConfigureAwait(false);
                 }
 
-                run = await Host.SubmitTurnAsync(userInput, turnToken);
+                var pendingRun = Host.SubmitTurnAsync(userInput, turnToken);
+                if (_input is ChatInputRouter router) router.SetActiveHandler(HandleRunInputAsync);
+                try
+                {
+                    run = await pendingRun.ConfigureAwait(false);
+                }
+                finally
+                {
+                    if (_input is ChatInputRouter completedRouter) completedRouter.SetActiveHandler(null);
+                }
             }
             catch (ArgumentException ex)
             {
@@ -261,6 +279,11 @@ internal sealed class ChatSessionConsole : IDisposable
         }
 
         await WriteTurnFooterAsync(turnNumber, run.Result!);
+        var unapplied =
+            Host.Session.Amendments.Count(item => item.RunId == run.Id && item.CanonicalMessageIndex is null);
+        if (unapplied > 0)
+            await
+                _output.WriteLineAsync($"{unapplied} saved amendment(s) were not applied; inspect them and submit a new turn to continue.");
         // 保存不可靠必须在所属回合立即告知用户，不能以运行终态代替保存证据。
         if (Host.PersistenceWarning is { Length: > 0 } warning)
             await _output.WriteLineAsync(TerminalDisplay.Format($"warning: this turn was not reliably saved: {warning}",
@@ -272,9 +295,55 @@ internal sealed class ChatSessionConsole : IDisposable
         await _output.WriteLineAsync();
     }
 
+    private async Task HandleRunInputAsync(string? line)
+    {
+        if (line is null)
+        {
+            Host?.CancelRun();
+            return;
+        }
+
+        var text = line.Trim();
+        if (text.Length == 0) return;
+        try
+        {
+            var message = text switch
+            {
+                "/pause" => Host?.RequestPause() == true
+                    ? "Pause requested; the current operation finishes at a safe boundary."
+                    : "No active run.",
+                "/resume" => Host?.ResumeRun() == true ? "Resume requested." : "No active run.",
+                "/cancel" => Host?.CancelRun() == true
+                    ? "Cancellation requested; waiting for cleanup."
+                    : "No active run.",
+                "/work" => Host is null
+                    ? "No session yet."
+                    : $"Work-item statuses are claims, not verified outcomes. Unapplied amendments: {Host.Session.Amendments.Count(item => item.CanonicalMessageIndex is null)}.\n" +
+                      string.Join('\n',
+                                  Host.Session.WorkItems.Select(item =>
+                                                                    $"{item.Id} [{item.Status}] {item.DisplayTitle}")),
+                _ => string.Empty
+            };
+            if (message.Length == 0)
+            {
+                if (Host is null) throw new InvalidOperationException("No active session.");
+                var accepted = await Host.QueueAmendmentAsync(line, _cancellation.SessionToken).ConfigureAwait(false);
+                message = $"Amendment {accepted.Id} saved and queued; it applies at the next safe boundary.";
+            }
+
+            await _output.WriteLineAsync(TerminalDisplay.Format(message, _redactor)).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or IOException
+                                      or OperationCanceledException)
+        {
+            await _output.WriteLineAsync(TerminalDisplay.Format($"Input was not accepted: {ex.Message}", _redactor))
+                         .ConfigureAwait(false);
+        }
+    }
+
     private async Task PromptInspectionIfNeededAsync(CancellationToken cancellationToken)
     {
-        if (Host is null || !Host.InspectionPending)
+        if (Host is not { InspectionPending: true })
         {
             _promptedInspectionNote  = null;
             _promptedInspectionRunId = null;
@@ -285,21 +354,18 @@ internal sealed class ChatSessionConsole : IDisposable
         var runId = Session.Turns.SelectMany(turn => turn.Runs)
                            .LastOrDefault(run => run.Result?.ToolCalls?.Any(call => call is
                             {
-                                SideEffects: true,
-                                State: ToolCallExecutionState
-                                   .UnknownResult
+                                SideEffects: true, State: ToolCallExecutionState.UnknownResult
                             }) == true)?.Id;
         var note = Host.InspectionPendingNote;
         if (note == _promptedInspectionNote && runId == _promptedInspectionRunId) return;
 
         _promptedInspectionNote  = note;
         _promptedInspectionRunId = runId;
-        if (await InspectionPrompt.ConfirmAsync(Host, _input, _output, _redactor, _cancellation.SessionToken))
-        {
-            await Host.AcknowledgeInspectionAsync(cancellationToken);
-            _promptedInspectionNote  = null;
-            _promptedInspectionRunId = null;
-        }
+        if (!await InspectionPrompt.ConfirmAsync(Host, _input, _output, _redactor, _cancellation.SessionToken)) return;
+
+        await Host.AcknowledgeInspectionAsync(cancellationToken);
+        _promptedInspectionNote  = null;
+        _promptedInspectionRunId = null;
     }
 
     /// <summary>
@@ -321,6 +387,9 @@ internal sealed class ChatSessionConsole : IDisposable
                    .Append(" in / ").Append((result.OutputTokens ?? 0).ToString("N0"))
                    .Append(" out tokens");
         summary.Append(')');
+        if (result.Budget is { } budget)
+            summary.Append($" [requests: {budget.ModelRequests}, budget tokens: {budget.AccountedTokens:N0}" +
+                           $"{(budget.HasEstimatedTokens ? " estimated" : " reported")}, elapsed: {budget.ElapsedMilliseconds} ms]");
 
         switch (result.Status)
         {
@@ -333,6 +402,9 @@ internal sealed class ChatSessionConsole : IDisposable
             case AgentStatus.StepLimitReached :
                 summary.Append(" — the step limit was reached.");
                 break;
+            case AgentStatus.BudgetLimitReached :
+                summary.Append($" — budget limit reached: {result.Budget?.LimitReason ?? "unknown"}.");
+                break;
         }
 
         await _output.WriteLineAsync(TerminalDisplay.Format(summary.ToString(), _redactor));
@@ -340,10 +412,11 @@ internal sealed class ChatSessionConsole : IDisposable
 
     private static string StatusText(AgentStatus status) => status switch
     {
-        AgentStatus.Completed        => "completed",
-        AgentStatus.Cancelled        => "cancelled",
-        AgentStatus.Failed           => "failed",
-        AgentStatus.StepLimitReached => "step limit reached",
-        _                            => status.ToString().ToLowerInvariant()
+        AgentStatus.Completed          => "completed",
+        AgentStatus.Cancelled          => "cancelled",
+        AgentStatus.Failed             => "failed",
+        AgentStatus.StepLimitReached   => "step limit reached",
+        AgentStatus.BudgetLimitReached => "budget limit reached",
+        _                              => status.ToString().ToLowerInvariant()
     };
 }

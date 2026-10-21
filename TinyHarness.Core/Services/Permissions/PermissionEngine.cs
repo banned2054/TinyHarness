@@ -41,6 +41,7 @@ public sealed class PermissionEngine
             ["filesystem.list"]   = PermissionDecision.Allow,
             ["filesystem.search"] = PermissionDecision.Allow,
             ["filesystem.read"]   = PermissionDecision.Allow,
+            ["session.work"]      = PermissionDecision.Allow,
             ["filesystem.write"]  = PermissionDecision.Ask
         };
 
@@ -413,7 +414,8 @@ public sealed class PermissionEngine
             var executable = args["executable"]?.GetValue<string>();
             var directory  = args["workingDirectory"]?.GetValue<string>();
             var arguments  = args["arguments"] as JsonArray;
-            if (!string.Equals(Mode, mode, StringComparison.Ordinal) || directory is null ||
+            if (!string.Equals(Mode, mode, StringComparison.Ordinal) ||
+                directory is null ||
                 !string.Equals(WorkingDirectory, directory, ExecutableComparison))
                 return false;
 
@@ -425,7 +427,8 @@ public sealed class PermissionEngine
                        string.Equals(Command, command, StringComparison.Ordinal);
             }
 
-            if (executable is null                                           || arguments is null ||
+            if (executable is null ||
+                arguments is null ||
                 !string.Equals(Executable, executable, ExecutableComparison) ||
                 arguments.Count != ArgumentPatterns.Count)
                 return false;

@@ -193,8 +193,9 @@ public static class SessionStorePaths
             throw new SessionStoreException($"Cannot validate session store file '{fullPath}': {ex.Message}", ex);
         }
 
-        if (target is not null || ((File.Exists(fullPath) || Directory.Exists(fullPath)) &&
-                                   (File.GetAttributes(fullPath) & FileAttributes.ReparsePoint) != 0))
+        if (target is not null ||
+            ((File.Exists(fullPath) || Directory.Exists(fullPath)) &&
+             (File.GetAttributes(fullPath) & FileAttributes.ReparsePoint) != 0))
             throw new
                 SessionStoreException($"Session store file '{fullPath}' is a link or reparse point and is not allowed.");
     }
@@ -299,6 +300,14 @@ public interface ISessionStoreWriter : IDisposable
     ///     <para>The batch or log exceeds its limit, data is damaged, or writing fails.</para>
     /// </exception>
     Task CommitAsync(ChatSession session, ConversationContext context, CancellationToken cancellationToken);
+
+    /// <summary>
+    ///     <para>在同一批次提交安全边界的 canonical 增量及控制事实；不支持的 writer 必须明确拒绝。</para>
+    ///     <para>Commits canonical increments and control facts in one safe-boundary batch; unsupported writers must refuse.</para>
+    /// </summary>
+    Task CommitControlAsync(ChatSession session, ConversationContext context, IReadOnlyList<SessionLogRecord> records,
+                            CancellationToken cancellationToken) =>
+        throw new NotSupportedException("This session writer does not support control records.");
 
     Task CommitExecutionIntentAsync(
         ChatSession session, ConversationContext context, CancellationToken cancellationToken) =>

@@ -31,9 +31,7 @@ namespace TinyHarness.Cli.Services;
 ///     rule allows/denies print nothing to keep read-only tools quiet.
 /// </summary>
 internal sealed class ConsoleHostEventSink(
-    IReadOnlyDictionary<string, string>? knownSecrets = null,
-    TextWriter?                          output       = null)
-    : IHostEventSink
+    IReadOnlyDictionary<string, string>? knownSecrets = null, TextWriter? output = null) : IHostEventSink
 {
     private readonly TextWriter            _output   = output ?? Console.Out;
     private readonly DisplaySecretRedactor _redactor = new(knownSecrets);
@@ -78,8 +76,8 @@ internal sealed class ConsoleHostEventSink(
                 await CloseOpenLineAsync(cancellationToken).ConfigureAwait(false);
                 break;
 
-            case HostEventKind.ApprovalResolved when @event.Payload is ApprovalResolution resolution &&
-                                                     resolution.Decision == PermissionDecision.Ask :
+            case HostEventKind.ApprovalResolved when @event.Payload is
+                ApprovalResolution { Decision: PermissionDecision.Ask } resolution :
                 await WriteLineAsync($"approval: {resolution.Outcome}", cancellationToken).ConfigureAwait(false);
                 break;
 
@@ -113,6 +111,10 @@ internal sealed class ConsoleHostEventSink(
 
             case HostEventKind.RunError when @event.Payload is string error :
                 await WriteLineAsync($"error: {error}", cancellationToken).ConfigureAwait(false);
+                break;
+
+            case HostEventKind.RunControlChanged when @event.Payload is string control :
+                await WriteLineAsync($"run control: {control}", cancellationToken).ConfigureAwait(false);
                 break;
 
             case HostEventKind.RunFinished :

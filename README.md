@@ -30,18 +30,22 @@ The goal is a small, complete, and explainable execution loop. The CLI is the cu
 
 Early development; commands, configuration, and storage formats may change between milestones.
 
-Implemented today: one-shot `run`, interactive multi-turn `chat`, a protected session store with strictly offline `session list` / `session show` and cross-process resume via `chat --session <id>`, offline-first configuration management, a read-only MCP worker, and opt-in Windows sandbox management. M14.1 adds bounded root/local `AGENTS.md` loading, rule refresh across tool boundaries and resume, and new-chat creation on the first nonblank submission. M14.2 adds one shared behavior prompt for natural-language task scope, tool use, verification, and delivery. Default tests and builds never call a paid model; real-model instruction adherence and continuation over the unified log are unverified.
+Implemented today: one-shot `run`, interactive multi-turn `chat`, a protected session store with strictly offline `session list` / `session show` and cross-process resume via `chat --session <id>`, offline-first configuration management, a read-only MCP worker, and opt-in Windows sandbox management. M14.1 adds bounded root/local `AGENTS.md` loading, rule refresh across tool boundaries and resume, and new-chat creation on the first nonblank submission. M14.2 adds one shared behavior prompt for natural-language task scope, tool use, verification, and delivery. Default tests and builds never call a paid model; milestone-specific evidence and limits are listed below.
 
 M14.1 offline regression passed: **853 total / 851 passed / 2 skipped because symbolic links cannot be created / 0 failed**. Scale passed separately (1/1) within the original budgets. NativeAOT publish and smoke outside the repository passed, verifying initial rules, updates, resumed source integrity, history, and confirmed patch diffs. Evidence: `artifacts/test-results/m14-regression.trx`, `artifacts/test-results/m14-scale.trx`, `artifacts/m14-instructions-scale-results.json`, and `artifacts/m14-instructions-native-smoke.txt`. See the [implementation and validation record](Docs/project-instructions-design.md#14-实施结果与本地验证) for compatibility, commands, and unverified boundaries.
 
 M14.2 engineering validation passed: **860 total / 858 passed / 2 skipped / 0 failed**, including 7 prompt integration cases; NativeAOT and native smoke outside the repository also passed. Only the current built-in prompt is maintained; new and resumed sessions use it, and different prompts fail strict resume. See the [system prompt design and evidence](Docs/system-prompt-design.md); model adherence remains to be evaluated separately.
+
+M15 adds safe-boundary amendments, pause/resume/cancel, a sourced `work_items` list, and trusted cumulative run budgets. Final offline regression: **1013 total / 1011 passed / 2 link-permission skips / 0 failed**; scale passed separately, and `win-x64` NativeAOT plus repository-external smoke passed. See the [M15 contract and evidence](Docs/task-control-design.md). M15 model adherence has not been evaluated with a real service; M14's later sample acceptance is recorded in the [compaction design](Docs/context-compaction-design.md).
 
 ## ✨ Features
 
 - **Agent loop** — streaming replies, multiple sequential tool calls per response, step limits, failure and cancellation handling.
 - **Tools** — `list_files`, `search_text`, `read_file`, `apply_patch`, and `shell` (direct process or explicit shell mode) with timeouts, process-tree termination, and output trimming.
 - **Permissions** — every call follows `Prepare → Authorize → Execute`: workspace reads are allowed by default, patches and processes ask for approval (`a` once / `s` this run / `d` deny), and command allow rules can be configured.
-- **Context** — token budgets calibrated by real usage, tool-result trimming, and compaction of older turns into validated structured summaries.
+- **Context** — token budgets calibrated by real usage, tool-result trimming, bounded text handoffs and sourced user wording after compaction.
+- **Run control and work** — text entered during a run becomes a saved amendment; `/pause`, `/resume`, `/cancel`, and `/work` provide optional host controls. Work-item completion stays a claim, separate from actual tool facts.
+- **Cumulative budgets** — trusted `settings.runBudget` limits logical model requests (including summaries), tool executions, wall time and total tokens. Missing usage is estimated; `BudgetLimitReached` retains its reason and counters.
 - **Project instructions** — root and scoped `AGENTS.md` files are loaded within fixed limits, retained through compaction, and refreshed before requests and tool dispatch. A changed rule set invalidates old unstarted plans and approvals; project files grant no permissions. Opening a new `chat`, blank input, or EOF creates no session until a real submission passes rule preflight.
 - **Persistence** — `run` and new `chat` sessions share the append-only `tinyharness.session-log/1` format in the protected session store; the old full run snapshot/audit pair is no longer the default output. History DTOs keep deterministic process/final classification, bounded redacted tool output, and per-file patch facts whose diffs distinguish `confirmed` from `unknown` after a later workspace change. An execution-intent failure prevents a side effect; an unknown side-effect result sets NeedsInspection, the model view rewinds to the last complete tool boundary, and an unknown side effect blocks writes and process execution until the user inspects and confirms. Session histories page by sequence cursor through a shared scanner (up to 200 returned items with an 8 MiB cumulative serialized UTF-8 budget; scanning may read the captured log range), artifact content is inlined up to 2 MiB per artifact and 4 MiB across stdout/stderr, batches are capped at 8 MiB, and a log at 256 MiB. An uncertain write poisons the writer and strict resume rejects a truncated final line; history inspection may return a reliable prefix with a warning. Sessions can be inspected strictly offline and resumed (`chat --session <id>`) after workspace/model/protocol and opaque-data integrity checks. Session files may contain secrets and are not encrypted; `session list` / `session show` print only redacted inspection views, never canonical messages or opaque payloads.
 - **MCP worker** — `tinyharness mcp` runs a local read-only stdio server exposing `ask_glm` for clients such as Codex.
@@ -52,7 +56,7 @@ M14.2 engineering validation passed: **860 total / 858 passed / 2 skipped / 0 fa
 - A session with an unknown side-effect result after interruption resumes with the model view rewound to the last complete tool boundary and side-effect tools blocked until the user inspects the workspace and confirms (`c` / `k` prompt at resume). Only `tinyharness.session-log/1` is supported. Old `.session.json` snapshots and separate audit files are ignored; no migration command is provided.
 - The Windows sandbox is verified on a single machine, and coexistence with a Codex release install is unverified.
 - Only `win-x64` NativeAOT has been verified; M14.1 publish and native smoke passed. Rule-file and directory-link creation tests were skipped on this host. Protocol coverage comes from a local simulated SSE service, with historical validation against one live endpoint for the earlier implementation.
-- `chat` with the unified session log has not been verified against a real model service; GUI history consumption, power-loss durability and actual OS isolation are also unverified in this acceptance run.
+- M15 control/work-item adherence has not been evaluated with a real model service; GUI history consumption, power-loss durability and new OS-isolation scenarios are also unverified in this acceptance run. Saved unapplied amendments are inspectable and never replayed automatically.
 
 ## 🚀 Build and Run
 
@@ -86,7 +90,7 @@ tinyharness init / config / provider / model / auth / doctor
 tinyharness sandbox status | provision | verify    Windows sandbox management
 ```
 
-`Ctrl+C` cancels the active run; in `chat` it cancels the current turn and exits when idle. Exit codes: `0` completed, `1` failed or step limit reached, `2` missing prompt, `130` cancelled. `doctor` is offline by default; `doctor --connect` is the explicit network check. Use `--help` or `help <command>` for full syntax.
+`Ctrl+C` cancels the active run; in `chat` it cancels the current turn and exits when idle. Exit codes: `0` completed, `1` failed or a step/budget limit reached, `2` missing prompt, `130` cancelled. `doctor` is offline by default; `doctor --connect` is the explicit network check. Use `--help` or `help <command>` for full syntax.
 
 ### Configure
 
@@ -134,6 +138,7 @@ dotnet run --project TinyHarness.Cli -- run --config artifacts/live.json "Find o
 - [PLAN.md](PLAN.md) — current product scope and the M12+ roadmap
 - [PAST_PLAN.md](PAST_PLAN.md) — archived MVP and M1–M11 plan
 - [Session persistence design](Docs/session-persistence-design.md) (Chinese)
+- [Task control and run budgets](Docs/task-control-design.md) (Chinese)
 - [Windows sandbox management and acceptance records](Docs/windows-sandbox-management.md) (Chinese)
 - [Windows sandbox integration design](Docs/windows-sandbox-dotnet-integration.md) (Chinese)
 - [M9](Docs/m9-demo.md) and [M10](Docs/m10-model-protocol.md) validation records

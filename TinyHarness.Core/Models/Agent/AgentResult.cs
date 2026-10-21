@@ -9,6 +9,12 @@ public sealed record AgentResult
     public required AgentStatus Status { get; init; }
 
     /// <summary>
+    ///     <para>本次运行的累计预算事实；旧日志无此字段时为 null。</para>
+    ///     <para>Cumulative budget facts for this run; null for older logs without this field.</para>
+    /// </summary>
+    public RunBudgetSnapshot? Budget { get; init; }
+
+    /// <summary>
     ///     <para>运行产出的最终 assistant 文本。</para>
     ///     <para>The final assistant text, when the run produced one.</para>
     /// </summary>

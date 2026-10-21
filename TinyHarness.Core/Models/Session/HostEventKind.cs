@@ -174,5 +174,11 @@ public enum HostEventKind
     ///     <para>压缩未提交；负载为不含模型正文的 CompactionFailureReason。</para>
     ///     <para>Compaction was not committed; payload is CompactionFailureReason without model text.</para>
     /// </summary>
-    CompactionFailed = 14
+    CompactionFailed = 14,
+
+    /// <summary>
+    ///     <para>已在安全边界暂停、继续或应用补充；负载为状态字符串，不含用户原话。</para>
+    ///     <para>Paused, resumed or applied an amendment at a safe boundary; payload is a state string without user text.</para>
+    /// </summary>
+    RunControlChanged = 15
 }

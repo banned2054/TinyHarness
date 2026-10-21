@@ -18,7 +18,7 @@ namespace TinyHarness.Core.Models.Session;
 ///         other services handle persistence and cross-process resume.
 ///     </para>
 /// </remarks>
-public sealed class ChatSession
+public sealed partial class ChatSession
 {
     private readonly List<SessionTurn> _turns = [];
 

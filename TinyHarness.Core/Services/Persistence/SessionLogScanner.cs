@@ -3,7 +3,6 @@ using System.Text.Json;
 using TinyHarness.Core.Exceptions;
 using TinyHarness.Core.Models.Context;
 using TinyHarness.Core.Models.Persistence;
-using TinyHarness.Core.Models.ProjectInstructions;
 
 namespace TinyHarness.Core.Services.Persistence;
 
@@ -264,7 +263,7 @@ internal static class SessionLogScanner
             throw new SessionStoreException($"Session log '{path}' uses unknown format '{batch.Format}'.");
         if (batch.SessionId != sessionId ||
             batch.Sequence != sequence ||
-            batch.BatchId   != $"{sessionId}:{sequence:D20}")
+            batch.BatchId != $"{sessionId}:{sequence:D20}")
             throw new
                 SessionStoreException($"Session log '{path}' has a duplicate, mismatched, or out-of-order batch at sequence {sequence}.");
         if (batch.Records is null || batch.Records.Count == 0)
@@ -343,6 +342,8 @@ internal static class SessionLogScanner
                     RequireObject(record.Payload, "run payload");
                     RequireStringProperty(record.Payload, "turnId");
                     RequireObject(Required(record.Payload, "run"), "run");
+                    var persistedRun = record.Payload.Deserialize(SessionLogJsonContext.Default.SessionLogRun);
+                    persistedRun?.Run.Budget?.Validate(persistedRun.Run.ToolExecutions);
                     break;
                 case "message" :
                     RequireObject(record.Payload, "message payload");
@@ -364,6 +365,10 @@ internal static class SessionLogScanner
                         throw new
                             SessionStoreException($"Session log '{path}' contains an invalid project-instructions record.");
                     break;
+                case "run-amendment" :
+                case "work-item" :
+                    SessionStoreWriter.ValidateControlRecord(record with { Id = string.Empty });
+                    break;
                 case "checkpoint" :
                     throw new
                         SessionStoreException("Legacy structured-state compaction checkpoints are unsupported; original data was not changed.");
@@ -377,7 +382,7 @@ internal static class SessionLogScanner
                     if (checkpoint.HasState &&
                         (checkpoint.State is null ||
                          RequiredString(Required(record.Payload, "state"), "schema") !=
-                                                CompactionState.CurrentSchema ||
+                         CompactionState.CurrentSchema ||
                          string.IsNullOrWhiteSpace(checkpoint.State.Summary) ||
                          checkpoint.State.RetainedUserMessages is null))
                         throw new SessionStoreException("Unsupported or invalid compaction checkpoint schema.");
@@ -397,8 +402,8 @@ internal static class SessionLogScanner
                 case "history" :
                     ValidateHistoryPayload(record.Payload);
                     if (RequiredString(record.Payload, "sessionId") != batch.SessionId ||
-                        RequiredString(record.Payload, "id")        != record.Id ||
-                        RequiredInt64(record.Payload, "sequence")   != batch.Sequence ||
+                        RequiredString(record.Payload, "id") != record.Id ||
+                        RequiredInt64(record.Payload, "sequence") != batch.Sequence ||
                         string.IsNullOrWhiteSpace(RequiredString(record.Payload, "kind")))
                         throw new
                             SessionStoreException($"Session log '{path}' contains an unbound history item at sequence {batch.Sequence}, record {index}.");
@@ -408,7 +413,7 @@ internal static class SessionLogScanner
                         SessionStoreException($"Session log '{path}' contains unknown required record kind '{record.Kind}'.");
             }
         }
-        catch (JsonException ex)
+        catch (Exception ex) when (ex is JsonException or InvalidDataException)
         {
             throw new
                 SessionStoreException($"Session log '{path}' contains an invalid '{record.Kind}' payload at sequence {batch.Sequence}, record {index}: {ex.Message}",

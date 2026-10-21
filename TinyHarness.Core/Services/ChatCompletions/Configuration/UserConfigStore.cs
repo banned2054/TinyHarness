@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using TinyHarness.Core.Models.Agent;
 using TinyHarness.Core.Models.Configuration;
 using TinyHarness.Core.Models.Runtime.WindowsSandbox;
 
@@ -141,6 +142,13 @@ public static class UserConfigStore
         if (settings is not null)
         {
             var settingsNode = new JsonObject();
+
+            if (settings.RunBudget is { } budget)
+            {
+                budget.Validate();
+                settingsNode["runBudget"] =
+                    JsonSerializer.SerializeToNode(budget, RunBudgetJsonContext.Default.RunBudgetLimits);
+            }
 
             if (settings.MaxAgentSteps is { } maxAgentSteps) settingsNode["maxAgentSteps"] = maxAgentSteps;
 
@@ -359,6 +367,7 @@ public static class UserConfigStore
 
         settings = new UserConfigSettings
         {
+            RunBudget     = BindRunBudget(settingsNode, filePath),
             MaxAgentSteps = ReadPositiveInt(settingsNode, "maxAgentSteps", filePath, "settings.maxAgentSteps"),
             ReservedOutputTokens =
                 ReadNonNegativeInt(settingsNode, "reservedOutputTokens", filePath, "settings.reservedOutputTokens"),
@@ -381,6 +390,29 @@ public static class UserConfigStore
             Profiles       = profiles ?? [],
             Settings       = settings
         };
+    }
+
+    /// <summary>
+    ///     <para>严格绑定可信累计预算；拒绝未知字段、错误类型和非法上限。</para>
+    ///     <para>Strictly binds trusted cumulative limits, rejecting unknown fields, wrong types and invalid limits.</para>
+    /// </summary>
+    private static RunBudgetLimits? BindRunBudget(JsonObject settings, string filePath)
+    {
+        if (!settings.TryGetPropertyValue("runBudget", out var node)) return null;
+        try
+        {
+            if (node is not JsonObject) throw new JsonException("runBudget must be an object");
+            var budget = node.Deserialize(RunBudgetJsonContext.Default.RunBudgetLimits)
+                      ?? throw new JsonException("runBudget must be an object");
+            budget.Validate();
+            return budget;
+        }
+        catch (Exception ex) when (ex is JsonException or ArgumentOutOfRangeException)
+        {
+            throw new
+                InvalidDataException($"User config field 'settings.runBudget' in '{filePath}' is invalid: {ex.Message}",
+                                     ex);
+        }
     }
 
     /// <summary>
@@ -441,7 +473,8 @@ public static class UserConfigStore
         var environment = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var (name, value) in environmentNode)
         {
-            if (string.IsNullOrWhiteSpace(name) || value is not JsonValue { } envValue ||
+            if (string.IsNullOrWhiteSpace(name)     ||
+                value is not JsonValue { } envValue ||
                 envValue.GetValueKind() is not JsonValueKind.String)
                 throw new
                     InvalidDataException($"User config field 'settings.windowsSandbox.extraEnvironment' in '{filePath}' must map non-empty names to string values.");

@@ -25,10 +25,7 @@ namespace TinyHarness.Core.Services.Session;
 ///     </para>
 /// </remarks>
 public sealed record SessionRestoration(
-    ChatSession         Session,
-    ConversationContext Context,
-    string?             NeedsInspection = null,
-    bool                RewoundTail     = false);
+    ChatSession Session, ConversationContext Context, string? NeedsInspection = null, bool RewoundTail = false);
 
 /// <summary>
 ///     <para>校验会话日志投影并重建可续聊的会话与上下文，不解析凭据、调用模型、启动工具或读写文件。</para>
@@ -153,9 +150,11 @@ public static class SessionResume
                 Content    = persisted.Content ?? string.Empty,
                 ToolCallId = persisted.ToolCallId,
                 Name       = persisted.Name,
-                ToolCalls = persisted.ToolCalls?.Select(call => new ChatToolCall(call.Id, call.Name, call.Arguments)).ToArray(),
+                ToolCalls = persisted.ToolCalls?.Select(call => new ChatToolCall(call.Id, call.Name, call.Arguments))
+                                     .ToArray(),
                 Reasoning = persisted.Reasoning?.Select(entry =>
-                    new ReasoningContent(entry.Text, entry.ProtectedData, entry.ItemId)).ToArray()
+                                                            new ReasoningContent(entry.Text, entry.ProtectedData,
+                                                                entry.ItemId)).ToArray()
             });
         }
 
@@ -268,6 +267,7 @@ public static class SessionResume
             var restoredTurn = new SessionTurn(turn.Id, turn.UserInput, turn.CreatedUtc);
             foreach (var run in turn.Runs)
             {
+                run.Budget?.Validate(run.ToolExecutions);
                 var restoredRun = new SessionRun(run.Id, snapshot.Id, turn.Id, run.StartedUtc);
                 var records = run.ToolCalls is { Count: > 0 } calls
                     ? calls.Select(call => RebuildToolCallRecord(snapshot.Id, call)).ToArray()
@@ -289,6 +289,7 @@ public static class SessionResume
                         ToolExecutions = run.ToolExecutions,
                         InputTokens    = run.InputTokens,
                         OutputTokens   = run.OutputTokens,
+                        Budget         = run.Budget,
                         ToolCalls      = records
                     }, run.FinishedUtc ?? run.StartedUtc);
                 }
@@ -299,6 +300,8 @@ public static class SessionResume
             session.AddTurn(restoredTurn);
         }
 
+        foreach (var amendment in snapshot.Amendments) session.RecordAmendment(amendment);
+        foreach (var item in snapshot.WorkItems) session.RecordWorkItem(item);
         return session;
     }
 

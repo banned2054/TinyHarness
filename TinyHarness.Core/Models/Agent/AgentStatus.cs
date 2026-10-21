@@ -14,5 +14,6 @@ public enum AgentStatus
     Completed,
     Failed,
     Cancelled,
-    StepLimitReached
+    StepLimitReached,
+    BudgetLimitReached
 }
