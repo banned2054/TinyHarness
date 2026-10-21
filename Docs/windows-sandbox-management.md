@@ -120,6 +120,8 @@ CLI 确认页说明监听范围；每目标在绑定前显示地址和请求端�
 
 本次非环回目标实际是 Meta 接口 `198.18.0.1`，不代表物理 LAN `192.168.8.248`、远端公网或非环回 IPv6 已验证；53/853 仍只证明直接端口通信观测，不证明系统 DNS 解析器/服务代发或完整泄漏防护。用户确认网络授权后，新 exe 从 0 条应用规则变为两条持久 Public / Inbound / Allow 规则（TCP、UDP 各一条，端口/地址均 Any）。只读核对并记录于 `firewall-after.json`、`firewall-persistent.json`，本 chat 未代点弹窗、未执行配置规则命令，也未自行删除规则。实际用户配置和受保护的 1,055 个既有文件哈希不变。旧 PriceLab 5 通过、旧矩阵 15/15 与此次专项分别计数，不宣称 M14 或全部沙箱管理完成。
 
+后续规则清理：用户另行明确授权删除上述两条新 exe 的应用规则；普通权限删除被拒后，通过一次精确 UAC 清理完成。清理后的独立只读复核确认 ActiveStore 与 PersistentStore 中该应用目标规则均为 0，未操作原有 TinyHarness 沙箱规则。证据：`artifacts/sandbox-network-acceptance-20261020/real-20261020-870c1a/firewall-cleanup-uac-result.json`、`firewall-cleanup-independent-check.json`。这项授权已完成，不表示可以在未来复验时继续修改规则。当前进度和后续边界见[接力入口](current-progress.md)。
+
 ## M11 验收记录
 
 M11 Windows 沙箱（2026-10-10，M11.1–M11.4）：M11.4 交付 `sandbox status`/`sandbox provision` 管理入口（见上文“Windows 沙箱管理命令”）。默认测试 **532/532 通过**（新增 28 个管理入口测试，全部离线，不启动真实 setup.exe、不触发 UAC）；`TinyHarness.Cli` 构建 0 警告；`win-x64` NativeAOT publish 无 trimming/AOT warning；发布产物从仓库外通过 `--help`、`sandbox status`（只读，本机未配置 windowsSandbox 如实报告并退出 0）、离线 `doctor` 与既有 smoke（Completed/17 steps/16 toolExecs），全程无 UAC、无机器修改；`sandbox provision --yes` 在未配置时于提权前拒绝（exit 1）。隔离验收（M11.5）未开始，完成前不宣称沙箱可用。
