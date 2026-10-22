@@ -28,8 +28,17 @@ public sealed class StreamAccumulator
     private readonly List<ChatToolCall> _toolCalls = [];
 
     private string? _openReasoningItemId;
+    private long    _closedReasoningCharacters;
 
     public string Content => _content.ToString();
+
+    public long TextCharacters => _content.Length;
+
+    /// <summary>
+    ///     <para>已拼装的推理文本字符数；条目完成时的完整文本覆盖增量，不重复计数 opaque 载荷。</para>
+    ///     <para>Assembled reasoning text characters; full item text replaces deltas and opaque payloads are not counted.</para>
+    /// </summary>
+    public long ReasoningCharacters => _closedReasoningCharacters + _reasoningText.Length;
 
     public IReadOnlyList<ChatToolCall> ToolCalls => _toolCalls;
 
@@ -50,6 +59,9 @@ public sealed class StreamAccumulator
     ///     Server-reported output token count; stays null when no reliable usage arrived.
     /// </summary>
     public int? OutputTokens { get; private set; }
+
+    public int? CachedInputTokens { get; private set; }
+    public int? ReasoningTokens   { get; private set; }
 
     /// <summary>
     ///     服务端报告的结束原因；未报告时保持为 null。
@@ -162,6 +174,7 @@ public sealed class StreamAccumulator
     /// </summary>
     private void CloseReasoningEntry(string? text, string? protectedData, string? itemId)
     {
+        _closedReasoningCharacters += text?.Length ?? 0;
         if (!string.IsNullOrEmpty(text) || protectedData is not null || itemId is not null)
             _reasoning.Add(new ReasoningContent(string.IsNullOrEmpty(text) ? null : text, protectedData, itemId));
 
@@ -179,6 +192,9 @@ public sealed class StreamAccumulator
         if (@event.InputTokens is { } inputTokens) InputTokens ??= inputTokens;
 
         if (@event.OutputTokens is { } outputTokens) OutputTokens ??= outputTokens;
+
+        if (@event.CachedInputTokens is { } cachedTokens) CachedInputTokens ??= cachedTokens;
+        if (@event.ReasoningTokens is { } reasoningTokens) ReasoningTokens  ??= reasoningTokens;
 
         if (@event.FinishReason is { } finishReason) FinishReason ??= finishReason;
     }

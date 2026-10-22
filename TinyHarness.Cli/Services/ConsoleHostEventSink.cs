@@ -39,6 +39,7 @@ internal sealed class ConsoleHostEventSink(
     private bool _lineOpen;
 
     private bool _toolLineOpen;
+    private long _lastWaitNoticeMilliseconds;
 
     /// <summary>
     ///     事件在运行内串行到达（契约：发布方内联等待），展示状态无需加锁。文本增量流之间
@@ -55,22 +56,45 @@ internal sealed class ConsoleHostEventSink(
         switch (@event.Kind)
         {
             case HostEventKind.ModelRequestStarted when @event.Payload is ModelRequestProgress startedRequest :
+                _lastWaitNoticeMilliseconds = 0;
                 await WriteLineAsync($"model request {startedRequest.RequestNumber}" +
-                                     $"{(startedRequest.SummaryRequest ? " (summary)" : string.Empty)}: waiting for model",
+                                     $"{(startedRequest.SummaryRequest ? " (summary)" : string.Empty)}: awaiting first SDK stream event " +
+                                     $"(~{startedRequest.EstimatedInputTokens:N0} input tokens; {startedRequest.InputMessageCount} messages)",
                                      cancellationToken).ConfigureAwait(false);
                 break;
 
+            case HostEventKind.ModelRequestActivity when @event.Payload is ModelRequestProgress activity :
+                _lastWaitNoticeMilliseconds = activity.ElapsedMilliseconds;
+                await WriteLineAsync($"model request {activity.RequestNumber}: {ModelPhaseText(activity)} " +
+                                     $"({activity.ElapsedMilliseconds} ms)", cancellationToken).ConfigureAwait(false);
+                break;
+
             case HostEventKind.ModelRequestWaiting when @event.Payload is ModelRequestProgress waitingRequest :
-                await WriteLineAsync($"model request {waitingRequest.RequestNumber}: still waiting for model " +
-                                     $"({waitingRequest.ElapsedMilliseconds / 1000}s elapsed)", cancellationToken)
-                   .ConfigureAwait(false);
+                if (waitingRequest.ElapsedMilliseconds - _lastWaitNoticeMilliseconds < 30_000) break;
+                _lastWaitNoticeMilliseconds = waitingRequest.ElapsedMilliseconds;
+                var lastEvent = waitingRequest.LastStreamEventMilliseconds is { } last
+                    ? $"; last SDK event {waitingRequest.ElapsedMilliseconds - last} ms ago"
+                    : string.Empty;
+                await WriteLineAsync($"model request {waitingRequest.RequestNumber}: {ModelPhaseText(waitingRequest)} " +
+                                     $"({waitingRequest.ElapsedMilliseconds / 1000}s elapsed{lastEvent})",
+                                     cancellationToken).ConfigureAwait(false);
                 break;
 
             case HostEventKind.ModelRequestFinished when @event.Payload is ModelRequestProgress finishedRequest :
                 await WriteLineAsync($"model request {finishedRequest.RequestNumber}: {finishedRequest.Outcome} " +
-                                     $"({finishedRequest.ElapsedMilliseconds} ms)" +
+                                     $"({finishedRequest.ElapsedMilliseconds} ms)"                                +
                                      (finishedRequest.PartialText ? "; streamed answer is incomplete" : string.Empty),
                                      cancellationToken).ConfigureAwait(false);
+                await WriteLineAsync($"model request {finishedRequest.RequestNumber} timings: "                        +
+                                     $"first SDK event={ObservedTime(finishedRequest.FirstStreamEventMilliseconds)}; " +
+                                     $"reasoning={ObservedTime(finishedRequest.FirstReasoningMilliseconds)}; "         +
+                                     $"text={ObservedTime(finishedRequest.FirstTextMilliseconds)}; "                   +
+                                     $"reasoning chars={finishedRequest.ReasoningCharacters:N0}; "                     +
+                                     $"text chars={finishedRequest.TextCharacters:N0}; "                               +
+                                     $"cached input tokens={ReportedCount(finishedRequest.CachedInputTokens)}; "       +
+                                     $"reasoning tokens={ReportedCount(finishedRequest.ReasoningTokens)}",
+                                     cancellationToken)
+                   .ConfigureAwait(false);
                 break;
 
             case HostEventKind.AssistantTextDelta when @event.Payload is string delta :
@@ -144,6 +168,32 @@ internal sealed class ConsoleHostEventSink(
                 break;
         }
     }
+
+    /// <summary>
+    ///     <para>只描述已观察到的流阶段和字符数，不将未收到更新解释为服务端空闲。</para>
+    ///     <para>Describes only observed stream phases and character counts without interpreting silence as server idleness.</para>
+    /// </summary>
+    private static string ModelPhaseText(ModelRequestProgress progress) => progress.Phase switch
+    {
+        ModelRequestPhase.ReceivingResponse => "SDK stream received; awaiting content",
+        ModelRequestPhase.ReceivingReasoning =>
+            $"receiving reasoning ({progress.ReasoningCharacters:N0} chars; contents hidden)",
+        ModelRequestPhase.ReceivingText => progress.SummaryRequest ? "receiving summary text" : "receiving answer text",
+        ModelRequestPhase.ReceivingTools => "receiving tool calls",
+        _ => "awaiting first SDK stream event"
+    };
+
+    /// <summary>
+    ///     <para>未观察到的阶段保持明确缺失，不显示成零毫秒。</para>
+    ///     <para>Keeps unobserved timings explicit instead of rendering them as zero milliseconds.</para>
+    /// </summary>
+    private static string ObservedTime(long? milliseconds) => milliseconds is { } value ? $"{value} ms" : "unobserved";
+
+    /// <summary>
+    ///     <para>区分服务端报告零与未报告 token 数。</para>
+    ///     <para>Distinguishes a server-reported zero from an unreported token count.</para>
+    /// </summary>
+    private static string ReportedCount(int? count) => count is { } value ? $"{value:N0}" : "unreported";
 
     /// <summary>
     ///     流式打印一个文本增量：脱敏后转义控制字符（保留换行与制表符）并写入。

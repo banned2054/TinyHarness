@@ -22,6 +22,54 @@ namespace TinyHarness.Tests;
 public class ConsoleHostEventSinkTests
 {
     /// <summary>
+    ///     <para>等待输出按三十秒节流，推理阶段只显示计数，并区分未报告与零缓存。</para>
+    ///     <para>Wait output is throttled to thirty seconds, reasoning shows counts only, and missing cache differs from zero.</para>
+    /// </summary>
+    [TestCase(null, "unreported")]
+    [TestCase(0, "0")]
+    [TestCase(8, "8")]
+    public async Task ModelObservationDisplayThrottlesAndPreservesMissingCache(int? cached, string expected)
+    {
+        var reasoning = new ModelRequestProgress(1, false, 10)
+        {
+            Phase                      = ModelRequestPhase.ReceivingReasoning, FirstStreamEventMilliseconds = 5,
+            FirstReasoningMilliseconds = 10, LastStreamEventMilliseconds = 10, ReasoningCharacters = 500
+        };
+        var output = await RenderAsync(
+            new HostEvent
+            {
+                Kind    = HostEventKind.ModelRequestStarted,
+                Payload = new ModelRequestProgress(1, false, 0)
+            },
+            new HostEvent { Kind = HostEventKind.ModelRequestActivity, Payload = reasoning },
+            new HostEvent
+            {
+                Kind    = HostEventKind.ModelRequestWaiting,
+                Payload = reasoning with { ElapsedMilliseconds = 10_000 }
+            },
+            new HostEvent
+            {
+                Kind    = HostEventKind.ModelRequestWaiting,
+                Payload = reasoning with { ElapsedMilliseconds = 30_010 }
+            },
+            new HostEvent
+            {
+                Kind = HostEventKind.ModelRequestFinished,
+                Payload = reasoning with
+                {
+                    ElapsedMilliseconds = 31_000, Outcome = "cancelled",
+                    CachedInputTokens = cached
+                }
+            });
+        Assert.That(output.Split("receiving reasoning").Length - 1, Is.EqualTo(2));
+        Assert.That(output, Does.Contain("500 chars; contents hidden").And.Contain("last SDK event 30000 ms ago"));
+        Assert.That(output,
+                    Does.Contain("first SDK event=5 ms").And.Contain("reasoning=10 ms").And.Contain("text=unobserved"));
+        Assert.That(output, Does.Contain($"cached input tokens={expected}"));
+        Assert.That(output, Does.Not.Contain("10s elapsed"));
+    }
+
+    /// <summary>
     ///     <para>请求等待与失败可见，已流出的正文明确标为未完成，摘要仅展示用途。</para>
     ///     <para>Request waits and failures are visible, streamed text is marked incomplete, and summaries show purpose only.</para>
     /// </summary>
@@ -29,17 +77,26 @@ public class ConsoleHostEventSinkTests
     public async Task ModelRequestLifecycleDisplaysWaitAndIncompleteAnswer()
     {
         var output = await RenderAsync(
-            new HostEvent { Kind = HostEventKind.ModelRequestStarted, Payload = new ModelRequestProgress(2, true, 0) },
-            new HostEvent { Kind = HostEventKind.ModelRequestWaiting, Payload = new ModelRequestProgress(2, true, 10_000) },
+            new HostEvent
+            {
+                Kind    = HostEventKind.ModelRequestStarted,
+                Payload = new ModelRequestProgress(2, true, 0)
+            },
+            new HostEvent
+            {
+                Kind    = HostEventKind.ModelRequestWaiting,
+                Payload = new ModelRequestProgress(2, true, 30_000)
+            },
             TextDelta("partial"),
             new HostEvent
             {
-                Kind = HostEventKind.ModelRequestFinished,
-                Payload = new ModelRequestProgress(2, true, 12_000, "failed", true)
+                Kind    = HostEventKind.ModelRequestFinished,
+                Payload = new ModelRequestProgress(2, true, 32_000, "failed", true)
             });
-        Assert.That(output, Does.Contain("model request 2 (summary): waiting for model"));
-        Assert.That(output, Does.Contain("still waiting for model (10s elapsed)"));
-        Assert.That(output, Does.Contain("partial\nmodel request 2: failed (12000 ms); streamed answer is incomplete"));
+        Assert.That(output, Does.Contain("model request 2 (summary): awaiting first SDK stream event"));
+        Assert.That(output, Does.Contain("awaiting first SDK stream event (30s elapsed)"));
+        Assert.That(output, Does.Contain("partial\nmodel request 2: failed (32000 ms); streamed answer is incomplete"));
+        Assert.That(output, Does.Contain("first SDK event=unobserved").And.Contain("cached input tokens=unreported"));
     }
 
     [Test]

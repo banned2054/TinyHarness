@@ -2,7 +2,7 @@
 
 更新日期：2026-10-22。工作目录：`C:\Code\.Net\TinyHarness`。
 
-本次工作：按用户授权修复模型无可用回答却 Completed，以及模型等待无反馈的问题，见 §9。M16 收窄验收结果保留于 §8，M15 工程结果保留于 §7。M17 尚未进入，不重跑旧沙箱专项或替换用户正在使用的 exe。
+本次工作：按用户授权补齐请求阶段时间、推理活动和缓存元数据观测，见 §10；此前响应完整性修复保留于 §9。M16 收窄验收结果保留于 §8，M15 工程结果保留于 §7。M17 尚未进入，不重跑旧沙箱专项或替换用户正在使用的 exe。
 
 这份文档用于跨 chat 接续工作，替代反复复制长交接 prompt。产品计划仍以 [PLAN.md](../PLAN.md) 为准，操作规则以 [AGENTS.md](../AGENTS.md) 和用户当前明确要求为准。开始工作先核对 HEAD、status、相关源码和差异；下面的路径、配置和结果是本次记录，不能替代下次的磁盘检查。后续取得新结果时更新这里的当前状态，详细证据留在对应报告。
 
@@ -101,6 +101,13 @@ CLI 第 8/9 轮各发起过摘要请求，但日志中 `context.compacted` 为 0
 最新本轮本地产物（未自动替换聊天进程）：
 
 ```text
+C:\Code\.Net\TinyHarness\artifacts\model-request-observability-20261022\native\TinyHarness.exe
+SHA-256: EFDBBB932AA36E05BBE9D28D1709DAF2337EF2E2E75239E8FE0C07EE522FB338
+```
+
+此前响应完整性修复产物：
+
+```text
 C:\Code\.Net\TinyHarness\artifacts\model-response-fix-20261022\native-accepted\TinyHarness.exe
 SHA-256: B697292555AE47C8CC12F86A91CB4BB789B76F177D38759BC8FE183060F7CFD8
 ```
@@ -188,3 +195,14 @@ SHA-256: 7CA34BFF187ED486B34223C56718C5232F2049018D01387E31C74730A1859B88
 - win-x64 Release NativeAOT publish 成功，无 compiler／trimming／AOT warning。仓库外隔离配置原生 smoke 退出 0，主链 Completed／17 steps／16 tools；新增合成会话验证一次读取后 reasoning-only 失败、同日志恢复、缺失终止信息失败与下一轮成功，未重放工具。现有控制／预算／规则刷新／历史 diff 检查继续通过。
 - 受限执行中 SDK 测试曾因 HttpListener 句柄无效失败，普通宿主权限复跑通过；原 PATH 下三项进程模拟回归失败，去重并前置 System32 的子进程 PATH 下原断言通过。NativeAOT 构建曾出现找不到 where、输入行过长及 link 不可用；精简进程 PATH 后通过。首次原生 smoke 缺少 PowerShell 路径失败，补齐该进程 PATH 后通过。中间日志保留，未修改机器环境或产品依赖，不将上述表现扩大解释为 Windows 内部根因已定位。
 - 本机证据：[验证记录](../artifacts/model-response-fix-20261022/verification.md)、[机器汇总](../artifacts/model-response-fix-20261022/final-proof.json)。原会话 SHA-256 仍为 `71F87CE61FAE54FC1B21C2BE028C9168295F704A750B5F1959BDA83DCF48869F`；未改写原会话或替换用户运行中的 exe。真实供应商复测、GUI、断电和新的 OS 隔离验收未执行；本轮不自动进入 M17。
+
+## 10. 请求阶段观测与缓存元数据（2026-10-22）
+
+- 用户使用 §9 的新产物恢复会话后，主动取消第四轮。只读检查确认该轮 351.1 秒、2 次模型请求／3 次读取；首个请求 221.9 秒，报告 40,189 输入／8,948 输出 token，正文 64 字符、reasoning 38,864 字符。三次读取在 usage 后约 154 ms 内结束，下一请求约 129 秒后取消且无最终 usage。长推理是首请求的有证据解释，仍缺首包与服务端排队信息，不能将它直接套用到第二请求。
+- 用户随后授权补齐观测。本轮保留已有未提交修改，没有新真实模型请求，没有发送原会话或操作 Banori、用户认证配置、目录信任、机器沙箱与 Git 写入。未改请求历史投影、协议、超时、重试、推理预算或缓存策略。
+- MicrosoftAiChatClient 首次收到 SDK update 时发出 ResponseStarted；明确不表示 HTTP 响应头、TCP 首包或真实服务端计算时间。沿同一 AgentLoop 记录首次流事件、首次推理、首次正文、最近流活动、逻辑字符数、输入估算和消息数；推理条目完整文本不与增量重复计数，opaque 不算可读字符，也不把字符数转换成实际 token。
+- 原事件路径新增有界首次活动通知，CLI 立即区分等待首个 SDK 流事件、接收推理／正文／工具；同阶段等待提示最多三十秒一条，并显示距最近活动的时间。推理和压缩正文不展示。请求结束行保留未观察到的阶段，不补为零。
+- 通过现有 SDK UsageDetails 提取 CachedInputTokenCount／ReasoningTokenCount，保留 null、显式零和非零，按输入／输出子集验证；不重复累计到预算。两种协议的本机 SDK/SSE 测试验证映射。服务商未通过 SDK 公开字段报告时显示 unreported，不据此断言缓存未命中。
+- 请求终态观测作为 `model.request` 审计事实追加到唯一 session-log，包括取消和失败；AuditRecord 新增可选 ModelRequest 元数据，不存请求、正文、推理原文或头部，不参与模型历史／授权恢复，无新 writer、恢复格式或迁移入口。旧日志缺失该字段仍可读。观测保存失败报告 PersistenceWarning 并阻止新工具；摘要发生该故障也停止后续请求，既有模型失败原因保留。
+- 最终普通离线回归 1058 总／1056 通过／2 链接权限跳过／0 失败，55 s；独立 scale 1/1，22 s；NativeAOT publish 无 compiler／trimming／AOT warning。仓库外隔离配置原生 smoke 退出 0，主链 Completed／17 steps／16 tools，另外验证新计时与可选缓存字段的生成 JSON、取消落盘及同日志恢复。完整命令见[本轮验证记录](../artifacts/model-request-observability-20261022/verification.md)。
+- 本轮开始与结束的真实会话 SHA-256 均为 `20A29ADBB32EE02D012A26D7FEC263E76288103E1C581E9A511D7CE0E2140B0A`；与 §9 哈希不同来自用户恢复会话后的追加，不由本轮诊断修改。新产物见 §5，未替换用户进程。真实请求速度、上游缓存实际命中和 HTTP 首字节时间仍未验证，需后续明确授权的真实测试；本轮不宣称推理已经提速。

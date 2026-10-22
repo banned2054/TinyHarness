@@ -1,3 +1,5 @@
+using TinyHarness.Core.Models.Session;
+
 namespace TinyHarness.Core.Models.Persistence;
 
 public sealed record AuditRecord
@@ -41,4 +43,10 @@ public sealed record AuditRecord
     public int?    InputTokens     { get; init; }
     public int?    OutputTokens    { get; init; }
     public string? FinishReason    { get; init; }
+
+    /// <summary>
+    ///     <para>可选的请求观测终态；旧日志无需此字段，不参与模型历史或授权恢复。</para>
+    ///     <para>Optional terminal request observations; absent in older logs and excluded from model history and grants.</para>
+    /// </summary>
+    public ModelRequestProgress? ModelRequest { get; init; }
 }

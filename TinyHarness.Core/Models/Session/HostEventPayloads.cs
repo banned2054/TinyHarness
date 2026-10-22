@@ -36,7 +36,24 @@ public sealed record ModelUsage(
     int?    InputTokens,
     int?    OutputTokens,
     string? FinishReason,
-    bool    SummaryRequest);
+    bool    SummaryRequest)
+{
+    public int? CachedInputTokens { get; init; }
+    public int? ReasoningTokens   { get; init; }
+}
+
+/// <summary>
+///     <para>最近收到的 SDK 流活动种类，不推断服务端排队、推理进程或网络状态。</para>
+///     <para>The latest observed SDK stream activity, without inferring server queues, computation or network state.</para>
+/// </summary>
+public enum ModelRequestPhase
+{
+    WaitingForResponse,
+    ReceivingResponse,
+    ReceivingReasoning,
+    ReceivingText,
+    ReceivingTools
+}
 
 /// <summary>
 ///     <para>单次模型请求的展示状态；序号包含压缩请求，耗时不是供应商网络超时。</para>
@@ -46,8 +63,29 @@ public sealed record ModelRequestProgress(
     int     RequestNumber,
     bool    SummaryRequest,
     long    ElapsedMilliseconds,
-    string? Outcome = null,
-    bool    PartialText = false);
+    string? Outcome     = null,
+    bool    PartialText = false)
+{
+    public ModelRequestPhase Phase                { get; init; }
+    public int               EstimatedInputTokens { get; init; }
+    public int               InputMessageCount    { get; init; }
+
+    /// <summary>
+    ///     <para>从请求开始到首次 SDK 流事件的耗时；未收到为 null，不是 HTTP 首字节时间。</para>
+    ///     <para>Time to the first SDK stream event; null until observed, and not HTTP time to first byte.</para>
+    /// </summary>
+    public long? FirstStreamEventMilliseconds { get; init; }
+
+    public long? FirstReasoningMilliseconds  { get; init; }
+    public long? FirstTextMilliseconds       { get; init; }
+    public long? LastStreamEventMilliseconds { get; init; }
+    public long  ReasoningCharacters         { get; init; }
+    public long  TextCharacters              { get; init; }
+    public int?  InputTokens                 { get; init; }
+    public int?  OutputTokens                { get; init; }
+    public int?  CachedInputTokens           { get; init; }
+    public int?  ReasoningTokens             { get; init; }
+}
 
 /// <summary>
 ///     <para>

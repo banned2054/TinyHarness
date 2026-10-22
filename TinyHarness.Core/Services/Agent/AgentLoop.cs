@@ -270,10 +270,11 @@ public sealed partial class AgentLoop
         string systemPrompt, string userInput, CancellationToken cancellationToken)
     {
         // 复用主循环时，事件序号、故障和执行记录仍须隔离到本次运行。
-        _eventSequence        = 0;
-        _sinkFault            = null;
-        _reportedInputTokens  = null;
-        _reportedOutputTokens = null;
+        _eventSequence                  = 0;
+        _sinkFault                      = null;
+        _modelRequestPersistenceWarning = null;
+        _reportedInputTokens            = null;
+        _reportedOutputTokens           = null;
         _toolCallRecords.Clear();
         _nextInvocationSequence = 0;
         using var budget = new RunBudget(_options.Budget, cancellationToken);
@@ -827,7 +828,10 @@ public sealed partial class AgentLoop
                 : result.Error,
             InputTokens = _reportedInputTokens,
             OutputTokens = _reportedOutputTokens,
-            ToolCalls = _toolCallRecords.ToArray()
+            ToolCalls = _toolCallRecords.ToArray(),
+            PersistenceWarning = _modelRequestPersistenceWarning is null ? result.PersistenceWarning
+                : string.IsNullOrWhiteSpace(result.PersistenceWarning) ? _modelRequestPersistenceWarning
+                : $"{result.PersistenceWarning}; {_modelRequestPersistenceWarning}"
         };
 
         if (_recorder is null) return await PublishRunFinishedAsync(result).ConfigureAwait(false);
@@ -1117,7 +1121,8 @@ public sealed partial class AgentLoop
                 return false;
             }
         }
-        catch (Exception ex) when (ex is OperationCanceledException or RunBudgetExceededException)
+        catch (Exception ex) when (ex is OperationCanceledException or RunBudgetExceededException ||
+                                   _modelRequestPersistenceWarning is not null)
         {
             throw;
         }
@@ -1126,8 +1131,8 @@ public sealed partial class AgentLoop
             _context.MarkCompactionAttempted(ex switch
             {
                 EmptyModelResponseException => CompactionFailureReason.EmptySummary,
-                InvalidDataException => CompactionFailureReason.IncompleteResponse,
-                _ => CompactionFailureReason.ModelRequestFailed
+                InvalidDataException        => CompactionFailureReason.IncompleteResponse,
+                _                           => CompactionFailureReason.ModelRequestFailed
             });
             await PublishCompactionFailureAsync(cancellationToken).ConfigureAwait(false);
             return false;
@@ -1372,7 +1377,8 @@ public sealed partial class AgentLoop
             case PermissionDecision.Ask :
             {
                 var approvalProvider = _approver ??
-                                       throw new InvalidOperationException("An approval provider is required when the permission engine returns Ask.");
+                                       throw new
+                                           InvalidOperationException("An approval provider is required when the permission engine returns Ask.");
                 await PublishEventAsync(HostEventKind.ApprovalRequested, preparation, cancellationToken)
                    .ConfigureAwait(false);
                 var amendmentToken = _control?.AmendmentToken ?? CancellationToken.None;

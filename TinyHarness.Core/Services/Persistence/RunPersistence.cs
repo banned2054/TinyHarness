@@ -7,6 +7,7 @@ using TinyHarness.Core.Models.ChatCompletions;
 using TinyHarness.Core.Models.Context;
 using TinyHarness.Core.Models.Permissions;
 using TinyHarness.Core.Models.Persistence;
+using TinyHarness.Core.Models.Session;
 using TinyHarness.Core.Models.Tools;
 
 namespace TinyHarness.Core.Services.Persistence;
@@ -44,6 +45,16 @@ public interface IRunRecorder
         int? inputTokens, int? outputTokens, string? finishReason, CancellationToken cancellationToken);
 
     /// <summary>
+    ///     <para>记录请求时间和活动计数，不含正文、推理或传输头；默认不执行操作。</para>
+    ///     <para>
+    ///         Records request timings and activity counts without text, reasoning or transport headers; defaults to a
+    ///         no-op.
+    ///     </para>
+    /// </summary>
+    Task RecordModelRequestAsync(ModelRequestProgress progress, CancellationToken cancellationToken) =>
+        Task.CompletedTask;
+
+    /// <summary>
     ///     <para>记录模型完成拼装的 assistant 正文与工具调用，供实时与历史展示共用。</para>
     ///     <para>Records the assembled assistant text and tool calls for shared live and historical display.</para>
     /// </summary>
@@ -71,7 +82,7 @@ internal sealed class SecretRedactor
     {
         _knownSecrets = (knownSecrets ?? new Dictionary<string, string>(StringComparer.Ordinal)).Values
            .Where(secret => !string.IsNullOrEmpty(secret)).Distinct(StringComparer.Ordinal).OrderByDescending(secret =>
-               secret.Length).ToArray();
+                secret.Length).ToArray();
     }
 
     public string Redact(string value)
@@ -119,9 +130,8 @@ internal sealed class SecretRedactor
         Content    = Redact(message.Content),
         Name       = RedactNullable(message.Name),
         ToolCallId = RedactNullable(message.ToolCallId),
-        ToolCalls = message.ToolCalls
-                          ?.Select(call =>
-                              new ChatToolCall(Redact(call.Id), Redact(call.FunctionName), Redact(call.ArgumentsJson))).ToArray(),
+        ToolCalls = message.ToolCalls?.Select(call =>
+            new ChatToolCall(Redact(call.Id), Redact(call.FunctionName), Redact(call.ArgumentsJson))).ToArray(),
         // 检查投影中的 opaque 字段同样必须脱敏；此投影不能用于无损续聊。
         Reasoning = message.Reasoning?.Select(entry => new ReasoningContent(RedactNullable(entry.Text),
                                                                             RedactNullable(entry.ProtectedData),

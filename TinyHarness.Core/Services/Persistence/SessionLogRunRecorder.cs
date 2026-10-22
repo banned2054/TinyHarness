@@ -7,6 +7,7 @@ using TinyHarness.Core.Models.ChatCompletions;
 using TinyHarness.Core.Models.Context;
 using TinyHarness.Core.Models.Permissions;
 using TinyHarness.Core.Models.Persistence;
+using TinyHarness.Core.Models.Session;
 using TinyHarness.Core.Models.Tools;
 
 namespace TinyHarness.Core.Services.Persistence;
@@ -162,7 +163,7 @@ public sealed class SessionLogRunRecorder : IRunRecorder
             Outcome         = _redactor.Redact(outcome),
             ExecutionPolicy = _redactor.RedactNullable(preparation.ExecutionPolicy)
         };
-        var isDenied = decision == PermissionDecision.Deny ||
+        var isDenied = decision == PermissionDecision.Deny                                         ||
                        outcome.StartsWith("Permission denied", StringComparison.OrdinalIgnoreCase) ||
                        outcome.StartsWith("Blocked pending inspection", StringComparison.OrdinalIgnoreCase);
         if (!isDenied || pending is null)
@@ -294,6 +295,18 @@ public sealed class SessionLogRunRecorder : IRunRecorder
             InputTokens  = inputTokens,
             OutputTokens = outputTokens,
             FinishReason = _redactor.RedactNullable(finishReason)
+        }, cancellationToken);
+
+    /// <summary>
+    ///     <para>将请求观测追加到同一审计日志，取消或失败也保留已观察到的阶段。</para>
+    ///     <para>Appends request observations to the same audit journal, retaining observed phases on cancellation or failure.</para>
+    /// </summary>
+    public Task RecordModelRequestAsync(ModelRequestProgress progress, CancellationToken cancellationToken) =>
+        AppendAuditAsync(new AuditRecord
+        {
+            RunId        = RunId,
+            Kind         = "model.request",
+            ModelRequest = progress
         }, cancellationToken);
 
     public async Task RecordAssistantAsync(ChatMessage assistantMessage, CancellationToken cancellationToken)

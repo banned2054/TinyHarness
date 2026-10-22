@@ -198,5 +198,11 @@ public enum HostEventKind
     ///     <para>模型请求已结束或失败；负载为 ModelRequestProgress，取消也须交付。</para>
     ///     <para>A model request finished or failed; payload is ModelRequestProgress, delivered even on cancellation.</para>
     /// </summary>
-    ModelRequestFinished = 18
+    ModelRequestFinished = 18,
+
+    /// <summary>
+    ///     <para>首次观察到一种请求活动；负载仅为 ModelRequestProgress，不包含模型原文。</para>
+    ///     <para>A request activity was observed for the first time; payload is metadata-only ModelRequestProgress.</para>
+    /// </summary>
+    ModelRequestActivity = 19
 }

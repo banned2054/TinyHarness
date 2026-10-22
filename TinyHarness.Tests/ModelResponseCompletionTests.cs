@@ -30,13 +30,15 @@ public sealed class ModelResponseCompletionTests
         string text, bool usage, bool reasoning, string? finishReason)
     {
         var model = new FakeChatClient();
-        var events = new List<ChatStreamEvent> { new() { Kind = ChatStreamEventKind.ContentDelta, ContentDelta = text } };
+        var events = new List<ChatStreamEvent>
+            { new() { Kind = ChatStreamEventKind.ContentDelta, ContentDelta = text } };
         if (reasoning)
-            events.Add(new ChatStreamEvent { Kind = ChatStreamEventKind.ReasoningDelta, ReasoningDelta = "private reasoning" });
+            events.Add(new ChatStreamEvent
+                           { Kind = ChatStreamEventKind.ReasoningDelta, ReasoningDelta = "private reasoning" });
         events.Add(new ChatStreamEvent
         {
-            Kind = ChatStreamEventKind.End, FinishReason = finishReason,
-            InputTokens = usage ? 12 : null, OutputTokens = usage ? 7 : null
+            Kind        = ChatStreamEventKind.End, FinishReason = finishReason,
+            InputTokens = usage ? 12 : null, OutputTokens       = usage ? 7 : null
         });
         model.Enqueue(events);
         var sink = new TestHostEventSink();
@@ -52,7 +54,8 @@ public sealed class ModelResponseCompletionTests
         Assert.That(loop.History.Select(message => message.Role), Is.EqualTo([ChatRole.System, ChatRole.User]));
         Assert.That(sink.Events.Count(e => e.Kind == HostEventKind.ModelRequestStarted), Is.EqualTo(1));
         Assert.That(sink.Events.Count(e => e.Kind == HostEventKind.ModelRequestFinished), Is.EqualTo(1));
-        Assert.That(((ModelRequestProgress)sink.Events.Single(e => e.Kind == HostEventKind.ModelRequestFinished).Payload!).Outcome,
+        Assert.That(((ModelRequestProgress)
+                        sink.Events.Single(e => e.Kind == HostEventKind.ModelRequestFinished).Payload!).Outcome,
                     Is.EqualTo("failed"));
     }
 
@@ -87,25 +90,31 @@ public sealed class ModelResponseCompletionTests
         Assert.That(tool.ExecuteCount, Is.Zero);
         Assert.That(result.ToolCalls, Is.Empty);
         Assert.That(sink.Events.Any(e => e.Kind == HostEventKind.ToolPrepared), Is.False);
-        var finished = (ModelRequestProgress)sink.Events.Single(e => e.Kind == HostEventKind.ModelRequestFinished).Payload!;
+        var finished =
+            (ModelRequestProgress)sink.Events.Single(e => e.Kind == HostEventKind.ModelRequestFinished).Payload!;
         Assert.That(finished.PartialText, Is.EqualTo(!tools));
     }
 
     /// <summary>
     ///     <para>失败回合与已确认工具保存在唯一日志；恢复后新回合成功，不重放工具。</para>
-    ///     <para>A failed turn and confirmed tool persist in the single journal; a resumed turn succeeds without replaying tools.</para>
+    ///     <para>
+    ///         A failed turn and confirmed tool persist in the single journal; a resumed turn succeeds without replaying
+    ///         tools.
+    ///     </para>
     /// </summary>
     [Test]
     public async Task FailureAfterConfirmedToolSurvivesRestoreAndContinues()
     {
         using var directory = new TestTempDir();
-        var identity = new SessionModelIdentity("offline-test", "https://example.invalid/v1", ChatApiKind.ChatCompletions);
+        var identity =
+            new SessionModelIdentity("offline-test", "https://example.invalid/v1", ChatApiKind.ChatCompletions);
         var model = new FakeChatClient();
         model.Enqueue(FakeChatClient.ToolCall("probe", "{}"));
         model.Enqueue(FakeChatClient.ReasonedText("private reasoning", "rs_1", "opaque"));
-        var tool = new FakeTool("probe");
+        var    tool = new FakeTool("probe");
         string sessionId;
-        using (var host = new ChatSessionHost(directory.Root, identity, Options(), model, new ToolRegistry([tool]), "sys",
+        using (var host = new ChatSessionHost(directory.Root, identity, Options(), model, new ToolRegistry([tool]),
+                                              "sys",
                                               sessionWriterFactory : id => new SessionStoreWriter(directory.Root, id)))
         {
             var failed = (await host.SubmitTurnAsync("go", default)).Result!;
@@ -118,7 +127,7 @@ public sealed class ModelResponseCompletionTests
 
         var snapshot = (await SessionStoreReader.ReadAsync(directory.Root, sessionId, default))!;
         var restored = SessionResume.Restore(snapshot, directory.Root, identity, "sys");
-        var next = new FakeChatClient();
+        var next     = new FakeChatClient();
         next.Enqueue(FakeChatClient.Text("continued"));
         using (var writer = await SessionStoreWriter.OpenExistingAsync(directory.Root, sessionId, null, default))
         using (var host = new ChatSessionHost(restored.Session, restored.Context, Options(), next,
@@ -132,8 +141,10 @@ public sealed class ModelResponseCompletionTests
             Assert.That(next.RequestLog.Single().Messages.Any(m => m.Reasoning is { Count: > 0 }), Is.False);
             Assert.That(host.PersistenceWarning, Is.Null);
         }
+
         var final = (await SessionStoreReader.ReadAsync(directory.Root, sessionId, default))!;
-        Assert.That(final.Turns.SelectMany(turn => turn.Runs).Select(run => run.Status), Is.EqualTo(["Failed", "Completed"]));
+        Assert.That(final.Turns.SelectMany(turn => turn.Runs).Select(run => run.Status),
+                    Is.EqualTo(["Failed", "Completed"]));
     }
 
     /// <summary>
@@ -151,7 +162,8 @@ public sealed class ModelResponseCompletionTests
         var result = await loop.RunAsync("sys", "go", cancellation.Token);
         Assert.That(result.Status, Is.EqualTo(callerCancelled ? AgentStatus.Cancelled : AgentStatus.Failed));
         Assert.That(sink.Events.Events.Last().Kind, Is.EqualTo(HostEventKind.RunFinished));
-        var finished = (ModelRequestProgress)sink.Events.Events.Single(e => e.Kind == HostEventKind.ModelRequestFinished).Payload!;
+        var finished =
+            (ModelRequestProgress)sink.Events.Events.Single(e => e.Kind == HostEventKind.ModelRequestFinished).Payload!;
         Assert.That(finished.Outcome, Is.EqualTo(callerCancelled ? "cancelled" : "failed"));
     }
 

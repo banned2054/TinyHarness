@@ -48,7 +48,13 @@ public enum ChatStreamEventKind
     ///     Usage data delivered as its own event; some protocols do not attach it
     ///     to the terminal event.
     /// </summary>
-    Usage
+    Usage,
+
+    /// <summary>
+    ///     <para>首次收到 SDK 流更新；不代表已测量 HTTP 响应头或网络首字节。</para>
+    ///     <para>The first SDK stream update arrived; this does not measure HTTP headers or the first network byte.</para>
+    /// </summary>
+    ResponseStarted
 }
 
 /// <summary>
@@ -121,6 +127,18 @@ public sealed record ChatStreamEvent
     ///     Output token count for the request; carried by Usage or End events.
     /// </summary>
     public int? OutputTokens { get; init; }
+
+    /// <summary>
+    ///     <para>服务端报告的缓存输入 token；包含在 InputTokens 内，未报告时为 null。</para>
+    ///     <para>Reported cached input tokens, included in InputTokens; null when unreported.</para>
+    /// </summary>
+    public int? CachedInputTokens { get; init; }
+
+    /// <summary>
+    ///     <para>服务端报告的推理 token；包含在 OutputTokens 内，不能用字符数替代。</para>
+    ///     <para>Reported reasoning tokens, included in OutputTokens; character counts are not a substitute.</para>
+    /// </summary>
+    public int? ReasoningTokens { get; init; }
 
     /// <summary>
     ///     服务端报告的结束原因（如 stop、tool_calls）；由 Usage 或 End 事件携带。

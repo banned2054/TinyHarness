@@ -322,7 +322,10 @@ internal sealed class SmokeStep
     ///     <para>创建携带明确结束原因的流事件。</para>
     ///     <para>Creates a stream-end event with an explicit finish reason.</para>
     /// </summary>
-    private static ChatStreamEvent End(string reason) => new() { Kind = ChatStreamEventKind.End, FinishReason = reason };
+    private static ChatStreamEvent End(string reason) => new()
+    {
+        Kind = ChatStreamEventKind.End, FinishReason = reason
+    };
 }
 
 /// <summary>

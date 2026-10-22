@@ -508,7 +508,7 @@ public class AgentLoopTests
         Assert.That(result.Status, Is.EqualTo(AgentStatus.Completed));
         Assert.That(result.FinalMessage, Is.EqualTo("done"));
         Assert.That(result.Error, Does.Contain("sink exploded"));
-        Assert.That(sink.Published, Is.EqualTo(6)); // 运行、请求、正文、usage 和两级终态。
+        Assert.That(sink.Published, Is.EqualTo(7)); // 运行、请求、活动、正文、usage 和两级终态。
     }
 
     [Test]
@@ -524,7 +524,7 @@ public class AgentLoopTests
         Assert.That(result.Status, Is.EqualTo(AgentStatus.Completed));
         Assert.That(result.FinalMessage, Is.EqualTo("done"));
         Assert.That(result.Error, Does.Contain("sink exploded"));
-        Assert.That(sink.Published, Is.EqualTo(6)); // 运行、请求、正文、usage 和两级终态。
+        Assert.That(sink.Published, Is.EqualTo(7)); // 运行、请求、活动、正文、usage 和两级终态。
     }
 
     [Test]
@@ -543,7 +543,7 @@ public class AgentLoopTests
 
         // 序号按运行重置，请求状态和 usage 也参与有序交付。
         Assert.That(sink.Events.Select(@event => @event.Sequence).ToArray(),
-                    Is.EqualTo([1L, 2L, 3L, 4L, 5L, 6L, 1L, 2L, 3L, 4L, 5L, 6L]));
+                    Is.EqualTo([1L, 2L, 3L, 4L, 5L, 6L, 7L, 1L, 2L, 3L, 4L, 5L, 6L, 7L]));
     }
 
     /// <summary>

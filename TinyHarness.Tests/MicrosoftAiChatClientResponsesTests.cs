@@ -138,7 +138,7 @@ public class MicrosoftAiChatClientResponsesTests
     ///     <para>纯文本终答一轮：无 reasoning、无工具调用。</para>
     ///     <para>A plain-text terminal round: no reasoning, no calls.</para>
     /// </summary>
-    private static string TextSse(string text)
+    private static string TextSse(string text, int? cached = null, bool detailedUsage = false)
     {
         var s = new StringBuilder();
         var response =
@@ -153,6 +153,10 @@ public class MicrosoftAiChatClientResponsesTests
         }));
         response["status"] = "completed";
         response["usage"]  = JsonNode.Parse("""{"input_tokens":9,"output_tokens":5,"total_tokens":14}""");
+        if (cached is { } count)
+            response["usage"]!["input_tokens_details"] = new JsonObject { ["cached_tokens"] = count };
+        if (detailedUsage)
+            response["usage"]!["output_tokens_details"] = new JsonObject { ["reasoning_tokens"] = 3 };
         s.Append(Event("response.completed", new JsonObject { ["sequence_number"] = 2, ["response"] = response }));
         return s.ToString();
     }
@@ -160,6 +164,27 @@ public class MicrosoftAiChatClientResponsesTests
     private static IReadOnlyList<ToolDefinition> ReadFileTool() => [new FakeTool("read_file").Definition];
 
     // ---- tests ---------------------------------------------------------------
+
+    /// <summary>
+    ///     <para>Responses 的缓存和推理 usage 按 SDK 子计数传递，缺失缓存不补零。</para>
+    ///     <para>Responses cache and reasoning usage retain SDK subset counts without filling missing cache values with zero.</para>
+    /// </summary>
+    [TestCase(null)]
+    [TestCase(0)]
+    [TestCase(6)]
+    public async Task ResponseUsageSubsetsRemainOptional(int? cached)
+    {
+        using var server = new MockSseServer();
+        server.Start();
+        server.EnqueueRaw(TextSse("done", cached, true));
+        var events = await CollectAsync(NewClient(server), new ChatCompletionRequest
+        {
+            Model = Model, Messages = [ChatMessage.User("go")]
+        });
+        var end = events.Single(e => e.Kind == ChatStreamEventKind.End);
+        Assert.That(end.CachedInputTokens, Is.EqualTo(cached));
+        Assert.That(end.ReasoningTokens, Is.EqualTo(3));
+    }
 
     /// <summary>
     ///     <para>Responses 的正文或完整工具条目仍须有 response.completed 才能接受。</para>
@@ -171,7 +196,7 @@ public class MicrosoftAiChatClientResponsesTests
     {
         using var server = new MockSseServer();
         server.Start();
-        var body = toolResponse ? ResponsesSse(1) : TextSse("partial");
+        var body     = toolResponse ? ResponsesSse(1) : TextSse("partial");
         var terminal = body.IndexOf("event: response.completed", StringComparison.Ordinal);
         Assert.That(terminal, Is.GreaterThanOrEqualTo(0));
         server.EnqueueRaw(body[..terminal]);

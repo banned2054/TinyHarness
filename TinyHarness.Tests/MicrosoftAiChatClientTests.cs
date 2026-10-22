@@ -112,9 +112,9 @@ public class MicrosoftAiChatClientTests
         {
             "done-only" => Sse(),
             "role-only" => Sse(RoleDelta()),
-            "text-eof" => RoleDelta() + ContentDelta("partial"),
-            "tool-eof" => RoleDelta() + ToolCallHead(0, "call_1", "probe") + ToolArgumentsDelta(0, "{}"),
-            _ => string.Empty
+            "text-eof"  => RoleDelta() + ContentDelta("partial"),
+            "tool-eof"  => RoleDelta() + ToolCallHead(0, "call_1", "probe") + ToolArgumentsDelta(0, "{}"),
+            _           => string.Empty
         };
         server.EnqueueRaw(body);
         var tool = new FakeTool("probe");
@@ -141,12 +141,13 @@ public class MicrosoftAiChatClientTests
 
         var events = await CollectAsync(client, Request(ChatMessage.User("Hi there")));
 
-        Assert.That(events.Count, Is.EqualTo(3));
-        Assert.That(events[0].Kind, Is.EqualTo(ChatStreamEventKind.ContentDelta));
-        Assert.That(events[0].ContentDelta, Is.EqualTo("Hello from "));
+        Assert.That(events.Count, Is.EqualTo(4));
+        Assert.That(events[0].Kind, Is.EqualTo(ChatStreamEventKind.ResponseStarted));
         Assert.That(events[1].Kind, Is.EqualTo(ChatStreamEventKind.ContentDelta));
-        Assert.That(events[1].ContentDelta, Is.EqualTo("the mock."));
-        Assert.That(events[2].Kind, Is.EqualTo(ChatStreamEventKind.End));
+        Assert.That(events[1].ContentDelta, Is.EqualTo("Hello from "));
+        Assert.That(events[2].Kind, Is.EqualTo(ChatStreamEventKind.ContentDelta));
+        Assert.That(events[2].ContentDelta, Is.EqualTo("the mock."));
+        Assert.That(events[3].Kind, Is.EqualTo(ChatStreamEventKind.End));
 
         // 累加器仍拼装出与 fake client 场景相同的文本。
         var accumulator = Accumulate(events);
@@ -172,12 +173,13 @@ public class MicrosoftAiChatClientTests
         var events = await CollectAsync(client, Request(ChatMessage.User("read it")));
 
         // M.E.AI 适配器自行拼装 wire 分片，因此适配层呈现一个完整调用事件加终态事件。
-        Assert.That(events.Count, Is.EqualTo(2));
-        Assert.That(events[0].Kind, Is.EqualTo(ChatStreamEventKind.ToolCallDelta));
-        Assert.That(events[1].Kind, Is.EqualTo(ChatStreamEventKind.End));
-        Assert.That(events[0].ToolCallIndex, Is.EqualTo(0));
-        Assert.That(events[0].ToolCallId, Is.EqualTo("call_1"));
-        Assert.That(events[0].ToolCallFunctionName, Is.EqualTo("read_file"));
+        Assert.That(events.Count, Is.EqualTo(3));
+        Assert.That(events[0].Kind, Is.EqualTo(ChatStreamEventKind.ResponseStarted));
+        Assert.That(events[1].Kind, Is.EqualTo(ChatStreamEventKind.ToolCallDelta));
+        Assert.That(events[2].Kind, Is.EqualTo(ChatStreamEventKind.End));
+        Assert.That(events[1].ToolCallIndex, Is.EqualTo(0));
+        Assert.That(events[1].ToolCallId, Is.EqualTo("call_1"));
+        Assert.That(events[1].ToolCallFunctionName, Is.EqualTo("read_file"));
 
         // 单个分片已携带完整、合法的参数 JSON。
         var call = TestAssert.Single(Accumulate(events).ToolCalls);
@@ -346,6 +348,31 @@ public class MicrosoftAiChatClientTests
         Assert.That(accumulator.InputTokens, Is.EqualTo(12));
         Assert.That(accumulator.OutputTokens, Is.EqualTo(7));
         Assert.That(accumulator.FinishReason, Is.EqualTo("stop"));
+    }
+
+    /// <summary>
+    ///     <para>真实 SDK 映射缓存及推理子计数，缺失、显式零和非零三种情况保持区分。</para>
+    ///     <para>The real SDK maps cache and reasoning subsets while distinguishing missing, explicit zero and nonzero values.</para>
+    /// </summary>
+    [TestCase(null)]
+    [TestCase(0)]
+    [TestCase(8)]
+    public async Task UsageSubsetsRemainOptionalThroughSdk(int? cached)
+    {
+        using var server = new MockSseServer();
+        server.Start();
+        var details = cached is { } count ? $",\"prompt_tokens_details\":{{\"cached_tokens\":{count}}}" : string.Empty;
+        var usage = $"{{\"prompt_tokens\":12,\"completion_tokens\":20,\"total_tokens\":32{details}," +
+                    "\"completion_tokens_details\":{\"reasoning_tokens\":7}}";
+        server.EnqueueRaw(Sse(RoleDelta(), ContentDelta("done"), Chunk("{}", "stop", usage)));
+
+        var events = await CollectAsync(NewClient(server), Request(ChatMessage.User("go")));
+
+        Assert.That(events.Count(e => e.Kind == ChatStreamEventKind.ResponseStarted), Is.EqualTo(1));
+        var end = events.Single(e => e.Kind  == ChatStreamEventKind.End);
+        Assert.That(end.CachedInputTokens, Is.EqualTo(cached));
+        Assert.That(end.ReasoningTokens, Is.EqualTo(7));
+        Assert.That(Accumulate(events).CachedInputTokens, Is.EqualTo(cached));
     }
 
     [Test]

@@ -650,10 +650,10 @@ internal static class Program
         using var fixture = await SmokeWorkspace.CreateAsync(cts.Token).ConfigureAwait(false);
         await Console.Out.WriteLineAsync($"  fixtureWs    : {fixture.Root}");
 
-        var plan      = SmokeScript.Build(ProcessProbeCommand(), fixture.Root);
-        var script    = new SmokeScriptClient(plan.Steps);
-        var workspace = new Workspace(fixture.Root);
-        var tools     = BuildTools(workspace, config);
+        var plan        = SmokeScript.Build(ProcessProbeCommand(), fixture.Root);
+        var script      = new SmokeScriptClient(plan.Steps);
+        var workspace   = new Workspace(fixture.Root);
+        var tools       = BuildTools(workspace, config);
         // 冒烟使用默认策略，确保副作用审批不受用户现行规则影响。
         var permissions = new PermissionEngine(fixture.Root);
         var approver    = new SmokeApprover();
@@ -834,10 +834,12 @@ internal static class Program
                        .WriteLineAsync("  m15          : control/work/budget/restore passed (separate offline session)");
             await ModelResponseOfflineSmoke.RunAsync(fixture.Root, sessionDirectory,
                                                      new SessionModelIdentity(config.Model,
-                                                                              config.Endpoint ?? "offline-smoke://local",
+                                                                              config.Endpoint ??
+                                                                              "offline-smoke://local",
                                                                               config.ChatApi), cts.Token)
                                            .ConfigureAwait(false);
-            await Console.Out.WriteLineAsync("  responses    : empty/termination/failure/restore/continue passed (offline)");
+            await Console.Out.WriteLineAsync(
+                "  responses    : empty/termination/failure/restore/continue/timing/cache/cancel passed (offline)");
         }
 
         TryDeleteSmokeDirectory(sessionDirectory);

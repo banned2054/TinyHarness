@@ -86,15 +86,24 @@ public sealed class MicrosoftAiChatClient : IChatCompletionClient, IDisposable
         // UsageContent entries inside update.Contents — ChatResponseUpdate has
         // no Usage property — with the same semantics as the previous
         // ToChatResponse path (probe-verified: multiple usage chunks add up).
-        long?             inputTokens  = null;
-        long?             outputTokens = null;
-        ChatFinishReason? finishReason = null;
+        long?             inputTokens       = null;
+        long?             outputTokens      = null;
+        long?             cachedInputTokens = null;
+        long?             reasoningTokens   = null;
+        ChatFinishReason? finishReason      = null;
+        var               started           = false;
 
         await foreach (var update in _inner
                                     .GetStreamingResponseAsync(messages, options, cancellationToken)
                                     .ConfigureAwait(false))
         {
             cancellationToken.ThrowIfCancellationRequested();
+
+            if (!started)
+            {
+                started = true;
+                yield return new ChatStreamEvent { Kind = ChatStreamEventKind.ResponseStarted };
+            }
 
             if (update.FinishReason is { } reason) finishReason = reason;
 
@@ -108,6 +117,11 @@ public sealed class MicrosoftAiChatClient : IChatCompletionClient, IDisposable
                         if (usage.Details.InputTokenCount is { } input) inputTokens = (inputTokens ?? 0) + input;
 
                         if (usage.Details.OutputTokenCount is { } output) outputTokens = (outputTokens ?? 0) + output;
+
+                        if (usage.Details.CachedInputTokenCount is { } cached)
+                            cachedInputTokens = (cachedInputTokens ?? 0) + cached;
+                        if (usage.Details.ReasoningTokenCount is { } reasoningCount)
+                            reasoningTokens = (reasoningTokens ?? 0) + reasoningCount;
 
                         break;
 
@@ -138,7 +152,7 @@ public sealed class MicrosoftAiChatClient : IChatCompletionClient, IDisposable
                             // On a ReasoningItem event this field carries the item's
                             // complete text, possibly duplicating already streamed
                             // deltas; the accumulator dedups per item boundary.
-                            ReasoningDelta = reasoning.Text
+                            ReasoningDelta         = reasoning.Text
                         };
                         break;
 
@@ -171,10 +185,12 @@ public sealed class MicrosoftAiChatClient : IChatCompletionClient, IDisposable
         // 枚举结束不证明响应完整；保留缺失的结束原因，由循环在执行工具前统一拒绝。
         yield return new ChatStreamEvent
         {
-            Kind         = ChatStreamEventKind.End,
-            FinishReason = finishReason?.ToString(),
-            InputTokens  = inputTokens is { } inputTokenCount ? checked((int)inputTokenCount) : null,
-            OutputTokens = outputTokens is { } outputTokenCount ? checked((int)outputTokenCount) : null
+            Kind              = ChatStreamEventKind.End,
+            FinishReason      = finishReason?.ToString(),
+            InputTokens       = inputTokens is { } inputTokenCount ? checked((int)inputTokenCount) : null,
+            OutputTokens      = outputTokens is { } outputTokenCount ? checked((int)outputTokenCount) : null,
+            CachedInputTokens = cachedInputTokens is { } cachedCount ? checked((int)cachedCount) : null,
+            ReasoningTokens   = reasoningTokens is { } totalReasoning ? checked((int)totalReasoning) : null
         };
     }
 

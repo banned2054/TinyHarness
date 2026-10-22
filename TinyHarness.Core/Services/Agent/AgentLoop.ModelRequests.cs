@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using TinyHarness.Core.Models.ChatCompletions;
 using TinyHarness.Core.Models.Session;
@@ -8,13 +7,18 @@ namespace TinyHarness.Core.Services.Agent;
 
 public sealed partial class AgentLoop
 {
+    private string? _modelRequestPersistenceWarning;
+
     /// <summary>
     ///     <para>消费模型流并记录请求状态和 usage；仅返回有明确终止信息的可用回答或工具轮。</para>
     ///     <para>Consumes a model stream and records progress and usage; returns only usable responses with a terminal reason.</para>
     /// </summary>
     /// <remarks>
     ///     <para>校验先于历史追加和工具准备；失败保留已确认工具及预算，不自动重试请求。</para>
-    ///     <para>Validation precedes history append and tool preparation; failure retains confirmed tools and budget without retrying.</para>
+    ///     <para>
+    ///         Validation precedes history append and tool preparation; failure retains confirmed tools and budget without
+    ///         retrying.
+    ///     </para>
     /// </remarks>
     /// <param name="publishTextDeltas">
     ///     <para>普通回答发布正文增量；压缩仅发布状态，不向宿主展示摘要或推理。</para>
@@ -24,24 +28,27 @@ public sealed partial class AgentLoop
         ChatCompletionRequest request, CancellationToken cancellationToken,
         int estimatedPromptTokens, bool publishTextDeltas)
     {
-        var       accumulator = new StreamAccumulator();
-        var       ended       = false;
-        using var charge      = _budget!.BeginRequest(estimatedPromptTokens);
-        var requestNumber = _budget.Snapshot.ModelRequests;
-        var elapsed       = Stopwatch.StartNew();
-        var outcome       = "failed";
-        var streamedText  = false;
+        var       accumulator   = new StreamAccumulator();
+        var       ended         = false;
+        using var charge        = _budget!.BeginRequest(estimatedPromptTokens);
+        var       requestNumber = _budget.Snapshot.ModelRequests;
+        var observation = new ModelRequestObservation(requestNumber, !publishTextDeltas, estimatedPromptTokens,
+                                                      request.Messages.Count, accumulator);
+        var outcome      = "failed";
+        var streamedText = false;
         try
         {
-            await PublishEventAsync(HostEventKind.ModelRequestStarted,
-                                    new ModelRequestProgress(requestNumber, !publishTextDeltas, 0), cancellationToken)
+            await PublishEventAsync(HostEventKind.ModelRequestStarted, observation.Snapshot(), cancellationToken)
                .ConfigureAwait(false);
-            await foreach (var value in ReadModelStreamAsync(request, requestNumber, !publishTextDeltas,
-                                                             elapsed, cancellationToken).ConfigureAwait(false))
+            await foreach (var value in ReadModelStreamAsync(request, observation, cancellationToken)
+                              .ConfigureAwait(false))
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 charge.Append(value);
                 accumulator.Append(value);
+                if (observation.Observe(value))
+                    await PublishEventAsync(HostEventKind.ModelRequestActivity, observation.Snapshot(), cancellationToken)
+                       .ConfigureAwait(false);
                 if (value.Kind == ChatStreamEventKind.End) ended = true;
                 if (publishTextDeltas && value.Kind == ChatStreamEventKind.ContentDelta)
                 {
@@ -52,13 +59,20 @@ public sealed partial class AgentLoop
             }
 
             accumulator.Finish();
-            if (accumulator.InputTokens is < 0 || accumulator.OutputTokens is < 0)
-                throw new InvalidDataException("Model usage cannot contain negative token counts.");
+            if (accumulator.InputTokens is < 0                          ||
+                accumulator.OutputTokens is < 0                         ||
+                accumulator.CachedInputTokens is < 0                    ||
+                accumulator.ReasoningTokens is < 0                      ||
+                accumulator.CachedInputTokens > accumulator.InputTokens ||
+                accumulator.ReasoningTokens   > accumulator.OutputTokens)
+                throw new InvalidDataException("Model usage contains negative or inconsistent token counts.");
 
             // 无效回答也保留已报告的计费事实；缺失 usage 不补为零。
-            if (accumulator.InputTokens is not null ||
-                accumulator.OutputTokens is not null ||
-                accumulator.FinishReason is not null)
+            if (accumulator.InputTokens is not null       ||
+                accumulator.OutputTokens is not null      ||
+                accumulator.FinishReason is not null      ||
+                accumulator.CachedInputTokens is not null ||
+                accumulator.ReasoningTokens is not null)
             {
                 if (_recorder is not null)
                     await _recorder.RecordModelUsageAsync(accumulator.InputTokens, accumulator.OutputTokens,
@@ -66,7 +80,11 @@ public sealed partial class AgentLoop
                                    .ConfigureAwait(false);
                 await PublishEventAsync(HostEventKind.ModelUsage,
                                         new ModelUsage(accumulator.InputTokens, accumulator.OutputTokens,
-                                                       accumulator.FinishReason, !publishTextDeltas), cancellationToken)
+                                                       accumulator.FinishReason, !publishTextDeltas)
+                                        {
+                                            CachedInputTokens = accumulator.CachedInputTokens,
+                                            ReasoningTokens   = accumulator.ReasoningTokens
+                                        }, cancellationToken)
                    .ConfigureAwait(false);
                 if (accumulator.InputTokens is { } inputTokens)
                     _reportedInputTokens = (_reportedInputTokens ?? 0) + inputTokens;
@@ -94,31 +112,53 @@ public sealed partial class AgentLoop
         }
         finally
         {
-            await PublishEventAsync(HostEventKind.ModelRequestFinished,
-                                    new ModelRequestProgress(requestNumber, !publishTextDeltas, elapsed.ElapsedMilliseconds,
-                                                             outcome, streamedText && outcome != "completed"),
-                                    CancellationToken.None).ConfigureAwait(false);
+            var progress = observation.Snapshot(outcome, streamedText && outcome != "completed");
+            try
+            {
+                if (_recorder is not null)
+                    await _recorder.RecordModelRequestAsync(progress, CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _modelRequestPersistenceWarning = $"Model request observations were not reliably saved: {ex.Message}";
+                if (outcome == "completed")
+                {
+                    progress = progress with { Outcome = "failed", PartialText = streamedText };
+                    throw new IOException(_modelRequestPersistenceWarning, ex);
+                }
+            }
+            finally
+            {
+                await PublishEventAsync(HostEventKind.ModelRequestFinished, progress, CancellationToken.None)
+                   .ConfigureAwait(false);
+            }
         }
     }
 
     /// <summary>
     ///     <para>串行读取模型流，等待期间每十秒发布状态；同一时刻只有一次流推进和一次计时等待。</para>
-    ///     <para>Reads the model stream serially with ten-second wait notices; only one stream move and timer wait are pending.</para>
+    ///     <para>
+    ///         Reads the model stream serially with ten-second wait notices; only one stream move and timer wait are
+    ///         pending.
+    ///     </para>
     /// </summary>
     /// <remarks>
     ///     <para>计时器不并发调用事件接收方；取消和释放仍等待当前流推进结束，不遗留后台读取。</para>
-    ///     <para>The timer never publishes concurrently; cancellation and disposal await the pending stream move without orphaned reads.</para>
+    ///     <para>
+    ///         The timer never publishes concurrently; cancellation and disposal await the pending stream move without
+    ///         orphaned reads.
+    ///     </para>
     /// </remarks>
     private async IAsyncEnumerable<ChatStreamEvent> ReadModelStreamAsync(
-        ChatCompletionRequest request, int requestNumber, bool summaryRequest, Stopwatch elapsed,
+        ChatCompletionRequest request, ModelRequestObservation observation,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         await using var stream = _model.CompleteAsync(request, cancellationToken).GetAsyncEnumerator(cancellationToken);
-        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(10));
-        Task<bool>? tick = null;
+        using var       timer  = new PeriodicTimer(TimeSpan.FromSeconds(10));
+        Task<bool>?     tick   = null;
         while (true)
         {
-            var next = stream.MoveNextAsync();
+            var  next = stream.MoveNextAsync();
             bool hasNext;
             if (_events is null || next.IsCompletedSuccessfully)
             {
@@ -135,13 +175,13 @@ public sealed partial class AgentLoop
                     await tick.ConfigureAwait(false);
                     tick = null;
                     // 展示取消不能中断当前 MoveNext 的回收；请求令牌仍传给模型流。
-                    await PublishEventAsync(HostEventKind.ModelRequestWaiting,
-                                            new ModelRequestProgress(requestNumber, summaryRequest,
-                                                                     elapsed.ElapsedMilliseconds), CancellationToken.None)
+                    await PublishEventAsync(HostEventKind.ModelRequestWaiting, observation.Snapshot(), CancellationToken.None)
                        .ConfigureAwait(false);
                 }
+
                 hasNext = await pending.ConfigureAwait(false);
             }
+
             if (!hasNext) yield break;
 
             yield return stream.Current;
@@ -155,12 +195,14 @@ public sealed partial class AgentLoop
     private static void ValidateModelCompletion(StreamAccumulator response, bool ended)
     {
         if (!ended || string.IsNullOrWhiteSpace(response.FinishReason))
-            throw new InvalidDataException("Model response is incomplete: a stream boundary or finish reason is missing; no tools from this response were started.");
+            throw new
+                InvalidDataException("Model response is incomplete: a stream boundary or finish reason is missing; no tools from this response were started.");
 
         var hasTools       = response.ToolCalls.Count > 0;
         var expectedReason = hasTools ? "tool_calls" : "stop";
         if (!string.Equals(response.FinishReason, expectedReason, StringComparison.OrdinalIgnoreCase))
-            throw new InvalidDataException("Model response has an incomplete, unsupported or inconsistent finish reason; no tools from this response were started.");
+            throw new
+                InvalidDataException("Model response has an incomplete, unsupported or inconsistent finish reason; no tools from this response were started.");
 
         if (!hasTools && string.IsNullOrWhiteSpace(response.Content))
             throw new EmptyModelResponseException();

@@ -143,6 +143,7 @@ public class HostEventStreamTests
         Assert.That(sink.Events.Select(@event => @event.Kind).ToArray(), Is.EqualTo([
             HostEventKind.RunStarted,
             HostEventKind.ModelRequestStarted,
+            HostEventKind.ModelRequestActivity,
             HostEventKind.ModelUsage,
             HostEventKind.ModelRequestFinished,
             HostEventKind.ToolPrepared,
@@ -151,6 +152,7 @@ public class HostEventStreamTests
             HostEventKind.ToolStarted,
             HostEventKind.ToolFinished,
             HostEventKind.ModelRequestStarted,
+            HostEventKind.ModelRequestActivity,
             HostEventKind.AssistantTextDelta,
             HostEventKind.ModelUsage,
             HostEventKind.ModelRequestFinished,
@@ -304,7 +306,8 @@ public class HostEventStreamTests
         // 取消到达流之前第一个增量已交付；终态事件仍会到达，之前没有 RunError。
         Assert.That(cancelSink.Events.Select(@event => @event.Kind).ToArray(),
                     Is.EqualTo([
-                        HostEventKind.RunStarted, HostEventKind.ModelRequestStarted, HostEventKind.AssistantTextDelta,
+                        HostEventKind.RunStarted, HostEventKind.ModelRequestStarted, HostEventKind.ModelRequestActivity,
+                        HostEventKind.AssistantTextDelta,
                         HostEventKind.ModelRequestFinished, HostEventKind.RunFinished
                     ]));
         TestAssert.DoesNotContainAny(@event => @event.Kind == HostEventKind.RunError, cancelSink.Events);
@@ -323,7 +326,7 @@ public class HostEventStreamTests
         Assert.That(result.Status, Is.EqualTo(AgentStatus.Completed));
         Assert.That(result.FinalMessage, Is.EqualTo("hi"));
         Assert.That(result.Error, Does.Contain("sink exploded"));
-        Assert.That(sink.Published, Is.EqualTo(6)); // 运行、请求、正文、usage 和两级终态。
+        Assert.That(sink.Published, Is.EqualTo(7)); // 运行、请求、活动、正文、usage 和两级终态。
     }
 
     [Test]
@@ -342,6 +345,7 @@ public class HostEventStreamTests
         Assert.That(sink.Kinds.ToArray(), Is.EqualTo([
             HostEventKind.RunStarted,
             HostEventKind.ModelRequestStarted,
+            HostEventKind.ModelRequestActivity,
             HostEventKind.AssistantTextDelta,
             HostEventKind.AssistantTextDelta,
             HostEventKind.AssistantTextDelta,
