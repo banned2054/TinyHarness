@@ -141,12 +141,11 @@ internal static class SandboxVerifyCommand
         var resolution   = await ConfigResolver.ResolveAsync(null, cancellationToken).ConfigureAwait(false);
         var knownSecrets = ResolveKnownSecrets(context, resolution, cancellationToken);
 
-        // 共享组合路径（session 目录守卫 + Compose）会在确认门之前校验验收工作区。
+        // 验收不写持久会话日志；共享组合路径在确认门之前校验组件与验收工作区。
         WindowsSandboxExecution preview;
         try
         {
-            preview = SandboxCliComposition.TryCompose(settings, resolution.Config.SessionDirectory, workspaceRoot,
-                                                       knownSecrets)
+            preview = SandboxCliComposition.TryCompose(settings, workspaceRoot, knownSecrets)
                    ?? throw new InvalidOperationException("settings.windowsSandbox.enabled is required for verify.");
         }
         catch (Exception ex) when (ex is InvalidOperationException or ArgumentException)
@@ -223,9 +222,9 @@ internal static class SandboxVerifyCommand
     public static async Task<int> ExecuteWorkerAsync(
         CommandContext context, CliOptions options, CancellationToken cancellationToken)
     {
-        var markerPath    = Path.GetFullPath(options.VerifyMarkerPath!);
-        var holdSeconds   = options.VerifyHoldSeconds!.Value;
-        var workspaceRoot = Path.GetFullPath(options.VerifyWorkspace!);
+        var markerPath      = Path.GetFullPath(options.VerifyMarkerPath!);
+        var holdSeconds     = options.VerifyHoldSeconds!.Value;
+        var workspaceRoot   = Path.GetFullPath(options.VerifyWorkspace!);
         // worker 只写 marker；陈旧 marker 由父进程在 spawn 前清理。把 marker
         // 限制在验收工作区的 artifacts 目录内，防止手工调用的 worker 写到
         // 预期布局之外。
@@ -262,11 +261,10 @@ internal static class SandboxVerifyCommand
                 return 1;
             }
 
-            // 组合方式与父进程 verify 一致：与 run 相同的 session 目录守卫和 knownSecrets 解析。
+            // 组合方式与父进程 verify 一致，不检查未使用的旧快照目录。
             var resolution   = await ConfigResolver.ResolveAsync(null, cancellationToken).ConfigureAwait(false);
             var knownSecrets = ResolveKnownSecrets(context, resolution, cancellationToken);
-            var execution = SandboxCliComposition.TryCompose(settings, resolution.Config.SessionDirectory,
-                                                             workspaceRoot, knownSecrets);
+            var execution    = SandboxCliComposition.TryCompose(settings, workspaceRoot, knownSecrets);
             if (execution is null)
             {
                 await context.Io.WriteErrorLineAsync("sandbox verify-worker: 沙箱未启用；退出。", cancellationToken)

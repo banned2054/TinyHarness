@@ -452,8 +452,8 @@ internal static class Program
                                                     () =>
                                                     {
                                                         sandbox = SandboxCliComposition.TryCompose(settings,
-                                                            config.SessionDirectory, config.WorkspaceRoot,
-                                                            knownSecrets, sessionStoreDirectory);
+                                                            config.WorkspaceRoot, knownSecrets,
+                                                            sessionStoreDirectory);
                                                         var policy = sandbox?.ExecutionPolicy ??
                                                                      ProcessExecutionPolicy.Host();
                                                         return
@@ -619,8 +619,7 @@ internal static class Program
         string?           sessionStoreDirectory = null)
     {
         var settings = await SandboxCliComposition.LoadSettingsAsync(cancellationToken).ConfigureAwait(false);
-        return SandboxCliComposition.TryCompose(settings, config.SessionDirectory, config.WorkspaceRoot, knownSecrets,
-                                                sessionStoreDirectory);
+        return SandboxCliComposition.TryCompose(settings, config.WorkspaceRoot, knownSecrets, sessionStoreDirectory);
     }
 
     /// <summary>
@@ -956,31 +955,21 @@ internal static class SandboxCliComposition
     /// </returns>
     /// <exception cref="InvalidOperationException">
     ///     <para>
-    ///         启用沙箱时，运行快照目录位于工作区内，或受保护会话存储目录位于工作区或附加写根内；
-    ///         这些位置会允许沙箱命令篡改审计或续聊快照。
+    ///         启用沙箱时，实际使用的受保护会话存储目录位于工作区或附加写根内；
+    ///         这些位置会允许沙箱命令篡改会话日志。
     ///     </para>
     ///     <para>
-    ///         With the sandbox enabled, the run-snapshot directory lies inside the workspace,
-    ///         or the protected session store lies inside the workspace or an additional write root;
-    ///         these locations would let sandboxed commands tamper with audits or resumable snapshots.
+    ///         With the sandbox enabled, the active protected session store lies inside the workspace
+    ///         or an additional write root; these locations would let sandboxed commands tamper with session logs.
     ///     </para>
     /// </exception>
     public static WindowsSandboxExecution? TryCompose(
         WindowsSandboxSettings?             settings,
-        string                              sessionDirectory,
         string                              workspaceRoot,
         IReadOnlyDictionary<string, string> knownSecrets,
         string?                             sessionStoreDirectory = null)
     {
         if (settings is not { Enabled: true }) return null;
-
-        var fullSessionDirectory = Path.GetFullPath(sessionDirectory);
-        if (Workspace.IsInside(workspaceRoot, fullSessionDirectory))
-            throw new InvalidOperationException($"The session directory '{fullSessionDirectory}' lies inside " +
-                                                $"the workspace '{workspaceRoot}'; "                           +
-                                                "sandboxed commands could tamper with audit records. "         +
-                                                "Move it outside the workspace (settings.sessionDirectory) "   +
-                                                "before enabling the Windows sandbox.");
 
         if (sessionStoreDirectory is null) return WindowsSandboxComposer.Compose(settings, workspaceRoot, knownSecrets);
         var fullStoreDirectory = Path.GetFullPath(sessionStoreDirectory);
