@@ -180,5 +180,23 @@ public enum HostEventKind
     ///     <para>已在安全边界暂停、继续或应用补充；负载为状态字符串，不含用户原话。</para>
     ///     <para>Paused, resumed or applied an amendment at a safe boundary; payload is a state string without user text.</para>
     /// </summary>
-    RunControlChanged = 15
+    RunControlChanged = 15,
+
+    /// <summary>
+    ///     <para>模型请求开始；负载为 ModelRequestProgress，不含请求正文。</para>
+    ///     <para>A model request started; payload is ModelRequestProgress without request text.</para>
+    /// </summary>
+    ModelRequestStarted = 16,
+
+    /// <summary>
+    ///     <para>模型请求仍在等待流事件；负载为 ModelRequestProgress，不展示推理内容。</para>
+    ///     <para>A model request is still awaiting stream events; payload is ModelRequestProgress without reasoning.</para>
+    /// </summary>
+    ModelRequestWaiting = 17,
+
+    /// <summary>
+    ///     <para>模型请求已结束或失败；负载为 ModelRequestProgress，取消也须交付。</para>
+    ///     <para>A model request finished or failed; payload is ModelRequestProgress, delivered even on cancellation.</para>
+    /// </summary>
+    ModelRequestFinished = 18
 }

@@ -1123,9 +1123,12 @@ public sealed partial class AgentLoop
         }
         catch (Exception ex)
         {
-            _context.MarkCompactionAttempted(ex is InvalidDataException
-                                                 ? CompactionFailureReason.IncompleteResponse
-                                                 : CompactionFailureReason.ModelRequestFailed);
+            _context.MarkCompactionAttempted(ex switch
+            {
+                EmptyModelResponseException => CompactionFailureReason.EmptySummary,
+                InvalidDataException => CompactionFailureReason.IncompleteResponse,
+                _ => CompactionFailureReason.ModelRequestFailed
+            });
             await PublishCompactionFailureAsync(cancellationToken).ConfigureAwait(false);
             return false;
         }
@@ -1157,98 +1160,6 @@ public sealed partial class AgentLoop
         await PublishEventAsync(HostEventKind.CompactionFailed, reason, cancellationToken).ConfigureAwait(false);
         if (_recorder is not null)
             await _recorder.RecordCompactionFailedAsync(reason, cancellationToken).ConfigureAwait(false);
-    }
-
-    /// <summary>
-    ///     <para>
-    ///         消费模型流，组装完整 assistant 消息并记录 usage 与结束原因。
-    ///     </para>
-    ///     <para>
-    ///         Consumes a model stream, assembling a complete assistant message and recording usage and finish reason.
-    ///     </para>
-    /// </summary>
-    /// <remarks>
-    ///     <para>
-    ///         可靠输入 usage 用于校准预算；usage 与结束原因全部缺失时不写审计行。
-    ///     </para>
-    ///     <para>
-    ///         Reliable input usage calibrates the budget; no audit line is written
-    ///         when both usage and finish reason are absent.
-    ///     </para>
-    /// </remarks>
-    /// <param name="publishTextDeltas">
-    ///     <para>
-    ///         是否原样发布 AssistantTextDelta；跨片段脱敏由宿主负责。
-    ///         压缩请求传 false，内部摘要不得进入回答展示。
-    ///     </para>
-    ///     <para>
-    ///         Whether to publish verbatim AssistantTextDelta events; the host handles cross-fragment redaction.
-    ///         Compaction requests pass false so internal summaries never enter the answer display.
-    ///     </para>
-    /// </param>
-    private async Task<ChatMessage> RequestAssistantMessageAsync(
-        ChatCompletionRequest request, CancellationToken cancellationToken,
-        int estimatedPromptTokens, bool publishTextDeltas)
-    {
-        var       accumulator = new StreamAccumulator();
-        var       ended       = false;
-        using var charge      = _budget!.BeginRequest(estimatedPromptTokens);
-
-        await foreach (var @event in _model.CompleteAsync(request, cancellationToken))
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            charge.Append(@event);
-            accumulator.Append(@event);
-            if (@event.Kind == ChatStreamEventKind.End) ended = true;
-            if (publishTextDeltas && @event.Kind == ChatStreamEventKind.ContentDelta)
-                await PublishEventAsync(HostEventKind.AssistantTextDelta, @event.ContentDelta, cancellationToken)
-                   .ConfigureAwait(false);
-        }
-
-        accumulator.Finish();
-        if (accumulator.InputTokens is < 0 || accumulator.OutputTokens is < 0)
-            throw new InvalidDataException("Model usage cannot contain negative token counts.");
-
-        // 摘要与普通请求共用 usage 审计路径，避免漏计摘要开销。
-        if (accumulator.InputTokens is not null  ||
-            accumulator.OutputTokens is not null ||
-            accumulator.FinishReason is not null)
-        {
-            if (_recorder is not null)
-                await _recorder.RecordModelUsageAsync(accumulator.InputTokens, accumulator.OutputTokens,
-                                                      accumulator.FinishReason, cancellationToken)
-                               .ConfigureAwait(false);
-
-            // 摘要标志只区分用途，不排除其累计开销。
-            var usage = new ModelUsage(accumulator.InputTokens, accumulator.OutputTokens,
-                                       accumulator.FinishReason, !publishTextDeltas);
-            await PublishEventAsync(HostEventKind.ModelUsage, usage, cancellationToken).ConfigureAwait(false);
-            if (accumulator.InputTokens is { } inputTokens)
-                _reportedInputTokens = (_reportedInputTokens ?? 0) + inputTokens;
-
-            if (accumulator.OutputTokens is { } outputTokens)
-                _reportedOutputTokens = (_reportedOutputTokens ?? 0) + outputTokens;
-        }
-
-        charge.Complete(accumulator.InputTokens, accumulator.OutputTokens);
-
-        // 无可靠输入 usage 时保持已有校准，不把缺失值当作实测。
-        if (accumulator.InputTokens is { } actualInputTokens)
-            _context.RecordModelUsage(estimatedPromptTokens, actualInputTokens);
-
-        if (!ended || accumulator.FinishReason is "length" or "content_filter" or "incomplete" or "max_tokens")
-            throw new
-                InvalidDataException("Model response ended without a complete stream boundary; no tools were started.");
-
-        if (!publishTextDeltas &&
-            (!ended ||
-             (accumulator.ToolCalls.Count == 0       &&
-              accumulator.FinishReason is { } reason &&
-              !string.Equals(reason, "stop", StringComparison.OrdinalIgnoreCase))))
-            throw
-                new InvalidDataException("Compaction response was incomplete or stopped without a usable completion.");
-
-        return ChatMessage.Assistant(accumulator.Content, accumulator.ToolCalls, accumulator.Reasoning);
     }
 
     /// <summary>

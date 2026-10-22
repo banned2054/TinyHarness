@@ -267,7 +267,7 @@ internal sealed class SmokeStep
             [
                 Content("Smoke ok: the Agent loop ran "),
                 Content("list_files, search_text, read_file, apply_patch, failing/passing fixture checks, direct process and explicit shell modes through the permission flow."),
-                End()
+                End("stop")
             ];
 
         // Arguments are split across deltas (when long enough) to exercise the
@@ -304,7 +304,7 @@ internal sealed class SmokeStep
             });
         }
 
-        events.Add(End());
+        events.Add(End("tool_calls"));
         return events;
     }
 
@@ -319,10 +319,10 @@ internal sealed class SmokeStep
     };
 
     /// <summary>
-    ///     创建正常结束流事件。
-    ///     Creates a normal end-of-stream event.
+    ///     <para>创建携带明确结束原因的流事件。</para>
+    ///     <para>Creates a stream-end event with an explicit finish reason.</para>
     /// </summary>
-    private static ChatStreamEvent End() => new() { Kind = ChatStreamEventKind.End };
+    private static ChatStreamEvent End(string reason) => new() { Kind = ChatStreamEventKind.End, FinishReason = reason };
 }
 
 /// <summary>

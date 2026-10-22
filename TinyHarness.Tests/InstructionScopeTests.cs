@@ -159,7 +159,7 @@ public class InstructionScopeTests
             ToolCallId             = prefix + index,
             ToolCallFunctionName   = name,
             ToolCallArgumentsDelta = argument
-        }).Append(new ChatStreamEvent { Kind = ChatStreamEventKind.End }).ToArray();
+        }).Append(new ChatStreamEvent { Kind = ChatStreamEventKind.End, FinishReason = "tool_calls" }).ToArray();
 
     private sealed class ChangeRuleApprover(Action? change) : IApprovalProvider
     {

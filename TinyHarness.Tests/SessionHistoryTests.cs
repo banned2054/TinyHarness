@@ -426,7 +426,7 @@ public sealed class SessionHistoryTests
                 ToolCallFunctionName   = invalidFirst ? "write_test" : "missing",
                 ToolCallArgumentsDelta = "{}"
             },
-            new ChatStreamEvent { Kind = ChatStreamEventKind.End }
+            new ChatStreamEvent { Kind = ChatStreamEventKind.End, FinishReason = "tool_calls" }
         ]);
         client.Enqueue(FakeChatClient.ToolCall("write_test", "{}", "reused"));
         client.Enqueue(FakeChatClient.Text("finished"));

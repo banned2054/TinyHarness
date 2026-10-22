@@ -109,31 +109,35 @@ public class ChatSessionTests
         var run2 = await host.SubmitTurnAsync("u2", CancellationToken.None);
 
         var session = host.Session;
-        // 每个运行依次发布开始、文本增量和结束事件。
-        Assert.That(sink.Events.Count, Is.EqualTo(6));
+        // 每个运行包含请求状态、正文、usage 和终态。
+        Assert.That(sink.Events.Count, Is.EqualTo(12));
         for (var i = 1; i < sink.Events.Count; i++)
             Assert.That(sink.Events[i].TimestampUtc >= sink.Events[i - 1].TimestampUtc, Is.True);
 
         // 各类事件均关联宿主身份，序号限定在当前运行。
-        var first = sink.Events.Take(3).ToArray();
+        var first = sink.Events.Take(6).ToArray();
         Assert.That(first[0].Kind, Is.EqualTo(HostEventKind.RunStarted));
-        Assert.That(first[1].Kind, Is.EqualTo(HostEventKind.AssistantTextDelta));
-        Assert.That(first[2].Kind, Is.EqualTo(HostEventKind.RunFinished));
+        Assert.That(first[1].Kind, Is.EqualTo(HostEventKind.ModelRequestStarted));
+        Assert.That(first[2].Kind, Is.EqualTo(HostEventKind.AssistantTextDelta));
+        Assert.That(first[3].Kind, Is.EqualTo(HostEventKind.ModelUsage));
+        Assert.That(first[4].Kind, Is.EqualTo(HostEventKind.ModelRequestFinished));
+        Assert.That(first[5].Kind, Is.EqualTo(HostEventKind.RunFinished));
         Assert.That(first[0].Sequence, Is.EqualTo(1));
-        Assert.That(first[2].Sequence, Is.EqualTo(3));
+        Assert.That(first[5].Sequence, Is.EqualTo(6));
         TestAssert.All(first, @event => Assert.That(@event.SessionId, Is.EqualTo(session.Id)));
         TestAssert.All(first, @event => Assert.That(@event.TurnId, Is.EqualTo(session.Turns[0].Id)));
         TestAssert.All(first, @event => Assert.That(@event.RunId, Is.EqualTo(run1.Id)));
-        Assert.That(TestAssert.TypeOf<string>(first[1].Payload), Is.EqualTo("one"));
-        Assert.That(first[2].Payload, Is.SameAs(run1.Result));
+        Assert.That(TestAssert.TypeOf<string>(first[2].Payload), Is.EqualTo("one"));
+        Assert.That(first[5].Payload, Is.SameAs(run1.Result));
 
         // 后续运行复用身份关联规则，但独立计数事件序号。
-        var second = sink.Events.Skip(3).ToArray();
+        var second = sink.Events.Skip(6).ToArray();
         Assert.That(second[0].Kind, Is.EqualTo(HostEventKind.RunStarted));
-        Assert.That(second[1].Kind, Is.EqualTo(HostEventKind.AssistantTextDelta));
-        Assert.That(second[2].Kind, Is.EqualTo(HostEventKind.RunFinished));
+        Assert.That(second[1].Kind, Is.EqualTo(HostEventKind.ModelRequestStarted));
+        Assert.That(second[2].Kind, Is.EqualTo(HostEventKind.AssistantTextDelta));
+        Assert.That(second[5].Kind, Is.EqualTo(HostEventKind.RunFinished));
         Assert.That(second[0].Sequence, Is.EqualTo(1));
-        Assert.That(second[2].Sequence, Is.EqualTo(3));
+        Assert.That(second[5].Sequence, Is.EqualTo(6));
         Assert.That(second[0].TurnId, Is.EqualTo(session.Turns[1].Id));
         Assert.That(second[0].RunId, Is.EqualTo(run2.Id));
         Assert.That(second[0].SessionId, Is.EqualTo(session.Id));

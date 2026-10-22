@@ -2,7 +2,7 @@
 
 更新日期：2026-10-22。工作目录：`C:\Code\.Net\TinyHarness`。
 
-本次工作：按用户确认收窄 M16，并按授权完成现有交付证据核查与验收，见 §8；无需新增产品代码。M15 工程结果保留于 §7。M17 尚未进入，不重跑旧沙箱专项或替换用户正在使用的 exe。
+本次工作：按用户授权修复模型无可用回答却 Completed，以及模型等待无反馈的问题，见 §9。M16 收窄验收结果保留于 §8，M15 工程结果保留于 §7。M17 尚未进入，不重跑旧沙箱专项或替换用户正在使用的 exe。
 
 这份文档用于跨 chat 接续工作，替代反复复制长交接 prompt。产品计划仍以 [PLAN.md](../PLAN.md) 为准，操作规则以 [AGENTS.md](../AGENTS.md) 和用户当前明确要求为准。开始工作先核对 HEAD、status、相关源码和差异；下面的路径、配置和结果是本次记录，不能替代下次的磁盘检查。后续取得新结果时更新这里的当前状态，详细证据留在对应报告。
 
@@ -101,6 +101,13 @@ CLI 第 8/9 轮各发起过摘要请求，但日志中 `context.compacted` 为 0
 最新本轮本地产物（未自动替换聊天进程）：
 
 ```text
+C:\Code\.Net\TinyHarness\artifacts\model-response-fix-20261022\native-accepted\TinyHarness.exe
+SHA-256: B697292555AE47C8CC12F86A91CB4BB789B76F177D38759BC8FE183060F7CFD8
+```
+
+此前压缩替换产物：
+
+```text
 C:\Code\.Net\TinyHarness\artifacts\compaction-replacement-20261021\native\TinyHarness.exe
 SHA-256: E5254543FACB25DF89A0F4AAB0668AD9E513601EE6690A6E1CF88194BE20159E
 ```
@@ -169,3 +176,15 @@ SHA-256: 7CA34BFF187ED486B34223C56718C5232F2049018D01387E31C74730A1859B88
 - 此前 Git 三个完成样本继续有效；本轮原生 `session show` 复查其四个会话（含原达限样本）均退出 0、源日志哈希不变，没有重放工具。
 - 新真实 `glm-5.3` 合成报告样本：只读未信任夹具，2 次模型请求／4 次文件读取和列举工具执行，Completed；正确区分确认补丁与后续变化，不把截断／未执行记录视为测试通过。模型仍有一句文件列表概括错误，记录原文，不宣称所有文字准确。夹具文件哈希变化 0，未发送产品源码。
 - 本机证据：`artifacts/m16-acceptance-20261022/`，机器汇总 `final-proof.json`。本轮只记录文档与验证产物；当前没有必须补建的 M16 功能，M17 需另行要求。真实项目完整源码补丁、完整并发作者归因、GUI、断电与新 OS 隔离环境不在本轮结论内。
+
+## 9. 模型响应完成校验与等待反馈（2026-10-22）
+
+- 开工基线 `b713d57`，工作区干净；本轮仅本地实施与离线验证，未操作 Git 写入、Banori、目录信任或沙箱机器配置，也未新增真实模型请求。
+- 原会话 `9b65f1a2f2c0431ea48d3e76c9fe5fb4` 第二轮最终 assistant 含 1 个 reasoning 条目（26,639 字符），无正文和工具调用；原循环把它记为 Completed。第三轮追问已创建，约 160 秒后以 SDK 100 秒 NetworkTimeout 重试失败结束；这不证明第二轮也是超时。没有原始 HTTP/SSE，第二轮上游原因仍未知，不把症状归因于 stdin。
+- 将模型请求消费收敛到同一 AgentLoop 的 `ModelRequests` partial：End 仅表示枚举结束，成功还须有匹配正文／工具形态的 `stop`／`tool_calls`。缺失、截断、未知或矛盾的结束原因以及空白、reasoning-only、usage-only 回答均失败；校验在追加 assistant 及准备工具之前。已报告 usage 和已确认工具保留，失败不自动重试或重放工具；压缩原有 EmptySummary／IncompleteResponse 等诊断保持区分。
+- 沿现有宿主事件通道新增请求开始、每十秒等待和请求终态，覆盖压缩请求；CLI 展示用途、耗时和结果，失败的流式文本标为未完成，不展示 reasoning 或摘要。单个流推进和计时等待均有界，事件仍内联串行，取消也交付请求终态。请求序号计数逻辑请求，不是 SDK 内部重试次数；超时及重试配置未改。
+- 严格结束原因契约同时适用于 fake client 和 smoke。原有允许缺少 finish reason 的文本测试改为期望失败；其余正常夹具补上明确原因，未降低工具、预算、恢复及故障注入断言。
+- 最终普通离线回归 1041 总／1039 通过／2 链接权限跳过／0 失败，50 s；独立 scale 1/1，22 s。针对性 98/98 包含真实 SDK 对本机合成 SSE 的 Chat Completions／Responses 缺失结束场景，以及等待通知、取消分类和持久化后新回合成功。集合重叠，数字不相加。
+- win-x64 Release NativeAOT publish 成功，无 compiler／trimming／AOT warning。仓库外隔离配置原生 smoke 退出 0，主链 Completed／17 steps／16 tools；新增合成会话验证一次读取后 reasoning-only 失败、同日志恢复、缺失终止信息失败与下一轮成功，未重放工具。现有控制／预算／规则刷新／历史 diff 检查继续通过。
+- 受限执行中 SDK 测试曾因 HttpListener 句柄无效失败，普通宿主权限复跑通过；原 PATH 下三项进程模拟回归失败，去重并前置 System32 的子进程 PATH 下原断言通过。NativeAOT 构建曾出现找不到 where、输入行过长及 link 不可用；精简进程 PATH 后通过。首次原生 smoke 缺少 PowerShell 路径失败，补齐该进程 PATH 后通过。中间日志保留，未修改机器环境或产品依赖，不将上述表现扩大解释为 Windows 内部根因已定位。
+- 本机证据：[验证记录](../artifacts/model-response-fix-20261022/verification.md)、[机器汇总](../artifacts/model-response-fix-20261022/final-proof.json)。原会话 SHA-256 仍为 `71F87CE61FAE54FC1B21C2BE028C9168295F704A750B5F1959BDA83DCF48869F`；未改写原会话或替换用户运行中的 exe。真实供应商复测、GUI、断电和新的 OS 隔离验收未执行；本轮不自动进入 M17。

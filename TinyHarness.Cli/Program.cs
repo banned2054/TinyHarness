@@ -832,6 +832,12 @@ internal static class Program
             await
                 Console.Out
                        .WriteLineAsync("  m15          : control/work/budget/restore passed (separate offline session)");
+            await ModelResponseOfflineSmoke.RunAsync(fixture.Root, sessionDirectory,
+                                                     new SessionModelIdentity(config.Model,
+                                                                              config.Endpoint ?? "offline-smoke://local",
+                                                                              config.ChatApi), cts.Token)
+                                           .ConfigureAwait(false);
+            await Console.Out.WriteLineAsync("  responses    : empty/termination/failure/restore/continue passed (offline)");
         }
 
         TryDeleteSmokeDirectory(sessionDirectory);

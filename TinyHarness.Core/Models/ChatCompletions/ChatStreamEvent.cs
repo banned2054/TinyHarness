@@ -25,8 +25,8 @@ public enum ChatStreamEventKind
     ToolCallDelta,
 
     /// <summary>
-    ///     流正常结束，累积消息已经完整。
-    ///     The stream ended normally and the accumulated message is complete.
+    ///     <para>流枚举结束；调用方仍须校验结束原因和累积消息，不能仅据此认定回答完整。</para>
+    ///     <para>Stream enumeration ended; callers must validate the finish reason and message before accepting completion.</para>
     /// </summary>
     End,
 

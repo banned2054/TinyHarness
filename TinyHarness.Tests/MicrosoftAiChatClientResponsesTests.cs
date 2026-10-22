@@ -161,6 +161,33 @@ public class MicrosoftAiChatClientResponsesTests
 
     // ---- tests ---------------------------------------------------------------
 
+    /// <summary>
+    ///     <para>Responses 的正文或完整工具条目仍须有 response.completed 才能接受。</para>
+    ///     <para>Responses text or complete function items still require response.completed before acceptance.</para>
+    /// </summary>
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task MissingResponseCompletedFailsBeforeTools(bool toolResponse)
+    {
+        using var server = new MockSseServer();
+        server.Start();
+        var body = toolResponse ? ResponsesSse(1) : TextSse("partial");
+        var terminal = body.IndexOf("event: response.completed", StringComparison.Ordinal);
+        Assert.That(terminal, Is.GreaterThanOrEqualTo(0));
+        server.EnqueueRaw(body[..terminal]);
+        var tool = new FakeTool("read_file");
+        var loop = new AgentLoop(NewClient(server), new ToolRegistry([tool]), new AgentOptions
+        {
+            Model = Model, MaxAgentSteps = 3, DefaultToolTimeoutSeconds = 30
+        });
+
+        var result = await loop.RunAsync("sys", "go", default);
+
+        Assert.That(result.Status, Is.EqualTo(AgentStatus.Failed));
+        Assert.That(tool.ExecuteCount, Is.Zero);
+        Assert.That(server.Requests.Count, Is.EqualTo(1));
+    }
+
     [Test]
     public async Task StreamingReasoningTextAndTools_AreAssembled()
     {

@@ -50,7 +50,10 @@ public class RunBudgetTests
         var model = new FakeChatClient();
         model.Enqueue([
             new ChatStreamEvent { Kind = ChatStreamEventKind.ContentDelta, ContentDelta = "answer" },
-            new ChatStreamEvent { Kind = ChatStreamEventKind.End, InputTokens           = input, OutputTokens = output }
+            new ChatStreamEvent
+            {
+                Kind = ChatStreamEventKind.End, FinishReason = "stop", InputTokens = input, OutputTokens = output
+            }
         ]);
         var result         = await new AgentLoop(model, new ToolRegistry([]), Options()).RunAsync("sys", "go", default);
         var estimatedInput = TokenEstimator.EstimateMessages(model.RequestLog[0].Messages);

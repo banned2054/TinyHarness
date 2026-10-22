@@ -59,7 +59,7 @@ public class WorkerRunnerTests
                 ToolCallArgumentsDelta = calls[i].Arguments
             });
 
-        events.Add(new ChatStreamEvent { Kind = ChatStreamEventKind.End });
+        events.Add(new ChatStreamEvent { Kind = ChatStreamEventKind.End, FinishReason = "tool_calls" });
         return events;
     }
 
@@ -925,7 +925,7 @@ public class WorkerRunnerTests
                 Kind         = ChatStreamEventKind.ContentDelta,
                 ContentDelta = DraftJson("Done.", "docs/a.md")
             },
-            new ChatStreamEvent { Kind = ChatStreamEventKind.End }
+            new ChatStreamEvent { Kind = ChatStreamEventKind.End, FinishReason = "stop" }
         ]);
         var runner = new WorkerRunner(fake, dir.Root, Options() with { MaxModelResponseCharacters = 700 });
 

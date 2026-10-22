@@ -222,7 +222,7 @@ public sealed class SessionJournalFaultTests
                 Kind                 = ChatStreamEventKind.ToolCallDelta, ToolCallIndex = 1, ToolCallId = secondCallId,
                 ToolCallFunctionName = "work", ToolCallArgumentsDelta                   = "{}"
             },
-            new ChatStreamEvent { Kind = ChatStreamEventKind.End }
+            new ChatStreamEvent { Kind = ChatStreamEventKind.End, FinishReason = "tool_calls" }
         ]);
         client.Enqueue(FakeChatClient.Text("done"));
         var tool = new FakeTool("work");
@@ -319,7 +319,7 @@ public sealed class SessionJournalFaultTests
                 Kind                 = ChatStreamEventKind.ToolCallDelta, ToolCallIndex = 1, ToolCallId = "later",
                 ToolCallFunctionName = "later", ToolCallArgumentsDelta                  = "{}"
             },
-            new ChatStreamEvent { Kind = ChatStreamEventKind.End }
+            new ChatStreamEvent { Kind = ChatStreamEventKind.End, FinishReason = "tool_calls" }
         ]);
         string sessionId;
         using (var host = NewHost(workspace.Root, directory.Root, client, [patchTool, laterTool]))

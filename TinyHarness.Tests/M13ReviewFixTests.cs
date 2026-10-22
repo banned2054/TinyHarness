@@ -41,7 +41,7 @@ public class M13ReviewFixTests
                 Kind       = ChatStreamEventKind.ToolCallDelta, ToolCallIndex = 1,
                 ToolCallId = id, ToolCallFunctionName                         = "read", ToolCallArgumentsDelta = "{}"
             },
-            new ChatStreamEvent { Kind = ChatStreamEventKind.End }
+            new ChatStreamEvent { Kind = ChatStreamEventKind.End, FinishReason = "tool_calls" }
         ]);
         var write  = new FakeTool("write");
         var read   = new FakeTool("read");
@@ -70,7 +70,7 @@ public class M13ReviewFixTests
                 Kind       = ChatStreamEventKind.ToolCallDelta, ToolCallIndex = 1,
                 ToolCallId = "second", ToolCallFunctionName                   = "write", ToolCallArgumentsDelta = "{}"
             },
-            new ChatStreamEvent { Kind = ChatStreamEventKind.End }
+            new ChatStreamEvent { Kind = ChatStreamEventKind.End, FinishReason = "tool_calls" }
         ]);
         client.Enqueue(FakeChatClient.ToolCall("write", "{}", "next"));
         client.Enqueue(FakeChatClient.Text("blocked"));

@@ -54,6 +54,25 @@ internal sealed class ConsoleHostEventSink(
     {
         switch (@event.Kind)
         {
+            case HostEventKind.ModelRequestStarted when @event.Payload is ModelRequestProgress startedRequest :
+                await WriteLineAsync($"model request {startedRequest.RequestNumber}" +
+                                     $"{(startedRequest.SummaryRequest ? " (summary)" : string.Empty)}: waiting for model",
+                                     cancellationToken).ConfigureAwait(false);
+                break;
+
+            case HostEventKind.ModelRequestWaiting when @event.Payload is ModelRequestProgress waitingRequest :
+                await WriteLineAsync($"model request {waitingRequest.RequestNumber}: still waiting for model " +
+                                     $"({waitingRequest.ElapsedMilliseconds / 1000}s elapsed)", cancellationToken)
+                   .ConfigureAwait(false);
+                break;
+
+            case HostEventKind.ModelRequestFinished when @event.Payload is ModelRequestProgress finishedRequest :
+                await WriteLineAsync($"model request {finishedRequest.RequestNumber}: {finishedRequest.Outcome} " +
+                                     $"({finishedRequest.ElapsedMilliseconds} ms)" +
+                                     (finishedRequest.PartialText ? "; streamed answer is incomplete" : string.Empty),
+                                     cancellationToken).ConfigureAwait(false);
+                break;
+
             case HostEventKind.AssistantTextDelta when @event.Payload is string delta :
                 await WriteDeltaAsync(delta, cancellationToken).ConfigureAwait(false);
                 break;

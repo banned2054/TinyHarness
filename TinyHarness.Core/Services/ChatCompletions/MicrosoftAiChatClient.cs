@@ -168,9 +168,7 @@ public sealed class MicrosoftAiChatClient : IChatCompletionClient, IDisposable
                 }
         }
 
-        // 流结束：把增量捕获的 usage 与结束原因放到唯一的 End 事件上；usage 缺失时保持 null。
-        // Stream end: the incrementally captured usage and finish reason land on the
-        // single End event; a missing usage stays null.
+        // 枚举结束不证明响应完整；保留缺失的结束原因，由循环在执行工具前统一拒绝。
         yield return new ChatStreamEvent
         {
             Kind         = ChatStreamEventKind.End,

@@ -39,6 +39,17 @@ public sealed record ModelUsage(
     bool    SummaryRequest);
 
 /// <summary>
+///     <para>单次模型请求的展示状态；序号包含压缩请求，耗时不是供应商网络超时。</para>
+///     <para>Display state of one model request; numbering includes compaction and elapsed time is not a network timeout.</para>
+/// </summary>
+public sealed record ModelRequestProgress(
+    int     RequestNumber,
+    bool    SummaryRequest,
+    long    ElapsedMilliseconds,
+    string? Outcome = null,
+    bool    PartialText = false);
+
+/// <summary>
 ///     <para>
 ///         项目指令生效事件的负载（<see cref="HostEventKind.ProjectInstructionsChanged" />）：
 ///         只携带版本、来源数量和探测摘要，不携带规则正文或授权语义。

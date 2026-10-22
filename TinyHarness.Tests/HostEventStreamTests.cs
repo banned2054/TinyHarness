@@ -27,6 +27,52 @@ namespace TinyHarness.Tests;
 /// </summary>
 public class HostEventStreamTests
 {
+    /// <summary>
+    ///     <para>等待通知在请求活动时发出，接收方取消后关闭请求且无遗留并发读取。</para>
+    ///     <para>Wait notices arrive during the active request; cancellation closes it without orphaned concurrent reads.</para>
+    /// </summary>
+    [Test]
+    public async Task WaitingRequestPublishesProgressAndCancelsSerially()
+    {
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var model = new GateChatClient();
+        var sink = new WaitingSink(cancellation.Cancel);
+        var loop = new AgentLoop(model, new ToolRegistry([]), Options(), null, null, events : sink);
+
+        var result = await loop.RunAsync("sys", "go", cancellation.Token);
+
+        Assert.That(result.Status, Is.EqualTo(AgentStatus.Cancelled));
+        Assert.That(model.Requests, Is.EqualTo(1));
+        Assert.That(sink.Events.Select(e => e.Kind), Is.EqualTo([
+            HostEventKind.RunStarted, HostEventKind.ModelRequestStarted, HostEventKind.ModelRequestWaiting,
+            HostEventKind.ModelRequestFinished, HostEventKind.RunFinished
+        ]));
+        var waiting = (ModelRequestProgress)sink.Events[2].Payload!;
+        Assert.That(waiting.ElapsedMilliseconds, Is.GreaterThanOrEqualTo(9000));
+        var finished = (ModelRequestProgress)sink.Events[3].Payload!;
+        Assert.That(finished.Outcome, Is.EqualTo("cancelled"));
+        Assert.That(sink.MaxConcurrent, Is.EqualTo(1));
+    }
+
+    private sealed class WaitingSink(Action cancel) : IHostEventSink
+    {
+        private int _inside;
+        internal List<HostEvent> Events { get; } = [];
+        internal int MaxConcurrent { get; private set; }
+
+        public ValueTask PublishAsync(HostEvent value, CancellationToken cancellationToken)
+        {
+            MaxConcurrent = Math.Max(MaxConcurrent, Interlocked.Increment(ref _inside));
+            try
+            {
+                Events.Add(value);
+                if (value.Kind == HostEventKind.ModelRequestWaiting) cancel();
+                return ValueTask.CompletedTask;
+            }
+            finally { Interlocked.Decrement(ref _inside); }
+        }
+    }
+
     private static AgentOptions Options(int maxSteps = 10) => new()
     {
         Model                     = "test-model",
@@ -96,24 +142,33 @@ public class HostEventStreamTests
         Assert.That(result.Status, Is.EqualTo(AgentStatus.Completed));
         Assert.That(sink.Events.Select(@event => @event.Kind).ToArray(), Is.EqualTo([
             HostEventKind.RunStarted,
+            HostEventKind.ModelRequestStarted,
+            HostEventKind.ModelUsage,
+            HostEventKind.ModelRequestFinished,
             HostEventKind.ToolPrepared,
             HostEventKind.ApprovalRequested,
             HostEventKind.ApprovalResolved,
             HostEventKind.ToolStarted,
             HostEventKind.ToolFinished,
+            HostEventKind.ModelRequestStarted,
             HostEventKind.AssistantTextDelta,
+            HostEventKind.ModelUsage,
+            HostEventKind.ModelRequestFinished,
             HostEventKind.RunFinished
         ]));
 
-        var requested = TestAssert.TypeOf<ToolPreparation>(sink.Events[2].Payload);
+        var requested = TestAssert.TypeOf<ToolPreparation>(sink.Events.Single(e => e.Kind == HostEventKind.ApprovalRequested)
+                                                             .Payload);
         Assert.That(requested.ToolName, Is.EqualTo("apply_patch"));
 
-        var resolution = TestAssert.TypeOf<ApprovalResolution>(sink.Events[3].Payload);
+        var resolution = TestAssert.TypeOf<ApprovalResolution>(sink.Events.Single(e => e.Kind == HostEventKind.ApprovalResolved)
+                                                                 .Payload);
         Assert.That(resolution.Decision, Is.EqualTo(PermissionDecision.Ask));
         Assert.That(resolution.Action, Is.EqualTo(ApprovalAction.AllowOnce));
         Assert.That(resolution.Outcome, Is.EqualTo("allow once"));
 
-        var outcome = TestAssert.TypeOf<ToolExecutionOutcome>(sink.Events[5].Payload);
+        var outcome = TestAssert.TypeOf<ToolExecutionOutcome>(sink.Events.Single(e => e.Kind == HostEventKind.ToolFinished)
+                                                                .Payload);
         Assert.That(outcome.Preparation.ToolName, Is.EqualTo("apply_patch"));
         Assert.That(outcome.Result.Succeeded, Is.True);
     }
@@ -231,8 +286,10 @@ public class HostEventStreamTests
 
         Assert.That(failed.Status, Is.EqualTo(AgentStatus.Failed));
         Assert.That(sink.Events.Select(@event => @event.Kind).ToArray(),
-                    Is.EqualTo([HostEventKind.RunStarted, HostEventKind.RunError, HostEventKind.RunFinished]));
-        Assert.That(TestAssert.TypeOf<string>(sink.Events[1].Payload), Is.EqualTo("endpoint unreachable"));
+                    Is.EqualTo([HostEventKind.RunStarted, HostEventKind.ModelRequestStarted,
+                                HostEventKind.ModelRequestFinished, HostEventKind.RunError, HostEventKind.RunFinished]));
+        Assert.That(TestAssert.TypeOf<string>(sink.Events.Single(e => e.Kind == HostEventKind.RunError).Payload),
+                    Is.EqualTo("endpoint unreachable"));
 
         // 取消不是错误：它的终态事件是唯一结尾。
         var cancelling = new FakeChatClient();
@@ -247,7 +304,8 @@ public class HostEventStreamTests
         // 取消到达流之前第一个增量已交付；终态事件仍会到达，之前没有 RunError。
         Assert.That(cancelSink.Events.Select(@event => @event.Kind).ToArray(),
                     Is.EqualTo([
-                        HostEventKind.RunStarted, HostEventKind.AssistantTextDelta, HostEventKind.RunFinished
+                        HostEventKind.RunStarted, HostEventKind.ModelRequestStarted, HostEventKind.AssistantTextDelta,
+                        HostEventKind.ModelRequestFinished, HostEventKind.RunFinished
                     ]));
         TestAssert.DoesNotContainAny(@event => @event.Kind == HostEventKind.RunError, cancelSink.Events);
     }
@@ -265,7 +323,7 @@ public class HostEventStreamTests
         Assert.That(result.Status, Is.EqualTo(AgentStatus.Completed));
         Assert.That(result.FinalMessage, Is.EqualTo("hi"));
         Assert.That(result.Error, Does.Contain("sink exploded"));
-        Assert.That(sink.Published, Is.EqualTo(3)); // RunStarted、失败的增量、RunFinished。
+        Assert.That(sink.Published, Is.EqualTo(6)); // 运行、请求、正文、usage 和两级终态。
     }
 
     [Test]
@@ -283,9 +341,12 @@ public class HostEventStreamTests
         Assert.That(sink.MaxConcurrent, Is.EqualTo(1));
         Assert.That(sink.Kinds.ToArray(), Is.EqualTo([
             HostEventKind.RunStarted,
+            HostEventKind.ModelRequestStarted,
             HostEventKind.AssistantTextDelta,
             HostEventKind.AssistantTextDelta,
             HostEventKind.AssistantTextDelta,
+            HostEventKind.ModelUsage,
+            HostEventKind.ModelRequestFinished,
             HostEventKind.RunFinished
         ]));
     }
@@ -327,9 +388,13 @@ public class HostEventStreamTests
         Assert.That(result.Status, Is.EqualTo(AgentStatus.Completed));
         var usages = sink.Events.Where(@event => @event.Kind == HostEventKind.ModelUsage)
                          .Select(@event => TestAssert.TypeOf<ModelUsage>(@event.Payload)).ToArray();
-        Assert.That(usages.Length, Is.EqualTo(2));
-        Assert.That(usages[0].SummaryRequest, Is.True);
-        Assert.That(usages[1].SummaryRequest, Is.False);
+        Assert.That(usages.Length, Is.EqualTo(5));
+        Assert.That(usages[3].SummaryRequest, Is.True);
+        Assert.That(usages[4].SummaryRequest, Is.False);
+        var summaryRequests = sink.Events.Where(e => e.Kind == HostEventKind.ModelRequestStarted)
+                                  .Select(e => (ModelRequestProgress)e.Payload!).ToArray();
+        Assert.That(summaryRequests.Select(p => p.RequestNumber), Is.EqualTo([1, 2, 3, 4, 5]));
+        Assert.That(summaryRequests.Select(p => p.SummaryRequest), Is.EqualTo([false, false, false, true, false]));
         // 只有最终回答自身的增量被展示；内部交接摘要 从未出现。
         Assert.That(sink.Events.Where(@event => @event.Kind == HostEventKind.AssistantTextDelta)
                         .Select(@event => TestAssert.TypeOf<string>(@event.Payload)).ToArray(), Is.EqualTo(["done"]));

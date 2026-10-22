@@ -68,7 +68,7 @@ internal sealed class FakeChatClient : IChatCompletionClient
     {
         return chunks
               .Select(c => new ChatStreamEvent { Kind = ChatStreamEventKind.ContentDelta, ContentDelta = c })
-              .Append(new ChatStreamEvent { Kind = ChatStreamEventKind.End }).ToArray();
+              .Append(new ChatStreamEvent { Kind = ChatStreamEventKind.End, FinishReason = "stop" }).ToArray();
     }
 
     /// <summary>
@@ -99,7 +99,7 @@ internal sealed class FakeChatClient : IChatCompletionClient
         foreach (var chunk in chunks)
             events.Add(new ChatStreamEvent { Kind = ChatStreamEventKind.ContentDelta, ContentDelta = chunk });
 
-        events.Add(new ChatStreamEvent { Kind = ChatStreamEventKind.End });
+        events.Add(new ChatStreamEvent { Kind = ChatStreamEventKind.End, FinishReason = "stop" });
         return events;
     }
 
@@ -119,7 +119,8 @@ internal sealed class FakeChatClient : IChatCompletionClient
         {
             Kind         = ChatStreamEventKind.End,
             InputTokens  = inputTokens,
-            OutputTokens = outputTokens
+            OutputTokens = outputTokens,
+            FinishReason = "stop"
         });
         return events;
     }
@@ -161,7 +162,7 @@ internal sealed class FakeChatClient : IChatCompletionClient
             });
         }
 
-        events.Add(new ChatStreamEvent { Kind = ChatStreamEventKind.End });
+        events.Add(new ChatStreamEvent { Kind = ChatStreamEventKind.End, FinishReason = "tool_calls" });
         return events;
     }
 
@@ -180,7 +181,7 @@ internal sealed class FakeChatClient : IChatCompletionClient
                 ToolCallArgumentsDelta = argumentsJson
             });
 
-        events.Add(new ChatStreamEvent { Kind = ChatStreamEventKind.End });
+        events.Add(new ChatStreamEvent { Kind = ChatStreamEventKind.End, FinishReason = "tool_calls" });
         return events;
     }
 

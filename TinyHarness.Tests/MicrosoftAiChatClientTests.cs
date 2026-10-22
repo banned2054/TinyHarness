@@ -95,6 +95,42 @@ public class MicrosoftAiChatClientTests
 
     // ---- tests ---------------------------------------------------------------
 
+    /// <summary>
+    ///     <para>空流或缺少终止信息的真实 SDK 响应不得变为完成或执行工具。</para>
+    ///     <para>Empty or unterminated streams through the real SDK cannot complete a turn or execute tools.</para>
+    /// </summary>
+    [TestCase("empty")]
+    [TestCase("done-only")]
+    [TestCase("role-only")]
+    [TestCase("text-eof")]
+    [TestCase("tool-eof")]
+    public async Task MissingCompletionFailsThroughSdk(string scenario)
+    {
+        using var server = new MockSseServer();
+        server.Start();
+        var body = scenario switch
+        {
+            "done-only" => Sse(),
+            "role-only" => Sse(RoleDelta()),
+            "text-eof" => RoleDelta() + ContentDelta("partial"),
+            "tool-eof" => RoleDelta() + ToolCallHead(0, "call_1", "probe") + ToolArgumentsDelta(0, "{}"),
+            _ => string.Empty
+        };
+        server.EnqueueRaw(body);
+        var tool = new FakeTool("probe");
+        var loop = new AgentLoop(NewClient(server), new ToolRegistry([tool]), new AgentOptions
+        {
+            Model = "mock-model", MaxAgentSteps = 3, DefaultToolTimeoutSeconds = 30
+        });
+
+        var result = await loop.RunAsync("sys", "go", default);
+
+        Assert.That(result.Status, Is.EqualTo(AgentStatus.Failed));
+        Assert.That(tool.ExecuteCount, Is.Zero);
+        Assert.That(server.Requests.Count, Is.EqualTo(1));
+        Assert.That(loop.History.Any(m => m.Role == TinyHarness.Core.Models.ChatCompletions.ChatRole.Assistant), Is.False);
+    }
+
     [Test]
     public async Task StreamingText_TranslatesToContentDeltasAndEnd()
     {

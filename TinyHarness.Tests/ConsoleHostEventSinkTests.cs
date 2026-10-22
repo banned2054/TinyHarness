@@ -21,6 +21,27 @@ namespace TinyHarness.Tests;
 /// </summary>
 public class ConsoleHostEventSinkTests
 {
+    /// <summary>
+    ///     <para>请求等待与失败可见，已流出的正文明确标为未完成，摘要仅展示用途。</para>
+    ///     <para>Request waits and failures are visible, streamed text is marked incomplete, and summaries show purpose only.</para>
+    /// </summary>
+    [Test]
+    public async Task ModelRequestLifecycleDisplaysWaitAndIncompleteAnswer()
+    {
+        var output = await RenderAsync(
+            new HostEvent { Kind = HostEventKind.ModelRequestStarted, Payload = new ModelRequestProgress(2, true, 0) },
+            new HostEvent { Kind = HostEventKind.ModelRequestWaiting, Payload = new ModelRequestProgress(2, true, 10_000) },
+            TextDelta("partial"),
+            new HostEvent
+            {
+                Kind = HostEventKind.ModelRequestFinished,
+                Payload = new ModelRequestProgress(2, true, 12_000, "failed", true)
+            });
+        Assert.That(output, Does.Contain("model request 2 (summary): waiting for model"));
+        Assert.That(output, Does.Contain("still waiting for model (10s elapsed)"));
+        Assert.That(output, Does.Contain("partial\nmodel request 2: failed (12000 ms); streamed answer is incomplete"));
+    }
+
     [Test]
     public async Task ProjectInstructionNoticeDisplaysOnlyRedactedSourceMetadata()
     {

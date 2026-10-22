@@ -203,7 +203,7 @@ public class AgentLoopPermissionTests
                 ToolCallFunctionName   = "apply_patch",
                 ToolCallArgumentsDelta = PatchArgs(EscapePatch())
             },
-            new() { Kind = ChatStreamEventKind.End }
+            new() { Kind = ChatStreamEventKind.End, FinishReason = "tool_calls" }
         };
         client.Enqueue(round);
         client.Enqueue(FakeChatClient.Text("understood"));
@@ -246,7 +246,7 @@ public class AgentLoopPermissionTests
                 ToolCallFunctionName   = "write_test",
                 ToolCallArgumentsDelta = "{}"
             },
-            new ChatStreamEvent { Kind = ChatStreamEventKind.End }
+            new ChatStreamEvent { Kind = ChatStreamEventKind.End, FinishReason = "tool_calls" }
         ]);
         client.Enqueue(FakeChatClient.Text("done"));
 

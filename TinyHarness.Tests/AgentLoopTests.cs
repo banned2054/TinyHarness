@@ -91,7 +91,7 @@ public class AgentLoopTests
                 Kind                 = ChatStreamEventKind.ToolCallDelta, ToolCallIndex = 1, ToolCallId = "b",
                 ToolCallFunctionName = "tool_b", ToolCallArgumentsDelta                 = "{}"
             },
-            new() { Kind = ChatStreamEventKind.End }
+            new() { Kind = ChatStreamEventKind.End, FinishReason = "tool_calls" }
         };
         client.Enqueue(calls);
         client.Enqueue(FakeChatClient.Text("all done"));
@@ -123,7 +123,7 @@ public class AgentLoopTests
                 Kind                 = ChatStreamEventKind.ToolCallDelta, ToolCallIndex = 1, ToolCallId = "b",
                 ToolCallFunctionName = "tool_b", ToolCallArgumentsDelta                 = "{}"
             },
-            new ChatStreamEvent { Kind = ChatStreamEventKind.End }
+            new ChatStreamEvent { Kind = ChatStreamEventKind.End, FinishReason = "tool_calls" }
         ]);
         var loop = new AgentLoop(client, new ToolRegistry([first, second]), Options(), null, null,
                                  recorder);
@@ -164,7 +164,7 @@ public class AgentLoopTests
                 Kind                 = ChatStreamEventKind.ToolCallDelta, ToolCallIndex = 1, ToolCallId = "b",
                 ToolCallFunctionName = "tool_b", ToolCallArgumentsDelta                 = "{}"
             },
-            new ChatStreamEvent { Kind = ChatStreamEventKind.End }
+            new ChatStreamEvent { Kind = ChatStreamEventKind.End, FinishReason = "tool_calls" }
         ]);
         var loop = new AgentLoop(client, new ToolRegistry([first, second]), Options(), null, null, recorder);
 
@@ -254,7 +254,7 @@ public class AgentLoopTests
                 Kind = ChatStreamEventKind.ToolCallDelta, ToolCallIndex = 0, ToolCallFunctionName = "t",
                 ToolCallArgumentsDelta = "{not json"
             },
-            new() { Kind = ChatStreamEventKind.End }
+            new() { Kind = ChatStreamEventKind.End, FinishReason = "tool_calls" }
         });
         var loop = new AgentLoop(client, new ToolRegistry([]), Options());
 
@@ -352,13 +352,17 @@ public class AgentLoopTests
     {
         var client   = new FakeChatClient();
         var recorder = new CapturingRecorder();
-        client.Enqueue(FakeChatClient.Text("hello")); // 终态不含 usage 或结束原因。
+        client.Enqueue([
+            new ChatStreamEvent { Kind = ChatStreamEventKind.ContentDelta, ContentDelta = "hello" },
+            new ChatStreamEvent { Kind = ChatStreamEventKind.End }
+        ]);
         var loop = new AgentLoop(client, new ToolRegistry([]), Options(), null, null,
                                  recorder);
 
         var result = await loop.RunAsync("sys", "hi", CancellationToken.None);
 
-        Assert.That(result.Status, Is.EqualTo(AgentStatus.Completed));
+        Assert.That(result.Status, Is.EqualTo(AgentStatus.Failed));
+        Assert.That(result.Error, Does.Contain("finish reason is missing"));
         Assert.That(recorder.UsageRecords, Is.Empty);
     }
 
@@ -504,7 +508,7 @@ public class AgentLoopTests
         Assert.That(result.Status, Is.EqualTo(AgentStatus.Completed));
         Assert.That(result.FinalMessage, Is.EqualTo("done"));
         Assert.That(result.Error, Does.Contain("sink exploded"));
-        Assert.That(sink.Published, Is.EqualTo(3)); // 开始、失败的文本增量、结束。
+        Assert.That(sink.Published, Is.EqualTo(6)); // 运行、请求、正文、usage 和两级终态。
     }
 
     [Test]
@@ -520,7 +524,7 @@ public class AgentLoopTests
         Assert.That(result.Status, Is.EqualTo(AgentStatus.Completed));
         Assert.That(result.FinalMessage, Is.EqualTo("done"));
         Assert.That(result.Error, Does.Contain("sink exploded"));
-        Assert.That(sink.Published, Is.EqualTo(3)); // 开始、文本增量、失败的结束事件。
+        Assert.That(sink.Published, Is.EqualTo(6)); // 运行、请求、正文、usage 和两级终态。
     }
 
     [Test]
@@ -537,8 +541,9 @@ public class AgentLoopTests
         await loop.RunTurnAsync("sys", "u1", CancellationToken.None);
         await loop.RunTurnAsync("sys", "u2", CancellationToken.None);
 
-        // 事件序号按运行重置；每回合依次发布开始、文本增量和结束事件。
-        Assert.That(sink.Events.Select(@event => @event.Sequence).ToArray(), Is.EqualTo([1L, 2L, 3L, 1L, 2L, 3L]));
+        // 序号按运行重置，请求状态和 usage 也参与有序交付。
+        Assert.That(sink.Events.Select(@event => @event.Sequence).ToArray(),
+                    Is.EqualTo([1L, 2L, 3L, 4L, 5L, 6L, 1L, 2L, 3L, 4L, 5L, 6L]));
     }
 
     /// <summary>
