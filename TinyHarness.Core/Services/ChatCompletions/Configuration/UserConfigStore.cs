@@ -368,7 +368,7 @@ public static class UserConfigStore
         settings = new UserConfigSettings
         {
             RunBudget     = BindRunBudget(settingsNode, filePath),
-            MaxAgentSteps = ReadPositiveInt(settingsNode, "maxAgentSteps", filePath, "settings.maxAgentSteps"),
+            MaxAgentSteps = ReadNonNegativeInt(settingsNode, "maxAgentSteps", filePath, "settings.maxAgentSteps"),
             ReservedOutputTokens =
                 ReadNonNegativeInt(settingsNode, "reservedOutputTokens", filePath, "settings.reservedOutputTokens"),
             CompactionThreshold =
@@ -405,7 +405,8 @@ public static class UserConfigStore
 
             // source generation 会将缺省 init 属性赋为类型零值，先补齐宿主默认值。
             var complete =
-                JsonSerializer.SerializeToNode(new RunBudgetLimits(), RunBudgetJsonContext.Default.RunBudgetLimits)!.AsObject();
+                JsonSerializer.SerializeToNode(new RunBudgetLimits(), RunBudgetJsonContext.Default.RunBudgetLimits)!
+                              .AsObject();
             foreach (var (name, value) in supplied) complete[name] = value?.DeepClone();
 
             var budget = complete.Deserialize(RunBudgetJsonContext.Default.RunBudgetLimits)

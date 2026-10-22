@@ -97,7 +97,8 @@ internal static class HelpText
 
         Trusted cumulative limits live in user-config settings.runBudget: maxModelRequests
         (including summaries), maxToolExecutions, maxWallClockSeconds and maxTotalTokens.
-        maxTotalTokens defaults to 0 (usage tracking only); a positive value enables its limit.
+        maxTotalTokens and maxWallClockSeconds default to 0 (tracking only); positive values
+        enable their limits. Tool timeouts and user cancellation remain active.
         Project configuration cannot override them. Missing usage is estimated; budget
         tokens are not exact charges. BudgetLimitReached preserves its reason and counters.
         Work-item completion is a claim, not test evidence. Saved unapplied amendments
@@ -163,6 +164,8 @@ internal static class HelpText
         config set writes non-sensitive defaults to the user config. Supported keys:
           maxAgentSteps, reservedOutputTokens, compactionThreshold,
           defaultToolTimeoutSeconds, sessionDirectory, sessionStoreDirectory
+
+        maxAgentSteps defaults to 0 (unlimited); a positive value enables a per-run step limit.
 
         Endpoint, profile, model, and API key changes use the provider, model, and auth
         commands instead. Use --config to run tasks against a project config file.

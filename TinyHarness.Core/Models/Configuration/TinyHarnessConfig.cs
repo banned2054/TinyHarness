@@ -35,7 +35,11 @@ public sealed record TinyHarnessConfig
 
     public int CompactionThreshold { get; init; } = 0;
 
-    public int MaxAgentSteps { get; init; } = 40;
+    /// <summary>
+    ///     <para>每次运行的普通模型步数上限；缺省或 0 时不限，正数启用上限。</para>
+    ///     <para>Ordinary model-step limit per run; omitted or zero means unlimited, and a positive value enables the limit.</para>
+    /// </summary>
+    public int MaxAgentSteps { get; init; }
 
     public int? DefaultToolTimeoutSeconds { get; init; } = 120;
 

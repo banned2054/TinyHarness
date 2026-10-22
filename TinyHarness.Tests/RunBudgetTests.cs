@@ -20,6 +20,32 @@ namespace TinyHarness.Tests;
 
 public class RunBudgetTests
 {
+    [TestCase(false)]
+    [TestCase(true)]
+    public void DisabledDeadlineRecordsTimeBeyondOldLimitAndPreservesUserCancellation(bool explicitZero)
+    {
+        var       clock        = new ElapsedTimeProvider();
+        using var cancellation = new CancellationTokenSource();
+        using var budget =
+            new RunBudget(explicitZero ? new RunBudgetLimits { MaxWallClockSeconds = 0 } : new RunBudgetLimits(),
+                          cancellation.Token, clock);
+        clock.Advance(TimeSpan.FromSeconds(901));
+        budget.Check();
+        using (var charge = budget.BeginRequest(10)) charge.Complete(10, 5);
+
+        budget.CheckTool();
+        budget.ToolStarted();
+        Assert.That(budget.Snapshot.ElapsedMilliseconds, Is.EqualTo(901_000));
+        Assert.That(budget.Snapshot.AccountedTokens, Is.EqualTo(15));
+        Assert.That(budget.Snapshot.ToolExecutions, Is.EqualTo(1));
+        Assert.That(budget.DeadlineReached, Is.False);
+        Assert.That(budget.Token.IsCancellationRequested, Is.False);
+
+        cancellation.Cancel();
+        Assert.Throws<OperationCanceledException>(budget.Check);
+        Assert.That(budget.Snapshot.LimitReason, Is.Null);
+    }
+
     private static AgentOptions Options(RunBudgetLimits? limits = null) => new()
     {
         Model                     = "test",
@@ -292,13 +318,18 @@ public class RunBudgetTests
         Assert.That(model.Requests, Is.EqualTo(1));
     }
 
-    [TestCase(0L)]
-    [TestCase(30_000_000_000L)]
-    public async Task TrustedConfiguration_RoundTripsBudget(long tokenLimit)
+    [TestCase(0L, 0)]
+    [TestCase(0L, 10)]
+    [TestCase(30_000_000_000L, 0)]
+    [TestCase(30_000_000_000L, 10)]
+    public async Task TrustedConfiguration_RoundTripsBudget(long tokenLimit, int wallClockSeconds)
     {
         var path = Path.Combine(Path.GetTempPath(), $"m15-config-{Guid.NewGuid():N}.json");
         var limits = new RunBudgetLimits
-            { MaxModelRequests = 7, MaxToolExecutions = 9, MaxWallClockSeconds = 10, MaxTotalTokens = tokenLimit };
+        {
+            MaxModelRequests = 7, MaxToolExecutions = 9, MaxWallClockSeconds = wallClockSeconds,
+            MaxTotalTokens   = tokenLimit
+        };
         await UserConfigStore.SaveAsync(path,
                                         new UserConfig { Settings = new UserConfigSettings { RunBudget = limits } },
                                         default);
@@ -307,7 +338,9 @@ public class RunBudgetTests
 
     [TestCase("{}")]
     [TestCase("{\"maxTotalTokens\":0}")]
-    public async Task TrustedConfiguration_MissingOrZeroTokenLimitKeepsOtherDefaults(string json)
+    [TestCase("{\"maxWallClockSeconds\":0}")]
+    [TestCase("{\"maxWallClockSeconds\":0,\"maxTotalTokens\":0}")]
+    public async Task TrustedConfiguration_MissingOrZeroOptionalLimitsKeepsOtherDefaults(string json)
     {
         var path = Path.Combine(Path.GetTempPath(), $"m15-unlimited-{Guid.NewGuid():N}.json");
         await File.WriteAllTextAsync(path, "{\"settings\":{\"runBudget\":" + json + "}}");
@@ -317,12 +350,13 @@ public class RunBudgetTests
         Assert.That(limits.MaxTotalTokens, Is.Zero);
         Assert.That(limits.MaxModelRequests, Is.EqualTo(128));
         Assert.That(limits.MaxToolExecutions, Is.EqualTo(256));
-        Assert.That(limits.MaxWallClockSeconds, Is.EqualTo(900));
+        Assert.That(limits.MaxWallClockSeconds, Is.Zero);
     }
 
     [TestCase("null")]
     [TestCase("{\"maxModelRequests\":0}")]
     [TestCase("{\"maxWallClockSeconds\":5000000}")]
+    [TestCase("{\"maxWallClockSeconds\":-1}")]
     [TestCase("{\"maxTotalTokens\":-1}")]
     [TestCase("{\"typo\":1}")]
     public async Task TrustedConfiguration_RejectsInvalidBudget(string json)
@@ -376,5 +410,16 @@ public class RunBudgetTests
             await Task.Delay(Timeout.Infinite, cancellationToken);
             yield break;
         }
+    }
+
+    private sealed class ElapsedTimeProvider : TimeProvider
+    {
+        private         long _timestamp;
+        public override long TimestampFrequency        => TimeSpan.TicksPerSecond;
+        public override long GetTimestamp()            => _timestamp;
+        internal        void Advance(TimeSpan elapsed) => _timestamp += elapsed.Ticks;
+
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period) =>
+            throw new InvalidOperationException("A disabled deadline must not create a timer.");
     }
 }

@@ -122,7 +122,7 @@ internal static class ConfigCommand
         switch (key)
         {
             case "maxAgentSteps" :
-                settings = settings with { MaxAgentSteps = ParsePositiveInt(key, value) };
+                settings = settings with { MaxAgentSteps = ParseNonNegativeInt(key, value) };
                 oldValue = DescribeOptionalInt(config.Settings?.MaxAgentSteps);
                 break;
             case "reservedOutputTokens" :

@@ -158,7 +158,7 @@ public class UserConfigStoreTests
     [TestCase("""{"profiles":[{"name":"a","chatApi":"grpc"}]}""", "invalid value 'grpc'")]
     [TestCase("""{"profiles":[{"name":"a","chatApi":5}]}""", "must be a string")]
     [TestCase("""{"defaultProfile":42}""", "'defaultProfile'")]
-    [TestCase("""{"settings":{"maxAgentSteps":-1}}""", "positive integer")]
+    [TestCase("""{"settings":{"maxAgentSteps":-1}}""", "non-negative integer")]
     [TestCase("""{"settings":{"compactionThreshold":-5}}""", "non-negative integer")]
     [TestCase("""{"profiles":"nope"}""", "must be an array")]
     public async Task LoadAsync_MalformedValues_ThrowActionableDiagnostics(string json, string expectedFragment)

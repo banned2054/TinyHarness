@@ -73,6 +73,10 @@ public static class ConfigurationLoader
     /// </summary>
     internal static TinyHarnessConfig NormalizePaths(TinyHarnessConfig config)
     {
+        if (config.MaxAgentSteps < 0)
+            throw new
+                InvalidDataException("Config field 'maxAgentSteps' must be a non-negative integer; 0 means unlimited.");
+
         var workspace = string.IsNullOrWhiteSpace(config.WorkspaceRoot)
             ? Environment.CurrentDirectory
             : Path.GetFullPath(config.WorkspaceRoot);

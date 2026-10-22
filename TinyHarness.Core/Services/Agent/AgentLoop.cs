@@ -155,6 +155,7 @@ public sealed partial class AgentLoop
         ArgumentNullException.ThrowIfNull(model);
         ArgumentNullException.ThrowIfNull(tools);
         ArgumentNullException.ThrowIfNull(options);
+        ArgumentOutOfRangeException.ThrowIfNegative(options.MaxAgentSteps);
         _model               = model;
         _tools               = tools;
         _options             = options;
@@ -306,7 +307,7 @@ public sealed partial class AgentLoop
             _control?.Ready();
             await PublishEventAsync(HostEventKind.RunStarted, null, cancellationToken).ConfigureAwait(false);
 
-            while (steps < _options.MaxAgentSteps)
+            while (_options.MaxAgentSteps == 0 || steps < _options.MaxAgentSteps)
             {
                 budget.Check();
                 await WaitForControlAsync(cancellationToken).ConfigureAwait(false);

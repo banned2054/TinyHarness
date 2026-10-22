@@ -40,12 +40,12 @@ M15 已加入安全边界补充、暂停／继续／取消、带来源的 `work_
 
 ## ✨ 特性
 
-- **Agent Loop** — 流式回复、一轮多个顺序工具调用、步数上限、失败与取消处理。
+- **Agent Loop** — 流式回复、一轮多个顺序工具调用、可选步数上限、失败与取消处理。`maxAgentSteps` 缺省或为 `0` 时不限，正数启用上限。
 - **工具** — `list_files`、`search_text`、`read_file`、`apply_patch` 与 `shell`（直接进程/显式 shell 模式），带超时、进程树终止和输出裁剪。
 - **权限** — 每次调用经过 `Prepare → Authorize → Execute`：工作区内读取默认放行，补丁与进程默认询问（`a` 单次 / `s` 本次运行 / `d` 拒绝），可配置命令允许规则。
 - **上下文** — token 预算按真实 usage 校准、工具结果裁剪、有界文本交接和带来源的真实用户原话。
 - **运行控制与工作项** — 运行中输入文本作为已保存的补充，`/pause`、`/resume`、`/cancel`、`/work` 提供可选宿主控制；工作项完成陈述与实际工具事实分开。
-- **累计预算** — 可信用户 `settings.runBudget` 限制逻辑模型请求（含摘要）、工具执行与墙钟；累计 token 默认只记录用量，`maxTotalTokens` 为 0 或缺省时不限，正数可显式启用。usage 缺失时明确估算，`BudgetLimitReached` 保留原因和计数。
+- **累计预算** — 可信用户 `settings.runBudget` 限制逻辑模型请求（含摘要）与工具执行；总时长和累计 token 默认只统计，`maxWallClockSeconds`／`maxTotalTokens` 为 0 或缺省时不限，正数可分别启用。usage 缺失时明确估算，`BudgetLimitReached` 保留原因和计数。
 - **项目指令** — 按固定预算加载根／局部 `AGENTS.md`，压缩后保留当前规则，在请求、审批和派发边界重新检查；规则变化使未启动的旧计划与批准失效，项目文件不能授予权限。新 `chat` 打开、空输入或 EOF 不创建会话，首次真实发送通过规则预检后才创建。
 - **持久化** — `run` 和新会话 `chat` 共用受保护会话存储中的 `tinyharness.session-log/1` 追加日志，默认不再输出旧的全量 run snapshot/audit。历史 DTO 确定性保存 process／final 分类、有界脱敏工具输出，以及逐文件 patch 事实；工作区后来变化后仍能读取当时 diff，并区分 `confirmed` 与 `unknown`。执行意图保存失败不启动副作用；副作用结果未知时设置 NeedsInspection，模型视图回退到最近完整工具边界，未知副作用阻断写入与进程执行直到用户检查确认。历史按序号游标经共享 scanner 分页（每页最多返回 200 条 items，序列化 UTF-8 累计预算 8 MiB；扫描可读取整个捕获范围）；artifact 内容内联保存，单个上限 2 MiB、stdout/stderr 合计 4 MiB；批次上限 8 MiB，日志总量上限 256 MiB。不确定写入使 writer poison，strict 续聊读取拒绝尾部半行，历史检查可返回可靠前缀并给出 warning。会话可严格离线查看，并可在新进程经工作区/模型/协议与 opaque 完整性检查后续聊（`chat --session <id>`）。会话可能包含秘密且不被 Harness 加密；`session list` / `session show` 只输出脱敏检查视图，不展示 canonical 消息或 opaque 载荷。
 - **MCP worker** — `tinyharness mcp` 启动本机只读 stdio 服务，向 Codex 等客户端提供 `ask_glm`。

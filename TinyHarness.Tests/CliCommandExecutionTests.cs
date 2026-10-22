@@ -144,6 +144,25 @@ public sealed class CliCommandExecutionTests
     }
 
     [Test]
+    public async Task ConfigSet_ZeroStepsDisablesLimitAndNegativeStepsPreserveConfiguration()
+    {
+        using var fixture = new CliFixture();
+        var       context = fixture.CreateContext();
+        var result = await ConfigCommand.ExecuteAsync(context,
+                                                      CommandLine.Parse(["config", "set", "maxAgentSteps", "0"]),
+                                                      CancellationToken.None);
+        Assert.That(result, Is.Zero);
+        var saved = await UserConfigStore.LoadAsync(fixture.UserConfigPath, CancellationToken.None);
+        Assert.That(saved.Settings!.MaxAgentSteps, Is.Zero);
+        var before = await File.ReadAllTextAsync(fixture.UserConfigPath);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            ConfigCommand.ExecuteAsync(context, CommandLine.Parse(["config", "set", "maxAgentSteps", "-1"]),
+                                       CancellationToken.None));
+        Assert.That(await File.ReadAllTextAsync(fixture.UserConfigPath), Is.EqualTo(before));
+    }
+
+    [Test]
     public async Task AuthSet_StoresOnlyTheEnvironmentVariableReference()
     {
         using var fixture = new CliFixture();

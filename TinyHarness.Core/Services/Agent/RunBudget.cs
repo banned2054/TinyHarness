@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using TinyHarness.Core.Models.Agent;
 using TinyHarness.Core.Models.ChatCompletions;
 using TinyHarness.Core.Services.Context;
@@ -11,10 +10,11 @@ namespace TinyHarness.Core.Services.Agent;
 /// </summary>
 internal sealed class RunBudget : IDisposable
 {
-    private readonly CancellationTokenSource _deadline;
-    private readonly Stopwatch               _elapsed = Stopwatch.StartNew();
-    private readonly RunBudgetLimits         _limits;
-    private readonly CancellationTokenSource _linked;
+    private readonly CancellationTokenSource? _deadline;
+    private readonly TimeProvider             _clock;
+    private readonly long                     _started;
+    private readonly RunBudgetLimits          _limits;
+    private readonly CancellationTokenSource  _linked;
 
     private bool    _estimated;
     private string? _reason;
@@ -22,16 +22,21 @@ internal sealed class RunBudget : IDisposable
     private long    _tokens;
     private int     _tools;
 
-    internal RunBudget(RunBudgetLimits limits, CancellationToken cancellationToken)
+    internal RunBudget(RunBudgetLimits limits, CancellationToken cancellationToken, TimeProvider? timeProvider = null)
     {
         limits.Validate();
-        _limits   = limits;
-        _deadline = new CancellationTokenSource(TimeSpan.FromSeconds(limits.MaxWallClockSeconds));
-        _linked   = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _deadline.Token);
+        _limits  = limits;
+        _clock   = timeProvider ?? TimeProvider.System;
+        _started = _clock.GetTimestamp();
+        _deadline = limits.MaxWallClockSeconds > 0
+            ? new CancellationTokenSource(TimeSpan.FromSeconds(limits.MaxWallClockSeconds), _clock)
+            : null;
+        _linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken,
+                                                                  _deadline?.Token ?? CancellationToken.None);
     }
 
     internal CancellationToken Token           => _linked.Token;
-    internal bool              DeadlineReached => _deadline.IsCancellationRequested;
+    internal bool              DeadlineReached => _deadline?.IsCancellationRequested == true;
 
     internal RunBudgetSnapshot Snapshot => new()
     {
@@ -39,14 +44,14 @@ internal sealed class RunBudget : IDisposable
         ToolExecutions      = _tools,
         AccountedTokens     = _tokens,
         HasEstimatedTokens  = _estimated,
-        ElapsedMilliseconds = _elapsed.ElapsedMilliseconds,
+        ElapsedMilliseconds = (long)_clock.GetElapsedTime(_started).TotalMilliseconds,
         LimitReason         = _reason ?? (DeadlineReached ? "wall-clock" : null)
     };
 
     public void Dispose()
     {
         _linked.Dispose();
-        _deadline.Dispose();
+        _deadline?.Dispose();
     }
 
     internal void Check()

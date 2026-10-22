@@ -6,9 +6,14 @@ namespace TinyHarness.Core.Models.Agent;
 /// </summary>
 public sealed record RunBudgetLimits
 {
-    public int MaxModelRequests    { get; init; } = 128;
-    public int MaxToolExecutions   { get; init; } = 256;
-    public int MaxWallClockSeconds { get; init; } = 900;
+    public int MaxModelRequests  { get; init; } = 128;
+    public int MaxToolExecutions { get; init; } = 256;
+
+    /// <summary>
+    ///     <para>单次运行总时长上限；默认 0 表示只记录耗时，正数按秒启用截止时间。</para>
+    ///     <para>Run duration limit; the default zero records elapsed time only, while positive seconds enable a deadline.</para>
+    /// </summary>
+    public int MaxWallClockSeconds { get; init; }
 
     /// <summary>
     ///     <para>累计 token 上限；默认 0 表示只记录用量，不因 token 累计停止运行。</para>
@@ -17,17 +22,20 @@ public sealed record RunBudgetLimits
     public long MaxTotalTokens { get; init; }
 
     /// <summary>
-    ///     <para>token 上限允许为零；拒绝其他非正上限、负 token 上限和超出计时器范围的墙钟上限。</para>
-    ///     <para>Allows a zero token limit; rejects other nonpositive limits, negative token limits and invalid timer ranges.</para>
+    ///     <para>token 与时长上限允许为零；拒绝负值、非正请求／工具上限和超出计时器范围的时长。</para>
+    ///     <para>
+    ///         Allows zero token and duration limits; rejects negative values, nonpositive request/tool limits and invalid
+    ///         timer ranges.
+    ///     </para>
     /// </summary>
     public void Validate()
     {
-        if (MaxModelRequests  <= 0                     ||
-            MaxToolExecutions <= 0                     ||
-            MaxWallClockSeconds is <= 0 or > 4_294_966 ||
+        if (MaxModelRequests  <= 0                    ||
+            MaxToolExecutions <= 0                    ||
+            MaxWallClockSeconds is < 0 or > 4_294_966 ||
             MaxTotalTokens < 0)
             throw new ArgumentOutOfRangeException(nameof(RunBudgetLimits),
-                                                  "Run budget limits must be positive and within the timer range; the token limit may be zero.");
+                                                  "Request/tool limits must be positive; token and duration limits may be zero, with duration within the timer range.");
     }
 }
 

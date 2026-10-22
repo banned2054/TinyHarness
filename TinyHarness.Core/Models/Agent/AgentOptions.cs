@@ -11,6 +11,10 @@ public sealed record AgentOptions
 {
     public required string Model { get; init; }
 
+    /// <summary>
+    ///     <para>每次运行的普通模型步数上限；0 表示不限，负数无效。</para>
+    ///     <para>Ordinary model-step limit per run; zero means unlimited and negative values are invalid.</para>
+    /// </summary>
     public required int MaxAgentSteps { get; init; }
 
     public required int? DefaultToolTimeoutSeconds { get; init; }

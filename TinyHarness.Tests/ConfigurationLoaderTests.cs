@@ -70,7 +70,7 @@ public class ConfigurationLoaderTests
         var config = await ConfigurationLoader.LoadAsync("does-not-exist.json", CancellationToken.None);
 
         Assert.That(config.ContextWindowTokens, Is.EqualTo(128_000));
-        Assert.That(config.MaxAgentSteps, Is.EqualTo(40));
+        Assert.That(config.MaxAgentSteps, Is.Zero);
         Assert.That(config.DefaultToolTimeoutSeconds, Is.EqualTo(120));
         Assert.That(config.CommandRules, Is.Empty);
         Assert.That(config.WorkspaceRoot, Is.EqualTo(Path.GetFullPath(Environment.CurrentDirectory)));
