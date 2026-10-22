@@ -116,6 +116,47 @@ public class RunBudgetTests
     }
 
     [Test]
+    public void DisabledTokenLimit_AccountsLargeEstimatesAndStreamingOutput()
+    {
+        using var budget = new RunBudget(new RunBudgetLimits(), default);
+        using (var charge = budget.BeginRequest(int.MaxValue))
+        {
+            charge.Append(new ChatStreamEvent { Kind = ChatStreamEventKind.ContentDelta, ContentDelta = "answer" });
+            charge.Complete(null, null);
+        }
+
+        using (var charge = budget.BeginRequest(100)) charge.Complete(100, 20);
+
+        Assert.That(budget.Snapshot.AccountedTokens, Is.EqualTo((long)int.MaxValue + 2 + 100 + 20));
+        Assert.That(budget.Snapshot.HasEstimatedTokens, Is.True);
+        Assert.That(budget.Snapshot.ModelRequests, Is.EqualTo(2));
+        Assert.That(budget.Snapshot.LimitReason, Is.Null);
+    }
+
+    [Test]
+    public async Task DefaultTokenLimit_AllowsFurtherToolsAndRequestsAboveTwoMillionTokens()
+    {
+        var model = new FakeChatClient();
+        var tool  = new ProbeTool();
+        model.Enqueue(FakeChatClient.ToolCall("probe", "{}").Select(value =>
+            value.Kind == ChatStreamEventKind.End
+                ? value with { InputTokens = 2_100_000, OutputTokens = 10 }
+                : value).ToArray());
+        model.Enqueue(FakeChatClient.TextWithUsage(100, 20, "done"));
+
+        var result = await new AgentLoop(model, new ToolRegistry([tool]), Options()).RunAsync("sys", "go", default);
+
+        Assert.That(result.Status, Is.EqualTo(AgentStatus.Completed), result.Error);
+        Assert.That(tool.Executions, Is.EqualTo(1));
+        Assert.That(result.Budget!.ModelRequests, Is.EqualTo(2));
+        Assert.That(result.Budget.AccountedTokens, Is.EqualTo(2_100_130));
+        Assert.That(result.Budget.HasEstimatedTokens, Is.False);
+        Assert.That(result.Budget.LimitReason, Is.Null);
+        Assert.That(result.InputTokens, Is.EqualTo(2_100_100));
+        Assert.That(result.OutputTokens, Is.EqualTo(30));
+    }
+
+    [Test]
     public async Task TokenLimit_StopsDuringOutputWithoutExecutingPartialToolCall()
     {
         var model    = new FakeChatClient();
@@ -223,12 +264,13 @@ public class RunBudgetTests
         Assert.That(result.Budget.HasEstimatedTokens, Is.True);
     }
 
-    [Test]
-    public async Task Journal_RestoresBudgetWithoutCallingModelAgain()
+    [TestCase(100)]
+    [TestCase(2_100_000)]
+    public async Task Journal_RestoresBudgetWithoutCallingModelAgain(int inputTokens)
     {
         var directory = Path.Combine(Path.GetTempPath(), $"m15-budget-{Guid.NewGuid():N}");
         var model     = new FakeChatClient();
-        model.Enqueue(FakeChatClient.TextWithUsage(100, 20, "done"));
+        model.Enqueue(FakeChatClient.TextWithUsage(inputTokens, 20, "done"));
         string            id;
         RunBudgetSnapshot expected;
         using (var host = new ChatSessionHost(Path.GetTempPath(),
@@ -250,16 +292,32 @@ public class RunBudgetTests
         Assert.That(model.Requests, Is.EqualTo(1));
     }
 
-    [Test]
-    public async Task TrustedConfiguration_RoundTripsBudget()
+    [TestCase(0L)]
+    [TestCase(30_000_000_000L)]
+    public async Task TrustedConfiguration_RoundTripsBudget(long tokenLimit)
     {
         var path = Path.Combine(Path.GetTempPath(), $"m15-config-{Guid.NewGuid():N}.json");
         var limits = new RunBudgetLimits
-            { MaxModelRequests = 7, MaxToolExecutions = 9, MaxWallClockSeconds = 10, MaxTotalTokens = 30_000_000_000 };
+            { MaxModelRequests = 7, MaxToolExecutions = 9, MaxWallClockSeconds = 10, MaxTotalTokens = tokenLimit };
         await UserConfigStore.SaveAsync(path,
                                         new UserConfig { Settings = new UserConfigSettings { RunBudget = limits } },
                                         default);
         Assert.That((await UserConfigStore.LoadAsync(path, default)).Settings!.RunBudget, Is.EqualTo(limits));
+    }
+
+    [TestCase("{}")]
+    [TestCase("{\"maxTotalTokens\":0}")]
+    public async Task TrustedConfiguration_MissingOrZeroTokenLimitKeepsOtherDefaults(string json)
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"m15-unlimited-{Guid.NewGuid():N}.json");
+        await File.WriteAllTextAsync(path, "{\"settings\":{\"runBudget\":" + json + "}}");
+
+        var limits = (await UserConfigStore.LoadAsync(path, default)).Settings!.RunBudget!;
+
+        Assert.That(limits.MaxTotalTokens, Is.Zero);
+        Assert.That(limits.MaxModelRequests, Is.EqualTo(128));
+        Assert.That(limits.MaxToolExecutions, Is.EqualTo(256));
+        Assert.That(limits.MaxWallClockSeconds, Is.EqualTo(900));
     }
 
     [TestCase("null")]

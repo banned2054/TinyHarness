@@ -401,8 +401,14 @@ public static class UserConfigStore
         if (!settings.TryGetPropertyValue("runBudget", out var node)) return null;
         try
         {
-            if (node is not JsonObject) throw new JsonException("runBudget must be an object");
-            var budget = node.Deserialize(RunBudgetJsonContext.Default.RunBudgetLimits)
+            if (node is not JsonObject supplied) throw new JsonException("runBudget must be an object");
+
+            // source generation 会将缺省 init 属性赋为类型零值，先补齐宿主默认值。
+            var complete =
+                JsonSerializer.SerializeToNode(new RunBudgetLimits(), RunBudgetJsonContext.Default.RunBudgetLimits)!.AsObject();
+            foreach (var (name, value) in supplied) complete[name] = value?.DeepClone();
+
+            var budget = complete.Deserialize(RunBudgetJsonContext.Default.RunBudgetLimits)
                       ?? throw new JsonException("runBudget must be an object");
             budget.Validate();
             return budget;

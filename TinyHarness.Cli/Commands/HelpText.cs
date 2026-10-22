@@ -97,6 +97,7 @@ internal static class HelpText
 
         Trusted cumulative limits live in user-config settings.runBudget: maxModelRequests
         (including summaries), maxToolExecutions, maxWallClockSeconds and maxTotalTokens.
+        maxTotalTokens defaults to 0 (usage tracking only); a positive value enables its limit.
         Project configuration cannot override them. Missing usage is estimated; budget
         tokens are not exact charges. BudgetLimitReached preserves its reason and counters.
         Work-item completion is a claim, not test evidence. Saved unapplied amendments

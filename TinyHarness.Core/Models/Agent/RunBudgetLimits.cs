@@ -6,23 +6,28 @@ namespace TinyHarness.Core.Models.Agent;
 /// </summary>
 public sealed record RunBudgetLimits
 {
-    public int  MaxModelRequests    { get; init; } = 128;
-    public int  MaxToolExecutions   { get; init; } = 256;
-    public int  MaxWallClockSeconds { get; init; } = 900;
-    public long MaxTotalTokens      { get; init; } = 2_000_000;
+    public int MaxModelRequests    { get; init; } = 128;
+    public int MaxToolExecutions   { get; init; } = 256;
+    public int MaxWallClockSeconds { get; init; } = 900;
 
     /// <summary>
-    ///     <para>拒绝非正数和无法表达为计时器间隔的墙钟上限。</para>
-    ///     <para>Rejects nonpositive limits and wall-clock limits outside the timer range.</para>
+    ///     <para>累计 token 上限；默认 0 表示只记录用量，不因 token 累计停止运行。</para>
+    ///     <para>Cumulative token limit; the default zero records usage without stopping the run for tokens.</para>
+    /// </summary>
+    public long MaxTotalTokens { get; init; }
+
+    /// <summary>
+    ///     <para>token 上限允许为零；拒绝其他非正上限、负 token 上限和超出计时器范围的墙钟上限。</para>
+    ///     <para>Allows a zero token limit; rejects other nonpositive limits, negative token limits and invalid timer ranges.</para>
     /// </summary>
     public void Validate()
     {
-        if (MaxModelRequests <= 0 ||
-            MaxToolExecutions <= 0 ||
+        if (MaxModelRequests  <= 0                     ||
+            MaxToolExecutions <= 0                     ||
             MaxWallClockSeconds is <= 0 or > 4_294_966 ||
-            MaxTotalTokens <= 0)
+            MaxTotalTokens < 0)
             throw new ArgumentOutOfRangeException(nameof(RunBudgetLimits),
-                                                  "Run budget limits must be positive and within the timer range.");
+                                                  "Run budget limits must be positive and within the timer range; the token limit may be zero.");
     }
 }
 
@@ -45,11 +50,11 @@ public sealed record RunBudgetSnapshot
     /// </summary>
     internal void Validate(int toolExecutions)
     {
-        if (ModelRequests < 0 ||
-            ToolExecutions < 0 ||
-            AccountedTokens < 0 ||
-            ElapsedMilliseconds < 0 ||
-            ToolExecutions != toolExecutions ||
+        if (ModelRequests       < 0               ||
+            ToolExecutions      < 0               ||
+            AccountedTokens     < 0               ||
+            ElapsedMilliseconds < 0               ||
+            ToolExecutions      != toolExecutions ||
             LimitReason is not (null or "wall-clock" or "tokens" or "model-requests" or "tool-executions"))
             throw new InvalidDataException("The run budget snapshot contains invalid or inconsistent facts.");
     }

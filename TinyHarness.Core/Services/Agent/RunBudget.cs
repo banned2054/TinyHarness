@@ -53,14 +53,14 @@ internal sealed class RunBudget : IDisposable
     {
         if (DeadlineReached) Exceeded("wall-clock");
         Token.ThrowIfCancellationRequested();
-        if (_tokens >= _limits.MaxTotalTokens) Exceeded("tokens");
+        if (_limits.MaxTotalTokens > 0 && _tokens >= _limits.MaxTotalTokens) Exceeded("tokens");
     }
 
     internal RequestCharge BeginRequest(int estimatedInputTokens)
     {
         Check();
-        if (_requests            >= _limits.MaxModelRequests) Exceeded("model-requests");
-        if (estimatedInputTokens >= _limits.MaxTotalTokens - _tokens) Exceeded("tokens");
+        if (_requests >= _limits.MaxModelRequests) Exceeded("model-requests");
+        if (_limits.MaxTotalTokens > 0 && estimatedInputTokens >= _limits.MaxTotalTokens - _tokens) Exceeded("tokens");
         _requests++;
         _tokens += estimatedInputTokens;
         return new RequestCharge(this, estimatedInputTokens);
