@@ -775,6 +775,8 @@ public sealed partial class ChatSessionHost : IDisposable
     private sealed class RunEventCorrelator(string sessionId, string turnId, string runId, IHostEventSink inner)
         : IHostEventSink
     {
+        public bool IncludeReasoningText => inner.IncludeReasoningText;
+
         private long _sequence;
 
         public async ValueTask PublishAsync(HostEvent @event, CancellationToken cancellationToken)

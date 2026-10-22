@@ -35,9 +35,9 @@ public class HostEventStreamTests
     public async Task WaitingRequestPublishesProgressAndCancelsSerially()
     {
         using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(20));
-        var model = new GateChatClient();
-        var sink = new WaitingSink(cancellation.Cancel);
-        var loop = new AgentLoop(model, new ToolRegistry([]), Options(), null, null, events : sink);
+        var       model        = new GateChatClient();
+        var       sink         = new WaitingSink(cancellation.Cancel);
+        var       loop         = new AgentLoop(model, new ToolRegistry([]), Options(), null, null, events : sink);
 
         var result = await loop.RunAsync("sys", "go", cancellation.Token);
 
@@ -56,9 +56,9 @@ public class HostEventStreamTests
 
     private sealed class WaitingSink(Action cancel) : IHostEventSink
     {
-        private int _inside;
-        internal List<HostEvent> Events { get; } = [];
-        internal int MaxConcurrent { get; private set; }
+        private  int             _inside;
+        internal List<HostEvent> Events        { get; } = [];
+        internal int             MaxConcurrent { get; private set; }
 
         public ValueTask PublishAsync(HostEvent value, CancellationToken cancellationToken)
         {
@@ -69,7 +69,10 @@ public class HostEventStreamTests
                 if (value.Kind == HostEventKind.ModelRequestWaiting) cancel();
                 return ValueTask.CompletedTask;
             }
-            finally { Interlocked.Decrement(ref _inside); }
+            finally
+            {
+                Interlocked.Decrement(ref _inside);
+            }
         }
     }
 
@@ -121,10 +124,10 @@ public class HostEventStreamTests
         var client = new FakeChatClient();
         client.Enqueue(FakeChatClient.ToolCall("apply_patch",
                                                new JsonObject
-                                                   {
-                                                       ["patch"] = "--- a/f.txt\n+++ b/f.txt\n@@ -1 +1 @@\n" +
-                                                                   "-old\n+new\n"
-                                                   }.ToJsonString(),
+                                               {
+                                                   ["patch"] = "--- a/f.txt\n+++ b/f.txt\n@@ -1 +1 @@\n" +
+                                                               "-old\n+new\n"
+                                               }.ToJsonString(),
                                                "p1"));
         client.Enqueue(FakeChatClient.Text("patched"));
         var approver = new ScriptedApprover();
@@ -159,18 +162,21 @@ public class HostEventStreamTests
             HostEventKind.RunFinished
         ]));
 
-        var requested = TestAssert.TypeOf<ToolPreparation>(sink.Events.Single(e => e.Kind == HostEventKind.ApprovalRequested)
-                                                             .Payload);
+        var requested =
+            TestAssert.TypeOf<ToolPreparation>(sink.Events.Single(e => e.Kind == HostEventKind.ApprovalRequested)
+                                                   .Payload);
         Assert.That(requested.ToolName, Is.EqualTo("apply_patch"));
 
-        var resolution = TestAssert.TypeOf<ApprovalResolution>(sink.Events.Single(e => e.Kind == HostEventKind.ApprovalResolved)
-                                                                 .Payload);
+        var resolution =
+            TestAssert.TypeOf<ApprovalResolution>(sink.Events.Single(e => e.Kind == HostEventKind.ApprovalResolved)
+                                                      .Payload);
         Assert.That(resolution.Decision, Is.EqualTo(PermissionDecision.Ask));
         Assert.That(resolution.Action, Is.EqualTo(ApprovalAction.AllowOnce));
         Assert.That(resolution.Outcome, Is.EqualTo("allow once"));
 
-        var outcome = TestAssert.TypeOf<ToolExecutionOutcome>(sink.Events.Single(e => e.Kind == HostEventKind.ToolFinished)
-                                                                .Payload);
+        var outcome =
+            TestAssert.TypeOf<ToolExecutionOutcome>(sink.Events.Single(e => e.Kind == HostEventKind.ToolFinished)
+                                                        .Payload);
         Assert.That(outcome.Preparation.ToolName, Is.EqualTo("apply_patch"));
         Assert.That(outcome.Result.Succeeded, Is.True);
     }
@@ -196,8 +202,7 @@ public class HostEventStreamTests
         // filesystem.read 被默认策略允许：结论以 null action 发布，之前没有 ApprovalRequested。
         TestAssert.DoesNotContainAny(@event => @event.Kind == HostEventKind.ApprovalRequested, sink.Events);
         var resolution = TestAssert.TypeOf<ApprovalResolution>(sink.Events.Single(@event =>
-            @event.Kind == HostEventKind.ApprovalResolved)
-                                                                   .Payload);
+            @event.Kind == HostEventKind.ApprovalResolved).Payload);
         Assert.That(resolution.Decision, Is.EqualTo(PermissionDecision.Allow));
         Assert.That(resolution.Action, Is.Null);
         Assert.That(resolution.Outcome, Is.EqualTo("allow"));
@@ -211,10 +216,10 @@ public class HostEventStreamTests
         var client = new FakeChatClient();
         client.Enqueue(FakeChatClient.ToolCall("apply_patch",
                                                new JsonObject
-                                                   {
-                                                       ["patch"] = "--- a/f.txt\n+++ b/f.txt\n@@ -1 +1 @@\n" +
-                                                                   "-old\n+new\n"
-                                                   }.ToJsonString()));
+                                               {
+                                                   ["patch"] = "--- a/f.txt\n+++ b/f.txt\n@@ -1 +1 @@\n" +
+                                                               "-old\n+new\n"
+                                               }.ToJsonString()));
         client.Enqueue(FakeChatClient.Text("understood"));
         var approver = new ScriptedApprover();
         approver.Enqueue(ApprovalAction.Deny);
@@ -230,12 +235,12 @@ public class HostEventStreamTests
 
         Assert.That(result.ToolExecutions, Is.EqualTo(0));
         var resolution = TestAssert.TypeOf<ApprovalResolution>(sink.Events.Single(@event =>
-            @event.Kind == HostEventKind.ApprovalResolved)
-                                                                   .Payload);
+            @event.Kind == HostEventKind.ApprovalResolved).Payload);
         Assert.That(resolution.Decision, Is.EqualTo(PermissionDecision.Ask));
         Assert.That(resolution.Action, Is.EqualTo(ApprovalAction.Deny));
         Assert.That(resolution.Outcome, Does.StartWith("Permission denied by user:"));
-        TestAssert.DoesNotContainAny(@event => @event.Kind is HostEventKind.ToolStarted or HostEventKind.ToolFinished, sink.Events);
+        TestAssert.DoesNotContainAny(@event => @event.Kind is HostEventKind.ToolStarted or HostEventKind.ToolFinished,
+                                     sink.Events);
     }
 
     [Test]
@@ -288,8 +293,10 @@ public class HostEventStreamTests
 
         Assert.That(failed.Status, Is.EqualTo(AgentStatus.Failed));
         Assert.That(sink.Events.Select(@event => @event.Kind).ToArray(),
-                    Is.EqualTo([HostEventKind.RunStarted, HostEventKind.ModelRequestStarted,
-                                HostEventKind.ModelRequestFinished, HostEventKind.RunError, HostEventKind.RunFinished]));
+                    Is.EqualTo([
+                        HostEventKind.RunStarted, HostEventKind.ModelRequestStarted,
+                        HostEventKind.ModelRequestFinished, HostEventKind.RunError, HostEventKind.RunFinished
+                    ]));
         Assert.That(TestAssert.TypeOf<string>(sink.Events.Single(e => e.Kind == HostEventKind.RunError).Payload),
                     Is.EqualTo("endpoint unreachable"));
 
@@ -382,9 +389,13 @@ public class HostEventStreamTests
         client.Enqueue(FakeChatClient.ToolCall("t", "{}", "b_2"));
         client.Enqueue(FakeChatClient.ToolCall("t", "{}", "c_3"));
         // 摘要回答是内部文本：其 usage 必须以摘要请求标记发布，其流不得作为回答增量展示。
-        client.Enqueue(TextWithUsage(Handoff("goal-one", "a.cs", "decision-x"), 500, 40));
+        client.Enqueue([
+            new()
+                { Kind = ChatStreamEventKind.ReasoningDelta, ReasoningDelta = "internal compaction reasoning" },
+            .. TextWithUsage(Handoff("goal-one", "a.cs", "decision-x"), 500, 40)
+        ]);
         client.Enqueue(TextWithUsage("done", 300, 25));
-        var sink = new TestHostEventSink();
+        var sink = new TestHostEventSink { IncludeReasoningText = true };
         var loop = new AgentLoop(client, new ToolRegistry([tool]), TightBudgetOptions(), null, null, events : sink);
 
         var result = await loop.RunAsync("sys", "go", CancellationToken.None);
@@ -404,6 +415,7 @@ public class HostEventStreamTests
                         .Select(@event => TestAssert.TypeOf<string>(@event.Payload)).ToArray(), Is.EqualTo(["done"]));
         Assert.That(result.InputTokens, Is.EqualTo(800));
         Assert.That(result.OutputTokens, Is.EqualTo(65));
+        Assert.That(sink.Events.Any(e => e.Kind == HostEventKind.AssistantReasoningDelta), Is.False);
     }
 
     private static AgentOptions TightBudgetOptions() => new()

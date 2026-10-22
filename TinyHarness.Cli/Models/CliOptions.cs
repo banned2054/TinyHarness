@@ -37,6 +37,8 @@ internal sealed record CliOptions
 
     public string? ConfigPath { get; init; }
 
+    public ReasoningDisplayMode ReasoningDisplay { get; init; } = ReasoningDisplayMode.Status;
+
     /// <summary>chat --session 的待续聊会话 ID（32 位十六进制）。The stored session id to resume (32 hex characters) for chat --session.</summary>
     public string? ResumeSessionId { get; init; }
 

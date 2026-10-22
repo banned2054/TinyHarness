@@ -16,6 +16,15 @@ namespace TinyHarness.Core.Services.Session;
 public interface IHostEventSink
 {
     /// <summary>
+    ///     <para>显式选择接收普通请求的可读推理增量；默认关闭，摘要和 opaque 数据始终不发布。</para>
+    ///     <para>
+    ///         Opts into readable reasoning deltas for regular requests; defaults off and excludes compaction and opaque
+    ///         data.
+    ///     </para>
+    /// </summary>
+    bool IncludeReasoningText => false;
+
+    /// <summary>
     ///     发布一条事件。事件按发出顺序送达。M12.2 落定的交付策略：发布方内联等待接收方
     ///     返回——不设中间队列，内存占用有界，缓慢的消费者直接拖慢发布方（模型流在事件边界
     ///     停止），不会无限缓存或丢失事件；需要解耦的宿主自行持有有界缓冲与合并策略。

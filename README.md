@@ -92,6 +92,18 @@ tinyharness sandbox status | provision | verify    Windows sandbox management
 
 `Ctrl+C` cancels the active run; in `chat` it cancels the current turn and exits when idle. Exit codes: `0` completed, `1` failed or a step/budget limit reached, `2` missing prompt, `130` cancelled. `doctor` is offline by default; `doctor --connect` is the explicit network check. Use `--help` or `help <command>` for full syntax.
 
+`run` and `chat` show elapsed seconds with cycling dots on one terminal line:
+`等待中... 12s`, changing to `思考中... 23s` when reasoning arrives. Per-request
+diagnostics and usage stay in the session log; the turn footer retains totals.
+Redirected output gets one notice per status change. `--reasoning content` streams readable reasoning under a separate heading,
+with known secrets redacted and terminal controls escaped. Internal compaction text
+and opaque payloads are excluded. This changes display only, including on resume.
+
+```powershell
+tinyharness chat --reasoning content
+tinyharness run --reasoning status -- "Explain this project"
+```
+
 ### Configure
 
 First-time setup does not require hand-editing JSON. `init` stores the provider profile, endpoint, key reference, model, and context window in the user config (`%APPDATA%\tinyharness\user-config.json` on Windows). The authentication configuration stores only key references — an environment variable or a Windows Credential Manager entry — never the key material itself, and keys are not proactively injected into `chat` sessions. Sessions use the protected store by default (`%LOCALAPPDATA%\tinyharness\sessions`), overridden by `settings.sessionStoreDirectory` or `TINYHARNESS_SESSION_STORE_DIR`; `config.sessionDirectory` is not the default. Session files preserve canonical conversation content verbatim so resume stays faithful, which means anything pasted into the chat, read from files, or returned by the model may contain secrets. The harness does not encrypt session files — the protected store location is a path and exclusive-write convention, not encryption and not a promise that other local processes cannot read it. Only `tinyharness.session-log/1` is supported; older persistence formats are neither read nor migrated.

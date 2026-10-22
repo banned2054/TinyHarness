@@ -68,10 +68,12 @@ internal static class CommandLine
 
         if (string.Equals(first, "session", StringComparison.Ordinal)) return ParseSessionArgs(args[1..]);
 
+        if (string.Equals(first, "--reasoning", StringComparison.Ordinal)) return ParsePromptArgs(args, false);
+
         if (first.StartsWith('-') && first.Length > 1)
             throw new CliUsageException($"Unknown option '{first}'.", HelpText.Overview);
 
-        // 无动词调用：整串参数即提示词，仅允许可选的 --config。
+        // 无动词调用也接受展示选项。
         return ParsePromptArgs(args, false);
     }
 
@@ -131,17 +133,17 @@ internal static class CommandLine
     }
 
     /// <summary>
-    ///     <para>解析 run/无动词形式：`--` 之前只接受 --config 与 help 标志，`--` 之后全部是提示词。</para>
+    ///     <para>解析 run/无动词形式的配置和展示选项；`--` 之后全部是提示词。</para>
     ///     <para>
-    ///         Parses run/verbless forms: before `--` only --config and help flags are accepted; after `--`
-    ///         everything is the prompt.
+    ///         Parses configuration and display options for run/verbless forms; everything after `--` is the prompt.
     ///     </para>
     /// </summary>
     private static CliOptions ParsePromptArgs(string[] args, bool withRunVerb)
     {
-        var     usage       = withRunVerb ? HelpText.Run : HelpText.Verbless;
-        string? configPath  = null;
-        var     promptParts = new List<string>();
+        var                   usage            = withRunVerb ? HelpText.Run : HelpText.Verbless;
+        string?               configPath       = null;
+        ReasoningDisplayMode? reasoningDisplay = null;
+        var                   promptParts      = new List<string>();
 
         for (var i = 0; i < args.Length; i++)
         {
@@ -149,7 +151,7 @@ internal static class CommandLine
             {
                 // `--` 之后全部归入提示词，包括形似选项的 token。
                 promptParts.AddRange(args[(i + 1)..]);
-                return FinishPrompt(configPath, promptParts, usage);
+                return FinishPrompt(configPath, promptParts, usage, reasoningDisplay);
             }
 
             if (string.Equals(args[i], "--config", StringComparison.Ordinal))
@@ -164,6 +166,12 @@ internal static class CommandLine
             if (IsHelpFlag(args[i]))
                 return new CliOptions { Kind = CliCommandKind.Help, HelpTopic = withRunVerb ? "run" : null };
 
+            if (string.Equals(args[i], "--reasoning", StringComparison.Ordinal))
+            {
+                reasoningDisplay = ReadReasoningDisplay(args, ref i, reasoningDisplay, usage);
+                continue;
+            }
+
             if (args[i].StartsWith('-') && args[i].Length > 1)
                 throw new
                     CliUsageException($"Unknown option '{args[i]}'. To send text that starts with '-' as part of the prompt, put it after '--'.",
@@ -172,29 +180,54 @@ internal static class CommandLine
             promptParts.Add(args[i]);
         }
 
-        return FinishPrompt(configPath, promptParts, usage);
+        return FinishPrompt(configPath, promptParts, usage, reasoningDisplay);
     }
 
     /// <summary>
     ///     <para>合并提示词片段；缺失提示词按使用错误处理。</para>
     ///     <para>Joins prompt fragments; a missing prompt is a usage error.</para>
     /// </summary>
-    private static CliOptions FinishPrompt(string? configPath, List<string> promptParts, string usage)
+    private static CliOptions FinishPrompt(
+        string? configPath, List<string> promptParts, string usage, ReasoningDisplayMode? reasoningDisplay)
     {
         var prompt = string.Join(' ', promptParts).Trim();
         return prompt.Length == 0
             ? throw new CliUsageException("A prompt is required.", usage)
-            : new CliOptions { Kind = CliCommandKind.Run, Prompt = prompt, ConfigPath = configPath };
+            : new CliOptions
+            {
+                Kind             = CliCommandKind.Run, Prompt = prompt, ConfigPath = configPath,
+                ReasoningDisplay = reasoningDisplay ?? ReasoningDisplayMode.Status
+            };
+    }
+
+    /// <summary>
+    ///     <para>严格解析一次思考展示选项，拒绝缺值、重复或未知模式。</para>
+    ///     <para>Strictly parses one reasoning display option, rejecting missing, duplicate or unknown values.</para>
+    /// </summary>
+    private static ReasoningDisplayMode ReadReasoningDisplay(
+        string[] args, ref int index, ReasoningDisplayMode? previous, string usage)
+    {
+        if (previous is not null)
+            throw new CliUsageException("The --reasoning option may be given at most once.", usage);
+        if (index + 1 >= args.Length)
+            throw new CliUsageException("The --reasoning option requires status or content.", usage);
+
+        return args[++index] switch
+        {
+            "status"  => ReasoningDisplayMode.Status,
+            "content" => ReasoningDisplayMode.Content,
+            _         => throw new CliUsageException("The --reasoning option requires status or content.", usage)
+        };
     }
 
     /// <summary>
     ///     <para>
-    ///         解析 chat 参数；接受 --config、--session &lt;id&gt; 与 help 标志。chat 不接受提示词：
+    ///         解析 chat 参数；接受 --config、--session、--reasoning 与 help 标志。chat 不接受提示词：
     ///         每个回合都在交互中逐行输入，把文本作为参数传入是重复的启动请求，按使用错误处理。
     ///         会话 ID 在解析期即校验（32 位十六进制），路径逃逸输入按使用错误处理。
     ///     </para>
     ///     <para>
-    ///         Parses chat arguments; --config, --session &lt;id&gt; and help flags are
+    ///         Parses chat arguments; --config, --session, --reasoning and help flags are
     ///         accepted. Chat takes no prompt — every turn is typed interactively, so
     ///         passing text as an argument is a duplicate start request and a usage
     ///         error. The session id is validated at parse time (32 hex characters),
@@ -205,11 +238,18 @@ internal static class CommandLine
     {
         const string usage = HelpText.Chat;
 
-        string? configPath      = null;
-        string? resumeSessionId = null;
+        string?               configPath       = null;
+        string?               resumeSessionId  = null;
+        ReasoningDisplayMode? reasoningDisplay = null;
         for (var i = 0; i < args.Length; i++)
         {
             if (IsHelpFlag(args[i])) return new CliOptions { Kind = CliCommandKind.Help, HelpTopic = "chat" };
+
+            if (string.Equals(args[i], "--reasoning", StringComparison.Ordinal))
+            {
+                reasoningDisplay = ReadReasoningDisplay(args, ref i, reasoningDisplay, usage);
+                continue;
+            }
 
             if (string.Equals(args[i], "--session", StringComparison.Ordinal))
             {
@@ -239,7 +279,10 @@ internal static class CommandLine
         }
 
         return new CliOptions
-            { Kind = CliCommandKind.Chat, ConfigPath = configPath, ResumeSessionId = resumeSessionId };
+        {
+            Kind             = CliCommandKind.Chat, ConfigPath = configPath, ResumeSessionId = resumeSessionId,
+            ReasoningDisplay = reasoningDisplay ?? ReasoningDisplayMode.Status
+        };
     }
 
     /// <summary>

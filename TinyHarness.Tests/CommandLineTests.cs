@@ -6,6 +6,34 @@ namespace TinyHarness.Tests;
 
 public class CommandLineTests
 {
+    [TestCase("chat")]
+    [TestCase("run")]
+    public void ReasoningDisplay_DefaultsToStatusAndAcceptsBothModes(string command)
+    {
+        string[] tail = command == "run" ? ["--", "hello"] : [];
+        Assert.That(CommandLine.Parse([command, .. tail]).ReasoningDisplay,
+                    Is.EqualTo(ReasoningDisplayMode.Status));
+        Assert.That(CommandLine.Parse([command, "--reasoning", "status", .. tail]).ReasoningDisplay,
+                    Is.EqualTo(ReasoningDisplayMode.Status));
+        Assert.That(CommandLine.Parse([command, "--reasoning", "content", .. tail]).ReasoningDisplay,
+                    Is.EqualTo(ReasoningDisplayMode.Content));
+        TestAssert.Throws<CliUsageException>(() => CommandLine.Parse([command, "--reasoning"]));
+        TestAssert.Throws<CliUsageException>(() => CommandLine.Parse([command, "--reasoning", "typo", .. tail]));
+        TestAssert.Throws<CliUsageException>(() =>
+            CommandLine.Parse([command, "--reasoning", "content", "--reasoning", "status", .. tail]));
+    }
+
+    [Test]
+    public void ReasoningDisplay_WorksVerblessAndDoesNotConsumePromptAfterDoubleDash()
+    {
+        var options = CommandLine.Parse(["--reasoning", "content", "--", "--reasoning", "status"]);
+        Assert.That(options.ReasoningDisplay, Is.EqualTo(ReasoningDisplayMode.Content));
+        Assert.That(options.Prompt, Is.EqualTo("--reasoning status"));
+        var resumed = CommandLine.Parse(["chat", "--session", new string('a', 32), "--reasoning", "content"]);
+        Assert.That(resumed.ResumeSessionId, Is.EqualTo(new string('a', 32)));
+        Assert.That(resumed.ReasoningDisplay, Is.EqualTo(ReasoningDisplayMode.Content));
+    }
+
     [Test]
     public void RootHelpFlag_ReturnsOverviewHelp()
     {

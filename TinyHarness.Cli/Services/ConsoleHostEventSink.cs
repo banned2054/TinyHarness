@@ -1,3 +1,4 @@
+using TinyHarness.Cli.Models;
 using TinyHarness.Core.Models.Context;
 using TinyHarness.Core.Models.Permissions;
 using TinyHarness.Core.Models.Session;
@@ -7,31 +8,25 @@ using TinyHarness.Core.Services.Session;
 namespace TinyHarness.Cli.Services;
 
 /// <summary>
-///     run 命令的宿主事件展示（M12.2）：assistant 文本增量流式打印，工具以"开始 → 终态"
-///     单行呈现，交互式审批结论、usage、压缩与错误各占一行。所有打印文本先做已知密钥
-///     脱敏（增量经跨片段流式脱敏），再转义控制字符，避免不可见内容误导。文本流之外的
-///     行首会先补换行，保证事件行不被流式文本截断；审批请求先关掉未闭合的流式行，避免
-///     审批提示与回答文本拼行；终态事件收尾未闭合的行并冲刷全部脱敏缓冲，命令摘要随后
-///     正常输出。审批交互界面仍由 <see cref="ConsoleApprovalProvider" /> 绘制，
-///     <see cref="HostEventKind.ApprovalRequested" /> 与 <see cref="HostEventKind.ToolPrepared" />
-///     在此不重复显示；非交互的规则允许/拒绝也不打印，避免只读工具刷屏。
-///     The run command's host-event display (M12.2): assistant text deltas stream
-///     directly, tools render as one "started → finished" line, and interactive approval
-///     resolutions, usage, compaction and errors each get a line. Every printed text is
-///     first redacted for known secrets (deltas through cross-fragment streaming
-///     redaction) and then has control characters escaped, so invisible content cannot
-///     mislead. A newline is emitted before a line event when streamed text left the
-///     line open; an approval request closes the open streamed line first so the
-///     approval prompt never merges into the answer text; the terminal event closes a
-///     trailing open line and drains the whole redaction buffer so the command summary
-///     starts clean. The interactive approval UI stays with
-///     <see cref="ConsoleApprovalProvider" />, so
-///     <see cref="HostEventKind.ApprovalRequested" /> and
-///     <see cref="HostEventKind.ToolPrepared" /> are not duplicated here; non-interactive
-///     rule allows/denies print nothing to keep read-only tools quiet.
+///     <para>run 和 chat 的宿主事件展示：等待耗时、可选思考内容、流式回答与工具生命周期。</para>
+///     <para>
+///         Host-event display for run and chat: elapsed waiting time, optional reasoning, streamed answers and tool
+///         lifecycle.
+///     </para>
 /// </summary>
-internal sealed class ConsoleHostEventSink(
-    IReadOnlyDictionary<string, string>? knownSecrets = null, TextWriter? output = null) : IHostEventSink
+/// <remarks>
+///     <para>文本跨片段脱敏后转义控制字符；其他输出和审批前收尾当前行。审批界面由 ConsoleApprovalProvider 绘制。</para>
+///     <para>
+///         Text is redacted across fragments before escaping controls; lines close before other output and approvals.
+///         ConsoleApprovalProvider draws prompts.
+///     </para>
+/// </remarks>
+internal sealed partial class ConsoleHostEventSink(
+    IReadOnlyDictionary<string, string>? knownSecrets     = null,
+    TextWriter?                          output           = null,
+    ReasoningDisplayMode                 reasoningDisplay = ReasoningDisplayMode.Status,
+    bool?                                animateThinking  = null,
+    TimeProvider?                        timeProvider     = null) : IHostEventSink, IAsyncDisposable
 {
     private readonly TextWriter            _output   = output ?? Console.Out;
     private readonly DisplaySecretRedactor _redactor = new(knownSecrets);
@@ -39,65 +34,88 @@ internal sealed class ConsoleHostEventSink(
     private bool _lineOpen;
 
     private bool _toolLineOpen;
-    private long _lastWaitNoticeMilliseconds;
 
     /// <summary>
-    ///     事件在运行内串行到达（契约：发布方内联等待），展示状态无需加锁。文本增量流之间
-    ///     必有其他事件，该边界冲刷脱敏缓冲的安全部分，把可能的密钥前缀留给下一条流拼接
-    ///     匹配；终态事件冲刷全部剩余缓冲。
-    ///     Events arrive serially within a run (the contract: the publisher awaits inline),
-    ///     so the display state needs no locking. Another event always separates two delta
-    ///     streams: that boundary flushes the redactor's safe part and holds a possible
-    ///     secret prefix for matching against the next stream; the terminal event flushes
-    ///     everything.
+    ///     <para>串行输出宿主事件和动画；文本在展示前跨片段脱敏，终态冲刷剩余缓冲。</para>
+    ///     <para>Serializes host events and animation; redacts text across fragments and drains the buffer on completion.</para>
     /// </summary>
     public async ValueTask PublishAsync(HostEvent @event, CancellationToken cancellationToken)
     {
+        await _displayGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (_animationTask is { IsFaulted: true }) await _animationTask.ConfigureAwait(false);
+            await PublishCoreAsync(@event, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _displayGate.Release();
+        }
+    }
+
+    private async ValueTask PublishCoreAsync(HostEvent @event, CancellationToken cancellationToken)
+    {
+        if (@event.Kind == HostEventKind.ModelRequestStarted && @event.Payload is ModelRequestProgress startedRequest)
+        {
+            await StopThinkingAsync(cancellationToken).ConfigureAwait(false);
+            await CloseReasoningAsync(cancellationToken).ConfigureAwait(false);
+            _hadReasoningContent = false;
+            _answerLabelWritten  = false;
+            _requestTextStarted  = false;
+            await ShowRequestStatusAsync("等待中", startedRequest.ElapsedMilliseconds, cancellationToken)
+               .ConfigureAwait(false);
+            return;
+        }
+
+        if (@event.Kind is HostEventKind.ModelRequestActivity or HostEventKind.ModelRequestWaiting &&
+            @event.Payload is ModelRequestProgress progress)
+        {
+            if (progress.Phase == ModelRequestPhase.ReceivingText)
+                await StopThinkingAsync(cancellationToken).ConfigureAwait(false);
+            else if (!_reasoningContentOpen && !_requestTextStarted)
+                await ShowRequestStatusAsync(progress.Phase == ModelRequestPhase.ReceivingReasoning ? "思考中" : "等待中",
+                                             progress.ElapsedMilliseconds, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        if (@event.Kind is HostEventKind.ModelUsage or HostEventKind.HistoryItemCompleted) return;
+
+        if (@event.Kind == HostEventKind.AssistantReasoningDelta)
+        {
+            if (IncludeReasoningText && @event.Payload is string { Length: > 0 } reasoning)
+            {
+                await StopThinkingAsync(cancellationToken).ConfigureAwait(false);
+                if (!_reasoningContentOpen)
+                {
+                    await WriteLineAsync("思考：", cancellationToken).ConfigureAwait(false);
+                    _reasoningContentOpen = true;
+                    _hadReasoningContent  = true;
+                }
+
+                await WriteDeltaAsync(reasoning, cancellationToken).ConfigureAwait(false);
+            }
+
+            return;
+        }
+
+        await StopThinkingAsync(cancellationToken).ConfigureAwait(false);
+        await CloseReasoningAsync(cancellationToken).ConfigureAwait(false);
+
         switch (@event.Kind)
         {
-            case HostEventKind.ModelRequestStarted when @event.Payload is ModelRequestProgress startedRequest :
-                _lastWaitNoticeMilliseconds = 0;
-                await WriteLineAsync($"model request {startedRequest.RequestNumber}" +
-                                     $"{(startedRequest.SummaryRequest ? " (summary)" : string.Empty)}: awaiting first SDK stream event " +
-                                     $"(~{startedRequest.EstimatedInputTokens:N0} input tokens; {startedRequest.InputMessageCount} messages)",
-                                     cancellationToken).ConfigureAwait(false);
-                break;
-
-            case HostEventKind.ModelRequestActivity when @event.Payload is ModelRequestProgress activity :
-                _lastWaitNoticeMilliseconds = activity.ElapsedMilliseconds;
-                await WriteLineAsync($"model request {activity.RequestNumber}: {ModelPhaseText(activity)} " +
-                                     $"({activity.ElapsedMilliseconds} ms)", cancellationToken).ConfigureAwait(false);
-                break;
-
-            case HostEventKind.ModelRequestWaiting when @event.Payload is ModelRequestProgress waitingRequest :
-                if (waitingRequest.ElapsedMilliseconds - _lastWaitNoticeMilliseconds < 30_000) break;
-                _lastWaitNoticeMilliseconds = waitingRequest.ElapsedMilliseconds;
-                var lastEvent = waitingRequest.LastStreamEventMilliseconds is { } last
-                    ? $"; last SDK event {waitingRequest.ElapsedMilliseconds - last} ms ago"
-                    : string.Empty;
-                await WriteLineAsync($"model request {waitingRequest.RequestNumber}: {ModelPhaseText(waitingRequest)} " +
-                                     $"({waitingRequest.ElapsedMilliseconds / 1000}s elapsed{lastEvent})",
-                                     cancellationToken).ConfigureAwait(false);
-                break;
-
             case HostEventKind.ModelRequestFinished when @event.Payload is ModelRequestProgress finishedRequest :
-                await WriteLineAsync($"model request {finishedRequest.RequestNumber}: {finishedRequest.Outcome} " +
-                                     $"({finishedRequest.ElapsedMilliseconds} ms)"                                +
-                                     (finishedRequest.PartialText ? "; streamed answer is incomplete" : string.Empty),
-                                     cancellationToken).ConfigureAwait(false);
-                await WriteLineAsync($"model request {finishedRequest.RequestNumber} timings: "                        +
-                                     $"first SDK event={ObservedTime(finishedRequest.FirstStreamEventMilliseconds)}; " +
-                                     $"reasoning={ObservedTime(finishedRequest.FirstReasoningMilliseconds)}; "         +
-                                     $"text={ObservedTime(finishedRequest.FirstTextMilliseconds)}; "                   +
-                                     $"reasoning chars={finishedRequest.ReasoningCharacters:N0}; "                     +
-                                     $"text chars={finishedRequest.TextCharacters:N0}; "                               +
-                                     $"cached input tokens={ReportedCount(finishedRequest.CachedInputTokens)}; "       +
-                                     $"reasoning tokens={ReportedCount(finishedRequest.ReasoningTokens)}",
-                                     cancellationToken)
-                   .ConfigureAwait(false);
+                if (finishedRequest.PartialText)
+                    await WriteLineAsync("回答未完成。", cancellationToken).ConfigureAwait(false);
                 break;
 
             case HostEventKind.AssistantTextDelta when @event.Payload is string delta :
+                _requestTextStarted = true;
+                if (_hadReasoningContent && !_answerLabelWritten)
+                {
+                    await WriteLineAsync("回答：", cancellationToken).ConfigureAwait(false);
+                    _answerLabelWritten = true;
+                }
+
                 await WriteDeltaAsync(delta, cancellationToken).ConfigureAwait(false);
                 break;
 
@@ -122,15 +140,6 @@ internal sealed class ConsoleHostEventSink(
             case HostEventKind.ApprovalResolved when @event.Payload is
                 ApprovalResolution { Decision: PermissionDecision.Ask } resolution :
                 await WriteLineAsync($"approval: {resolution.Outcome}", cancellationToken).ConfigureAwait(false);
-                break;
-
-            case HostEventKind.ModelUsage when @event.Payload is ModelUsage usage &&
-                                               (usage.InputTokens is not null || usage.OutputTokens is not null) :
-                var summaryNote  = usage.SummaryRequest ? " (summary request)" : string.Empty;
-                var inputTokens  = (usage.InputTokens  ?? 0).ToString("N0");
-                var outputTokens = (usage.OutputTokens ?? 0).ToString("N0");
-                await WriteLineAsync($"usage: {inputTokens} in / {outputTokens} out tokens{summaryNote}",
-                                     cancellationToken).ConfigureAwait(false);
                 break;
 
             case HostEventKind.CompactionApplied when @event.Payload is ContextChange change :
@@ -168,32 +177,6 @@ internal sealed class ConsoleHostEventSink(
                 break;
         }
     }
-
-    /// <summary>
-    ///     <para>只描述已观察到的流阶段和字符数，不将未收到更新解释为服务端空闲。</para>
-    ///     <para>Describes only observed stream phases and character counts without interpreting silence as server idleness.</para>
-    /// </summary>
-    private static string ModelPhaseText(ModelRequestProgress progress) => progress.Phase switch
-    {
-        ModelRequestPhase.ReceivingResponse => "SDK stream received; awaiting content",
-        ModelRequestPhase.ReceivingReasoning =>
-            $"receiving reasoning ({progress.ReasoningCharacters:N0} chars; contents hidden)",
-        ModelRequestPhase.ReceivingText => progress.SummaryRequest ? "receiving summary text" : "receiving answer text",
-        ModelRequestPhase.ReceivingTools => "receiving tool calls",
-        _ => "awaiting first SDK stream event"
-    };
-
-    /// <summary>
-    ///     <para>未观察到的阶段保持明确缺失，不显示成零毫秒。</para>
-    ///     <para>Keeps unobserved timings explicit instead of rendering them as zero milliseconds.</para>
-    /// </summary>
-    private static string ObservedTime(long? milliseconds) => milliseconds is { } value ? $"{value} ms" : "unobserved";
-
-    /// <summary>
-    ///     <para>区分服务端报告零与未报告 token 数。</para>
-    ///     <para>Distinguishes a server-reported zero from an unreported token count.</para>
-    /// </summary>
-    private static string ReportedCount(int? count) => count is { } value ? $"{value:N0}" : "unreported";
 
     /// <summary>
     ///     流式打印一个文本增量：脱敏后转义控制字符（保留换行与制表符）并写入。

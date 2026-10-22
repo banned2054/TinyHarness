@@ -92,6 +92,17 @@ tinyharness sandbox status | provision | verify    Windows 沙箱管理
 
 `Ctrl+C` 取消当前执行；在 `chat` 中先取消当前回合，空闲时再按结束会话。退出码：`0` 完成、`1` 失败或步数／累计预算达限、`2` 缺少提示词、`130` 取消。`doctor` 默认离线，`doctor --connect` 才联网检查。完整语法见 `--help` 或 `help <命令>`。
 
+`run` 和 `chat` 默认在终端同一行循环点号并更新当前请求耗时：`等待中... 12s`，
+收到推理后显示 `思考中... 23s`。逐请求诊断和 usage 明细仅保留在会话日志，回合末仍汇总用量。
+重定向输出仅在状态变化时提示一次。`--reasoning content` 在独立的“思考”区域流式展示可读文本，
+跨片段脱敏已知密钥并转义控制字符。
+内部压缩文本和 opaque 载荷不展示。该选项仅影响显示，续聊时也可重新选择。
+
+```powershell
+tinyharness chat --reasoning content
+tinyharness run --reasoning status -- "解释这个项目"
+```
+
 ### 配置
 
 首次使用不需要手工编辑 JSON。`init` 会把 provider profile、endpoint、密钥引用、模型和上下文窗口写入用户配置（Windows 为 `%APPDATA%\tinyharness\user-config.json`）。认证配置只保存密钥引用——环境变量或 Windows Credential Manager——不保存密钥本体，密钥也不会被主动注入 `chat` 会话。会话默认使用受保护存储（`%LOCALAPPDATA%\tinyharness\sessions`），可通过 `settings.sessionStoreDirectory` 或 `TINYHARNESS_SESSION_STORE_DIR` 覆盖；`config.sessionDirectory` 不是默认位置。会话为保真续聊原样保存 canonical 对话内容，粘贴进会话的文本、会话读取的文件或模型返回的内容都可能包含秘密；Harness 不加密会话文件——“受保护”的存储位置只是路径与排他写约定，不代表加密、也不承诺其他本地进程不可读写。当前仅支持 `tinyharness.session-log/1`，不读取或迁移旧持久化格式。

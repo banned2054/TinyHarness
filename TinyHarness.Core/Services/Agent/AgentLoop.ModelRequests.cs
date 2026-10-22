@@ -25,8 +25,8 @@ public sealed partial class AgentLoop
     ///     <para>Regular responses publish text deltas; compaction publishes progress without summary or reasoning text.</para>
     /// </param>
     private async Task<ChatMessage> RequestAssistantMessageAsync(
-        ChatCompletionRequest request, CancellationToken cancellationToken,
-        int estimatedPromptTokens, bool publishTextDeltas)
+        ChatCompletionRequest request,               CancellationToken cancellationToken,
+        int                   estimatedPromptTokens, bool              publishTextDeltas)
     {
         var       accumulator   = new StreamAccumulator();
         var       ended         = false;
@@ -47,9 +47,14 @@ public sealed partial class AgentLoop
                 charge.Append(value);
                 accumulator.Append(value);
                 if (observation.Observe(value))
-                    await PublishEventAsync(HostEventKind.ModelRequestActivity, observation.Snapshot(), cancellationToken)
+                    await PublishEventAsync(HostEventKind.ModelRequestActivity, observation.Snapshot(),
+                                            cancellationToken)
                        .ConfigureAwait(false);
                 if (value.Kind == ChatStreamEventKind.End) ended = true;
+                if (publishTextDeltas && _events?.IncludeReasoningText == true &&
+                    accumulator.ReasoningDisplayDelta is { Length: > 0 } reasoningDelta)
+                    await PublishEventAsync(HostEventKind.AssistantReasoningDelta, reasoningDelta, cancellationToken)
+                       .ConfigureAwait(false);
                 if (publishTextDeltas && value.Kind == ChatStreamEventKind.ContentDelta)
                 {
                     streamedText |= !string.IsNullOrWhiteSpace(value.ContentDelta);
@@ -150,7 +155,7 @@ public sealed partial class AgentLoop
     ///     </para>
     /// </remarks>
     private async IAsyncEnumerable<ChatStreamEvent> ReadModelStreamAsync(
-        ChatCompletionRequest request, ModelRequestObservation observation,
+        ChatCompletionRequest                      request, ModelRequestObservation observation,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         await using var stream = _model.CompleteAsync(request, cancellationToken).GetAsyncEnumerator(cancellationToken);
@@ -175,7 +180,8 @@ public sealed partial class AgentLoop
                     await tick.ConfigureAwait(false);
                     tick = null;
                     // 展示取消不能中断当前 MoveNext 的回收；请求令牌仍传给模型流。
-                    await PublishEventAsync(HostEventKind.ModelRequestWaiting, observation.Snapshot(), CancellationToken.None)
+                    await PublishEventAsync(HostEventKind.ModelRequestWaiting, observation.Snapshot(),
+                                            CancellationToken.None)
                        .ConfigureAwait(false);
                 }
 
@@ -213,5 +219,5 @@ public sealed partial class AgentLoop
     ///     <para>Distinguishes empty output from protocol truncation so compaction retains its EmptySummary diagnostic.</para>
     /// </summary>
     private sealed class EmptyModelResponseException() : Exception(
-        "Model response contained no usable answer or tool calls; reasoning and usage alone do not complete a turn.");
+                                                                   "Model response contained no usable answer or tool calls; reasoning and usage alone do not complete a turn.");
 }

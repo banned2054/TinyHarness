@@ -40,6 +40,15 @@ public sealed class StreamAccumulator
     /// </summary>
     public long ReasoningCharacters => _closedReasoningCharacters + _reasoningText.Length;
 
+    /// <summary>
+    ///     <para>最近一次追加新增的可读推理文本；条目完成只补尚未流出的后缀，不重放或解密 opaque 数据。</para>
+    ///     <para>
+    ///         Readable reasoning added by the last append; item completion emits only an unseen suffix and never replays or
+    ///         decrypts opaque data.
+    ///     </para>
+    /// </summary>
+    internal string? ReasoningDisplayDelta { get; private set; }
+
     public IReadOnlyList<ChatToolCall> ToolCalls => _toolCalls;
 
     /// <summary>
@@ -75,6 +84,7 @@ public sealed class StreamAccumulator
     /// </summary>
     public void Append(ChatStreamEvent @event)
     {
+        ReasoningDisplayDelta = null;
         switch (@event.Kind)
         {
             case ChatStreamEventKind.ContentDelta :
@@ -137,6 +147,7 @@ public sealed class StreamAccumulator
         }
 
         _reasoningText.Append(@event.ReasoningDelta ?? string.Empty);
+        ReasoningDisplayDelta = @event.ReasoningDelta;
     }
 
     /// <summary>
@@ -152,6 +163,14 @@ public sealed class StreamAccumulator
     /// </summary>
     private void AppendReasoningItem(ChatStreamEvent @event)
     {
+        if (!string.IsNullOrEmpty(@event.ReasoningDelta))
+        {
+            var streamed = _reasoningText.ToString();
+            // 完整文本可能覆盖增量；终端无法撤回已显示内容，不重复打印发生改写的条目。
+            if (@event.ReasoningDelta.StartsWith(streamed, StringComparison.Ordinal))
+                ReasoningDisplayDelta = @event.ReasoningDelta[streamed.Length..];
+        }
+
         var text = !string.IsNullOrEmpty(@event.ReasoningDelta)
             ? @event.ReasoningDelta
             : _reasoningText.Length == 0

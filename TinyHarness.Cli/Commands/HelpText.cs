@@ -17,9 +17,9 @@ internal static class HelpText
         TinyHarness - a local coding-agent harness (Chat Completions)
 
         Usage:
-          tinyharness run [--config <path>] [--] "your prompt"
-          tinyharness [--config <path>] "your prompt"          (verbless)
-          tinyharness chat [--config <path>]                   (interactive multi-turn session)
+          tinyharness run [--config <path>] [--reasoning status|content] [--] "your prompt"
+          tinyharness [--reasoning status|content] "your prompt" (verbless)
+          tinyharness chat [--config <path>] [--reasoning status|content] (interactive multi-turn session)
           tinyharness smoke [--config <path>]                  (offline tool-flow smoke)
           tinyharness mcp                                      (local MCP stdio worker)
           tinyharness init                                     (create the user config)
@@ -41,19 +41,26 @@ internal static class HelpText
 
     public const string Verbless = """
         Usage:
-          tinyharness [--config <path>] "your prompt"
+          tinyharness [--reasoning status|content] "your prompt"
 
-        Sends the prompt to the configured model through the agent loop. Only --config is
-        recognized before the prompt; use `run --` when the prompt itself starts with a
+        Sends the prompt to the configured model through the agent loop. --config and
+        --reasoning are recognized while parsing the prompt; use `run --` when it starts with a
         command name or contains '--'.
+        --reasoning defaults to status (cycling dots); content streams readable reasoning.
         """;
 
     public const string Run = """
         Usage:
-          tinyharness run [--config <path>] [--] "your prompt"
+          tinyharness run [--config <path>] [--reasoning status|content] [--] "your prompt"
 
-        Runs one agent task. Only --config is recognized before the prompt. Everything after
+        Runs one agent task. --config and --reasoning are recognized before `--`. Everything after
         `--` is the prompt, so `run -- "config your editor"` sends the whole text as a prompt.
+
+        Request status shows elapsed seconds with cycling dots, changing from waiting to reasoning.
+        Per-request diagnostics and usage stay in the session log. Redirected output gets
+        one notice per status change. --reasoning content streams readable
+        reasoning separately from the answer, with known secrets redacted. Opaque data and
+        internal compaction text are never displayed. This option does not change model settings.
 
         Without --config the lookup order is:
           1. .\tinyharness.json in the current directory (project config)
@@ -67,9 +74,14 @@ internal static class HelpText
 
     public const string Chat = """
         Usage:
-          tinyharness chat [--config <path>] [--session <id>]
+          tinyharness chat [--config <path>] [--session <id>] [--reasoning status|content]
 
         Starts an interactive multi-turn session against the configured model and workspace.
+        Request status shows elapsed seconds with cycling dots, changing from waiting to reasoning.
+        Per-request diagnostics and usage stay in the session log; redirected output gets
+        one notice per status change. --reasoning content streams readable
+        reasoning separately from the answer, redacting known secrets. Internal compaction
+        text and opaque data are never displayed. The choice also applies when resuming.
         At the input prompt, each line starts a user turn. During an active run, ordinary
         text is saved as an amendment and applied at a safe boundary; obsolete unstarted
         plans require replanning and fresh approval. Approval replies stay separate.

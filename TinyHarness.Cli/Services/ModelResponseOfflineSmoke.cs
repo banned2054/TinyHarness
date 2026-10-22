@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using System.Text.Json;
+using TinyHarness.Cli.Models;
 using TinyHarness.Core.Models.Agent;
 using TinyHarness.Core.Models.ChatCompletions;
 using TinyHarness.Core.Models.Session;
@@ -32,12 +33,14 @@ internal static class ModelResponseOfflineSmoke
         string workspace, string directory, SessionModelIdentity identity, CancellationToken cancellationToken)
     {
         var options = new AgentOptions { Model = identity.ModelId, MaxAgentSteps = 4, DefaultToolTimeoutSeconds = 30 };
-        using var display = new StringWriter();
-        var sink = new ConsoleHostEventSink(output : display);
-        var model = new ResponseClient(false);
-        var tools = new ToolRegistry([new ReadFileTool(new Workspace(workspace))]);
-        const string systemPrompt = "Offline response completion smoke";
-        string sessionId;
+        Require(options.Budget is { MaxWallClockSeconds: 0, MaxTotalTokens: 0 },
+                "default optional run limits are enabled");
+        using var       display      = new StringWriter();
+        await using var sink         = new ConsoleHostEventSink(output : display);
+        var             model        = new ResponseClient(false);
+        var             tools        = new ToolRegistry([new ReadFileTool(new Workspace(workspace))]);
+        const string    systemPrompt = "Offline response completion smoke";
+        string          sessionId;
         using (var host = new ChatSessionHost(workspace, identity, options, model, tools, systemPrompt, events : sink,
                                               sessionWriterFactory : id => new SessionStoreWriter(directory, id)))
         {
@@ -74,16 +77,38 @@ internal static class ModelResponseOfflineSmoke
         Require(final.Turns.SelectMany(turn => turn.Runs).Select(run => run.Status)
                      .SequenceEqual(["Failed", "Failed", "Completed"]), "terminal facts did not round-trip");
         var rendered = display.ToString();
-        Require(rendered.Contains("awaiting first SDK stream event", StringComparison.Ordinal) &&
-                rendered.Contains("model request 2: failed", StringComparison.Ordinal)         &&
-                rendered.Contains("receiving reasoning", StringComparison.Ordinal)             &&
-                rendered.Contains("cached input tokens=0", StringComparison.Ordinal)           &&
+        Require(rendered.Contains("等待中... 0s", StringComparison.Ordinal)             &&
+                rendered.Contains("思考中...", StringComparison.Ordinal)                &&
+                !rendered.Contains("model request", StringComparison.Ordinal)        &&
+                !rendered.Contains("usage:", StringComparison.Ordinal)               &&
+                !rendered.Contains("cached input tokens=", StringComparison.Ordinal) &&
                 !rendered.Contains("private reasoning", StringComparison.Ordinal),
                 "request progress or reasoning privacy failed");
         var observations = await ReadObservationsAsync(directory, sessionId, cancellationToken).ConfigureAwait(false);
         Require(observations.Count == 4 && observations[1].FirstReasoningMilliseconds is not null &&
                 observations[2].FirstStreamEventMilliseconds is null && observations[3].CachedInputTokens == 0,
                 "request timings or optional cache values did not round-trip");
+
+        using var contentDisplay = new StringWriter();
+        await using var contentSink =
+            new ConsoleHostEventSink(new Dictionary<string, string> { ["test"] = "smoke-secret" }, contentDisplay,
+                                     ReasoningDisplayMode.Content);
+        using (var host = new ChatSessionHost(workspace, identity, options, new ResponseClient(false, readable : true),
+                                              tools, systemPrompt, events : contentSink))
+        {
+            var result =
+                (await host.SubmitTurnAsync("show reasoning", cancellationToken).ConfigureAwait(false)).Result!;
+            Require(result is { Status: AgentStatus.Completed, ToolExecutions: 0 },
+                    "readable reasoning did not complete");
+            var shown = contentDisplay.ToString();
+            Require(shown.Contains("思考：", StringComparison.Ordinal)                &&
+                    shown.Contains("回答：", StringComparison.Ordinal)                &&
+                    shown.Contains("inspect [REDACTED]", StringComparison.Ordinal) &&
+                    !shown.Contains("smoke-secret", StringComparison.Ordinal)      &&
+                    !shown.Contains("opaque", StringComparison.Ordinal)            &&
+                    shown.Split("inspect", StringSplitOptions.None).Length == 2,
+                    "readable reasoning redaction, deduplication or separation failed");
+        }
 
         using var cancel = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         using (var host = new ChatSessionHost(workspace, identity, options, new ResponseClient(false, true), tools,
@@ -101,10 +126,10 @@ internal static class ModelResponseOfflineSmoke
             (await ReadObservationsAsync(directory, sessionId, cancellationToken).ConfigureAwait(false)).Single();
         Require(cancelledObservation is
                 {
-                    Outcome: "cancelled",
+                    Outcome                   : "cancelled",
                     FirstReasoningMilliseconds: not null,
-                    FirstTextMilliseconds: null,
-                    ReasoningCharacters: > 0
+                    FirstTextMilliseconds     : null,
+                    ReasoningCharacters       : > 0
                 },
                 "cancelled request lost its observed phase");
     }
@@ -140,7 +165,7 @@ internal static class ModelResponseOfflineSmoke
         if (!condition) throw new InvalidDataException($"Response completion smoke: {detail}.");
     }
 
-    private sealed class ResponseClient(bool resumed, bool wait = false) : IChatCompletionClient
+    private sealed class ResponseClient(bool resumed, bool wait = false, bool readable = false) : IChatCompletionClient
     {
         internal int Requests { get; private set; }
 
@@ -153,6 +178,22 @@ internal static class ModelResponseOfflineSmoke
         {
             var index = Requests++;
             Require(index < 2, "unexpected model retry");
+            if (readable)
+            {
+                yield return new ChatStreamEvent
+                    { Kind = ChatStreamEventKind.ReasoningDelta, ReasoningDelta = "inspect smoke-" };
+                yield return new ChatStreamEvent
+                    { Kind = ChatStreamEventKind.ReasoningDelta, ReasoningDelta = "secret" };
+                yield return new ChatStreamEvent
+                {
+                    Kind                   = ChatStreamEventKind.ReasoningItem, ReasoningDelta = "inspect smoke-secret",
+                    ReasoningProtectedData = "opaque"
+                };
+                yield return new ChatStreamEvent { Kind = ChatStreamEventKind.ContentDelta, ContentDelta = "answer" };
+                yield return new ChatStreamEvent { Kind = ChatStreamEventKind.End, FinishReason          = "stop" };
+                yield break;
+            }
+
             if (wait)
             {
                 yield return new ChatStreamEvent { Kind = ChatStreamEventKind.ResponseStarted };

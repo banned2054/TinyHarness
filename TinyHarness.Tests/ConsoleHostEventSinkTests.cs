@@ -22,13 +22,13 @@ namespace TinyHarness.Tests;
 public class ConsoleHostEventSinkTests
 {
     /// <summary>
-    ///     <para>等待输出按三十秒节流，推理阶段只显示计数，并区分未报告与零缓存。</para>
-    ///     <para>Wait output is throttled to thirty seconds, reasoning shows counts only, and missing cache differs from zero.</para>
+    ///     <para>只展示等待与思考耗时，逐请求诊断和用量不因缓存是否报告而外显。</para>
+    ///     <para>Shows only waiting and reasoning time, hiding request diagnostics and usage regardless of cache reporting.</para>
     /// </summary>
-    [TestCase(null, "unreported")]
-    [TestCase(0, "0")]
-    [TestCase(8, "8")]
-    public async Task ModelObservationDisplayThrottlesAndPreservesMissingCache(int? cached, string expected)
+    [TestCase(null)]
+    [TestCase(0)]
+    [TestCase(8)]
+    public async Task ModelObservationDisplayHidesDiagnosticsAndUsage(int? cached)
     {
         var reasoning = new ModelRequestProgress(1, false, 10)
         {
@@ -54,6 +54,11 @@ public class ConsoleHostEventSinkTests
             },
             new HostEvent
             {
+                Kind = HostEventKind.ModelUsage,
+                Payload = new ModelUsage(100, 20, "stop", false) { CachedInputTokens = cached }
+            },
+            new HostEvent
+            {
                 Kind = HostEventKind.ModelRequestFinished,
                 Payload = reasoning with
                 {
@@ -61,17 +66,12 @@ public class ConsoleHostEventSinkTests
                     CachedInputTokens = cached
                 }
             });
-        Assert.That(output.Split("receiving reasoning").Length - 1, Is.EqualTo(2));
-        Assert.That(output, Does.Contain("500 chars; contents hidden").And.Contain("last SDK event 30000 ms ago"));
-        Assert.That(output,
-                    Does.Contain("first SDK event=5 ms").And.Contain("reasoning=10 ms").And.Contain("text=unobserved"));
-        Assert.That(output, Does.Contain($"cached input tokens={expected}"));
-        Assert.That(output, Does.Not.Contain("10s elapsed"));
+        Assert.That(output, Is.EqualTo("等待中... 0s\n思考中... 0s\n"));
     }
 
     /// <summary>
-    ///     <para>请求等待与失败可见，已流出的正文明确标为未完成，摘要仅展示用途。</para>
-    ///     <para>Request waits and failures are visible, streamed text is marked incomplete, and summaries show purpose only.</para>
+    ///     <para>隐藏请求元数据，同时保留已流出回答未完成的提示。</para>
+    ///     <para>Hides request metadata while preserving the incomplete streamed answer notice.</para>
     /// </summary>
     [Test]
     public async Task ModelRequestLifecycleDisplaysWaitAndIncompleteAnswer()
@@ -93,10 +93,7 @@ public class ConsoleHostEventSinkTests
                 Kind    = HostEventKind.ModelRequestFinished,
                 Payload = new ModelRequestProgress(2, true, 32_000, "failed", true)
             });
-        Assert.That(output, Does.Contain("model request 2 (summary): awaiting first SDK stream event"));
-        Assert.That(output, Does.Contain("awaiting first SDK stream event (30s elapsed)"));
-        Assert.That(output, Does.Contain("partial\nmodel request 2: failed (32000 ms); streamed answer is incomplete"));
-        Assert.That(output, Does.Contain("first SDK event=unobserved").And.Contain("cached input tokens=unreported"));
+        Assert.That(output, Is.EqualTo("等待中... 0s\npartial\n回答未完成。\n"));
     }
 
     [Test]
@@ -120,8 +117,8 @@ public class ConsoleHostEventSinkTests
 
     private static async Task<string> RenderAsync(params HostEvent[] events)
     {
-        using var output = new StringWriter { NewLine = "\n" };
-        var       sink   = new ConsoleHostEventSink(output : output);
+        using var       output = new StringWriter { NewLine = "\n" };
+        await using var sink   = new ConsoleHostEventSink(output : output);
         foreach (var @event in events) await sink.PublishAsync(@event, CancellationToken.None);
 
         return output.ToString();
@@ -176,16 +173,16 @@ public class ConsoleHostEventSinkTests
     [Test]
     public async Task LineEvent_AfterOpenDelta_ClosesTheLineFirst()
     {
-        var usage = new HostEvent
+        var control = new HostEvent
         {
-            Kind     = HostEventKind.ModelUsage,
+            Kind     = HostEventKind.RunControlChanged,
             Sequence = 2,
-            Payload  = new ModelUsage(120, 30, "stop", false)
+            Payload  = "paused"
         };
 
-        var output = await RenderAsync(TextDelta("partial answer"), usage);
+        var output = await RenderAsync(TextDelta("partial answer"), control);
 
-        Assert.That(output, Is.EqualTo("partial answer\nusage: 120 in / 30 out tokens\n"));
+        Assert.That(output, Is.EqualTo("partial answer\nrun control: paused\n"));
     }
 
     [Test]
@@ -209,6 +206,15 @@ public class ConsoleHostEventSinkTests
         var output = await RenderAsync(ToolStartedEvent(), ToolFinishedEvent(exitCode : 0));
 
         Assert.That(output, Is.EqualTo("tool: read_file src/a.cs -> ok (exit 0)\n"));
+    }
+
+    [Test]
+    public async Task HiddenUsagePreservesSingleLineToolLifecycle()
+    {
+        var output = await RenderAsync(ToolStartedEvent(),
+                                       new HostEvent { Kind = HostEventKind.ModelUsage, Payload = new ModelUsage(100, 10, "tool_calls", false) },
+                                       ToolFinishedEvent());
+        Assert.That(output, Is.EqualTo("tool: read_file src/a.cs -> ok\n"));
     }
 
     [Test]
@@ -263,17 +269,17 @@ public class ConsoleHostEventSinkTests
     [Test]
     public async Task ToolFinished_AfterLineClosed_RewritesTheWholeLine()
     {
-        var usage = new HostEvent
+        var control = new HostEvent
         {
-            Kind     = HostEventKind.ModelUsage,
+            Kind     = HostEventKind.RunControlChanged,
             Sequence = 2,
-            Payload  = new ModelUsage(120, 30, "stop", false)
+            Payload  = "paused"
         };
 
-        var output = await RenderAsync(ToolStartedEvent(), usage, ToolFinishedEvent(exitCode : 0));
+        var output = await RenderAsync(ToolStartedEvent(), control, ToolFinishedEvent(exitCode : 0));
 
-        Assert.That(output, Is.EqualTo("tool: read_file src/a.cs\n"      +
-                                       "usage: 120 in / 30 out tokens\n" +
+        Assert.That(output, Is.EqualTo("tool: read_file src/a.cs\n" +
+                                       "run control: paused\n"      +
                                        "tool: read_file src/a.cs -> ok (exit 0)\n"));
     }
 
@@ -294,7 +300,7 @@ public class ConsoleHostEventSinkTests
     [Test]
     public async Task Deltas_SecretSplitAcrossStreams_StayRedactedAcrossLineEvents()
     {
-        // usage 行在两段模型流之间结束当前流式行；被扣留的 "sk-secret-" 前缀不得在此原样出现，
+        // 控制提示结束当前流式行；被扣留的 "sk-secret-" 前缀不得在此原样出现，
         // 否则下一段流的补全会把整个密钥补齐显示出来。
         using var output = new StringWriter { NewLine = "\n" };
         var sink = new ConsoleHostEventSink(new Dictionary<string, string> { ["env"] = "sk-secret-value" },
@@ -302,9 +308,9 @@ public class ConsoleHostEventSinkTests
         await sink.PublishAsync(TextDelta("see sk-secret-"), CancellationToken.None);
         await sink.PublishAsync(new HostEvent
                                 {
-                                    Kind     = HostEventKind.ModelUsage,
+                                    Kind     = HostEventKind.RunControlChanged,
                                     Sequence = 2,
-                                    Payload  = new ModelUsage(1, 1, "stop", false)
+                                    Payload  = "paused"
                                 },
                                 CancellationToken.None);
         await sink.PublishAsync(TextDelta("value now"), CancellationToken.None);
@@ -312,7 +318,7 @@ public class ConsoleHostEventSinkTests
                                 CancellationToken.None);
 
         var shown = output.ToString();
-        Assert.That(shown, Is.EqualTo("see \nusage: 1 in / 1 out tokens\n[REDACTED] now\n"));
+        Assert.That(shown, Is.EqualTo("see \nrun control: paused\n[REDACTED] now\n"));
         Assert.That(shown, Does.Not.Contain("sk-secret-value"));
     }
 

@@ -10,7 +10,8 @@ namespace TinyHarness.Tests;
 /// </summary>
 internal sealed class TestHostEventSink : IHostEventSink
 {
-    public List<HostEvent> Events { get; } = [];
+    public bool            IncludeReasoningText { get; init; }
+    public List<HostEvent> Events               { get; } = [];
 
     public ValueTask PublishAsync(HostEvent @event, CancellationToken cancellationToken)
     {

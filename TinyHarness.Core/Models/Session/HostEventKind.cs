@@ -204,5 +204,14 @@ public enum HostEventKind
     ///     <para>首次观察到一种请求活动；负载仅为 ModelRequestProgress，不包含模型原文。</para>
     ///     <para>A request activity was observed for the first time; payload is metadata-only ModelRequestProgress.</para>
     /// </summary>
-    ModelRequestActivity = 19
+    ModelRequestActivity = 19,
+
+    /// <summary>
+    ///     <para>显式订阅的普通请求可读推理增量；负载为字符串，不含 opaque 数据，不用于持久化。</para>
+    ///     <para>
+    ///         Opt-in readable reasoning delta for a regular request; string payload excludes opaque data and is not
+    ///         persisted.
+    ///     </para>
+    /// </summary>
+    AssistantReasoningDelta = 20
 }

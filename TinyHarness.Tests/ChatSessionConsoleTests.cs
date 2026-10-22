@@ -451,7 +451,7 @@ public class ChatSessionConsoleTests
     }
 
     [Test]
-    public async Task RunAsync_UsageTotalsAppearOnTheEventLineAndTheTurnFooter()
+    public async Task RunAsync_UsageTotalsAppearOnlyOnTheTurnFooter()
     {
         var client = new FakeChatClient();
         client.Enqueue(FakeChatClient.TextWithUsage(120, 45, "回答文本"));
@@ -465,7 +465,7 @@ public class ChatSessionConsoleTests
         var exit = await console.RunAsync();
 
         Assert.That(exit, Is.EqualTo(0));
-        Assert.That(output.ToString(), Does.Contain("usage: 120 in / 45 out tokens"));
+        Assert.That(output.ToString(), Does.Not.Contain("usage:").And.Not.Contain("model request"));
         Assert.That(output.ToString(),
                     Does.Contain("turn 1 finished: completed (steps: 1, tools: 0, 120 in / 45 out tokens)"));
     }

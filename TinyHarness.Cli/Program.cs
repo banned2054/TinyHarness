@@ -113,10 +113,10 @@ internal static class Program
                 return await RunMcpServerAsync();
 
             case CliCommandKind.Run :
-                return await RunAsync(options.Prompt!, options.ConfigPath);
+                return await RunAsync(options.Prompt!, options.ConfigPath, options.ReasoningDisplay);
 
             case CliCommandKind.Chat :
-                return await RunChatAsync(options.ConfigPath, options.ResumeSessionId);
+                return await RunChatAsync(options.ConfigPath, options.ResumeSessionId, options.ReasoningDisplay);
 
             default :
                 return await RunManagementCommandAsync(options).ConfigureAwait(false);
@@ -167,12 +167,14 @@ internal static class Program
     ///         approvals use a single input reader.
     ///     </para>
     /// </remarks>
-    private static async Task<int> RunAsync(string prompt, string? configPath)
+    private static async Task<int> RunAsync(string prompt, string? configPath, ReasoningDisplayMode reasoningDisplay)
     {
         using var cts = new CancellationTokenSource();
         using var cancelRegistration = new ConsoleCancellation(cts);
         var       reader = new ExclusiveInputReader(Console.In);
         var       composition = await ComposeAgentAsync(configPath, cts.Token, true, reader).ConfigureAwait(false);
+        await using var events =
+            new ConsoleHostEventSink(composition.KnownSecrets, reasoningDisplay : reasoningDisplay);
 
         await WriteHeaderAsync("TinyHarness run", composition).ConfigureAwait(false);
 
@@ -191,7 +193,7 @@ internal static class Program
                                              WorkspacePrompts.Current,
                                              composition.Permissions,
                                              approver,
-                                             new ConsoleHostEventSink(composition.KnownSecrets),
+                                             events,
                                              sessionWriterFactory : sessionId =>
                                                  new SessionStoreWriter(composition.SessionStoreDirectory!, sessionId,
                                                                         composition.KnownSecrets),
@@ -267,13 +269,16 @@ internal static class Program
     ///         reach the entry point as exit code 1 without fallback. The session host owns and disposes the store writer.
     ///     </para>
     /// </remarks>
-    private static async Task<int> RunChatAsync(string? configPath, string? resumeSessionId)
+    private static async Task<int> RunChatAsync(
+        string? configPath, string? resumeSessionId, ReasoningDisplayMode reasoningDisplay)
     {
         using var cancellation = new ChatCancellation();
         using var reader       = new ChatInputRouter(new ExclusiveInputReader(Console.In));
         var composition = await ComposeAgentAsync(configPath, cancellation.SessionToken, true, reader)
            .ConfigureAwait(false);
         var config = composition.Config;
+        await using var events =
+            new ConsoleHostEventSink(composition.KnownSecrets, reasoningDisplay : reasoningDisplay);
 
         // 回合、审批与检查确认必须共享同一个读取器，不能另开 stdin 循环。
 
@@ -295,7 +300,7 @@ internal static class Program
                                            WorkspacePrompts.Current,
                                            composition.Permissions,
                                            new ConsoleApprovalProvider(reader, Console.Out, composition.KnownSecrets),
-                                           new ConsoleHostEventSink(composition.KnownSecrets),
+                                           events,
                                            null,
                                            sessionId => new SessionStoreWriter(composition.SessionStoreDirectory!,
                                                                                sessionId, composition.KnownSecrets),
@@ -327,7 +332,7 @@ internal static class Program
                 host = new ChatSessionHost(restored.Session, restored.Context, composition.Options, composition.Model,
                                            composition.Tools, WorkspacePrompts.Current, composition.Permissions,
                                            new ConsoleApprovalProvider(reader, Console.Out, composition.KnownSecrets),
-                                           new ConsoleHostEventSink(composition.KnownSecrets),
+                                           events,
                                            null,
                                            writer, restored.NeedsInspection,
                                            instructionLoader,
