@@ -1,5 +1,7 @@
 # Windows 沙箱 · TinyHarness .NET 直接组件接入方案
 
+组件源码：[banned2054/codex](https://github.com/banned2054/codex)，基于 [OpenAI Codex](https://github.com/openai/codex) 的 TinyHarness 沙箱 fork。以下旧版本基准保留其历史含义；当前可信 TCP 环回模式与实际验收范围见[沙箱管理记录](windows-sandbox-management.md)。
+
 > 版本基准：本地源码 `C:\Code\Rust\codex`（2026-10-09 核对，HEAD `d650bd7c05`）
 > 协议硬版本：`SETUP_VERSION = 5`，`IPC_PROTOCOL_VERSION = 6`
 > 主方案：TinyHarness 的 C# Runtime 直接编排独立编译的 setup / runner 组件，不调用 Codex CLI，不新增 Rust shim

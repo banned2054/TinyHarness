@@ -1,0 +1,270 @@
+name: Package Windows x64
+
+on:
+    workflow_dispatch:
+    push:
+        tags:
+            - "v*"
+
+permissions:
+    contents: read
+
+concurrency:
+    group: package-windows-${{ github.ref }}
+    cancel-in-progress: false
+
+env:
+    CODEX_REPOSITORY: banned2054/codex
+    CODEX_REF: 1b647eac0adc5f31140340ffcc5d49b19a235fad
+    DOTNET_NOLOGO: "true"
+    DOTNET_CLI_TELEMETRY_OPTOUT: "true"
+
+jobs:
+    build:
+        name: Build, verify, and package
+        runs-on: windows-2025
+        timeout-minutes: 90
+        defaults:
+            run:
+                shell: pwsh
+                working-directory: harness
+        outputs:
+            version: ${{ steps.metadata.outputs.version }}
+            package_name: ${{ steps.metadata.outputs.package_name }}
+        steps:
+            - name: Initialize isolated build directories
+              working-directory: .
+              run: |
+                  $ErrorActionPreference = 'Stop'
+                  "CARGO_TARGET_DIR=$env:RUNNER_TEMP/codex-target" >> $env:GITHUB_ENV
+                  "TINYHARNESS_USER_CONFIG_DIR=$env:RUNNER_TEMP/tinyharness-user-config" >> $env:GITHUB_ENV
+                  "TINYHARNESS_SESSION_STORE_DIR=$env:RUNNER_TEMP/tinyharness-sessions" >> $env:GITHUB_ENV
+
+            - name: Check out TinyHarness
+              uses: actions/checkout@v7
+              with:
+                  ref: ${{ github.sha }}
+                  path: harness
+                  persist-credentials: false
+
+            - name: Check out the pinned sandbox fork
+              uses: actions/checkout@v7
+              with:
+                  repository: ${{ env.CODEX_REPOSITORY }}
+                  ref: ${{ env.CODEX_REF }}
+                  path: codex
+                  persist-credentials: false
+
+            - name: Set up .NET 10
+              id: dotnet
+              uses: actions/setup-dotnet@v6
+              with:
+                  dotnet-version: "10.0.x"
+
+            - name: Select SDK and validate versions
+              id: metadata
+              env:
+                  SELECTED_DOTNET_SDK: ${{ steps.dotnet.outputs.dotnet-version }}
+              run: |
+                  $ErrorActionPreference = 'Stop'
+                  $PSNativeCommandUseErrorActionPreference = $true
+                  if (Test-Path -LiteralPath global.json) {
+                    throw 'A repository global.json now exists; reconcile the workflow SDK selection before releasing.'
+                  }
+                  # 避免 runner 上更高版本的预装 SDK 覆盖本轮选择。
+                  @{ sdk = @{ version = $env:SELECTED_DOTNET_SDK; rollForward = 'disable' } } |
+                    ConvertTo-Json -Depth 3 | Set-Content -LiteralPath global.json -Encoding utf8NoBOM
+                  $version = (dotnet msbuild TinyHarness.Cli/TinyHarness.Cli.csproj -nologo -getProperty:Version | Out-String).Trim()
+                  $coreVersion = (dotnet msbuild TinyHarness.Core/TinyHarness.Core.csproj -nologo -getProperty:Version | Out-String).Trim()
+                  if ($version -notmatch '^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$' -or $version -ne $coreVersion) {
+                    throw "CLI and Core must declare the same release version: CLI=$version, Core=$coreVersion"
+                  }
+                  if ($env:GITHUB_REF_TYPE -eq 'tag' -and $env:GITHUB_REF_NAME -cne "v$version") {
+                    throw "Tag '$env:GITHUB_REF_NAME' does not match project version 'v$version'."
+                  }
+                  $forkCommit = (git -C ../codex rev-parse HEAD | Out-String).Trim()
+                  if ($forkCommit -cne $env:CODEX_REF) { throw 'The sandbox checkout is not the pinned commit.' }
+                  "version=$version" >> $env:GITHUB_OUTPUT
+                  "package_name=TinyHarness-$version-win-x64" >> $env:GITHUB_OUTPUT
+                  dotnet --info
+
+            - name: Restore and test TinyHarness offline paths
+              run: |
+                  $ErrorActionPreference = 'Stop'
+                  $PSNativeCommandUseErrorActionPreference = $true
+                  dotnet restore TinyHarness.slnx
+                  dotnet test TinyHarness.Tests/TinyHarness.Tests.csproj -c Release --no-restore `
+                    --logger 'trx;LogFileName=offline.trx' --results-directory "$env:RUNNER_TEMP/test-results"
+
+            - name: Publish NativeAOT
+              run: |
+                  $ErrorActionPreference = 'Stop'
+                  $PSNativeCommandUseErrorActionPreference = $true
+                  dotnet publish TinyHarness.Cli/TinyHarness.Cli.csproj -c Release -r win-x64 `
+                    --self-contained true -o "$env:RUNNER_TEMP/native"
+
+            - name: Install the fork's Rust toolchain
+              working-directory: codex/codex-rs
+              run: |
+                  $ErrorActionPreference = 'Stop'
+                  $PSNativeCommandUseErrorActionPreference = $true
+                  $toolchain = Select-String -LiteralPath rust-toolchain.toml -Pattern '^channel\s*=\s*"([^"]+)"'
+                  if ($null -eq $toolchain -or @($toolchain).Count -ne 1) { throw 'Cannot determine the pinned Rust toolchain.' }
+                  $channel = $toolchain.Matches[0].Groups[1].Value
+                  rustup toolchain install $channel --profile minimal --component clippy --component rustfmt --component rust-src `
+                    --target x86_64-pc-windows-msvc
+                  rustc --version
+                  cargo --version
+
+            - name: Cache sandbox dependencies and build outputs
+              uses: actions/cache@v6
+              with:
+                  path: |
+                      ~/.cargo/registry
+                      ~/.cargo/git
+                      ${{ runner.temp }}/codex-target
+                  key: sandbox-windows-2025-msvc-${{ hashFiles('codex/codex-rs/Cargo.lock', 'codex/codex-rs/rust-toolchain.toml', 'codex/codex-rs/.cargo/config.toml') }}-${{ env.CODEX_REF }}
+                  restore-keys: |
+                      sandbox-windows-2025-msvc-${{ hashFiles('codex/codex-rs/Cargo.lock', 'codex/codex-rs/rust-toolchain.toml', 'codex/codex-rs/.cargo/config.toml') }}-
+
+            - name: Build the three sandbox components
+              working-directory: codex/codex-rs
+              run: |
+                  $ErrorActionPreference = 'Stop'
+                  $PSNativeCommandUseErrorActionPreference = $true
+                  cargo build --locked --release --target x86_64-pc-windows-msvc -p codex-windows-sandbox --bins
+
+            - name: Assemble ZIP and provenance
+              env:
+                  PACKAGE_NAME: ${{ steps.metadata.outputs.package_name }}
+                  RELEASE_VERSION: ${{ steps.metadata.outputs.version }}
+              run: |
+                  $ErrorActionPreference = 'Stop'
+                  $PSNativeCommandUseErrorActionPreference = $true
+                  $packageRoot = Join-Path $env:RUNNER_TEMP "package/$env:PACKAGE_NAME"
+                  $dist = Join-Path $env:RUNNER_TEMP 'dist'
+                  if (Test-Path -LiteralPath $packageRoot) { throw 'Package staging directory already exists.' }
+                  New-Item -ItemType Directory -Path "$packageRoot/sandbox", "$packageRoot/licenses", $dist | Out-Null
+                  Copy-Item -LiteralPath "$env:RUNNER_TEMP/native/TinyHarness.exe" -Destination $packageRoot
+                  $sandboxOutput = Join-Path $env:CARGO_TARGET_DIR 'x86_64-pc-windows-msvc/release'
+                  foreach ($component in @('codex-windows-sandbox-setup.exe', 'codex-command-runner.exe', 'codex-windows-managed-deny-probe.exe')) {
+                    Copy-Item -LiteralPath (Join-Path $sandboxOutput $component) -Destination "$packageRoot/sandbox"
+                  }
+                  Copy-Item -LiteralPath .github/package-assets/README.txt, .github/package-assets/sandbox-settings.example.json -Destination $packageRoot
+                  Copy-Item -LiteralPath ../codex/LICENSE -Destination "$packageRoot/licenses/Codex-LICENSE.txt"
+                  Copy-Item -LiteralPath ../codex/NOTICE -Destination "$packageRoot/licenses/Codex-NOTICE.txt"
+                  $productVersion = [Diagnostics.FileVersionInfo]::GetVersionInfo("$packageRoot/TinyHarness.exe").ProductVersion
+                  if ($productVersion.Split('+')[0] -cne $env:RELEASE_VERSION) {
+                    throw "Native executable version '$productVersion' does not match '$env:RELEASE_VERSION'."
+                  }
+                  $fileHashes = [ordered]@{}
+                  foreach ($file in Get-ChildItem -LiteralPath $packageRoot -File -Recurse | Sort-Object FullName) {
+                    $relative = [IO.Path]::GetRelativePath($packageRoot, $file.FullName).Replace('\', '/')
+                    $fileHashes[$relative] = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+                  }
+                  $sourceCommit = (git rev-parse HEAD | Out-String).Trim()
+                  $sdk = (dotnet --version | Out-String).Trim()
+                  Push-Location ../codex/codex-rs
+                  try {
+                    $rust = (rustc --version | Out-String).Trim()
+                    $cargo = (cargo --version | Out-String).Trim()
+                  } finally { Pop-Location }
+                  [ordered]@{
+                    version = $env:RELEASE_VERSION
+                    runtimeIdentifier = 'win-x64'
+                    tinyHarness = @{ repository = $env:GITHUB_REPOSITORY; commit = $sourceCommit }
+                    sandbox = @{ repository = $env:CODEX_REPOSITORY; commit = $env:CODEX_REF }
+                    toolchains = @{ dotnetSdk = $sdk; rust = $rust; cargo = $cargo }
+                    buildUrl = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
+                    builtAtUtc = [DateTimeOffset]::UtcNow.ToString('O')
+                    files = $fileHashes
+                  } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath "$packageRoot/build-info.json" -Encoding utf8NoBOM
+                  $zipPath = Join-Path $dist "$env:PACKAGE_NAME.zip"
+                  Compress-Archive -LiteralPath $packageRoot -DestinationPath $zipPath -CompressionLevel Optimal
+                  $zipHash = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+                  "$zipHash  $env:PACKAGE_NAME.zip" | Set-Content -LiteralPath "$dist/SHA256SUMS.txt" -Encoding ascii
+                  @(
+                    "# TinyHarness $env:RELEASE_VERSION - prototype preview"
+                    ''
+                    'Windows x64 NativeAOT with the TinyHarness Codex-fork sandbox components.'
+                    'Unzip and read README.txt. Sandbox configuration and explicit provisioning are separate steps.'
+                    'Automated checks cover the default offline tests and the packaged native offline smoke.'
+                    'This is not a real-provider or real Windows isolation acceptance run.'
+                    ''
+                    "TinyHarness commit: $sourceCommit"
+                    "Sandbox fork: $env:CODEX_REPOSITORY@$env:CODEX_REF"
+                    "Build: $env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
+                  ) | Set-Content -LiteralPath "$dist/RELEASE_NOTES.md" -Encoding utf8NoBOM
+
+            - name: Verify the extracted package outside the repositories
+              env:
+                  PACKAGE_NAME: ${{ steps.metadata.outputs.package_name }}
+              run: |
+                  $ErrorActionPreference = 'Stop'
+                  $PSNativeCommandUseErrorActionPreference = $true
+                  $extracted = Join-Path $env:RUNNER_TEMP 'extracted'
+                  Expand-Archive -LiteralPath "$env:RUNNER_TEMP/dist/$env:PACKAGE_NAME.zip" -DestinationPath $extracted
+                  $packageRoot = Join-Path $extracted $env:PACKAGE_NAME
+                  $manifest = Get-Content -LiteralPath "$packageRoot/build-info.json" -Raw | ConvertFrom-Json -AsHashtable
+                  foreach ($entry in $manifest.files.GetEnumerator()) {
+                    $hash = (Get-FileHash -LiteralPath (Join-Path $packageRoot $entry.Key) -Algorithm SHA256).Hash.ToLowerInvariant()
+                    if ($hash -cne $entry.Value) { throw "Extracted file hash mismatch: $($entry.Key)" }
+                  }
+                  $smokeDirectory = Join-Path $env:RUNNER_TEMP 'native-smoke'
+                  New-Item -ItemType Directory -Path $smokeDirectory | Out-Null
+                  $configPath = (Resolve-Path -LiteralPath tinyharness.json).Path
+                  Push-Location $smokeDirectory
+                  try {
+                    & "$packageRoot/TinyHarness.exe" --help
+                    & "$packageRoot/TinyHarness.exe" smoke --config $configPath
+                  } finally { Pop-Location }
+
+            - name: Upload the verified package
+              uses: actions/upload-artifact@v7
+              with:
+                  name: ${{ steps.metadata.outputs.package_name }}
+                  path: ${{ runner.temp }}/dist/*
+                  if-no-files-found: error
+                  compression-level: 0
+                  retention-days: 14
+
+            - name: Upload test results
+              if: ${{ always() }}
+              uses: actions/upload-artifact@v7
+              with:
+                  name: windows-test-results-${{ github.run_attempt }}
+                  path: ${{ runner.temp }}/test-results/**
+                  if-no-files-found: ignore
+                  retention-days: 14
+
+    draft-release:
+        name: Create a prerelease draft for the tag
+        needs: build
+        if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
+        runs-on: ubuntu-latest
+        timeout-minutes: 10
+        permissions:
+            contents: write
+            actions: read
+        steps:
+            - name: Download the verified package from this run
+              uses: actions/download-artifact@v8
+              with:
+                  name: ${{ needs.build.outputs.package_name }}
+                  path: dist
+
+            - name: Check checksum and create an unpublished release
+              shell: bash
+              working-directory: dist
+              env:
+                  GH_TOKEN: ${{ github.token }}
+                  GH_REPO: ${{ github.repository }}
+                  RELEASE_TAG: ${{ github.ref_name }}
+                  RELEASE_VERSION: ${{ needs.build.outputs.version }}
+                  PACKAGE_NAME: ${{ needs.build.outputs.package_name }}
+              run: |
+                  set -euo pipefail
+                  sha256sum --check SHA256SUMS.txt
+                  gh release create "$RELEASE_TAG" "$PACKAGE_NAME.zip" SHA256SUMS.txt \
+                    --repo "$GH_REPO" --verify-tag --draft --prerelease \
+                    --title "TinyHarness $RELEASE_VERSION" --notes-file RELEASE_NOTES.md

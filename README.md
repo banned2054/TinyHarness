@@ -79,9 +79,15 @@ $publishDirectory = (Resolve-Path .\TinyHarness.Cli\bin\Release\net10.0\win-x64\
 $env:PATH = "$publishDirectory;$env:PATH"
 ```
 
+### Windows sandbox components and source
+
+The optional Windows tool-process sandbox uses components built from [banned2054/codex](https://github.com/banned2054/codex), this project's fork of [OpenAI Codex](https://github.com/openai/codex). The fork gives TinyHarness its own machine-level identifiers and includes its network-isolation changes. TinyHarness's C# runtime directly orchestrates these components; running the Codex CLI or agent is not required.
+
+The two runtime components are `codex-windows-sandbox-setup.exe` and `codex-command-runner.exe`. Build the matching components from the fork and configure their absolute paths in user `settings.windowsSandbox.setupExecutablePath` and `runnerExecutablePath`. They are not produced or automatically downloaded by `dotnet publish`. See the [component build and integration instructions](Docs/windows-sandbox-dotnet-integration.md#构建产物已在本机构建验证) and [sandbox management guide](Docs/windows-sandbox-management.md) for setup and validation scope.
+
 ## 📖 Usage
 
-The examples below use the published executable on `PATH`.
+The examples below use the published executable on `PATH`. Its file name is `TinyHarness.exe`; the command is written as `tinyharness` without a hyphen. Windows command lookup is case-insensitive, so `TinyHarness` works too. To launch directly from the publish directory in PowerShell, use `.\TinyHarness.exe`. There is no `tiny-harness` executable or alias supplied by this project.
 
 ### Configure a model
 
@@ -180,9 +186,11 @@ The MCP worker uses user configuration and sends permitted workspace content to 
 
 ## 📚 Documentation
 
+- [Changelog](Docs/CHANGELOG.md) — bilingual release notes and known limitations.
 - [Session persistence](Docs/session-persistence-design.md), [project rules](Docs/project-instructions-design.md), [behavior prompt](Docs/system-prompt-design.md), and [context compaction](Docs/context-compaction-design.md) — contracts and validation records, mainly in Chinese.
 - [Run control and budgets](Docs/task-control-design.md) and [delivery evidence](Docs/m16-verification.md).
 - [Windows sandbox management](Docs/windows-sandbox-management.md) — setup requirements, scope, and limitations.
+- [Release packaging](Docs/releasing.md) — GitHub Actions builds, pinned sandbox source, ZIP layout, and draft releases (Chinese).
 - [Current development handoff](Docs/current-progress.md) — current work and historical local evidence.
 - [Historical plans](PAST_PLAN.md) — archived MVP through M17 records. [PLAN.md](PLAN.md) currently serves as an archive pointer; no new overall roadmap is defined.
 - [AGENTS.md](AGENTS.md) — repository development rules.

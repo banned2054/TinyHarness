@@ -79,9 +79,15 @@ $publishDirectory = (Resolve-Path .\TinyHarness.Cli\bin\Release\net10.0\win-x64\
 $env:PATH = "$publishDirectory;$env:PATH"
 ```
 
+### Windows 沙箱组件与来源
+
+可选 Windows 工具进程沙箱使用 [banned2054/codex](https://github.com/banned2054/codex) 构建的组件，这是本项目对 [OpenAI Codex](https://github.com/openai/codex) 的 fork。fork 为 TinyHarness 隔离了机器级命名，并包含对应的网络隔离改动。TinyHarness 的 C# Runtime 直接编排这些组件，不需要运行 Codex CLI 或 Codex Agent。
+
+日常运行使用 `codex-windows-sandbox-setup.exe` 与 `codex-command-runner.exe`。请从该 fork 构建匹配组件，并在用户配置 `settings.windowsSandbox.setupExecutablePath` 和 `runnerExecutablePath` 中设置绝对路径；`dotnet publish` 不会生成或自动下载它们。构建与接入细节见[组件构建说明](windows-sandbox-dotnet-integration.md#构建产物已在本机构建验证)，配置和验收范围见[沙箱管理说明](windows-sandbox-management.md)。
+
 ## 📖 使用说明
 
-以下示例假设发布后的程序已加入 `PATH`。
+以下示例假设发布后的程序已加入 `PATH`。产物文件名是 `TinyHarness.exe`，文档命令统一写成不带连字符的 `tinyharness`；Windows 查找命令时不区分大小写，写成 `TinyHarness` 也可用。在发布目录直接用 PowerShell 启动时写 `.\TinyHarness.exe`。项目没有提供 `tiny-harness` 可执行文件或别名。
 
 ### 配置模型
 
@@ -180,9 +186,11 @@ MCP worker 使用用户配置，将获准读取的工作区内容发送给模型
 
 ## 📚 文档
 
+- [更新日志](CHANGELOG.md)：中英文版本说明与已知限制。
 - [会话持久化](session-persistence-design.md)、[项目规则](project-instructions-design.md)、[行为提示词](system-prompt-design.md)与[上下文压缩](context-compaction-design.md)：契约和验证记录。
 - [任务控制与预算](task-control-design.md)、[交付证据](m16-verification.md)。
 - [Windows 沙箱管理](windows-sandbox-management.md)：配置前提、范围和限制。
+- [打包与发布](releasing.md)：GitHub Actions 构建、固定沙箱来源、ZIP 结构和 Release 草稿。
 - [当前接力入口](current-progress.md)：当前工作与历史本机证据。
 - [历史计划](../PAST_PLAN.md)：MVP 至 M17 的归档记录；[PLAN.md](../PLAN.md) 暂作归档入口，当前没有制定新的总路线。
 - [AGENTS.md](../AGENTS.md)：仓库开发规则。

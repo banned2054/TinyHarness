@@ -1,0 +1,11 @@
+{
+  "settings": {
+    "windowsSandbox": {
+      "enabled": true,
+      "allowTcpLoopback": false,
+      "setupExecutablePath": "C:\\Tools\\TinyHarness\\sandbox\\codex-windows-sandbox-setup.exe",
+      "runnerExecutablePath": "C:\\Tools\\TinyHarness\\sandbox\\codex-command-runner.exe",
+      "policy": "workspace-write"
+    }
+  }
+}

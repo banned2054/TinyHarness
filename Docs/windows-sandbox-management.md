@@ -2,6 +2,8 @@
 
 本页内容自中文 README 精简迁出（2026-10-13）：`sandbox` 命令的使用细节与 M11 验收记录在此维护，接入设计见 [Windows 沙箱接入方案](windows-sandbox-dotnet-integration.md)。
 
+组件源码来自 [banned2054/codex](https://github.com/banned2054/codex)，即 TinyHarness 使用的 [OpenAI Codex](https://github.com/openai/codex) fork。日常 setup／runner 从该 fork 单独构建，TinyHarness 的 .NET 发布不包含 Rust 组件构建或自动下载。
+
 ## Windows 沙箱管理命令
 
 `tinyharness sandbox` 是 Windows 工具进程沙箱的显式管理入口，只读取用户配置中的可信设置 `settings.windowsSandbox`，不发送任何输入给模型。普通工具执行不会自动 provisioning、提权或修复账户；账户、密码和网络规则的机器级设置仍只能通过 `sandbox provision` 显式发生。`run` / `chat` 的工作区目录授权是独立的用户确认流程，见下文。
