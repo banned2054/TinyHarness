@@ -17,8 +17,11 @@ namespace TinyHarness.Cli.Services;
 internal sealed class ChatCancellation : IDisposable
 {
     private readonly ConsoleCancelEventHandler _handler;
+    private readonly Lock                      _inputGate = new();
     private readonly bool                      _registerConsole;
     private readonly CancellationTokenSource   _session = new();
+    private          long                      _inputInterruptVersion;
+    private TaskCompletionSource _inputInterrupted = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     // Invariant: _turnActive == 1 implies _turn is set (until the dispose race, whose
     // ObjectDisposedException is swallowed in RaiseCancel). The flag is written with
@@ -45,10 +48,36 @@ internal sealed class ChatCancellation : IDisposable
     /// <summary>会话是否已被请求结束。Whether the session has been asked to end.</summary>
     public bool IsSessionCancelled => _session.IsCancellationRequested;
 
+    internal long InputInterruptVersion
+    {
+        get
+        {
+            lock (_inputGate)
+            {
+                return _inputInterruptVersion;
+            }
+        }
+    }
+
     public void Dispose()
     {
         if (_registerConsole) Console.CancelKeyPress -= _handler;
         _session.Dispose();
+    }
+
+    /// <summary>
+    ///     <para>等待指定读取开始后的控制键处理完成；不消费信号，允许读取完成与按键回调交错。</para>
+    ///     <para>
+    ///         Waits for control-key processing after a read began without consuming the signal, allowing read/callback
+    ///         races.
+    ///     </para>
+    /// </summary>
+    internal Task WaitForInputInterruptAsync(long version)
+    {
+        lock (_inputGate)
+        {
+            return version != _inputInterruptVersion ? Task.CompletedTask : _inputInterrupted.Task;
+        }
     }
 
     /// <summary>
@@ -86,6 +115,24 @@ internal sealed class ChatCancellation : IDisposable
     ///     console handler and tests.
     /// </summary>
     public void RaiseCancel()
+    {
+        try
+        {
+            CancelCurrentScope();
+        }
+        finally
+        {
+            // 先完成回合/会话取消，再允许输入端重读，避免退出时又留下新的 stdin 读取。
+            lock (_inputGate)
+            {
+                _inputInterruptVersion++;
+                _inputInterrupted.TrySetResult();
+                _inputInterrupted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            }
+        }
+    }
+
+    private void CancelCurrentScope()
     {
         var generation = Volatile.Read(ref _turnGeneration);
         if (Volatile.Read(ref _turnActive) == 1)

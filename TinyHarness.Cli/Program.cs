@@ -275,7 +275,9 @@ internal static class Program
         string? configPath, string? resumeSessionId, ReasoningDisplayMode reasoningDisplay)
     {
         using var cancellation = new ChatCancellation();
-        using var reader       = new ChatInputRouter(new ExclusiveInputReader(Console.In));
+        using var consoleInput = new ChatConsoleInputReader(Console.In, cancellation,
+                                                            OperatingSystem.IsWindows() && !Console.IsInputRedirected);
+        using var reader = new ChatInputRouter(new ExclusiveInputReader(consoleInput));
         var composition = await ComposeAgentAsync(configPath, cancellation.SessionToken, true, reader)
            .ConfigureAwait(false);
         var config = composition.Config;
