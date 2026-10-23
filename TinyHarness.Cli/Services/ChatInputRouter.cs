@@ -6,16 +6,18 @@ namespace TinyHarness.Cli.Services;
 /// </summary>
 internal sealed class ChatInputRouter(TextReader inner) : TextReader
 {
-    private readonly object                         _gate     = new();
-    private readonly CancellationTokenSource        _lifetime = new();
-    private readonly SemaphoreSlim                  _wake     = new(0, 1);
-    private          Func<string?, Task>?           _activeHandler;
-    private          string?                        _buffered;
-    private          bool                           _disposed;
-    private          bool                           _eof;
-    private          Exception?                     _fault;
-    private          TaskCompletionSource<string?>? _prompt;
-    private          Task?                          _pump;
+    private readonly Lock                    _gate     = new();
+    private readonly CancellationTokenSource _lifetime = new();
+    private readonly SemaphoreSlim           _wake     = new(0, 1);
+
+    private TaskCompletionSource?          _activeDispatch;
+    private Func<string?, Task>?           _activeHandler;
+    private string?                        _buffered;
+    private bool                           _disposed;
+    private bool                           _eof;
+    private Exception?                     _fault;
+    private TaskCompletionSource<string?>? _prompt;
+    private Task?                          _pump;
 
     internal void SetActiveHandler(Func<string?, Task>? handler)
     {
@@ -23,6 +25,20 @@ internal sealed class ChatInputRouter(TextReader inner) : TextReader
         {
             _activeHandler = handler;
             Wake();
+        }
+    }
+
+    /// <summary>
+    ///     <para>停止运行输入分发，并等待已取出的输入处理完毕，避免跨会话延迟执行命令。</para>
+    ///     <para>Stops run-input dispatch and drains an already dequeued input to prevent delayed commands crossing sessions.</para>
+    /// </summary>
+    internal Task ClearActiveHandlerAsync()
+    {
+        lock (_gate)
+        {
+            _activeHandler = null;
+            Wake();
+            return _activeDispatch?.Task ?? Task.CompletedTask;
         }
     }
 
@@ -103,9 +119,25 @@ internal sealed class ChatInputRouter(TextReader inner) : TextReader
                     {
                         _buffered = line;
                     }
+
+                    if (handler is not null)
+                        _activeDispatch = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
                 }
 
-                if (handler is not null) await handler(line).ConfigureAwait(false);
+                if (handler is not null)
+                    try
+                    {
+                        await handler(line).ConfigureAwait(false);
+                    }
+                    finally
+                    {
+                        lock (_gate)
+                        {
+                            _activeDispatch!.TrySetResult();
+                            _activeDispatch = null;
+                        }
+                    }
+
                 if (line is null) return;
                 lock (_gate)
                 {

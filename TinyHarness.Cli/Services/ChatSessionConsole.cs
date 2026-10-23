@@ -1,6 +1,8 @@
 using System.Text;
+using TinyHarness.Core.Exceptions;
 using TinyHarness.Core.Models.Agent;
 using TinyHarness.Core.Models.Session;
+using TinyHarness.Core.Services.Persistence;
 using TinyHarness.Core.Services.Session;
 
 namespace TinyHarness.Cli.Services;
@@ -13,13 +15,13 @@ namespace TinyHarness.Cli.Services;
 ///     <para>
 ///         每行非空输入是当前回合的最新目标。回合、审批与检查确认共享读取器；
 ///         回答、工具、审批与 usage 由宿主事件展示，本循环不重复打印
-///         <see cref="AgentResult.FinalMessage" />。输入输出、宿主与取消协调器由调用方管理。
+///         <see cref="AgentResult.FinalMessage" />。输入输出、直接传入的宿主与取消协调器由调用方管理。
 ///     </para>
 ///     <para>
 ///         Each nonblank input line is the current turn's latest goal. Turns, approvals,
 ///         and inspection confirmation share a reader. Host events display answers, tools,
 ///         approvals, and usage; this loop never reprints <see cref="AgentResult.FinalMessage" />.
-///         The caller owns input, output, the host, and the cancellation coordinator.
+///         The caller owns input, output, the directly supplied host, and the cancellation coordinator.
 ///     </para>
 ///     <para>
 ///         活动回合取消、提交被拒绝或回合失败均不结束会话；EOF 或空闲 Ctrl+C 结束会话。
@@ -35,12 +37,16 @@ namespace TinyHarness.Cli.Services;
 /// </remarks>
 internal sealed class ChatSessionConsole : IDisposable
 {
-    private readonly ChatCancellation                                _cancellation;
-    private readonly Func<CancellationToken, Task<ChatSessionHost>>? _hostFactory;
+    private readonly ChatCancellation                                        _cancellation;
+    private readonly Func<CancellationToken, Task<ChatSessionHost>>?         _hostFactory;
+    private readonly TextReader                                              _input;
+    private readonly TextWriter                                              _output;
+    private readonly DisplaySecretRedactor                                   _redactor;
+    private readonly Func<string, CancellationToken, Task<ChatSessionHost>>? _resumeFactory;
 
-    private readonly TextReader            _input;
-    private readonly TextWriter            _output;
-    private readonly DisplaySecretRedactor _redactor;
+    private readonly string? _sessionStoreDirectory;
+
+    private string? _pendingSessionCommand;
 
     /// <summary>
     ///     <para>已提示中断的说明；与运行 ID 共同识别中断，避免只读续聊重复提示。</para>
@@ -68,22 +74,30 @@ internal sealed class ChatSessionConsole : IDisposable
     }
 
     /// <summary>
-    ///     <para>建立等待首次非空发送的入口；工厂须先预检规则再创建宿主。</para>
-    ///     <para>Creates an entry awaiting its first nonblank submission; the factory checks rules before creating a host.</para>
+    ///     <para>建立可选择会话的入口；工厂须先预检规则再创建宿主，本入口接管初始及后续宿主。</para>
+    ///     <para>
+    ///         Creates a session-selection entry; the factory checks rules before creation, and this entry owns initial and
+    ///         subsequent hosts.
+    ///     </para>
     /// </summary>
-    public ChatSessionConsole(Func<CancellationToken, Task<ChatSessionHost>> hostFactory, TextReader       input,
-                              TextWriter                                     output,      ChatCancellation cancellation,
-                              IReadOnlyDictionary<string, string>?           knownSecrets = null)
+    public ChatSessionConsole(Func<CancellationToken, Task<ChatSessionHost>> hostFactory, TextReader input,
+                              TextWriter output, ChatCancellation cancellation,
+                              IReadOnlyDictionary<string, string>? knownSecrets = null,
+                              Func<string, CancellationToken, Task<ChatSessionHost>>? resumeFactory = null,
+                              string? sessionStoreDirectory = null, ChatSessionHost? initialHost = null)
     {
         ArgumentNullException.ThrowIfNull(hostFactory);
         ArgumentNullException.ThrowIfNull(input);
         ArgumentNullException.ThrowIfNull(output);
         ArgumentNullException.ThrowIfNull(cancellation);
-        _hostFactory  = hostFactory;
-        _input        = input;
-        _output       = output;
-        _cancellation = cancellation;
-        _redactor     = new DisplaySecretRedactor(knownSecrets);
+        _hostFactory           = hostFactory;
+        _input                 = input;
+        _output                = output;
+        _cancellation          = cancellation;
+        _redactor              = new DisplaySecretRedactor(knownSecrets);
+        _resumeFactory         = resumeFactory;
+        _sessionStoreDirectory = sessionStoreDirectory;
+        Host                   = initialHost;
     }
 
     /// <summary>
@@ -92,7 +106,7 @@ internal sealed class ChatSessionConsole : IDisposable
     /// </summary>
     public ChatSession Session => Host?.Session ??
                                   throw new
-                                      InvalidOperationException("No session exists before the first accepted submission.");
+                                      InvalidOperationException("No session has been selected or created yet.");
 
     internal ChatSessionHost? Host { get; private set; }
 
@@ -103,8 +117,8 @@ internal sealed class ChatSessionConsole : IDisposable
     internal Func<CancellationToken, Task>? WorkspaceTrustHandler { get; set; }
 
     /// <summary>
-    ///     <para>释放本入口通过工厂创建的宿主。</para>
-    ///     <para>Disposes the host created by this entry's factory.</para>
+    ///     <para>释放由工厂入口接管的当前宿主。</para>
+    ///     <para>Disposes the current host owned by the factory-based entry.</para>
     /// </summary>
     public void Dispose()
     {
@@ -150,11 +164,25 @@ internal sealed class ChatSessionConsole : IDisposable
         if (_input is ChatInputRouter)
             await
                 _output.WriteLineAsync("During a run, text adds an amendment. Controls: /pause /resume /cancel /work. Approval replies stay separate.");
+        if (_resumeFactory is not null)
+        {
+            await
+                _output.WriteLineAsync("Sessions: /new, /sessions, /switch <session-id>. During a run, switching waits for cancellation and cleanup.");
+            if (Host is null) await HandleSessionCommandAsync("/sessions", cancellationToken);
+            else await WriteUnappliedAmendmentsAsync();
+        }
+
         await PromptInspectionIfNeededAsync(cancellationToken);
 
         while (!_cancellation.IsSessionCancelled)
         {
             cancellationToken.ThrowIfCancellationRequested();
+
+            if (Interlocked.Exchange(ref _pendingSessionCommand, null) is { } pending)
+            {
+                await HandleSessionCommandAsync(pending, cancellationToken);
+                await PromptInspectionIfNeededAsync(cancellationToken);
+            }
 
             await _output.WriteAsync("you> ");
             await _output.FlushAsync(cancellationToken);
@@ -174,6 +202,12 @@ internal sealed class ChatSessionConsole : IDisposable
 
             var userInput = line.Trim();
             if (userInput.Length == 0) continue;
+
+            if (IsSessionCommand(userInput))
+            {
+                await HandleSessionCommandAsync(userInput, cancellationToken);
+                continue;
+            }
 
             if (userInput is "/pause" or "/resume" or "/cancel" or "/work")
             {
@@ -248,7 +282,8 @@ internal sealed class ChatSessionConsole : IDisposable
                 }
                 finally
                 {
-                    if (_input is ChatInputRouter completedRouter) completedRouter.SetActiveHandler(null);
+                    if (_input is ChatInputRouter completedRouter)
+                        await completedRouter.ClearActiveHandlerAsync().ConfigureAwait(false);
                 }
             }
             catch (ArgumentException ex)
@@ -262,7 +297,8 @@ internal sealed class ChatSessionConsole : IDisposable
                 await _output.WriteLineAsync(TerminalDisplay.Format($"cannot start a turn: {ex.Message}", _redactor));
                 return;
             }
-            catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException)
+            catch (Exception ex) when (ex is SessionStoreException or IOException or InvalidDataException
+                                          or UnauthorizedAccessException)
             {
                 await _output.WriteLineAsync(TerminalDisplay.Format($"cannot start a turn: {ex.Message}", _redactor));
                 return;
@@ -290,7 +326,8 @@ internal sealed class ChatSessionConsole : IDisposable
                                                                 _redactor));
 
         // 新中断仅提示一次；确认前副作用已被阻断，只读分析不受影响。
-        await PromptInspectionIfNeededAsync(cancellationToken);
+        if (Volatile.Read(ref _pendingSessionCommand) is null)
+            await PromptInspectionIfNeededAsync(cancellationToken);
 
         await _output.WriteLineAsync();
     }
@@ -305,6 +342,18 @@ internal sealed class ChatSessionConsole : IDisposable
 
         var text = line.Trim();
         if (text.Length == 0) return;
+        if (IsSessionCommand(text))
+        {
+            await HandleSessionCommandAsync(text, _cancellation.SessionToken, true).ConfigureAwait(false);
+            return;
+        }
+
+        if (Volatile.Read(ref _pendingSessionCommand) is not null)
+        {
+            await _output.WriteLineAsync("Session change pending; wait for the next input prompt.");
+            return;
+        }
+
         try
         {
             var message = text switch
@@ -339,6 +388,114 @@ internal sealed class ChatSessionConsole : IDisposable
             await _output.WriteLineAsync(TerminalDisplay.Format($"Input was not accepted: {ex.Message}", _redactor))
                          .ConfigureAwait(false);
         }
+    }
+
+    private static bool IsSessionCommand(string input) =>
+        input.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() is "/new" or "/sessions"
+         or "/switch";
+
+    /// <summary>
+    ///     <para>在宿主边界管理会话；运行中只排队切换，恢复失败保留当前宿主。</para>
+    ///     <para>
+    ///         Manages sessions at host boundaries; queues switches during runs and keeps the current host on restore
+    ///         failure.
+    ///     </para>
+    /// </summary>
+    private async Task HandleSessionCommandAsync(
+        string input, CancellationToken cancellationToken, bool duringRun = false)
+    {
+        if (_hostFactory is null || _resumeFactory is null || _sessionStoreDirectory is null)
+        {
+            await _output.WriteLineAsync("Session navigation is unavailable in this console.");
+            return;
+        }
+
+        var parts = input.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+        if ((parts[0] is "/new" or "/sessions" && parts.Length != 1) ||
+            (parts[0] == "/switch" && (parts.Length != 2 || !SessionStorePaths.IsValidSessionId(parts[1]))))
+        {
+            await _output.WriteLineAsync("Usage: /new | /sessions | /switch <session-id> (32 hex characters).");
+            return;
+        }
+
+        try
+        {
+            switch (parts[0])
+            {
+                case "/sessions" :
+                {
+                    var entries = await SessionStoreReader.ListAsync(_sessionStoreDirectory, cancellationToken);
+                    await _output.WriteLineAsync("Sessions (* current):");
+                    if (entries.Count == 0)
+                        await _output.WriteLineAsync("  (no stored sessions; use /new or type a request)");
+                    foreach (var entry in entries)
+                    {
+                        var marker = entry.Id == Host?.Session.Id ? "*" : " ";
+                        var detail = entry.Session is { } session
+                            ? $"updated {session.UpdatedUtc.LocalDateTime:yyyy-MM-dd HH:mm:ss}  turns {session.Turns.Count}  {session.Model?.ModelId}  {session.WorkspaceRoot}"
+                            : $"damaged: {entry.Error}";
+                        await _output.WriteLineAsync(TerminalDisplay.Format($"{marker} {entry.Id}  {detail}",
+                                                                            _redactor));
+                    }
+
+                    return;
+                }
+                case "/switch" when string.Equals(parts[1], Host?.Session.Id, StringComparison.OrdinalIgnoreCase) :
+                    await _output.WriteLineAsync($"Already in session {Host!.Session.Id}.");
+                    return;
+            }
+
+            if (duringRun)
+            {
+                if (Interlocked.CompareExchange(ref _pendingSessionCommand, input, null) is not null)
+                {
+                    await _output.WriteLineAsync("A session change is already pending; wait for cleanup.");
+                    return;
+                }
+
+                Host?.CancelRun();
+                await _output.WriteLineAsync("Session change queued; waiting for the current turn to finish cleanup.");
+                return;
+            }
+
+            if (Host?.PersistenceWarning is { Length: > 0 })
+            {
+                await
+                    _output.WriteLineAsync("Cannot leave this session: its latest changes were not reliably saved. Restart after inspecting the session log.");
+                return;
+            }
+
+            // 目标持锁并恢复成功后才释放当前宿主，失败不得丢弃当前上下文。
+            var next = parts[0] == "/new"
+                ? await _hostFactory(cancellationToken).ConfigureAwait(false)
+                : await _resumeFactory(parts[1].ToLowerInvariant(), cancellationToken).ConfigureAwait(false);
+            var previous = Host;
+            Host = next;
+            previous?.Dispose();
+            _promptedInspectionNote  = null;
+            _promptedInspectionRunId = null;
+            await _output.WriteLineAsync($"session    : {next.Session.Id} ({next.Session.Turns.Count} turns)");
+            await WriteUnappliedAmendmentsAsync();
+            await PromptInspectionIfNeededAsync(cancellationToken);
+        }
+        catch (OperationCanceledException) when (_cancellation.IsSessionCancelled ||
+                                                 cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex) when (ex is SessionStoreException or IOException or InvalidDataException
+                                      or InvalidOperationException or UnauthorizedAccessException or ArgumentException)
+        {
+            await _output.WriteLineAsync(TerminalDisplay.Format($"Session command failed: {ex.Message}", _redactor));
+        }
+    }
+
+    private async Task WriteUnappliedAmendmentsAsync()
+    {
+        var unapplied = Host?.Session.Amendments.Count(item => item.CanonicalMessageIndex is null) ?? 0;
+        if (unapplied > 0)
+            await
+                _output.WriteLineAsync($"{unapplied} saved amendment(s) remain unapplied; inspect with session show and resubmit to continue.");
     }
 
     private async Task PromptInspectionIfNeededAsync(CancellationToken cancellationToken)

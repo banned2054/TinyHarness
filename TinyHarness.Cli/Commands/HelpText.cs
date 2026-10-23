@@ -17,6 +17,7 @@ internal static class HelpText
         TinyHarness - a local coding-agent harness (Chat Completions)
 
         Usage:
+          tinyharness                                         (interactive session selection)
           tinyharness run [--config <path>] [--reasoning status|content] [--] "your prompt"
           tinyharness [--reasoning status|content] "your prompt" (verbless)
           tinyharness chat [--config <path>] [--reasoning status|content] (interactive multi-turn session)
@@ -76,7 +77,14 @@ internal static class HelpText
         Usage:
           tinyharness chat [--config <path>] [--session <id>] [--reasoning status|content]
 
-        Starts an interactive multi-turn session against the configured model and workspace.
+        Starts an interactive entry against the configured model and workspace. Invoking
+        tinyharness without arguments opens the same entry. Startup lists stored sessions;
+        no session is created until /new or the first ordinary request. Use /sessions to
+        list all stored sessions (* marks the current one), /new to create and select an
+        empty saved session, and /switch <session-id> to resume one using its full 32-hex ID.
+        Listing, creating and switching do not call the model. During a run, /new and
+        /switch request cancellation and wait for cleanup and persistence before switching.
+        A failed switch keeps the current session. Unsaved changes prevent leaving it.
         Request status shows elapsed seconds with cycling dots, changing from waiting to reasoning.
         Per-request diagnostics and usage stay in the session log; redirected output gets
         one notice per status change. --reasoning content streams readable
@@ -98,7 +106,7 @@ internal static class HelpText
         verbatim, without redaction or encryption by the harness; pasted secrets can be saved.
         Inspection output and audit remain redacted. Keep the session store private.
 
-        --session <id> resumes a stored session in a new process. The resume requires the
+        --session <id> resumes a stored session directly at startup. It and /switch require the
         same workspace, endpoint, model and chat api as the stored session, and the stored
         opaque reasoning payloads must pass their integrity check; any mismatch refuses the
         resume instead of replaying changed content. Incomplete trailing tool groups are

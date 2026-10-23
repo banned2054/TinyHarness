@@ -25,7 +25,7 @@ internal static class CommandLine
     /// </summary>
     public static CliOptions Parse(string[] args)
     {
-        if (args.Length == 0) throw new CliUsageException("No command or prompt was given.", HelpText.Overview);
+        if (args.Length == 0) return new CliOptions { Kind = CliCommandKind.Chat };
 
         var first = args[0];
         if (string.Equals(first, "process-smoke-child", StringComparison.Ordinal))

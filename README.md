@@ -122,10 +122,13 @@ Configuration lookup is: explicit `--config <file>`, current-directory `tinyharn
 
 ```powershell
 tinyharness run -- "Explain how this project is organized"
+tinyharness
 tinyharness chat
 ```
 
-In `chat`, each submitted line starts a turn. You can discuss a problem first and explicitly request a change later. Model requests send conversation and relevant tool content to the configured provider and may incur charges.
+`tinyharness` with no arguments and `tinyharness chat` open the same interactive entry and list stored sessions. Use `/new` to create and select a saved conversation, `/sessions` to list all conversations (`*` marks the current one), and `/switch <session-id>` with the full 32-character ID to resume one. These commands make no model requests. A first ordinary request also creates a conversation automatically; exiting before selection creates none.
+
+In a selected conversation, each submitted line starts a turn. You can discuss a problem first and explicitly request a change later. Model requests send conversation and relevant tool content to the configured provider and may incur charges.
 
 Interactive startup asks about trust for a new workspace. Read-only workspaces allow list/search/read tools; patches and processes require workspace trust and then the normal permission flow. Noninteractive workspaces without saved trust stay read-only. Trust does not automatically approve commands; Windows directory authorization may separately require UAC.
 
@@ -144,6 +147,9 @@ During an active `chat` run, ordinary text is queued as an amendment for a safe 
 
 | Input | Behavior |
 | --- | --- |
+| `/new` | Create and select a new saved conversation |
+| `/sessions` | List all stored conversations |
+| `/switch <session-id>` | Switch to a stored conversation |
 | `/pause` | Request a pause at a model/tool boundary |
 | `/resume` | Continue a paused run |
 | `/cancel` | Cancel the active run and wait for cleanup |
@@ -151,6 +157,8 @@ During an active `chat` run, ordinary text is queued as an amendment for a safe 
 | `Ctrl+C` | Cancel the active turn; at the idle prompt, exit the session |
 
 These are limited controls, not a general command system. Approval replies use their own prompt. `/trust` is available at the idle input prompt. Saved amendments that were not applied are not replayed automatically after cancellation or restart.
+
+During a run, `/new` and `/switch` cancel it and wait for cleanup and saving before changing conversations. A failed switch keeps the current conversation; unreliable saves prevent leaving it. Switching requires the same workspace, endpoint, model and protocol as the stored conversation, so an incompatible conversation listed by `/sessions` must be reopened with its matching configuration.
 
 ### Inspect and resume sessions
 

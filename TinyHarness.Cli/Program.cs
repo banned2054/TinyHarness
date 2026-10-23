@@ -6,6 +6,7 @@ using TinyHarness.Cli.Prompts;
 using TinyHarness.Cli.Services;
 using TinyHarness.Core.Exceptions;
 using TinyHarness.Core.Models.Agent;
+using TinyHarness.Core.Models.ChatCompletions;
 using TinyHarness.Core.Models.Configuration;
 using TinyHarness.Core.Models.Context;
 using TinyHarness.Core.Models.Persistence;
@@ -15,6 +16,7 @@ using TinyHarness.Core.Models.Session;
 using TinyHarness.Core.Models.Tools;
 using TinyHarness.Core.Services.ChatCompletions;
 using TinyHarness.Core.Services.ChatCompletions.Configuration;
+using TinyHarness.Core.Services.Context;
 using TinyHarness.Core.Services.Mcp;
 using TinyHarness.Core.Services.Permissions;
 using TinyHarness.Core.Services.Persistence;
@@ -282,61 +284,30 @@ internal static class Program
 
         // 回合、审批与检查确认必须共享同一个读取器，不能另开 stdin 循环。
 
-        ChatSessionHost? host = null;
-        Func<CancellationToken, Task<ChatSessionHost>>? hostFactory = null;
         var instructionLoader = new ProjectInstructionLoader(new Workspace(config.WorkspaceRoot));
-        string? resumedNote = null;
-        if (resumeSessionId is null)
+        var identity          = new SessionModelIdentity(config.Model, config.Endpoint, config.ChatApi);
+
+        PermissionEngine NewPermissions() => new(config.WorkspaceRoot, config.CommandRules,
+                                                 workspaceReadOnly : () => composition.Access.State.IsReadOnly);
+
+        async Task<ChatSessionHost> CreateHostAsync(CancellationToken token)
         {
-            hostFactory = async token =>
-            {
-                var initialInstructions = await instructionLoader.LoadAsync(null, [], token).ConfigureAwait(false);
-                token.ThrowIfCancellationRequested();
-                return new ChatSessionHost(config.WorkspaceRoot,
-                                           new SessionModelIdentity(config.Model, config.Endpoint, config.ChatApi),
-                                           composition.Options,
-                                           composition.Model,
-                                           composition.Tools,
-                                           WorkspacePrompts.Current,
-                                           composition.Permissions,
-                                           new ConsoleApprovalProvider(reader, Console.Out, composition.KnownSecrets),
-                                           events,
-                                           null,
-                                           sessionId => new SessionStoreWriter(composition.SessionStoreDirectory!,
-                                                                               sessionId, composition.KnownSecrets),
-                                           instructionLoader,
-                                           initialInstructions,
-                                           composition.KnownSecrets);
-            };
-        }
-        else
-        {
-            // 先取锁、严格读取并续种提交序号；恢复成功后转交写入器，否则由此处释放。
-            var writer = await SessionStoreWriter.OpenExistingAsync(composition.SessionStoreDirectory!,
-                                                                    resumeSessionId, composition.KnownSecrets,
-                                                                    cancellation.SessionToken).ConfigureAwait(false);
+            var instructions = await instructionLoader.LoadAsync(null, [], token).ConfigureAwait(false);
+            token.ThrowIfCancellationRequested();
+            var session = new ChatSession(Guid.NewGuid().ToString("N"), config.WorkspaceRoot, identity);
+            var context = new ConversationContext(composition.Options.Context);
+            context.Append(ChatMessage.System(WorkspacePrompts.Current));
+            var writer =
+                new SessionStoreWriter(composition.SessionStoreDirectory!, session.Id, composition.KnownSecrets);
             try
             {
-                var restored = SessionResume.Restore(writer.LoadedSnapshot!, config.WorkspaceRoot,
-                                                     new SessionModelIdentity(config.Model, config.Endpoint,
-                                                                              config.ChatApi),
-                                                     WorkspacePrompts.Current, composition.Options.Context);
-                resumedNote = $"resumed    : {restored.Session.Turns.Count} turns from commit " +
-                              $"{writer.CommitSequence} ({writer.LoadedSnapshot!.UpdatedUtc.LocalDateTime:yyyy-MM-dd HH:mm:ss})";
-                var pendingAmendments = restored.Session.Amendments.Count(item => item.CanonicalMessageIndex is null);
-                if (pendingAmendments > 0)
-                    resumedNote +=
-                        $"\n  amendments : {pendingAmendments} saved but unapplied; inspect with session show and resubmit to continue";
-                if (restored.RewoundTail)
-                    resumedNote += "\n  rewound    : the last incomplete tool round was dropped from the model view";
-                host = new ChatSessionHost(restored.Session, restored.Context, composition.Options, composition.Model,
-                                           composition.Tools, WorkspacePrompts.Current, composition.Permissions,
+                // 显式新建即保存空会话，不发送模型请求；项目规则仍由首回合边界可靠提交。
+                await writer.CommitAsync(session, context, token).ConfigureAwait(false);
+                return new ChatSessionHost(session, context, composition.Options, composition.Model, composition.Tools,
+                                           WorkspacePrompts.Current, NewPermissions(),
                                            new ConsoleApprovalProvider(reader, Console.Out, composition.KnownSecrets),
-                                           events,
-                                           null,
-                                           writer, restored.NeedsInspection,
-                                           instructionLoader,
-                                           knownSecrets : composition.KnownSecrets);
+                                           events, sessionWriter : writer, instructionLoader : instructionLoader,
+                                           initialInstructions : instructions, knownSecrets : composition.KnownSecrets);
             }
             catch
             {
@@ -345,33 +316,64 @@ internal static class Program
             }
         }
 
-        using (host)
+        async Task<ChatSessionHost> ResumeHostAsync(string sessionId, CancellationToken token)
         {
-            await WriteHeaderAsync("TinyHarness chat", composition, host?.Session.Id).ConfigureAwait(false);
-            if (resumedNote is not null) await Console.Out.WriteLineAsync($"  {resumedNote}");
-            await
-                Console.Out
-                       .WriteLineAsync("  storage   : append-only JSONL session log; protocol history is saved verbatim " +
+            var writer = await SessionStoreWriter.OpenExistingAsync(composition.SessionStoreDirectory!, sessionId,
+                                                                    composition.KnownSecrets, token)
+                                                 .ConfigureAwait(false);
+            try
+            {
+                var restored = SessionResume.Restore(writer.LoadedSnapshot!, config.WorkspaceRoot, identity,
+                                                     WorkspacePrompts.Current, composition.Options.Context);
+                var resumed = new ChatSessionHost(restored.Session, restored.Context, composition.Options,
+                                                  composition.Model, composition.Tools, WorkspacePrompts.Current,
+                                                  NewPermissions(),
+                                                  new ConsoleApprovalProvider(reader, Console.Out,
+                                                                              composition.KnownSecrets),
+                                                  events, sessionWriter : writer,
+                                                  needsInspection : restored.NeedsInspection,
+                                                  instructionLoader : instructionLoader,
+                                                  knownSecrets : composition.KnownSecrets);
+                await Console.Out.WriteLineAsync($"  resumed   : {restored.Session.Turns.Count} turns from commit " +
+                                                 $"{writer.CommitSequence} ({writer.LoadedSnapshot!.UpdatedUtc.LocalDateTime:yyyy-MM-dd HH:mm:ss})");
+                if (restored.RewoundTail)
+                    await
+                        Console.Out
+                               .WriteLineAsync("  rewound    : the last incomplete tool round was dropped from the model view");
+                return resumed;
+            }
+            catch
+            {
+                writer.Dispose();
+                throw;
+            }
+        }
+
+        using var console = new ChatSessionConsole(CreateHostAsync, reader, Console.Out, cancellation,
+                                                   composition.KnownSecrets, ResumeHostAsync,
+                                                   composition.SessionStoreDirectory,
+                                                   resumeSessionId is null
+                                                       ? null
+                                                       : await ResumeHostAsync(resumeSessionId,
+                                                                               cancellation.SessionToken));
+        await WriteHeaderAsync("TinyHarness chat", composition, console.Host?.Session.Id).ConfigureAwait(false);
+        await
+            Console.Out.WriteLineAsync("  storage   : append-only JSONL session log; protocol history is saved verbatim " +
                                        "without harness encryption, so pasted secrets may be stored. Keep the session store private.");
 
-            // 启动与后续中断确认均交给会话循环，避免保持阻断后多读一次回合输入。
-            using var console = host is null
-                ? new ChatSessionConsole(hostFactory!, reader, Console.Out, cancellation, composition.KnownSecrets)
-                : new ChatSessionConsole(host, reader, Console.Out, cancellation, composition.KnownSecrets);
-            console.WorkspaceTrustHandler = composition.Access.ChangeAsync;
-            var exit         = await console.RunAsync().ConfigureAwait(false);
-            var attachedHost = console.Host;
+        console.WorkspaceTrustHandler = composition.Access.ChangeAsync;
+        var exit         = await console.RunAsync().ConfigureAwait(false);
+        var attachedHost = console.Host;
 
-            // 只报告存在的产物；末次保存不可靠时明确警告，不以终态代替保存证据。
-            if (attachedHost?.Session.Turns.Count > 0 && attachedHost.PersistencePath is { } path && File.Exists(path))
-                await Console.Out.WriteLineAsync($"session    : {path}");
-            if (attachedHost?.PersistenceWarning is { Length: > 0 } warning)
-                await Console.Out.WriteLineAsync($"warning    : {warning}");
-            if (attachedHost?.DisplayWarning is { Length: > 0 } displayWarning)
-                await Console.Out.WriteLineAsync($"display    : {displayWarning}");
+        // 只报告存在的产物；末次保存不可靠时明确警告，不以终态代替保存证据。
+        if (attachedHost?.PersistencePath is { } path && File.Exists(path))
+            await Console.Out.WriteLineAsync($"session    : {path}");
+        if (attachedHost?.PersistenceWarning is { Length: > 0 } warning)
+            await Console.Out.WriteLineAsync($"warning    : {warning}");
+        if (attachedHost?.DisplayWarning is { Length: > 0 } displayWarning)
+            await Console.Out.WriteLineAsync($"display    : {displayWarning}");
 
-            return exit;
-        }
+        return exit;
     }
 
     /// <summary>
@@ -457,20 +459,20 @@ internal static class Program
                                                     () =>
                                                     {
                                                         sandbox = SandboxCliComposition.TryCompose(settings,
-                                                            config.WorkspaceRoot, knownSecrets,
-                                                            sessionStoreDirectory);
+                                                                 config.WorkspaceRoot, knownSecrets,
+                                                                 sessionStoreDirectory);
                                                         var policy = sandbox?.ExecutionPolicy ??
                                                                      ProcessExecutionPolicy.Host();
                                                         return
                                                             Task.FromResult((new ShellTool(new Workspace(config
-                                                                                    .WorkspaceRoot),
-                                                                                 config.DefaultToolTimeoutSeconds,
-                                                                                 knownSecrets,
-                                                                                 processBackend :
-                                                                                 sandbox?.Backend ??
-                                                                                 new
-                                                                                     HostProcessBackend(knownSecrets),
-                                                                                 executionPolicy : policy),
+                                                                                                  .WorkspaceRoot),
+                                                                                      config.DefaultToolTimeoutSeconds,
+                                                                                      knownSecrets,
+                                                                                      processBackend :
+                                                                                      sandbox?.Backend ??
+                                                                                      new
+                                                                                          HostProcessBackend(knownSecrets),
+                                                                                      executionPolicy : policy),
                                                                              policy));
                                                     });
         await access.InitializeAsync(cancellationToken).ConfigureAwait(false);
@@ -654,10 +656,10 @@ internal static class Program
         using var fixture = await SmokeWorkspace.CreateAsync(cts.Token).ConfigureAwait(false);
         await Console.Out.WriteLineAsync($"  fixtureWs    : {fixture.Root}");
 
-        var plan        = SmokeScript.Build(ProcessProbeCommand(), fixture.Root);
-        var script      = new SmokeScriptClient(plan.Steps);
-        var workspace   = new Workspace(fixture.Root);
-        var tools       = BuildTools(workspace, config);
+        var plan      = SmokeScript.Build(ProcessProbeCommand(), fixture.Root);
+        var script    = new SmokeScriptClient(plan.Steps);
+        var workspace = new Workspace(fixture.Root);
+        var tools     = BuildTools(workspace, config);
         // 冒烟使用默认策略，确保副作用审批不受用户现行规则影响。
         var permissions = new PermissionEngine(fixture.Root);
         var approver    = new SmokeApprover();
@@ -781,7 +783,7 @@ internal static class Program
                                          "Smoke refreshed project rules: preserve confirmed file facts.\n", cts.Token)
                       .ConfigureAwait(false);
             using (var resumedWriter = await SessionStoreWriter.OpenExistingAsync(sessionDirectory, sessionId,
-                       null, cts.Token).ConfigureAwait(false))
+                            null, cts.Token).ConfigureAwait(false))
             using (var refreshedHost = new ChatSessionHost(restoration.Session, restoration.Context, options,
                                                            new SmokeScriptClient([new SmokeStep()]), tools,
                                                            systemPrompt, permissions, approver,
@@ -843,7 +845,7 @@ internal static class Program
                                                                               config.ChatApi), cts.Token)
                                            .ConfigureAwait(false);
             await Console.Out.WriteLineAsync(
-                "  responses    : empty/termination/failure/restore/continue/timing/cache/cancel passed (offline)");
+                                             "  responses    : empty/termination/failure/restore/continue/timing/cache/cancel passed (offline)");
         }
 
         TryDeleteSmokeDirectory(sessionDirectory);
