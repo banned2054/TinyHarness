@@ -7,60 +7,50 @@
 <br>
 
 <div>
+    <a href="#-项目状态"><img alt="版本 0.0.1 原型" src="https://img.shields.io/badge/version-0.0.1-blue"></a>
     <a href="https://dotnet.microsoft.com/"><img alt=".NET 10" src="https://img.shields.io/badge/.NET-10.0-512BD4"></a>
-    <a href="https://learn.microsoft.com/dotnet/core/deploying/native-aot/"><img alt="NativeAOT win-x64" src="https://img.shields.io/badge/NativeAOT-win--x64-009688"></a>
-    <a href="#-构建与运行"><img alt="默认测试离线" src="https://img.shields.io/badge/tests-offline-green"></a>
+    <a href="#platform-status"><img alt="NativeAOT win-x64" src="https://img.shields.io/badge/NativeAOT-win--x64-009688"></a>
 </div>
 
 <br>
 
 <!-- markdownlint-restore -->
 
-[**English**](../README.md) | 简体中文
+[English](../README.md) | 简体中文
 
 </div>
 
-一个基于 .NET 10 的轻量本地 coding-agent harness。模型调用统一走 `Microsoft.Extensions.AI.IChatClient` 边界（底层为官方 OpenAI SDK），由配置显式选择 Chat Completions（缺省）或 Responses 协议。模型负责提出下一步行动——检查文件、提出补丁、运行命令；harness 负责参数校验、权限审批、工具调度与上下文管理。
+**TinyHarness.NET** 是基于 .NET 10 的轻量本地 coding-agent harness。
 
-目标是把 Agent 执行链路做小、做完整、可解释：CLI 是当前入口，`win-x64` NativeAOT 是持续验证的构建约束。
-
-> **这里的审批是应用层策略，不是 OS 沙箱。** 获准的进程仍可能访问工作区外的文件和网络；可选的 Windows 沙箱只覆盖 `shell` 工具进程。
+它把语言模型连接到本地工作区，通过 CLI 讨论代码、检查文件、应用补丁和运行命令。模型适配通过 `Microsoft.Extensions.AI.IChatClient` 使用官方 OpenAI SDK，由配置显式选择 Chat Completions 或 Responses 协议。
 
 ## 🚧 项目状态
 
-早期开发中，命令、配置和存储格式可能随里程碑变化。
+**0.0.1 定位为第一个原型预览版。** 基础任务可以跑通，项目已在实际使用中发现和修复问题，目前仍很粗糙，适合尝试与反馈。
 
-目前已实现：单任务 `run`、交互式多轮 `chat`、受保护会话存储（严格离线的 `session list` / `session show`，并支持 `chat --session <id>` 跨进程续聊）、离线优先的配置管理、只读 MCP worker 和可选的 Windows 沙箱管理。M14.1 已加入有界的根／局部 `AGENTS.md` 加载、工具边界与续聊刷新，以及首次非空发送才创建新 chat 会话。M14.2 加入统一基础行为提示词，覆盖自然语言任务范围、工具策略、验证与交付。默认测试与构建不调用付费模型；各阶段的证据与限制分别见下文。
-
-M14.1 离线回归通过：**853 总、851 通过、2 项因符号链接创建权限跳过、0 失败**；scale 独立 1/1 通过，原预算不变。NativeAOT 编译与仓库外 smoke 通过，验证规则初始加载、更新、续聊来源完整性、历史和已确认 patch diff。证据：`artifacts/test-results/m14-regression.trx`、`artifacts/test-results/m14-scale.trx`、`artifacts/m14-instructions-scale-results.json`、`artifacts/m14-instructions-native-smoke.txt`。兼容、命令及未验证边界见[实施与验收记录](project-instructions-design.md#14-实施结果与本地验证)。
-
-M14.2 工程验证通过：**860 总、858 通过、2 跳过、0 失败**，包含 7 个提示词接入用例；NativeAOT 与仓库外原生 smoke 也已通过。只维护当前内置提示词，创建和续聊均使用它；提示词不一致时仍严格拒绝续聊。详见[系统提示词设计与证据](system-prompt-design.md)，模型遵循能力尚待单独评估。
-
-M15 已加入安全边界补充、暂停／继续／取消、带来源的 `work_items` 与可信累计运行预算。最终离线回归 **1013 总／1011 通过／2 项链接权限跳过／0 失败**；scale 独立通过，`win-x64` NativeAOT 与仓库外原生 smoke 通过。详见[任务控制与验收](task-control-design.md)。M15 的真实模型遵循尚未评估；M14 后续指定样本的验收见[压缩设计](context-compaction-design.md)。
+终端界面尚未完善：权限请求、AI 回复与用户输入缺乏清晰区分。命令、配置和会话格式仍可能变化。已有测试和有限的实际使用记录不代表生产可用，也不代表完成了全面安全审查。
 
 ## ✨ 特性
 
-- **Agent Loop** — 流式回复、一轮多个顺序工具调用、可选步数上限、失败与取消处理。`maxAgentSteps` 缺省或为 `0` 时不限，正数启用上限。
-- **工具** — `list_files`、`search_text`、`read_file`、`apply_patch` 与 `shell`（直接进程/显式 shell 模式），带超时、进程树终止和输出裁剪。
-- **权限** — 每次调用经过 `Prepare → Authorize → Execute`：工作区内读取默认放行，补丁与进程默认询问（`a` 单次 / `s` 本次运行 / `d` 拒绝），可配置命令允许规则。
-- **上下文** — token 预算按真实 usage 校准、工具结果裁剪、有界文本交接和带来源的真实用户原话。
-- **运行控制与工作项** — 运行中输入文本作为已保存的补充，`/pause`、`/resume`、`/cancel`、`/work` 提供可选宿主控制；工作项完成陈述与实际工具事实分开。
-- **累计预算** — 可信用户 `settings.runBudget` 限制逻辑模型请求（含摘要）与工具执行；总时长和累计 token 默认只统计，`maxWallClockSeconds`／`maxTotalTokens` 为 0 或缺省时不限，正数可分别启用。usage 缺失时明确估算，`BudgetLimitReached` 保留原因和计数。
-- **项目指令** — 按固定预算加载根／局部 `AGENTS.md`，压缩后保留当前规则，在请求、审批和派发边界重新检查；规则变化使未启动的旧计划与批准失效，项目文件不能授予权限。新 `chat` 打开、空输入或 EOF 不创建会话，首次真实发送通过规则预检后才创建。
-- **持久化** — `run` 和新会话 `chat` 共用受保护会话存储中的 `tinyharness.session-log/1` 追加日志，默认不再输出旧的全量 run snapshot/audit。历史 DTO 确定性保存 process／final 分类、有界脱敏工具输出，以及逐文件 patch 事实；工作区后来变化后仍能读取当时 diff，并区分 `confirmed` 与 `unknown`。执行意图保存失败不启动副作用；副作用结果未知时设置 NeedsInspection，模型视图回退到最近完整工具边界，未知副作用阻断写入与进程执行直到用户检查确认。历史按序号游标经共享 scanner 分页（每页最多返回 200 条 items，序列化 UTF-8 累计预算 8 MiB；扫描可读取整个捕获范围）；artifact 内容内联保存，单个上限 2 MiB、stdout/stderr 合计 4 MiB；批次上限 8 MiB，日志总量上限 256 MiB。不确定写入使 writer poison，strict 续聊读取拒绝尾部半行，历史检查可返回可靠前缀并给出 warning。会话可严格离线查看，并可在新进程经工作区/模型/协议与 opaque 完整性检查后续聊（`chat --session <id>`）。会话可能包含秘密且不被 Harness 加密；`session list` / `session show` 只输出脱敏检查视图，不展示 canonical 消息或 opaque 载荷。
-- **MCP worker** — `tinyharness mcp` 启动本机只读 stdio 服务，向 Codex 等客户端提供 `ask_glm`。
-- **Windows 沙箱** — 可选的机器级 `shell` 进程隔离，通过 `sandbox status / provision / verify` 显式管理。
+- **会话与工作区** — 单次任务、流式多轮对话、本地会话历史与跨进程续聊。
+- **文件与进程工具** — 列举文件、搜索文本、读取文件、应用补丁和运行命令，带审批、超时与有界输出。
+- **上下文与项目规则** — 加载根目录和局部 `AGENTS.md`，统计 token，自动压缩模型上下文并保留完整本地历史。
+- **模型与配置** — Provider profile、显式模型上下文窗口、环境变量或 Windows Credential Manager 密钥引用，以及离线配置检查。
+- **附加集成** — 本机只读 MCP worker，以及可选的 Windows `shell` 工具进程隔离。
 
 ## 🗺️ 限制
 
-- 中断后仍有未知副作用结果的会话，续聊时模型视图回退到最近完整工具边界，副作用工具保持阻断直到用户检查工作区并确认（恢复时的 `c` / `k` 提示）。当前仅支持 `tinyharness.session-log/1`；旧 `.session.json` 快照和独立 audit 文件不再读取，也不提供迁移命令。
-- Windows 沙箱只在单台机器上验证过，与 Codex 发布版共存未验收。
-- NativeAOT 只验证了 `win-x64`；M14.1 的 publish 和原生 smoke 已通过。本机规则 leaf／目录链接创建测试因权限跳过。协议验证基于本地模拟 SSE 服务，旧实现另有单个真实 endpoint 的历史验证。
-- M15 控制和工作项的真实模型遵循未验证；GUI 历史消费、断电持久性及新的 OS 隔离场景也未在本轮验证。已保存但未生效的补充可检查，不会在重启时自动重放。
+- 输入编辑、输出排版和运行中控制仍很简陋，没有完整 TUI、多行编辑器或供工具使用的交互式终端。
+- 模型回答、摘要和工作项状态都可能出错；应核对文件变更与实际命令结果，再判断任务是否完成。
+- **审批属于应用层策略。** 未启用可选 Windows 沙箱时，获准的进程仍可访问工作区外文件和网络。沙箱仅覆盖经它启动的 `shell` 进程，不覆盖整个 Harness 或模型请求，且需要单独配置组件和机器环境。
+- 会话原样保存对话和工具内容且不加密，可能包含秘密。续聊有严格的身份与格式检查，升级可能导致旧会话不兼容；不提供旧格式迁移。
+- NativeAOT 仅有 Windows x64 验证记录；其他平台、广泛供应商兼容性、断电持久性与全面安全性尚未验证。
 
 ## 🚀 构建与运行
 
-需要 [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0)。首次 restore 需要网络；测试和 smoke 不调用真实模型、不需要 API key。
+### 从源码构建
+
+需要 [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0)。首次 restore 需要联网；默认测试与 smoke 使用模拟模型，不需要 API key。
 
 ```powershell
 git clone https://github.com/banned2054/TinyHarness.git
@@ -70,91 +60,133 @@ dotnet test TinyHarness.Tests/TinyHarness.Tests.csproj --no-restore
 dotnet run --project TinyHarness.Cli -- smoke --config tinyharness.json
 ```
 
-仓库自带的 [tinyharness.json](../tinyharness.json) 使用占位 endpoint：smoke 的目标是由脚本模型检查并修复一个刻意损坏的 fixture，重新构建并以 `status : Completed` 结束；本次 native smoke 结果见项目状态。
+smoke 在临时工作区执行文件与进程工具链路，不测试真实供应商或 Windows 沙箱。
 
-原生发布（另需 MSVC C++ 构建工具和 Windows SDK）：
+### NativeAOT 发布
+
+Windows 上还需要 MSVC C++ 构建工具和 Windows SDK：
 
 ```powershell
-dotnet publish TinyHarness.Cli/TinyHarness.Cli.csproj -c Release -r win-x64 --self-contained true -o artifacts/nativeaot
+dotnet publish TinyHarness.Cli/TinyHarness.Cli.csproj -c Release -r win-x64 --self-contained true
 ```
 
-### 命令
+可执行文件输出到 `TinyHarness.Cli/bin/Release/net10.0/win-x64/publish/TinyHarness.exe`，原生产物运行时不需要安装 .NET runtime。可选沙箱组件另行配置。
 
-```text
-tinyharness run [--config <file>] "任务"    单任务执行（也可省略 run 直接给任务）
-tinyharness chat [--config <file>] [--session <id>]    交互式多轮会话；--session 续聊已保存会话
-tinyharness session list | show <id>         严格离线的会话查看
-tinyharness mcp                              只读 stdio MCP worker（ask_glm）
-tinyharness smoke                            离线端到端自检
-tinyharness init / config / provider / model / auth / doctor
-tinyharness sandbox status | provision | verify    Windows 沙箱管理
+如需从其他工作区使用该程序，在仓库根目录把发布目录加入当前 PowerShell 会话的 `PATH`：
+
+```powershell
+$publishDirectory = (Resolve-Path .\TinyHarness.Cli\bin\Release\net10.0\win-x64\publish).Path
+$env:PATH = "$publishDirectory;$env:PATH"
 ```
 
-`Ctrl+C` 取消当前执行；在 `chat` 中先取消当前回合，空闲时再按结束会话。退出码：`0` 完成、`1` 失败或步数／累计预算达限、`2` 缺少提示词、`130` 取消。`doctor` 默认离线，`doctor --connect` 才联网检查。完整语法见 `--help` 或 `help <命令>`。
+## 📖 使用说明
 
-`run` 和 `chat` 默认在终端同一行循环点号并更新当前请求耗时：`等待中... 12s`，
-收到推理后显示 `思考中... 23s`。逐请求诊断和 usage 明细仅保留在会话日志，回合末仍汇总用量。
-重定向输出仅在状态变化时提示一次。`--reasoning content` 在独立的“思考”区域流式展示可读文本，
-跨片段脱敏已知密钥并转义控制字符。
-内部压缩文本和 opaque 载荷不展示。该选项仅影响显示，续聊时也可重新选择。
+以下示例假设发布后的程序已加入 `PATH`。
+
+### 配置模型
+
+进入要处理的项目目录，然后运行配置向导：
+
+```powershell
+Set-Location C:\Code\YourProject
+tinyharness init
+tinyharness config show
+tinyharness doctor
+```
+
+`init` 会询问 provider profile、endpoint、API key 来源、模型 ID 和上下文窗口。endpoint 是 SDK 基地址，通常以 `/v1` 结尾，不要填写完整 `/chat/completions` 或 `/responses` URL。模型需要支持流式输出和 tool calling。新建 profile 默认使用 Chat Completions；Responses 需要显式设置 `chatApi`。
+
+密钥来源可以选择环境变量引用或 Windows Credential Manager。若选择环境变量，需要在启动 TinyHarness 的终端设置其值，例如 PowerShell 7.1+：
+
+```powershell
+$env:TINYHARNESS_API_KEY = Read-Host "API key" -MaskInput
+```
+
+用户配置位于 `%APPDATA%\tinyharness\user-config.json`，保存密钥引用而非密钥值。`TINYHARNESS_USER_CONFIG_DIR` 可覆盖该目录。`config show` 显示生效配置与来源，`doctor` 离线检查配置；`doctor --connect` 会实际请求模型，可能产生费用。
+
+配置查找顺序为：显式 `--config <文件>`、当前目录的 `tinyharness.json`、用户配置、内置默认值；这些文件不会隐式合并。**仓库自带的 `tinyharness.json` 是使用占位 endpoint 的 smoke 示例。** 实际任务请从目标项目目录启动，或显式指定配置，避免它覆盖 `init` 创建的 profile。
+
+### 开始任务或对话
+
+```powershell
+tinyharness run -- "解释这个项目的结构"
+tinyharness chat
+```
+
+`chat` 中每次提交一行作为一个用户回合，可以先讨论问题，再明确要求修改。模型请求会向配置的供应商发送对话及相关工具内容，并可能产生费用。
+
+首次交互启动时会询问工作区信任。只读工作区允许列举、搜索和读取；补丁与进程需要先信任工作区，再经过正常审批。非交互启动且没有已保存信任时保持只读。信任不等于自动批准命令，Windows 目录授权还可能单独触发 UAC。
+
+工具审批时，`a` 单次允许，`s` 允许本次运行内匹配的请求，`d` 拒绝。运行期批准不会恢复到后续回合，批准前请核对具体动作。
+
+### 思考展示与基础控制
 
 ```powershell
 tinyharness chat --reasoning content
 tinyharness run --reasoning status -- "解释这个项目"
 ```
 
-### 配置
+默认 `status` 显示等待／思考耗时；`content` 在服务提供可读推理时显示内容，仅改变展示方式。内部压缩文本和 opaque 推理载荷不会展示。逐请求计时与用量明细保留在会话日志中。
 
-首次使用不需要手工编辑 JSON。`init` 会把 provider profile、endpoint、密钥引用、模型和上下文窗口写入用户配置（Windows 为 `%APPDATA%\tinyharness\user-config.json`）。认证配置只保存密钥引用——环境变量或 Windows Credential Manager——不保存密钥本体，密钥也不会被主动注入 `chat` 会话。会话默认使用受保护存储（`%LOCALAPPDATA%\tinyharness\sessions`），可通过 `settings.sessionStoreDirectory` 或 `TINYHARNESS_SESSION_STORE_DIR` 覆盖；`config.sessionDirectory` 不是默认位置。会话为保真续聊原样保存 canonical 对话内容，粘贴进会话的文本、会话读取的文件或模型返回的内容都可能包含秘密；Harness 不加密会话文件——“受保护”的存储位置只是路径与排他写约定，不代表加密、也不承诺其他本地进程不可读写。当前仅支持 `tinyharness.session-log/1`，不读取或迁移旧持久化格式。
+`chat` 运行期间输入普通文本，会将它保存为待安全边界处理的补充。现有基础控制如下：
 
-```powershell
-dotnet run --project TinyHarness.Cli -- init
-dotnet run --project TinyHarness.Cli -- config show
-```
+| 输入 | 行为 |
+| --- | --- |
+| `/pause` | 请求在模型／工具边界暂停 |
+| `/resume` | 继续已暂停的运行 |
+| `/cancel` | 取消当前运行并等待清理 |
+| `/work` | 查看工作项陈述与未生效补充数量 |
+| `Ctrl+C` | 取消活动回合；空闲输入时退出会话 |
 
-### 连接真实模型
+这些只是有限控制，还没有通用命令系统；审批回复使用独立提示。空闲输入时可用 `/trust` 管理工作区信任。取消或重启后，已保存但未生效的补充不会自动重放。
 
-在 Git 忽略的 `artifacts/` 目录下保存一个 JSON 配置，例如 `artifacts/live.json`：
-
-```json
-{
-  "endpoint": "https://your-provider.example/v1",
-  "model": "your-tool-capable-model",
-  "chatApi": "chat-completions",
-  "apiKeyEnvironmentVariable": "TINYHARNESS_API_KEY",
-  "contextWindowTokens": 128000,
-  "workspaceRoot": "C:/Code/YourProject",
-  "commandRules": []
-}
-```
-
-`endpoint` 是 SDK 基地址（通常以 `/v1` 结尾），不要填完整的 completions URL；模型必须支持所选协议和 tool calling，`chatApi` 不根据模型名推断。
+### 查看历史与续聊
 
 ```powershell
-$env:TINYHARNESS_API_KEY = Read-Host "API key" -MaskInput    # PowerShell 7.1+
-dotnet run --project TinyHarness.Cli -- run --config artifacts/live.json "检查这个项目为什么测试失败并修复"
+tinyharness session list
+tinyharness session show <session-id>
+tinyharness chat --session <session-id>
 ```
 
-`run` 与 `chat` 会调用真实模型服务并可能产生费用；获准的工具会实际修改文件、启动进程。未指定 `--config` 时读取当前目录的 `tinyharness.json`。
+`session list` 和 `session show` 严格离线，不调用模型、不执行工具，也不读取 API key。会话默认位于 `%LOCALAPPDATA%\tinyharness\sessions`，可由 `settings.sessionStoreDirectory` 或 `TINYHARNESS_SESSION_STORE_DIR` 覆盖；旧 `sessionDirectory` 字段不决定该存储位置。
+
+续聊要求工作区、endpoint、模型、协议、当前内置提示词匹配，且已存协议内容通过校验。中断工具的副作用不确定时，写入和进程执行保持阻断，直到用户检查并确认。不要把原始会话文件当普通日志分享：检查输出会脱敏，但存储的对话内容不加密，也不做通用脱敏。
+
+### 配置、预算与集成
+
+完整语法见 `tinyharness help <命令>`：
+
+| 命令 | 用途 |
+| --- | --- |
+| `provider list / add / use` | 管理 provider profile |
+| `model list / add / use` | 管理显式配置的模型及上下文窗口 |
+| `auth set <profile>` | 设置 profile 的密钥引用 |
+| `config show / set` | 查看配置来源或调整支持的用户默认值 |
+| `mcp` | 通过 stdio 提供只读 `ask_glm` worker |
+| `sandbox status / provision / verify` | 检查、配置或验证可选 Windows 沙箱 |
+
+`maxAgentSteps` 默认 `0`，表示不限普通步数。可信用户 `settings.runBudget` 默认每次运行最多 128 次逻辑模型请求（含压缩）和 256 次工具执行。累计 token 和总时长默认只统计、不设限（`maxTotalTokens`／`maxWallClockSeconds` 为 `0`），正数可启用相应上限；单工具超时与取消仍有效。详细契约见[运行预算](task-control-design.md)。
+
+MCP worker 使用用户配置，将获准读取的工作区内容发送给模型，但不能写文件或执行命令；它是 MCP server，不是连接外部工具的 client。`sandbox provision` 会提权修改机器账户、ACL 与网络规则，`sandbox verify` 会执行真实隔离检查；使用前请阅读[沙箱配置与验收说明](windows-sandbox-management.md)。
+
+<a id="platform-status"></a>
 
 ## 🖥️ 平台状态
 
 | 平台 | 状态 |
 | --- | --- |
-| Windows x64 | 主要开发平台；本地统一验收完成：离线回归、scale、`win-x64` NativeAOT 发布与原生 smoke |
-| 其他 RID | 尚未验证 |
+| Windows x64 | 主要开发与原型使用平台，已有 NativeAOT 和限定范围的真实使用／隔离记录 |
+| 其他 RID | 尚未完成分发或日常使用验证 |
 
 ## 📚 文档
 
-- [PLAN.md](../PLAN.md) — 当前产品范围与 M12+ 路线
-- [PAST_PLAN.md](../PAST_PLAN.md) — 归档的 MVP 与 M1–M11 计划
-- [会话持久化设计](session-persistence-design.md) — 当前契约与本地验收矩阵
-- [任务控制与运行预算](task-control-design.md) — M15 契约、兼容与本地验收
-- [Windows 沙箱管理与验收记录](windows-sandbox-management.md)
-- [Windows 沙箱接入方案](windows-sandbox-dotnet-integration.md)
-- [M9 验证记录](m9-demo.md)、[M10 验证记录](m10-model-protocol.md)
-- [AGENTS.md](../AGENTS.md) — 仓库开发规则
+- [会话持久化](session-persistence-design.md)、[项目规则](project-instructions-design.md)、[行为提示词](system-prompt-design.md)与[上下文压缩](context-compaction-design.md)：契约和验证记录。
+- [任务控制与预算](task-control-design.md)、[交付证据](m16-verification.md)。
+- [Windows 沙箱管理](windows-sandbox-management.md)：配置前提、范围和限制。
+- [当前接力入口](current-progress.md)：当前工作与历史本机证据。
+- [历史计划](../PAST_PLAN.md)：MVP 至 M17 的归档记录；[PLAN.md](../PLAN.md) 暂作归档入口，当前没有制定新的总路线。
+- [AGENTS.md](../AGENTS.md)：仓库开发规则。
 
 ## 🤝 参与贡献
 
-欢迎聚焦的 issue 和 PR。默认测试保持离线、不依赖 API key，并区分已实现与未验证的行为；工作规则见 [AGENTS.md](../AGENTS.md)。
+欢迎聚焦的问题反馈与修复，请附复现步骤、相关命令和脱敏输出。默认测试保持离线，并区分已验证结果与推测；仓库工作规则见 [AGENTS.md](../AGENTS.md)。

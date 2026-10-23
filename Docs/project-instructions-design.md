@@ -8,7 +8,7 @@
 
 - 源码核查基线：TinyHarness `10a697ab26967cdf2d4a1196e7f88de892f8738b`，核查时工作区干净。
 - 本地参考：`C:\Code\Rust\codex`，HEAD `1343180d6c83a7d58e20dc4394678570aabde79a`；结论来自该 checkout 的源码阅读，不代表在线最新版或运行验证。
-- [PLAN.md](../PLAN.md) 决定全局范围和顺序；本文细化其 §8.1。已有日志、协议和中断契约继续以[会话持久化设计](session-persistence-design.md)为准；[AGENTS.md](../AGENTS.md)规定工作授权。
+- 本文细化[归档阶段计划 §8.1](../PAST_PLAN.md#81-仓库指令加载)，原阶段计划已收口。已有日志、协议和中断契约继续以[会话持久化设计](session-persistence-design.md)为准；[AGENTS.md](../AGENTS.md)规定工作授权，新任务范围以用户当前要求及对应设计为准。
 - 本阶段只实现项目指令能力。用户后续确认 M14.2 聚焦[基础系统提示词](system-prompt-design.md)，不引入 Analyze / Implement 切换；任务中补充输入属于 M15，Git 差异与完整交付报告属于 M16，均不借本设计提前实现。
 
 阅读顺序：§2–§3 保留实施前源码核查与设计依据，§4–§13 定义契约和验收要求，§14 记录实际实施与本地证据。拟议名称与实际 API 的差异以 §14 为准，不把历史缺口当作当前缺陷。
