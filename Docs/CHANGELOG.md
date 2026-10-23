@@ -14,11 +14,13 @@ All notable changes to TinyHarness.NET are documented here, with matching Simpli
 
 [简体中文](#简体中文-v001) | [English](#english-v001)
 
-Release Date / 发布日期：Unreleased / 待发布
+Release Date / 发布日期：2026-10-23
+
+[Download / 下载 v0.0.1](https://github.com/banned2054/TinyHarness/releases/tag/v0.0.1)
 
 ### 简体中文 v0.0.1
 
-这是 TinyHarness.NET 的首个原型版本，汇集从基础执行循环到多轮会话的初始能力。基础任务已能用于实际尝试，仍在根据使用反馈修复细节，适合体验与反馈。
+这是 TinyHarness.NET 的首次公开发布，汇集从基础执行循环到多轮会话的初始能力。项目仍处于早期原型阶段，基础任务已能用于实际尝试，仍在根据使用反馈修复细节，适合体验与反馈。
 
 #### ✨ 新增
 
@@ -35,8 +37,10 @@ Release Date / 发布日期：Unreleased / 待发布
 #### 📦 构建与分发
 
 - 配置 GitHub Actions 构建 TinyHarness NativeAOT 与固定 commit 的 Codex fork 沙箱组件，整理 Windows x64 ZIP。
-- 包内包含主程序、沙箱 setup／runner／managed-deny-probe、独立双语使用说明、沙箱配置示例、构建来源与文件哈希，以及 fork 的 LICENSE／NOTICE。
+- 包内包含主程序、沙箱 setup／runner／managed-deny-probe、独立双语使用说明、沙箱配置示例、构建来源与文件哈希，以及 `LICENSE`、`NOTICE` 和 `THIRD-PARTY-LICENSES.txt`。
+- 项目采用 Apache-2.0；第三方许可按分发范围整理，合并相同条款并保留适用版权、归属与特殊声明。
 - 手动 workflow 运行上传构建 artifact；匹配项目版本的 `v*` tag 构建通过后创建 Draft + Prerelease，不自动公开。
+- `v0.0.1` 按正式 Release 发布；公开前核对构建结果和分发包，再取消草稿与预发布标记。
 - 提供中英文 README、使用说明和[打包文档](releasing.md)，原阶段计划统一并入[历史计划](../PAST_PLAN.md)。
 
 #### 🧪 测试
@@ -53,7 +57,7 @@ Release Date / 发布日期：Unreleased / 待发布
 
 ### English v0.0.1
 
-This is the first TinyHarness.NET prototype, bringing together the initial execution loop and multi-turn session capabilities. Basic tasks can be tried in real work, with practical issues still being fixed through use and feedback. It is intended for experimentation and feedback.
+This is the first public release of TinyHarness.NET, bringing together the initial execution loop and multi-turn session capabilities. The project remains an early prototype. Basic tasks can be tried in real work, with practical issues still being fixed through use and feedback. It is intended for experimentation and feedback.
 
 #### ✨ Added
 
@@ -70,8 +74,10 @@ This is the first TinyHarness.NET prototype, bringing together the initial execu
 #### 📦 Build and Distribution
 
 - A GitHub Actions workflow configured to build TinyHarness NativeAOT and the sandbox components from a pinned Codex-fork commit, then assemble a Windows x64 ZIP.
-- A package containing the main executable, sandbox setup/runner/managed-deny-probe, standalone bilingual instructions, a sandbox configuration example, build provenance and file hashes, and the fork's LICENSE/NOTICE.
+- A package containing the main executable, sandbox setup/runner/managed-deny-probe, standalone bilingual instructions, a sandbox configuration example, build provenance and file hashes, plus `LICENSE`, `NOTICE`, and `THIRD-PARTY-LICENSES.txt`.
+- Apache-2.0 licensing for the project, with third-party terms scoped to the distribution, identical terms deduplicated, and applicable copyrights, attribution, and special notices retained.
 - Manual workflow runs upload build artifacts; successful builds for `v*` tags matching the project version create a Draft + Prerelease without automatically publishing it.
+- `v0.0.1` is published as a regular release; build results and distribution files are checked before removing the draft and prerelease flags.
 - English and Chinese READMEs, usage instructions, and [packaging documentation](releasing.md); the previous milestone plans are consolidated in the [historical plan archive](../PAST_PLAN.md).
 
 #### 🧪 Tests

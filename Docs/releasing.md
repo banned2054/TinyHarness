@@ -49,4 +49,4 @@ ZIP 内包含 `TinyHarness.exe`、`sandbox/` 下的 setup／runner／managed-den
 
 独立 `draft-release` job 仅在版本 tag push 且构建成功时运行，使用 `contents: write` 与当前 run 的 `actions: read`，不检出或执行源码。它下载已验证 artifact、核对 ZIP checksum，再用 `gh release create --verify-tag --draft --prerelease` 创建草稿，不隐式创建 tag。
 
-第一次使用先手动构建，下载 ZIP 检查目录、版本和说明，在获授权的环境验证实际使用，再决定 tag 和公开发布。workflow YAML 的本地静态检查不能代替 GitHub runner 的首次实际执行。
+公开正式 Release 前，核对 tag 指向本次发布提交、对应 run 成功、ZIP 校验和、包内版本与 build-info.json 的来源记录，以及随附的三份许可文件。Release 正文使用当前版本的中英文 CHANGELOG，并附构建来源。完成核对后按用户授权取消 draft 和 prerelease 标记，再确认 Release 页面与资产可访问。workflow YAML 的本地静态检查不能代替 GitHub runner 的实际执行。

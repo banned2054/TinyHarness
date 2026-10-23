@@ -1,4 +1,4 @@
-TinyHarness.NET - prototype preview / 原型预览
+TinyHarness.NET 0.0.1 - initial release / 首次发布
 
 English
 -------

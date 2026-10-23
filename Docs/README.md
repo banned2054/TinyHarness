@@ -7,7 +7,7 @@
 <br>
 
 <div>
-    <a href="#-项目状态"><img alt="版本 0.0.1 原型" src="https://img.shields.io/badge/version-0.0.1-blue"></a>
+    <a href="https://github.com/banned2054/TinyHarness/releases/tag/v0.0.1"><img alt="版本 0.0.1" src="https://img.shields.io/badge/version-0.0.1-blue"></a>
     <a href="https://dotnet.microsoft.com/"><img alt=".NET 10" src="https://img.shields.io/badge/.NET-10.0-512BD4"></a>
     <a href="#platform-status"><img alt="NativeAOT win-x64" src="https://img.shields.io/badge/NativeAOT-win--x64-009688"></a>
 </div>
@@ -26,7 +26,7 @@
 
 ## 🚧 项目状态
 
-**0.0.1 定位为第一个原型预览版。** 基础任务可以跑通，项目已在实际使用中发现和修复问题，目前仍很粗糙，适合尝试与反馈。
+**0.0.1 是首次公开发布。** 项目仍处于早期原型阶段：基础任务可以跑通，仍在根据实际使用与反馈修复问题。
 
 终端界面尚未完善：权限请求、AI 回复与用户输入缺乏清晰区分。命令、配置和会话格式仍可能变化。已有测试和有限的实际使用记录不代表生产可用，也不代表完成了全面安全审查。
 
@@ -47,6 +47,12 @@
 - NativeAOT 仅有 Windows x64 验证记录；其他平台、广泛供应商兼容性、断电持久性与全面安全性尚未验证。
 
 ## 🚀 构建与运行
+
+### 下载 Windows x64 版本
+
+从 [Release v0.0.1](https://github.com/banned2054/TinyHarness/releases/tag/v0.0.1) 下载 `TinyHarness-0.0.1-win-x64.zip` 和 `SHA256SUMS.txt`。核对 ZIP 的 SHA-256 后，完整解压到目标工作区及沙箱写根之外的固定目录，保留 `TinyHarness.exe` 同目录下的 `sandbox/`、`LICENSE`、`NOTICE` 和 `THIRD-PARTY-LICENSES.txt`。
+
+包内已附带三个匹配的沙箱组件，运行主程序无需安装 .NET runtime。将解压目录加入 `PATH`，在目标项目中打开终端，运行 `tinyharness init`；模型配置和命令见[使用说明](#-使用说明)。可选沙箱仍需单独配置组件路径并明确初始化，解压本身不会修改机器环境。
 
 ### 从源码构建
 
@@ -83,7 +89,7 @@ $env:PATH = "$publishDirectory;$env:PATH"
 
 可选 Windows 工具进程沙箱使用 [banned2054/codex](https://github.com/banned2054/codex) 构建的组件，这是本项目对 [OpenAI Codex](https://github.com/openai/codex) 的 fork。fork 为 TinyHarness 隔离了机器级命名，并包含对应的网络隔离改动。TinyHarness 的 C# Runtime 直接编排这些组件，不需要运行 Codex CLI 或 Codex Agent。
 
-日常运行使用 `codex-windows-sandbox-setup.exe` 与 `codex-command-runner.exe`。请从该 fork 构建匹配组件，并在用户配置 `settings.windowsSandbox.setupExecutablePath` 和 `runnerExecutablePath` 中设置绝对路径；`dotnet publish` 不会生成或自动下载它们。构建与接入细节见[组件构建说明](windows-sandbox-dotnet-integration.md#构建产物已在本机构建验证)，配置和验收范围见[沙箱管理说明](windows-sandbox-management.md)。
+日常运行使用 `codex-windows-sandbox-setup.exe` 与 `codex-command-runner.exe`。可使用 Release ZIP 中的匹配组件，或从该 fork 自行构建，并在用户配置 `settings.windowsSandbox.setupExecutablePath` 和 `runnerExecutablePath` 中设置绝对路径；`dotnet publish` 不会生成或自动下载它们。构建与接入细节见[组件构建说明](windows-sandbox-dotnet-integration.md#构建产物已在本机构建验证)，配置和验收范围见[沙箱管理说明](windows-sandbox-management.md)。
 
 ## 📖 使用说明
 

@@ -7,7 +7,7 @@
 <br>
 
 <div>
-    <a href="#-project-status"><img alt="Version 0.0.1 prototype" src="https://img.shields.io/badge/version-0.0.1-blue"></a>
+    <a href="https://github.com/banned2054/TinyHarness/releases/tag/v0.0.1"><img alt="Version 0.0.1" src="https://img.shields.io/badge/version-0.0.1-blue"></a>
     <a href="https://dotnet.microsoft.com/"><img alt=".NET 10" src="https://img.shields.io/badge/.NET-10.0-512BD4"></a>
     <a href="#platform-status"><img alt="NativeAOT win-x64" src="https://img.shields.io/badge/NativeAOT-win--x64-009688"></a>
 </div>
@@ -26,7 +26,7 @@ It connects a language model to a local workspace so you can discuss code, inspe
 
 ## 🚧 Project Status
 
-**0.0.1 is the first prototype preview.** Basic tasks can run, and the project is being used to find and fix practical problems. It remains rough and is intended for experimentation and feedback.
+**0.0.1 is the first public release.** The project remains an early prototype: basic tasks can run, and practical issues are still being fixed through use and feedback.
 
 The terminal interface is unfinished: permission requests, AI replies, and user input are not clearly separated. Commands, configuration, and session formats may change. Existing tests and limited real-use checks do not establish production readiness or a comprehensive security review.
 
@@ -47,6 +47,12 @@ The terminal interface is unfinished: permission requests, AI replies, and user 
 - Windows x64 is the only platform with recorded NativeAOT validation. Other platforms, broader provider compatibility, power-loss durability, and comprehensive security remain unverified.
 
 ## 🚀 Build and Run
+
+### Download Windows x64
+
+Download `TinyHarness-0.0.1-win-x64.zip` and `SHA256SUMS.txt` from [Release v0.0.1](https://github.com/banned2054/TinyHarness/releases/tag/v0.0.1). Verify the ZIP's SHA-256, then extract the entire directory to a stable location outside your target workspace and sandbox write roots. Keep `sandbox/`, `LICENSE`, `NOTICE`, and `THIRD-PARTY-LICENSES.txt` beside `TinyHarness.exe`.
+
+The package includes the three matching sandbox components and does not require the .NET runtime. Add the extracted directory to `PATH`, open a terminal in your target project, and run `tinyharness init`. See [Usage](#-usage) for model configuration and commands. Enabling the optional sandbox requires separately configured component paths and explicit provisioning; extraction alone does not change machine settings.
 
 ### Build from source
 
@@ -83,7 +89,7 @@ $env:PATH = "$publishDirectory;$env:PATH"
 
 The optional Windows tool-process sandbox uses components built from [banned2054/codex](https://github.com/banned2054/codex), this project's fork of [OpenAI Codex](https://github.com/openai/codex). The fork gives TinyHarness its own machine-level identifiers and includes its network-isolation changes. TinyHarness's C# runtime directly orchestrates these components; running the Codex CLI or agent is not required.
 
-The two runtime components are `codex-windows-sandbox-setup.exe` and `codex-command-runner.exe`. Build the matching components from the fork and configure their absolute paths in user `settings.windowsSandbox.setupExecutablePath` and `runnerExecutablePath`. They are not produced or automatically downloaded by `dotnet publish`. See the [component build and integration instructions](Docs/windows-sandbox-dotnet-integration.md#构建产物已在本机构建验证) and [sandbox management guide](Docs/windows-sandbox-management.md) for setup and validation scope.
+The two runtime components are `codex-windows-sandbox-setup.exe` and `codex-command-runner.exe`. Use the matching components included in the release ZIP, or build them from the fork, and configure their absolute paths in user `settings.windowsSandbox.setupExecutablePath` and `runnerExecutablePath`. They are not produced or automatically downloaded by `dotnet publish`. See the [component build and integration instructions](Docs/windows-sandbox-dotnet-integration.md#构建产物已在本机构建验证) and [sandbox management guide](Docs/windows-sandbox-management.md) for setup and validation scope.
 
 ## 📖 Usage
 
