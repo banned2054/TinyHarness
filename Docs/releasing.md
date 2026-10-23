@@ -35,7 +35,7 @@ Actions artifact 名为 `TinyHarness-<Version>-win-x64`，包含：
 - `SHA256SUMS.txt`：ZIP 的 SHA-256，Release job 下载后再次校验。
 - `RELEASE_NOTES.md`：版本、来源和验证范围，供草稿使用。
 
-ZIP 内包含 `TinyHarness.exe`、`sandbox/` 下的 setup／runner／managed-deny-probe、双语独立 `README.txt`、配置片段示例、`build-info.json`，以及 fork 的 LICENSE／NOTICE。仅拷贝明确列出的文件，不打包源树、用户配置、凭据、会话日志、PDB 或整个 Cargo target 目录。deny-probe 与 runner 同目录，以便用户另行选择 `sandbox verify`。
+ZIP 内包含 `TinyHarness.exe`、`sandbox/` 下的 setup／runner／managed-deny-probe、双语独立 `README.txt`、配置片段示例、`build-info.json`，以及根目录的三份许可材料：`LICENSE`（项目采用的 Apache-2.0 全文）、`NOTICE`（项目归属及继承的 Codex 声明）、`THIRD-PARTY-LICENSES.txt`（合并后的第三方版权、许可正文和特殊声明）。许可维护范围见[第三方声明说明](third-party-notices.md)。仅拷贝明确列出的文件，不打包源树、用户配置、凭据、会话日志、PDB 或整个 Cargo target 目录。deny-probe 与 runner 同目录，以便用户另行选择 `sandbox verify`。
 
 `build-info.json` 记录两个仓库的 commit、SDK／Rust／Cargo 版本、构建链接和文件哈希；自身不加入内部文件哈希表，整个 ZIP 由外部校验文件覆盖。源 commit 固定不表示 ZIP 字节级可复现，SDK patch、runner 镜像和时间戳仍可能变化。
 

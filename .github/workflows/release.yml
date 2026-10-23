@@ -144,15 +144,14 @@ jobs:
                   $packageRoot = Join-Path $env:RUNNER_TEMP "package/$env:PACKAGE_NAME"
                   $dist = Join-Path $env:RUNNER_TEMP 'dist'
                   if (Test-Path -LiteralPath $packageRoot) { throw 'Package staging directory already exists.' }
-                  New-Item -ItemType Directory -Path "$packageRoot/sandbox", "$packageRoot/licenses", $dist | Out-Null
+                  New-Item -ItemType Directory -Path "$packageRoot/sandbox", $dist | Out-Null
                   Copy-Item -LiteralPath "$env:RUNNER_TEMP/native/TinyHarness.exe" -Destination $packageRoot
                   $sandboxOutput = Join-Path $env:CARGO_TARGET_DIR 'x86_64-pc-windows-msvc/release'
                   foreach ($component in @('codex-windows-sandbox-setup.exe', 'codex-command-runner.exe', 'codex-windows-managed-deny-probe.exe')) {
                     Copy-Item -LiteralPath (Join-Path $sandboxOutput $component) -Destination "$packageRoot/sandbox"
                   }
                   Copy-Item -LiteralPath .github/package-assets/README.txt, .github/package-assets/sandbox-settings.example.json -Destination $packageRoot
-                  Copy-Item -LiteralPath ../codex/LICENSE -Destination "$packageRoot/licenses/Codex-LICENSE.txt"
-                  Copy-Item -LiteralPath ../codex/NOTICE -Destination "$packageRoot/licenses/Codex-NOTICE.txt"
+                  Copy-Item -LiteralPath LICENSE, NOTICE, THIRD-PARTY-LICENSES.txt -Destination $packageRoot
                   $productVersion = [Diagnostics.FileVersionInfo]::GetVersionInfo("$packageRoot/TinyHarness.exe").ProductVersion
                   if ($productVersion.Split('+')[0] -cne $env:RELEASE_VERSION) {
                     throw "Native executable version '$productVersion' does not match '$env:RELEASE_VERSION'."

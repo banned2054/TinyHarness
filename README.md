@@ -186,6 +186,7 @@ The MCP worker uses user configuration and sends permitted workspace content to 
 
 ## 📚 Documentation
 
+- [License](LICENSE) — Apache-2.0; [NOTICE](NOTICE) and [third-party licenses](THIRD-PARTY-LICENSES.txt) retain dependency attribution and terms. See the [maintenance notes](Docs/third-party-notices.md).
 - [Changelog](Docs/CHANGELOG.md) — bilingual release notes and known limitations.
 - [Session persistence](Docs/session-persistence-design.md), [project rules](Docs/project-instructions-design.md), [behavior prompt](Docs/system-prompt-design.md), and [context compaction](Docs/context-compaction-design.md) — contracts and validation records, mainly in Chinese.
 - [Run control and budgets](Docs/task-control-design.md) and [delivery evidence](Docs/m16-verification.md).

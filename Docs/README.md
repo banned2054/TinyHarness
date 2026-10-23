@@ -186,6 +186,7 @@ MCP worker 使用用户配置，将获准读取的工作区内容发送给模型
 
 ## 📚 文档
 
+- [许可证](../LICENSE)：项目采用 Apache-2.0；[NOTICE](../NOTICE) 与[第三方许可](../THIRD-PARTY-LICENSES.txt)保留组件归属和条款。更新方式见[维护说明](third-party-notices.md)。
 - [更新日志](CHANGELOG.md)：中英文版本说明与已知限制。
 - [会话持久化](session-persistence-design.md)、[项目规则](project-instructions-design.md)、[行为提示词](system-prompt-design.md)与[上下文压缩](context-compaction-design.md)：契约和验证记录。
 - [任务控制与预算](task-control-design.md)、[交付证据](m16-verification.md)。

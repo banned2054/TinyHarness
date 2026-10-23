@@ -6,12 +6,14 @@ This Windows x64 package contains TinyHarness.exe (NativeAOT) and three Windows
 sandbox components built from https://github.com/banned2054/codex, a fork of
 https://github.com/openai/codex. The .NET runtime and the full Codex CLI are not
 required to launch TinyHarness. Tools you ask it to run still need to be installed.
-Sandbox source attribution is in licenses/. build-info.json records both source
-commits, toolchains, and packaged file hashes. Verify the ZIP with SHA256SUMS.txt.
+TinyHarness.NET is licensed under Apache-2.0; see LICENSE. Third-party attribution
+and terms are in NOTICE and THIRD-PARTY-LICENSES.txt. build-info.json records both
+source commits, toolchains, and packaged file hashes. Verify the ZIP with SHA256SUMS.txt.
 
 Basic use
 1. Extract the whole directory to a stable location outside your target workspace
-   and any sandbox write roots. Keep sandbox/ and licenses/ beside TinyHarness.exe.
+   and any sandbox write roots. Keep sandbox/, LICENSE, NOTICE and
+   THIRD-PARTY-LICENSES.txt beside TinyHarness.exe.
 2. Add the extracted directory to PATH, then open PowerShell in the target project.
    Without PATH, invoke TinyHarness.exe by its full path, keeping the target project
    as the current working directory. The command is tinyharness, without a hyphen.
@@ -65,11 +67,13 @@ Source and full documentation: https://github.com/banned2054/TinyHarness
 --------
 本包适用于 Windows x64，包含 NativeAOT 的 TinyHarness.exe，以及来自
 banned2054/codex fork 的三个沙箱组件；运行主程序不需要 .NET runtime 或完整
-Codex CLI。Agent 调用的开发工具仍需自行安装。来源和许可材料在 licenses/，
-构建来源与文件哈希在 build-info.json，ZIP 校验文件为 SHA256SUMS.txt。
+Codex CLI。Agent 调用的开发工具仍需自行安装。项目采用 Apache-2.0，见 LICENSE；
+第三方归属和条款见 NOTICE 与 THIRD-PARTY-LICENSES.txt。构建来源与文件哈希在
+build-info.json，ZIP 校验文件为 SHA256SUMS.txt。
 
 首次使用
-1. 完整解压到目标工作区和沙箱写根之外的固定目录，保留 sandbox/、licenses/。
+1. 完整解压到目标工作区和沙箱写根之外的固定目录，保留 sandbox/ 及
+   LICENSE、NOTICE、THIRD-PARTY-LICENSES.txt。
 2. 把解压目录加入 PATH，再进入要处理的项目目录；也可保持项目为当前目录，
    使用 TinyHarness.exe 的绝对路径启动。命令写作 tinyharness，不带连字符。
 3. 运行 tinyharness init，配置服务、密钥引用、模型与上下文窗口。选择环境变量

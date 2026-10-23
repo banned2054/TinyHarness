@@ -1,0 +1,17 @@
+TinyHarness.NET
+Copyright 2026 TinyHarness.NET contributors
+
+Licensed under the Apache License, Version 2.0; see LICENSE.
+Third-party components retain their respective copyrights and licenses.
+Their copyright notices, license texts and exceptions are collected in
+THIRD-PARTY-LICENSES.txt.
+
+Windows sandbox components are built from https://github.com/banned2054/codex,
+a fork of https://github.com/openai/codex, at commit
+1b647eac0adc5f31140340ffcc5d49b19a235fad. The fork includes TinyHarness-specific
+machine identifiers and network-isolation changes.
+
+Applicable attribution from the upstream Codex NOTICE:
+-----------------------------------------------------
+OpenAI Codex
+Copyright 2025 OpenAI
