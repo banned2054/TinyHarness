@@ -5,10 +5,10 @@
 ## 触发方式
 
 - `workflow_dispatch`：手动选择 TinyHarness 的 ref，只构建并上传 Actions artifact，不创建 Release。
-- 推送 `v*` tag：先校验 tag 必须精确等于 CLI／Core 的 `Version` 加 `v` 前缀，例如 `v0.0.1`。全部构建和验证通过后，将同一批 ZIP 与校验文件附到 **Draft + Prerelease**，不会自动公开。
-- 普通分支 push 和 PR 不触发此发布工作流。已有同名 Release 时创建会失败，不覆盖资产或修改已发布内容。
+- `release.published`：由用户自行创建并发布 Release（正式版或预发布版）；仅处理 tag 以 `v` 开头的版本。先校验 tag 必须精确等于 CLI／Core 的 `Version` 加 `v` 前缀，例如 `v0.0.1`。全部构建和验证通过后，将 ZIP 与校验文件上传到触发本轮的现有 Release。
+- 保存 Release 草稿、单独推送 tag、普通分支 push 和 PR 不触发此发布工作流。Action 不创建 Release，不修改其标题、正文或预发布标记，也不覆盖同名附件。
 
-创建 tag、推送 tag、运行工作流及公开草稿分别属于实际操作，本文不自动执行这些步骤。
+创建 tag、推送 tag、手动运行工作流及发布 Release 分别属于实际操作，本文不自动执行这些步骤。发布 Release 会触发构建和附件上传；构建完成前，公开页面尚无本轮生成的分发附件。
 
 ## 构建来源与验证
 
@@ -33,7 +33,7 @@ Actions artifact 名为 `TinyHarness-<Version>-win-x64`，包含：
 
 - `TinyHarness-<Version>-win-x64.zip`：带同名顶层目录。
 - `SHA256SUMS.txt`：ZIP 的 SHA-256，Release job 下载后再次校验。
-- `RELEASE_NOTES.md`：版本、来源和验证范围，供草稿使用。
+- `RELEASE_NOTES.md`：版本、来源和验证范围，保留在 Actions artifact 中供参考，不覆盖用户填写的 Release 正文。
 
 ZIP 内包含 `TinyHarness.exe`、`sandbox/` 下的 setup／runner／managed-deny-probe、双语独立 `README.txt`、配置片段示例、`build-info.json`，以及根目录的三份许可材料：`LICENSE`（项目采用的 Apache-2.0 全文）、`NOTICE`（项目归属及继承的 Codex 声明）、`THIRD-PARTY-LICENSES.txt`（合并后的第三方版权、许可正文和特殊声明）。许可维护范围见[第三方声明说明](third-party-notices.md)。仅拷贝明确列出的文件，不打包源树、用户配置、凭据、会话日志、PDB 或整个 Cargo target 目录。deny-probe 与 runner 同目录，以便用户另行选择 `sandbox verify`。
 
@@ -45,8 +45,8 @@ ZIP 内包含 `TinyHarness.exe`、`sandbox/` 下的 setup／runner／managed-den
 
 解压不启用沙箱，不自动初始化或修改机器。用户选择沙箱后自行核对 `sandbox status`、明确执行 `sandbox provision` 并确认 UAC。严格模式和 TCP 环回模式的选择及副作用见[沙箱管理](windows-sandbox-management.md)。
 
-## Release 草稿
+## Release 附件上传
 
-独立 `draft-release` job 仅在版本 tag push 且构建成功时运行，使用 `contents: write` 与当前 run 的 `actions: read`，不检出或执行源码。它下载已验证 artifact、核对 ZIP checksum，再用 `gh release create --verify-tag --draft --prerelease` 创建草稿，不隐式创建 tag。
+独立 `upload-release-assets` job 仅在 `v` 开头的 Release 发布且构建成功时运行，使用 `contents: write` 与当前 run 的 `actions: read`，不检出或执行源码。它下载已验证 artifact、核对 ZIP checksum，确认对应 Release 仍存在且已发布，再用 `gh release upload` 上传 ZIP 和 `SHA256SUMS.txt`。没有创建 Release 或 tag 的步骤，也不使用 `--clobber`；同名附件冲突时失败，不删除或替换已有附件。
 
-公开正式 Release 前，核对 tag 指向本次发布提交、对应 run 成功、ZIP 校验和、包内版本与 build-info.json 的来源记录，以及随附的三份许可文件。Release 正文使用当前版本的中英文 CHANGELOG，并附构建来源。完成核对后按用户授权取消 draft 和 prerelease 标记，再确认 Release 页面与资产可访问。workflow YAML 的本地静态检查不能代替 GitHub runner 的实际执行。
+发布前核对 tag 指向预期提交，并由用户填写标题、正文和是否为预发布版；正文可使用当前版本的中英文 CHANGELOG。发布后等待对应 run 成功，再核对 Release 附件、ZIP 校验和、包内版本与 build-info.json 的来源记录，以及随附的三份许可文件。构建或上传失败时 Release 仍保持用户发布时的状态，应检查日志；手动 `workflow_dispatch` 仅生成 artifact，不向既有 Release 补传附件。workflow YAML 的本地静态检查不能代替 GitHub runner 的实际执行。

@@ -2,9 +2,8 @@ name: Package Windows x64
 
 on:
     workflow_dispatch:
-    push:
-        tags:
-            - "v*"
+    release:
+        types: [published]
 
 permissions:
     contents: read
@@ -22,6 +21,7 @@ env:
 jobs:
     build:
         name: Build, verify, and package
+        if: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.event.release.tag_name, 'v') }}
         runs-on: windows-2025
         timeout-minutes: 90
         defaults:
@@ -236,10 +236,10 @@ jobs:
                   if-no-files-found: ignore
                   retention-days: 14
 
-    draft-release:
-        name: Create a prerelease draft for the tag
+    upload-release-assets:
+        name: Upload assets to the published release
         needs: build
-        if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
+        if: ${{ github.event_name == 'release' && github.event.action == 'published' && startsWith(github.event.release.tag_name, 'v') }}
         runs-on: ubuntu-latest
         timeout-minutes: 10
         permissions:
@@ -252,18 +252,19 @@ jobs:
                   name: ${{ needs.build.outputs.package_name }}
                   path: dist
 
-            - name: Check checksum and create an unpublished release
+            - name: Check checksum and upload to the existing release
               shell: bash
               working-directory: dist
               env:
                   GH_TOKEN: ${{ github.token }}
                   GH_REPO: ${{ github.repository }}
-                  RELEASE_TAG: ${{ github.ref_name }}
-                  RELEASE_VERSION: ${{ needs.build.outputs.version }}
+                  RELEASE_TAG: ${{ github.event.release.tag_name }}
                   PACKAGE_NAME: ${{ needs.build.outputs.package_name }}
               run: |
                   set -euo pipefail
                   sha256sum --check SHA256SUMS.txt
-                  gh release create "$RELEASE_TAG" "$PACKAGE_NAME.zip" SHA256SUMS.txt \
-                    --repo "$GH_REPO" --verify-tag --draft --prerelease \
-                    --title "TinyHarness $RELEASE_VERSION" --notes-file RELEASE_NOTES.md
+                  if [ "$(gh release view "$RELEASE_TAG" --repo "$GH_REPO" --json isDraft --jq '.isDraft')" != 'false' ]; then
+                    echo 'The release must exist and be published before uploading assets.' >&2
+                    exit 1
+                  fi
+                  gh release upload "$RELEASE_TAG" "$PACKAGE_NAME.zip" SHA256SUMS.txt --repo "$GH_REPO"

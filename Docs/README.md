@@ -197,7 +197,7 @@ MCP worker 使用用户配置，将获准读取的工作区内容发送给模型
 - [会话持久化](session-persistence-design.md)、[项目规则](project-instructions-design.md)、[行为提示词](system-prompt-design.md)与[上下文压缩](context-compaction-design.md)：契约和验证记录。
 - [任务控制与预算](task-control-design.md)、[交付证据](m16-verification.md)。
 - [Windows 沙箱管理](windows-sandbox-management.md)：配置前提、范围和限制。
-- [打包与发布](releasing.md)：GitHub Actions 构建、固定沙箱来源、ZIP 结构和 Release 草稿。
+- [打包与发布](releasing.md)：GitHub Actions 构建、固定沙箱来源、ZIP 结构和用户发布 Release 后的附件上传。
 - [当前接力入口](current-progress.md)：当前工作与历史本机证据。
 - [历史计划](../PAST_PLAN.md)：MVP 至 M17 的归档记录；[PLAN.md](../PLAN.md) 暂作归档入口，当前没有制定新的总路线。
 - [AGENTS.md](../AGENTS.md)：仓库开发规则。

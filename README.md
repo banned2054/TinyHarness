@@ -197,7 +197,7 @@ The MCP worker uses user configuration and sends permitted workspace content to 
 - [Session persistence](Docs/session-persistence-design.md), [project rules](Docs/project-instructions-design.md), [behavior prompt](Docs/system-prompt-design.md), and [context compaction](Docs/context-compaction-design.md) — contracts and validation records, mainly in Chinese.
 - [Run control and budgets](Docs/task-control-design.md) and [delivery evidence](Docs/m16-verification.md).
 - [Windows sandbox management](Docs/windows-sandbox-management.md) — setup requirements, scope, and limitations.
-- [Release packaging](Docs/releasing.md) — GitHub Actions builds, pinned sandbox source, ZIP layout, and draft releases (Chinese).
+- [Release packaging](Docs/releasing.md) — GitHub Actions builds, pinned sandbox source, ZIP layout, and asset uploads after you publish a Release (Chinese).
 - [Current development handoff](Docs/current-progress.md) — current work and historical local evidence.
 - [Historical plans](PAST_PLAN.md) — archived MVP through M17 records. [PLAN.md](PLAN.md) currently serves as an archive pointer; no new overall roadmap is defined.
 - [AGENTS.md](AGENTS.md) — repository development rules.
