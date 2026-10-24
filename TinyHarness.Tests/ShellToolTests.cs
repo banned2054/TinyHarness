@@ -145,7 +145,7 @@ public class ShellToolTests
     }
 
     [Test]
-    public async Task Execute_TruncatesInMemoryOutputAndKeepsFullRedactedArtifact()
+    public async Task Execute_TruncatesPreviewAndKeepsOriginalLocalArtifact()
     {
         using var    dir          = new TestTempDir();
         const string secret       = "secret-value-12345";
@@ -153,7 +153,7 @@ public class ShellToolTests
         var tool = new ShellTool(dir.Workspace,
                                  knownSecrets : new Dictionary<string, string> { ["TEST_SECRET"] = secret },
                                  artifactRoot : artifactRoot, outputCharacterLimit : 40);
-        // 把密钥放在捕获读取器 4096 字符边界两侧，验证流式脱敏不依赖进程分块。
+        // 把密钥放在读取块边界两侧，验证本地 artifact 不因捕获分块改变原文。
         var command = PlatformCommand($"echo {new string('x', 4094)}{secret}abcdefghijklmnopqrstuv");
 
         var result = await tool.ExecuteAsync(tool.Prepare(Call(command.Executable, command.Arguments)),
@@ -163,10 +163,10 @@ public class ShellToolTests
         Assert.That(result.OutputTruncated, Is.True);
         TestAssert.NotNull(result.StdoutArtifactPath);
         Assert.That(result.Stdout, Does.Contain("[truncated"));
-        TestAssert.DoesNotContain(secret, result.Content, StringComparison.Ordinal);
+        Assert.That(result.Content, Does.Not.Contain("[REDACTED]"));
         var artifact = await File.ReadAllTextAsync(result.StdoutArtifactPath!);
-        TestAssert.DoesNotContain(secret, artifact, StringComparison.Ordinal);
-        Assert.That(artifact, Does.Contain("[REDACTED]"));
+        Assert.That(artifact, Does.Contain(secret));
+        Assert.That(artifact, Does.Not.Contain("[REDACTED]"));
     }
 
     [Test]

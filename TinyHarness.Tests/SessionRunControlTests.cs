@@ -81,7 +81,7 @@ public class SessionRunControlTests
         await model.Entered.Task.WaitAsync(TestTimeout);
         var accepted = await host.QueueAmendmentAsync($"only discuss {secret}", default);
         Assert.That(accepted.CanonicalMessageIndex, Is.Null);
-        Assert.That(accepted.DisplayText, Does.Not.Contain(secret));
+        Assert.That(accepted.DisplayText, Is.EqualTo($"only discuss {secret}"));
         model.Release.TrySetResult();
         var result = (await running.WaitAsync(TestTimeout)).Result!;
         Assert.That(result.Status, Is.EqualTo(AgentStatus.Completed), result.Error);
@@ -97,7 +97,7 @@ public class SessionRunControlTests
         var history = await new SessionHistoryReader().ReadPageAsync(store.Root, host.Session.Id, 200, null, default);
         Assert.That(history.Items.Where(item => item.Kind == "user").Select(item => item.Text),
                     Does.Contain(accepted.DisplayText));
-        Assert.That(history.Items.Any(item => item.Text?.Contains(secret) == true), Is.False);
+        Assert.That(history.Items.Any(item => item.Text == $"only discuss {secret}"), Is.True);
         Assert.That(script.Requests, Is.EqualTo(2));
         Assert.That(host.PersistenceWarning, Is.Null);
     }
@@ -197,7 +197,7 @@ public class SessionRunControlTests
             await model.Entered.Task.WaitAsync(TestTimeout);
             for (var index = 0; index < 32; index++) await host.QueueAmendmentAsync($"amendment {index}", default);
             await TestAssert.ThrowsAsync<InvalidOperationException>(() => host.QueueAmendmentAsync("one too many",
-                                                                        default));
+                                                                             default));
             host.CancelRun();
             Assert.That((await running.WaitAsync(TestTimeout)).Result!.Status, Is.EqualTo(AgentStatus.Cancelled));
         }

@@ -64,7 +64,7 @@ public sealed class SessionHistoryTests
     }
 
     [Test]
-    public async Task Recorder_AppendsRedactedBoundHistoryAndInlinesBoundedArtifact()
+    public async Task Recorder_PreservesLocalHistoryAndArtifactsWhileRedactingAudit()
     {
         using var    dir        = new TestTempDir();
         const string secret     = "artifact-secret-value";
@@ -95,14 +95,21 @@ public sealed class SessionHistoryTests
                                                      published.Add(item);
                                                      throw new InvalidOperationException("display unavailable");
                                                  }, publishErrors.Add);
+        const string laterSecret = "key-added-after-construction";
+        secrets["LATER_KEY"] = laterSecret;
 
         await recorder.StartAsync("system", "question " + secret, CancellationToken.None);
-        var call = new ChatToolCall("call-id", "shell", "{\"command\":\"echo\",\"_plan\":\"private\"}");
+        var call = new ChatToolCall("call-id", "shell",
+                                    " {\"command\":\"echo\",\"token\":\"example\",\"_plan\":\"private\"} ");
         await recorder.RecordAssistantAsync(ChatMessage.Assistant("processing", [call]), CancellationToken.None);
         var preparation = new ToolPreparation
         {
-            ToolName        = "shell", CallId            = call.Id, Arguments         = new JsonObject(),
-            Capability      = "process.execute", Summary = "run command", TargetPaths = [],
+            ToolName        = "shell",
+            CallId          = call.Id,
+            Arguments       = new JsonObject(),
+            Capability      = "process.execute",
+            Summary         = "run command " + secret + " " + laterSecret,
+            TargetPaths     = [],
             ExecutionPolicy = "backend=test"
         };
         await recorder.RecordPreparedAsync(preparation, CancellationToken.None);
@@ -115,20 +122,16 @@ public sealed class SessionHistoryTests
             StdoutArtifactPath = artifactPath,
             PatchChanges =
             [
-                new PatchChange("confirmed.txt", "modify", "confirmed diff", PatchChange.ConfirmedState),
+                new PatchChange("confirmed.txt", "modify", "confirmed diff " + secret, PatchChange.ConfirmedState),
                 new PatchChange("unknown.txt", "modify", "partial diff", PatchChange.UnknownState)
             ]
         };
         await recorder.RecordResultAsync(preparation, firstResult, CancellationToken.None);
         var sequenceAfterResult = writer.CommitSequence;
         await TestAssert.ThrowsAsync<InvalidOperationException>(() => recorder.RecordResultAsync(preparation,
-                                                                         firstResult, CancellationToken.None));
-        await TestAssert.ThrowsAsync<InvalidOperationException>(() =>
-                                                                    recorder
-                                                                       .RecordAssistantAsync(ChatMessage
-                                                                                    .Assistant("duplicate",
-                                                                                              [call, call]),
-                                                                                 CancellationToken.None));
+                                                                    firstResult, CancellationToken.None));
+        await TestAssert.ThrowsAsync<InvalidOperationException>(
+            () => recorder.RecordAssistantAsync(ChatMessage.Assistant("duplicate", [call, call]), CancellationToken.None));
         Assert.That(writer.CommitSequence, Is.EqualTo(sequenceAfterResult));
         File.Delete(artifactPath);
         var missingCall = new ChatToolCall(call.Id, "shell", "{\"command\":\"echo\"}");
@@ -148,7 +151,7 @@ public sealed class SessionHistoryTests
         var sequenceBeforeLateConfirmation = writer.CommitSequence;
         var duplicate =
             await TestAssert.ThrowsAsync<InvalidOperationException>(() => recorder.RecordResultAsync(preparation,
-                                                                             firstResult, CancellationToken.None));
+                                                                        firstResult, CancellationToken.None));
         Assert.That(duplicate.Message, Does.Contain("call-00000001"));
         Assert.That(writer.CommitSequence, Is.EqualTo(sequenceBeforeLateConfirmation));
         await recorder.RecordResultAsync(missingPreparation, new ToolResult
@@ -161,7 +164,7 @@ public sealed class SessionHistoryTests
         var sequenceAfterSecondResult = writer.CommitSequence;
         duplicate =
             await TestAssert.ThrowsAsync<InvalidOperationException>(() => recorder.RecordResultAsync(missingPreparation,
-                                                                             firstResult, CancellationToken.None));
+                                                                        firstResult, CancellationToken.None));
         Assert.That(duplicate.Message, Does.Contain("call-00000002"));
         Assert.That(writer.CommitSequence, Is.EqualTo(sequenceAfterSecondResult));
         var oversizedCall = new ChatToolCall("call-oversized", "shell", "{\"command\":\"echo\"}");
@@ -201,7 +204,7 @@ public sealed class SessionHistoryTests
                                               record.Payload.Deserialize(PersistenceJsonContext.Default.AuditRecord)!)
                                   .ToArray();
         var savedItems = historyRecords.Select(record => record.Payload.Deserialize(
-                                                    SessionHistoryJsonContext.Default.SessionHistoryItem)!).ToArray();
+                                                SessionHistoryJsonContext.Default.SessionHistoryItem)!).ToArray();
         var savedTools = savedItems.Where(item => item.Kind == SessionHistoryKind.Tool).ToArray();
         var savedTool  = savedTools[0];
 
@@ -211,12 +214,13 @@ public sealed class SessionHistoryTests
                     Is.EqualTo(["user", "process", "tool", "process", "tool", "process", "tool"]));
         Assert.That(savedTool.State, Is.EqualTo(nameof(ToolCallExecutionState.UnknownResult)));
         Assert.That(savedTool.Succeeded, Is.False);
-        Assert.That(savedTool.Stdout, Is.EqualTo("before [REDACTED] after"));
+        Assert.That(savedTool.Stdout, Is.EqualTo(fullOutput));
+        Assert.That(savedTool.PatchChanges![0].Diff, Is.EqualTo("confirmed diff " + secret));
         Assert.That(savedTool.OutputIncomplete, Is.False);
         Assert.That(savedTool.OutputWarning, Is.Null);
         Assert.That(savedTool.PatchChanges!.Select(change => change.State),
                     Is.EqualTo([PatchChange.ConfirmedState, PatchChange.UnknownState]));
-        Assert.That(savedTool.ArgumentsJson, Is.EqualTo("{\"command\":\"echo\"}"));
+        Assert.That(savedTool.ArgumentsJson, Is.EqualTo(call.ArgumentsJson));
         Assert.That(savedTools.Select(item => item.InvocationId),
                     Is.EqualTo(["call-00000001", "call-00000002", "call-00000003"]));
         Assert.That(savedItems.All(item => item.Sequence > 1 && !string.IsNullOrWhiteSpace(item.Id)), Is.True);
@@ -242,8 +246,11 @@ public sealed class SessionHistoryTests
                     Is.EqualTo(savedTools.Select(item => item.InvocationId)));
         var historyJson = string.Join(Environment.NewLine,
                                       historyRecords.Select(record => record.Payload.GetRawText()));
-        TestAssert.DoesNotContain(secret, historyJson, StringComparison.Ordinal);
-        TestAssert.DoesNotContain("_plan", historyJson, StringComparison.Ordinal);
+        Assert.That(historyJson, Does.Contain(secret));
+        Assert.That(savedItems[0].Text, Is.EqualTo("question " + secret));
+        Assert.That(auditRecords.Where(item => item.Summary is not null)
+                                .All(item => !item.Summary!.Contains(secret, StringComparison.Ordinal) &&
+                                             !item.Summary.Contains(laterSecret, StringComparison.Ordinal)), Is.True);
     }
 
     [Test]
@@ -273,7 +280,7 @@ public sealed class SessionHistoryTests
         Assert.That(item.PreparationError, Does.Contain("Unknown tool"));
         Assert.That(item.Succeeded, Is.Null);
         Assert.That(item.ExitCode, Is.Null);
-        TestAssert.DoesNotContain("hidden", item.ArgumentsJson, StringComparison.Ordinal);
+        Assert.That(item.ArgumentsJson, Is.EqualTo("{\"token\":\"hidden\"}"));
     }
 
     [Test]
@@ -362,9 +369,9 @@ public sealed class SessionHistoryTests
             var live = events.Items.Single(item => item.Id == saved.Id);
             Assert.That(JsonElement.DeepEquals(
                                                JsonSerializer.SerializeToElement(live,
-                                                        SessionHistoryJsonContext.Default.SessionHistoryItem),
+                                                   SessionHistoryJsonContext.Default.SessionHistoryItem),
                                                JsonSerializer.SerializeToElement(saved,
-                                                        SessionHistoryJsonContext.Default.SessionHistoryItem)),
+                                                   SessionHistoryJsonContext.Default.SessionHistoryItem)),
                         Is.True);
         }
 
@@ -514,13 +521,14 @@ public sealed class SessionHistoryTests
         Assert.That(audit.Status, Is.EqualTo(tools[0].State));
     }
 
-    private static ChatSessionHost NewHost(string             directory, FakeChatClient client, ToolRegistry tools,
-                                           IApprovalProvider? approver = null, IHostEventSink? events = null) => new(
-         directory,
-         new SessionModelIdentity("test-model", "https://example.invalid/v1", ChatApiKind.ChatCompletions),
-         new AgentOptions { Model = "test-model", MaxAgentSteps = 10, DefaultToolTimeoutSeconds = 30 },
-         client, tools, "history test system prompt", new PermissionEngine(directory), approver, events,
-         sessionWriterFactory : id => new SessionStoreWriter(directory, id));
+    private static ChatSessionHost NewHost(
+        string directory, FakeChatClient client, ToolRegistry tools,
+        IApprovalProvider? approver = null, IHostEventSink? events = null) =>
+        new(directory,
+            new SessionModelIdentity("test-model", "https://example.invalid/v1", ChatApiKind.ChatCompletions),
+            new AgentOptions { Model = "test-model", MaxAgentSteps = 10, DefaultToolTimeoutSeconds = 30 },
+            client, tools, "history test system prompt", new PermissionEngine(directory), approver, events,
+            sessionWriterFactory : id => new SessionStoreWriter(directory, id));
 
     private sealed class DenyHistoryApprover : IApprovalProvider
     {

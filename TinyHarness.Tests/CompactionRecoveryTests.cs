@@ -70,14 +70,17 @@ public sealed class CompactionRecoveryTests
         Assert.That(log, Does.Not.Contain("stateJson"));
         using var writer = await SessionStoreWriter.OpenExistingAsync(store.Root, id, null, CancellationToken.None);
         var restored = SessionResume.Restore(writer.LoadedSnapshot!, workspace.Root, Identity, "sys",
-                                             Options(100_000).Context);
+                                             Options().Context);
         var savedView = restored.Context.BuildModelView().ToArray();
         var continued = new FakeChatClient();
         continued.Enqueue(FakeChatClient.Text("still only discussing"));
-        using var resumed = new ChatSessionHost(restored.Session, restored.Context, Options(100_000), continued,
+        using var resumed = new ChatSessionHost(restored.Session, restored.Context, Options(), continued,
                                                 new ToolRegistry([tool]), "sys", sessionWriter : writer);
+        // 恢复时上下文须与固化选择一致；改用大窗口按设计走显式模型选择变更。
+        await resumed.ChangeModelAsync(Identity, continued, Options(100_000).Context, null,
+                                       CancellationToken.None);
         var next = await resumed.SubmitTurnAsync("Continue discussing.", CancellationToken.None);
-        Assert.That(next.Result!.Status, Is.EqualTo(AgentStatus.Completed));
+        Assert.That(next.Result!.Status, Is.EqualTo(AgentStatus.Completed), next.Result.Error);
         Assert.That(tool.ExecuteCount, Is.EqualTo(3));
         Assert.That(continued.RequestLog.Single().Messages.Take(savedView.Length), Is.EqualTo(savedView));
         Assert.That(restored.Context.State.Summary, Does.Contain("No modification"));

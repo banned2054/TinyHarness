@@ -203,8 +203,9 @@ public sealed class SessionJournalFaultTests
         Assert.That(secondTool.ExecuteCount, Is.EqualTo(1));
     }
 
-    [Test]
-    public async Task DistinctCallIdsRedactedToSameKnownSecret_RestoreDistinctInvocations()
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task DistinctInvocationsRestoreWithOriginalOrLegacyRedactedCallIds(bool legacyRedacted)
     {
         using var    workspace    = new TestTempDir();
         using var    directory    = new TestTempDir();
@@ -241,10 +242,36 @@ public sealed class SessionJournalFaultTests
             sessionId = host.Session.Id;
         }
 
+        if (legacyRedacted)
+        {
+            // 模拟旧 writer 已经脱敏的本地记录，协议消息保持原样；读取不能猜回旧 CallId。
+            var path  = Path.Combine(directory.Root, sessionId + SessionStoreWriter.LogFileSuffix);
+            var lines = await File.ReadAllLinesAsync(path);
+            for (var i = 0; i < lines.Length; i++)
+            {
+                var batch = System.Text.Json.Nodes.JsonNode.Parse(lines[i])!;
+                foreach (var record in batch["records"]!.AsArray())
+                {
+                    var kind    = record!["kind"]!.GetValue<string>();
+                    var payload = record["payload"]!;
+                    if (kind == "history" && payload["callId"] is not null)
+                        payload["callId"] = "[REDACTED]";
+                    if (kind == "run" && payload["run"]!["toolCalls"] is System.Text.Json.Nodes.JsonArray calls)
+                        foreach (var call in calls)
+                            call!["callId"] = "[REDACTED]";
+                }
+
+                lines[i] = batch.ToJsonString();
+            }
+
+            await File.WriteAllLinesAsync(path, lines);
+        }
+
         var page = await new SessionHistoryReader().ReadPageAsync(directory.Root, sessionId, 200, null,
                                                                   CancellationToken.None);
         var history = page.Items.Where(item => item.Kind == SessionHistoryKind.Tool).ToArray();
-        Assert.That(history.Select(item => item.CallId), Is.EqualTo(["[REDACTED]", "[REDACTED]"]));
+        Assert.That(history.Select(item => item.CallId),
+                    Is.EqualTo(legacyRedacted ? new[] { "[REDACTED]", "[REDACTED]" } : [firstCallId, secondCallId]));
         Assert.That(history.Select(item => item.InvocationId), Is.EqualTo(["call-00000001", "call-00000002"]));
         using var reopened = await SessionStoreWriter.OpenExistingAsync(directory.Root, sessionId, secrets,
                                                                         CancellationToken.None);

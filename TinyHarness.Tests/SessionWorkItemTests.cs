@@ -144,7 +144,7 @@ public class SessionWorkItemTests
     }
 
     [Test]
-    public async Task WorkItems_KeepCanonicalTitleAndRedactedInspectionTitle()
+    public async Task WorkItems_PreserveOriginalTitleInLocalHistory()
     {
         using var    store   = new TestTempDir();
         const string secret  = "synthetic-work-secret";
@@ -160,9 +160,9 @@ public class SessionWorkItemTests
         await host.SubmitTurnAsync("inspect", default);
         var snapshot = (await SessionStoreReader.ReadAsync(store.Root, host.Session.Id, default))!;
         Assert.That(snapshot.WorkItems.Single().Title, Does.Contain(secret));
-        Assert.That(snapshot.WorkItems.Single().DisplayTitle, Does.Not.Contain(secret));
+        Assert.That(snapshot.WorkItems.Single().DisplayTitle, Is.EqualTo("inspect " + secret));
         var history = await new SessionHistoryReader().ReadPageAsync(store.Root, host.Session.Id, 200, null, default);
-        Assert.That(history.Items.Any(item => item.Text?.Contains(secret) == true), Is.False);
+        Assert.That(history.Items.Any(item => item.Text?.Contains(secret) == true), Is.True);
     }
 
     [Test]

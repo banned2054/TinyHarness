@@ -228,7 +228,7 @@ public class ShellToolBackendTests
     }
 
     [Test]
-    public async Task Execute_RedactsSecretAcrossBackendChunkBoundary()
+    public async Task Execute_PreservesOriginalOutputAcrossBackendChunkBoundary()
     {
         using var    dir    = new TestTempDir();
         const string secret = "chunk-boundary-secret";
@@ -244,9 +244,19 @@ public class ShellToolBackendTests
         var result = await tool.ExecuteAsync(tool.Prepare(Call("dotnet", ["test"])), CancellationToken.None);
 
         Assert.That(result.Succeeded, Is.True, result.Content);
-        Assert.That(result.Stdout, Does.Contain("[REDACTED]"));
-        TestAssert.DoesNotContain(secret, result.Stdout, StringComparison.Ordinal);
-        TestAssert.DoesNotContain(secret, result.Content, StringComparison.Ordinal);
+        Assert.That(result.Stdout, Is.EqualTo("prefix-" + secret + "-suffix"));
+        Assert.That(result.Content, Does.Contain(secret));
+    }
+
+    [Test]
+    public async Task Capture_ExplicitRedactionStillCoversFragmentedSecrets()
+    {
+        using var directory = new TestTempDir();
+        var       capture   = new ProcessOutputCapture(Path.Combine(directory.Root, "capture.txt"), 100, ["known-key"]);
+        await capture.AppendAsync("prefix known-".AsMemory(), CancellationToken.None);
+        await capture.AppendAsync("key suffix".AsMemory(), CancellationToken.None);
+        await capture.AppendAsync(ReadOnlyMemory<char>.Empty, CancellationToken.None);
+        Assert.That(capture.Complete().Content, Is.EqualTo("prefix [REDACTED] suffix"));
     }
 
     private static ChatToolCall Call(string executable, IReadOnlyList<string> arguments,

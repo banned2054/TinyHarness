@@ -401,7 +401,7 @@ public class ChatSessionTests
     }
 
     [Test]
-    public async Task SubmitTurn_PersistsExecutionRecordsRedactedForInspection()
+    public async Task SubmitTurn_PreservesLocalExecutionRecords()
     {
         using var    ws     = new TestTempDir();
         using var    dir    = new TestTempDir();
@@ -427,8 +427,8 @@ public class ChatSessionTests
 
         var snapshot = await SessionStoreReader.ReadAsync(dir.Root, host.Session.Id, CancellationToken.None);
         var stored   = TestAssert.Single(snapshot!.Turns.Single().Runs.Single().ToolCalls!);
-        // 检查投影脱敏，canonical 用户内容保持原样。
-        Assert.That(stored.Summary, Is.EqualTo("patch([REDACTED])"));
+        // 本地执行事实与协议历史都保留原文。
+        Assert.That(stored.Summary, Is.EqualTo($"patch({secret})"));
         Assert.That(Enum.Parse<ToolCallExecutionState>(stored.State),
                     Is.EqualTo(ToolCallExecutionState.ConfirmedResult));
         Assert.That(snapshot.Turns.Single().Runs.Single().NeedsInspection, Is.False);

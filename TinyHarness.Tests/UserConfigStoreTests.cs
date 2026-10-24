@@ -1,3 +1,4 @@
+using TinyHarness.Core.Models.ChatCompletions;
 using TinyHarness.Core.Models.Configuration;
 using TinyHarness.Core.Services.ChatCompletions.Configuration;
 
@@ -250,4 +251,339 @@ public class UserConfigStoreTests
             Directory.Delete(dir, true);
         }
     }
+
+    [Test]
+    public async Task SaveThenLoad_RoundTripsModelCatalogCapabilities()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"tinyharness-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        var path = Path.Combine(dir, "user-config.json");
+        try
+        {
+            var config = new UserConfig
+            {
+                Profiles =
+                [
+                    new UserProfile
+                    {
+                        Name     = "work",
+                        Endpoint = "https://api.example.com/v1",
+                        Models =
+                        [
+                            new UserProfileModel
+                            {
+                                Id = "glm-5.3", DisplayName = "GLM-5.3", ContextWindowTokens = 200_000,
+                                ReasoningEfforts =
+                                    [ModelReasoningEffort.Low, ModelReasoningEffort.Medium, ModelReasoningEffort.High],
+                                DefaultReasoningEffort = ModelReasoningEffort.Medium
+                            },
+                            new UserProfileModel { Id = "glm-5.3-flash", ContextWindowTokens = 128_000 }
+                        ]
+                    }
+                ]
+            };
+
+            await UserConfigStore.SaveAsync(path, config, CancellationToken.None);
+            var loaded = await UserConfigStore.LoadAsync(path, CancellationToken.None);
+
+            var profile = TestAssert.Single(loaded.Profiles);
+            Assert.That(profile.Models.Count, Is.EqualTo(2));
+            var full = profile.Models[0];
+            Assert.That(full.DisplayName, Is.EqualTo("GLM-5.3"));
+            Assert.That(full.ReasoningEfforts,
+                        Is.EqualTo(new[]
+                        {
+                            ModelReasoningEffort.Low, ModelReasoningEffort.Medium, ModelReasoningEffort.High
+                        }));
+            Assert.That(full.DefaultReasoningEffort, Is.EqualTo(ModelReasoningEffort.Medium));
+            var bare = profile.Models[1];
+            Assert.That(bare.DisplayName, Is.Null);
+            Assert.That(bare.ReasoningEfforts, Is.Null);
+            Assert.That(bare.DefaultReasoningEffort, Is.Null);
+        }
+        finally
+        {
+            Directory.Delete(dir, true);
+        }
+    }
+
+    [Test]
+    public async Task LoadAsync_AcceptsOffSynonymAndCaseInsensitiveEfforts()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"tinyharness-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        var path = Path.Combine(dir, "user-config.json");
+        try
+        {
+            await File.WriteAllTextAsync(path,
+                                         """{"profiles":[{"name":"a","models":[{"id":"m","contextWindowTokens":1,"reasoningEfforts":["off","HIGH"],"defaultReasoningEffort":"high"}]}]}""");
+
+            var loaded = await UserConfigStore.LoadAsync(path, CancellationToken.None);
+
+            var model = TestAssert.Single(TestAssert.Single(loaded.Profiles).Models);
+            Assert.That(model.ReasoningEfforts,
+                        Is.EqualTo(new[] { ModelReasoningEffort.None, ModelReasoningEffort.High }));
+            Assert.That(model.DefaultReasoningEffort, Is.EqualTo(ModelReasoningEffort.High));
+        }
+        finally
+        {
+            Directory.Delete(dir, true);
+        }
+    }
+
+    [TestCase("""{"profiles":[{"name":"a","endpoint":"ftp://x","models":[{"id":"m","contextWindowTokens":1}]}]}""",
+              "absolute http(s)")]
+    [TestCase("""{"profiles":[{"name":"a","models":[{"id":"m","contextWindowTokens":1,"reasoningEfforts":"high"}]}]}""",
+              "must be an array")]
+    [TestCase("""{"profiles":[{"name":"a","models":[{"id":"m","contextWindowTokens":1,"reasoningEfforts":["turbo"]}]}]}""",
+              "expected one of: none, low, medium, high, extra-high")]
+    [TestCase("""{"profiles":[{"name":"a","models":[{"id":"m","contextWindowTokens":1,"reasoningEfforts":["low","LOW"]}]}]}""",
+              "duplicates effort 'low'")]
+    [TestCase("""{"profiles":[{"name":"a","models":[{"id":"m","contextWindowTokens":1,"defaultReasoningEffort":"turbo"}]}]}""",
+              "invalid value 'turbo'")]
+    [TestCase("""{"profiles":[{"name":"a","models":[{"id":"m","contextWindowTokens":1,"reasoningEfforts":["low"],"defaultReasoningEffort":"high"}]}]}""",
+              "must be one of the model's declared reasoningEfforts")]
+    [TestCase("""{"profiles":[{"name":"a","models":[{"id":"m","contextWindowTokens":1,"defaultReasoningEffort":"high"}]}]}""",
+              "must be one of the model's declared reasoningEfforts")]
+    public async Task LoadAsync_MalformedCatalogCapabilities_ThrowActionableDiagnostics(
+        string json, string expectedFragment)
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"tinyharness-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        var path = Path.Combine(dir, "user-config.json");
+        try
+        {
+            await File.WriteAllTextAsync(path, json);
+
+            var error =
+                await TestAssert.ThrowsAsync<InvalidDataException>(() =>
+                                                                       UserConfigStore
+                                                                          .LoadAsync(path, CancellationToken.None));
+
+            Assert.That(error.Message, Does.Contain(expectedFragment));
+            Assert.That(error.Message, Does.Contain(path));
+        }
+        finally
+        {
+            Directory.Delete(dir, true);
+        }
+    }
+
+    [Test]
+    public async Task SaveAsync_InvalidCandidate_IsRejectedWithoutTouchingDisk()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"tinyharness-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        var path = Path.Combine(dir, "user-config.json");
+        try
+        {
+            var config = new UserConfig
+            {
+                Profiles =
+                [
+                    new UserProfile
+                    {
+                        Name = "a",
+                        Models =
+                        [
+                            new UserProfileModel
+                            {
+                                Id = "m", ContextWindowTokens = 1, ReasoningEfforts = [ModelReasoningEffort.Low],
+                                DefaultReasoningEffort = ModelReasoningEffort.High
+                            }
+                        ]
+                    }
+                ]
+            };
+
+            var error =
+                await TestAssert.ThrowsAsync<InvalidDataException>(
+                    () => UserConfigStore.SaveAsync(path, config, CancellationToken.None));
+
+            Assert.That(error.Message, Does.Contain("defaultReasoningEffort"));
+            Assert.That(File.Exists(path), Is.False);
+            Assert.That(Directory.GetFiles(dir), Is.Empty);
+        }
+        finally
+        {
+            Directory.Delete(dir, true);
+        }
+    }
+
+    [Test]
+    public async Task SaveAsync_StaleBaseline_RefusesAndKeepsNewerDiskContent()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"tinyharness-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        var path = Path.Combine(dir, "user-config.json");
+        try
+        {
+            var baseline = ConfigWithModel("old");
+            await UserConfigStore.SaveAsync(path, baseline, CancellationToken.None);
+            await UserConfigStore.SaveAsync(path, ConfigWithModel("new"), CancellationToken.None);
+
+            var error =
+                await TestAssert.ThrowsAsync<InvalidDataException>(() =>
+                                                                       UserConfigStore.SaveAsync(path,
+                                                                           baseline with { DefaultProfile = "a" },
+                                                                           baseline, CancellationToken.None));
+
+            Assert.That(error.Message, Does.Contain("changed while it was being edited"));
+            var loaded = await UserConfigStore.LoadAsync(path, CancellationToken.None);
+            Assert.That(TestAssert.Single(TestAssert.Single(loaded.Profiles).Models).Id, Is.EqualTo("new"));
+        }
+        finally
+        {
+            Directory.Delete(dir, true);
+        }
+    }
+
+    [Test]
+    public async Task SaveAsync_MatchingBaseline_CommitsTheEdit()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"tinyharness-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        var path = Path.Combine(dir, "user-config.json");
+        try
+        {
+            var baseline = ConfigWithModel("old");
+            await UserConfigStore.SaveAsync(path, baseline, CancellationToken.None);
+
+            // 非覆盖式追加：编辑后的候选保留原有模型并新增一项。
+            var profile = TestAssert.Single(baseline.Profiles);
+            var edited = baseline with
+            {
+                Profiles =
+                [
+                    profile with
+                    {
+                        Models =
+                        [
+                            .. profile.Models, new UserProfileModel { Id = "added", ContextWindowTokens = 2 }
+                        ]
+                    }
+                ]
+            };
+            await UserConfigStore.SaveAsync(path, edited, baseline, CancellationToken.None);
+
+            var loaded = await UserConfigStore.LoadAsync(path, CancellationToken.None);
+            var models = TestAssert.Single(loaded.Profiles).Models;
+            Assert.That(models.Select(model => model.Id).ToArray(), Is.EqualTo(["old", "added"]));
+        }
+        finally
+        {
+            Directory.Delete(dir, true);
+        }
+    }
+
+    [Test]
+    public async Task SaveAsync_ConcurrentBaselineSavesCannotBothSucceed()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"tinyharness-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        var path = Path.Combine(dir, "user-config.json");
+        try
+        {
+            var baseline = ConfigWithModel("old");
+            await UserConfigStore.SaveAsync(path, baseline, CancellationToken.None);
+
+            async Task<Exception?> TrySaveAsync(UserConfig candidate)
+            {
+                try
+                {
+                    await UserConfigStore.SaveAsync(path, candidate, baseline, CancellationToken.None);
+                    return null;
+                }
+                catch (Exception ex)
+                {
+                    return ex;
+                }
+            }
+
+            // 同基线并发保存：锁内串行，后到者复查基线时已见前者写入，必须明确失败而非静默覆盖。
+            var errors = await Task.WhenAll(TrySaveAsync(ConfigWithModel("one")), TrySaveAsync(ConfigWithModel("two")));
+
+            Assert.That(errors.Count(error => error is null), Is.EqualTo(1));
+            var conflict = errors.Single(error => error is not null)!;
+            Assert.That(conflict, Is.InstanceOf<InvalidDataException>());
+            Assert.That(conflict.Message, Does.Contain("changed while it was being edited"));
+            var loaded = await UserConfigStore.LoadAsync(path, CancellationToken.None);
+            Assert.That(TestAssert.Single(TestAssert.Single(loaded.Profiles).Models).Id,
+                        Is.EqualTo(errors[0] is null ? "one" : "two"));
+        }
+        finally
+        {
+            Directory.Delete(dir, true);
+        }
+    }
+
+    [Test]
+    public async Task SaveAsync_CancellationWhileWaitingForTheSaveLockStopsWaiting()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"tinyharness-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        var path = Path.Combine(dir, "user-config.json");
+        try
+        {
+            // 预占保存锁并取消等待令牌：等待必须响应取消，而不是等满锁超时。
+            await using var held = new FileStream(path + UserConfigStore.SaveLockSuffix, FileMode.OpenOrCreate,
+                                                  FileAccess.ReadWrite, FileShare.None);
+            using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
+
+            try
+            {
+                await UserConfigStore.SaveAsync(path, ConfigWithModel("m"), cts.Token);
+                Assert.Fail("Waiting for the save lock should honor cancellation.");
+            }
+            catch (OperationCanceledException)
+            {
+                // TaskCanceledException 也属于 OperationCanceledException，两种取消路径都接受。
+            }
+        }
+        finally
+        {
+            Directory.Delete(dir, true);
+        }
+    }
+
+    [Test]
+    public async Task SaveAsync_LeavesNoTemporaryFilesBehind()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"tinyharness-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        var path = Path.Combine(dir, "user-config.json");
+        try
+        {
+            var config = ConfigWithModel("m");
+            await UserConfigStore.SaveAsync(path, config, CancellationToken.None);
+            await UserConfigStore.SaveAsync(path, config, config, CancellationToken.None);
+
+            // 保存锁文件是持久的协调产物（与会话存储一致）；不得残留临时写入文件。
+            Assert.That(Directory.GetFiles(dir),
+                        Is.EquivalentTo([path, path + UserConfigStore.SaveLockSuffix]));
+            var loaded = await UserConfigStore.LoadAsync(path, CancellationToken.None);
+            Assert.That(TestAssert.Single(TestAssert.Single(loaded.Profiles).Models).Id, Is.EqualTo("m"));
+        }
+        finally
+        {
+            Directory.Delete(dir, true);
+        }
+    }
+
+    /// <summary>
+    ///     构造只有一个供应商、一个模型的最小合法配置。
+    ///     Builds a minimal valid config with a single provider holding one model.
+    /// </summary>
+    private static UserConfig ConfigWithModel(string modelId) => new()
+    {
+        Profiles =
+        [
+            new UserProfile
+            {
+                Name     = "a",
+                Endpoint = "https://api.example.com/v1",
+                Models   = [new UserProfileModel { Id = modelId, ContextWindowTokens = 1 }]
+            }
+        ]
+    };
 }

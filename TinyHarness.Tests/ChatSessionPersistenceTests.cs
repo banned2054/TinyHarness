@@ -131,7 +131,7 @@ public class ChatSessionPersistenceTests
         Assert.That(toolItem.PreparationError, Does.Contain("Unknown tool"));
         Assert.That(toolItem.Succeeded, Is.Null);
         Assert.That(toolItem.ExitCode, Is.Null);
-        TestAssert.DoesNotContain("hidden", toolItem.ArgumentsJson, StringComparison.Ordinal);
+        Assert.That(toolItem.ArgumentsJson, Is.EqualTo("{\"token\":\"hidden\"}"));
     }
 
     [Test]
@@ -227,7 +227,7 @@ public class ChatSessionPersistenceTests
     }
 
     [Test]
-    public async Task SubmitTurn_PreservesProtocolSecretsWhileInspectionAndAuditStayRedacted()
+    public async Task SubmitTurn_PreservesLocalHistoryAndProtocolWhileAuditStaysRedacted()
     {
         using var    dir           = new TestTempDir();
         const string secret        = "sk-test-secret-value";
@@ -249,8 +249,13 @@ public class ChatSessionPersistenceTests
 
         var read = await SessionStoreReader.ReadAsync(dir.Root, host.Session.Id, CancellationToken.None);
         TestAssert.NotNull(read);
-        Assert.That(read.Turns[0].UserInput, Is.EqualTo("question [REDACTED] [REDACTED]"));
-        Assert.That(read.Turns[0].Runs.Single().FinalMessage, Is.EqualTo("answer [REDACTED] [REDACTED]"));
+        Assert.That(read.Turns[0].UserInput, Is.EqualTo("question " + secret + " " + numericSecret));
+        Assert.That(read.Turns[0].Runs.Single().FinalMessage, Is.EqualTo("answer " + secret + " " + numericSecret));
+        var page = await new SessionHistoryReader().ReadPageAsync(dir.Root, host.Session.Id, 200, null,
+                                                                  CancellationToken.None);
+        var answer = page.Items.First(item => item.Kind == SessionHistoryKind.Final);
+        Assert.That(answer.Text, Is.EqualTo("answer " + secret + " " + numericSecret));
+        Assert.That(answer.Reasoning, Is.EqualTo("reason " + secret));
         var conversation = read.Conversation!;
         TestAssert.ContainsAll(m => m.Role    == "User" &&
                                     m.Content == "question " + secret + " " + numericSecret, conversation.Messages);
@@ -274,13 +279,19 @@ public class ChatSessionPersistenceTests
             var batch = JsonNode.Parse(line)!;
             foreach (var record in batch["records"]!.AsArray())
             {
-                if (record!["kind"]!.GetValue<string>() is not ("audit" or "history")) continue;
+                if (record!["kind"]!.GetValue<string>() != "audit") continue;
                 var payload = record["payload"]!.ToJsonString();
                 TestAssert.DoesNotContain(secret, payload, StringComparison.Ordinal);
                 TestAssert.DoesNotContain(numericSecret, payload, StringComparison.Ordinal);
                 TestAssert.DoesNotContain("encrypted_content", payload, StringComparison.Ordinal);
             }
         }
+
+        foreach (var item in page.Items)
+            TestAssert.DoesNotContain("encrypted_content",
+                                      JsonSerializer.Serialize(item,
+                                                               SessionHistoryJsonContext.Default.SessionHistoryItem),
+                                      StringComparison.Ordinal);
     }
 
     private static async Task<string> ReadSharedTextAsync(string path)
@@ -309,7 +320,7 @@ public class ChatSessionPersistenceTests
     }
 
     [Test]
-    public async Task SubmitTurn_PersistenceFailureBecomesWarningAndKeepsTheTerminalState()
+    public async Task SubmitTurn_StartupSaveFailureFailsTheTurnBeforeAnyModelRequest()
     {
         var client = new FakeChatClient();
         client.Enqueue(FakeChatClient.Text("answer"));
@@ -317,8 +328,11 @@ public class ChatSessionPersistenceTests
         using var host = NewHost(client, _ => new ThrowingSessionWriter());
         var       run  = await host.SubmitTurnAsync("anything", CancellationToken.None);
 
-        // 保存故障单独报告，不把已完成的执行改写为失败。
-        Assert.That(run.Result!.Status, Is.EqualTo(AgentStatus.Completed));
+        // 启动事实未可靠保存时按设计不发起模型请求；故障同时以保存警告报告，不静默。
+        Assert.That(run.Result!.Status, Is.EqualTo(AgentStatus.Failed));
+        Assert.That(run.IsFinished, Is.True);
+        Assert.That(client.Requests, Is.EqualTo(0));
+        TestAssert.Contains("disk on fire", run.Result.Error, StringComparison.Ordinal);
         TestAssert.NotNull(host.PersistenceWarning);
         TestAssert.Contains("disk on fire", host.PersistenceWarning, StringComparison.Ordinal);
     }
@@ -431,7 +445,8 @@ public class ChatSessionPersistenceTests
     [Test]
     public async Task SubmitTurn_CheckpointFailureNeverExecutesTheSideEffectAndRecordsKnownNotStarted()
     {
-        using var ws = new TestTempDir();
+        using var ws    = new TestTempDir();
+        using var store = new TestTempDir();
         var identity =
             new SessionModelIdentity("test-model", "https://example.invalid/v1", ChatApiKind.ChatCompletions);
         var client = new FakeChatClient();
@@ -439,7 +454,7 @@ public class ChatSessionPersistenceTests
         var tool = new FakeTool("write");
         using var host = new ChatSessionHost(ws.Root, identity, Options(), client,
                                              new ToolRegistry([tool]), SystemPrompt,
-                                             sessionWriterFactory : _ => new ThrowingSessionWriter());
+                                             sessionWriterFactory : _ => new IntentFailingSessionWriter(store.Root));
 
         var run = await host.SubmitTurnAsync("write only after durable intent", CancellationToken.None);
 
@@ -476,7 +491,7 @@ public class ChatSessionPersistenceTests
 
         var read = await SessionStoreReader.ReadAsync(dir.Root, host.Session.Id, CancellationToken.None);
         TestAssert.NotNull(read);
-        Assert.That(read!.CommitSequence, Is.EqualTo(1));
+        Assert.That(read!.CommitSequence, Is.EqualTo(3));
         Assert.That(read.Turns.Count, Is.EqualTo(2));
     }
 
@@ -571,12 +586,12 @@ public class ChatSessionPersistenceTests
     }
 
     /// <summary>
-    ///     <para>首次提交失败、后续提交成功的写入端，用于验证成功保存后清除警告。</para>
-    ///     <para>Fails the first commit and succeeds thereafter to verify that a successful save clears the warning.</para>
+    ///     <para>第二次提交（首个回合的终态保存）失败的写入端；验证保存失败转为警告并由下一次成功提交清除。</para>
+    ///     <para>Fails the second commit (the first turn's terminal save); the failure becomes a warning cleared by the next successful commit.</para>
     /// </summary>
     private sealed class FlakySessionWriter(string directory) : ISessionStoreWriter
     {
-        private bool                _failed;
+        private int                 _commits;
         private SessionStoreWriter? _writer;
 
         public string SnapshotPath => _writer?.SnapshotPath ?? throw new NotSupportedException();
@@ -586,14 +601,47 @@ public class ChatSessionPersistenceTests
         public async Task CommitAsync(
             ChatSession session, ConversationContext context, CancellationToken cancellationToken)
         {
-            if (!_failed)
-            {
-                _failed = true;
+            // 回合启动提交成功，首个终态保存失败，模拟执行完成后的落盘故障。
+            if (++_commits == 2)
                 throw new SessionStoreException("flaky storage");
-            }
 
             _writer ??= new SessionStoreWriter(directory, session.Id);
             await _writer.CommitAsync(session, context, cancellationToken);
+        }
+
+        public void Dispose() => _writer?.Dispose();
+    }
+
+    /// <summary>
+    ///     <para>启动提交成功、执行意图提交起永久失败的写入端；验证副作用前的可靠意图门仍会放行模型请求。</para>
+    ///     <para>Commits startup facts, then fails the execution-intent commit permanently; the durable-intent gate before side effects still allows the model request.</para>
+    /// </summary>
+    private sealed class IntentFailingSessionWriter(string directory) : ISessionStoreWriter
+    {
+        private SessionStoreWriter? _writer;
+
+        private bool _poisoned;
+
+        public string SnapshotPath => _writer?.SnapshotPath ?? throw new NotSupportedException();
+
+        public long CommitSequence => _writer?.CommitSequence ?? 0;
+
+        public async Task CommitAsync(
+            ChatSession session, ConversationContext context, CancellationToken cancellationToken)
+        {
+            // 意图保存失败后停止追加，与真实 writer 的失败语义一致。
+            if (_poisoned)
+                throw new SessionStoreException("disk on fire");
+
+            _writer ??= new SessionStoreWriter(directory, session.Id);
+            await _writer.CommitAsync(session, context, cancellationToken);
+        }
+
+        public Task CommitExecutionIntentAsync(
+            ChatSession session, ConversationContext context, CancellationToken cancellationToken)
+        {
+            _poisoned = true;
+            throw new SessionStoreException("disk on fire");
         }
 
         public void Dispose() => _writer?.Dispose();

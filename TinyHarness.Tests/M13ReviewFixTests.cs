@@ -94,7 +94,7 @@ public class M13ReviewFixTests
 
     [TestCase(ToolCallExecutionState.UnknownResult)]
     [TestCase(ToolCallExecutionState.ConfirmedResult)]
-    public async Task RunAndSessionInspectionRecordsRedactEveryStringAndRoundTripState(ToolCallExecutionState state)
+    public async Task LocalExecutionFactsPreserveIdentityAndRedactDiagnostics(ToolCallExecutionState state)
     {
         using var    ws      = new TestTempDir();
         using var    dir     = new TestTempDir();
@@ -128,13 +128,14 @@ public class M13ReviewFixTests
             stored = await ReadSharedTextAsync(writer.SnapshotPath);
         }
 
-        Assert.That(stored, Does.Not.Contain(secret));
+        Assert.That(stored, Does.Contain(secret));
         var snapshot = await SessionStoreReader.ReadAsync(dir.Root, session.Id, CancellationToken.None);
         Assert.That(snapshot!.PendingInspectionReason, Is.EqualTo("inspect [REDACTED]"));
         var call = TestAssert.Single(snapshot.Turns[0].Runs[0].ToolCalls!);
-        Assert.That(call.CallId, Is.EqualTo("[REDACTED]"));
-        Assert.That(call.ToolName, Is.EqualTo("[REDACTED]"));
-        Assert.That(call.Capability, Is.EqualTo("[REDACTED]"));
+        Assert.That(call.CallId, Is.EqualTo(secret));
+        Assert.That(call.ToolName, Is.EqualTo(secret));
+        Assert.That(call.Capability, Is.EqualTo(secret));
+        Assert.That(call.PreparationError, Is.EqualTo("[REDACTED]"));
         Assert.That(call.State, Is.EqualTo(state.ToString()));
     }
 

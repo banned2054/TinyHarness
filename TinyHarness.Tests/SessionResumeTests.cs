@@ -441,7 +441,7 @@ public class SessionResumeTests
     }
 
     [Test]
-    public async Task Commit_PreservesKnownSecretTextForResumeAndRedactsInspectionOnly()
+    public async Task Commit_PreservesKnownSecretTextForLocalHistoryAndRedactsAuditOnly()
     {
         using var ws     = new TestTempDir();
         using var dir    = new TestTempDir();
@@ -466,8 +466,8 @@ public class SessionResumeTests
         using var writer =
             await SessionStoreWriter.OpenExistingAsync(dir.Root, sessionId, secrets, CancellationToken.None);
         var snapshot = writer.LoadedSnapshot!;
-        Assert.That(snapshot.Turns.Single().UserInput, Is.EqualTo("use key [REDACTED]"));
-        Assert.That(snapshot.Turns.Single().Runs.Single().FinalMessage, Is.EqualTo("done with [REDACTED]"));
+        Assert.That(snapshot.Turns.Single().UserInput, Is.EqualTo("use key sk-test-secret-value"));
+        Assert.That(snapshot.Turns.Single().Runs.Single().FinalMessage, Is.EqualTo("done with sk-test-secret-value"));
         var restored = SessionResume.Restore(snapshot, ws.Root, Identity, SystemPrompt);
         Assert.That(restored.Session.Id, Is.EqualTo(sessionId));
 
@@ -481,14 +481,14 @@ public class SessionResumeTests
                                sent);
         TestAssert.ContainsAll(message =>
             message is { Role: ChatRole.Assistant, Content: "done with sk-test-secret-value" }, sent);
-        var retainedDisplayAndAudit =
+        var retainedAudit =
             string.Join('\n', (await ReadLinesSharedAsync(
                 Path.Combine(dir.Root, sessionId + SessionStoreWriter.LogFileSuffix)))
                 .SelectMany(line => JsonNode.Parse(line)!["records"]!.AsArray()
-                                           .Where(record => record!["kind"]!.GetValue<string>() is "audit" or "history")
+                                           .Where(record => record!["kind"]!.GetValue<string>() == "audit")
                                            .Select(record => record!["payload"]!.ToJsonString())));
-        TestAssert.DoesNotContain("sk-test-secret-value", retainedDisplayAndAudit, StringComparison.Ordinal);
-        TestAssert.DoesNotContain("opaque-payload-1", retainedDisplayAndAudit, StringComparison.Ordinal);
+        TestAssert.DoesNotContain("sk-test-secret-value", retainedAudit, StringComparison.Ordinal);
+        TestAssert.DoesNotContain("opaque-payload-1", retainedAudit, StringComparison.Ordinal);
     }
 
 
@@ -617,9 +617,9 @@ public class SessionResumeTests
                             Is.EqualTo(PersistedReasoning.ComputeOpaqueHash(entry.ProtectedData, entry.ItemId)));
         }
 
-        Assert.That(snapshot.Turns.Single().UserInput, Is.EqualTo("current [REDACTED] [REDACTED]"));
+        Assert.That(snapshot.Turns.Single().UserInput, Is.EqualTo("current " + secret + " " + numericSecret));
         var storedRun = snapshot.Turns.Single().Runs.Single();
-        Assert.That(storedRun.FinalMessage, Is.EqualTo("done [REDACTED]"));
+        Assert.That(storedRun.FinalMessage, Is.EqualTo("done " + secret));
         Assert.That(storedRun.Error, Is.EqualTo("error [REDACTED]"));
         var restored = SessionResume.Restore(snapshot, ws.Root, Identity, systemPrompt, contextOptions);
         Assert.That(restored.Context.Position, Is.EqualTo(context.Position));
