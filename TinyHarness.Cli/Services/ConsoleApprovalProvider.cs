@@ -5,16 +5,11 @@ using TinyHarness.Core.Services.Permissions;
 namespace TinyHarness.Cli.Services;
 
 /// <summary>
-///     在终端显示已经准备好的副作用、权限范围与必要预览，然后读取用户的审批选择。
-///     M12.2 起"会话允许"的文案明确为本次运行范围（PLAN §4.2）：授权不延伸到未来运行，
-///     也不被已保存会话继承；旧的 <c>[s]ession</c> 输入保持兼容，含义相同。所有展示文本
-///     先做已知密钥脱敏再转义控制字符——审批界面与其他展示面遵循同一条不回显密钥的规则。
-///     Displays the prepared side effect, permission scope, and any required preview before reading the user's choice.
-///     Since M12.2 the "session approval" copy states the run-scoped reality (PLAN §4.2):
-///     the grant does not extend to future runs nor is it inherited by a saved session,
-///     while the legacy <c>[s]ession</c> input stays accepted with the same meaning. Every
-///     displayed text is redacted for known secrets before control characters are escaped —
-///     the approval UI follows the same no-echo rule as every other display surface.
+///     <para>展示副作用范围与原始补丁预览，并读取本次运行范围的审批；命令摘要仍隐藏已知密钥。</para>
+///     <para>
+///         Shows side-effect scopes and original patch previews for run-scoped approval; command summaries still hide
+///         known keys.
+///     </para>
 /// </summary>
 internal sealed class ConsoleApprovalProvider(
     TextReader                           input,
@@ -44,16 +39,17 @@ internal sealed class ConsoleApprovalProvider(
             await
                 output.WriteLineAsync("  RISK: elevated — shell syntax can chain commands, redirect output, and expand variables.");
 
-        await output.WriteLineAsync($"  {TerminalDisplay.Format(preparation.Summary, _redactor)}");
+        var commandRedactor = preparation.Capability == "process.execute" ? _redactor : null;
+        await output.WriteLineAsync($"  {TerminalDisplay.Format(preparation.Summary, commandRedactor)}");
         foreach (var target in preparation.TargetPaths)
-            await output.WriteLineAsync($"  target: {TerminalDisplay.Format(target, _redactor)}");
+            await output.WriteLineAsync($"  target: {TerminalDisplay.Format(target)}");
 
         if (preparation.ToolName == "apply_patch")
         {
             var patch = preparation.Arguments["patch"]?.GetValue<string>()
                      ?? throw new InvalidDataException("Cannot approve apply_patch without a patch preview.");
             await output.WriteLineAsync("  Proposed diff (control characters are escaped):");
-            await output.WriteLineAsync(TerminalDisplay.Format(patch, _redactor));
+            await output.WriteLineAsync(TerminalDisplay.Format(patch));
         }
 
         var runConstraint = preparation.SessionConstraint is null

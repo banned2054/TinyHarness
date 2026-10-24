@@ -380,7 +380,7 @@ internal sealed class ChatSessionConsole : IDisposable
                 message = $"Amendment {accepted.Id} saved and queued; it applies at the next safe boundary.";
             }
 
-            await _output.WriteLineAsync(TerminalDisplay.Format(message, _redactor)).ConfigureAwait(false);
+            await _output.WriteLineAsync(TerminalDisplay.Format(message)).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or IOException
                                       or OperationCanceledException)

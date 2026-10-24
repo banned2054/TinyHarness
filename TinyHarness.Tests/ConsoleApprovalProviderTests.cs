@@ -95,7 +95,7 @@ public class ConsoleApprovalProviderTests
     }
 
     [Test]
-    public async Task Prompt_RedactsKnownSecretsFromSummaryAndPatchPreview()
+    public async Task Prompt_PreservesOriginalLocalPatchPreview()
     {
         using var dir = new TestTempDir();
         var preparation =
@@ -115,10 +115,10 @@ public class ConsoleApprovalProviderTests
                                           new Dictionary<string, string> { ["env"] = "sk-secret-value" })
            .PromptAsync(preparation, CancellationToken.None);
 
-        // 审批界面与其他展示面一样：补丁预览中嵌入的已知密钥不得原样出现在终端。
+        // 本地审批必须能核对实际 diff，不能用脱敏文本改变补丁内容。
         var shown = output.ToString();
-        Assert.That(shown, Does.Contain("[REDACTED]"));
-        Assert.That(shown, Does.Not.Contain("sk-secret-value"));
+        Assert.That(shown, Does.Contain("-key = sk-secret-value"));
+        Assert.That(shown, Does.Not.Contain("[REDACTED]"));
     }
 
     [Test]

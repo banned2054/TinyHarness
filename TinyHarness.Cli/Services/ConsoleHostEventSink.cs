@@ -15,10 +15,10 @@ namespace TinyHarness.Cli.Services;
 ///     </para>
 /// </summary>
 /// <remarks>
-///     <para>文本跨片段脱敏后转义控制字符；其他输出和审批前收尾当前行。审批界面由 ConsoleApprovalProvider 绘制。</para>
+///     <para>本地正文保留原文并转义控制字符；诊断继续脱敏。受控出口可显式启用正文脱敏。</para>
 ///     <para>
-///         Text is redacted across fragments before escaping controls; lines close before other output and approvals.
-///         ConsoleApprovalProvider draws prompts.
+///         Local text is preserved with controls escaped, while diagnostics remain redacted.
+///         Controlled output surfaces can explicitly enable content redaction.
 ///     </para>
 /// </remarks>
 internal sealed partial class ConsoleHostEventSink(
@@ -26,18 +26,20 @@ internal sealed partial class ConsoleHostEventSink(
     TextWriter?                          output           = null,
     ReasoningDisplayMode                 reasoningDisplay = ReasoningDisplayMode.Status,
     bool?                                animateThinking  = null,
-    TimeProvider?                        timeProvider     = null) : IHostEventSink, IAsyncDisposable
+    TimeProvider?                        timeProvider     = null,
+    bool                                 redactContent    = false) : IHostEventSink, IAsyncDisposable
 {
-    private readonly TextWriter            _output   = output ?? Console.Out;
-    private readonly DisplaySecretRedactor _redactor = new(knownSecrets);
+    private readonly TextWriter             _output          = output ?? Console.Out;
+    private readonly DisplaySecretRedactor  _redactor        = new(knownSecrets);
+    private readonly DisplaySecretRedactor? _contentRedactor = redactContent ? new(knownSecrets) : null;
 
     private bool _lineOpen;
 
     private bool _toolLineOpen;
 
     /// <summary>
-    ///     <para>串行输出宿主事件和动画；文本在展示前跨片段脱敏，终态冲刷剩余缓冲。</para>
-    ///     <para>Serializes host events and animation; redacts text across fragments and drains the buffer on completion.</para>
+    ///     <para>串行输出宿主事件和动画；仅在显式选择时对正文进行跨片段脱敏。</para>
+    ///     <para>Serializes host events and animation, redacting content across fragments only when explicitly selected.</para>
     /// </summary>
     public async ValueTask PublishAsync(HostEvent @event, CancellationToken cancellationToken)
     {
@@ -121,7 +123,7 @@ internal sealed partial class ConsoleHostEventSink(
 
             case HostEventKind.ToolStarted when @event.Payload is ToolPreparation started :
                 await CloseOpenLineAsync(cancellationToken).ConfigureAwait(false);
-                await _output.WriteAsync(TerminalDisplay.Format($"tool: {started.Summary}", _redactor).AsMemory(),
+                await _output.WriteAsync(ToolSummary(started).AsMemory(),
                                          cancellationToken).ConfigureAwait(false);
                 _lineOpen     = true;
                 _toolLineOpen = true;
@@ -179,14 +181,12 @@ internal sealed partial class ConsoleHostEventSink(
     }
 
     /// <summary>
-    ///     流式打印一个文本增量：脱敏后转义控制字符（保留换行与制表符）并写入。
-    ///     Streams one text delta: redact, escape control characters (keeping newlines and
-    ///     tabs) and write.
+    ///     <para>打印正文增量并转义控制字符；只有受控出口显式要求时才脱敏。</para>
+    ///     <para>Prints a content delta with controls escaped, redacting only when a controlled output explicitly requests it.</para>
     /// </summary>
     private async Task WriteDeltaAsync(string delta, CancellationToken cancellationToken)
     {
-        // Push already replaced the secrets; Format skips a redundant redaction scan.
-        var text = TerminalDisplay.Format(_redactor.Push(delta));
+        var text = TerminalDisplay.Format(_contentRedactor?.Push(delta) ?? delta);
         if (text.Length == 0) return;
 
         await _output.WriteAsync(text.AsMemory(), cancellationToken).ConfigureAwait(false);
@@ -212,14 +212,21 @@ internal sealed partial class ConsoleHostEventSink(
         else
         {
             await CloseOpenLineAsync(cancellationToken).ConfigureAwait(false);
-            await _output.WriteLineAsync(TerminalDisplay.Format($"tool: {outcome.Preparation.Summary}{suffix}",
-                                                                _redactor).AsMemory(), cancellationToken)
+            await _output.WriteLineAsync((ToolSummary(outcome.Preparation) + suffix).AsMemory(), cancellationToken)
                          .ConfigureAwait(false);
         }
 
         _lineOpen     = false;
         _toolLineOpen = false;
     }
+
+    /// <summary>
+    ///     <para>仅对命令摘要或显式脱敏出口隐藏密钥，普通本地工具摘要保留原文。</para>
+    ///     <para>Hides keys in command summaries or explicitly redacted output, preserving ordinary local tool summaries.</para>
+    /// </summary>
+    private string ToolSummary(ToolPreparation preparation) =>
+        TerminalDisplay.Format($"tool: {preparation.Summary}",
+                               preparation.Capability == "process.execute" ? _redactor : _contentRedactor);
 
     /// <summary>
     ///     输出一行前补换行关闭流式文本行，然后写入事件行。
@@ -233,19 +240,13 @@ internal sealed partial class ConsoleHostEventSink(
     }
 
     /// <summary>
-    ///     关闭未闭合的流式行：先输出脱敏缓冲的可显示部分，再补换行。中途边界只输出安全
-    ///     前缀——流尚未结束，尾部仍可能是跨流拆分密钥的前缀，留给下一条流拼接匹配；终态
-    ///     时流已结束，全量冲刷剩余缓冲。
-    ///     Closes an open streamed line: first emit the redactor's displayable part, then
-    ///     the newline. A mid-stream boundary emits only the safe prefix — the stream has
-    ///     not ended, so the tail may still be the prefix of a secret split across streams
-    ///     and stays for matching against the next one; at the end of the stream the whole
-    ///     remaining buffer is flushed.
+    ///     <para>关闭流式行；显式脱敏时，中途保留可能的密钥前缀，终态冲刷全部缓冲。</para>
+    ///     <para>Closes a streamed line; explicit redaction retains possible key prefixes mid-stream and drains all buffered text at completion.</para>
     /// </summary>
     private async Task CloseOpenLineAsync(CancellationToken cancellationToken, bool endOfStream = false)
     {
         _toolLineOpen = false;
-        var tail = endOfStream ? _redactor.Flush() : _redactor.FlushSafe();
+        var tail = (endOfStream ? _contentRedactor?.Flush() : _contentRedactor?.FlushSafe()) ?? string.Empty;
         if (tail.Length > 0)
         {
             await _output.WriteAsync(tail.AsMemory(), cancellationToken).ConfigureAwait(false);

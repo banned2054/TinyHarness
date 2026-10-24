@@ -154,7 +154,7 @@ internal static class SessionCommand
              .ConfigureAwait(false);
 
         // 区分历史未知副作用与当前确认状态；待检查的会话续聊时仍阻断副作用。
-        if (session.PendingInspectionReason is not null ||
+        if (session.PendingInspectionReason is not null   ||
             session.InspectionAcknowledgedUtc is not null ||
             session.Turns.SelectMany(turn => turn.Runs).Any(run => run.NeedsInspection == true))
         {
@@ -233,7 +233,7 @@ internal static class SessionCommand
                                  "(historical fact; current inspection state is shown above)",
                                  cancellationToken).ConfigureAwait(false);
 
-        // 从脱敏检查投影展示执行记录；未知结果不得补造成功、失败或退出码。
+        // 从运行事实展示执行记录；未知结果不得补造成功、失败或退出码。
         if (!includeDetails || run.ToolCalls is not { Count: > 0 }) return;
 
         foreach (var call in run.ToolCalls)

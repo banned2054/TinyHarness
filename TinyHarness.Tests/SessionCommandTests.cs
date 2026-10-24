@@ -29,6 +29,51 @@ namespace TinyHarness.Tests;
 public class SessionCommandTests
 {
     [Test]
+    public async Task Show_PreservesLocalContentWithoutReadingCredentialsOrOpaque()
+    {
+        using var    fixture = new SessionCliFixture();
+        const string secret  = "synthetic-local-history-key";
+        var          client  = new FakeChatClient();
+        client.Enqueue(FakeChatClient.ReasonedText("inspect " + secret, "opaque-id", "opaque-value",
+                                                   "answer "  + secret + "\u001b[2J"));
+        string sessionId;
+        using (var host = new TinyHarness.Core.Services.Session.ChatSessionHost(
+                                                                                fixture.Workspace,
+                                                                                new SessionModelIdentity("test-model",
+                                                                                    "https://example.invalid/v1",
+                                                                                    ChatApiKind.ChatCompletions),
+                                                                                new AgentOptions
+                                                                                {
+                                                                                    Model = "test-model",
+                                                                                    MaxAgentSteps = 4,
+                                                                                    DefaultToolTimeoutSeconds = 30
+                                                                                },
+                                                                                client,
+                                                                                new TinyHarness.Core.Services.Tools.
+                                                                                    ToolRegistry([]), "sys",
+                                                                                sessionWriterFactory : id =>
+                                                                                    new SessionStoreWriter(fixture
+                                                                                           .StoreDirectory, id,
+                                                                                        new Dictionary<string,
+                                                                                            string>
+                                                                                        {
+                                                                                            ["key"] = secret
+                                                                                        })))
+        {
+            sessionId = host.Session.Id;
+            await host.SubmitTurnAsync("token=example " + secret, CancellationToken.None);
+            Assert.That(host.PersistenceWarning, Is.Null);
+        }
+
+        var exit = await SessionCommand.ExecuteAsync(fixture.CreateContext(), Options("show", sessionId),
+                                                     CancellationToken.None);
+        Assert.That(exit, Is.Zero);
+        Assert.That(fixture.Io.Output, Does.Contain("token=example " + secret));
+        Assert.That(fixture.Io.Output, Does.Contain("answer "        + secret + "\\u001B[2J"));
+        Assert.That(fixture.Io.Output, Does.Not.Contain("opaque-id").And.Not.Contain("opaque-value"));
+    }
+
+    [Test]
     public async Task List_ShowsStoredSessionsOffline()
     {
         using var fixture = new SessionCliFixture();
@@ -137,10 +182,10 @@ public class SessionCommandTests
                         ]
                     }
                 }.Select(item =>
-                new SessionLogRecord("", "history",
-                                     JsonSerializer.SerializeToElement(
-                                              item,
-                                              SessionHistoryJsonContext.Default.SessionHistoryItem)))
+                             new SessionLogRecord("", "history",
+                                                  JsonSerializer.SerializeToElement(
+                                                   item,
+                                                   SessionHistoryJsonContext.Default.SessionHistoryItem)))
                  .ToArray();
             await writer.AppendRecordsAsync(items, CancellationToken.None);
         }
@@ -367,38 +412,39 @@ public class SessionCommandTests
         {
             new("", "identity",
                 JsonSerializer.SerializeToElement(
-                    new SessionLogIdentity(session.Id, session.WorkspaceRoot, session.Model!, session.CreatedUtc),
-                    SessionLogJsonContext.Default.SessionLogIdentity))
+                                                  new SessionLogIdentity(session.Id, session.WorkspaceRoot,
+                                                                         session.Model!, session.CreatedUtc),
+                                                  SessionLogJsonContext.Default.SessionLogIdentity))
         };
         foreach (var turn in session.Turns)
         {
             records.Add(new SessionLogRecord("", "turn", JsonSerializer.SerializeToElement(
-                                                  new SessionLogTurn(turn.Id, turn.UserInput, turn.CreatedUtc),
-                                                  SessionLogJsonContext.Default.SessionLogTurn)));
+                                              new SessionLogTurn(turn.Id, turn.UserInput, turn.CreatedUtc),
+                                              SessionLogJsonContext.Default.SessionLogTurn)));
             foreach (var run in turn.Runs)
                 records.Add(new SessionLogRecord("", "run", JsonSerializer.SerializeToElement(
-                                                      new SessionLogRun(turn.Id, run),
-                                                      SessionLogJsonContext.Default.SessionLogRun)));
+                                                  new SessionLogRun(turn.Id, run),
+                                                  SessionLogJsonContext.Default.SessionLogRun)));
         }
 
         if (session.Conversation is { } conversation)
         {
             foreach (var message in conversation.Messages)
                 records.Add(new SessionLogRecord("", "message", JsonSerializer.SerializeToElement(
-                                                      new SessionLogMessage(message),
-                                                      SessionLogJsonContext.Default.SessionLogMessage)));
+                                                  new SessionLogMessage(message),
+                                                  SessionLogJsonContext.Default.SessionLogMessage)));
             records.Add(new SessionLogRecord("", "compaction-checkpoint", JsonSerializer.SerializeToElement(
-                                                  new SessionLogCheckpoint(conversation.State,
-                                                                           conversation.HasState,
-                                                                           conversation.FoldStartMessageIndex,
-                                                                           conversation.FoldEndMessageIndex),
-                                                  SessionLogJsonContext.Default.SessionLogCheckpoint)));
+                                              new SessionLogCheckpoint(conversation.State,
+                                                                       conversation.HasState,
+                                                                       conversation.FoldStartMessageIndex,
+                                                                       conversation.FoldEndMessageIndex),
+                                              SessionLogJsonContext.Default.SessionLogCheckpoint)));
         }
 
         records.Add(new SessionLogRecord("", "session-state", JsonSerializer.SerializeToElement(
-                                              new SessionLogSessionState(session.InspectionAcknowledgedUtc,
-                                                                         session.PendingInspectionReason),
-                                              SessionLogJsonContext.Default.SessionLogSessionState)));
+                                          new SessionLogSessionState(session.InspectionAcknowledgedUtc,
+                                                                     session.PendingInspectionReason),
+                                          SessionLogJsonContext.Default.SessionLogSessionState)));
         // CLI 读取测试直接构造完整日志批次，避免借用旧快照格式。
         var batch = new SessionLogBatch
         {
@@ -408,10 +454,10 @@ public class SessionCommandTests
             BatchId    = SessionStoreWriter.BatchId(session.Id, 1),
             WrittenUtc = session.UpdatedUtc,
             Records = records.Select((record, index) =>
-            record with
-            {
-            Id = SessionStoreWriter.RecordId(session.Id, 1, index)
-            }).ToArray()
+                                         record with
+                                         {
+                                             Id = SessionStoreWriter.RecordId(session.Id, 1, index)
+                                         }).ToArray()
         };
         await File.WriteAllTextAsync(Path.Combine(directory, session.Id + SessionStoreWriter.LogFileSuffix),
                                      JsonSerializer.Serialize(batch, SessionLogJsonContext.Default.SessionLogBatch) +

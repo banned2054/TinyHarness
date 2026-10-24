@@ -84,7 +84,7 @@ public class ReasoningDisplayTests
     }
 
     [Test]
-    public async Task ContentEscapesControlsAndRedactsAcrossReasoningAndAnswer()
+    public async Task LocalReasoningAndAnswerPreserveTextAndEscapeControls()
     {
         using var output = new StringWriter { NewLine = "\n" };
         await using var sink = new ConsoleHostEventSink(new Dictionary<string, string> { ["test"] = "sk-secret-value" },
@@ -93,7 +93,7 @@ public class ReasoningDisplayTests
         await sink.PublishAsync(new HostEvent { Kind = HostEventKind.AssistantTextDelta, Payload = "value done" },
                                 CancellationToken.None);
         await sink.PublishAsync(new HostEvent { Kind = HostEventKind.RunFinished }, CancellationToken.None);
-        Assert.That(output.ToString(), Is.EqualTo("思考：\na\\u001B[2J \n回答：\n[REDACTED] done\n"));
+        Assert.That(output.ToString(), Is.EqualTo("思考：\na\\u001B[2J sk-secret-\n回答：\nvalue done\n"));
     }
 
     [Test]

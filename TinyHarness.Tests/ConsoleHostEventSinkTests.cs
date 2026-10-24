@@ -10,12 +10,12 @@ namespace TinyHarness.Tests;
 
 /// <summary>
 ///     <para>
-///         run 命令事件展示契约：增量流式内联打印、跨增量密钥脱敏、控制字符转义、工具单行
+///         run 命令事件展示契约：本地增量保留原文、可选跨增量脱敏、控制字符转义、工具单行
 ///         生命周期、非增量事件前补换行、终态事件收尾。
 ///     </para>
 ///     <para>
-///         The run command's event display contract: deltas stream inline, secrets spanning
-///         deltas are redacted, control characters are escaped, tools render as one line,
+///         The run command's event display contract: local deltas preserve text, optional redaction covers
+///         fragmented secrets, control characters are escaped, tools render as one line,
 ///         line events close an open streamed line, and the terminal event tidies up.
 ///     </para>
 /// </summary>
@@ -36,36 +36,37 @@ public class ConsoleHostEventSinkTests
             FirstReasoningMilliseconds = 10, LastStreamEventMilliseconds = 10, ReasoningCharacters = 500
         };
         var output = await RenderAsync(
-            new HostEvent
-            {
-                Kind    = HostEventKind.ModelRequestStarted,
-                Payload = new ModelRequestProgress(1, false, 0)
-            },
-            new HostEvent { Kind = HostEventKind.ModelRequestActivity, Payload = reasoning },
-            new HostEvent
-            {
-                Kind    = HostEventKind.ModelRequestWaiting,
-                Payload = reasoning with { ElapsedMilliseconds = 10_000 }
-            },
-            new HostEvent
-            {
-                Kind    = HostEventKind.ModelRequestWaiting,
-                Payload = reasoning with { ElapsedMilliseconds = 30_010 }
-            },
-            new HostEvent
-            {
-                Kind = HostEventKind.ModelUsage,
-                Payload = new ModelUsage(100, 20, "stop", false) { CachedInputTokens = cached }
-            },
-            new HostEvent
-            {
-                Kind = HostEventKind.ModelRequestFinished,
-                Payload = reasoning with
-                {
-                    ElapsedMilliseconds = 31_000, Outcome = "cancelled",
-                    CachedInputTokens = cached
-                }
-            });
+                                       new HostEvent
+                                       {
+                                           Kind    = HostEventKind.ModelRequestStarted,
+                                           Payload = new ModelRequestProgress(1, false, 0)
+                                       },
+                                       new HostEvent { Kind = HostEventKind.ModelRequestActivity, Payload = reasoning },
+                                       new HostEvent
+                                       {
+                                           Kind    = HostEventKind.ModelRequestWaiting,
+                                           Payload = reasoning with { ElapsedMilliseconds = 10_000 }
+                                       },
+                                       new HostEvent
+                                       {
+                                           Kind    = HostEventKind.ModelRequestWaiting,
+                                           Payload = reasoning with { ElapsedMilliseconds = 30_010 }
+                                       },
+                                       new HostEvent
+                                       {
+                                           Kind = HostEventKind.ModelUsage,
+                                           Payload = new ModelUsage(100, 20, "stop", false)
+                                               { CachedInputTokens = cached }
+                                       },
+                                       new HostEvent
+                                       {
+                                           Kind = HostEventKind.ModelRequestFinished,
+                                           Payload = reasoning with
+                                           {
+                                               ElapsedMilliseconds = 31_000, Outcome = "cancelled",
+                                               CachedInputTokens = cached
+                                           }
+                                       });
         Assert.That(output, Is.EqualTo("等待中... 0s\n思考中... 0s\n"));
     }
 
@@ -77,22 +78,22 @@ public class ConsoleHostEventSinkTests
     public async Task ModelRequestLifecycleDisplaysWaitAndIncompleteAnswer()
     {
         var output = await RenderAsync(
-            new HostEvent
-            {
-                Kind    = HostEventKind.ModelRequestStarted,
-                Payload = new ModelRequestProgress(2, true, 0)
-            },
-            new HostEvent
-            {
-                Kind    = HostEventKind.ModelRequestWaiting,
-                Payload = new ModelRequestProgress(2, true, 30_000)
-            },
-            TextDelta("partial"),
-            new HostEvent
-            {
-                Kind    = HostEventKind.ModelRequestFinished,
-                Payload = new ModelRequestProgress(2, true, 32_000, "failed", true)
-            });
+                                       new HostEvent
+                                       {
+                                           Kind    = HostEventKind.ModelRequestStarted,
+                                           Payload = new ModelRequestProgress(2, true, 0)
+                                       },
+                                       new HostEvent
+                                       {
+                                           Kind    = HostEventKind.ModelRequestWaiting,
+                                           Payload = new ModelRequestProgress(2, true, 30_000)
+                                       },
+                                       TextDelta("partial"),
+                                       new HostEvent
+                                       {
+                                           Kind    = HostEventKind.ModelRequestFinished,
+                                           Payload = new ModelRequestProgress(2, true, 32_000, "failed", true)
+                                       });
         Assert.That(output, Is.EqualTo("等待中... 0s\npartial\n回答未完成。\n"));
     }
 
@@ -212,7 +213,11 @@ public class ConsoleHostEventSinkTests
     public async Task HiddenUsagePreservesSingleLineToolLifecycle()
     {
         var output = await RenderAsync(ToolStartedEvent(),
-                                       new HostEvent { Kind = HostEventKind.ModelUsage, Payload = new ModelUsage(100, 10, "tool_calls", false) },
+                                       new HostEvent
+                                       {
+                                           Kind    = HostEventKind.ModelUsage,
+                                           Payload = new ModelUsage(100, 10, "tool_calls", false)
+                                       },
                                        ToolFinishedEvent());
         Assert.That(output, Is.EqualTo("tool: read_file src/a.cs -> ok\n"));
     }
@@ -284,11 +289,11 @@ public class ConsoleHostEventSinkTests
     }
 
     [Test]
-    public async Task Deltas_AreRedactedAcrossFragments_BeforeDisplay()
+    public async Task Deltas_ExplicitRedactionCoversFragmentedSecrets()
     {
         using var output = new StringWriter { NewLine = "\n" };
         var sink = new ConsoleHostEventSink(new Dictionary<string, string> { ["env"] = "sk-secret-value" },
-                                            output);
+                                            output, redactContent : true);
         await sink.PublishAsync(TextDelta("see sk-secret-"), CancellationToken.None);
         await sink.PublishAsync(TextDelta("value now"), CancellationToken.None);
         await sink.PublishAsync(new HostEvent { Kind = HostEventKind.RunFinished, Sequence = 3 },
@@ -304,7 +309,7 @@ public class ConsoleHostEventSinkTests
         // 否则下一段流的补全会把整个密钥补齐显示出来。
         using var output = new StringWriter { NewLine = "\n" };
         var sink = new ConsoleHostEventSink(new Dictionary<string, string> { ["env"] = "sk-secret-value" },
-                                            output);
+                                            output, redactContent : true);
         await sink.PublishAsync(TextDelta("see sk-secret-"), CancellationToken.None);
         await sink.PublishAsync(new HostEvent
                                 {
@@ -323,19 +328,35 @@ public class ConsoleHostEventSinkTests
     }
 
     [Test]
-    public async Task ErrorLines_PrintRedacted()
+    public async Task LocalDeltasPreserveKnownKeysAndBusinessAssignments()
     {
         using var output = new StringWriter { NewLine = "\n" };
-        var       sink   = new ConsoleHostEventSink(new Dictionary<string, string> { ["env"] = "tok123" }, output);
+        await using var sink = new ConsoleHostEventSink(
+                                                        new Dictionary<string, string> { ["key"] = "sk-local-value" },
+                                                        output);
+        await sink.PublishAsync(TextDelta("token=example; sk-local-"), CancellationToken.None);
+        Assert.That(output.ToString(), Is.EqualTo("token=example; sk-local-"));
+        await sink.PublishAsync(TextDelta("value\u001b[2J"), CancellationToken.None);
+        await sink.PublishAsync(new HostEvent { Kind = HostEventKind.RunFinished }, CancellationToken.None);
+        Assert.That(output.ToString(), Is.EqualTo("token=example; sk-local-value\\u001B[2J\n"));
+    }
+
+    [Test]
+    public async Task ErrorLines_PrintRedacted()
+    {
+        using var output  = new StringWriter { NewLine               = "\n" };
+        var       secrets = new Dictionary<string, string> { ["env"] = "tok123" };
+        var       sink    = new ConsoleHostEventSink(secrets, output);
+        secrets["switched"] = "tok456";
         await sink.PublishAsync(new HostEvent
                                 {
                                     Kind     = HostEventKind.RunError,
                                     Sequence = 1,
-                                    Payload  = "request with tok123 failed"
+                                    Payload  = "request with tok123 and tok456 failed"
                                 },
                                 CancellationToken.None);
 
-        Assert.That(output.ToString(), Is.EqualTo("error: request with [REDACTED] failed\n"));
+        Assert.That(output.ToString(), Is.EqualTo("error: request with [REDACTED] and [REDACTED] failed\n"));
     }
 
     [Test]

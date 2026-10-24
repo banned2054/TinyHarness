@@ -224,7 +224,7 @@ internal static class Program
                          .WriteLineAsync($"usage      : {inputTokens} in / {outputTokens} out tokens (server-reported; absent requests not counted)");
         }
 
-        await Console.Out.WriteLineAsync($"final      : {TerminalDisplay.Format(result.FinalMessage, redactor)}");
+        await Console.Out.WriteLineAsync($"final      : {TerminalDisplay.Format(result.FinalMessage)}");
         await Console.Out.WriteLineAsync("storage    : append-only JSONL session log");
         if (host.PersistencePath is { } persistencePath && File.Exists(persistencePath))
             await Console.Out.WriteLineAsync($"session    : {persistencePath}").ConfigureAwait(false);

@@ -15,6 +15,16 @@ namespace TinyHarness.Tests;
 /// </summary>
 public class DisplaySecretRedactorTests
 {
+    [Test]
+    public void DiagnosticRedactionObservesNewKeysAndRetainsOldKeys()
+    {
+        var secrets  = new Dictionary<string, string> { ["first"] = "original-key" };
+        var redactor = new DisplaySecretRedactor(secrets);
+        secrets["second"] = "replacement-key";
+        Assert.That(redactor.Redact("original-key replacement-key"), Is.EqualTo("[REDACTED] [REDACTED]"));
+        Assert.That(redactor.Push("replacement-") + redactor.Push("key") + redactor.Flush(), Is.EqualTo("[REDACTED]"));
+    }
+
     private static IReadOnlyDictionary<string, string> Secrets(params string[] values)
     {
         return values.ToDictionary(value => $"name-{value}", value => value, StringComparer.Ordinal);

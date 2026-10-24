@@ -101,13 +101,12 @@ internal static class ModelResponseOfflineSmoke
             Require(result is { Status: AgentStatus.Completed, ToolExecutions: 0 },
                     "readable reasoning did not complete");
             var shown = contentDisplay.ToString();
-            Require(shown.Contains("思考：", StringComparison.Ordinal)                &&
-                    shown.Contains("回答：", StringComparison.Ordinal)                &&
-                    shown.Contains("inspect [REDACTED]", StringComparison.Ordinal) &&
-                    !shown.Contains("smoke-secret", StringComparison.Ordinal)      &&
-                    !shown.Contains("opaque", StringComparison.Ordinal)            &&
+            Require(shown.Contains("思考：", StringComparison.Ordinal)                  &&
+                    shown.Contains("回答：", StringComparison.Ordinal)                  &&
+                    shown.Contains("inspect smoke-secret", StringComparison.Ordinal) &&
+                    !shown.Contains("opaque", StringComparison.Ordinal)              &&
                     shown.Split("inspect", StringSplitOptions.None).Length == 2,
-                    "readable reasoning redaction, deduplication or separation failed");
+                    "local reasoning preservation, deduplication or separation failed");
         }
 
         using var cancel = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
