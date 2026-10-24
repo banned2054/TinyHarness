@@ -202,7 +202,7 @@ The MCP worker uses user configuration and sends permitted workspace content to 
 
 - [Documentation navigation](Docs/README.md#documentation) — the Chinese README lists active plans and document locations.
 - [Changelog](Docs/CHANGELOG.md) and [code style](Docs/code-style.md).
-- Plans under implementation stay at the top level of `Docs/`; completed plans move into `Docs/Archive/`.
+- Active plans: [provider/model selection](Docs/session-model-switching-design.md) and [desktop migration](Docs/desktop-migration-plan.md), mainly in Chinese.
 - [Completed designs and historical records](Docs/Archive/README.md) — session persistence, project rules, prompts, compaction, budgets, sandbox integration, and validation evidence.
 - Maintenance guides: [release packaging](Docs/Guides/releasing.md) and [third-party notices](Docs/Guides/third-party-notices.md).
 - [PLAN.md](PLAN.md), [historical plans](PAST_PLAN.md), and [AGENTS.md](AGENTS.md) — development entry points and repository rules.

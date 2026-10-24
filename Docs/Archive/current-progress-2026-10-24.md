@@ -7,6 +7,8 @@
 ## 当前状态
 
 - 产品仍处于 0.0.1 原型阶段；原 MVP 至 M17 阶段计划已收口，见[历史计划](../../PAST_PLAN.md)。阶段收口不代表完成所有场景的全面验收。
+- [供应商、模型管理与会话内选择](../session-model-switching-design.md)处于实施中。已完成和待完成的具体范围由该文档维护，不在这里复制第二份进度表。
+- [桌面 GUI 迁移](../desktop-migration-plan.md)保留为活动计划；目标契约、实际实现与验证范围需结合工作区核对，不因已经存在 Desktop 项目就宣称迁移完成。
 - 使用方式和已知限制见[中文 README](../README.md)与[英文 README](../../README.md)；当前契约、单项计划和历史记录统一从[文档索引](../README.md#documentation)查找。
 
 ## 接续工作
