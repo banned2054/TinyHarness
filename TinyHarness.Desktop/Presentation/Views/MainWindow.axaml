@@ -1,0 +1,93 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:TinyHarness.Desktop.ViewModels"
+        xmlns:conversation="using:TinyHarness.Desktop.Presentation.Views.Conversation"
+        xmlns:tooling="using:TinyHarness.Desktop.Presentation.Views.Tooling"
+        x:Class="TinyHarness.Desktop.Presentation.Views.MainWindow"
+        x:DataType="vm:MainWindowViewModel"
+        Title="TinyHarness" Width="1220" Height="820" MinWidth="850" MinHeight="560"
+        Background="{DynamicResource ChatBackgroundBrush}">
+    <Window.DataTemplates>
+        <DataTemplate DataType="vm:MessageItemViewModel"><conversation:MessageView /></DataTemplate>
+        <DataTemplate DataType="vm:ToolActivityItemViewModel"><tooling:ToolActivityView /></DataTemplate>
+    </Window.DataTemplates>
+    <Grid ColumnDefinitions="260,5,*" RowDefinitions="*,Auto">
+        <Border Background="{DynamicResource SidebarBackgroundBrush}" Padding="16,20,8,12">
+            <Grid RowDefinitions="Auto,Auto,*,Auto" RowSpacing="16">
+                <TextBlock Text="TinyHarness" FontSize="21" FontWeight="SemiBold" Margin="8,0" />
+                <Button Grid.Row="1" Content="＋ 新对话" Command="{Binding NewSessionCommand}" HorizontalAlignment="Stretch" />
+                <ListBox Grid.Row="2" Classes="session-list" ItemsSource="{Binding Sessions}"
+                         SelectedItem="{Binding SelectedSession, Mode=TwoWay}">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate x:DataType="vm:SessionViewModel">
+                            <StackPanel Margin="8,8,0,8" Spacing="4">
+                                <TextBlock Text="{Binding Title}" TextTrimming="CharacterEllipsis" />
+                                <TextBlock Text="{Binding Status}" Classes="caption" />
+                                <TextBlock Text="{Binding WorkspaceRoot}" Classes="caption" TextTrimming="CharacterEllipsis" />
+                            </StackPanel>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+                <StackPanel Grid.Row="3" Orientation="Horizontal" Spacing="8">
+                    <Button Content="设置" Command="{Binding OpenSettingsCommand}" />
+                    <Button Content="刷新历史" Command="{Binding RefreshCommand}" />
+                </StackPanel>
+            </Grid>
+        </Border>
+        <GridSplitter Grid.Column="1" ResizeDirection="Columns" Background="Transparent" />
+        <ContentControl Grid.Column="2" Content="{Binding SelectedSession}">
+            <ContentControl.ContentTemplate>
+                <DataTemplate x:DataType="vm:SessionViewModel">
+                    <Grid RowDefinitions="Auto,*,Auto,Auto" Margin="0,12,0,0">
+                        <Grid Margin="28,6,28,12" ColumnDefinitions="*,Auto" ColumnSpacing="16">
+                            <TextBlock Text="{Binding Title}" Classes="heading" />
+                            <Panel Grid.Column="1" VerticalAlignment="Center" MaxWidth="240">
+                                <Button Content="{Binding WorkspaceLabel}" Classes="tool-toggle"
+                                        ToolTip.Tip="{Binding WorkspaceRoot}" AutomationProperties.Name="选择工作区目录"
+                                        IsVisible="{Binding CanChooseWorkspace}" Click="BrowseFolder" />
+                                <TextBlock Text="{Binding WorkspaceLabel}" Classes="caption" TextTrimming="CharacterEllipsis"
+                                           ToolTip.Tip="{Binding WorkspaceRoot}" IsVisible="{Binding !CanChooseWorkspace}" />
+                            </Panel>
+                        </Grid>
+                        <ScrollViewer Grid.Row="1" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+                            <StackPanel MaxWidth="816" Margin="28,8" Spacing="4">
+                                <ItemsControl ItemsSource="{Binding Items}" />
+                                <Button Content="加载后续历史" Command="{Binding LoadHistoryCommand}" IsVisible="{Binding HasMoreHistory}" />
+                                <ItemsControl ItemsSource="{Binding WorkItems}" />
+                            </StackPanel>
+                        </ScrollViewer>
+                        <StackPanel Grid.Row="2" MaxWidth="816" Margin="28,8" Spacing="8">
+                            <Border IsVisible="{Binding HasApproval}" Background="{DynamicResource PanelBackgroundBrush}" Padding="16" CornerRadius="12">
+                                <StackPanel Spacing="10">
+                                    <TextBlock Text="工具请求审批" FontWeight="SemiBold" />
+                                    <ScrollViewer MaxHeight="200"><TextBlock Text="{Binding ApprovalText}" Classes="tool-mono" /></ScrollViewer>
+                                    <WrapPanel Orientation="Horizontal">
+                                        <Button Content="仅允许一次" Command="{Binding AllowOnceCommand}" Margin="0,0,8,0" />
+                                        <Button Content="本轮允许此范围" Command="{Binding AllowRunCommand}" Margin="0,0,8,0" />
+                                        <Button Content="拒绝" Command="{Binding DenyCommand}" />
+                                    </WrapPanel>
+                                </StackPanel>
+                            </Border>
+                            <TextBlock Text="{Binding Notice}" IsVisible="{Binding HasNotice}" TextWrapping="Wrap" Classes="caption" />
+                            <Button Content="我已检查中断产生的变更，解除检查阻断" IsVisible="{Binding InspectionPending}"
+                                    IsEnabled="{Binding !IsRunning}" Command="{Binding AcknowledgeInspectionCommand}" />
+                        </StackPanel>
+                        <conversation:ComposerView Grid.Row="3" MaxWidth="816" Margin="28,0,28,16" />
+                    </Grid>
+                </DataTemplate>
+            </ContentControl.ContentTemplate>
+        </ContentControl>
+        <TextBlock Grid.Row="1" Grid.ColumnSpan="3" Text="{Binding Notice}" Margin="16,4" TextWrapping="Wrap" Classes="caption" />
+        <Border Grid.ColumnSpan="3" Grid.RowSpan="2" Background="{DynamicResource ChatBackgroundBrush}" IsVisible="{Binding SettingsOpen}" Padding="40">
+            <StackPanel Spacing="20" MaxWidth="760">
+                <TextBlock Text="设置" Classes="heading" />
+                <TextBlock Text="模型和凭据引用共用 TinyHarness 用户配置。修改配置后刷新目录；已打开的会话保持原模型身份。" TextWrapping="Wrap" />
+                <SelectableTextBlock Text="{Binding UserConfigPath}" TextWrapping="Wrap" />
+                <TextBlock Text="新对话也可以使用工作区内的 tinyharness.json。API key 通过环境变量或系统凭据存储提供。沙箱使用可信用户设置；本界面不会自动安装或配置系统沙箱。" TextWrapping="Wrap" Classes="caption" />
+                <Button Content="刷新模型与历史" Command="{Binding RefreshCommand}" />
+                <Button Content="切换深色 / 浅色" Command="{Binding ToggleThemeCommand}" />
+                <Button Content="返回对话" Command="{Binding OpenSettingsCommand}" />
+            </StackPanel>
+        </Border>
+    </Grid>
+</Window>

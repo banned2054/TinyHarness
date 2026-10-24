@@ -1,0 +1,317 @@
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <!-- 侧栏样式：会话列表行、分组头行、新建会话按钮与分隔条。 -->
+
+    <Style Selector="ListBox.session-list">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="Focusable" Value="False" />
+        <Setter Property="AutoScrollToSelectedItem" Value="False" />
+    </Style>
+    <!-- 容器只承载虚拟化；选中底色与键盘焦点仍由原来的行按钮绘制。 -->
+    <Style Selector="ListBox.session-list ListBoxItem">
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="Margin" Value="0,0,20,0" />
+        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+        <Setter Property="Focusable" Value="False" />
+        <Setter Property="Template">
+            <ControlTemplate>
+                <ContentPresenter Content="{TemplateBinding Content}"
+                                  ContentTemplate="{TemplateBinding ContentTemplate}"
+                                  HorizontalContentAlignment="Stretch" />
+            </ControlTemplate>
+        </Setter>
+    </Style>
+
+    <!-- 会话列表行与分组头行：自定义模板，点击分别驱动选择会话与展开收起。
+         对话行在模板 Border#PART_Surface 上自绘 hover/选中高亮；
+         分组头行改由行容器 Border.group-row 承担（右侧悬浮按钮组同一矩形）。
+         基础行规格取自 DSH WorkspaceBrowser 的 Rows.module.css：
+         行高 34（工作区）/32（对话）、水平内边距 8、圆角 8、行距 2。
+         行保持键盘焦点可达：Tab 聚焦、Enter/Space 触发；:focus-visible 显示高亮。
+         HorizontalAlignment 显式 Stretch：行宽恒等于列表内容区宽度，
+         不随标题长度伸缩（Fluent 12 下按钮默认对齐不再横向撑满）。 -->
+    <Style Selector="Button.session-row, Button.group-header">
+        <Setter Property="Padding" Value="12" />
+        <Setter Property="MinHeight" Value="32" />
+        <Setter Property="Margin" Value="0,2" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="HorizontalAlignment" Value="Stretch" />
+        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate>
+                    <Border x:Name="PART_Surface" CornerRadius="8" Padding="{TemplateBinding Padding}"
+                            Background="Transparent">
+                        <!-- 自定义模板的 ContentPresenter 必须显式携带按钮内容，
+                             缺省绑定会把行内文字整体吞掉（只剩固定尺寸元素）。 -->
+                        <ContentPresenter Content="{TemplateBinding Content}"
+                                          ContentTemplate="{TemplateBinding ContentTemplate}"
+                                          HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                          VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}" />
+                    </Border>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+    <!-- 对话行相对工作区行缩进一个完整图标步进：行内边距 20 加行内保留的
+         置顶气泡槽 20（16 气泡 + 4 间距）合计 40，标题与工作区标题左对齐，
+         形成明确的 tab 式层级；气泡槽正落在工作区文件夹图标的同一列位
+         （8 行内边距 +8 箭头 +4 间距 = 20 起）；行命中区域仍占满整行宽。 -->
+    <Style Selector="Button.session-row">
+        <Setter Property="Padding" Value="20,0,8,0" />
+    </Style>
+    <Style Selector="Button.group-header">
+        <Setter Property="MinHeight" Value="34" />
+        <Setter Property="Padding" Value="8,0" />
+    </Style>
+    <!-- 分组头行容器：整行一个圆角矩形，承担悬停/选中底色（工作区行右侧的
+         悬浮按钮组画在同一矩形内），常态透明。Background 用 Transparent 而非
+         null，保证按钮隐藏区也命中悬停；Margin 承担行距（行内按钮已归零）。 -->
+    <Style Selector="Border.group-row">
+        <Setter Property="CornerRadius" Value="8" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Margin" Value="0,2" />
+    </Style>
+    <Style Selector="Border.group-row:pointerover">
+        <Setter Property="Background" Value="{DynamicResource SessionHoverBrush}" />
+    </Style>
+    <!-- 状态样式声明顺序即优先级：悬停在前、选中（.current）最后，
+         保证行被悬停时当前选中态不被覆盖。键盘焦点高亮仍由行内按钮的
+         :focus-visible 在 PART_Surface 上呈现（Border 不可聚焦）。 -->
+    <Style Selector="Border.group-row.current">
+        <Setter Property="Background" Value="{DynamicResource SessionSelectedBrush}" />
+    </Style>
+    <!-- 分类头行（置顶/工作区）：纯文字+右侧箭头，整行不画圆角矩形——常态与悬停
+         都保持透明。声明在悬停/选中样式之后，状态底色被压回透明（Avalonia 以
+         声明顺序定优先级）。IsCurrent 恒为 false，选中态不会出现。 -->
+    <Style Selector="Border.group-row.category">
+        <Setter Property="Background" Value="Transparent" />
+    </Style>
+    <Style Selector="Border.group-row.category:pointerover">
+        <Setter Property="Background" Value="Transparent" />
+    </Style>
+    <!-- 工作区行悬浮按钮组：常态隐藏且不参与命中（避免透明按钮拦截行内
+         点击），悬停整行圆角矩形时淡入。Opacity 显隐保持布局稳定——按钮
+         常驻占位，标题列宽与行高不因显隐跳动。 -->
+    <Style Selector="StackPanel.workspace-actions">
+        <Setter Property="Margin" Value="0,3,4,3" />
+        <Setter Property="Opacity" Value="0" />
+        <Setter Property="IsHitTestVisible" Value="False" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <DoubleTransition Property="Opacity" Duration="0:0:0.12" />
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="Border.group-row:pointerover StackPanel.workspace-actions">
+        <Setter Property="Opacity" Value="1" />
+        <Setter Property="IsHitTestVisible" Value="True" />
+    </Style>
+    <!-- 菜单弹层打开期间（menu-open，code-behind 开合时标记）按钮组保持显现：
+         鼠标移入弹层后行 hover 丢失，锚点按钮随之隐藏会让弹层看起来悬空。 -->
+    <Style Selector="Border.group-row.menu-open StackPanel.workspace-actions">
+        <Setter Property="Opacity" Value="1" />
+        <Setter Property="IsHitTestVisible" Value="True" />
+    </Style>
+    <!-- 右键菜单打开期间（menu-ctx-open）按钮组保持隐藏：菜单已锚定点击处，
+         行 hover 也不浮现按钮组。须声明在 menu-open 之后，两种标记并存时以隐藏为准。 -->
+    <Style Selector="Border.group-row.menu-ctx-open StackPanel.workspace-actions">
+        <Setter Property="Opacity" Value="0" />
+        <Setter Property="IsHitTestVisible" Value="False" />
+    </Style>
+    <!-- 会话行尾部：常态信息（运行指示 + 相对时间 + 置顶标记）与悬浮操作条
+         （三点菜单 / 归档 / 置顶）共享同一右侧槽位——两栈在同一 Panel 内叠放，
+         悬停整行时淡出淡入互换（对齐 DSH sessionRow 的 time ↔ rowActions 纯 CSS
+         互换）；叠放保持标题列宽与行高稳定，不因切换跳动。空白新会话行两栈
+         都不显示（IsVisible 绑定在使用处）。 -->
+    <Style Selector="StackPanel.session-trailing">
+        <Setter Property="Transitions">
+            <Transitions>
+                <DoubleTransition Property="Opacity" Duration="0:0:0.12" />
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="Button.session-row:pointerover StackPanel.session-trailing">
+        <Setter Property="Opacity" Value="0" />
+    </Style>
+    <Style Selector="Button.session-row.menu-open StackPanel.session-trailing">
+        <Setter Property="Opacity" Value="0" />
+    </Style>
+    <Style Selector="StackPanel.session-actions">
+        <Setter Property="Opacity" Value="0" />
+        <Setter Property="IsHitTestVisible" Value="False" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <DoubleTransition Property="Opacity" Duration="0:0:0.12" />
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="Button.session-row:pointerover StackPanel.session-actions">
+        <Setter Property="Opacity" Value="1" />
+        <Setter Property="IsHitTestVisible" Value="True" />
+    </Style>
+    <!-- 菜单弹层打开期间（menu-open，code-behind 开合时标记）操作条保持显现：
+         鼠标移入弹层后行 hover 丢失，锚点按钮随之隐藏会让弹层看起来悬空。 -->
+    <Style Selector="Button.session-row.menu-open StackPanel.session-actions">
+        <Setter Property="Opacity" Value="1" />
+        <Setter Property="IsHitTestVisible" Value="True" />
+    </Style>
+    <!-- 右键菜单打开期间（menu-ctx-open）操作条保持隐藏：菜单已锚定点击处，
+         行 hover 也不浮现操作条。须声明在 menu-open 之后，两种标记并存时以隐藏为准。 -->
+    <Style Selector="Button.session-row.menu-ctx-open StackPanel.session-actions">
+        <Setter Property="Opacity" Value="0" />
+        <Setter Property="IsHitTestVisible" Value="False" />
+    </Style>
+    <!-- 会话行悬浮操作按钮（三点菜单 / 归档 / 置顶）：24×24 小圆角块（行高 32 内
+         上下留 4），自身悬停叠一层行悬停色形成按钮层次（同 workspace-menu）。 -->
+    <Style Selector="Button.session-action">
+        <Setter Property="Width" Value="24" />
+        <Setter Property="Height" Value="24" />
+        <Setter Property="MinWidth" Value="0" />
+        <Setter Property="MinHeight" Value="0" />
+        <Setter Property="Margin" Value="0" />
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="CornerRadius" Value="6" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="HorizontalContentAlignment" Value="Center" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+    </Style>
+    <Style Selector="Button.session-action:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource SessionHoverBrush}" />
+    </Style>
+    <!-- 头部图标按钮（搜索 / 分组方式 / 添加工作区 / 关闭搜索）：对齐 DSH
+         WorkspaceBrowser 的 iconButton——28×28 正圆、透明底，悬停 interactive-bg-hover
+         （SidebarIconHoverBrush）；关闭搜索行内以局部属性覆盖为 24×24。 -->
+    <Style Selector="Button.sidebar-icon">
+        <Setter Property="Width" Value="28" />
+        <Setter Property="Height" Value="28" />
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="CornerRadius" Value="14" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="HorizontalContentAlignment" Value="Center" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+    </Style>
+    <Style Selector="Button.sidebar-icon:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource SidebarIconHoverBrush}" />
+    </Style>
+    <!-- 侧栏搜索行容器（对齐 DSH searchExpanded）：高 30、圆角 10、0.5px 细描边、
+         透明底吃侧栏色；宽度向两侧各溢出 2px（margin-inline: -2px 的对应），由使用处负 Margin 承担。 -->
+    <Style Selector="Border.sidebar-search">
+        <Setter Property="Height" Value="30" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="{DynamicResource SidebarSearchBorderBrush}" />
+        <Setter Property="BorderThickness" Value="0.5" />
+        <Setter Property="CornerRadius" Value="10" />
+        <Setter Property="Padding" Value="0,0,4,0" />
+    </Style>
+    <!-- 搜索行内输入框：无边框透明融入容器（Fluent 状态底色画在模板
+         Border#PART_BorderElement 上，须逐状态覆盖，同 composer-input 的处理）；
+         字号 13、垂直居中与 DSH searchInput 一致。MinHeight 归零压掉 Fluent 的
+         32 默认值——比 30 高的行还高，会把文字顶离与放大镜共用的中线
+         （配合使用处 VerticalAlignment=Center，同 popup-search 的做法）。 -->
+    <Style Selector="TextBox.sidebar-search-input">
+        <Setter Property="MinHeight" Value="0" />
+        <Setter Property="FontSize" Value="13" />
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="PlaceholderForeground" Value="{DynamicResource TextMutedBrush}" />
+    </Style>
+    <Style Selector="TextBox.sidebar-search-input /template/ Border#PART_BorderElement">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+    </Style>
+    <Style
+        Selector="TextBox.sidebar-search-input:pointerover /template/ Border#PART_BorderElement,
+                     TextBox.sidebar-search-input:focus /template/ Border#PART_BorderElement,
+                     TextBox.sidebar-search-input:focus-visible /template/ Border#PART_BorderElement,
+                     TextBox.sidebar-search-input:disabled /template/ Border#PART_BorderElement">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+    </Style>
+    <!-- 工作区行悬浮按钮（三点菜单 / 新建会话）：28×28 小圆角块，悬停行时由
+         workspace-actions 控制显隐，自身悬停再叠一层行悬停色形成按钮层次。 -->
+    <Style Selector="Button.workspace-menu, Button.workspace-new-session">
+        <Setter Property="Width" Value="28" />
+        <Setter Property="Height" Value="28" />
+        <Setter Property="Margin" Value="0" />
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="CornerRadius" Value="7" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="HorizontalContentAlignment" Value="Center" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+    </Style>
+    <Style
+        Selector="Button.workspace-menu:pointerover /template/ ContentPresenter#PART_ContentPresenter,
+                     Button.workspace-new-session:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource SessionHoverBrush}" />
+    </Style>
+    <!-- 状态样式声明顺序即优先级：悬停与焦点在前、选中（.current）最后，
+         保证行被悬停或键盘聚焦时当前选中态不被覆盖。 -->
+    <Style Selector="Button.session-row:pointerover /template/ Border#PART_Surface">
+        <Setter Property="Background" Value="{DynamicResource SessionHoverBrush}" />
+    </Style>
+    <Style
+        Selector="Button.session-row:focus-visible /template/ Border#PART_Surface, Button.group-header:focus-visible /template/ Border#PART_Surface">
+        <Setter Property="Background" Value="{DynamicResource SessionHoverBrush}" />
+    </Style>
+    <!-- 选中态：对话行与分组头行容器共用同一选中底色（分组头行画在
+         Border.group-row 上，见上方行容器样式）。 -->
+    <Style Selector="Button.session-row.current /template/ Border#PART_Surface">
+        <Setter Property="Background" Value="{DynamicResource SessionSelectedBrush}" />
+    </Style>
+    <!-- 顶部「新建会话」按钮：形态对齐 DSH 侧栏 newSession——高 38、圆角 12、
+         内边距 16,8、圆形加号与文字间距 6、字号 14 中等字重。
+         HorizontalAlignment 显式 Stretch（Fluent 12 下按钮默认不横向撑满），
+         按钮占满侧栏内容区宽度，内容经 HorizontalContentAlignment 居中。
+         Fluent 把状态底色画在模板 ContentPresenter 上，状态覆盖指向该部件。 -->
+    <Style Selector="Button.new-session">
+        <Setter Property="Height" Value="38" />
+        <Setter Property="Padding" Value="16,8" />
+        <Setter Property="CornerRadius" Value="12" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="HorizontalAlignment" Value="Stretch" />
+        <Setter Property="Background" Value="{DynamicResource NewSessionButtonBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource OnAccentBrush}" />
+        <Setter Property="FontSize" Value="14" />
+        <Setter Property="FontWeight" Value="Medium" />
+        <Setter Property="HorizontalContentAlignment" Value="Center" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+    </Style>
+    <Style Selector="Button.new-session:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource NewSessionButtonHoverBrush}" />
+    </Style>
+    <Style Selector="Button.new-session:pressed /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource NewSessionButtonActiveBrush}" />
+    </Style>
+    <Style Selector="Button.new-session:disabled /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource NewSessionButtonBrush}" />
+    </Style>
+    <Style Selector="Button.new-session:focus-visible /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource NewSessionButtonHoverBrush}" />
+    </Style>
+    <!-- 侧栏分隔条：自绘模板去掉 Fluent 默认外观，常态完全透明、不占视觉宽度，
+         悬停时以列表悬停色轻微提示可拖拽。 -->
+    <Style Selector="GridSplitter.sidebar-splitter">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate>
+                    <Border Background="{TemplateBinding Background}" />
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+    <Style Selector="GridSplitter.sidebar-splitter:pointerover">
+        <Setter Property="Background" Value="{DynamicResource SessionHoverBrush}" />
+    </Style>
+</Styles>

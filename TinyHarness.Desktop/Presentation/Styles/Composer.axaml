@@ -1,0 +1,218 @@
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <!-- 底部输入区样式：输入面板、工具行按钮、模型下拉与统计条。 -->
+
+    <!-- 底部输入区的面板：对齐 WebUI 的输入卡片——上方输入区、下方工具行，
+         统计条留在卡片外侧；面板高度随文本与错误提示增长。 -->
+    <Style Selector="Border.composer-panel">
+        <Setter Property="Background" Value="{DynamicResource ComposerBackgroundBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="BorderBrush" Value="Transparent" />
+        <Setter Property="CornerRadius" Value="22" />
+        <Setter Property="Padding" Value="8,8,8,6" />
+    </Style>
+    <!-- 输入框聚焦的克制反馈：整块面板描边轻微提亮（code-behind 切换 focused 类），
+         输入框内部不绘制任何独立边框或底色，对齐 WebUI 的卡片级聚焦高亮。 -->
+    <Style Selector="Border.composer-panel.focused">
+        <Setter Property="BorderBrush" Value="{DynamicResource ComposerFocusRingBrush}" />
+    </Style>
+    <!-- 面板内输入框不自带边框与底色，视觉容器由输入面板承担；
+         采用 WebUI 的紧凑单行基线，多行时由 TextBox 自然增高。 -->
+    <Style Selector="TextBox.composer-input">
+        <Setter Property="MinHeight" Value="44" />
+        <Setter Property="MaxHeight" Value="200" />
+        <Setter Property="Padding" Value="6,4,8,0" />
+        <Setter Property="FontSize" Value="14" />
+        <Setter Property="LineHeight" Value="24" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Foreground" Value="{DynamicResource ComposerTextBrush}" />
+        <Setter Property="CaretBrush" Value="{DynamicResource ComposerTextBrush}" />
+        <Setter Property="PlaceholderForeground" Value="{DynamicResource ComposerTextMutedBrush}" />
+    </Style>
+    <!-- Fluent 把 TextBox 的状态底色与描边画在模板部件 Border#PART_BorderElement 上：
+         聚焦时该部件会换成强调色描边加深色填充，仅改控件的 Background/BorderThickness
+         （模板绑定源）压不住这些状态样式；必须逐状态覆盖模板部件本身，
+         输入框悬停/聚焦下才能保持透明无描边、与面板融为一体。 -->
+    <Style Selector="TextBox.composer-input /template/ Border#PART_BorderElement">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+    </Style>
+    <Style
+        Selector="TextBox.composer-input:pointerover /template/ Border#PART_BorderElement,
+                     TextBox.composer-input:focus /template/ Border#PART_BorderElement,
+                     TextBox.composer-input:focus-visible /template/ Border#PART_BorderElement,
+                     TextBox.composer-input:disabled /template/ Border#PART_BorderElement">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+    </Style>
+    <!-- 工具栏圆形图标按钮（附件等占位）：Fluent 把状态底色画在模板 ContentPresenter 上，
+         悬停/禁用态需覆盖该部件而非按钮的 Background。 -->
+    <Style Selector="Button.composer-icon">
+        <Setter Property="Width" Value="30" />
+        <Setter Property="Height" Value="30" />
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="CornerRadius" Value="15" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Foreground" Value="{DynamicResource ComposerTextMutedBrush}" />
+        <Setter Property="HorizontalContentAlignment" Value="Center" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+    </Style>
+    <Style Selector="Button.composer-icon:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource SessionHoverBrush}" />
+    </Style>
+    <Style Selector="Button.composer-icon:disabled /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+    </Style>
+    <!-- 圆形发送按钮：尺寸和配色对齐 WebUI 的 34px primary icon button。 -->
+    <Style Selector="Button.composer-send">
+        <Setter Property="Width" Value="34" />
+        <Setter Property="Height" Value="34" />
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="CornerRadius" Value="17" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Background" Value="{DynamicResource ComposerActionBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource OnAccentBrush}" />
+        <Setter Property="HorizontalContentAlignment" Value="Center" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+    </Style>
+    <Style Selector="Button.composer-send:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource ComposerSendHoverBrush}" />
+    </Style>
+    <Style Selector="Button.composer-send:pressed /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource ComposerActionBrush}" />
+    </Style>
+    <Style Selector="Button.composer-send:disabled">
+        <Setter Property="Foreground" Value="{DynamicResource ComposerTextMutedBrush}" />
+    </Style>
+    <Style Selector="Button.composer-send:disabled /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource ComposerControlBrush}" />
+    </Style>
+    <!-- 生成中的圆形停止按钮沿用发送按钮尺寸，保持工具行基线稳定。 -->
+    <Style Selector="Button.composer-stop">
+        <Setter Property="Width" Value="34" />
+        <Setter Property="Height" Value="34" />
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="CornerRadius" Value="17" />
+        <Setter Property="Background" Value="{DynamicResource ComposerControlBrush}" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Foreground" Value="{DynamicResource StatusErrorBrush}" />
+        <Setter Property="HorizontalContentAlignment" Value="Center" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+    </Style>
+    <Style Selector="Button.composer-stop:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource SessionHoverBrush}" />
+    </Style>
+    <Style Selector="Button.composer-stop:pressed /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource SessionHoverBrush}" />
+    </Style>
+    <!-- 模型/推理等级选择按钮：面板内紧凑尺寸；点击弹出两级菜单（行样式见 PopupMenus）。 -->
+    <Style Selector="Button.model-picker-button">
+        <Setter Property="MinWidth" Value="180" />
+        <Setter Property="MaxWidth" Value="300" />
+        <Setter Property="Height" Value="28" />
+        <Setter Property="Padding" Value="10,0" />
+        <Setter Property="CornerRadius" Value="8" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Background" Value="{DynamicResource ComposerControlBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource ComposerTextBrush}" />
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+    </Style>
+    <!-- Fluent 把按钮状态底色画在模板 ContentPresenter 上：悬停微亮，禁用保持控件底色。 -->
+    <Style Selector="Button.model-picker-button:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource PopupItemHoverBrush}" />
+    </Style>
+    <Style Selector="Button.model-picker-button:disabled /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource ComposerControlBrush}" />
+    </Style>
+    <!-- 执行权限选择按钮：与模型按钮同基线的紧凑变体（预设名较短）；仅在选中会话时可见。 -->
+    <Style Selector="Button.permission-picker-button">
+        <Setter Property="MinWidth" Value="118" />
+        <Setter Property="MaxWidth" Value="220" />
+        <Setter Property="Height" Value="28" />
+        <Setter Property="Padding" Value="10,0" />
+        <Setter Property="CornerRadius" Value="8" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Background" Value="{DynamicResource ComposerControlBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource ComposerTextBrush}" />
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+    </Style>
+    <Style Selector="Button.permission-picker-button:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource PopupItemHoverBrush}" />
+    </Style>
+    <Style Selector="Button.permission-picker-button:disabled /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource ComposerControlBrush}" />
+    </Style>
+    <!-- 风险确认弹层内 auto 预设的 EXP 角标：弱化小圆角徽标。 -->
+    <Style Selector="Border.permission-exp-badge">
+        <Setter Property="Background" Value="{DynamicResource PopupItemSelectedBrush}" />
+        <Setter Property="CornerRadius" Value="4" />
+        <Setter Property="Padding" Value="4,1" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+    <Style Selector="StackPanel.composer-stats">
+        <Setter Property="Margin" Value="4,0" />
+        <Setter Property="Spacing" Value="14" />
+    </Style>
+    <Style Selector="TextBlock.composer-stat">
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="Foreground" Value="{DynamicResource ComposerTextMutedBrush}" />
+    </Style>
+
+    <!-- 任务面板（TodoPanel）：输入框上方的任务清单卡片，形态对齐官方 dock 卡片——
+         与输入卡片同底色、radius-lg 16px、body padding 6px 12px、头部与列表 gap 8px。 -->
+    <Style Selector="Border.todo-panel">
+        <Setter Property="Background" Value="{DynamicResource ComposerBackgroundBrush}" />
+        <Setter Property="CornerRadius" Value="16" />
+        <Setter Property="Padding" Value="12,6" />
+    </Style>
+    <!-- 头部整行可点：透明按钮，悬停不画底（收起态的点击区即整行，对齐官方 header button）。 -->
+    <Style Selector="Button.todo-header">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+    </Style>
+    <Style Selector="Button.todo-header:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+    </Style>
+    <Style Selector="Button.todo-header:pressed /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+    </Style>
+    <!-- 头部文案：标题 13px/24px 中量级 primary；进度段 13px/20px tertiary 单行省略。 -->
+    <Style Selector="TextBlock.todo-title">
+        <Setter Property="FontSize" Value="13" />
+        <Setter Property="FontWeight" Value="Medium" />
+        <Setter Property="LineHeight" Value="24" />
+        <Setter Property="Foreground" Value="{DynamicResource ComposerTextBrush}" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+    <Style Selector="TextBlock.todo-progress">
+        <Setter Property="FontSize" Value="13" />
+        <Setter Property="LineHeight" Value="20" />
+        <Setter Property="Foreground" Value="{DynamicResource ToolRowLabelBrush}" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+    <!-- 头部清单图标与箭头：16 空间 1px 线稿原尺寸渲染（同折叠行几何来源）。 -->
+    <Style Selector="Path.todo-icon">
+        <Setter Property="Stretch" Value="None" />
+        <Setter Property="Stroke" Value="{DynamicResource ToolRowLabelBrush}" />
+        <Setter Property="StrokeThickness" Value="1" />
+    </Style>
+    <!-- 条目文字：13px/20px secondary 单行省略（官方 Figma strip 单行口径）。 -->
+    <Style Selector="TextBlock.todo-item-text">
+        <Setter Property="FontSize" Value="13" />
+        <Setter Property="LineHeight" Value="20" />
+        <Setter Property="Foreground" Value="{DynamicResource ToolRowLabelHoverBrush}" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+        <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+    </Style>
+</Styles>

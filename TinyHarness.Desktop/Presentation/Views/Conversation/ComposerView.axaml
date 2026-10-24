@@ -1,0 +1,51 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:TinyHarness.Desktop.ViewModels"
+             xmlns:conversation="using:TinyHarness.Desktop.Presentation.Views.Conversation"
+             x:Class="TinyHarness.Desktop.Presentation.Views.Conversation.ComposerView"
+             x:DataType="vm:SessionViewModel">
+    <StackPanel Spacing="6">
+        <Border x:Name="ComposerSurface" Classes="composer-panel">
+            <StackPanel Spacing="8">
+                <TextBox x:Name="MessageInput" Classes="composer-input" Text="{Binding Draft, Mode=TwoWay}"
+                         PlaceholderText="输入消息…" AcceptsReturn="True" TextWrapping="Wrap"
+                         ScrollViewer.VerticalScrollBarVisibility="Auto" />
+                <Grid ColumnDefinitions="Auto,Auto,*,Auto,Auto" ColumnSpacing="10">
+                    <Button Classes="composer-icon" IsEnabled="False" VerticalAlignment="Center"
+                            ToolTip.Tip="附件功能尚未接入" AutomationProperties.Name="添加附件">
+                        <Viewbox Width="15" Height="15">
+                            <Path Data="{StaticResource Icon.PlusLarge}"
+                                  Stroke="{Binding $parent[Button].Foreground}" StrokeThickness="2" />
+                        </Viewbox>
+                    </Button>
+                    <conversation:PermissionSelectorView Grid.Column="1" VerticalAlignment="Center" />
+                    <conversation:ModelPickerView Grid.Column="3" VerticalAlignment="Center" />
+                    <Panel Grid.Column="4" Width="34" Height="34">
+                        <Button Classes="composer-stop" Command="{Binding CancelCommand}" IsVisible="{Binding IsRunning}"
+                                ToolTip.Tip="停止生成" AutomationProperties.Name="停止生成">
+                            <Viewbox Width="15" Height="15">
+                                <Path Data="{StaticResource Icon.StopFill}" Fill="{Binding $parent[Button].Foreground}" />
+                            </Viewbox>
+                        </Button>
+                        <Button Classes="composer-send" Command="{Binding SendCommand}" IsVisible="{Binding !IsRunning}"
+                                ToolTip.Tip="发送" AutomationProperties.Name="发送">
+                            <Viewbox Width="16" Height="16">
+                                <Path Width="24" Height="24" Data="{StaticResource Icon.ArrowUp}"
+                                      Stroke="{Binding $parent[Button].Foreground}" StrokeThickness="2" />
+                            </Viewbox>
+                        </Button>
+                    </Panel>
+                </Grid>
+            </StackPanel>
+        </Border>
+        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+            <TextBlock Text="{Binding Status}" Classes="composer-stat" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+            <TextBlock Grid.Column="1" Text="Enter 发送 · Shift+Enter 换行" Classes="composer-stat" />
+        </Grid>
+        <StackPanel Orientation="Horizontal" Spacing="8" IsVisible="{Binding IsRunning}">
+            <Button Classes="tool-toggle" Content="暂停" Command="{Binding PauseCommand}" />
+            <Button Classes="tool-toggle" Content="继续" Command="{Binding ResumeCommand}" />
+            <Button Classes="tool-toggle" Content="发送补充" Command="{Binding SendCommand}" />
+        </StackPanel>
+    </StackPanel>
+</UserControl>

@@ -17,6 +17,8 @@ MIT 正文共享一份。BSD-2-Clause、BSD-3-Clause 分开；ISC、Unicode、Zl
 按实际分发内容确定范围：直接或传递依赖只要带入受许可约束的代码，就保留相应版权与条款；上游声明仅选取相关部分。未使用的上游组件不因出现在上游仓库就纳入。对难以准确区分的运行库内部共享代码、内联代码及原生库归属，保守保留相关声明。
 
 - 主程序：`net10.0/win-x64` 的 14 个生产 NuGet 依赖输入，以及 .NET NativeAOT runtime 10.0.12；组件记录保留版本、包版权和源提交。这是保守的库级归属范围，不表示每个包均有独立代码进入最终 exe。
+- 桌面端：根据 Desktop 的 `project.assets.json` 与安装包元数据记录 UI、Markdown、渲染及语法高亮依赖，排除构建工具与其他平台的原生资产包；Inter 字体单独保留 OFL-1.1，DeepSeek Harness 图标单独保留 MIT 来源声明。作者自有的 DshDesktop 代码统一使用项目 Apache-2.0，不再作为第三方组件附带独立许可文件。
+- 桌面端上游与原生包随附的复合声明暂按来源整体保留，不表示每项均链接进最终二进制。TextMateSharp.Grammars 保留包声明、已核对的资源归属和 Swift 补充许可；完整语法／主题资源来源和最终 Desktop NativeAOT 产物仍需在二进制分发前专项复核，本次合并不代表完整分发审计。
 - 沙箱：Codex fork 提交 `1b647eac0adc5f31140340ffcc5d49b19a235fad` 的 Windows x64 normal 依赖，排除仅用于 build／proc-macro／test 的路径，当前 420 个外部 crate；这是依赖范围，不是逐符号链接清单。
 - Rust 运行时：保留 Rust 1.95.0 Windows x64 标准库、Unicode、相关运行时依赖／Windows 绑定及 compiler-builtins 的许可材料。
 
@@ -41,7 +43,7 @@ Codex NOTICE 保留 OpenAI 的版权归属；所选沙箱生产源码与依赖�
 
 ## 更新与分发
 
-1. 更新 .NET 依赖或 SDK 后，根据 CLI 的 `project.assets.json` 生产目标、各包 `.nuspec` 与实际 runtime 版本更新组件及声明。执行 NativeAOT publish 时可设置 `-p:IlcGenerateMapFile=true`，结合生成的映射和链接响应文件重新核对范围；不要将本次八项排除当作以后版本的固定规则，也不要仅凭包名或符号缺失删除内部共享代码的归属。
+1. 更新 .NET 依赖或 SDK 后，根据 CLI／Desktop 的 `project.assets.json` 生产目标、各包 `.nuspec` 与实际 runtime 版本更新组件及声明；桌面端还需核对字体、图标、嵌入语法／主题和原生包随附声明。执行 NativeAOT publish 时可设置 `-p:IlcGenerateMapFile=true`，结合生成的映射和链接响应文件重新核对范围；不要将本次八项排除当作以后版本的固定规则，也不要仅凭包名或符号缺失删除内部共享代码的归属。
 2. 更新 Codex 时核对固定提交的 LICENSE／NOTICE、Cargo.lock 及 rust-toolchain.toml。在 fork 的 codex-rs 目录取得目标依赖：
 
    ```powershell
@@ -50,4 +52,4 @@ Codex NOTICE 保留 OpenAI 的版权归属；所选沙箱生产源码与依赖�
 
    对照对应版本的许可原文更新编号、版权和条款。MIT OR Apache-2.0 等替代许可可按实际授权选择一项，但嵌套第三方条款、例外与生成代码自身的归属必须保留。
 3. 更新 Rust 时核对目标标准库和运行时 intrinsics 的许可，避免重新引入全平台或测试／构建工具清单。
-4. 现有发布工作流将三份根目录文件复制进 ZIP，并纳入构建来源文件的哈希。自行分发 dotnet publish 产物时也需携带这三份文件，publish 不会自动生成许可材料。
+4. 现有发布工作流将三份根目录文件复制进 ZIP，并纳入构建来源文件的哈希。Desktop 项目在 build／publish 时复制这三份文件；其他自行分发的产物也需携带它们，publish 不会自动生成许可材料。

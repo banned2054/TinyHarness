@@ -1,0 +1,135 @@
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:md="clr-namespace:LiveMarkdown.Avalonia;assembly=LiveMarkdown.Avalonia">
+    <!-- LiveMarkdown 相关样式覆盖：本文件必须在 LiveMarkdown.Avalonia/Styles.axaml
+         之后加载（见 App.axaml 的 StyleInclude 顺序），否则库默认样式会反压本文件的覆盖。 -->
+
+    <!-- 覆盖库默认 CodeBlock 模板：参照 Codex 的代码框——一体化深底圆角、无外描边、
+         头部为 `</>` 图标 + 语言名 + 幽灵按钮。语法高亮配色仍由 DarkPlus 主题提供。
+         模板部件名（PART_CodeTextBlock 等）须与库的代码后台约定一致，缺失会抛异常。 -->
+    <Style Selector="md|CodeBlock">
+        <Setter Property="FontFamily" Value="Consolas, 'Courier New', monospace" />
+        <Setter Property="Foreground" Value="{DynamicResource CodeBlockForegroundBrush}" />
+        <Setter Property="Margin" Value="0,4" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="md:CodeBlock">
+                    <Border Background="{DynamicResource CodeBlockBackgroundBrush}"
+                            CornerRadius="8" ClipToBounds="True">
+                        <StackPanel Orientation="Vertical">
+                            <Grid ColumnDefinitions="*,Auto" Margin="12,7,6,0">
+                                <StackPanel Orientation="Horizontal" Spacing="7" VerticalAlignment="Center">
+                                    <TextBlock Text="&lt;/&gt;"
+                                               FontFamily="{TemplateBinding FontFamily}"
+                                               FontSize="11" FontWeight="SemiBold"
+                                               Foreground="{DynamicResource CodeBlockMutedBrush}"
+                                               VerticalAlignment="Center" />
+                                    <TextBlock x:Name="PART_LanguageTextBlock"
+                                               Text="{TemplateBinding Language}"
+                                               FontSize="12"
+                                               Foreground="{DynamicResource CodeBlockMutedBrush}"
+                                               VerticalAlignment="Center" />
+                                </StackPanel>
+                                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="2">
+                                    <ToggleButton x:Name="PART_ToggleTextWrapButton"
+                                                  Width="26" Height="26"
+                                                  Padding="0" CornerRadius="5"
+                                                  BorderThickness="0"
+                                                  Focusable="False"
+                                                  IsChecked="{TemplateBinding IsCodeWrapped, Mode=TwoWay}">
+                                        <Viewbox Width="14" Height="14">
+                                            <Path Width="24" Height="24"
+                                                  Data="{DynamicResource Icon.CodeTextWrap}"
+                                                  Stroke="{DynamicResource CodeBlockMutedBrush}"
+                                                  StrokeThickness="2" />
+                                        </Viewbox>
+                                    </ToggleButton>
+                                    <Button x:Name="PART_CopyButton"
+                                            Width="26" Height="26"
+                                            Padding="0" CornerRadius="5"
+                                            BorderThickness="0"
+                                            Focusable="False">
+                                        <Viewbox Width="14" Height="14">
+                                            <Path Width="24" Height="24"
+                                                  Data="{DynamicResource Icon.CodeCopy}"
+                                                  Stroke="{DynamicResource CodeBlockMutedBrush}"
+                                                  StrokeThickness="2" />
+                                        </Viewbox>
+                                    </Button>
+                                </StackPanel>
+                            </Grid>
+                            <ScrollViewer x:Name="PART_ScrollViewer"
+                                          HorizontalScrollBarVisibility="{TemplateBinding HorizontalScrollBarVisibility}"
+                                          VerticalScrollBarVisibility="Auto">
+                                <md:MarkdownTextBlock x:Name="PART_CodeTextBlock"
+                                                      Margin="12,6,12,12"
+                                                      FontFamily="{TemplateBinding FontFamily}"
+                                                      TextWrapping="{TemplateBinding TextWrapping}" />
+                            </ScrollViewer>
+                        </StackPanel>
+                    </Border>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+    <Style Selector="md|CodeBlock /template/ ToggleButton#PART_ToggleTextWrapButton">
+        <Setter Property="ToolTip.Tip" Value="切换自动换行" />
+    </Style>
+    <Style Selector="md|CodeBlock /template/ Button#PART_CopyButton">
+        <Setter Property="ToolTip.Tip" Value="复制代码" />
+    </Style>
+    <!-- 幽灵按钮状态：Fluent 把状态底色画在按钮模板内的 PART_ContentPresenter 上，
+         覆盖该部件而非按钮的 Background。选中态（换行开关默认选中）只给轻微亮度差。 -->
+    <Style
+        Selector="md|CodeBlock /template/ ToggleButton#PART_ToggleTextWrapButton /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+    </Style>
+    <Style
+        Selector="md|CodeBlock /template/ ToggleButton#PART_ToggleTextWrapButton:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource CodeBlockButtonActiveBrush}" />
+    </Style>
+    <Style
+        Selector="md|CodeBlock /template/ ToggleButton#PART_ToggleTextWrapButton:checked /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource CodeBlockButtonActiveBrush}" />
+    </Style>
+    <Style
+        Selector="md|CodeBlock /template/ ToggleButton#PART_ToggleTextWrapButton:checked:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource CodeBlockButtonActiveBrush}" />
+    </Style>
+    <Style
+        Selector="md|CodeBlock /template/ Button#PART_CopyButton /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+    </Style>
+    <Style
+        Selector="md|CodeBlock /template/ Button#PART_CopyButton:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource CodeBlockButtonActiveBrush}" />
+    </Style>
+    <!-- 行内代码：覆盖库默认的半透明黑 chip 底与金橄榄色文字。库对 CodeInline 的
+         Foreground 不做继承回退（置空会导致文字不渲染），因此显式引用正文所用的
+         Fluent 前景资源，使行内代码文字与默认正文同色。
+         Padding 左右参与测量（嵌套排版按 padding+margin 预留步进），垂直方向只外扩绘制；
+         Margin 垂直方向把绘制矩形从行框内向内收缩（不改行高）——在 27px 行高下
+         chip 实际绘制高度 = 27 − 4 = 23，相邻两行 chip 之间保留 4px 间隙。 -->
+    <Style Selector="md|CodeInline">
+        <Setter Property="Foreground" Value="{DynamicResource SystemControlForegroundBaseHighBrush}" />
+        <Setter Property="Background" Value="{DynamicResource InlineCodeBackgroundBrush}" />
+        <Setter Property="Padding" Value="6,0" />
+        <Setter Property="Margin" Value="0,2" />
+    </Style>
+    <!-- 正文排版：只作用于段落正文（ParagraphBlock），标题/代码块/表格保持库的自然行高。
+         27 ≈ 15px 字号的 1.8 倍；库默认行高未设置（自然行高约 20）。 -->
+    <Style Selector="md|MarkdownRenderer md|MarkdownTextBlock.ParagraphBlock">
+        <Setter Property="LineHeight" Value="27" />
+    </Style>
+    <!-- 文档级块间距（相邻段落等块元素之间）：库默认 4px 过密，取 18。
+         只改文档根容器（MarkdownDocument）；列表项、表格单元格与引用块内部的
+         StackPanel 间距仍按库默认，避免列表被拉开。 -->
+    <Style Selector="md|MarkdownRenderer StackPanel.MarkdownDocument">
+        <Setter Property="Spacing" Value="18" />
+    </Style>
+    <!-- 库默认样式把 Markdown 文本固定为 Arial、14px；覆盖回应用字体与气泡正文字号。 -->
+    <Style Selector="md|MarkdownTextBlock">
+        <Setter Property="FontFamily" Value="{DynamicResource FontFamilyNormal}" />
+        <Setter Property="FontSize" Value="15" />
+    </Style>
+</Styles>

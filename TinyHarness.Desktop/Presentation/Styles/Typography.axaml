@@ -1,0 +1,23 @@
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <!-- 文本排版工具类：标题、次级文本、说明文字与工具区等宽文本。
+         颜色一律引用 ThemeResources.axaml 的语义资源。 -->
+    <Style Selector="TextBlock.heading">
+        <Setter Property="FontSize" Value="20" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+    <Style Selector="TextBlock.muted">
+        <Setter Property="Foreground" Value="{DynamicResource TextMutedBrush}" />
+    </Style>
+    <Style Selector="TextBlock.caption">
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="Foreground" Value="{DynamicResource TextMutedBrush}" />
+    </Style>
+    <!-- 工具区等宽文本：工具卡参数/结果与审批横幅的工具名共用。 -->
+    <Style Selector="TextBlock.tool-mono">
+        <Setter Property="FontFamily" Value="Consolas, 'Courier New', monospace" />
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="TextWrapping" Value="Wrap" />
+        <Setter Property="Foreground" Value="{DynamicResource TextMutedBrush}" />
+    </Style>
+</Styles>

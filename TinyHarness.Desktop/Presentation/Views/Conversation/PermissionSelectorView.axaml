@@ -1,0 +1,42 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:TinyHarness.Desktop.ViewModels"
+             x:Class="TinyHarness.Desktop.Presentation.Views.Conversation.PermissionSelectorView"
+             x:DataType="vm:SessionViewModel">
+    <Panel>
+        <Button x:Name="PermissionPickerButton" Classes="permission-picker-button"
+                Command="{Binding TogglePermissionMenuCommand}"
+                AutomationProperties.Name="执行权限" ToolTip.Tip="本会话的执行权限">
+            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
+                <TextBlock Text="{Binding PermissionPickerLabel}" TextTrimming="CharacterEllipsis" />
+                <Path Grid.Column="1" Data="{StaticResource Icon.DropdownChevron}" Width="8" Height="4"
+                      Stretch="None" Stroke="{Binding $parent[Button].Foreground}"
+                      StrokeThickness="1.6" VerticalAlignment="Center" />
+            </Grid>
+        </Button>
+        <Popup x:Name="PermissionPickerPopup" PlacementTarget="{Binding #PermissionPickerButton}"
+               Placement="TopEdgeAlignedLeft" VerticalOffset="-4"
+               IsOpen="{Binding IsPermissionMenuOpen, Mode=TwoWay}" IsLightDismissEnabled="True">
+            <Border Classes="popup-surface" Width="252" MaxHeight="360">
+                <StackPanel>
+                    <TextBlock Text="执行权限" Classes="popup-section" />
+                    <TextBlock Text="会话开始后固定权限；工具仍按规则审批。" Classes="popup-value"
+                               TextWrapping="Wrap" MaxWidth="230" Margin="10,4,10,8" />
+                    <ItemsControl ItemsSource="{Binding PermissionOptions}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:ComposerMenuOption">
+                                <Button Classes="popup-item" Classes.selected="{Binding IsSelected}"
+                                        Command="{Binding SelectCommand}">
+                                    <Grid ColumnDefinitions="*,Auto">
+                                        <TextBlock Text="{Binding Label}" TextTrimming="CharacterEllipsis" />
+                                        <TextBlock Grid.Column="1" Classes="popup-check" Text="✓" IsVisible="{Binding IsSelected}" />
+                                    </Grid>
+                                </Button>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
+            </Border>
+        </Popup>
+    </Panel>
+</UserControl>

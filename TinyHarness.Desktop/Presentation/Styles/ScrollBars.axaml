@@ -1,0 +1,11 @@
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <!-- Codex 风格滚动条：Thumb 在任何状态下保持胶囊形。
+         Fluent 模板的 Thumb 无 Margin、无内缩边框，纵向宽/横向高都直接绑定 ScrollBarSize（6px），
+         因此 CornerRadius 取厚度一半（3）即可让两端呈完整半圆，纵向横向一致；
+         主题状态样式只改 Thumb 背景，圆角在 pointerover/pressed 等状态下均由本样式稳定接管。
+         滚动条的主题色与尺寸资源见 ThemeResources.axaml 的 ThemeDictionaries。 -->
+    <Style Selector="ScrollBar /template/ Thumb">
+        <Setter Property="CornerRadius" Value="3" />
+    </Style>
+</Styles>

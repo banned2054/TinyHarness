@@ -1,0 +1,65 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:TinyHarness.Desktop.ViewModels"
+             x:Class="TinyHarness.Desktop.Presentation.Views.Tooling.ToolActivityView"
+             x:DataType="vm:ToolActivityItemViewModel"
+             mc:Ignorable="d"
+             d:DesignHeight="80" d:DesignWidth="480">
+    <!-- 工具调用行式条目：顶层（运行中的轮次）与过程组展开时复用（DataTemplate 实例化本视图）。
+         对齐官方 DisclosureRow/ToolRow：类型图标 + 口语化标题 + 2×2 分隔点 + 参数摘要 +
+         状态与时间；整行可点击展开，悬停时图标淡出、折叠 chevron 淡入（见 reason-row 样式）。 -->
+    <StackPanel Spacing="4">
+        <Button Classes="reason-row" Classes.expanded="{Binding IsExpanded}"
+                Command="{Binding ToggleDetailsCommand}">
+            <Grid ColumnDefinitions="Auto,Auto,Auto,*,Auto,Auto" ColumnSpacing="6">
+                <Panel Grid.Column="0" Classes="row-leading" Width="16" Height="16"
+                       VerticalAlignment="Center">
+                    <Path Classes="row-icon" Data="{Binding IconStroke}"
+                          Stroke="{Binding $parent[Button].Foreground}" StrokeThickness="1" />
+                    <Path Classes="row-icon" Data="{Binding IconFill}"
+                          Fill="{Binding $parent[Button].Foreground}" />
+                    <Path Classes="row-chev row-chev-hover" Data="{StaticResource Icon.RowChevronDown}"
+                          Stroke="{Binding $parent[Button].Foreground}" StrokeThickness="1" />
+                    <Path Classes="row-chev row-chev-open" Data="{StaticResource Icon.RowChevronUp}"
+                          Stroke="{Binding $parent[Button].Foreground}" StrokeThickness="1" />
+                </Panel>
+                <TextBlock Grid.Column="1" Text="{Binding Title}" FontSize="13"
+                           VerticalAlignment="Center" />
+                <Ellipse Grid.Column="2" Width="2" Height="2" Margin="2,0"
+                         Fill="{DynamicResource ToolRowCaptionBrush}"
+                         VerticalAlignment="Center" />
+                <TextBlock Grid.Column="3" Text="{Binding SummaryText}" Classes="tool-summary"
+                           Classes.error="{Binding IsFailed}" />
+                <TextBlock Grid.Column="4" Text="{Binding StatusText}" Classes="caption"
+                           VerticalAlignment="Center"
+                           IsVisible="{Binding !IsInProcessGroup}" />
+                <TextBlock Grid.Column="5" Text="{Binding CreatedAtText}"
+                           Classes="caption" VerticalAlignment="Center"
+                           IsVisible="{Binding !IsInProcessGroup}" />
+            </Grid>
+        </Button>
+        <StackPanel Spacing="8" IsVisible="{Binding IsExpanded}">
+            <Border Background="{DynamicResource ChatBackgroundBrush}"
+                    CornerRadius="6" Padding="10,8" IsVisible="{Binding HasError}">
+                <TextBlock Text="{Binding ErrorReason}" FontSize="12"
+                           TextWrapping="Wrap"
+                           Foreground="{DynamicResource StatusErrorBrush}" />
+            </Border>
+            <StackPanel Spacing="4"
+                        IsVisible="{Binding ArgumentsText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                <TextBlock Text="参数" Classes="caption" />
+                <TextBlock Classes="tool-mono" Text="{Binding ArgumentsPreview}" />
+            </StackPanel>
+            <StackPanel Spacing="4"
+                        IsVisible="{Binding ResultText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                <TextBlock Text="结果" Classes="caption" />
+                <Border Background="{DynamicResource ChatBackgroundBrush}"
+                        CornerRadius="6" Padding="10,8" MaxHeight="320">
+                    <TextBlock Classes="tool-mono" Text="{Binding ResultPreview}" />
+                </Border>
+            </StackPanel>
+        </StackPanel>
+    </StackPanel>
+</UserControl>

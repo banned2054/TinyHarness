@@ -1,0 +1,198 @@
+<ResourceDictionary xmlns="https://github.com/avaloniaui"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <!--
+      语义资源统一入口：界面颜色全部来自本文件按 ThemeVariant 划分的语义资源，
+      窗口与视图内不写死颜色值。当前选择的主题固定为 Dark（见 App.axaml 的
+      RequestedThemeVariant）；需要更换时只改该处（Light，或 Default 跟随系统）。
+      深色取值为当前界面既定配色；浅色取值参考 Harness Web 端 ui-theme 的浅色语义色
+      （design-platform.css）。
+    -->
+
+    <!-- 代码块共用色：两种主题下代码框都保持深底，与 DarkPlus 高亮配色（VS 暗色）成套。
+         参照 Codex 的代码框观感：一体化深底、无外描边、弱化的头部与操作图标。 -->
+    <SolidColorBrush x:Key="CodeBlockBackgroundBrush" Color="#1E1E1E" />
+    <SolidColorBrush x:Key="CodeBlockForegroundBrush" Color="#D4D4D4" />
+    <SolidColorBrush x:Key="CodeBlockMutedBrush" Color="#9DA5B4" />
+    <!-- 任务面板状态圆点：官方 StateDot 的 static 两档（成功绿与待处理灰不随主题）。 -->
+    <SolidColorBrush x:Key="StateSuccessBrush" Color="#22C55E" />
+    <SolidColorBrush x:Key="StateIdleBrush" Color="#D4D4D4" />
+    <!-- 换行开关默认处于选中态（IsCodeWrapped 默认 true），压掉 Fluent 的强调色底保持幽灵观感。 -->
+    <SolidColorBrush x:Key="CodeBlockButtonActiveBrush" Color="#2EFFFFFF" />
+
+    <ResourceDictionary.ThemeDictionaries>
+        <ResourceDictionary x:Key="Dark">
+            <!-- Scrollbars: state changes affect color only; thickness and shape stay fixed. -->
+            <x:Double x:Key="ScrollBarSize">6</x:Double>
+            <TransformOperations x:Key="VerticalSmallScrollThumbScaleTransform">none</TransformOperations>
+            <TransformOperations x:Key="HorizontalSmallScrollThumbScaleTransform">none</TransformOperations>
+            <SolidColorBrush x:Key="ScrollBarPanningThumbBackground" Color="#3C3C3D" />
+            <SolidColorBrush x:Key="ScrollBarThumbFillPointerOver" Color="#9E9E9F" />
+            <SolidColorBrush x:Key="ScrollBarThumbFillPressed" Color="#9E9E9F" />
+            <SolidColorBrush x:Key="ScrollBarThumbFillDisabled" Color="#3C3C3D" />
+            <SolidColorBrush x:Key="ScrollBarThumbBackgroundColor" Color="#9E9E9F" />
+            <SolidColorBrush x:Key="ScrollBarTrackFill" Color="Transparent" />
+            <SolidColorBrush x:Key="ScrollBarTrackFillPointerOver" Color="Transparent" />
+            <SolidColorBrush x:Key="ScrollBarTrackStroke" Color="Transparent" />
+            <SolidColorBrush x:Key="ScrollBarTrackStrokePointerOver" Color="Transparent" />
+            <SolidColorBrush x:Key="ScrollBarBackground" Color="Transparent" />
+            <SolidColorBrush x:Key="ScrollBarBorderBrush" Color="Transparent" />
+            <!-- 表面：侧栏底色为本轮指定的 #1B1B1C 中性灰。 -->
+            <SolidColorBrush x:Key="SidebarBackgroundBrush" Color="#1B1B1C" />
+            <!-- 会话区画布：对齐 Codex 的中性深灰 #1E1E1E。 -->
+            <SolidColorBrush x:Key="ChatBackgroundBrush" Color="#1E1E1E" />
+            <SolidColorBrush x:Key="PanelBackgroundBrush" Color="#202532" />
+            <SolidColorBrush x:Key="SubtleBorderBrush" Color="#252B3A" />
+            <!-- 自定义标题栏：全窗口统一的一条 chrome surface，略深于侧栏以区分层级。 -->
+            <SolidColorBrush x:Key="TitleBarBackgroundBrush" Color="#18181A" />
+            <!-- Caption 关闭按钮的 Windows 式红（悬停/按下两档），仅标题栏 chrome 使用。 -->
+            <SolidColorBrush x:Key="TitleBarCloseHoverBrush" Color="#C42B1C" />
+            <SolidColorBrush x:Key="TitleBarClosePressedBrush" Color="#9E1B14" />
+            <!-- WebUI composer surface: neutral elevated gray against the chat canvas. -->
+            <SolidColorBrush x:Key="ComposerBackgroundBrush" Color="#2B2B2F" />
+            <SolidColorBrush x:Key="ComposerControlBrush" Color="#3A3A40" />
+            <SolidColorBrush x:Key="ComposerTextBrush" Color="#F1F1F3" />
+            <SolidColorBrush x:Key="ComposerTextMutedBrush" Color="#A7ABB4" />
+            <SolidColorBrush x:Key="ComposerActionBrush" Color="#679EFE" />
+            <!-- 输入框聚焦时的面板描边：中性灰轻微提亮，避免强调色矩形观感。 -->
+            <SolidColorBrush x:Key="ComposerFocusRingBrush" Color="#3F3F47" />
+            <!-- 会话列表：选中态为本轮指定的 #2D2D2E；悬停取其与底色之间的
+                 中性灰 #262627——清晰但不过亮，也不会盖过选中态。 -->
+            <SolidColorBrush x:Key="SessionHoverBrush" Color="#262627" />
+            <SolidColorBrush x:Key="SessionSelectedBrush" Color="#2D2D2E" />
+            <!-- 侧栏顶部「新建会话」按钮三态（对齐 DSH newSession 的实底形态）：
+                 常规 #43454A、悬停微亮、按下/激活 #353638。 -->
+            <SolidColorBrush x:Key="NewSessionButtonBrush" Color="#43454A" />
+            <SolidColorBrush x:Key="NewSessionButtonHoverBrush" Color="#4C4E53" />
+            <SolidColorBrush x:Key="NewSessionButtonActiveBrush" Color="#353638" />
+            <!-- 侧栏头部图标按钮与搜索行（对齐 DSH WorkspaceBrowser 头部）：
+                 图标按钮悬停 interactive-bg-hover rgba(255,255,255,0.08)、
+                 搜索框描边 border-l4 rgba(255,255,255,0.2)，搜索框底透明吃侧栏色。 -->
+            <SolidColorBrush x:Key="SidebarIconHoverBrush" Color="#14FFFFFF" />
+            <SolidColorBrush x:Key="SidebarSearchBorderBrush" Color="#33FFFFFF" />
+            <!-- 通用弹层菜单（模型选择、分组/排序方式、推理等级等）：形态对齐 DSH
+                 当前弹层——深色 #353638 圆角面板、选中 #454648、悬停取两者之间的中性灰。
+                 部分取值与 Composer/Session 资源数值相近是为了整体观感统一，
+                 但语义独立成组：以后调整侧栏或输入区配色不应误伤弹层。 -->
+            <SolidColorBrush x:Key="PopupSurfaceBrush" Color="#353638" />
+            <SolidColorBrush x:Key="PopupItemSelectedBrush" Color="#454648" />
+            <SolidColorBrush x:Key="PopupItemHoverBrush" Color="#3D3E40" />
+            <!-- 危险项悬停底：红调弱化底，配 StatusErrorBrush 红字（对齐 DSH hover-danger）。 -->
+            <SolidColorBrush x:Key="PopupDangerHoverBrush" Color="#46282A" />
+            <SolidColorBrush x:Key="PopupForegroundBrush" Color="#F1F1F3" />
+            <SolidColorBrush x:Key="PopupMutedForegroundBrush" Color="#A7ABB4" />
+            <SolidColorBrush x:Key="PopupDividerBrush" Color="#414244" />
+            <!-- 应用内居中设置面板：弹层语义的独立表面，略深于弹层菜单的 #353638。 -->
+            <SolidColorBrush x:Key="SettingsPanelBackgroundBrush" Color="#2C2C2E" />
+            <!-- 消息气泡 -->
+            <SolidColorBrush x:Key="UserBubbleBrush" Color="#3B5CCC" />
+            <SolidColorBrush x:Key="OnAccentBrush" Color="#FFFFFF" />
+            <SolidColorBrush x:Key="OnAccentMutedBrush" Color="#DCE5FF" />
+            <!-- 悬浮输入面板发送按钮悬停：气泡强调色提亮一档。 -->
+            <SolidColorBrush x:Key="ComposerSendHoverBrush" Color="#78A8FF" />
+            <!-- 行内代码（markdown `code`）chip 底色：会话底色上的中性灰。 -->
+            <SolidColorBrush x:Key="InlineCodeBackgroundBrush" Color="#323232" />
+            <!-- 文件改动卡片（已编辑）：对齐 Codex 的中性圆角表面（底 #262626、
+                 悬停/选中 #2A2A2A）与增删行数红绿。 -->
+            <SolidColorBrush x:Key="ChangesCardBackgroundBrush" Color="#262626" />
+            <SolidColorBrush x:Key="ChangesCardHoverBrush" Color="#2A2A2A" />
+            <SolidColorBrush x:Key="ChangesCardPressedBrush" Color="#2E2E2E" />
+            <SolidColorBrush x:Key="ChangesCardBorderBrush" Color="#3F3F41" />
+            <SolidColorBrush x:Key="DiffAddedBrush" Color="#3FB950" />
+            <SolidColorBrush x:Key="DiffDeletedBrush" Color="#F85149" />
+            <!-- 文本与状态 -->
+            <SolidColorBrush x:Key="TextMutedBrush" Color="#8D96A6" />
+            <SolidColorBrush x:Key="AccentTextBrush" Color="#AFC0FF" />
+            <SolidColorBrush x:Key="StatusRunningBrush" Color="#F0B45A" />
+            <SolidColorBrush x:Key="StatusConnectedBrush" Color="#5ED6A0" />
+            <SolidColorBrush x:Key="StatusErrorBrush" Color="#FF9A9A" />
+            <!-- 折叠行（工具/思考）：label-tertiary / label-secondary(hover) / label-caption -->
+            <SolidColorBrush x:Key="ToolRowLabelBrush" Color="#ADB2B8" />
+            <SolidColorBrush x:Key="ToolRowLabelHoverBrush" Color="#CFD3D6" />
+            <SolidColorBrush x:Key="ToolRowCaptionBrush" Color="#81858C" />
+        </ResourceDictionary>
+        <ResourceDictionary x:Key="Light">
+            <!-- Scrollbars: state changes affect color only; thickness and shape stay fixed. -->
+            <x:Double x:Key="ScrollBarSize">6</x:Double>
+            <TransformOperations x:Key="VerticalSmallScrollThumbScaleTransform">none</TransformOperations>
+            <TransformOperations x:Key="HorizontalSmallScrollThumbScaleTransform">none</TransformOperations>
+            <SolidColorBrush x:Key="ScrollBarPanningThumbBackground" Color="#E4E4E5" />
+            <SolidColorBrush x:Key="ScrollBarThumbFillPointerOver" Color="#585A5B" />
+            <SolidColorBrush x:Key="ScrollBarThumbFillPressed" Color="#585A5B" />
+            <SolidColorBrush x:Key="ScrollBarThumbFillDisabled" Color="#E4E4E5" />
+            <SolidColorBrush x:Key="ScrollBarThumbBackgroundColor" Color="#585A5B" />
+            <SolidColorBrush x:Key="ScrollBarTrackFill" Color="Transparent" />
+            <SolidColorBrush x:Key="ScrollBarTrackFillPointerOver" Color="Transparent" />
+            <SolidColorBrush x:Key="ScrollBarTrackStroke" Color="Transparent" />
+            <SolidColorBrush x:Key="ScrollBarTrackStrokePointerOver" Color="Transparent" />
+            <SolidColorBrush x:Key="ScrollBarBackground" Color="Transparent" />
+            <SolidColorBrush x:Key="ScrollBarBorderBrush" Color="Transparent" />
+            <!-- 表面：sidebar-fill / bg-base / module-platform / border-l2 -->
+            <SolidColorBrush x:Key="SidebarBackgroundBrush" Color="#F9FAFB" />
+            <SolidColorBrush x:Key="ChatBackgroundBrush" Color="#FFFFFF" />
+            <SolidColorBrush x:Key="PanelBackgroundBrush" Color="#F5F6F7" />
+            <SolidColorBrush x:Key="SubtleBorderBrush" Color="#1A000000" />
+            <!-- 自定义标题栏（浅色对应）与 caption 关闭按钮红。 -->
+            <SolidColorBrush x:Key="TitleBarBackgroundBrush" Color="#F3F4F6" />
+            <SolidColorBrush x:Key="TitleBarCloseHoverBrush" Color="#E81123" />
+            <SolidColorBrush x:Key="TitleBarClosePressedBrush" Color="#F1707A" />
+            <!-- WebUI composer surface: light elevated neutral pair. -->
+            <SolidColorBrush x:Key="ComposerBackgroundBrush" Color="#F4F5F7" />
+            <SolidColorBrush x:Key="ComposerControlBrush" Color="#E7EAEE" />
+            <SolidColorBrush x:Key="ComposerTextBrush" Color="#1A1D22" />
+            <SolidColorBrush x:Key="ComposerTextMutedBrush" Color="#70757E" />
+            <SolidColorBrush x:Key="ComposerActionBrush" Color="#3964FE" />
+            <!-- 输入框聚焦时的面板描边：中性灰加深一档（当前固定 Dark 主题，仅保持完整性）。 -->
+            <SolidColorBrush x:Key="ComposerFocusRingBrush" Color="#C7CBD3" />
+            <!-- 会话列表：nav-item-hover / nav-item-active-accent -->
+            <SolidColorBrush x:Key="SessionHoverBrush" Color="#F1F3F5" />
+            <SolidColorBrush x:Key="SessionSelectedBrush" Color="#E4EDFD" />
+            <!-- 消息气泡：button-info-fill(deepseek-500) -->
+            <SolidColorBrush x:Key="UserBubbleBrush" Color="#4176E6" />
+            <SolidColorBrush x:Key="OnAccentBrush" Color="#FFFFFF" />
+            <SolidColorBrush x:Key="OnAccentMutedBrush" Color="#E7EEFF" />
+            <!-- 悬浮输入面板发送按钮悬停：气泡强调色加深一档。 -->
+            <SolidColorBrush x:Key="ComposerSendHoverBrush" Color="#3563D9" />
+            <!-- 行内代码 chip 底色的浅色对应。
+                 （当前应用固定 Dark 主题，浅色值仅保持语义资源完整性。） -->
+            <SolidColorBrush x:Key="InlineCodeBackgroundBrush" Color="#E9EAEA" />
+            <!-- 文件改动卡片（已编辑）的浅色对应：底 #FFFEFF、悬停/选中 #FBFAFC。 -->
+            <SolidColorBrush x:Key="ChangesCardBackgroundBrush" Color="#FFFEFF" />
+            <SolidColorBrush x:Key="ChangesCardHoverBrush" Color="#FBFAFC" />
+            <SolidColorBrush x:Key="ChangesCardPressedBrush" Color="#F5F3F7" />
+            <SolidColorBrush x:Key="ChangesCardBorderBrush" Color="#E2E0E5" />
+            <SolidColorBrush x:Key="DiffAddedBrush" Color="#1A7F37" />
+            <SolidColorBrush x:Key="DiffDeletedBrush" Color="#CF222E" />
+            <!-- 侧栏顶部「新建会话」按钮三态的浅色对应：实底中性灰同构。
+                 （当前应用固定 Dark 主题，浅色值仅保持语义资源完整性。） -->
+            <SolidColorBrush x:Key="NewSessionButtonBrush" Color="#E7EAEE" />
+            <SolidColorBrush x:Key="NewSessionButtonHoverBrush" Color="#DDE0E4" />
+            <SolidColorBrush x:Key="NewSessionButtonActiveBrush" Color="#D2D5DA" />
+            <!-- 侧栏头部图标按钮与搜索行的浅色对应：interactive-bg-hover
+                 rgba(38,49,72,0.06)、border-l4 rgba(0,0,0,0.16)。
+                 （当前应用固定 Dark 主题，浅色值仅保持语义资源完整性。） -->
+            <SolidColorBrush x:Key="SidebarIconHoverBrush" Color="#0F263148" />
+            <SolidColorBrush x:Key="SidebarSearchBorderBrush" Color="#29000000" />
+            <!-- 通用弹层菜单的浅色对应：白底面板、选中 #F2F3F4、悬停更浅一档。
+                 （当前应用固定 Dark 主题，浅色值仅保持语义资源完整性。） -->
+            <SolidColorBrush x:Key="PopupSurfaceBrush" Color="#FFFFFF" />
+            <SolidColorBrush x:Key="PopupItemSelectedBrush" Color="#F2F3F4" />
+            <SolidColorBrush x:Key="PopupItemHoverBrush" Color="#F8F9FA" />
+            <SolidColorBrush x:Key="PopupDangerHoverBrush" Color="#FBE7E7" />
+            <SolidColorBrush x:Key="PopupForegroundBrush" Color="#1A1D22" />
+            <SolidColorBrush x:Key="PopupMutedForegroundBrush" Color="#70757E" />
+            <SolidColorBrush x:Key="PopupDividerBrush" Color="#EDEEF0" />
+            <!-- 应用内居中设置面板（浅色对应：纯白面板）。 -->
+            <SolidColorBrush x:Key="SettingsPanelBackgroundBrush" Color="#FFFFFF" />
+            <!-- 文本与状态：label-tertiary / link / warn-label / success / error-primary -->
+            <SolidColorBrush x:Key="TextMutedBrush" Color="#81858C" />
+            <SolidColorBrush x:Key="AccentTextBrush" Color="#4176E6" />
+            <SolidColorBrush x:Key="StatusRunningBrush" Color="#DD8629" />
+            <SolidColorBrush x:Key="StatusConnectedBrush" Color="#22C55E" />
+            <SolidColorBrush x:Key="StatusErrorBrush" Color="#EC1313" />
+            <!-- 折叠行（工具/思考）：label-tertiary / label-secondary(hover) / label-caption -->
+            <SolidColorBrush x:Key="ToolRowLabelBrush" Color="#81858C" />
+            <SolidColorBrush x:Key="ToolRowLabelHoverBrush" Color="#61666B" />
+            <SolidColorBrush x:Key="ToolRowCaptionBrush" Color="#ADB2B8" />
+        </ResourceDictionary>
+    </ResourceDictionary.ThemeDictionaries>
+</ResourceDictionary>
