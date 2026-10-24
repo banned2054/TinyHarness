@@ -7,7 +7,7 @@ Scope: Windows x64 application and sandbox distribution. Related runtime/library
 provenance is retained conservatively where inlining or shared/native code cannot
 be attributed more narrowly; this does not assert that every upstream component
 or every function in a referenced library is shipped. Unrelated upstream platform
-and test-only notices are excluded. Scope and maintenance: Docs/third-party-notices.md.
+and test-only notices are excluded. Scope and maintenance: Docs/Guides/third-party-notices.md.
 Component references point to shared license texts later in this file.
 Each shared text lists its component/source attribution before the license terms.
 Only texts with identical terms after whitespace normalization are merged.

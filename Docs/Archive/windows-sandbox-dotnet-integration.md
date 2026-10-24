@@ -1,3 +1,9 @@
+# Windows 沙箱直接组件接入方案（历史基线）
+
+归档日期：2026-10-24。
+
+> 以下完整保留 2026-10-09 核查及后续补充时的设计、源码行号、示例和验证边界。严格模式 setup v5 与 IPC v6 是原参考基线，不能据此覆盖后来的 TCP 环回模式。文中的「尚未完成」不表示当前状态；现行接入职责见[接入说明](windows-sandbox-integration-guide.md)，模式、版本与使用限制见[沙箱管理](windows-sandbox-management.md)。
+
 # Windows 沙箱 · TinyHarness .NET 直接组件接入方案
 
 组件源码：[banned2054/codex](https://github.com/banned2054/codex)，基于 [OpenAI Codex](https://github.com/openai/codex) 的 TinyHarness 沙箱 fork。以下旧版本基准保留其历史含义；当前可信 TCP 环回模式与实际验收范围见[沙箱管理记录](windows-sandbox-management.md)。
@@ -7,7 +13,7 @@
 > 主方案：TinyHarness 的 C# Runtime 直接编排独立编译的 setup / runner 组件，不调用 Codex CLI，不新增 Rust shim
 > 状态：组件已编译，协议及部分 C# 片段已验证；完整 TinyHarness 接入与实际隔离验收尚未完成
 > 命名空间（2026-10-10）：接入目标改为 TinyHarness 独立命名空间 fork（§1.1）；setup/runner 已替换为 fork 构建
-> 产品范围和实施顺序：[PAST_PLAN.md §22：M11](../PAST_PLAN.md#22-m11windows-工具进程沙箱)
+> 产品范围和实施顺序：[PAST_PLAN.md §22：M11](../../PAST_PLAN.md#22-m11windows-工具进程沙箱)
 > 目标读者：在 .NET harness 中复用 Codex Windows 沙箱模块执行不可信命令的集成开发者
 
 ---
@@ -657,7 +663,7 @@ static async Task<JsonObject?> ReadFrameAsync(Stream s, CancellationToken ct) {
 
 ## 10. 实施路线与后续平台
 
-详细历史里程碑见 [PAST_PLAN.md §22](../PAST_PLAN.md#22-m11windows-工具进程沙箱)，本节只记录技术落点：
+详细历史里程碑见 [PAST_PLAN.md §22](../../PAST_PLAN.md#22-m11windows-工具进程沙箱)，本节只记录技术落点：
 
 1. 提取现有宿主进程 backend，建立 prepared execution、输出和终态契约，保留现有 shell 行为与默认测试。
 2. 实现 C# Windows 编排及 fake 管道测试；直接使用已编译 setup/runner，不调用 Codex CLI，不新增 Rust shim。

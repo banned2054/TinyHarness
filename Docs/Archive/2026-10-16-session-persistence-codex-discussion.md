@@ -1,6 +1,8 @@
 # 会话持久化与 Codex 方案讨论记录
 
-> **历史材料（2026-10-17 标记，2026-10-23 更新入口）。** 本文保留当时对话、更正和旧计划验收证据，不再承载当前设计或下一步安排。当前入口为[使用说明](README.md)与[会话持久化设计](session-persistence-design.md)，原阶段计划见[历史归档](../PAST_PLAN.md#m12-m17)。下文关于“尚未改变计划”的表述描述的是 2026-10-16 当时状态。
+> 历史归档（2026-10-24 整理）。本页保留原日期、范围、结果与限制，不作为当前实现说明或新的操作授权。当前文档见[文档索引](../README.md#documentation)。
+
+> **历史材料（2026-10-17 标记，2026-10-23 更新入口）。** 本文保留当时对话、更正和旧计划验收证据，不再承载当前设计或下一步安排。当前入口为[使用说明](../README.md)与[会话持久化设计](session-persistence-design.md)，原阶段计划见[历史归档](../../PAST_PLAN.md#m12-m17)。下文关于“尚未改变计划”的表述描述的是 2026-10-16 当时状态。
 
 - 日期：2026-10-16。
 - TinyHarness 核查基线：`45fae0b4a70e13c56846e4be1dab9bde5c9e0aa1`。
@@ -107,7 +109,7 @@ M14 的顺序是：
 
 旧 M7 快照以及 v1/v2 会话文件目前仍可检查，但不会自动升级成可续聊的 v3。
 
-相关依据见 [M7 历史计划](../PAST_PLAN.md#15-持久化与审计) 和 [阶段计划中的存储说明](../PAST_PLAN.md#7-持久化与安全续聊)。**准确总结就是：M7 做了“留档”，M13 在保留留档能力的基础上，新增了“跨进程接着聊”的存储与恢复体系。**
+相关依据见 [M7 历史计划](../../PAST_PLAN.md#15-持久化与审计) 和 [阶段计划中的存储说明](../../PAST_PLAN.md#7-持久化与安全续聊)。**准确总结就是：M7 做了“留档”，M13 在保留留档能力的基础上，新增了“跨进程接着聊”的存储与恢复体系。**
 
 > 归档补充：后续 Git 历史核查没有找到独立提交的 `CurrentFormatVersion = 2`；可见历史直接由 1 变为 3。关于 v2 的描述来自当前兼容契约、注释与计划记录，不能据此推导它曾独立发布或独立验证。
 
@@ -130,7 +132,7 @@ M14 的顺序是：
 
 也就是说，不只是“日志和会话各存一份”，而是**旧运行快照里也有对话历史，新会话快照里又保存了它**。聊得越多，旧快照还会反复留下此前的历史。
 
-实际双写入口在 [Program.cs:263](../TinyHarness.Cli/Program.cs#L263)，旧快照写入内容见 [RunPersistence.cs:153](../TinyHarness.Core/Services/Persistence/RunPersistence.cs#L153)。
+实际双写入口在 [Program.cs:263](../../TinyHarness.Cli/Program.cs#L263)，旧快照写入内容见 [RunPersistence.cs:153](../../TinyHarness.Core/Services/Persistence/RunPersistence.cs#L153)。
 
 #### 为什么会这样？
 
@@ -739,15 +741,15 @@ Codex 自身也有协议项、展示条目、索引和 SQLite 状态，并非绝
 
 | 范围 | 关键位置 |
 |---|---|
-| 当时路线及安全契约 | [归档阶段计划](../PAST_PLAN.md#m12-m17)，尤其第 7 节与 M13／M14 路线 |
-| M7 历史定位 | [PAST_PLAN.md](../PAST_PLAN.md) |
-| chat 同时接入两条保存路径 | [Program.cs](../TinyHarness.Cli/Program.cs)，`RunChatAsync` |
-| 旧运行审计与全量检查快照 | [RunPersistence.cs](../TinyHarness.Core/Services/Persistence/RunPersistence.cs)，`FileRunRecorder` |
-| v3 模型、检查视图与执行记录 | [PersistedSession.cs](../TinyHarness.Core/Models/Persistence/PersistedSession.cs) |
-| 原子替换、16 MiB 上限、提交审计及锁 | [SessionStore.cs](../TinyHarness.Core/Services/Persistence/SessionStore.cs) |
-| 副作用前检查点与中断结算 | [ChatSessionHost.cs](../TinyHarness.Core/Services/Session/ChatSessionHost.cs) |
-| 身份、协议及 opaque 校验与恢复 | [SessionResume.cs](../TinyHarness.Core/Services/Session/SessionResume.cs) |
-| 完整本地历史与受预算限制的模型视图 | [ConversationContext.cs](../TinyHarness.Core/Services/Context/ConversationContext.cs) |
+| 当时路线及安全契约 | [归档阶段计划](../../PAST_PLAN.md#m12-m17)，尤其第 7 节与 M13／M14 路线 |
+| M7 历史定位 | [PAST_PLAN.md](../../PAST_PLAN.md) |
+| chat 同时接入两条保存路径 | [Program.cs](../../TinyHarness.Cli/Program.cs)，`RunChatAsync` |
+| 旧运行审计与全量检查快照 | [RunPersistence.cs](../../TinyHarness.Core/Services/Persistence/RunPersistence.cs)，`FileRunRecorder` |
+| v3 模型、检查视图与执行记录 | [PersistedSession.cs](../../TinyHarness.Core/Models/Persistence/PersistedSession.cs) |
+| 原子替换、16 MiB 上限、提交审计及锁 | [SessionStore.cs](../../TinyHarness.Core/Services/Persistence/SessionStore.cs) |
+| 副作用前检查点与中断结算 | [ChatSessionHost.cs](../../TinyHarness.Core/Services/Session/ChatSessionHost.cs) |
+| 身份、协议及 opaque 校验与恢复 | [SessionResume.cs](../../TinyHarness.Core/Services/Session/SessionResume.cs) |
+| 完整本地历史与受预算限制的模型视图 | [ConversationContext.cs](../../TinyHarness.Core/Services/Context/ConversationContext.cs) |
 
 ### 本地 Codex
 
@@ -776,7 +778,7 @@ Codex 自身也有协议项、展示条目、索引和 SQLite 状态，并非绝
 
 ## 五、旧 PLAN 的基线与验收记录归档
 
-2026-10-17 文档整理时，从原 PLAN 迁入以下基线说明、详细验收记录与阶段路线。内容保留原文，日期、测试数量、下一阶段和“尚未实现”等表述均属于原记录；本次没有重新执行这些验证。2026-10-23 原阶段计划也已归档，当前停点见[开发接力](current-progress.md)，持久化契约见[设计文档](session-persistence-design.md)。
+2026-10-17 文档整理时，从原 PLAN 迁入以下基线说明、详细验收记录与阶段路线。内容保留原文，日期、测试数量、下一阶段和“尚未实现”等表述均属于原记录；本次没有重新执行这些验证。2026-10-23 原阶段计划也已归档，当前停点见[开发接力](../../PLAN.md)，持久化契约见[设计文档](session-persistence-design.md)。
 
 ### 1. 原基线与复验记录
 
@@ -860,4 +862,3 @@ Codex 自身也有协议项、展示条目、索引和 SQLite 状态，并非绝
 3. M17.3：在另行明确授权后执行少量真实模型任务与必要的 Windows 隔离复验，记录配置组合、环境、成功/失败、耗时与 usage。
 
 验收：离线结果可重复且不依赖模型密钥；`win-x64` NativeAOT 产物从仓库外完成新会话/续聊/报告与原入口 smoke。机器断言覆盖保存/恢复前后消息协议字段与 opaque 原值一致、压缩状态与完整工具边界正确、opaque 哈希不符时拒绝、v1/v2 仍仅供检查；以合成秘密验证检查投影、审计、报告与终端不能泄漏已知秘密或 opaque 原文，且展示脱敏不修改 canonical 历史。真实调用只对具体组合形成证据，不以 fake 通过证明真实 coding 能力；未授权或未完成的真实验证如实列为未验证。
-

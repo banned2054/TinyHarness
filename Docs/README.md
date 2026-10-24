@@ -89,7 +89,7 @@ $env:PATH = "$publishDirectory;$env:PATH"
 
 可选 Windows 工具进程沙箱使用 [banned2054/codex](https://github.com/banned2054/codex) 构建的组件，这是本项目对 [OpenAI Codex](https://github.com/openai/codex) 的 fork。fork 为 TinyHarness 隔离了机器级命名，并包含对应的网络隔离改动。TinyHarness 的 C# Runtime 直接编排这些组件，不需要运行 Codex CLI 或 Codex Agent。
 
-日常运行使用 `codex-windows-sandbox-setup.exe` 与 `codex-command-runner.exe`。可使用 Release ZIP 中的匹配组件，或从该 fork 自行构建，并在用户配置 `settings.windowsSandbox.setupExecutablePath` 和 `runnerExecutablePath` 中设置绝对路径；`dotnet publish` 不会生成或自动下载它们。构建与接入细节见[组件构建说明](windows-sandbox-dotnet-integration.md#构建产物已在本机构建验证)，配置和验收范围见[沙箱管理说明](windows-sandbox-management.md)。
+日常运行使用 `codex-windows-sandbox-setup.exe` 与 `codex-command-runner.exe`。可使用 Release ZIP 中的匹配组件，或从该 fork 自行构建，并在用户配置 `settings.windowsSandbox.setupExecutablePath` 和 `runnerExecutablePath` 中设置绝对路径；`dotnet publish` 不会生成或自动下载它们。构建与接入细节见[组件构建说明](Archive/windows-sandbox-dotnet-integration.md#构建产物已在本机构建验证)，配置和验收范围见[沙箱管理说明](Archive/windows-sandbox-management.md)。
 
 ## 📖 使用说明
 
@@ -184,9 +184,9 @@ tinyharness chat --session <session-id>
 | `mcp` | 通过 stdio 提供只读 `ask_glm` worker |
 | `sandbox status / provision / verify` | 检查、配置或验证可选 Windows 沙箱 |
 
-`maxAgentSteps` 默认 `0`，表示不限普通步数。可信用户 `settings.runBudget` 默认每次运行最多 128 次逻辑模型请求（含压缩）和 256 次工具执行。累计 token 和总时长默认只统计、不设限（`maxTotalTokens`／`maxWallClockSeconds` 为 `0`），正数可启用相应上限；单工具超时与取消仍有效。详细契约见[运行预算](task-control-design.md)。
+`maxAgentSteps` 默认 `0`，表示不限普通步数。可信用户 `settings.runBudget` 默认每次运行最多 128 次逻辑模型请求（含压缩）和 256 次工具执行。累计 token 和总时长默认只统计、不设限（`maxTotalTokens`／`maxWallClockSeconds` 为 `0`），正数可启用相应上限；单工具超时与取消仍有效。详细契约见[运行预算](Archive/task-control-design.md)。
 
-MCP worker 使用用户配置，将获准读取的工作区内容发送给模型，但不能写文件或执行命令；它是 MCP server，不是连接外部工具的 client。`sandbox provision` 会提权修改机器账户、ACL 与网络规则，`sandbox verify` 会执行真实隔离检查；使用前请阅读[沙箱配置与验收说明](windows-sandbox-management.md)。
+MCP worker 使用用户配置，将获准读取的工作区内容发送给模型，但不能写文件或执行命令；它是 MCP server，不是连接外部工具的 client。`sandbox provision` 会提权修改机器账户、ACL 与网络规则，`sandbox verify` 会执行真实隔离检查；使用前请阅读[沙箱配置与验收说明](Archive/windows-sandbox-management.md)。
 
 <a id="platform-status"></a>
 
@@ -197,17 +197,22 @@ MCP worker 使用用户配置，将获准读取的工作区内容发送给模型
 | Windows x64 | 主要开发与原型使用平台，已有 NativeAOT 和限定范围的真实使用／隔离记录 |
 | 其他 RID | 尚未完成分发或日常使用验证 |
 
+<a id="documentation"></a>
+
 ## 📚 文档
 
-- [许可证](../LICENSE)：项目采用 Apache-2.0；[NOTICE](../NOTICE) 与[第三方许可](../THIRD-PARTY-LICENSES.txt)保留组件归属和条款。更新方式见[维护说明](third-party-notices.md)。
-- [更新日志](CHANGELOG.md)：中英文版本说明与已知限制。
-- [会话持久化](session-persistence-design.md)、[项目规则](project-instructions-design.md)、[行为提示词](system-prompt-design.md)与[上下文压缩](context-compaction-design.md)：契约和验证记录。
-- [任务控制与预算](task-control-design.md)、[交付证据](m16-verification.md)。
-- [Windows 沙箱管理](windows-sandbox-management.md)：配置前提、范围和限制。
-- [打包与发布](releasing.md)：GitHub Actions 构建、固定沙箱来源、ZIP 结构和用户发布 Release 后的附件上传。
-- [当前接力入口](current-progress.md)：当前工作与历史本机证据。
-- [历史计划](../PAST_PLAN.md)：MVP 至 M17 的归档记录；[PLAN.md](../PLAN.md) 暂作归档入口，当前没有制定新的总路线。
-- [AGENTS.md](../AGENTS.md)：仓库开发规则。
+`Docs/` 顶层仅保留本页、[代码风格](code-style.md)、[更新日志](CHANGELOG.md)和正在实施的单项计划。实施完成后，将计划与设计移入 [Archive](Archive/README.md)，不因仍有参考价值而继续留在顶层。
+
+| 位置 | 内容 |
+| --- | --- |
+| 顶层活动计划 | 正在实施的单项计划由对应开发任务维护与提交；实施完成后移入归档 |
+| [Archive](Archive/README.md) | 已完成的设计、实现边界、历史讨论、接力与验收；归档不取消仍有效的技术约束 |
+| Guides | [打包与发布](Guides/releasing.md)、[许可证与第三方声明维护](Guides/third-party-notices.md)等持续使用的维护说明 |
+| [Templates](Templates/README.md) | 可复制的跨项目代码风格母版 |
+
+[PLAN.md](../PLAN.md) 维护活动计划入口；[PAST_PLAN.md](../PAST_PLAN.md) 保留历史总计划；[AGENTS.md](../AGENTS.md) 规定仓库工作方式。项目采用 [Apache-2.0](../LICENSE)，[NOTICE](../NOTICE) 与[第三方许可](../THIRD-PARTY-LICENSES.txt)保留归属和条款。
+
+新增文档按职责放入相应位置。计划完成后及时归档，并更新本节、归档索引和相关引用；历史日期、测试结果及未验证范围保留原意，不把旧结论当作当前验证。当前仍有效的实现边界可继续在归档文档中维护，后续变更先核对源码和活动计划。
 
 ## 🤝 参与贡献
 

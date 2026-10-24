@@ -1,15 +1,16 @@
 # TinyHarness.NET 计划入口
 
-更新日期：2026-10-23。
+更新日期：2026-10-24。
 
 原 MVP 至 M17 阶段计划已收口并合并到 [PAST_PLAN.md](PAST_PLAN.md)。当前定位是 **0.0.1 原型预览版**：基础流程已能用于实际任务，仍在根据使用反馈修复细节，交互、稳定性与安全性均不作成熟保证。
 
 当前没有新的总计划。是否继续维护总 PLAN 尚未决定；后续需要设计的单项功能，可以分别维护对应计划，本文暂留为归档与阅读入口，不预先安排下一轮里程碑。
 
+- 文档阅读入口：[中文 README 文档导航](Docs/README.md#documentation)；已完成的设计、讨论与验收见[归档索引](Docs/Archive/README.md)。
 - 使用方式与已知限制：[英文 README](README.md)、[中文 README](Docs/README.md)。
-- 当前开发停点与历史证据：[开发接力](Docs/current-progress.md)。
 - 历史范围、约束与里程碑：[MVP／M1–M11](PAST_PLAN.md#m1-m11)、[M12–M17](PAST_PLAN.md#m12-m17)。
-- 详细契约：继续查阅对应的[会话持久化](Docs/session-persistence-design.md)、[项目规则](Docs/project-instructions-design.md)、[系统提示词](Docs/system-prompt-design.md)、[上下文压缩](Docs/context-compaction-design.md)、[任务控制与预算](Docs/task-control-design.md)和[Windows 沙箱](Docs/windows-sandbox-management.md)文档。
+- 已完成实现的设计参考：继续查阅归档中的[会话持久化](Docs/Archive/session-persistence-design.md)、[项目规则](Docs/Archive/project-instructions-design.md)、[系统提示词](Docs/Archive/system-prompt-design.md)、[上下文压缩](Docs/Archive/context-compaction-design.md)、[任务控制与预算](Docs/Archive/task-control-design.md)和[Windows 沙箱](Docs/Archive/windows-sandbox-management.md)文档。
+- 活动计划：正在实施的单项计划保留在 `Docs/` 顶层，由对应开发任务维护与提交；完成后迁入归档。
 - 工作规则：[AGENTS.md](AGENTS.md)。开始具体变更时读取相关设计或单项计划，并核对实际源码和工作区状态。
 
 归档不取消现有协议、安全、权限、数据完整性和 NativeAOT 约束。历史记录只证明当时所述范围，不能替代当前验证，也不授予修改、提交、真实模型调用、机器配置或发布权限。

@@ -1,6 +1,8 @@
 # M16 交付证据核查与验收
 
-日期：2026-10-22。范围见[归档计划 §9.2](../PAST_PLAN.md#92-变更与验证证据)；该阶段计划已于 2026-10-23 归档，本次验收记录保留原日期与范围。
+> 历史归档（2026-10-24 整理）。本页保留原日期、范围、结果与限制，不作为当前实现说明或新的操作授权。当前文档见[文档索引](../README.md#documentation)。
+
+日期：2026-10-22。范围见[归档计划 §9.2](../../PAST_PLAN.md#92-变更与验证证据)；该阶段计划已于 2026-10-23 归档，本次验收记录保留原日期与范围。
 
 **收窄后的 M16 已完成本机验收，无需新增产品代码。** 现有 shell、补丁事实、唯一 session-log 和离线检查入口足以支撑本次交付场景；没有新增专用 Git tool call、归因数据库或独立报告系统。模型解释仍须与确定性记录核对，不承诺每句话正确或能识别所有并发修改者。
 
@@ -22,11 +24,11 @@
 
 ## 2. 本轮工程验证
 
-证据根目录：`artifacts/m16-acceptance-20261022/`（本机保留，被 Git 忽略）。[机器汇总](../artifacts/m16-acceptance-20261022/final-proof.json) 记录测试、原生 smoke、历史检查、模型请求和范围核对。
+证据根目录：`artifacts/m16-acceptance-20261022/`（本机保留，被 Git 忽略）。[机器汇总](../../artifacts/m16-acceptance-20261022/final-proof.json) 记录测试、原生 smoke、历史检查、模型请求和范围核对。
 
 ### 针对性测试
 
-最终 **158 总／158 通过／0 失败／0 跳过**；这不是全 solution 回归或 scale 复验。结果为 [TRX](../artifacts/m16-acceptance-20261022/test-results/m16-evidence-bounded-path-host.trx)。
+最终 **158 总／158 通过／0 失败／0 跳过**；这不是全 solution 回归或 scale 复验。结果为 [TRX](../../artifacts/m16-acceptance-20261022/test-results/m16-evidence-bounded-path-host.trx)。
 
 | 测试类 | 用例数 |
 |---|---:|
@@ -41,7 +43,7 @@
 | SessionWorkItemTests | 10 |
 | ShellToolTests | 13 |
 
-执行 `dotnet test TinyHarness.Tests/TinyHarness.Tests.csproj --no-restore`，以这十个类的 `FullyQualifiedName` OR 条件过滤，并输出上述 TRX。可复制的完整过滤器与命令保留在 [离线复跑脚本](../artifacts/m16-acceptance-20261022/run-offline-tests.ps1)；复跑使用新文件名，不覆盖原证据。仅为该测试进程设置精简 PATH，包含系统目录、Windows PowerShell、dotnet、pwsh 和 Git 的目录；没有修改系统或用户环境变量。
+执行 `dotnet test TinyHarness.Tests/TinyHarness.Tests.csproj --no-restore`，以这十个类的 `FullyQualifiedName` OR 条件过滤，并输出上述 TRX。可复制的完整过滤器与命令保留在 [离线复跑脚本](../../artifacts/m16-acceptance-20261022/run-offline-tests.ps1)；复跑使用新文件名，不覆盖原证据。仅为该测试进程设置精简 PATH，包含系统目录、Windows PowerShell、dotnet、pwsh 和 Git 的目录；没有修改系统或用户环境变量。
 
 保留失败证据而不合并计数：
 
@@ -53,9 +55,9 @@
 ### 原生产物与历史检查
 
 - 使用既有 `artifacts/m15-manual-style/native/TinyHarness.exe`，SHA-256 `DAA578AC282EB9FA81100933332B72A84376E39B2562986C9612C6B99258BA9B`。
-- 仓库外临时 cwd、隔离用户配置运行 `smoke --config <临时 project.json>`：退出 0、Completed／17 steps／16 tool executions；日志恢复、历史 confirmed diff、失败／成功夹具检查、两种命令模式及另行 M15 控制／预算 smoke 均通过。[原生输出](../artifacts/m16-acceptance-20261022/native-smoke.txt)。使用 fake model，未运行 Windows 沙箱。
+- 仓库外临时 cwd、隔离用户配置运行 `smoke --config <临时 project.json>`：退出 0、Completed／17 steps／16 tool executions；日志恢复、历史 confirmed diff、失败／成功夹具检查、两种命令模式及另行 M15 控制／预算 smoke 均通过。[原生输出](../../artifacts/m16-acceptance-20261022/native-smoke.txt)。使用 fake model，未运行 Windows 沙箱。
 - 本轮没有重新 publish；本轮只验证既有原生产物行为，不把历史 AOT 编译结果称作新的 publish。
-- 对此前 Git 验证的四个会话运行原生 `session show <id>`，均退出 0、显示历史，源日志前后哈希相同。[检查汇总](../artifacts/m16-acceptance-20261022/offline-show-results.json)。
+- 对此前 Git 验证的四个会话运行原生 `session show <id>`，均退出 0、显示历史，源日志前后哈希相同。[检查汇总](../../artifacts/m16-acceptance-20261022/offline-show-results.json)。
 
 ## 3. 真实 GLM 报告样本
 
@@ -68,11 +70,11 @@
 - 正确区分已确认的 10→11 与当前 12，后者来源不明，不能全部归于补丁。
 - 未把补丁成功、合成 exit 0 或截断记录当作构建／测试通过；拒绝记录按未执行报告。
 - 对用户草稿的字节一致性保留未验证说明；验收脚本独立比较三个夹具文件 SHA-256，实际变化 0。
-- 运行 Completed，2 次模型请求、4 次工具执行（list_files 与三次 read_file）、7,516 reported accounted tokens；未执行 shell 或写入工具。会话 ID 为 `d2824992516a48b0972683724f169d54`。[检查投影](../artifacts/m16-acceptance-20261022/glm-report-inspection.json) 和 [CLI 输出](../artifacts/m16-acceptance-20261022/glm-report.txt) 保留证据。
+- 运行 Completed，2 次模型请求、4 次工具执行（list_files 与三次 read_file）、7,516 reported accounted tokens；未执行 shell 或写入工具。会话 ID 为 `d2824992516a48b0972683724f169d54`。[检查投影](../../artifacts/m16-acceptance-20261022/glm-report-inspection.json) 和 [CLI 输出](../../artifacts/m16-acceptance-20261022/glm-report.txt) 保留证据。
 
 已知文字瑕疵：开头说三个文件与 `currentFiles` 一致，但该列表实际只列出 owned.txt 和 user-draft.txt，未列 evidence.json。此句不准确，保留原文；不能把核心判定正确外推成整篇文字无误。确定性文件清单与工具记录优先于模型概括。
 
-此前 Git 的三个完成样本、初次达限及完整源码补丁外发审批限制，仍按 [原验证记录](../artifacts/git-shell-glm53-20261021/verification.md) 分别计数，本轮不重跑完整源码补丁。
+此前 Git 的三个完成样本、初次达限及完整源码补丁外发审批限制，仍按 [原验证记录](../../artifacts/git-shell-glm53-20261021/verification.md) 分别计数，本轮不重跑完整源码补丁。
 
 ## 4. 收口与限制
 

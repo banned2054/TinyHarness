@@ -1,8 +1,10 @@
 # M10 统一模型协议接入验证记录
 
+> 历史归档（2026-10-24 整理）。本页保留原日期、范围、结果与限制，不作为当前实现说明或新的操作授权。当前文档见[文档索引](../README.md#documentation)。
+
 日期：2026-10-08
 
-依据原计划 [PAST_PLAN.md 第 21 节](../PAST_PLAN.md#21-统一模型协议接入)，模型调用边界迁移到 `Microsoft.Extensions.AI.IChatClient`，底层使用官方 OpenAI SDK；Chat Completions 与 Responses 两种协议由配置显式选择。Anthropic 按第 21 节结论继续排除在外置依赖之外。
+依据原计划 [PAST_PLAN.md 第 21 节](../../PAST_PLAN.md#21-统一模型协议接入)，模型调用边界迁移到 `Microsoft.Extensions.AI.IChatClient`，底层使用官方 OpenAI SDK；Chat Completions 与 Responses 两种协议由配置显式选择。Anthropic 按第 21 节结论继续排除在外置依赖之外。
 
 ## 已交付
 

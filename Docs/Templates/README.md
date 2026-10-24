@@ -26,4 +26,4 @@
 - 项目副本随其仓库版本管理，不依赖用户绝对路径、全局配置或目录链接。
 - 母版更新后按需比较并合并到各项目，保留项目补充；不自动覆盖，也不要求各项目永久逐字相同。
 - 本仓库的活动规则是 [Docs/code-style.md](../code-style.md)；母版用于复制，不是第二份活动项目指令。
-- [TinyHarness 源码参考记录](../code-style-evidence.md) 只留在本项目，不作为通用规则传播。
+- [TinyHarness 源码参考记录](../Archive/code-style-evidence.md) 只留在本项目，不作为通用规则传播。

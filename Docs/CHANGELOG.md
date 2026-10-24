@@ -41,7 +41,7 @@ Release Date / 发布日期：2026-10-23
 - 项目采用 Apache-2.0；第三方许可按分发范围整理，合并相同条款并保留适用版权、归属与特殊声明。
 - 手动 workflow 运行上传构建 artifact；匹配项目版本的 `v*` tag 构建通过后创建 Draft + Prerelease，不自动公开。
 - `v0.0.1` 按正式 Release 发布；公开前核对构建结果和分发包，再取消草稿与预发布标记。
-- 提供中英文 README、使用说明和[打包文档](releasing.md)，原阶段计划统一并入[历史计划](../PAST_PLAN.md)。
+- 提供中英文 README、使用说明和[打包文档](Guides/releasing.md)，原阶段计划统一并入[历史计划](../PAST_PLAN.md)。
 
 #### 🧪 测试
 
@@ -78,7 +78,7 @@ This is the first public release of TinyHarness.NET, bringing together the initi
 - Apache-2.0 licensing for the project, with third-party terms scoped to the distribution, identical terms deduplicated, and applicable copyrights, attribution, and special notices retained.
 - Manual workflow runs upload build artifacts; successful builds for `v*` tags matching the project version create a Draft + Prerelease without automatically publishing it.
 - `v0.0.1` is published as a regular release; build results and distribution files are checked before removing the draft and prerelease flags.
-- English and Chinese READMEs, usage instructions, and [packaging documentation](releasing.md); the previous milestone plans are consolidated in the [historical plan archive](../PAST_PLAN.md).
+- English and Chinese READMEs, usage instructions, and [packaging documentation](Guides/releasing.md); the previous milestone plans are consolidated in the [historical plan archive](../PAST_PLAN.md).
 
 #### 🧪 Tests
 

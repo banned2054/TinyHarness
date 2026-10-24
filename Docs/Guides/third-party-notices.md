@@ -2,9 +2,9 @@
 
 项目采用 Apache-2.0。源码仓库与二进制 ZIP 使用同一套三份文件：
 
-- [LICENSE](../LICENSE)：Apache-2.0 完整原文，也供采用相同标准条款的第三方组件引用。
-- [NOTICE](../NOTICE)：项目归属、Codex fork 来源及适用于沙箱的上游声明。
-- [THIRD-PARTY-LICENSES.txt](../THIRD-PARTY-LICENSES.txt)：组件清单、版权归属、共享许可正文与特殊条款。
+- [LICENSE](../../LICENSE)：Apache-2.0 完整原文，也供采用相同标准条款的第三方组件引用。
+- [NOTICE](../../NOTICE)：项目归属、Codex fork 来源及适用于沙箱的上游声明。
+- [THIRD-PARTY-LICENSES.txt](../../THIRD-PARTY-LICENSES.txt)：组件清单、版权归属、共享许可正文与特殊条款。
 
 ## 组织方式
 

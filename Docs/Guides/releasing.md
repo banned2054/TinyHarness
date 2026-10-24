@@ -1,6 +1,6 @@
 # Windows x64 打包与发布
 
-工作流：[`.github/workflows/release.yml`](../.github/workflows/release.yml)。首版只生成 Windows x64 ZIP；以下说明工作流行为，不表示已经在 GitHub runner 上跑通或创建了发布。
+工作流：[`.github/workflows/release.yml`](../../.github/workflows/release.yml)。首版只生成 Windows x64 ZIP；以下说明工作流行为，不表示已经在 GitHub runner 上跑通或创建了发布。
 
 ## 触发方式
 
@@ -41,9 +41,9 @@ ZIP 内包含 `TinyHarness.exe`、`sandbox/` 下的 setup／runner／managed-den
 
 ## 用户首次使用
 
-包内说明与 [README 使用指南](README.md#-使用说明) 一致。解压目录应位于工作区和全部沙箱写根之外。配置向导先创建用户模型配置，沙箱示例仅用于合并 `settings.windowsSandbox`，其中两个组件路径需替换成用户机器上的真实绝对路径；不能覆盖整份用户配置。
+包内说明与 [README 使用指南](../README.md#-使用说明) 一致。解压目录应位于工作区和全部沙箱写根之外。配置向导先创建用户模型配置，沙箱示例仅用于合并 `settings.windowsSandbox`，其中两个组件路径需替换成用户机器上的真实绝对路径；不能覆盖整份用户配置。
 
-解压不启用沙箱，不自动初始化或修改机器。用户选择沙箱后自行核对 `sandbox status`、明确执行 `sandbox provision` 并确认 UAC。严格模式和 TCP 环回模式的选择及副作用见[沙箱管理](windows-sandbox-management.md)。
+解压不启用沙箱，不自动初始化或修改机器。用户选择沙箱后自行核对 `sandbox status`、明确执行 `sandbox provision` 并确认 UAC。严格模式和 TCP 环回模式的选择及副作用见[沙箱管理](../Archive/windows-sandbox-management.md)。
 
 ## Release 附件上传
 

@@ -183,5 +183,5 @@ if (result is { Status: RunStatus.Completed, Budget: { ModelRequests: 3 } })
 
 - 本项目的具体共享设置为 `TinyHarness.sln.DotSettings`，与 `.editorconfig` 的优先关系见根 `AGENTS.md`。
 - 当前选定的 `banned甄选` profile 保留 C# using 原顺序；这不等于已经执行字母排序。
-- 本项目未修改源码的排版观察保留在[源码参考记录](code-style-evidence.md)，不复制到其他项目作为其源码证据。
+- 本项目未修改源码的排版观察保留在[源码参考记录](Archive/code-style-evidence.md)，不复制到其他项目作为其源码证据。
 - 本文没有授予批量格式化、功能修改或 Git 操作权限；只处理当前任务明确授权的范围。

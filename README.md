@@ -89,7 +89,7 @@ $env:PATH = "$publishDirectory;$env:PATH"
 
 The optional Windows tool-process sandbox uses components built from [banned2054/codex](https://github.com/banned2054/codex), this project's fork of [OpenAI Codex](https://github.com/openai/codex). The fork gives TinyHarness its own machine-level identifiers and includes its network-isolation changes. TinyHarness's C# runtime directly orchestrates these components; running the Codex CLI or agent is not required.
 
-The two runtime components are `codex-windows-sandbox-setup.exe` and `codex-command-runner.exe`. Use the matching components included in the release ZIP, or build them from the fork, and configure their absolute paths in user `settings.windowsSandbox.setupExecutablePath` and `runnerExecutablePath`. They are not produced or automatically downloaded by `dotnet publish`. See the [component build and integration instructions](Docs/windows-sandbox-dotnet-integration.md#构建产物已在本机构建验证) and [sandbox management guide](Docs/windows-sandbox-management.md) for setup and validation scope.
+The two runtime components are `codex-windows-sandbox-setup.exe` and `codex-command-runner.exe`. Use the matching components included in the release ZIP, or build them from the fork, and configure their absolute paths in user `settings.windowsSandbox.setupExecutablePath` and `runnerExecutablePath`. They are not produced or automatically downloaded by `dotnet publish`. See the [component build and integration instructions](Docs/Archive/windows-sandbox-dotnet-integration.md#构建产物已在本机构建验证) and [sandbox management guide](Docs/Archive/windows-sandbox-management.md) for setup and validation scope.
 
 ## 📖 Usage
 
@@ -185,9 +185,9 @@ Use `tinyharness help <command>` for full syntax:
 | `mcp` | Serve the read-only `ask_glm` worker over stdio |
 | `sandbox status / provision / verify` | Inspect, provision, or test the optional Windows sandbox |
 
-`maxAgentSteps` defaults to `0` (unlimited). Trusted user `settings.runBudget` defaults to 128 logical model requests, including compaction, and 256 tool executions per run. Total tokens and wall time are tracked without limits by default (`maxTotalTokens` / `maxWallClockSeconds` are `0`); positive values enable those limits. Individual tool timeouts and cancellation remain active. See the [budget contract](Docs/task-control-design.md) for details.
+`maxAgentSteps` defaults to `0` (unlimited). Trusted user `settings.runBudget` defaults to 128 logical model requests, including compaction, and 256 tool executions per run. Total tokens and wall time are tracked without limits by default (`maxTotalTokens` / `maxWallClockSeconds` are `0`); positive values enable those limits. Individual tool timeouts and cancellation remain active. See the [budget contract](Docs/Archive/task-control-design.md) for details.
 
-The MCP worker uses user configuration and sends permitted workspace content to the configured model; it cannot write files or run commands. It is an MCP server, not a client for external tools. `sandbox provision` changes machine accounts, ACLs, and network rules with elevation; `sandbox verify` runs real isolation checks. Follow the [sandbox setup and acceptance documentation](Docs/windows-sandbox-management.md) before using either.
+The MCP worker uses user configuration and sends permitted workspace content to the configured model; it cannot write files or run commands. It is an MCP server, not a client for external tools. `sandbox provision` changes machine accounts, ACLs, and network rules with elevation; `sandbox verify` runs real isolation checks. Follow the [sandbox setup and acceptance documentation](Docs/Archive/windows-sandbox-management.md) before using either.
 
 <a id="platform-status"></a>
 
@@ -200,15 +200,13 @@ The MCP worker uses user configuration and sends permitted workspace content to 
 
 ## 📚 Documentation
 
-- [License](LICENSE) — Apache-2.0; [NOTICE](NOTICE) and [third-party licenses](THIRD-PARTY-LICENSES.txt) retain dependency attribution and terms. See the [maintenance notes](Docs/third-party-notices.md).
-- [Changelog](Docs/CHANGELOG.md) — bilingual release notes and known limitations.
-- [Session persistence](Docs/session-persistence-design.md), [project rules](Docs/project-instructions-design.md), [behavior prompt](Docs/system-prompt-design.md), and [context compaction](Docs/context-compaction-design.md) — contracts and validation records, mainly in Chinese.
-- [Run control and budgets](Docs/task-control-design.md) and [delivery evidence](Docs/m16-verification.md).
-- [Windows sandbox management](Docs/windows-sandbox-management.md) — setup requirements, scope, and limitations.
-- [Release packaging](Docs/releasing.md) — GitHub Actions builds, pinned sandbox source, ZIP layout, and asset uploads after you publish a Release (Chinese).
-- [Current development handoff](Docs/current-progress.md) — current work and historical local evidence.
-- [Historical plans](PAST_PLAN.md) — archived MVP through M17 records. [PLAN.md](PLAN.md) currently serves as an archive pointer; no new overall roadmap is defined.
-- [AGENTS.md](AGENTS.md) — repository development rules.
+- [Documentation navigation](Docs/README.md#documentation) — the Chinese README lists active plans and document locations.
+- [Changelog](Docs/CHANGELOG.md) and [code style](Docs/code-style.md).
+- Plans under implementation stay at the top level of `Docs/`; completed plans move into `Docs/Archive/`.
+- [Completed designs and historical records](Docs/Archive/README.md) — session persistence, project rules, prompts, compaction, budgets, sandbox integration, and validation evidence.
+- Maintenance guides: [release packaging](Docs/Guides/releasing.md) and [third-party notices](Docs/Guides/third-party-notices.md).
+- [PLAN.md](PLAN.md), [historical plans](PAST_PLAN.md), and [AGENTS.md](AGENTS.md) — development entry points and repository rules.
+- [License](LICENSE) — Apache-2.0; [NOTICE](NOTICE) and [third-party licenses](THIRD-PARTY-LICENSES.txt) retain attribution and terms.
 
 ## 🤝 Contributing
 

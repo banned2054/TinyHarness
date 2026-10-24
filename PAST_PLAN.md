@@ -8,7 +8,7 @@
 
 - [MVP 与 M1–M11 原计划](#m1-m11)
 - [M12–M17 阶段计划快照](#m12-m17)
-- [当前文档入口](PLAN.md)、[使用说明](Docs/README.md)、[开发接力](Docs/current-progress.md)
+- [当前文档入口](PLAN.md)、[使用说明](Docs/README.md)、[开发接力](PLAN.md)
 
 <a id="m1-m11"></a>
 
@@ -16,7 +16,7 @@
 
 本文档定义 TinyHarness.NET 的产品需求、架构边界、MVP 范围和实施顺序。编码 Agent 的操作规范位于 `AGENTS.md`。
 
-路线更新（2026-09-23）：M8 已完成；2026-09-19 的职责目录整理及其构建、225 项默认测试、`win-x64` NativeAOT publish/smoke 验证记录继续有效。M9 的本机 MCP worker、离线闭环、`win-x64` NativeAOT smoke、`glm-5.3` HTTPS endpoint 和 Codex 客户端调用均已验证，记录见 [M9 验证记录](Docs/m9-demo.md)。
+路线更新（2026-09-23）：M8 已完成；2026-09-19 的职责目录整理及其构建、225 项默认测试、`win-x64` NativeAOT publish/smoke 验证记录继续有效。M9 的本机 MCP worker、离线闭环、`win-x64` NativeAOT smoke、`glm-5.3` HTTPS endpoint 和 Codex 客户端调用均已验证，记录见 [M9 验证记录](Docs/Archive/m9-demo.md)。
 
 ## 1. 项目定位
 
@@ -683,7 +683,7 @@ MVP 完成需要同时满足：
 
 **状态：先迁移 OpenAI Chat Completions 与 Responses；Anthropic Messages 暂缓。** 2026-10-08 用户确认以 `Microsoft.Extensions.AI.IChatClient` 作为统一调用接口，底层使用官方 SDK。此项扩展现有 Chat Completions-only MVP；前文记录的是原 MVP 的范围和验收历史，不回写成当时已支持多协议。
 
-同日实施完成：两条 OpenAI 协议路径已实现并入主线——`ModelClientFactory`/`MicrosoftAiChatClient` 适配 `IChatClient`，`chatApi` 显式选择协议（缺省 `chat-completions`），Responses 的 reasoning/item id/encrypted content 回传与 `store:false` 无状态请求、真实 usage 的审计与预算校准均已落地。离线验收（默认测试 408/408、`win-x64` NativeAOT publish 零警告、原生产物仓库外 smoke）见 [M10 验证记录](Docs/m10-model-protocol.md)。真实供应商调用尚未执行，tested providers 清单不变。
+同日实施完成：两条 OpenAI 协议路径已实现并入主线——`ModelClientFactory`/`MicrosoftAiChatClient` 适配 `IChatClient`，`chatApi` 显式选择协议（缺省 `chat-completions`），Responses 的 reasoning/item id/encrypted content 回传与 `store:false` 无状态请求、真实 usage 的审计与预算校准均已落地。离线验收（默认测试 408/408、`win-x64` NativeAOT publish 零警告、原生产物仓库外 smoke）见 [M10 验证记录](Docs/Archive/m10-model-protocol.md)。真实供应商调用尚未执行，tested providers 清单不变。
 
 ### 兼容性结论
 
@@ -717,7 +717,7 @@ Anthropic 12.54.0 在 NativeAOT 发布产物中产生 2,625 条 IL2026/IL3050 �
 
 **状态：M11.1（执行后端）、M11.2（Windows 编排）与 M11.3（策略闭环）已实现并提交；M11.4（管理/产物）已实现并提交；M11.5（隔离验收）的验收工具（`sandbox verify` 入口、Core 验收运行器与离线测试）已实现并入工作区（2026-10-10）。2026-10-10 起接入目标改为沙箱的 TinyHarness 独立命名空间 fork（上游同机安装会与 Codex 争用机器级命名）：setup/runner 二进制替换为 fork 构建（exe 文件名与 wire 协议不变），setup payload 账户名改为 `TinyHarnessOffline`/`TinyHarnessOnline`，父进程私有桌面前缀改为 `TinyHarnessDesktop-`，sandbox home 缺省使用独立固定默认（`%LOCALAPPDATA%\tinyharness\windows-sandbox-home`），仍为 Codex 用户名的旧 marker/凭据在状态检查、执行与 provisioning 一律拒绝复用；DPAPI 与 IPC 协议不变，不安装服务。同日经用户授权在本机完成真实 provisioning 与 `sandbox verify` 全矩阵：14/15 用例 PASS（身份、deny-read、读写与元数据隔离、退出码/超时/取消/断管道/大输出/遗弃回收），`network-denied` FAIL 如实记录——沙箱内对 127.0.0.1 与本机 IP 的 TCP 连接未被拦截（按用户作用域的防火墙 BLOCK 规则未对沙箱账户进程生效，或本机 IP 环回快速路径绕过远程地址匹配，用例无法区分；WFP 当时仅覆盖 ICMP/DNS/SMB）；真实验收同时修复了 3 个离线测试无法暴露的缺陷（ConvertStringSecurityDescriptorToSecurityDescriptorW 缺第 4 参数致原生崩溃、STARTUPINFOW 布局错误、cap SID 的 workspace_by_cwd 契约）。同晚 fork 补齐按账户 SID 的 WFP 通用 TCP/UDP BLOCK 过滤器（内核强制、覆盖环回，setup v5/IPC v6 与 C# 接入层不变）并重新 provisioning 后，`network-denied` 复验 PASS、全矩阵 **15/15 PASS（exit 0，报告 `tinyharness-verify-20261010-232828.json`）**——M11.5 隔离验收在本机闭环：身份、deny-read/deny-write、元数据保护、工作区写入、断网、退出码/超时/取消、断管道、大输出、宿主遗弃回收全部真实验证通过。边界：验证覆盖本机单环境；跨 home 重复 provisioning 会轮换共享账户密码（本次已实证并经默认 home 重新 provisioning 恢复一致）；与 Codex 发布版共存未验收。详见 [Docs/README.md](Docs/README.md) M11.5 验证记录。** 2026-10-09 确定 Windows 优先，TinyHarness 的 C# Runtime 直接编排已独立编译的 Codex Windows 沙箱组件；不通过 Codex CLI/Agent 执行，不新增 Rust shim，不把修改 Codex Rust 公共 API 作为首期前置条件。Linux/macOS 后续独立接入。
 
-技术依据及 wire 协议见 [Windows 沙箱直接组件接入方案](Docs/windows-sandbox-dotnet-integration.md)。该文档基于 Codex revision `d650bd7c05`、setup version 5、IPC version 6；组件已编译，真实 Rust 序列化/帧协议和部分 C# 片段已有验证记录，但这些不证明完整 TinyHarness 接入或隔离生效。前文 MVP 的“无 OS sandbox”是历史基线，M11 完成前现有执行边界仍然有效。
+技术依据及 wire 协议见 [Windows 沙箱直接组件接入方案](Docs/Archive/windows-sandbox-dotnet-integration.md)。该文档基于 Codex revision `d650bd7c05`、setup version 5、IPC version 6；组件已编译，真实 Rust 序列化/帧协议和部分 C# 片段已有验证记录，但这些不证明完整 TinyHarness 接入或隔离生效。前文 MVP 的“无 OS sandbox”是历史基线，M11 完成前现有执行边界仍然有效。
 
 ### 22.1 产品范围
 
@@ -806,33 +806,33 @@ ShellTool.Prepare：命令 + 清理后的环境 + 有效隔离策略
 
 更新日期：2026-10-22。
 
-当前接力入口：[当前进度与操作边界](Docs/current-progress.md)。涉及当前 M14／沙箱后续工作时，先读取该文档并核对磁盘状态；后续结果更新该入口，不再反复复制长交接 prompt。文档不产生操作授权。
+当前接力入口：[当前进度与操作边界](PLAN.md)。涉及当前 M14／沙箱后续工作时，先读取该文档并核对磁盘状态；后续结果更新该入口，不再反复复制长交接 prompt。文档不产生操作授权。
 
-2026-10-22：按用户要求默认关闭普通 step 上限，`maxAgentSteps` 缺省或为 0 时只统计，正数仍启用上限，负数拒绝；配置读取和 `config set` 同步支持零。保留独立累计请求／工具预算和只读 MCP worker 限制。针对性 78/78、普通回归 1099 通过／2 链接权限跳过／0 失败，NativeAOT 和仓库外离线 smoke 通过，见[当前进度 §15](Docs/current-progress.md#15-默认关闭普通-step-上限2026-10-22)。
+2026-10-22：按用户要求默认关闭普通 step 上限，`maxAgentSteps` 缺省或为 0 时只统计，正数仍启用上限，负数拒绝；配置读取和 `config set` 同步支持零。保留独立累计请求／工具预算和只读 MCP worker 限制。针对性 78/78、普通回归 1099 通过／2 链接权限跳过／0 失败，NativeAOT 和仓库外离线 smoke 通过，见[当前进度 §15](Docs/Archive/current-progress-2026-10-22.md#15-默认关闭普通-step-上限2026-10-22)。
 
-2026-10-22：修复沙箱组合仍检查旧 `sessionDirectory`、导致默认 `artifacts/runs` 阻止 chat 续聊工作区激活的问题。`run`／`chat` 仅校验实际使用的受保护会话目录，继续拒绝工作区及附加写根内的会话日志；不写持久日志的 sandbox verify 不再检查旧快照目录。普通离线回归 1091 通过／2 链接权限跳过／0 失败，NativeAOT 和仓库外原生 smoke 通过，见[当前进度 §14](Docs/current-progress.md#14-沙箱启动的旧会话目录检查修复2026-10-22)。
+2026-10-22：修复沙箱组合仍检查旧 `sessionDirectory`、导致默认 `artifacts/runs` 阻止 chat 续聊工作区激活的问题。`run`／`chat` 仅校验实际使用的受保护会话目录，继续拒绝工作区及附加写根内的会话日志；不写持久日志的 sandbox verify 不再检查旧快照目录。普通离线回归 1091 通过／2 链接权限跳过／0 失败，NativeAOT 和仓库外原生 smoke 通过，见[当前进度 §14](Docs/Archive/current-progress-2026-10-22.md#14-沙箱启动的旧会话目录检查修复2026-10-22)。
 
-2026-10-22：按用户要求精简终端请求输出，仅显示原位更新的等待／思考耗时，逐请求诊断和 usage 明细继续落在同一日志，回合末保留汇总。同时默认关闭总时长上限，`maxWallClockSeconds` 为 0 或缺省时仅统计，显式正数仍可启用；累计 token 默认不限的契约不变。针对性 105/105，普通离线回归 1086 通过／2 链接权限跳过／0 失败，NativeAOT 与仓库外原生 smoke 通过，见[当前进度 §13](Docs/current-progress.md#13-简洁请求状态与默认关闭总时长限制2026-10-22)。
+2026-10-22：按用户要求精简终端请求输出，仅显示原位更新的等待／思考耗时，逐请求诊断和 usage 明细继续落在同一日志，回合末保留汇总。同时默认关闭总时长上限，`maxWallClockSeconds` 为 0 或缺省时仅统计，显式正数仍可启用；累计 token 默认不限的契约不变。针对性 105/105，普通离线回归 1086 通过／2 链接权限跳过／0 失败，NativeAOT 与仓库外原生 smoke 通过，见[当前进度 §13](Docs/Archive/current-progress-2026-10-22.md#13-简洁请求状态与默认关闭总时长限制2026-10-22)。
 
-2026-10-22：按用户要求新增可选思考展示，`run`／`chat` 使用 `--reasoning status|content`。默认同一行循环一至三个点；内容模式流式展示可读推理，复用脱敏和终端转义，不发布内部压缩文本或 opaque 载荷，不改变模型请求与日志格式。普通离线回归 1076 通过／2 链接权限跳过／0 失败，NativeAOT 和仓库外原生 smoke 通过；详见[当前进度 §12](Docs/current-progress.md#12-可选思考展示2026-10-22)。
+2026-10-22：按用户要求新增可选思考展示，`run`／`chat` 使用 `--reasoning status|content`。默认同一行循环一至三个点；内容模式流式展示可读推理，复用脱敏和终端转义，不发布内部压缩文本或 opaque 载荷，不改变模型请求与日志格式。普通离线回归 1076 通过／2 链接权限跳过／0 失败，NativeAOT 和仓库外原生 smoke 通过；详见[当前进度 §12](Docs/Archive/current-progress-2026-10-22.md#12-可选思考展示2026-10-22)。
 
-2026-10-22：按用户确认仅关闭默认累计 token 上限；`maxTotalTokens` 缺省或为 0 时继续记录用量，显式正数仍可启用。其他运行限制、上下文窗口与默认 90% 压缩路径保留。针对性 98/98、普通回归 1062 通过／2 链接权限跳过／0 失败，NativeAOT 与仓库外原生 smoke 通过。输出预留仍用于本地容量检查，尚未作为最大输出参数传给模型；见[当前进度 §11](Docs/current-progress.md#11-默认关闭累计-token-上限2026-10-22)。
+2026-10-22：按用户确认仅关闭默认累计 token 上限；`maxTotalTokens` 缺省或为 0 时继续记录用量，显式正数仍可启用。其他运行限制、上下文窗口与默认 90% 压缩路径保留。针对性 98/98、普通回归 1062 通过／2 链接权限跳过／0 失败，NativeAOT 与仓库外原生 smoke 通过。输出预留仍用于本地容量检查，尚未作为最大输出参数传给模型；见[当前进度 §11](Docs/Archive/current-progress-2026-10-22.md#11-默认关闭累计-token-上限2026-10-22)。
 
-2026-10-22：按用户授权补齐慢请求观测。沿原请求和日志路径记录首次 SDK 流事件、推理／正文阶段与计数、缓存和推理 token 子计数；取消也保存已观察到的阶段。CLI 区分活动并将同阶段等待提示节流到三十秒。普通离线回归 1056 通过／2 链接权限跳过／0 失败，NativeAOT 及仓库外原生 smoke 通过；没有真实模型调用，也未更改上下文、推理预算或缓存策略。首个 SDK 事件不等于 HTTP 首字节，真实服务端慢因仍待新观测判断，见[当前进度 §10](Docs/current-progress.md#10-请求阶段观测与缓存元数据2026-10-22)。
+2026-10-22：按用户授权补齐慢请求观测。沿原请求和日志路径记录首次 SDK 流事件、推理／正文阶段与计数、缓存和推理 token 子计数；取消也保存已观察到的阶段。CLI 区分活动并将同阶段等待提示节流到三十秒。普通离线回归 1056 通过／2 链接权限跳过／0 失败，NativeAOT 及仓库外原生 smoke 通过；没有真实模型调用，也未更改上下文、推理预算或缓存策略。首个 SDK 事件不等于 HTTP 首字节，真实服务端慢因仍待新观测判断，见[当前进度 §10](Docs/Archive/current-progress-2026-10-22.md#10-请求阶段观测与缓存元数据2026-10-22)。
 
-2026-10-22：按用户授权修复真实使用中“无可用回答却 Completed”和模型等待无反馈的问题。模型响应在追加历史及准备工具前校验明确结束原因、正文／工具形态；reasoning 或 usage 不代替回答。新增串行模型请求开始、等待和结束事件，保留现有超时、重试、预算及会话续聊路径。普通离线回归 1039 通过／2 链接权限跳过／0 失败，独立 scale 1/1、NativeAOT 与仓库外原生 smoke 通过；未新增真实模型请求，第二轮上游原因仍未知。证据与边界见[当前进度 §9](Docs/current-progress.md#9-模型响应完成校验与等待反馈2026-10-22)。
+2026-10-22：按用户授权修复真实使用中“无可用回答却 Completed”和模型等待无反馈的问题。模型响应在追加历史及准备工具前校验明确结束原因、正文／工具形态；reasoning 或 usage 不代替回答。新增串行模型请求开始、等待和结束事件，保留现有超时、重试、预算及会话续聊路径。普通离线回归 1039 通过／2 链接权限跳过／0 失败，独立 scale 1/1、NativeAOT 与仓库外原生 smoke 通过；未新增真实模型请求，第二轮上游原因仍未知。证据与边界见[当前进度 §9](Docs/Archive/current-progress-2026-10-22.md#9-模型响应完成校验与等待反馈2026-10-22)。
 
-2026-10-22：按用户确认，M16 收窄为交付证据核查与补缺，取消新增专用 Git tool call，复用现有 `shell`、日志与补丁事实。随后按用户授权完成核查：针对性测试 158/158、既有 NativeAOT 产物的仓库外离线 smoke、四个历史会话检查及新增 GLM 合成报告样本通过，无需新增产品代码。收窄后的 M16 已验收，环境复跑和模型文字瑕疵如实保留，见 [M16 验收](Docs/m16-verification.md)；M17 尚未进入。
+2026-10-22：按用户确认，M16 收窄为交付证据核查与补缺，取消新增专用 Git tool call，复用现有 `shell`、日志与补丁事实。随后按用户授权完成核查：针对性测试 158/158、既有 NativeAOT 产物的仓库外离线 smoke、四个历史会话检查及新增 GLM 合成报告样本通过，无需新增产品代码。收窄后的 M16 已验收，环境复跑和模型文字瑕疵如实保留，见 [M16 验收](Docs/Archive/m16-verification.md)；M17 尚未进入。
 
-2026-10-21：用户明确要求进入 M15。任务控制、运行预算和可检查工作项已实施，沿用唯一执行与日志路径；工程验收见[任务控制设计](Docs/task-control-design.md)。该实施轮未调用真实模型、未操作沙箱机器配置。
+2026-10-21：用户明确要求进入 M15。任务控制、运行预算和可检查工作项已实施，沿用唯一执行与日志路径；工程验收见[任务控制设计](Docs/Archive/task-control-design.md)。该实施轮未调用真实模型、未操作沙箱机器配置。
 
 2026-10-20 当前状态：积累的改动已拆为六笔本地 commit，HEAD 为 `17f2944`，未推送，用户的注释和格式化原样保留。提交前普通回归 955 通过／2 链接权限跳过／0 失败（未包含规模测试），五个代码提交的独立副本相关测试、最新 NativeAOT 与仓库外离线 smoke 均通过，详见进度文档。
 
-M14：基础行为已有 9 轮真实评估；2026-10-21 按用户确认替换压缩实现，退出七字段 JSON 摘要与逐字事实校验，采用有界文本交接、有界真实用户原话和宿主当前规则，仍复用唯一 session-log。真实 GLM 4 轮连续自动压缩，加独立进程恢复后的 1 次自动压缩，均正常完成、无工具请求或执行；未预置或重放摘要。指定样本的压缩、遵循与恢复尾项通过，后续不自动推进 M15。普通回归、scale、NativeAOT 与仓库外 smoke 证据见[压缩设计与验收](Docs/context-compaction-design.md)。自然语言摘要仍有继承历史错误数字的质量限制，不是事实正确性保证。替换前的失败诊断保留在系统提示词设计 §8。
+M14：基础行为已有 9 轮真实评估；2026-10-21 按用户确认替换压缩实现，退出七字段 JSON 摘要与逐字事实校验，采用有界文本交接、有界真实用户原话和宿主当前规则，仍复用唯一 session-log。真实 GLM 4 轮连续自动压缩，加独立进程恢复后的 1 次自动压缩，均正常完成、无工具请求或执行；未预置或重放摘要。指定样本的压缩、遵循与恢复尾项通过，后续不自动推进 M15。普通回归、scale、NativeAOT 与仓库外 smoke 证据见[压缩设计与验收](Docs/Archive/context-compaction-design.md)。自然语言摘要仍有继承历史错误数字的质量限制，不是事实正确性保证。替换前的失败诊断保留在系统提示词设计 §8。
 
-沙箱：保留历史 PriceLab 5 项通过、旧 verify 15/15，以及改进探针后的真实网络专项 3/3 用例／14/14 目标、28 个宿主前后 ACK 对照；这些结果分别计数。非环回专项只覆盖 Meta 接口 `198.18.0.1`，不扩大为物理 LAN 或完整 DNS 泄漏防护。弹窗产生的两条应用放行规则已另经用户授权精确删除，清理后 ActiveStore／PersistentStore 目标规则均为 0；不重复 provisioning、PriceLab 或规则清理。完整契约与历史证据见[管理文档](Docs/windows-sandbox-management.md)。
+沙箱：保留历史 PriceLab 5 项通过、旧 verify 15/15，以及改进探针后的真实网络专项 3/3 用例／14/14 目标、28 个宿主前后 ACK 对照；这些结果分别计数。非环回专项只覆盖 Meta 接口 `198.18.0.1`，不扩大为物理 LAN 或完整 DNS 泄漏防护。弹窗产生的两条应用放行规则已另经用户授权精确删除，清理后 ActiveStore／PersistentStore 目标规则均为 0；不重复 provisioning、PriceLab 或规则清理。完整契约与历史证据见[管理文档](Docs/Archive/windows-sandbox-management.md)。
 
-2026-10-18：M14.1 已实施项目规则和首次发送生命周期，证据见[项目指令设计](Docs/project-instructions-design.md#14-实施结果与本地验证)。用户随后确认 M14 剩余范围改为自然对话的基础行为提示词，不引入 Analyze／Implement 切换、只读开关或前置意图分类模型。M14.2 仅维护当前模板，接入及验证边界见[系统提示词设计](Docs/system-prompt-design.md)。
+2026-10-18：M14.1 已实施项目规则和首次发送生命周期，证据见[项目指令设计](Docs/Archive/project-instructions-history.md#14-实施结果与本地验证)。用户随后确认 M14 剩余范围改为自然对话的基础行为提示词，不引入 Analyze／Implement 切换、只读开关或前置意图分类模型。M14.2 仅维护当前模板，接入及验证边界见[系统提示词设计](Docs/Archive/system-prompt-design.md)。
 
 **目标：从单次任务执行器，推进为自己日常使用的本地 coding-agent harness。** 单 Agent、CLI 先行、可续聊、可控制、可检查；后续 GUI 可接入已有的 DSH Desktop，但不作为核心能力的前置条件。
 
@@ -850,23 +850,23 @@ M14：基础行为已有 9 轮真实评估；2026-10-21 按用户确认替换压
 | M16 交付证据核查与补缺 | 收窄范围已验收，无需新增产品代码 | 158 项针对性测试、原生 smoke、离线历史检查及指定 GLM 样本；不保证所有任务下模型文字准确，见 M16 验收 |
 | M17 日常使用验收 | 后续方向，尚未进入 | 当前不展开远期施工细节，进入时重新核实依赖 |
 
-上述 M12–M13 记录的历史源码核查基线为 `45fae0b4a70e13c56846e4be1dab9bde5c9e0aa1`。详细记录和原路线已迁入[历史基线附录](Docs/2026-10-16-session-persistence-codex-discussion.md#legacy-plan-baseline)，不以历史通过证明新日志通过；当前统一日志的本地验收结果见 §10.1，旧实现的历史通过不计入本次数字。
+上述 M12–M13 记录的历史源码核查基线为 `45fae0b4a70e13c56846e4be1dab9bde5c9e0aa1`。详细记录和原路线已迁入[历史基线附录](Docs/Archive/2026-10-16-session-persistence-codex-discussion.md#legacy-plan-baseline)，不以历史通过证明新日志通过；当前统一日志的本地验收结果见 §10.1，旧实现的历史通过不计入本次数字。
 
 ## 1. 文档职责与历史归档
 
 - 本文件定义产品目标、全局边界、当前状态及近期切片；只有当前切片细化到可执行程度，后续只保留目标和依赖。
-- [当前进度与接力入口](Docs/current-progress.md) 保存当前停点、提交基线、本机证据位置、下一步与操作边界；不替代产品设计，也不授予操作权限。
-- [会话持久化设计](Docs/session-persistence-design.md) 定义持久化的当前目标契约、关键选择、兼容与本地验收证据。本文件引用其规则，不维护第二份详细设计。
-- [项目指令加载与会话首次发送设计](Docs/project-instructions-design.md) 定义 M14.1 契约并记录实施证据，细化 §8.1。
-- [系统提示词设计](Docs/system-prompt-design.md) 定义 M14.2 的基础行为、集中维护和会话提示词一致性，区分工程接入与模型行为评估，细化 §8.2。
-- [上下文压缩设计](Docs/context-compaction-design.md) 定义有界交接、原话来源、失败处理、检查点兼容与替换验收；不维护第二套事实或持久化路径。
-- [任务控制与运行预算](Docs/task-control-design.md) 定义 M15 的控制边界、工作项陈述、可信累计预算、日志扩展与离线验收。
-- [交付证据核查与验收](Docs/m16-verification.md) 记录 M16 对现有执行、补丁与日志路径的验收矩阵、本机结果及模型解释限制。
-- [2026-10-16 讨论记录](Docs/2026-10-16-session-persistence-codex-discussion.md) 是历史材料，保留早期更正与迁入的旧计划验收记录，不作为当前实施指令。
+- [当前进度与接力入口](PLAN.md) 保存当前停点、提交基线、本机证据位置、下一步与操作边界；不替代产品设计，也不授予操作权限。
+- [会话持久化设计](Docs/Archive/session-persistence-design.md) 定义持久化的当前目标契约、关键选择、兼容与本地验收证据。本文件引用其规则，不维护第二份详细设计。
+- [项目指令加载与会话首次发送设计](Docs/Archive/project-instructions-design.md) 定义 M14.1 契约并记录实施证据，细化 §8.1。
+- [系统提示词设计](Docs/Archive/system-prompt-design.md) 定义 M14.2 的基础行为、集中维护和会话提示词一致性，区分工程接入与模型行为评估，细化 §8.2。
+- [上下文压缩设计](Docs/Archive/context-compaction-design.md) 定义有界交接、原话来源、失败处理、检查点兼容与替换验收；不维护第二套事实或持久化路径。
+- [任务控制与运行预算](Docs/Archive/task-control-design.md) 定义 M15 的控制边界、工作项陈述、可信累计预算、日志扩展与离线验收。
+- [交付证据核查与验收](Docs/Archive/m16-verification.md) 记录 M16 对现有执行、补丁与日志路径的验收矩阵、本机结果及模型解释限制。
+- [2026-10-16 讨论记录](Docs/Archive/2026-10-16-session-persistence-codex-discussion.md) 是历史材料，保留早期更正与迁入的旧计划验收记录，不作为当前实施指令。
 - [AGENTS.md](AGENTS.md) 定义编码 Agent 在本仓库中可以怎样工作。
 - [PAST_PLAN.md](PAST_PLAN.md) 原样保存截至 2026-10-11 的旧 `PLAN.md`，包含 MVP、M1–M11、协议选择与 Windows 沙箱接入的历史决策及验收记录。该归档不再承载新增路线。
 - [README.md](README.md) 与 [中文 README](Docs/README.md) 描述实际可用的功能和使用方式；新功能验收前不得按本计划宣称已支持。
-- [M9 验证记录](Docs/m9-demo.md)、[M10 验证记录](Docs/m10-model-protocol.md) 和 [Windows 沙箱接入方案](Docs/windows-sandbox-dotnet-integration.md) 保留为历史证据。M11.5 真实验收闭环见 [Windows 沙箱管理与验收记录](Docs/windows-sandbox-management.md)。
+- [M9 验证记录](Docs/Archive/m9-demo.md)、[M10 验证记录](Docs/Archive/m10-model-protocol.md) 和 [Windows 沙箱接入方案](Docs/Archive/windows-sandbox-dotnet-integration.md) 保留为历史证据。M11.5 真实验收闭环见 [Windows 沙箱管理与验收记录](Docs/Archive/windows-sandbox-verification.md)。
 
 历史记录中“当时未实现”的描述不否定后来完成的能力。当前顺序看本文件，持久化详细契约看设计文档；发现两者冲突先核实并对齐，不能自行选择较宽松规则。平台安全策略、当前用户明确指令和 AGENTS.md 的优先级不变。
 
@@ -945,7 +945,7 @@ M11.5 于 2026-10-10 在本机完成真实矩阵 15/15 PASS。该证据只覆盖
 - 可信组件路径、home、有效隔离上限和附加写根来自独立可信宿主设置，不被项目配置或模型参数覆盖。
 - 显式启用沙箱后 fail closed，不回退宿主；普通执行不自动 provisioning、提权、密码修复或重置网络规则。工作区目录授权须由宿主另行请求明确确认，只给固定目录及原账户补授 ACL 管理权，不改变上述机器级设置。
 - 授权指纹继续绑定后端、版本、规范化读写范围、deny、网络、临时根、元数据保护和环境策略身份。
-- 严格模式继续阻断环回。可信 `allowTcpLoopback` 选项仅允许 TCP 环回（包括宿主服务），外部网络及 UDP 仍阻断；采用独立账户、默认 home 和规则标识，payload/marker v6，旧严格模式 v5，IPC v6 不变。该模式已有旧矩阵、PriceLab 和一次新网络专项的真实结果，范围及限制见 [管理文档](Docs/windows-sandbox-management.md)。非 TTY、每命令 runner、无后台后代契约保持不变。标准策略要求有效 `root/read`，不宣称“只能读取仓库”。
+- 严格模式继续阻断环回。可信 `allowTcpLoopback` 选项仅允许 TCP 环回（包括宿主服务），外部网络及 UDP 仍阻断；采用独立账户、默认 home 和规则标识，payload/marker v6，旧严格模式 v5，IPC v6 不变。该模式已有旧矩阵、PriceLab 和一次新网络专项的真实结果，范围及限制见 [管理文档](Docs/Archive/windows-sandbox-management.md)。非 TTY、每命令 runner、无后台后代契约保持不变。标准策略要求有效 `root/read`，不宣称“只能读取仓库”。
 - 同一网络模式的不同 home 仍共享机器账户和密码；重复 provisioning 会影响同模式其他 home，不能并发轮换凭据。跨模式拒绝复用已有 marker/凭据目录。命名分栈不等于与 Codex 共存已验收。
 - 会话快照、审计、恢复元数据及可信组件不得对沙箱目标命令可写；新存储需复用或扩展已有保护机制。
 
@@ -985,13 +985,13 @@ tinyharness session list|show <id>       # 严格离线查看
 - 第一版可在安全边界接收补充指令；不要求中途打断正在写入的工具或重解释已审批的计划。
 - “暂停”只在模型/工具边界生效，等待确认期间不执行下一工具；取消使用既有进程树清理并确认终态，不能用暂停代替清理。
 
-该契约由 CLI 首先使用。以后 Avalonia 消费同一状态和事件，通过同一审批/控制入口操作，而不是解析终端文字。当前 HostEvent 是内存事件，不直接等同于持久化 DTO；实时完成条目、历史条目和模型协议记录的职责按[持久化设计](Docs/session-persistence-design.md) 明确。
+该契约由 CLI 首先使用。以后 Avalonia 消费同一状态和事件，通过同一审批/控制入口操作，而不是解析终端文字。当前 HostEvent 是内存事件，不直接等同于持久化 DTO；实时完成条目、历史条目和模型协议记录的职责按[持久化设计](Docs/Archive/session-persistence-design.md) 明确。
 
 ## 7. 持久化与安全续聊
 
 ### 7.1 当前实现与目标存储
 
-当前新会话权威路径是 `tinyharness.session-log/1`：`run` 与 `chat` 共用一个追加日志，结构化执行事实与可恢复压缩检查点写入同一权威记录链路；chat 的旧全量 run 快照和普通全量会话重写已退出。旧快照和独立 audit 文件不再读取，不提供迁移入口，也不自动清理已有文件。具体格式、兼容和验收见[持久化设计](Docs/session-persistence-design.md)。
+当前新会话权威路径是 `tinyharness.session-log/1`：`run` 与 `chat` 共用一个追加日志，结构化执行事实与可恢复压缩检查点写入同一权威记录链路；chat 的旧全量 run 快照和普通全量会话重写已退出。旧快照和独立 audit 文件不再读取，不提供迁移入口，也不自动清理已有文件。具体格式、兼容和验收见[持久化设计](Docs/Archive/session-persistence-design.md)。
 
 持续有效的边界：
 
@@ -1043,7 +1043,7 @@ Harness 不加密会话文件，“受保护目录”只是路径与排他写检
 
 ### 9.1 可检查的工作状态
 
-M15 在会话中维护带来源的目标／约束工作项、完成／取消陈述和证据引用，复用既有回合与 canonical 工具事实，详细契约见[任务控制设计](Docs/task-control-design.md)。文本交接只用于有界模型上下文，不作为确定性工作项数据库；不重建已删除的七字段状态或维护两套相互冲突的事实。工作项陈述、执行终态与事实引用分别保存。
+M15 在会话中维护带来源的目标／约束工作项、完成／取消陈述和证据引用，复用既有回合与 canonical 工具事实，详细契约见[任务控制设计](Docs/Archive/task-control-design.md)。文本交接只用于有界模型上下文，不作为确定性工作项数据库；不重建已删除的七字段状态或维护两套相互冲突的事实。工作项陈述、执行终态与事实引用分别保存。
 
 - 工作项使用稳定 ID；模型可以建议更新，用户要求和工具事实保留来源。
 - 模型标记工作项完成是陈述，不代表测试或副作用成功。
@@ -1070,7 +1070,7 @@ Git 检查复用现有 `shell`，本阶段不新增专用 Git tool call。单条
 
 报告属于检查输出而非恢复协议：终端及按需提供的结构化报告、可分享 artifact（含命令输出和模型解释中的引用）均遵守 §7.2 的已知密钥脱敏规则，不直接嵌入 canonical 会话快照或 opaque 载荷原文。展示脱敏不得改写用于续聊的 canonical 内容。
 
-本机真实样本：2026-10-21 使用 TinyHarness NativeAOT 产物与 `glm-5.3`，完成状态／最近提交统计、预期失败引用查询、合成 no-index diff 三个场景；模型通过现有 `shell` 执行 Git，正确报告退出 128 的失败及 diff 退出 1 的含义。另一次初始运行因审批等待耗尽墙钟预算，不计为通过；真实项目完整补丁未获外发审批、未执行。该轮未覆盖的已有修改、后续变化、截断／未执行与历史结果区分，已在 2026-10-22 的源码核查、针对性测试及合成报告样本中补验，见 [M16 验收](Docs/m16-verification.md)；不外推完整并发作者归因或自动测试结果解析。原 Git [验证记录](artifacts/git-shell-glm53-20261021/verification.md)仅保留于本机被 Git 忽略的 artifacts 目录。
+本机真实样本：2026-10-21 使用 TinyHarness NativeAOT 产物与 `glm-5.3`，完成状态／最近提交统计、预期失败引用查询、合成 no-index diff 三个场景；模型通过现有 `shell` 执行 Git，正确报告退出 128 的失败及 diff 退出 1 的含义。另一次初始运行因审批等待耗尽墙钟预算，不计为通过；真实项目完整补丁未获外发审批、未执行。该轮未覆盖的已有修改、后续变化、截断／未执行与历史结果区分，已在 2026-10-22 的源码核查、针对性测试及合成报告样本中补验，见 [M16 验收](Docs/Archive/m16-verification.md)；不外推完整并发作者归因或自动测试结果解析。原 Git [验证记录](artifacts/git-shell-glm53-20261021/verification.md)仅保留于本机被 Git 忽略的 artifacts 目录。
 
 ## 10. 当前切片与后续方向
 
@@ -1085,9 +1085,9 @@ Git 检查复用现有 `shell`，本阶段不新增专用 Git tool call。单条
 - 验收：交付实际文件、命令、结果与资源证据，按设计的假设表和场景矩阵说明已验证／未验证；核查实时／历史内容一致、canonical 保真及历史工具启动次数不增加。真实模型、GUI 和断电持久性不在本次默认结论内。
 - 首次日志验收（移除兼容层之前）的普通回归：794 总、793 通过、1 项链接权限跳过、0 失败，35 s；`artifacts/test-results/session-log-regression.trx`。History 9/9 验证 Prepare 失败完成条目即时进入原始 JSONL、live/page 同序和整 round 工具未执行；rawCallId 复用已由独立 InvocationId 修复。
 - 首次日志验收的 scale：另 1/1 通过、23 s，原预算不变；`artifacts/test-results/session-log-scale.trx` 与 `artifacts/session-journal-scale-results.json`。100／1,000／10,000 规模 append p95 为 2.6615／2.5418／2.665 ms；10,000 规模恢复为 1,874.3712 ms、105,944,888 B；200 条首屏为 369.5788 ms、47,105,864 B，实际读取 24,661,090 B。8 MiB 是返回 items 的累计序列化 UTF-8 预算，不是总 I/O 上限。
-- 首次日志验收的 NativeAOT 重 publish 成功，0 warning／error；仓库外 exe smoke 退出 0、Completed、17 steps、16 toolExecs，验证 read／restore／history／confirmed patch diff，且唯一日志、无旧 snapshot/audit 输出。产物为 `artifacts/session-log-nativeaot/TinyHarness.exe`，文本证据为 `artifacts/session-log-native-smoke.txt`；执行命令、环境和完整测量见[设计 §7.2](Docs/session-persistence-design.md#72-最终本地验证证据)。
+- 首次日志验收的 NativeAOT 重 publish 成功，0 warning／error；仓库外 exe smoke 退出 0、Completed、17 steps、16 toolExecs，验证 read／restore／history／confirmed patch diff，且唯一日志、无旧 snapshot/audit 输出。产物为 `artifacts/session-log-nativeaot/TinyHarness.exe`，文本证据为 `artifacts/session-log-native-smoke.txt`；执行命令、环境和完整测量见[设计 §7.2](Docs/Archive/session-persistence-history.md#72-最终本地验证证据)。
 
-- 移除旧兼容层后的复验：775 总、774 通过、1 链接权限跳过、0 失败；独立 scale 1/1、NativeAOT 与仓库外 smoke 均通过。当前证据与命令见[设计 §7.3](Docs/session-persistence-design.md#73-移除旧兼容层后的本地复验)。
+- 移除旧兼容层后的复验：775 总、774 通过、1 链接权限跳过、0 失败；独立 scale 1/1、NativeAOT 与仓库外 smoke 均通过。当前证据与命令见[设计 §7.3](Docs/Archive/session-persistence-history.md#73-移除旧兼容层后的本地复验)。
 
 **本轮收口结论：** 统一日志与旧兼容层精简的本地回归、故障与安全边界、规模测量和 NativeAOT 原生产物均已取得证据。真实模型、GUI、断电与实际 OS 隔离未验证；本轮到此停止，不自动进入后续方向。
 
@@ -1096,7 +1096,7 @@ Git 检查复用现有 `shell`，本阶段不新增专用 Git tool call。单条
 | 方向 | 目标与依赖 |
 |---|---|
 | 统一日志收口与后续演进 | 在最终验收基础上处理验收发现；后续扩展不改变已确认的安全、身份和追加日志事实语义 |
-| M14：项目指令与基础系统提示词 | M14.1 项目规则与首次发送已完成；M14.2 接入唯一当前行为模板，见[系统提示词设计](Docs/system-prompt-design.md)；工程验证与模型遵循评估分别记录 |
+| M14：项目指令与基础系统提示词 | M14.1 项目规则与首次发送已完成；M14.2 接入唯一当前行为模板，见[系统提示词设计](Docs/Archive/system-prompt-design.md)；工程验证与模型遵循评估分别记录 |
 | M15：任务控制与运行预算 | 已实施有界补充／暂停／继续／取消、工作项陈述和可信累计预算；工程验证与限制见任务控制设计，遵守 §6、§9 |
 | M16：交付证据核查与补缺 | 已按 §9.2 完成收窄范围验收，无需新增产品代码；矩阵、证据与限制见 M16 验收，不新增专用 Git 工具或独立报告系统 |
 | M17：日常使用验收 | 集成前述能力后细化；离线固定任务、异常组合、NativeAOT 与另行授权的少量真实验证 |
