@@ -190,7 +190,7 @@ internal static class Program
                                                                       composition.Config.Endpoint,
                                                                       composition.Config.ChatApi),
                                              composition.Options,
-                                             composition.Model,
+                                             composition.Model!,
                                              composition.Tools,
                                              WorkspacePrompts.Current,
                                              composition.Permissions,
@@ -279,7 +279,8 @@ internal static class Program
         using var consoleInput = new ChatConsoleInputReader(Console.In, cancellation,
                                                             OperatingSystem.IsWindows() && !Console.IsInputRedirected);
         using var reader = new ChatInputRouter(new ExclusiveInputReader(consoleInput));
-        var composition = await ComposeAgentAsync(configPath, cancellation.SessionToken, true, reader)
+        var composition = await ComposeAgentAsync(configPath, cancellation.SessionToken, true, reader,
+                                                   resumeSessionId is not null)
            .ConfigureAwait(false);
         var config = composition.Config;
         var selectionSecrets =
@@ -299,6 +300,12 @@ internal static class Program
 
         async Task<ChatSessionHost> CreateHostAsync(CancellationToken token)
         {
+            // 降级组合（启动凭据缺失）没有可执行客户端：新会话需要模型，在任何持久化产物创建之前
+            // 明确拒绝，不留下空会话日志，也不伪造绑定。
+            if (composition.Model is null)
+                throw new
+                    InvalidOperationException("No API key is configured for the default model, so a new session cannot start. Restore the API key or resume a session and select a model with '/models use'.");
+
             var instructions = await instructionLoader.LoadAsync(null, [], token).ConfigureAwait(false);
             token.ThrowIfCancellationRequested();
             var session = new ChatSession(Guid.NewGuid().ToString("N"), config.WorkspaceRoot, identity);
@@ -311,7 +318,7 @@ internal static class Program
                 // 显式新建即保存空会话，不发送模型请求；项目规则仍由首回合边界可靠提交。
                 // 启动客户端归组合根按进程生命周期持有（/new 宿主共用），宿主以借用方式绑定。
                 await writer.CommitAsync(session, context, token).ConfigureAwait(false);
-                return new ChatSessionHost(session, context, composition.Options, composition.Model, composition.Tools,
+                return new ChatSessionHost(session, context, composition.Options, composition.Model!, composition.Tools,
                                            WorkspacePrompts.Current, NewPermissions(),
                                            new ConsoleApprovalProvider(reader, Console.Out, composition.KnownSecrets),
                                            events, sessionWriter : writer, instructionLoader : instructionLoader,
@@ -415,11 +422,19 @@ internal static class Program
                                                      "(restored from the saved session)");
                 }
 
-                if (!string.Equals(target.CredentialRoute, composition.CredentialRoute, StringComparison.Ordinal))
+                // 降级组合没有启动路由可比；绑定成功时说明实际恢复到的路由来源。
+                if (composition.CredentialRoute is { } startupRoute)
+                {
+                    if (!string.Equals(target.CredentialRoute, startupRoute, StringComparison.Ordinal))
+                        await
+                            Console.Out.WriteLineAsync("  route     : resumed with the session's saved credential route " +
+                                                       $"'{target.CredentialRoute}' (startup default: "                  +
+                                                       $"{startupRoute})");
+                }
+                else
                     await
                         Console.Out.WriteLineAsync("  route     : resumed with the session's saved credential route " +
-                                                   $"'{target.CredentialRoute}' (startup default: "                  +
-                                                   $"{composition.CredentialRoute})");
+                                                   $"'{target.CredentialRoute}' (no startup credentials)");
                 if (alignedRoute.Revision != recordedRoute.Revision)
                     await Console.Out.WriteLineAsync("  route     : the credential route changed since this session " +
                                                      "was saved; the previous route's reasoning stays isolated from " +
@@ -510,12 +525,24 @@ internal static class Program
     ///         null falls back to the console standard input.
     ///     </para>
     /// </param>
+    /// <param name="allowMissingModelCredentials">
+    ///     <para>
+    ///         仅供恢复入口使用：启动默认模型的凭据缺失时不拒绝启动，改为组合出无客户端、无路由的降级组合，
+    ///         由恢复绑定从日志最后保存的选择解析目标，或以未绑定宿主等待显式重选。
+    ///     </para>
+    ///     <para>
+    ///         For resume entries only: a missing credential for the startup default model no longer rejects
+    ///         startup — the composition degrades to no client and no route, letting the resume binding resolve
+    ///         the target from the log's last saved selection or wait for explicit re-selection unbound.
+    ///     </para>
+    /// </param>
     /// <exception cref="ConfigException">
-    ///     <para>模型或 endpoint 缺失，或无法解析 API key。</para>
-    ///     <para>The model or endpoint is missing, or the API key cannot be resolved.</para>
+    ///     <para>模型或 endpoint 缺失，或无法解析 API key（未允许降级时）。</para>
+    ///     <para>The model or endpoint is missing, or the API key cannot be resolved (when degradation is not allowed).</para>
     /// </exception>
     private static async Task<AgentComposition> ComposeAgentAsync(
-        string? configPath, CancellationToken cancellationToken, bool persistSessions = false, TextReader? input = null)
+        string? configPath, CancellationToken cancellationToken, bool persistSessions = false, TextReader? input = null,
+        bool allowMissingModelCredentials = false)
     {
         var resolution = await ConfigResolver.ResolveAsync(configPath, cancellationToken).ConfigureAwait(false);
         var config     = resolution.Config;
@@ -528,12 +555,10 @@ internal static class Program
             throw new
                 ConfigException("An endpoint must be configured. Run 'tinyharness init' (user config) or set 'endpoint' in the config file.");
 
-        var apiKey = ApiKeyReader.Read(config.ApiKeyEnvironmentVariable, config.ApiKeyCredentialTarget,
-                                       new WindowsCredentialStore(), resolution.ProfileName);
-        if (apiKey is null)
-            throw new
-                ConfigException("No API key found. Run 'tinyharness auth set <profile>' or set the environment variable " +
-                                $"'{config.ApiKeyEnvironmentVariable}' before running.");
+        // 启动凭据解析统一经组合入口：降级允许时环境变量缺失与凭据存储条目缺失都归一为无客户端组合。
+        var apiKey = StartupModelCredentials.Resolve(config.ApiKeyEnvironmentVariable, config.ApiKeyCredentialTarget,
+                                                     resolution.ProfileName, new WindowsCredentialStore(),
+                                                     allowMissingModelCredentials);
 
         // 续聊存储仅取可信用户设置，不接受项目配置；保护校验失败即拒绝启动，不降级目录。
         var userConfig = await UserConfigStore.LoadAsync(UserConfigStore.DefaultFilePath(), cancellationToken)
@@ -590,7 +615,10 @@ internal static class Program
         await access.InitializeAsync(cancellationToken).ConfigureAwait(false);
         var executionPolicy = access.Policy;
 
-        var model = ModelClientFactory.Create(config.Model, config.Endpoint, apiKey, config.ChatApi);
+        // 降级组合（恢复入口且凭据缺失）没有客户端与路由；其余执行栈照常组装。
+        var model = apiKey is null
+            ? null
+            : ModelClientFactory.Create(config.Model, config.Endpoint, apiKey, config.ChatApi);
         var workspace = new Workspace(config.WorkspaceRoot);
         var tools     = BuildTools(workspace, config, apiKey, executionPolicy, sandbox?.Backend, knownSecrets, access);
         var options = new AgentOptions
@@ -609,8 +637,11 @@ internal static class Program
         };
 
         return new AgentComposition(resolution, config,
-                                    CredentialRoute.Describe(resolution.ProfileName, config.ApiKeyEnvironmentVariable,
-                                                             config.ApiKeyCredentialTarget),
+                                    apiKey is null
+                                        ? null
+                                        : CredentialRoute.Describe(resolution.ProfileName,
+                                                                   config.ApiKeyEnvironmentVariable,
+                                                                   config.ApiKeyCredentialTarget),
                                     knownSecrets, sandbox, executionPolicy, model, tools,
                                     permissions, options, sessionStoreDirectory, access);
     }
@@ -1008,11 +1039,11 @@ internal static class Program
     private sealed record AgentComposition(
         ConfigResolution                    Resolution,
         TinyHarnessConfig                   Config,
-        string                              CredentialRoute,
+        string?                             CredentialRoute,
         IReadOnlyDictionary<string, string> KnownSecrets,
         WindowsSandboxExecution?            Sandbox,
         ProcessExecutionPolicy              ExecutionPolicy,
-        IChatCompletionClient               Model,
+        IChatCompletionClient?              Model,
         ToolRegistry                        Tools,
         PermissionEngine                    Permissions,
         AgentOptions                        Options,

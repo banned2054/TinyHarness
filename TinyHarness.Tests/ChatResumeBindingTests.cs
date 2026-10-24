@@ -692,6 +692,96 @@ public class ChatResumeBindingTests
     }
 
     [Test]
+    public async Task Resolve_DegradedCompositionResolvesSavedTargetFromCatalogWithoutStartupClient()
+    {
+        // 启动默认凭据缺失（无启动客户端与路由）：目标按日志记录从可信目录解析并构造客户端。
+        var saved = new SessionModelSelection
+        {
+            Revision        = 2,
+            Model           = new SessionModelIdentity("flash", "https://one.example/v1",
+                                                           ChatApiKind.ChatCompletions),
+            CredentialRoute = "work|env:WORK_KEY",
+            Context         = new ContextOptions { ContextWindowTokens = 128_000 },
+            MessageBoundary = 3
+        };
+        var created = new List<string>();
+
+        var outcome = await ChatResumeBinding.ResolveAsync(Snapshot(saved), Identity, StartupOptions(),
+                                                            configuredClient      : null,
+                                                            configuredCredentialRoute : null,
+                                                            catalogLoader         : _ => LoadCatalog(Catalog()),
+                                                            (profile, modelId, _) =>
+                                                            {
+                                                                created.Add($"{profile.Name}/{modelId}");
+                                                                return Task.FromResult<IChatCompletionClient>(
+                                                                    new FakeChatClient());
+                                                            },
+                                                            CancellationToken.None);
+
+        Assert.That(outcome.NeedsReselection, Is.False);
+        var binding = outcome.Target!;
+        Assert.That(created, Is.EqualTo(["work/flash"]));
+        Assert.That(binding.Client, Is.Not.Null);
+        Assert.That(binding.CredentialRoute, Is.EqualTo("work|env:WORK_KEY"));
+        Assert.That(binding.Options.Model, Is.EqualTo("flash"));
+        Assert.That(binding.Options.ReasoningEffort, Is.EqualTo(saved.ReasoningEffort));
+    }
+
+    [Test]
+    public async Task Resolve_DegradedCompositionReturnsReselectWhenSavedTargetCredentialsAreMissing()
+    {
+        // 失效的启动默认同时是日志保存目标（work/big）：目录解析命中但凭据不可用——需要重选，不拒绝恢复。
+        var saved = new SessionModelSelection
+        {
+            Revision        = 2,
+            Model           = Identity,
+            CredentialRoute = "work|env:WORK_KEY",
+            Context         = new ContextOptions { ContextWindowTokens = 128_000 },
+            MessageBoundary = 3
+        };
+        var factoryCalls = new List<string>();
+
+        var outcome = await ChatResumeBinding.ResolveAsync(Snapshot(saved), Identity, StartupOptions(),
+                                                            configuredClient      : null,
+                                                            configuredCredentialRoute : null,
+                                                            catalogLoader         : _ => LoadCatalog(Catalog()),
+                                                            (profile, modelId, _) =>
+                                                            {
+                                                                factoryCalls.Add($"{profile.Name}/{modelId}");
+                                                                throw new
+                                                                    ConfigException($"No API key found for provider '{profile.Name}'.");
+                                                            },
+                                                            CancellationToken.None);
+
+        Assert.That(outcome.NeedsReselection, Is.True);
+        Assert.That(outcome.ReselectionReason, Does.Contain("credentials could not be resolved"));
+        Assert.That(factoryCalls, Is.EqualTo(["work/big"]));
+    }
+
+    [Test]
+    public async Task Resolve_DegradedCompositionLegacyLogFallsBackToUniqueIdentityMatch()
+    {
+        // 无选择记录的旧日志在降级组合下同样可恢复：按初始身份三元组（Snapshot 的初始身份是 big）走唯一候选兜底。
+        var created = new List<string>();
+
+        var outcome = await ChatResumeBinding.ResolveAsync(Snapshot(), Identity, StartupOptions(),
+                                                            configuredClient      : null,
+                                                            configuredCredentialRoute : null,
+                                                            catalogLoader         : _ => LoadCatalog(Catalog()),
+                                                            (profile, modelId, _) =>
+                                                            {
+                                                                created.Add($"{profile.Name}/{modelId}");
+                                                                return Task.FromResult<IChatCompletionClient>(
+                                                                    new FakeChatClient());
+                                                            },
+                                                            CancellationToken.None);
+
+        Assert.That(outcome.NeedsReselection, Is.False);
+        Assert.That(created, Is.EqualTo(["work/big"]));
+        Assert.That(outcome.Target!.CredentialRoute, Is.EqualTo("work|env:WORK_KEY"));
+    }
+
+    [Test]
     public async Task Reopen_DeletedTargetResumesUnboundThenSelectsNewTargetWithoutTouchingOldCredentials()
     {
         using var store = new TestTempDir();

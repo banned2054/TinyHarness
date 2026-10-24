@@ -98,10 +98,21 @@ internal static class ChatResumeBinding
     ///         selection a refreshed context is returned for the caller to materialize as a new selection snapshot
     ///         before use.
     ///     </para>
+    ///     <para>
+    ///         传入 null 启动客户端表示降级组合（启动默认模型凭据缺失）：没有可复用的客户端与路由，
+    ///         目标一律从可信目录按日志记录解析，解析失败或凭据不可用同样返回需要重选——失效的启动默认
+    ///         不阻止恢复入口先接管历史。
+    ///     </para>
+    ///     <para>
+    ///         A null startup client denotes a degraded composition (the startup default's credentials are missing):
+    ///         with nothing to reuse, the target always resolves from the trusted catalog by the log's records, and
+    ///         resolution failures or unusable credentials likewise return re-selection-required — a stale startup
+    ///         default never blocks the resume entry from taking over history first.
+    ///     </para>
     /// </remarks>
     public static async Task<ResolutionOutcome> ResolveAsync(
         PersistedSession snapshot, SessionModelIdentity configuredIdentity, AgentOptions configuredOptions,
-        IChatCompletionClient configuredClient, string configuredCredentialRoute,
+        IChatCompletionClient? configuredClient, string? configuredCredentialRoute,
         Func<CancellationToken, Task<UserConfig>> catalogLoader,
         Func<UserProfile, string, CancellationToken, Task<IChatCompletionClient>> clientFactory,
         CancellationToken cancellationToken)
@@ -111,8 +122,16 @@ internal static class ChatResumeBinding
         ArgumentNullException.ThrowIfNull(configuredOptions);
         ArgumentNullException.ThrowIfNull(catalogLoader);
         ArgumentNullException.ThrowIfNull(clientFactory);
-        ArgumentNullException.ThrowIfNull(configuredClient);
-        ArgumentException.ThrowIfNullOrWhiteSpace(configuredCredentialRoute);
+        if (configuredClient is null)
+        {
+            // 降级组合（启动默认凭据缺失）：没有可复用的启动客户端与路由，目标只能从可信目录解析。
+            if (configuredCredentialRoute is not null)
+                throw new ArgumentException("A degraded resume composition has no startup credential route.",
+                                            nameof(configuredCredentialRoute));
+        }
+        else if (string.IsNullOrWhiteSpace(configuredCredentialRoute))
+            throw new ArgumentException("The startup credential route is required with a startup client.",
+                                        nameof(configuredCredentialRoute));
         cancellationToken.ThrowIfCancellationRequested();
 
         // 旧日志没有任何选择记录：以初始身份为隐式修订 0 的目标；与启动配置一致时直接复用启动组合。
@@ -122,23 +141,24 @@ internal static class ChatResumeBinding
             if (snapshot.Model is null)
                 return ResolutionOutcome.Reselect(
                     $"Stored session '{snapshot.Id}' carries no usable model identity; start a new session instead.");
-            if (snapshot.Model.Equals(configuredIdentity))
+            if (configuredClient is not null && snapshot.Model.Equals(configuredIdentity))
                 return ResolutionOutcome.Bound(new ResolvedTarget(configuredIdentity, configuredOptions,
-                                                                  configuredClient, configuredCredentialRoute,
+                                                                  configuredClient, configuredCredentialRoute!,
                                                                   ProfileHint   : null,
                                                                   SavedSelection: null));
             return await ResolveFromCatalogAsync(snapshot, snapshot.Model, null, configuredOptions, catalogLoader,
                                                  clientFactory, cancellationToken).ConfigureAwait(false);
         }
 
-        IChatCompletionClient client       = configuredClient;
-        var                   route        = configuredCredentialRoute;
+        IChatCompletionClient client       = configuredClient!;
+        var                   route        = configuredCredentialRoute!;
         ResolvedTarget?       fromCatalog  = null;
         UserProfileModel?     startupMatch = null;
 
         // 未跟踪路由（null）的历史选择无从解析：沿用启动客户端，由恢复入口保守采纳当前路由。
-        // 身份不同，或已记录路由指向其他凭据（含同三元组换 profile／换账户）时，必须按记录解析目标。
-        if (saved.Model != configuredIdentity ||
+        // 身份不同、已记录路由指向其他凭据（含同三元组换 profile／换账户），或没有启动组合时，必须按记录解析目标。
+        if (configuredClient is null ||
+            saved.Model != configuredIdentity ||
             (saved.CredentialRoute is not null && saved.CredentialRoute != configuredCredentialRoute))
         {
             var resolved = await ResolveFromCatalogAsync(snapshot, saved.Model, saved.CredentialRoute,
