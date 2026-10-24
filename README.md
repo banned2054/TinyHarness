@@ -170,7 +170,7 @@ tinyharness chat --session <session-id>
 
 `session list` and `session show` are strictly offline: they do not call a model, run tools, or read an API key. Sessions default to `%LOCALAPPDATA%\tinyharness\sessions`; `settings.sessionStoreDirectory` or `TINYHARNESS_SESSION_STORE_DIR` can override the store. The legacy `sessionDirectory` field does not select this store.
 
-Resume requires matching workspace, endpoint, model, protocol, current built-in prompt, and valid stored protocol content. If interrupted tool effects are uncertain, writes and processes stay blocked until you inspect and acknowledge the state. Do not share raw session files as ordinary logs: inspection output is redacted, but stored conversation content is not encrypted or generally redacted.
+Resume requires matching workspace, endpoint, model, protocol, current built-in prompt, and valid stored protocol content. If interrupted tool effects are uncertain, writes and processes stay blocked until you inspect and acknowledge the state. Local answers, readable reasoning, tool parameters, output, diffs, and `session show` preserve recorded content; terminal controls are escaped. Diagnostics, audits, and command summaries retain best-effort redaction. Earlier redacted history stays as recorded. Raw session files and local display output may contain secrets and are not safe-to-share exports; session files are not encrypted.
 
 ### Configuration, budgets, and integrations
 

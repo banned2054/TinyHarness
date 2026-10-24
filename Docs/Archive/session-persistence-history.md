@@ -24,6 +24,12 @@
 
 首版不实现 GUI、SQLite、历史分叉、后台归档、分段压缩、外部 MCP 或新供应商支持；不引入完整 event-sourcing 框架或插件式存储平台。
 
+## 2026-10-24 本地原文与脱敏边界复验
+
+2026-10-24 本地复验：普通离线回归 1164 总、1162 通过、2 项链接权限跳过、0 失败（不含规模测试），结果为 `artifacts/test-results/privacy-final-verified.trx`。覆盖本地正文、可读推理、参数、输出、artifact、diff、补充、工作项、离线 `session show`、诊断动态密钥及旧脱敏记录读取。`win-x64` NativeAOT 发布成功，无 compiler／trimming／AOT warning；`artifacts/privacy-nativeaot/TinyHarness.exe` 在仓库外隔离配置下离线 smoke Completed、17 steps、16 toolExecs，记录为 `artifacts/privacy-native-smoke.txt`。真实模型和 Desktop UI 未验证。
+
+规模回归另行 1/1 通过，沿用原有预算，结果为 `artifacts/test-results/privacy-scale.trx`；未据此扩大真实环境保证。
+
 ## 7. 验收场景与证据
 
 ### 7.1 新设计的验收矩阵

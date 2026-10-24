@@ -10,6 +10,7 @@
 - 使用方式与已知限制：[英文 README](README.md)、[中文 README](Docs/README.md)。
 - 历史范围、约束与里程碑：[MVP／M1–M11](PAST_PLAN.md#m1-m11)、[M12–M17](PAST_PLAN.md#m12-m17)。
 - 已完成实现的设计参考：继续查阅归档中的[会话持久化](Docs/Archive/session-persistence-design.md)、[项目规则](Docs/Archive/project-instructions-design.md)、[系统提示词](Docs/Archive/system-prompt-design.md)、[上下文压缩](Docs/Archive/context-compaction-design.md)、[任务控制与预算](Docs/Archive/task-control-design.md)和[Windows 沙箱](Docs/Archive/windows-sandbox-management.md)文档。
+- 当前本地内容与脱敏边界：[按用途和出口处理](Docs/Archive/session-persistence-design.md#44-按用途和出口处理脱敏)；本地正文与历史保留原文，诊断和审计继续脱敏。
 - 活动计划：正在实施的单项计划保留在 `Docs/` 顶层，由对应开发任务维护与提交；完成后迁入归档。
 - 工作规则：[AGENTS.md](AGENTS.md)。开始具体变更时读取相关设计或单项计划，并核对实际源码和工作区状态。
 

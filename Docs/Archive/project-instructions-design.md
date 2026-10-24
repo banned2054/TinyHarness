@@ -276,8 +276,8 @@ rules-applied 与对应 canonical message 在同一 CommitCore 批次提交；�
 - 初次显示已加载文件数、来源／作用域和有效版本；后续只提示变化或失败，不每个 token／每次工具刷屏。
 - 继续使用 IHostEventSink，`ProjectInstructionsChanged` 事件及明确 DTO 包含 revision、变更摘要和脱敏来源列表。通知不携带授权入口，不依赖消费者确认才能改变权限。
 - 已可靠提交的规则展示条目以 `project-instructions` history kind 进入现有 `SessionHistoryItem`／HistoryItemCompleted／分页链路；`ProjectionBuilder.ApplyHistory` 的封闭分类同步校验。不能只添加 CLI 日志而让历史完全丢失规则变化。
-- 规则原文用于模型／恢复，检查默认仅显示脱敏元数据与变更摘要；有需要的正文查看必须复用脱敏投影，不打印 canonical 原文。显示错误仍是 DisplayWarning，不能改写规则生效或工具确认事实。
-- 规则正文可能含秘密，沿用现有“canonical 原样、检查与终端脱敏、受保护目录不等于加密”的契约，不主动读取凭据作为规则内容。
+- 规则原文用于模型／恢复，规则通知仅显示脱敏元数据与变更摘要；本地内容与诊断出口按[持久化设计 §4.4](session-persistence-design.md#44-按用途和出口处理脱敏)分别处理，opaque 不进入普通展示。显示错误仍是 DisplayWarning，不能改写规则生效或工具确认事实。
+- 规则正文可能含秘密；canonical 原样保存，诊断和审计继续脱敏，受保护目录不等于加密，不主动读取凭据作为规则内容。
 
 ### 9.3 权限关系
 
@@ -306,7 +306,7 @@ M14.1 不提供讨论／实施的语义判断。后续 M14.2 通过基础系统�
 | token | 规则渲染、工具 schema、摘要规则输入、usage 校准、无预算模式 | 发送视图与所有预算口径一致，超窗口拒绝请求，不静默裁剪规则 |
 | 日志与兼容 | 无规则记录的当前日志、新 schema、未知 schema/kind、错 revision／scope／hash／消息下标 | 当前 JSONL 唯一 writer；旧程序明确拒绝新必需 kind；新程序严格校验来源 |
 | 故障恢复 | 初始写失败、规则更新写失败、半行、flush 后确认丢失、未知副作用 | 不调用／不继续、poison、不自动截断、不重放工具、不错误解除阻断 |
-| 历史与脱敏 | 规则正文含合成秘密、通知消费者失败、规则变更跨分页 | live/history 绑定同一提交事实，脱敏一致、游标稳定、DisplayWarning 不覆盖事实 |
+| 历史与脱敏 | 规则正文含合成秘密、通知消费者失败、规则变更跨分页 | live/history 绑定同一提交事实，本地原文与诊断脱敏按各自出口一致、游标稳定、DisplayWarning 不覆盖事实 |
 | 入口回归 | run/chat/smoke 一致，session list/show 离线，worker focus 与任务包不变 | 请求捕获、工具次数、文件／环境访问证据 |
 | NativeAOT | 新 DTO、JSON、入口及事件路径 | win-x64 publish 无未解释 warning；仓库外原生产物离线 smoke 验证加载／更新／恢复 |
 

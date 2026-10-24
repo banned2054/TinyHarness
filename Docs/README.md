@@ -169,7 +169,7 @@ tinyharness chat --session <session-id>
 
 `session list` 和 `session show` 严格离线，不调用模型、不执行工具，也不读取 API key。会话默认位于 `%LOCALAPPDATA%\tinyharness\sessions`，可由 `settings.sessionStoreDirectory` 或 `TINYHARNESS_SESSION_STORE_DIR` 覆盖；旧 `sessionDirectory` 字段不决定该存储位置。
 
-续聊要求工作区、endpoint、模型、协议、当前内置提示词匹配，且已存协议内容通过校验。中断工具的副作用不确定时，写入和进程执行保持阻断，直到用户检查并确认。不要把原始会话文件当普通日志分享：检查输出会脱敏，但存储的对话内容不加密，也不做通用脱敏。
+续聊要求工作区、endpoint、模型、协议、当前内置提示词匹配，且已存协议内容通过校验。中断工具的副作用不确定时，写入和进程执行保持阻断，直到用户检查并确认。本地回答、可读推理、工具参数、输出、diff 和 `session show` 保留记录原文，终端控制字符仍会转义；诊断、审计和命令摘要保留尽力脱敏。旧的脱敏历史按原记录显示。原始会话文件和本地展示可能含秘密，不属于可安全分享的导出；会话文件不加密。
 
 ### 配置、预算与集成
 
