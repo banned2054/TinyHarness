@@ -42,9 +42,9 @@ public sealed class DesktopLifecycleTests
     [Test]
     public async Task DuplicateSubmitIsRejectedBeforeCreatingAnotherTurn()
     {
-        var entered = Signal();
+        var             entered = Signal();
         await using var session = Create(new WaitingModel(entered));
-        var run = session.SubmitAsync("first");
+        var             run     = session.SubmitAsync("first");
         await entered.Task.WaitAsync(Timeout);
         Assert.Throws<InvalidOperationException>(() => session.SubmitAsync("duplicate"));
         Assert.That(session.Host.Session.Turns, Has.Count.EqualTo(1));
@@ -55,10 +55,10 @@ public sealed class DesktopLifecycleTests
     [Test]
     public async Task ShutdownWaitsForModelCleanupBeforeDisposingClient()
     {
-        var entered = Signal();
-        var cleanup = Signal();
+        var entered        = Signal();
+        var cleanup        = Signal();
         var releaseCleanup = Signal();
-        var model = new WaitingModel(entered, cleanup: async () =>
+        var model = new WaitingModel(entered, cleanup : async () =>
         {
             cleanup.SetResult();
             await releaseCleanup.Task;
@@ -90,7 +90,7 @@ public sealed class DesktopLifecycleTests
     public async Task ShutdownCancelsAnInFlightOpenAndDoesNotLeakTheReturnedClient()
     {
         var entered = Signal();
-        var model = new WaitingModel(Signal());
+        var model   = new WaitingModel(Signal());
         var manager = new DesktopSessionManager();
         var open = manager.OpenAsync(null, async token =>
         {
@@ -112,8 +112,8 @@ public sealed class DesktopLifecycleTests
         DesktopApproval? pending = null;
         var provider = new DesktopApprovalProvider(value => { pending = value; return ValueTask.CompletedTask; }, value => value);
         using var cancellation = new CancellationTokenSource();
-        var first = provider.PromptAsync(Preparation(), cancellation.Token);
-        var expiredId = pending!.Id;
+        var       first        = provider.PromptAsync(Preparation(), cancellation.Token);
+        var       expiredId    = pending!.Id;
         cancellation.Cancel();
         await Assert.ThatAsync(async () => await first, Throws.InstanceOf<OperationCanceledException>());
         Assert.That(pending, Is.Null);
@@ -127,13 +127,13 @@ public sealed class DesktopLifecycleTests
     [Test]
     public async Task ApprovalCancellationInOneSessionDoesNotWithdrawAnotherSessionsRequest()
     {
-        DesktopApproval? left = null;
+        DesktopApproval? left  = null;
         DesktopApproval? right = null;
         var first = new DesktopApprovalProvider(value => { left = value; return ValueTask.CompletedTask; }, value => value);
         var second = new DesktopApprovalProvider(value => { right = value; return ValueTask.CompletedTask; }, value => value);
         using var cancellation = new CancellationTokenSource();
-        var firstWait = first.PromptAsync(Preparation(), cancellation.Token);
-        var secondWait = second.PromptAsync(Preparation(), CancellationToken.None);
+        var       firstWait    = first.PromptAsync(Preparation(), cancellation.Token);
+        var       secondWait   = second.PromptAsync(Preparation(), CancellationToken.None);
         cancellation.Cancel();
         await Assert.ThatAsync(async () => await firstWait, Throws.InstanceOf<OperationCanceledException>());
         Assert.That(left, Is.Null);
@@ -145,12 +145,12 @@ public sealed class DesktopLifecycleTests
     [Test]
     public async Task ARunOnlyFinishesAfterItsTerminalSaveAndShutdownPreservesSaveWarnings()
     {
-        var enteredSave = Signal();
-        var releaseSave = Signal();
-        var writer = new DelayedFailingWriter(enteredSave, releaseSave);
-        var model = new WaitingModel(Signal(), CompletedSignal());
-        await using var session = Create(model, writer);
-        var run = session.SubmitAsync("save");
+        var             enteredSave = Signal();
+        var             releaseSave = Signal();
+        var             writer      = new DelayedFailingWriter(enteredSave, releaseSave);
+        var             model       = new WaitingModel(Signal(), CompletedSignal());
+        await using var session     = Create(model, writer);
+        var             run         = session.SubmitAsync("save");
         await enteredSave.Task.WaitAsync(Timeout);
         var shutdown = session.DisposeAsync().AsTask();
         Assert.That(shutdown.IsCompleted, Is.False);
@@ -168,21 +168,25 @@ public sealed class DesktopLifecycleTests
         var host = new ChatSessionHost(Path.GetTempPath(), new SessionModelIdentity("offline", "https://offline.invalid", default),
                                        options, model, new ToolRegistry([]), "offline desktop test",
                                        approver: approvals, sessionWriterFactory: writer is null ? null : _ => writer);
-        return new DesktopSession(host, model, approvals);
+        return new DesktopSession(host, approvals);
     }
 
     private static TaskCompletionSource Signal() => new(TaskCreationOptions.RunContinuationsAsynchronously);
     private static TaskCompletionSource CompletedSignal() { var signal = Signal(); signal.SetResult(); return signal; }
     private static ToolPreparation Preparation() => new()
     {
-        ToolName = "offline", CallId = "call", Capability = "filesystem.write", Summary = "offline approval",
-        Arguments = new JsonObject()
+        ToolName   = "offline",
+        CallId     = "call",
+        Capability = "filesystem.write",
+        Summary    = "offline approval",
+        Arguments  = new JsonObject()
     };
 
     private sealed class WaitingModel(TaskCompletionSource entered, TaskCompletionSource? finish = null,
                                        Func<Task>? cleanup = null) : IChatCompletionClient, IDisposable
     {
         public bool Disposed { get; private set; }
+
         public async IAsyncEnumerable<ChatStreamEvent> CompleteAsync(ChatCompletionRequest request,
             [EnumeratorCancellation] CancellationToken cancellationToken)
         {
@@ -196,6 +200,7 @@ public sealed class DesktopLifecycleTests
             }
             finally { if (cleanup is not null) await cleanup(); }
         }
+
         public void Dispose() => Disposed = true;
     }
 
@@ -210,6 +215,7 @@ public sealed class DesktopLifecycleTests
             await release.Task;
             throw new IOException("fixture save failed");
         }
+
         public void Dispose() => Disposed = true;
     }
 }

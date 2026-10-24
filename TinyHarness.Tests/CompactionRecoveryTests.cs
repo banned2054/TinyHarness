@@ -31,7 +31,7 @@ public sealed class CompactionRecoveryTests
         Model                     = Identity.ModelId,
         MaxAgentSteps             = 8,
         DefaultToolTimeoutSeconds = 30,
-        Context = new ContextOptions
+        Context                   = new ContextOptions
         {
             ContextWindowTokens       = window,
             ReservedOutputTokens      = 30,
@@ -77,7 +77,7 @@ public sealed class CompactionRecoveryTests
         using var resumed = new ChatSessionHost(restored.Session, restored.Context, Options(), continued,
                                                 new ToolRegistry([tool]), "sys", sessionWriter : writer);
         // 恢复时上下文须与固化选择一致；改用大窗口按设计走显式模型选择变更。
-        await resumed.ChangeModelAsync(Identity, continued, Options(100_000).Context, null,
+        await resumed.ChangeModelAsync(new SessionModelBinding(Identity, continued, Options(100_000).Context, null),
                                        CancellationToken.None);
         var next = await resumed.SubmitTurnAsync("Continue discussing.", CancellationToken.None);
         Assert.That(next.Result!.Status, Is.EqualTo(AgentStatus.Completed), next.Result.Error);
@@ -154,8 +154,7 @@ public sealed class CompactionRecoveryTests
                 Sequence   = sequence,
                 BatchId    = $"{session.Id}:{sequence:D20}",
                 WrittenUtc = DateTimeOffset.UtcNow,
-                Records =
-                [
+                Records    = [
                     new SessionLogRecord($"{session.Id}:{sequence:D20}:0000",
                                          kind == "legacy" ? "checkpoint" : "compaction-checkpoint",
                                          payload.RootElement.Clone())

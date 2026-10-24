@@ -210,9 +210,8 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
                             var boundItem = item with { Id = recordId, Sequence = sequence };
                             normalized[i] = record with
                             {
-                                Id = recordId,
-                                Payload =
-                                JsonSerializer.SerializeToElement(boundItem,
+                                Id      = recordId,
+                                Payload = JsonSerializer.SerializeToElement(boundItem,
                                                                   SessionHistoryJsonContext.Default.SessionHistoryItem)
                             };
                         }
@@ -610,9 +609,8 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
             InputTokens            = run.Result?.InputTokens,
             OutputTokens           = run.Result?.OutputTokens,
             Budget                 = run.Result?.Budget,
-            NeedsInspection =
-                toolCalls?.Any(c => c is { SideEffects: true, State: ToolCallExecutionState.UnknownResult }),
-            ToolCalls = toolCalls?.Select(c => new PersistedToolCallRecord
+            NeedsInspection        = toolCalls?.Any(c => c is { SideEffects: true, State: ToolCallExecutionState.UnknownResult }),
+            ToolCalls              = toolCalls?.Select(c => new PersistedToolCallRecord
             {
                 CallId           = c.CallId,
                 InvocationId     = c.InvocationId,
@@ -678,9 +676,9 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
         Content    = message.Content,
         ToolCallId = message.ToolCallId,
         Name       = message.Name,
-        ToolCalls = message.ToolCalls?.Select(c => new PersistedToolCall(c.Id, c.FunctionName, c.ArgumentsJson))
+        ToolCalls  = message.ToolCalls?.Select(c => new PersistedToolCall(c.Id, c.FunctionName, c.ArgumentsJson))
                            .ToArray(),
-        Reasoning = message.Reasoning?.Select(r => new PersistedReasoning
+        Reasoning  = message.Reasoning?.Select(r => new PersistedReasoning
         {
             Text          = r.Text,
             ProtectedData = r.ProtectedData,
@@ -825,6 +823,10 @@ public static class SessionStoreReader
                             Read<SessionModelSelection>(record.Payload, SessionLogJsonContext.Default.SessionModelSelection);
                         selection.Validate();
                         var previousSelection = _modelSelections.LastOrDefault();
+                        // /2 记录显式携带前驱并须与链上一致；/1 旧记录无前驱字段，按修订连续性推导。
+                        if (!selection.IsLegacySchema &&
+                            selection.PreviousRevision != (previousSelection?.Revision ?? 0))
+                            throw new SessionStoreException("Invalid model selection predecessor revision.");
                         var identityChanged   = (previousSelection?.Model ?? _identity?.Model) != selection.Model;
                         var previousEpoch     = previousSelection?.ContinuationEpoch          ?? 0;
                         var previousStart     = previousSelection?.ReasoningStartMessageIndex ?? 0;
@@ -984,20 +986,19 @@ public static class SessionStoreReader
                         : _state?.PendingInspectionReason;
             return new PersistedSession
             {
-                Id                      = _identity.Id,
-                WorkspaceRoot           = _identity.WorkspaceRoot,
-                Model                   = _identity.Model,
-                ModelSelections         = _modelSelections.ToArray(),
-                CreatedUtc              = _identity.CreatedUtc,
-                UpdatedUtc              = _updatedUtc,
-                CommitSequence          = sequence,
-                PendingInspectionReason = pendingReason,
-                InspectionAcknowledgedUtc =
-                    hasUnknownSideEffects || _state?.ExecutionIntent == true ? null : acknowledged,
-                Turns      = _turns,
-                Amendments = _amendments.Values.ToArray(),
-                WorkItems  = _workItems.Values.ToArray(),
-                Conversation = new PersistedConversation
+                Id                        = _identity.Id,
+                WorkspaceRoot             = _identity.WorkspaceRoot,
+                Model                     = _identity.Model,
+                ModelSelections           = _modelSelections.ToArray(),
+                CreatedUtc                = _identity.CreatedUtc,
+                UpdatedUtc                = _updatedUtc,
+                CommitSequence            = sequence,
+                PendingInspectionReason   = pendingReason,
+                InspectionAcknowledgedUtc = hasUnknownSideEffects || _state?.ExecutionIntent == true ? null : acknowledged,
+                Turns                     = _turns,
+                Amendments                = _amendments.Values.ToArray(),
+                WorkItems                 = _workItems.Values.ToArray(),
+                Conversation              = new PersistedConversation
                 {
                     Messages                         = _messages,
                     State                            = checkpoint.State,
@@ -1118,7 +1119,7 @@ public static class SessionStoreReader
 
             calls[callIndex] = calls[callIndex] with
             {
-                State = callState,
+                State            = callState,
                 NotStartedReason = item.NotStartedReason
             };
             _completedToolFacts.Add(factKey, calls[callIndex]);
@@ -1137,7 +1138,7 @@ public static class SessionStoreReader
 
             runs[runIndex] = run with
             {
-                ToolCalls = calls,
+                ToolCalls       = calls,
                 NeedsInspection = calls.Any(call => call is
                 {
                     SideEffects: true, State: nameof(ToolCallExecutionState.UnknownResult)
@@ -1402,7 +1403,7 @@ public static class SessionStoreReader
             Content    = message.Content,
             ToolCallId = message.ToolCallId,
             Name       = message.Name,
-            ToolCalls = message.ToolCalls?.Select(call => new ChatToolCall(call.Id, call.Name, call.Arguments))
+            ToolCalls  = message.ToolCalls?.Select(call => new ChatToolCall(call.Id, call.Name, call.Arguments))
                                .ToArray()
         };
 

@@ -57,23 +57,37 @@ public sealed record SessionRestoration(
 public static class SessionResume
 {
     /// <summary>
-    ///     <para>校验快照身份、协议与压缩状态，重建会话及安全边界内的上下文。</para>
+    ///     <para>校验快照协议与压缩状态，重建会话及安全边界内的上下文；不解析凭据，不以目标模型可用性为前提。</para>
     ///     <para>
-    ///         Validates snapshot identity, protocol and compaction state, rebuilding the session
-    ///         and context within a safe boundary.
+    ///         Validates snapshot protocol and compaction state, rebuilding the session and context within a safe
+    ///         boundary, without resolving credentials and without requiring the target model to remain available.
     ///     </para>
     /// </summary>
     /// <remarks>
     ///     <para>
-    ///         当前工作区、模型与协议身份须匹配快照，系统提示须与首条 system 消息完全一致。
-    ///         工具组、opaque 哈希、折叠边界、交接摘要来源与运行记录均须有效。
+    ///         本方法只恢复历史事实：canonical 消息、opaque 哈希、完整工具边界、选择链、run 归属、检查点、
+    ///         规则、工作项与 NeedsInspection。历史模型不再存在于当前配置不构成日志损坏；
+    ///         可执行目标由调用方另行解析（默认最后已提交选择，失效时明确重选），不由恢复偷偷降级。
+    ///         工作区与系统提示须匹配快照；工具组、折叠边界、交接摘要来源与运行记录均须有效。
     ///     </para>
     ///     <para>
-    ///         The current workspace, model and protocol identity must match the snapshot;
-    ///         the system prompt must exactly match its first system message. Tool groups, opaque hashes,
-    ///         fold boundaries, handoff sources and run records must be valid.
+    ///         This method restores historical facts only: canonical messages, opaque hashes, complete tool
+    ///         boundaries, the selection chain, run ownership, checkpoints, rules, work items, and NeedsInspection.
+    ///         A historical model no longer present in the current configuration is not log damage; the executable
+    ///         target is resolved separately by the caller (the last committed selection by default, with explicit
+    ///         re-selection when it fails) — restore never silently downgrades. The workspace and system prompt must
+    ///         match the snapshot; tool groups, fold boundaries, handoff sources, and run records must be valid.
     ///     </para>
     /// </remarks>
+    /// <param name="legacyContextOptions">
+    ///     <para>
+    ///         仅供没有任何选择记录的旧日志兜底的新建上下文参数；有选择记录时以记录为准，历史缺失参数保持未知。
+    ///     </para>
+    ///     <para>
+    ///         Fallback context options used only for legacy logs without any selection record; logs with selections
+    ///         use the recorded values and keep missing historical parameters unknown.
+    ///     </para>
+    /// </param>
     /// <param name="snapshot">
     ///     <para>
     ///         应由 <see cref="Persistence.SessionStoreWriter.OpenExistingAsync" /> 严格读取并完成日志校验；
@@ -86,19 +100,14 @@ public static class SessionResume
     ///     </para>
     /// </param>
     /// <exception cref="SessionStoreException">
-    ///     <para>快照不可续聊、身份不一致或恢复内容校验失败；不降级放行。</para>
-    ///     <para>
-    ///         The snapshot is not resumable, identity differs, or restored content fails validation;
-    ///         no fallback is allowed.
-    ///     </para>
+    ///     <para>快照不可续聊或恢复内容校验失败；不降级放行。</para>
+    ///     <para>The snapshot is not resumable or restored content fails validation; no fallback is allowed.</para>
     /// </exception>
-    public static SessionRestoration Restore(PersistedSession     snapshot, string workspaceRoot,
-                                             SessionModelIdentity model,    string systemPrompt,
-                                             ContextOptions?      contextOptions = null)
+    public static SessionRestoration Restore(PersistedSession snapshot,     string          workspaceRoot,
+                                             string           systemPrompt, ContextOptions? legacyContextOptions = null)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
-        ArgumentNullException.ThrowIfNull(model);
         ArgumentException.ThrowIfNullOrWhiteSpace(systemPrompt);
 
         var conversation = snapshot.Conversation
@@ -126,17 +135,6 @@ public static class SessionResume
                                       $"the current workspace is '{Path.GetFullPath(workspaceRoot)}'. A session is fixed " +
                                       "to one workspace (PLAN §5); reopen it from there or start a new session.");
 
-        var selectedModel = snapshot.ModelSelection?.Model ?? snapshot.Model;
-        if (selectedModel is null || !selectedModel.Equals(model))
-            throw new
-                SessionStoreException($"Stored session '{snapshot.Id}' belongs to model "                         +
-                                      DescribeModel(selectedModel)                                                +
-                                      " but the current configuration uses "                                      +
-                                      DescribeModel(model)                                                        +
-                                      ". Resume requires the same endpoint, model and chat API; opaque protocol " +
-                                      "content is never silently replayed under a different identity (PLAN §5). " +
-                                      "Restore the configuration or start a new session.");
-
         var messages = new List<ChatMessage>(conversation.Messages.Count);
         foreach (var persisted in conversation.Messages)
         {
@@ -151,9 +149,9 @@ public static class SessionResume
                 Content    = persisted.Content ?? string.Empty,
                 ToolCallId = persisted.ToolCallId,
                 Name       = persisted.Name,
-                ToolCalls = persisted.ToolCalls?.Select(call => new ChatToolCall(call.Id, call.Name, call.Arguments))
+                ToolCalls  = persisted.ToolCalls?.Select(call => new ChatToolCall(call.Id, call.Name, call.Arguments))
                                      .ToArray(),
-                Reasoning = persisted.Reasoning?.Select(entry =>
+                Reasoning  = persisted.Reasoning?.Select(entry =>
                                                             new ReasoningContent(entry.Text, entry.ProtectedData,
                                                                 entry.ItemId)).ToArray()
             });
@@ -186,7 +184,7 @@ public static class SessionResume
             snapshot.ModelSelections.FirstOrDefault(selection =>
                                                        selection.Revision == conversation.CheckpointModelSelectionRevision);
         var checkpointOptions = checkpointSelection?.Context ??
-                                snapshot.ModelSelections.FirstOrDefault()?.Context ?? contextOptions;
+                                snapshot.ModelSelections.FirstOrDefault()?.Context ?? legacyContextOptions;
         var context = new ConversationContext(checkpointOptions);
         try
         {
@@ -206,6 +204,55 @@ public static class SessionResume
         session.PendingInspectionReason = needsInspection;
         if (needsInspection is not null) session.InspectionAcknowledgedUtc = null;
         return new SessionRestoration(session, context, needsInspection, rewoundTail);
+    }
+
+    /// <summary>
+    ///     <para>恢复历史事实后，额外要求传入目标与最后已提交选择（或初始身份）完全一致；供带既定目标的恢复入口使用。</para>
+    ///     <para>
+    ///         Restores historical facts and additionally requires the supplied target to equal the last committed
+    ///         selection (or the initial identity); for resume entry points that already carry a fixed target.
+    ///     </para>
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         目标匹配是调用方的前置条件，不属于历史事实恢复；需要更换目标时应显式应用选择事务，
+    ///         不得删除本检查后把历史静默转发到另一模型。目标不可解析时应改用无目标重载并报告需要重选。
+    ///     </para>
+    ///     <para>
+    ///         The target match is a caller precondition, not part of restoring historical facts; changing targets
+    ///         must go through an explicit selection transaction instead of silently forwarding history to another
+    ///         model after dropping this check. When the target cannot be resolved, use the target-free overload and
+    ///         report that a re-selection is required.
+    ///     </para>
+    /// </remarks>
+    public static SessionRestoration Restore(PersistedSession     snapshot, string workspaceRoot,
+                                             SessionModelIdentity model,    string systemPrompt,
+                                             ContextOptions?      contextOptions = null)
+    {
+        var restored = Restore(snapshot, workspaceRoot, systemPrompt, contextOptions);
+        EnsureTargetMatchesLastSelection(snapshot, model);
+        return restored;
+    }
+
+    /// <summary>
+    ///     <para>校验传入目标与快照最后已提交选择（无选择记录时为初始身份）完全一致；不一致拒绝续聊。</para>
+    ///     <para>Requires the supplied target to equal the snapshot's last committed selection (or initial identity); mismatches refuse resume.</para>
+    /// </summary>
+    public static void EnsureTargetMatchesLastSelection(PersistedSession snapshot, SessionModelIdentity model)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        ArgumentNullException.ThrowIfNull(model);
+
+        var selectedModel = snapshot.ModelSelection?.Model ?? snapshot.Model;
+        if (selectedModel is null || !selectedModel.Equals(model))
+            throw new
+                SessionStoreException($"Stored session '{snapshot.Id}' belongs to model "                         +
+                                      DescribeModel(selectedModel)                                                +
+                                      " but the current configuration uses "                                      +
+                                      DescribeModel(model)                                                        +
+                                      ". Resume requires the same endpoint, model and chat API; opaque protocol " +
+                                      "content is never silently replayed under a different identity (PLAN §5). " +
+                                      "Restore the configuration, or resume and select a new model explicitly.");
     }
 
     /// <summary>

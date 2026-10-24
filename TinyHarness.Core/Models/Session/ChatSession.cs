@@ -20,7 +20,7 @@ namespace TinyHarness.Core.Models.Session;
 /// </remarks>
 public sealed partial class ChatSession
 {
-    private readonly List<SessionTurn> _turns = [];
+    private readonly List<SessionTurn>           _turns           = [];
     private readonly List<SessionModelSelection> _modelSelections = [];
 
     public ChatSession(
@@ -56,8 +56,12 @@ public sealed partial class ChatSession
     internal void RecordModelSelection(SessionModelSelection selection)
     {
         selection.Validate();
-        if (selection.Revision != (ModelSelection?.Revision ?? 0) + 1)
+        var previousRevision = ModelSelection?.Revision ?? 0;
+        if (selection.Revision != previousRevision + 1)
             throw new InvalidDataException("Model selection revisions must be contiguous.");
+        // /2 记录显式携带前驱；与修订递增推导不一致即拒绝，不静默修补。
+        if (!selection.IsLegacySchema && selection.PreviousRevision != previousRevision)
+            throw new InvalidDataException("Model selection predecessors must continue the recorded chain.");
         _modelSelections.Add(selection);
     }
 

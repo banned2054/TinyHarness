@@ -41,7 +41,7 @@ public sealed class DesktopSessionFactory
 {
     private readonly Func<TinyHarnessConfig, string, IChatCompletionClient> _modelFactory;
     private readonly ICredentialStore _credentials;
-    private readonly string? _userConfigPath;
+    private readonly string?          _userConfigPath;
 
     /// <summary>
     /// <para>允许离线验收注入模型与凭据存储；生产默认使用 Core 的正式客户端和系统凭据。</para>
@@ -59,10 +59,9 @@ public sealed class DesktopSessionFactory
     /// <para>读取可信设置，建立新会话或严格恢复；失败释放所有已打开的资源，不发送模型请求。</para>
     /// <para>Reads trusted settings and creates or strictly resumes a session; failures release resources without model calls.</para>
     /// </summary>
-    public async Task<DesktopSession> OpenAsync(DesktopSessionRequest request,
-                                                Func<DesktopEvent, ValueTask> events,
-                                                Func<DesktopApproval?, ValueTask> approvalChanged,
-                                                CancellationToken cancellationToken)
+    public async Task<DesktopSession> OpenAsync(
+        DesktopSessionRequest request, Func<DesktopEvent, ValueTask> events,
+        Func<DesktopApproval?, ValueTask> approvalChanged, CancellationToken cancellationToken)
     {
         var root = Path.GetFullPath(request.WorkspaceRoot);
         if (!Directory.Exists(root)) throw new DirectoryNotFoundException(root);
@@ -76,11 +75,11 @@ public sealed class DesktopSessionFactory
         var key = ApiKeyReader.Read(config.ApiKeyEnvironmentVariable, config.ApiKeyCredentialTarget,
                                      _credentials, request.ProfileName ?? resolution.ProfileName)
                  ?? throw new InvalidOperationException("没有可用的模型凭据，请在用户配置中设置凭据引用或环境变量。");
-        var secrets = new Dictionary<string, string>(StringComparer.Ordinal) { ["model-api-key"] = key };
-        var redactor = new DisplaySecretRedactor(secrets);
+        var secrets   = new Dictionary<string, string>(StringComparer.Ordinal) { ["model-api-key"] = key };
+        var redactor  = new DisplaySecretRedactor(secrets);
         var approvals = new DesktopApprovalProvider(approvalChanged, redactor.Redact);
-        var sink = new DesktopEventSink(events, secrets, request.ShowReasoning);
-        var access = new WorkspaceAccessState(WorkspaceDirectoryIdentity.Capture(root));
+        var sink      = new DesktopEventSink(events, secrets, request.ShowReasoning);
+        var access    = new WorkspaceAccessState(WorkspaceDirectoryIdentity.Capture(root));
         access.SetReadOnly(!request.AllowChanges);
         WindowsSandboxExecution? sandbox = null;
         if (request.AllowChanges && user.Settings?.WindowsSandbox is { Enabled: true } settings)
@@ -97,35 +96,42 @@ public sealed class DesktopSessionFactory
             new ListFilesTool(workspace), new SearchTextTool(workspace), new ReadFileTool(workspace),
             new ApplyPatchTool(workspace),
             new ShellTool(workspace, config.DefaultToolTimeoutSeconds, secrets,
-                          processBackend: sandbox?.Backend ?? (IProcessExecutionBackend)new HostProcessBackend(secrets),
-                          executionPolicy: sandbox?.ExecutionPolicy)
+                          processBackend : sandbox?.Backend ?? (IProcessExecutionBackend)new HostProcessBackend(secrets),
+                          executionPolicy : sandbox?.ExecutionPolicy)
         ];
         var tools = new ToolRegistry(toolSet.Select(tool => access.Guard(() => tool)));
         var options = new AgentOptions
         {
-            Model = config.Model, MaxAgentSteps = config.MaxAgentSteps, EnableWorkItems = true,
-            Budget = user.Settings?.RunBudget ?? new RunBudgetLimits(),
+            Model                     = config.Model,
+            MaxAgentSteps             = config.MaxAgentSteps,
+            EnableWorkItems           = true,
+            Budget                    = user.Settings?.RunBudget ?? new RunBudgetLimits(),
             DefaultToolTimeoutSeconds = config.DefaultToolTimeoutSeconds,
-            Context = new ContextOptions
+            Context                   = new ContextOptions
             {
-                ContextWindowTokens = config.ContextWindowTokens, ReservedOutputTokens = config.ReservedOutputTokens,
+                ContextWindowTokens       = config.ContextWindowTokens,
+                ReservedOutputTokens      = config.ReservedOutputTokens,
                 CompactionThresholdTokens = config.CompactionThreshold
             }
         };
-        var identity = new SessionModelIdentity(config.Model, config.Endpoint, config.ChatApi);
+        var identity     = new SessionModelIdentity(config.Model, config.Endpoint, config.ChatApi);
         var instructions = new ProjectInstructionLoader(workspace);
-        IChatCompletionClient? model = null;
-        SessionStoreWriter? writer = null;
+
+        IChatCompletionClient? model  = null;
+        SessionStoreWriter?    writer = null;
+        ChatSessionHost?       host   = null;
         try
         {
             model = _modelFactory(config, key);
-            ChatSessionHost host;
             if (request.SessionId is { } sessionId)
             {
                 writer = await SessionStoreWriter.OpenExistingAsync(directory, sessionId, secrets, cancellationToken)
                                                   .ConfigureAwait(false);
-                var restored = SessionResume.Restore(writer.LoadedSnapshot!, root, identity, WorkspacePrompts.Current,
+                // 先恢复历史事实（不以目标模型可用性为前提）；桌面恢复仍要求打开目标与最后保存选择一致，
+                // 会话内显式切换入口接入前，不一致时明确失败而不是转发历史到另一模型。
+                var restored = SessionResume.Restore(writer.LoadedSnapshot!, root, WorkspacePrompts.Current,
                                                       options.Context);
+                SessionResume.EnsureTargetMatchesLastSelection(writer.LoadedSnapshot!, identity);
                 host = new ChatSessionHost(restored.Session, restored.Context, options, model, tools,
                                             WorkspacePrompts.Current, permissions, approvals, sink,
                                             sessionWriter: writer, needsInspection: restored.NeedsInspection,
@@ -146,12 +152,19 @@ public sealed class DesktopSessionFactory
                                             instructionLoader: instructions, initialInstructions: initial,
                                             knownSecrets: secrets, credentialRoute: credentialRoute);
             }
-            return new DesktopSession(host, model, approvals);
+
+            return new DesktopSession(host, approvals);
         }
         catch
         {
-            writer?.Dispose();
-            (model as IDisposable)?.Dispose();
+            // 已构造宿主拥有 writer 与客户端；未构造时两者仍归本方法释放。
+            if (host is not null) host.Dispose();
+            else
+            {
+                writer?.Dispose();
+                (model as IDisposable)?.Dispose();
+            }
+
             throw;
         }
     }
@@ -165,9 +178,11 @@ public sealed class DesktopSessionFactory
                        ?? throw new InvalidOperationException("所选模型已不在用户配置中。");
         return config with
         {
-            Model = selected.Id, Endpoint = profile.Endpoint, ChatApi = profile.ChatApi,
-            ContextWindowTokens = selected.ContextWindowTokens,
-            ApiKeyCredentialTarget = profile.ApiKeyCredentialTarget,
+            Model                     = selected.Id,
+            Endpoint                  = profile.Endpoint,
+            ChatApi                   = profile.ChatApi,
+            ContextWindowTokens       = selected.ContextWindowTokens,
+            ApiKeyCredentialTarget    = profile.ApiKeyCredentialTarget,
             ApiKeyEnvironmentVariable = profile.ApiKeyEnvironmentVariable
         };
     }
@@ -177,7 +192,7 @@ internal sealed class DesktopEventSink(Func<DesktopEvent, ValueTask> publish,
                                        IReadOnlyDictionary<string, string> secrets,
                                        bool includeReasoning) : IHostEventSink
 {
-    private readonly DisplaySecretRedactor _text = new(secrets);
+    private readonly DisplaySecretRedactor _text      = new(secrets);
     private readonly DisplaySecretRedactor _reasoning = new(secrets);
     public bool IncludeReasoningText => includeReasoning;
 
@@ -190,6 +205,7 @@ internal sealed class DesktopEventSink(Func<DesktopEvent, ValueTask> publish,
             await publish(new DesktopEvent("text", @event.RunId, _text.Flush())).ConfigureAwait(false);
             await publish(new DesktopEvent("reasoning", @event.RunId, _reasoning.Flush())).ConfigureAwait(false);
         }
+
         DesktopEvent? display = @event.Kind switch
         {
             HostEventKind.AssistantTextDelta when @event.Payload is string text =>
@@ -197,7 +213,7 @@ internal sealed class DesktopEventSink(Func<DesktopEvent, ValueTask> publish,
             HostEventKind.AssistantReasoningDelta when @event.Payload is string text =>
                 new("reasoning", @event.RunId, _reasoning.Push(text)),
             HostEventKind.HistoryItemCompleted when @event.Payload is SessionHistoryItem item =>
-                new("history", @event.RunId, History: item),
+                new("history", @event.RunId, History : item),
             HostEventKind.RunStarted => new("state", @event.RunId, "运行中"),
             HostEventKind.RunControlChanged when @event.Payload is string state => new("state", @event.RunId, state),
             HostEventKind.ModelRequestStarted => new("state", @event.RunId, "等待模型响应"),
@@ -205,13 +221,14 @@ internal sealed class DesktopEventSink(Func<DesktopEvent, ValueTask> publish,
             HostEventKind.ToolStarted => new("state", @event.RunId, "工具执行中"),
             HostEventKind.RunError when @event.Payload is string error => new("error", @event.RunId, _text.Redact(error)),
             HostEventKind.RunFinished => new("state", @event.RunId, "正在保存"),
-            _ => null
+            _                         => null
         };
         if (@event.Kind == HostEventKind.RunFinished)
         {
             await publish(new DesktopEvent("text", @event.RunId, _text.Flush())).ConfigureAwait(false);
             await publish(new DesktopEvent("reasoning", @event.RunId, _reasoning.Flush())).ConfigureAwait(false);
         }
+
         if (display is not null) await publish(display).ConfigureAwait(false);
     }
 }

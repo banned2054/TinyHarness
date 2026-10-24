@@ -68,13 +68,17 @@ public class ModelSelectionContinuityTests
         using var host = NewHost(store, first, "work|env:WORK_KEY");
 
         await host.SubmitTurnAsync("first question", CancellationToken.None);
-        var selection = await host.ChangeModelAsync(Identity, second, Options().Context, null,
-                                                    CancellationToken.None, credentialRoute : "work|env:WORK_KEY");
+        var selection = await host.ChangeModelAsync(
+            new SessionModelBinding(Identity, second, Options().Context, ModelReasoningEffort.High,
+                                    "work|env:WORK_KEY"),
+            CancellationToken.None);
         var run = await host.SubmitTurnAsync("second question", CancellationToken.None);
 
-        // 同一路由重选：epoch 与推理起点不变，新客户端仍回传旧回合的 opaque 推理。
+        // 同一路由仅改强度：epoch 与推理起点不变，新客户端仍回传旧回合的 opaque 推理；
+        // 完全相同的策略重复选择按契约是 no-op，不采纳等价新客户端。
         Assert.That(run.Result!.Status, Is.EqualTo(AgentStatus.Completed), run.Result.Error);
         Assert.That(selection.CredentialRoute, Is.EqualTo("work|env:WORK_KEY"));
+        Assert.That(selection.ReasoningEffort, Is.EqualTo(ModelReasoningEffort.High));
         Assert.That(selection.ContinuationEpoch, Is.EqualTo(0));
         Assert.That(selection.ReasoningStartMessageIndex, Is.EqualTo(0));
         var sent      = second.RequestLog.Single().Messages.Single(message => message.Role == ChatRole.Assistant);
@@ -94,8 +98,9 @@ public class ModelSelectionContinuityTests
         using var host = NewHost(store, first, "work|env:WORK_KEY");
 
         await host.SubmitTurnAsync("first question", CancellationToken.None);
-        var selection = await host.ChangeModelAsync(Identity, second, Options().Context, null,
-                                                    CancellationToken.None, credentialRoute : "alt|credential:ALT");
+        var selection = await host.ChangeModelAsync(
+            new SessionModelBinding(Identity, second, Options().Context, null, "alt|credential:ALT"),
+            CancellationToken.None);
         var run = await host.SubmitTurnAsync("second question", CancellationToken.None);
 
         // 模型三元组不变但凭据路由变化：正文保留，旧账户的 opaque 推理不再进入新客户端请求。
@@ -143,9 +148,10 @@ public class ModelSelectionContinuityTests
                                               credentialRoute : "work|env:WORK_KEY"))
         {
             sessionId = host.Session.Id;
-            var selection = await host.ChangeModelAsync(Identity, new FakeChatClient(), Options().Context,
-                                                        ModelReasoningEffort.High, CancellationToken.None,
-                                                        credentialRoute : "work|env:WORK_KEY");
+            var selection = await host.ChangeModelAsync(
+                new SessionModelBinding(Identity, new FakeChatClient(), Options().Context,
+                                        ModelReasoningEffort.High, "work|env:WORK_KEY"),
+                CancellationToken.None);
 
             // 空持久会话首次提交选择：确立 system 上下文后边界为 1，不伪造用户回合。
             Assert.That(selection.MessageBoundary, Is.EqualTo(1));
@@ -174,9 +180,10 @@ public class ModelSelectionContinuityTests
         using var host = new ChatSessionHost(workspace.Root, Identity, Options(), new FakeChatClient(),
                                              new ToolRegistry([]), SystemPrompt);
 
-        var selection = await host.ChangeModelAsync(Identity, new FakeChatClient(), Options().Context,
-                                                    ModelReasoningEffort.High, CancellationToken.None,
-                                                    credentialRoute : "work|env:WORK_KEY");
+        var selection = await host.ChangeModelAsync(
+            new SessionModelBinding(Identity, new FakeChatClient(), Options().Context,
+                                    ModelReasoningEffort.High, "work|env:WORK_KEY"),
+            CancellationToken.None);
 
         // 无写入端：不确立 system 上下文，选择只是内存草稿，边界保持 0。
         Assert.That(selection.MessageBoundary, Is.EqualTo(0));
@@ -188,7 +195,10 @@ public class ModelSelectionContinuityTests
     {
         var routed = new SessionModelSelection
         {
-            Revision = 2, Model = Identity, CredentialRoute = "work|env:WORK_KEY", MessageBoundary = 1
+            Revision        = 2,
+            Model           = Identity,
+            CredentialRoute = "work|env:WORK_KEY",
+            MessageBoundary = 1
         };
 
         var roundTripped = JsonSerializer.SerializeToNode(routed, SessionLogJsonContext.Default.SessionModelSelection)!
@@ -310,9 +320,9 @@ public class ModelSelectionContinuityTests
             sessionId = host.Session.Id;
 
             // 与内存种子完全相同的首次选择：不得因“无变化”跳过首次持久化，否则日志保持为空。
-            var selection = await host.ChangeModelAsync(Identity, client, Options().Context, null,
-                                                        CancellationToken.None,
-                                                        credentialRoute : "work|env:WORK_KEY");
+            var selection = await host.ChangeModelAsync(
+                new SessionModelBinding(Identity, client, Options().Context, null, "work|env:WORK_KEY"),
+                CancellationToken.None);
             Assert.That(selection.Revision, Is.EqualTo(2));
             Assert.That(selection.MessageBoundary, Is.EqualTo(1));
             Assert.That(host.PersistenceWarning, Is.Null);
@@ -341,8 +351,9 @@ public class ModelSelectionContinuityTests
 
         // 首回合提交使种子选择可靠保存；随后相同选择保持 no-op。
         await host.SubmitTurnAsync("first question", CancellationToken.None);
-        var selection = await host.ChangeModelAsync(Identity, client, Options().Context, null, CancellationToken.None,
-                                                    credentialRoute : "work|env:WORK_KEY");
+        var selection = await host.ChangeModelAsync(
+            new SessionModelBinding(Identity, client, Options().Context, null, "work|env:WORK_KEY"),
+            CancellationToken.None);
 
         Assert.That(selection.Revision, Is.EqualTo(1));
         Assert.That(selection.ContinuationEpoch, Is.EqualTo(0));

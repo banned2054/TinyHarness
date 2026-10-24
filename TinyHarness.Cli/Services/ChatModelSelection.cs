@@ -32,13 +32,14 @@ namespace TinyHarness.Cli.Services;
 ///         the session untouched. During a run only queries are allowed.
 ///     </para>
 ///     <para>
-///         候选客户端由工厂在用户完成选择后才构造；被拒绝或未采纳的候选沿用组合根的进程生命周期约定，
-///         不由本类释放，已采纳客户端同样随进程存活。
+///         候选客户端由工厂在用户完成选择后才构造，经 <see cref="SessionModelBinding" /> 转交宿主；
+///         宿主拒绝、取消或提交失败时候选仍归本层并释放一次，成功后（含 no-op 短路）归宿主释放。
 ///     </para>
 ///     <para>
-///         Candidate clients are constructed by the factory only after the user completes a choice; rejected or
-///         unadopted candidates follow the composition root's process-lifetime convention and are never disposed
-///         here, and adopted clients live with the process as well.
+///         Candidate clients are constructed by the factory only after the user completes a choice and transfer to
+///         the host through <see cref="SessionModelBinding" />; rejections, cancellation, or failed commits leave
+///         the candidate with this layer for exactly one release, while accepted calls (including the no-op
+///         short-circuit) hand disposal to the host.
 ///     </para>
 /// </remarks>
 internal sealed class ChatModelSelection
@@ -83,7 +84,7 @@ internal sealed class ChatModelSelection
     ///     <para>处理一条 /models 命令；空闲与运行路径共用，运行中只允许查询。</para>
     ///     <para>Handles one /models command; both idle and running paths share it, and only queries are allowed during a run.</para>
     /// </summary>
-    public async Task HandleAsync(ChatSessionHost host, string input, bool duringRun,
+    public async Task HandleAsync(ChatSessionHost   host, string input, bool duringRun,
                                   CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(host);
@@ -161,7 +162,7 @@ internal sealed class ChatModelSelection
     ///     <para>直接形式：原子选择目标模型与强度；省略强度时采用目标模型声明的默认值。</para>
     ///     <para>Direct form: atomically selects the target model and effort; an omitted effort uses the target model's declared default.</para>
     /// </summary>
-    private async Task UseAsync(ChatSessionHost host, string[] arguments, bool duringRun,
+    private async Task UseAsync(ChatSessionHost   host, string[] arguments, bool duringRun,
                                 CancellationToken cancellationToken)
     {
         if (duringRun)
@@ -256,7 +257,8 @@ internal sealed class ChatModelSelection
             return;
         }
 
-        var selection = await host.ChangeReasoningEffortAsync(effort, cancellationToken).ConfigureAwait(false);
+        var selection = await host.ChangeReasoningEffortAsync(effort, cancellationToken, targets[0].Model.ReasoningEfforts)
+                                  .ConfigureAwait(false);
         await WriteAsync($"model      : {targets[0].Profile.Name} / {selection.Model.ModelId}", cancellationToken);
         await WriteAsync($"effort     : {EffortDisplay(selection.ReasoningEffort)}", cancellationToken);
         if (selection.Revision == current.Revision)
@@ -371,8 +373,8 @@ internal sealed class ChatModelSelection
     }
 
     /// <summary>
-    ///     <para>构造候选绑定并经宿主原子保存；打印最终模型与强度。</para>
-    ///     <para>Builds the candidate binding and saves it atomically through the host, then prints the final model and effort.</para>
+    ///     <para>构造候选绑定并经宿主原子保存；打印最终模型与强度。失败时候选仍归本层，释放一次。</para>
+    ///     <para>Builds the candidate binding and saves it atomically through the host, then prints the final model and effort. On failure the candidate stays here and is released once.</para>
     /// </summary>
     private async Task ApplyAsync(
         ChatSessionHost host, UserProfile profile, UserProfileModel model,
@@ -391,13 +393,24 @@ internal sealed class ChatModelSelection
         var context = current.Context is { } existing
             ? existing with { ContextWindowTokens = model.ContextWindowTokens }
             : new ContextOptions { ContextWindowTokens = model.ContextWindowTokens };
-        var selection =
-            await host.ChangeModelAsync(new SessionModelIdentity(model.Id, profile.Endpoint, profile.ChatApi),
-                                        client, context, effort, cancellationToken,
-                                        credentialRoute : CredentialRoute.Describe(profile.Name,
-                                                                                  profile.ApiKeyEnvironmentVariable,
-                                                                                  profile.ApiKeyCredentialTarget),
-                                        expectedRevision : current.Revision).ConfigureAwait(false);
+        var candidate = new SessionModelBinding(new SessionModelIdentity(model.Id, profile.Endpoint, profile.ChatApi),
+                                                client, context, effort,
+                                                CredentialRoute.Describe(profile.Name,
+                                                                         profile.ApiKeyEnvironmentVariable,
+                                                                         profile.ApiKeyCredentialTarget),
+                                                profile.Name, model.ReasoningEfforts);
+        SessionModelSelection selection;
+        try
+        {
+            // 宿主拒绝、取消或提交失败时候选所有权未转交，由本层释放一次；成功后归宿主。
+            selection = await host.ChangeModelAsync(candidate, cancellationToken,
+                                                    expectedRevision : current.Revision).ConfigureAwait(false);
+        }
+        catch
+        {
+            candidate.Dispose();
+            throw;
+        }
 
         await WriteAsync($"model      : {profile.Name} / {selection.Model.ModelId}" +
                          (string.IsNullOrWhiteSpace(model.DisplayName) ? string.Empty : $" ({model.DisplayName})"),

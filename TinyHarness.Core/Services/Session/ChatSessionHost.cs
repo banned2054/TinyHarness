@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using TinyHarness.Core.Models.Agent;
 using TinyHarness.Core.Models.ChatCompletions;
 using TinyHarness.Core.Models.Persistence;
@@ -52,8 +53,8 @@ public sealed partial class ChatSessionHost : IDisposable
     private readonly IHostEventSink?             _events;
     private readonly ProjectInstructionSnapshot? _initialInstructions;
     private readonly ProjectInstructionLoader?   _instructionLoader;
-    private IChatCompletionClient _modelClient;
-    private AgentOptions _options;
+    private          SessionModelBinding?        _binding;
+    private          AgentOptions                _options;
     private readonly PermissionEngine?           _permissions;
     private readonly Func<string, IRunRecorder>? _recorderFactory;
     private readonly ISessionStoreWriter?        _sessionWriter;
@@ -86,10 +87,13 @@ public sealed partial class ChatSessionHost : IDisposable
                            ProjectInstructionLoader?            instructionLoader    = null,
                            ProjectInstructionSnapshot?          initialInstructions  = null,
                            IReadOnlyDictionary<string, string>? knownSecrets         = null,
-                           string?                              credentialRoute      = null)
-        : this(new ChatSession(NewId(), workspaceRoot, model), ContextFor(options), options, modelClient, tools,
+                           string?                              credentialRoute      = null,
+                           bool                                 ownsModelClient      = true)
+        : this(new ChatSession(NewId(), workspaceRoot, model), ContextFor(options), options,
+               // 新会话必须携带可执行客户端；仅恢复接管允许未绑定等待显式重选目标。
+               modelClient ?? throw new ArgumentNullException(nameof(modelClient)), tools,
                systemPrompt, permissions, approver, events, recorderFactory, sessionWriterFactory, null,
-               instructionLoader, initialInstructions, knownSecrets, credentialRoute)
+               instructionLoader, initialInstructions, knownSecrets, credentialRoute, ownsModelClient)
     {
     }
 
@@ -114,11 +118,22 @@ public sealed partial class ChatSessionHost : IDisposable
     ///         <paramref name="credentialRoute" /> is recorded only into the first seeded selection; sessions that
     ///         already carry selections (including restored ones) never have their historical route provenance rewritten.
     ///     </para>
+    ///     <para>
+    ///         <paramref name="modelClient" /> 成功构造后由宿主通过当前绑定拥有并释放；传 null 以未绑定状态接管已恢复会话，
+    ///         供目标模型待显式重选时先取得历史与写入端——此时禁止发送，直到通过
+    ///         <c>ChangeModelAsync</c> 应用候选绑定。构造失败时客户端仍归调用方。
+    ///     </para>
+    ///     <para>
+    ///         On successful construction the host owns and releases <paramref name="modelClient" /> through its
+    ///         current binding; passing null takes over a restored session unbound, for targets awaiting explicit
+    ///         re-selection — sending stays prohibited until a candidate binding is applied through
+    ///         <c>ChangeModelAsync</c>. On failure the client stays with the caller.
+    ///     </para>
     /// </remarks>
     public ChatSessionHost(ChatSession                          session,
                            ConversationContext                  context,
                            AgentOptions                         options,
-                           IChatCompletionClient                modelClient,
+                           IChatCompletionClient?               modelClient,
                            ToolRegistry                         tools,
                            string                               systemPrompt,
                            PermissionEngine?                    permissions         = null,
@@ -130,10 +145,11 @@ public sealed partial class ChatSessionHost : IDisposable
                            ProjectInstructionLoader?            instructionLoader   = null,
                            ProjectInstructionSnapshot?          initialInstructions = null,
                            IReadOnlyDictionary<string, string>? knownSecrets        = null,
-                           string?                              credentialRoute     = null)
+                           string?                              credentialRoute     = null,
+                           bool                                 ownsModelClient     = true)
         : this(session, context, options, modelClient, tools, systemPrompt, permissions, approver, events,
                recorderFactory, sessionWriter is null ? null : _ => sessionWriter, needsInspection,
-               instructionLoader, initialInstructions, knownSecrets, credentialRoute)
+               instructionLoader, initialInstructions, knownSecrets, credentialRoute, ownsModelClient)
     {
     }
 
@@ -147,7 +163,7 @@ public sealed partial class ChatSessionHost : IDisposable
     private ChatSessionHost(ChatSession                          session,
                             ConversationContext                  context,
                             AgentOptions                         options,
-                            IChatCompletionClient                modelClient,
+                            IChatCompletionClient?               modelClient,
                             ToolRegistry                         tools,
                             string                               systemPrompt,
                             PermissionEngine?                    permissions,
@@ -156,21 +172,24 @@ public sealed partial class ChatSessionHost : IDisposable
                             Func<string, IRunRecorder>?          recorderFactory,
                             Func<string, ISessionStoreWriter>?   sessionWriterFactory,
                             string?                              needsInspection,
-                            ProjectInstructionLoader?            instructionLoader,
-                            ProjectInstructionSnapshot?          initialInstructions,
-                            IReadOnlyDictionary<string, string>? knownSecrets,
-                            string?                              credentialRoute)
+                           ProjectInstructionLoader?            instructionLoader,
+                           ProjectInstructionSnapshot?          initialInstructions,
+                           IReadOnlyDictionary<string, string>? knownSecrets,
+                           string?                              credentialRoute,
+                           bool                                 ownsModelClient)
     {
         ArgumentNullException.ThrowIfNull(session);
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(options);
-        ArgumentNullException.ThrowIfNull(modelClient);
         ArgumentNullException.ThrowIfNull(tools);
         ArgumentException.ThrowIfNullOrWhiteSpace(systemPrompt);
         if (credentialRoute is not null && string.IsNullOrWhiteSpace(credentialRoute))
             throw new ArgumentException("The credential route must be a non-empty string when provided.",
                                         nameof(credentialRoute));
-        if (!string.Equals(options.Model, session.Model.ModelId, StringComparison.Ordinal))
+        // 未绑定接管（modelClient 为 null）等待显式选择目标：构造时不要求启动参数匹配会话或保存选择，
+        // 不得为绕过校验伪造旧模型客户端；绑定就位前禁止发送。
+        if (modelClient is not null &&
+            !string.Equals(options.Model, session.Model.ModelId, StringComparison.Ordinal))
             throw new
                 ArgumentException($"AgentOptions.Model '{options.Model}' does not match the session model identity '{session.Model.ModelId}'.",
                                   nameof(options));
@@ -186,7 +205,6 @@ public sealed partial class ChatSessionHost : IDisposable
 
         Session              = session;
         _options             = options;
-        _modelClient         = modelClient;
         _tools               = tools;
         _systemPrompt        = systemPrompt;
         _permissions         = permissions;
@@ -209,15 +227,37 @@ public sealed partial class ChatSessionHost : IDisposable
         if (session.ModelSelection is null)
             session.RecordModelSelection(new SessionModelSelection
             {
-                Revision = 1, Model = session.Model, CredentialRoute = credentialRoute, Context = options.Context,
-                ReasoningEffort = options.ReasoningEffort, MessageBoundary = 0
+                Revision                = 1,
+                PreviousRevision        = 0,
+                SelectedUtc             = DateTimeOffset.UtcNow,
+                Model                   = session.Model,
+                ProfileHint             = null,
+                CredentialRoute         = credentialRoute,
+                Context                 = options.Context,
+                ReasoningEffort         = options.ReasoningEffort,
+                ReasoningCapabilities   = null,
+                ReasoningMappingVersion = ReasoningEffortMappings.CurrentVersion,
+                ProjectionVersion       = SessionModelSelection.CurrentProjectionVersion,
+                MessageBoundary         = 0
             });
-        else if (session.ModelSelection.Context         != options.Context ||
-                 session.ModelSelection.ReasoningEffort != options.ReasoningEffort)
+        else if (modelClient is not null &&
+                 (session.ModelSelection.Context         != options.Context ||
+                  session.ModelSelection.ReasoningEffort != options.ReasoningEffort))
             throw new
                 ArgumentException("Options must match the restored model selection; change it explicitly after restoring.",
                                   nameof(options));
         _context.BindModel(session.ModelSelection!);
+
+        // 客户端的绑定转交在构造成功返回后才完成；写入端工厂抛出时构造未完成，
+        // 客户端仍归调用方释放（构造失败的宿主实例不会被返回，也不会自行释放，不产生双重释放）。
+        if (modelClient is not null)
+            _binding = new SessionModelBinding(session.ModelSelection!.Model, modelClient,
+                                               session.ModelSelection.Context,
+                                               session.ModelSelection.ReasoningEffort,
+                                               session.ModelSelection.CredentialRoute,
+                                               session.ModelSelection.ProfileHint,
+                                               session.ModelSelection.ReasoningCapabilities,
+                                               ownsClient: ownsModelClient);
         _sessionWriter = sessionWriterFactory?.Invoke(session.Id);
     }
 
@@ -232,6 +272,24 @@ public sealed partial class ChatSessionHost : IDisposable
     ///     <para>Whether a run is active; at most one per session.</para>
     /// </summary>
     public bool HasActiveRun => Volatile.Read(ref _activeRuns) == 1;
+
+    /// <summary>
+    ///     <para>是否已有可执行模型绑定；未绑定宿主在应用候选选择前禁止发送。</para>
+    ///     <para>Whether an executable model binding exists; an unbound host refuses sending until a candidate selection is applied.</para>
+    /// </summary>
+    public bool HasModelBinding => Volatile.Read(ref _binding) is not null;
+
+    /// <summary>
+    ///     <para>
+    ///         最近一次已被替换绑定（或未采纳候选）的客户端释放失败说明；不影响已提交选择或请求行为，
+    ///         释放不重试、不回滚。
+    ///     </para>
+    ///     <para>
+    ///         The last failure reported while releasing a superseded binding's (or an unadopted candidate's) client;
+    ///         committed selections and request behavior stay unaffected — release is neither retried nor rolled back.
+    ///     </para>
+    /// </summary>
+    public string? BindingReleaseWarning { get; private set; }
 
     /// <summary>
     ///     <para>是否存在待用户确认的 NeedsInspection；阻断期间拒绝所有非只读能力，即使未注入权限引擎。</para>
@@ -282,7 +340,22 @@ public sealed partial class ChatSessionHost : IDisposable
         if (previous == -1) return;
         if (previous != 0)
             throw new InvalidOperationException("Wait for the active session operation before disposing.");
-        _sessionWriter?.Dispose();
+        try
+        {
+            _sessionWriter?.Dispose();
+        }
+        finally
+        {
+            // 关闭回收当前绑定持有的客户端；失败单独记录，不掩盖 writer 释放结果，也不抛出掩盖关闭流程。
+            try
+            {
+                _binding?.Dispose();
+            }
+            catch (Exception ex)
+            {
+                Trace.TraceError("Model client disposal failed while disposing the session host: {0}", ex.Message);
+            }
+        }
     }
 
     private static ConversationContext ContextFor(AgentOptions options) =>
@@ -318,6 +391,14 @@ public sealed partial class ChatSessionHost : IDisposable
             throw new
                 InvalidOperationException("This session already has an active run; a session processes one run at a time (PLAN §5). " +
                                           "Wait for the current turn to finish before submitting another one.");
+        if (Volatile.Read(ref _binding) is null)
+        {
+            // 未绑定宿主（恢复后待重选目标）禁止发送；不伪造客户端或悄悄改用全局默认。
+            Interlocked.Exchange(ref _activeRuns, 0);
+            throw new
+                InvalidOperationException("This session has no model binding yet; select a model (e.g. '/models use <model-id>') before sending.");
+        }
+
         DisplayWarning = null;
 
         var turn = new SessionTurn(NewId(), userInput);
@@ -599,7 +680,7 @@ public sealed partial class ChatSessionHost : IDisposable
                                                                   status, evidence, token))
             ])
             : _tools;
-        return new AgentLoop(_modelClient, tools, _options, permissions, _approver, recorder, events, _context,
+        return new AgentLoop(_binding!.Client, tools, _options, permissions, _approver, recorder, events, _context,
                              _sessionWriter is null
                                  ? null
                                  : (records, token) => CheckpointExecutionAsync(run, records, token),
@@ -818,10 +899,10 @@ public sealed partial class ChatSessionHost : IDisposable
         {
             await inner.PublishAsync(@event with
                                      {
-                                         Sequence = Interlocked.Increment(ref _sequence),
+                                         Sequence  = Interlocked.Increment(ref _sequence),
                                          SessionId = sessionId,
-                                         TurnId = turnId,
-                                         RunId = runId
+                                         TurnId    = turnId,
+                                         RunId     = runId
                                      },
                                      cancellationToken)
                        .ConfigureAwait(false);

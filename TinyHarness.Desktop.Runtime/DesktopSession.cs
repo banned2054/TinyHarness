@@ -1,26 +1,24 @@
 using TinyHarness.Core.Models.Session;
-using TinyHarness.Core.Services.ChatCompletions;
 using TinyHarness.Core.Services.Session;
 
 namespace TinyHarness.Desktop.Runtime;
 
 /// <summary>
-/// <para>拥有一个宿主和模型客户端；页面选择不影响运行，释放必须等待取消与保存结束。</para>
-/// <para>Owns one host and model client; page selection never affects runs, and disposal awaits cancellation and saving.</para>
+/// <para>拥有一个宿主；页面选择不影响运行，释放必须等待取消与保存结束，客户端随宿主绑定释放。</para>
+/// <para>Owns one host; page selection never affects runs, disposal awaits cancellation and saving, and the model client is released with the host's binding.</para>
 /// </summary>
-public sealed class DesktopSession(ChatSessionHost host, IChatCompletionClient model,
-                                   DesktopApprovalProvider approvals) : IAsyncDisposable
+public sealed class DesktopSession(ChatSessionHost host, DesktopApprovalProvider approvals) : IAsyncDisposable
 {
-    private readonly object _sync = new();
-    private readonly CancellationTokenSource _lifetime = new();
-    private Task<SessionRun>? _run;
-    private CancellationTokenSource? _runCancellation;
-    private Task? _disposeTask;
-    private bool _closing;
+    private readonly object                   _sync     = new();
+    private readonly CancellationTokenSource  _lifetime = new();
+    private          Task<SessionRun>?        _run;
+    private          CancellationTokenSource? _runCancellation;
+    private          Task?                    _disposeTask;
+    private          bool                     _closing;
 
-    public ChatSessionHost Host { get; } = host;
+    public ChatSessionHost         Host      { get; } = host;
     public DesktopApprovalProvider Approvals { get; } = approvals;
-    public string Id => Host.Session.Id;
+    public string                  Id        => Host.Session.Id;
 
     public bool IsRunning
     {
@@ -65,8 +63,8 @@ public sealed class DesktopSession(ChatSessionHost host, IChatCompletionClient m
     }
 
     /// <summary>
-    /// <para>阻止后续提交，取消并等待本会话所有工作，然后释放 writer 和客户端。</para>
-    /// <para>Rejects later submissions, cancels and awaits this session's work, then releases the writer and client.</para>
+    /// <para>阻止后续提交，取消并等待本会话所有工作，然后随宿主释放 writer 与模型客户端。</para>
+    /// <para>Rejects later submissions, cancels and awaits this session's work, then releases the writer and model client with the host.</para>
     /// </summary>
     public ValueTask DisposeAsync()
     {
@@ -93,7 +91,6 @@ public sealed class DesktopSession(ChatSessionHost host, IChatCompletionClient m
             try { Host.Dispose(); }
             finally
             {
-                (model as IDisposable)?.Dispose();
                 _runCancellation?.Dispose();
                 _lifetime.Dispose();
             }

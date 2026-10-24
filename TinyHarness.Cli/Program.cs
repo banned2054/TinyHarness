@@ -309,13 +309,15 @@ internal static class Program
             try
             {
                 // 显式新建即保存空会话，不发送模型请求；项目规则仍由首回合边界可靠提交。
+                // 启动客户端归组合根按进程生命周期持有（/new 宿主共用），宿主以借用方式绑定。
                 await writer.CommitAsync(session, context, token).ConfigureAwait(false);
                 return new ChatSessionHost(session, context, composition.Options, composition.Model, composition.Tools,
                                            WorkspacePrompts.Current, NewPermissions(),
                                            new ConsoleApprovalProvider(reader, Console.Out, composition.KnownSecrets),
                                            events, sessionWriter : writer, instructionLoader : instructionLoader,
                                            initialInstructions : instructions, knownSecrets : composition.KnownSecrets,
-                                           credentialRoute : composition.CredentialRoute);
+                                           credentialRoute : composition.CredentialRoute,
+                                           ownsModelClient : false);
             }
             catch
             {
@@ -329,35 +331,79 @@ internal static class Program
             var writer = await SessionStoreWriter.OpenExistingAsync(composition.SessionStoreDirectory!, sessionId,
                                                                     composition.KnownSecrets, token)
                                                  .ConfigureAwait(false);
+            ChatSessionHost?                  host     = null;
+            ChatResumeBinding.ResolvedTarget? resolved = null;
             try
             {
-                // 恢复的请求绑定以日志最后保存的选择为准：仅改强度或换模型后退出，也按该选择
-                // 准备客户端与参数；启动组合的默认选择不再作为恢复依据，也不悄悄替代保存的选择。
-                var binding =
-                    await ChatResumeBinding.PrepareAsync(writer.LoadedSnapshot!, identity, composition.Options,
+                var snapshot = writer.LoadedSnapshot!;
+                // 先恢复历史事实：验证日志、完整历史与选择链，不以目标模型可用性为前提；
+                // 历史模型已删除不构成日志损坏，也不解析其凭据或构造其客户端。
+                var restored = SessionResume.Restore(snapshot, config.WorkspaceRoot, WorkspacePrompts.Current,
+                                                     composition.Options.Context);
+
+                // 再解析可执行目标：默认最后已提交选择；失效、歧义或能力不再支持时不悄悄改用全局默认。
+                var outcome =
+                    await ChatResumeBinding.ResolveAsync(snapshot, identity, composition.Options,
                                                          composition.Model, composition.CredentialRoute,
                                                          t => UserConfigStore.LoadAsync(UserConfigStore.DefaultFilePath(), t),
                                                          CreateSelectionClientAsync, token).ConfigureAwait(false);
-                var restored = SessionResume.Restore(writer.LoadedSnapshot!, config.WorkspaceRoot, binding.Identity,
-                                                     WorkspacePrompts.Current, binding.Options.Context);
-                var resumed = new ChatSessionHost(restored.Session, restored.Context, binding.Options,
-                                                  binding.Client, composition.Tools, WorkspacePrompts.Current,
-                                                  NewPermissions(),
-                                                  new ConsoleApprovalProvider(reader, Console.Out,
-                                                                              composition.KnownSecrets),
-                                                  events, sessionWriter : writer,
-                                                  needsInspection : restored.NeedsInspection,
-                                                  instructionLoader : instructionLoader,
-                                                  knownSecrets : composition.KnownSecrets);
+                await Console.Out.WriteLineAsync($"  resumed   : {restored.Session.Turns.Count} turns from commit " +
+                                                 $"{writer.CommitSequence} ({snapshot.UpdatedUtc.LocalDateTime:yyyy-MM-dd HH:mm:ss})");
+                if (restored.RewoundTail)
+                    await
+                        Console.Out
+                               .WriteLineAsync("  rewound    : the last incomplete tool round was dropped from the model view");
+                if (outcome.Target is not { } target)
+                {
+                    // 目标不可解析：以未绑定宿主接管已恢复历史与写入端，等待用户显式选择后再发送。
+                    host = new ChatSessionHost(restored.Session, restored.Context, composition.Options,
+                                               modelClient : null, composition.Tools, WorkspacePrompts.Current,
+                                               NewPermissions(),
+                                               new ConsoleApprovalProvider(reader, Console.Out,
+                                                                           composition.KnownSecrets),
+                                               events, sessionWriter : writer,
+                                               needsInspection : restored.NeedsInspection,
+                                               instructionLoader : instructionLoader,
+                                               knownSecrets : composition.KnownSecrets);
+                    await Console.Out.WriteLineAsync("  model     : " + outcome.ReselectionReason);
+                    await Console.Out.WriteLineAsync(
+                        "  model     : the session history stays resumable; select a model with " +
+                        "'/models use <model-id> [--provider <profile>] [--effort <id>]' before sending.");
+                    return host;
+                }
+
+                resolved = target;
+                // 启动客户端归组合根进程生命周期持有（借用）；目录解析构造的新客户端随宿主转交释放。
+                host = new ChatSessionHost(restored.Session, restored.Context, target.Options, target.Client,
+                                           composition.Tools, WorkspacePrompts.Current, NewPermissions(),
+                                           new ConsoleApprovalProvider(reader, Console.Out, composition.KnownSecrets),
+                                           events, sessionWriter : writer,
+                                           needsInspection : restored.NeedsInspection,
+                                           instructionLoader : instructionLoader,
+                                           knownSecrets : composition.KnownSecrets,
+                                           ownsModelClient : !ReferenceEquals(target.Client, composition.Model));
 
                 // 恢复不经过会话内切换入口：把本次实际使用的客户端路由交给 Core 核对；
                 // 不一致时按选择事务采纳当前路由并开启新 epoch，隔离旧路由产生的 opaque 推理。
-                var recordedRoute = resumed.Session.ModelSelection!;
-                var alignedRoute = await resumed.EnsureCredentialRouteAsync(binding.CredentialRoute, token)
+                var recordedRoute = host.Session.ModelSelection!;
+                var alignedRoute = await host.EnsureCredentialRouteAsync(target.CredentialRoute, token)
                                                 .ConfigureAwait(false);
-                await Console.Out.WriteLineAsync($"  resumed   : {restored.Session.Turns.Count} turns from commit " +
-                                                 $"{writer.CommitSequence} ({writer.LoadedSnapshot!.UpdatedUtc.LocalDateTime:yyyy-MM-dd HH:mm:ss})");
-                if (binding.SavedSelection is { } saved &&
+                if (target.RefreshedContext is { } refreshed)
+                {
+                    // 目标模型当前窗口与保存选择不同：使用前按选择事务追加新快照，不显示旧修订却发送新配置。
+                    var current = host.Session.ModelSelection!;
+                    await host.ChangeModelAsync(new SessionModelBinding(current.Model, target.Client, refreshed,
+                                                                        current.ReasoningEffort,
+                                                                        target.CredentialRoute, target.ProfileHint,
+                                                                        target.CurrentCapabilities,
+                                                                        ownsClient : false),
+                                                token, expectedRevision : current.Revision).ConfigureAwait(false);
+                    await Console.Out.WriteLineAsync(
+                        $"  window    : the model's current context window ({refreshed.ContextWindowTokens:N0} tokens) " +
+                        "was saved as a new selection revision");
+                }
+
+                if (target.SavedSelection is { } saved &&
                     (saved.Model           != identity ||
                      saved.ReasoningEffort != composition.Options.ReasoningEffort ||
                      saved.Context         != composition.Options.Context))
@@ -369,24 +415,28 @@ internal static class Program
                                                      "(restored from the saved session)");
                 }
 
-                if (!string.Equals(binding.CredentialRoute, composition.CredentialRoute, StringComparison.Ordinal))
+                if (!string.Equals(target.CredentialRoute, composition.CredentialRoute, StringComparison.Ordinal))
                     await
                         Console.Out.WriteLineAsync("  route     : resumed with the session's saved credential route " +
-                                                   $"'{binding.CredentialRoute}' (startup default: "                  +
+                                                   $"'{target.CredentialRoute}' (startup default: "                  +
                                                    $"{composition.CredentialRoute})");
                 if (alignedRoute.Revision != recordedRoute.Revision)
                     await Console.Out.WriteLineAsync("  route     : the credential route changed since this session " +
                                                      "was saved; the previous route's reasoning stays isolated from " +
                                                      "new requests");
-                if (restored.RewoundTail)
-                    await
-                        Console.Out
-                               .WriteLineAsync("  rewound    : the last incomplete tool round was dropped from the model view");
-                return resumed;
+                return host;
             }
             catch
             {
-                writer.Dispose();
+                // 已构造宿主拥有 writer 与已转交客户端；未构造时仅释放本方法构造的候选客户端与 writer。
+                if (host is not null) host.Dispose();
+                else
+                {
+                    writer.Dispose();
+                    if (resolved is not null && !ReferenceEquals(resolved.Client, composition.Model))
+                        (resolved.Client as IDisposable)?.Dispose();
+                }
+
                 throw;
             }
         }
@@ -540,7 +590,7 @@ internal static class Program
         await access.InitializeAsync(cancellationToken).ConfigureAwait(false);
         var executionPolicy = access.Policy;
 
-        var model     = ModelClientFactory.Create(config.Model, config.Endpoint, apiKey, config.ChatApi);
+        var model = ModelClientFactory.Create(config.Model, config.Endpoint, apiKey, config.ChatApi);
         var workspace = new Workspace(config.WorkspaceRoot);
         var tools     = BuildTools(workspace, config, apiKey, executionPolicy, sandbox?.Backend, knownSecrets, access);
         var options = new AgentOptions
@@ -550,7 +600,7 @@ internal static class Program
             Budget                    = userConfig.Settings?.RunBudget ?? new RunBudgetLimits(),
             EnableWorkItems           = true,
             DefaultToolTimeoutSeconds = config.DefaultToolTimeoutSeconds,
-            Context = new ContextOptions
+            Context                   = new ContextOptions
             {
                 ContextWindowTokens       = config.ContextWindowTokens,
                 ReservedOutputTokens      = config.ReservedOutputTokens,
@@ -733,7 +783,7 @@ internal static class Program
             Model                     = config.Model,
             MaxAgentSteps             = config.MaxAgentSteps,
             DefaultToolTimeoutSeconds = config.DefaultToolTimeoutSeconds,
-            Context = new ContextOptions
+            Context                   = new ContextOptions
             {
                 ContextWindowTokens       = config.ContextWindowTokens,
                 ReservedOutputTokens      = config.ReservedOutputTokens,
