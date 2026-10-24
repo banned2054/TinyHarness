@@ -111,6 +111,12 @@ internal sealed class ChatSessionConsole : IDisposable
     internal ChatSessionHost? Host { get; private set; }
 
     /// <summary>
+    ///     <para>会话内 /models 命令处理器；为空时该入口不可用。两条输入路径共用，运行中仅查询。</para>
+    ///     <para>The in-session /models handler; the entry is unavailable when null. Both input paths share it, and only queries run during a run.</para>
+    /// </summary>
+    internal ChatModelSelection? ModelSelection { get; set; }
+
+    /// <summary>
     ///     <para>仅由宿主在空闲边界处理工作区信任，不产生模型回合。</para>
     ///     <para>Handles workspace trust only at an idle host boundary without creating a model turn.</para>
     /// </summary>
@@ -172,6 +178,10 @@ internal sealed class ChatSessionConsole : IDisposable
             else await WriteUnappliedAmendmentsAsync();
         }
 
+        if (ModelSelection is not null)
+            await
+                _output.WriteLineAsync("Models: /models to switch model or reasoning effort when idle; /models list anytime.");
+
         await PromptInspectionIfNeededAsync(cancellationToken);
 
         while (!_cancellation.IsSessionCancelled)
@@ -206,6 +216,12 @@ internal sealed class ChatSessionConsole : IDisposable
             if (IsSessionCommand(userInput))
             {
                 await HandleSessionCommandAsync(userInput, cancellationToken);
+                continue;
+            }
+
+            if (ChatModelSelection.IsModelsCommand(userInput))
+            {
+                await HandleModelsCommandAsync(userInput, duringRun : false, cancellationToken);
                 continue;
             }
 
@@ -348,6 +364,12 @@ internal sealed class ChatSessionConsole : IDisposable
             return;
         }
 
+        if (ChatModelSelection.IsModelsCommand(text))
+        {
+            await HandleModelsCommandAsync(text, duringRun : true, _cancellation.SessionToken).ConfigureAwait(false);
+            return;
+        }
+
         if (Volatile.Read(ref _pendingSessionCommand) is not null)
         {
             await _output.WriteLineAsync("Session change pending; wait for the next input prompt.");
@@ -393,6 +415,40 @@ internal sealed class ChatSessionConsole : IDisposable
     private static bool IsSessionCommand(string input) =>
         input.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() is "/new" or "/sessions"
          or "/switch";
+
+    /// <summary>
+    ///     <para>处理 /models 命令；无会话或处理器未接线时明确提示，异常经脱敏报告且不影响会话。</para>
+    ///     <para>Handles /models commands; missing sessions or wiring are reported clearly, and failures are redacted without affecting the session.</para>
+    /// </summary>
+    private async Task HandleModelsCommandAsync(string input, bool duringRun, CancellationToken cancellationToken)
+    {
+        if (ModelSelection is null)
+        {
+            await _output.WriteLineAsync("Model selection is unavailable in this console.");
+            return;
+        }
+
+        if (Host is null)
+        {
+            await _output.WriteLineAsync("No session yet; type a request to create one first.");
+            return;
+        }
+
+        try
+        {
+            await ModelSelection.HandleAsync(Host, input, duringRun, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (_cancellation.IsSessionCancelled ||
+                                                 cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or InvalidDataException
+                                      or IOException or UnauthorizedAccessException or ConfigException)
+        {
+            await _output.WriteLineAsync(TerminalDisplay.Format($"Model selection failed: {ex.Message}", _redactor));
+        }
+    }
 
     /// <summary>
     ///     <para>在宿主边界管理会话；运行中只排队切换，恢复失败保留当前宿主。</para>
@@ -484,7 +540,8 @@ internal sealed class ChatSessionConsole : IDisposable
             throw;
         }
         catch (Exception ex) when (ex is SessionStoreException or IOException or InvalidDataException
-                                      or InvalidOperationException or UnauthorizedAccessException or ArgumentException)
+                                      or InvalidOperationException or UnauthorizedAccessException or ArgumentException
+                                      or ConfigException)
         {
             await _output.WriteLineAsync(TerminalDisplay.Format($"Session command failed: {ex.Message}", _redactor));
         }

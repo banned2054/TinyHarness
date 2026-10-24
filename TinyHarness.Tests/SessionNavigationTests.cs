@@ -2,6 +2,7 @@ using System.Threading.Channels;
 using TinyHarness.Cli.Commands;
 using TinyHarness.Cli.Models;
 using TinyHarness.Cli.Services;
+using TinyHarness.Core.Exceptions;
 using TinyHarness.Core.Models.Agent;
 using TinyHarness.Core.Models.ChatCompletions;
 using TinyHarness.Core.Models.Configuration;
@@ -139,6 +140,7 @@ public class SessionNavigationTests
     [TestCase("damaged")]
     [TestCase("locked")]
     [TestCase("identity")]
+    [TestCase("nokey")]
     public async Task FailedSwitch_KeepsCurrentSessionUsable(string reason)
     {
         using var        fixture  = new NavigationFixture();
@@ -151,6 +153,10 @@ public class SessionNavigationTests
                 case "damaged" :
                     await File.WriteAllTextAsync(Path.Combine(fixture.Store.Root,
                                                               targetId + SessionStoreWriter.LogFileSuffix), "broken\n");
+                    break;
+                case "nokey" :
+                    // 恢复按最后选择解析目标 profile 密钥：解析失败按 ConfigException 报告，不得中断输入循环。
+                    fixture.FailResumeWithConfigError = true;
                     break;
                 case "locked" or "identity" :
                 {
@@ -309,13 +315,15 @@ public class SessionNavigationTests
 
     private sealed class NavigationFixture : IDisposable
     {
-        internal TestTempDir Store { get; } = new();
-        private  TestTempDir Workspace { get; } = new();
-        internal FakeChatClient Client { get; } = new();
-        internal IChatCompletionClient? Model { get; set; }
-        internal ToolRegistry Tools { get; set; } = new([]);
-        internal IApprovalProvider? Approver { get; set; }
-        internal bool FailAfterRequest { get; init; }
+        internal TestTempDir            Store            { get; } = new();
+        private  TestTempDir            Workspace        { get; } = new();
+        internal FakeChatClient         Client           { get; } = new();
+        internal IChatCompletionClient? Model            { get; set; }
+        internal ToolRegistry           Tools            { get; set; } = new([]);
+        internal IApprovalProvider?     Approver         { get; set; }
+        internal bool                   FailAfterRequest { get; init; }
+
+        internal bool FailResumeWithConfigError { get; set; }
         internal List<ChatSessionHost> Created { get; } = [];
         internal TaskCompletionSource SecondSelected { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -367,6 +375,10 @@ public class SessionNavigationTests
 
         internal async Task<ChatSessionHost> ResumeAsync(string id, CancellationToken token)
         {
+            if (FailResumeWithConfigError)
+                throw new
+                    ConfigException("No API key found for provider 'work'. Run 'tinyharness auth set work' or set the environment variable 'WORK_KEY' before switching.");
+
             var writer = await SessionStoreWriter.OpenExistingAsync(Store.Root, id, null, token);
             try
             {

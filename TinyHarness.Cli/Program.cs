@@ -201,7 +201,8 @@ internal static class Program
                                                                         composition.KnownSecrets),
                                              instructionLoader : instructionLoader,
                                              initialInstructions : initialInstructions,
-                                             knownSecrets : composition.KnownSecrets);
+                                             knownSecrets : composition.KnownSecrets,
+                                             credentialRoute : composition.CredentialRoute);
 
         var run      = await host.SubmitTurnAsync(prompt, cts.Token).ConfigureAwait(false);
         var result   = run.Result!;
@@ -281,6 +282,10 @@ internal static class Program
         var composition = await ComposeAgentAsync(configPath, cancellation.SessionToken, true, reader)
            .ConfigureAwait(false);
         var config = composition.Config;
+        var selectionSecrets =
+            new System.Collections.Concurrent.ConcurrentDictionary<string, string>(composition.KnownSecrets,
+                                                                                  StringComparer.Ordinal);
+        composition = composition with { KnownSecrets = selectionSecrets };
         await using var events =
             new ConsoleHostEventSink(composition.KnownSecrets, reasoningDisplay : reasoningDisplay);
 
@@ -309,7 +314,8 @@ internal static class Program
                                            WorkspacePrompts.Current, NewPermissions(),
                                            new ConsoleApprovalProvider(reader, Console.Out, composition.KnownSecrets),
                                            events, sessionWriter : writer, instructionLoader : instructionLoader,
-                                           initialInstructions : instructions, knownSecrets : composition.KnownSecrets);
+                                           initialInstructions : instructions, knownSecrets : composition.KnownSecrets,
+                                           credentialRoute : composition.CredentialRoute);
             }
             catch
             {
@@ -325,10 +331,17 @@ internal static class Program
                                                  .ConfigureAwait(false);
             try
             {
-                var restored = SessionResume.Restore(writer.LoadedSnapshot!, config.WorkspaceRoot, identity,
-                                                     WorkspacePrompts.Current, composition.Options.Context);
-                var resumed = new ChatSessionHost(restored.Session, restored.Context, composition.Options,
-                                                  composition.Model, composition.Tools, WorkspacePrompts.Current,
+                // 恢复的请求绑定以日志最后保存的选择为准：仅改强度或换模型后退出，也按该选择
+                // 准备客户端与参数；启动组合的默认选择不再作为恢复依据，也不悄悄替代保存的选择。
+                var binding =
+                    await ChatResumeBinding.PrepareAsync(writer.LoadedSnapshot!, identity, composition.Options,
+                                                         composition.Model, composition.CredentialRoute,
+                                                         t => UserConfigStore.LoadAsync(UserConfigStore.DefaultFilePath(), t),
+                                                         CreateSelectionClientAsync, token).ConfigureAwait(false);
+                var restored = SessionResume.Restore(writer.LoadedSnapshot!, config.WorkspaceRoot, binding.Identity,
+                                                     WorkspacePrompts.Current, binding.Options.Context);
+                var resumed = new ChatSessionHost(restored.Session, restored.Context, binding.Options,
+                                                  binding.Client, composition.Tools, WorkspacePrompts.Current,
                                                   NewPermissions(),
                                                   new ConsoleApprovalProvider(reader, Console.Out,
                                                                               composition.KnownSecrets),
@@ -336,8 +349,35 @@ internal static class Program
                                                   needsInspection : restored.NeedsInspection,
                                                   instructionLoader : instructionLoader,
                                                   knownSecrets : composition.KnownSecrets);
+
+                // 恢复不经过会话内切换入口：把本次实际使用的客户端路由交给 Core 核对；
+                // 不一致时按选择事务采纳当前路由并开启新 epoch，隔离旧路由产生的 opaque 推理。
+                var recordedRoute = resumed.Session.ModelSelection!;
+                var alignedRoute = await resumed.EnsureCredentialRouteAsync(binding.CredentialRoute, token)
+                                                .ConfigureAwait(false);
                 await Console.Out.WriteLineAsync($"  resumed   : {restored.Session.Turns.Count} turns from commit " +
                                                  $"{writer.CommitSequence} ({writer.LoadedSnapshot!.UpdatedUtc.LocalDateTime:yyyy-MM-dd HH:mm:ss})");
+                if (binding.SavedSelection is { } saved &&
+                    (saved.Model           != identity ||
+                     saved.ReasoningEffort != composition.Options.ReasoningEffort ||
+                     saved.Context         != composition.Options.Context))
+                {
+                    var effort = saved.ReasoningEffort is { } level
+                        ? ModelReasoningEffortParser.ToValueString(level)
+                        : "default (service decides)";
+                    await Console.Out.WriteLineAsync($"  selection : model {saved.Model.ModelId}, effort {effort} " +
+                                                     "(restored from the saved session)");
+                }
+
+                if (!string.Equals(binding.CredentialRoute, composition.CredentialRoute, StringComparison.Ordinal))
+                    await
+                        Console.Out.WriteLineAsync("  route     : resumed with the session's saved credential route " +
+                                                   $"'{binding.CredentialRoute}' (startup default: "                  +
+                                                   $"{composition.CredentialRoute})");
+                if (alignedRoute.Revision != recordedRoute.Revision)
+                    await Console.Out.WriteLineAsync("  route     : the credential route changed since this session " +
+                                                     "was saved; the previous route's reasoning stays isolated from " +
+                                                     "new requests");
                 if (restored.RewoundTail)
                     await
                         Console.Out
@@ -358,6 +398,26 @@ internal static class Program
                                                        ? null
                                                        : await ResumeHostAsync(resumeSessionId,
                                                                                cancellation.SessionToken));
+
+        // 普通正文保留原文；所有诊断与审计出口共享本次进程使用过的密钥集合。
+
+        async Task<IChatCompletionClient> CreateSelectionClientAsync(UserProfile profile, string modelId,
+                                                                     CancellationToken token)
+        {
+            var apiKey = ApiKeyReader.Read(profile.ApiKeyEnvironmentVariable, profile.ApiKeyCredentialTarget,
+                                           new WindowsCredentialStore(), profile.Name);
+            if (apiKey is null)
+                throw new
+                    ConfigException($"No API key found for provider '{profile.Name}'. Run 'tinyharness auth set {profile.Name}' or set the environment variable '{profile.ApiKeyEnvironmentVariable}' before switching.");
+
+            selectionSecrets[Guid.NewGuid().ToString("N")] = apiKey;
+            return ModelClientFactory.Create(modelId, profile.Endpoint, apiKey, profile.ChatApi);
+        }
+
+        console.ModelSelection =
+            new ChatModelSelection(reader, Console.Out,
+                                   token => UserConfigStore.LoadAsync(UserConfigStore.DefaultFilePath(), token),
+                                   CreateSelectionClientAsync, selectionSecrets, !Console.IsInputRedirected);
         await WriteHeaderAsync("TinyHarness chat", composition, console.Host?.Session.Id).ConfigureAwait(false);
         await
             Console.Out.WriteLineAsync("  storage   : append-only JSONL session log; protocol history is saved verbatim " +
@@ -461,20 +521,20 @@ internal static class Program
                                                     () =>
                                                     {
                                                         sandbox = SandboxCliComposition.TryCompose(settings,
-                                                                 config.WorkspaceRoot, knownSecrets,
-                                                                 sessionStoreDirectory);
+                                                            config.WorkspaceRoot, knownSecrets,
+                                                            sessionStoreDirectory);
                                                         var policy = sandbox?.ExecutionPolicy ??
                                                                      ProcessExecutionPolicy.Host();
                                                         return
                                                             Task.FromResult((new ShellTool(new Workspace(config
-                                                                                                  .WorkspaceRoot),
-                                                                                      config.DefaultToolTimeoutSeconds,
-                                                                                      knownSecrets,
-                                                                                      processBackend :
-                                                                                      sandbox?.Backend ??
-                                                                                      new
-                                                                                          HostProcessBackend(knownSecrets),
-                                                                                      executionPolicy : policy),
+                                                                                    .WorkspaceRoot),
+                                                                                 config.DefaultToolTimeoutSeconds,
+                                                                                 knownSecrets,
+                                                                                 processBackend :
+                                                                                 sandbox?.Backend ??
+                                                                                 new
+                                                                                     HostProcessBackend(knownSecrets),
+                                                                                 executionPolicy : policy),
                                                                              policy));
                                                     });
         await access.InitializeAsync(cancellationToken).ConfigureAwait(false);
@@ -498,7 +558,10 @@ internal static class Program
             }
         };
 
-        return new AgentComposition(resolution, config, knownSecrets, sandbox, executionPolicy, model, tools,
+        return new AgentComposition(resolution, config,
+                                    CredentialRoute.Describe(resolution.ProfileName, config.ApiKeyEnvironmentVariable,
+                                                             config.ApiKeyCredentialTarget),
+                                    knownSecrets, sandbox, executionPolicy, model, tools,
                                     permissions, options, sessionStoreDirectory, access);
     }
 
@@ -658,10 +721,10 @@ internal static class Program
         using var fixture = await SmokeWorkspace.CreateAsync(cts.Token).ConfigureAwait(false);
         await Console.Out.WriteLineAsync($"  fixtureWs    : {fixture.Root}");
 
-        var plan      = SmokeScript.Build(ProcessProbeCommand(), fixture.Root);
-        var script    = new SmokeScriptClient(plan.Steps);
-        var workspace = new Workspace(fixture.Root);
-        var tools     = BuildTools(workspace, config);
+        var plan        = SmokeScript.Build(ProcessProbeCommand(), fixture.Root);
+        var script      = new SmokeScriptClient(plan.Steps);
+        var workspace   = new Workspace(fixture.Root);
+        var tools       = BuildTools(workspace, config);
         // 冒烟使用默认策略，确保副作用审批不受用户现行规则影响。
         var permissions = new PermissionEngine(fixture.Root);
         var approver    = new SmokeApprover();
@@ -785,7 +848,7 @@ internal static class Program
                                          "Smoke refreshed project rules: preserve confirmed file facts.\n", cts.Token)
                       .ConfigureAwait(false);
             using (var resumedWriter = await SessionStoreWriter.OpenExistingAsync(sessionDirectory, sessionId,
-                            null, cts.Token).ConfigureAwait(false))
+                       null, cts.Token).ConfigureAwait(false))
             using (var refreshedHost = new ChatSessionHost(restoration.Session, restoration.Context, options,
                                                            new SmokeScriptClient([new SmokeStep()]), tools,
                                                            systemPrompt, permissions, approver,
@@ -895,6 +958,7 @@ internal static class Program
     private sealed record AgentComposition(
         ConfigResolution                    Resolution,
         TinyHarnessConfig                   Config,
+        string                              CredentialRoute,
         IReadOnlyDictionary<string, string> KnownSecrets,
         WindowsSandboxExecution?            Sandbox,
         ProcessExecutionPolicy              ExecutionPolicy,
