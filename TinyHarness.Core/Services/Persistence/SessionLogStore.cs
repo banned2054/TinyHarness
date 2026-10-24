@@ -45,6 +45,7 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
     private readonly SecretRedactor _redactor;
 
     private string? _checkpointFingerprint;
+    private int _persistedModelSelectionCount;
 
     private Func<SessionHistoryItem, CancellationToken, ValueTask>? _historyItemCommitted;
 
@@ -78,7 +79,7 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
         Directory.CreateDirectory(directory);
         SessionId     = sessionId.ToLowerInvariant();
         SnapshotPath  = Path.Combine(directory, SessionId + LogFileSuffix);
-        _knownSecrets = knownSecrets?.ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
+        _knownSecrets = knownSecrets;
         _redactor     = new SecretRedactor(_knownSecrets);
 
         var lockPath = Path.Combine(directory, $"{SessionId}.lock");
@@ -126,6 +127,12 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
 
     public string            SessionId      { get; }
     public PersistedSession? LoadedSnapshot { get; private set; }
+
+    /// <summary>
+    ///     <para>已可靠提交的模型选择数量；恢复时从日志快照续种，供调用方判断当前选择是否已持久化。</para>
+    ///     <para>The number of reliably committed model selections; resumed sessions seed it from the log snapshot so callers can tell whether the current selection is durable.</para>
+    /// </summary>
+    public int PersistedModelSelectionCount => _persistedModelSelectionCount;
 
     internal Action<SessionLogBatch, string>? InjectWriteFault { get; init; }
 
@@ -321,13 +328,20 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
 
             if (CommitSequence == 0)
                 Add("identity",
-                    new SessionLogIdentity(SessionId, session.WorkspaceRoot, session.Model, session.CreatedUtc));
+                    new SessionLogIdentity(SessionId, session.WorkspaceRoot, session.InitialModel, session.CreatedUtc));
+
+            var modelSelectionCount = _persistedModelSelectionCount;
+            for (var i = modelSelectionCount; i < session.ModelSelections.Count; i++)
+            {
+                Add("model-selection", session.ModelSelections[i]);
+                modelSelectionCount++;
+            }
 
             var turns = session.Turns;
             for (var i = persistedTurnCount; i < turns.Count; i++)
             {
                 var turn = turns[i];
-                Add("turn", new SessionLogTurn(turn.Id, _redactor.Redact(turn.UserInput), turn.CreatedUtc));
+                Add("turn", new SessionLogTurn(turn.Id, turn.UserInput, turn.CreatedUtc));
                 foreach (var run in turn.Runs)
                 {
                     var persistedRun = PersistRun(run);
@@ -348,7 +362,8 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
             {
                 var lastTurn = turns[^1];
                 if (trackedTurnId != lastTurn.Id)
-                    throw new SessionStoreException("The session turn sequence changed behind the committed journal cursor.");
+                    throw new
+                        SessionStoreException("The session turn sequence changed behind the committed journal cursor.");
 
                 for (var i = trackedTurnRunCount; i < lastTurn.Runs.Count; i++)
                 {
@@ -412,14 +427,16 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
             var position = context.Position;
             var nextCheckpointFingerprint =
                 $"{position.HasState}:{position.FoldStartMessageIndex}:{position.FoldEndMessageIndex}:" +
-                (position.HasState ? context.State.ToJson() : string.Empty);
+                (position.HasState ? context.State.ToJson() : string.Empty)                             + ":" +
+                context.CheckpointModelSelectionRevision;
             if (!string.Equals(nextCheckpointFingerprint, checkpointFingerprint, StringComparison.Ordinal))
             {
                 if (position.HasState || checkpointFingerprint is not null)
                     Add("compaction-checkpoint", new SessionLogCheckpoint(position.HasState ? context.State : null,
                                                                           position.HasState,
                                                                           position.FoldStartMessageIndex,
-                                                                          position.FoldEndMessageIndex));
+                                                                          position.FoldEndMessageIndex,
+                                                                          context.CheckpointModelSelectionRevision));
                 checkpointFingerprint = nextCheckpointFingerprint;
             }
 
@@ -435,6 +452,7 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
             foreach (var record in controlRecords ?? [])
             {
                 ValidateControlRecord(record);
+                if (record.Kind == "model-selection") modelSelectionCount++;
                 records.Add(record with { Id = RecordId(SessionId, nextSequence, records.Count) });
             }
 
@@ -460,6 +478,7 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
             await WriteBatchAsync(batch, bytes, cancellationToken).ConfigureAwait(false);
 
             CommitSequence                          = nextSequence;
+            _persistedModelSelectionCount           = modelSelectionCount;
             _persistedMessageCount                  = context.Messages.Count;
             _persistedProjectInstructionRecordCount = projectInstructionRecords.Count;
             _persistedTurnCount                     = persistedTurnCount;
@@ -544,12 +563,13 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
             var snapshot = await SessionStoreReader.ReadAsync(directory, sessionId, cancellationToken)
                                                    .ConfigureAwait(false)
                         ?? throw new SessionStoreException($"Session log '{path}' is empty.");
-            writer.CommitSequence         = snapshot.CommitSequence;
-            writer.LoadedSnapshot         = snapshot;
-            writer._persistedTurnCount    = snapshot.Turns.Count;
-            writer._trackedTurnId         = snapshot.Turns.LastOrDefault()?.Id;
-            writer._trackedTurnRunCount   = snapshot.Turns.LastOrDefault()?.Runs.Count ?? 0;
-            writer._persistedMessageCount = snapshot.Conversation?.Messages.Count      ?? 0;
+            writer.CommitSequence               = snapshot.CommitSequence;
+            writer.LoadedSnapshot               = snapshot;
+            writer._persistedModelSelectionCount = snapshot.ModelSelections.Count;
+            writer._persistedTurnCount          = snapshot.Turns.Count;
+            writer._trackedTurnId               = snapshot.Turns.LastOrDefault()?.Id;
+            writer._trackedTurnRunCount         = snapshot.Turns.LastOrDefault()?.Runs.Count ?? 0;
+            writer._persistedMessageCount       = snapshot.Conversation?.Messages.Count      ?? 0;
             writer._persistedProjectInstructionRecordCount =
                 snapshot.Conversation?.ProjectInstructionRecords.Count ?? 0;
             writer._lastSessionState = new SessionLogSessionState(snapshot.InspectionAcknowledgedUtc,
@@ -558,7 +578,8 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
                 writer._checkpointFingerprint = $"{conversation.HasState}:{conversation.FoldStartMessageIndex}:" +
                                                 $"{conversation.FoldEndMessageIndex}:" + (conversation.HasState
                                                     ? conversation.State?.ToJson()
-                                                    : string.Empty);
+                                                    : string.Empty) + ":" +
+                                                conversation.CheckpointModelSelectionRevision;
             if (snapshot.Turns.LastOrDefault()?.Runs.LastOrDefault() is not { } lastRun) return writer;
             writer._lastRunId   = lastRun.Id;
             writer._lastRunJson = JsonSerializer.Serialize(lastRun, SessionLogJsonContext.Default.PersistedRun);
@@ -577,30 +598,31 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
         var toolCalls = run.Result?.ToolCalls ?? run.ExecutionRecords;
         return new PersistedRun
         {
-            Id             = run.Id,
-            StartedUtc     = run.StartedUtc,
-            FinishedUtc    = run.FinishedUtc,
-            Status         = run.Result?.Status.ToString(),
-            FinalMessage   = run.Result is null ? null : _redactor.Redact(run.Result.FinalMessage),
-            Error          = run.Result is null ? null : _redactor.RedactNullable(run.Result.Error),
-            Steps          = run.Result?.Steps          ?? 0,
-            ToolExecutions = run.Result?.ToolExecutions ?? 0,
-            InputTokens    = run.Result?.InputTokens,
-            OutputTokens   = run.Result?.OutputTokens,
-            Budget         = run.Result?.Budget,
+            ModelSelectionRevision = run.ModelSelection?.Revision,
+            Id                     = run.Id,
+            StartedUtc             = run.StartedUtc,
+            FinishedUtc            = run.FinishedUtc,
+            Status                 = run.Result?.Status.ToString(),
+            FinalMessage           = run.Result?.FinalMessage,
+            Error                  = run.Result is null ? null : _redactor.RedactNullable(run.Result.Error),
+            Steps                  = run.Result?.Steps          ?? 0,
+            ToolExecutions         = run.Result?.ToolExecutions ?? 0,
+            InputTokens            = run.Result?.InputTokens,
+            OutputTokens           = run.Result?.OutputTokens,
+            Budget                 = run.Result?.Budget,
             NeedsInspection =
                 toolCalls?.Any(c => c is { SideEffects: true, State: ToolCallExecutionState.UnknownResult }),
             ToolCalls = toolCalls?.Select(c => new PersistedToolCallRecord
             {
-                CallId           = _redactor.Redact(c.CallId),
+                CallId           = c.CallId,
                 InvocationId     = c.InvocationId,
-                ToolName         = _redactor.Redact(c.ToolName),
-                Capability       = _redactor.RedactNullable(c.Capability),
+                ToolName         = c.ToolName,
+                Capability       = c.Capability,
                 SideEffects      = c.SideEffects,
-                Summary          = _redactor.Redact(c.Summary),
+                Summary          = c.Summary,
                 PreparationError = _redactor.RedactNullable(c.PreparationError),
                 NotStartedReason = _redactor.RedactNullable(c.NotStartedReason),
-                Approval         = _redactor.RedactNullable(c.Approval),
+                Approval         = c.Approval,
                 State            = c.State.ToString()
             }).ToArray()
         };
@@ -612,6 +634,10 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
             throw new SessionStoreException("Control record IDs are assigned by the writer.");
         switch (record.Kind)
         {
+            case "model-selection" :
+                (record.Payload.Deserialize(SessionLogJsonContext.Default.SessionModelSelection)
+              ?? throw new InvalidDataException("Missing model selection payload.")).Validate();
+                break;
             case "run-amendment" :
                 (record.Payload.Deserialize(SessionLogJsonContext.Default.RunAmendment)
               ?? throw new InvalidDataException("Missing amendment payload.")).Validate();
@@ -745,6 +771,7 @@ public static class SessionStoreReader
             _expectedInstructionHistory;
 
         private SessionLogIdentity?     _identity;
+        private readonly List<SessionModelSelection> _modelSelections = [];
         private SessionLogSessionState? _state;
         private DateTimeOffset          _updatedUtc;
 
@@ -793,6 +820,28 @@ public static class SessionStoreReader
                         _turns.Add(new PersistedTurn
                                        { Id = turn.Id, UserInput = turn.UserInput, CreatedUtc = turn.CreatedUtc });
                         break;
+                    case "model-selection" :
+                        var selection =
+                            Read<SessionModelSelection>(record.Payload, SessionLogJsonContext.Default.SessionModelSelection);
+                        selection.Validate();
+                        var previousSelection = _modelSelections.LastOrDefault();
+                        var identityChanged   = (previousSelection?.Model ?? _identity?.Model) != selection.Model;
+                        var previousEpoch     = previousSelection?.ContinuationEpoch          ?? 0;
+                        var previousStart     = previousSelection?.ReasoningStartMessageIndex ?? 0;
+                        if (selection.Revision != (previousSelection?.Revision ?? 0) + 1 ||
+                            (selection.MessageBoundary != _messages.Count &&
+                             !(previousSelection is null && !identityChanged && selection.MessageBoundary == 0)) ||
+                            (identityChanged && selection.ContinuationEpoch != previousEpoch + 1) ||
+                            (!identityChanged && selection.ContinuationEpoch != previousEpoch &&
+                             selection.ContinuationEpoch != previousEpoch + 1) ||
+                            selection.ReasoningStartMessageIndex !=
+                                (selection.ContinuationEpoch == previousEpoch ? previousStart : _messages.Count) ||
+                            (_messages.Count > 0 &&
+                             ChatHistoryInvariants.LastCompleteBoundary(_messages.Select(ToChatMessage).ToArray()) !=
+                             _messages.Count))
+                            throw new SessionStoreException("Invalid model selection revision or protocol boundary.");
+                        _modelSelections.Add(selection);
+                        break;
                     case "run" :
                         var run   = Read<SessionLogRun>(record.Payload, SessionLogJsonContext.Default.SessionLogRun);
                         var index = _turns.FindIndex(t => t.Id == run.TurnId);
@@ -802,6 +851,10 @@ public static class SessionStoreReader
                         var oldTurn  = _turns[index];
                         var runs     = oldTurn.Runs.ToList();
                         var runIndex = runs.FindIndex(r => r.Id == run.Run.Id);
+                        if (runIndex < 0
+                                ? run.Run.ModelSelectionRevision != _modelSelections.LastOrDefault()?.Revision
+                                : run.Run.ModelSelectionRevision != runs[runIndex].ModelSelectionRevision)
+                            throw new SessionStoreException("A run has an unknown or changed model selection.");
                         ReconcileRun(run.TurnId, run.Run, runIndex < 0 ? null : runs[runIndex]);
                         if (runIndex < 0) runs.Add(run.Run);
                         else runs[runIndex] = run.Run;
@@ -888,6 +941,10 @@ public static class SessionStoreReader
                         _checkpoint =
                             Read<SessionLogCheckpoint>(record.Payload,
                                                        SessionLogJsonContext.Default.SessionLogCheckpoint);
+                        if (_checkpoint.ModelSelectionRevision is { } checkpointRevision &&
+                            _modelSelections.All(selection => selection.Revision != checkpointRevision))
+                            throw new
+                                SessionStoreException("A compaction checkpoint references an unknown model selection.");
                         break;
                     case "session-state" :
                         _state = Read<SessionLogSessionState>(record.Payload,
@@ -930,6 +987,7 @@ public static class SessionStoreReader
                 Id                      = _identity.Id,
                 WorkspaceRoot           = _identity.WorkspaceRoot,
                 Model                   = _identity.Model,
+                ModelSelections         = _modelSelections.ToArray(),
                 CreatedUtc              = _identity.CreatedUtc,
                 UpdatedUtc              = _updatedUtc,
                 CommitSequence          = sequence,
@@ -941,12 +999,13 @@ public static class SessionStoreReader
                 WorkItems  = _workItems.Values.ToArray(),
                 Conversation = new PersistedConversation
                 {
-                    Messages                  = _messages,
-                    State                     = checkpoint.State,
-                    HasState                  = checkpoint.HasState,
-                    ProjectInstructionRecords = _projectInstructionRecords,
-                    FoldStartMessageIndex     = checkpoint.FoldStartMessageIndex,
-                    FoldEndMessageIndex       = checkpoint.FoldEndMessageIndex
+                    Messages                         = _messages,
+                    State                            = checkpoint.State,
+                    HasState                         = checkpoint.HasState,
+                    ProjectInstructionRecords        = _projectInstructionRecords,
+                    FoldStartMessageIndex            = checkpoint.FoldStartMessageIndex,
+                    FoldEndMessageIndex              = checkpoint.FoldEndMessageIndex,
+                    CheckpointModelSelectionRevision = checkpoint.ModelSelectionRevision
                 }
             };
         }
@@ -1371,6 +1430,7 @@ public static class SessionStoreReader
 [JsonSerializable(typeof(PersistedToolCallRecord))]
 [JsonSerializable(typeof(PersistedReasoning))]
 [JsonSerializable(typeof(SessionModelIdentity))]
+[JsonSerializable(typeof(SessionModelSelection))]
 [JsonSerializable(typeof(ChatApiKind))]
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase,
                              UseStringEnumConverter = true,

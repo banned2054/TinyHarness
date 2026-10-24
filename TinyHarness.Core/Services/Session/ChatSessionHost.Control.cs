@@ -47,8 +47,11 @@ public sealed partial class ChatSessionHost
                    ?? throw new InvalidOperationException("No active run; submit a new turn.");
         var amendment = new RunAmendment
         {
-            Id   = Guid.NewGuid().ToString("N"), TurnId = control.Run.TurnId, RunId = control.Run.Id,
-            Text = text, DisplayText                    = RedactControlText(text)
+            Id           = Guid.NewGuid().ToString("N"),
+            TurnId       = control.Run.TurnId,
+            RunId        = control.Run.Id,
+            Text         = text,
+            DisplayText  = text
         };
         amendment.Validate();
         await control.EnqueueAsync(amendment, async () =>
@@ -65,7 +68,8 @@ public sealed partial class ChatSessionHost
                     new SessionLogRecord(string.Empty, "history", JsonSerializer.SerializeToElement(history,
                                              SessionHistoryJsonContext.Default.SessionHistoryItem))
                 ], cancellationToken).ConfigureAwait(false);
-                control.RecordHistory(appended[^1].Payload.Deserialize(SessionHistoryJsonContext.Default.SessionHistoryItem)!);
+                control.RecordHistory(
+                    appended[^1].Payload.Deserialize(SessionHistoryJsonContext.Default.SessionHistoryItem)!);
             }
 
             Session.RecordAmendment(amendment);
@@ -75,8 +79,6 @@ public sealed partial class ChatSessionHost
 
     private SessionRunControl CreateRunControl(SessionRun run, CancellationToken cancellationToken) =>
         new(run, ApplyAmendmentAsync, cancellationToken);
-
-    private string RedactControlText(string text) => (_eventRedactor ?? new SecretRedactor(null)).Redact(text);
 
     private static SessionLogRecord AmendmentRecord(RunAmendment amendment) =>
         new(string.Empty, "run-amendment",
@@ -113,10 +115,12 @@ public sealed partial class ChatSessionHost
         var boundary = ChatHistoryInvariants.LastCompleteBoundary(_context.Messages);
         if (boundary < 0) throw new InvalidDataException("No complete conversation boundary is available.");
         var position = _context.Position;
-        var snapshot = ContextFor(_options);
+        var snapshot = new ConversationContext(_context.CheckpointOptions);
         snapshot.Restore(_context.Messages.Take(boundary).ToArray(), _context.State, position.HasState,
-                         position.FoldStartMessageIndex, position.FoldEndMessageIndex);
+                         position.FoldStartMessageIndex, position.FoldEndMessageIndex,
+                         _context.CheckpointModelSelectionRevision);
         snapshot.RestoreProjectInstructions(RetainedInstructionRecords(boundary));
+        snapshot.BindModel(Session.ModelSelection!);
         return snapshot;
     }
 }

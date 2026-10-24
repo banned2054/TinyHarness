@@ -284,6 +284,19 @@ public interface ISessionStoreWriter : IDisposable
     long CommitSequence { get; }
 
     /// <summary>
+    ///     <para>
+    ///         已可靠提交到日志的模型选择数量；调用方据此区分“配置相同且已保存”与“仅在内存初始化”。
+    ///         不持久化模型选择的 writer 保持默认 0，使调用方保守地视为未保存。
+    ///     </para>
+    ///     <para>
+    ///         The number of model selections reliably committed to the journal; callers use it to tell an
+    ///         identical, already-saved selection from one that exists only in memory. Writers that persist no
+    ///         model selections keep the default zero so callers conservatively treat them as unsaved.
+    ///     </para>
+    /// </summary>
+    int PersistedModelSelectionCount => 0;
+
+    /// <summary>
     ///     <para>将本次新增会话事实写为一个物理行批次，完整 flush 后递增提交序号。</para>
     ///     <para>Writes new session facts as one physical-line batch and advances the sequence after a complete flush.</para>
     /// </summary>

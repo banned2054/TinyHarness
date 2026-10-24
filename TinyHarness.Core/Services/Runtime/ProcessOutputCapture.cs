@@ -4,12 +4,8 @@ using TinyHarness.Core.Models.Runtime;
 namespace TinyHarness.Core.Services.Runtime;
 
 /// <summary>
-///     接收按块推送的进程输出：持续写入本地临时 artifact，同时只在内存中保留有界的模型视图。
-///     已知 secret 在写入 artifact 和内存前进行跨块脱敏；长度为零的块表示流结束，触发尾部冲刷。
-///     Receives pushed process-output chunks, streaming them to a local temporary
-///     artifact while retaining only a bounded model-facing view in memory. Known
-///     secrets are redacted across chunk boundaries before either destination sees
-///     them; a zero-length chunk marks end-of-stream and flushes the redaction tail.
+///     <para>分块写入本地临时输出并保留有界视图；仅在调用方提供秘密集合时进行跨块脱敏。</para>
+///     <para>Writes chunked local output with a bounded view, redacting across chunks only when the caller supplies secrets.</para>
 /// </summary>
 public interface IProcessOutputCapture
 {
@@ -89,9 +85,10 @@ internal sealed class ProcessOutputCapture(string artifactPath, int modelCharact
             return new CapturedProcessOutput(_view.ToString(), false, _totalCharacters, null);
         }
 
-        var omitted = Math.Max(0, _totalCharacters - _view.Length);
-        var content = _view.ToString(0, _headLimit)                                                    +
-                      $"\n... [truncated {omitted} chars; full redacted output: {artifactPath}] ...\n" +
+        var omitted    = Math.Max(0, _totalCharacters - _view.Length);
+        var outputKind = secrets.Count == 0 ? "full output" : "full redacted output";
+        var content = _view.ToString(0, _headLimit)                                            +
+                      $"\n... [truncated {omitted} chars; {outputKind}: {artifactPath}] ...\n" +
                       _view.ToString(_view.Length - _tailLimit, _tailLimit);
         return new CapturedProcessOutput(content, true, _totalCharacters, artifactPath);
     }

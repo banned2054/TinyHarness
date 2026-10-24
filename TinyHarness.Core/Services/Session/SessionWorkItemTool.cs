@@ -83,9 +83,9 @@ internal sealed class SessionWorkItemTool(
                     throw new InvalidDataException("Invalid work item evidence array.");
                 foreach (var value in array)
                 {
-                    if (value is not JsonValue scalar ||
+                    if (value is not JsonValue scalar           ||
                         !scalar.TryGetValue<int>(out var index) ||
-                        index < 0 ||
+                        index < 0                               ||
                         evidence.Contains(index))
                         throw new InvalidDataException("Evidence indexes must be distinct nonnegative integers.");
                     evidence.Add(index);
@@ -155,14 +155,14 @@ public sealed partial class ChatSessionHost
         if (prior is null && Session.WorkItems.Count >= 128)
             throw new InvalidDataException("The session work-item limit is 128.");
         var safeContext = CompleteContextSnapshot();
-        if (evidence.Any(index => index >= safeContext.Messages.Count ||
+        if (evidence.Any(index => index                            >= safeContext.Messages.Count ||
                                   safeContext.Messages[index].Role != ChatRole.Tool))
             throw new
                 InvalidDataException("Evidence must reference complete earlier canonical tool messages; no verification is inferred.");
         var item = new SessionWorkItem
         {
             Id           = prior?.Id ?? Guid.NewGuid().ToString("N"), SourceTurnId = prior?.SourceTurnId ?? run.TurnId,
-            UpdatedRunId = run.Id, Title = title, DisplayTitle = RedactControlText(title), Status = status,
+            UpdatedRunId = run.Id, Title = title, DisplayTitle = title, Status = status,
             Revision     = checked((prior?.Revision ?? 0) + 1), EvidenceMessageIndexes = evidence.ToArray()
         };
         item.Validate();

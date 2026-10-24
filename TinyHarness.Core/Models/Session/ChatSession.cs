@@ -21,6 +21,7 @@ namespace TinyHarness.Core.Models.Session;
 public sealed partial class ChatSession
 {
     private readonly List<SessionTurn> _turns = [];
+    private readonly List<SessionModelSelection> _modelSelections = [];
 
     public ChatSession(
         string id, string workspaceRoot, SessionModelIdentity model, DateTimeOffset? createdUtc = null)
@@ -30,7 +31,7 @@ public sealed partial class ChatSession
         ArgumentNullException.ThrowIfNull(model);
         Id            = id;
         WorkspaceRoot = Path.GetFullPath(workspaceRoot);
-        Model         = model;
+        InitialModel  = model;
         CreatedUtc    = createdUtc ?? DateTimeOffset.UtcNow;
     }
 
@@ -43,10 +44,22 @@ public sealed partial class ChatSession
     public string WorkspaceRoot { get; }
 
     /// <summary>
-    ///     <para>会话创建时固定的模型身份。</para>
-    ///     <para>The model identity fixed at session creation.</para>
+    ///     <para>当前选择的模型身份；未采用选择记录的旧会话沿用初始模型。</para>
+    ///     <para>The selected model identity; legacy sessions without selections retain their initial model.</para>
     /// </summary>
-    public SessionModelIdentity Model { get; }
+    public SessionModelIdentity Model => ModelSelection?.Model ?? InitialModel;
+
+    public SessionModelIdentity                 InitialModel    { get; }
+    public SessionModelSelection?               ModelSelection  => _modelSelections.LastOrDefault();
+    public IReadOnlyList<SessionModelSelection> ModelSelections => _modelSelections.AsReadOnly();
+
+    internal void RecordModelSelection(SessionModelSelection selection)
+    {
+        selection.Validate();
+        if (selection.Revision != (ModelSelection?.Revision ?? 0) + 1)
+            throw new InvalidDataException("Model selection revisions must be contiguous.");
+        _modelSelections.Add(selection);
+    }
 
     public DateTimeOffset CreatedUtc { get; }
 

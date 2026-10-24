@@ -35,12 +35,12 @@ namespace TinyHarness.Core.Services.Session;
 ///         trigger NeedsInspection, cleared only by user inspection and acknowledgement, never model output.
 ///     </para>
 ///     <para>
-///         不主动存储凭据或恢复可执行授权；canonical 历史可能含秘密并原样追加到日志，检查视图另行脱敏。
+///         不主动存储凭据或恢复可执行授权；协议与本地历史保留原文，可能含秘密，诊断与审计另行脱敏。
 ///         恢复时沿用已校验的会话、上下文与写入端，在原身份和提交序号上继续。
 ///     </para>
 ///     <para>
 ///         Credentials are not proactively stored and executable authorization is not restored;
-///         canonical history may contain secrets and is appended verbatim, with separately redacted inspection views.
+///         protocol and local history preserve text and may contain secrets, while diagnostics and audits are redacted.
 ///         Resume continues the validated session, context and writer under the existing identity and commit sequence.
 ///     </para>
 /// </remarks>
@@ -52,8 +52,8 @@ public sealed partial class ChatSessionHost : IDisposable
     private readonly IHostEventSink?             _events;
     private readonly ProjectInstructionSnapshot? _initialInstructions;
     private readonly ProjectInstructionLoader?   _instructionLoader;
-    private readonly IChatCompletionClient       _modelClient;
-    private readonly AgentOptions                _options;
+    private IChatCompletionClient _modelClient;
+    private AgentOptions _options;
     private readonly PermissionEngine?           _permissions;
     private readonly Func<string, IRunRecorder>? _recorderFactory;
     private readonly ISessionStoreWriter?        _sessionWriter;
@@ -85,10 +85,11 @@ public sealed partial class ChatSessionHost : IDisposable
                            Func<string, ISessionStoreWriter>?   sessionWriterFactory = null,
                            ProjectInstructionLoader?            instructionLoader    = null,
                            ProjectInstructionSnapshot?          initialInstructions  = null,
-                           IReadOnlyDictionary<string, string>? knownSecrets         = null)
+                           IReadOnlyDictionary<string, string>? knownSecrets         = null,
+                           string?                              credentialRoute      = null)
         : this(new ChatSession(NewId(), workspaceRoot, model), ContextFor(options), options, modelClient, tools,
                systemPrompt, permissions, approver, events, recorderFactory, sessionWriterFactory, null,
-               instructionLoader, initialInstructions, knownSecrets)
+               instructionLoader, initialInstructions, knownSecrets, credentialRoute)
     {
     }
 
@@ -106,6 +107,13 @@ public sealed partial class ChatSessionHost : IDisposable
     ///         if construction fails. Unacknowledged inspection reasons block non-read-only capabilities at startup,
     ///         cleared only by <see cref="AcknowledgeInspectionAsync" />.
     ///     </para>
+    ///     <para>
+    ///         <paramref name="credentialRoute" /> 只记录进首个种子选择；已带选择的会话（含恢复）不据此改写历史路由来源。
+    ///     </para>
+    ///     <para>
+    ///         <paramref name="credentialRoute" /> is recorded only into the first seeded selection; sessions that
+    ///         already carry selections (including restored ones) never have their historical route provenance rewritten.
+    ///     </para>
     /// </remarks>
     public ChatSessionHost(ChatSession                          session,
                            ConversationContext                  context,
@@ -121,10 +129,11 @@ public sealed partial class ChatSessionHost : IDisposable
                            string?                              needsInspection     = null,
                            ProjectInstructionLoader?            instructionLoader   = null,
                            ProjectInstructionSnapshot?          initialInstructions = null,
-                           IReadOnlyDictionary<string, string>? knownSecrets        = null)
+                           IReadOnlyDictionary<string, string>? knownSecrets        = null,
+                           string?                              credentialRoute     = null)
         : this(session, context, options, modelClient, tools, systemPrompt, permissions, approver, events,
                recorderFactory, sessionWriter is null ? null : _ => sessionWriter, needsInspection,
-               instructionLoader, initialInstructions, knownSecrets)
+               instructionLoader, initialInstructions, knownSecrets, credentialRoute)
     {
     }
 
@@ -149,7 +158,8 @@ public sealed partial class ChatSessionHost : IDisposable
                             string?                              needsInspection,
                             ProjectInstructionLoader?            instructionLoader,
                             ProjectInstructionSnapshot?          initialInstructions,
-                            IReadOnlyDictionary<string, string>? knownSecrets)
+                            IReadOnlyDictionary<string, string>? knownSecrets,
+                            string?                              credentialRoute)
     {
         ArgumentNullException.ThrowIfNull(session);
         ArgumentNullException.ThrowIfNull(context);
@@ -157,6 +167,9 @@ public sealed partial class ChatSessionHost : IDisposable
         ArgumentNullException.ThrowIfNull(modelClient);
         ArgumentNullException.ThrowIfNull(tools);
         ArgumentException.ThrowIfNullOrWhiteSpace(systemPrompt);
+        if (credentialRoute is not null && string.IsNullOrWhiteSpace(credentialRoute))
+            throw new ArgumentException("The credential route must be a non-empty string when provided.",
+                                        nameof(credentialRoute));
         if (!string.Equals(options.Model, session.Model.ModelId, StringComparison.Ordinal))
             throw new
                 ArgumentException($"AgentOptions.Model '{options.Model}' does not match the session model identity '{session.Model.ModelId}'.",
@@ -193,6 +206,18 @@ public sealed partial class ChatSessionHost : IDisposable
             _permissions?.SetNonReadOnlyBlock(pending);
         }
 
+        if (session.ModelSelection is null)
+            session.RecordModelSelection(new SessionModelSelection
+            {
+                Revision = 1, Model = session.Model, CredentialRoute = credentialRoute, Context = options.Context,
+                ReasoningEffort = options.ReasoningEffort, MessageBoundary = 0
+            });
+        else if (session.ModelSelection.Context         != options.Context ||
+                 session.ModelSelection.ReasoningEffort != options.ReasoningEffort)
+            throw new
+                ArgumentException("Options must match the restored model selection; change it explicitly after restoring.",
+                                  nameof(options));
+        _context.BindModel(session.ModelSelection!);
         _sessionWriter = sessionWriterFactory?.Invoke(session.Id);
     }
 
@@ -251,7 +276,14 @@ public sealed partial class ChatSessionHost : IDisposable
     /// </summary>
     public string? PersistencePath => _sessionWriter?.SnapshotPath;
 
-    public void Dispose() => _sessionWriter?.Dispose();
+    public void Dispose()
+    {
+        var previous = Interlocked.CompareExchange(ref _activeRuns, -1, 0);
+        if (previous == -1) return;
+        if (previous != 0)
+            throw new InvalidOperationException("Wait for the active session operation before disposing.");
+        _sessionWriter?.Dispose();
+    }
 
     private static ConversationContext ContextFor(AgentOptions options) =>
         new((options ?? throw new ArgumentNullException(nameof(options))).Context);
@@ -281,6 +313,7 @@ public sealed partial class ChatSessionHost : IDisposable
     public async Task<SessionRun> SubmitTurnAsync(string userInput, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(userInput);
+        EnsureModelOperationsAllowed();
         if (Interlocked.CompareExchange(ref _activeRuns, 1, 0) != 0)
             throw new
                 InvalidOperationException("This session already has an active run; a session processes one run at a time (PLAN §5). " +
@@ -288,13 +321,15 @@ public sealed partial class ChatSessionHost : IDisposable
         DisplayWarning = null;
 
         var turn = new SessionTurn(NewId(), userInput);
-        var run  = new SessionRun(NewId(), Session.Id, turn.Id);
+        var run  = new SessionRun(NewId(), Session.Id, turn.Id, modelSelection : Session.ModelSelection);
         Session.AddTurn(turn);
         turn.AddRun(run);
         using var control = CreateRunControl(run, cancellationToken);
         _activeControl = control;
         try
         {
+            if (_sessionWriter is not null)
+                await _sessionWriter.CommitAsync(Session, _context, cancellationToken).ConfigureAwait(false);
             var loop   = ComposeRunLoop(run);
             var result = await loop.RunTurnAsync(_systemPrompt, userInput, control.Token).ConfigureAwait(false);
             if (!string.IsNullOrWhiteSpace(result.PersistenceWarning))

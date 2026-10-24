@@ -126,10 +126,11 @@ public static class SessionResume
                                       $"the current workspace is '{Path.GetFullPath(workspaceRoot)}'. A session is fixed " +
                                       "to one workspace (PLAN §5); reopen it from there or start a new session.");
 
-        if (snapshot.Model is null || !snapshot.Model.Equals(model))
+        var selectedModel = snapshot.ModelSelection?.Model ?? snapshot.Model;
+        if (selectedModel is null || !selectedModel.Equals(model))
             throw new
                 SessionStoreException($"Stored session '{snapshot.Id}' belongs to model "                         +
-                                      DescribeModel(snapshot.Model)                                               +
+                                      DescribeModel(selectedModel)                                                +
                                       " but the current configuration uses "                                      +
                                       DescribeModel(model)                                                        +
                                       ". Resume requires the same endpoint, model and chat API; opaque protocol " +
@@ -181,12 +182,18 @@ public static class SessionResume
 
         var state = conversation.State ?? CompactionState.Empty;
 
-        var context = new ConversationContext(contextOptions);
+        var checkpointSelection =
+            snapshot.ModelSelections.FirstOrDefault(selection =>
+                                                       selection.Revision == conversation.CheckpointModelSelectionRevision);
+        var checkpointOptions = checkpointSelection?.Context ??
+                                snapshot.ModelSelections.FirstOrDefault()?.Context ?? contextOptions;
+        var context = new ConversationContext(checkpointOptions);
         try
         {
             context.Restore(messages, state, conversation.HasState, conversation.FoldStartMessageIndex,
-                            conversation.FoldEndMessageIndex);
+                            conversation.FoldEndMessageIndex, conversation.CheckpointModelSelectionRevision);
             context.RestoreProjectInstructions(conversation.ProjectInstructionRecords);
+            if (snapshot.ModelSelection is { } selection) context.BindModel(selection);
         }
         catch (Exception ex) when (ex is ArgumentException or InvalidDataException)
         {
@@ -262,13 +269,16 @@ public static class SessionResume
             InspectionAcknowledgedUtc = snapshot.InspectionAcknowledgedUtc,
             PendingInspectionReason   = snapshot.PendingInspectionReason
         };
+        foreach (var selection in snapshot.ModelSelections) session.RecordModelSelection(selection);
         foreach (var turn in snapshot.Turns)
         {
             var restoredTurn = new SessionTurn(turn.Id, turn.UserInput, turn.CreatedUtc);
             foreach (var run in turn.Runs)
             {
                 run.Budget?.Validate(run.ToolExecutions);
-                var restoredRun = new SessionRun(run.Id, snapshot.Id, turn.Id, run.StartedUtc);
+                var restoredRun = new SessionRun(run.Id, snapshot.Id, turn.Id, run.StartedUtc,
+                                                 snapshot.ModelSelections.FirstOrDefault(selection =>
+                                                     selection.Revision == run.ModelSelectionRevision));
                 var records = run.ToolCalls is { Count: > 0 } calls
                     ? calls.Select(call => RebuildToolCallRecord(snapshot.Id, call)).ToArray()
                     : null;

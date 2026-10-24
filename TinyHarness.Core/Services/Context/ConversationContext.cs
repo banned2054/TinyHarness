@@ -1,6 +1,7 @@
 using TinyHarness.Core.Models.ChatCompletions;
 using TinyHarness.Core.Models.Context;
 using TinyHarness.Core.Models.ProjectInstructions;
+using TinyHarness.Core.Models.Session;
 using TinyHarness.Core.Models.Tools;
 using TinyHarness.Core.Services.Agent;
 
@@ -52,8 +53,11 @@ public sealed class ConversationContext
 
     private readonly List<ChatMessage> _messages = [];
 
-    private readonly ContextOptions? _options;
-    private          int             _foldEndMessageIndex;
+    private ContextOptions? _options;
+    private ContextOptions? _checkpointOptions;
+    private int             _reasoningStartMessageIndex;
+    private long            _modelSelectionRevision;
+    private int             _foldEndMessageIndex;
 
     // 折叠区只从模型视图隐藏，完整原始消息仍保留在本地。
     private int  _foldStartMessageIndex = -1;
@@ -81,6 +85,25 @@ public sealed class ConversationContext
     ///     </para>
     /// </summary>
     public ConversationContext(ContextOptions? options = null) => _options = options?.Validate();
+
+    internal ContextOptions? CheckpointOptions                => _checkpointOptions ?? _options;
+    internal long?           CheckpointModelSelectionRevision { get; private set; }
+
+    /// <summary>
+    ///     <para>在空闲边界重绑请求策略；完整历史与已提交检查点不变，旧区间的推理仅从请求视图隔离。</para>
+    ///     <para>Rebinds request policy while idle, retaining canonical history and checkpoints and isolating old reasoning in views.</para>
+    /// </summary>
+    internal void BindModel(SessionModelSelection selection)
+    {
+        selection.Validate();
+        _checkpointOptions ??= _options;
+        _options                    = selection.Context;
+        _reasoningStartMessageIndex = selection.ReasoningStartMessageIndex;
+        _modelSelectionRevision     = selection.Revision;
+        _usageCalibration           = 1.0;
+        _pendingFold                = null;
+        _messagesAtLastAttempt      = -1;
+    }
 
     /// <summary>
     ///     <para>已确认提交的当前项目规则；null 表示尚未纳入宿主管理。</para>
@@ -139,12 +162,12 @@ public sealed class ConversationContext
 
     private int SummaryBudget =>
         Math.Min(_options?.SummaryTokens ?? 2000,
-                 Math.Max(1, ((_options?.ContextWindowTokens ?? 128_000) -
+                 Math.Max(1, ((_options?.ContextWindowTokens  ?? 128_000) -
                               (_options?.ReservedOutputTokens ?? 8000)) / 4));
 
     private int RetainedUserBudget =>
         Math.Min(_options?.RetainedUserMessageTokens ?? 2000,
-                 Math.Max(0, ((_options?.ContextWindowTokens ?? 128_000) -
+                 Math.Max(0, ((_options?.ContextWindowTokens  ?? 128_000) -
                               (_options?.ReservedOutputTokens ?? 8000)) / 8));
 
     private int ThresholdTokens => _options!.CompactionThresholdTokens > 0
@@ -162,8 +185,8 @@ public sealed class ConversationContext
         ProjectInstructionRenderer.Validate(snapshot);
         if (_pendingInstructions is not null)
             throw new InvalidOperationException("A project instruction update is already pending.");
-        if (_messages.Count == 0 ||
-            _messages[0].Role != ChatRole.System ||
+        if (_messages.Count                                       == 0               ||
+            _messages[0].Role                                     != ChatRole.System ||
             ChatHistoryInvariants.LastCompleteBoundary(_messages) != _messages.Count)
             throw new InvalidOperationException("Project instructions require a complete conversation boundary.");
         var rulesChanged = ProjectInstructions?.Revision != snapshot.Revision;
@@ -235,11 +258,11 @@ public sealed class ConversationContext
         foreach (var record in restoredRecords)
         {
             ProjectInstructionRenderer.Validate(record.Snapshot);
-            if (record.Schema != "tinyharness.project-instructions/1" ||
-                record.Revision != record.Snapshot.Revision ||
-                record.PreviousRevision != current?.Revision ||
-                string.IsNullOrWhiteSpace(record.TurnId) ||
-                string.IsNullOrWhiteSpace(record.RunId) ||
+            if (record.Schema           != "tinyharness.project-instructions/1" ||
+                record.Revision         != record.Snapshot.Revision             ||
+                record.PreviousRevision != current?.Revision                    ||
+                string.IsNullOrWhiteSpace(record.TurnId)                        ||
+                string.IsNullOrWhiteSpace(record.RunId)                         ||
                 string.IsNullOrWhiteSpace(record.Reason))
                 throw new InvalidDataException("Invalid project instruction revision chain.");
             if (record.Action == "rules-applied")
@@ -256,8 +279,8 @@ public sealed class ConversationContext
                     throw new InvalidDataException("Invalid project instruction canonical message binding.");
                 previousMessageIndex = index;
             }
-            else if (record.Action != "scopes-tracked" ||
-                     current is null ||
+            else if (record.Action != "scopes-tracked"   ||
+                     current is null                     ||
                      record.Revision != current.Revision ||
                      record.CanonicalMessageIndex is not null)
             {
@@ -334,7 +357,8 @@ public sealed class ConversationContext
     ///     </para>
     /// </remarks>
     public void Restore(IReadOnlyList<ChatMessage> messages,              CompactionState state, bool hasState,
-                        int                        foldStartMessageIndex, int             foldEndMessageIndex)
+                        int                        foldStartMessageIndex, int             foldEndMessageIndex,
+                        long?                      checkpointModelSelectionRevision = null)
     {
         ArgumentNullException.ThrowIfNull(messages);
         ArgumentNullException.ThrowIfNull(state);
@@ -349,9 +373,9 @@ public sealed class ConversationContext
             throw new ArgumentException("The fold position does not agree with the restored message history.");
         }
 
-        if (state.Schema != CompactionState.CurrentSchema ||
-            state.Summary is null ||
-            state.RetainedUserMessages is null ||
+        if (state.Schema != CompactionState.CurrentSchema           ||
+            state.Summary is null                                   ||
+            state.RetainedUserMessages is null                      ||
             (hasState  && string.IsNullOrWhiteSpace(state.Summary)) ||
             (!hasState && (!string.IsNullOrEmpty(state.Summary) || state.RetainedUserMessages.Count != 0)))
             throw new ArgumentException("Invalid compaction checkpoint schema or summary.");
@@ -365,10 +389,12 @@ public sealed class ConversationContext
 
         Reset();
         _messages.AddRange(messages);
-        State                  = state;
-        _hasState              = hasState;
-        _foldStartMessageIndex = foldStartMessageIndex;
-        _foldEndMessageIndex   = foldEndMessageIndex;
+        State                            = state;
+        _hasState                        = hasState;
+        _foldStartMessageIndex           = foldStartMessageIndex;
+        _foldEndMessageIndex             = foldEndMessageIndex;
+        _checkpointOptions               = _options;
+        CheckpointModelSelectionRevision = checkpointModelSelectionRevision;
         ValidateStateSources();
         _pendingFold           = null;
         _messagesAtLastAttempt = -1;
@@ -414,7 +440,7 @@ public sealed class ConversationContext
 
         _messages.RemoveRange(messageCount, _messages.Count - messageCount);
         var retained = _instructionRecords.TakeWhile(record => record.CanonicalMessageIndex is not { } index ||
-                                                              index < messageCount).ToArray();
+                                                               index < messageCount).ToArray();
         RestoreProjectInstructions(retained);
         _pendingFold           = null;
         _messagesAtLastAttempt = -1;
@@ -501,7 +527,7 @@ public sealed class ConversationContext
             }
 
             if ((i >= foldStart && i < foldEnd) || _instructionMessageIndices.Contains(i)) continue;
-            view.Add(Enabled ? CapViewMessage(_messages[i]) : _messages[i]);
+            view.Add(ViewMessage(i));
             if (i == 0 && ProjectInstructions is { } snapshot)
                 view.Add(ChatMessage.User(ProjectInstructionRenderer.Render(snapshot)));
         }
@@ -526,7 +552,7 @@ public sealed class ConversationContext
         foreach (var span in selection.Spans)
             for (var i = span.Start; i < span.Start + span.Count; i++)
                 if (!_instructionMessageIndices.Contains(i))
-                    result.Add(CapViewMessage(_messages[i]));
+                    result.Add(ViewMessage(i));
         result.Add(SummaryTask());
         return result;
     }
@@ -539,7 +565,7 @@ public sealed class ConversationContext
     {
         var pending = _pendingFold;
         _pendingFold = null;
-        if (pending is null ||
+        if (pending is null                               ||
             _messages.Count != pending.MessageCountAtPlan ||
             (_foldStartMessageIndex >= 0 && pending.StartMessageIndex != _foldEndMessageIndex))
             return RejectCompaction(CompactionFailureReason.InvalidPlan);
@@ -556,11 +582,13 @@ public sealed class ConversationContext
         };
         if (EstimateCandidateViewTokens(candidate, start, end) >= EstimateViewTokens())
             return RejectCompaction(CompactionFailureReason.NoBudgetBenefit);
-        _foldStartMessageIndex = start;
-        _foldEndMessageIndex   = end;
-        State                  = candidate;
-        _hasState              = true;
-        LastCompactionFailure  = CompactionFailureReason.None;
+        _foldStartMessageIndex           = start;
+        _foldEndMessageIndex             = end;
+        State                            = candidate;
+        _checkpointOptions               = _options;
+        CheckpointModelSelectionRevision = _modelSelectionRevision == 0 ? null : _modelSelectionRevision;
+        _hasState                        = true;
+        LastCompactionFailure            = CompactionFailureReason.None;
         return true;
     }
 
@@ -606,6 +634,14 @@ public sealed class ConversationContext
                       "the full result stays in the local history] ...\n"                         +
                       message.Content[^tail..];
         return ChatMessage.Tool(message.Name ?? string.Empty, message.ToolCallId ?? string.Empty, content);
+    }
+
+    private ChatMessage ViewMessage(int index)
+    {
+        var message = _messages[index];
+        if (index < _reasoningStartMessageIndex && message.Reasoning is not null)
+            message = message with { Reasoning = null };
+        return Enabled ? CapViewMessage(message) : message;
     }
 
     /// <summary>
@@ -692,7 +728,7 @@ public sealed class ConversationContext
         for (var i = end - 1; i >= start && remaining > 0; i--)
         {
             var message = _messages[i];
-            if (message.Role != ChatRole.User ||
+            if (message.Role != ChatRole.User          ||
                 _instructionMessageIndices.Contains(i) ||
                 string.IsNullOrEmpty(message.Content))
                 continue;
@@ -751,13 +787,13 @@ public sealed class ConversationContext
         var tokens   = 0;
         foreach (var entry in State.RetainedUserMessages)
         {
-            if (entry is null ||
-                entry.MessageIndex <= previous ||
-                entry.MessageIndex < _foldStartMessageIndex ||
-                entry.MessageIndex >= _foldEndMessageIndex ||
-                entry.Content is null ||
-                entry.Content.Length == 0 ||
-                _messages[entry.MessageIndex].Role != ChatRole.User ||
+            if (entry is null                                           ||
+                entry.MessageIndex <= previous                          ||
+                entry.MessageIndex < _foldStartMessageIndex             ||
+                entry.MessageIndex >= _foldEndMessageIndex              ||
+                entry.Content is null                                   ||
+                entry.Content.Length               == 0                 ||
+                _messages[entry.MessageIndex].Role != ChatRole.User     ||
                 _instructionMessageIndices.Contains(entry.MessageIndex) ||
                 !_messages[entry.MessageIndex].Content.EndsWith(entry.Content, StringComparison.Ordinal))
                 throw new InvalidDataException("Invalid retained user-message source in compaction checkpoint.");
@@ -765,7 +801,13 @@ public sealed class ConversationContext
             tokens   += TokenEstimator.EstimateMessage(RetainedMessage(entry));
         }
 
-        if (Enabled && (tokens > RetainedUserBudget || TokenEstimator.EstimateText(State.Summary) > SummaryBudget))
+        var generationOptions = _checkpointOptions ?? _options;
+        var available = (generationOptions?.ContextWindowTokens  ?? 128_000) -
+                        (generationOptions?.ReservedOutputTokens ?? 8000);
+        var retainedBudget = Math.Min(generationOptions?.RetainedUserMessageTokens ?? 2000, Math.Max(0, available / 8));
+        var summaryBudget  = Math.Min(generationOptions?.SummaryTokens             ?? 2000, Math.Max(1, available / 4));
+        if (generationOptions is not null &&
+            (tokens > retainedBudget || TokenEstimator.EstimateText(State.Summary) > summaryBudget))
             throw new InvalidDataException("The saved compaction exceeds the current summary or retained-user budget.");
     }
 
@@ -820,7 +862,7 @@ public sealed class ConversationContext
         var tokens = 0;
         for (var i = span.Start; i < span.Start + span.Count; i++)
             if (!_instructionMessageIndices.Contains(i))
-                tokens += TokenEstimator.EstimateMessage(CapViewMessage(_messages[i]));
+                tokens += TokenEstimator.EstimateMessage(ViewMessage(i));
 
         return tokens;
     }

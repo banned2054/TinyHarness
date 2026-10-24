@@ -382,7 +382,7 @@ public sealed class MicrosoftAiChatClient : IChatCompletionClient, IDisposable
             };
 #pragma warning restore OPENAI001
         }
-        else if (request.Tools is { Count: > 0 })
+        else if (request.Tools is { Count: > 0 } || request.ReasoningEffort is not null)
         {
             options = new ChatOptions();
         }
@@ -390,6 +390,20 @@ public sealed class MicrosoftAiChatClient : IChatCompletionClient, IDisposable
         {
             return null;
         }
+
+        if (request.ReasoningEffort is { } effort)
+            options.Reasoning = new ReasoningOptions
+            {
+                Effort = effort switch
+                {
+                    ModelReasoningEffort.None => ReasoningEffort.None,
+                    ModelReasoningEffort.Low => ReasoningEffort.Low,
+                    ModelReasoningEffort.Medium => ReasoningEffort.Medium,
+                    ModelReasoningEffort.High => ReasoningEffort.High,
+                    ModelReasoningEffort.ExtraHigh => ReasoningEffort.ExtraHigh,
+                    _ => throw new ArgumentOutOfRangeException(nameof(request), "Unsupported reasoning effort.")
+                }
+            };
 
         if (request.Tools is not { Count: > 0 }) return options;
 

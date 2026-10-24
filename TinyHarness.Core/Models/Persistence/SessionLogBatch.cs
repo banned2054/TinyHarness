@@ -40,7 +40,8 @@ public sealed record SessionLogCheckpoint(
     CompactionState? State,
     bool             HasState,
     int              FoldStartMessageIndex,
-    int              FoldEndMessageIndex);
+    int              FoldEndMessageIndex,
+    long?            ModelSelectionRevision = null);
 
 public sealed record SessionLogSessionState(
     DateTimeOffset? InspectionAcknowledgedUtc,

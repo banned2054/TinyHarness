@@ -1,4 +1,5 @@
 using TinyHarness.Core.Models.Agent;
+using TinyHarness.Core.Models.ChatCompletions;
 
 namespace TinyHarness.Core.Models.Configuration;
 
@@ -11,7 +12,37 @@ public sealed record UserProfileModel
 {
     public string Id { get; init; } = string.Empty;
 
+    /// <summary>
+    ///     <para>可选显示名，仅用于界面展示；不参与请求标识、选择键或模型身份。</para>
+    ///     <para>Optional display name for presentation only; never part of request identity, selection keys, or model identity.</para>
+    /// </summary>
+    public string? DisplayName { get; init; }
+
     public int ContextWindowTokens { get; init; }
+
+    /// <summary>
+    ///     <para>
+    ///         该模型声明支持的推理强度档位集合；null 表示未声明能力，此时只能选择不发送强度参数，
+    ///         不从模型名称或同 profile 的其他模型推断。
+    ///     </para>
+    ///     <para>
+    ///         The reasoning effort levels this model declares; null means undeclared capability, in which case only
+    ///         omitting the effort parameter is selectable — never inferred from model names or sibling models.
+    ///     </para>
+    /// </summary>
+    public IReadOnlyList<ModelReasoningEffort>? ReasoningEfforts { get; init; }
+
+    /// <summary>
+    ///     <para>
+    ///         模型默认强度档位；null 表示不发送强度参数（由服务决定）。声明时必须属于
+    ///         <see cref="ReasoningEfforts" /> 集合，且不会在切换模型时自动带到其他模型。
+    ///     </para>
+    ///     <para>
+    ///         The model's default effort; null sends no effort parameter and leaves the decision to the service.
+    ///         When declared it must belong to <see cref="ReasoningEfforts" /> and is never carried over to another model.
+    ///     </para>
+    /// </summary>
+    public ModelReasoningEffort? DefaultReasoningEffort { get; init; }
 }
 
 /// <summary>

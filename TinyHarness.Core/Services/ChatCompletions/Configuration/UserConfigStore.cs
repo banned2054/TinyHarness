@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using TinyHarness.Core.Models.Agent;
+using TinyHarness.Core.Models.ChatCompletions;
 using TinyHarness.Core.Models.Configuration;
 using TinyHarness.Core.Models.Runtime.WindowsSandbox;
 
@@ -26,6 +27,21 @@ public static class UserConfigStore
     ///     <para>The user config file name.</para>
     /// </summary>
     public const string FileName = "user-config.json";
+
+    /// <summary>
+    ///     <para>保存与基线比较共用的写出设置，保证两侧产生同一规范形式。</para>
+    ///     <para>Serialization settings shared by saving and baseline comparison so both produce one canonical form.</para>
+    /// </summary>
+    private static readonly JsonSerializerOptions SerializedJsonOptions = new() { WriteIndented = true };
+
+    /// <summary>
+    ///     <para>保存锁文件名后缀；锁以独占句柄为准，进程崩溃即由操作系统释放，残留文件不阻塞后续保存。</para>
+    ///     <para>Save-lock file name suffix; the lock is the exclusive handle, released by the OS on process death, and a leftover file never blocks later saves.</para>
+    /// </summary>
+    public const string SaveLockSuffix = ".lock";
+
+    private const int SaveLockTimeoutMs    = 5000;
+    private const int SaveLockRetryDelayMs = 25;
 
     /// <summary>
     ///     <para>
@@ -84,17 +100,120 @@ public static class UserConfigStore
     }
 
     /// <summary>
-    ///     <para>保存用户配置，自动创建父目录；内容整体重写为当前 schema。</para>
-    ///     <para>Saves the user config, creating parent directories; the content is rewritten to the current schema.</para>
+    ///     <para>保存用户配置：获取同目录保存锁，锁内校验候选、临时写入并安全替换，自动创建父目录。</para>
+    ///     <para>Saves the user config: acquires the sibling save lock, then validates the candidate, writes a temp file, and safely replaces the target inside it, creating parent directories.</para>
     /// </summary>
-    public static async Task SaveAsync(string filePath, UserConfig config, CancellationToken cancellationToken)
+    public static Task SaveAsync(string filePath, UserConfig config, CancellationToken cancellationToken)
+        => SaveAsync(filePath, config, expectedBaseline: null, cancellationToken);
+
+    /// <summary>
+    ///     <para>
+    ///         保存用户配置：先校验候选，再获取同目录保存锁，锁内完成基线复查、临时写入与安全替换；
+    ///         自动创建父目录。基线被其他入口改动则明确失败，由调用方重载后重试，不用旧快照覆盖新数据。
+    ///     </para>
+    ///     <para>
+    ///         Saves the user config: validates the candidate first, acquires the sibling save lock, then re-checks
+    ///         the baseline, writes a temp file and safely replaces the target inside one critical section, creating
+    ///         parent directories. A baseline changed by another entry point fails explicitly; the caller reloads and
+    ///         retries instead of overwriting newer data.
+    ///     </para>
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         基线复查与最终替换之间没有锁外的窗口；并发保存按锁串行，后到者会看到前者的写入并按基线失败。
+    ///         锁跨进程生效，等待期间响应取消，超时抛出带锁路径的 IOException。
+    ///     </para>
+    ///     <para>
+    ///         No window is left between the baseline recheck and the final replacement; concurrent saves serialize
+    ///         on the lock, and the later one observes the earlier write and fails its baseline. The lock spans
+    ///         processes, waiting honors cancellation, and a timeout throws an IOException naming the lock path.
+    ///     </para>
+    /// </remarks>
+    public static async Task SaveAsync(string            filePath, UserConfig config, UserConfig? expectedBaseline,
+                                       CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(filePath);
         ArgumentNullException.ThrowIfNull(config);
 
+        // 先校验候选：非法输入不获取锁、不触碰文件系统。
+        UserConfigValidator.Validate(config);
+
         var directory = Path.GetDirectoryName(Path.GetFullPath(filePath));
         if (!string.IsNullOrEmpty(directory)) Directory.CreateDirectory(directory);
 
+        await using var saveLock = await OpenSaveLockAsync(filePath, cancellationToken).ConfigureAwait(false);
+        if (expectedBaseline is not null)
+        {
+            var current = await LoadAsync(filePath, cancellationToken).ConfigureAwait(false);
+            if (!ConfigEquals(current, expectedBaseline))
+                throw new
+                    InvalidDataException($"User config '{filePath}' changed while it was being edited; reload it and retry.");
+        }
+
+        var content  = WriteRoot(config).ToJsonString(SerializedJsonOptions) + Environment.NewLine;
+        var tempPath = filePath + ".tmp-" + Guid.NewGuid().ToString("N");
+        try
+        {
+            await File.WriteAllTextAsync(tempPath, content, cancellationToken).ConfigureAwait(false);
+            if (File.Exists(filePath))
+                File.Replace(tempPath, filePath, null);
+            else
+                File.Move(tempPath, filePath);
+        }
+        catch
+        {
+            // 替换失败时尽力清理同目录临时文件；清理失败不得掩盖原始错误。
+            try
+            {
+                if (File.Exists(tempPath)) File.Delete(tempPath);
+            }
+            catch (IOException)
+            {
+            }
+
+            throw;
+        }
+    }
+
+    /// <summary>
+    ///     <para>获取配置文件的跨进程保存锁；被占用时短暂等待，超时抛出带锁路径的 IOException。</para>
+    ///     <para>Acquires the cross-process save lock for a config file; waits briefly while held and throws an IOException naming the lock path on timeout.</para>
+    /// </summary>
+    private static async Task<FileStream> OpenSaveLockAsync(string filePath, CancellationToken cancellationToken)
+    {
+        var lockPath = filePath + SaveLockSuffix;
+        var deadline = Environment.TickCount64 + SaveLockTimeoutMs;
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                return new FileStream(lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+            }
+            catch (IOException) when (Environment.TickCount64 < deadline)
+            {
+                await Task.Delay(SaveLockRetryDelayMs, cancellationToken).ConfigureAwait(false);
+            }
+            catch (IOException ex)
+            {
+                throw new
+                    IOException($"Could not acquire the user-config save lock '{lockPath}' within " +
+                                $"{SaveLockTimeoutMs} ms; another writer may be saving the same file. Retry the save.",
+                                ex);
+            }
+        }
+    }
+
+    /// <summary>
+    ///     <para>按同一写出规范比较两份配置的结构内容，忽略文件级空白差异。</para>
+    ///     <para>Compares two configs structurally through the same canonical writer, ignoring file-level whitespace.</para>
+    /// </summary>
+    private static bool ConfigEquals(UserConfig left, UserConfig right) =>
+        string.Equals(WriteRoot(left).ToJsonString(SerializedJsonOptions),
+                      WriteRoot(right).ToJsonString(SerializedJsonOptions), StringComparison.Ordinal);
+
+    private static JsonObject WriteRoot(UserConfig config)
+    {
         var root                                                                      = new JsonObject();
         if (!string.IsNullOrWhiteSpace(config.DefaultProfile)) root["defaultProfile"] = config.DefaultProfile;
 
@@ -112,6 +231,19 @@ public static class UserConfigStore
                         ["id"]                  = model.Id,
                         ["contextWindowTokens"] = model.ContextWindowTokens
                     };
+                    if (!string.IsNullOrWhiteSpace(model.DisplayName))
+                        modelNode["displayName"] = model.DisplayName;
+                    if (model.ReasoningEfforts is { Count: > 0 } efforts)
+                    {
+                        var effortArray = new JsonArray();
+                        foreach (var effort in efforts)
+                            effortArray.Add((JsonNode?)JsonValue.Create(ModelReasoningEffortParser.ToValueString(effort)));
+                        modelNode["reasoningEfforts"] = effortArray;
+                    }
+
+                    if (model.DefaultReasoningEffort is { } defaultEffort)
+                        modelNode["defaultReasoningEffort"] =
+                            ModelReasoningEffortParser.ToValueString(defaultEffort);
                     models.Add((JsonNode?)modelNode);
                 }
 
@@ -239,9 +371,7 @@ public static class UserConfigStore
             if (settingsNode.Count > 0) root["settings"] = settingsNode;
         }
 
-        var options = new JsonSerializerOptions { WriteIndented = true };
-        await File.WriteAllTextAsync(filePath, root.ToJsonString(options) + Environment.NewLine, cancellationToken)
-                  .ConfigureAwait(false);
+        return root;
     }
 
     /// <summary>
@@ -302,11 +432,57 @@ public static class UserConfigStore
                                                             $"profiles[{i}].models[{m}].contextWindowTokens")
                                          ?? throw new
                                                 InvalidDataException($"User config field 'profiles[{i}].models[{m}].contextWindowTokens' in '{filePath}' is required and must be a positive integer.");
-                        models[m] = new UserProfileModel { Id = id, ContextWindowTokens = contextWindow };
+                        var displayName = ReadString(modelNode, "displayName", filePath);
+
+                        IReadOnlyList<ModelReasoningEffort>? reasoningEfforts = null;
+                        if (modelNode["reasoningEfforts"] is not null)
+                        {
+                            if (modelNode["reasoningEfforts"] is not JsonArray effortArray)
+                                throw new
+                                    InvalidDataException($"User config field 'profiles[{i}].models[{m}].reasoningEfforts' in '{filePath}' must be an array.");
+
+                            var parsed      = new List<ModelReasoningEffort>();
+                            var seenEfforts = new HashSet<ModelReasoningEffort>();
+                            for (var e = 0; e < effortArray.Count; e++)
+                            {
+                                if (effortArray[e] is not JsonValue { } effortValue ||
+                                    effortValue.GetValueKind() is not JsonValueKind.String ||
+                                    !ModelReasoningEffortParser.TryParse(effortValue.GetValue<string>(),
+                                                                         out var effort))
+                                    throw new
+                                        InvalidDataException($"User config field 'profiles[{i}].models[{m}].reasoningEfforts[{e}]' in '{filePath}' has an invalid effort value; expected one of: {ModelReasoningEffortParser.AcceptedValuesText}.");
+                                if (!seenEfforts.Add(effort))
+                                    throw new
+                                        InvalidDataException($"User config field 'profiles[{i}].models[{m}].reasoningEfforts[{e}]' in '{filePath}' duplicates effort '{ModelReasoningEffortParser.ToValueString(effort)}'.");
+
+                                parsed.Add(effort);
+                            }
+
+                            // 空数组与缺省同义：未声明强度能力。
+                            if (parsed.Count > 0) reasoningEfforts = parsed;
+                        }
+
+                        var defaultEffort = ReadReasoningEffort(modelNode, "defaultReasoningEffort", filePath,
+                                                                $"profiles[{i}].models[{m}].defaultReasoningEffort");
+                        if (defaultEffort is { } declaredDefault &&
+                            (reasoningEfforts is null || !reasoningEfforts.Contains(declaredDefault)))
+                            throw new
+                                InvalidDataException($"User config field 'profiles[{i}].models[{m}].defaultReasoningEffort' in '{filePath}' must be one of the model's declared reasoningEfforts.");
+                        models[m] = new UserProfileModel
+                        {
+                            Id                     = id,
+                            DisplayName            = displayName,
+                            ContextWindowTokens    = contextWindow,
+                            ReasoningEfforts       = reasoningEfforts,
+                            DefaultReasoningEffort = defaultEffort
+                        };
                     }
                 }
 
                 var endpoint = ReadString(profileNode, "endpoint", filePath) ?? string.Empty;
+                if (UserConfigValidator.GetEndpointError(endpoint) is { } endpointError)
+                    throw new
+                        InvalidDataException($"User config field 'profiles[{i}].endpoint' in '{filePath}' {endpointError}.");
                 var apiKeyEnvironmentVariable =
                     ReadString(profileNode, "apiKeyEnvironmentVariable", filePath) ?? string.Empty;
                 var apiKeyCredentialTarget =
@@ -605,6 +781,28 @@ public static class UserConfigStore
             : throw new
                 InvalidDataException($"User config field '{fieldPath}' in '{filePath}' has an invalid value '{value}'; " +
                                      $"expected '{ChatApiKindParser.ChatCompletionsValue}' or '{ChatApiKindParser.ResponsesValue}'.");
+    }
+
+    /// <summary>
+    ///     <para>
+    ///         通过共享映射读取可选强度档位字段；非法值抛出包含字段路径、原值与可接受值列表的错误。
+    ///     </para>
+    ///     <para>
+    ///         Reads the optional reasoning effort property through the shared mapping; an invalid value fails with
+    ///         the field path, raw value, and the accepted values.
+    ///     </para>
+    /// </summary>
+    private static ModelReasoningEffort? ReadReasoningEffort(JsonObject node, string property, string filePath,
+                                                             string     fieldPath)
+    {
+        var value = ReadString(node, property, filePath);
+        if (value is null) return null;
+
+        return ModelReasoningEffortParser.TryParse(value, out var effort)
+            ? effort
+            : throw new
+                InvalidDataException($"User config field '{fieldPath}' in '{filePath}' has an invalid value '{value}'; " +
+                                     $"expected one of: {ModelReasoningEffortParser.AcceptedValuesText}.");
     }
 
     /// <summary>

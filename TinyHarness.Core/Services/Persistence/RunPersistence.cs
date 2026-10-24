@@ -76,13 +76,11 @@ internal sealed class SecretRedactor
         "apikey", "accesstoken", "token", "password", "secret"
     };
 
-    private readonly IReadOnlyList<string> _knownSecrets;
+    private readonly IReadOnlyDictionary<string, string>? _knownSecrets;
 
     public SecretRedactor(IReadOnlyDictionary<string, string>? knownSecrets)
     {
-        _knownSecrets = (knownSecrets ?? new Dictionary<string, string>(StringComparer.Ordinal)).Values
-           .Where(secret => !string.IsNullOrEmpty(secret)).Distinct(StringComparer.Ordinal).OrderByDescending(secret =>
-                secret.Length).ToArray();
+        _knownSecrets = knownSecrets;
     }
 
     public string Redact(string value)
@@ -105,7 +103,11 @@ internal sealed class SecretRedactor
 
     private string RedactKnownSecrets(string value)
     {
-        foreach (var secret in _knownSecrets) value = value.Replace(secret, "[REDACTED]", StringComparison.Ordinal);
+        // 切换模型后仍使用同一秘密来源；旧值由组合层保留，不随凭据路由变化丢失。
+        foreach (var secret in (_knownSecrets?.Values ?? []).Where(secret => !string.IsNullOrEmpty(secret))
+                                                            .Distinct(StringComparer.Ordinal)
+                                                            .OrderByDescending(secret => secret.Length))
+            value = value.Replace(secret, "[REDACTED]", StringComparison.Ordinal);
 
         return value;
     }
@@ -131,7 +133,8 @@ internal sealed class SecretRedactor
         Name       = RedactNullable(message.Name),
         ToolCallId = RedactNullable(message.ToolCallId),
         ToolCalls = message.ToolCalls?.Select(call =>
-            new ChatToolCall(Redact(call.Id), Redact(call.FunctionName), Redact(call.ArgumentsJson))).ToArray(),
+                                                  new ChatToolCall(Redact(call.Id), Redact(call.FunctionName),
+                                                                   Redact(call.ArgumentsJson))).ToArray(),
         // 检查投影中的 opaque 字段同样必须脱敏；此投影不能用于无损续聊。
         Reasoning = message.Reasoning?.Select(entry => new ReasoningContent(RedactNullable(entry.Text),
                                                                             RedactNullable(entry.ProtectedData),

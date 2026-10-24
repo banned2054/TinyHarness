@@ -12,6 +12,8 @@ public sealed record ChatCompletionRequest
 {
     public required string Model { get; init; }
 
+    public ModelReasoningEffort? ReasoningEffort { get; init; }
+
     public required IReadOnlyList<ChatMessage> Messages { get; init; }
 
     public IReadOnlyList<ToolDefinition>? Tools { get; init; }

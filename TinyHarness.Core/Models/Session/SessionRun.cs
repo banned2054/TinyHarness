@@ -11,15 +11,17 @@ namespace TinyHarness.Core.Models.Session;
 /// </summary>
 public sealed class SessionRun
 {
-    public SessionRun(string id, string sessionId, string turnId, DateTimeOffset? startedUtc = null)
+    public SessionRun(string id, string sessionId, string turnId, DateTimeOffset? startedUtc = null,
+                      SessionModelSelection? modelSelection = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(id);
         ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
         ArgumentException.ThrowIfNullOrWhiteSpace(turnId);
-        Id         = id;
-        SessionId  = sessionId;
-        TurnId     = turnId;
-        StartedUtc = startedUtc ?? DateTimeOffset.UtcNow;
+        Id             = id;
+        SessionId      = sessionId;
+        TurnId         = turnId;
+        StartedUtc     = startedUtc ?? DateTimeOffset.UtcNow;
+        ModelSelection = modelSelection;
     }
 
     public string Id { get; }
@@ -29,6 +31,8 @@ public sealed class SessionRun
     public string TurnId { get; }
 
     public DateTimeOffset StartedUtc { get; }
+
+    public SessionModelSelection? ModelSelection { get; }
 
     /// <summary>
     ///     <para>终态写入时间；尚未结束时为 <see langword="null" />。</para>

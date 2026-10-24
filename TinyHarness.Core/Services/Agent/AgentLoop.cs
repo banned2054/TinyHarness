@@ -594,7 +594,7 @@ public sealed partial class AgentLoop
                                 var changedEvent =
                                     await _instructionBoundary
                                          .ApplyToolRoundUpdateAsync(deferred.Select(candidate =>
-                                                                       roundRecords[candidate.RoundCall.Call.Id]).ToArray(),
+                                                                        roundRecords[candidate.RoundCall.Call.Id]).ToArray(),
                                                                     cancellationToken).ConfigureAwait(false);
                                 await PublishInstructionChangedAsync(changedEvent, cancellationToken)
                                    .ConfigureAwait(false);
@@ -830,9 +830,11 @@ public sealed partial class AgentLoop
             InputTokens = _reportedInputTokens,
             OutputTokens = _reportedOutputTokens,
             ToolCalls = _toolCallRecords.ToArray(),
-            PersistenceWarning = _modelRequestPersistenceWarning is null ? result.PersistenceWarning
-                : string.IsNullOrWhiteSpace(result.PersistenceWarning) ? _modelRequestPersistenceWarning
-                : $"{result.PersistenceWarning}; {_modelRequestPersistenceWarning}"
+            PersistenceWarning = _modelRequestPersistenceWarning is null
+                ? result.PersistenceWarning
+                : string.IsNullOrWhiteSpace(result.PersistenceWarning)
+                    ? _modelRequestPersistenceWarning
+                    : $"{result.PersistenceWarning}; {_modelRequestPersistenceWarning}"
         };
 
         if (_recorder is null) return await PublishRunFinishedAsync(result).ConfigureAwait(false);
@@ -1041,9 +1043,10 @@ public sealed partial class AgentLoop
     /// </summary>
     private ChatCompletionRequest BuildRequest(IReadOnlyList<ToolDefinition> definitions) => new()
     {
-        Model    = _options.Model,
-        Messages = _context.BuildModelView(),
-        Tools    = definitions.Count == 0 ? null : definitions
+        Model           = _options.Model,
+        ReasoningEffort = _options.ReasoningEffort,
+        Messages        = _context.BuildModelView(),
+        Tools           = definitions.Count == 0 ? null : definitions
     };
 
     /// <summary>
@@ -1107,9 +1110,10 @@ public sealed partial class AgentLoop
             // 摘要不得请求工具或产生副作用。
             var summaryRequest = new ChatCompletionRequest
             {
-                Model    = _options.Model,
-                Messages = foldMessages,
-                Tools    = null
+                Model           = _options.Model,
+                ReasoningEffort = _options.ReasoningEffort,
+                Messages        = foldMessages,
+                Tools           = null
             };
             // 摘要按自身输入校准并累计 usage，但内部文本不得作为回答展示。
             var estimatedSummaryTokens = TokenEstimator.EstimateMessages(foldMessages);

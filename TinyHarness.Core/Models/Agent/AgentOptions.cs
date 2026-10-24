@@ -1,4 +1,5 @@
 using TinyHarness.Core.Models.Context;
+using TinyHarness.Core.Models.ChatCompletions;
 
 namespace TinyHarness.Core.Models.Agent;
 
@@ -10,6 +11,12 @@ namespace TinyHarness.Core.Models.Agent;
 public sealed record AgentOptions
 {
     public required string Model { get; init; }
+
+    /// <summary>
+    ///     <para>请求推理强度；null 表示不发送强度参数，沿用服务默认值。</para>
+    ///     <para>Requested reasoning effort; null omits the parameter and preserves the service default.</para>
+    /// </summary>
+    public ModelReasoningEffort? ReasoningEffort { get; init; }
 
     /// <summary>
     ///     <para>每次运行的普通模型步数上限；0 表示不限，负数无效。</para>

@@ -4,8 +4,8 @@ using TinyHarness.Core.Models.Tools;
 namespace TinyHarness.Core.Models.Persistence;
 
 /// <summary>
-///     <para>会话历史与实时输出共用的脱敏展示条目，不包含任意 object 载荷。</para>
-///     <para>A redacted display item shared by stored history and live output, with no arbitrary object payloads.</para>
+///     <para>会话历史与实时输出共用的本地展示条目；正文与工具内容保留原文，不包含任意 object 载荷。</para>
+///     <para>A local display item shared by stored history and live output, preserving text and tool content without arbitrary object payloads.</para>
 /// </summary>
 public sealed record SessionHistoryItem
 {
@@ -16,7 +16,14 @@ public sealed record SessionHistoryItem
     public          string? RunId     { get; init; }
     public required string  Kind      { get; init; }
     public          string? Text      { get; init; }
-    public          string? CallId    { get; init; }
+
+    /// <summary>
+    ///     <para>助手的可读推理原文；与正文分开展示，不含 opaque 载荷，旧日志缺失时为空。</para>
+    ///     <para>Readable assistant reasoning as received, shown apart from the body without opaque payloads; null when absent in older logs.</para>
+    /// </summary>
+    public string? Reasoning { get; init; }
+
+    public string? CallId { get; init; }
 
     /// <summary>
     ///     <para>未脱敏的本次运行调用序号；旧历史缺失时按脱敏 CallId 关联。</para>

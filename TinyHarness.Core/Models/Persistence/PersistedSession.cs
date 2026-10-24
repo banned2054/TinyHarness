@@ -9,10 +9,10 @@ using TinyHarness.Core.Models.Session;
 namespace TinyHarness.Core.Models.Persistence;
 
 /// <summary>
-///     <para>由会话日志重建的内存投影，保存身份、提交序号、脱敏检查视图及可续聊协议内容。</para>
+///     <para>由会话日志重建的本地投影，保存身份、提交序号、运行事实及可续聊协议原文。</para>
 ///     <para>
-///         An in-memory session-log projection containing fixed identity, commit sequence, redacted inspection
-///         views and resumable protocol content.
+///         A local session-log projection containing identity, commit sequence, run facts and verbatim resumable
+///         protocol content.
 ///     </para>
 /// </summary>
 /// <remarks>
@@ -33,6 +33,9 @@ public sealed record PersistedSession
     public string WorkspaceRoot { get; init; } = string.Empty;
 
     public SessionModelIdentity? Model { get; init; }
+
+    public IReadOnlyList<SessionModelSelection> ModelSelections { get; init; } = [];
+    public SessionModelSelection?               ModelSelection  => ModelSelections.LastOrDefault();
 
     public DateTimeOffset CreatedUtc { get; init; }
 
@@ -99,7 +102,8 @@ public sealed record PersistedSession
 /// </remarks>
 public sealed record PersistedConversation
 {
-    public IReadOnlyList<PersistedMessage> Messages { get; init; } = [];
+    public long?                           CheckpointModelSelectionRevision { get; init; }
+    public IReadOnlyList<PersistedMessage> Messages                         { get; init; } = [];
 
     public IReadOnlyList<ProjectInstructionRecord> ProjectInstructionRecords { get; init; } = [];
 
@@ -196,8 +200,8 @@ public sealed record PersistedReasoning
 }
 
 /// <summary>
-///     <para>用户回合的脱敏检查视图，包含输入与全部运行尝试的记录。</para>
-///     <para>A redacted inspection view of a user turn, containing its input and records of all run attempts.</para>
+///     <para>用户回合的本地视图，保留输入原文及全部运行尝试。</para>
+///     <para>A local turn view preserving user input and all run attempts.</para>
 /// </summary>
 public sealed record PersistedTurn
 {
@@ -211,10 +215,9 @@ public sealed record PersistedTurn
 }
 
 /// <summary>
-///     <para>运行的脱敏检查视图，包含状态、计数、usage、回答或错误，以及可选的工具记录和检查标记。</para>
+///     <para>运行的本地视图，保留回答原文及执行事实；错误诊断继续脱敏。</para>
 ///     <para>
-///         A redacted run inspection view containing status, counts, usage, answer or error,
-///         and optional tool records and inspection markers.
+///         A local run view preserving answers and execution facts while keeping error diagnostics redacted.
 ///     </para>
 /// </summary>
 /// <remarks>
@@ -226,7 +229,8 @@ public sealed record PersistedTurn
 /// </remarks>
 public sealed record PersistedRun
 {
-    public RunBudgetSnapshot? Budget { get; init; }
+    public long?              ModelSelectionRevision { get; init; }
+    public RunBudgetSnapshot? Budget                 { get; init; }
 
     public string Id { get; init; } = string.Empty;
 
@@ -266,9 +270,9 @@ public sealed record PersistedRun
     public bool? NeedsInspection { get; init; }
 
     /// <summary>
-    ///     <para>请求的工具调用的脱敏执行意图与确认事实；没有调用时可为 null，不含可重放计划或授权。</para>
+    ///     <para>工具调用的执行意图与确认事实；没有调用时可为 null，不含可重放计划或授权。</para>
     ///     <para>
-    ///         Redacted execution intent and confirmation facts for requested tool calls; may be null when no
+    ///         Execution intent and confirmation facts for requested tool calls; may be null when no
     ///         calls exist and carry no replayable plan or authorization.
     ///     </para>
     /// </summary>
@@ -276,9 +280,9 @@ public sealed record PersistedRun
 }
 
 /// <summary>
-///     <para>工具调用的脱敏执行意图与确认检查记录，区分未开始、已确认与未知结果；不可重放执行或授权。</para>
+///     <para>工具调用的执行意图与确认记录，区分未开始、已确认与未知结果；不可重放执行或授权。</para>
 ///     <para>
-///         A redacted tool-call inspection record of execution intent and confirmation, distinguishing
+///         A tool-call record of execution intent and confirmation, distinguishing
 ///         not started, confirmed and unknown results; never replays execution or authorization.
 ///     </para>
 /// </summary>
@@ -307,8 +311,8 @@ public sealed record PersistedToolCallRecord
     public bool SideEffects { get; init; }
 
     /// <summary>
-    ///     <para>按已知密钥规则脱敏的一行摘要。</para>
-    ///     <para>The one-line summary redacted for known secrets.</para>
+    ///     <para>工具准备时的一行摘要原文。</para>
+    ///     <para>The original one-line summary from tool preparation.</para>
     /// </summary>
     public string Summary { get; init; } = string.Empty;
 
@@ -324,8 +328,8 @@ public sealed record PersistedToolCallRecord
     public string? NotStartedReason { get; init; }
 
     /// <summary>
-    ///     <para>脱敏后的授权结论；尚未授权时为 null。</para>
-    ///     <para>The redacted authorization outcome; null before authorization.</para>
+    ///     <para>用于本地查看的授权结论；尚未授权时为 null，不可恢复为授权。</para>
+    ///     <para>The local authorization outcome; null before authorization and never restored as a grant.</para>
     /// </summary>
     public string? Approval { get; init; }
 

@@ -1,7 +1,6 @@
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
-using System.Text.Json.Nodes;
 using TinyHarness.Core.Models.Agent;
 using TinyHarness.Core.Models.ChatCompletions;
 using TinyHarness.Core.Models.Context;
@@ -13,8 +12,8 @@ using TinyHarness.Core.Models.Tools;
 namespace TinyHarness.Core.Services.Persistence;
 
 /// <summary>
-///     <para>将单次运行审计与脱敏展示历史追加到所属会话日志。</para>
-///     <para>Appends one run's audit facts and redacted display history to its owning session log.</para>
+///     <para>将脱敏运行审计和保留原文的本地展示历史追加到所属会话日志。</para>
+///     <para>Appends redacted run audits and verbatim local display history to the session log.</para>
 /// </summary>
 public sealed class SessionLogRunRecorder : IRunRecorder
 {
@@ -62,8 +61,8 @@ public sealed class SessionLogRunRecorder : IRunRecorder
     ///     <para>Commits canonical context containing identity and user input before run audit begins.</para>
     /// </param>
     /// <param name="knownSecrets">
-    ///     <para>用于检查投影的已知密钥；canonical 会话内容不经过此脱敏器。</para>
-    ///     <para>Known secrets for inspection projections; canonical session content bypasses this redactor.</para>
+    ///     <para>用于审计和诊断的已知密钥；协议消息和本地历史不经过此脱敏器。</para>
+    ///     <para>Known secrets for audits and diagnostics; protocol messages and local history bypass this redactor.</para>
     /// </param>
     /// <param name="historyItemCommitted">
     ///     <para>日志确认追加后接收 writer 绑定的同一展示条目。</para>
@@ -106,7 +105,7 @@ public sealed class SessionLogRunRecorder : IRunRecorder
             SystemPrompt = _redactor.Redact(systemPrompt),
             UserInput    = _redactor.Redact(userInput)
         };
-        var userItem = NewHistoryItem(SessionHistoryKind.User, _redactor.Redact(userInput));
+        var userItem = NewHistoryItem(SessionHistoryKind.User, userInput);
         var appended = await AppendBatchAsync([AuditRecord(audit), HistoryRecord(userItem)], cancellationToken)
            .ConfigureAwait(false);
         await PublishHistoryItemsAsync(appended, cancellationToken).ConfigureAwait(false);
@@ -144,7 +143,7 @@ public sealed class SessionLogRunRecorder : IRunRecorder
             pending = existingPending with
             {
                 Decision = decision,
-                Outcome = _redactor.Redact(outcome)
+                Outcome = outcome
             };
             _pendingTools[invocationId] = pending;
         }
@@ -328,7 +327,8 @@ public sealed class SessionLogRunRecorder : IRunRecorder
         var kind = assistantMessage.ToolCalls is { Count: > 0 }
             ? SessionHistoryKind.Process
             : SessionHistoryKind.Final;
-        var item     = NewHistoryItem(kind, _redactor.Redact(assistantMessage.Content));
+        var item = NewHistoryItem(kind, assistantMessage.Content,
+                                  ReasoningText(assistantMessage.Reasoning));
         var appended = await AppendBatchAsync([HistoryRecord(item)], cancellationToken).ConfigureAwait(false);
         _currentInvocationIds.Clear();
         if (assistantMessage.ToolCalls is { } recordedCalls)
@@ -384,6 +384,25 @@ public sealed class SessionLogRunRecorder : IRunRecorder
         _assistantCalls.Clear();
         _currentInvocationIds.Clear();
         await PublishHistoryItemsAsync(appended, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    ///     <para>按到达顺序拼接助手的可读推理文本；不展示 opaque 载荷。</para>
+    ///     <para>Joins readable assistant reasoning in arrival order without exposing opaque payloads.</para>
+    /// </summary>
+    private string? ReasoningText(IReadOnlyList<ReasoningContent>? entries)
+    {
+        if (entries is not { Count: > 0 }) return null;
+
+        string? joined = null;
+        foreach (var entry in entries)
+        {
+            var text = entry.Text;
+            if (string.IsNullOrEmpty(text)) continue;
+            joined = joined is null ? text : $"{joined}\n{text}";
+        }
+
+        return joined;
     }
 
     private string GetCurrentInvocationId(string callId) =>
@@ -461,8 +480,8 @@ public sealed class SessionLogRunRecorder : IRunRecorder
     {
         var preparation    = pending.Preparation;
         var remainingBytes = MaxArtifactsBytes;
-        var stdout         = result is null ? null : _redactor.Redact(result.Stdout);
-        var stderr         = result is null ? null : _redactor.Redact(result.Stderr);
+        var stdout         = result?.Stdout;
+        var stderr         = result?.Stderr;
         var outputWarnings = new List<string>();
         if (result?.ExecutionIncomplete == true)
             outputWarnings.Add("tool execution is incomplete; retained output does not confirm overall completion");
@@ -470,35 +489,29 @@ public sealed class SessionLogRunRecorder : IRunRecorder
         {
             var artifact = await ReadArtifactAsync(stdoutPath, remainingBytes, cancellationToken).ConfigureAwait(false);
             remainingBytes -= artifact.BytesRead;
-            if (artifact.Text is not null) stdout = _redactor.Redact(artifact.Text);
+            if (artifact.Text is not null) stdout = artifact.Text;
             if (artifact.Warning is not null) outputWarnings.Add("stdout: " + artifact.Warning);
         }
 
         if (result?.StderrArtifactPath is { } stderrPath)
         {
             var artifact = await ReadArtifactAsync(stderrPath, remainingBytes, cancellationToken).ConfigureAwait(false);
-            if (artifact.Text is not null) stderr = _redactor.Redact(artifact.Text);
+            if (artifact.Text is not null) stderr = artifact.Text;
             if (artifact.Warning is not null) outputWarnings.Add("stderr: " + artifact.Warning);
         }
 
         var outputWarning = outputWarnings.Count == 0 ? null : string.Join("; ", outputWarnings);
         return NewHistoryItem(SessionHistoryKind.Tool,
-                              result is null ? null : _redactor.Redact(result.Content),
-                              _redactor.Redact(preparation?.CallId ??
-                                               pending.Call?.Id ?? execution?.CallId ?? string.Empty),
+                              result?.Content,
+                              callId : preparation?.CallId ?? pending.Call?.Id ?? execution?.CallId ?? string.Empty,
                               invocationId : invocationId,
-                              toolName : _redactor.Redact(preparation?.ToolName ??
-                                                          pending.Call?.FunctionName ?? string.Empty),
-                              argumentsJson : SafeArguments(pending.Call?.ArgumentsJson),
-                              capability : preparation is null
-                                  ? _redactor.RedactNullable(execution?.Capability)
-                                  : _redactor.Redact(preparation.Capability),
-                              summary : preparation is null
-                                  ? _redactor.Redact(execution?.Summary ?? string.Empty)
-                                  : _redactor.Redact(preparation.Summary),
-                              targetPaths : preparation is null ? null : RedactPaths(preparation.TargetPaths),
-                              executionPolicy : _redactor.RedactNullable(preparation?.ExecutionPolicy),
-                              approval : _redactor.RedactNullable(pending.Outcome ?? execution?.Approval),
+                              toolName : preparation?.ToolName ?? pending.Call?.FunctionName ?? string.Empty,
+                              argumentsJson : pending.Call?.ArgumentsJson,
+                              capability : preparation?.Capability ?? execution?.Capability,
+                              summary : preparation?.Summary       ?? execution?.Summary ?? string.Empty,
+                              targetPaths : preparation?.TargetPaths,
+                              executionPolicy : preparation?.ExecutionPolicy,
+                              approval : pending.Outcome ?? execution?.Approval,
                               state : state,
                               preparationError : _redactor.RedactNullable(execution?.PreparationError),
                               notStartedReason : _redactor.RedactNullable(execution?.NotStartedReason),
@@ -508,7 +521,7 @@ public sealed class SessionLogRunRecorder : IRunRecorder
                               outputTruncated : result?.OutputTruncated ?? false,
                               stdout : stdout,
                               stderr : stderr,
-                              patchChanges : result?.PatchChanges?.Select(RedactPatch).ToArray(),
+                              patchChanges : result?.PatchChanges,
                               outputIncomplete : outputIncomplete || outputWarning is not null,
                               outputWarning : outputWarning);
     }
@@ -558,7 +571,8 @@ public sealed class SessionLogRunRecorder : IRunRecorder
         }
     }
 
-    private SessionHistoryItem NewHistoryItem(string kind, string? text = null, string? callId = null,
+    private SessionHistoryItem NewHistoryItem(string kind, string? text = null, string? reasoning = null,
+                                              string? callId = null,
                                               string? toolName = null, string? argumentsJson = null,
                                               string? capability = null, string? summary = null,
                                               IReadOnlyList<string>? targetPaths = null, string? executionPolicy = null,
@@ -579,6 +593,7 @@ public sealed class SessionLogRunRecorder : IRunRecorder
         RunId            = RunId,
         Kind             = kind,
         Text             = text,
+        Reasoning        = reasoning,
         CallId           = callId,
         InvocationId     = invocationId,
         ToolName         = toolName,
@@ -612,47 +627,6 @@ public sealed class SessionLogRunRecorder : IRunRecorder
 
     private IReadOnlyList<string> RedactPaths(IReadOnlyList<string> paths) =>
         paths.Select(_redactor.Redact).ToArray();
-
-    private PatchChange RedactPatch(PatchChange change) => new(_redactor.Redact(change.Path),
-                                                               _redactor.Redact(change.Operation),
-                                                               _redactor.Redact(change.Diff),
-                                                               _redactor.Redact(change.State));
-
-    private string? SafeArguments(string? argumentsJson)
-    {
-        if (argumentsJson is null) return null;
-        try
-        {
-            var node = JsonNode.Parse(argumentsJson);
-            if (node is not JsonObject) return null;
-            RemoveInternalFields(node);
-            return _redactor.Redact(node.ToJsonString());
-        }
-        catch (JsonException)
-        {
-            return null;
-        }
-    }
-
-    private static void RemoveInternalFields(JsonNode? node)
-    {
-        switch (node)
-        {
-            case JsonObject obj :
-            {
-                foreach (var property in obj.ToArray())
-                    if (property.Key.StartsWith('_')) obj.Remove(property.Key);
-                    else RemoveInternalFields(property.Value);
-                break;
-            }
-            case JsonArray array :
-            {
-                foreach (var item in array)
-                    RemoveInternalFields(item);
-                break;
-            }
-        }
-    }
 
     private sealed record ArtifactReadResult(string? Text, string? Warning, int BytesRead);
 

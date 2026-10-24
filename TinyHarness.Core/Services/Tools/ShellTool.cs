@@ -242,12 +242,12 @@ public sealed class ShellTool : ITool
 
         cancellationToken.ThrowIfCancellationRequested();
         Directory.CreateDirectory(_artifactRoot);
-        var                    runId = $"{DateTimeOffset.UtcNow:yyyyMMddTHHmmssfff}-{Guid.NewGuid():N}";
-        var                    stdoutPath = Path.Combine(_artifactRoot, runId + ".stdout.txt");
-        var                    stderrPath = Path.Combine(_artifactRoot, runId + ".stderr.txt");
-        var                    secrets = _knownSecrets.Values.Where(value => !string.IsNullOrEmpty(value)).ToArray();
-        var                    stdoutCapture = _captureFactory(stdoutPath, _outputCharacterLimit, secrets);
-        var                    stderrCapture = _captureFactory(stderrPath, _outputCharacterLimit, secrets);
+        var runId      = $"{DateTimeOffset.UtcNow:yyyyMMddTHHmmssfff}-{Guid.NewGuid():N}";
+        var stdoutPath = Path.Combine(_artifactRoot, runId + ".stdout.txt");
+        var stderrPath = Path.Combine(_artifactRoot, runId + ".stderr.txt");
+        // 本地工具结果也是后续模型上下文，保留原文；凭据环境隔离仍由执行后端负责。
+        var stdoutCapture = _captureFactory(stdoutPath, _outputCharacterLimit, []);
+        var stderrCapture = _captureFactory(stderrPath, _outputCharacterLimit, []);
         ProcessExecutionResult execution;
         try
         {
