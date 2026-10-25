@@ -160,19 +160,22 @@ public sealed class DesktopSessionFactory
                                                  .ConfigureAwait(false);
                 var snapshot = writer.LoadedSnapshot!;
                 var restored = SessionResume.Restore(snapshot, root, WorkspacePrompts.Current, options.Context);
-                var saved    = restored.Session.ModelSelection!;
+                var saved    = restored.Session.ModelSelection;
+                // 旧日志允许没有选择记录；宿主接管前按初始模型定位，缺失强度保持未知。
+                var savedModel  = saved?.Model ?? restored.Session.InitialModel;
+                var savedEffort = saved?.ReasoningEffort;
                 var matches = user
                              .Profiles.SelectMany(profile =>
                                                       profile.Models.Select(item => (Profile : profile, Model : item)))
-                             .Where(item => item.Model.Id         == saved.Model.ModelId  &&
-                                            item.Profile.Endpoint == saved.Model.Endpoint &&
-                                            item.Profile.ChatApi  == saved.Model.ChatApi  &&
-                                            (saved.CredentialRoute is null ||
+                             .Where(item => item.Model.Id         == savedModel.ModelId  &&
+                                            item.Profile.Endpoint == savedModel.Endpoint &&
+                                            item.Profile.ChatApi  == savedModel.ChatApi  &&
+                                            (saved?.CredentialRoute is null ||
                                              Route(item.Profile) == saved.CredentialRoute)).ToArray();
                 var target = matches.Length == 1 ? matches[0] : default;
                 var available = target.Profile is not null &&
-                                (saved.ReasoningEffort is null ||
-                                 target.Model.ReasoningEfforts?.Contains(saved.ReasoningEffort.Value) == true);
+                                (savedEffort is null ||
+                                 target.Model.ReasoningEfforts?.Contains(savedEffort.Value) == true);
                 string? reason = null;
                 if (available && !request.Reselect)
                 {
@@ -186,13 +189,23 @@ public sealed class DesktopSessionFactory
                 host = new ChatSessionHost(restored.Session, restored.Context,
                                            options with
                                            {
-                                               Model = saved.Model.ModelId, Context = saved.Context,
-                                               ReasoningEffort = saved.ReasoningEffort
+                                               Model = savedModel.ModelId,
+                                               Context = saved is null ? options.Context : saved.Context,
+                                               ReasoningEffort = savedEffort
                                            }, model, tools, WorkspacePrompts.Current, permissions, approvals, sink,
                                            sessionWriter : writer, needsInspection : restored.NeedsInspection,
                                            instructionLoader : instructions, knownSecrets : secrets);
                 if (model is null)
                     await events(new DesktopEvent("error", null, "需要重新选择模型；历史已恢复。" + reason)).ConfigureAwait(false);
+                else if (saved is null)
+                {
+                    // 首次绑定固化当前目录的窗口与能力；旧 run 的强度和选择归属仍保持未知。
+                    var context = options.Context! with { ContextWindowTokens = target.Model!.ContextWindowTokens };
+                    await host.ChangeModelAsync(new SessionModelBinding(savedModel, model, context, savedEffort,
+                                                                        Route(target.Profile!), target.Profile!.Name,
+                                                                        target.Model.ReasoningEfforts, ownsClient : false),
+                                                cancellationToken).ConfigureAwait(false);
+                }
                 else
                     await host.EnsureCredentialRouteAsync(Route(target.Profile!), cancellationToken)
                               .ConfigureAwait(false);

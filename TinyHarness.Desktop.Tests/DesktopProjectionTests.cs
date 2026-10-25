@@ -2,6 +2,7 @@ using NUnit.Framework;
 using System.Runtime.CompilerServices;
 using TinyHarness.Core.Models.ChatCompletions;
 using TinyHarness.Core.Models.Configuration;
+using TinyHarness.Core.Services.Session;
 using TinyHarness.Core.Services.ChatCompletions;
 using TinyHarness.Core.Services.ChatCompletions.Configuration;
 using TinyHarness.Core.Services.Persistence;
@@ -405,6 +406,113 @@ public sealed class DesktopProjectionTests
         Assert.That(requests.Last().Model, Is.EqualTo("flash"));
     }
 
+    [TestCase(true)]
+    [TestCase(false)]
+    public async Task LegacySessionCanSwitchBeforeInputAndRestoreSelectionWithoutModelRequests(bool keepOldProvider)
+    {
+        var fixture = await Fixture.CreateAsync();
+        var id      = await CreateLegacySessionAsync(fixture);
+        var before  = await SessionStoreReader.ReadAsync(fixture.Store, id, CancellationToken.None);
+        var path    = Path.Combine(fixture.Store, id + SessionStoreWriter.LogFileSuffix);
+        var prefix  = await File.ReadAllBytesAsync(path);
+        Assert.That(before!.ModelSelection, Is.Null);
+        var user = await UserConfigStore.LoadAsync(fixture.Config, CancellationToken.None);
+        var target = new UserProfile
+        {
+            Name         = "deepseek", Endpoint = "https://deepseek.invalid/v1", ApiKeyCredentialTarget = "fixture",
+            DefaultModel = "deepseek-chat",
+            Models       = [new UserProfileModel { Id = "deepseek-chat", ContextWindowTokens = 64000 }]
+        };
+        await UserConfigStore.SaveAsync(fixture.Config, user with
+        {
+            Profiles = keepOldProvider ? [user.Profiles[0], target] : [target]
+        }, CancellationToken.None);
+        var requests = 0;
+        var clients  = new List<string>();
+        var factory = new DesktopSessionFactory((config, _) =>
+        {
+            clients.Add(config.Model);
+            return new Model(Signal(), Signal(), "unused", observed : _ => requests++);
+        }, new Credentials(), fixture.Config);
+        await using (var manager = new DesktopSessionManager())
+        {
+            var page = new SessionViewModel(manager, factory, fixture.First, id, fixture.Store,
+                                            dispatch : action =>
+                                            {
+                                                action();
+                                                return ValueTask.CompletedTask;
+                                            });
+            await page.SelectModelAsync(new ModelChoice("deepseek", "deepseek-chat"), null);
+            Assert.That(page.Id, Is.EqualTo(id));
+            Assert.That(page.Draft, Is.Empty);
+            Assert.That(page.CurrentModelNameText, Is.EqualTo("deepseek-chat"));
+            Assert.That(clients, Is.EqualTo(new[] { "deepseek-chat" }));
+        }
+
+        var saved = await SessionStoreReader.ReadAsync(fixture.Store, id, CancellationToken.None);
+        Assert.That(saved!.Model, Is.EqualTo(before.Model));
+        Assert.That(saved.ModelSelection!.Model.ModelId, Is.EqualTo("deepseek-chat"));
+        Assert.That(saved.ModelSelection.Context!.ContextWindowTokens, Is.EqualTo(64000));
+        Assert.That(saved.Turns, Has.Count.EqualTo(1));
+        Assert.That(saved.Turns[0].Runs[0].ModelSelectionRevision, Is.Null);
+        Assert.That(saved.Conversation!.Messages.Select(message => message.Content),
+                    Is.EqualTo(before.Conversation!.Messages.Select(message => message.Content)));
+        var after = await File.ReadAllBytesAsync(path);
+        Assert.That(after.Take(prefix.Length), Is.EqualTo(prefix));
+        await using var reopened = await factory.OpenAsync(new DesktopSessionRequest(fixture.First, SessionId : id),
+                                                           _ => ValueTask.CompletedTask,
+                                                           _ => ValueTask.CompletedTask, CancellationToken.None);
+        Assert.That(reopened.Host.Session.ModelSelection!.Model.ModelId, Is.EqualTo("deepseek-chat"));
+        Assert.That(reopened.Host.Session.Turns, Has.Count.EqualTo(1));
+        Assert.That(requests, Is.Zero);
+    }
+
+    [Test]
+    public async Task LegacySessionResumesInitialModelWithoutInheritingCurrentDefaultEffort()
+    {
+        var fixture = await Fixture.CreateAsync();
+        var id      = await CreateLegacySessionAsync(fixture);
+        var user    = await UserConfigStore.LoadAsync(fixture.Config, CancellationToken.None);
+        await UserConfigStore.SaveAsync(fixture.Config, user with
+        {
+            Profiles =
+            [
+                user.Profiles[0] with
+                {
+                    Models =
+                    [
+                        user.Profiles[0].Models[0] with
+                        {
+                            ReasoningEfforts = [ModelReasoningEffort.High],
+                            DefaultReasoningEffort = ModelReasoningEffort.High
+                        }
+                    ]
+                }
+            ]
+        }, CancellationToken.None);
+        var finish = Signal();
+        finish.SetResult();
+        var requests = new List<ChatCompletionRequest>();
+        var factory = new DesktopSessionFactory((_, _) => new Model(Signal(), finish, "continued",
+                                                                    observed : requests.Add),
+                                                new Credentials(), fixture.Config);
+        await using var session = await factory.OpenAsync(new DesktopSessionRequest(fixture.First, SessionId : id),
+                                                          _ => ValueTask.CompletedTask,
+                                                          _ => ValueTask.CompletedTask, CancellationToken.None);
+        Assert.That(session.Host.HasModelBinding, Is.True);
+        Assert.That(session.Host.Session.ModelSelection!.ReasoningEffort, Is.Null);
+        Assert.That(requests, Is.Empty);
+        await session.SubmitAsync("continue");
+        Assert.That(requests, Has.Count.EqualTo(1));
+        Assert.That(requests[0].Model, Is.EqualTo("offline"));
+        Assert.That(requests[0].ReasoningEffort, Is.Null);
+        Assert.That(requests[0].Messages.Select(message => message.Content),
+                    Does.Contain("legacy question").And.Contain("legacy answer"));
+        var saved = await SessionStoreReader.ReadAsync(fixture.Store, id, CancellationToken.None);
+        Assert.That(saved!.Turns, Has.Count.EqualTo(2));
+        Assert.That(saved.Turns[0].Runs[0].ModelSelectionRevision, Is.Null);
+    }
+
     [Test]
     public async Task RemovedTargetCanBeExplicitlyReplacedWithoutReadingItsCredentials()
     {
@@ -572,6 +680,38 @@ public sealed class DesktopProjectionTests
         await ready.Task.WaitAsync(TimeSpan.FromSeconds(5));
         settings.Providers.Single().EditCommand.Execute(null);
         Assert.That(settings.Editor!.ModelEntries.Single().DisplayName, Is.EqualTo("saved name"));
+    }
+
+    private static async Task<string> CreateLegacySessionAsync(Fixture fixture)
+    {
+        var finish = Signal();
+        finish.SetResult();
+        var factory = new DesktopSessionFactory((_, _) => new Model(Signal(), finish, "legacy answer"),
+                                                new Credentials(), fixture.Config);
+        string seedId;
+        await using (var seed = await factory.OpenAsync(new DesktopSessionRequest(fixture.First),
+                                                        _ => ValueTask.CompletedTask,
+                                                        _ => ValueTask.CompletedTask, CancellationToken.None))
+        {
+            await seed.SubmitAsync("legacy question");
+            seedId = seed.Id;
+        }
+
+        var snapshot = (await SessionStoreReader.ReadAsync(fixture.Store, seedId, CancellationToken.None))!;
+        // 独立写出没有选择记录及 run 修订引用的旧日志夹具，不改写种子日志。
+        var legacy = snapshot with
+        {
+            Id = Guid.NewGuid().ToString("N"), ModelSelections = [],
+            Turns = snapshot.Turns.Select(turn => turn with
+            {
+                Runs = turn.Runs.Select(run => run with { ModelSelectionRevision = null }).ToArray()
+            }).ToArray(),
+            Conversation = snapshot.Conversation! with { CheckpointModelSelectionRevision = null }
+        };
+        var       restored = SessionResume.Restore(legacy, fixture.First, legacy.Conversation.Messages[0].Content);
+        using var writer   = new SessionStoreWriter(fixture.Store, legacy.Id);
+        await writer.CommitAsync(restored.Session, restored.Context, CancellationToken.None);
+        return legacy.Id;
     }
 
     private static SessionViewModel Page(DesktopSessionManager manager, DesktopSessionFactory factory, string root) =>
