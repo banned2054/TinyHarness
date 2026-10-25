@@ -12,6 +12,7 @@
         <StyleInclude Source="avares://TinyHarness.Desktop/Presentation/Styles/Tooling.axaml" />
         <StyleInclude Source="avares://TinyHarness.Desktop/Presentation/Styles/Sidebar.axaml" />
         <StyleInclude Source="avares://TinyHarness.Desktop/Presentation/Styles/Composer.axaml" />
+        <StyleInclude Source="avares://TinyHarness.Desktop/Presentation/Styles/Settings.axaml" />
     </Application.Styles>
     <Application.Resources>
         <ResourceDictionary>

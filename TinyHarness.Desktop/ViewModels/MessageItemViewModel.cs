@@ -23,6 +23,7 @@ public sealed class MessageItemViewModel : ConversationItemViewModel
     {
         Id                     = message.Id;
         Role                   = message.Role;
+        ModelLabel             = message.ModelLabel ?? string.Empty;
         _content               = message.Content;
         _reasoning             = message.Reasoning;
         _isInterrupted         = message.IsInterrupted;
@@ -55,7 +56,8 @@ public sealed class MessageItemViewModel : ConversationItemViewModel
         IsInProcessGroup       = true;
     }
 
-    public string Id { get; }
+    public string ModelLabel { get; } = string.Empty;
+    public string Id         { get; }
 
     public MessageRole Role { get; }
 

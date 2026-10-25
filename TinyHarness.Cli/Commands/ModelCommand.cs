@@ -1,6 +1,7 @@
 using TinyHarness.Cli.Models;
 using TinyHarness.Cli.Services;
 using TinyHarness.Core.Models.Configuration;
+using TinyHarness.Core.Services.ChatCompletions.Configuration;
 
 namespace TinyHarness.Cli.Commands;
 
@@ -12,6 +13,22 @@ namespace TinyHarness.Cli.Commands;
 /// </summary>
 internal static class ModelCommand
 {
+    private static async Task<int> EditAsync(CommandContext    context, string id, string? providerName,
+                                             CancellationToken token)
+    {
+        var (_, provider) = await UserConfigAccess.RequireProfileAsync(context, providerName, token);
+        try
+        {
+            await CatalogWizard.ModelAsync(context, provider.Name, id, true, token);
+        }
+        catch (OperationCanceledException) when (!token.IsCancellationRequested)
+        {
+            await context.Io.WriteLineAsync("Cancelled. Nothing was saved.", token);
+        }
+
+        return 0;
+    }
+
     /// <summary>
     ///     执行 model 子命令。
     ///     Executes a model subcommand.
@@ -21,7 +38,10 @@ internal static class ModelCommand
     {
         "list" => await ListAsync(context, options.ProviderName, cancellationToken).ConfigureAwait(false),
         "add" => await AddAsync(context, options.Primary!, options.ContextWindowTokens!.Value, options.ProviderName,
-                                cancellationToken)
+                                cancellationToken, options.ModelDisplayName, options.ModelEfforts,
+                                options.ModelDefaultEffort)
+           .ConfigureAwait(false),
+        "edit" => await EditAsync(context, options.Primary!, options.ProviderName, cancellationToken)
            .ConfigureAwait(false),
         "use" => await UseAsync(context, options.Primary!, options.ProviderName, cancellationToken)
            .ConfigureAwait(false),
@@ -69,7 +89,8 @@ internal static class ModelCommand
     ///     Adds a model to a profile; duplicate ids fail; the model becomes the default when the profile has none.
     /// </summary>
     private static async Task<int> AddAsync(CommandContext context,      string modelId, int contextWindowTokens,
-                                            string?        providerName, CancellationToken cancellationToken)
+                                            string?        providerName, CancellationToken cancellationToken,
+                                            string?        displayName,  string? efforts, string? defaultEffort)
     {
         var io = context.Io;
         var (config, profile) =
@@ -80,16 +101,11 @@ internal static class ModelCommand
                 InvalidOperationException($"Model '{modelId}' already exists in profile '{profile.Name}'. Run 'tinyharness model use {modelId}' to select it.");
 
         var makeDefault = profile.DefaultModel.Length == 0;
-        var updated = profile with
-        {
-            Models =
-            [
-                .. profile.Models, new UserProfileModel { Id = modelId, ContextWindowTokens = contextWindowTokens }
-            ],
-            DefaultModel = makeDefault ? modelId : profile.DefaultModel
-        };
-        config = UserConfigAccess.UpsertProfile(config, updated);
-        await UserConfigAccess.SaveAsync(context, config, cancellationToken).ConfigureAwait(false);
+        var model = ModelCatalogEditor.Model(modelId, displayName, contextWindowTokens, efforts ?? string.Empty,
+                                             defaultEffort ?? "default");
+        var candidate = ModelCatalogEditor.PutModel(config, profile.Name, model, false, makeDefault);
+        await ModelCatalogEditor.SaveAsync(context.ResolveUserConfigPath(), config, candidate, cancellationToken)
+                                .ConfigureAwait(false);
 
         await io.WriteLineAsync($"Added '{modelId}' ({contextWindowTokens:N0} tokens) to profile '{profile.Name}'.",
                                 cancellationToken).ConfigureAwait(false);
@@ -121,9 +137,11 @@ internal static class ModelCommand
                 InvalidOperationException($"Model '{modelId}' is not configured in profile '{profile.Name}'. Known models: {known}.");
         }
 
-        var updated = profile with { DefaultModel = modelId };
+        var updated  = profile with { DefaultModel = modelId };
+        var baseline = config;
         config = UserConfigAccess.UpsertProfile(config, updated);
-        await UserConfigAccess.SaveAsync(context, config, cancellationToken).ConfigureAwait(false);
+        await ModelCatalogEditor.SaveAsync(context.ResolveUserConfigPath(), baseline, config, cancellationToken)
+                                .ConfigureAwait(false);
 
         await io
              .WriteLineAsync($"Default model for profile '{profile.Name}' is now '{modelId}' ({model.ContextWindowTokens:N0} tokens).",

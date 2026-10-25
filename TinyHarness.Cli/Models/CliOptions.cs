@@ -60,6 +60,10 @@ internal sealed record CliOptions
     /// <summary>model add 的 --context-window 值。The --context-window value of model add.</summary>
     public int? ContextWindowTokens { get; init; }
 
+    public string? ModelDisplayName   { get; init; }
+    public string? ModelEfforts       { get; init; }
+    public string? ModelDefaultEffort { get; init; }
+
     /// <summary>auth set --env 选项值。The auth set --env option value.</summary>
     public string? EnvironmentVariable { get; init; }
 

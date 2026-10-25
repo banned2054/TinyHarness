@@ -56,6 +56,7 @@
                                 <TextBlock Grid.Column="2" Classes="popup-chevron" Text="›" />
                             </Grid>
                         </Button>
+                        <Button Content="管理供应商与模型" Command="{Binding ManageModelsCommand}" Classes="popup-navigation" />
                         <Border Classes="popup-divider" />
                         <CheckBox Content="显示可读思考" IsChecked="{Binding ShowReasoning, Mode=TwoWay}"
                                   IsEnabled="{Binding CanConfigure}" Margin="10,4"
@@ -71,8 +72,8 @@
                                     <TextBlock Text="模型" />
                                 </StackPanel>
                             </Button>
-                            <TextBlock Text="当前会话的模型已固定，新对话可选择其他模型。"
-                                       IsVisible="{Binding !CanSelectModel}" TextWrapping="Wrap" Margin="10,6"
+                            <TextBlock Text="当前运行结束后可切换。"
+                                       IsVisible="{Binding !CanChangeModel}" TextWrapping="Wrap" Margin="10,6"
                                        Foreground="{DynamicResource PopupMutedForegroundBrush}" FontSize="12" />
                             <ItemsControl ItemsSource="{Binding ModelGroups}">
                                 <ItemsControl.ItemTemplate>
@@ -104,7 +105,7 @@
                             </ItemsControl>
                         </StackPanel>
                     </ScrollViewer>
-                    <!-- 推理等级保留入口；当前尚未接入请求参数，所有选项均禁用。 -->
+                    <!-- 强度能力来自可信模型目录。 -->
                     <StackPanel IsVisible="{Binding IsEffortsMenuPage}">
                         <Button Classes="popup-navigation"
                                 Command="{Binding ShowModelMenuRootCommand}">
@@ -113,7 +114,7 @@
                                 <TextBlock Text="推理等级" />
                             </StackPanel>
                         </Button>
-                        <TextBlock Text="推理等级暂未接入，当前使用模型默认值。" TextWrapping="Wrap" Margin="10,6"
+                        <TextBlock Text="默认表示不传强度参数；其他档位来自模型配置。" TextWrapping="Wrap" Margin="10,6"
                                    Foreground="{DynamicResource PopupMutedForegroundBrush}" FontSize="12" />
                         <ItemsControl ItemsSource="{Binding EffortOptions}" Margin="0,2,0,0">
                             <ItemsControl.ItemTemplate>

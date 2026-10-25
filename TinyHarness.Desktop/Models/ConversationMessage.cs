@@ -17,4 +17,5 @@ public sealed record ConversationMessage(
     bool           HasToolCalls  = false,
     long?          Step          = null,
     string?        Reasoning     = null,
-    bool           IsInterrupted = false) : ConversationEntry(Seq, CreatedAt);
+    bool           IsInterrupted = false,
+    string?        ModelLabel    = null) : ConversationEntry(Seq, CreatedAt);

@@ -1,6 +1,7 @@
 using TinyHarness.Cli.Models;
 using TinyHarness.Cli.Services;
 using TinyHarness.Core.Models.Configuration;
+using TinyHarness.Core.Services.ChatCompletions.Configuration;
 
 namespace TinyHarness.Cli.Commands;
 
@@ -18,7 +19,8 @@ internal static class ProviderCommand
         CommandContext context, CliOptions options, CancellationToken cancellationToken) => options.Subcommand switch
     {
         "list" => await ListAsync(context, cancellationToken).ConfigureAwait(false),
-        "add"  => await AddAsync(context, options.Primary!, cancellationToken).ConfigureAwait(false),
+        "add"  => await SaveProviderAsync(context, options.Primary!, false, cancellationToken).ConfigureAwait(false),
+        "edit" => await SaveProviderAsync(context, options.Primary!, true, cancellationToken).ConfigureAwait(false),
         "use"  => await UseAsync(context, options.Primary!, cancellationToken).ConfigureAwait(false),
         _      => throw new InvalidOperationException($"Unknown provider subcommand '{options.Subcommand}'.")
     };
@@ -64,46 +66,20 @@ internal static class ProviderCommand
     }
 
     /// <summary>
-    ///     交互式添加或覆盖一个 profile；可选择设为默认。
-    ///     Interactively adds or overwrites one profile; optionally selects it as the default.
+    ///     <para>通过共享表单添加或编辑供应商，不隐式设置默认项。</para>
+    ///     <para>Adds or edits a provider using shared forms without implicitly setting defaults.</para>
     /// </summary>
-    private static async Task<int> AddAsync(
-        CommandContext context, string profileName, CancellationToken cancellationToken)
+    private static async Task<int> SaveProviderAsync(CommandContext    context, string name, bool edit,
+                                                     CancellationToken token)
     {
-        var io = context.Io;
-        var (config, exists) = await UserConfigAccess.LoadAsync(context, cancellationToken).ConfigureAwait(false);
-        await io
-             .WriteLineAsync($"TinyHarness provider add '{profileName}' (user config: {context.ResolveUserConfigPath()})",
-                             cancellationToken).ConfigureAwait(false);
-
-        var existing = UserConfigAccess.FindProfile(config, profileName);
-        if (existing is not null &&
-            !await CliPrompt.ConfirmAsync(io, $"Profile '{profileName}' already exists. Overwrite it?",
-                                          false,
-                                          cancellationToken).ConfigureAwait(false))
+        try
         {
-            await io.WriteLineAsync("Cancelled. Nothing was changed.", cancellationToken).ConfigureAwait(false);
-            return 0;
+            await CatalogWizard.ProviderAsync(context, name, edit, token);
         }
-
-        var profile = await ProfileEditor.CollectAsync(context, profileName, existing, cancellationToken)
-                                         .ConfigureAwait(false);
-        var makeDefault = await CliPrompt
-                               .ConfirmAsync(io, $"Make '{profileName}' the default profile?",
-                                             config.DefaultProfile is null, cancellationToken)
-                               .ConfigureAwait(false);
-
-        config = UserConfigAccess.UpsertProfile(config, profile);
-        if (makeDefault) config = config with { DefaultProfile = profileName };
-
-        await UserConfigAccess.SaveAsync(context, config, cancellationToken).ConfigureAwait(false);
-
-        await io.WriteLineAsync(string.Empty, cancellationToken).ConfigureAwait(false);
-        await io.WriteLineAsync($"Saved profile '{profileName}'.", cancellationToken).ConfigureAwait(false);
-        if (string.IsNullOrEmpty(profile.ApiKeyCredentialTarget) &&
-            string.IsNullOrEmpty(profile.ApiKeyEnvironmentVariable))
-            await io.WriteLineAsync($"No API key source configured yet. Run 'tinyharness auth set {profileName}'.",
-                                    cancellationToken).ConfigureAwait(false);
+        catch (OperationCanceledException) when (!token.IsCancellationRequested)
+        {
+            await context.Io.WriteLineAsync("Cancelled. Nothing was saved.", token);
+        }
 
         return 0;
     }
@@ -126,8 +102,10 @@ internal static class ProviderCommand
             throw new InvalidOperationException($"Profile '{profileName}' was not found. Known profiles: {known}.");
         }
 
+        var baseline = config;
         config = config with { DefaultProfile = profileName };
-        await UserConfigAccess.SaveAsync(context, config, cancellationToken).ConfigureAwait(false);
+        await ModelCatalogEditor.SaveAsync(context.ResolveUserConfigPath(), baseline, config, cancellationToken)
+                                .ConfigureAwait(false);
         await io.WriteLineAsync($"Default profile is now '{profileName}' ({profile.Endpoint}).", cancellationToken)
                 .ConfigureAwait(false);
         if (profile.DefaultModel.Length > 0)

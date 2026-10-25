@@ -1,0 +1,282 @@
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <!-- 应用内设置面板样式：居中 modal 壳、左导航、通用行、供应商/模型卡与弹层下拉。
+         颜色一律引用 ThemeResources.axaml 的语义资源（Popup*/Composer*/Session* 系列复用
+         既有层级语义，SettingsPanelBackgroundBrush 承担面板独立表面）。 -->
+
+    <!-- 遮罩：约 24% 黑，点击关闭由视图 code-behind 承担。 -->
+    <Style Selector="Border.settings-mask">
+        <Setter Property="Background" Value="#C03B3B3B" />
+    </Style>
+    <!-- 面板表面：圆角 16、柔和投影、裁剪内容。 -->
+    <Style Selector="Border.settings-panel">
+        <Setter Property="Background" Value="{DynamicResource SettingsPanelBackgroundBrush}" />
+        <Setter Property="CornerRadius" Value="16" />
+        <Setter Property="BoxShadow" Value="0 18 48 8 #66000000" />
+        <Setter Property="ClipToBounds" Value="True" />
+    </Style>
+    <!-- 左导航标题「设置」。 -->
+    <Style Selector="TextBlock.settings-nav-title">
+        <Setter Property="FontSize" Value="16" />
+        <Setter Property="FontWeight" Value="Medium" />
+        <Setter Property="Foreground" Value="{DynamicResource PopupForegroundBrush}" />
+        <Setter Property="Margin" Value="0,2,0,6" />
+    </Style>
+    <!-- 导航行：高 40、Padding 12、圆角 8、纯文字；悬停取会话列表层级、选中取弹层选中层级。
+         模板与 popup-item 同构（PART_Surface 自绘高亮）。 -->
+    <Style Selector="Button.settings-nav-item">
+        <Setter Property="Height" Value="40" />
+        <Setter Property="Padding" Value="12,0" />
+        <Setter Property="CornerRadius" Value="8" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Foreground" Value="{DynamicResource PopupForegroundBrush}" />
+        <Setter Property="FontSize" Value="14" />
+        <Setter Property="HorizontalAlignment" Value="Stretch" />
+        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate>
+                    <Border x:Name="PART_Surface" CornerRadius="{TemplateBinding CornerRadius}"
+                            Padding="{TemplateBinding Padding}" Background="Transparent">
+                        <ContentPresenter Content="{TemplateBinding Content}"
+                                          HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                          VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}" />
+                    </Border>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+    <Style Selector="Button.settings-nav-item:pointerover /template/ Border#PART_Surface">
+        <Setter Property="Background" Value="{DynamicResource SessionHoverBrush}" />
+    </Style>
+    <Style Selector="Button.settings-nav-item:focus-visible /template/ Border#PART_Surface">
+        <Setter Property="Background" Value="{DynamicResource SessionHoverBrush}" />
+    </Style>
+    <Style Selector="Button.settings-nav-item.selected /template/ Border#PART_Surface">
+        <Setter Property="Background" Value="{DynamicResource PopupItemSelectedBrush}" />
+    </Style>
+    <!-- 通用行容器：横向 Padding 16、底部分隔线（末行由 .last 移除）。 -->
+    <Style Selector="Border.settings-row">
+        <Setter Property="Padding" Value="16,0" />
+        <Setter Property="MinHeight" Value="56" />
+        <Setter Property="BorderBrush" Value="{DynamicResource PopupDividerBrush}" />
+        <Setter Property="BorderThickness" Value="0,0,0,1" />
+    </Style>
+    <Style Selector="Border.settings-row.last">
+        <Setter Property="BorderThickness" Value="0" />
+    </Style>
+    <!-- 行内下拉按钮：宽度随当前选项文本自适应，超长选项经 MaxWidth 截断。
+         高 34 + 水平内距 14：文字到边框上下约 8px、左右 14px。底色复用 Composer 控件层级。 -->
+    <Style Selector="Button.settings-select">
+        <Setter Property="MaxWidth" Value="260" />
+        <Setter Property="Height" Value="34" />
+        <Setter Property="Padding" Value="14,0" />
+        <Setter Property="CornerRadius" Value="8" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Background" Value="{DynamicResource ComposerControlBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource PopupForegroundBrush}" />
+        <Setter Property="FontSize" Value="13" />
+        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+    </Style>
+    <Style Selector="Button.settings-select:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource PopupItemHoverBrush}" />
+    </Style>
+    <Style Selector="Button.settings-select:disabled">
+        <Setter Property="Foreground" Value="{DynamicResource PopupMutedForegroundBrush}" />
+    </Style>
+    <!-- 外观选择块：图标+文字纵向排布，选中以气泡强调描边。 -->
+    <Style Selector="Button.settings-choice">
+        <Setter Property="Width" Value="92" />
+        <Setter Property="Height" Value="60" />
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="CornerRadius" Value="10" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="BorderBrush" Value="{DynamicResource PopupDividerBrush}" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Foreground" Value="{DynamicResource PopupForegroundBrush}" />
+        <Setter Property="HorizontalContentAlignment" Value="Center" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+    </Style>
+    <Style Selector="Button.settings-choice:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource PopupItemHoverBrush}" />
+    </Style>
+    <Style Selector="Button.settings-choice.selected">
+        <Setter Property="BorderBrush" Value="{DynamicResource UserBubbleBrush}" />
+        <Setter Property="Background" Value="{DynamicResource PopupItemSelectedBrush}" />
+    </Style>
+    <Style Selector="Button.settings-choice:disabled">
+        <Setter Property="Foreground" Value="{DynamicResource PopupMutedForegroundBrush}" />
+    </Style>
+    <!-- 供应商/编辑卡：圆角 12、弹层表面色。 -->
+    <Style Selector="Border.settings-card">
+        <Setter Property="Background" Value="{DynamicResource PopupSurfaceBrush}" />
+        <Setter Property="CornerRadius" Value="12" />
+        <Setter Property="Padding" Value="16" />
+        <Setter Property="Margin" Value="0,0,0,12" />
+    </Style>
+    <Style Selector="TextBlock.settings-card-title">
+        <Setter Property="FontSize" Value="14" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="Foreground" Value="{DynamicResource PopupForegroundBrush}" />
+    </Style>
+    <Style Selector="TextBlock.settings-card-description">
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="Foreground" Value="{DynamicResource PopupMutedForegroundBrush}" />
+        <Setter Property="TextWrapping" Value="Wrap" />
+    </Style>
+    <Style Selector="TextBlock.settings-field-label">
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="Foreground" Value="{DynamicResource PopupMutedForegroundBrush}" />
+    </Style>
+    <!-- 卡内输入框：细描边圆角，聚焦换强调描边。Fluent 把状态底色与描边画在模板部件
+         Border#PART_BorderElement 上，须逐状态覆盖；密码输入经 TextBox 的 PasswordChar
+         （Avalonia 12 无 PasswordBox 控件）。 -->
+    <Style Selector="TextBox.settings-input">
+        <Setter Property="MinHeight" Value="32" />
+        <Setter Property="FontSize" Value="13" />
+        <Setter Property="Padding" Value="10,0" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Foreground" Value="{DynamicResource PopupForegroundBrush}" />
+        <Setter Property="CaretBrush" Value="{DynamicResource PopupForegroundBrush}" />
+        <Setter Property="PlaceholderForeground" Value="{DynamicResource PopupMutedForegroundBrush}" />
+        <Setter Property="SelectionBrush" Value="Transparent" />
+        <Setter Property="SelectionForegroundBrush" Value="{DynamicResource PopupForegroundBrush}" />
+    </Style>
+    <Style Selector="TextBox.settings-input /template/ Border#PART_BorderElement">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="{DynamicResource PopupDividerBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="8" />
+    </Style>
+    <Style
+        Selector="TextBox.settings-input:pointerover /template/ Border#PART_BorderElement,
+                     TextBox.settings-input:focus /template/ Border#PART_BorderElement,
+                     TextBox.settings-input:focus-visible /template/ Border#PART_BorderElement">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="{DynamicResource AccentTextBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="8" />
+    </Style>
+    <Style Selector="TextBox.settings-input:disabled /template/ Border#PART_BorderElement">
+        <Setter Property="Opacity" Value="0.55" />
+    </Style>
+    <!-- 卡内主按钮（保存）：气泡强调色实底。 -->
+    <Style Selector="Button.settings-primary">
+        <Setter Property="Padding" Value="16,6" />
+        <Setter Property="CornerRadius" Value="8" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Background" Value="{DynamicResource UserBubbleBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource OnAccentBrush}" />
+        <Setter Property="FontSize" Value="13" />
+    </Style>
+    <Style Selector="Button.settings-primary:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource ComposerSendHoverBrush}" />
+    </Style>
+    <Style Selector="Button.settings-primary:pressed /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource UserBubbleBrush}" />
+    </Style>
+    <Style Selector="Button.settings-primary:disabled">
+        <Setter Property="Foreground" Value="{DynamicResource OnAccentMutedBrush}" />
+        <Setter Property="Opacity" Value="0.6" />
+    </Style>
+    <!-- 卡内次按钮（取消/编辑）：描边幽灵。 -->
+    <Style Selector="Button.settings-secondary">
+        <Setter Property="Padding" Value="14,6" />
+        <Setter Property="CornerRadius" Value="8" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="{DynamicResource PopupDividerBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource PopupForegroundBrush}" />
+        <Setter Property="FontSize" Value="13" />
+    </Style>
+    <Style Selector="Button.settings-secondary:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource PopupItemHoverBrush}" />
+    </Style>
+    <!-- 头部关闭图标按钮：28×28。 -->
+    <Style Selector="Button.settings-close-icon">
+        <Setter Property="Width" Value="28" />
+        <Setter Property="Height" Value="28" />
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="CornerRadius" Value="14" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Foreground" Value="{DynamicResource PopupMutedForegroundBrush}" />
+        <Setter Property="HorizontalContentAlignment" Value="Center" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+    </Style>
+    <Style Selector="Button.settings-close-icon:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource PopupItemHoverBrush}" />
+    </Style>
+    <!-- 模型条目容器：透明填充（面板底色透出）+ 分割线圆角描边。 -->
+    <Style Selector="Border.settings-model-entry">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="{DynamicResource PopupDividerBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="10" />
+        <Setter Property="Padding" Value="12,10" />
+    </Style>
+    <!-- 条目折叠按钮：透明小方钮，悬停取弹层悬停层级。 -->
+    <Style Selector="Button.settings-entry-chevron">
+        <Setter Property="Width" Value="24" />
+        <Setter Property="Height" Value="28" />
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="CornerRadius" Value="6" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Foreground" Value="{DynamicResource PopupMutedForegroundBrush}" />
+        <Setter Property="HorizontalContentAlignment" Value="Center" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+    </Style>
+    <Style Selector="Button.settings-entry-chevron:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource PopupItemHoverBrush}" />
+    </Style>
+    <!-- 条目折叠箭头：ChevronRight 8 viewBox（Path 尺寸=viewBox 规则），展开旋转 90° 朝下。 -->
+    <Style Selector="Path.settings-chevron-icon">
+        <Setter Property="Width" Value="8" />
+        <Setter Property="Height" Value="8" />
+        <Setter Property="Stretch" Value="None" />
+    </Style>
+    <Style Selector="Path.settings-chevron-icon.expanded">
+        <Setter Property="RenderTransform">
+            <Setter.Value>
+                <TransformOperations>rotate(90deg)</TransformOperations>
+            </Setter.Value>
+        </Setter>
+    </Style>
+    <!-- 「+ 添加」虚线按钮：Rectangle StrokeDashArray 承担虚线（Border 无虚线属性）。 -->
+    <Style Selector="Button.settings-add-model">
+        <Setter Property="Height" Value="36" />
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Foreground" Value="{DynamicResource PopupMutedForegroundBrush}" />
+        <Setter Property="FontSize" Value="13" />
+        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+        <Setter Property="VerticalContentAlignment" Value="Stretch" />
+    </Style>
+    <Style Selector="Button.settings-add-model:pointerover TextBlock.add-model-caption">
+        <Setter Property="Foreground" Value="{DynamicResource PopupForegroundBrush}" />
+    </Style>
+    <!-- 行内错误与成功提示。 -->
+    <Style Selector="TextBlock.settings-error">
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="Foreground" Value="{DynamicResource StatusErrorBrush}" />
+        <Setter Property="TextWrapping" Value="Wrap" />
+    </Style>
+    <!-- 分区副标题。 -->
+    <Style Selector="TextBlock.settings-section-intro">
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="Foreground" Value="{DynamicResource PopupMutedForegroundBrush}" />
+        <Setter Property="TextWrapping" Value="Wrap" />
+        <Setter Property="Margin" Value="0,0,0,14" />
+    </Style>
+    <!-- 提供方行卡：弹层表面色圆角行（名称 + 说明 + 凭据圆点 + 编辑）。 -->
+    <Style Selector="Border.settings-provider-row">
+        <Setter Property="Background" Value="{DynamicResource PopupSurfaceBrush}" />
+        <Setter Property="CornerRadius" Value="10" />
+        <Setter Property="Padding" Value="16,12" />
+    </Style>
+</Styles>

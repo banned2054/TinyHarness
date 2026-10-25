@@ -44,13 +44,24 @@ namespace TinyHarness.Cli.Services;
 /// </remarks>
 internal sealed class ChatModelSelection
 {
+    internal sealed record DraftChoice(UserProfile Profile, UserProfileModel Model, ModelReasoningEffort? Effort);
+    public DraftChoice? DraftTarget { get; private set; }
+    public Func<CancellationToken, Task>? ManageCatalog { get; set; }
+    private SessionModelSelection? Current(ChatSessionHost? host) => host?.Session.ModelSelection ??
+        (DraftTarget is { } draft ? new SessionModelSelection
+        {
+            Model = new SessionModelIdentity(draft.Model.Id, draft.Profile.Endpoint, draft.Profile.ChatApi),
+            CredentialRoute = CredentialRoute.Describe(draft.Profile.Name, draft.Profile.ApiKeyEnvironmentVariable, draft.Profile.ApiKeyCredentialTarget),
+            ProfileHint = draft.Profile.Name, ReasoningEffort = draft.Effort
+        } : null);
+
     private const string EffortDefaultToken = "default";
 
     private readonly Func<CancellationToken, Task<UserConfig>> _catalogLoader;
     private readonly Func<UserProfile, string, CancellationToken, Task<IChatCompletionClient>> _clientFactory;
-    private readonly bool                        _interactiveInputAvailable;
+    private readonly bool _interactiveInputAvailable;
     private readonly TextReader                  _input;
-    private readonly TextWriter                  _output;
+    private readonly TextWriter _output;
     private readonly IDictionary<string, string> _secrets;
 
     /// <summary>
@@ -75,19 +86,49 @@ internal sealed class ChatModelSelection
     }
 
     /// <summary>
+    ///     <para>发送前核对当前目录，配置漂移要求显式应用；不解析密钥。</para>
+    ///     <para>Checks the catalog before sending, requiring explicit application of configuration drift without resolving keys.</para>
+    /// </summary>
+    public async Task ValidateBeforeSendAsync(ChatSessionHost host, CancellationToken token)
+    {
+        var current = host.Session.ModelSelection!;
+        if (current.CredentialRoute is null) return;
+        var catalog = await _catalogLoader(token).ConfigureAwait(false);
+        var provider = catalog.Profiles.SingleOrDefault(item => current.ProfileHint is { } hint
+                                                            ? item.Name == hint
+                                                            : CredentialRoute.Describe(item.Name,
+                                                                  item.ApiKeyEnvironmentVariable,
+                                                                  item.ApiKeyCredentialTarget) ==
+                                                              current.CredentialRoute);
+        if (provider is null && current.ProfileHint is null) return;
+        var model = provider?.Models.SingleOrDefault(item => item.Id == current.Model.ModelId);
+        if (provider is null ||
+            model is null ||
+            provider.Endpoint != current.Model.Endpoint ||
+            provider.ChatApi != current.Model.ChatApi ||
+            CredentialRoute.Describe(provider.Name, provider.ApiKeyEnvironmentVariable,
+                                     provider.ApiKeyCredentialTarget) != current.CredentialRoute ||
+            current.Context?.ContextWindowTokens != model.ContextWindowTokens                    ||
+            current.ReasoningCapabilities is { } capabilities &&
+             !capabilities.SequenceEqual(model.ReasoningEfforts ?? []))
+            throw new
+                InvalidOperationException("Model configuration changed; use /models use to apply it explicitly before sending.");
+    }
+
+    /// <summary>
     ///     <para>判断输入行是否为 /models 命令；<c>/modelsXYZ</c> 不按前缀误识别。</para>
     ///     <para>Whether the input line is a /models command; <c>/modelsXYZ</c> is not matched by prefix.</para>
     /// </summary>
-    public static bool IsModelsCommand(string input) => SplitArguments(input).FirstOrDefault() == "/models";
+    public static bool IsModelsCommand(string input) =>
+        input.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() == "/models";
 
     /// <summary>
     ///     <para>处理一条 /models 命令；空闲与运行路径共用，运行中只允许查询。</para>
     ///     <para>Handles one /models command; both idle and running paths share it, and only queries are allowed during a run.</para>
     /// </summary>
-    public async Task HandleAsync(ChatSessionHost   host, string input, bool duringRun,
+    public async Task HandleAsync(ChatSessionHost?  host, string input, bool duringRun,
                                   CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(host);
         var arguments = SplitArguments(input);
         if (arguments.Length < 2)
         {
@@ -98,7 +139,7 @@ internal sealed class ChatModelSelection
 
         switch (arguments[1])
         {
-            case "list" :
+            case "list" when arguments.Length == 2 :
                 await ListAsync(host, cancellationToken);
                 return;
             case "use" when arguments.Length >= 3 :
@@ -120,7 +161,7 @@ internal sealed class ChatModelSelection
     ///     <para>按 profile 分组列出本地模型并标记当前选择及其强度。</para>
     ///     <para>Lists local models grouped by profile, marking the current selection and its effort.</para>
     /// </summary>
-    private async Task ListAsync(ChatSessionHost host, CancellationToken cancellationToken)
+    private async Task ListAsync(ChatSessionHost? host, CancellationToken cancellationToken)
     {
         var config = await _catalogLoader(cancellationToken).ConfigureAwait(false);
         if (config.Profiles.Count == 0)
@@ -130,7 +171,7 @@ internal sealed class ChatModelSelection
         }
 
         await WriteAsync("Models by provider (* current):", cancellationToken);
-        var current = host.Session.ModelSelection;
+        var current = Current(host);
         foreach (var profile in config.Profiles)
         {
             await
@@ -162,7 +203,7 @@ internal sealed class ChatModelSelection
     ///     <para>直接形式：原子选择目标模型与强度；省略强度时采用目标模型声明的默认值。</para>
     ///     <para>Direct form: atomically selects the target model and effort; an omitted effort uses the target model's declared default.</para>
     /// </summary>
-    private async Task UseAsync(ChatSessionHost   host, string[] arguments, bool duringRun,
+    private async Task UseAsync(ChatSessionHost?  host, string[] arguments, bool duringRun,
                                 CancellationToken cancellationToken)
     {
         if (duringRun)
@@ -226,7 +267,7 @@ internal sealed class ChatModelSelection
     ///     <para>仅调整当前模型的强度；default 表示不发送强度参数。</para>
     ///     <para>Adjusts only the current model's effort; default sends no effort parameter.</para>
     /// </summary>
-    private async Task ChangeEffortAsync(ChatSessionHost   host, string effortToken, bool duringRun,
+    private async Task ChangeEffortAsync(ChatSessionHost?  host, string effortToken, bool duringRun,
                                          CancellationToken cancellationToken)
     {
         if (duringRun)
@@ -236,12 +277,23 @@ internal sealed class ChatModelSelection
             return;
         }
 
-        var current = host.Session.ModelSelection!;
+        var current = Current(host);
+        if (current is null)
+        {
+            await WriteAsync("Select a model first with /models use.", cancellationToken);
+            return;
+        }
+
         var targets = ResolveTargets(await _catalogLoader(cancellationToken).ConfigureAwait(false),
                                      current.Model.ModelId, null,
                                      profile => string.Equals(current.Model.Endpoint, profile.Endpoint,
-                                                              StringComparison.Ordinal) &&
-                                                current.Model.ChatApi == profile.ChatApi);
+                                                              StringComparison.Ordinal)  &&
+                                                current.Model.ChatApi == profile.ChatApi &&
+                                                (current.CredentialRoute is null ||
+                                                 CredentialRoute.Describe(profile.Name,
+                                                                          profile.ApiKeyEnvironmentVariable,
+                                                                          profile.ApiKeyCredentialTarget) ==
+                                                 current.CredentialRoute));
         if (targets.Count != 1)
         {
             await WriteAsync(targets.Count == 0
@@ -257,19 +309,28 @@ internal sealed class ChatModelSelection
             return;
         }
 
-        var selection = await host.ChangeReasoningEffortAsync(effort, cancellationToken, targets[0].Model.ReasoningEfforts)
-                                  .ConfigureAwait(false);
-        await WriteAsync($"model      : {targets[0].Profile.Name} / {selection.Model.ModelId}", cancellationToken);
-        await WriteAsync($"effort     : {EffortDisplay(selection.ReasoningEffort)}", cancellationToken);
-        if (selection.Revision == current.Revision)
-            await WriteAsync("The selection already matched; nothing was changed.", cancellationToken);
+        if (host is { HasModelBinding: true })
+        {
+            var model = targets[0].Model;
+            if (current.Context is { ContextWindowTokens: { } window } && window != model.ContextWindowTokens)
+                throw new
+                    InvalidOperationException("Model configuration changed; use /models use to apply it explicitly.");
+            var selection = await host.ChangeReasoningEffortAsync(effort, cancellationToken, model.ReasoningEfforts,
+                                                                  expectedRevision: current.Revision)
+                                      .ConfigureAwait(false);
+            await WriteAsync($"model      : {targets[0].Profile.Name} / {selection.Model.ModelId}", cancellationToken);
+            await WriteAsync($"effort     : {EffortDisplay(selection.ReasoningEffort)}", cancellationToken);
+            return;
+        }
+
+        await ApplyAsync(host, targets[0].Profile, targets[0].Model, effort, cancellationToken);
     }
 
     /// <summary>
     ///     <para>两级交互菜单：先选模型，再选该模型支持的强度，一次性应用；取消或无效输入不部分更改。</para>
     ///     <para>The two-step menu: pick a model, then one of its supported efforts, and apply once; cancellation or invalid input never applies partially.</para>
     /// </summary>
-    private async Task RunMenuAsync(ChatSessionHost host, CancellationToken cancellationToken)
+    private async Task RunMenuAsync(ChatSessionHost? host, CancellationToken cancellationToken)
     {
         if (!_interactiveInputAvailable)
         {
@@ -278,60 +339,71 @@ internal sealed class ChatModelSelection
             return;
         }
 
-        var config  = await _catalogLoader(cancellationToken).ConfigureAwait(false);
-        var catalog = config.Profiles.SelectMany(profile => profile.Models.Select(model => (profile, model))).ToList();
-        if (catalog.Count == 0)
+        while (true)
         {
-            await
-                WriteAsync("No models are configured; run 'tinyharness model add <model-id> --context-window <tokens>'.",
-                           cancellationToken);
-            return;
-        }
-
-        await WriteAsync("Models by provider (* current):", cancellationToken);
-        var current = host.Session.ModelSelection;
-        for (var i = 0; i < catalog.Count; i++)
-        {
-            var (profile, model) = catalog[i];
-            var marker = IsCurrentSelection(current, profile, model) ? "*" : " ";
-            await WriteAsync($"{marker} {i + 1}) {DescribeModel(profile, model)}", cancellationToken);
-        }
-
-        await WriteAsync("Select a model by number (/cancel to abort):", cancellationToken);
-        var modelIndex = await ReadMenuChoiceAsync(catalog.Count, cancellationToken);
-        if (modelIndex is null) return;
-        var (chosenProfile, chosenModel) = catalog[modelIndex.Value];
-
-        ModelReasoningEffort? effort = null;
-        if (chosenModel.ReasoningEfforts is { Count: > 0 } efforts)
-        {
-            await WriteAsync($"Reasoning effort for {chosenModel.Id}:", cancellationToken);
-            await WriteAsync("  1) default (decided by the service)", cancellationToken);
-            for (var i = 0; i < efforts.Count; i++)
+            var config = await _catalogLoader(cancellationToken).ConfigureAwait(false);
+            var catalog = config.Profiles.SelectMany(profile => profile.Models.Select(model => (profile, model)))
+                                .ToList();
+            if (catalog.Count == 0 && ManageCatalog is null)
             {
-                var level = efforts[i];
-                var note  = level == chosenModel.DefaultReasoningEffort ? " (model default)" : string.Empty;
-                var mark = IsCurrentSelection(current, chosenProfile, chosenModel) &&
-                           current!.ReasoningEffort == level
-                    ? "*"
-                    : " ";
-                await WriteAsync($" {mark} {i + 2}) {ModelReasoningEffortParser.ToValueString(level)}{note}",
-                                 cancellationToken);
+                await WriteAsync("No models are configured; run 'tinyharness model add'.", cancellationToken);
+                return;
             }
 
-            await WriteAsync("Select an effort by number (/cancel to abort):", cancellationToken);
-            var effortIndex = await ReadMenuChoiceAsync(efforts.Count + 1, cancellationToken);
-            if (effortIndex is null) return;
-            effort = effortIndex == 0 ? null : efforts[effortIndex.Value - 1];
-        }
-        else
-        {
-            effort = null;
-            await WriteAsync("This model declares no reasoning efforts; using the default (decided by the service).",
-                             cancellationToken);
-        }
+            await WriteAsync("Models by provider (* current):", cancellationToken);
+            var current = Current(host);
+            for (var i = 0; i < catalog.Count; i++)
+            {
+                var (profile, model) = catalog[i];
+                var marker = IsCurrentSelection(current, profile, model) ? "*" : " ";
+                await WriteAsync($"{marker} {i + 1}) {DescribeModel(profile, model)}", cancellationToken);
+            }
 
-        await ApplyAsync(host, chosenProfile, chosenModel, effort, cancellationToken);
+            if (ManageCatalog is not null)
+            {
+                await WriteAsync($"  {catalog.Count + 1}) Add model", cancellationToken);
+                await WriteAsync($"  {catalog.Count + 2}) Manage providers / edit models", cancellationToken);
+            }
+
+            await WriteAsync("Select a model by number (/cancel to abort):", cancellationToken);
+            var modelIndex =
+                await ReadMenuChoiceAsync(catalog.Count + (ManageCatalog is null ? 0 : 2), cancellationToken);
+            if (modelIndex is null || modelIndex < 0) return;
+            if (modelIndex >= catalog.Count)
+            {
+                await ManageCatalog!(cancellationToken);
+                continue;
+            }
+
+            var (chosenProfile, chosenModel) = catalog[modelIndex.Value];
+            var efforts = chosenModel.ReasoningEfforts ?? [];
+            var preferred = IsCurrentSelection(current, chosenProfile, chosenModel)
+                ? current!.ReasoningEffort
+                : chosenModel.DefaultReasoningEffort;
+            ModelReasoningEffort? effort = null;
+            if (efforts.Count > 0)
+            {
+                var preferredIndex = preferred is { } level ? efforts.ToList().IndexOf(level) + 1 : 0;
+                await WriteAsync($"Reasoning effort for {chosenModel.Id}:", cancellationToken);
+                await WriteAsync($" {(preferredIndex == 0 ? "*" : " ")} 1) default (decided by the service)",
+                                 cancellationToken);
+                for (var i = 0; i < efforts.Count; i++)
+                    await
+                        WriteAsync($" {(preferredIndex == i + 1 ? "*" : " ")} {i + 2}) {ModelReasoningEffortParser.ToValueString(efforts[i])}",
+                                   cancellationToken);
+                await WriteAsync($"Select an effort [Enter: {preferredIndex + 1}; /back: models; /cancel: abort]:",
+                                 cancellationToken);
+                var effortIndex = await ReadMenuChoiceAsync(efforts.Count + 1, cancellationToken, preferredIndex);
+                if (effortIndex is null) return;
+                if (effortIndex < 0) continue;
+                effort = effortIndex == 0 ? null : efforts[effortIndex.Value - 1];
+            }
+            else await
+                    WriteAsync("This model declares no reasoning efforts; using the default (decided by the service).",
+                               cancellationToken);
+            await ApplyAsync(host, chosenProfile, chosenModel, effort, cancellationToken);
+            return;
+        }
     }
 
     /// <summary>
@@ -377,7 +449,7 @@ internal sealed class ChatModelSelection
     ///     <para>Builds the candidate binding and saves it atomically through the host, then prints the final model and effort. On failure the candidate stays here and is released once.</para>
     /// </summary>
     private async Task ApplyAsync(
-        ChatSessionHost host, UserProfile profile, UserProfileModel model,
+        ChatSessionHost?      host,   UserProfile       profile, UserProfileModel model,
         ModelReasoningEffort? effort, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(profile.Endpoint))
@@ -388,7 +460,16 @@ internal sealed class ChatModelSelection
             return;
         }
 
-        var current = host.Session.ModelSelection!;
+        if (host is null)
+        {
+            DraftTarget = new DraftChoice(profile, model, effort);
+            await
+                WriteAsync($"Draft model: {profile.Name} / {model.Id}; effort: {EffortDisplay(effort)}. No session created.",
+                           cancellationToken);
+            return;
+        }
+
+        var current = Current(host)!;
         var client  = await _clientFactory(profile, model.Id, cancellationToken).ConfigureAwait(false);
         var context = current.Context is { } existing
             ? existing with { ContextWindowTokens = model.ContextWindowTokens }
@@ -425,7 +506,8 @@ internal sealed class ChatModelSelection
     ///     <para>读取一个菜单编号（0 基）；取消、EOF、取消令牌或无效输入都返回 null 且不产生部分更改。</para>
     ///     <para>Reads one menu number (0-based); cancellation, EOF, the cancellation token, or invalid input all return null without partial changes.</para>
     /// </summary>
-    private async Task<int?> ReadMenuChoiceAsync(int choiceCount, CancellationToken cancellationToken)
+    private async Task<int?> ReadMenuChoiceAsync(int  choiceCount, CancellationToken cancellationToken,
+                                                 int? defaultIndex = null)
     {
         string? line;
         try
@@ -445,7 +527,8 @@ internal sealed class ChatModelSelection
         }
 
         var text = line.Trim();
-        if (text.Length == 0) return null;
+        if (text.Length == 0) return defaultIndex;
+        if (text        == "/back") return -1;
         if (text is "/cancel")
         {
             await WriteAsync("Model selection cancelled; nothing was changed.", cancellationToken);
@@ -461,10 +544,10 @@ internal sealed class ChatModelSelection
         return choice - 1;
     }
 
-    private async Task WriteCurrentSelectionAsync(ChatSessionHost   host, bool running,
+    private async Task WriteCurrentSelectionAsync(ChatSessionHost?  host, bool running,
                                                   CancellationToken cancellationToken)
     {
-        var current = host.Session.ModelSelection!;
+        var current = Current(host)!;
         await WriteAsync($"current model: {current.Model.ModelId}  effort: {EffortDisplay(current.ReasoningEffort)}",
                          cancellationToken);
         if (running)
@@ -473,7 +556,7 @@ internal sealed class ChatModelSelection
     }
 
     internal static List<(UserProfile Profile, UserProfileModel Model)> ResolveTargets(
-        UserConfig config, string modelId, string? providerName,
+        UserConfig               config, string modelId, string? providerName,
         Func<UserProfile, bool>? profileFilter = null)
     {
         var profiles = config.Profiles.Where(profile => profileFilter is null || profileFilter(profile));
@@ -482,17 +565,20 @@ internal sealed class ChatModelSelection
 
         return profiles.SelectMany(profile => profile.Models
                                                      .Where(model => string.Equals(model.Id, modelId,
-                                                                                   StringComparison.Ordinal))
+                                                                StringComparison.Ordinal))
                                                      .Select(model => (profile, model)))
                        .ToList();
     }
 
     private static bool IsCurrentSelection(
         SessionModelSelection? current, UserProfile profile, UserProfileModel model) =>
-        current is not null &&
-        string.Equals(current.Model.ModelId, model.Id, StringComparison.Ordinal) &&
+        current is not null                                                               &&
+        string.Equals(current.Model.ModelId, model.Id, StringComparison.Ordinal)          &&
         string.Equals(current.Model.Endpoint, profile.Endpoint, StringComparison.Ordinal) &&
-        current.Model.ChatApi == profile.ChatApi;
+        current.Model.ChatApi == profile.ChatApi                                          &&
+        (current.CredentialRoute is null ||
+         current.CredentialRoute == CredentialRoute.Describe(profile.Name, profile.ApiKeyEnvironmentVariable,
+                                                            profile.ApiKeyCredentialTarget));
 
     private static string DescribeModel(UserProfile profile, UserProfileModel model)
     {
@@ -510,7 +596,7 @@ internal sealed class ChatModelSelection
     {
         // 展示前合并当前秘密集合，包含切换中解析出的新密钥。
         await _output.WriteLineAsync(new DisplaySecretRedactor(_secrets.ToDictionary(pair => pair.Key,
-                                                                                  pair => pair.Value)).Redact(text));
+                                                                   pair => pair.Value)).Redact(text));
         await _output.FlushAsync(cancellationToken);
     }
 
@@ -535,6 +621,7 @@ internal sealed class ChatModelSelection
             }
             else current.Append(ch);
 
+        if (inQuote) throw new ArgumentException("Unclosed quoted argument; the selection was not changed.");
         if (current.Length > 0) parts.Add(current.ToString());
         return [.. parts];
     }

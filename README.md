@@ -185,6 +185,17 @@ Use `tinyharness help <command>` for full syntax:
 | `mcp` | Serve the read-only `ask_glm` worker over stdio |
 | `sandbox status / provision / verify` | Inspect, provision, or test the optional Windows sandbox |
 
+Model selection is available through `/models` before the first request and between runs;
+`list`, `use <id> --provider <name> [--effort <id>]`, and `effort <id|default>` also work directly.
+Draft selection creates no session or writer. Current markers distinguish credential routes.
+The menu includes catalog management and accepts credential references only. Enter new keys
+through `auth set --store` or standalone provider forms. `provider edit <name>` and
+`model edit <id> [--provider <name>]` preserve other models and settings.
+`model add` also accepts `--display-name`, `--efforts low,high`, and `--default-effort high`.
+Desktop supports idle session switching, declared reasoning levels, and provider/model forms.
+Saving a catalog does not switch open sessions. Configuration drift requires explicit re-selection.
+New keys use fresh credential targets; save failures retain old references and report possible orphan entries.
+
 `maxAgentSteps` defaults to `0` (unlimited). Trusted user `settings.runBudget` defaults to 128 logical model requests, including compaction, and 256 tool executions per run. Total tokens and wall time are tracked without limits by default (`maxTotalTokens` / `maxWallClockSeconds` are `0`); positive values enable those limits. Individual tool timeouts and cancellation remain active. See the [budget contract](Docs/Archive/task-control-design.md) for details.
 
 The MCP worker uses user configuration and sends permitted workspace content to the configured model; it cannot write files or run commands. It is an MCP server, not a client for external tools. `sandbox provision` changes machine accounts, ACLs, and network rules with elevation; `sandbox verify` runs real isolation checks. Follow the [sandbox setup and acceptance documentation](Docs/Archive/windows-sandbox-management.md) before using either.

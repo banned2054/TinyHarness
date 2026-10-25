@@ -184,6 +184,16 @@ tinyharness chat --session <session-id>
 | `mcp` | 通过 stdio 提供只读 `ask_glm` worker |
 | `sandbox status / provision / verify` | 检查、配置或验证可选 Windows 沙箱 |
 
+首次发送前和运行结束后均可通过 `/models` 选择模型与强度；也支持 `list`、
+`use <id> --provider <name> [--effort <id>]` 与 `effort <id|default>`。
+草稿选择不创建会话或 writer，当前标记区分不同凭据路由。菜单提供目录管理，
+只收集凭据引用；新密钥使用独立表单或 `auth set --store` 隐藏输入。
+`provider edit <name>` 与 `model edit <id> [--provider <name>]` 保留其他模型与设置；
+`model add` 支持 `--display-name`、`--efforts low,high` 和 `--default-effort high`。
+Desktop 模型菜单支持空闲时切换已有会话的模型与已声明强度，设置页可添加／编辑供应商和模型。
+保存目录不会自动切换会话，影响请求的配置变化须显式重新选择后再发送。
+新密钥写入独立凭据目标；保存失败保留原引用，并报告可能残留的新条目。
+
 `maxAgentSteps` 默认 `0`，表示不限普通步数。可信用户 `settings.runBudget` 默认每次运行最多 128 次逻辑模型请求（含压缩）和 256 次工具执行。累计 token 和总时长默认只统计、不设限（`maxTotalTokens`／`maxWallClockSeconds` 为 `0`），正数可启用相应上限；单工具超时与取消仍有效。详细契约见[运行预算](Archive/task-control-design.md)。
 
 MCP worker 使用用户配置，将获准读取的工作区内容发送给模型，但不能写文件或执行命令；它是 MCP server，不是连接外部工具的 client。`sandbox provision` 会提权修改机器账户、ACL 与网络规则，`sandbox verify` 会执行真实隔离检查；使用前请阅读[沙箱配置与验收说明](Archive/windows-sandbox-management.md)。

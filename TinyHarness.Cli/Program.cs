@@ -280,13 +280,10 @@ internal static class Program
                                                             OperatingSystem.IsWindows() && !Console.IsInputRedirected);
         using var reader = new ChatInputRouter(new ExclusiveInputReader(consoleInput));
         var composition = await ComposeAgentAsync(configPath, cancellation.SessionToken, true, reader,
-                                                   resumeSessionId is not null)
+                                                  true)
            .ConfigureAwait(false);
-        var config = composition.Config;
-        var selectionSecrets =
-            new System.Collections.Concurrent.ConcurrentDictionary<string, string>(composition.KnownSecrets,
-                                                                                  StringComparer.Ordinal);
-        composition = composition with { KnownSecrets = selectionSecrets };
+        var config           = composition.Config;
+        var selectionSecrets = (System.Collections.Concurrent.ConcurrentDictionary<string, string>)composition.KnownSecrets;
         await using var events =
             new ConsoleHostEventSink(composition.KnownSecrets, reasoningDisplay : reasoningDisplay);
 
@@ -298,37 +295,101 @@ internal static class Program
         PermissionEngine NewPermissions() => new(config.WorkspaceRoot, config.CommandRules,
                                                  workspaceReadOnly : () => composition.Access.State.IsReadOnly);
 
+        ChatModelSelection? draftSelector = null;
+
         async Task<ChatSessionHost> CreateHostAsync(CancellationToken token)
         {
-            // 降级组合（启动凭据缺失）没有可执行客户端：新会话需要模型，在任何持久化产物创建之前
-            // 明确拒绝，不留下空会话日志，也不伪造绑定。
-            if (composition.Model is null)
-                throw new
-                    InvalidOperationException("No API key is configured for the default model, so a new session cannot start. Restore the API key or resume a session and select a model with '/models use'.");
+            var               instructions = await instructionLoader.LoadAsync(null, [], token).ConfigureAwait(false);
+            var               draft = draftSelector?.DraftTarget;
+            var               selectedOptions = composition.Options;
+            var               selectedIdentity = identity;
+            var               selectedClient = composition.Model;
+            var               selectedRoute = composition.CredentialRoute;
+            UserProfile?      initialProfile = null;
+            UserProfileModel? initialModel = null;
+            if (composition.Resolution.ProfileName is { } profileName)
+            {
+                var user = await UserConfigStore.LoadAsync(UserConfigStore.DefaultFilePath(), token)
+                                                .ConfigureAwait(false);
+                initialProfile  = user.Profiles.SingleOrDefault(item => item.Name        == profileName);
+                initialModel    = initialProfile?.Models.SingleOrDefault(item => item.Id == selectedIdentity.ModelId);
+                selectedOptions = selectedOptions with { ReasoningEffort = initialModel?.DefaultReasoningEffort };
+            }
 
-            var instructions = await instructionLoader.LoadAsync(null, [], token).ConfigureAwait(false);
+            if (draft is not null)
+            {
+                var catalog = await UserConfigStore.LoadAsync(UserConfigStore.DefaultFilePath(), token)
+                                                   .ConfigureAwait(false);
+                var provider = catalog.Profiles.SingleOrDefault(item => item.Name == draft.Profile.Name)
+                            ?? throw new InvalidOperationException("Draft provider was removed; select again.");
+                var model = provider.Models.SingleOrDefault(item => item.Id == draft.Model.Id)
+                         ?? throw new InvalidOperationException("Draft model was removed; select again.");
+                if (provider.Endpoint != draft.Profile.Endpoint ||
+                    provider.ChatApi != draft.Profile.ChatApi ||
+                    provider.ApiKeyCredentialTarget != draft.Profile.ApiKeyCredentialTarget ||
+                    provider.ApiKeyEnvironmentVariable != draft.Profile.ApiKeyEnvironmentVariable ||
+                    model.ContextWindowTokens != draft.Model.ContextWindowTokens ||
+                    !(model.ReasoningEfforts ?? []).SequenceEqual(draft.Model.ReasoningEfforts ?? []))
+                    throw new InvalidOperationException("Draft configuration changed; select again before sending.");
+                selectedOptions = selectedOptions with
+                {
+                    Model = model.Id, ReasoningEffort = draft.Effort,
+                    Context = (selectedOptions.Context ?? new ContextOptions()) with
+                    {
+                        ContextWindowTokens = model.ContextWindowTokens
+                    }
+                };
+                selectedIdentity = new SessionModelIdentity(model.Id, provider.Endpoint, provider.ChatApi);
+                selectedRoute = CredentialRoute.Describe(provider.Name, provider.ApiKeyEnvironmentVariable,
+                                                         provider.ApiKeyCredentialTarget);
+            }
+
+            if (selectedClient is null && draft is null)
+                throw new InvalidOperationException("Select a configured model with /models use before sending.");
+
             token.ThrowIfCancellationRequested();
-            var session = new ChatSession(Guid.NewGuid().ToString("N"), config.WorkspaceRoot, identity);
-            var context = new ConversationContext(composition.Options.Context);
+            var session = new ChatSession(Guid.NewGuid().ToString("N"), config.WorkspaceRoot, selectedIdentity);
+            var context = new ConversationContext(selectedOptions.Context);
             context.Append(ChatMessage.System(WorkspacePrompts.Current));
             var writer =
                 new SessionStoreWriter(composition.SessionStoreDirectory!, session.Id, composition.KnownSecrets);
+            ChatSessionHost? createdHost = null;
             try
             {
+                if (draft is not null)
+                    selectedClient = await CreateSelectionClientAsync(draft.Profile, draft.Model.Id, token)
+                       .ConfigureAwait(false);
                 // 显式新建即保存空会话，不发送模型请求；项目规则仍由首回合边界可靠提交。
                 // 启动客户端归组合根按进程生命周期持有（/new 宿主共用），宿主以借用方式绑定。
-                await writer.CommitAsync(session, context, token).ConfigureAwait(false);
-                return new ChatSessionHost(session, context, composition.Options, composition.Model!, composition.Tools,
-                                           WorkspacePrompts.Current, NewPermissions(),
-                                           new ConsoleApprovalProvider(reader, Console.Out, composition.KnownSecrets),
-                                           events, sessionWriter : writer, instructionLoader : instructionLoader,
-                                           initialInstructions : instructions, knownSecrets : composition.KnownSecrets,
-                                           credentialRoute : composition.CredentialRoute,
-                                           ownsModelClient : false);
+                createdHost = new ChatSessionHost(session, context, selectedOptions, selectedClient!, composition.Tools,
+                                                  WorkspacePrompts.Current, NewPermissions(),
+                                                  new ConsoleApprovalProvider(reader, Console.Out,
+                                                                              composition.KnownSecrets),
+                                                  events, sessionWriter : writer, instructionLoader : instructionLoader,
+                                                  initialInstructions : instructions,
+                                                  knownSecrets : composition.KnownSecrets,
+                                                  credentialRoute : selectedRoute,
+                                                  ownsModelClient : draft is not null);
+                await createdHost.ChangeModelAsync(new SessionModelBinding(selectedIdentity, selectedClient!,
+                                                                           selectedOptions.Context,
+                                                                           selectedOptions.ReasoningEffort,
+                                                                           selectedRoute,
+                                                                           draft?.Profile.Name ?? initialProfile?.Name,
+                                                                           draft?.Model.ReasoningEfforts ??
+                                                                           initialModel?.ReasoningEfforts, ownsClient: false),
+                                                   token).ConfigureAwait(false);
+                return createdHost;
             }
             catch
             {
-                writer.Dispose();
+                if (createdHost is not null) createdHost.Dispose();
+                else
+                {
+                    writer.Dispose();
+                    if (!ReferenceEquals(selectedClient, composition.Model))
+                        (selectedClient as IDisposable)?.Dispose();
+                }
+
                 throw;
             }
         }
@@ -352,7 +413,9 @@ internal static class Program
                 var outcome =
                     await ChatResumeBinding.ResolveAsync(snapshot, identity, composition.Options,
                                                          composition.Model, composition.CredentialRoute,
-                                                         t => UserConfigStore.LoadAsync(UserConfigStore.DefaultFilePath(), t),
+                                                         t =>
+                                                             UserConfigStore
+                                                                .LoadAsync(UserConfigStore.DefaultFilePath(), t),
                                                          CreateSelectionClientAsync, token).ConfigureAwait(false);
                 await Console.Out.WriteLineAsync($"  resumed   : {restored.Session.Turns.Count} turns from commit " +
                                                  $"{writer.CommitSequence} ({snapshot.UpdatedUtc.LocalDateTime:yyyy-MM-dd HH:mm:ss})");
@@ -374,8 +437,8 @@ internal static class Program
                                                knownSecrets : composition.KnownSecrets);
                     await Console.Out.WriteLineAsync("  model     : " + outcome.ReselectionReason);
                     await Console.Out.WriteLineAsync(
-                        "  model     : the session history stays resumable; select a model with " +
-                        "'/models use <model-id> [--provider <profile>] [--effort <id>]' before sending.");
+                                                     "  model     : the session history stays resumable; select a model with " +
+                                                     "'/models use <model-id> [--provider <profile>] [--effort <id>]' before sending.");
                     return host;
                 }
 
@@ -394,7 +457,7 @@ internal static class Program
                 // 不一致时按选择事务采纳当前路由并开启新 epoch，隔离旧路由产生的 opaque 推理。
                 var recordedRoute = host.Session.ModelSelection!;
                 var alignedRoute = await host.EnsureCredentialRouteAsync(target.CredentialRoute, token)
-                                                .ConfigureAwait(false);
+                                             .ConfigureAwait(false);
                 if (target.RefreshedContext is { } refreshed)
                 {
                     // 目标模型当前窗口与保存选择不同：使用前按选择事务追加新快照，不显示旧修订却发送新配置。
@@ -406,12 +469,12 @@ internal static class Program
                                                                         ownsClient : false),
                                                 token, expectedRevision : current.Revision).ConfigureAwait(false);
                     await Console.Out.WriteLineAsync(
-                        $"  window    : the model's current context window ({refreshed.ContextWindowTokens:N0} tokens) " +
-                        "was saved as a new selection revision");
+                                                     $"  window    : the model's current context window ({refreshed.ContextWindowTokens:N0} tokens) " +
+                                                     "was saved as a new selection revision");
                 }
 
                 if (target.SavedSelection is { } saved &&
-                    (saved.Model           != identity ||
+                    (saved.Model           != identity                            ||
                      saved.ReasoningEffort != composition.Options.ReasoningEffort ||
                      saved.Context         != composition.Options.Context))
                 {
@@ -427,9 +490,10 @@ internal static class Program
                 {
                     if (!string.Equals(target.CredentialRoute, startupRoute, StringComparison.Ordinal))
                         await
-                            Console.Out.WriteLineAsync("  route     : resumed with the session's saved credential route " +
-                                                       $"'{target.CredentialRoute}' (startup default: "                  +
-                                                       $"{startupRoute})");
+                            Console.Out
+                                   .WriteLineAsync("  route     : resumed with the session's saved credential route " +
+                                                   $"'{target.CredentialRoute}' (startup default: "                   +
+                                                   $"{startupRoute})");
                 }
                 else
                     await
@@ -466,7 +530,7 @@ internal static class Program
 
         // 普通正文保留原文；所有诊断与审计出口共享本次进程使用过的密钥集合。
 
-        async Task<IChatCompletionClient> CreateSelectionClientAsync(UserProfile profile, string modelId,
+        async Task<IChatCompletionClient> CreateSelectionClientAsync(UserProfile       profile, string modelId,
                                                                      CancellationToken token)
         {
             var apiKey = ApiKeyReader.Read(profile.ApiKeyEnvironmentVariable, profile.ApiKeyCredentialTarget,
@@ -476,13 +540,19 @@ internal static class Program
                     ConfigException($"No API key found for provider '{profile.Name}'. Run 'tinyharness auth set {profile.Name}' or set the environment variable '{profile.ApiKeyEnvironmentVariable}' before switching.");
 
             selectionSecrets[Guid.NewGuid().ToString("N")] = apiKey;
+            if (profile.ApiKeyEnvironmentVariable.Length > 0)
+                selectionSecrets[profile.ApiKeyEnvironmentVariable] = apiKey;
             return ModelClientFactory.Create(modelId, profile.Endpoint, apiKey, profile.ChatApi);
         }
 
-        console.ModelSelection =
+        console.ModelSelection = draftSelector =
             new ChatModelSelection(reader, Console.Out,
                                    token => UserConfigStore.LoadAsync(UserConfigStore.DefaultFilePath(), token),
                                    CreateSelectionClientAsync, selectionSecrets, !Console.IsInputRedirected);
+        draftSelector.ManageCatalog = token => CatalogWizard.MenuAsync(new CommandContext
+        {
+            Io = new ChatCatalogConsole(reader, Console.Out), Credentials = new WindowsCredentialStore()
+        }, token);
         await WriteHeaderAsync("TinyHarness chat", composition, console.Host?.Session.Id).ConfigureAwait(false);
         await
             Console.Out.WriteLineAsync("  storage   : append-only JSONL session log; protocol history is saved verbatim " +
@@ -527,11 +597,11 @@ internal static class Program
     /// </param>
     /// <param name="allowMissingModelCredentials">
     ///     <para>
-    ///         仅供恢复入口使用：启动默认模型的凭据缺失时不拒绝启动，改为组合出无客户端、无路由的降级组合，
+    ///         供交互入口使用：启动默认模型或凭据缺失时不拒绝启动，改为组合出无客户端、无路由的降级组合，
     ///         由恢复绑定从日志最后保存的选择解析目标，或以未绑定宿主等待显式重选。
     ///     </para>
     ///     <para>
-    ///         For resume entries only: a missing credential for the startup default model no longer rejects
+    ///         For interactive entries: a missing startup model or credential no longer rejects
     ///         startup — the composition degrades to no client and no route, letting the resume binding resolve
     ///         the target from the log's last saved selection or wait for explicit re-selection unbound.
     ///     </para>
@@ -542,23 +612,25 @@ internal static class Program
     /// </exception>
     private static async Task<AgentComposition> ComposeAgentAsync(
         string? configPath, CancellationToken cancellationToken, bool persistSessions = false, TextReader? input = null,
-        bool allowMissingModelCredentials = false)
+        bool    allowMissingModelCredentials = false)
     {
         var resolution = await ConfigResolver.ResolveAsync(configPath, cancellationToken).ConfigureAwait(false);
         var config     = resolution.Config;
 
-        if (string.IsNullOrWhiteSpace(config.Model))
+        if (!allowMissingModelCredentials && string.IsNullOrWhiteSpace(config.Model))
             throw new
                 ConfigException("A model must be configured. Run 'tinyharness init' (user config) or set 'model' in the config file.");
 
-        if (string.IsNullOrWhiteSpace(config.Endpoint))
+        if (!allowMissingModelCredentials && string.IsNullOrWhiteSpace(config.Endpoint))
             throw new
                 ConfigException("An endpoint must be configured. Run 'tinyharness init' (user config) or set 'endpoint' in the config file.");
 
         // 启动凭据解析统一经组合入口：降级允许时环境变量缺失与凭据存储条目缺失都归一为无客户端组合。
-        var apiKey = StartupModelCredentials.Resolve(config.ApiKeyEnvironmentVariable, config.ApiKeyCredentialTarget,
-                                                     resolution.ProfileName, new WindowsCredentialStore(),
-                                                     allowMissingModelCredentials);
+        var apiKey = string.IsNullOrWhiteSpace(config.Model) || string.IsNullOrWhiteSpace(config.Endpoint)
+            ? null
+            : StartupModelCredentials.Resolve(config.ApiKeyEnvironmentVariable, config.ApiKeyCredentialTarget,
+                                              resolution.ProfileName, new WindowsCredentialStore(),
+                                              allowMissingModelCredentials);
 
         // 续聊存储仅取可信用户设置，不接受项目配置；保护校验失败即拒绝启动，不降级目录。
         var userConfig = await UserConfigStore.LoadAsync(UserConfigStore.DefaultFilePath(), cancellationToken)
@@ -569,9 +641,11 @@ internal static class Program
                                                                        config.WorkspaceRoot);
 
         // 沙箱仅取可信用户设置，不接受项目配置；组件、路径、平台或存储保护校验失败均不回退宿主。
-        var knownSecrets = SandboxCliComposition.KnownSecrets(config, apiKey);
-        var settings     = userConfig.Settings?.WindowsSandbox;
-        var accessState  = new WorkspaceAccessState(WorkspaceDirectoryIdentity.Capture(config.WorkspaceRoot));
+        var knownSecrets =
+            new System.Collections.Concurrent.ConcurrentDictionary<string, string>(SandboxCliComposition.KnownSecrets(config, apiKey),
+                                                     StringComparer.Ordinal);
+        var settings    = userConfig.Settings?.WindowsSandbox;
+        var accessState = new WorkspaceAccessState(WorkspaceDirectoryIdentity.Capture(config.WorkspaceRoot));
         var permissions = new PermissionEngine(config.WorkspaceRoot, config.CommandRules,
                                                workspaceReadOnly : () => accessState.IsReadOnly);
         var trustPath = Path.Combine(Path.GetDirectoryName(UserConfigStore.DefaultFilePath())!, "workspace-trust.json");
@@ -596,20 +670,20 @@ internal static class Program
                                                     () =>
                                                     {
                                                         sandbox = SandboxCliComposition.TryCompose(settings,
-                                                            config.WorkspaceRoot, knownSecrets,
-                                                            sessionStoreDirectory);
+                                                                 config.WorkspaceRoot, knownSecrets,
+                                                                 sessionStoreDirectory);
                                                         var policy = sandbox?.ExecutionPolicy ??
                                                                      ProcessExecutionPolicy.Host();
                                                         return
                                                             Task.FromResult((new ShellTool(new Workspace(config
-                                                                                    .WorkspaceRoot),
-                                                                                 config.DefaultToolTimeoutSeconds,
-                                                                                 knownSecrets,
-                                                                                 processBackend :
-                                                                                 sandbox?.Backend ??
-                                                                                 new
-                                                                                     HostProcessBackend(knownSecrets),
-                                                                                 executionPolicy : policy),
+                                                                                                  .WorkspaceRoot),
+                                                                                      config.DefaultToolTimeoutSeconds,
+                                                                                      knownSecrets,
+                                                                                      processBackend :
+                                                                                      sandbox?.Backend ??
+                                                                                      new
+                                                                                          HostProcessBackend(knownSecrets),
+                                                                                      executionPolicy : policy),
                                                                              policy));
                                                     });
         await access.InitializeAsync(cancellationToken).ConfigureAwait(false);
@@ -628,7 +702,7 @@ internal static class Program
             Budget                    = userConfig.Settings?.RunBudget ?? new RunBudgetLimits(),
             EnableWorkItems           = true,
             DefaultToolTimeoutSeconds = config.DefaultToolTimeoutSeconds,
-            Context                   = new ContextOptions
+            Context = new ContextOptions
             {
                 ContextWindowTokens       = config.ContextWindowTokens,
                 ReservedOutputTokens      = config.ReservedOutputTokens,
@@ -814,7 +888,7 @@ internal static class Program
             Model                     = config.Model,
             MaxAgentSteps             = config.MaxAgentSteps,
             DefaultToolTimeoutSeconds = config.DefaultToolTimeoutSeconds,
-            Context                   = new ContextOptions
+            Context = new ContextOptions
             {
                 ContextWindowTokens       = config.ContextWindowTokens,
                 ReservedOutputTokens      = config.ReservedOutputTokens,
@@ -929,7 +1003,7 @@ internal static class Program
                                          "Smoke refreshed project rules: preserve confirmed file facts.\n", cts.Token)
                       .ConfigureAwait(false);
             using (var resumedWriter = await SessionStoreWriter.OpenExistingAsync(sessionDirectory, sessionId,
-                       null, cts.Token).ConfigureAwait(false))
+                            null, cts.Token).ConfigureAwait(false))
             using (var refreshedHost = new ChatSessionHost(restoration.Session, restoration.Context, options,
                                                            new SmokeScriptClient([new SmokeStep()]), tools,
                                                            systemPrompt, permissions, approver,

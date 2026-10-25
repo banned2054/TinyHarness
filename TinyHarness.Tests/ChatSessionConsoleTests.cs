@@ -50,6 +50,36 @@ public class ChatSessionConsoleTests
 
     private static int Count(string text, string needle) => text.Split(needle).Length - 1;
 
+    [Test]
+    public async Task PendingModelsCommandsDoNotInvokeSessionFactoryOrResolveCredentials()
+    {
+        var       input        = new StringReader("/models use draft --provider work --effort high\n/models list\n");
+        var       output       = new StringWriter();
+        using var cancellation = new ChatCancellation(false);
+        using var console =
+            new ChatSessionConsole(_ => throw new AssertionException("Draft commands must not create a host."), input,
+                                   output, cancellation);
+        console.ModelSelection = new ChatModelSelection(input, output, _ => Task.FromResult(new UserConfig
+        {
+            Profiles =
+            [
+                new UserProfile
+                {
+                    Name = "work", Endpoint = "https://offline.invalid/v1", Models =
+                    [
+                        new UserProfileModel
+                        {
+                            Id = "draft", ContextWindowTokens = 128000, ReasoningEfforts = [ModelReasoningEffort.High]
+                        }
+                    ]
+                }
+            ]
+        }), (_, _, _) => throw new AssertionException("Draft commands must not resolve credentials."));
+        Assert.That(await console.RunAsync(TestToken()), Is.Zero);
+        Assert.That(console.Host, Is.Null);
+        Assert.That(output.ToString(), Does.Contain("Draft model: work / draft").And.Contain("* work / draft"));
+    }
+
     [TestCase("")]
     [TestCase("\n  \n\t\n")]
     public async Task PendingEntry_EofAndBlankInputNeverCreateSession(string input)

@@ -4,10 +4,8 @@ using TinyHarness.Core.Models.Configuration;
 namespace TinyHarness.Cli.Services;
 
 /// <summary>
-///     交互式收集一个 provider profile 的字段：endpoint、API key 来源、默认模型与上下文窗口。
-///     init 与 provider add 共用同一套提示，保证两条入口产生一致的配置。
-///     Interactively collects one provider profile: endpoint, API key source, default model, and context window.
-///     init and provider add share the same prompts so both entries produce consistent configs.
+///     <para>收集 init 的供应商与初始模型候选，完成前不写入凭据。</para>
+///     <para>Collects init provider and initial-model candidates without writing credentials before completion.</para>
 /// </summary>
 internal static class ProfileEditor
 {
@@ -24,10 +22,16 @@ internal static class ProfileEditor
     public const string DefaultApiKeyVariable = "TINYHARNESS_API_KEY";
 
     /// <summary>
-    ///     依次提示并收集 profile 字段；选择凭据存储时立即保存密钥条目。
-    ///     Prompts for the profile fields in order; the credential entry is saved immediately when the store is chosen.
+    ///     依次提示并收集 profile 字段；完整表单完成前不写入凭据。
+    ///     Prompts for the profile fields in order; credentials are not written until the form is complete.
     /// </summary>
-    public static async Task<UserProfile> CollectAsync(
+    public sealed record PendingProfile(UserProfile Profile, string? Secret);
+
+    /// <summary>
+    /// <para>返回完整表单及候选密钥，调用方负责最终保存。</para>
+    ///     <para>Returns a completed form and candidate key; the caller owns final saving.</para>
+    /// </summary>
+    public static async Task<PendingProfile> CollectAsync(
         CommandContext context, string profileName, UserProfile? existing, CancellationToken cancellationToken)
     {
         var io = context.Io;
@@ -35,7 +39,7 @@ internal static class ProfileEditor
 
         var endpoint = await PromptEndpointAsync(io, existing?.Endpoint, cancellationToken).ConfigureAwait(false);
 
-        var (envVariable, credentialTarget) =
+        var (envVariable, credentialTarget, secret) =
             await PromptApiKeySourceAsync(context, profileName, existing, cancellationToken).ConfigureAwait(false);
 
         var modelId = await PromptModelIdAsync(io, existing?.DefaultModel, cancellationToken).ConfigureAwait(false);
@@ -43,7 +47,7 @@ internal static class ProfileEditor
             await CliPrompt.PositiveIntAsync(io, $"Context window tokens for '{modelId}'", 128_000, cancellationToken)
                            .ConfigureAwait(false);
 
-        return new UserProfile
+        return new PendingProfile(new UserProfile
         {
             Name                      = profileName,
             Endpoint                  = endpoint,
@@ -52,13 +56,17 @@ internal static class ProfileEditor
             // 协议不经交互提示收集；覆盖已有 profile 时保留其显式选择，避免静默回退。
             // The protocol is not prompted; overwriting an existing profile keeps its explicit
             // choice instead of silently falling back.
-            ChatApi      = existing?.ChatApi ?? ChatApiKind.ChatCompletions,
-            DefaultModel = modelId,
-            Models =
-            [
-                new UserProfileModel { Id = modelId, ContextWindowTokens = contextWindow }
-            ]
-        };
+            ChatApi                   = existing?.ChatApi ?? ChatApiKind.ChatCompletions,
+            DefaultModel              = modelId,
+            Models = existing is null
+                ? [new UserProfileModel { Id = modelId, ContextWindowTokens = contextWindow }]
+                : existing.Models.Any(item => item.Id == modelId)
+                    ? existing.Models
+                              .Select(item => item.Id == modelId
+                                          ? item with { ContextWindowTokens = contextWindow }
+                                          : item).ToArray()
+                    : [.. existing.Models, new UserProfileModel { Id = modelId, ContextWindowTokens = contextWindow }]
+        }, secret);
     }
 
     /// <summary>
@@ -91,7 +99,7 @@ internal static class ProfileEditor
     ///     Prompts for the API key source: an environment variable reference, the system credential store (when supported), or
     ///     skip.
     /// </summary>
-    private static async Task<(string EnvVariable, string CredentialTarget)> PromptApiKeySourceAsync(
+    private static async Task<(string EnvVariable, string CredentialTarget, string? Secret)> PromptApiKeySourceAsync(
         CommandContext context, string profileName, UserProfile? existing, CancellationToken cancellationToken)
     {
         var io = context.Io;
@@ -101,7 +109,7 @@ internal static class ProfileEditor
                                 cancellationToken).ConfigureAwait(false);
         if (context.Credentials.IsSupported)
             await io
-                 .WriteLineAsync($"  2) Windows credential store (the key is saved under '{CredentialTargetPrefix}{profileName}'; JSON keeps the reference only)",
+                 .WriteLineAsync($"  2) Windows credential store (a new target is created on save; JSON keeps the reference only)",
                                  cancellationToken).ConfigureAwait(false);
 
         await io.WriteLineAsync("  3) skip (configure later with 'tinyharness auth set')", cancellationToken)
@@ -117,7 +125,7 @@ internal static class ProfileEditor
                 var variable = await CliPrompt
                                     .LineWithDefaultAsync(io, "Environment variable name", DefaultApiKeyVariable,
                                                           cancellationToken).ConfigureAwait(false);
-                if (IsValidEnvironmentVariableName(variable)) return (variable, string.Empty);
+                if (IsValidEnvironmentVariableName(variable)) return (variable, string.Empty, null);
 
                 await io.WriteLineAsync("  Use letters, digits and underscores, starting with a letter or underscore.",
                                         cancellationToken).ConfigureAwait(false);
@@ -127,15 +135,12 @@ internal static class ProfileEditor
             if (hasStore && choice == "2")
             {
                 var secret = await ReadSecretAsync(io, cancellationToken).ConfigureAwait(false);
-                var target = CredentialTargetPrefix + profileName;
-                context.Credentials.Save(target, secret);
-                await io
-                     .WriteLineAsync($"  Saved the API key to the credential store entry '{target}'. The value was not written to any file.",
-                                     cancellationToken).ConfigureAwait(false);
-                return (string.Empty, target);
+                return (string.Empty, string.Empty, secret);
             }
 
-            if (choice == "3") return (string.Empty, string.Empty);
+            if (choice == "3")
+                return (existing?.ApiKeyEnvironmentVariable ?? string.Empty,
+                        existing?.ApiKeyCredentialTarget    ?? string.Empty, null);
 
             await io.WriteLineAsync("  Answer with the option number.", cancellationToken).ConfigureAwait(false);
         }

@@ -58,12 +58,12 @@ public sealed partial class ChatSessionHost
     ///     </para>
     /// </remarks>
     public async Task<SessionModelSelection> ChangeModelAsync(
-        SessionModelBinding candidate, CancellationToken cancellationToken,
-        long? expectedRevision = null, bool resetReasoning = false)
+        SessionModelBinding candidate,               CancellationToken cancellationToken,
+        long?               expectedRevision = null, bool              resetReasoning = false)
     {
         ArgumentNullException.ThrowIfNull(candidate);
         cancellationToken.ThrowIfCancellationRequested();
-        if (candidate.ReasoningEffort is { } effort &&
+        if (candidate.ReasoningEffort is { } effort             &&
             candidate.ReasoningCapabilities is { } capabilities &&
             !capabilities.Contains(effort))
             throw new
@@ -83,10 +83,10 @@ public sealed partial class ChatSessionHost
                 throw new InvalidOperationException("Model selection requires a complete conversation boundary.");
 
             // 空会话首次可靠提交选择前确立 system 上下文，使仅含选择的日志满足恢复契约。
-            var establishingContext = boundary == 0 && _sessionWriter is not null;
+            var establishingContext           = boundary == 0 && _sessionWriter is not null;
             if (establishingContext) boundary = 1;
 
-            var newEpoch = resetReasoning ||
+            var newEpoch = resetReasoning                   ||
                            current.Model != candidate.Model ||
                            !string.Equals(current.CredentialRoute, candidate.CredentialRoute, StringComparison.Ordinal);
             var selection = new SessionModelSelection
@@ -125,7 +125,7 @@ public sealed partial class ChatSessionHost
                     if (establishingContext) _context.Append(ChatMessage.System(_systemPrompt));
                     var record = new SessionLogRecord(string.Empty, "model-selection",
                                                       JsonSerializer.SerializeToElement(selection,
-                                                          SessionLogJsonContext.Default.SessionModelSelection));
+                                                               SessionLogJsonContext.Default.SessionModelSelection));
                     await _sessionWriter.CommitControlAsync(Session, _context, [record], cancellationToken)
                                         .ConfigureAwait(false);
                 }
@@ -140,8 +140,8 @@ public sealed partial class ChatSessionHost
             _binding = candidate;
             _options = _options with
             {
-                Model           = candidate.Model.ModelId,
-                Context         = candidate.Context,
+                Model = candidate.Model.ModelId,
+                Context = candidate.Context,
                 ReasoningEffort = candidate.ReasoningEffort
             };
             _context.BindModel(selection);
@@ -176,8 +176,8 @@ public sealed partial class ChatSessionHost
     ///     </para>
     /// </remarks>
     public Task<SessionModelSelection> ChangeReasoningEffortAsync(
-        ModelReasoningEffort? reasoningEffort, CancellationToken cancellationToken,
-        IReadOnlyList<ModelReasoningEffort>? declaredCapabilities = null)
+        ModelReasoningEffort?                reasoningEffort,             CancellationToken cancellationToken,
+        IReadOnlyList<ModelReasoningEffort>? declaredCapabilities = null, long?             expectedRevision = null)
     {
         var current = Session.ModelSelection!;
         var binding = BoundBindingOrThrow();
@@ -186,7 +186,7 @@ public sealed partial class ChatSessionHost
                                                         declaredCapabilities ?? current.ReasoningCapabilities,
                                                         ownsClient           : false),
                                 cancellationToken,
-                                expectedRevision : current.Revision);
+                                expectedRevision : expectedRevision ?? current.Revision);
     }
 
     /// <summary>
@@ -242,12 +242,12 @@ public sealed partial class ChatSessionHost
     ///     <para>Compares every policy input affecting requests and history interpretation; the profile hint affects display only and never decides a no-op.</para>
     /// </summary>
     private static bool PolicyEquals(SessionModelSelection current, SessionModelSelection candidate) =>
-        current.Schema                   == candidate.Schema &&
-        current.Model                    == candidate.Model &&
-        current.Context                  == candidate.Context &&
-        current.ReasoningEffort          == candidate.ReasoningEffort &&
-        string.Equals(current.CredentialRoute, candidate.CredentialRoute, StringComparison.Ordinal) &&
-        CapabilitiesEqual(current.ReasoningCapabilities, candidate.ReasoningCapabilities) &&
+        current.Schema          == candidate.Schema                                                                 &&
+        current.Model           == candidate.Model                                                                  &&
+        current.Context         == candidate.Context                                                                &&
+        current.ReasoningEffort == candidate.ReasoningEffort                                                        &&
+        string.Equals(current.CredentialRoute, candidate.CredentialRoute, StringComparison.Ordinal)                 &&
+        CapabilitiesEqual(current.ReasoningCapabilities, candidate.ReasoningCapabilities)                           &&
         string.Equals(current.ReasoningMappingVersion, candidate.ReasoningMappingVersion, StringComparison.Ordinal) &&
         string.Equals(current.ProjectionVersion, candidate.ProjectionVersion, StringComparison.Ordinal);
 

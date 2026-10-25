@@ -2,6 +2,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="using:TinyHarness.Desktop.ViewModels"
         xmlns:conversation="using:TinyHarness.Desktop.Presentation.Views.Conversation"
+        xmlns:views="using:TinyHarness.Desktop.Presentation.Views"
         xmlns:tooling="using:TinyHarness.Desktop.Presentation.Views.Tooling"
         x:Class="TinyHarness.Desktop.Presentation.Views.MainWindow"
         x:DataType="vm:MainWindowViewModel"
@@ -78,16 +79,10 @@
             </ContentControl.ContentTemplate>
         </ContentControl>
         <TextBlock Grid.Row="1" Grid.ColumnSpan="3" Text="{Binding Notice}" Margin="16,4" TextWrapping="Wrap" Classes="caption" />
-        <Border Grid.ColumnSpan="3" Grid.RowSpan="2" Background="{DynamicResource ChatBackgroundBrush}" IsVisible="{Binding SettingsOpen}" Padding="40">
-            <StackPanel Spacing="20" MaxWidth="760">
-                <TextBlock Text="设置" Classes="heading" />
-                <TextBlock Text="模型和凭据引用共用 TinyHarness 用户配置。修改配置后刷新目录；已打开的会话保持原模型身份。" TextWrapping="Wrap" />
-                <SelectableTextBlock Text="{Binding UserConfigPath}" TextWrapping="Wrap" />
-                <TextBlock Text="新对话也可以使用工作区内的 tinyharness.json。API key 通过环境变量或系统凭据存储提供。沙箱使用可信用户设置；本界面不会自动安装或配置系统沙箱。" TextWrapping="Wrap" Classes="caption" />
-                <Button Content="刷新模型与历史" Command="{Binding RefreshCommand}" />
-                <Button Content="切换深色 / 浅色" Command="{Binding ToggleThemeCommand}" />
-                <Button Content="返回对话" Command="{Binding OpenSettingsCommand}" />
-            </StackPanel>
+        <!-- 可见性绑在包装层：SettingsPanelView 自带 x:DataType，元素上的数据绑定会按面板 VM 解析。 -->
+        <Border x:Name="SettingsOverlay" Grid.ColumnSpan="3" Grid.RowSpan="2" IsVisible="{Binding SettingsOpen}">
+            <views:SettingsPanelView DataContext="{Binding Settings}"
+                                     IsVisible="{Binding #SettingsOverlay.IsVisible}" />
         </Border>
     </Grid>
 </Window>

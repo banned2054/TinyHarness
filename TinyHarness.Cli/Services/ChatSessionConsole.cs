@@ -290,6 +290,8 @@ internal sealed class ChatSessionConsole : IDisposable
                     await _output.WriteLineAsync($"session    : {Host.Session.Id}").ConfigureAwait(false);
                 }
 
+                if (ModelSelection is not null)
+                    await ModelSelection.ValidateBeforeSendAsync(Host, turnToken).ConfigureAwait(false);
                 var pendingRun = Host.SubmitTurnAsync(userInput, turnToken);
                 if (_input is ChatInputRouter router) router.SetActiveHandler(HandleRunInputAsync);
                 try
@@ -425,12 +427,6 @@ internal sealed class ChatSessionConsole : IDisposable
         if (ModelSelection is null)
         {
             await _output.WriteLineAsync("Model selection is unavailable in this console.");
-            return;
-        }
-
-        if (Host is null)
-        {
-            await _output.WriteLineAsync("No session yet; type a request to create one first.");
             return;
         }
 

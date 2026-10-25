@@ -195,11 +195,13 @@ internal static class HelpText
         Usage:
           tinyharness provider list
           tinyharness provider add <name>
+          tinyharness provider edit <name>
           tinyharness provider use <name>
 
         Named provider profiles live in the user config. Each profile holds an endpoint, an
         API key reference, and its model list. `provider add` guides through the fields
-        interactively; `provider use` selects the default profile.
+        interactively; add rejects duplicate names and does not select a default.
+        `provider edit` preserves all models; `provider use` selects the default profile.
         """;
 
     public const string Auth = """
@@ -220,11 +222,14 @@ internal static class HelpText
         Usage:
           tinyharness model list [--provider <name>]
           tinyharness model add <model-id> --context-window <tokens> [--provider <name>]
+            [--display-name <name>] [--efforts <comma-separated-ids>] [--default-effort <id|default>]
           tinyharness model use <model-id> [--provider <name>]
+          tinyharness model edit <model-id> [--provider <name>]
 
         Manages the model list of a profile. The context window is always explicit; it is
         never inferred from the model name. `model list` shows the locally configured
-        models; remote model discovery is not performed.
+        models; remote model discovery is not performed. `model edit` opens a form for
+        display name, window, declared efforts and default effort; the API ID stays fixed.
         """;
 
     public const string Doctor = """

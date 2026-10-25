@@ -10,31 +10,42 @@ using TinyHarness.Desktop.Runtime;
 namespace TinyHarness.Desktop;
 
 /// <summary>
-/// <para>验证原生产物的独立会话、并发、同一日志和恢复；所有模型与凭据均为离线夹具。</para>
-/// <para>Verifies native independent sessions, concurrency, shared journaling and resume using only offline fixtures.</para>
+///     <para>验证原生产物的独立会话、并发、同一日志和恢复；所有模型与凭据均为离线夹具。</para>
+///     <para>Verifies native independent sessions, concurrency, shared journaling and resume using only offline fixtures.</para>
 /// </summary>
 internal static class OfflineSmoke
 {
     public static async Task<int> RunAsync()
     {
-        var root = Path.Combine(Path.GetTempPath(), "tinyharness-desktop-smoke-" + Guid.NewGuid().ToString("N"));
-        var workspace = Path.Combine(root, "workspace");
-        var store = Path.Combine(root, "sessions");
+        var root       = Path.Combine(Path.GetTempPath(), "tinyharness-desktop-smoke-" + Guid.NewGuid().ToString("N"));
+        var workspace  = Path.Combine(root, "workspace");
+        var store      = Path.Combine(root, "sessions");
         var configPath = Path.Combine(root, "user-config.json");
         Directory.CreateDirectory(workspace);
         var user = new UserConfig
         {
             DefaultProfile = "offline",
-            Profiles = [new UserProfile
-            {
-                Name = "offline", Endpoint = "https://offline.invalid/v1", ApiKeyCredentialTarget = "offline-only",
-                DefaultModel = "offline-model", Models = [new UserProfileModel { Id = "offline-model", ContextWindowTokens = 128_000 }]
-            }],
+            Profiles =
+            [
+                new UserProfile
+                {
+                    Name = "offline", Endpoint = "https://offline.invalid/v1", ApiKeyCredentialTarget = "offline-only",
+                    DefaultModel = "offline-model", Models =
+                    [
+                        new UserProfileModel { Id = "offline-model", ContextWindowTokens = 128_000 },
+                        new UserProfileModel
+                        {
+                            Id               = "flash", ContextWindowTokens = 128_000,
+                            ReasoningEfforts = [ModelReasoningEffort.Low, ModelReasoningEffort.High]
+                        }
+                    ]
+                }
+            ],
             Settings = new UserConfigSettings { SessionStoreDirectory = store }
         };
         await UserConfigStore.SaveAsync(configPath, user, CancellationToken.None);
-        var bothStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var entered = 0;
+        var bothStarted   = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var entered       = 0;
         var createdModels = 0;
         var factory = new DesktopSessionFactory((_, _) => new OfflineModel(async token =>
         {
@@ -47,31 +58,53 @@ internal static class OfflineSmoke
             await using (var manager = new DesktopSessionManager())
             {
                 Task<DesktopSession> Open() => manager.OpenAsync(null,
-                    token => factory.OpenAsync(new DesktopSessionRequest(workspace), _ => ValueTask.CompletedTask,
-                                                _ => ValueTask.CompletedTask, token));
-                var first = await Open();
+                                                                 token =>
+                                                                     factory
+                                                                        .OpenAsync(new DesktopSessionRequest(workspace),
+                                                                             _ => ValueTask.CompletedTask,
+                                                                             _ => ValueTask.CompletedTask, token));
+
+                var first  = await Open();
                 var second = await Open();
                 firstId = first.Id;
-                var firstRun = first.SubmitAsync("offline first");
+                var firstRun  = first.SubmitAsync("offline first");
                 var secondRun = second.SubmitAsync("offline second");
-                var runs = await Task.WhenAll(firstRun, secondRun).WaitAsync(TimeSpan.FromSeconds(20));
+                var runs      = await Task.WhenAll(firstRun, secondRun).WaitAsync(TimeSpan.FromSeconds(20));
                 if (first.Id == second.Id || runs.Any(run => run.Result?.Status != Core.Models.Agent.AgentStatus.Completed))
                     throw new InvalidOperationException("Parallel desktop sessions did not complete independently.");
                 if (first.Host.PersistenceWarning is not null || second.Host.PersistenceWarning is not null)
                     throw new InvalidOperationException("Desktop sessions were not reliably saved.");
+                await first.ChangeModelAsync("offline", "flash", ModelReasoningEffort.High,
+                                             first.Host.Session.ModelSelection!.Revision);
+                await first.SubmitAsync("offline switched");
+                await first.ChangeModelAsync("offline", "offline-model", null,
+                                             first.Host.Session.ModelSelection!.Revision);
+                await first.SubmitAsync("offline switched back");
+                await first.ChangeModelAsync("offline", "flash", ModelReasoningEffort.High,
+                                             first.Host.Session.ModelSelection!.Revision);
             }
+
             await using (var manager = new DesktopSessionManager())
             {
                 var restored = await manager.OpenAsync(firstId,
-                    token => factory.OpenAsync(new DesktopSessionRequest(workspace, SessionId: firstId),
-                                                _ => ValueTask.CompletedTask, _ => ValueTask.CompletedTask, token));
-                if (restored.Host.Session.Turns.Count != 1) throw new InvalidOperationException("Resume lost the first turn.");
+                                                       token =>
+                                                           factory.OpenAsync(new DesktopSessionRequest(workspace,
+                                                                                 SessionId : firstId),
+                                                                             _ => ValueTask.CompletedTask,
+                                                                             _ => ValueTask.CompletedTask, token));
+                if (restored.Host.Session.Turns.Count                    != 3       ||
+                    restored.Host.Session.ModelSelection?.Model.ModelId  != "flash" ||
+                    restored.Host.Session.ModelSelection.ReasoningEffort != ModelReasoningEffort.High)
+                    throw new InvalidOperationException("Resume lost the first turn.");
                 var run = await restored.SubmitAsync("offline resumed");
-                if (run.Result?.Status != Core.Models.Agent.AgentStatus.Completed) throw new InvalidOperationException("Resumed turn failed.");
+                if (run.Result?.Status != Core.Models.Agent.AgentStatus.Completed)
+                    throw new InvalidOperationException("Resumed turn failed.");
             }
+
             var saved = await SessionStoreReader.ReadAsync(store, firstId, CancellationToken.None);
-            if (saved?.Turns.Count != 2 || createdModels != 3) throw new InvalidOperationException("Persistence or client ownership failed.");
-            Console.WriteLine($"PASS desktop: parallel=2 resumedTurns=2 disposedClients={createdModels}; fixture={root}");
+            if (saved?.Turns.Count != 4 || createdModels != 6)
+                throw new InvalidOperationException("Persistence or client ownership failed.");
+            Console.WriteLine($"PASS desktop: parallel=2 switched=A/B/A/B resumedTurns=4 disposedClients={createdModels}; fixture={root}");
             return 0;
         }
         catch (Exception exception)
@@ -83,21 +116,25 @@ internal static class OfflineSmoke
 
     private sealed class OfflineCredentials : ICredentialStore
     {
-        public bool IsSupported => true;
-        public string? Read(string targetName) => targetName == "offline-only" ? "offline-fixture-key" : null;
-        public void Save(string targetName, string secret) => throw new NotSupportedException();
-        public bool Delete(string targetName) => throw new NotSupportedException();
+        public bool    IsSupported => true;
+        public string? Read(string   targetName) => targetName == "offline-only" ? "offline-fixture-key" : null;
+        public void    Save(string   targetName, string secret) => throw new NotSupportedException();
+        public bool    Delete(string targetName) => throw new NotSupportedException();
     }
 
-    private sealed class OfflineModel(Func<CancellationToken, Task> started, Action disposed) : IChatCompletionClient, IDisposable
+    private sealed class OfflineModel(Func<CancellationToken, Task> started, Action disposed)
+        : IChatCompletionClient, IDisposable
     {
         public async IAsyncEnumerable<ChatStreamEvent> CompleteAsync(ChatCompletionRequest request,
-            [EnumeratorCancellation] CancellationToken cancellationToken)
+                                                                     [EnumeratorCancellation]
+                                                                     CancellationToken cancellationToken)
         {
             await started(cancellationToken);
-            yield return new ChatStreamEvent { Kind = ChatStreamEventKind.ContentDelta, ContentDelta = "offline desktop response" };
+            yield return new ChatStreamEvent
+                { Kind = ChatStreamEventKind.ContentDelta, ContentDelta = "offline desktop response" };
             yield return new ChatStreamEvent { Kind = ChatStreamEventKind.End, FinishReason = "stop" };
         }
+
         public void Dispose() => disposed();
     }
 }

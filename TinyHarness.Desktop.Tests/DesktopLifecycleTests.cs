@@ -27,8 +27,9 @@ public sealed class DesktopLifecycleTests
         var finishSecond = Signal();
         await using var manager = new DesktopSessionManager();
         var first = await manager.OpenAsync(null, _ => Task.FromResult(Create(new WaitingModel(firstEntered))));
-        var second = await manager.OpenAsync(null, _ => Task.FromResult(Create(new WaitingModel(secondEntered, finishSecond))));
-        var firstRun = first.SubmitAsync("first");
+        var second =
+            await manager.OpenAsync(null, _ => Task.FromResult(Create(new WaitingModel(secondEntered, finishSecond))));
+        var firstRun  = first.SubmitAsync("first");
         var secondRun = second.SubmitAsync("second");
         await Task.WhenAll(firstEntered.Task, secondEntered.Task).WaitAsync(Timeout);
         Assert.That(first.Cancel(), Is.True);
@@ -95,8 +96,14 @@ public sealed class DesktopLifecycleTests
         var open = manager.OpenAsync(null, async token =>
         {
             entered.SetResult();
-            try { await Task.Delay(System.Threading.Timeout.Infinite, token); }
-            catch (OperationCanceledException) { }
+            try
+            {
+                await Task.Delay(System.Threading.Timeout.Infinite, token);
+            }
+            catch (OperationCanceledException)
+            {
+            }
+
             return Create(model);
         });
         await entered.Task.WaitAsync(Timeout);
@@ -110,7 +117,11 @@ public sealed class DesktopLifecycleTests
     public async Task CancelledApprovalCannotApproveAFutureInvocation()
     {
         DesktopApproval? pending = null;
-        var provider = new DesktopApprovalProvider(value => { pending = value; return ValueTask.CompletedTask; }, value => value);
+        var provider = new DesktopApprovalProvider(value =>
+        {
+            pending = value;
+            return ValueTask.CompletedTask;
+        }, value => value);
         using var cancellation = new CancellationTokenSource();
         var       first        = provider.PromptAsync(Preparation(), cancellation.Token);
         var       expiredId    = pending!.Id;
@@ -129,8 +140,16 @@ public sealed class DesktopLifecycleTests
     {
         DesktopApproval? left  = null;
         DesktopApproval? right = null;
-        var first = new DesktopApprovalProvider(value => { left = value; return ValueTask.CompletedTask; }, value => value);
-        var second = new DesktopApprovalProvider(value => { right = value; return ValueTask.CompletedTask; }, value => value);
+        var first = new DesktopApprovalProvider(value =>
+        {
+            left = value;
+            return ValueTask.CompletedTask;
+        }, value => value);
+        var second = new DesktopApprovalProvider(value =>
+        {
+            right = value;
+            return ValueTask.CompletedTask;
+        }, value => value);
         using var cancellation = new CancellationTokenSource();
         var       firstWait    = first.PromptAsync(Preparation(), cancellation.Token);
         var       secondWait   = second.PromptAsync(Preparation(), CancellationToken.None);
@@ -161,18 +180,65 @@ public sealed class DesktopLifecycleTests
         Assert.That(writer.Disposed, Is.True);
     }
 
-    private static DesktopSession Create(IChatCompletionClient model, ISessionStoreWriter? writer = null)
+    [Test]
+    public async Task ClosingWaitsForSelectionCleanupAndRejectsLateOperations()
+    {
+        var entered = Signal();
+        var cleanup = Signal();
+        var release = Signal();
+        var model   = new WaitingModel(Signal());
+        var session = Create(model, changeModel : async (_, _, _, _, token) =>
+        {
+            entered.SetResult();
+            try
+            {
+                await Task.Delay(System.Threading.Timeout.Infinite, token);
+            }
+            finally
+            {
+                cleanup.SetResult();
+                await release.Task;
+            }
+
+            throw new OperationCanceledException(token);
+        });
+        var change = session.ChangeModelAsync("provider", "model", null, session.Host.Session.ModelSelection!.Revision);
+        await entered.Task.WaitAsync(Timeout);
+        Assert.Throws<InvalidOperationException>(() => session.SubmitAsync("overlap"));
+        var shutdown = session.DisposeAsync().AsTask();
+        await cleanup.Task.WaitAsync(Timeout);
+        Assert.That(shutdown.IsCompleted, Is.False);
+        Assert.That(model.Disposed, Is.False);
+        release.SetResult();
+        await Assert.CatchAsync<OperationCanceledException>(async () => await change);
+        await shutdown.WaitAsync(Timeout);
+        Assert.That(model.Disposed, Is.True);
+        Assert.Throws<ObjectDisposedException>(() => session.ChangeModelAsync("provider", "model", null, 0));
+    }
+
+    private static DesktopSession Create(IChatCompletionClient model, ISessionStoreWriter? writer = null,
+                                         Func<string, string, ModelReasoningEffort?, long, CancellationToken,
+                                             Task<SessionModelSelection>>? changeModel = null)
     {
         var approvals = new DesktopApprovalProvider(_ => ValueTask.CompletedTask, value => value);
-        var options = new AgentOptions { Model = "offline", MaxAgentSteps = 2, DefaultToolTimeoutSeconds = 10 };
-        var host = new ChatSessionHost(Path.GetTempPath(), new SessionModelIdentity("offline", "https://offline.invalid", default),
+        var options   = new AgentOptions { Model = "offline", MaxAgentSteps = 2, DefaultToolTimeoutSeconds = 10 };
+        var host = new ChatSessionHost(Path.GetTempPath(),
+                                       new SessionModelIdentity("offline", "https://offline.invalid", default),
                                        options, model, new ToolRegistry([]), "offline desktop test",
-                                       approver: approvals, sessionWriterFactory: writer is null ? null : _ => writer);
-        return new DesktopSession(host, approvals);
+                                       approver : approvals,
+                                       sessionWriterFactory : writer is null ? null : _ => writer);
+        return new DesktopSession(host, approvals, changeModel);
     }
 
     private static TaskCompletionSource Signal() => new(TaskCreationOptions.RunContinuationsAsynchronously);
-    private static TaskCompletionSource CompletedSignal() { var signal = Signal(); signal.SetResult(); return signal; }
+
+    private static TaskCompletionSource CompletedSignal()
+    {
+        var signal = Signal();
+        signal.SetResult();
+        return signal;
+    }
+
     private static ToolPreparation Preparation() => new()
     {
         ToolName   = "offline",
@@ -182,34 +248,43 @@ public sealed class DesktopLifecycleTests
         Arguments  = new JsonObject()
     };
 
-    private sealed class WaitingModel(TaskCompletionSource entered, TaskCompletionSource? finish = null,
-                                       Func<Task>? cleanup = null) : IChatCompletionClient, IDisposable
+    private sealed class WaitingModel(
+        TaskCompletionSource  entered,
+        TaskCompletionSource? finish  = null,
+        Func<Task>?           cleanup = null) : IChatCompletionClient, IDisposable
     {
         public bool Disposed { get; private set; }
 
         public async IAsyncEnumerable<ChatStreamEvent> CompleteAsync(ChatCompletionRequest request,
-            [EnumeratorCancellation] CancellationToken cancellationToken)
+                                                                     [EnumeratorCancellation]
+                                                                     CancellationToken cancellationToken)
         {
             entered.TrySetResult();
             try
             {
                 if (finish is null) await Task.Delay(System.Threading.Timeout.Infinite, cancellationToken);
                 else await finish.Task.WaitAsync(cancellationToken);
-                yield return new ChatStreamEvent { Kind = ChatStreamEventKind.ContentDelta, ContentDelta = "offline result" };
+                yield return new ChatStreamEvent
+                    { Kind = ChatStreamEventKind.ContentDelta, ContentDelta = "offline result" };
                 yield return new ChatStreamEvent { Kind = ChatStreamEventKind.End, FinishReason = "stop" };
             }
-            finally { if (cleanup is not null) await cleanup(); }
+            finally
+            {
+                if (cleanup is not null) await cleanup();
+            }
         }
 
         public void Dispose() => Disposed = true;
     }
 
-    private sealed class DelayedFailingWriter(TaskCompletionSource entered, TaskCompletionSource release) : ISessionStoreWriter
+    private sealed class DelayedFailingWriter(TaskCompletionSource entered, TaskCompletionSource release)
+        : ISessionStoreWriter
     {
-        public string SnapshotPath => "offline";
-        public long CommitSequence => 0;
+        public string SnapshotPath   => "offline";
+        public long   CommitSequence => 0;
         public bool Disposed { get; private set; }
-        public async Task CommitAsync(ChatSession session, Core.Services.Context.ConversationContext context, CancellationToken cancellationToken)
+        public async Task CommitAsync(ChatSession       session, Core.Services.Context.ConversationContext context,
+                                      CancellationToken cancellationToken)
         {
             entered.TrySetResult();
             await release.Task;

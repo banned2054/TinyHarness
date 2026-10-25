@@ -62,9 +62,8 @@ public sealed class CliCommandExecutionTests
     {
         using var fixture = new CliFixture([
             "https://team.example/v1",
-            "3",
-            "team-model",
-            "32000",
+            "chat-completions",
+            "none",
             "y"
         ]);
         await UserConfigStore.SaveAsync(fixture.UserConfigPath, new UserConfig
@@ -98,7 +97,7 @@ public sealed class CliCommandExecutionTests
         Assert.That(listResult, Is.EqualTo(0));
         Assert.That(config.DefaultProfile, Is.EqualTo("work"));
         Assert.That(config.Profiles.Select(p => p.Name), Is.EqualTo(["work", "team"]));
-        Assert.That(fixture.Io.Output, Does.Contain("Saved profile 'team'."));
+        Assert.That(fixture.Io.Output, Does.Contain("Provider saved"));
         Assert.That(fixture.Io.Output, Does.Contain("Default profile is now 'work'"));
         Assert.That(fixture.Io.Output, Does.Contain("* work"));
     }
@@ -157,8 +156,11 @@ public sealed class CliCommandExecutionTests
         var before = await File.ReadAllTextAsync(fixture.UserConfigPath);
 
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            ConfigCommand.ExecuteAsync(context, CommandLine.Parse(["config", "set", "maxAgentSteps", "-1"]),
-                                       CancellationToken.None));
+                                                                ConfigCommand.ExecuteAsync(context,
+                                                                    CommandLine.Parse([
+                                                                        "config", "set", "maxAgentSteps", "-1"
+                                                                    ]),
+                                                                    CancellationToken.None));
         Assert.That(await File.ReadAllTextAsync(fixture.UserConfigPath), Is.EqualTo(before));
     }
 
@@ -230,6 +232,54 @@ public sealed class CliCommandExecutionTests
         Assert.That(fixture.Io.Output, Does.Contain("[ok]   model model-x"));
         Assert.That(fixture.Io.Output, Does.Contain("offline mode; pass --connect"));
         Assert.That(fixture.Io.Output, Does.Not.Contain("--connect will send one real model request"));
+    }
+
+    [Test]
+    public async Task ExplicitProviderAndModelEditsPreserveUneditedConfiguration()
+    {
+        using var fixture = new CliFixture([
+            "https://new.example/v1", "responses", "keep", "y",
+            "Model X", "96000", "low,high", "high", "n", "y"
+        ]);
+        var original = ProfileConfig("work") with { Settings = new UserConfigSettings { MaxAgentSteps = 13 } };
+        await UserConfigStore.SaveAsync(fixture.UserConfigPath, original, CancellationToken.None);
+        await ProviderCommand.ExecuteAsync(fixture.CreateContext(), CommandLine.Parse(["provider", "edit", "work"]),
+                                           CancellationToken.None);
+        await ModelCommand.ExecuteAsync(fixture.CreateContext(),
+                                        CommandLine.Parse(["model", "edit", "model-x", "--provider", "work"]),
+                                        CancellationToken.None);
+        var saved = await UserConfigStore.LoadAsync(fixture.UserConfigPath, CancellationToken.None);
+        Assert.That(saved.Profiles[0].Models[0].DisplayName, Is.EqualTo("Model X"));
+        Assert.That(saved.Profiles[0].Models[0].ContextWindowTokens, Is.EqualTo(96000));
+        Assert.That(saved.Profiles[0].Models[0].DefaultReasoningEffort, Is.EqualTo(Core.Models.ChatCompletions.ModelReasoningEffort.High));
+        Assert.That(saved.Profiles[0].DefaultModel, Is.EqualTo("model-x"));
+        Assert.That(saved.Settings, Is.EqualTo(original.Settings));
+    }
+
+    [Test]
+    public async Task ModelAddSupportsDisplayAndEffortCapabilities()
+    {
+        using var fixture = new CliFixture();
+        await UserConfigStore.SaveAsync(fixture.UserConfigPath, ProfileConfig("work"), CancellationToken.None);
+        await ModelCommand.ExecuteAsync(fixture.CreateContext(), CommandLine.Parse([
+            "model", "add", "flash", "--context-window", "64000",
+            "--display-name", "Flash", "--efforts", "low,high",
+            "--default-effort", "low"
+        ]), CancellationToken.None);
+        var saved = await UserConfigStore.LoadAsync(fixture.UserConfigPath, CancellationToken.None);
+        Assert.That(saved.Profiles[0].Models[1].DisplayName, Is.EqualTo("Flash"));
+        Assert.That(saved.Profiles[0].Models[1].ReasoningEfforts, Has.Count.EqualTo(2));
+    }
+
+    [Test]
+    public async Task InitIncompleteFormDoesNotWriteCredential()
+    {
+        using var fixture = new CliFixture(["work", "https://api.example/v1", "2", "secret-before-eof"]);
+        fixture.Credentials.IsSupported = true;
+        await Assert.ThrowsAsync<InvalidOperationException>(() => InitCommand.ExecuteAsync(fixture.CreateContext(),
+                                                                CancellationToken.None));
+        Assert.That(fixture.Credentials.Saves, Is.Zero);
+        Assert.That(File.Exists(fixture.UserConfigPath), Is.False);
     }
 
     private static UserConfig ProfileConfig(string name) => new()
@@ -320,11 +370,12 @@ public sealed class CliCommandExecutionTests
     private sealed class FakeCredentialStore : ICredentialStore
     {
         private readonly Dictionary<string, string> _entries = new(StringComparer.Ordinal);
-
-        public bool IsSupported => false;
+        public bool IsSupported { get; set; }
+        public int Saves { get; private set; }
 
         public void Save(string targetName, string secret)
         {
+            Saves++;
             _entries[targetName] = secret;
         }
 

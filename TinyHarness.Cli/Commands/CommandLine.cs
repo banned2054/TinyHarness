@@ -376,9 +376,9 @@ internal static class CommandLine
                 return args.Length > 1
                     ? throw new CliUsageException($"Unknown argument '{args[1]}' for provider list.", usage)
                     : new CliOptions { Kind = CliCommandKind.Provider, Subcommand = "list" };
-            case "add" or "use" when args.Length != 2 :
+            case "add" or "edit" or "use" when args.Length != 2 :
                 throw new CliUsageException($"provider {subcommand} requires exactly one profile name.", usage);
-            case "add" or "use" :
+            case "add" or "edit" or "use" :
                 ValidateProfileName(args[1], usage);
                 return new CliOptions { Kind = CliCommandKind.Provider, Subcommand = subcommand, Primary = args[1] };
             default :
@@ -469,10 +469,24 @@ internal static class CommandLine
             {
                 var modelId = args[1];
                 ValidateModelId(modelId, usage);
-                int? contextWindow = null;
-                var  provider      = (string?)null;
+                int?    contextWindow = null;
+                string? displayName   = null, efforts = null, defaultEffort = null;
+                var     provider      = (string?)null;
                 for (var i = 2; i < args.Length; i++)
                 {
+                    if (args[i] is "--display-name" or "--efforts" or "--default-effort")
+                    {
+                        if (i + 1 >= args.Length) throw new CliUsageException($"{args[i]} requires a value.", usage);
+                        switch (args[i++])
+                        {
+                            case "--display-name" :   displayName   = args[i]; break;
+                            case "--efforts" :        efforts       = args[i]; break;
+                            case "--default-effort" : defaultEffort = args[i]; break;
+                        }
+
+                        continue;
+                    }
+
                     if (string.Equals(args[i], "--context-window", StringComparison.Ordinal))
                     {
                         if (i + 1 >= args.Length || !int.TryParse(args[i + 1], out var parsed) || parsed <= 0)
@@ -502,11 +516,21 @@ internal static class CommandLine
                 {
                     Kind                = CliCommandKind.Model,
                     Subcommand          = "add",
+                    ModelDisplayName    = displayName, ModelEfforts = efforts, ModelDefaultEffort = defaultEffort,
                     Primary             = modelId,
                     ContextWindowTokens = contextWindow,
                     ProviderName        = provider
                 };
             }
+            case "edit" when args.Length < 2 || args[1].StartsWith('-') :
+                throw new CliUsageException("model edit requires a model id.", usage);
+            case "edit" :
+                ValidateModelId(args[1], usage);
+                return new CliOptions
+                {
+                    Kind         = CliCommandKind.Model, Subcommand = "edit", Primary = args[1],
+                    ProviderName = ReadProviderOption(args, 2, usage)
+                };
             case "use" when args.Length < 2 || args[1].StartsWith('-') :
                 throw new CliUsageException("model use requires a model id.", usage);
             case "use" :

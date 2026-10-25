@@ -41,16 +41,20 @@ internal static class InitCommand
             return 0;
         }
 
-        var profile = await ProfileEditor.CollectAsync(context, profileName, existing, cancellationToken)
+        var baseline = config;
+        var pending = await ProfileEditor.CollectAsync(context, profileName, existing, cancellationToken)
                                          .ConfigureAwait(false);
+        var profile = pending.Profile;
         config = UserConfigAccess.UpsertProfile(config, profile) with { DefaultProfile = profileName };
-        await UserConfigStore.SaveAsync(userPath, config, cancellationToken).ConfigureAwait(false);
+        await ModelCatalogEditor
+             .SaveAsync(userPath, baseline, config, cancellationToken, context.Credentials, pending.Secret, profileName)
+             .ConfigureAwait(false);
 
         await io.WriteLineAsync(string.Empty, cancellationToken).ConfigureAwait(false);
         await io.WriteLineAsync($"Saved user config: {userPath}", cancellationToken).ConfigureAwait(false);
         await io.WriteLineAsync($"Profile '{profileName}' is now the default.", cancellationToken)
                 .ConfigureAwait(false);
-        if (string.IsNullOrEmpty(profile.ApiKeyCredentialTarget) &&
+        if (pending.Secret is null && string.IsNullOrEmpty(profile.ApiKeyCredentialTarget) &&
             string.IsNullOrEmpty(profile.ApiKeyEnvironmentVariable))
             await io.WriteLineAsync($"No API key source configured yet. Run 'tinyharness auth set {profileName}'.",
                                     cancellationToken).ConfigureAwait(false);

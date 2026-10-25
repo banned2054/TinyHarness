@@ -81,6 +81,69 @@ public class ChatModelSelectionTests
                 return Task.FromResult<IChatCompletionClient>(new FakeChatClient());
             });
 
+    [Test]
+    public async Task DraftUseAndEffortNeverCreateClientsAndListMarksOnlyTheChosenRoute()
+    {
+        var output    = new StringWriter();
+        var created   = new List<(string Profile, string Model)>();
+        var selection = NewSelection(new StringReader(string.Empty), output, created);
+        await selection.HandleAsync(null, "/models use big --provider work --effort high", false, TestToken());
+        await selection.HandleAsync(null, "/models effort low", false, TestToken());
+        Assert.That(selection.DraftTarget!.Effort, Is.EqualTo(ModelReasoningEffort.Low));
+        Assert.That(created, Is.Empty);
+        await selection.HandleAsync(null, "/models list", false, TestToken());
+        Assert.That(output.ToString(), Does.Contain("* work / big").And.Not.Contain("* alt / big"));
+    }
+
+    [Test]
+    public async Task ListDistinguishesCredentialRoutesForTheSameIdentity()
+    {
+        var first   = Catalog().Profiles[0] with { ApiKeyEnvironmentVariable = "FIRST" };
+        var second  = first with { Name = "second", ApiKeyEnvironmentVariable = "SECOND" };
+        var catalog = new UserConfig { Profiles = [first, second] };
+        var output  = new StringWriter();
+        var selection = new ChatModelSelection(new StringReader(""), output, _ => Task.FromResult(catalog),
+                                               (_, _, _) =>
+                                                   Task.FromResult<IChatCompletionClient>(new FakeChatClient()));
+        using var host = NewHost();
+        await selection.HandleAsync(host, "/models use big --provider second", false, TestToken());
+        await selection.HandleAsync(host, "/models list", false, TestToken());
+        Assert.That(output.ToString(), Does.Contain("* second / big").And.Not.Contain("* work / big"));
+        await selection.HandleAsync(host, "/models effort low", false, TestToken());
+        Assert.That(host.Session.ModelSelection!.ProfileHint, Is.EqualTo("second"));
+    }
+
+    [Test]
+    public async Task ManagementMenuDoesNotApplyASelectionAndIsNeverOpenedDuringRun()
+    {
+        var selection = NewSelection(new StringReader("4\n"), new StringWriter(), []);
+        var calls     = 0;
+        selection.ManageCatalog = _ =>
+        {
+            calls++;
+            return Task.CompletedTask;
+        };
+        using var host = NewHost();
+        await selection.HandleAsync(host, "/models", true, TestToken());
+        Assert.That(calls, Is.Zero);
+        await selection.HandleAsync(host, "/models", false, TestToken());
+        Assert.That(calls, Is.EqualTo(1));
+        Assert.That(host.Session.Turns, Is.Empty);
+    }
+
+    [Test]
+    public async Task StaleEffortSelectionCannotChangeANewerRevision()
+    {
+        using var host     = NewHost();
+        var       revision = host.Session.ModelSelection!.Revision;
+        await host.ChangeReasoningEffortAsync(ModelReasoningEffort.High, TestToken());
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                                                                host.ChangeReasoningEffortAsync(ModelReasoningEffort
+                                                                            .Low, TestToken(),
+                                                                         expectedRevision : revision));
+        Assert.That(host.Session.ModelSelection!.ReasoningEffort, Is.EqualTo(ModelReasoningEffort.High));
+    }
+
     [TestCase("/models", true)]
     [TestCase("  /models  ", true)]
     [TestCase("/models list", true)]

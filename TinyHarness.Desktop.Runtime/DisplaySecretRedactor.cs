@@ -3,44 +3,55 @@ using System.Text;
 namespace TinyHarness.Desktop.Runtime;
 
 /// <summary>
-///     终端展示专用的已知密钥脱敏（PLAN §6：文本流在显示前处理跨片段已知密钥脱敏）。
-///     支持两种输入：整段文本一次性替换，以及按增量推送的流式替换——保留足够尾部与下一段
-///     拼接后再匹配，使被拆分在多个增量中的密钥同样被替换。流中途的边界冲刷只输出安全前缀，
-///     并保留可能是某密钥前缀的尾部给下一段拼接（密钥可跨两条模型流拆分）；终态冲刷对剩余
-///     缓冲做全量扫描（更短的密钥可能完整落在未扫描尾部内），绝不原样输出。
-///     无已知密钥时所有路径原样返回。
-///     Display-side redaction of known secrets (PLAN §6: text is redacted across fragments
-///     before display). Two inputs are supported: one-shot replacement over whole text, and
-///     streaming replacement fed delta by delta — enough trailing text is held back and
-///     prepended to the next delta so a secret split across deltas is still matched. A
-///     mid-stream boundary flush emits only the safe prefix and holds back a tail that
-///     could still be a secret prefix (secrets can be split across two model streams); the
-///     terminal flush scans the remaining buffer in full (a shorter secret can sit complete
-///     inside the unscanned tail) and never emits raw leftovers. Without known secrets every
-///     path passes through.
+///     <para>诊断和显式脱敏出口使用的已知密钥替换器，普通本地正文不默认经过此类。</para>
+///     <para>Replaces known keys for diagnostics and explicitly redacted output; ordinary local content bypasses it.</para>
 /// </summary>
+/// <remarks>
+///     <para>支持整段和跨片段替换；中途冲刷保留可能的密钥前缀，终态冲刷扫描全部剩余内容。</para>
+///     <para>Supports whole-text and fragmented replacement; intermediate flushes retain possible key prefixes and final flushes scan all remaining text.</para>
+/// </remarks>
 internal sealed class DisplaySecretRedactor
 {
-    private const string Replacement = "[REDACTED]";
+    private const    string                               Replacement = "[REDACTED]";
+    private int _maximumSecretLength;
 
-    private readonly int _maximumSecretLength;
-
-    private readonly IReadOnlyList<string> _secrets;
+    private          IReadOnlyList<string> _secrets = [];
+    private readonly IReadOnlyDictionary<string, string>? _secretSource;
 
     private string _pending = string.Empty;
 
     public DisplaySecretRedactor(IReadOnlyDictionary<string, string>? knownSecrets)
     {
-        _secrets = (knownSecrets ?? new Dictionary<string, string>(StringComparer.Ordinal)).Values
-           .Where(value => !string.IsNullOrEmpty(value))
-           .Distinct(StringComparer.Ordinal)
-           .OrderByDescending(value => value.Length)
-           .ToArray();
+        _secretSource = knownSecrets;
+        RefreshSecrets();
+    }
+
+    /// <summary>
+    ///     <para>在出口处理前读取当前秘密集合，保留切换前后密钥的脱敏能力。</para>
+    ///     <para>Reads the current secret set before output processing to cover keys used before and after a switch.</para>
+    /// </summary>
+    private void RefreshSecrets()
+    {
+        _secrets = (_secretSource?.Values ?? [])
+                  .Where(value => !string.IsNullOrEmpty(value))
+                  .Distinct(StringComparer.Ordinal)
+                  .OrderByDescending(value => value.Length)
+                  .ToArray();
         _maximumSecretLength = _secrets.Count == 0 ? 0 : _secrets.Max(value => value.Length);
     }
 
-    /// <summary>是否配置了已知密钥。Whether any known secret is configured.</summary>
-    public bool HasSecrets => _secrets.Count > 0;
+    /// <summary>
+    ///     <para>当前来源是否包含已知密钥。</para>
+    ///     <para>Whether the current source contains known keys.</para>
+    /// </summary>
+    public bool HasSecrets
+    {
+        get
+        {
+            RefreshSecrets();
+            return _secrets.Count > 0;
+        }
+    }
 
     /// <summary>
     ///     整段替换全部已知密钥；用于审批摘要、错误说明等一次成形的展示文本。

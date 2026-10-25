@@ -117,6 +117,7 @@ internal static class ConfigCommand
                                           "Endpoint, profiles, models, and API keys are managed by init/provider/model/auth.");
 
         var (config, _) = await UserConfigAccess.LoadAsync(context, cancellationToken).ConfigureAwait(false);
+        var    baseline = config;
         var    settings = config.Settings ?? new UserConfigSettings();
         string oldValue;
         switch (key)
@@ -158,7 +159,8 @@ internal static class ConfigCommand
         }
 
         config = config with { Settings = settings };
-        await UserConfigAccess.SaveAsync(context, config, cancellationToken).ConfigureAwait(false);
+        await UserConfigStore.SaveAsync(context.ResolveUserConfigPath(), config, baseline, cancellationToken)
+                             .ConfigureAwait(false);
 
         await io.WriteLineAsync($"{key}: {oldValue} -> {value}", cancellationToken).ConfigureAwait(false);
         await io.WriteLineAsync($"Saved to user config: {context.ResolveUserConfigPath()}", cancellationToken)

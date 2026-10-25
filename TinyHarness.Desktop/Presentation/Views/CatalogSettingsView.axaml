@@ -1,0 +1,380 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:TinyHarness.Desktop.ViewModels"
+             x:Class="TinyHarness.Desktop.Presentation.Views.CatalogSettingsView"
+             x:DataType="vm:CatalogSettingsViewModel">
+    <!-- 模型分区：供应商行列表（点编辑行内展开编辑卡）+ 底部虚线添加位（展开添加卡）。
+         编辑卡与添加卡共用 ProviderEditorTemplate；一次只有一张卡，由分区 VM 保证互斥。 -->
+    <UserControl.Resources>
+        <!-- 弹层选项行：选中打勾（与模型选择菜单同构）。 -->
+        <DataTemplate x:Key="CatalogChoiceTemplate" x:DataType="vm:CatalogChoiceOptionViewModel">
+            <Button Classes="popup-item"
+                    Classes.selected="{Binding IsSelected}"
+                    Command="{Binding SelectCommand}"
+                    AutomationProperties.Name="{Binding Label}">
+                <Grid ColumnDefinitions="*,Auto">
+                    <TextBlock Text="{Binding Label}" TextTrimming="CharacterEllipsis" />
+                    <Path Grid.Column="1" Classes="popup-check"
+                          Data="{StaticResource Icon.Check}"
+                          Stroke="{DynamicResource PopupForegroundBrush}"
+                          StrokeThickness="1.4"
+                          IsVisible="{Binding IsSelected}" />
+                </Grid>
+            </Button>
+        </DataTemplate>
+        <!-- 模型目录单条目：折叠仅 ID/名称行（API ID 是保存键，已有条目只读）；展开补窗口、
+             支持档位与默认档位。本期目录管理无删除入口，因此不设删除按钮。 -->
+        <DataTemplate x:Key="ModelEntryTemplate" x:DataType="vm:CatalogModelEntryViewModel">
+            <Border Classes="settings-model-entry" Margin="0,0,0,8">
+                <StackPanel Spacing="10">
+                    <Grid ColumnDefinitions="4*,3*,Auto" ColumnSpacing="8">
+                        <TextBox Grid.Column="0" Classes="settings-input"
+                                 Text="{Binding Id, Mode=TwoWay}"
+                                 PlaceholderText="模型 ID（API 标识）"
+                                 IsEnabled="{Binding IsIdEnabled}"
+                                 AutomationProperties.Name="模型 ID" />
+                        <TextBox Grid.Column="1" Classes="settings-input"
+                                 Text="{Binding DisplayName, Mode=TwoWay}"
+                                 PlaceholderText="显示名称（可选）"
+                                 AutomationProperties.Name="显示名称" />
+                        <Button Grid.Column="2" Classes="settings-entry-chevron"
+                                Command="{Binding ToggleExpandCommand}"
+                                AutomationProperties.Name="展开或收起模型参数"
+                                ToolTip.Tip="展开或收起模型参数"
+                                VerticalAlignment="Center">
+                            <Path Classes="settings-chevron-icon"
+                                  Classes.expanded="{Binding IsExpanded}"
+                                  Data="{StaticResource Icon.ChevronRight}"
+                                  Stroke="{Binding $parent[Button].Foreground}"
+                                  StrokeThickness="1.4"
+                                  StrokeLineCap="Round" StrokeJoin="Round"
+                                  HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Button>
+                    </Grid>
+                    <StackPanel IsVisible="{Binding IsExpanded}" Spacing="10">
+                        <Grid ColumnDefinitions="*,*" ColumnSpacing="8">
+                            <StackPanel Grid.Column="0" Spacing="4">
+                                <TextBlock Classes="settings-field-label" Text="上下文窗口" />
+                                <TextBox Classes="settings-input"
+                                         Text="{Binding WindowDraft, Mode=TwoWay}"
+                                         PlaceholderText="128K"
+                                         AutomationProperties.Name="上下文窗口" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="1" Spacing="4">
+                                <TextBlock Classes="settings-field-label" Text="默认档位" />
+                                <Panel>
+                                    <Button x:Name="EffortSelectButton" Classes="settings-select"
+                                            Command="{Binding ToggleEffortMenuCommand}"
+                                            AutomationProperties.Name="默认档位">
+                                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
+                                            <TextBlock Text="{Binding DefaultEffortLabel}"
+                                                       TextTrimming="CharacterEllipsis" />
+                                            <Path Grid.Column="1" Width="8" Height="4" Stretch="None"
+                                                  Data="{StaticResource Icon.DropdownChevron}"
+                                                  Stroke="{Binding $parent[Button].Foreground}"
+                                                  StrokeThickness="1.6"
+                                                  VerticalAlignment="Center" />
+                                        </Grid>
+                                    </Button>
+                                    <Popup PlacementTarget="{Binding #EffortSelectButton}"
+                                           Placement="BottomEdgeAlignedLeft" VerticalOffset="4"
+                                           IsOpen="{Binding IsEffortMenuOpen, Mode=TwoWay}"
+                                           IsLightDismissEnabled="True">
+                                        <Border Classes="popup-surface" MinWidth="220" MaxHeight="320">
+                                            <ScrollViewer>
+                                                <ItemsControl ItemsSource="{Binding DefaultEffortOptions}"
+                                                              ItemTemplate="{StaticResource CatalogChoiceTemplate}" />
+                                            </ScrollViewer>
+                                        </Border>
+                                    </Popup>
+                                </Panel>
+                            </StackPanel>
+                        </Grid>
+                        <StackPanel Spacing="4">
+                            <TextBlock Classes="settings-field-label" Text="支持的推理档位" />
+                            <!-- 档位值是当前适配器已实现的映射集合；勾选即声明该模型支持。 -->
+                            <WrapPanel Orientation="Horizontal">
+                                <CheckBox Content="none" FontSize="13" Margin="0,0,16,0"
+                                          IsChecked="{Binding IsNoneSelected, Mode=TwoWay}"
+                                          Foreground="{DynamicResource PopupForegroundBrush}"
+                                          AutomationProperties.Name="支持 none 档位" />
+                                <CheckBox Content="low" FontSize="13" Margin="0,0,16,0"
+                                          IsChecked="{Binding IsLowSelected, Mode=TwoWay}"
+                                          Foreground="{DynamicResource PopupForegroundBrush}"
+                                          AutomationProperties.Name="支持 low 档位" />
+                                <CheckBox Content="medium" FontSize="13" Margin="0,0,16,0"
+                                          IsChecked="{Binding IsMediumSelected, Mode=TwoWay}"
+                                          Foreground="{DynamicResource PopupForegroundBrush}"
+                                          AutomationProperties.Name="支持 medium 档位" />
+                                <CheckBox Content="high" FontSize="13" Margin="0,0,16,0"
+                                          IsChecked="{Binding IsHighSelected, Mode=TwoWay}"
+                                          Foreground="{DynamicResource PopupForegroundBrush}"
+                                          AutomationProperties.Name="支持 high 档位" />
+                                <CheckBox Content="extra-high" FontSize="13"
+                                          IsChecked="{Binding IsExtraHighSelected, Mode=TwoWay}"
+                                          Foreground="{DynamicResource PopupForegroundBrush}"
+                                          AutomationProperties.Name="支持 extra-high 档位" />
+                            </WrapPanel>
+                            <TextBlock Classes="settings-card-description"
+                                       Text="留空表示未声明能力，此时只能使用默认（由服务决定）。" />
+                        </StackPanel>
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+        </DataTemplate>
+        <!-- 供应商编辑卡（编辑行内展开与添加位共用）：字段区 + 分割线 + 模型目录 + 校验与底部操作。
+             密钥经 PasswordChar 遮蔽、永不回显；凭据引用只存名称，不存密钥值。 -->
+        <DataTemplate x:Key="ProviderEditorTemplate" x:DataType="vm:CatalogProviderEditorViewModel">
+            <StackPanel Spacing="12" IsEnabled="{Binding CanEdit}">
+                <Rectangle Height="1" Fill="{DynamicResource PopupDividerBrush}"
+                           IsVisible="{Binding !IsCreate}" />
+
+                <!-- 供应商名称：固定键，仅创建时输入。 -->
+                <StackPanel Spacing="6" IsVisible="{Binding IsCreate}">
+                    <TextBlock Classes="settings-field-label" Text="供应商名称" />
+                    <TextBox Classes="settings-input"
+                             Text="{Binding Name, Mode=TwoWay}"
+                             PlaceholderText="offline-gateway"
+                             AutomationProperties.Name="供应商名称" />
+                    <TextBlock Classes="settings-card-description"
+                               Text="1-64 个字母、数字、'.'、'_' 或 '-'，不以 '-' 或 '.' 开头；保存后不可修改。" />
+                </StackPanel>
+
+                <StackPanel Spacing="6">
+                    <TextBlock Classes="settings-field-label" Text="接口地址" />
+                    <TextBox Classes="settings-input"
+                             Text="{Binding Endpoint, Mode=TwoWay}"
+                             PlaceholderText="https://api.example.com/v1"
+                             AutomationProperties.Name="接口地址" />
+                    <TextBlock Classes="settings-card-description" Text="{Binding RequestPreview}" />
+                </StackPanel>
+
+                <!-- 协议位于供应商层，其下所有模型沿用；编辑保留已有协议。 -->
+                <StackPanel Spacing="6">
+                    <TextBlock Classes="settings-field-label" Text="API 协议" />
+                    <Panel>
+                        <Button x:Name="ProtocolSelectButton" Classes="settings-select"
+                                Command="{Binding ToggleProtocolMenuCommand}"
+                                AutomationProperties.Name="API 协议">
+                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
+                                <TextBlock Text="{Binding ProtocolLabel}" TextTrimming="CharacterEllipsis" />
+                                <Path Grid.Column="1" Width="8" Height="4" Stretch="None"
+                                      Data="{StaticResource Icon.DropdownChevron}"
+                                      Stroke="{Binding $parent[Button].Foreground}"
+                                      StrokeThickness="1.6"
+                                      VerticalAlignment="Center" />
+                            </Grid>
+                        </Button>
+                        <Popup PlacementTarget="{Binding #ProtocolSelectButton}"
+                               Placement="BottomEdgeAlignedLeft" VerticalOffset="4"
+                               IsOpen="{Binding IsProtocolMenuOpen, Mode=TwoWay}"
+                               IsLightDismissEnabled="True">
+                            <Border Classes="popup-surface" MinWidth="220" MaxHeight="320">
+                                <ScrollViewer>
+                                    <ItemsControl ItemsSource="{Binding ProtocolOptions}"
+                                                  ItemTemplate="{StaticResource CatalogChoiceTemplate}" />
+                                </ScrollViewer>
+                            </Border>
+                        </Popup>
+                    </Panel>
+                    <TextBlock Classes="settings-card-description"
+                               Text="协议属于供应商；需要同一服务的另一种协议时使用另一供应商。" />
+                </StackPanel>
+
+                <!-- 凭据：引用二选一或留空（待配置）；新密钥在完整表单提交时写入独立凭据目标。 -->
+                <StackPanel Spacing="6">
+                    <TextBlock Classes="settings-field-label" Text="凭据引用" />
+                    <Grid ColumnDefinitions="*,*" ColumnSpacing="8">
+                        <TextBox Classes="settings-input"
+                                 Text="{Binding EnvironmentVariable, Mode=TwoWay}"
+                                 PlaceholderText="API key 环境变量名"
+                                 AutomationProperties.Name="API key 环境变量名" />
+                        <TextBox Grid.Column="1" Classes="settings-input"
+                                 Text="{Binding CredentialTarget, Mode=TwoWay}"
+                                 PlaceholderText="已有系统凭据目标"
+                                 AutomationProperties.Name="已有系统凭据目标" />
+                    </Grid>
+                    <TextBox Classes="settings-input"
+                             Text="{Binding Secret, Mode=TwoWay}"
+                             PasswordChar="●"
+                             PlaceholderText="{Binding SecretWatermark}"
+                             AutomationProperties.Name="新 API 密钥" />
+                    <TextBlock Classes="settings-card-description"
+                               Text="只保存引用，不保存密钥；填写新密钥会创建新的系统凭据目标并替换引用。" />
+                </StackPanel>
+
+                <CheckBox Content="设为全局默认供应商" FontSize="13"
+                          IsChecked="{Binding MakeDefaultProvider, Mode=TwoWay}"
+                          Foreground="{DynamicResource PopupForegroundBrush}"
+                          AutomationProperties.Name="设为全局默认供应商" />
+
+                <!-- 模型目录：条目草稿在保存时一次提交；默认模型下拉覆盖供应商默认项。 -->
+                <Rectangle Height="1" Fill="{DynamicResource PopupDividerBrush}" />
+                <Grid ColumnDefinitions="*,Auto">
+                    <TextBlock Classes="settings-card-title" Text="模型目录" VerticalAlignment="Center" />
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                        <TextBlock Classes="settings-field-label" Text="默认模型" VerticalAlignment="Center" />
+                        <Panel>
+                            <Button x:Name="DefaultModelSelectButton" Classes="settings-select"
+                                    Command="{Binding ToggleDefaultModelMenuCommand}"
+                                    AutomationProperties.Name="默认模型">
+                                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
+                                    <TextBlock Text="{Binding DefaultModelLabel}"
+                                               TextTrimming="CharacterEllipsis" />
+                                    <Path Grid.Column="1" Width="8" Height="4" Stretch="None"
+                                          Data="{StaticResource Icon.DropdownChevron}"
+                                          Stroke="{Binding $parent[Button].Foreground}"
+                                          StrokeThickness="1.6"
+                                          VerticalAlignment="Center" />
+                                </Grid>
+                            </Button>
+                            <Popup PlacementTarget="{Binding #DefaultModelSelectButton}"
+                                   Placement="BottomEdgeAlignedRight" VerticalOffset="4"
+                                   IsOpen="{Binding IsDefaultModelMenuOpen, Mode=TwoWay}"
+                                   IsLightDismissEnabled="True">
+                                <Border Classes="popup-surface" MinWidth="220" MaxHeight="320">
+                                    <ScrollViewer>
+                                        <ItemsControl ItemsSource="{Binding DefaultModelOptions}"
+                                                      ItemTemplate="{StaticResource CatalogChoiceTemplate}" />
+                                    </ScrollViewer>
+                                </Border>
+                            </Popup>
+                        </Panel>
+                    </StackPanel>
+                </Grid>
+
+                <!-- 空目录提示：可以先保存为空目录，后续再补模型。 -->
+                <Border IsVisible="{Binding !HasModelEntries}">
+                    <Grid>
+                        <Rectangle Fill="Transparent"
+                                   Stroke="{DynamicResource PopupDividerBrush}"
+                                   StrokeThickness="1" StrokeDashArray="4,3"
+                                   RadiusX="8" RadiusY="8" />
+                        <TextBlock FontSize="12"
+                                   Foreground="{DynamicResource PopupMutedForegroundBrush}"
+                                   Text="还没有模型；可以先保存供应商，之后再添加模型。"
+                                   TextWrapping="Wrap" TextAlignment="Center"
+                                   Margin="24,12"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Grid>
+                </Border>
+                <ItemsControl ItemsSource="{Binding ModelEntries}"
+                              ItemTemplate="{StaticResource ModelEntryTemplate}" />
+                <Button Classes="settings-add-model"
+                        Command="{Binding AddModelCommand}"
+                        AutomationProperties.Name="添加模型">
+                    <Grid>
+                        <Rectangle Fill="Transparent"
+                                   Stroke="{DynamicResource PopupDividerBrush}"
+                                   StrokeThickness="1" StrokeDashArray="4,3"
+                                   RadiusX="8" RadiusY="8" />
+                        <TextBlock Classes="add-model-caption" Text="+ 添加模型"
+                                   FontSize="13" HorizontalAlignment="Center"
+                                   VerticalAlignment="Center" />
+                    </Grid>
+                </Button>
+
+                <TextBlock Classes="settings-error"
+                           Text="{Binding FirstValidationError}"
+                           IsVisible="{Binding HasValidationError}" />
+
+                <Grid ColumnDefinitions="*,Auto" Margin="0,4,0,0">
+                    <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="12"
+                                VerticalAlignment="Center">
+                        <TextBlock Classes="settings-error" MaxWidth="300"
+                                   TextTrimming="CharacterEllipsis"
+                                   Text="{Binding SaveError}"
+                                   IsVisible="{Binding HasSaveError}"
+                                   VerticalAlignment="Center"
+                                   ToolTip.Tip="{Binding SaveError}" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
+                        <Button Classes="settings-secondary" Content="取消"
+                                Command="{Binding CancelCommand}"
+                                AutomationProperties.Name="取消" />
+                        <Button Classes="settings-primary"
+                                Content="{Binding SaveButtonText}"
+                                Command="{Binding SaveCommand}"
+                                IsEnabled="{Binding CanSave}"
+                                AutomationProperties.Name="保存" />
+                    </StackPanel>
+                </Grid>
+            </StackPanel>
+        </DataTemplate>
+    </UserControl.Resources>
+    <StackPanel IsVisible="{Binding IsActive}">
+        <TextBlock Classes="settings-section-intro" Text="{Binding Intro}" />
+        <StackPanel Spacing="0">
+            <TextBlock Text="暂无已配置的模型供应商。" FontSize="13"
+                       Foreground="{DynamicResource PopupMutedForegroundBrush}"
+                       Margin="0,4,0,12"
+                       IsVisible="{Binding !HasProviders}" />
+            <ItemsControl ItemsSource="{Binding Providers}">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:CatalogProviderRowViewModel">
+                        <Border Classes="settings-provider-row" Margin="0,0,0,10">
+                            <StackPanel>
+                                <Grid ColumnDefinitions="*,Auto">
+                                    <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="8"
+                                                VerticalAlignment="Center">
+                                        <TextBlock Classes="settings-card-title" Text="{Binding Name}"
+                                                   VerticalAlignment="Center" />
+                                        <Border CornerRadius="4" Padding="6,1"
+                                                Background="{DynamicResource PopupItemSelectedBrush}"
+                                                IsVisible="{Binding IsDefaultProvider}"
+                                                VerticalAlignment="Center">
+                                            <TextBlock FontSize="11" Text="默认"
+                                                       Foreground="{DynamicResource AccentTextBrush}" />
+                                        </Border>
+                                        <TextBlock FontSize="12" Text="{Binding Caption}"
+                                                   Foreground="{DynamicResource PopupMutedForegroundBrush}"
+                                                   VerticalAlignment="Center" />
+                                        <StackPanel Orientation="Horizontal" Spacing="4"
+                                                    VerticalAlignment="Center">
+                                            <Ellipse Width="8" Height="8" VerticalAlignment="Center"
+                                                     Fill="{DynamicResource StatusConnectedBrush}"
+                                                     IsVisible="{Binding IsCredentialSet}" />
+                                            <Ellipse Width="8" Height="8" VerticalAlignment="Center"
+                                                     Stroke="{DynamicResource TextMutedBrush}"
+                                                     StrokeThickness="1" Fill="Transparent"
+                                                     IsVisible="{Binding IsCredentialUnset}" />
+                                        </StackPanel>
+                                    </StackPanel>
+                                    <Button Grid.Column="1" Classes="settings-secondary"
+                                            Content="编辑" Command="{Binding EditCommand}"
+                                            AutomationProperties.Name="编辑"
+                                            VerticalAlignment="Center" />
+                                </Grid>
+                                <ContentControl Content="{Binding Editor}"
+                                                IsVisible="{Binding HasEditor}"
+                                                ContentTemplate="{StaticResource ProviderEditorTemplate}" />
+                            </StackPanel>
+                        </Border>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+            <!-- 添加位：虚线按钮展开添加卡，与行编辑互斥。 -->
+            <Button Classes="settings-add-model"
+                    Command="{Binding OpenAddCommand}"
+                    IsVisible="{Binding !IsAddOpen}"
+                    AutomationProperties.Name="添加供应商">
+                <Grid>
+                    <Rectangle Fill="Transparent"
+                               Stroke="{DynamicResource PopupDividerBrush}"
+                               StrokeThickness="1" StrokeDashArray="4,3"
+                               RadiusX="8" RadiusY="8" />
+                    <TextBlock Classes="add-model-caption" Text="+ 添加供应商"
+                               FontSize="13" HorizontalAlignment="Center"
+                               VerticalAlignment="Center" />
+                </Grid>
+            </Button>
+            <Border Classes="settings-card" Margin="0" IsVisible="{Binding IsAddOpen}">
+                <ContentControl Content="{Binding Editor}"
+                                ContentTemplate="{StaticResource ProviderEditorTemplate}" />
+            </Border>
+        </StackPanel>
+        <TextBlock Text="{Binding SectionNotice}" IsVisible="{Binding HasSectionNotice}"
+                   TextWrapping="Wrap" Margin="0,10,0,0" FontSize="12"
+                   Foreground="{DynamicResource PopupMutedForegroundBrush}" />
+    </StackPanel>
+</UserControl>
