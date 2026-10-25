@@ -216,9 +216,44 @@ public sealed class DesktopLifecycleTests
         Assert.Throws<ObjectDisposedException>(() => session.ChangeModelAsync("provider", "model", null, 0));
     }
 
+    [Test]
+    public async Task ClosingCancelsAndWaitsForConfigurationRefreshBeforeDisposingClient()
+    {
+        var entered = Signal();
+        var cleanup = Signal();
+        var release = Signal();
+        var model   = new WaitingModel(Signal());
+        var session = Create(model, validateCurrent : async token =>
+        {
+            entered.SetResult();
+            try
+            {
+                await Task.Delay(System.Threading.Timeout.Infinite, token);
+            }
+            finally
+            {
+                cleanup.SetResult();
+                await release.Task;
+            }
+        });
+        var send = session.SubmitAsync("refresh first");
+        await entered.Task.WaitAsync(Timeout);
+        Assert.Throws<InvalidOperationException>(() => session.SubmitAsync("overlap"));
+        var shutdown = session.DisposeAsync().AsTask();
+        await cleanup.Task.WaitAsync(Timeout);
+        Assert.That(shutdown.IsCompleted, Is.False);
+        Assert.That(model.Disposed, Is.False);
+        Assert.That(session.Host.Session.Turns, Is.Empty);
+        release.SetResult();
+        await Assert.CatchAsync<OperationCanceledException>(async () => await send);
+        await shutdown.WaitAsync(Timeout);
+        Assert.That(model.Disposed, Is.True);
+    }
+
     private static DesktopSession Create(IChatCompletionClient model, ISessionStoreWriter? writer = null,
                                          Func<string, string, ModelReasoningEffort?, long, CancellationToken,
-                                             Task<SessionModelSelection>>? changeModel = null)
+                                             Task<SessionModelSelection>>? changeModel = null,
+                                         Func<CancellationToken, Task>? validateCurrent = null)
     {
         var approvals = new DesktopApprovalProvider(_ => ValueTask.CompletedTask, value => value);
         var options   = new AgentOptions { Model = "offline", MaxAgentSteps = 2, DefaultToolTimeoutSeconds = 10 };
@@ -227,7 +262,7 @@ public sealed class DesktopLifecycleTests
                                        options, model, new ToolRegistry([]), "offline desktop test",
                                        approver : approvals,
                                        sessionWriterFactory : writer is null ? null : _ => writer);
-        return new DesktopSession(host, approvals, changeModel);
+        return new DesktopSession(host, approvals, changeModel, validateCurrent);
     }
 
     private static TaskCompletionSource Signal() => new(TaskCreationOptions.RunContinuationsAsynchronously);

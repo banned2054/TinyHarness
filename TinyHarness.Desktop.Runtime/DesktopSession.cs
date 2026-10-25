@@ -127,7 +127,16 @@ public sealed class DesktopSession(
                 change = _change;
             }
 
-            if (run is not null) await run.ConfigureAwait(false);
+            if (run is not null)
+                try
+                {
+                    await run.ConfigureAwait(false);
+                }
+                catch (Exception) when (run.IsCanceled || run.IsFaulted)
+                {
+                    // 发送前刷新失败由发起者报告；关闭只等待收尾，不再次抛出同一错误。
+                }
+
             if (change is not null)
                 try
                 {

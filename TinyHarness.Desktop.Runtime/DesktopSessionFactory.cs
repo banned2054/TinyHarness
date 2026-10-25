@@ -164,28 +164,21 @@ public sealed class DesktopSessionFactory
                 // 旧日志允许没有选择记录；宿主接管前按初始模型定位，缺失强度保持未知。
                 var savedModel  = saved?.Model ?? restored.Session.InitialModel;
                 var savedEffort = saved?.ReasoningEffort;
-                var matches = user
-                             .Profiles.SelectMany(profile =>
-                                                      profile.Models.Select(item => (Profile : profile, Model : item)))
-                             .Where(item => item.Model.Id         == savedModel.ModelId  &&
-                                            item.Profile.Endpoint == savedModel.Endpoint &&
-                                            item.Profile.ChatApi  == savedModel.ChatApi  &&
-                                            (saved?.CredentialRoute is null ||
-                                             Route(item.Profile) == saved.CredentialRoute)).ToArray();
-                var target = matches.Length == 1 ? matches[0] : default;
-                var available = target.Profile is not null &&
-                                (savedEffort is null ||
-                                 target.Model.ReasoningEfforts?.Contains(savedEffort.Value) == true);
+                var target = FindTarget(user, saved, savedModel);
                 string? reason = null;
-                if (available && !request.Reselect)
+                if (!request.Reselect && target is { } resolved)
                 {
-                    try { model = CreateClient(ConfigFor(config, target.Profile!, target.Model!), target.Profile!.Name);
+                    try
+                    {
+                        model = CreateClient(ConfigFor(config, resolved.Profile, resolved.Model),
+                                             resolved.Profile.Name);
                     }
                     catch (Exception ex) when (ex is Core.Exceptions.ConfigException or InvalidOperationException)
                     {
                         reason = Redact(ex.Message);
                     }
                 }
+                // 客户端按当前目录构造，接管后先提交配置刷新；提交前不发送任何历史。
                 host = new ChatSessionHost(restored.Session, restored.Context,
                                            options with
                                            {
@@ -195,20 +188,27 @@ public sealed class DesktopSessionFactory
                                            }, model, tools, WorkspacePrompts.Current, permissions, approvals, sink,
                                            sessionWriter : writer, needsInspection : restored.NeedsInspection,
                                            instructionLoader : instructions, knownSecrets : secrets);
-                if (model is null)
-                    await events(new DesktopEvent("error", null, "需要重新选择模型；历史已恢复。" + reason)).ConfigureAwait(false);
-                else if (saved is null)
-                {
-                    // 首次绑定固化当前目录的窗口与能力；旧 run 的强度和选择归属仍保持未知。
-                    var context = options.Context! with { ContextWindowTokens = target.Model!.ContextWindowTokens };
-                    await host.ChangeModelAsync(new SessionModelBinding(savedModel, model, context, savedEffort,
-                                                                        Route(target.Profile!), target.Profile!.Name,
-                                                                        target.Model.ReasoningEfforts, ownsClient : false),
-                                                cancellationToken).ConfigureAwait(false);
-                }
+                if (request.Reselect || target is null)
+                    await events(new DesktopEvent("error", null, "需要重新选择模型；历史已恢复。"))
+                       .ConfigureAwait(false);
+                else if (model is null)
+                    await events(new DesktopEvent("error", null, "模型配置暂不可用，请检查配置后重试。" + reason))
+                       .ConfigureAwait(false);
                 else
-                    await host.EnsureCredentialRouteAsync(Route(target.Profile!), cancellationToken)
-                              .ConfigureAwait(false);
+                {
+                    try
+                    {
+                        await ChangeAsync(host, target.Value.Profile, target.Value.Model,
+                                          CurrentEffort(savedEffort, target.Value.Model),
+                                          host.Session.ModelSelection!.Revision, cancellationToken, model)
+                           .ConfigureAwait(false);
+                    }
+                    catch (Exception ex) when (ex is Core.Exceptions.ConfigException or InvalidOperationException)
+                    {
+                        await events(new DesktopEvent("error", null, "模型配置暂不可用，请检查配置后重试。" + Redact(ex.Message)))
+                           .ConfigureAwait(false);
+                    }
+                }
             }
             else
             {
@@ -252,7 +252,7 @@ public sealed class DesktopSessionFactory
             return new DesktopSession(host, approvals,
                                       (profile, modelId, effort, revision, token) =>
                                           ChangeAsync(host, profile, modelId, effort, revision, token),
-                                      token => ValidateCurrentAsync(host, token));
+                                      token => RefreshCurrentAsync(host, token));
         }
         catch
         {
@@ -300,6 +300,13 @@ public sealed class DesktopSessionFactory
                       throw new InvalidOperationException("供应商已不存在。");
         var model = profile.Models.SingleOrDefault(item => item.Id == modelId) ??
                     throw new InvalidOperationException("模型已不存在。");
+        return await ChangeAsync(host, profile, model, effort, revision, token).ConfigureAwait(false);
+    }
+
+    private async Task<SessionModelSelection> ChangeAsync(
+        ChatSessionHost host, UserProfile profile, UserProfileModel model, ModelReasoningEffort? effort,
+        long revision, CancellationToken token, IChatCompletionClient? preparedClient = null)
+    {
         if (effort is { } level && model.ReasoningEfforts?.Contains(level) != true)
             throw new InvalidOperationException("模型未声明该强度。");
         if (string.IsNullOrWhiteSpace(profile.Endpoint)) throw new InvalidOperationException("请先配置供应商 Endpoint。");
@@ -314,16 +321,18 @@ public sealed class DesktopSessionFactory
             current.Model.Endpoint == profile.Endpoint &&
             current.Model.ChatApi == profile.ChatApi &&
             current.CredentialRoute == Route(profile) &&
+            current.ProfileHint == profile.Name &&
             current.Context == context &&
             (current.ReasoningCapabilities ?? []).SequenceEqual(model.ReasoningEfforts ?? []))
             return await host.ChangeReasoningEffortAsync(effort, token, model.ReasoningEfforts,
                                                          expectedRevision: revision).ConfigureAwait(false);
-        var client =
-            CreateClient(ConfigFor(new TinyHarnessConfig { WorkspaceRoot = host.Session.WorkspaceRoot }, profile,
-                                   model), profile.Name);
+        var client = preparedClient ??
+                     CreateClient(ConfigFor(new TinyHarnessConfig { WorkspaceRoot = host.Session.WorkspaceRoot },
+                                            profile, model), profile.Name);
         var candidate = new SessionModelBinding(new SessionModelIdentity(model.Id, profile.Endpoint, profile.ChatApi),
                                                 client,
-                                                context, effort, Route(profile), profile.Name, model.ReasoningEfforts);
+                                                context, effort, Route(profile), profile.Name, model.ReasoningEfforts,
+                                                ownsClient : preparedClient is null);
         try
         {
             return await host.ChangeModelAsync(candidate, token, revision).ConfigureAwait(false);
@@ -335,26 +344,54 @@ public sealed class DesktopSessionFactory
         }
     }
 
-    private async Task ValidateCurrentAsync(ChatSessionHost host, CancellationToken token)
+    /// <summary>
+    ///     <para>发送前按原供应商和模型刷新绑定；目标缺失时保留草稿并要求重选，刷新失败不发送。</para>
+    ///     <para>Refreshes the binding for the same provider and model before sending; missing targets require re-selection and failed refreshes prevent sending.</para>
+    /// </summary>
+    private async Task RefreshCurrentAsync(ChatSessionHost host, CancellationToken token)
     {
         var current = host.Session.ModelSelection!;
         var user = await UserConfigStore.LoadAsync(_userConfigPath ?? UserConfigStore.DefaultFilePath(), token)
                                         .ConfigureAwait(false);
-        // 无目录路由的项目配置仍沿用原路径；目录绑定在发送前检查漂移，不自动转发历史。
+        // 无目录归属的项目配置仍沿用原路径，不擅自绑定目录中的同名模型。
         if (current.CredentialRoute is null) return;
-        var profile = user.Profiles.SingleOrDefault(item => current.ProfileHint is { } name
-                                                        ? item.Name == name
-                                                        : Route(item) == current.CredentialRoute);
-        if (profile is null && current.ProfileHint is null) return;
-        var model = profile?.Models.SingleOrDefault(item => item.Id == current.Model.ModelId);
-        if (profile is null ||
-            model is null ||
-            Route(profile) != current.CredentialRoute ||
-            profile.Endpoint != current.Model.Endpoint ||
-            profile.ChatApi != current.Model.ChatApi ||
-            current.Context?.ContextWindowTokens != model.ContextWindowTokens ||
-            !(current.ReasoningCapabilities ?? []).SequenceEqual(model.ReasoningEfforts ?? []))
-            throw new InvalidOperationException("模型配置已变化，请显式重新选择模型后发送。");
+        if (current.ProfileHint is null && current.CredentialRoute.StartsWith('|')) return;
+        var target = FindTarget(user, current, current.Model) ??
+                     throw new InvalidOperationException("当前供应商或模型已不存在，请重新选择模型后发送。");
+        await ChangeAsync(host, target.Profile, target.Model, CurrentEffort(current.ReasoningEffort, target.Model),
+                          current.Revision, token).ConfigureAwait(false);
+    }
+
+    private static ModelReasoningEffort? CurrentEffort(ModelReasoningEffort? saved, UserProfileModel model) =>
+        saved is null || model.ReasoningEfforts?.Contains(saved.Value) == true ? saved : model.DefaultReasoningEffort;
+
+    /// <summary>
+    ///     <para>按供应商名和模型 ID 定位当前目录项；无供应商信息的旧日志仅允许唯一身份匹配。</para>
+    ///     <para>Locates the current catalog entry by provider name and model ID; legacy logs without a provider require a unique identity match.</para>
+    /// </summary>
+    private static (UserProfile Profile, UserProfileModel Model)? FindTarget(
+        UserConfig user, SessionModelSelection? saved, SessionModelIdentity identity)
+    {
+        var name = saved?.ProfileHint;
+        if (name is null && saved?.CredentialRoute is { } route)
+        {
+            var separator = route.IndexOf('|');
+            if (separator > 0) name = route[..separator];
+        }
+
+        if (name is not null)
+        {
+            var profile = user.Profiles.SingleOrDefault(item => item.Name == name);
+            var model   = profile?.Models.SingleOrDefault(item => item.Id == identity.ModelId);
+            return profile is not null && model is not null ? (profile, model) : null;
+        }
+
+        var matches = user
+                     .Profiles.SelectMany(profile => profile.Models.Select(model => (Profile : profile, Model : model)))
+                     .Where(item => item.Model.Id         == identity.ModelId  &&
+                                    item.Profile.Endpoint == identity.Endpoint &&
+                                    item.Profile.ChatApi  == identity.ChatApi).ToArray();
+        return matches.Length == 1 ? matches[0] : null;
     }
 
     private static TinyHarnessConfig SelectConfig(TinyHarnessConfig     config, UserConfig user,

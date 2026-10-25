@@ -309,6 +309,7 @@ public sealed partial class SessionViewModel : ObservableObject
         finally
         {
             IsRunning = false;
+            NotifyModelSelection();
         }
     }
 
@@ -337,7 +338,11 @@ public sealed partial class SessionViewModel : ObservableObject
                 if (_submittedDraftRevision is { } submitted && _draftRevision == submitted) Draft = string.Empty;
                 _submittedDraftRevision = null;
                 if (!_runLabels.ContainsKey(runId) && _runtime?.Host.Session.ModelSelection is { } selection)
+                {
                     _runLabels[runId] = SelectionLabel(selection);
+                    NotifyModelSelection();
+                }
+
                 Status = update.Text ?? "运行中";
                 break;
             case "state" :                                      Status = update.Text ?? "运行中"; break;

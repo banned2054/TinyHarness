@@ -567,39 +567,240 @@ public sealed class DesktopProjectionTests
         Assert.That(Text(history), Does.Contain("new answer"));
     }
 
-    [Test]
-    public async Task CatalogDriftRejectsSendAndPreservesDraftUntilExplicitSelection()
+    [TestCase("endpoint", false)]
+    [TestCase("endpoint", true)]
+    [TestCase("protocol", false)]
+    [TestCase("protocol", true)]
+    [TestCase("credential", false)]
+    [TestCase("credential", true)]
+    [TestCase("window", false)]
+    [TestCase("window", true)]
+    [TestCase("capabilities", false)]
+    [TestCase("capabilities", true)]
+    [TestCase("effort", false)]
+    [TestCase("effort", true)]
+    [TestCase("default", false)]
+    [TestCase("default", true)]
+    public async Task ExistingCatalogTargetRefreshesBeforeSendWithoutReselection(string change, bool reopen)
+    {
+        var fixture = await Fixture.CreateAsync();
+        var user    = await UserConfigStore.LoadAsync(fixture.Config, CancellationToken.None);
+        user = user with
+        {
+            Profiles =
+            [
+                user.Profiles[0] with
+                {
+                    Models =
+                    [
+                        user.Profiles[0].Models[0] with
+                        {
+                            ReasoningEfforts = [ModelReasoningEffort.Low, ModelReasoningEffort.High],
+                            DefaultReasoningEffort = ModelReasoningEffort.High
+                        }
+                    ]
+                }
+            ]
+        };
+        await UserConfigStore.SaveAsync(fixture.Config, user, CancellationToken.None);
+        var finish = Signal();
+        finish.SetResult();
+        var requests = new List<(TinyHarnessConfig Config, string Key, ChatCompletionRequest Request)>();
+        var clients  = 0;
+        var disposed = 0;
+        var factory = new DesktopSessionFactory((config, key) =>
+                                                {
+                                                    clients++;
+                                                    return new Model(Signal(), finish, "answer", "old reasoning",
+                                                                     request => requests.Add((config, key, request)),
+                                                                     () => disposed++);
+                                                },
+                                                new Credentials(target => target == "replacement"
+                                                                    ? "replacement-key"
+                                                                    : "fixture-secret-key"),
+                                                fixture.Config);
+        await using var manager        = new DesktopSessionManager();
+        await using var resumedManager = new DesktopSessionManager();
+        var             page           = Page(manager, factory, fixture.First);
+        await page.SelectModelAsync(new ModelChoice("offline", "offline"), ModelReasoningEffort.High);
+        page.Draft = "first";
+        await page.SendAsync();
+        await page.Completion;
+        var id     = page.Id!;
+        var before = await SessionStoreReader.ReadAsync(fixture.Store, id, CancellationToken.None);
+        var model  = user.Profiles[0].Models[0];
+        var updated = change switch
+        {
+            "endpoint"   => user.Profiles[0] with { Endpoint = "https://changed.invalid/v1" },
+            "protocol"   => user.Profiles[0] with { ChatApi = ChatApiKind.Responses },
+            "credential" => user.Profiles[0] with { ApiKeyCredentialTarget = "replacement" },
+            "window"     => user.Profiles[0] with { Models = [model with { ContextWindowTokens = 64000 }] },
+            "capabilities" => user.Profiles[0] with
+            {
+                Models = [model with { ReasoningEfforts = [ModelReasoningEffort.High] }]
+            },
+            "effort" => user.Profiles[0] with
+            {
+                Models =
+                [
+                    model with
+                    {
+                        ReasoningEfforts = [ModelReasoningEffort.Low],
+                        DefaultReasoningEffort = ModelReasoningEffort.Low
+                    }
+                ]
+            },
+            _ => user.Profiles[0] with { Models = [model with { DefaultReasoningEffort = ModelReasoningEffort.Low }] }
+        };
+        await UserConfigStore.SaveAsync(fixture.Config, user with { Profiles = [updated] }, CancellationToken.None);
+        if (reopen)
+        {
+            await manager.DisposeAsync();
+            page = new SessionViewModel(resumedManager, factory, fixture.First, id, fixture.Store,
+                                        dispatch : action =>
+                                        {
+                                            action();
+                                            return ValueTask.CompletedTask;
+                                        });
+        }
+
+        page.Draft = "second";
+        await page.SendAsync();
+        await page.Completion;
+        Assert.That(page.Draft, Is.Empty);
+        Assert.That(page.Id, Is.EqualTo(id));
+        Assert.That(page.CurrentEffortText, Is.EqualTo(change == "effort" ? "low" : "high"));
+        Assert.That(requests, Has.Count.EqualTo(2));
+        Assert.That(requests[1].Config.Endpoint, Is.EqualTo(updated.Endpoint));
+        Assert.That(requests[1].Config.ChatApi, Is.EqualTo(updated.ChatApi));
+        Assert.That(requests[1].Key, Is.EqualTo(change == "credential" ? "replacement-key" : "fixture-secret-key"));
+        Assert.That(requests[1].Request.ReasoningEffort,
+                    Is.EqualTo(change == "effort" ? ModelReasoningEffort.Low : ModelReasoningEffort.High));
+        Assert.That(requests[1].Request.Messages.Select(message => message.Content),
+                    Does.Contain("first").And.Contain("answer"));
+        var saved = await SessionStoreReader.ReadAsync(fixture.Store, id, CancellationToken.None);
+        Assert.That(saved!.Turns, Has.Count.EqualTo(2));
+        Assert.That(saved.ModelSelection!.Context!.ContextWindowTokens,
+                    Is.EqualTo(updated.Models[0].ContextWindowTokens));
+        if (change == "default")
+            Assert.That(saved.ModelSelection.Revision, Is.EqualTo(before!.ModelSelection!.Revision));
+        var isolatesReasoning = change is "endpoint" or "protocol" or "credential";
+        Assert.That(saved.ModelSelection.ContinuationEpoch,
+                    Is.EqualTo(before!.ModelSelection!.ContinuationEpoch + (isolatesReasoning ? 1 : 0)));
+        if (isolatesReasoning)
+            Assert.That(requests[1].Request.Messages.Where(message => message.Role == ChatRole.Assistant)
+                                   .All(message => message.Reasoning is null or { Count: 0 }), Is.True);
+        Assert.That(saved.Turns[0].Runs[0].ModelSelectionRevision,
+                    Is.EqualTo(before.Turns[0].Runs[0].ModelSelectionRevision));
+        var revision    = saved.ModelSelection.Revision;
+        var clientCount = clients;
+        Assert.That(disposed, Is.EqualTo(clients - 1));
+        page.Draft = "third";
+        await page.SendAsync();
+        await page.Completion;
+        var unchanged = await SessionStoreReader.ReadAsync(fixture.Store, id, CancellationToken.None);
+        Assert.That(unchanged!.ModelSelection!.Revision, Is.EqualTo(revision));
+        Assert.That(clients, Is.EqualTo(clientCount));
+    }
+
+    [TestCase(true, false)]
+    [TestCase(true, true)]
+    [TestCase(false, false)]
+    [TestCase(false, true)]
+    public async Task DeletedCatalogTargetPreservesDraftWithoutUsingAnotherProvider(bool removeProvider, bool reopen)
     {
         var fixture = await Fixture.CreateAsync();
         var finish  = Signal();
         finish.SetResult();
-        var factory = new DesktopSessionFactory((_, _) => new Model(Signal(), finish, "answer"), new Credentials(),
-                                                fixture.Config);
-        await using var manager = new DesktopSessionManager();
-        var             page    = Page(manager, factory, fixture.First);
+        var requests = 0;
+        var factory =
+            new DesktopSessionFactory((_, _) => new Model(Signal(), finish, "answer", observed : _ => requests++),
+                                      new Credentials(), fixture.Config);
+        await using var manager        = new DesktopSessionManager();
+        await using var resumedManager = new DesktopSessionManager();
+        var             page           = Page(manager, factory, fixture.First);
         page.Draft = "first";
         await page.SendAsync();
         await page.Completion;
-        var user = await UserConfigStore.LoadAsync(fixture.Config, CancellationToken.None);
-        await UserConfigStore.SaveAsync(fixture.Config,
-                                        user with
+        var user        = await UserConfigStore.LoadAsync(fixture.Config, CancellationToken.None);
+        var alternative = user.Profiles[0] with { Name = "alternative" };
+        await UserConfigStore.SaveAsync(fixture.Config, user with
+        {
+            DefaultProfile = "alternative",
+            Profiles = removeProvider
+                ? [alternative]
+                : [user.Profiles[0] with { Models = [], DefaultModel = "" }, alternative]
+        }, CancellationToken.None);
+        if (reopen)
+        {
+            var id = page.Id;
+            await manager.DisposeAsync();
+            page = new SessionViewModel(resumedManager, factory, fixture.First, id, fixture.Store,
+                                        dispatch : action =>
                                         {
-                                            Profiles =
-                                            [
-                                                user.Profiles[0] with { Endpoint = "https://changed.invalid/v1" }
-                                            ]
-                                        }, CancellationToken.None);
+                                            action();
+                                            return ValueTask.CompletedTask;
+                                        });
+        }
+
         page.Draft = "must stay";
         await page.SendAsync();
         await page.Completion;
         Assert.That(page.Draft, Is.EqualTo("must stay"));
         Assert.That(page.Notice, Does.Contain("重新选择"));
+        Assert.That(requests, Is.EqualTo(1));
         var saved = await SessionStoreReader.ReadAsync(fixture.Store, page.Id!, CancellationToken.None);
         Assert.That(saved!.Turns, Has.Count.EqualTo(1));
-        await page.SelectModelAsync(new ModelChoice("offline", "offline"), null);
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task CredentialRefreshFailureKeepsDraftAndCanRetryWithoutReselecting(bool reopen)
+    {
+        var fixture = await Fixture.CreateAsync();
+        var finish  = Signal();
+        finish.SetResult();
+        var requests    = new List<string>();
+        var unavailable = true;
+        var factory =
+            new DesktopSessionFactory((_, key) => new Model(Signal(), finish, "answer",
+                                                            observed : _ => requests.Add(key)),
+                                      new Credentials(target => target == "replacement"
+                                                          ? unavailable ? null : "replacement-key"
+                                                          : "fixture-secret-key"), fixture.Config);
+        await using var manager        = new DesktopSessionManager();
+        await using var resumedManager = new DesktopSessionManager();
+        var             page           = Page(manager, factory, fixture.First);
+        page.Draft = "first";
+        await page.SendAsync();
+        await page.Completion;
+        var user = await UserConfigStore.LoadAsync(fixture.Config, CancellationToken.None);
+        await UserConfigStore.SaveAsync(fixture.Config, user with
+        {
+            Profiles = [user.Profiles[0] with { ApiKeyCredentialTarget = "replacement" }]
+        }, CancellationToken.None);
+        if (reopen)
+        {
+            var id = page.Id;
+            await manager.DisposeAsync();
+            page = new SessionViewModel(resumedManager, factory, fixture.First, id, fixture.Store,
+                                        dispatch : action =>
+                                        {
+                                            action();
+                                            return ValueTask.CompletedTask;
+                                        });
+        }
+
+        page.Draft = "retry me";
+        await page.SendAsync();
+        await page.Completion;
+        Assert.That(page.Draft, Is.EqualTo("retry me"));
+        Assert.That(requests, Has.Count.EqualTo(1));
+        unavailable = false;
         await page.SendAsync();
         await page.Completion;
         Assert.That(page.Draft, Is.Empty);
+        Assert.That(requests, Is.EqualTo(new[] { "fixture-secret-key", "replacement-key" }));
     }
 
     [Test]
@@ -752,10 +953,10 @@ public sealed class DesktopProjectionTests
         }
     }
 
-    private sealed class Credentials : ICredentialStore
+    private sealed class Credentials(Func<string, string?>? read = null) : ICredentialStore
     {
-        public bool    IsSupported                              => true;
-        public string? Read(string   targetName)                => "fixture-secret-key";
+        public bool    IsSupported => true;
+        public string? Read(string   targetName) => read is null ? "fixture-secret-key" : read(targetName);
         public void    Save(string   targetName, string secret) => throw new NotSupportedException();
         public bool    Delete(string targetName) => throw new NotSupportedException();
     }
@@ -765,7 +966,8 @@ public sealed class DesktopProjectionTests
         TaskCompletionSource           finish,
         string                         response,
         string?                        reasoning = null,
-        Action<ChatCompletionRequest>? observed  = null) : IChatCompletionClient
+        Action<ChatCompletionRequest>? observed  = null,
+        Action?                        disposed  = null) : IChatCompletionClient, IDisposable
     {
         public async IAsyncEnumerable<ChatStreamEvent> CompleteAsync(ChatCompletionRequest request,
                                                                      [EnumeratorCancellation]
@@ -783,5 +985,7 @@ public sealed class DesktopProjectionTests
                     { Kind = ChatStreamEventKind.ContentDelta, ContentDelta = new string(part) };
             yield return new ChatStreamEvent { Kind = ChatStreamEventKind.End, FinishReason = "stop" };
         }
+
+        public void Dispose() => disposed?.Invoke();
     }
 }

@@ -84,6 +84,17 @@ internal static class OfflineSmoke
                                              first.Host.Session.ModelSelection!.Revision);
             }
 
+            await UserConfigStore.SaveAsync(configPath, user with
+            {
+                Profiles =
+                [
+                    user.Profiles[0] with
+                    {
+                        Endpoint = "https://refreshed.invalid/v1",
+                        ApiKeyCredentialTarget = "offline-updated"
+                    }
+                ]
+            }, CancellationToken.None);
             await using (var manager = new DesktopSessionManager())
             {
                 var restored = await manager.OpenAsync(firstId,
@@ -92,10 +103,12 @@ internal static class OfflineSmoke
                                                                                  SessionId : firstId),
                                                                              _ => ValueTask.CompletedTask,
                                                                              _ => ValueTask.CompletedTask, token));
-                if (restored.Host.Session.Turns.Count                    != 3       ||
-                    restored.Host.Session.ModelSelection?.Model.ModelId  != "flash" ||
-                    restored.Host.Session.ModelSelection.ReasoningEffort != ModelReasoningEffort.High)
-                    throw new InvalidOperationException("Resume lost the first turn.");
+                if (restored.Host.Session.Turns.Count != 3 ||
+                    restored.Host.Session.ModelSelection?.Model.ModelId != "flash" ||
+                    restored.Host.Session.ModelSelection.ReasoningEffort != ModelReasoningEffort.High ||
+                    restored.Host.Session.ModelSelection.Model.Endpoint != "https://refreshed.invalid/v1" ||
+                    restored.Host.Session.ModelSelection.CredentialRoute != "offline|credential:offline-updated")
+                    throw new InvalidOperationException("Resume lost history or failed to refresh the existing target.");
                 var run = await restored.SubmitAsync("offline resumed");
                 if (run.Result?.Status != Core.Models.Agent.AgentStatus.Completed)
                     throw new InvalidOperationException("Resumed turn failed.");
@@ -104,7 +117,7 @@ internal static class OfflineSmoke
             var saved = await SessionStoreReader.ReadAsync(store, firstId, CancellationToken.None);
             if (saved?.Turns.Count != 4 || createdModels != 6)
                 throw new InvalidOperationException("Persistence or client ownership failed.");
-            Console.WriteLine($"PASS desktop: parallel=2 switched=A/B/A/B resumedTurns=4 disposedClients={createdModels}; fixture={root}");
+            Console.WriteLine($"PASS desktop: parallel=2 switched=A/B/A/B refreshed=true resumedTurns=4 disposedClients={createdModels}; fixture={root}");
             return 0;
         }
         catch (Exception exception)
@@ -116,10 +129,13 @@ internal static class OfflineSmoke
 
     private sealed class OfflineCredentials : ICredentialStore
     {
-        public bool    IsSupported => true;
-        public string? Read(string   targetName) => targetName == "offline-only" ? "offline-fixture-key" : null;
-        public void    Save(string   targetName, string secret) => throw new NotSupportedException();
-        public bool    Delete(string targetName) => throw new NotSupportedException();
+        public bool IsSupported => true;
+
+        public string? Read(string targetName) =>
+            targetName is "offline-only" or "offline-updated" ? "offline-fixture-key" : null;
+
+        public void Save(string   targetName, string secret) => throw new NotSupportedException();
+        public bool Delete(string targetName) => throw new NotSupportedException();
     }
 
     private sealed class OfflineModel(Func<CancellationToken, Task> started, Action disposed)
