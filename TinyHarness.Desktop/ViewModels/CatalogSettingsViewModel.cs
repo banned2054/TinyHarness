@@ -47,7 +47,7 @@ public sealed class CatalogSettingsViewModel : SettingsSectionViewModel
     }
 
     public string Intro =>
-        "供应商描述实际调用的服务，其下模型共用接口地址、协议与凭据引用。保存只写入用户配置，不切换已打开会话。";
+        "配置供应商的 API 密钥、接口地址和模型目录。";
 
     public ObservableCollection<CatalogProviderRowViewModel> Providers { get; } = [];
 
@@ -270,7 +270,7 @@ public sealed class CatalogProviderRowViewModel : ObservableObject
 
     public string Name => Source.Name;
 
-    public string Caption => $"{ChatApiKindParser.ToValueString(Source.ChatApi)} · {Source.Models.Count} 个模型";
+    public string Caption => $"{Source.Models.Count} 个模型";
 
     public bool IsDefaultProvider { get; }
 
@@ -335,6 +335,8 @@ public sealed class CatalogProviderEditorViewModel : ObservableObject
     private string? _saveError;
     private bool _isProtocolMenuOpen;
     private bool _isDefaultModelMenuOpen;
+    private bool _isCustomExpanded = true;
+    private bool _isCredentialOptionsExpanded;
     private IReadOnlyList<CatalogChoiceOptionViewModel> _defaultModelOptions = [];
 
     private CatalogProviderEditorViewModel(string path, ICredentialStore credentials, UserConfig baseline,
@@ -366,9 +368,9 @@ public sealed class CatalogProviderEditorViewModel : ObservableObject
 
         ProtocolOptions =
         [
-            new(ChatApiKindParser.ChatCompletionsValue, "Chat Completions",
+            new(ChatApiKindParser.ChatCompletionsValue, "OpenAI Chat Completions",
                 _protocol == ChatApiKindParser.ChatCompletionsValue, SelectProtocol),
-            new(ChatApiKindParser.ResponsesValue, "Responses", _protocol == ChatApiKindParser.ResponsesValue,
+            new(ChatApiKindParser.ResponsesValue, "OpenAI Responses", _protocol == ChatApiKindParser.ResponsesValue,
                 SelectProtocol)
         ];
         SaveCommand     = new AsyncCommand(SaveAsync, exception => SaveError = Redact(exception.Message));
@@ -378,6 +380,9 @@ public sealed class CatalogProviderEditorViewModel : ObservableObject
             new RelayCommand(() => IsProtocolMenuOpen = !IsProtocolMenuOpen);
         ToggleDefaultModelMenuCommand =
             new RelayCommand(() => IsDefaultModelMenuOpen = !IsDefaultModelMenuOpen);
+        ToggleCustomCommand = new RelayCommand(() => IsCustomExpanded = !IsCustomExpanded);
+        ToggleCredentialOptionsCommand =
+            new RelayCommand(() => IsCredentialOptionsExpanded = !IsCredentialOptionsExpanded);
         RefreshDefaultModelOptions();
     }
 
@@ -408,6 +413,35 @@ public sealed class CatalogProviderEditorViewModel : ObservableObject
     public RelayCommand CancelCommand { get; }
 
     public RelayCommand AddModelCommand { get; }
+
+    /// <summary>
+    ///     <para>地址、协议与模型目录的展开状态；收起时仍可填写和保存 API 密钥。</para>
+    ///     <para>Whether endpoint, protocol and models are expanded; API keys stay editable and saveable when collapsed.</para>
+    /// </summary>
+    public bool IsCustomExpanded
+    {
+        get => _isCustomExpanded;
+        private set
+        {
+            if (!SetProperty(ref _isCustomExpanded, value) || value) return;
+            IsProtocolMenuOpen     = false;
+            IsDefaultModelMenuOpen = false;
+        }
+    }
+
+    public RelayCommand ToggleCustomCommand { get; }
+
+    /// <summary>
+    ///     <para>高级凭据来源的展开状态；与密钥输入分开，不改变凭据内容。</para>
+    ///     <para>Whether advanced credential sources are expanded; separate from API key entry without changing credentials.</para>
+    /// </summary>
+    public bool IsCredentialOptionsExpanded
+    {
+        get => _isCredentialOptionsExpanded;
+        private set => SetProperty(ref _isCredentialOptionsExpanded, value);
+    }
+
+    public RelayCommand ToggleCredentialOptionsCommand { get; }
 
     public string Name
     {
@@ -442,7 +476,7 @@ public sealed class CatalogProviderEditorViewModel : ObservableObject
     ///     <para>The protocol button uses a friendly label mapped to the same values as its options and saved field.</para>
     /// </summary>
     public string ProtocolLabel =>
-        _protocol == ChatApiKindParser.ResponsesValue ? "Responses" : "Chat Completions";
+        _protocol == ChatApiKindParser.ResponsesValue ? "OpenAI Responses" : "OpenAI Chat Completions";
 
     public bool IsProtocolMenuOpen
     {
@@ -516,14 +550,13 @@ public sealed class CatalogProviderEditorViewModel : ObservableObject
                                         : "/chat/completions");
 
     /// <summary>
-    ///     <para>密钥框占位：已有引用提示替换语义，否则提示可选输入；值不回显。</para>
-    ///     <para>The secret placeholder explains replacement when references exist; otherwise input is optional and never revealed.</para>
+    ///     <para>密钥框按当前凭据来源提示留空保留或直接粘贴；不读取或回显已存密钥。</para>
+    ///     <para>The key placeholder explains retaining the current source or pasting a key, without reading or revealing stored keys.</para>
     /// </summary>
     public string SecretWatermark =>
-        _source is { } provider && (provider.ApiKeyEnvironmentVariable.Length > 0 ||
-                                    provider.ApiKeyCredentialTarget.Length    > 0)
-            ? "已保存凭据引用——输入新密钥将替换"
-            : "新 API 密钥（可选）";
+        !string.IsNullOrWhiteSpace(EnvironmentVariable) || !string.IsNullOrWhiteSpace(CredentialTarget)
+            ? "留空使用已配置的凭据"
+            : "粘贴 API key";
 
     public bool CanEdit => !_isSaving;
 

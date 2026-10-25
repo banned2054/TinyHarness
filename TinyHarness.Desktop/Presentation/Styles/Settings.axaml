@@ -216,7 +216,7 @@
         <Setter Property="BorderBrush" Value="{DynamicResource PopupDividerBrush}" />
         <Setter Property="BorderThickness" Value="1" />
         <Setter Property="CornerRadius" Value="10" />
-        <Setter Property="Padding" Value="12,10" />
+        <Setter Property="Padding" Value="6" />
     </Style>
     <!-- 条目折叠按钮：透明小方钮，悬停取弹层悬停层级。 -->
     <Style Selector="Button.settings-entry-chevron">
@@ -273,10 +273,44 @@
         <Setter Property="TextWrapping" Value="Wrap" />
         <Setter Property="Margin" Value="0,0,0,14" />
     </Style>
-    <!-- 提供方行卡：弹层表面色圆角行（名称 + 说明 + 凭据圆点 + 编辑）。 -->
+    <!-- 提供方标题行与展开的编辑表面分层。 -->
     <Style Selector="Border.settings-provider-row">
-        <Setter Property="Background" Value="{DynamicResource PopupSurfaceBrush}" />
+        <Setter Property="Background" Value="Transparent" />
         <Setter Property="CornerRadius" Value="10" />
-        <Setter Property="Padding" Value="16,12" />
+        <Setter Property="Padding" Value="0" />
+    </Style>
+    <Style Selector="Border.settings-provider-editor">
+        <Setter Property="Background" Value="{DynamicResource PopupSurfaceBrush}" />
+        <Setter Property="CornerRadius" Value="14" />
+        <Setter Property="Padding" Value="16" />
+        <Setter Property="Margin" Value="0,8,0,0" />
+    </Style>
+    <Style Selector="Border.settings-provider-editor TextBox.settings-input /template/ Border#PART_BorderElement">
+        <Setter Property="Background" Value="{DynamicResource ComposerBackgroundBrush}" />
+    </Style>
+    <Style Selector="Border.settings-provider-editor Button.settings-select">
+        <Setter Property="Background" Value="{DynamicResource ComposerBackgroundBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource PopupDividerBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+    </Style>
+    <Style Selector="Border.settings-help">
+        <Setter Property="Width" Value="14" />
+        <Setter Property="Height" Value="14" />
+        <Setter Property="CornerRadius" Value="7" />
+        <Setter Property="BorderBrush" Value="{DynamicResource PopupDividerBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+    <Style Selector="Button.settings-collapsible">
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="MinHeight" Value="22" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Foreground" Value="{DynamicResource PopupForegroundBrush}" />
+        <Setter Property="HorizontalContentAlignment" Value="Left" />
+    </Style>
+    <Style Selector="Button.settings-collapsible:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Foreground" Value="{DynamicResource AccentTextBrush}" />
     </Style>
 </Styles>
