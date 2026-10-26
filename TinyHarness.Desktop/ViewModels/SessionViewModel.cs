@@ -30,7 +30,6 @@ public sealed partial class SessionViewModel : ObservableObject
     private bool _running;
     private bool _opening;
     private bool _allowChanges;
-    private bool _showReasoning;
     private DesktopApproval? _approval;
     private SessionHistoryCursor? _historyCursor;
     private bool _historyLoaded;
@@ -141,17 +140,6 @@ public sealed partial class SessionViewModel : ObservableObject
             if (_allowChanges == value) return;
             if (!CanConfigure) throw new InvalidOperationException("当前会话的权限设置已经生效。");
             if (SetProperty(ref _allowChanges, value)) OnPropertyChanged(nameof(PermissionPickerLabel));
-        }
-    }
-
-    public bool ShowReasoning
-    {
-        get => _showReasoning;
-        set
-        {
-            if (_showReasoning == value) return;
-            if (!CanConfigure) throw new InvalidOperationException("当前会话的思考展示设置已经生效。");
-            SetProperty(ref _showReasoning, value);
         }
     }
 
@@ -378,9 +366,7 @@ public sealed partial class SessionViewModel : ObservableObject
 
             Items.Add(new MessageItemViewModel(new ConversationMessage(item.Sequence, item.Id, role,
                                                                        item.Text ?? string.Empty, DateTimeOffset.Now,
-                                                                       Reasoning : _showReasoning
-                                                                           ? item.Reasoning
-                                                                           : null,
+                                                                       Reasoning : item.Reasoning,
                                                                        ModelLabel : item.RunId is { } runId
                                                                            ? _runLabels.GetValueOrDefault(runId)
                                                                            : null)));

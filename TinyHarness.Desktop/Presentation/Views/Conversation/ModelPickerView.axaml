@@ -34,7 +34,7 @@
                IsLightDismissEnabled="True">
             <Border Classes="popup-surface" Width="264" MaxHeight="420">
                 <Panel>
-                    <!-- 主菜单保留模型与推理等级导航，以及独立的显示开关。 -->
+                    <!-- 主菜单保留模型与推理等级导航。 -->
                     <StackPanel IsVisible="{Binding IsModelMenuRootPage}">
                         <Button Classes="popup-navigation"
                                 Command="{Binding ShowModelsPageCommand}">
@@ -56,11 +56,6 @@
                                 <TextBlock Grid.Column="2" Classes="popup-chevron" Text="›" />
                             </Grid>
                         </Button>
-                        <Button Content="管理供应商与模型" Command="{Binding ManageModelsCommand}" Classes="popup-navigation" />
-                        <Border Classes="popup-divider" />
-                        <CheckBox Content="显示可读思考" IsChecked="{Binding ShowReasoning, Mode=TwoWay}"
-                                  IsEnabled="{Binding CanConfigure}" Margin="10,4"
-                                  ToolTip.Tip="只控制思考内容的展示，不改变推理等级" />
                     </StackPanel>
                     <!-- 模型二级菜单：提供方作分组标题，模型单独成行，当前模型勾选。 -->
                     <ScrollViewer IsVisible="{Binding IsModelsMenuPage}" MaxHeight="380">

@@ -137,7 +137,7 @@ public sealed class DesktopProjectionTests
     }
 
     [Test]
-    public async Task EnabledReadableThinkingPreservesOriginalTextAcrossHistoryReload()
+    public async Task ReasoningIsShownByDefaultAndPreservesOriginalTextAcrossHistoryReload()
     {
         var fixture = await Fixture.CreateAsync();
         var finish  = Signal();
@@ -145,23 +145,39 @@ public sealed class DesktopProjectionTests
         var factory = new DesktopSessionFactory((_, _) => new Model(Signal(), finish, "offline answer",
                                                                     "thinking about fixture-secret-key before answering"),
                                                 new Credentials(), fixture.Config);
-        await using var manager = new DesktopSessionManager();
-        var             page    = Page(manager, factory, fixture.First);
-        page.ShowReasoning = true;
-        page.Draft         = "request";
+        await using var manager           = new DesktopSessionManager();
+        var             page              = Page(manager, factory, fixture.First);
+        string?         streamedReasoning = null;
+        page.Items.CollectionChanged += (_, args) =>
+        {
+            if (args.NewItems is null) return;
+            foreach (var message in args.NewItems.OfType<MessageItemViewModel>())
+                message.PropertyChanged += (_, change) =>
+                {
+                    if (message.IsStreaming && change.PropertyName == nameof(MessageItemViewModel.Reasoning))
+                        streamedReasoning = message.Reasoning;
+                };
+        };
+        page.Draft = "request";
         await page.SendAsync();
         await page.Completion.WaitAsync(TimeSpan.FromSeconds(10));
         var settled = page.Items.OfType<MessageItemViewModel>().Last(message => message.IsAssistantMessage);
         Assert.That(settled.HasReasoning, Is.True);
         Assert.That(settled.Reasoning, Is.EqualTo("thinking about fixture-secret-key before answering"));
+        Assert.That(streamedReasoning, Is.EqualTo(settled.Reasoning));
         Assert.That(settled.ReasoningSummary, Is.Not.Null);
+        Assert.That(settled.IsReasoningExpanded, Is.False);
+        settled.ToggleReasoningCommand.Execute(null);
+        Assert.That(settled.IsReasoningExpanded, Is.True);
+        settled.ToggleReasoningCommand.Execute(null);
+        Assert.That(settled.IsReasoningExpanded, Is.False);
+        Assert.That(settled.Reasoning, Is.EqualTo("thinking about fixture-secret-key before answering"));
         var browse = new SessionViewModel(manager, factory, fixture.First, page.Id, fixture.Store,
                                           dispatch : action =>
                                           {
                                               action();
                                               return ValueTask.CompletedTask;
                                           });
-        browse.ShowReasoning = true;
         await browse.LoadHistoryAsync();
         var reloaded = browse.Items.OfType<MessageItemViewModel>().Last(message => message.IsAssistantMessage);
         Assert.That(reloaded.HasReasoning, Is.True);
@@ -169,13 +185,12 @@ public sealed class DesktopProjectionTests
     }
 
     [Test]
-    public async Task DisabledReadableThinkingKeepsReasoningRowHidden()
+    public async Task AnswerWithoutReasoningKeepsReasoningRowHidden()
     {
         var fixture = await Fixture.CreateAsync();
         var finish  = Signal();
         finish.SetResult();
-        var factory = new DesktopSessionFactory((_, _) => new Model(Signal(), finish, "offline answer",
-                                                                    "hidden thinking"),
+        var factory = new DesktopSessionFactory((_, _) => new Model(Signal(), finish, "offline answer"),
                                                 new Credentials(), fixture.Config);
         await using var manager = new DesktopSessionManager();
         var             page    = Page(manager, factory, fixture.First);

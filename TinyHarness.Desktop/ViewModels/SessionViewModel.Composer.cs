@@ -192,7 +192,7 @@ public sealed partial class SessionViewModel
     private async Task OpenRuntimeAsync(bool reselect)
     {
         var request = new DesktopSessionRequest(WorkspaceRoot, AllowChanges, Id, SelectedModel?.ProfileName,
-                                                SelectedModel?.ModelId, ShowReasoning, _effort,
+                                                SelectedModel?.ModelId, true, _effort,
                                                 SelectedModel is not null, reselect);
         _runtime = await _manager.OpenAsync(Id,
                                             token => _factory.OpenAsync(request, OnEventAsync, OnApprovalAsync, token),
