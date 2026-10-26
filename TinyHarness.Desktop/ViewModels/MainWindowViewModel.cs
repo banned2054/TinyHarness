@@ -84,6 +84,8 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
             foreach (var model in profile.Models)
                 Models.Add(new ModelChoice(profile.Name, model.Id, model.DisplayName, model.ReasoningEfforts,
                                            model.DefaultReasoningEffort));
+            foreach (var draft in Sessions.Where(session => session.Id is null).ToArray())
+                await draft.RefreshDefaultModelAsync();
             var directory = user.Settings?.SessionStoreDirectory ?? SessionStorePaths.DefaultDirectory();
             var entries   = await SessionStoreReader.ListAsync(directory, CancellationToken.None);
             if (_closing) return;
@@ -123,6 +125,7 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
             { ModelOptions = Models, ManageModelsCommand = OpenSettingsCommand };
         Sessions.Insert(0, session);
         SelectedSession = session;
+        _               = session.RefreshDefaultModelAsync();
     }
 
     private static async Task LoadSelectedHistoryAsync(SessionViewModel session)

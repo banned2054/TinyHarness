@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using TinyHarness.Core.Models.ChatCompletions;
 using TinyHarness.Core.Models.Session;
+using TinyHarness.Core.Services.ChatCompletions.Configuration;
 using TinyHarness.Desktop.Runtime;
 
 namespace TinyHarness.Desktop.ViewModels;
@@ -10,6 +11,8 @@ public sealed partial class SessionViewModel
     private bool _isModelMenuOpen;
     private bool _isPermissionMenuOpen;
     private int  _modelMenuPage;
+    private ModelChoice? _defaultModel;
+    private long         _defaultModelRevision;
 
     public RelayCommand                             ToggleModelMenuCommand { get; private set; } = null!;
     public RelayCommand                             ShowModelMenuRootCommand { get; private set; } = null!;
@@ -22,16 +25,23 @@ public sealed partial class SessionViewModel
     public bool                                     CanChangeModel => !IsRunning && !_opening && !_changing;
     public bool                                     CanSelectModel => CanChangeModel;
     public RelayCommand?                            ManageModelsCommand { get; init; }
-    public string                                   ModelPickerLabel => $"{CurrentModelNameText} · {CurrentEffortText}";
+    public string                                   ModelPickerLabel => $"{CurrentModelLabel} · {CurrentEffortText}";
 
     public string CurrentModelNameText => (_runtime?.Host.Session.ModelSelection ?? _savedSelection)?.Model.ModelId ??
-                                          _historicalIdentity?.ModelId ?? SelectedModel?.ModelId ?? "工作区默认";
+                                          _historicalIdentity?.ModelId ?? SelectedModel?.ModelId ??
+                                          _defaultModel?.ModelId ?? "请选择模型";
+
+    public string CurrentModelLabel => (_runtime?.Host.Session.ModelSelection ?? _savedSelection) is { } selection
+        ? selection.Model.ModelId
+        : Id is not null
+            ? CurrentModelNameText
+            : (SelectedModel ?? _defaultModel)?.Label ?? "请选择模型";
 
     public string CurrentEffortText => (_runtime?.Host.Session.ModelSelection ?? _savedSelection) is { } selection
         ? EffortText(selection.ReasoningEffort)
         : Id is not null
             ? "未记录"
-            : EffortText(_effort);
+            : EffortText(SelectedModel is null ? _defaultModel?.DefaultEffort : _effort);
 
     public string ChangeModelHint       => CanChangeModel ? "选择将可靠保存到本会话" : "当前运行结束后可切换";
     private static string EffortText(ModelReasoningEffort? effort) => effort is { } level ? ModelReasoningEffortParser.ToValueString(level) : "默认";
@@ -103,27 +113,84 @@ public sealed partial class SessionViewModel
     private void RebuildModelMenu()
     {
         ModelGroups.Clear();
-        if (Id is null) ModelGroups.Add(new ComposerModelGroup("工作区", [ModelMenuOption(null)]));
         foreach (var group in ModelOptions.GroupBy(model => model.ProfileName))
             ModelGroups.Add(new ComposerModelGroup(group.Key, group.Select(model => ModelMenuOption(model)).ToArray()));
     }
 
-    private ComposerMenuOption ModelMenuOption(ModelChoice? choice) =>
-        new(choice?.Label ?? "使用工作区配置", () => _ = ApplyMenuSelectionAsync(choice, choice?.DefaultEffort),
+    private ComposerMenuOption ModelMenuOption(ModelChoice choice) =>
+        new(choice.Label, () => _ = ApplyMenuSelectionAsync(choice, choice.DefaultEffort),
             () => CanChangeModel)
         {
-            IsSelected = choice is null
-                ? Id is null && SelectedModel is null
-                :
-                choice.ProfileName == (_runtime?.Host.Session.ModelSelection ?? _savedSelection)?.ProfileHint &&
-                   choice.ModelId     == CurrentModelNameText || Equals(SelectedModel, choice)
+            IsSelected = choice.ProfileName ==
+                         ((_runtime?.Host.Session.ModelSelection ?? _savedSelection)?.ProfileHint ??
+                          (SelectedModel ?? _defaultModel)?.ProfileName) &&
+                         choice.ModelId == CurrentModelNameText
         };
+
+    /// <summary>
+    ///     <para>刷新未手动选择的草稿默认项；迟到结果不能覆盖新目录、手动选择或已建立会话。</para>
+    ///     <para>
+    ///         Refreshes an implicit draft default; late results cannot replace a new directory,
+    ///         explicit choice or established session.
+    ///     </para>
+    /// </summary>
+    public async Task RefreshDefaultModelAsync()
+    {
+        var revision = ++_defaultModelRevision;
+        if (Id is not null || SelectedModel is not null) return;
+        var root = WorkspaceRoot;
+        _defaultModel = null;
+        NotifyModelSelection();
+        try
+        {
+            var resolution = await _factory.ResolveDefaultConfigAsync(root, CancellationToken.None);
+            var user       = await UserConfigStore.LoadAsync(resolution.UserConfigPath, CancellationToken.None);
+            var config     = resolution.Config;
+            var profiles =
+                user.Profiles.Where(profile => profile.Endpoint                  == config.Endpoint                  &&
+                                               profile.ChatApi                   == config.ChatApi                   &&
+                                               profile.ApiKeyEnvironmentVariable == config.ApiKeyEnvironmentVariable &&
+                                               profile.ApiKeyCredentialTarget    == config.ApiKeyCredentialTarget    &&
+                                               profile.Models.Any(model => model.Id == config.Model)).ToArray();
+            var profile = resolution.ProfileName is { } name
+                ? user.Profiles.SingleOrDefault(item => item.Name == name)
+                : profiles.Length == 1
+                    ? profiles[0]
+                    : null;
+            var model = profile?.Models.SingleOrDefault(item => item.Id == config.Model);
+            if (revision != _defaultModelRevision ||
+                Id is not null                    ||
+                SelectedModel is not null         ||
+                root != WorkspaceRoot) return;
+            _defaultModel = string.IsNullOrWhiteSpace(config.Model)
+                ? null
+                : new ModelChoice(profile?.Name ?? config.Endpoint, config.Model, model?.DisplayName,
+                                  model?.ReasoningEfforts,
+                                  resolution.ProfileName is null ? null : model?.DefaultReasoningEffort);
+            NotifyModelSelection();
+            RebuildModelMenu();
+            RebuildEfforts();
+        }
+        catch (Exception exception)
+        {
+            if (revision != _defaultModelRevision ||
+                Id is not null                    ||
+                SelectedModel is not null         ||
+                root != WorkspaceRoot) return;
+            _defaultModel = null;
+            NotifyModelSelection();
+            RebuildModelMenu();
+            RebuildEfforts();
+            ShowError(exception);
+        }
+    }
 
     private void RebuildEfforts()
     {
         var selection = _runtime?.Host.Session.ModelSelection ?? _savedSelection;
         var choice = selection is null
-            ? SelectedModel
+            ? SelectedModel ?? ModelOptions.FirstOrDefault(item => item.ProfileName == _defaultModel?.ProfileName &&
+                                                                   item.ModelId     == _defaultModel?.ModelId)
             : ModelOptions.FirstOrDefault(item => item.ProfileName == selection.ProfileHint &&
                                                   item.ModelId     == selection.Model.ModelId);
         var levels = choice?.Efforts ?? selection?.ReasoningCapabilities ?? [];
@@ -225,6 +292,7 @@ public sealed partial class SessionViewModel
     private void NotifyModelSelection()
     {
         OnPropertyChanged(nameof(CurrentModelNameText));
+        OnPropertyChanged(nameof(CurrentModelLabel));
         OnPropertyChanged(nameof(ModelPickerLabel));
         OnPropertyChanged(nameof(CurrentEffortText));
         OnPropertyChanged(nameof(ChangeModelHint));

@@ -128,7 +128,11 @@ public sealed partial class SessionViewModel : ObservableObject
         {
             if (string.Equals(_workspaceRoot, value, StringComparison.Ordinal)) return;
             if (!CanChooseWorkspace) throw new InvalidOperationException("会话根目录已固定，请新建对话选择其他目录。");
-            if (SetProperty(ref _workspaceRoot, value)) OnPropertyChanged(nameof(WorkspaceLabel));
+            if (SetProperty(ref _workspaceRoot, value))
+            {
+                OnPropertyChanged(nameof(WorkspaceLabel));
+                _ = RefreshDefaultModelAsync();
+            }
         }
     }
 
@@ -444,5 +448,5 @@ public sealed record ModelChoice(
     IReadOnlyList<ModelReasoningEffort>? Efforts       = null,
     ModelReasoningEffort?                DefaultEffort = null)
 {
-    public string Label => $"{ProfileName} / {DisplayName ?? ModelId}";
+    public string Label => DisplayName ?? ModelId;
 }

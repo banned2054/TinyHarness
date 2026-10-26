@@ -281,7 +281,7 @@ public sealed class DesktopProjectionTests
                                         })
             { ModelOptions = [new ModelChoice("offline", "offline")] };
         page.IsModelMenuOpen = true;
-        var staleModel = page.ModelGroups[1].Options[0];
+        var staleModel = page.ModelGroups[0].Options[0];
         page.IsPermissionMenuOpen = true;
         var stalePermission = page.PermissionOptions[1];
         page.Draft = "start";
@@ -309,9 +309,12 @@ public sealed class DesktopProjectionTests
         var page = new SessionViewModel(manager, new DesktopSessionFactory(), Path.GetTempPath())
             { ModelOptions = [choice] };
         page.IsModelMenuOpen = true;
-        page.ModelGroups[1].Options[0].SelectCommand.Execute(null);
+        page.ModelGroups[0].Options[0].SelectCommand.Execute(null);
         Assert.That(page.SelectedModel, Is.EqualTo(choice));
         Assert.That(page.ModelPickerLabel, Is.EqualTo("model · 默认"));
+        Assert.That(page.CurrentModelLabel, Is.EqualTo("model"));
+        Assert.That(page.ModelGroups[0].Name, Is.EqualTo("provider"));
+        Assert.That(page.ModelGroups[0].Options[0].Label, Is.EqualTo("model"));
         Assert.That(page.IsModelMenuOpen, Is.False);
         page.IsPermissionMenuOpen = true;
         page.PermissionOptions[1].SelectCommand.Execute(null);
@@ -326,6 +329,74 @@ public sealed class DesktopProjectionTests
         Assert.That(page.CurrentEffortText, Is.EqualTo("默认"));
         page.IsPermissionMenuOpen = true;
         Assert.That(page.PermissionOptions.Skip(2).All(option => !option.SelectCommand.CanExecute(null)), Is.True);
+    }
+
+    [Test]
+    public async Task DraftDefaultDisplaysModelAndEffortWithoutOpeningSession()
+    {
+        var fixture = await Fixture.CreateAsync();
+        var user    = await UserConfigStore.LoadAsync(fixture.Config, CancellationToken.None);
+        var model = user.Profiles[0].Models[0] with
+        {
+            ReasoningEfforts = [ModelReasoningEffort.High], DefaultReasoningEffort = ModelReasoningEffort.High
+        };
+        await UserConfigStore.SaveAsync(fixture.Config, user with
+        {
+            Profiles = [user.Profiles[0] with { Models = [model] }]
+        }, CancellationToken.None);
+        var factory =
+            new DesktopSessionFactory((_, _) => throw new AssertionException("Draft must not create a client."),
+                                      new Credentials(_ => throw new AssertionException("Draft must not read credentials.")),
+                                      fixture.Config);
+        await using var manager = new DesktopSessionManager();
+        var page = new SessionViewModel(manager, factory, fixture.First)
+            { ModelOptions = [new ModelChoice("offline", "offline", Efforts : model.ReasoningEfforts)] };
+        await page.RefreshDefaultModelAsync();
+        Assert.That(page.CurrentModelLabel, Is.EqualTo("offline"));
+        Assert.That(page.ModelPickerLabel, Is.EqualTo("offline · high"));
+        Assert.That(page.ModelGroups, Has.Count.EqualTo(1));
+        Assert.That(page.ModelGroups[0].Options[0].IsSelected, Is.True);
+        Assert.That(page.EffortOptions.Single(option => option.Label == "high").IsSelected, Is.True);
+        Assert.That(page.SelectedModel, Is.Null);
+        Assert.That(page.Id, Is.Null);
+        Assert.That(Directory.Exists(fixture.Store), Is.False);
+    }
+
+    [Test]
+    public async Task DraftDefaultFollowsProjectConfigurationAndKeepsExplicitSelection()
+    {
+        var fixture = await Fixture.CreateAsync();
+        var user    = await UserConfigStore.LoadAsync(fixture.Config, CancellationToken.None);
+        var project = user.Profiles[0] with
+        {
+            Name = "project-provider", Endpoint = "https://project.invalid/v1", DefaultModel = "project-model",
+            Models = [new UserProfileModel { Id = "project-model", ContextWindowTokens = 128_000 }]
+        };
+        await UserConfigStore.SaveAsync(fixture.Config, user with
+        {
+            Profiles = [user.Profiles[0], project]
+        }, CancellationToken.None);
+        await File.WriteAllTextAsync(Path.Combine(fixture.Second, ConfigResolver.ProjectConfigFileName),
+                                     """
+                                     {"endpoint":"https://project.invalid/v1","model":"project-model","apiKeyCredentialTarget":"fixture"}
+                                     """);
+        await using var manager = new DesktopSessionManager();
+        var page = new SessionViewModel(manager, new DesktopSessionFactory(userConfigPath : fixture.Config),
+                                        fixture.First)
+        {
+            ModelOptions = [new ModelChoice("offline", "offline"), new ModelChoice("project-provider", "project-model")]
+        };
+        await page.RefreshDefaultModelAsync();
+        Assert.That(page.ModelPickerLabel, Is.EqualTo("offline · 默认"));
+        page.WorkspaceRoot = fixture.Second;
+        await page.RefreshDefaultModelAsync();
+        Assert.That(page.CurrentModelLabel, Is.EqualTo("project-model"));
+        Assert.That(page.ModelGroups[1].Options[0].IsSelected, Is.True);
+        await page.SelectModelAsync(new ModelChoice("offline", "offline"), null);
+        await page.RefreshDefaultModelAsync();
+        Assert.That(page.CurrentModelLabel, Is.EqualTo("offline"));
+        Assert.That(page.Id, Is.Null);
+        Assert.That(Directory.Exists(fixture.Store), Is.False);
     }
 
     [Test]
@@ -415,6 +486,8 @@ public sealed class DesktopProjectionTests
                                            });
         await resumed.LoadHistoryAsync();
         Assert.That(resumed.CurrentModelNameText, Is.EqualTo("flash"));
+        Assert.That(resumed.CurrentModelLabel, Is.EqualTo("flash"));
+        Assert.That(resumed.ModelPickerLabel, Is.EqualTo("flash · 默认"));
         resumed.Draft = "fourth";
         await resumed.SendAsync();
         await resumed.Completion;

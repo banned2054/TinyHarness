@@ -76,6 +76,13 @@ public sealed class DesktopSessionFactory
     }
 
     /// <summary>
+    ///     <para>只读解析草稿的生效模型配置；不读取密钥、不创建客户端或会话。</para>
+    ///     <para>Resolves the effective draft model configuration without reading secrets or creating clients or sessions.</para>
+    /// </summary>
+    public Task<ConfigResolution> ResolveDefaultConfigAsync(string workspaceRoot, CancellationToken cancellationToken) =>
+        ConfigResolver.ResolveAsync(null, cancellationToken, workspaceRoot, _userConfigPath);
+
+    /// <summary>
     ///     <para>读取可信设置，建立新会话或严格恢复；失败释放所有已打开的资源，不发送模型请求。</para>
     ///     <para>Reads trusted settings and creates or strictly resumes a session; failures release resources without model calls.</para>
     /// </summary>

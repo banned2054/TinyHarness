@@ -42,7 +42,7 @@
                                 <TextBlock Text="模型" />
                                 <TextBlock Grid.Column="1"
                                            Classes="popup-value"
-                                           Text="{Binding CurrentModelNameText}" />
+                                           Text="{Binding CurrentModelLabel}" />
                                 <TextBlock Grid.Column="2" Classes="popup-chevron" Text="›" />
                             </Grid>
                         </Button>
