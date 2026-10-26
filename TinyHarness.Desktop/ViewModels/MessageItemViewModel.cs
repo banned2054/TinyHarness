@@ -1,7 +1,7 @@
 using Avalonia.Media;
+using LiveMarkdown.Avalonia;
 using TinyHarness.Desktop.Models;
 using TinyHarness.Desktop.Utils;
-using LiveMarkdown.Avalonia;
 
 namespace TinyHarness.Desktop.ViewModels;
 
@@ -10,20 +10,22 @@ public sealed class MessageItemViewModel : ConversationItemViewModel
     /// <summary>思考摘要的截断长度（对齐参考实现的收起形态：首行 + 省略号）。</summary>
     private const int ReasoningSummaryLimit = 80;
 
-    private string _content;
-    private bool   _isInterrupted;
-    private bool   _isReasoningExpanded;
-    private bool   _isReasoningProjected;
-    private bool   _isStreaming;
-    private string? _reasoning;
+    private readonly bool   _hasToolCalls;
+    private          string _content;
+    private          bool   _isInterrupted;
+    private          bool   _isReasoningExpanded;
+    private          bool   _isReasoningProjected;
+    private          bool   _isStreaming;
 
     private MessageItemViewModel? _processReasoningProjection;
+    private string?               _reasoning;
 
     public MessageItemViewModel(ConversationMessage message) : base(message.Seq)
     {
         Id                     = message.Id;
         Role                   = message.Role;
         ModelLabel             = message.ModelLabel ?? string.Empty;
+        _hasToolCalls          = message.HasToolCalls;
         _content               = message.Content;
         _reasoning             = message.Reasoning;
         _isInterrupted         = message.IsInterrupted;
@@ -32,10 +34,11 @@ public sealed class MessageItemViewModel : ConversationItemViewModel
         ToggleReasoningCommand = new RelayCommand(() => IsReasoningExpanded = !IsReasoningExpanded);
     }
 
-    private MessageItemViewModel(string id, string content) : base(-1)
+    private MessageItemViewModel(string id, string content, string? modelLabel) : base(-1)
     {
         Id                     = id;
         Role                   = MessageRole.Assistant;
+        ModelLabel             = modelLabel ?? string.Empty;
         _content               = content;
         _reasoning             = null;
         CreatedAtText          = string.Empty;
@@ -59,11 +62,26 @@ public sealed class MessageItemViewModel : ConversationItemViewModel
     public string ModelLabel { get; } = string.Empty;
     public string Id         { get; }
 
+    /// <summary>
+    ///     <para>本条目是否承载当前运行开头的唯一分割线。</para>
+    ///     <para>Whether this item carries the single divider at the start of its run.</para>
+    /// </summary>
+    public bool StartsRun { get; init; }
+
+    /// <summary>
+    ///     <para>仅运行首条消息在分割线上方显示模型标签，流式与历史共用。</para>
+    ///     <para>Shows a model label above the divider only on the run's first item, for both streaming and history.</para>
+    /// </summary>
+    public bool HasRunModelLabel => StartsRun && !string.IsNullOrWhiteSpace(ModelLabel);
+
     public MessageRole Role { get; }
 
     /// <summary>
     ///     <para>思考（reasoning）全文；不算回复正文，以独立可折叠行展示；流式期间逐段追加。</para>
-    ///     <para>Full reasoning text; shown in its own collapsible row rather than the body, and appended live while streaming.</para>
+    ///     <para>
+    ///         Full reasoning text; shown in its own collapsible row rather than the body, and appended live while
+    ///         streaming.
+    ///     </para>
     /// </summary>
     public string? Reasoning
     {
@@ -137,8 +155,18 @@ public sealed class MessageItemViewModel : ConversationItemViewModel
     public string Content
     {
         get => _content;
-        private set => SetProperty(ref _content, value);
+        private set
+        {
+            if (SetProperty(ref _content, value)) OnPropertyChanged(nameof(HasResponseMetadata));
+        }
     }
+
+    /// <summary>
+    ///     <para>仅在组外助手正文旁显示时间；思考和工具调用过程不显示。</para>
+    ///     <para>Shows time beside standalone assistant content, excluding reasoning and tool-call steps.</para>
+    /// </summary>
+    public bool HasResponseMetadata =>
+        IsAssistantMessage && !_hasToolCalls && !IsInProcessGroup && !string.IsNullOrWhiteSpace(Content);
 
     public string CreatedAtText { get; }
 
@@ -163,13 +191,6 @@ public sealed class MessageItemViewModel : ConversationItemViewModel
     /// <summary>条目已折叠进过程组：组内中间消息不再显示各自时间戳。</summary>
     public bool IsInProcessGroup { get; private set; }
 
-    public string RoleLabel => Role switch
-    {
-        MessageRole.User      => "你",
-        MessageRole.Assistant => "TinyHarness",
-        _                     => "系统"
-    };
-
     public bool IsUserMessage => Role == MessageRole.User;
 
     public bool IsAssistantMessage => Role == MessageRole.Assistant;
@@ -183,6 +204,7 @@ public sealed class MessageItemViewModel : ConversationItemViewModel
 
         IsInProcessGroup = true;
         OnPropertyChanged(nameof(IsInProcessGroup));
+        OnPropertyChanged(nameof(HasResponseMetadata));
     }
 
     /// <summary>消息移出过程组时恢复时间戳与正文消息中的思考行。</summary>
@@ -192,6 +214,7 @@ public sealed class MessageItemViewModel : ConversationItemViewModel
         {
             IsInProcessGroup = false;
             OnPropertyChanged(nameof(IsInProcessGroup));
+            OnPropertyChanged(nameof(HasResponseMetadata));
         }
 
         if (_processReasoningProjection is null) return;
@@ -200,11 +223,12 @@ public sealed class MessageItemViewModel : ConversationItemViewModel
         IsReasoningProjected        = false;
     }
 
-    /// <summary>流式输出的临时助手气泡；提交的消息事件到达后会被替换。</summary>
-    public static MessageItemViewModel CreateStreaming()
-    {
-        return new MessageItemViewModel($"streaming-{Guid.NewGuid():N}", string.Empty);
-    }
+    /// <summary>
+    ///     <para>创建临时流式条目并指定运行分割线和模型标签；正式消息到达后替换。</para>
+    ///     <para>Creates a temporary streaming item with its run divider and model label, replaced by the recorded message.</para>
+    /// </summary>
+    public static MessageItemViewModel CreateStreaming(bool startsRun = false, string? modelLabel = null) =>
+        new($"streaming-{Guid.NewGuid():N}", string.Empty, modelLabel) { StartsRun = startsRun };
 
     /// <summary>标记最终回复的思考已由过程组展示；只影响可见性，不丢弃协议数据。</summary>
     public void ProjectReasoning()
@@ -233,7 +257,10 @@ public sealed class MessageItemViewModel : ConversationItemViewModel
 
     /// <summary>
     ///     <para>向思考行追加一段流式推理文本；已投影进过程组的条目不再重复展示。</para>
-    ///     <para>Appends one live reasoning fragment to the thinking row; projected entries keep it hidden to avoid duplication.</para>
+    ///     <para>
+    ///         Appends one live reasoning fragment to the thinking row; projected entries keep it hidden to avoid
+    ///         duplication.
+    ///     </para>
     /// </summary>
     public void AppendReasoning(string text)
     {

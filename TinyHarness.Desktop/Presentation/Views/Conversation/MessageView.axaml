@@ -9,24 +9,26 @@
              mc:Ignorable="d"
              d:DesignHeight="120" d:DesignWidth="480">
     <!-- 消息气泡：主时间线与过程组内的中间消息复用（DataTemplate 实例化本视图）。
-         底部间距按消息类型自带：用户/系统气泡 16，助手消息由内部块管理（思考行零间距）。 -->
+         用户消息不带角色标签；时间移出气泡，悬停整条消息时淡入（user-message 样式）。
+         助手/系统消息的底部间距由内部块与各自样式管理（思考行零间距）。 -->
     <Grid>
-        <Border Classes="message-bubble user-bubble" IsVisible="{Binding IsUserMessage}">
-            <StackPanel Spacing="7">
-                <TextBlock Text="{Binding RoleLabel}" Classes="caption"
-                           Foreground="{DynamicResource OnAccentMutedBrush}" />
+        <StackPanel Classes="user-message" IsVisible="{Binding IsUserMessage}">
+            <Border Classes="message-bubble user-bubble">
                 <TextBlock Text="{Binding Content}" TextWrapping="Wrap" LineHeight="22"
                            Foreground="{DynamicResource OnAccentBrush}" />
-                <TextBlock Text="{Binding CreatedAtText}" Classes="caption"
-                           HorizontalAlignment="Right"
-                           Foreground="{DynamicResource OnAccentMutedBrush}" />
-            </StackPanel>
-        </Border>
+            </Border>
+            <TextBlock Text="{Binding CreatedAtText}" Classes="caption user-message-time" />
+        </StackPanel>
         <!-- 助手消息不用气泡包装：思考行与工具调用行同一互锁节奏（行内 4px 呼吸位，
              与 tool-card 机制相同），块间用 Margin 而非容器 Spacing——子块折叠不留幻影间距。
              纯思考消息（无正文）只出思考行，与相邻行零额外空隙。 -->
         <StackPanel IsVisible="{Binding IsAssistantMessage}">
-            <TextBlock Text="{Binding ModelLabel}" Classes="caption" Margin="0,2,0,6" />
+            <StackPanel Margin="0,12" IsVisible="{Binding StartsRun}">
+                <TextBlock Text="{Binding ModelLabel}" Classes="caption" Margin="0,0,0,8"
+                           IsVisible="{Binding HasRunModelLabel}" />
+                <Border Height="1" HorizontalAlignment="Stretch"
+                        Background="{DynamicResource AssistantReplyDividerBrush}" />
+            </StackPanel>
             <!-- 状态行仅在生成中/已中断时出现。 -->
             <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,0,0,4"
                         IsVisible="{Binding HasStatusHint}">
@@ -76,9 +78,9 @@
             <StackPanel Margin="0,10,0,16" Spacing="7"
                         IsVisible="{Binding Content, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
                 <md:MarkdownRenderer MarkdownBuilder="{Binding MarkdownBuilder}" />
-                <!-- 过程组内的中间消息不显示时间戳；用户消息与最终回复保持原样。 -->
+                <!-- 仅回复正文显示时间戳，思考与工具调用过程不显示。 -->
                 <TextBlock Text="{Binding CreatedAtText}" Classes="caption"
-                           IsVisible="{Binding !IsInProcessGroup}" />
+                           IsVisible="{Binding HasResponseMetadata}" />
             </StackPanel>
         </StackPanel>
         <Border Classes="message-bubble system-bubble"

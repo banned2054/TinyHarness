@@ -17,10 +17,27 @@
         <Setter Property="Padding" Value="14,11" />
         <Setter Property="CornerRadius" Value="14" />
     </Style>
+    <!-- 用户消息：右对齐容器（气泡 + 悬停时间行）。时间默认透明、悬停整条消息时淡入；
+         时间行常驻占位（高度约等于原气泡底距 16），悬停不引起时间线跳动。 -->
+    <Style Selector="StackPanel.user-message">
+        <Setter Property="HorizontalAlignment" Value="Right" />
+    </Style>
     <Style Selector="Border.user-bubble">
         <Setter Property="HorizontalAlignment" Value="Right" />
         <Setter Property="Background" Value="{DynamicResource UserBubbleBrush}" />
-        <Setter Property="Margin" Value="0,0,0,16" />
+        <Setter Property="Margin" Value="0,0,0,2" />
+    </Style>
+    <Style Selector="TextBlock.user-message-time">
+        <Setter Property="HorizontalAlignment" Value="Right" />
+        <Setter Property="Opacity" Value="0" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <DoubleTransition Property="Opacity" Duration="0:0:0.1" />
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="StackPanel.user-message:pointerover > TextBlock.user-message-time">
+        <Setter Property="Opacity" Value="1" />
     </Style>
     <!-- 助手回复不用气泡底色，直接融入聊天背景；思考行与工具行同节奏（无包装间距），
          正文块自带呼吸位，因此助手消息不再套 message-bubble。 -->

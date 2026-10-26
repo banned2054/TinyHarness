@@ -2,11 +2,11 @@ using NUnit.Framework;
 using System.Runtime.CompilerServices;
 using TinyHarness.Core.Models.ChatCompletions;
 using TinyHarness.Core.Models.Configuration;
-using TinyHarness.Core.Services.Session;
 using TinyHarness.Core.Services.ChatCompletions;
 using TinyHarness.Core.Services.ChatCompletions.Configuration;
 using TinyHarness.Core.Services.Persistence;
 using TinyHarness.Core.Services.Runtime;
+using TinyHarness.Core.Services.Session;
 using TinyHarness.Desktop.Runtime;
 using TinyHarness.Desktop.ViewModels;
 
@@ -87,10 +87,13 @@ public sealed class DesktopProjectionTests
         finish.SetResult();
         var requests = 0;
         var factory = new DesktopSessionFactory((_, _) => new Model(Signal(), finish,
-            "answer fixture-secret-key done", "thinking fixture-secret-key done", observed: _ =>
-            {
-                if (++requests > 1) throw new InvalidOperationException("failed fixture-secret-key");
-            }), new Credentials(), fixture.Config);
+                                                                    "answer fixture-secret-key done",
+                                                                    "thinking fixture-secret-key done", _ =>
+                                                                    {
+                                                                        if (++requests > 1)
+                                                                            throw new
+                                                                                InvalidOperationException("failed fixture-secret-key");
+                                                                    }), new Credentials(), fixture.Config);
         var events = new List<DesktopEvent>();
         await using var session =
             await factory.OpenAsync(new DesktopSessionRequest(fixture.First, ShowReasoning : true),
@@ -134,6 +137,73 @@ public sealed class DesktopProjectionTests
         Assert.That(saved.Amendments, Has.Count.EqualTo(1));
         Assert.That(saved.Amendments[0].Text, Is.EqualTo("additional constraint"));
         Assert.That(saved.Amendments[0].CanonicalMessageIndex, Is.Not.Null);
+    }
+
+    [TestCase(2, false)]
+    [TestCase(2, true)]
+    [TestCase(101, false)]
+    public async Task DividerAppearsOncePerRunAcrossToolsStreamingCancellationAndHistoryPages(
+        int toolRounds, bool cancel)
+    {
+        var fixture      = await Fixture.CreateAsync();
+        var finalEntered = Signal();
+        var finish       = Signal();
+        var factory = new DesktopSessionFactory((_, _) => new MultiStepModel(toolRounds, finalEntered, finish),
+                                                new Credentials(), fixture.Config);
+        await using var manager           = new DesktopSessionManager();
+        var             page              = Page(manager, factory, fixture.First);
+        var             streamDividers    = new List<bool>();
+        var             streamModelLabels = new List<bool>();
+        page.Items.CollectionChanged += (_, change) =>
+        {
+            if (change.NewItems is null) return;
+            foreach (var message in change.NewItems.OfType<MessageItemViewModel>().Where(message => message.IsStreaming))
+            {
+                streamDividers.Add(message.StartsRun);
+                streamModelLabels.Add(message.HasRunModelLabel);
+            }
+        };
+        page.Draft = "first run";
+        await page.SendAsync();
+        await finalEntered.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        Assert.That(page.Items.OfType<MessageItemViewModel>().Count(message => message.StartsRun), Is.EqualTo(1));
+        Assert.That(streamDividers, Is.EqualTo(Enumerable.Range(0, toolRounds + 1).Select(index => index == 0)));
+        Assert.That(streamModelLabels, Is.EqualTo(streamDividers));
+        if (cancel) page.CancelCommand.Execute(null);
+        else finish.SetResult();
+        await page.Completion.WaitAsync(TimeSpan.FromSeconds(30));
+        Assert.That(page.Status, Is.EqualTo(cancel ? "Cancelled" : "Completed"));
+        Assert.That(page.Items.OfType<MessageItemViewModel>().Count(message => message.StartsRun), Is.EqualTo(1));
+        Assert.That(page.Items.OfType<ToolActivityItemViewModel>().Count(), Is.EqualTo(toolRounds));
+        finish.TrySetResult();
+        page.Draft = "second run";
+        await page.SendAsync();
+        await page.Completion.WaitAsync(TimeSpan.FromSeconds(30));
+        Assert.That(page.Status, Is.EqualTo("Completed"));
+        Assert.That(page.Items.OfType<MessageItemViewModel>().Count(message => message.StartsRun), Is.EqualTo(2));
+        Assert.That(page.Items.OfType<MessageItemViewModel>().Count(message => message.HasRunModelLabel),
+                    Is.EqualTo(2));
+        Assert.That(page.Items.OfType<MessageItemViewModel>().Where(message => message.IsUserMessage)
+                        .Any(message => message.StartsRun), Is.False);
+        var browse = new SessionViewModel(manager, factory, fixture.First, page.Id, fixture.Store,
+                                          dispatch : action =>
+                                          {
+                                              action();
+                                              return ValueTask.CompletedTask;
+                                          });
+        var pages = 0;
+        do
+        {
+            await browse.LoadHistoryAsync();
+            pages++;
+        } while (browse.HasMoreHistory);
+
+        Assert.That(browse.Items.OfType<MessageItemViewModel>().Count(message => message.StartsRun), Is.EqualTo(2));
+        Assert.That(browse.Items.OfType<MessageItemViewModel>().Count(message => message.HasRunModelLabel),
+                    Is.EqualTo(2));
+        Assert.That(browse.Items.OfType<MessageItemViewModel>().Count(message => message.IsAssistantMessage),
+                    Is.EqualTo(2 * (toolRounds + 1) - (cancel ? 1 : 0)));
+        if (toolRounds > 100) Assert.That(pages, Is.GreaterThan(1));
     }
 
     [Test]
@@ -346,7 +416,9 @@ public sealed class DesktopProjectionTests
         }, CancellationToken.None);
         var factory =
             new DesktopSessionFactory((_, _) => throw new AssertionException("Draft must not create a client."),
-                                      new Credentials(_ => throw new AssertionException("Draft must not read credentials.")),
+                                      new Credentials(_ =>
+                                                          throw new
+                                                              AssertionException("Draft must not read credentials.")),
                                       fixture.Config);
         await using var manager = new DesktopSessionManager();
         var page = new SessionViewModel(manager, factory, fixture.First)
@@ -1047,6 +1119,37 @@ public sealed class DesktopProjectionTests
         public string? Read(string   targetName) => read is null ? "fixture-secret-key" : read(targetName);
         public void    Save(string   targetName, string secret) => throw new NotSupportedException();
         public bool    Delete(string targetName) => throw new NotSupportedException();
+    }
+
+    private sealed class MultiStepModel(
+        int toolRounds, TaskCompletionSource finalEntered, TaskCompletionSource finish) : IChatCompletionClient
+    {
+        private int _requests;
+
+        public async IAsyncEnumerable<ChatStreamEvent> CompleteAsync(ChatCompletionRequest request,
+                                                                     [EnumeratorCancellation]
+                                                                     CancellationToken cancellationToken)
+        {
+            var step = _requests++ % (toolRounds + 1);
+            yield return new ChatStreamEvent
+                { Kind = ChatStreamEventKind.ReasoningDelta, ReasoningDelta = $"thinking {step}" };
+            yield return new ChatStreamEvent { Kind = ChatStreamEventKind.ContentDelta, ContentDelta = $"step {step}" };
+            if (step < toolRounds)
+            {
+                yield return new ChatStreamEvent
+                {
+                    Kind = ChatStreamEventKind.ToolCallDelta, ToolCallIndex = 0, ToolCallId = $"call-{_requests}",
+                    ToolCallFunctionName = "work_items", ToolCallArgumentsDelta = "{\"action\":\"list\"}"
+                };
+                yield return new ChatStreamEvent { Kind = ChatStreamEventKind.End, FinishReason = "tool_calls" };
+            }
+            else
+            {
+                finalEntered.TrySetResult();
+                await finish.Task.WaitAsync(cancellationToken);
+                yield return new ChatStreamEvent { Kind = ChatStreamEventKind.End, FinishReason = "stop" };
+            }
+        }
     }
 
     private sealed class Model(

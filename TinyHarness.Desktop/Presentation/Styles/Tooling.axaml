@@ -19,12 +19,12 @@
         <Setter Property="CornerRadius" Value="10" />
         <Setter Property="Padding" Value="12,10" />
     </Style>
-    <!-- 裁决按钮：允许为气泡强调色实底，拒绝为描边幽灵按钮。 -->
+    <!-- 裁决按钮：允许为强调色实底，拒绝为描边幽灵按钮。 -->
     <Style Selector="Button.approval-allow">
         <Setter Property="Padding" Value="16,6" />
         <Setter Property="CornerRadius" Value="8" />
         <Setter Property="BorderThickness" Value="0" />
-        <Setter Property="Background" Value="{DynamicResource UserBubbleBrush}" />
+        <Setter Property="Background" Value="{DynamicResource AccentFillBrush}" />
         <Setter Property="Foreground" Value="{DynamicResource OnAccentBrush}" />
         <Setter Property="FontSize" Value="13" />
     </Style>
@@ -32,7 +32,7 @@
         <Setter Property="Background" Value="{DynamicResource ComposerSendHoverBrush}" />
     </Style>
     <Style Selector="Button.approval-allow:pressed /template/ ContentPresenter#PART_ContentPresenter">
-        <Setter Property="Background" Value="{DynamicResource UserBubbleBrush}" />
+        <Setter Property="Background" Value="{DynamicResource AccentFillBrush}" />
     </Style>
     <Style Selector="Button.approval-reject">
         <Setter Property="Padding" Value="16,6" />

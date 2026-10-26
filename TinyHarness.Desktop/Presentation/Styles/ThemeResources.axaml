@@ -13,6 +13,8 @@
     <SolidColorBrush x:Key="CodeBlockBackgroundBrush" Color="#1E1E1E" />
     <SolidColorBrush x:Key="CodeBlockForegroundBrush" Color="#D4D4D4" />
     <SolidColorBrush x:Key="CodeBlockMutedBrush" Color="#9DA5B4" />
+    <!-- 助手回复的横向分割线。 -->
+    <SolidColorBrush x:Key="AssistantReplyDividerBrush" Color="#2D2D2D" />
     <!-- 任务面板状态圆点：官方 StateDot 的 static 两档（成功绿与待处理灰不随主题）。 -->
     <SolidColorBrush x:Key="StateSuccessBrush" Color="#22C55E" />
     <SolidColorBrush x:Key="StateIdleBrush" Color="#D4D4D4" />
@@ -83,11 +85,14 @@
             <SolidColorBrush x:Key="PopupDividerBrush" Color="#414244" />
             <!-- 应用内居中设置面板：弹层语义的独立表面，略深于弹层菜单的 #353638。 -->
             <SolidColorBrush x:Key="SettingsPanelBackgroundBrush" Color="#2C2C2E" />
-            <!-- 消息气泡 -->
-            <SolidColorBrush x:Key="UserBubbleBrush" Color="#3B5CCC" />
+            <!-- 消息气泡：中性灰表面（与 #262626 改动卡同系、微亮一档）；
+                 OnAccent 白字在灰底上保持可用。 -->
+            <SolidColorBrush x:Key="UserBubbleBrush" Color="#272727" />
             <SolidColorBrush x:Key="OnAccentBrush" Color="#FFFFFF" />
             <SolidColorBrush x:Key="OnAccentMutedBrush" Color="#DCE5FF" />
-            <!-- 悬浮输入面板发送按钮悬停：气泡强调色提亮一档。 -->
+            <!-- 强调色实底：审批允许、设置保存等主按钮共用（原气泡蓝拆出，与气泡解耦）。 -->
+            <SolidColorBrush x:Key="AccentFillBrush" Color="#3B5CCC" />
+            <!-- 悬浮输入面板发送按钮悬停：强调色提亮一档。 -->
             <SolidColorBrush x:Key="ComposerSendHoverBrush" Color="#78A8FF" />
             <!-- 行内代码（markdown `code`）chip 底色：会话底色上的中性灰。 -->
             <SolidColorBrush x:Key="InlineCodeBackgroundBrush" Color="#323232" />
@@ -146,10 +151,13 @@
             <!-- 会话列表：nav-item-hover / nav-item-active-accent -->
             <SolidColorBrush x:Key="SessionHoverBrush" Color="#F1F3F5" />
             <SolidColorBrush x:Key="SessionSelectedBrush" Color="#E4EDFD" />
-            <!-- 消息气泡：button-info-fill(deepseek-500) -->
+            <!-- 消息气泡：button-info-fill(deepseek-500)。当前应用固定 Dark 主题，
+                 浅色仍保留蓝底；气泡中性灰方案如需覆盖浅色，需另行配 OnAccent 文字色。 -->
             <SolidColorBrush x:Key="UserBubbleBrush" Color="#4176E6" />
             <SolidColorBrush x:Key="OnAccentBrush" Color="#FFFFFF" />
             <SolidColorBrush x:Key="OnAccentMutedBrush" Color="#E7EEFF" />
+            <!-- 强调色实底：与 Dark 的 AccentFillBrush 同语义（浅色沿用 deepseek-500）。 -->
+            <SolidColorBrush x:Key="AccentFillBrush" Color="#4176E6" />
             <!-- 悬浮输入面板发送按钮悬停：气泡强调色加深一档。 -->
             <SolidColorBrush x:Key="ComposerSendHoverBrush" Color="#3563D9" />
             <!-- 行内代码 chip 底色的浅色对应。

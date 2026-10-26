@@ -34,6 +34,7 @@ public sealed partial class SessionViewModel : ObservableObject
     private          SessionHistoryCursor?                         _historyCursor;
     private          Task?                                         _historyLoad;
     private          bool                                          _historyLoaded;
+    private          string?                                       _lastAssistantRunId;
     private          ModelChoice?                                  _model;
     private          string                                        _notice = string.Empty;
     private          bool                                          _opening;
@@ -329,10 +330,10 @@ public sealed partial class SessionViewModel : ObservableObject
         switch (update.Kind)
         {
             case "text" when !string.IsNullOrEmpty(update.Text) :
-                EnsureStream().AppendText(update.Text);
+                EnsureStream(update.RunId).AppendText(update.Text);
                 break;
             case "reasoning" when !string.IsNullOrEmpty(update.Text) :
-                EnsureStream().AppendReasoning(update.Text);
+                EnsureStream(update.RunId).AppendReasoning(update.Text);
                 break;
             case "state" when update.RunId is { } runId :
                 if (_submittedDraftRevision is { } submitted && _draftRevision == submitted) Draft = string.Empty;
@@ -351,12 +352,19 @@ public sealed partial class SessionViewModel : ObservableObject
         }
     }
 
-    /// <summary>取当前流式气泡；正文与思考增量到达时惰性创建，条目落位或收束后不再复活。</summary>
-    private MessageItemViewModel EnsureStream()
+    /// <summary>
+    ///     <para>惰性创建流式条目；分割线按运行判断，等正式消息替换后才推进运行边界。</para>
+    ///     <para>
+    ///         Lazily creates a stream item; its divider follows the run, whose boundary advances only on recorded
+    ///         replacement.
+    ///     </para>
+    /// </summary>
+    private MessageItemViewModel EnsureStream(string? runId)
     {
         if (_stream is null)
         {
-            _stream = MessageItemViewModel.CreateStreaming();
+            _stream = MessageItemViewModel.CreateStreaming(runId is null || runId != _lastAssistantRunId,
+                                                           runId is null ? null : _runLabels.GetValueOrDefault(runId));
             Items.Add(_stream);
         }
 
@@ -376,12 +384,18 @@ public sealed partial class SessionViewModel : ObservableObject
                 Title = firstLine[..Math.Min(firstLine.Length, 48)];
             }
 
+            var assistantRunId = item.RunId ?? item.TurnId;
             Items.Add(new MessageItemViewModel(new ConversationMessage(item.Sequence, item.Id, role,
                                                                        item.Text ?? string.Empty, DateTimeOffset.Now,
+                                                                       HasToolCalls : item.Kind == SessionHistoryKind.Process,
                                                                        Reasoning : item.Reasoning,
                                                                        ModelLabel : item.RunId is { } runId
                                                                            ? _runLabels.GetValueOrDefault(runId)
-                                                                           : null)));
+                                                                           : null))
+            {
+                StartsRun = role == MessageRole.Assistant && assistantRunId != _lastAssistantRunId
+            });
+            if (role == MessageRole.Assistant) _lastAssistantRunId = assistantRunId;
         }
         else if (item.Kind == SessionHistoryKind.Tool)
         {

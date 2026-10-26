@@ -9,11 +9,11 @@
              d:DesignHeight="80" d:DesignWidth="480">
     <!-- 工具调用行式条目：顶层（运行中的轮次）与过程组展开时复用（DataTemplate 实例化本视图）。
          对齐官方 DisclosureRow/ToolRow：类型图标 + 口语化标题 + 2×2 分隔点 + 参数摘要 +
-         状态与时间；整行可点击展开，悬停时图标淡出、折叠 chevron 淡入（见 reason-row 样式）。 -->
+         状态；整行可点击展开，悬停时图标淡出、折叠 chevron 淡入（见 reason-row 样式）。 -->
     <StackPanel Spacing="4">
         <Button Classes="reason-row" Classes.expanded="{Binding IsExpanded}"
                 Command="{Binding ToggleDetailsCommand}">
-            <Grid ColumnDefinitions="Auto,Auto,Auto,*,Auto,Auto" ColumnSpacing="6">
+            <Grid ColumnDefinitions="Auto,Auto,Auto,*,Auto" ColumnSpacing="6">
                 <Panel Grid.Column="0" Classes="row-leading" Width="16" Height="16"
                        VerticalAlignment="Center">
                     <Path Classes="row-icon" Data="{Binding IconStroke}"
@@ -34,9 +34,6 @@
                            Classes.error="{Binding IsFailed}" />
                 <TextBlock Grid.Column="4" Text="{Binding StatusText}" Classes="caption"
                            VerticalAlignment="Center"
-                           IsVisible="{Binding !IsInProcessGroup}" />
-                <TextBlock Grid.Column="5" Text="{Binding CreatedAtText}"
-                           Classes="caption" VerticalAlignment="Center"
                            IsVisible="{Binding !IsInProcessGroup}" />
             </Grid>
         </Button>
