@@ -21,13 +21,16 @@
                     <conversation:PermissionSelectorView Grid.Column="1" VerticalAlignment="Center" />
                     <conversation:ModelPickerView Grid.Column="3" VerticalAlignment="Center" />
                     <Panel Grid.Column="4" Width="34" Height="34">
-                        <Button Classes="composer-stop" Command="{Binding CancelCommand}" IsVisible="{Binding IsRunning}"
+                        <Button Classes="composer-stop" Command="{Binding CancelCommand}"
+                                IsVisible="{Binding IsRunning}"
                                 ToolTip.Tip="停止生成" AutomationProperties.Name="停止生成">
-                            <Viewbox Width="15" Height="15">
-                                <Path Data="{StaticResource Icon.StopFill}" Fill="{Binding $parent[Button].Foreground}" />
+                            <Viewbox Width="20" Height="20">
+                                <Path Width="24" Height="24" Data="{StaticResource Icon.StopFill}"
+                                      Fill="{Binding $parent[Button].Foreground}" />
                             </Viewbox>
                         </Button>
-                        <Button Classes="composer-send" Command="{Binding SendCommand}" IsVisible="{Binding !IsRunning}"
+                        <Button Classes="composer-send" Command="{Binding SendCommand}"
+                                IsVisible="{Binding !IsRunning}"
                                 ToolTip.Tip="发送" AutomationProperties.Name="发送">
                             <Viewbox Width="16" Height="16">
                                 <Path Width="24" Height="24" Data="{StaticResource Icon.ArrowUp}"
@@ -39,13 +42,9 @@
             </StackPanel>
         </Border>
         <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
-            <TextBlock Text="{Binding Status}" Classes="composer-stat" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
-            <TextBlock Grid.Column="1" Text="Enter 发送 · Shift+Enter 换行" Classes="composer-stat" />
+            <TextBlock Text="{Binding Status}" Classes="composer-stat" VerticalAlignment="Center"
+                       TextTrimming="CharacterEllipsis" />
+            <TextBlock Grid.Column="1" Text="{Binding ComposerSendHint}" Classes="composer-stat" />
         </Grid>
-        <StackPanel Orientation="Horizontal" Spacing="8" IsVisible="{Binding IsRunning}">
-            <Button Classes="tool-toggle" Content="暂停" Command="{Binding PauseCommand}" />
-            <Button Classes="tool-toggle" Content="继续" Command="{Binding ResumeCommand}" />
-            <Button Classes="tool-toggle" Content="发送补充" Command="{Binding SendCommand}" />
-        </StackPanel>
     </StackPanel>
 </UserControl>

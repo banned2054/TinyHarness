@@ -1,7 +1,7 @@
 using Avalonia.Threading;
+using System.Collections.ObjectModel;
 using TinyHarness.Core.Models.ChatCompletions;
 using TinyHarness.Core.Models.Configuration;
-using System.Collections.ObjectModel;
 using TinyHarness.Core.Models.Permissions;
 using TinyHarness.Core.Models.Persistence;
 using TinyHarness.Core.Models.Session;
@@ -17,39 +17,40 @@ namespace TinyHarness.Desktop.ViewModels;
 /// </summary>
 public sealed partial class SessionViewModel : ObservableObject
 {
-    private readonly DesktopSessionManager _manager;
+    private readonly Func<Action, ValueTask>                       _dispatch;
     private readonly DesktopSessionFactory                         _factory;
-    private readonly Func<Action, ValueTask> _dispatch;
     private readonly HashSet<string>                               _historyIds = new(StringComparer.Ordinal);
+    private readonly DesktopSessionManager                         _manager;
+    private readonly Dictionary<string, string>                    _runLabels = new(StringComparer.Ordinal);
     private readonly Dictionary<string, ToolActivityItemViewModel> _tools     = new(StringComparer.Ordinal);
-    private DesktopSession?                              _runtime;
-    private string _draft = string.Empty;
-    private string _status = "就绪";
-    private string _notice = string.Empty;
-    private string _workspaceRoot;
-    private bool _running;
-    private bool _opening;
-    private bool _allowChanges;
-    private DesktopApproval? _approval;
-    private SessionHistoryCursor? _historyCursor;
-    private bool _historyLoaded;
-    private MessageItemViewModel? _stream;
-    private long _draftRevision;
-    private string _title;
-    private ModelChoice? _model;
-    private Task? _historyLoad;
-    private Task? _completion;
-    private bool _changing;
-    private ModelReasoningEffort? _effort;
-    private SessionModelSelection? _savedSelection;
-    private SessionModelIdentity? _historicalIdentity;
-    private readonly Dictionary<string, string> _runLabels = new(StringComparer.Ordinal);
-    private CancellationTokenSource? _openingCancellation;
-    private long? _submittedDraftRevision;
+    private          bool                                          _allowChanges;
+    private          DesktopApproval?                              _approval;
+    private          bool                                          _changing;
+    private          Task?                                         _completion;
+    private          string                                        _draft = string.Empty;
+    private          long                                          _draftRevision;
+    private          ModelReasoningEffort?                         _effort;
+    private          SessionModelIdentity?                         _historicalIdentity;
+    private          SessionHistoryCursor?                         _historyCursor;
+    private          Task?                                         _historyLoad;
+    private          bool                                          _historyLoaded;
+    private          ModelChoice?                                  _model;
+    private          string                                        _notice = string.Empty;
+    private          bool                                          _opening;
+    private          CancellationTokenSource?                      _openingCancellation;
+    private          bool                                          _running;
+    private          DesktopSession?                               _runtime;
+    private          SessionModelSelection?                        _savedSelection;
+    private          string                                        _status = "就绪";
+    private          MessageItemViewModel?                         _stream;
+    private          long?                                         _submittedDraftRevision;
+    private          string                                        _title;
+    private          string                                        _workspaceRoot;
 
-    public SessionViewModel(DesktopSessionManager manager, DesktopSessionFactory factory, string workspaceRoot,
-                             string? id = null, string? storeDirectory = null, string? title = null,
-                             Func<Action, ValueTask>? dispatch = null)
+    public SessionViewModel(
+        DesktopSessionManager manager, DesktopSessionFactory factory, string workspaceRoot,
+        string? id = null, string? storeDirectory = null, string? title = null,
+        Func<Action, ValueTask>? dispatch = null)
     {
         _manager           = manager;
         _factory           = factory;
@@ -179,9 +180,13 @@ public sealed partial class SessionViewModel : ObservableObject
         get => _running;
         private set
         {
-            if (SetProperty(ref _running, value)) OnPropertyChanged(nameof(CanChangeModel));
+            if (!SetProperty(ref _running, value)) return;
+            OnPropertyChanged(nameof(CanChangeModel));
+            OnPropertyChanged(nameof(ComposerSendHint));
         }
     }
+
+    public string ComposerSendHint => IsRunning ? "Enter 发送补充 · Shift+Enter 换行" : "Enter 发送 · Shift+Enter 换行";
 
     public bool HasMoreHistory    => _historyCursor is not null;
     public bool InspectionPending => _runtime?.Host.InspectionPending == true;
@@ -230,7 +235,10 @@ public sealed partial class SessionViewModel : ObservableObject
 
     /// <summary>
     ///     <para>捕获本页草稿和版本后发送；运行中输入走 Core 补充入口，完成只消费原始草稿。</para>
-    ///     <para>Captures this page's draft and revision before sending; active input uses Core amendments and consumes only that draft.</para>
+    ///     <para>
+    ///         Captures this page's draft and revision before sending; active input uses Core amendments and consumes only
+    ///         that draft.
+    ///     </para>
     /// </summary>
     public async Task SendAsync()
     {
@@ -393,8 +401,12 @@ public sealed partial class SessionViewModel : ObservableObject
                                             item.NotStartedReason ??
                                             item.PreparationError ?? (succeeded ? null : item.State),
                                             DateTimeOffset.Now);
-            if (_tools.TryGetValue(key, out var existing)) existing.Settle(activity);
-            else {
+            if (_tools.TryGetValue(key, out var existing))
+            {
+                existing.Settle(activity);
+            }
+            else
+            {
                 var tool = new ToolActivityItemViewModel(activity);
                 _tools.Add(key, tool);
                 Items.Add(tool);
