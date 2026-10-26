@@ -215,7 +215,7 @@ MCP worker 使用用户配置，将获准读取的工作区内容发送给模型
 
 | 位置 | 内容 |
 | --- | --- |
-| 顶层活动计划 | [供应商、模型管理与会话内选择](session-model-switching-design.md)、[桌面 GUI 迁移](desktop-migration-plan.md)；具体进度由各计划维护 |
+| 顶层活动计划 | [供应商、模型管理与会话内选择](session-model-switching-design.md)、[桌面 GUI 迁移](desktop-migration-plan.md)、[项目实体、会话归属与多目录扩展](project-session-plan.md)；具体设计、实施与验证状态由各计划维护 |
 | [Archive](Archive/README.md) | 已完成的设计、实现边界、历史讨论、接力与验收；归档不取消仍有效的技术约束 |
 | Guides | [打包与发布](Guides/releasing.md)、[许可证与第三方声明维护](Guides/third-party-notices.md)等持续使用的维护说明 |
 | [Templates](Templates/README.md) | 可复制的跨项目代码风格母版 |
