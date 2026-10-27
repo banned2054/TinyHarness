@@ -1,8 +1,8 @@
 # 项目实体、会话归属与多目录扩展
 
-更新日期：2026-10-26。
+更新日期：2026-10-27。
 
-**状态：阶段一（项目核心）已实现，阶段二至四待实施。** 本文记录独立 Project、现有会话按目录归属、Desktop／CLI 接入和后续多目录执行的方案；已完成部分与验证见[实施状态](#15-实施状态)。尚未接入任何运行入口：现有会话未绑定项目，实际会话日志未追加归属记录，正式会话的运行行为没有变化。
+**状态：阶段一（项目核心）与阶段二（Core 会话归属）已实现，阶段三至四待实施。** 本文记录独立 Project、现有会话按目录归属、Desktop／CLI 接入和后续多目录执行的方案；已完成部分与验证见[实施状态](#15-实施状态)。Core 已具备初始绑定、严格归属恢复和显式旧日志初始化能力，但尚未接入 CLI／Desktop 生产入口，也未对真实用户会话追加归属；正式会话的运行行为没有变化。
 
 入口见 [PLAN.md](../PLAN.md)。既有契约见[会话持久化](Archive/session-persistence-design.md)、[项目规则](Archive/project-instructions-design.md)、[桌面 GUI 迁移](desktop-migration-plan.md)和[Windows 沙箱管理](Archive/windows-sandbox-management.md)。操作授权以用户当前要求和 [AGENTS.md](../AGENTS.md) 为准，保存计划不构成代码实施、实际数据接入、Git 或发布授权。
 
@@ -226,7 +226,9 @@ payload:
 - 不确定追加后遵守 poison 与严格读取规则，检查可靠事实后决定是否重试。
 - 不解析凭据、不创建模型客户端、不发模型请求、不执行旧工具，不恢复批准、不清除 NeedsInspection。
 - 可临时按目录展示待处理组，但必须区别推断与已持久化归属。
-- 支持分批与取消；全局完成标记不替代逐会话事实检查，之后发现未绑定日志仍可继续处理。
+- 支持分批与取消；`maxSessions` 限制本次实际检查的日志数量，`afterSessionId`／`NextCursor` 与 `HasMore` 支持续扫。游标只跨过具有处理结果的连续前缀，取消不得跳过未完成项；Pending／Failed 可以继续后续批次，末批结束后从头重试这些条目。预取消或枚举中取消未检查完目录时保留原游标并以 `HasMore=true` 表示尚未确认完成。
+- 文件名仍全量枚举、排序，只保留轻量 ID 元数据；正文逐日志读取并释放投影，不累计整个 store 的会话内容。分批不代表恒定枚举成本，单日志继续受既有 256 MiB／批次 8 MiB 预算限制。枚举逐项响应取消。
+- 取消令牌从调用边界传入追加；写中取消沿用 writer 的 poison／不确定写入契约，保留已完成事实并停止，当轮不重试。全局完成标记不替代逐会话事实检查，之后发现未绑定日志仍可继续处理。
 
 追加归属会增加提交序号和 `UpdatedUtc`，但不是新对话。增加派生 `LastActivityUtc`，排除仅项目归属维护的批次；保留原“最近提交时间”语义，不让初始化将全部旧会话排到最前面。
 
@@ -317,12 +319,12 @@ SessionWorkspace
 
 ## 12. 实施顺序
 
-阶段一已完成，阶段二至四待实施；不要求碎片提交。
+阶段一与阶段二已完成，阶段三至四待实施；不要求碎片提交。
 
 | 阶段 | 工作 | 完成标准 |
 | --- | --- | --- |
 | 一：项目核心（已完成） | 模型、目录册、路径匹配、创建复用、改名、保护 | 重启一致、并发不重复、过期编辑不覆盖、损坏不被当空配置 |
-| 二：会话归属 | 日志记录、严格读取、投影、初始绑定、旧日志初始化 | 归属可恢复、接入幂等、历史和阻断保真 |
+| 二：会话归属（已完成） | 日志记录、严格读取、投影、初始绑定、旧日志初始化 | 归属可恢复、接入幂等、历史和阻断保真；生产入口尚未接线 |
 | 三：生产入口 | CLI／Desktop 接入，分组、草稿、改名、状态 | 两端一致、生产新会话都有归属、项目操作不干扰活动会话 |
 | 四：综合验收 | 故障测试、真实 GUI、NativeAOT、离线产物 smoke、文档 | 数据、交互、并发与产物分别有证据 |
 
@@ -330,7 +332,7 @@ SessionWorkspace
 
 ## 13. 验收矩阵
 
-以下均为待执行要求，当前没有本功能测试通过结论。
+以下为完整功能的验收要求；阶段一与二的已执行结果见 §15，涉及生产入口、真实 GUI 与综合故障的项目仍待后续阶段执行。
 
 | 场景 | 必须观察的结果 |
 | --- | --- |
@@ -385,3 +387,15 @@ SessionWorkspace
 - 保留既有测试并修正通用测试的 Windows 路径假设；新增旧读句柄保留快照、替换冲突取消、只读目标失败保留原字节、缺失时等待保存者四项测试，取消断言接受 `OperationCanceledException` 的派生类型。
 - 已验证（Windows x64）：目录册专项共 37 项，35 通过、2 项因缺少符号链接创建权限跳过；子代理将专项测试重复运行 10 轮、并发读写测试另跑 10 轮，均无失败；主代理复核后重跑专项结果相同。Core／CLI 全部离线回归共 1,276 项，1,272 通过、4 项环境相关跳过、0 失败。`dotnet publish TinyHarness.Cli/TinyHarness.Cli.csproj -c Release -r win-x64 --self-contained true -o artifacts/project-store-managed-nativeaot-20261027` 成功，无 compiler／trimming／AOT 警告；从仓库外运行该原生产物的 `smoke --config <仓库绝对路径>/tinyharness.json` 成功。产物 smoke 验证既有离线入口，不代表尚未接入入口的目录册流程已经在原生产物中执行。
 - 未验证：Linux／macOS、真实跨进程并发、断电与设备故障。未修改凭据、进程或 Windows 沙箱现有的原生调用；本次无新增依赖、schema 或公开方法签名变化。
+
+2026-10-27 完成阶段二（Core 会话归属）：
+
+- `SessionLogBatch.cs` 增加 `SessionLogProjectBinding`，payload schema 为 `tinyharness.project-binding/1`；严格校验字段集合、类型、重复属性、schema 与项目 ID。`SessionLogScanner` 跨批次拒绝重复／冲突绑定，分页与全量读取共用校验。
+- `SessionStoreWriter` 在初始身份批次内提交归属，旧日志通过通用追加链路绑定一次；成功落盘后才更新归属缓存，校验失败不推进状态，写入故障沿用 poison。后续会话提交不得转移或丢弃已绑定归属。新增内部强类型打开结果，仅在锁打开阶段将 Windows 已确定共享／锁冲突标为待处理；预期存储／格式错误返回失败，取消与其他意外异常传播，非成功退出均释放句柄。
+- `ChatSession` 增加只读 `ProjectId`、项目感知构造重载与一次性 `BindProject`；原四参数 CLR 构造签名保留。`PersistedSession` 与 `SessionResume` 保留归属，`LastActivityUtc` 排除纯绑定维护批次，`UpdatedUtc` 原语义不变。新增记录使用现有 source-generated JSON 元数据，不增加依赖。
+- 新增 `SessionProjectInitializer`：只处理当前 store 的统一日志；按原执行根精确创建／复用项目，先可靠保存项目再锁内重读并追加归属。已绑定日志不依赖目录册可用性、不重建换绑；目录缺失不阻止归属；非法根、损坏／截断／超限日志与目录册预期故障逐项报告且不修复。占用只返回 Pending，不抢占原宿主。API 支持正文检查数量上限和续扫游标，取消后游标不跨过未完成项；文件名枚举／排序仍为全量轻量操作。调用方必须先解析并验证受保护 store，生产接入留至阶段三。
+- 新增 `SessionProjectBindingTests` 20 项、`SessionProjectInitializerTests` 24 项，专项 44/44 通过。覆盖初始／旧日志绑定、重复和非法载荷、写入故障与取消、幂等字节、原前缀／历史／opaque／规则／非空压缩检查点／检查阻断保真、活动时间、旧构造兼容、Windows 等价路径分组、分批／占用续扫、取消后按返回游标恢复（含交错目录分组）、非法绝对／相对路径隔离、目录册丢失／损坏／IO、锁释放及并发测试注入隔离。
+- 已验证（Windows x64、SDK 10.0.402）：`dotnet test TinyHarness.Tests/TinyHarness.Tests.csproj --no-restore` 共 1,323 项，1,319 通过、4 项因符号链接环境能力跳过、0 失败；`dotnet test TinyHarness.Desktop.Tests/TinyHarness.Desktop.Tests.csproj --no-restore` 56/56 通过。最终 TRX 位于 `artifacts/session-binding-validation/`。
+- `dotnet publish TinyHarness.Cli/TinyHarness.Cli.csproj -c Release -r win-x64 --self-contained true -o artifacts/session-binding-nativeaot-20261027` 成功，无 compiler／trimming／AOT 警告；从仓库外运行该产物 `smoke --config C:/Code/.Net/TinyHarness/tinyharness.json` 成功（离线 17 steps、16 tool executions）。此 smoke 验证既有产物路径，不代表未接入口的归属初始化服务已经在原生产物中执行。
+- 兼容边界：新 reader 支持未绑定统一日志；写入 `project-binding` 后，旧程序按未知必需记录拒绝读取。保留字节前缀不等于旧程序兼容。
+- 未实施／未验证：CLI／Desktop 生产接线、项目分组 UI、真实用户日志初始化、真实 GUI、真实模型、Linux／macOS、跨进程并发、断电／设备故障；阶段三与四仍待实施。

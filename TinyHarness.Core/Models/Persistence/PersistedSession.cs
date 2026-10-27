@@ -32,6 +32,12 @@ public sealed record PersistedSession
 
     public string WorkspaceRoot { get; init; } = string.Empty;
 
+    /// <summary>
+    ///     <para>日志 project-binding 记录的项目归属；未绑定的旧日志为 null，不支持转移。</para>
+    ///     <para>Project ownership from the log's project-binding record; null for unbound legacy logs and never transferred.</para>
+    /// </summary>
+    public string? ProjectId { get; init; }
+
     public SessionModelIdentity? Model { get; init; }
 
     public IReadOnlyList<SessionModelSelection> ModelSelections { get; init; } = [];
@@ -44,6 +50,17 @@ public sealed record PersistedSession
     ///     <para>When the log was last successfully committed.</para>
     /// </summary>
     public DateTimeOffset UpdatedUtc { get; init; }
+
+    /// <summary>
+    ///     <para>
+    ///         最近一次非归属维护批次的提交时间；纯 project-binding 追加不推进本值，归属初始化不伪造新对话活动。
+    ///     </para>
+    ///     <para>
+    ///         When the last non-ownership-maintenance batch committed; a pure project-binding append never
+    ///         advances it, so ownership initialization fabricates no new conversation activity.
+    ///     </para>
+    /// </summary>
+    public DateTimeOffset LastActivityUtc { get; init; }
 
     /// <summary>
     ///     <para>日志最近一次成功提交的批次序号；检查点也提交，因此不等同回合数。</para>

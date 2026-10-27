@@ -1,3 +1,5 @@
+using TinyHarness.Core.Models.Persistence;
+
 namespace TinyHarness.Core.Models.Session;
 
 /// <summary>
@@ -23,16 +25,35 @@ public sealed partial class ChatSession
     private readonly List<SessionTurn>           _turns           = [];
     private readonly List<SessionModelSelection> _modelSelections = [];
 
+    /// <summary>
+    ///     <para>创建固定执行目录的未绑定会话，不读写持久化数据。</para>
+    ///     <para>Creates an unbound session with a fixed execution directory without accessing persistence.</para>
+    /// </summary>
     public ChatSession(
         string id, string workspaceRoot, SessionModelIdentity model, DateTimeOffset? createdUtc = null)
+        : this(id, workspaceRoot, model, createdUtc, null)
+    {
+    }
+
+    /// <summary>
+    ///     <para>创建带可选初始项目归属的会话；持久化由调用方提交，归属不授予执行权限。</para>
+    ///     <para>Creates a session with optional initial project ownership; the caller persists it, and ownership grants no execution permissions.</para>
+    /// </summary>
+    public ChatSession(
+        string id, string workspaceRoot, SessionModelIdentity model, DateTimeOffset? createdUtc,
+        string? projectId)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(id);
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
         ArgumentNullException.ThrowIfNull(model);
+        if (projectId is not null && !SessionLogProjectBinding.IsValidProjectId(projectId))
+            throw new ArgumentException("A project id must contain exactly 32 lowercase hexadecimal characters.",
+                                        nameof(projectId));
         Id            = id;
         WorkspaceRoot = Path.GetFullPath(workspaceRoot);
         InitialModel  = model;
         CreatedUtc    = createdUtc ?? DateTimeOffset.UtcNow;
+        ProjectId     = projectId;
     }
 
     public string Id { get; }
@@ -52,6 +73,49 @@ public sealed partial class ChatSession
     public SessionModelIdentity                 InitialModel    { get; }
     public SessionModelSelection?               ModelSelection  => _modelSelections.LastOrDefault();
     public IReadOnlyList<SessionModelSelection> ModelSelections => _modelSelections.AsReadOnly();
+
+    /// <summary>
+    ///     <para>
+    ///         会话的项目归属；旧会话未绑定时为 null，绑定后只能保持或幂等重申同值，不支持转移。
+    ///     </para>
+    ///     <para>
+    ///         The session's project ownership; null for unbound legacy sessions, and once bound it can only
+    ///         stay or idempotently restate the same value — ownership is never transferred.
+    ///     </para>
+    /// </summary>
+    public string? ProjectId { get; private set; }
+
+    /// <summary>
+    ///     <para>
+    ///         绑定项目归属：同值重复绑定幂等，绑定到不同项目被拒绝。仅在归属记录可靠提交到会话日志后调用，
+    ///         使内存会话与日志镜像一致；未提交归属就绑定会使后续提交被 writer 的一致性检查拒绝。
+    ///     </para>
+    ///     <para>
+    ///         Binds project ownership: rebinding the same value is idempotent while binding to a different
+    ///         project is rejected. Call only after the ownership record is durably committed to the session log
+    ///         so the in-memory session mirrors the journal; binding before that commit makes later commits fail
+    ///         the writer's consistency check.
+    ///     </para>
+    /// </summary>
+    /// <exception cref="ArgumentException">
+    ///     <para>项目 ID 形态非法。</para>
+    ///     <para>The project id is malformed.</para>
+    /// </exception>
+    /// <exception cref="InvalidOperationException">
+    ///     <para>已绑定到其他项目时尝试改绑。</para>
+    ///     <para>Attempting to rebind a session already owned by a different project.</para>
+    /// </exception>
+    public void BindProject(string projectId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(projectId);
+        if (!SessionLogProjectBinding.IsValidProjectId(projectId))
+            throw new ArgumentException("A project id must contain exactly 32 lowercase hexadecimal characters.",
+                                        nameof(projectId));
+        if (ProjectId is not null && !string.Equals(ProjectId, projectId, StringComparison.Ordinal))
+            throw new
+                InvalidOperationException($"Session '{Id}' is already bound to project '{ProjectId}'; project ownership is never transferred to '{projectId}'.");
+        ProjectId = projectId;
+    }
 
     internal void RecordModelSelection(SessionModelSelection selection)
     {

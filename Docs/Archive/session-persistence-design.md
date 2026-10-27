@@ -2,7 +2,7 @@
 
 > 已完成实现的文档归档（2026-10-24）。保留设计、使用边界和相关证据供维护时查阅；归档不撤销仍有效的协议、安全、权限和 NativeAOT 约束，也不代表对后续修改的授权。当前开发范围以[活动计划](../../PLAN.md)和实际源码为准。
 
-更新日期：2026-10-24。本文维护当前契约；历史核查与验收见[归档](session-persistence-history.md)。压缩扩展见 §4.1、§6.1 及[压缩设计](context-compaction-design.md)。当前内容保存与脱敏边界见 §4.4；历史验收中的“展示统一脱敏”已被该节替代。
+更新日期：2026-10-27。本文维护当前契约；历史核查与验收见[归档](session-persistence-history.md)。压缩扩展见 §4.1、§6.1 及[压缩设计](context-compaction-design.md)。当前内容保存与脱敏边界见 §4.4；历史验收中的“展示统一脱敏”已被该节替代。
 
 ## 1. 状态与适用范围
 
@@ -60,14 +60,19 @@
 - 当前 diff 与工具输出保留原文并内联保存在历史条目中；从临时 artifact 读取内容的边界为单个 2 MiB、stdout/stderr 合计 4 MiB。artifact 缺失、不可读或超限时保留可用输出并明确 outputIncomplete／warning，不冒充完整归档，也不把临时路径作为长期可读引用。
 - 可执行批准、凭据值和旧计划对象不落盘；审批与策略身份只作为历史事实。协议内容可能包含秘密，不加密的事实不能因换格式而消失。
 
-M14.1 在相同 envelope 中扩展必需记录族，详细来源契约见[项目指令设计 §8](project-instructions-design.md#8-统一日志来源与版本演进)：
+相同 envelope 中的必需记录扩展如下；项目规则的详细来源契约见[项目指令设计 §8](project-instructions-design.md#8-统一日志来源与版本演进)：
 
 | 记录族 | payload schema | 兼容边界 |
 |---|---|---|
 | `project-instructions` | `tinyharness.project-instructions/1` | `rules-applied` 绑定同批 canonical 宿主消息和完整规则；`scopes-tracked` 仅更新完整探测集合，引用当前 revision，不重复正文 |
 | `compaction-checkpoint` | `state.schema = tinyharness.compaction/1` | 保存有界交接、真实用户原话的 canonical 下标／内容及折叠边界；替换旧 `checkpoint`，不做隐式迁移 |
+| `project-binding` | `tinyharness.project-binding/1` | 保存一次性 ProjectId；初始身份批次或旧日志后续追加，不支持重复或转移 |
 
 外层仍为 `tinyharness.session-log/1`，批次、顺序、锁与资源上限保持原契约。没有项目规则记录的统一日志仍可读取，规则状态为尚未管理；下一次真实发送才加载当前规则。首次写入此必需记录后，旧二进制按未知必需 kind 明确拒绝；新 reader 拒绝未知 payload schema、renderer 或损坏来源绑定，不忽略规则后继续执行。此扩展不重新引入旧快照读取、迁移或独立规则文件。
+
+项目归属扩展的 Core 实现与初始化契约见[项目会话计划](../project-session-plan.md)。新 reader 支持没有绑定的统一日志；绑定载荷严格要求 `schema` 与 32 位小写十六进制 `projectId`，拒绝缺失、未知、重复或错误类型字段。scanner、分页读取、全量投影与 writer 均拒绝重复／冲突绑定。写入后旧程序会按未知必需记录拒绝读取，保留原字节前缀不等于旧程序兼容。
+
+归属不改变原执行根、canonical、opaque、项目规则、压缩检查点或 NeedsInspection；`UpdatedUtc` 仍为最近提交时间，派生 `LastActivityUtc` 排除纯归属维护批次。旧日志初始化仅由显式服务调用，先可靠保存项目并释放目录册锁，再获取会话排他 writer 严格重读、追加；reader 与历史列举不会隐式写入。分批限制正文检查数量，文件名枚举仍为全量轻量操作；取消与不确定写入遵循既有 writer 契约。本阶段未接入 CLI／Desktop 生产入口，也未初始化真实用户日志。
 
 ### 4.2 写入边界与故障
 

@@ -28,6 +28,42 @@ internal static class SessionLogWriter
 }
 
 /// <summary>
+///     <para>强类型打开既有 writer 的状态：成功、确定的锁占用，或其余失败。</para>
+///     <para>Strongly typed statuses for opening an existing writer: opened, a definite lock hold, or any other failure.</para>
+/// </summary>
+internal enum SessionWriterOpenStatus
+{
+    Opened,
+    LockHeld,
+    Failed
+}
+
+/// <summary>
+///     <para>
+///         <see cref="SessionStoreWriter.TryOpenExistingAsync" /> 的结果；<see cref="Status" /> 为 Opened 时调用方负责释放
+///         <see cref="Writer" />，否则 <see cref="Error" /> 携带不含凭据的结构化失败原因。
+///     </para>
+///     <para>
+///         The result of <see cref="SessionStoreWriter.TryOpenExistingAsync" />; when opened, the caller owns
+///         and disposes <see cref="Writer" />. Otherwise <see cref="Error" /> carries the credential-free
+///         structural failure reason.
+///     </para>
+/// </summary>
+internal sealed record SessionWriterOpenResult(
+    SessionWriterOpenStatus Status, SessionStoreWriter? Writer, SessionStoreException? Error)
+{
+    internal static SessionWriterOpenResult FromOpened(SessionStoreWriter writer) =>
+        new(SessionWriterOpenStatus.Opened, writer, null);
+
+    internal static SessionWriterOpenResult FromLockHeld(string sessionId) =>
+        new(SessionWriterOpenStatus.LockHeld, null,
+            new SessionStoreException($"Session '{sessionId}' is already open by another writer."));
+
+    internal static SessionWriterOpenResult FromFailure(SessionStoreException error) =>
+        new(SessionWriterOpenStatus.Failed, null, error);
+}
+
+/// <summary>
 ///     <para>将会话提交为带排他锁的追加式 JSONL 批次，并在不确定写入后停止追加。</para>
 ///     <para>Commits sessions as append-only JSONL batches under an exclusive lock and stops after uncertain writes.</para>
 /// </summary>
@@ -57,6 +93,7 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
     private long    _persistedMessageCount;
     private int     _persistedProjectInstructionRecordCount;
     private int     _persistedTurnCount;
+    private string? _projectId;
     private bool    _poisoned;
     private string? _trackedTurnId;
     private int     _trackedTurnRunCount;
@@ -68,7 +105,8 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
     }
 
     private SessionStoreWriter(
-        string directory, string sessionId, bool requireNew, IReadOnlyDictionary<string, string>? knownSecrets)
+        string directory, string sessionId, bool requireNew, IReadOnlyDictionary<string, string>? knownSecrets,
+        FileStream? acquiredLockStream = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(directory);
         ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
@@ -87,7 +125,9 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
         SessionStorePaths.EnsureStoreLeaf(directory, SnapshotPath);
         try
         {
-            _lockStream = new FileStream(lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+            // acquiredLockStream 由调用方在锁分类后移交；此处不再重复打开。
+            _lockStream = acquiredLockStream ??
+                          new FileStream(lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
             SessionStorePaths.EnsureStoreLeaf(directory, lockPath);
         }
         catch (IOException ex)
@@ -179,8 +219,9 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
                 throw new
                     SessionStoreException("The session identity batch must be committed before appending run records.");
 
-            var sequence   = CommitSequence + 1;
-            var normalized = new SessionLogRecord[records.Count];
+            var     sequence         = CommitSequence + 1;
+            var     normalized       = new SessionLogRecord[records.Count];
+            string? bindingProjectId = null;
             for (var i = 0; i < records.Count; i++)
             {
                 var record = records[i] ?? throw new SessionStoreException("The record batch contains a null record.");
@@ -237,6 +278,24 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
                     ValidateControlRecord(record);
                     normalized[i] = record with { Id = recordId };
                 }
+                else if (record.Kind == "project-binding")
+                {
+                    if (_projectId is not null || bindingProjectId is not null)
+                        throw new
+                            SessionStoreException($"Session '{SessionId}' already carries a project binding; ownership is bound once and never appended again or transferred.");
+                    try
+                    {
+                        bindingProjectId = SessionLogProjectBinding.Parse(record.Payload);
+                    }
+                    catch (Exception ex) when (ex is InvalidDataException or JsonException)
+                    {
+                        throw new
+                            SessionStoreException($"Journal record 'project-binding' has an invalid typed payload: {ex.Message}",
+                                                  ex);
+                    }
+
+                    normalized[i] = record with { Id = recordId };
+                }
                 else
                 {
                     throw new SessionStoreException($"Unknown required journal record kind '{record.Kind}'.");
@@ -263,6 +322,8 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
             await WriteBatchAsync(batch, bytes, cancellationToken).ConfigureAwait(false);
 
             CommitSequence = sequence;
+            // 校验只暂存待绑定值，成功落盘后才推进 writer 归属缓存。
+            if (bindingProjectId is not null) _projectId = bindingProjectId;
             return normalized;
         }
         finally
@@ -304,6 +365,9 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
         try
         {
             if (_poisoned) throw PoisonedException();
+            if (CommitSequence > 0 && !string.Equals(session.ProjectId, _projectId, StringComparison.Ordinal))
+                throw new
+                    SessionStoreException($"Session '{SessionId}' carries project '{session.ProjectId ?? "(unbound)"}' while the committed journal carries '{_projectId ?? "(unbound)"}'; project ownership is bound once and never transferred or dropped.");
             if (context.Messages.Count < _persistedMessageCount)
                 throw new
                     SessionStoreException("The in-memory conversation rewound behind the committed journal prefix.");
@@ -326,8 +390,14 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
             var lastSessionState      = _lastSessionState;
 
             if (CommitSequence == 0)
+            {
                 Add("identity",
                     new SessionLogIdentity(SessionId, session.WorkspaceRoot, session.InitialModel, session.CreatedUtc));
+                // 初始归属随身份批次一次提交，不先请求模型再补写。
+                if (session.ProjectId is { } initialProjectId)
+                    Add("project-binding",
+                        new SessionLogProjectBinding(SessionLogProjectBinding.SchemaName, initialProjectId));
+            }
 
             var modelSelectionCount = _persistedModelSelectionCount;
             for (var i = modelSelectionCount; i < session.ModelSelections.Count; i++)
@@ -487,6 +557,7 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
             _lastRunJson                            = lastRunJson;
             _checkpointFingerprint                  = checkpointFingerprint;
             _lastSessionState                       = lastSessionState;
+            _projectId                              = session.ProjectId;
         }
         finally
         {
@@ -562,27 +633,7 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
             var snapshot = await SessionStoreReader.ReadAsync(directory, sessionId, cancellationToken)
                                                    .ConfigureAwait(false)
                         ?? throw new SessionStoreException($"Session log '{path}' is empty.");
-            writer.CommitSequence               = snapshot.CommitSequence;
-            writer.LoadedSnapshot               = snapshot;
-            writer._persistedModelSelectionCount = snapshot.ModelSelections.Count;
-            writer._persistedTurnCount          = snapshot.Turns.Count;
-            writer._trackedTurnId               = snapshot.Turns.LastOrDefault()?.Id;
-            writer._trackedTurnRunCount         = snapshot.Turns.LastOrDefault()?.Runs.Count ?? 0;
-            writer._persistedMessageCount       = snapshot.Conversation?.Messages.Count      ?? 0;
-            writer._persistedProjectInstructionRecordCount =
-                snapshot.Conversation?.ProjectInstructionRecords.Count ?? 0;
-            writer._lastSessionState = new SessionLogSessionState(snapshot.InspectionAcknowledgedUtc,
-                                                                  snapshot.PendingInspectionReason);
-            if (snapshot.Conversation is { } conversation)
-                writer._checkpointFingerprint = $"{conversation.HasState}:{conversation.FoldStartMessageIndex}:" +
-                                                $"{conversation.FoldEndMessageIndex}:" + (conversation.HasState
-                                                    ? conversation.State?.ToJson()
-                                                    : string.Empty) + ":" +
-                                                conversation.CheckpointModelSelectionRevision;
-            if (snapshot.Turns.LastOrDefault()?.Runs.LastOrDefault() is not { } lastRun) return writer;
-            writer._lastRunId   = lastRun.Id;
-            writer._lastRunJson = JsonSerializer.Serialize(lastRun, SessionLogJsonContext.Default.PersistedRun);
-
+            writer.SeedFromSnapshot(snapshot);
             return writer;
         }
         catch
@@ -590,6 +641,129 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
             writer.Dispose();
             throw;
         }
+    }
+
+    /// <summary>
+    ///     <para>
+    ///         以强类型结果打开既有会话 writer：仅确定的锁共享/占用返回 <see cref="SessionWriterOpenStatus.LockHeld" />，
+    ///         路径、链接、权限及其他 IO 失败返回 <see cref="SessionWriterOpenStatus.Failed" />，不按异常文本区分。
+    ///     </para>
+    ///     <para>
+    ///         Opens an existing session writer as a strongly typed result: only a definite lock sharing or hold
+    ///         returns <see cref="SessionWriterOpenStatus.LockHeld" />, while path, link, permission, and other IO
+    ///         failures return <see cref="SessionWriterOpenStatus.Failed" /> — never classified by message text.
+    ///     </para>
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         锁冲突仅按 Windows 共享/锁冲突 HRESULT 确定区分；其他平台无法确定归属时按失败报告。
+    ///         <see cref="SessionWriterOpenStatus.Opened" /> 时返回的 writer 由调用方释放；
+    ///         取消在读取阶段抛出并释放已持有的句柄。
+    ///     </para>
+    ///     <para>
+    ///         Lock contention is decided only by the Windows sharing/lock-violation HRESULTs; platforms where it
+    ///         cannot be decided report failure. The caller owns and disposes a writer returned as
+    ///         <see cref="SessionWriterOpenStatus.Opened" />; cancellation during the strict read throws after
+    ///         releasing the held handles.
+    ///     </para>
+    /// </remarks>
+    internal static async Task<SessionWriterOpenResult> TryOpenExistingAsync(
+        string directory, string sessionId, IReadOnlyDictionary<string, string>? knownSecrets,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(directory);
+        if (!SessionStorePaths.IsValidSessionId(sessionId))
+            throw new ArgumentException("A session id must contain exactly 32 hexadecimal characters.",
+                                        nameof(sessionId));
+        sessionId = sessionId.ToLowerInvariant();
+        var path = Path.Combine(directory, sessionId + LogFileSuffix);
+        if (!File.Exists(path))
+            return SessionWriterOpenResult.FromFailure(
+                new SessionStoreException($"No JSONL session log '{path}' exists."));
+
+        var                 lockPath   = Path.Combine(directory, $"{sessionId}.lock");
+        FileStream?         lockStream = null;
+        SessionStoreWriter? writer     = null;
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            SessionStorePaths.EnsureStoreLeaf(directory, lockPath);
+            try
+            {
+                lockStream = new FileStream(lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+            }
+            catch (IOException ex) when (IsLockContention(ex))
+            {
+                return SessionWriterOpenResult.FromLockHeld(sessionId);
+            }
+
+            SessionStorePaths.EnsureStoreLeaf(directory, lockPath);
+            writer = new SessionStoreWriter(directory, sessionId, false, knownSecrets, lockStream);
+            lockStream = null;
+            var snapshot = await SessionStoreReader.ReadAsync(directory, sessionId, cancellationToken)
+                                                   .ConfigureAwait(false)
+                        ?? throw new SessionStoreException($"Session log '{path}' is empty.");
+            writer.SeedFromSnapshot(snapshot);
+            var opened = writer;
+            writer = null;
+            return SessionWriterOpenResult.FromOpened(opened);
+        }
+        catch (Exception ex) when (IsRecoverableOpenFailure(ex))
+        {
+            return SessionWriterOpenResult.FromFailure(ex is SessionStoreException storeFailure
+                                                           ? storeFailure
+                                                           : new SessionStoreException(
+                                                               $"Cannot open session '{sessionId}' for ownership initialization: {ex.Message}",
+                                                               ex));
+        }
+        finally
+        {
+            // 只有成功返回才移交所有权；取消及未分类异常同样必须释放句柄。
+            writer?.Dispose();
+            lockStream?.Dispose();
+        }
+    }
+
+    // Win32 ERROR_SHARING_VIOLATION / ERROR_LOCK_VIOLATION 的 HRESULT，仅 Windows 的共享检查会返回。
+    private const int SharingViolationHResult = unchecked((int)0x80070020);
+    private const int LockViolationHResult    = unchecked((int)0x80070021);
+
+    internal static bool IsRecoverableOpenFailure(Exception exception) =>
+        exception is SessionStoreException or IOException or UnauthorizedAccessException or JsonException or
+                     InvalidDataException or InvalidOperationException or ArgumentException or FormatException or
+                     OverflowException or NotSupportedException;
+
+    private static bool IsLockContention(IOException ex) =>
+        OperatingSystem.IsWindows() &&
+        (ex.HResult == SharingViolationHResult || ex.HResult == LockViolationHResult);
+
+    /// <summary>
+    ///     <para>以严格读取的快照续种 writer 的提交游标与各持久化缓存；归属缓存一并从日志镜像。</para>
+    ///     <para>Reseeds the writer's commit cursor and persistence caches from a strictly read snapshot, mirroring the project binding too.</para>
+    /// </summary>
+    private void SeedFromSnapshot(PersistedSession snapshot)
+    {
+        CommitSequence               = snapshot.CommitSequence;
+        LoadedSnapshot               = snapshot;
+        _persistedModelSelectionCount = snapshot.ModelSelections.Count;
+        _persistedTurnCount          = snapshot.Turns.Count;
+        _trackedTurnId               = snapshot.Turns.LastOrDefault()?.Id;
+        _trackedTurnRunCount         = snapshot.Turns.LastOrDefault()?.Runs.Count ?? 0;
+        _persistedMessageCount       = snapshot.Conversation?.Messages.Count      ?? 0;
+        _persistedProjectInstructionRecordCount =
+            snapshot.Conversation?.ProjectInstructionRecords.Count ?? 0;
+        _lastSessionState = new SessionLogSessionState(snapshot.InspectionAcknowledgedUtc,
+                                                       snapshot.PendingInspectionReason);
+        _projectId = snapshot.ProjectId;
+        if (snapshot.Conversation is { } seededConversation)
+            _checkpointFingerprint = $"{seededConversation.HasState}:{seededConversation.FoldStartMessageIndex}:" +
+                                     $"{seededConversation.FoldEndMessageIndex}:" + (seededConversation.HasState
+                                         ? seededConversation.State?.ToJson()
+                                         : string.Empty) + ":" +
+                                     seededConversation.CheckpointModelSelectionRevision;
+        if (snapshot.Turns.LastOrDefault()?.Runs.LastOrDefault() is not { } lastRun) return;
+        _lastRunId   = lastRun.Id;
+        _lastRunJson = JsonSerializer.Serialize(lastRun, SessionLogJsonContext.Default.PersistedRun);
     }
 
     private PersistedRun PersistRun(SessionRun run)
@@ -772,10 +946,15 @@ public static class SessionStoreReader
         private readonly List<SessionModelSelection> _modelSelections = [];
         private SessionLogSessionState? _state;
         private DateTimeOffset          _updatedUtc;
+        private DateTimeOffset          _lastActivityUtc;
+        private string?                 _projectId;
 
         public void Apply(SessionLogBatch batch)
         {
             _updatedUtc = batch.WrittenUtc;
+            // 纯归属维护批次不构成对话活动；含任何其他记录的批次按其提交时间推进。
+            if (batch.Records.Any(record => record.Kind != "project-binding"))
+                _lastActivityUtc = batch.WrittenUtc;
             for (var recordIndex = 0; recordIndex < batch.Records.Count; recordIndex++)
             {
                 var record = batch.Records[recordIndex];
@@ -958,6 +1137,24 @@ public static class SessionStoreReader
                         }
 
                         break;
+                    case "project-binding" :
+                        string boundProjectId;
+                        try
+                        {
+                            boundProjectId = SessionLogProjectBinding.Parse(record.Payload);
+                        }
+                        catch (Exception ex) when (ex is InvalidDataException or JsonException)
+                        {
+                            throw new
+                                SessionStoreException($"Session '{sessionId}' contains an invalid project-binding record: {ex.Message}",
+                                                      ex);
+                        }
+
+                        if (_projectId is not null)
+                            throw new
+                                SessionStoreException($"Session '{sessionId}' repeats or conflicts with its project binding '{_projectId}'; ownership is bound exactly once and never transferred.");
+                        _projectId = boundProjectId;
+                        break;
                     default :
                         throw new
                             SessionStoreException($"Session '{sessionId}' contains unknown required record kind '{record.Kind}'.");
@@ -988,10 +1185,12 @@ public static class SessionStoreReader
             {
                 Id                        = _identity.Id,
                 WorkspaceRoot             = _identity.WorkspaceRoot,
+                ProjectId                 = _projectId,
                 Model                     = _identity.Model,
                 ModelSelections           = _modelSelections.ToArray(),
                 CreatedUtc                = _identity.CreatedUtc,
                 UpdatedUtc                = _updatedUtc,
+                LastActivityUtc           = _lastActivityUtc,
                 CommitSequence            = sequence,
                 PendingInspectionReason   = pendingReason,
                 InspectionAcknowledgedUtc = hasUnknownSideEffects || _state?.ExecutionIntent == true ? null : acknowledged,
@@ -1415,6 +1614,7 @@ public static class SessionStoreReader
 [JsonSerializable(typeof(SessionLogBatch))]
 [JsonSerializable(typeof(SessionLogRecord))]
 [JsonSerializable(typeof(SessionLogIdentity))]
+[JsonSerializable(typeof(SessionLogProjectBinding))]
 [JsonSerializable(typeof(SessionLogTurn))]
 [JsonSerializable(typeof(SessionLogRun))]
 [JsonSerializable(typeof(SessionLogMessage))]

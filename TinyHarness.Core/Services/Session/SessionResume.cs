@@ -311,7 +311,8 @@ public static class SessionResume
     /// </remarks>
     private static ChatSession RebuildSession(PersistedSession snapshot)
     {
-        var session = new ChatSession(snapshot.Id, snapshot.WorkspaceRoot, snapshot.Model!, snapshot.CreatedUtc)
+        var session = new ChatSession(snapshot.Id, snapshot.WorkspaceRoot, snapshot.Model!, snapshot.CreatedUtc,
+                                      snapshot.ProjectId)
         {
             InspectionAcknowledgedUtc = snapshot.InspectionAcknowledgedUtc,
             PendingInspectionReason   = snapshot.PendingInspectionReason
