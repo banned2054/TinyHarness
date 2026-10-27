@@ -16,22 +16,58 @@
         <Border Background="{DynamicResource SidebarBackgroundBrush}" Padding="16,20,8,12">
             <Grid RowDefinitions="Auto,Auto,*,Auto" RowSpacing="16">
                 <TextBlock Text="TinyHarness" FontSize="21" FontWeight="SemiBold" Margin="8,0" />
-                <Button Grid.Row="1" Content="＋ 新对话" Command="{Binding NewSessionCommand}" HorizontalAlignment="Stretch" />
-                <ListBox Grid.Row="2" Classes="session-list" ItemsSource="{Binding Sessions}"
-                         SelectedItem="{Binding SelectedSession, Mode=TwoWay}">
-                    <ListBox.ItemTemplate>
-                        <DataTemplate x:DataType="vm:SessionViewModel">
-                            <StackPanel Margin="8,8,0,8" Spacing="4">
-                                <TextBlock Text="{Binding Title}" TextTrimming="CharacterEllipsis" />
-                                <TextBlock Text="{Binding Status}" Classes="caption" />
-                                <TextBlock Text="{Binding WorkspaceRoot}" Classes="caption" TextTrimming="CharacterEllipsis" />
-                            </StackPanel>
-                        </DataTemplate>
-                    </ListBox.ItemTemplate>
-                </ListBox>
-                <StackPanel Grid.Row="3" Orientation="Horizontal" Spacing="8">
-                    <Button Content="设置" Command="{Binding OpenSettingsCommand}" />
-                    <Button Content="刷新历史" Command="{Binding RefreshCommand}" />
+                <StackPanel Grid.Row="1" Spacing="8">
+                    <Button Content="＋ 新对话" Command="{Binding NewSessionCommand}" HorizontalAlignment="Stretch" />
+                    <Button Content="打开目录 / 项目" Click="OpenProjectFolder" HorizontalAlignment="Stretch" />
+                </StackPanel>
+                <ScrollViewer Grid.Row="2" HorizontalScrollBarVisibility="Disabled">
+                    <ItemsControl ItemsSource="{Binding Projects}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:ProjectViewModel">
+                                <Expander IsExpanded="{Binding IsExpanded, Mode=TwoWay}" HorizontalAlignment="Stretch">
+                                    <Expander.Header>
+                                        <TextBlock Text="{Binding Name}" ToolTip.Tip="{Binding Root}" TextTrimming="CharacterEllipsis" />
+                                    </Expander.Header>
+                                    <StackPanel Spacing="6">
+                                        <StackPanel IsVisible="{Binding CanEdit}" Spacing="4">
+                                            <Button Content="＋ 项目内新对话" Command="{Binding NewSessionCommand}" />
+                                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="4">
+                                                <TextBox Text="{Binding EditedName, Mode=TwoWay}" PlaceholderText="项目名称" />
+                                                <Button Grid.Column="1" Content="改名" Command="{Binding RenameCommand}" />
+                                            </Grid>
+                                        </StackPanel>
+                                        <ItemsControl ItemsSource="{Binding Sessions}">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate x:DataType="vm:SessionViewModel">
+                                                    <Button Click="SelectHistory" Classes="session-row" Classes.current="{Binding IsSelected}" HorizontalAlignment="Stretch"
+                                                            HorizontalContentAlignment="Stretch" ToolTip.Tip="{Binding WorkspaceRoot}">
+                                                        <StackPanel Margin="4" Spacing="4">
+                                                            <TextBlock Text="{Binding Title}" TextTrimming="CharacterEllipsis" />
+                                                            <TextBlock Text="{Binding Status}" Classes="caption" />
+                                                        </StackPanel>
+                                                    </Button>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </StackPanel>
+                                </Expander>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </ScrollViewer>
+                <StackPanel Grid.Row="3" Spacing="8">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Button Content="设置" Command="{Binding OpenSettingsCommand}" />
+                        <Button Content="刷新历史" Command="{Binding RefreshCommand}" />
+                    </StackPanel>
+                    <Expander Header="旧会话项目归属">
+                        <StackPanel Spacing="6">
+                            <TextBlock Text="初始化会追加归属记录，旧版本将无法读取这些日志。每次最多检查 100 个；占用或失败项可重试。"
+                                       TextWrapping="Wrap" Classes="caption" />
+                            <Button Content="初始化 / 继续扫描" Command="{Binding InitializeProjectsCommand}" />
+                            <Button Content="取消初始化" Command="{Binding CancelInitializationCommand}" />
+                        </StackPanel>
+                    </Expander>
                 </StackPanel>
             </Grid>
         </Border>

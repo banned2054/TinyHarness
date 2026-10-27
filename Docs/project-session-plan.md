@@ -2,7 +2,7 @@
 
 更新日期：2026-10-27。
 
-**状态：阶段一（项目核心）与阶段二（Core 会话归属）已实现，阶段三至四待实施。** 本文记录独立 Project、现有会话按目录归属、Desktop／CLI 接入和后续多目录执行的方案；已完成部分与验证见[实施状态](#15-实施状态)。Core 已具备初始绑定、严格归属恢复和显式旧日志初始化能力，但尚未接入 CLI／Desktop 生产入口，也未对真实用户会话追加归属；正式会话的运行行为没有变化。
+**状态：阶段一至三已实现，阶段四综合验收待完成。** 本文记录独立 Project、现有会话按目录归属、Desktop／CLI 接入和后续多目录执行的方案；已完成部分与验证见[实施状态](#15-实施状态)。CLI／Desktop 新建持久化会话保存归属，恢复旧日志在原 writer 内补齐；列表与历史只读，批量初始化须显式执行。尚未对真实用户会话追加归属。
 
 入口见 [PLAN.md](../PLAN.md)。既有契约见[会话持久化](Archive/session-persistence-design.md)、[项目规则](Archive/project-instructions-design.md)、[桌面 GUI 迁移](desktop-migration-plan.md)和[Windows 沙箱管理](Archive/windows-sandbox-management.md)。操作授权以用户当前要求和 [AGENTS.md](../AGENTS.md) 为准，保存计划不构成代码实施、实际数据接入、Git 或发布授权。
 
@@ -319,13 +319,13 @@ SessionWorkspace
 
 ## 12. 实施顺序
 
-阶段一与阶段二已完成，阶段三至四待实施；不要求碎片提交。
+阶段一至三已实现，阶段四综合验收待完成；不要求碎片提交。
 
 | 阶段 | 工作 | 完成标准 |
 | --- | --- | --- |
 | 一：项目核心（已完成） | 模型、目录册、路径匹配、创建复用、改名、保护 | 重启一致、并发不重复、过期编辑不覆盖、损坏不被当空配置 |
 | 二：会话归属（已完成） | 日志记录、严格读取、投影、初始绑定、旧日志初始化 | 归属可恢复、接入幂等、历史和阻断保真；生产入口尚未接线 |
-| 三：生产入口 | CLI／Desktop 接入，分组、草稿、改名、状态 | 两端一致、生产新会话都有归属、项目操作不干扰活动会话 |
+| 三：生产入口（已实现） | CLI／Desktop 接入，分组、草稿、改名、状态 | 两端一致、生产新会话都有归属、项目操作不干扰活动会话；本轮证据见 §15 |
 | 四：综合验收 | 故障测试、真实 GUI、NativeAOT、离线产物 smoke、文档 | 数据、交互、并发与产物分别有证据 |
 
 同一功能必需的代码、局部重构和测试完整交付；阶段不是 Git 授权，也不要求碎片提交。主要改动在 Core 项目与持久化模块、CLI 会话入口、Desktop.Runtime 创建入口和桌面列表投影；第一版不改文件工具执行边界和规则发现算法。
@@ -399,3 +399,22 @@ SessionWorkspace
 - `dotnet publish TinyHarness.Cli/TinyHarness.Cli.csproj -c Release -r win-x64 --self-contained true -o artifacts/session-binding-nativeaot-20261027` 成功，无 compiler／trimming／AOT 警告；从仓库外运行该产物 `smoke --config C:/Code/.Net/TinyHarness/tinyharness.json` 成功（离线 17 steps、16 tool executions）。此 smoke 验证既有产物路径，不代表未接入口的归属初始化服务已经在原生产物中执行。
 - 兼容边界：新 reader 支持未绑定统一日志；写入 `project-binding` 后，旧程序按未知必需记录拒绝读取。保留字节前缀不等于旧程序兼容。
 - 未实施／未验证：CLI／Desktop 生产接线、项目分组 UI、真实用户日志初始化、真实 GUI、真实模型、Linux／macOS、跨进程并发、断电／设备故障；阶段三与四仍待实施。
+
+2026-10-27 完成阶段三（生产入口接入）：
+
+- Core 新增 `SessionProjectBinding`，两端按最终执行根复用项目并在新日志初始批次提交归属；恢复旧日志先严格校验，再使用原 writer 可靠追加归属，成功后才更新内存。已有归属不查询目录册，不因目录册缺失或损坏而换绑。初始化额外验证每份旧日志保存目录的存储保护边界。
+- CLI `run`、首次发送和显式 `/new` 均接入；空白交互与模型草稿不创建项目或会话日志。`session list/show` 只读展示项目名称／ID、未绑定或项目信息缺失，目录册故障不阻止历史检查；列表按 `LastActivityUtc` 排序。新增 `session initialize-projects [after-session-id]`，每批最多检查 100 个日志，输出兼容提示、逐项 Bound／AlreadyBound／Pending／Failed、取消状态与续扫游标；末批后可从头重试占用／失败项。
+- Desktop 新增 `ProjectViewModel` 与项目分组侧栏，支持打开目录、空项目、项目内独立草稿、名称修订检查与折叠。切换未发送草稿的项目保留输入并刷新默认模型；首次发送才建立宿主。原有请求／页面构造签名保留，项目与预期存储通过附加属性或重载传递，防止配置变化后发送到其他 store。运行、审批、取消与保存继续属于原 SessionId；项目缺失保留原 ID 与历史。旧日志初始化为显式操作，可取消、续扫并展示逐项结果；历史浏览不触发写入。
+- 新增 8 项 `DesktopProjectEntryTests`，覆盖草稿与空项目、同名不同路径、项目复用、初始归属／重启、固定执行根、改名冲突、运行中改名／折叠／切换与草稿隔离、只读历史、初始化前缀保真／幂等、101 份日志分批续扫、目录册损坏及预期 store／项目不匹配。新增 4 项 CLI／共享恢复测试，覆盖显式初始化、只读 list/show、损坏目录册、原 writer 恢复归属和游标参数。
+- 已验证（Windows x64、.NET SDK 10.0.402）：Core／CLI 完整离线回归 1,326 项中 1,322 通过、4 项符号链接能力相关跳过；之后补充游标大小写校验，最终 `SessionCommandTests` 16/16 通过。Desktop 最终完整回归 64/64 通过。TRX 与隔离原生产物验证脚本位于 `artifacts/project-entry-validation/`。
+- CLI 与 Desktop 均完成 Release `win-x64` NativeAOT publish，无新增 compiler／trimming／AOT warning；产物分别位于 `artifacts/project-entry-cli-nativeaot-20261027/` 与 `artifacts/project-entry-desktop-nativeaot-20261027/`。从仓库外运行 CLI `smoke --config <仓库>/tinyharness.json` 通过（17 steps、16 tool executions）；Desktop `--offline-smoke` 验证同目录两会话共享可靠项目、并行、模型切换与恢复。隔离 CLI 原生产物验证覆盖空白交互无日志、`/new` 两次复用同项目、初始批次归属、项目 list/show、显式初始化以及损坏目录册时的历史／已绑定续聊。均使用临时夹具、假凭据与离线模型，没有初始化真实用户日志。
+- 环境说明：继承的 PATH 过长使 cmd 无法发现 `where`／`ping`；缩短验证进程的 PATH 后，相关进程测试及 NativeAOT 构建通过。受限执行环境会阻止本地 HTTP listener、祖先目录身份检查或 Avalonia 本机许可目录读取，最终相应验证在本机权限下运行；未关闭检查、修改依赖或更改机器配置。按 `banned甄选` profile 仅清理本轮 C# 文件，并人工核对新增逻辑排版。
+- 阶段四仍待完成：真实 GUI 交互、完整故障矩阵、真实跨进程并发、Linux／macOS、断电／设备故障及实际用户数据接入均未验证；多目录执行未实施。本阶段的原生产物离线结果不替代这些验收。
+
+2026-10-27 阶段四离线验收与两项 P2 修复（GUI 受阻，阶段四未完成）：
+
+- 修复 Desktop 投影两处 P2 问题：历史与列表刷新改为按 store 与会话 ID 匹配，原地更新归属与活动时间，保留宿主草稿与既有历史；新建草稿按当前 store 重新解析归属，不复制旧绑定；异步归属绑定增加 `CanChooseWorkspace` 守卫。新增两项回归测试在旧实现失败、修复后通过；Desktop 最终回归 66/66 通过。
+- Core／CLI 最终离线回归 1,327 项：1,323 通过、4 项符号链接能力相关跳过、0 失败。首轮全量与两次专项复跑中 `SessionJournalScaleTests.AppendAndRecovery_MeetsLockedScaleBudgets` 失败（6>4），最终全量通过；初步定位为 WrittenUtc 小数秒尾零序列化字节抖动，相关代码本轮未改动、问题未修复，该结果不构成可靠全绿。
+- CLI 与 Desktop 均完成 Release `win-x64` NativeAOT publish，产物为 native code，0 compiler／trimming／AOT warning；分别位于 `artifacts/project-stage4-cli-nativeaot-20261027/` 与 `artifacts/project-stage4-desktop-nativeaot-20261027/`。CLI `smoke` 离线通过（17 steps、16 tool executions）；隔离夹具 `artifacts/project-stage4-validation/stage4_native_entries.py` 对原生产物 PASS：空白交互无日志、`/new` 两次复用同项目、初始批次归属、`session list/show` 与显式 `initialize-projects`、损坏目录册时历史展示与已绑定续聊。Desktop 修复后产物（r2）`--offline-smoke` PASS：parallel=2、switched=A/B/A/B、refreshed=true、resumedTurns=4、disposedClients=6。本轮证据位于 `artifacts/project-stage4-validation/`。
+- 真实 GUI 验收受阻：以 `powershell -NoProfile -File` 执行隔离启动脚本并带 `-ReuseFixture` 时，被本机 PowerShell 执行策略拒绝（UnauthorizedAccess"禁止运行脚本"），应用未启动；未绕过策略、未修改机器配置，启动脚本与步骤文档示例中的 `-ExecutionPolicy Bypass` 参数已移除。GUI 交互（打开目录、改名、切页、草稿保留、折叠、刷新）仍未验证。
+- 阶段四仍未完成：真实 GUI 交互、真实跨进程并发、Linux／macOS、断电／设备故障、真实模型与实际用户数据接入均未验证；未对真实用户会话执行归属初始化。

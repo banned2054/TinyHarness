@@ -72,7 +72,7 @@
 
 项目归属扩展的 Core 实现与初始化契约见[项目会话计划](../project-session-plan.md)。新 reader 支持没有绑定的统一日志；绑定载荷严格要求 `schema` 与 32 位小写十六进制 `projectId`，拒绝缺失、未知、重复或错误类型字段。scanner、分页读取、全量投影与 writer 均拒绝重复／冲突绑定。写入后旧程序会按未知必需记录拒绝读取，保留原字节前缀不等于旧程序兼容。
 
-归属不改变原执行根、canonical、opaque、项目规则、压缩检查点或 NeedsInspection；`UpdatedUtc` 仍为最近提交时间，派生 `LastActivityUtc` 排除纯归属维护批次。旧日志初始化仅由显式服务调用，先可靠保存项目并释放目录册锁，再获取会话排他 writer 严格重读、追加；reader 与历史列举不会隐式写入。分批限制正文检查数量，文件名枚举仍为全量轻量操作；取消与不确定写入遵循既有 writer 契约。本阶段未接入 CLI／Desktop 生产入口，也未初始化真实用户日志。
+归属不改变原执行根、canonical、opaque、项目规则、压缩检查点或 NeedsInspection；`UpdatedUtc` 仍为最近提交时间，派生 `LastActivityUtc` 排除纯归属维护批次。旧日志初始化仅由显式服务调用，先可靠保存项目并释放目录册锁，再获取会话排他 writer 严格重读、追加；reader 与历史列举不会隐式写入。分批限制正文检查数量，文件名枚举仍为全量轻量操作；取消与不确定写入遵循既有 writer 契约。CLI／Desktop 生产入口现已在新会话初始批次保存归属，恢复入口通过原 writer 补齐未绑定归属；已绑定值不依赖目录册可用性。批量初始化由 CLI `session initialize-projects [after-session-id]` 或 Desktop 显式操作触发，每批最多 100 个；未对真实用户日志执行初始化。
 
 ### 4.2 写入边界与故障
 

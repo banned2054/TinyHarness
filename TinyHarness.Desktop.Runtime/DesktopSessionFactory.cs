@@ -1,9 +1,11 @@
 using System.Collections.Concurrent;
-using TinyHarness.Core.Models.ChatCompletions;
+using TinyHarness.Core.Exceptions;
 using TinyHarness.Core.Models.Agent;
+using TinyHarness.Core.Models.ChatCompletions;
 using TinyHarness.Core.Models.Configuration;
 using TinyHarness.Core.Models.Context;
 using TinyHarness.Core.Models.Persistence;
+using TinyHarness.Core.Models.Project;
 using TinyHarness.Core.Models.Session;
 using TinyHarness.Core.Models.Tools;
 using TinyHarness.Core.Services.ChatCompletions;
@@ -21,8 +23,11 @@ using TinyHarness.Desktop.Runtime.Prompts;
 namespace TinyHarness.Desktop.Runtime;
 
 /// <summary>
-    ///     <para>提供桌面文本与历史投影，诊断脱敏，不暴露原始协议载荷或不透明推理。</para>
-    ///     <para>Provides desktop text and history projections with redacted diagnostics, without raw protocol payloads or opaque reasoning.</para>
+///     <para>提供桌面文本与历史投影，诊断脱敏，不暴露原始协议载荷或不透明推理。</para>
+///     <para>
+///         Provides desktop text and history projections with redacted diagnostics, without raw protocol payloads or
+///         opaque reasoning.
+///     </para>
 /// </summary>
 public sealed record DesktopEvent(
     string              Kind,
@@ -43,7 +48,11 @@ public sealed record DesktopSessionRequest(
     bool                  ShowReasoning   = false,
     ModelReasoningEffort? Effort          = null,
     bool                  EffortSpecified = false,
-    bool                  Reselect        = false);
+    bool                  Reselect        = false)
+{
+    public string? ProjectId      { get; init; }
+    public string? StoreDirectory { get; init; }
+}
 
 /// <summary>
 ///     <para>独立于 CLI 组装桌面宿主，复用 Core 的模型、权限、工具和唯一日志。</para>
@@ -51,20 +60,17 @@ public sealed record DesktopSessionRequest(
 /// </summary>
 public sealed class DesktopSessionFactory
 {
+    private readonly ICredentialStore                                       _credentials;
     private readonly Func<TinyHarnessConfig, string, IChatCompletionClient> _modelFactory;
-    private readonly ICredentialStore _credentials;
-    private readonly string?          _userConfigPath;
     private readonly ConcurrentDictionary<string, string>                   _secrets = new(StringComparer.Ordinal);
-
-    /// <summary>
-    /// <para>用入口生命周期内全部已知密钥处理诊断。</para>
-    /// <para>Redacts diagnostics with every key known during this entry's lifetime.</para>
-    /// </summary>
-    public string Redact(string text) => new DisplaySecretRedactor(_secrets).Redact(text);
+    private readonly string?                                                _userConfigPath;
 
     /// <summary>
     ///     <para>允许离线验收注入模型与凭据存储；生产默认使用 Core 的正式客户端和系统凭据。</para>
-    ///     <para>Allows offline acceptance to inject models and credentials; production uses Core clients and system credentials.</para>
+    ///     <para>
+    ///         Allows offline acceptance to inject models and credentials; production uses Core clients and system
+    ///         credentials.
+    ///     </para>
     /// </summary>
     public DesktopSessionFactory(Func<TinyHarnessConfig, string, IChatCompletionClient>? modelFactory = null,
                                  ICredentialStore? credentials = null, string? userConfigPath = null)
@@ -76,15 +82,25 @@ public sealed class DesktopSessionFactory
     }
 
     /// <summary>
+    ///     <para>用入口生命周期内全部已知密钥处理诊断。</para>
+    ///     <para>Redacts diagnostics with every key known during this entry's lifetime.</para>
+    /// </summary>
+    public string Redact(string text) => new DisplaySecretRedactor(_secrets).Redact(text);
+
+    /// <summary>
     ///     <para>只读解析草稿的生效模型配置；不读取密钥、不创建客户端或会话。</para>
     ///     <para>Resolves the effective draft model configuration without reading secrets or creating clients or sessions.</para>
     /// </summary>
-    public Task<ConfigResolution> ResolveDefaultConfigAsync(string workspaceRoot, CancellationToken cancellationToken) =>
+    public Task<ConfigResolution>
+        ResolveDefaultConfigAsync(string workspaceRoot, CancellationToken cancellationToken) =>
         ConfigResolver.ResolveAsync(null, cancellationToken, workspaceRoot, _userConfigPath);
 
     /// <summary>
     ///     <para>读取可信设置，建立新会话或严格恢复；失败释放所有已打开的资源，不发送模型请求。</para>
-    ///     <para>Reads trusted settings and creates or strictly resumes a session; failures release resources without model calls.</para>
+    ///     <para>
+    ///         Reads trusted settings and creates or strictly resumes a session; failures release resources without model
+    ///         calls.
+    ///     </para>
     /// </summary>
     public async Task<DesktopSession> OpenAsync(
         DesktopSessionRequest             request,         Func<DesktopEvent, ValueTask> events,
@@ -113,6 +129,9 @@ public sealed class DesktopSessionFactory
                 WorkspaceRoot = root
             };
         var directory = SessionStorePaths.ResolveProtected(user.Settings?.SessionStoreDirectory, root);
+        if (request.StoreDirectory is { } expectedDirectory &&
+            !ProjectRoots.AreEqual(directory, Path.GetFullPath(expectedDirectory)))
+            throw new InvalidOperationException("会话存储位置已改变，请刷新后重试。");
         var secrets   = _secrets;
         var redactor  = new DisplaySecretRedactor(secrets);
         var approvals = new DesktopApprovalProvider(approvalChanged, redactor.Redact);
@@ -135,7 +154,7 @@ public sealed class DesktopSessionFactory
             new ListFilesTool(workspace), new SearchTextTool(workspace), new ReadFileTool(workspace),
             new ApplyPatchTool(workspace),
             new ShellTool(workspace, config.DefaultToolTimeoutSeconds, secrets,
-                          processBackend : sandbox?.Backend ?? (IProcessExecutionBackend)new HostProcessBackend(secrets),
+                          processBackend : sandbox?.Backend ?? new HostProcessBackend(secrets),
                           executionPolicy : sandbox?.ExecutionPolicy)
         ];
         var tools = new ToolRegistry(toolSet.Select(tool => access.Guard(() => tool)));
@@ -167,24 +186,25 @@ public sealed class DesktopSessionFactory
                                                  .ConfigureAwait(false);
                 var snapshot = writer.LoadedSnapshot!;
                 var restored = SessionResume.Restore(snapshot, root, WorkspacePrompts.Current, options.Context);
-                var saved    = restored.Session.ModelSelection;
+                await SessionProjectBinding.BindRestoredAsync(directory, restored.Session, writer, cancellationToken)
+                                           .ConfigureAwait(false);
+                var     saved       = restored.Session.ModelSelection;
                 // 旧日志允许没有选择记录；宿主接管前按初始模型定位，缺失强度保持未知。
-                var savedModel  = saved?.Model ?? restored.Session.InitialModel;
-                var savedEffort = saved?.ReasoningEffort;
-                var target = FindTarget(user, saved, savedModel);
-                string? reason = null;
+                var     savedModel  = saved?.Model ?? restored.Session.InitialModel;
+                var     savedEffort = saved?.ReasoningEffort;
+                var     target      = FindTarget(user, saved, savedModel);
+                string? reason      = null;
                 if (!request.Reselect && target is { } resolved)
-                {
                     try
                     {
                         model = CreateClient(ConfigFor(config, resolved.Profile, resolved.Model),
                                              resolved.Profile.Name);
                     }
-                    catch (Exception ex) when (ex is Core.Exceptions.ConfigException or InvalidOperationException)
+                    catch (Exception ex) when (ex is ConfigException or InvalidOperationException)
                     {
                         reason = Redact(ex.Message);
                     }
-                }
+
                 // 客户端按当前目录构造，接管后先提交配置刷新；提交前不发送任何历史。
                 host = new ChatSessionHost(restored.Session, restored.Context,
                                            options with
@@ -202,7 +222,6 @@ public sealed class DesktopSessionFactory
                     await events(new DesktopEvent("error", null, "模型配置暂不可用，请检查配置后重试。" + reason))
                        .ConfigureAwait(false);
                 else
-                {
                     try
                     {
                         await ChangeAsync(host, target.Value.Profile, target.Value.Model,
@@ -210,12 +229,11 @@ public sealed class DesktopSessionFactory
                                           host.Session.ModelSelection!.Revision, cancellationToken, model)
                            .ConfigureAwait(false);
                     }
-                    catch (Exception ex) when (ex is Core.Exceptions.ConfigException or InvalidOperationException)
+                    catch (Exception ex) when (ex is ConfigException or InvalidOperationException)
                     {
                         await events(new DesktopEvent("error", null, "模型配置暂不可用，请检查配置后重试。" + Redact(ex.Message)))
                            .ConfigureAwait(false);
                     }
-                }
             }
             else
             {
@@ -241,9 +259,13 @@ public sealed class DesktopSessionFactory
                     CredentialRoute.Describe(profile?.Name, config.ApiKeyEnvironmentVariable,
                                              config.ApiKeyCredentialTarget);
                 var initial = await instructions.LoadAsync(null, [], cancellationToken).ConfigureAwait(false);
-                var session = new ChatSession(Guid.NewGuid().ToString("N"), root, identity);
+                var project = await SessionProjectBinding.GetProjectAsync(directory, root, cancellationToken)
+                                                         .ConfigureAwait(false);
+                if (request.ProjectId is { } expectedProject && expectedProject != project.Id)
+                    throw new InvalidOperationException("项目归属已改变，请刷新项目后重试。");
+                var session = new ChatSession(Guid.NewGuid().ToString("N"), root, identity, null, project.Id);
                 var context = new ConversationContext(options.Context);
-                context.Append(Core.Models.ChatCompletions.ChatMessage.System(WorkspacePrompts.Current));
+                context.Append(ChatMessage.System(WorkspacePrompts.Current));
                 writer = new SessionStoreWriter(directory, session.Id, secrets);
                 host = new ChatSessionHost(session, context, options, model, tools, WorkspacePrompts.Current,
                                            permissions, approvals, sink, sessionWriter : writer,
@@ -252,7 +274,7 @@ public sealed class DesktopSessionFactory
                 await host.ChangeModelAsync(new SessionModelBinding(identity, model!, options.Context,
                                                                     options.ReasoningEffort,
                                                                     credentialRoute, profile?.Name,
-                                                                    selected?.ReasoningEfforts, ownsClient: false),
+                                                                    selected?.ReasoningEfforts, false),
                                             cancellationToken).ConfigureAwait(false);
             }
 
@@ -264,7 +286,10 @@ public sealed class DesktopSessionFactory
         catch
         {
             // 已构造宿主拥有 writer 与客户端；未构造时两者仍归本方法释放。
-            if (host is not null) host.Dispose();
+            if (host is not null)
+            {
+                host.Dispose();
+            }
             else
             {
                 writer?.Dispose();
@@ -311,8 +336,8 @@ public sealed class DesktopSessionFactory
     }
 
     private async Task<SessionModelSelection> ChangeAsync(
-        ChatSessionHost host, UserProfile profile, UserProfileModel model, ModelReasoningEffort? effort,
-        long revision, CancellationToken token, IChatCompletionClient? preparedClient = null)
+        ChatSessionHost host,     UserProfile       profile, UserProfileModel       model, ModelReasoningEffort? effort,
+        long            revision, CancellationToken token,   IChatCompletionClient? preparedClient = null)
     {
         if (effort is { } level && model.ReasoningEfforts?.Contains(level) != true)
             throw new InvalidOperationException("模型未声明该强度。");
@@ -322,24 +347,24 @@ public sealed class DesktopSessionFactory
         {
             ContextWindowTokens = model.ContextWindowTokens
         };
-        if (host.HasModelBinding &&
-            current.Revision == revision &&
-            current.Model.ModelId == model.Id &&
-            current.Model.Endpoint == profile.Endpoint &&
-            current.Model.ChatApi == profile.ChatApi &&
-            current.CredentialRoute == Route(profile) &&
-            current.ProfileHint == profile.Name &&
-            current.Context == context &&
+        if (host.HasModelBinding                        &&
+            current.Revision        == revision         &&
+            current.Model.ModelId   == model.Id         &&
+            current.Model.Endpoint  == profile.Endpoint &&
+            current.Model.ChatApi   == profile.ChatApi  &&
+            current.CredentialRoute == Route(profile)   &&
+            current.ProfileHint     == profile.Name     &&
+            current.Context         == context          &&
             (current.ReasoningCapabilities ?? []).SequenceEqual(model.ReasoningEfforts ?? []))
             return await host.ChangeReasoningEffortAsync(effort, token, model.ReasoningEfforts,
-                                                         expectedRevision: revision).ConfigureAwait(false);
+                                                         revision).ConfigureAwait(false);
         var client = preparedClient ??
                      CreateClient(ConfigFor(new TinyHarnessConfig { WorkspaceRoot = host.Session.WorkspaceRoot },
                                             profile, model), profile.Name);
         var candidate = new SessionModelBinding(new SessionModelIdentity(model.Id, profile.Endpoint, profile.ChatApi),
                                                 client,
                                                 context, effort, Route(profile), profile.Name, model.ReasoningEfforts,
-                                                ownsClient : preparedClient is null);
+                                                preparedClient is null);
         try
         {
             return await host.ChangeModelAsync(candidate, token, revision).ConfigureAwait(false);
@@ -353,7 +378,10 @@ public sealed class DesktopSessionFactory
 
     /// <summary>
     ///     <para>发送前按原供应商和模型刷新绑定；目标缺失时保留草稿并要求重选，刷新失败不发送。</para>
-    ///     <para>Refreshes the binding for the same provider and model before sending; missing targets require re-selection and failed refreshes prevent sending.</para>
+    ///     <para>
+    ///         Refreshes the binding for the same provider and model before sending; missing targets require re-selection
+    ///         and failed refreshes prevent sending.
+    ///     </para>
     /// </summary>
     private async Task RefreshCurrentAsync(ChatSessionHost host, CancellationToken token)
     {
@@ -374,7 +402,10 @@ public sealed class DesktopSessionFactory
 
     /// <summary>
     ///     <para>按供应商名和模型 ID 定位当前目录项；无供应商信息的旧日志仅允许唯一身份匹配。</para>
-    ///     <para>Locates the current catalog entry by provider name and model ID; legacy logs without a provider require a unique identity match.</para>
+    ///     <para>
+    ///         Locates the current catalog entry by provider name and model ID; legacy logs without a provider require a
+    ///         unique identity match.
+    ///     </para>
     /// </summary>
     private static (UserProfile Profile, UserProfileModel Model)? FindTarget(
         UserConfig user, SessionModelSelection? saved, SessionModelIdentity identity)
@@ -382,7 +413,7 @@ public sealed class DesktopSessionFactory
         var name = saved?.ProfileHint;
         if (name is null && saved?.CredentialRoute is { } route)
         {
-            var separator = route.IndexOf('|');
+            var separator           = route.IndexOf('|');
             if (separator > 0) name = route[..separator];
         }
 
@@ -423,23 +454,23 @@ internal sealed class DesktopEventSink(
 
     public async ValueTask PublishAsync(HostEvent @event, CancellationToken cancellationToken)
     {
-        DesktopEvent? display = @event.Kind switch
+        var display = @event.Kind switch
         {
             HostEventKind.AssistantTextDelta when @event.Payload is string text =>
-                new("text", @event.RunId, text),
+                new DesktopEvent("text", @event.RunId, text),
             HostEventKind.AssistantReasoningDelta when @event.Payload is string text =>
-                new("reasoning", @event.RunId, text),
+                new DesktopEvent("reasoning", @event.RunId, text),
             HostEventKind.HistoryItemCompleted when @event.Payload is SessionHistoryItem item =>
-                new("history", @event.RunId, History : item),
-            HostEventKind.RunStarted => new("state", @event.RunId, "运行中"),
+                new DesktopEvent("history", @event.RunId, History : item),
+            HostEventKind.RunStarted => new DesktopEvent("state", @event.RunId, "运行中"),
             HostEventKind.RunControlChanged when @event.Payload is string state =>
-                new("state", @event.RunId, state),
-            HostEventKind.ModelRequestStarted => new("state", @event.RunId, "等待模型响应"),
-            HostEventKind.ModelRequestWaiting => new("state", @event.RunId, "等待模型响应"),
-            HostEventKind.ToolStarted         => new("state", @event.RunId, "工具执行中"),
-            HostEventKind.RunError when @event.Payload is string error => new("error", @event.RunId,
-                _diagnostics.Redact(error)),
-            HostEventKind.RunFinished => new("state", @event.RunId, "正在保存"),
+                new DesktopEvent("state", @event.RunId, state),
+            HostEventKind.ModelRequestStarted => new DesktopEvent("state", @event.RunId, "等待模型响应"),
+            HostEventKind.ModelRequestWaiting => new DesktopEvent("state", @event.RunId, "等待模型响应"),
+            HostEventKind.ToolStarted         => new DesktopEvent("state", @event.RunId, "工具执行中"),
+            HostEventKind.RunError when @event.Payload is string error => new DesktopEvent("error", @event.RunId,
+                     _diagnostics.Redact(error)),
+            HostEventKind.RunFinished => new DesktopEvent("state", @event.RunId, "正在保存"),
             _                         => null
         };
         if (display is not null) await publish(display).ConfigureAwait(false);

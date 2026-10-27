@@ -92,6 +92,15 @@ internal static class CommandLine
         var subcommand = args[0].ToLowerInvariant();
         switch (subcommand)
         {
+            case "initialize-projects" :
+                if (args.Length > 2 || (args.Length == 2 && !SessionStorePaths.IsValidSessionId(args[1])))
+                    throw new CliUsageException("Use session initialize-projects [after-session-id].", usage);
+                return new CliOptions
+                {
+                    Kind    = CliCommandKind.Session, Subcommand = subcommand,
+                    Primary = args.Length == 2 ? args[1].ToLowerInvariant() : null
+                };
+
             case "list" :
                 return args.Length > 1
                     ? throw new CliUsageException($"Unknown argument '{args[1]}' for session list.", usage)

@@ -7,7 +7,10 @@ namespace TinyHarness.Core.Services.Persistence;
 
 /// <summary>
 ///     <para>单次会话归属初始化的结果状态：本次追加绑定、已保持既有绑定、writer 被占用待重试，或读取/追加失败。</para>
-///     <para>Per-session ownership-initialization outcomes: newly bound this run, existing binding kept, writer held for a later retry, or a read or append failure.</para>
+///     <para>
+///         Per-session ownership-initialization outcomes: newly bound this run, existing binding kept, writer held for a
+///         later retry, or a read or append failure.
+///     </para>
 /// </summary>
 public enum SessionProjectBindingStatus
 {
@@ -19,7 +22,10 @@ public enum SessionProjectBindingStatus
 
 /// <summary>
 ///     <para>一个会话的初始化事实：会话 ID、保存的执行根、结果状态、项目 ID 与不含凭据的失败/待处理原因。</para>
-///     <para>One session's initialization fact: session id, saved workspace root, outcome, project id, and a credential-free pending or failure reason.</para>
+///     <para>
+///         One session's initialization fact: session id, saved workspace root, outcome, project id, and a
+///         credential-free pending or failure reason.
+///     </para>
 /// </summary>
 public sealed record SessionProjectBindingOutcome(
     string                      SessionId,
@@ -137,7 +143,10 @@ public static class SessionProjectInitializer
     /// </param>
     /// <param name="maxSessions">
     ///     <para>本次实际检查的最大日志数；null 不限制，剩余部分由 HasMore/NextCursor 指示。</para>
-    ///     <para>The maximum number of logs examined this run; null means no limit, with the remainder indicated by HasMore/NextCursor.</para>
+    ///     <para>
+    ///         The maximum number of logs examined this run; null means no limit, with the remainder indicated by
+    ///         HasMore/NextCursor.
+    ///     </para>
     /// </param>
     /// <param name="utcNow">
     ///     <para>创建项目时使用的时间；null 使用当前时间。</para>
@@ -145,7 +154,10 @@ public static class SessionProjectInitializer
     /// </param>
     /// <returns>
     ///     <para>逐会话事实、项目事实、取消标记、续扫游标与剩余指示；未检查的日志不在 Outcomes 中。</para>
-    ///     <para>Per-session facts, project facts, cancellation, the continuation cursor, and the remaining flag; unexamined logs are absent from Outcomes.</para>
+    ///     <para>
+    ///         Per-session facts, project facts, cancellation, the continuation cursor, and the remaining flag; unexamined
+    ///         logs are absent from Outcomes.
+    ///     </para>
     /// </returns>
     /// <exception cref="ArgumentException">
     ///     <para>存储目录为空。</para>
@@ -162,7 +174,7 @@ public static class SessionProjectInitializer
     public static Task<SessionProjectInitializationResult> InitializeAsync(
         string storeDirectory, string? afterSessionId = null, int? maxSessions = null, DateTimeOffset? utcNow = null,
         CancellationToken cancellationToken = default) =>
-        InitializeAsync(storeDirectory, afterSessionId, maxSessions, utcNow, ownershipAppend: null,
+        InitializeAsync(storeDirectory, afterSessionId, maxSessions, utcNow, null,
                         cancellationToken);
 
     /// <summary>
@@ -215,11 +227,12 @@ public static class SessionProjectInitializer
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             throw new SessionStoreException(
-                $"Cannot enumerate the session store directory '{Path.GetFullPath(storeDirectory)}': {ex.Message}", ex);
+                                            $"Cannot enumerate the session store directory '{Path.GetFullPath(storeDirectory)}': {ex.Message}",
+                                            ex);
         }
 
         var eligible = orderedIds.Where(id => afterSessionId is null ||
-                                             string.CompareOrdinal(id, afterSessionId) > 0)
+                                              string.CompareOrdinal(id, afterSessionId) > 0)
                                  .ToList();
         var examined        = maxSessions is { } limit ? eligible.Take(limit).ToList() : eligible;
         var moreFilesRemain = examined.Count < eligible.Count;
@@ -238,28 +251,20 @@ public static class SessionProjectInitializer
                 // 单日志严格读取：处理完立即释放投影，只保留结果元数据。
                 var snapshot = await ReadSessionSnapshotAsync(storeDirectory, sessionId, cancellationToken);
                 if (snapshot.Error is not null)
-                {
                     outcomes.Add(new SessionProjectBindingOutcome(sessionId, string.Empty,
                                                                   SessionProjectBindingStatus.Failed, null,
                                                                   snapshot.Error));
-                }
                 else if (snapshot.Session!.ProjectId is { } boundProjectId)
-                {
                     // 已绑定条目保持原值；即使目录册缺失也不重建换绑，本服务不为其执行任何写入。
                     outcomes.Add(new SessionProjectBindingOutcome(sessionId, snapshot.Session.WorkspaceRoot,
                                                                   SessionProjectBindingStatus.AlreadyBound,
                                                                   boundProjectId, null));
-                }
-                else if (RootValidationError(snapshot.Session.WorkspaceRoot) is { } rootError)
-                {
+                else if (RootValidationError(storeDirectory, snapshot.Session.WorkspaceRoot) is { } rootError)
                     outcomes.Add(new SessionProjectBindingOutcome(sessionId, snapshot.Session.WorkspaceRoot,
                                                                   SessionProjectBindingStatus.Failed, null,
                                                                   rootError));
-                }
                 else
-                {
                     candidates.Add((sessionId, snapshot.Session.WorkspaceRoot));
-                }
             }
 
             // 先创建或复用项目并释放目录册锁，再进入会话 writer 边界；目录册错误按候选逐项失败，不覆盖目录册。
@@ -299,7 +304,7 @@ public static class SessionProjectInitializer
                 }
 
                 var open = await SessionStoreWriter.TryOpenExistingAsync(storeDirectory, sessionId, null,
-                                                                          cancellationToken).ConfigureAwait(false);
+                                                                         cancellationToken).ConfigureAwait(false);
                 if (open.Status != SessionWriterOpenStatus.Opened)
                 {
                     // 锁占用（含本进程宿主）仅待处理；其余打开或严格读取失败单独报告，不修复。
@@ -329,7 +334,7 @@ public static class SessionProjectInitializer
                         continue;
                     }
 
-                    if (RootValidationError(reloaded.WorkspaceRoot) is { } reloadedRootError)
+                    if (RootValidationError(storeDirectory, reloaded.WorkspaceRoot) is { } reloadedRootError)
                     {
                         outcomes.Add(new SessionProjectBindingOutcome(sessionId, reloaded.WorkspaceRoot,
                                                                       SessionProjectBindingStatus.Failed, null,
@@ -340,8 +345,9 @@ public static class SessionProjectInitializer
                     if (!ProjectRoots.AreEqual(ProjectRoots.Normalize(reloaded.WorkspaceRoot), normalizedRoot))
                     {
                         outcomes.Add(new SessionProjectBindingOutcome(
-                                         sessionId, reloaded.WorkspaceRoot, SessionProjectBindingStatus.Failed, null,
-                                         $"The session's saved workspace root changed since the scan ('{reloaded.WorkspaceRoot}'); it was not bound to the scanned project."));
+                                                                      sessionId, reloaded.WorkspaceRoot,
+                                                                      SessionProjectBindingStatus.Failed, null,
+                                                                      $"The session's saved workspace root changed since the scan ('{reloaded.WorkspaceRoot}'); it was not bound to the scanned project."));
                         continue;
                     }
 
@@ -429,7 +435,10 @@ public static class SessionProjectInitializer
 
     /// <summary>
     ///     <para>读取单个日志快照；预期格式与存储异常转为失败消息，取消原样传播。</para>
-    ///     <para>Reads one log snapshot; expected format and storage exceptions become failure messages while cancellation propagates.</para>
+    ///     <para>
+    ///         Reads one log snapshot; expected format and storage exceptions become failure messages while cancellation
+    ///         propagates.
+    ///     </para>
     /// </summary>
     private static async Task<(PersistedSession? Session, string? Error)> ReadSessionSnapshotAsync(
         string storeDirectory, string sessionId, CancellationToken cancellationToken)
@@ -456,20 +465,26 @@ public static class SessionProjectInitializer
 
     /// <summary>
     ///     <para>校验保存的执行根：空白、相对或无法规范化的根返回错误，不改用进程目录推测。</para>
-    ///     <para>Validates the saved workspace root: blank, relative, or unnormalizable roots return an error instead of being guessed against the process directory.</para>
+    ///     <para>
+    ///         Validates the saved workspace root: blank, relative, or unnormalizable roots return an error instead of being
+    ///         guessed against the process directory.
+    ///     </para>
     /// </summary>
-    private static string? RootValidationError(string workspaceRoot)
+    private static string? RootValidationError(string storeDirectory, string workspaceRoot)
     {
         if (string.IsNullOrWhiteSpace(workspaceRoot))
             return "The session's saved workspace root is empty.";
         if (!Path.IsPathFullyQualified(workspaceRoot))
-            return $"The session's saved workspace root '{workspaceRoot}' is not an absolute path; it was not resolved against the process directory.";
+            return
+                $"The session's saved workspace root '{workspaceRoot}' is not an absolute path; it was not resolved against the process directory.";
         try
         {
             ProjectRoots.Normalize(workspaceRoot);
+            SessionStorePaths.ResolveProtected(storeDirectory, workspaceRoot);
         }
-        catch (Exception ex) when (ex is ProjectStoreException or ArgumentException or InvalidOperationException or
-                                       PathTooLongException or NotSupportedException)
+        catch (Exception ex) when (ex is ProjectStoreException or SessionStoreException or ArgumentException
+                                      or InvalidOperationException or
+                                         PathTooLongException or NotSupportedException)
         {
             return $"The session's saved workspace root '{workspaceRoot}' cannot be normalized: {ex.Message}";
         }

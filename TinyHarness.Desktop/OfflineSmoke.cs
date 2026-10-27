@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using TinyHarness.Core.Models.Agent;
 using TinyHarness.Core.Models.ChatCompletions;
 using TinyHarness.Core.Models.Configuration;
 using TinyHarness.Core.Services.ChatCompletions;
@@ -64,13 +65,17 @@ internal static class OfflineSmoke
                                                                              _ => ValueTask.CompletedTask,
                                                                              _ => ValueTask.CompletedTask, token));
 
-                var first  = await Open();
-                var second = await Open();
+                var first    = await Open();
+                var second   = await Open();
+                var projects = await ProjectStore.LoadAsync(ProjectStore.FilePath(store), CancellationToken.None);
+                if (projects.Projects.Count      != 1 || first.Host.Session.ProjectId != projects.Projects[0].Id ||
+                    first.Host.Session.ProjectId != second.Host.Session.ProjectId)
+                    throw new InvalidOperationException("Desktop sessions did not share the reliably saved project.");
                 firstId = first.Id;
                 var firstRun  = first.SubmitAsync("offline first");
                 var secondRun = second.SubmitAsync("offline second");
                 var runs      = await Task.WhenAll(firstRun, secondRun).WaitAsync(TimeSpan.FromSeconds(20));
-                if (first.Id == second.Id || runs.Any(run => run.Result?.Status != Core.Models.Agent.AgentStatus.Completed))
+                if (first.Id == second.Id || runs.Any(run => run.Result?.Status != AgentStatus.Completed))
                     throw new InvalidOperationException("Parallel desktop sessions did not complete independently.");
                 if (first.Host.PersistenceWarning is not null || second.Host.PersistenceWarning is not null)
                     throw new InvalidOperationException("Desktop sessions were not reliably saved.");
@@ -103,19 +108,20 @@ internal static class OfflineSmoke
                                                                                  SessionId : firstId),
                                                                              _ => ValueTask.CompletedTask,
                                                                              _ => ValueTask.CompletedTask, token));
-                if (restored.Host.Session.Turns.Count != 3 ||
-                    restored.Host.Session.ModelSelection?.Model.ModelId != "flash" ||
-                    restored.Host.Session.ModelSelection.ReasoningEffort != ModelReasoningEffort.High ||
-                    restored.Host.Session.ModelSelection.Model.Endpoint != "https://refreshed.invalid/v1" ||
+                if (restored.Host.Session.Turns.Count                    != 3                              ||
+                    restored.Host.Session.ModelSelection?.Model.ModelId  != "flash"                        ||
+                    restored.Host.Session.ModelSelection.ReasoningEffort != ModelReasoningEffort.High      ||
+                    restored.Host.Session.ModelSelection.Model.Endpoint  != "https://refreshed.invalid/v1" ||
                     restored.Host.Session.ModelSelection.CredentialRoute != "offline|credential:offline-updated")
-                    throw new InvalidOperationException("Resume lost history or failed to refresh the existing target.");
+                    throw
+                        new InvalidOperationException("Resume lost history or failed to refresh the existing target.");
                 var run = await restored.SubmitAsync("offline resumed");
-                if (run.Result?.Status != Core.Models.Agent.AgentStatus.Completed)
+                if (run.Result?.Status != AgentStatus.Completed)
                     throw new InvalidOperationException("Resumed turn failed.");
             }
 
             var saved = await SessionStoreReader.ReadAsync(store, firstId, CancellationToken.None);
-            if (saved?.Turns.Count != 4 || createdModels != 6)
+            if (saved?.Turns.Count != 4 || saved.ProjectId is null || createdModels != 6)
                 throw new InvalidOperationException("Persistence or client ownership failed.");
             Console.WriteLine($"PASS desktop: parallel=2 switched=A/B/A/B refreshed=true resumedTurns=4 disposedClients={createdModels}; fixture={root}");
             return 0;

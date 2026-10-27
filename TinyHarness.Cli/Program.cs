@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text;
 using TinyHarness.Cli.Commands;
 using TinyHarness.Cli.Exceptions;
@@ -185,10 +186,15 @@ internal static class Program
         var instructionLoader = new ProjectInstructionLoader(new Workspace(composition.Config.WorkspaceRoot));
         var initialInstructions = await instructionLoader.LoadAsync(null, [], cts.Token).ConfigureAwait(false);
 
-        using var host = new ChatSessionHost(composition.Config.WorkspaceRoot,
-                                             new SessionModelIdentity(composition.Config.Model,
-                                                                      composition.Config.Endpoint,
-                                                                      composition.Config.ChatApi),
+        var project = await SessionProjectBinding.GetProjectAsync(composition.SessionStoreDirectory!,
+                                                                  composition.Config.WorkspaceRoot, cts.Token)
+                                                 .ConfigureAwait(false);
+        var session = new ChatSession(Guid.NewGuid().ToString("N"), composition.Config.WorkspaceRoot,
+                                      new SessionModelIdentity(composition.Config.Model, composition.Config.Endpoint,
+                                                               composition.Config.ChatApi), null, project.Id);
+        var context = new ConversationContext(composition.Options.Context);
+        context.Append(ChatMessage.System(WorkspacePrompts.Current));
+        using var host = new ChatSessionHost(session, context,
                                              composition.Options,
                                              composition.Model!,
                                              composition.Tools,
@@ -196,9 +202,8 @@ internal static class Program
                                              composition.Permissions,
                                              approver,
                                              events,
-                                             sessionWriterFactory : sessionId =>
-                                                 new SessionStoreWriter(composition.SessionStoreDirectory!, sessionId,
-                                                                        composition.KnownSecrets),
+                                             sessionWriter : new SessionStoreWriter(composition.SessionStoreDirectory!,
+                                                      session.Id, composition.KnownSecrets),
                                              instructionLoader : instructionLoader,
                                              initialInstructions : initialInstructions,
                                              knownSecrets : composition.KnownSecrets,
@@ -283,7 +288,7 @@ internal static class Program
                                                   true)
            .ConfigureAwait(false);
         var config           = composition.Config;
-        var selectionSecrets = (System.Collections.Concurrent.ConcurrentDictionary<string, string>)composition.KnownSecrets;
+        var selectionSecrets = (ConcurrentDictionary<string, string>)composition.KnownSecrets;
         await using var events =
             new ConsoleHostEventSink(composition.KnownSecrets, reasoningDisplay : reasoningDisplay);
 
@@ -324,11 +329,11 @@ internal static class Program
                             ?? throw new InvalidOperationException("Draft provider was removed; select again.");
                 var model = provider.Models.SingleOrDefault(item => item.Id == draft.Model.Id)
                          ?? throw new InvalidOperationException("Draft model was removed; select again.");
-                if (provider.Endpoint != draft.Profile.Endpoint ||
-                    provider.ChatApi != draft.Profile.ChatApi ||
-                    provider.ApiKeyCredentialTarget != draft.Profile.ApiKeyCredentialTarget ||
+                if (provider.Endpoint                  != draft.Profile.Endpoint                  ||
+                    provider.ChatApi                   != draft.Profile.ChatApi                   ||
+                    provider.ApiKeyCredentialTarget    != draft.Profile.ApiKeyCredentialTarget    ||
                     provider.ApiKeyEnvironmentVariable != draft.Profile.ApiKeyEnvironmentVariable ||
-                    model.ContextWindowTokens != draft.Model.ContextWindowTokens ||
+                    model.ContextWindowTokens          != draft.Model.ContextWindowTokens         ||
                     !(model.ReasoningEfforts ?? []).SequenceEqual(draft.Model.ReasoningEfforts ?? []))
                     throw new InvalidOperationException("Draft configuration changed; select again before sending.");
                 selectedOptions = selectedOptions with
@@ -348,7 +353,11 @@ internal static class Program
                 throw new InvalidOperationException("Select a configured model with /models use before sending.");
 
             token.ThrowIfCancellationRequested();
-            var session = new ChatSession(Guid.NewGuid().ToString("N"), config.WorkspaceRoot, selectedIdentity);
+            var project = await SessionProjectBinding.GetProjectAsync(composition.SessionStoreDirectory!,
+                                                                      config.WorkspaceRoot,
+                                                                      token).ConfigureAwait(false);
+            var session = new ChatSession(Guid.NewGuid().ToString("N"), config.WorkspaceRoot, selectedIdentity,
+                                          null, project.Id);
             var context = new ConversationContext(selectedOptions.Context);
             context.Append(ChatMessage.System(WorkspacePrompts.Current));
             var writer =
@@ -376,13 +385,16 @@ internal static class Program
                                                                            selectedRoute,
                                                                            draft?.Profile.Name ?? initialProfile?.Name,
                                                                            draft?.Model.ReasoningEfforts ??
-                                                                           initialModel?.ReasoningEfforts, ownsClient: false),
+                                                                           initialModel?.ReasoningEfforts, false),
                                                    token).ConfigureAwait(false);
                 return createdHost;
             }
             catch
             {
-                if (createdHost is not null) createdHost.Dispose();
+                if (createdHost is not null)
+                {
+                    createdHost.Dispose();
+                }
                 else
                 {
                     writer.Dispose();
@@ -408,6 +420,8 @@ internal static class Program
                 // 历史模型已删除不构成日志损坏，也不解析其凭据或构造其客户端。
                 var restored = SessionResume.Restore(snapshot, config.WorkspaceRoot, WorkspacePrompts.Current,
                                                      composition.Options.Context);
+                await SessionProjectBinding.BindRestoredAsync(composition.SessionStoreDirectory!, restored.Session,
+                                                              writer, token).ConfigureAwait(false);
 
                 // 再解析可执行目标：默认最后已提交选择；失效、歧义或能力不再支持时不悄悄改用全局默认。
                 var outcome =
@@ -427,7 +441,7 @@ internal static class Program
                 {
                     // 目标不可解析：以未绑定宿主接管已恢复历史与写入端，等待用户显式选择后再发送。
                     host = new ChatSessionHost(restored.Session, restored.Context, composition.Options,
-                                               modelClient : null, composition.Tools, WorkspacePrompts.Current,
+                                               null, composition.Tools, WorkspacePrompts.Current,
                                                NewPermissions(),
                                                new ConsoleApprovalProvider(reader, Console.Out,
                                                                            composition.KnownSecrets),
@@ -466,8 +480,8 @@ internal static class Program
                                                                         current.ReasoningEffort,
                                                                         target.CredentialRoute, target.ProfileHint,
                                                                         target.CurrentCapabilities,
-                                                                        ownsClient : false),
-                                                token, expectedRevision : current.Revision).ConfigureAwait(false);
+                                                                        false),
+                                                token, current.Revision).ConfigureAwait(false);
                     await Console.Out.WriteLineAsync(
                                                      $"  window    : the model's current context window ({refreshed.ContextWindowTokens:N0} tokens) " +
                                                      "was saved as a new selection revision");
@@ -496,9 +510,12 @@ internal static class Program
                                                    $"{startupRoute})");
                 }
                 else
+                {
                     await
                         Console.Out.WriteLineAsync("  route     : resumed with the session's saved credential route " +
                                                    $"'{target.CredentialRoute}' (no startup credentials)");
+                }
+
                 if (alignedRoute.Revision != recordedRoute.Revision)
                     await Console.Out.WriteLineAsync("  route     : the credential route changed since this session " +
                                                      "was saved; the previous route's reasoning stays isolated from " +
@@ -508,7 +525,10 @@ internal static class Program
             catch
             {
                 // 已构造宿主拥有 writer 与已转交客户端；未构造时仅释放本方法构造的候选客户端与 writer。
-                if (host is not null) host.Dispose();
+                if (host is not null)
+                {
+                    host.Dispose();
+                }
                 else
                 {
                     writer.Dispose();
@@ -642,7 +662,7 @@ internal static class Program
 
         // 沙箱仅取可信用户设置，不接受项目配置；组件、路径、平台或存储保护校验失败均不回退宿主。
         var knownSecrets =
-            new System.Collections.Concurrent.ConcurrentDictionary<string, string>(SandboxCliComposition.KnownSecrets(config, apiKey),
+            new ConcurrentDictionary<string, string>(SandboxCliComposition.KnownSecrets(config, apiKey),
                                                      StringComparer.Ordinal);
         var settings    = userConfig.Settings?.WindowsSandbox;
         var accessState = new WorkspaceAccessState(WorkspaceDirectoryIdentity.Capture(config.WorkspaceRoot));
@@ -674,17 +694,14 @@ internal static class Program
                                                                  sessionStoreDirectory);
                                                         var policy = sandbox?.ExecutionPolicy ??
                                                                      ProcessExecutionPolicy.Host();
-                                                        return
-                                                            Task.FromResult((new ShellTool(new Workspace(config
-                                                                                                  .WorkspaceRoot),
-                                                                                      config.DefaultToolTimeoutSeconds,
-                                                                                      knownSecrets,
-                                                                                      processBackend :
-                                                                                      sandbox?.Backend ??
-                                                                                      new
-                                                                                          HostProcessBackend(knownSecrets),
-                                                                                      executionPolicy : policy),
-                                                                             policy));
+                                                        return Task.FromResult((
+                                                            new ShellTool(new Workspace(config.WorkspaceRoot),
+                                                                          config.DefaultToolTimeoutSeconds,
+                                                                          knownSecrets,
+                                                                          processBackend : sandbox?.Backend ??
+                                                                              new HostProcessBackend(knownSecrets),
+                                                                          executionPolicy : policy),
+                                                            policy));
                                                     });
         await access.InitializeAsync(cancellationToken).ConfigureAwait(false);
         var executionPolicy = access.Policy;

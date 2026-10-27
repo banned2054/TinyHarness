@@ -42,6 +42,7 @@ public sealed partial class SessionViewModel : ObservableObject
     private          bool                                          _running;
     private          DesktopSession?                               _runtime;
     private          SessionModelSelection?                        _savedSelection;
+    private          bool                                          _selected;
     private          string                                        _status = "就绪";
     private          MessageItemViewModel?                         _stream;
     private          long?                                         _submittedDraftRevision;
@@ -49,9 +50,17 @@ public sealed partial class SessionViewModel : ObservableObject
     private          string                                        _workspaceRoot;
 
     public SessionViewModel(
-        DesktopSessionManager manager, DesktopSessionFactory factory, string workspaceRoot,
-        string? id = null, string? storeDirectory = null, string? title = null,
+        DesktopSessionManager    manager,         DesktopSessionFactory factory,               string  workspaceRoot,
+        string?                  id       = null, string?               storeDirectory = null, string? title = null,
         Func<Action, ValueTask>? dispatch = null)
+        : this(manager, factory, workspaceRoot, id, storeDirectory, title, dispatch, null, null)
+    {
+    }
+
+    public SessionViewModel(
+        DesktopSessionManager manager,   DesktopSessionFactory factory, string workspaceRoot,
+        string?               id,        string? storeDirectory, string? title, Func<Action, ValueTask>? dispatch,
+        string?               projectId, DateTimeOffset? lastActivityUtc)
     {
         _manager           = manager;
         _factory           = factory;
@@ -59,7 +68,9 @@ public sealed partial class SessionViewModel : ObservableObject
         _workspaceRoot     = workspaceRoot;
         Id                 = id;
         StoreDirectory     = storeDirectory;
-        _title             = title ?? "新对话";
+        ProjectId          = projectId;
+        LastActivityUtc    = lastActivityUtc ?? DateTimeOffset.UtcNow;
+        _title             = title           ?? "新对话";
         SendCommand        = new AsyncCommand(SendAsync, ShowError);
         LoadHistoryCommand = new AsyncCommand(LoadHistoryAsync, ShowError);
         CancelCommand = new RelayCommand(() =>
@@ -84,8 +95,17 @@ public sealed partial class SessionViewModel : ObservableObject
         InitializeComposer();
     }
 
-    public string?                                         Id { get; private set; }
+    public string? Id { get; private set; }
+
+    public bool IsSelected
+    {
+        get => _selected;
+        set => SetProperty(ref _selected, value);
+    }
+
     public string?                                         StoreDirectory { get; private set; }
+    public string?                                         ProjectId { get; private set; }
+    public DateTimeOffset                                  LastActivityUtc { get; private set; }
     public ObservableCollection<ConversationItemViewModel> Items { get; } = [];
     public ObservableCollection<string>                    WorkItems { get; } = [];
     public Task                                            Completion => _completion ?? Task.CompletedTask;
@@ -132,6 +152,9 @@ public sealed partial class SessionViewModel : ObservableObject
             if (!CanChooseWorkspace) throw new InvalidOperationException("会话根目录已固定，请新建对话选择其他目录。");
             if (SetProperty(ref _workspaceRoot, value))
             {
+                ProjectId      = null;
+                StoreDirectory = null;
+                OnPropertyChanged(nameof(ProjectId));
                 OnPropertyChanged(nameof(WorkspaceLabel));
                 _ = RefreshDefaultModelAsync();
             }
@@ -198,6 +221,25 @@ public sealed partial class SessionViewModel : ObservableObject
         : string.Empty;
 
     /// <summary>
+    ///     <para>把未发送草稿切到指定绑定；项目为空时仅绑定当前存储目录，归属留待首次发送解析。正式会话与正在打开的草稿拒绝切换。</para>
+    ///     <para>
+    ///         Moves an unsent draft to the given binding; a null project binds only the store directory and leaves
+    ///         ownership to the first send. Established or opening sessions reject changes.
+    ///     </para>
+    /// </summary>
+    public async Task SelectProjectAsync(string? projectId, string root, string directory)
+    {
+        if (!CanChooseWorkspace) throw new InvalidOperationException("会话执行目录已固定。");
+        _workspaceRoot = root;
+        ProjectId      = projectId;
+        StoreDirectory = directory;
+        OnPropertyChanged(nameof(WorkspaceRoot));
+        OnPropertyChanged(nameof(WorkspaceLabel));
+        OnPropertyChanged(nameof(ProjectId));
+        await RefreshDefaultModelAsync();
+    }
+
+    /// <summary>
     ///     <para>只读加载一个有界历史页；不创建宿主或取得 writer 锁。</para>
     ///     <para>Reads one bounded history page without creating a host or acquiring a writer lock.</para>
     /// </summary>
@@ -233,6 +275,29 @@ public sealed partial class SessionViewModel : ObservableObject
     }
 
     public Task EnsureHistoryLoadedAsync() => _historyLoad ??= LoadHistoryAsync();
+
+    /// <summary>
+    ///     <para>用目录刷新结果更新归属与活动时间；不替换实例、宿主、草稿或历史投影，活动只前进不回退。</para>
+    ///     <para>
+    ///         Applies catalog-refresh ownership and activity without replacing the instance, host, draft or history
+    ///         projection; activity only moves forward.
+    ///     </para>
+    /// </summary>
+    public void ApplyStoredMetadata(string? projectId, DateTimeOffset lastActivityUtc)
+    {
+        if (ProjectId != projectId)
+        {
+            ProjectId = projectId;
+            OnPropertyChanged(nameof(ProjectId));
+        }
+
+        // 运行中的行是本地活动权威；目录快照只允许推进排序，不允许回退。
+        if (lastActivityUtc > LastActivityUtc)
+        {
+            LastActivityUtc = lastActivityUtc;
+            OnPropertyChanged(nameof(LastActivityUtc));
+        }
+    }
 
     /// <summary>
     ///     <para>捕获本页草稿和版本后发送；运行中输入走 Core 补充入口，完成只消费原始草稿。</para>
@@ -296,6 +361,8 @@ public sealed partial class SessionViewModel : ObservableObject
         try
         {
             var run = await execution;
+            LastActivityUtc = DateTimeOffset.UtcNow;
+            OnPropertyChanged(nameof(LastActivityUtc));
             Status = run.Result?.Status.ToString() ?? "运行结束";
             StopStream();
             WorkItems.Clear();
@@ -387,7 +454,8 @@ public sealed partial class SessionViewModel : ObservableObject
             var assistantRunId = item.RunId ?? item.TurnId;
             Items.Add(new MessageItemViewModel(new ConversationMessage(item.Sequence, item.Id, role,
                                                                        item.Text ?? string.Empty, DateTimeOffset.Now,
-                                                                       HasToolCalls : item.Kind == SessionHistoryKind.Process,
+                                                                       HasToolCalls : item.Kind ==
+                                                                       SessionHistoryKind.Process,
                                                                        Reasoning : item.Reasoning,
                                                                        ModelLabel : item.RunId is { } runId
                                                                            ? _runLabels.GetValueOrDefault(runId)

@@ -310,6 +310,7 @@ internal static class HelpText
         Usage:
           tinyharness session list
           tinyharness session show <session-id>
+          tinyharness session initialize-projects [after-session-id]
 
         Strictly offline inspection of tinyharness.session-log/1 sessions: no API key
         is read, no model is called, no tool runs, and no workspace file is opened for writing.
@@ -322,6 +323,12 @@ internal static class HelpText
         session show prints session history and the turn/run inspection summary.
         Damaged or unknown log formats are rejected. Raw protocol messages and opaque
         reasoning are not printed.
+
+        list/show are read-only and display saved project ownership (or missing project information).
+        initialize-projects explicitly appends ownership to at most 100 legacy logs per call,
+        without credentials, models or tools. IMPORTANT: older programs cannot read logs
+        after project-binding is written. Use the printed cursor for the next batch;
+        after the final batch, run again without a cursor to retry pending/failed entries.
         """;
 
     /// <summary>

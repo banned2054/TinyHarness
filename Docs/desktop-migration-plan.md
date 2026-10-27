@@ -27,7 +27,9 @@
 
 ## 项目归属接入状态
 
-2026-10-27：[项目与会话计划](project-session-plan.md)的阶段二已提供 Core `ProjectId`、严格日志绑定／恢复及显式旧日志初始化服务。Desktop 尚未调用初始化器、创建项目绑定或展示项目分组；这些属于阶段三，不从 Core 实现推定桌面接入完成。接入时必须验证最终 session store 位于实际可写根之外，在原宿主的安全空闲边界处理已持有 writer 的会话，并以 `LastActivityUtc` 而非归属维护提交时间排序。历史浏览继续只读，不因列表或分页触发初始化。
+2026-10-27：[项目与会话计划](project-session-plan.md)阶段三已接入 Desktop：侧栏按项目分组，支持打开目录、项目内草稿、改名和折叠；首次发送才建立会话并保存归属。恢复旧日志先严格校验，再由原 writer 补齐归属；已绑定会话不因目录册故障换绑。项目操作校验最终 session store 与执行根、沙箱附加写根的保护边界，以 `LastActivityUtc` 而非归属维护提交时间排序。历史浏览继续只读；“旧会话项目归属”提供兼容提示、每批 100 个日志的显式初始化、取消和续扫，保留逐项失败与占用结果。真实 GUI 与综合故障验收仍单独记录，不从投影测试推定通过。
+
+2026-10-27（后续）：修复投影刷新与草稿归属两处 P2 问题——刷新按 store 与会话 ID 匹配并原地更新归属与活动时间、保留宿主草稿历史；新建草稿按当前 store 重新解析归属，不复制旧绑定；异步绑定增加 `CanChooseWorkspace` 守卫。新增两项回归在旧实现失败、修复后通过，Desktop 最终回归 66/66。CLI／Desktop Release `win-x64` NativeAOT 均产出 native code、0 compiler／trimming／AOT warning，隔离夹具脚本与 `--offline-smoke` 离线验证通过。真实 GUI 启动被本机 PowerShell 执行策略拒绝（UnauthorizedAccess），应用未启动、未绕过策略，GUI 交互仍未验证，不从离线结果推定阶段四完成；本轮测试与产物证据见[实施状态](project-session-plan.md#15-实施状态)与 `../artifacts/project-stage4-validation/`。
 
 ## 验证
 

@@ -33,6 +33,7 @@ The terminal interface is unfinished: permission requests, AI replies, and user 
 ## ✨ Features
 
 - **Conversations and workspaces** — One-shot tasks, streaming multi-turn conversations, local session history, and cross-process resume.
+- **Projects** — Shared CLI/Desktop project identities, a desktop project sidebar, per-project drafts and renaming. Existing unified logs can be explicitly initialized with `session initialize-projects [after-session-id]` (100 per batch); writing project ownership makes those logs unreadable by older versions. Sessions retain their original execution directory and permissions.
 - **File and process tools** — List files, search text, read files, apply patches, and run commands with approval, timeouts, and bounded output.
 - **Context and project rules** — Root and scoped `AGENTS.md` loading, token accounting, and automatic context compaction while retaining full local history.
 - **Models and configuration** — Provider profiles, explicit model context windows, environment-variable or Windows Credential Manager key references, and offline configuration checks.

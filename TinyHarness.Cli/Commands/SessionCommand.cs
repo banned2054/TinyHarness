@@ -4,14 +4,15 @@ using TinyHarness.Core.Exceptions;
 using TinyHarness.Core.Models.Agent;
 using TinyHarness.Core.Models.Configuration;
 using TinyHarness.Core.Models.Persistence;
+using TinyHarness.Core.Models.Project;
 using TinyHarness.Core.Services.ChatCompletions.Configuration;
 using TinyHarness.Core.Services.Persistence;
 
 namespace TinyHarness.Cli.Commands;
 
 /// <summary>
-///     <para>提供会话日志的严格离线检查入口。</para>
-///     <para>Provides strictly offline inspection of session logs.</para>
+///     <para>提供会话日志的只读离线检查和显式项目归属初始化。</para>
+///     <para>Provides read-only offline log inspection and explicit project ownership initialization.</para>
 /// </summary>
 /// <remarks>
 ///     <para>不解析 API key、不调用模型、不启动工具或写入工作区；list 报告损坏条目，show 拒绝损坏与未知格式。</para>
@@ -27,7 +28,9 @@ internal static class SessionCommand
     {
         "list" => await ListAsync(context, cancellationToken).ConfigureAwait(false),
         "show" => await ShowAsync(context, options.Primary!, cancellationToken).ConfigureAwait(false),
-        _      => throw new InvalidOperationException($"Unknown session subcommand '{options.Subcommand}'.")
+        "initialize-projects" => await InitializeProjectsAsync(context, options.Primary, cancellationToken)
+           .ConfigureAwait(false),
+        _ => throw new InvalidOperationException($"Unknown session subcommand '{options.Subcommand}'.")
     };
 
     /// <summary>
@@ -39,15 +42,17 @@ internal static class SessionCommand
         var io       = context.Io;
         var storeDir = await ResolveStoreDirectoryAsync(context, cancellationToken).ConfigureAwait(false);
         await io.WriteLineAsync($"Session store: {storeDir}", cancellationToken).ConfigureAwait(false);
-        var entries = await SessionStoreReader.ListAsync(storeDir, cancellationToken).ConfigureAwait(false);
+        var entries  = await SessionStoreReader.ListAsync(storeDir, cancellationToken).ConfigureAwait(false);
+        var projects = await ReadProjectsAsync(io, storeDir, cancellationToken).ConfigureAwait(false);
         if (entries.Count == 0)
             await io.WriteLineAsync("  (no stored sessions)", cancellationToken).ConfigureAwait(false);
 
-        foreach (var entry in entries)
+        foreach (var entry in entries.OrderByDescending(entry => entry.Session?.LastActivityUtc))
             if (entry.Session is { } session)
                 await io
                      .WriteLineAsync($"  {entry.Id}  updated {session.UpdatedUtc.LocalDateTime:yyyy-MM-dd HH:mm:ss}" +
-                                     $"  turns {session.Turns.Count}  {session.WorkspaceRoot}",
+                                     $"  turns {session.Turns.Count}  {session.WorkspaceRoot}"                       +
+                                     $"  project {TerminalDisplay.Format(ProjectLabel(session, projects))}",
                                      cancellationToken).ConfigureAwait(false);
             else
                 await io.WriteLineAsync($"  {entry.Id}  damaged: {entry.Error}", cancellationToken)
@@ -71,6 +76,9 @@ internal static class SessionCommand
                                                   .ConfigureAwait(false);
             if (session is not null)
             {
+                var projects = await ReadProjectsAsync(io, storeDir, cancellationToken).ConfigureAwait(false);
+                await io.WriteLineAsync($"project         : {TerminalDisplay.Format(ProjectLabel(session, projects))}",
+                                        cancellationToken).ConfigureAwait(false);
                 await WriteStoredSessionAsync(io, storeDir, session, redactor, cancellationToken).ConfigureAwait(false);
                 return 0;
             }
@@ -84,6 +92,65 @@ internal static class SessionCommand
         await io.WriteErrorLineAsync($"No session '{sessionId}' found in '{storeDir}'.", cancellationToken)
                 .ConfigureAwait(false);
         return 1;
+    }
+
+    /// <summary>
+    ///     <para>只读解析项目显示值；目录册故障不阻止检查原有历史。</para>
+    ///     <para>Reads project labels without preventing history inspection when the catalog fails.</para>
+    /// </summary>
+    private static async Task<IReadOnlyList<Project>> ReadProjectsAsync(
+        ICliConsole io, string directory, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return (await ProjectStore.LoadAsync(ProjectStore.FilePath(directory), cancellationToken)
+                                      .ConfigureAwait(false)).Projects;
+        }
+        catch (Exception ex) when (ex is ProjectStoreException or IOException or UnauthorizedAccessException)
+        {
+            await io.WriteErrorLineAsync("Project catalog: " + TerminalDisplay.Format(ex.Message), cancellationToken)
+                    .ConfigureAwait(false);
+            return [];
+        }
+    }
+
+    private static string ProjectLabel(PersistedSession session, IReadOnlyList<Project> projects) =>
+        session.ProjectId is not { } id                                     ? "unbound (initialization pending)" :
+        projects.FirstOrDefault(project => project.Id == id) is { } project ? $"{project.Name} <{id}>" :
+                                                                              $"missing project information <{id}>";
+
+    /// <summary>
+    ///     <para>显式初始化一个有界批次；展示兼容边界、逐项结果和续扫游标，不读取凭据。</para>
+    ///     <para>
+    ///         Explicitly initializes one bounded batch and reports compatibility, item outcomes and a continuation cursor
+    ///         without credentials.
+    ///     </para>
+    /// </summary>
+    private static async Task<int> InitializeProjectsAsync(
+        CommandContext context, string? cursor, CancellationToken cancellationToken)
+    {
+        var directory = await ResolveStoreDirectoryAsync(context, cancellationToken).ConfigureAwait(false);
+        var user = await UserConfigStore.LoadAsync(context.ResolveUserConfigPath(), cancellationToken)
+                                        .ConfigureAwait(false);
+        if (user.Settings?.WindowsSandbox is { Enabled: true } sandbox)
+            foreach (var root in sandbox.AdditionalWriteRoots)
+                SessionStorePaths.EnsureOutsideWorkspace(directory, root, "settings.sessionStoreDirectory");
+        await context.Io.WriteLineAsync("Writing project-binding makes these logs unreadable by older programs.",
+                                        cancellationToken).ConfigureAwait(false);
+        if (!Directory.Exists(directory)) return 0;
+        var result = await SessionProjectInitializer.InitializeAsync(directory, cursor, 100,
+                                                                     cancellationToken : cancellationToken)
+                                                    .ConfigureAwait(false);
+        // 取消后的已提交事实仍需输出，不能让已取消令牌隐藏结果与游标。
+        foreach (var outcome in result.Outcomes)
+            await context.Io.WriteLineAsync(TerminalDisplay.Format(
+                                                                   $"{outcome.SessionId} {outcome.Status} {outcome.ProjectId} {outcome.Detail}"),
+                                            CancellationToken.None).ConfigureAwait(false);
+        await context.Io
+                     .WriteLineAsync($"cancelled={result.Cancelled}; more={result.HasMore}; cursor={result.NextCursor}",
+                                     CancellationToken.None).ConfigureAwait(false);
+        return result.Cancelled                                                            ? 130 :
+            result.Outcomes.Any(item => item.Status == SessionProjectBindingStatus.Failed) ? 1 : 0;
     }
 
     /// <summary>

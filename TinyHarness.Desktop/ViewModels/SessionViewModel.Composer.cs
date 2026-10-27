@@ -8,11 +8,11 @@ namespace TinyHarness.Desktop.ViewModels;
 
 public sealed partial class SessionViewModel
 {
-    private bool _isModelMenuOpen;
-    private bool _isPermissionMenuOpen;
-    private int  _modelMenuPage;
     private ModelChoice? _defaultModel;
     private long         _defaultModelRevision;
+    private bool         _isModelMenuOpen;
+    private bool         _isPermissionMenuOpen;
+    private int          _modelMenuPage;
 
     public RelayCommand                             ToggleModelMenuCommand { get; private set; } = null!;
     public RelayCommand                             ShowModelMenuRootCommand { get; private set; } = null!;
@@ -44,8 +44,6 @@ public sealed partial class SessionViewModel
             : EffortText(SelectedModel is null ? _defaultModel?.DefaultEffort : _effort);
 
     public string ChangeModelHint       => CanChangeModel ? "选择将可靠保存到本会话" : "当前运行结束后可切换";
-    private static string EffortText(ModelReasoningEffort? effort) => effort is { } level ? ModelReasoningEffortParser.ToValueString(level) : "默认";
-    private static string SelectionLabel(SessionModelSelection selection) => $"{selection.ProfileHint ?? ""} / {selection.Model.ModelId} · {EffortText(selection.ReasoningEffort)}";
     public string PermissionPickerLabel => AllowChanges ? "按规则审批" : "只读";
 
     public string WorkspaceLabel => Path.GetFileName(Path.TrimEndingDirectorySeparator(WorkspaceRoot)) is
@@ -79,6 +77,12 @@ public sealed partial class SessionViewModel
             RebuildPermissionMenu();
         }
     }
+
+    private static string EffortText(ModelReasoningEffort? effort) =>
+        effort is { } level ? ModelReasoningEffortParser.ToValueString(level) : "默认";
+
+    private static string SelectionLabel(SessionModelSelection selection) =>
+        $"{selection.ProfileHint ?? ""} / {selection.Model.ModelId} · {EffortText(selection.ReasoningEffort)}";
 
     /// <summary>
     ///     <para>建立输入区菜单；模型强度来自目录，未接入的权限预设禁用。</para>
@@ -123,7 +127,7 @@ public sealed partial class SessionViewModel
         {
             IsSelected = choice.ProfileName ==
                          ((_runtime?.Host.Session.ModelSelection ?? _savedSelection)?.ProfileHint ??
-                          (SelectedModel ?? _defaultModel)?.ProfileName) &&
+                          (SelectedModel                         ?? _defaultModel)?.ProfileName) &&
                          choice.ModelId == CurrentModelNameText
         };
 
@@ -217,7 +221,10 @@ public sealed partial class SessionViewModel
 
     /// <summary>
     ///     <para>草稿只更新偏好；已有会话通过已注册宿主异步提交，失败保留标签和草稿。</para>
-    ///     <para>Updates only draft preferences, or commits asynchronously through the registered host, keeping confirmed labels and drafts on failure.</para>
+    ///     <para>
+    ///         Updates only draft preferences, or commits asynchronously through the registered host, keeping confirmed
+    ///         labels and drafts on failure.
+    ///     </para>
     /// </summary>
     public async Task SelectModelAsync(ModelChoice? choice, ModelReasoningEffort? effort)
     {
@@ -260,13 +267,18 @@ public sealed partial class SessionViewModel
     {
         var request = new DesktopSessionRequest(WorkspaceRoot, AllowChanges, Id, SelectedModel?.ProfileName,
                                                 SelectedModel?.ModelId, true, _effort,
-                                                SelectedModel is not null, reselect);
+                                                SelectedModel is not null, reselect)
+        {
+            ProjectId = ProjectId, StoreDirectory = StoreDirectory
+        };
         _runtime = await _manager.OpenAsync(Id,
                                             token => _factory.OpenAsync(request, OnEventAsync, OnApprovalAsync, token),
                                             _openingCancellation?.Token ?? CancellationToken.None);
         Id             = _runtime.Id;
         _workspaceRoot = _runtime.Host.Session.WorkspaceRoot;
         StoreDirectory = Path.GetDirectoryName(_runtime.Host.PersistencePath);
+        ProjectId      = _runtime.Host.Session.ProjectId;
+        OnPropertyChanged(nameof(ProjectId));
         OnPropertyChanged(nameof(WorkspaceRoot));
         OnPropertyChanged(nameof(WorkspaceLabel));
         NotifyModelSelection();

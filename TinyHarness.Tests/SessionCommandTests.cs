@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using TinyHarness.Cli.Commands;
+using TinyHarness.Cli.Exceptions;
 using TinyHarness.Cli.Models;
 using TinyHarness.Cli.Services;
 using TinyHarness.Core.Models.Agent;
@@ -13,6 +14,8 @@ using TinyHarness.Core.Models.Tools;
 using TinyHarness.Core.Services.Context;
 using TinyHarness.Core.Services.Persistence;
 using TinyHarness.Core.Services.Runtime;
+using TinyHarness.Core.Services.Session;
+using TinyHarness.Core.Services.Tools;
 
 namespace TinyHarness.Tests;
 
@@ -29,6 +32,16 @@ namespace TinyHarness.Tests;
 public class SessionCommandTests
 {
     [Test]
+    public void InitializationCursorAcceptsUppercaseIdsAndRejectsInvalidArguments()
+    {
+        var id = new string('a', 32);
+        Assert.That(CommandLine.Parse(["session", "initialize-projects", id.ToUpperInvariant()]).Primary,
+                    Is.EqualTo(id));
+        Assert.Throws<CliUsageException>(() => CommandLine.Parse(["session", "initialize-projects", "../bad"]));
+        Assert.Throws<CliUsageException>(() => CommandLine.Parse(["session", "initialize-projects", id, "extra"]));
+    }
+
+    [Test]
     public async Task Show_PreservesLocalContentWithoutReadingCredentialsOrOpaque()
     {
         using var    fixture = new SessionCliFixture();
@@ -37,28 +50,27 @@ public class SessionCommandTests
         client.Enqueue(FakeChatClient.ReasonedText("inspect " + secret, "opaque-id", "opaque-value",
                                                    "answer "  + secret + "\u001b[2J"));
         string sessionId;
-        using (var host = new TinyHarness.Core.Services.Session.ChatSessionHost(
-                                                                                fixture.Workspace,
-                                                                                new SessionModelIdentity("test-model",
-                                                                                    "https://example.invalid/v1",
-                                                                                    ChatApiKind.ChatCompletions),
-                                                                                new AgentOptions
-                                                                                {
-                                                                                    Model = "test-model",
-                                                                                    MaxAgentSteps = 4,
-                                                                                    DefaultToolTimeoutSeconds = 30
-                                                                                },
-                                                                                client,
-                                                                                new TinyHarness.Core.Services.Tools.
-                                                                                    ToolRegistry([]), "sys",
-                                                                                sessionWriterFactory : id =>
-                                                                                    new SessionStoreWriter(fixture
-                                                                                           .StoreDirectory, id,
-                                                                                        new Dictionary<string,
-                                                                                            string>
-                                                                                        {
-                                                                                            ["key"] = secret
-                                                                                        })))
+        using (var host = new ChatSessionHost(
+                                              fixture.Workspace,
+                                              new SessionModelIdentity("test-model",
+                                                                       "https://example.invalid/v1",
+                                                                       ChatApiKind.ChatCompletions),
+                                              new AgentOptions
+                                              {
+                                                  Model                     = "test-model",
+                                                  MaxAgentSteps             = 4,
+                                                  DefaultToolTimeoutSeconds = 30
+                                              },
+                                              client,
+                                              new ToolRegistry([]), "sys",
+                                              sessionWriterFactory : id =>
+                                                  new SessionStoreWriter(fixture
+                                                                            .StoreDirectory, id,
+                                                                         new Dictionary<string,
+                                                                             string>
+                                                                         {
+                                                                             ["key"] = secret
+                                                                         })))
         {
             sessionId = host.Session.Id;
             await host.SubmitTurnAsync("token=example " + secret, CancellationToken.None);
@@ -368,6 +380,88 @@ public class SessionCommandTests
         Assert.That(exit, Is.EqualTo(1));
         TestAssert.Contains("No session", fixture.Io.Error, StringComparison.Ordinal);
         TestAssert.Contains(fixture.StoreDirectory, fixture.Io.Error, StringComparison.Ordinal);
+    }
+
+    [Test]
+    public async Task ProjectInitializationIsExplicitAndListShowRemainReadOnly()
+    {
+        using var fixture = new SessionCliFixture();
+        var stored =
+            await CommitStoredSessionAsync(fixture.StoreDirectory, "q", "a", workspaceRoot : fixture.Workspace);
+        var path   = Path.Combine(fixture.StoreDirectory, stored.Id + SessionStoreWriter.LogFileSuffix);
+        var prefix = await File.ReadAllBytesAsync(path);
+        await SessionCommand.ExecuteAsync(fixture.CreateContext(), Options("list"), CancellationToken.None);
+        Assert.That(fixture.Io.Output, Does.Contain("unbound"));
+        Assert.That(File.Exists(ProjectStore.FilePath(fixture.StoreDirectory)), Is.False);
+        Assert.That(await File.ReadAllBytesAsync(path), Is.EqualTo(prefix));
+        fixture.Io.Clear();
+        var options = CommandLine.Parse(["session", "initialize-projects"]);
+        Assert.That(await SessionCommand.ExecuteAsync(fixture.CreateContext(), options, CancellationToken.None),
+                    Is.Zero);
+        Assert.That(fixture.Io.Output, Does.Contain("older programs").And.Contain("Bound"));
+        var initialized = await SessionStoreReader.ReadAsync(fixture.StoreDirectory, stored.Id, CancellationToken.None);
+        Assert.That(initialized!.ProjectId, Is.Not.Null);
+        Assert.That(initialized.LastActivityUtc, Is.EqualTo(stored.LastActivityUtc));
+        Assert.That((await File.ReadAllBytesAsync(path)).Take(prefix.Length), Is.EqualTo(prefix));
+        fixture.Io.Clear();
+        await SessionCommand.ExecuteAsync(fixture.CreateContext(), Options("show", stored.Id), CancellationToken.None);
+        Assert.That(fixture.Io.Output, Does.Contain(initialized.ProjectId!));
+        var boundBytes = await File.ReadAllBytesAsync(path);
+        await SessionCommand.ExecuteAsync(fixture.CreateContext(), options, CancellationToken.None);
+        Assert.That(await File.ReadAllBytesAsync(path), Is.EqualTo(boundBytes));
+    }
+
+    [Test]
+    public async Task DamagedProjectCatalogDoesNotBlockHistoryOrGetOverwritten()
+    {
+        using var fixture = new SessionCliFixture();
+        var stored =
+            await CommitStoredSessionAsync(fixture.StoreDirectory, "q", "a", workspaceRoot : fixture.Workspace);
+        await SessionCommand.ExecuteAsync(fixture.CreateContext(), Options("initialize-projects"),
+                                          CancellationToken.None);
+        await File.WriteAllTextAsync(ProjectStore.FilePath(fixture.StoreDirectory), "damaged");
+        fixture.Io.Clear();
+        Assert.That(await SessionCommand.ExecuteAsync(fixture.CreateContext(), Options("show", stored.Id),
+                                                      CancellationToken.None), Is.Zero);
+        Assert.That(fixture.Io.Output, Does.Contain("missing project information").And.Contain("input : q"));
+        Assert.That(fixture.Io.Error, Does.Contain("Project catalog"));
+        Assert.That(await File.ReadAllTextAsync(ProjectStore.FilePath(fixture.StoreDirectory)), Is.EqualTo("damaged"));
+    }
+
+    [Test]
+    public async Task RestoredBindingUsesOriginalWriterAndKeepsBoundIdWithoutCatalog()
+    {
+        using var fixture = new SessionCliFixture();
+        var identity =
+            new SessionModelIdentity("test-model", "https://example.invalid/v1", ChatApiKind.ChatCompletions);
+        var session = new ChatSession(Guid.NewGuid().ToString("N"), fixture.Workspace, identity);
+        var context = new ConversationContext(new ContextOptions());
+        context.Append(ChatMessage.System("sys"));
+        using (var writer = new SessionStoreWriter(fixture.StoreDirectory, session.Id))
+        {
+            await writer.CommitAsync(session, context, CancellationToken.None);
+        }
+
+        using (var writer =
+               await SessionStoreWriter.OpenExistingAsync(fixture.StoreDirectory, session.Id, null,
+                                                          CancellationToken.None))
+        {
+            var restored = SessionResume.Restore(writer.LoadedSnapshot!, fixture.Workspace,
+                                                 "sys", new ContextOptions());
+            await SessionProjectBinding.BindRestoredAsync(fixture.StoreDirectory, restored.Session, writer,
+                                                          CancellationToken.None);
+            var sequence = writer.CommitSequence;
+            Assert.That(restored.Session.ProjectId, Is.Not.Null);
+            await File.WriteAllTextAsync(ProjectStore.FilePath(fixture.StoreDirectory), "damaged");
+            await SessionProjectBinding.BindRestoredAsync(fixture.StoreDirectory, restored.Session, writer,
+                                                          CancellationToken.None);
+            Assert.That(writer.CommitSequence, Is.EqualTo(sequence));
+            await writer.CommitAsync(restored.Session, restored.Context, CancellationToken.None);
+        }
+
+        var saved = await SessionStoreReader.ReadAsync(fixture.StoreDirectory, session.Id, CancellationToken.None);
+        Assert.That(saved!.ProjectId, Is.Not.Null);
+        Assert.That(saved.WorkspaceRoot, Is.EqualTo(fixture.Workspace));
     }
 
     private static CliOptions Options(string subcommand, string? primary = null) => new()
