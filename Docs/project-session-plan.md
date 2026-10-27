@@ -2,7 +2,7 @@
 
 更新日期：2026-10-26。
 
-**状态：方案已整理，尚未实施。** 本文记录独立 Project、现有会话按目录归属、Desktop／CLI 接入和后续多目录执行的方案。类型、字段、记录与文件名均为拟议设计，不代表已存在。本次仅保存计划，没有修改运行代码、初始化项目目录册或追加实际会话日志。
+**状态：阶段一（项目核心）已实现，阶段二至四待实施。** 本文记录独立 Project、现有会话按目录归属、Desktop／CLI 接入和后续多目录执行的方案；已完成部分与验证见[实施状态](#15-实施状态)。尚未接入任何运行入口：现有会话未绑定项目，实际会话日志未追加归属记录，正式会话的运行行为没有变化。
 
 入口见 [PLAN.md](../PLAN.md)。既有契约见[会话持久化](Archive/session-persistence-design.md)、[项目规则](Archive/project-instructions-design.md)、[桌面 GUI 迁移](desktop-migration-plan.md)和[Windows 沙箱管理](Archive/windows-sandbox-management.md)。操作授权以用户当前要求和 [AGENTS.md](../AGENTS.md) 为准，保存计划不构成代码实施、实际数据接入、Git 或发布授权。
 
@@ -190,6 +190,19 @@ payload:
 - 不声称跨文件原子事务：先保存项目、后写绑定。失败可留下空项目供下次复用，不能先写尚未可靠保存的项目 ID。
 - 普通 flush 和安全替换不单独证明断电持久性；进程退出、替换故障和设备故障保证分别验证。
 
+### 7.1 目录册保存与读取
+
+目录册采用单一的托管文件 API 实现，不引入目录册专用的 P/Invoke、原生结构体或平台快速路径：
+
+1. 写者持有同目录保存锁，在锁内重读、校验目录册与编辑修订号。
+2. 通过 `FileMode.CreateNew` 创建同目录随机临时文件，异步写入完整内容并 flush，关闭写句柄后再提交。
+3. 重新校验目标叶子后，已有文件用 `File.Replace(tempPath, filePath, null)` 提交，首次创建用 `File.Move(tempPath, filePath)`；不自行删除目标，不编写原生替换或复制删除回退。同目录约束避免跨卷复制路径，不把任意文件系统上的原子性或断电持久性作为无条件保证。Windows 实测中，覆盖式 `File.Move` 无法在旧读句柄保持打开时完成，而 `File.Replace` 可以，后者仍可能存在短暂的路径不可访问窗口。
+4. Windows 的共享或锁冲突可有界等待并响应取消；其他错误立即传播。未提交时只尽力清理本次成功创建的临时文件，不覆盖原始异常。
+5. 正常读者通过共享读取与删除的异步句柄读取快照；长度预算和正文读取使用同一句柄，合作写者只整体替换、不原地改写。共享标志不作为 Unix 上阻止外部写入的安全保证。
+6. 无锁读取遇到目录册缺失时，先以只读方式打开既有保存锁并与写者互斥，再复查是否确实缺失；锁文件也不存在时才按尚无保存者处理。读取不创建目录或锁文件，不按“两次探测间隔足够长”猜测替换已经结束。写者已持锁时调用内部读取路径，避免重复获取自己的锁。锁等待或快照打开重试耗尽时报错，取消继续传播。
+
+验收分别检查并发创建、并发读写、读者持有旧句柄时提交、替换阻塞时取消、失败保留原字节和临时文件清理。测试数据使用当前平台的绝对路径；Windows 专属共享语义测试显式限定平台。Windows 的验证结果不替代 Linux／macOS 实测。
+
 ## 8. 现有会话初始化
 
 首次启用项目功能时由独立初始化服务处理，不把写入隐藏在 reader、历史分页或 `session list/show` 中。
@@ -304,11 +317,11 @@ SessionWorkspace
 
 ## 12. 实施顺序
 
-以下阶段均待实施，不表示本次已经开始代码工作。
+阶段一已完成，阶段二至四待实施；不要求碎片提交。
 
 | 阶段 | 工作 | 完成标准 |
 | --- | --- | --- |
-| 一：项目核心 | 模型、目录册、路径匹配、创建复用、改名、保护 | 重启一致、并发不重复、过期编辑不覆盖、损坏不被当空配置 |
+| 一：项目核心（已完成） | 模型、目录册、路径匹配、创建复用、改名、保护 | 重启一致、并发不重复、过期编辑不覆盖、损坏不被当空配置 |
 | 二：会话归属 | 日志记录、严格读取、投影、初始绑定、旧日志初始化 | 归属可恢复、接入幂等、历史和阻断保真 |
 | 三：生产入口 | CLI／Desktop 接入，分组、草稿、改名、状态 | 两端一致、生产新会话都有归属、项目操作不干扰活动会话 |
 | 四：综合验收 | 故障测试、真实 GUI、NativeAOT、离线产物 smoke、文档 | 数据、交互、并发与产物分别有证据 |
@@ -349,4 +362,26 @@ SessionWorkspace
 - 同步格式扩展与旧程序读取限制，不能把计划写成已实现行为。
 - 第一版新旧契约衔接时同步持久化和桌面计划，不改写历史验收结论。
 - 完成后按仓库规则归档本计划，更新 PLAN 和文档导航。
-- 本次完成项仅为方案落盘与导航接入；代码、真实数据初始化、构建、测试和 GUI 验收均尚未执行。
+
+## 15. 实施状态
+
+2026-10-26 完成阶段一（项目核心）。全部为新增文件，未修改既有代码与任何运行入口；阶段二至四尚未开始。
+
+- 新增文件：
+  - [ProjectStoreException](../TinyHarness.Core/Exceptions/ProjectStoreException.cs)：目录册操作失败异常。
+  - [Project](../TinyHarness.Core/Models/Project/Project.cs)：项目数据与不变量；`CreateNew` 生成随机 ID 与默认名称，`Validate` 严格校验 ID、名称、root 数量与规范化形态、主目录归属和修订号。
+  - [ProjectRoot](../TinyHarness.Core/Models/Project/ProjectRoot.cs)：`Normalize` 转绝对路径并统一尾部分隔符（卷根保留分隔符），`AreEqual` 按平台大小写规则词法比较，`DefaultDisplayName` 取目录名、卷根退回完整路径。
+  - [ProjectCatalog](../TinyHarness.Core/Models/Project/ProjectCatalog.cs)：schema `tinyharness.projects/1`、目录册修订号、项目数量预算、跨项目 ID 与目录唯一性（歧义即报错）。
+  - [ProjectStore](../TinyHarness.Core/Services/Persistence/ProjectStore.cs)：缺失文件返回空目录册；读取先校验叶子（非目录、非链接）与 1 MiB 字节预算；损坏、未知 schema、未知字段、缺字段、超预算抛 `ProjectStoreException` 并保留原文件；保存走同目录临时文件安全替换；`GetOrCreateAsync` 在跨进程锁内重读并精确匹配，`RenameAsync` 按调用方修订号拒绝过期基线；JSON 使用 source-generated `ProjectJsonContext`（camelCase、拒绝未映射成员、缩进写出）。
+  - [ProjectStoreTests](../TinyHarness.Tests/ProjectStoreTests.cs)：19 项测试。
+- 关键偏差：目录册服务放入 `Services.Persistence`（与 `SessionStorePaths` 同域），不设 `Services/Project` 命名空间，避免与 `Project` 类型名冲突；目录册文件自身的链接校验由 `ProjectStore` 承担，存储目录对工作区的保护仍由调用方经 `SessionStorePaths.ResolveProtected` 保证，在阶段三接入时生效。
+- 已验证：`dotnet test --filter ProjectStoreTests` 19/19 通过，覆盖重启一致、等价词法路径与 Windows 大小写匹配、父子目录与同名目录不合并、并发创建共享单项目、卷根命名、改名与目录册修订号递增、过期基线失败不覆盖、空白根与非法名称拒绝、空文件／损坏 JSON／未知 schema／超预算文件／跨项目重复目录／未知字段／缺字段／非规范 root 的报告且不覆盖；CLI NativeAOT publish 无新增警告，发布产物 `smoke` 通过。
+- 未验证：跨进程并发、断电与设备故障、真实 GUI；阶段二（会话归属记录与初始化）、阶段三（CLI／Desktop 接入）与阶段四（综合验收）未实施。
+
+2026-10-27 调整阶段一目录册保存设计（见 §7.1），未推进后续阶段：
+
+- `ProjectStore` 移除目录册专用 P/Invoke、原生结构体与 NT 路径转换；已有文件使用托管 `File.Replace`，首次创建使用 `File.Move`。临时文件保持同目录独占创建、异步写入、flush 与关闭后提交，仅清理本次成功创建且未提交的文件。
+- 读取使用异步快照句柄；正常读取无锁，缺失时只读打开既有保存锁并复查，不创建文件或目录，不把替换窗口误判为空目录册。写路径在已持有保存锁时使用内部读取流程，避免重复获取自己的锁。
+- 保留既有测试并修正通用测试的 Windows 路径假设；新增旧读句柄保留快照、替换冲突取消、只读目标失败保留原字节、缺失时等待保存者四项测试，取消断言接受 `OperationCanceledException` 的派生类型。
+- 已验证（Windows x64）：目录册专项共 37 项，35 通过、2 项因缺少符号链接创建权限跳过；子代理将专项测试重复运行 10 轮、并发读写测试另跑 10 轮，均无失败；主代理复核后重跑专项结果相同。Core／CLI 全部离线回归共 1,276 项，1,272 通过、4 项环境相关跳过、0 失败。`dotnet publish TinyHarness.Cli/TinyHarness.Cli.csproj -c Release -r win-x64 --self-contained true -o artifacts/project-store-managed-nativeaot-20261027` 成功，无 compiler／trimming／AOT 警告；从仓库外运行该原生产物的 `smoke --config <仓库绝对路径>/tinyharness.json` 成功。产物 smoke 验证既有离线入口，不代表尚未接入入口的目录册流程已经在原生产物中执行。
+- 未验证：Linux／macOS、真实跨进程并发、断电与设备故障。未修改凭据、进程或 Windows 沙箱现有的原生调用；本次无新增依赖、schema 或公开方法签名变化。
