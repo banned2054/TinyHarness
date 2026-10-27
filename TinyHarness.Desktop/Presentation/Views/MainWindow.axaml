@@ -3,120 +3,101 @@
         xmlns:vm="using:TinyHarness.Desktop.ViewModels"
         xmlns:conversation="using:TinyHarness.Desktop.Presentation.Views.Conversation"
         xmlns:views="using:TinyHarness.Desktop.Presentation.Views"
+        xmlns:sidebar="using:TinyHarness.Desktop.Presentation.Views.Sidebar"
         xmlns:tooling="using:TinyHarness.Desktop.Presentation.Views.Tooling"
         x:Class="TinyHarness.Desktop.Presentation.Views.MainWindow"
         x:DataType="vm:MainWindowViewModel"
         Title="TinyHarness" Width="1220" Height="820" MinWidth="850" MinHeight="560"
         Background="{DynamicResource ChatBackgroundBrush}">
     <Window.DataTemplates>
-        <DataTemplate DataType="vm:MessageItemViewModel"><conversation:MessageView /></DataTemplate>
-        <DataTemplate DataType="vm:ToolActivityItemViewModel"><tooling:ToolActivityView /></DataTemplate>
+        <DataTemplate DataType="vm:MessageItemViewModel">
+            <conversation:MessageView />
+        </DataTemplate>
+        <DataTemplate DataType="vm:ToolActivityItemViewModel">
+            <tooling:ToolActivityView />
+        </DataTemplate>
     </Window.DataTemplates>
-    <Grid ColumnDefinitions="260,5,*" RowDefinitions="*,Auto">
-        <Border Background="{DynamicResource SidebarBackgroundBrush}" Padding="16,20,8,12">
-            <Grid RowDefinitions="Auto,Auto,*,Auto" RowSpacing="16">
-                <TextBlock Text="TinyHarness" FontSize="21" FontWeight="SemiBold" Margin="8,0" />
-                <StackPanel Grid.Row="1" Spacing="8">
-                    <Button Content="＋ 新对话" Command="{Binding NewSessionCommand}" HorizontalAlignment="Stretch" />
-                    <Button Content="打开目录 / 项目" Click="OpenProjectFolder" HorizontalAlignment="Stretch" />
-                </StackPanel>
-                <ScrollViewer Grid.Row="2" HorizontalScrollBarVisibility="Disabled">
-                    <ItemsControl ItemsSource="{Binding Projects}">
-                        <ItemsControl.ItemTemplate>
-                            <DataTemplate x:DataType="vm:ProjectViewModel">
-                                <Expander IsExpanded="{Binding IsExpanded, Mode=TwoWay}" HorizontalAlignment="Stretch">
-                                    <Expander.Header>
-                                        <TextBlock Text="{Binding Name}" ToolTip.Tip="{Binding Root}" TextTrimming="CharacterEllipsis" />
-                                    </Expander.Header>
-                                    <StackPanel Spacing="6">
-                                        <StackPanel IsVisible="{Binding CanEdit}" Spacing="4">
-                                            <Button Content="＋ 项目内新对话" Command="{Binding NewSessionCommand}" />
-                                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="4">
-                                                <TextBox Text="{Binding EditedName, Mode=TwoWay}" PlaceholderText="项目名称" />
-                                                <Button Grid.Column="1" Content="改名" Command="{Binding RenameCommand}" />
-                                            </Grid>
-                                        </StackPanel>
-                                        <ItemsControl ItemsSource="{Binding Sessions}">
-                                            <ItemsControl.ItemTemplate>
-                                                <DataTemplate x:DataType="vm:SessionViewModel">
-                                                    <Button Click="SelectHistory" Classes="session-row" Classes.current="{Binding IsSelected}" HorizontalAlignment="Stretch"
-                                                            HorizontalContentAlignment="Stretch" ToolTip.Tip="{Binding WorkspaceRoot}">
-                                                        <StackPanel Margin="4" Spacing="4">
-                                                            <TextBlock Text="{Binding Title}" TextTrimming="CharacterEllipsis" />
-                                                            <TextBlock Text="{Binding Status}" Classes="caption" />
-                                                        </StackPanel>
-                                                    </Button>
-                                                </DataTemplate>
-                                            </ItemsControl.ItemTemplate>
-                                        </ItemsControl>
-                                    </StackPanel>
-                                </Expander>
-                            </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                    </ItemsControl>
-                </ScrollViewer>
-                <StackPanel Grid.Row="3" Spacing="8">
-                    <StackPanel Orientation="Horizontal" Spacing="8">
-                        <Button Content="设置" Command="{Binding OpenSettingsCommand}" />
-                        <Button Content="刷新历史" Command="{Binding RefreshCommand}" />
-                    </StackPanel>
-                    <Expander Header="旧会话项目归属">
-                        <StackPanel Spacing="6">
-                            <TextBlock Text="初始化会追加归属记录，旧版本将无法读取这些日志。每次最多检查 100 个；占用或失败项可重试。"
-                                       TextWrapping="Wrap" Classes="caption" />
-                            <Button Content="初始化 / 继续扫描" Command="{Binding InitializeProjectsCommand}" />
-                            <Button Content="取消初始化" Command="{Binding CancelInitializationCommand}" />
-                        </StackPanel>
-                    </Expander>
-                </StackPanel>
-            </Grid>
-        </Border>
-        <GridSplitter Grid.Column="1" ResizeDirection="Columns" Background="Transparent" />
-        <ContentControl Grid.Column="2" Content="{Binding SelectedSession}">
-            <ContentControl.ContentTemplate>
-                <DataTemplate x:DataType="vm:SessionViewModel">
-                    <Grid RowDefinitions="Auto,*,Auto,Auto" Margin="0,12,0,0">
-                        <Grid Margin="28,6,28,12" ColumnDefinitions="*,Auto" ColumnSpacing="16">
-                            <TextBlock Text="{Binding Title}" Classes="heading" />
-                            <Panel Grid.Column="1" VerticalAlignment="Center" MaxWidth="240">
-                                <Button Content="{Binding WorkspaceLabel}" Classes="tool-toggle"
-                                        ToolTip.Tip="{Binding WorkspaceRoot}" AutomationProperties.Name="选择工作区目录"
-                                        IsVisible="{Binding CanChooseWorkspace}" Click="BrowseFolder" />
-                                <TextBlock Text="{Binding WorkspaceLabel}" Classes="caption" TextTrimming="CharacterEllipsis"
-                                           ToolTip.Tip="{Binding WorkspaceRoot}" IsVisible="{Binding !CanChooseWorkspace}" />
-                            </Panel>
-                        </Grid>
-                        <ScrollViewer Grid.Row="1" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
-                            <StackPanel MaxWidth="816" Margin="28,8" Spacing="4">
-                                <ItemsControl ItemsSource="{Binding Items}" />
-                                <Button Content="加载后续历史" Command="{Binding LoadHistoryCommand}" IsVisible="{Binding HasMoreHistory}" />
-                                <ItemsControl ItemsSource="{Binding WorkItems}" />
-                            </StackPanel>
-                        </ScrollViewer>
-                        <StackPanel Grid.Row="2" MaxWidth="816" Margin="28,8" Spacing="8">
-                            <Border IsVisible="{Binding HasApproval}" Background="{DynamicResource PanelBackgroundBrush}" Padding="16" CornerRadius="12">
-                                <StackPanel Spacing="10">
-                                    <TextBlock Text="工具请求审批" FontWeight="SemiBold" />
-                                    <ScrollViewer MaxHeight="200"><TextBlock Text="{Binding ApprovalText}" Classes="tool-mono" /></ScrollViewer>
-                                    <WrapPanel Orientation="Horizontal">
-                                        <Button Content="仅允许一次" Command="{Binding AllowOnceCommand}" Margin="0,0,8,0" />
-                                        <Button Content="本轮允许此范围" Command="{Binding AllowRunCommand}" Margin="0,0,8,0" />
-                                        <Button Content="拒绝" Command="{Binding DenyCommand}" />
-                                    </WrapPanel>
+    <!-- 窗口只负责窗口级布局：侧栏 / 分隔条 / 会话主区域。侧栏可拖拽：GridSplitter 只调整
+         左列固定像素宽，右列保持 1* 吃掉差值，拖拽等量挤压右栏而窗口总宽不变。左列宽度由
+         code-behind clamp 到 [240, min(480, 可用宽 - 560)]（splitter 列不占布局宽度），
+         窗口尺寸变化后同样重新 clamp。 -->
+    <Grid RowDefinitions="*,Auto">
+        <Grid x:Name="ContentGrid">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="280" MinWidth="240" MaxWidth="480" />
+                <ColumnDefinition Width="0" />
+                <ColumnDefinition Width="1*" MinWidth="560" />
+            </Grid.ColumnDefinitions>
+            <sidebar:SidebarView x:Name="Sidebar" Grid.Column="0" />
+
+            <ContentControl Grid.Column="2" Content="{Binding SelectedSession}">
+                <ContentControl.ContentTemplate>
+                    <DataTemplate x:DataType="vm:SessionViewModel">
+                        <Grid RowDefinitions="Auto,*,Auto,Auto" Margin="0,12,0,0">
+                            <Grid Margin="28,6,28,12" ColumnDefinitions="*,Auto" ColumnSpacing="16">
+                                <TextBlock Text="{Binding Title}" Classes="heading" />
+                                <Panel Grid.Column="1" VerticalAlignment="Center" MaxWidth="240">
+                                    <Button Content="{Binding WorkspaceLabel}" Classes="tool-toggle"
+                                            ToolTip.Tip="{Binding WorkspaceRoot}" AutomationProperties.Name="选择工作区目录"
+                                            IsVisible="{Binding CanChooseWorkspace}" Click="BrowseFolder" />
+                                    <TextBlock Text="{Binding WorkspaceLabel}" Classes="caption"
+                                               TextTrimming="CharacterEllipsis"
+                                               ToolTip.Tip="{Binding WorkspaceRoot}"
+                                               IsVisible="{Binding !CanChooseWorkspace}" />
+                                </Panel>
+                            </Grid>
+                            <ScrollViewer Grid.Row="1" HorizontalScrollBarVisibility="Disabled"
+                                          VerticalScrollBarVisibility="Auto">
+                                <StackPanel MaxWidth="816" Margin="28,8" Spacing="4">
+                                    <ItemsControl ItemsSource="{Binding Items}" />
+                                    <Button Content="加载后续历史" Command="{Binding LoadHistoryCommand}"
+                                            IsVisible="{Binding HasMoreHistory}" />
+                                    <ItemsControl ItemsSource="{Binding WorkItems}" />
                                 </StackPanel>
-                            </Border>
-                            <TextBlock Text="{Binding Notice}" IsVisible="{Binding HasNotice}" TextWrapping="Wrap" Classes="caption" />
-                            <Button Content="我已检查中断产生的变更，解除检查阻断" IsVisible="{Binding InspectionPending}"
-                                    IsEnabled="{Binding !IsRunning}" Command="{Binding AcknowledgeInspectionCommand}" />
-                        </StackPanel>
-                        <conversation:ComposerView Grid.Row="3" MaxWidth="816" Margin="28,0,28,16" />
-                    </Grid>
-                </DataTemplate>
-            </ContentControl.ContentTemplate>
-        </ContentControl>
-        <TextBlock Grid.Row="1" Grid.ColumnSpan="3" Text="{Binding Notice}" Margin="16,4" TextWrapping="Wrap" Classes="caption" />
+                            </ScrollViewer>
+                            <StackPanel Grid.Row="2" MaxWidth="816" Margin="28,8" Spacing="8">
+                                <Border IsVisible="{Binding HasApproval}"
+                                        Background="{DynamicResource PanelBackgroundBrush}" Padding="16"
+                                        CornerRadius="12">
+                                    <StackPanel Spacing="10">
+                                        <TextBlock Text="工具请求审批" FontWeight="SemiBold" />
+                                        <ScrollViewer MaxHeight="200">
+                                            <TextBlock Text="{Binding ApprovalText}" Classes="tool-mono" />
+                                        </ScrollViewer>
+                                        <WrapPanel Orientation="Horizontal">
+                                            <Button Content="仅允许一次" Command="{Binding AllowOnceCommand}"
+                                                    Margin="0,0,8,0" />
+                                            <Button Content="本轮允许此范围" Command="{Binding AllowRunCommand}"
+                                                    Margin="0,0,8,0" />
+                                            <Button Content="拒绝" Command="{Binding DenyCommand}" />
+                                        </WrapPanel>
+                                    </StackPanel>
+                                </Border>
+                                <TextBlock Text="{Binding Notice}" IsVisible="{Binding HasNotice}" TextWrapping="Wrap"
+                                           Classes="caption" />
+                                <Button Content="我已检查中断产生的变更，解除检查阻断" IsVisible="{Binding InspectionPending}"
+                                        IsEnabled="{Binding !IsRunning}"
+                                        Command="{Binding AcknowledgeInspectionCommand}" />
+                            </StackPanel>
+                            <conversation:ComposerView Grid.Row="3" MaxWidth="816" Margin="28,0,28,16" />
+                        </Grid>
+                    </DataTemplate>
+                </ContentControl.ContentTemplate>
+            </ContentControl>
+
+            <!-- 分隔条：布局列宽 0，左右栏视觉上直接相接；命中区是悬跨分界线的 8px 控件
+                 （左右各 4px，声明在最后以获得最高 z-order）。PreviousAndNext 在
+                 「固定列 + 星号列」组合下只改左列固定宽，拖拽等量挤压右栏而窗口总宽不变。 -->
+            <GridSplitter x:Name="SidebarSplitter" Grid.Column="1"
+                          Classes="sidebar-splitter"
+                          ResizeDirection="Columns"
+                          ResizeBehavior="PreviousAndNext"
+                          Width="8"
+                          HorizontalAlignment="Center" VerticalAlignment="Stretch" />
+        </Grid>
+        <TextBlock Grid.Row="1" Text="{Binding Notice}" Margin="16,4" TextWrapping="Wrap" Classes="caption" />
         <!-- 可见性绑在包装层：SettingsPanelView 自带 x:DataType，元素上的数据绑定会按面板 VM 解析。 -->
-        <Border x:Name="SettingsOverlay" Grid.ColumnSpan="3" Grid.RowSpan="2" IsVisible="{Binding SettingsOpen}">
+        <Border x:Name="SettingsOverlay" Grid.RowSpan="2" IsVisible="{Binding SettingsOpen}">
             <views:SettingsPanelView DataContext="{Binding Settings}"
                                      IsVisible="{Binding #SettingsOverlay.IsVisible}" />
         </Border>

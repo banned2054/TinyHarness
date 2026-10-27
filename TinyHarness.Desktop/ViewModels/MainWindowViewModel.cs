@@ -24,7 +24,13 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     private          string?                  _initializationCursor;
     private          TaskCompletionSource?    _initializationFinished;
     private          bool                     _loadingCatalog;
-    private          string                   _notice   = string.Empty;
+    private          string                   _notice = string.Empty;
+    private          int                      _renameDialogVersion;
+    private          ProjectViewModel?        _renameTarget;
+    private          bool                     _renamingProject;
+    private          string                   _projectRenameDraft = string.Empty;
+    private          string?                  _projectRenameError;
+    private          bool                     _projectRenameOpen;
     private          IReadOnlyList<Project>   _projects = [];
     private          SessionViewModel?        _selected;
     private          bool                     _settingsOpen;
@@ -44,6 +50,17 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         Settings = new SettingsPanelViewModel(new GeneralSettingsSectionViewModel(UserConfigPath), Catalog);
         Settings.CloseRequested += (_, _) => SettingsOpen = false;
         NewSessionCommand = new RelayCommand(NewSession);
+        SelectSessionCommand = new RelayCommand<SessionViewModel>(session => SelectedSession = session);
+        ToggleProjectCommand = new RelayCommand<ProjectViewModel>(group =>
+        {
+            if (group is null) return;
+            group.IsExpanded = !group.IsExpanded;
+            RebuildSidebarRows();
+        });
+        OpenProjectRenameCommand =
+            new RelayCommand<ProjectViewModel>(OpenProjectRename, group => group is { CanEdit: true });
+        ConfirmProjectRenameCommand = new RelayCommand(() => _ = ConfirmProjectRenameAsync());
+        CancelProjectRenameCommand  = new RelayCommand(CancelProjectRename);
         OpenSettingsCommand = new RelayCommand(() =>
         {
             SettingsOpen = !SettingsOpen;
@@ -59,17 +76,26 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         NewSession();
     }
 
-    public CatalogSettingsViewModel               Catalog                     { get; }
-    public SettingsPanelViewModel                 Settings                    { get; }
-    public ObservableCollection<SessionViewModel> Sessions                    { get; } = [];
-    public ObservableCollection<ProjectViewModel> Projects                    { get; } = [];
-    public ObservableCollection<ModelChoice>      Models                      { get; } = [];
-    public RelayCommand                           NewSessionCommand           { get; }
-    public RelayCommand                           OpenSettingsCommand         { get; }
-    public AsyncCommand                           RefreshCommand              { get; }
-    public string                                 UserConfigPath              { get; }
-    public AsyncCommand                           InitializeProjectsCommand   { get; }
-    public RelayCommand                           CancelInitializationCommand { get; }
+    public CatalogSettingsViewModel               Catalog  { get; }
+    public SettingsPanelViewModel                 Settings { get; }
+    public ObservableCollection<SessionViewModel> Sessions { get; } = [];
+    public ObservableCollection<ProjectViewModel> Projects { get; } = [];
+    public ObservableCollection<ModelChoice>      Models   { get; } = [];
+
+    /// <summary>侧栏呈现行：项目组头行与成员会话行混排的铺平投影，按各组的展开态生成。</summary>
+    public ObservableCollection<object> SidebarRows { get; } = [];
+
+    public RelayCommand                   NewSessionCommand           { get; }
+    public RelayCommand<SessionViewModel> SelectSessionCommand        { get; }
+    public RelayCommand<ProjectViewModel> ToggleProjectCommand        { get; }
+    public RelayCommand<ProjectViewModel> OpenProjectRenameCommand    { get; }
+    public RelayCommand                   ConfirmProjectRenameCommand { get; }
+    public RelayCommand                   CancelProjectRenameCommand  { get; }
+    public RelayCommand                   OpenSettingsCommand         { get; }
+    public AsyncCommand                   RefreshCommand              { get; }
+    public string                         UserConfigPath              { get; }
+    public AsyncCommand                   InitializeProjectsCommand   { get; }
+    public RelayCommand                   CancelInitializationCommand { get; }
 
     public string Notice
     {
@@ -83,6 +109,38 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         set => SetProperty(ref _settingsOpen, value);
     }
 
+    /// <summary>项目重命名弹窗是否打开（组头菜单打开，浅失焦或取消关闭）。</summary>
+    public bool IsProjectRenameOpen
+    {
+        get => _projectRenameOpen;
+        private set => SetProperty(ref _projectRenameOpen, value);
+    }
+
+    /// <summary>项目重命名输入草稿：弹窗打开时预填当前名称；trim 后为确认与校验依据。</summary>
+    public string ProjectRenameDraftText
+    {
+        get => _projectRenameDraft;
+        set
+        {
+            if (!SetProperty(ref _projectRenameDraft, value ?? string.Empty)) return;
+            // 输入变化即重算本地校验；上一次确认失败的错误随之让位。
+            _projectRenameError = null;
+            NotifyProjectRenameValidation();
+        }
+    }
+
+    /// <summary>项目重命名错误提示：目录册保存失败在弹窗内呈现，可修改后重试。</summary>
+    public string? ProjectRenameErrorText => _projectRenameError;
+
+    public bool HasProjectRenameError => _projectRenameError is not null;
+
+    /// <summary>确认重命名是否可用：存在目标、名称非空、与当前名不同且不在途。</summary>
+    public bool CanConfirmProjectRename =>
+        !_renamingProject &&
+        _renameTarget is not null &&
+        ProjectRenameDraftText.Trim().Length > 0 &&
+        ProjectRenameDraftText.Trim() != _renameTarget.Name;
+
     public SessionViewModel? SelectedSession
     {
         get => _selected;
@@ -92,7 +150,8 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
             if (_selected is { } previous) previous.IsSelected = false;
             if (!SetProperty(ref _selected, value) || value is null) return;
             value.IsSelected = true;
-            _                = LoadSelectedHistoryAsync(value);
+            RebuildSidebarRows();
+            _ = LoadSelectedHistoryAsync(value);
         }
     }
 
@@ -267,7 +326,7 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
             var existing = previous.GetValueOrDefault(key);
             group = (existing is not null && (existing.Project is null) == (project is null) ? existing : null) ??
                     new ProjectViewModel(key, project, name, root,
-                                         NewProjectSessionAsync, RenameProjectAsync,
+                                         NewProjectSessionAsync,
                                          exception => Notice = exception.Message);
             if (project is not null) group.Update(project);
             group.Sessions.Clear();
@@ -290,6 +349,35 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
                      group.Sessions.Where(session => session.Id is not null).Select(session => session.LastActivityUtc)
                           .DefaultIfEmpty(group.Project?.CreatedUtc ?? DateTimeOffset.MinValue).Max()))
             Projects.Add(group);
+        RebuildSidebarRows();
+    }
+
+    /// <summary>
+    ///     <para>把项目分组与成员会话铺平为侧栏呈现行；折叠组只保留组头行。</para>
+    ///     <para>Flattens project groups and member sessions into sidebar rows; collapsed groups keep only their header.</para>
+    /// </summary>
+    private void RebuildSidebarRows()
+    {
+        foreach (var group in Projects) group.NotifyCurrentChanged();
+        var rows = new List<object>(Projects.Count + Sessions.Count);
+        foreach (var group in Projects)
+        {
+            rows.Add(group);
+            if (group.IsExpanded) rows.AddRange(group.Sessions);
+        }
+
+        // 保留未变行与控件；刷新不 Reset，排序只移动、增删实际变化的行，避免整表重建闪动。
+        var retained = new HashSet<object>(rows);
+        for (var index = SidebarRows.Count - 1; index >= 0; index--)
+            if (!retained.Contains(SidebarRows[index]))
+                SidebarRows.RemoveAt(index);
+        for (var index = 0; index < rows.Count; index++)
+        {
+            if (index < SidebarRows.Count && ReferenceEquals(SidebarRows[index], rows[index])) continue;
+            var previousIndex = SidebarRows.IndexOf(rows[index]);
+            if (previousIndex >= 0) SidebarRows.Move(previousIndex, index);
+            else SidebarRows.Insert(index, rows[index]);
+        }
     }
 
     /// <summary>
@@ -340,6 +428,78 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
                                                      project.Revision, cancellationToken : _lifetime.Token);
         _projects = _projects.Select(item => item.Id == renamed.Id ? renamed : item).ToArray();
         group.Update(renamed);
+    }
+
+    /// <summary>组头「重命名」：以该组为对象打开重命名弹窗并预填当前名称。</summary>
+    private void OpenProjectRename(ProjectViewModel? group)
+    {
+        if (group is not { CanEdit: true }) return;
+        _renameTarget = group;
+        // 每次打开都是新的弹窗实例：身份递增，使仍在途的上一次确认结果不落回本弹窗。
+        _renameDialogVersion++;
+        ProjectRenameDraftText = group.Name;
+        _projectRenameError    = null;
+        IsProjectRenameOpen    = true;
+        // 预填与残留草稿相同时草稿 setter 不通知，开窗即补齐校验通知（确认按钮的可用态）。
+        NotifyProjectRenameValidation();
+    }
+
+    /// <summary>确认重命名：按显示修订号保存；失败留在弹窗内呈现并可重试。</summary>
+    private async Task ConfirmProjectRenameAsync()
+    {
+        if (_renameTarget is null || !CanConfirmProjectRename) return;
+        var group         = _renameTarget;
+        var name          = ProjectRenameDraftText.Trim();
+        var dialogVersion = _renameDialogVersion;
+        _renamingProject = true;
+        NotifyProjectRenameValidation();
+        try
+        {
+            group.EditedName = name;
+            await RenameProjectAsync(group);
+            if (_renameDialogVersion != dialogVersion) return;
+            _projectRenameError = null;
+            CloseProjectRename();
+        }
+        catch (Exception exception)
+        {
+            // 原弹窗已不在时错误只进窗口通知，不得写入当前弹窗（可能是另一个项目）。
+            if (_renameDialogVersion != dialogVersion)
+            {
+                Notice = exception.Message;
+                return;
+            }
+
+            _projectRenameError = _factory.Redact(exception.Message);
+            NotifyProjectRenameValidation();
+        }
+        finally
+        {
+            _renamingProject = false;
+            NotifyProjectRenameValidation();
+        }
+    }
+
+    /// <summary>关闭并清理重命名弹窗状态（取消、确认成功与浅失焦共用）。</summary>
+    private void CloseProjectRename()
+    {
+        IsProjectRenameOpen = false;
+        _renameTarget       = null;
+        _projectRenameError = null;
+        NotifyProjectRenameValidation();
+    }
+
+    private void CancelProjectRename()
+    {
+        CloseProjectRename();
+    }
+
+    /// <summary>重命名校验相关属性的统一通知点（输入、在途与错误状态变化都会经过）。</summary>
+    private void NotifyProjectRenameValidation()
+    {
+        OnPropertyChanged(nameof(CanConfirmProjectRename));
+        OnPropertyChanged(nameof(ProjectRenameErrorText));
+        OnPropertyChanged(nameof(HasProjectRenameError));
     }
 
     private async Task<string> ResolveProtectedDirectoryAsync(string root, CancellationToken token)

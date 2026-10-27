@@ -8,6 +8,13 @@ namespace TinyHarness.Desktop.Presentation.Views;
 
 public sealed partial class MainWindow : Window
 {
+    // 侧栏拖拽常量：宽度上限 = min(480, 可用宽 - 右栏最小 560)；
+    // splitter 布局列宽 0，命中区悬跨分界线、不占布局宽度。
+    private const double SidebarMinWidth     = 240;
+    private const double SidebarMaxWidth     = 480;
+    private const double SidebarDefaultWidth = 280;
+    private const double ContentMinWidth     = 560;
+
     private readonly MainWindowViewModel _model;
     private          bool                _allowClose;
     private          bool                _closing;
@@ -19,9 +26,10 @@ public sealed partial class MainWindow : Window
     public MainWindow(MainWindowViewModel model)
     {
         InitializeComponent();
-        _model      =  model;
-        DataContext =  model;
-        Closing     += OnClosing;
+        _model                  =  model;
+        DataContext             =  model;
+        Closing                 += OnClosing;
+        ContentGrid.SizeChanged += OnContentGridSizeChanged;
     }
 
     private async void BrowseFolder(object? sender, RoutedEventArgs args)
@@ -38,25 +46,6 @@ public sealed partial class MainWindow : Window
         {
             session.ShowError(exception);
         }
-    }
-
-    private async void OpenProjectFolder(object? sender, RoutedEventArgs args)
-    {
-        try
-        {
-            var folders =
-                await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions { AllowMultiple = false });
-            if (folders.FirstOrDefault()?.TryGetLocalPath() is { } path) await _model.OpenProjectAsync(path);
-        }
-        catch (Exception exception)
-        {
-            _model.Notice = exception.Message;
-        }
-    }
-
-    private void SelectHistory(object? sender, RoutedEventArgs args)
-    {
-        if (sender is Control { DataContext: SessionViewModel session }) _model.SelectedSession = session;
     }
 
     /// <summary>
@@ -85,5 +74,34 @@ public sealed partial class MainWindow : Window
             _closing      = false;
             IsEnabled     = true;
         }
+    }
+
+    // Avalonia 不为 ColumnDefinition 的 x:Name 生成字段，按位置取列。
+    private ColumnDefinition SidebarColumn => ContentGrid.ColumnDefinitions[0];
+
+    /// <summary>窗口尺寸变化后重新 clamp 左栏宽度。</summary>
+    private void OnContentGridSizeChanged(object? sender, SizeChangedEventArgs e)
+    {
+        ClampSidebarWidth();
+    }
+
+    /// <summary>
+    ///     <para>
+    ///         左栏宽度 clamp 到 [240, min(480, 可用宽-560)]；上限同步写入列与侧栏内容的 MaxWidth，
+    ///         让 GridSplitter 拖拽在右栏最小宽 560 之前停下。
+    ///     </para>
+    ///     <para>
+    ///         Clamps the sidebar width to [240, min(480, available-560)]; the limit also goes to the sidebar surface so
+    ///         dragging stops before the 560px minimum of the content column.
+    ///     </para>
+    /// </summary>
+    private void ClampSidebarWidth()
+    {
+        var available = ContentGrid.Bounds.Width;
+        var upper     = Math.Max(SidebarMinWidth, Math.Min(SidebarMaxWidth, available - ContentMinWidth));
+        SidebarColumn.MaxWidth = upper;
+        Sidebar.SetSurfaceMaxWidth(upper);
+        var current = SidebarColumn.Width.IsAbsolute ? SidebarColumn.Width.Value : SidebarDefaultWidth;
+        SidebarColumn.Width = new GridLength(Math.Clamp(current, SidebarMinWidth, upper), GridUnitType.Pixel);
     }
 }

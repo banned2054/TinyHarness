@@ -12,8 +12,8 @@ public sealed class ProjectViewModel : ObservableObject
     private string _editedName;
     private bool   _expanded = true;
 
-    public ProjectViewModel(string                       key,    Project? project, string name, string root,
-                            Func<ProjectViewModel, Task> create, Func<ProjectViewModel, Task> rename,
+    public ProjectViewModel(string                       key, Project? project, string name, string root,
+                            Func<ProjectViewModel, Task> create,
                             Action<Exception>            error)
     {
         Key               = key;
@@ -22,7 +22,6 @@ public sealed class ProjectViewModel : ObservableObject
         Root              = root;
         _editedName       = name;
         NewSessionCommand = new AsyncCommand(() => create(this), error);
-        RenameCommand     = new AsyncCommand(() => rename(this), error);
     }
 
     public string                                 Key               { get; }
@@ -32,7 +31,6 @@ public sealed class ProjectViewModel : ObservableObject
     public bool                                   CanEdit           => Project is not null;
     public ObservableCollection<SessionViewModel> Sessions          { get; } = [];
     public AsyncCommand                           NewSessionCommand { get; }
-    public AsyncCommand                           RenameCommand     { get; }
 
     public string EditedName
     {
@@ -44,6 +42,18 @@ public sealed class ProjectViewModel : ObservableObject
     {
         get => _expanded;
         set => SetProperty(ref _expanded, value);
+    }
+
+    /// <summary>该组是否包含当前选中的会话；驱动组头行的选中高亮。</summary>
+    public bool IsCurrent => Sessions.Any(session => session.IsSelected);
+
+    /// <summary>
+    ///     <para>选中变化或成员列表重建后统一刷新 IsCurrent 通知；高亮本身按成员实时求值。</para>
+    ///     <para>Refreshes the IsCurrent notification after selection or membership changes; the highlight is evaluated live.</para>
+    /// </summary>
+    public void NotifyCurrentChanged()
+    {
+        OnPropertyChanged(nameof(IsCurrent));
     }
 
     /// <summary>

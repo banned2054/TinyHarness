@@ -1,0 +1,236 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:TinyHarness.Desktop.ViewModels"
+             xmlns:sidebar="using:TinyHarness.Desktop.Presentation.Views.Sidebar"
+             x:Class="TinyHarness.Desktop.Presentation.Views.Sidebar.SidebarView"
+             x:DataType="vm:MainWindowViewModel"
+             mc:Ignorable="d"
+             d:DesignHeight="760" d:DesignWidth="280">
+    <!-- 侧栏内容视图：拖拽调宽等窗口级布局由 MainWindow 统一协调（见 MainWindow.axaml.cs），
+         宽度上限经 SetSurfaceMaxWidth 与外层 Grid 列同步。 -->
+    <Border x:Name="Surface"
+            MinWidth="240" MaxWidth="480"
+            Background="{DynamicResource SidebarBackgroundBrush}" Padding="12,16,12,12">
+        <Grid RowDefinitions="Auto,Auto,Auto,*,Auto">
+            <!-- 头部：应用名标题行。 -->
+            <TextBlock Text="TinyHarness" Classes="heading" HorizontalAlignment="Center" />
+
+            <!-- 顶部「新对话」：DSH newSession 形态——左侧 16px 圆形加号图标，
+                 图标与文字间距 6，实底按钮样式见 Button.new-session。 -->
+            <Button Grid.Row="1"
+                    Margin="0,24,0,10"
+                    Classes="new-session"
+                    AutomationProperties.Name="新对话"
+                    Command="{Binding NewSessionCommand}">
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                    <Path Width="16" Height="16"
+                          Data="{StaticResource Icon.PlusCircleOutline}"
+                          Stroke="{Binding $parent[Button].Foreground}" StrokeThickness="1.5"
+                          StrokeLineCap="Round"
+                          HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    <TextBlock Text="新对话" VerticalAlignment="Center" />
+                </StackPanel>
+            </Button>
+
+            <!-- 头部行：会话标签 + 打开目录/项目图标按钮（文件夹加号，语义同 DSH
+                 WorkspaceBrowser 的添加工作区）。文件夹对话框是视图行为，见 code-behind，
+                 登记编排走 MainWindowViewModel.OpenProjectAsync。 -->
+            <Grid Grid.Row="2" Margin="0,0,0,4" ColumnDefinitions="*,Auto">
+                <TextBlock Text="会话" Classes="caption" VerticalAlignment="Center" />
+                <Button Grid.Column="1" Classes="sidebar-icon"
+                        AutomationProperties.Name="打开目录 / 项目"
+                        ToolTip.Tip="打开目录 / 项目"
+                        Click="OnOpenProjectClick">
+                    <Panel>
+                        <Path Width="16" Height="16"
+                              Data="{StaticResource Icon.ProjectAddFolderFill}"
+                              Fill="{DynamicResource TextMutedBrush}" />
+                        <Path Width="16" Height="16"
+                              Data="{StaticResource Icon.ProjectAddPlusStroke}"
+                              Stroke="{DynamicResource TextMutedBrush}" StrokeThickness="1"
+                              StrokeLineCap="Round" />
+                    </Panel>
+                </Button>
+            </Grid>
+
+            <!-- ListBox 的滚动视口驱动虚拟化，只创建可见行；行按钮继续负责选择与键盘操作。 -->
+            <ListBox x:Name="SessionList" Grid.Row="3" Classes="session-list"
+                     ItemsSource="{Binding SidebarRows}"
+                     HorizontalAlignment="Stretch"
+                     Margin="0,0,-12,0"
+                     ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                     ScrollViewer.VerticalScrollBarVisibility="Auto">
+                <ListBox.ItemsPanel>
+                    <ItemsPanelTemplate>
+                        <VirtualizingStackPanel HorizontalAlignment="Stretch" />
+                    </ItemsPanelTemplate>
+                </ListBox.ItemsPanel>
+                <ListBox.DataTemplates>
+                    <DataTemplate x:DataType="vm:ProjectViewModel">
+                        <!-- 项目组头行：整行一个圆角矩形（Border.group-row）承担悬停/选中底色；
+                             右侧悬浮按钮组（重命名 + 项目内新对话）平时隐藏，悬停整行时淡入
+                             （显隐样式见 Sidebar.axaml 的 workspace-actions）。待初始化与缺失
+                             分组不可编辑（CanEdit=false），不显示悬浮操作。 -->
+                        <Border Classes="group-row" Classes.current="{Binding IsCurrent}">
+                            <Grid ColumnDefinitions="*,Auto" HorizontalAlignment="Stretch">
+                                <Button Grid.Column="0" Classes="group-header" Margin="0"
+                                        HorizontalAlignment="Stretch"
+                                        AutomationProperties.Name="{Binding Name}"
+                                        Command="{Binding $parent[sidebar:SidebarView].DataContext.ToggleProjectCommand}"
+                                        CommandParameter="{Binding}">
+                                    <!-- 项目行：左侧折叠箭头（收起向右、展开向下）+
+                                         文件夹图标（随展开态切换：折叠闭合、展开打开）+ 标题。 -->
+                                    <Grid ColumnDefinitions="Auto,Auto,*" ColumnSpacing="4"
+                                          HorizontalAlignment="Stretch">
+                                        <Panel Grid.Column="0" Width="8" Height="16" VerticalAlignment="Center">
+                                            <Panel VerticalAlignment="Center" Width="8" Height="8">
+                                                <Path Data="{StaticResource Icon.ChevronRight}"
+                                                      Stroke="{DynamicResource TextMutedBrush}"
+                                                      StrokeThickness="1.5"
+                                                      StrokeLineCap="Round"
+                                                      IsVisible="{Binding !IsExpanded}" />
+                                                <Path Data="{StaticResource Icon.ChevronDown}"
+                                                      Stroke="{DynamicResource TextMutedBrush}"
+                                                      StrokeThickness="1.5"
+                                                      StrokeLineCap="Round"
+                                                      IsVisible="{Binding IsExpanded}" />
+                                            </Panel>
+                                        </Panel>
+                                        <Panel Grid.Column="1" Width="16" Height="16" VerticalAlignment="Center">
+                                            <Path Width="16" Height="16"
+                                                  IsVisible="{Binding !IsExpanded}"
+                                                  Data="{StaticResource Icon.FolderCloseRegular}"
+                                                  Stroke="{DynamicResource TextMutedBrush}" StrokeThickness="1" />
+                                            <Panel IsVisible="{Binding IsExpanded}">
+                                                <Path Width="16" Height="16"
+                                                      Data="{StaticResource Icon.FolderOpenPlate}"
+                                                      Fill="{DynamicResource TextMutedBrush}" Opacity="0.16" />
+                                                <Path Width="16" Height="16"
+                                                      Data="{StaticResource Icon.FolderOpenFront}"
+                                                      Fill="{DynamicResource TextMutedBrush}" />
+                                                <Path Width="16" Height="16"
+                                                      Data="{StaticResource Icon.FolderOpenBack}"
+                                                      Fill="{DynamicResource TextMutedBrush}" />
+                                            </Panel>
+                                        </Panel>
+                                        <TextBlock Grid.Column="2" Text="{Binding Name}"
+                                                   FontSize="14" FontWeight="SemiBold"
+                                                   VerticalAlignment="Center"
+                                                   TextTrimming="CharacterEllipsis"
+                                                   ToolTip.Tip="{Binding Root}" />
+                                    </Grid>
+                                </Button>
+                                <StackPanel Grid.Column="1" Classes="workspace-actions"
+                                            Orientation="Horizontal" Spacing="2"
+                                            IsVisible="{Binding CanEdit}">
+                                    <Button Classes="workspace-menu"
+                                            AutomationProperties.Name="重命名项目"
+                                            ToolTip.Tip="重命名项目"
+                                            Command="{Binding $parent[sidebar:SidebarView].DataContext.OpenProjectRenameCommand}"
+                                            CommandParameter="{Binding}">
+                                        <!-- DSH IconEditOutlineRegular：fill 框身 + stroke 笔杆。 -->
+                                        <Panel Width="16" Height="16">
+                                            <Path Width="16" Height="16"
+                                                  Data="{StaticResource Icon.EditBodyFill}"
+                                                  Fill="{DynamicResource TextMutedBrush}" />
+                                            <Path Width="16" Height="16"
+                                                  Data="{StaticResource Icon.EditPenStroke}"
+                                                  Stroke="{DynamicResource TextMutedBrush}" StrokeThickness="1" />
+                                        </Panel>
+                                    </Button>
+                                    <Button Classes="workspace-new-session"
+                                            AutomationProperties.Name="在此项目内新建对话"
+                                            ToolTip.Tip="在此项目内新建对话"
+                                            Command="{Binding NewSessionCommand}">
+                                        <!-- DSH IconNewChatOutlineMedium：气泡包加号（1.3 描边）。 -->
+                                        <Path Width="16" Height="16"
+                                              Data="{StaticResource Icon.NewChatOutlineMedium}"
+                                              Stroke="{DynamicResource TextMutedBrush}" StrokeThickness="1.3" />
+                                    </Button>
+                                </StackPanel>
+                            </Grid>
+                        </Border>
+                    </DataTemplate>
+                    <DataTemplate x:DataType="vm:SessionViewModel">
+                        <!-- 会话行：整行按钮驱动选择；右侧常驻运行指示与状态文案
+                             （不使用 session-trailing：本行没有悬浮操作条可与之互换）。 -->
+                        <Button Classes="session-row"
+                                Classes.current="{Binding IsSelected}"
+                                HorizontalAlignment="Stretch"
+                                AutomationProperties.Name="{Binding Title}"
+                                Command="{Binding $parent[sidebar:SidebarView].DataContext.SelectSessionCommand}"
+                                CommandParameter="{Binding}">
+                            <Grid ColumnDefinitions="*,Auto" HorizontalAlignment="Stretch">
+                                <TextBlock Grid.Column="0"
+                                           Text="{Binding Title}"
+                                           FontSize="14"
+                                           VerticalAlignment="Center"
+                                           TextTrimming="CharacterEllipsis"
+                                           ToolTip.Tip="{Binding WorkspaceRoot}" />
+                                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6"
+                                            HorizontalAlignment="Right" VerticalAlignment="Center">
+                                    <Ellipse Width="7" Height="7" VerticalAlignment="Center"
+                                             Fill="{DynamicResource StatusRunningBrush}"
+                                             IsVisible="{Binding IsRunning}" />
+                                    <TextBlock Text="{Binding Status}" Classes="caption"
+                                               VerticalAlignment="Center" />
+                                </StackPanel>
+                            </Grid>
+                        </Button>
+                    </DataTemplate>
+                </ListBox.DataTemplates>
+            </ListBox>
+
+            <!-- 底部卡片：设置与历史刷新入口 + 旧会话项目归属初始化工具（迁移期功能）。 -->
+            <Border Grid.Row="4" Margin="0,16,0,0" Padding="12"
+                    Background="{DynamicResource PanelBackgroundBrush}" CornerRadius="10">
+                <StackPanel Spacing="7">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Button Content="设置" Command="{Binding OpenSettingsCommand}" />
+                        <Button Content="刷新历史" Command="{Binding RefreshCommand}" />
+                    </StackPanel>
+                    <Expander Header="旧会话项目归属">
+                        <StackPanel Spacing="6">
+                            <TextBlock Text="初始化会追加归属记录，旧版本将无法读取这些日志。每次最多检查 100 个；占用或失败项可重试。"
+                                       TextWrapping="Wrap" Classes="caption" />
+                            <Button Content="初始化 / 继续扫描" Command="{Binding InitializeProjectsCommand}" />
+                            <Button Content="取消初始化" Command="{Binding CancelInitializationCommand}" />
+                        </StackPanel>
+                    </Expander>
+                </StackPanel>
+            </Border>
+
+            <!-- 项目重命名弹窗：预填当前名并全选，Enter 确认、Esc/取消/浅失焦关闭；
+                 确认按显示修订号保存，错误留在弹窗内可重试。弹窗实例全局一份（状态在
+                 MainWindowViewModel），不随行投影重复创建。 -->
+            <Popup x:Name="ProjectRenamePopup"
+                   PlacementTarget="{Binding #Surface}" Placement="Center"
+                   IsOpen="{Binding IsProjectRenameOpen, Mode=TwoWay}"
+                   IsLightDismissEnabled="True">
+                <Border Classes="popup-surface" Width="320" Padding="14,12">
+                    <StackPanel Spacing="10">
+                        <TextBlock Text="重命名项目"
+                                   FontSize="14" FontWeight="SemiBold"
+                                   Foreground="{DynamicResource PopupForegroundBrush}" />
+                        <TextBox x:Name="ProjectRenameInput"
+                                 Classes="popup-input"
+                                 Text="{Binding ProjectRenameDraftText, Mode=TwoWay}"
+                                 AutomationProperties.Name="项目名称" />
+                        <TextBlock Classes="popup-error"
+                                   Text="{Binding ProjectRenameErrorText}"
+                                   IsVisible="{Binding HasProjectRenameError}" />
+                        <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right">
+                            <Button Classes="approval-reject" Content="取消"
+                                    Command="{Binding CancelProjectRenameCommand}" />
+                            <Button Classes="approval-allow" Content="重命名"
+                                    Command="{Binding ConfirmProjectRenameCommand}"
+                                    IsEnabled="{Binding CanConfirmProjectRename}" />
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+            </Popup>
+        </Grid>
+    </Border>
+</UserControl>
