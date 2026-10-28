@@ -4,13 +4,14 @@ using TinyHarness.Core.Models.Project;
 namespace TinyHarness.Desktop.ViewModels;
 
 /// <summary>
-///     <para>项目侧栏投影；缺失项目和待初始化分组仅用于展示，不推断持久化归属。</para>
-///     <para>Sidebar projection; missing-project and pending groups are display-only and never infer persisted ownership.</para>
+///     <para>项目侧栏投影；草稿、缺失项目与整理未完成分组仅用于展示，不推断持久化归属。</para>
+///     <para>Sidebar projection; draft, missing-project and unfinished-organize groups are display-only and never infer persisted ownership.</para>
 /// </summary>
 public sealed class ProjectViewModel : ObservableObject
 {
-    private string _editedName;
-    private bool   _expanded = true;
+    private string  _editedName;
+    private bool    _expanded = true;
+    private string? _detail;
 
     public ProjectViewModel(string                       key, Project? project, string name, string root,
                             Func<ProjectViewModel, Task> create,
@@ -31,6 +32,12 @@ public sealed class ProjectViewModel : ObservableObject
     public bool                                   CanEdit           => Project is not null;
     public ObservableCollection<SessionViewModel> Sessions          { get; } = [];
     public AsyncCommand                           NewSessionCommand { get; }
+
+    /// <summary>纯展示组的附加说明（如整理未完成原因）；真实项目组不使用。</summary>
+    public string? Detail => _detail;
+
+    /// <summary>组头提示：有附加说明时优先展示，否则显示目录路径；草稿组无目录时为空。</summary>
+    public string? HeaderTip => _detail ?? (Root.Length > 0 ? Root : null);
 
     public string EditedName
     {
@@ -68,5 +75,28 @@ public sealed class ProjectViewModel : ObservableObject
         EditedName = project.Name;
         OnPropertyChanged(nameof(Name));
         OnPropertyChanged(nameof(CanEdit));
+    }
+
+    /// <summary>
+    ///     <para>刷新纯展示组的名称与说明；真实项目组仍以 <see cref="Update" /> 保存的定义为准。</para>
+    ///     <para>
+    ///         Refreshes a display-only group's name and detail; real project groups keep following the saved
+    ///         definition via <see cref="Update" />.
+    ///     </para>
+    /// </summary>
+    public void RefreshDisplay(string name, string? detail)
+    {
+        if (Project is not null) return;
+        if (Name != name)
+        {
+            Name       = name;
+            EditedName = name;
+            OnPropertyChanged(nameof(Name));
+        }
+
+        if (_detail == detail) return;
+        _detail = detail;
+        OnPropertyChanged(nameof(Detail));
+        OnPropertyChanged(nameof(HeaderTip));
     }
 }

@@ -31,6 +31,10 @@
 
 2026-10-27（后续）：修复投影刷新与草稿归属两处 P2 问题——刷新按 store 与会话 ID 匹配并原地更新归属与活动时间、保留宿主草稿历史；新建草稿按当前 store 重新解析归属，不复制旧绑定；异步绑定增加 `CanChooseWorkspace` 守卫。新增两项回归在旧实现失败、修复后通过，Desktop 最终回归 66/66。CLI／Desktop Release `win-x64` NativeAOT 均产出 native code、0 compiler／trimming／AOT warning，隔离夹具脚本与 `--offline-smoke` 离线验证通过。真实 GUI 启动被本机 PowerShell 执行策略拒绝（UnauthorizedAccess），应用未启动、未绕过策略，GUI 交互仍未验证，不从离线结果推定阶段四完成；本轮测试与产物证据见[实施状态](project-session-plan.md#15-实施状态)与 `../artifacts/project-stage4-validation/`。
 
+2026-10-28：Desktop 启动即自动整理旧会话归属：窗口显示后先做轻量准备，后台按每批最多检查 100 份日志分批整理一轮，结束后统一加载项目与历史；生效 session store 真正变化和点击“刷新历史”时再各启动一轮。侧栏移除“旧会话项目归属”手动初始化区域，未绑定草稿独立展示为“草稿”组；成功静默，异常才显示摘要并给未完成目录组标注原因。同一时刻只运行一轮，切 store 取消旧轮并防护迟到结果，关闭取消并等待整轮结束；整理不抢选中、不丢草稿、不改变活动会话运行资源。CLI `session initialize-projects [after-session-id]` 保留为显式入口；真实 GUI 仍未验证，本轮证据见[实施状态](project-session-plan.md#15-实施状态)。
+
+2026-10-28（后续）：修复启动自动整理三项评审缺陷——分组重建改为本轮每 key 清一次成员，同项目多会话与项目内草稿不再丢失；自动整轮写入前复用与显式入口一致的完整保护校验（含 Windows 沙箱附加写根），保护失败或受保护解析与本轮捕获 store 不一致时拒绝写入并给出可见原因，只读历史保持可见；未归属分组键与整理明细按会话 store 隔离，同根跨 store 不再合并成组或串用原因。新增 5 项红绿回归，Desktop 完整回归 92/92 通过，Release `win-x64` NativeAOT publish 与产物 `--offline-smoke` 通过；详见[实施状态](project-session-plan.md#15-实施状态)。同日用户实测反馈：已有的未绑定旧会话已成功自动补齐项目归属；此为用户提供的结果，Agent 未读取真实日志复核，不代表整体 GUI 验收完成。
+
 ## 验证
 
 离线验证跨会话并行、同会话互斥、切换与取消隔离、审批取消、关闭等待、日志恢复和保存失败；构建编译绑定，执行 Windows NativeAOT publish 与离线原生产物 smoke。真实模型调用、系统沙箱配置与真实 GUI 交互分别报告，不从离线测试推定通过。

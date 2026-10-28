@@ -104,7 +104,7 @@ public sealed class DesktopProjectEntryTests
         {
             await model.OpenProjectAsync(fixture.First);
             var page = model.SelectedSession!;
-            projectId  = page.ProjectId;
+            projectId = page.ProjectId;
             page.Draft = "first request";
             await page.SendAsync();
             await page.Completion;
@@ -242,7 +242,7 @@ public sealed class DesktopProjectEntryTests
         page.Draft = "draft survives refresh";
         Assert.That(history, Is.GreaterThan(0));
         Assert.That(page.ProjectId, Is.Null);
-        Assert.That(model.Projects.Any(group => group.Key == "pending:" + ProjectRoots.Normalize(fixture.First)),
+        Assert.That(model.Projects.Any(group => group.Key == PendingKey(fixture.Store, fixture.First)),
                     Is.True);
 
         var initialized = await SessionProjectInitializer.InitializeAsync(fixture.Store, maxSessions : 100,
@@ -257,7 +257,7 @@ public sealed class DesktopProjectEntryTests
         Assert.That(page.Items.Count, Is.EqualTo(history));
         Assert.That(page.LastActivityUtc, Is.EqualTo(activity));
         Assert.That(model.Projects.Single(group => group.Key == page.ProjectId).Sessions, Does.Contain(page));
-        Assert.That(model.Projects.All(group => group.Key != "pending:" + ProjectRoots.Normalize(fixture.First)),
+        Assert.That(model.Projects.All(group => group.Key != PendingKey(fixture.Store, fixture.First)),
                     Is.True);
         Assert.That(model.Notice, Is.Empty);
         Assert.That(fixture.Credentials.Reads, Is.Zero);
@@ -302,6 +302,16 @@ public sealed class DesktopProjectEntryTests
         Assert.That(oldPage.StoreDirectory, Is.EqualTo(fixture.Store));
         Assert.That(oldPage.Draft, Is.EqualTo("old page keeps its binding"));
         Assert.That(fixture.Models, Is.GreaterThan(0));
+    }
+
+    /// <summary>
+    ///     <para>未归属旧日志的侧栏分组键：长度前缀分隔 store 与执行目录，与 MainWindowViewModel 的构造一致。</para>
+    ///     <para>Group key for unbound legacy rows: a length prefix separates store and root, matching MainWindowViewModel.</para>
+    /// </summary>
+    private static string PendingKey(string store, string root)
+    {
+        var normalizedStore = ProjectRoots.Normalize(store);
+        return "pending:" + normalizedStore.Length + ":" + normalizedStore + ProjectRoots.Normalize(root);
     }
 
     /// <summary>
@@ -377,8 +387,8 @@ public sealed class DesktopProjectEntryTests
             var root = Path.Combine(Path.GetTempPath(), "tinyharness-project-entry-" + Guid.NewGuid().ToString("N"));
             var fixture = new Fixture
             {
-                First = Path.Combine(root, "a", "same"), Second = Path.Combine(root, "b", "same"),
-                Store = Path.Combine(root, "sessions"), Config  = Path.Combine(root, "user.json")
+                First  = Path.Combine(root, "a", "same"), Second = Path.Combine(root, "b", "same"),
+                Store  = Path.Combine(root, "sessions"), Config = Path.Combine(root, "user.json")
             };
             Directory.CreateDirectory(fixture.First);
             Directory.CreateDirectory(fixture.Second);

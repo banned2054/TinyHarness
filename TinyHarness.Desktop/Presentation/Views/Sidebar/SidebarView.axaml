@@ -71,8 +71,8 @@
                     <DataTemplate x:DataType="vm:ProjectViewModel">
                         <!-- 项目组头行：整行一个圆角矩形（Border.group-row）承担悬停/选中底色；
                              右侧悬浮按钮组（重命名 + 项目内新对话）平时隐藏，悬停整行时淡入
-                             （显隐样式见 Sidebar.axaml 的 workspace-actions）。待初始化与缺失
-                             分组不可编辑（CanEdit=false），不显示悬浮操作。 -->
+                             （显隐样式见 Sidebar.axaml 的 workspace-actions）。草稿、整理未完成
+                             与缺失分组不可编辑（CanEdit=false），不显示悬浮操作。 -->
                         <Border Classes="group-row" Classes.current="{Binding IsCurrent}">
                             <Grid ColumnDefinitions="*,Auto" HorizontalAlignment="Stretch">
                                 <Button Grid.Column="0" Classes="group-header" Margin="0"
@@ -119,7 +119,7 @@
                                                    FontSize="14" FontWeight="SemiBold"
                                                    VerticalAlignment="Center"
                                                    TextTrimming="CharacterEllipsis"
-                                                   ToolTip.Tip="{Binding Root}" />
+                                                   ToolTip.Tip="{Binding HeaderTip}" />
                                     </Grid>
                                 </Button>
                                 <StackPanel Grid.Column="1" Classes="workspace-actions"
@@ -183,7 +183,8 @@
                 </ListBox.DataTemplates>
             </ListBox>
 
-            <!-- 底部卡片：设置与历史刷新入口 + 旧会话项目归属初始化工具（迁移期功能）。 -->
+            <!-- 底部卡片：设置与历史刷新入口；启动加载状态与历史整理摘要为轻量提示，
+                 成功静默，异常才出现，不覆盖其他操作的错误提示。 -->
             <Border Grid.Row="4" Margin="0,16,0,0" Padding="12"
                     Background="{DynamicResource PanelBackgroundBrush}" CornerRadius="10">
                 <StackPanel Spacing="7">
@@ -191,14 +192,10 @@
                         <Button Content="设置" Command="{Binding OpenSettingsCommand}" />
                         <Button Content="刷新历史" Command="{Binding RefreshCommand}" />
                     </StackPanel>
-                    <Expander Header="旧会话项目归属">
-                        <StackPanel Spacing="6">
-                            <TextBlock Text="初始化会追加归属记录，旧版本将无法读取这些日志。每次最多检查 100 个；占用或失败项可重试。"
-                                       TextWrapping="Wrap" Classes="caption" />
-                            <Button Content="初始化 / 继续扫描" Command="{Binding InitializeProjectsCommand}" />
-                            <Button Content="取消初始化" Command="{Binding CancelInitializationCommand}" />
-                        </StackPanel>
-                    </Expander>
+                    <TextBlock Text="正在加载历史…" Classes="caption"
+                               IsVisible="{Binding LoadingHistory}" />
+                    <TextBlock Text="{Binding OrganizeNotice}" Classes="caption" TextWrapping="Wrap"
+                               IsVisible="{Binding HasOrganizeNotice}" />
                 </StackPanel>
             </Border>
 

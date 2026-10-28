@@ -1,8 +1,8 @@
 # 项目实体、会话归属与多目录扩展
 
-更新日期：2026-10-27。
+更新日期：2026-10-28。
 
-**状态：阶段一至三已实现，阶段四综合验收待完成。** 本文记录独立 Project、现有会话按目录归属、Desktop／CLI 接入和后续多目录执行的方案；已完成部分与验证见[实施状态](#15-实施状态)。CLI／Desktop 新建持久化会话保存归属，恢复旧日志在原 writer 内补齐；列表与历史只读，批量初始化须显式执行。尚未对真实用户会话追加归属。
+**状态：阶段一至三已实现，阶段四综合验收待完成。** 本文记录独立 Project、现有会话按目录归属、Desktop／CLI 接入和后续多目录执行的方案；已完成部分与验证见[实施状态](#15-实施状态)。CLI／Desktop 新建持久化会话保存归属，恢复旧日志在原 writer 内补齐；列表与历史只读，旧日志归属由 Desktop 在启动、生效 store 变化与“刷新历史”时自动分批整理，CLI 保留 `session initialize-projects` 显式命令。尚未对真实用户会话追加归属。
 
 入口见 [PLAN.md](../PLAN.md)。既有契约见[会话持久化](Archive/session-persistence-design.md)、[项目规则](Archive/project-instructions-design.md)、[桌面 GUI 迁移](desktop-migration-plan.md)和[Windows 沙箱管理](Archive/windows-sandbox-management.md)。操作授权以用户当前要求和 [AGENTS.md](../AGENTS.md) 为准，保存计划不构成代码实施、实际数据接入、Git 或发布授权。
 
@@ -259,6 +259,7 @@ mixagents
 - 正式会话第一版归属和执行目录固定，不提供移动入口。
 - 目录缺失仍可查看历史；发送报告不可用，不自动切到其他路径。
 - 同名项目通过完整路径提示区分；按成员最近对话活动排序，空项目按创建时间，改名不制造活动。
+- 旧日志归属自动整理：Desktop 启动、生效 session store 真正变化和用户点击“刷新历史”时自动执行一轮分批整理（每批最多检查 100 份日志，幂等续扫、占用跳过、损坏只报告不修复）；选择会话、历史分页、折叠展开与普通只读刷新不触发。成功静默，异常才显示简短摘要，未完成的旧日志保留只读目录组并标注原因；未绑定草稿独立展示为“草稿”组。CLI `session initialize-projects [after-session-id]` 保留为显式入口。
 - 不顺带加入草稿持久化、会话标题编辑等额外功能。
 
 继续由 `DesktopSessionManager` 按 SessionId 管理宿主，不新增项目级工具宿主。模型、writer、审批、取消和关闭清理仍按会话隔离，切页不丢弃另一会话的草稿、保存警告或待决审批。
@@ -418,3 +419,20 @@ SessionWorkspace
 - CLI 与 Desktop 均完成 Release `win-x64` NativeAOT publish，产物为 native code，0 compiler／trimming／AOT warning；分别位于 `artifacts/project-stage4-cli-nativeaot-20261027/` 与 `artifacts/project-stage4-desktop-nativeaot-20261027/`。CLI `smoke` 离线通过（17 steps、16 tool executions）；隔离夹具 `artifacts/project-stage4-validation/stage4_native_entries.py` 对原生产物 PASS：空白交互无日志、`/new` 两次复用同项目、初始批次归属、`session list/show` 与显式 `initialize-projects`、损坏目录册时历史展示与已绑定续聊。Desktop 修复后产物（r2）`--offline-smoke` PASS：parallel=2、switched=A/B/A/B、refreshed=true、resumedTurns=4、disposedClients=6。本轮证据位于 `artifacts/project-stage4-validation/`。
 - 真实 GUI 验收受阻：以 `powershell -NoProfile -File` 执行隔离启动脚本并带 `-ReuseFixture` 时，被本机 PowerShell 执行策略拒绝（UnauthorizedAccess"禁止运行脚本"），应用未启动；未绕过策略、未修改机器配置，启动脚本与步骤文档示例中的 `-ExecutionPolicy Bypass` 参数已移除。GUI 交互（打开目录、改名、切页、草稿保留、折叠、刷新）仍未验证。
 - 阶段四仍未完成：真实 GUI 交互、真实跨进程并发、Linux／macOS、断电／设备故障、真实模型与实际用户数据接入均未验证；未对真实用户会话执行归属初始化。
+
+2026-10-28 完成 Desktop 旧日志自动整理接入：
+
+- Desktop 改为启动即自动整理：窗口 `Opened` 后先做轻量配置与模型准备，后台按每批最多检查 100 份日志自动执行一轮归属整理，结束后统一只读加载项目与历史；生效 session store 真正变化和点击“刷新历史”时再各启动一轮。选择会话、历史分页、折叠展开、未知项目刷新与整理后的刷新不触发新一轮。同一时刻只运行一轮，切 store 取消旧轮并以运行代次和 `ProjectRoots` 路径比对防护迟到结果，关闭取消并等待整轮结束。侧栏移除“旧会话项目归属”手动初始化区域，未绑定草稿独立展示为“草稿”组；成功静默，异常才显示简短摘要并给未完成目录组标注原因，已归属草稿计入真实项目分组。
+- 新增 `DesktopStartupOrganizeTests` 16 项，覆盖 101 份日志多批扫完、二次启动幂等、空 store 无副作用、草稿不被扫描阻塞、占用跳过、损坏日志报告不修复、取消即时停止且仍完成统一加载、同 store 重复触发合并、异常轮清算明细并标注未完成组、切 store 后不误标旧 store 分组、`HasOrganizeNotice` 属性通知等。
+- 实施后经三轮 Open Code Review（delegation 模式）收敛：首轮修复 4 项（异常摘要缺少属性通知、取消误报游标停滞、异常轮明细残留、取消后跳过统一加载），次轮修复 1 项（未完成标注未按本轮 store 过滤），第三轮无新发现；修复均附红／绿验证，未削弱既有只读、保护与生命周期断言。
+- 已验证（Windows x64）：`dotnet test TinyHarness.Desktop.Tests/TinyHarness.Desktop.Tests.csproj` 87/87 通过、0 警告；`dotnet publish TinyHarness.Desktop/TinyHarness.Desktop.csproj -c Release -r win-x64` NativeAOT 成功，0 compiler／trimming／AOT 警告；原生产物 `--offline-smoke` 两次运行均 PASS（退出码 0：parallel=2、switched=A/B/A/B、refreshed=true、resumedTurns=4、disposedClients=6）。
+- 未验证：真实 GUI 交互（App 启动入口无受支持的隔离参数，默认配置指向真实用户数据，按真实数据保护要求未启动 GUI，自动启动接线仅由离线测试与代码审查覆盖）、真实用户日志初始化、真实模型、Linux／macOS、断电／设备故障；阶段四仍未完成。
+
+2026-10-28 修复自动整理接入的三项评审缺陷（P1×2、P2×1）：
+
+- 修复侧栏分组重建：`Group()` 改为本轮每 key 首次遇到时清一次成员；此前同组每次追加成员前都被清空，同项目多会话与项目内草稿只剩排序末位成员，组间活动排序随之错误。
+- 自动整轮在进入 Core 初始化前复用与显式入口一致的 `ResolveProtectedDirectoryAsync` 完整保护校验（含 Windows 沙箱附加写根；Core 仅逐日志校验各自执行根，不覆盖附加写根）；保护失败走异常轮提示并保持只读加载，不创建目录册或追加日志。解析结果与本轮捕获 store 不一致时跳过写入并给出可见原因，迟到轮不覆盖新轮展示。
+- 未归属旧日志的侧栏分组键纳入会话 store（长度前缀分隔 store 与执行根，避免路径内合法分隔符字符造成键歧义），整理明细按行 store＋执行根查询；切换 store 后两个 store 的同一执行根不再合并成组，也不串用整理原因。
+- 新增 5 项回归：同项目多成员／草稿／SidebarRows 铺平与组序、重建保留分组实例与展开态、store 位于沙箱附加写根内时拒绝写入且文件集字节不变、解析 drift 拦截并可见（旧实现对不一致目录静默跳过，红点为缺少可观察原因而非发生写入）、同根跨 store 分组与原因隔离；修复前 5/5 失败，修复后通过。既有 pending 键断言同步新键格式。
+- 已验证（Windows x64）：`dotnet test TinyHarness.Desktop.Tests/TinyHarness.Desktop.Tests.csproj` 92/92 通过、0 警告；Release `win-x64` NativeAOT publish 无 compiler／trimming／AOT 警告，产物 `--offline-smoke` PASS（parallel=2、switched=A/B/A/B、refreshed=true、resumedTurns=4、disposedClients=6）。证据在 `artifacts/startup-organize-bugfix-20261028/`。真实 GUI 交互与真实用户日志初始化仍未验证，阶段四未完成。
+- 用户实测反馈（2026-10-28）：已有的未绑定项目旧会话已成功自动补齐项目归属；此为用户提供的验证结果，Agent 未读取真实用户日志复核，其余阶段四未验证项不变。

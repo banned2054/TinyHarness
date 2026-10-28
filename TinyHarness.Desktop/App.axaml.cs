@@ -17,8 +17,10 @@ public sealed class App : Application
         {
             var model = new MainWindowViewModel();
             desktop.ShutdownMode = ShutdownMode.OnExplicitShutdown;
-            desktop.MainWindow = new MainWindow(model);
-            _ = model.InitializeAsync();
+            desktop.MainWindow   = new MainWindow(model);
+            // 等窗口真正显示（Opened 由生命周期的 Show 触发）后再启动轻量准备与自动整理；
+            // 赋值 MainWindow 不代表已显示，提前重初始化会在窗口出现前占用 UI 线程。
+            desktop.MainWindow.Opened += (_, _) => _ = model.StartAsync();
         }
         base.OnFrameworkInitializationCompleted();
     }
