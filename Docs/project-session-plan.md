@@ -286,7 +286,7 @@ CLI 行为：
 - 恢复入口保留已绑定值；未绑定时仅在排他 writer 的安全边界补齐。
 - `session list/show` 展示项目名称／ID，严格只读，目录册故障不触发写入。
 - 普通空白交互和模型草稿选择不提前创建会话或 writer。
-- **保留显式 `/new` 创建并保存空会话的现有行为**，新建时一并绑定；它与 Desktop 未发送草稿不同，不借本计划改变其语义。
+- **2026-10-28 起，显式 `/new` 与 Desktop 未发送草稿对齐：只进入未发送空白态**，释放当前宿主但不创建会话、写入端或项目；首次普通输入才建立会话并在初始批次绑定归属。此前“显式新建即保存空会话”的行为已按用户要求移除。
 - 暂不增加完整 CLI 项目管理命令平台；遇到归属歧义明确报告。
 - ProjectId 和项目名称不参与凭据路由；模型选择、协议校验、规则加载与恢复检查继续生效。
 
@@ -353,7 +353,7 @@ SessionWorkspace
 | 新旧格式兼容 | 新 reader 读未绑定日志；旧 reader 拒绝新必需记录 |
 | 活动排序 | 初始化不伪造新对话，改名不改变对话活动时间 |
 | Desktop 跨项目切换 | 运行、审批、取消与保存归原会话，草稿不串页 |
-| 草稿与空交互 | 不新增空日志；显式 CLI `/new` 的既有保存行为保留 |
+| 草稿与空交互 | 不新增空日志；CLI `/new` 只进入空白态，首次发送才创建（2026-10-28 起） |
 | 模型／凭据失效 | 列表历史可浏览，初始化不读取 key、不请求模型 |
 | CLI／Desktop 一致 | 同一 store 和最终根目录解析到同一项目 |
 | NativeAOT | 受影响入口发布和离线产物 smoke 通过，无被忽略的新增 trimming／AOT warning |
@@ -471,3 +471,16 @@ SessionWorkspace
 - 项目菜单补齐 DshDesktop 原有 `ScrollViewer MaxHeight="288"` 结构，列表独立滚动，目录标题和打开目录入口固定在滚动区外；弹窗与按钮左对齐。
 - 新增 4 项 ViewModel 回归与 1 项菜单结构回归；原实现下 3 项 ViewModel 和 1 项结构测试先红，修复后专项 **28/28**、Desktop 全套 **120/120** 通过，0 失败／跳过。Release `win-x64` NativeAOT publish 无 compiler／trimming／AOT 警告，原生产物 `--offline-smoke` 通过。按共享 `banned甄选` profile 清理后人工仅保留改动范围的排版，完整验证证据在 `artifacts/review-fixes-20261028/`。
 - 最终静态复审未发现阻断项。未运行真实 GUI、真实模型、用户日志初始化或完整 solution 回归；结构测试不替代滚轮、键盘和对齐实际观感验收，阶段四仍未完成。
+
+2026-10-28 CLI `/new` 对齐 Desktop 空白草稿行为：
+
+- `ChatSessionConsole` 的 `/new` 不再调用会话工厂：释放当前宿主并进入未发送空白态，不创建会话 ID、写入端、日志或项目；首次普通输入沿用既有惰性工厂建立会话并在初始批次绑定归属。运行中排队取消、终态持久化等待与保存警告拒绝丢弃的守卫全部保留；`/switch`／`--resume` 打开既有日志的语义不变；空白态命令、空输入与退出不落盘。本任务不涉及 Core、公开 API 或 session-log 协议变更。
+- 测试：改写 `SessionNavigationTests` 中断言旧行为的四项（空白两次 `/new` 无产物且首发恰好创建一个、运行中 `/new` 与审批取消进入空白态），新增五项（既有会话 `/new` 退出无新增日志、空白态 `/switch` 恢复、`/new` 后预检失败保持可重试、`/new` 后空闲取消无产物、`/models` 草稿经工厂随首发应用）；空列表提示文案同步更新。
+- 已验证（Windows x64）：`SessionNavigationTests` 20/20（首轮一次失败未复现且未捕获测试名，其后 17 次复跑全绿）、`ChatSessionConsoleTests|ChatModelSelectionTests` 45/45、`SessionCommandTests|ChatCancellationTests|ChatConsoleInputReaderTests` 及合并回归 95/95 通过；CLI Release `win-x64` NativeAOT publish 0 warning，产物 smoke 与隔离原生 chat 脚本（`/new`×2＋命令＋EOF 无日志无目录册、首发创建含归属）通过，证据在 `artifacts/cli-blank-session-20261028/`。
+- 范围外发现：`ChatInputRouterTests.RealConsoleHostRoute_AppliesAmendmentDuringInlineApproval` 单测复现 8 轮 2 次间歇失败（Amendments 为空，`ChatInputRouterTests.cs:45`），该路径不经过本次修改代码，未处理。真实模型与真实用户数据未接入。
+
+2026-10-29 CLI 首发凭据预检修复与复核：
+
+- 首次发送的预检边界捕获 `ConfigException`，草稿模型缺凭据时报告错误而不退出输入循环，保留空白态供重选或重试。新增用例先红后绿；补强五类失败切换测试，先建立真实会话再切换失败，断言原 SessionId、前后两轮上下文与唯一宿主保留。
+- 最终 CLI 定向离线回归 **96/96** 通过，Release `win-x64` NativeAOT publish 无 compiler／trimming／AOT 警告；原生 CLI `smoke`、空白 `/new` 不落盘及缺凭据首发后继续执行 `/sessions` 均通过。证据在 `artifacts/review-fixes-20261028/`。静态复审无生产阻断项，未执行真实模型或完整 solution 回归。
+- 仍有既有工厂顺序限制：真实 CLI 在解析草稿凭据前建立 writer 并保存项目，首发缺凭据可能留下 0 字节日志、锁文件及空项目；本轮仅修复异常逃逸，未重排这条持久化链路。离线注入工厂的无额外日志断言不代表真实工厂也无这些产物。

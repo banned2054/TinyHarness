@@ -80,6 +80,50 @@ public class ChatSessionConsoleTests
         Assert.That(output.ToString(), Does.Contain("Draft model: work / draft").And.Contain("* work / draft"));
     }
 
+    [Test]
+    public async Task PendingEntry_DraftSelectionIsAppliedByTheFactoryOnFirstSend()
+    {
+        var client = new FakeChatClient();
+        client.Enqueue(FakeChatClient.Text("ok"));
+        var catalog = new UserConfig
+        {
+            Profiles =
+            [
+                new UserProfile
+                {
+                    Name = "work", Endpoint = "https://offline.invalid/v1", Models =
+                    [
+                        new UserProfileModel { Id = "draft", ContextWindowTokens = 128000 }
+                    ]
+                }
+            ]
+        };
+        using var           cancellation = new ChatCancellation(false);
+        var                 input        = new StringReader("/models use draft --provider work\ngo\n");
+        var                 output       = new StringWriter();
+        ChatModelSelection? selection    = null;
+        using var console = new ChatSessionConsole(_ =>
+        {
+            // 模拟生产组装契约：工厂在首次发送时读取待发送草稿并按其模型身份构造宿主。
+            var draft = selection!.DraftTarget!;
+            Assert.That(draft.Profile.Name, Is.EqualTo("work"));
+            Assert.That(draft.Model.Id, Is.EqualTo("draft"));
+            return Task.FromResult(new ChatSessionHost(
+                Path.Combine(Path.GetTempPath(), "tinyharness-chat-console-tests"),
+                new SessionModelIdentity(draft.Model.Id, draft.Profile.Endpoint, ChatApiKind.ChatCompletions),
+                new AgentOptions { Model = draft.Model.Id, MaxAgentSteps = 8, DefaultToolTimeoutSeconds = 30 },
+                client, new ToolRegistry([]), SystemPrompt));
+        }, input, output, cancellation);
+        console.ModelSelection = selection =
+            new ChatModelSelection(input, output, _ => Task.FromResult(catalog),
+                                   (_, _, _) => throw new AssertionException(
+                                       "Draft application must not resolve credentials before a session exists."));
+        Assert.That(await console.RunAsync(TestToken()), Is.Zero);
+        Assert.That(console.Session.Model.ModelId, Is.EqualTo("draft"));
+        Assert.That(client.Requests, Is.EqualTo(1));
+        Assert.That(output.ToString(), Does.Contain("Draft model: work / draft").And.Contain("No session created"));
+    }
+
     [TestCase("")]
     [TestCase("\n  \n\t\n")]
     public async Task PendingEntry_EofAndBlankInputNeverCreateSession(string input)

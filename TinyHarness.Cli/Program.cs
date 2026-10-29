@@ -368,8 +368,9 @@ internal static class Program
                 if (draft is not null)
                     selectedClient = await CreateSelectionClientAsync(draft.Profile, draft.Model.Id, token)
                        .ConfigureAwait(false);
-                // 显式新建即保存空会话，不发送模型请求；项目规则仍由首回合边界可靠提交。
-                // 启动客户端归组合根按进程生命周期持有（/new 宿主共用），宿主以借用方式绑定。
+                // 首次普通输入才执行本工厂：/new 只进入未发送空白态，不创建会话或写入端；
+                // 项目规则仍由首回合边界可靠提交。
+                // 启动客户端归组合根按进程生命周期持有（后续宿主共用），宿主以借用方式绑定。
                 createdHost = new ChatSessionHost(session, context, selectedOptions, selectedClient!, composition.Tools,
                                                   WorkspacePrompts.Current, NewPermissions(),
                                                   new ConsoleApprovalProvider(reader, Console.Out,

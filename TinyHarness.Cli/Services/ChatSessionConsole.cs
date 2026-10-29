@@ -112,7 +112,10 @@ internal sealed class ChatSessionConsole : IDisposable
 
     /// <summary>
     ///     <para>会话内 /models 命令处理器；为空时该入口不可用。两条输入路径共用，运行中仅查询。</para>
-    ///     <para>The in-session /models handler; the entry is unavailable when null. Both input paths share it, and only queries run during a run.</para>
+    ///     <para>
+    ///         The in-session /models handler; the entry is unavailable when null. Both input paths share it, and only
+    ///         queries run during a run.
+    ///     </para>
     /// </summary>
     internal ChatModelSelection? ModelSelection { get; set; }
 
@@ -221,7 +224,7 @@ internal sealed class ChatSessionConsole : IDisposable
 
             if (ChatModelSelection.IsModelsCommand(userInput))
             {
-                await HandleModelsCommandAsync(userInput, duringRun : false, cancellationToken);
+                await HandleModelsCommandAsync(userInput, false, cancellationToken);
                 continue;
             }
 
@@ -267,11 +270,14 @@ internal sealed class ChatSessionConsole : IDisposable
     /// <remarks>
     ///     <para>
     ///         参数或活动运行冲突导致的提交拒绝会报告后返回；无论提交结果如何，均结束活动回合的取消作用域。
+    ///         首发工厂或发送前校验失败（含配置与凭据错误）同样报告后返回，空白态保持可重试。
     ///         最终回答已由事件流展示，不在摘要中重印。
     ///     </para>
     ///     <para>
     ///         Submissions rejected for argument errors or active-run conflicts are reported and return;
     ///         the active-turn cancellation scope ends regardless of submission outcome.
+    ///         First-send factory or pre-send validation failures (including configuration and credential errors)
+    ///         are likewise reported and return, leaving the blank state retryable.
     ///         The summary never reprints the final answer already shown by the event stream.
     ///     </para>
     /// </remarks>
@@ -316,8 +322,9 @@ internal sealed class ChatSessionConsole : IDisposable
                 return;
             }
             catch (Exception ex) when (ex is SessionStoreException or IOException or InvalidDataException
-                                          or UnauthorizedAccessException)
+                                          or UnauthorizedAccessException or ConfigException)
             {
+                // 空白草稿的凭据迟至首发工厂才解析；缺凭据等配置失败在此报告并保持空白态可重试。
                 await _output.WriteLineAsync(TerminalDisplay.Format($"cannot start a turn: {ex.Message}", _redactor));
                 return;
             }
@@ -368,7 +375,7 @@ internal sealed class ChatSessionConsole : IDisposable
 
         if (ChatModelSelection.IsModelsCommand(text))
         {
-            await HandleModelsCommandAsync(text, duringRun : true, _cancellation.SessionToken).ConfigureAwait(false);
+            await HandleModelsCommandAsync(text, true, _cancellation.SessionToken).ConfigureAwait(false);
             return;
         }
 
@@ -420,7 +427,10 @@ internal sealed class ChatSessionConsole : IDisposable
 
     /// <summary>
     ///     <para>处理 /models 命令；无会话或处理器未接线时明确提示，异常经脱敏报告且不影响会话。</para>
-    ///     <para>Handles /models commands; missing sessions or wiring are reported clearly, and failures are redacted without affecting the session.</para>
+    ///     <para>
+    ///         Handles /models commands; missing sessions or wiring are reported clearly, and failures are redacted without
+    ///         affecting the session.
+    ///     </para>
     /// </summary>
     private async Task HandleModelsCommandAsync(string input, bool duringRun, CancellationToken cancellationToken)
     {
@@ -447,10 +457,16 @@ internal sealed class ChatSessionConsole : IDisposable
     }
 
     /// <summary>
-    ///     <para>在宿主边界管理会话；运行中只排队切换，恢复失败保留当前宿主。</para>
+    ///     <para>
+    ///         在宿主边界管理会话；运行中只排队切换，恢复失败保留当前宿主。
+    ///         <c>/new</c> 进入未发送空白态：释放当前宿主但不调用工厂，不创建会话、写入端或项目，
+    ///         首次普通输入才建立真实会话。
+    ///     </para>
     ///     <para>
     ///         Manages sessions at host boundaries; queues switches during runs and keeps the current host on restore
-    ///         failure.
+    ///         failure. <c>/new</c> enters the unsent blank state: it releases the current host without invoking the
+    ///         factory, creates no session, writer, or project, and the first ordinary input establishes the real
+    ///         session.
     ///     </para>
     /// </summary>
     private async Task HandleSessionCommandAsync(
@@ -479,7 +495,7 @@ internal sealed class ChatSessionConsole : IDisposable
                     var entries = await SessionStoreReader.ListAsync(_sessionStoreDirectory, cancellationToken);
                     await _output.WriteLineAsync("Sessions (* current):");
                     if (entries.Count == 0)
-                        await _output.WriteLineAsync("  (no stored sessions; use /new or type a request)");
+                        await _output.WriteLineAsync("  (no stored sessions; type a request to create one)");
                     foreach (var entry in entries)
                     {
                         var marker = entry.Id == Host?.Session.Id ? "*" : " ";
@@ -517,10 +533,21 @@ internal sealed class ChatSessionConsole : IDisposable
                 return;
             }
 
+            if (parts[0] == "/new")
+            {
+                // 显式新建只进入未发送空白态：不调用工厂，不创建会话、写入端或项目；
+                // 保存警告守卫已在上方拒绝到达此处，当前宿主在此释放且历史保持可恢复。
+                var abandoned = Host;
+                Host = null;
+                abandoned?.Dispose();
+                _promptedInspectionNote  = null;
+                _promptedInspectionRunId = null;
+                await _output.WriteLineAsync("new session: blank; the first message creates and saves it.");
+                return;
+            }
+
             // 目标持锁并恢复成功后才释放当前宿主，失败不得丢弃当前上下文。
-            var next = parts[0] == "/new"
-                ? await _hostFactory(cancellationToken).ConfigureAwait(false)
-                : await _resumeFactory(parts[1].ToLowerInvariant(), cancellationToken).ConfigureAwait(false);
+            var next     = await _resumeFactory(parts[1].ToLowerInvariant(), cancellationToken).ConfigureAwait(false);
             var previous = Host;
             Host = next;
             previous?.Dispose();

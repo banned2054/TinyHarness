@@ -29,10 +29,8 @@ public class SessionNavigationTests
     private static readonly string   SecondId = new('b', 32);
 
     [Test]
-    public void NoArguments_StartsTheInteractiveEntry()
-    {
+    public void NoArguments_StartsTheInteractiveEntry() =>
         Assert.That(CommandLine.Parse([]).Kind, Is.EqualTo(CliCommandKind.Chat));
-    }
 
     [TestCase("")]
     [TestCase("/sessions\n/new extra\n/sessions extra\n/switch\n/switch ../escape\n/switch a b\n")]
@@ -50,22 +48,50 @@ public class SessionNavigationTests
     }
 
     [Test]
-    public async Task New_PersistsAnEmptyResumableSessionAndListsItWithoutModelCalls()
+    public async Task New_EntersBlankWithoutCreatingAndFirstMessageCreatesExactlyOneSession()
     {
         using var fixture      = new NavigationFixture();
         using var cancellation = new ChatCancellation(false);
         var       output       = new StringWriter();
-        using (var console = fixture.Console(new StringReader("/new\n/sessions\n"), output, cancellation))
+        using (var console = fixture.Console(new StringReader("/new\n/new\n/sessions\n\n   \n"), output, cancellation))
         {
             Assert.That(await console.RunAsync(), Is.Zero);
-            Assert.That(console.Session.Id, Is.EqualTo(FirstId));
-            Assert.That(console.Session.Turns, Is.Empty);
-            Assert.That(output.ToString(), Does.Contain($"* {FirstId}"));
+            Assert.That(console.Host, Is.Null);
+            Assert.That(fixture.Created, Is.Empty);
+            Assert.That(fixture.Client.Requests, Is.Zero);
+            Assert.That(output.ToString(), Does.Contain("new session: blank"));
+            Assert.That(output.ToString(), Does.Contain("(no stored sessions; type a request to create one)"));
         }
 
-        using var resumed = await fixture.ResumeAsync(FirstId, default);
-        Assert.That(resumed.Session.Turns, Is.Empty);
-        Assert.That(fixture.Client.Requests, Is.Zero);
+        Assert.That(Directory.GetFiles(fixture.Store.Root, "*" + SessionStoreWriter.LogFileSuffix), Is.Empty);
+
+        fixture.Client.Enqueue(FakeChatClient.Text("first answer"));
+        fixture.Client.Enqueue(FakeChatClient.Text("second answer"));
+        using var established = fixture.Console(new StringReader("/new\nfirst question\nsecond question\n"),
+                                                new StringWriter(), cancellation);
+        Assert.That(await established.RunAsync(), Is.Zero);
+        Assert.That(fixture.Created.Count, Is.EqualTo(1));
+        Assert.That(established.Session.Id, Is.EqualTo(FirstId));
+        Assert.That(established.Session.Turns.Select(turn => turn.UserInput),
+                    Is.EqualTo(["first question", "second question"]));
+        Assert.That(fixture.Client.Requests, Is.EqualTo(2));
+        Assert.That(Directory.GetFiles(fixture.Store.Root, "*" + SessionStoreWriter.LogFileSuffix),
+                    Is.EqualTo([Path.Combine(fixture.Store.Root, FirstId + SessionStoreWriter.LogFileSuffix)]));
+    }
+
+    [Test]
+    public async Task New_AfterEstablishedSession_ReleasesHostAndAddsNoStoredSessionOnExit()
+    {
+        using var fixture = new NavigationFixture();
+        fixture.Client.Enqueue(FakeChatClient.Text("answer"));
+        using var cancellation = new ChatCancellation(false);
+        using var console = fixture.Console(new StringReader("question\n/new\n"), new StringWriter(), cancellation);
+        Assert.That(await console.RunAsync(), Is.Zero);
+        Assert.That(console.Host, Is.Null);
+        Assert.That(fixture.Created.Count, Is.EqualTo(1));
+        Assert.That(Directory.GetFiles(fixture.Store.Root, "*" + SessionStoreWriter.LogFileSuffix)
+                             .Select(Path.GetFileName),
+                    Is.EqualTo([FirstId + SessionStoreWriter.LogFileSuffix]));
     }
 
     [Test]
@@ -174,15 +200,21 @@ public class SessionNavigationTests
                 }
             }
 
+            fixture.Client.Enqueue(FakeChatClient.Text("before switching"));
             fixture.Client.Enqueue(FakeChatClient.Text("still here"));
             using var cancellation = new ChatCancellation(false);
             var       output       = new StringWriter();
-            using var console = fixture.Console(new StringReader($"/new\n/switch {targetId}\nkeep going\n"), output,
-                                                cancellation);
+            using var console =
+                fixture.Console(new StringReader($"/new\nfirst question\n/switch {targetId}\nkeep going\n"),
+                                output, cancellation);
             Assert.That(await console.RunAsync(), Is.Zero);
             Assert.That(console.Session.Id, Is.EqualTo(FirstId));
-            Assert.That(console.Session.Turns.Single().UserInput, Is.EqualTo("keep going"));
-            Assert.That(fixture.Client.Requests, Is.EqualTo(1));
+            Assert.That(console.Session.Turns.Select(turn => turn.UserInput),
+                        Is.EqualTo(["first question", "keep going"]));
+            Assert.That(fixture.Created.Count, Is.EqualTo(1));
+            Assert.That(fixture.Client.Requests, Is.EqualTo(2));
+            Assert.That(fixture.Client.RequestLog[1].Messages.Where(message => message.Role == ChatRole.User)
+                               .Select(message => message.Content), Is.EqualTo(["first question", "keep going"]));
             Assert.That(output.ToString(), Does.Contain("Session command failed:"));
         }
         finally
@@ -214,16 +246,28 @@ public class SessionNavigationTests
         await gate.WaitStartedAsync(timeout.Token);
         input.Lines.Writer.TryWrite("/sessions");
         input.Lines.Writer.TryWrite(command == "/new" ? command : $"/switch {SecondId}");
-        await fixture.SecondSelected.Task.WaitAsync(Timeout);
+        if (command == "/switch") await fixture.SecondSelected.Task.WaitAsync(Timeout);
         input.Lines.Writer.Complete();
         Assert.That(await running.WaitAsync(Timeout), Is.Zero);
-        Assert.That(console.Session.Id, Is.EqualTo(SecondId));
-        Assert.That(console.Session.Turns, Is.Empty);
         var saved = (await SessionStoreReader.ReadAsync(fixture.Store.Root, FirstId, default))!;
         Assert.That(saved.Turns.Single().Runs.Single().Status, Is.EqualTo(nameof(AgentStatus.Cancelled)));
         Assert.That(saved.Amendments, Is.Empty);
         Assert.That(gate.Requests, Is.EqualTo(1));
         Assert.That(output.ToString(), Does.Contain("waiting for the current turn to finish cleanup"));
+        if (command == "/new")
+        {
+            // 排队的 /new 在回合终态保存后进入空白态：不创建第二个会话或日志。
+            Assert.That(console.Host, Is.Null);
+            Assert.That(fixture.Created.Count, Is.EqualTo(1));
+            Assert.That(Directory.GetFiles(fixture.Store.Root, "*" + SessionStoreWriter.LogFileSuffix)
+                                 .Select(Path.GetFileName),
+                        Is.EqualTo([FirstId + SessionStoreWriter.LogFileSuffix]));
+        }
+        else
+        {
+            Assert.That(console.Session.Id, Is.EqualTo(SecondId));
+            Assert.That(console.Session.Turns, Is.Empty);
+        }
     }
 
     [Test]
@@ -244,11 +288,13 @@ public class SessionNavigationTests
         var running = console.RunAsync();
         await approver.Entered.Task.WaitAsync(Timeout);
         input.Lines.Writer.TryWrite("/new");
-        await fixture.SecondSelected.Task.WaitAsync(Timeout);
         input.Lines.Writer.Complete();
         Assert.That(await running.WaitAsync(Timeout), Is.Zero);
         Assert.That(tool.ExecuteCount, Is.Zero);
-        Assert.That(console.Session.Id, Is.EqualTo(SecondId));
+        // 审批被 /new 取消后进入空白态：原会话以取消终态可靠保存，不创建第二个会话。
+        Assert.That(console.Host, Is.Null);
+        Assert.That(fixture.Created.Count, Is.EqualTo(1));
+        Assert.That(output.ToString(), Does.Contain("new session: blank"));
         var saved = (await SessionStoreReader.ReadAsync(fixture.Store.Root, FirstId, default))!;
         Assert.That(saved.Turns.Single().Runs.Single().Status, Is.EqualTo(nameof(AgentStatus.Cancelled)));
         Assert.That(saved.Amendments, Is.Empty);
@@ -267,6 +313,86 @@ public class SessionNavigationTests
         Assert.That(console.Session.Id, Is.EqualTo(FirstId));
         Assert.That(fixture.Created.Count, Is.EqualTo(1));
         Assert.That(output.ToString(), Does.Contain("Cannot leave this session"));
+    }
+
+    [Test]
+    public async Task New_FromBlankState_SwitchResumesStoredHistoryAndContinues()
+    {
+        using var fixture  = new NavigationFixture();
+        var       targetId = new string('c', 32);
+        var       stored   = await fixture.CreateStoredAsync(targetId, fixture.Identity, default);
+        stored.Dispose();
+        fixture.Client.Enqueue(FakeChatClient.Text("followup answer"));
+        using var cancellation = new ChatCancellation(false);
+        using var console = fixture.Console(new StringReader($"/new\n/switch {targetId}\nfollowup\n"),
+                                            new StringWriter(), cancellation);
+        Assert.That(await console.RunAsync(), Is.Zero);
+        Assert.That(fixture.Created, Is.Empty);
+        Assert.That(console.Session.Id, Is.EqualTo(targetId));
+        Assert.That(console.Session.Turns.Select(turn => turn.UserInput), Is.EqualTo(["followup"]));
+    }
+
+    [Test]
+    public async Task New_ThenPreflightFailure_StaysBlankWithoutStoreUntilSuccessfulSend()
+    {
+        using var fixture = new NavigationFixture { FailNextCreate = true };
+        fixture.Client.Enqueue(FakeChatClient.Text("accepted"));
+        using var cancellation = new ChatCancellation(false);
+        var       output       = new StringWriter();
+        using var console      = fixture.Console(new StringReader("/new\nrejected\naccepted\n"), output, cancellation);
+        Assert.That(await console.RunAsync(), Is.Zero);
+        Assert.That(output.ToString(), Does.Contain("cannot start a turn: injected create failure"));
+        Assert.That(fixture.Created.Count, Is.EqualTo(1));
+        Assert.That(console.Session.Id, Is.EqualTo(FirstId));
+        Assert.That(console.Session.Turns.Select(turn => turn.UserInput), Is.EqualTo(["accepted"]));
+        Assert.That(Directory.GetFiles(fixture.Store.Root, "*" + SessionStoreWriter.LogFileSuffix)
+                             .Select(Path.GetFileName),
+                    Is.EqualTo([FirstId + SessionStoreWriter.LogFileSuffix]));
+    }
+
+    [Test]
+    public async Task New_ThenFirstSendConfigError_KeepsBlankStateForSessionsAndRetry()
+    {
+        using var fixture = new NavigationFixture { FailNextCreateWithConfigError = true };
+        fixture.Client.Enqueue(FakeChatClient.Text("accepted"));
+        using var cancellation = new ChatCancellation(false);
+        var       output = new StringWriter();
+        using var console = fixture.Console(new StringReader("/new\nfirst\n/sessions\nretry\n"), output, cancellation);
+        Assert.That(await console.RunAsync(), Is.Zero);
+        // 缺凭据草稿只在首发工厂解析凭据：失败按既有错误报告，不退出输入循环，空白态可重选或重试。
+        Assert.That(output.ToString(),
+                    Does.Contain("cannot start a turn: No API key found for provider 'work'"));
+        Assert.That(output.ToString(), Does.Contain("Sessions (* current)"));
+        Assert.That(fixture.Created.Count, Is.EqualTo(1));
+        Assert.That(console.Session.Id, Is.EqualTo(FirstId));
+        Assert.That(console.Session.Turns.Select(turn => turn.UserInput), Is.EqualTo(["retry"]));
+        Assert.That(fixture.Client.Requests, Is.EqualTo(1));
+        Assert.That(Directory.GetFiles(fixture.Store.Root, "*" + SessionStoreWriter.LogFileSuffix)
+                             .Select(Path.GetFileName),
+                    Is.EqualTo([FirstId + SessionStoreWriter.LogFileSuffix]));
+    }
+
+    [Test]
+    public async Task New_ThenIdleCancellation_CreatesNoSessionOrLog()
+    {
+        using var fixture      = new NavigationFixture();
+        using var cancellation = new ChatCancellation(false);
+        using var input        = new NavigationInput();
+        using var router       = new ChatInputRouter(input);
+        var       output       = new StringWriter();
+        using var console      = fixture.Console(router, output, cancellation);
+        input.Lines.Writer.TryWrite("/new");
+        var running  = console.RunAsync();
+        var deadline = Task.Delay(Timeout);
+        while (!output.ToString().Contains("new session: blank"))
+            Assert.That(await Task.WhenAny(deadline, Task.Delay(20)), Is.Not.EqualTo(deadline),
+                        "The blank prompt was not shown.");
+
+        cancellation.RaiseCancel();
+        input.Lines.Writer.Complete();
+        Assert.That(await running.WaitAsync(Timeout), Is.EqualTo(130));
+        Assert.That(fixture.Created, Is.Empty);
+        Assert.That(Directory.GetFiles(fixture.Store.Root, "*" + SessionStoreWriter.LogFileSuffix), Is.Empty);
     }
 
     [Test]
@@ -324,6 +450,19 @@ public class SessionNavigationTests
         internal bool                   FailAfterRequest { get; init; }
 
         internal bool FailResumeWithConfigError { get; set; }
+
+        /// <summary>
+        ///     <para>下一次创建模拟发送前预检失败，触发后自动复位。</para>
+        ///     <para>Simulates a preflight failure on the next creation, then resets automatically.</para>
+        /// </summary>
+        internal bool FailNextCreate { get; set; }
+
+        /// <summary>
+        ///     <para>下一次创建抛出配置异常以模拟草稿缺凭据，触发后自动复位。</para>
+        ///     <para>Throws a configuration exception on the next creation to simulate missing draft credentials, then resets.</para>
+        /// </summary>
+        internal bool FailNextCreateWithConfigError { get; set; }
+
         internal List<ChatSessionHost> Created { get; } = [];
         internal TaskCompletionSource SecondSelected { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -342,6 +481,19 @@ public class SessionNavigationTests
 
         private async Task<ChatSessionHost> CreateAsync(CancellationToken token)
         {
+            if (FailNextCreate)
+            {
+                FailNextCreate = false;
+                throw new InvalidDataException("injected create failure");
+            }
+
+            if (FailNextCreateWithConfigError)
+            {
+                FailNextCreateWithConfigError = false;
+                throw new
+                    ConfigException("No API key found for provider 'work'. Run 'tinyharness auth set work' or set the environment variable 'WORK_KEY' before switching.");
+            }
+
             var host = await CreateStoredAsync(Created.Count == 0 ? FirstId : SecondId, Identity, token);
             Created.Add(host);
             if (Created.Count == 2) SecondSelected.TrySetResult();
