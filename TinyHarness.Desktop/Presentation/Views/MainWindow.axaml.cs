@@ -35,6 +35,8 @@ public sealed partial class MainWindow : Window
     private async void BrowseFolder(object? sender, RoutedEventArgs args)
     {
         if (sender is not Control { DataContext: SessionViewModel session } || !session.CanChooseWorkspace) return;
+        // 入口可能位于空白页目标菜单内：先收起弹层再打开系统目录选择。
+        session.IsWorkspaceMenuOpen = false;
         try
         {
             var folders =

@@ -52,7 +52,7 @@ public sealed class DesktopStartupOrganizeTests
     }
 
     [Test]
-    public async Task StartupOnMissingStoreCreatesNoCatalogOrLogsAndKeepsDraftsGroup()
+    public async Task StartupOnMissingStoreCreatesNoCatalogOrLogsAndKeepsBlankPageOutOfSidebar()
     {
         var fixture = await Fixture.CreateAsync();
         await using var model = fixture.Window();
@@ -60,13 +60,14 @@ public sealed class DesktopStartupOrganizeTests
         Assert.That(File.Exists(ProjectStore.FilePath(fixture.Store)), Is.False, "空 store 不得生成项目目录册。");
         if (Directory.Exists(fixture.Store))
             Assert.That(Directory.GetFiles(fixture.Store, "*" + SessionStoreWriter.LogFileSuffix), Is.Empty);
-        Assert.That(model.Projects.Single(group => group.Key == "drafts").Sessions,
-                    Has.Count.EqualTo(1));
+        Assert.That(model.Projects, Is.Empty);
+        Assert.That(model.SidebarRows, Is.Empty, "空白新对话页不出现在侧栏投影中。");
+        Assert.That(model.SelectedSession, Is.Not.Null.And.Property(nameof(SessionViewModel.Id)).Null);
         Assert.That(model.OrganizeNotice, Is.Empty);
     }
 
     [Test]
-    public async Task DraftTypingStaysAvailableWhileTheRoundRuns()
+    public async Task DraftTypingAndBlankPageSelectionSurviveTheRoundAndRefresh()
     {
         var fixture = await Fixture.CreateAsync();
         for (var index = 0; index < 101; index++)
@@ -76,11 +77,18 @@ public sealed class DesktopStartupOrganizeTests
         // 目录册出现即证明扫描已在后台建立项目；此时输入必须可用。
         await WaitUntilAsync(() => File.Exists(ProjectStore.FilePath(fixture.Store)), "整理未开始写入目录册。");
         model.SelectedSession!.Draft = "typed during scan";
+        var blank = model.SelectedSession;
         await startup;
+        Assert.That(model.SelectedSession, Is.SameAs(blank), "整理与统一加载不得抢空白页选中。");
         Assert.That(model.SelectedSession.Draft, Is.EqualTo("typed during scan"));
         Assert.That(model.SelectedSession.Id, Is.Null);
         var entries = await SessionStoreReader.ListAsync(fixture.Store, CancellationToken.None);
         Assert.That(entries.All(entry => entry.Session!.ProjectId is not null), Is.True);
+
+        await model.RefreshAsync();
+        Assert.That(model.SelectedSession, Is.SameAs(blank), "刷新不得抢空白页选中。");
+        Assert.That(model.SelectedSession.Draft, Is.EqualTo("typed during scan"));
+        Assert.That(model.SelectedSession.Id, Is.Null);
     }
 
     [Test]
@@ -204,7 +212,7 @@ public sealed class DesktopStartupOrganizeTests
     }
 
     [Test]
-    public async Task StoreSwitchCancelsTheOldRoundOrganizesTheNewStoreAndKeepsOldPageBindings()
+    public async Task StoreSwitchCancelsTheOldRoundOrganizesTheNewStoreAndRebindsTheBlankPage()
     {
         var fixture     = await Fixture.CreateAsync();
         var secondStore = Path.Combine(Path.GetDirectoryName(fixture.Store)!, "sessions-2");
@@ -230,8 +238,8 @@ public sealed class DesktopStartupOrganizeTests
                                                                      CancellationToken.None))!.ProjectId is not null,
                              "新 store 的日志未被新一轮整理绑定。");
         await startup;
-        Assert.That(model.SelectedSession!.StoreDirectory, Is.EqualTo(fixture.Store),
-                    "旧页面必须保留原 store 绑定。");
+        Assert.That(model.SelectedSession!.StoreDirectory, Is.EqualTo(secondStore),
+                    "空白新对话页必须跟随当前 store 重新绑定，不沿用旧 store。");
     }
 
     [Test]
@@ -254,7 +262,7 @@ public sealed class DesktopStartupOrganizeTests
     }
 
     [Test]
-    public async Task UnboundDraftsGetTheirOwnGroupSeparatedFromLegacyLogsAndReadsStayReadOnly()
+    public async Task UnboundLegacyRowsKeepDirectoryGroupsAndBlankPageStaysOutOfSidebar()
     {
         var fixture = await Fixture.CreateAsync();
         var id      = await CommitLegacySessionAsync(fixture.Store, fixture.First);
@@ -262,10 +270,13 @@ public sealed class DesktopStartupOrganizeTests
         var             log    = Path.Combine(fixture.Store, id + SessionStoreWriter.LogFileSuffix);
         var             prefix = await File.ReadAllBytesAsync(log);
         await model.InitializeAsync();
-        var draft = model.SelectedSession!;
-        Assert.That(model.Projects.Single(group => group.Key == "drafts").Sessions, Does.Contain(draft));
+        var blank = model.SelectedSession!;
+        Assert.That(blank.Id, Is.Null, "启动后选中空白新对话页。");
         var legacy = model.Sessions.Single(session => session.Id == id);
         var group  = model.Projects.Single(item => item.Key == PendingKey(fixture.Store, fixture.First));
+        Assert.That(model.Projects.Count, Is.EqualTo(1), "只有旧日志目录分组，空白页不产生草稿分组。");
+        Assert.That(model.SidebarRows, Is.EqualTo(new object[] { group, legacy }),
+                    "侧栏只含旧日志目录分组及其正式行，空白新对话页不出现。");
         Assert.That(group.Sessions, Does.Contain(legacy));
         Assert.That(group.Name, Is.EqualTo(legacy.WorkspaceLabel), "旧日志未整理前只按目录展示，不叫待初始化。");
         Assert.That(group.CanEdit, Is.False);
@@ -446,7 +457,7 @@ public sealed class DesktopStartupOrganizeTests
     }
 
     [Test]
-    public async Task SameProjectKeepsAllMembersOrderDraftsAndSidebarRowsAfterOrganize()
+    public async Task SameProjectKeepsAllMembersAndSidebarRowsAfterOrganize()
     {
         var fixture = await Fixture.CreateAsync();
         // 交错提交制造可区分的活动时间：A1(t1) < B1(t2) < B2(t3) < A2(t4)，正确的组序为 First 在 Second 前；
@@ -467,25 +478,25 @@ public sealed class DesktopStartupOrganizeTests
         Assert.That(first.Sessions.Select(session => session.Id), Is.EqualTo(new[] { a2, a1 }),
                     "同项目多个会话必须全部保留并按活动时间降序。");
         Assert.That(second.Sessions.Select(session => session.Id), Is.EqualTo(new[] { b2, b1 }));
-        // 启动草稿最新，草稿组排最前；First 的最近活动 t4 晚于 Second 的 t3。
-        var drafts = model.Projects.Single(group => group.Key == "drafts");
-        Assert.That(model.Projects, Is.EqualTo(new object[] { drafts, first, second }),
+        // First 的最近活动 t4 晚于 Second 的 t3；空白新对话页没有分组，也不参与排序。
+        Assert.That(model.Projects, Is.EqualTo(new object[] { first, second }),
                     "项目组必须按成员最近对话活动排序。");
-
-        await model.NewProjectSessionAsync(first);
-        var draft = first.Sessions.Single(session => session.Id is null);
-        Assert.That(draft.ProjectId, Is.EqualTo(first.Project!.Id));
-        Assert.That(first.Sessions.Select(session => session.Id), Is.EqualTo(new string?[] { null, a2, a1 }),
-                    "项目内草稿必须与全部成员留在所属项目分组。");
-        Assert.That(drafts.Sessions.Select(session => session.Id), Is.EqualTo(new string?[] { null }),
-                    "未发送草稿仍独立成组。");
         Assert.That(model.SidebarRows,
-                    Is.EqualTo(new object[]
-                    {
-                        first, draft, ById(a2), ById(a1),
-                        drafts, drafts.Sessions.Single(),
-                        second, ById(b2), ById(b1)
-                    }), "铺平侧栏行必须与分组投影一致：组头在前、成员随后且顺序稳定。");
+                    Is.EqualTo(new object[] { first, ById(a2), ById(a1), second, ById(b2), ById(b1) }),
+                    "铺平侧栏行必须与分组投影一致：组头在前、成员随后且顺序稳定。");
+
+        // 项目「+」把空白页切到该项目并保留输入，但不产生草稿侧栏行。
+        model.SelectedSession!.Draft = "typed before retarget";
+        await model.NewProjectSessionAsync(first);
+        var blank = model.SelectedSession!;
+        Assert.That(model.Sessions, Does.Not.Contain(blank), "空白页不属于正式会话集合。");
+        Assert.That(blank.ProjectId, Is.EqualTo(first.Project!.Id));
+        Assert.That(blank.Draft, Is.EqualTo("typed before retarget"));
+        Assert.That(first.Sessions.Select(session => session.Id), Is.EqualTo(new[] { a2, a1 }),
+                    "空白页切换项目不得在分组中新增草稿成员。");
+        Assert.That(model.SidebarRows,
+                    Is.EqualTo(new object[] { first, ById(a2), ById(a1), second, ById(b2), ById(b1) }),
+                    "侧栏行不因空白页切换目标而改变。");
     }
 
     [Test]
@@ -498,8 +509,7 @@ public sealed class DesktopStartupOrganizeTests
         await using var model = fixture.Window();
         await model.StartAsync();
 
-        var group  = model.Projects.Single(item => item.Key != "drafts");
-        var drafts = model.Projects.Single(item => item.Key == "drafts");
+        var group = model.Projects.Single(item => item.CanEdit);
         model.ToggleProjectCommand.Execute(group);
         Assert.That(group.IsExpanded, Is.False);
 
@@ -507,7 +517,6 @@ public sealed class DesktopStartupOrganizeTests
 
         Assert.That(model.Projects.Single(item => item.Key == group.Key), Is.SameAs(group),
                     "重建必须复用原分组对象。");
-        Assert.That(model.Projects.Single(item => item.Key == "drafts"), Is.SameAs(drafts));
         Assert.That(group.IsExpanded, Is.False, "重建不得重置展开状态。");
         Assert.That(group.Sessions.Select(session => session.Id).OrderBy(id => id, StringComparer.Ordinal),
                     Is.EqualTo(new[] { id1, id2 }.OrderBy(id => id, StringComparer.Ordinal)),

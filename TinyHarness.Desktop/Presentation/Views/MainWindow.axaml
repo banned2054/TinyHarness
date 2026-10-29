@@ -33,19 +33,9 @@
             <ContentControl Grid.Column="2" Content="{Binding SelectedSession}">
                 <ContentControl.ContentTemplate>
                     <DataTemplate x:DataType="vm:SessionViewModel">
-                        <Grid RowDefinitions="Auto,*,Auto,Auto" Margin="0,12,0,0">
-                            <Grid Margin="28,6,28,12" ColumnDefinitions="*,Auto" ColumnSpacing="16">
-                                <TextBlock Text="{Binding Title}" Classes="heading" />
-                                <Panel Grid.Column="1" VerticalAlignment="Center" MaxWidth="240">
-                                    <Button Content="{Binding WorkspaceLabel}" Classes="tool-toggle"
-                                            ToolTip.Tip="{Binding WorkspaceRoot}" AutomationProperties.Name="选择工作区目录"
-                                            IsVisible="{Binding CanChooseWorkspace}" Click="BrowseFolder" />
-                                    <TextBlock Text="{Binding WorkspaceLabel}" Classes="caption"
-                                               TextTrimming="CharacterEllipsis"
-                                               ToolTip.Tip="{Binding WorkspaceRoot}"
-                                               IsVisible="{Binding !CanChooseWorkspace}" />
-                                </Panel>
-                            </Grid>
+                        <Grid RowDefinitions="Auto,*,Auto,Auto,Auto" Margin="0,12,0,0">
+                            <!-- 页头只保留标题占位；空白页为「新对话」，正式会话为首条输入摘要。 -->
+                            <TextBlock Margin="28,6,28,12" Text="{Binding Title}" Classes="heading" />
                             <ScrollViewer Grid.Row="1" HorizontalScrollBarVisibility="Disabled"
                                           VerticalScrollBarVisibility="Auto">
                                 <StackPanel MaxWidth="816" Margin="28,8" Spacing="4">
@@ -79,7 +69,72 @@
                                         IsEnabled="{Binding !IsRunning}"
                                         Command="{Binding AcknowledgeInspectionCommand}" />
                             </StackPanel>
-                            <conversation:ComposerView Grid.Row="3" MaxWidth="816" Margin="28,0,28,16" />
+                            <!-- 目标行紧贴输入卡上缘：空白页为项目/目录选择入口，正式页为只读状态；
+                                 行常驻等高（MinHeight），转正不使输入卡跳位。 -->
+                            <Grid Grid.Row="3" MaxWidth="816" Margin="28,0,28,10" MinHeight="36">
+                                <Panel IsVisible="{Binding CanChooseWorkspace}" HorizontalAlignment="Left">
+                                    <Button x:Name="WorkspacePickerButton"
+                                            Classes="workspace-picker"
+                                            Command="{Binding ToggleWorkspaceMenuCommand}"
+                                            AutomationProperties.Name="选择项目与目录"
+                                            ToolTip.Tip="{Binding WorkspaceRoot}">
+                                        <Grid ColumnDefinitions="Auto,Auto" ColumnSpacing="8">
+                                            <TextBlock Text="{Binding WorkspaceTargetLabel}"
+                                                       TextTrimming="CharacterEllipsis" MaxWidth="360" />
+                                            <Path Grid.Column="1"
+                                                  Data="{StaticResource Icon.DropdownChevron}"
+                                                  Width="8" Height="4"
+                                                  Stretch="None"
+                                                  Stroke="{Binding $parent[Button].Foreground}"
+                                                  StrokeThickness="1.6"
+                                                  VerticalAlignment="Center" />
+                                        </Grid>
+                                    </Button>
+                                    <Popup PlacementTarget="{Binding #WorkspacePickerButton}"
+                                           Placement="TopEdgeAlignedLeft"
+                                           VerticalOffset="-4"
+                                           IsOpen="{Binding IsWorkspaceMenuOpen, Mode=TwoWay}"
+                                           IsLightDismissEnabled="True">
+                                        <Border Classes="popup-surface" Width="300" MaxHeight="420">
+                                            <StackPanel>
+                                                <TextBlock Classes="popup-section" Text="项目"
+                                                           IsVisible="{Binding HasProjectChoices}" />
+                                                <ScrollViewer MaxHeight="288" HorizontalScrollBarVisibility="Disabled">
+                                                    <ItemsControl ItemsSource="{Binding ProjectMenuOptions}">
+                                                        <ItemsControl.ItemTemplate>
+                                                            <DataTemplate x:DataType="vm:ComposerMenuOption">
+                                                                <Button Classes="popup-item"
+                                                                        Classes.selected="{Binding IsSelected}"
+                                                                        Command="{Binding SelectCommand}"
+                                                                        ToolTip.Tip="{Binding ToolTip}">
+                                                                    <Grid ColumnDefinitions="*,Auto">
+                                                                        <TextBlock Text="{Binding Label}"
+                                                                                   TextTrimming="CharacterEllipsis" />
+                                                                        <TextBlock Grid.Column="1" Classes="popup-check"
+                                                                                   Text="✓"
+                                                                                   IsVisible="{Binding IsSelected}" />
+                                                                    </Grid>
+                                                                </Button>
+                                                            </DataTemplate>
+                                                        </ItemsControl.ItemTemplate>
+                                                    </ItemsControl>
+                                                </ScrollViewer>
+                                                <TextBlock Classes="popup-section" Text="目录" />
+                                                <Button Classes="popup-item" Click="BrowseFolder"
+                                                        AutomationProperties.Name="打开目录">
+                                                    <TextBlock Text="打开目录…" />
+                                                </Button>
+                                            </StackPanel>
+                                        </Border>
+                                    </Popup>
+                                </Panel>
+                                <TextBlock IsVisible="{Binding !CanChooseWorkspace}"
+                                           HorizontalAlignment="Left" VerticalAlignment="Center"
+                                           Text="{Binding WorkspaceTargetLabel}"
+                                           Classes="caption" TextTrimming="CharacterEllipsis" MaxWidth="360"
+                                           ToolTip.Tip="{Binding WorkspaceRoot}" />
+                            </Grid>
+                            <conversation:ComposerView Grid.Row="4" MaxWidth="816" Margin="28,0,28,16" />
                         </Grid>
                     </DataTemplate>
                 </ContentControl.ContentTemplate>

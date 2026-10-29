@@ -18,10 +18,12 @@
             <TextBlock Text="TinyHarness" Classes="heading" HorizontalAlignment="Center" />
 
             <!-- 顶部「新对话」：DSH newSession 形态——左侧 16px 圆形加号图标，
-                 图标与文字间距 6，实底按钮样式见 Button.new-session。 -->
+                 图标与文字间距 6，实底按钮样式见 Button.new-session；
+                 选中空白页期间以 current 类保持激活，提供可辨认状态。 -->
             <Button Grid.Row="1"
                     Margin="0,24,0,10"
                     Classes="new-session"
+                    Classes.current="{Binding IsNewConversationSelected}"
                     AutomationProperties.Name="新对话"
                     Command="{Binding NewSessionCommand}">
                 <StackPanel Orientation="Horizontal" Spacing="6">
@@ -192,6 +194,9 @@
                         <Button Content="设置" Command="{Binding OpenSettingsCommand}" />
                         <Button Content="刷新历史" Command="{Binding RefreshCommand}" />
                     </StackPanel>
+                    <!-- 失败首发草稿的显式恢复入口：用户点击才返回，不抢导航、不占侧栏会话行。 -->
+                    <Button Content="返回未发送草稿" Command="{Binding ReturnToFailedDraftCommand}"
+                            IsVisible="{Binding HasFailedDraft}" />
                     <TextBlock Text="正在加载历史…" Classes="caption"
                                IsVisible="{Binding LoadingHistory}" />
                     <TextBlock Text="{Binding OrganizeNotice}" Classes="caption" TextWrapping="Wrap"

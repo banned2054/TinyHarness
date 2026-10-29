@@ -19,29 +19,27 @@ public sealed class DesktopSidebarTests
     [Test]
     public async Task SidebarRowsFlattenGroupsWithMembersAndCollapseByExpansion()
     {
-        var             fixture = await SidebarFixture.CreateAsync();
-        await using var model   = fixture.Window();
-        await model.OpenProjectAsync(fixture.First);
-        var firstGroup = model.Projects.Single(item => item.Key == model.SelectedSession!.ProjectId);
-        await model.NewProjectSessionAsync(firstGroup);
-        await model.OpenProjectAsync(fixture.Second);
-        var draft       = model.SelectedSession!;
-        var secondGroup = model.Projects.Single(item => item.Key == draft.ProjectId);
+        var             fixture     = await SidebarFixture.CreateAsync();
+        await using var model       = fixture.Window();
+        var             first       = await PromoteConversationAsync(model, fixture.First, "first request");
+        var             second      = await PromoteConversationAsync(model, fixture.Second, "second request");
+        var             firstGroup  = model.Projects.Single(item => item.Key == first.ProjectId);
+        var             secondGroup = model.Projects.Single(item => item.Key == second.ProjectId);
 
         Assert.That(model.SidebarRows,
                     Is.EqualTo(model.Projects.SelectMany(group => group.IsExpanded
-                                                              ? group.Sessions.Cast<object>().Prepend(group)
-                                                              : [group]).ToList()),
+                                                             ? group.Sessions.Cast<object>().Prepend(group)
+                                                             : [group]).ToList()),
                     "侧栏行必须按项目顺序铺平，成员会话内联在展开的组头之后。");
         Assert.That(model.SidebarRows.OfType<ProjectViewModel>().Select(group => group.Key),
                     Is.EquivalentTo(new[] { firstGroup.Key, secondGroup.Key }));
 
         model.ToggleProjectCommand.Execute(secondGroup);
-        Assert.That(model.SidebarRows, Does.Contain(secondGroup).And.Not.Contain(draft));
-        Assert.That(model.SidebarRows, Does.Contain(firstGroup));
-        Assert.That(secondGroup.Sessions, Does.Contain(draft));
+        Assert.That(model.SidebarRows, Does.Contain(secondGroup).And.Not.Contain(second));
+        Assert.That(model.SidebarRows, Does.Contain(first));
+        Assert.That(secondGroup.Sessions, Does.Contain(second));
         model.ToggleProjectCommand.Execute(secondGroup);
-        Assert.That(model.SidebarRows, Does.Contain(draft));
+        Assert.That(model.SidebarRows, Does.Contain(second));
     }
 
     [Test]
@@ -49,23 +47,35 @@ public sealed class DesktopSidebarTests
     {
         var             fixture = await SidebarFixture.CreateAsync();
         await using var model   = fixture.Window();
-        await model.OpenProjectAsync(fixture.First);
-        var firstGroup = model.Projects.Single(item => item.CanEdit);
-        await model.NewProjectSessionAsync(firstGroup);
+        var             first   = await PromoteConversationAsync(model, fixture.First, "first request");
         await model.OpenProjectAsync(fixture.Second);
-        var secondGroup = model.Projects.Single(item => item.Key             == model.SelectedSession!.ProjectId);
-        var first       = model.Sessions.Single(session => session.ProjectId == firstGroup.Project!.Id);
+        var firstGroup  = model.Projects.Single(group => group.CanEdit             && group.Key == first.ProjectId);
+        var secondGroup = model.Projects.Single(group => group.Project is not null && group.Key != first.ProjectId);
 
         model.SelectSessionCommand.Execute(first);
         Assert.That(first.IsSelected, Is.True);
         Assert.That(firstGroup.IsCurrent, Is.True);
         Assert.That(secondGroup.IsCurrent, Is.False);
-        model.SelectSessionCommand.Execute(model.SelectedSession == first
-                                               ? model.Sessions.First(session => !ReferenceEquals(session, first))
-                                               : model.SelectedSession!);
+        model.NewSessionCommand.Execute(null);
         Assert.That(first.IsSelected, Is.False);
-        Assert.That(firstGroup.IsCurrent, Is.False);
-        Assert.That(secondGroup.IsCurrent, Is.True);
+        Assert.That(firstGroup.IsCurrent, Is.False, "空白新对话页不属于任何分组。");
+        Assert.That(secondGroup.IsCurrent, Is.False);
+    }
+
+    /// <summary>
+    ///     <para>发送一条消息把空白页提升为正式会话行并返回该页。</para>
+    ///     <para>Sends one message to promote the blank page into a formal session row and returns it.</para>
+    /// </summary>
+    private static async Task<SessionViewModel> PromoteConversationAsync(MainWindowViewModel model, string root,
+                                                                         string              text)
+    {
+        await model.OpenProjectAsync(root);
+        var page = model.SelectedSession!;
+        page.Draft = text;
+        await page.SendAsync();
+        await page.Completion.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.That(page.Id, Is.Not.Null);
+        return page;
     }
 
     [Test]

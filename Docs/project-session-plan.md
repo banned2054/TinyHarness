@@ -249,17 +249,18 @@ mixagents
 | 操作 | 第一版行为 |
 | --- | --- |
 | 打开目录 | 选择目录，创建或打开对应项目 |
-| 项目内新建对话 | 创建归属该项目的草稿 |
+| 项目内新建对话 | 把唯一空白新对话页切到该项目，保留输入；不新建草稿页 |
 | 项目改名 | 保存名称和修订号 |
 | 选择历史会话 | 读取历史，展示该会话自己的执行目录 |
 | 折叠／切换项目 | 只改变展示，不取消运行或释放宿主 |
 
 - 显式创建项目允许空项目；草稿不创建会话日志或宿主，首次发送才建立会话并提交归属。
-- 未发送草稿切换项目时保留输入并刷新适用默认模型配置；异步发送继续绑定原会话和草稿版本。
+- 桌面保持单一可复用的空白新对话页：顶部「新对话」与项目组「+」进入同一份未发送草稿，空白页不出现在正式会话列表、项目成员或侧栏投影中；发送被接受（取得真实 SessionId）即提升为正式会话行且仅登记一次，无真实 ID 的失败保持草稿并可重试。仅当下一份未被选中、无文字且无任何显式预选时才无损回收空白槽；其他被换出的失败草稿留在进程内去重列表，经显式「返回未发送草稿」逐份轮转访问，不覆盖当前空白页输入或已恢复页的修改，不新增持久化或正式侧栏草稿行。
+- 未发送草稿切换项目时保留输入并刷新适用默认模型配置；异步发送继续绑定原会话和草稿版本。菜单、项目「+」、打开目录与自动 store 重绑共用每页意图代际，操作开始时固定页面，异步结果仅在意图、可选目录状态及 store 仍适用时应用；旧结果不改目标、默认模型或选择。自动刷新在配置 I/O 前捕获代际，显式解析在途或之后出现用户意图时不抢占。空白页目标仅在尚无绑定、生效 store 真正变化或显式选择时解析，store 变化时丢弃旧 store 的项目 ID 并按当前目录册只读重解析；正式会话的执行根与 store 固定。
 - 正式会话第一版归属和执行目录固定，不提供移动入口。
 - 目录缺失仍可查看历史；发送报告不可用，不自动切到其他路径。
-- 同名项目通过完整路径提示区分；按成员最近对话活动排序，空项目按创建时间，改名不制造活动。
-- 旧日志归属自动整理：Desktop 启动、生效 session store 真正变化和用户点击“刷新历史”时自动执行一轮分批整理（每批最多检查 100 份日志，幂等续扫、占用跳过、损坏只报告不修复）；选择会话、历史分页、折叠展开与普通只读刷新不触发。成功静默，异常才显示简短摘要，未完成的旧日志保留只读目录组并标注原因；未绑定草稿独立展示为“草稿”组。CLI `session initialize-projects [after-session-id]` 保留为显式入口。
+- 同名项目在组头与空白页项目选择菜单中均通过完整路径提示区分；按成员最近对话活动排序，空项目按创建时间，改名不制造活动。
+- 旧日志归属自动整理：Desktop 启动、生效 session store 真正变化和用户点击“刷新历史”时自动执行一轮分批整理（每批最多检查 100 份日志，幂等续扫、占用跳过、损坏只报告不修复）；选择会话、历史分页、折叠展开与普通只读刷新不触发。成功静默，异常才显示简短摘要，未完成的旧日志保留只读目录组并标注原因；空白新对话页不属于侧栏投影。CLI `session initialize-projects [after-session-id]` 保留为显式入口。
 - 不顺带加入草稿持久化、会话标题编辑等额外功能。
 
 继续由 `DesktopSessionManager` 按 SessionId 管理宿主，不新增项目级工具宿主。模型、writer、审批、取消和关闭清理仍按会话隔离，切页不丢弃另一会话的草稿、保存警告或待决审批。
@@ -436,3 +437,37 @@ SessionWorkspace
 - 新增 5 项回归：同项目多成员／草稿／SidebarRows 铺平与组序、重建保留分组实例与展开态、store 位于沙箱附加写根内时拒绝写入且文件集字节不变、解析 drift 拦截并可见（旧实现对不一致目录静默跳过，红点为缺少可观察原因而非发生写入）、同根跨 store 分组与原因隔离；修复前 5/5 失败，修复后通过。既有 pending 键断言同步新键格式。
 - 已验证（Windows x64）：`dotnet test TinyHarness.Desktop.Tests/TinyHarness.Desktop.Tests.csproj` 92/92 通过、0 警告；Release `win-x64` NativeAOT publish 无 compiler／trimming／AOT 警告，产物 `--offline-smoke` PASS（parallel=2、switched=A/B/A/B、refreshed=true、resumedTurns=4、disposedClients=6）。证据在 `artifacts/startup-organize-bugfix-20261028/`。真实 GUI 交互与真实用户日志初始化仍未验证，阶段四未完成。
 - 用户实测反馈（2026-10-28）：已有的未绑定项目旧会话已成功自动补齐项目归属；此为用户提供的验证结果，Agent 未读取真实用户日志复核，其余阶段四未验证项不变。
+
+2026-10-28 接入单一空白新对话页首版（对齐 DshDesktop blank session 交互，后续评审修复与最终结果见下一条）：
+
+- Desktop 以唯一空白页承载未发送草稿：启动即选中该页；顶部「新对话」与项目组「+」进入同一份，反复点击不堆积，空白页不进入 Sessions、项目成员或 SidebarRows；空白页在输入区上缘提供项目／目录状态与切换入口（弹层列已有项目并复用「打开目录」，正式页为只读标签，行常驻等高防跳位）。侧栏「草稿」分组随之取消。
+- 首次发送被接受（真实 SessionId 与宿主建立）即把该页登记为正式会话行且仅一次，不等待模型整轮完成；尚无真实 ID 的打开失败保持草稿、文字与显式预选并可重试（仍是唯一空白页），已取得真实 ID 的失败保留会话行与重试引用。在途目标冻结：期间「新对话」得到独立的下一份空白页；失败页在下一份无任何用户预选（文字、显式项目／模型／权限均无；自动绑定不算）时无损回收空白槽且不抢选中，否则经侧栏「返回未发送草稿」显式恢复。
+- 空白页目标解析收窄为：页面尚无绑定（初始）或生效 store 真正变化（丢弃旧 store 项目 ID、按当前目录册重解析）或用户显式选择；同 store 刷新不再重解析。`OpenProjectAsync` 保留创建／复用项目的既有行为；「新对话」与项目「+」只选择已有项目。
+- 新增 `DesktopBlankConversationTests` 9 项（复用无行无日志、跨历史／项目保留预选、提升一次、有 ID 失败保留行重试复用、无 ID 失败保持可重试、在途迟到不抢页不改目标、pristine 回收不抢历史页、显式预选不被静默覆盖、非 pristine 显式恢复）；调整被新 UX 取代的草稿侧栏行断言（DesktopSidebarTests 2 项改用提升后的正式行、DesktopStartupOrganizeTests 5 项、DesktopProjectEntryTests 2 项改写为空白页 store 重解析与项目「+」切换语义），保留 store／只读／保护／归属覆盖。
+- 已验证（Windows x64）：`dotnet test TinyHarness.Desktop.Tests/TinyHarness.Desktop.Tests.csproj` 101/101 通过、0 警告；Release `win-x64` NativeAOT publish 0 compiler／trimming／AOT 警告，产物 `--offline-smoke` PASS（parallel=2、switched=A/B/A/B、refreshed=true、resumedTurns=4、disposedClients=6）。TRX、publish 日志与 smoke 记录在 `artifacts/blank-session-20261028/`。真实 GUI 交互（弹层布局、按钮激活态、转正不跳位的实际观感）未验证，App 启动入口无隔离参数、默认配置指向真实用户数据，按真实数据保护要求未启动；阶段四其余未验证项不变。
+
+2026-10-28 空白新对话页评审修复与接手验证 r2（后续独立复评修复及最终结果见下一条；阶段四仍未完成）：
+
+- 修复选中页无损性：后台首发打开失败时，只有未被选中、无文字且无显式项目／模型／权限预选的下一份才可回收空白槽；用户正查看的 pristine 页继续留在槽位，失败页从恢复入口访问，失败后继续输入、切历史再回「新对话」仍可到达原输入。
+- 失败草稿改为进程内去重列表，「返回未发送草稿」轮转访问各页；当前空白槽保持独立，恢复页上的编辑与显式预选保留，真实会话建立后从恢复列表移除。两份首发在 manager gate 上排队并先后失败时，两份文字与下一份输入均可到达；不新增持久化或正式侧栏草稿行。
+- 菜单、组头「+」、打开目录与自动重绑统一使用每页意图代际：显式操作开始时固定页面并标记在途，所有目标 I/O 后检查意图、`CanChooseWorkspace` 与 store 适用性；自动刷新在配置 I/O 前捕获代际，不给已在途或后来出现的用户意图制造更高优先级。`OpenProjectAsync` 不在迟到时改取另一页，目标默认模型刷新也防护旧意图。项目选择按当前 store 的目录册只读解析，不跨 store 复制项目 ID；正式会话的根与 store 仍固定。`InternalsVisibleTo` 仅供 Desktop 测试访问现有受保护目录解析顺序注入点，不改变依赖、目标框架或 AOT／trimming／reflection-disabled 设置。
+- 确定性证据：接手工作树已含 P1 与多失败列表的部分修复，T3 原样执行已绿（`desktop-blank-handoff-t3.trx`），未回退制造红结果。补强后实际剩余目标竞态 5 项先红（`desktop-blank-remaining-red.trx`），修复后 18/18 绿；随后确认「用户显式解析先于自动刷新」1 红／1 绿（`desktop-blank-auto-intent-red.trx`），修复后空白页专项 **19/19** 绿（`desktop-blank-intent-final-green.trx`）。挂起钩子均有超时和退出放行，无 sleep 概率时序。
+- 已验证（Windows x64、SDK 10.0.402）：最终 `dotnet test TinyHarness.Desktop.Tests/TinyHarness.Desktop.Tests.csproj` **111/111** 通过、0 失败／跳过、0 编译警告（`desktop-blank-final-r2.trx`）；`dotnet publish TinyHarness.Desktop/TinyHarness.Desktop.csproj -c Release -r win-x64 -o artifacts/blank-session-20261028/desktop-nativeaot-final` 生成 native code、退出码 0，0 compiler／trimming／AOT 警告（`publish-desktop-final-r2.log`）。从仓库外 TEMP 运行最终产物 `--offline-smoke` 退出码 0（`offline-smoke-final-r2.txt`：parallel=2、switched=A/B/A/B、refreshed=true、resumedTurns=4、disposedClients=6），仅使用进程级短 PATH，未改机器设置。首版 101/101 与中间 110/110、前一轮产物日志保留为历史证据，不作为最终结果。证据目录为 `artifacts/blank-session-20261028/`。
+- 未验证：真实 GUI 的弹层布局、激活态、键盘与转正视觉连续性。生产启动入口没有受支持的隔离参数，默认触及真实用户数据，本轮没有启动 GUI、真实模型或用户日志初始化，也没有新增隔离入口或绕过策略；阶段四其余未验证项不变。
+
+2026-10-28 空白页独立复评修复与最终验证 r3：
+
+- `OpenProjectAsync` 保留自行发现新 store 的既有流程：store 代次未变时可继续；自动刷新推进代次后，解析结果仍等于当前 store 且本页意图未变、仍可选择目录时也继续，不因代次推进静默丢弃显式打开。真正旧 store、更新用户意图或原页已转正仍拒绝。
+- 权限菜单的真实选择入口记录显式预选，包括重选默认「只读」同值；不以所有程序性 setter 赋值作为用户意图。离页后首发后台失败不再将该下一页当作 pristine 回收，原只读预选与失败页均可恢复。
+- 空白页项目菜单将组头完整路径提示传给选项并绑定 `ToolTip.Tip`，同名不同目录可辨识；保留已有选项构造签名，不新增页面或改变布局。回归通过真实菜单命令核对两项路径提示及各自 ProjectId／执行根。
+- 确定性红绿：前两项共 3 个用例先红（`desktop-blank-review-r3-red.trx`：缓存 S1→S2、启动未缓存 store、权限同值重选），路径提示 1 项先红（`desktop-blank-project-tips-r3-red.trx`），修复后空白页专项 **23/23** 通过（`desktop-blank-r3-green.trx`）。首轮绿跑的启动夹具在 VM 自动读配置时替换配置触发过一次共享冲突（`desktop-blank-review-r3-green.trx`）；夹具改为先配置再构造 VM，未改 Core 或压制异常，随后 22/22 及最终 23/23 通过。
+- 已验证（Windows x64、SDK 10.0.402）：最终 Desktop 全套 **115/115** 通过、0 失败／跳过、0 编译警告（`desktop-blank-final-r3.trx`）。最终 `desktop-nativeaot-final` Release `win-x64` publish 生成 native code、退出码 0、0 compiler／trimming／AOT 警告（`publish-desktop-final-r3.log`）；从仓库外 TEMP 运行产物 `--offline-smoke` PASS、退出码 0（`offline-smoke-final-r3.txt`：parallel=2、switched=A/B/A/B、refreshed=true、resumedTurns=4、disposedClients=6），仅使用进程级短 PATH。r2 的 111/111 与之前日志保留，不作为 r3 最终证据。证据目录仍为 `artifacts/blank-session-20261028/`。
+- 未验证边界不变：真实 GUI／用户数据／真实模型均未启动，tooltip 实际观感不由 XAML 编译和 ViewModel 测试推定；没有新增 GUI 隔离入口或绕过策略，阶段四仍未完成。
+
+2026-10-29 Desktop 空白页评审修复：
+
+- 未绑定页面的目标标签只回退自身目录，避免 `null` 项目 ID 匹配侧栏无项目展示组。首次真实会话登记时主动检查未知归属，并在当前 store 的统一加载结束后有界只读补载，解决直接首发创建的项目被误标为缺失；每个未知 ID 自动补查一次，手动刷新仍正常重读目录册。
+- 改名与目录册投影更新前后比较目标标签，只向值变化的正式页、唯一空白页及恢复草稿发通知，不增加页面对分组的长期订阅。
+- 项目菜单补齐 DshDesktop 原有 `ScrollViewer MaxHeight="288"` 结构，列表独立滚动，目录标题和打开目录入口固定在滚动区外；弹窗与按钮左对齐。
+- 新增 4 项 ViewModel 回归与 1 项菜单结构回归；原实现下 3 项 ViewModel 和 1 项结构测试先红，修复后专项 **28/28**、Desktop 全套 **120/120** 通过，0 失败／跳过。Release `win-x64` NativeAOT publish 无 compiler／trimming／AOT 警告，原生产物 `--offline-smoke` 通过。按共享 `banned甄选` profile 清理后人工仅保留改动范围的排版，完整验证证据在 `artifacts/review-fixes-20261028/`。
+- 最终静态复审未发现阻断项。未运行真实 GUI、真实模型、用户日志初始化或完整 solution 回归；结构测试不替代滚轮、键盘和对齐实际观感验收，阶段四仍未完成。

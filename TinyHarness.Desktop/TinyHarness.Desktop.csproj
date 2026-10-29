@@ -19,6 +19,10 @@
     <PackageReference Include="LiveMarkdown.Avalonia" Version="2.4.3" />
   </ItemGroup>
   <ItemGroup>
+    <!-- 仅暴露确定性测试注入点（受保护目录解析顺序、空白页项目选择入口），不构成公开契约。 -->
+    <InternalsVisibleTo Include="TinyHarness.Desktop.Tests" />
+  </ItemGroup>
+  <ItemGroup>
     <Content Include="../LICENSE" Link="LICENSE" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="../NOTICE" Link="NOTICE" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="../THIRD-PARTY-LICENSES.txt" Link="THIRD-PARTY-LICENSES.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />

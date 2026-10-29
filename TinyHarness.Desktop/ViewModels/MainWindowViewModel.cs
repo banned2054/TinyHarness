@@ -19,13 +19,16 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
 {
     private readonly Func<Action, ValueTask>?      _dispatch;
     private readonly DesktopSessionFactory         _factory;
+    private readonly List<SessionViewModel>         _failedDrafts = [];
     private readonly CancellationTokenSource       _lifetime    = new();
     private readonly DesktopSessionManager         _manager     = new();
     private readonly SemaphoreSlim                 _refreshGate = new(1, 1);
+    private readonly HashSet<string>               _projectReloadRetried = new(StringComparer.Ordinal);
     private          bool                          _closing;
     private          string?                       _initializationCursor;
     private          bool                          _loadingCatalog;
     private          int                           _migrationBusy;
+    private          SessionViewModel?             _newConversation;
     private          IReadOnlyList<OrganizeIssue>? _organizeIssues;
     private          string?                       _organizeIssuesStore;
     private          CancellationTokenSource?      _organizeSource;
@@ -44,6 +47,7 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     private          SessionViewModel?             _selected;
     private          bool                          _settingsOpen;
     private          string?                       _storeDirectory;
+    private          int                           _storeRevision;
 
     public MainWindowViewModel() : this(new DesktopSessionFactory(), UserConfigStore.DefaultFilePath())
     {
@@ -58,13 +62,23 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         Catalog = new CatalogSettingsViewModel(UserConfigPath, InitializeAsync);
         Settings = new SettingsPanelViewModel(new GeneralSettingsSectionViewModel(UserConfigPath), Catalog);
         Settings.CloseRequested += (_, _) => SettingsOpen = false;
-        NewSessionCommand = new RelayCommand(NewSession);
+        NewSessionCommand = new RelayCommand(NewConversation);
         SelectSessionCommand = new RelayCommand<SessionViewModel>(session => SelectedSession = session);
         ToggleProjectCommand = new RelayCommand<ProjectViewModel>(group =>
         {
             if (group is null) return;
             group.IsExpanded = !group.IsExpanded;
             RebuildSidebarRows();
+        });
+        ReturnToFailedDraftCommand = new RelayCommand(() =>
+        {
+            // 轮转访问：进入最早一份未在当前查看的失败草稿，并将其移到队尾，反复进入不互相挡住。
+            var draft = _failedDrafts.FirstOrDefault(item => item is { Id: null } &&
+                                                             !ReferenceEquals(item, SelectedSession));
+            if (draft is null) return;
+            _failedDrafts.Remove(draft);
+            _failedDrafts.Add(draft);
+            SelectedSession = draft;
         });
         OpenProjectRenameCommand =
             new RelayCommand<ProjectViewModel>(OpenProjectRename, group => group is { CanEdit: true });
@@ -82,7 +96,7 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         RefreshCommand = new AsyncCommand(RefreshAsync, exception => Notice = exception.Message);
         InitializeProjectsCommand = new AsyncCommand(InitializeProjectsAsync, exception => Notice = exception.Message);
         CancelInitializationCommand = new RelayCommand(() => _organizeSource?.Cancel());
-        NewSession();
+        SelectedSession = ConversationDraft();
     }
 
     public CatalogSettingsViewModel               Catalog  { get; }
@@ -105,6 +119,25 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     public string                         UserConfigPath              { get; }
     public AsyncCommand                   InitializeProjectsCommand   { get; }
     public RelayCommand                   CancelInitializationCommand { get; }
+    public RelayCommand                   ReturnToFailedDraftCommand  { get; }
+
+    /// <summary>
+    ///     <para>当前选中页是否为未发送的空白新对话页；驱动顶部「新对话」按钮的激活态。</para>
+    ///     <para>Whether the selected page is the unsent blank new-conversation page; it drives the top button's active state.</para>
+    /// </summary>
+    public bool IsNewConversationSelected => SelectedSession is { Id: null };
+
+    /// <summary>
+    ///     <para>
+    ///         是否存在可恢复的失败首发草稿：页面尚无真实 ID、不在当前选中页，经侧栏入口逐份轮转返回。
+    ///     </para>
+    ///     <para>
+    ///         Whether recoverable failed first-send drafts exist: they have no real Id, are not the selected page, and
+    ///         are visited in rotation through the sidebar entry.
+    ///     </para>
+    /// </summary>
+    public bool HasFailedDraft =>
+        _failedDrafts.Any(item => item is { Id: null } && !ReferenceEquals(item, SelectedSession));
 
     public string Notice
     {
@@ -192,6 +225,8 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
             if (_selected is { } previous) previous.IsSelected = false;
             if (!SetProperty(ref _selected, value) || value is null) return;
             value.IsSelected = true;
+            OnPropertyChanged(nameof(IsNewConversationSelected));
+            OnPropertyChanged(nameof(HasFailedDraft));
             RebuildSidebarRows();
             _ = LoadSelectedHistoryAsync(value);
         }
@@ -227,8 +262,9 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     public async Task InitializeAsync()
     {
         if (_closing) return;
-        var changed = false;
-        var store   = string.Empty;
+        var draftTargets = CaptureDraftTargets();
+        var changed      = false;
+        var store        = string.Empty;
         await _refreshGate.WaitAsync(_lifetime.Token);
         _loadingCatalog = true;
         try
@@ -258,25 +294,28 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
                 var row = new SessionViewModel(_manager, _factory, stored.WorkspaceRoot, stored.Id, store,
                                                title[..Math.Min(title.Length, 48)], _dispatch, stored.ProjectId,
                                                stored.LastActivityUtc)
-                    { ModelOptions = Models, ManageModelsCommand = OpenSettingsCommand };
+                {
+                    ModelOptions = Models, ManageModelsCommand = OpenSettingsCommand, ProjectOptions = Projects
+                };
                 // 标签来自最后选择；历史页面不解析凭据，目标缺失也保留页面。
                 AddSession(row);
             }
 
-            if (Sessions.Count == 0) NewSession();
-            SelectedSession ??= Sessions.FirstOrDefault();
-            await RebindUnboundDraftsAsync(store);
+            SelectedSession ??= ConversationDraft();
+            await RebindUnboundDraftsAsync(store, draftTargets);
             RebuildProjects();
         }
         catch (Exception exception)
         {
             Notice = exception.Message;
-            if (Sessions.Count == 0) NewSession();
+            SelectedSession ??= ConversationDraft();
         }
         finally
         {
             _loadingCatalog = false;
             _refreshGate.Release();
+            // 本次目录册快照可能早于加载期间首发建立的项目；补查兜底，避免被加载 guard 跳过的补载永久丢失。
+            ReloadCatalogForUnknownProjectsAfterLoad();
         }
 
         // 锁外协调：先等被取消的旧轮退出，再按“store 真正变化”触发新一轮；本轮结束后的刷新不会再次进入这里。
@@ -339,16 +378,16 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     /// </summary>
     private async Task<(string Store, bool StoreChanged)> InitializeLightAsync()
     {
+        var draftTargets = CaptureDraftTargets();
         await _refreshGate.WaitAsync(_lifetime.Token);
         _loadingCatalog = true;
         try
         {
             var (store, changed) = await PrepareAsync();
             if (_closing) return (store, changed);
-            await RebindUnboundDraftsAsync(store);
+            await RebindUnboundDraftsAsync(store, draftTargets);
             RebuildProjects();
-            if (Sessions.Count == 0) NewSession();
-            SelectedSession ??= Sessions.FirstOrDefault();
+            SelectedSession ??= ConversationDraft();
             return (store, changed);
         }
         finally
@@ -364,14 +403,14 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     /// </summary>
     private async Task<(string Store, bool StoreChanged)> PrepareAsync()
     {
-        var user = await UserConfigStore.LoadAsync(UserConfigPath, _lifetime.Token);
+        var revision = _storeRevision;
+        var user     = await UserConfigStore.LoadAsync(UserConfigPath, _lifetime.Token);
+        if (revision != _storeRevision && _storeDirectory is { } current) return (current, false);
         Models.Clear();
         foreach (var profile in user.Profiles)
         foreach (var model in profile.Models)
             Models.Add(new ModelChoice(profile.Name, model.Id, model.DisplayName, model.ReasoningEfforts,
                                        model.DefaultReasoningEffort));
-        foreach (var draft in Sessions.Where(session => session.Id is null).ToArray())
-            await draft.RefreshDefaultModelAsync();
         var directory = user.Settings?.SessionStoreDirectory ?? SessionStorePaths.DefaultDirectory();
         directory = Path.GetFullPath(directory);
         var changed = _storeDirectory is not null && !ProjectRoots.AreEqual(_storeDirectory, directory);
@@ -383,14 +422,19 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
             _organizeSource?.Cancel();
             ResetOrganizeDisplay();
         }
+        if (_storeDirectory is null || !ProjectRoots.AreEqual(_storeDirectory, directory)) _storeRevision++;
         _storeDirectory = directory;
+        revision        = _storeRevision;
         try
         {
-            _projects = (await ProjectStore.LoadAsync(ProjectStore.FilePath(directory), _lifetime.Token)).Projects;
+            var catalog = await ProjectStore.LoadAsync(ProjectStore.FilePath(directory), _lifetime.Token);
+            if (revision != _storeRevision) return (_storeDirectory!, false);
+            _projects = catalog.Projects;
         }
         catch (Exception exception) when (exception is ProjectStoreException or IOException
                                            or UnauthorizedAccessException)
         {
+            if (revision != _storeRevision) return (_storeDirectory!, false);
             _projects = [];
             Notice    = $"项目信息无法读取：{exception.Message}";
         }
@@ -407,38 +451,176 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     }
 
     /// <summary>
-    ///     <para>为仍无归属的草稿按当前目录册重新解析项目；守卫与草稿首次绑定一致，不覆盖用户已改状态。</para>
-    ///     <para>
-    ///         Re-resolves a project for drafts still without ownership against the current catalog; the guards match
-    ///         first-time draft binding and never overwrite user changes.
-    ///     </para>
+    ///     <para>在配置 I/O 前捕获可自动绑定的草稿与意图代际；显式目标解析在途的页面不参与。</para>
+    ///     <para>Captures drafts and intent revisions before config I/O; pages with pending explicit target resolutions are excluded.</para>
     /// </summary>
-    private async Task RebindUnboundDraftsAsync(string directory)
+    private List<(SessionViewModel Page, int Revision)> CaptureDraftTargets()
     {
-        foreach (var draft in Sessions.Where(session => session.Id is null).ToArray())
+        var pages = new List<SessionViewModel>(_failedDrafts);
+        if (_newConversation is { } draft) pages.Add(draft);
+        if (SelectedSession is { Id: null } selected) pages.Add(selected);
+        return pages.Distinct().Where(page => page.CanChooseWorkspace && !page.TargetIntentPending)
+                    .Select(page => (page, page.TargetIntentRevision)).ToList();
+    }
+
+    /// <summary>
+    ///     <para>仅为意图未变且未绑定当前 store 的草稿重解析项目；不沿用旧 store 的项目 ID。</para>
+    ///     <para>Re-resolves projects only for unchanged drafts not bound to the current store; old-store project IDs are never reused.</para>
+    /// </summary>
+    private async Task RebindUnboundDraftsAsync(
+        string directory, IReadOnlyList<(SessionViewModel Page, int Revision)> targets)
+    {
+        foreach (var (draft, revision) in targets)
         {
-            if (_closing || draft is not { Id: null, ProjectId: null, CanChooseWorkspace: true }) continue;
-            if (draft.StoreDirectory is { } bound && !ProjectRoots.AreEqual(bound, directory)) continue;
-            var root    = draft.WorkspaceRoot;
+            if (!CanApplyTarget(draft, revision) || !IsApplicableStore(directory, _storeRevision)) continue;
+            if (draft.StoreDirectory is { } bound && ProjectRoots.AreEqual(bound, directory))
+            {
+                await draft.RefreshDefaultModelAsync();
+                continue;
+            }
+
+            // 自动操作在配置读取前捕获代际；只有期间没有用户新意图时才登记实际重绑。
+            draft.CaptureTargetIntent();
+            var root = draft.WorkspaceRoot;
             var project = _projects.FirstOrDefault(item =>
                 item.Roots.Any(projectRoot => ProjectRoots.AreEqual(projectRoot.Path, root)));
-            if (project is null) continue;
-            await draft.SelectProjectAsync(project.Id, root, directory);
+            await draft.SelectProjectAsync(project?.Id, root, directory, userSelected : false);
         }
     }
 
-    private void NewSession()
+    private bool CanApplyTarget(SessionViewModel page, int revision) =>
+        !_closing && page.CanChooseWorkspace && page.TargetIntentRevision == revision;
+
+    private bool IsApplicableStore(string directory, int revision) =>
+        _storeDirectory is { } current
+            ? ProjectRoots.AreEqual(current, directory)
+            : revision == _storeRevision;
+
+    /// <summary>
+    ///     <para>顶部「新对话」：进入同一份未发送的空白页；当前空白页在途或已提升时才另起下一份。</para>
+    ///     <para>Top "new conversation": enters the same unsent blank page; a fresh one starts only while the current page is sending or established.</para>
+    /// </summary>
+    private void NewConversation()
     {
         if (_closing) return;
-        // 新草稿继承所选执行目录；存储与项目绑定按当前有效配置解析，不复制旧页面可能过期的绑定。
-        var session = new SessionViewModel(_manager, _factory,
-                                           SelectedSession?.WorkspaceRoot ?? Environment.CurrentDirectory,
-                                           null, null, null, _dispatch, null, null)
-            { ModelOptions = Models, ManageModelsCommand = OpenSettingsCommand };
+        SelectedSession = ConversationDraft();
+    }
+
+    /// <summary>
+    ///     <para>返回可进入的空白新对话页：优先复用未发送的当前空白页，在途或已提升时新建下一份并接管空白槽。</para>
+    ///     <para>Returns the enterable blank page: reuses the unsent current one, or starts the next page taking over the blank slot when it is sending or established.</para>
+    /// </summary>
+    private SessionViewModel ConversationDraft()
+    {
+        if (_newConversation is { } page && page.Id is null && !page.IsRunning) return page;
+        return CreateConversationDraft();
+    }
+
+    /// <summary>
+    ///     <para>新建下一份空白页；root 继承上一份空白页的目标，不继承刚浏览的历史会话目录。</para>
+    ///     <para>Creates the next blank page; the root follows the previous blank page's target, never the just-visited history session's directory.</para>
+    /// </summary>
+    private SessionViewModel CreateConversationDraft()
+    {
+        var root = _newConversation?.WorkspaceRoot ?? Environment.CurrentDirectory;
+        var session = new SessionViewModel(_manager, _factory, root, null, null, null, _dispatch, null, null)
+        {
+            ModelOptions = Models, ManageModelsCommand = OpenSettingsCommand, ProjectOptions = Projects
+        };
+        session.SelectProjectCommand = new RelayCommand<ProjectViewModel>(
+                                                                          group => _ =
+                                                                              SelectConversationProjectAsync(session,
+                                                                                  group),
+                                                                          group => group is { CanEdit: true } &&
+                                                                              session.CanChooseWorkspace);
+        session.Established     += OnConversationEstablished;
+        session.FirstSendFailed += OnConversationFirstSendFailed;
+        _newConversation        =  session;
+        _                       =  session.RefreshDefaultModelAsync();
+        _                       =  BindNewDraftAsync(session);
+        return session;
+    }
+
+    /// <summary>
+    ///     <para>空白页首发取得真实 SessionId：登记为正式会话行（仅一次）；迟到登记不抢选中、不清其他页输入。</para>
+    ///     <para>A blank page gains a real SessionId on its first send: register the formal row exactly once; late registration never steals selection or clears other pages' input.</para>
+    /// </summary>
+    private void OnConversationEstablished(SessionViewModel session)
+    {
+        if (_closing || session.Id is null || Sessions.Contains(session)) return;
         AddSession(session);
-        SelectedSession = session;
-        _               = session.RefreshDefaultModelAsync();
-        _               = BindNewDraftAsync(session);
+        if (_failedDrafts.RemoveAll(item => ReferenceEquals(item, session)) > 0)
+            OnPropertyChanged(nameof(HasFailedDraft));
+        OnPropertyChanged(nameof(IsNewConversationSelected));
+    }
+
+    /// <summary>
+    ///     <para>
+    ///         首发在取得真实 ID 前失败：保留文字与预选。仅回收未被选中且无用户内容的空白槽，
+    ///         其他被换出的失败页进入去重恢复列表；不改变选中或覆盖下一份草稿。
+    ///     </para>
+    ///     <para>
+    ///         Retains text and preselections when opening fails before a real Id. Only an unselected pristine slot is
+    ///         reclaimed; other displaced failed pages enter the deduplicated recovery list without changing selection
+    ///         or overwriting the next draft.
+    ///     </para>
+    /// </summary>
+    private void OnConversationFirstSendFailed(SessionViewModel session)
+    {
+        if (_closing || ReferenceEquals(_newConversation, session) || ReferenceEquals(SelectedSession, session)) return;
+        // 下一份仍无任何用户预选（无文字、无显式项目／模型／权限；自动绑定可重解析）且未被用户正在查看：
+        // 无损换回失败页；正被选中的空白页不得被回收顶替。
+        if (!ReferenceEquals(SelectedSession, _newConversation) &&
+            _newConversation is { Id: null, Draft.Length: 0, HasUserPreselection: false })
+        {
+            _newConversation = session;
+            return;
+        }
+
+        // 下一份被选中或已有内容／预选：不覆盖、不抢导航、不伪装正式侧栏行，保留仍有内容的失败草稿供显式恢复。
+        RegisterFailedDraft(session);
+    }
+
+    /// <summary>
+    ///     <para>登记一份仍有内容或显式预选的失败草稿；重复登记与已提升页面被忽略。</para>
+    ///     <para>Registers a failed draft that still holds content or explicit preselections; duplicates and established pages are ignored.</para>
+    /// </summary>
+    private void RegisterFailedDraft(SessionViewModel session)
+    {
+        // 无文字也无显式预选的失败页没有可丢失的用户输入，不进入恢复列表。
+        if (session.Id is not null || (session.Draft.Length == 0 && !session.HasUserPreselection)) return;
+        if (_failedDrafts.Any(item => ReferenceEquals(item, session))) return;
+        _failedDrafts.Add(session);
+        OnPropertyChanged(nameof(HasFailedDraft));
+    }
+
+    /// <summary>
+    ///     <para>空白页项目菜单选择：按页身份切换该页目标；在途或已建立的页面目标冻结，迟到解析不改写。</para>
+    ///     <para>
+    ///         Blank-page project menu selection: retargets that page by identity; in-flight or established targets are
+    ///         frozen and late resolutions never rewrite them.
+    ///     </para>
+    /// </summary>
+    internal async Task SelectConversationProjectAsync(SessionViewModel page, ProjectViewModel? group)
+    {
+        if (_closing || !page.CanChooseWorkspace || group is not { Project: { } project }) return;
+        var revision = page.BeginTargetIntent();
+        try
+        {
+            await ApplyProjectChoiceAsync(page, project.PrimaryRoot, revision);
+        }
+        catch (OperationCanceledException)
+        {
+            // 关闭过程中的取消不构成错误。
+        }
+        catch (Exception exception)
+        {
+            Notice = exception.Message;
+        }
+        finally
+        {
+            page.CompleteTargetIntent(revision);
+        }
     }
 
     /// <summary>
@@ -452,20 +634,21 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     {
         try
         {
-            var root      = session.WorkspaceRoot;
-            var directory = await ResolveProtectedDirectoryAsync(root, _lifetime.Token);
-            // 项目只取当前目录册中可靠存在的定义；草稿不创建项目或会话日志。
-            var project = _storeDirectory is { } current && ProjectRoots.AreEqual(current, directory)
-                ? _projects.FirstOrDefault(item =>
-                    item.Roots.Any(projectRoot => ProjectRoots.AreEqual(projectRoot.Path, root)))
-                : null;
-            // 页面已显式选择项目、开始发送或改过执行目录时，保留其自己的绑定。
-            if (_closing                                                           ||
-                !session.CanChooseWorkspace                                        ||
-                session is not { Id: null, ProjectId: null, StoreDirectory: null } ||
+            var revision      = session.TargetIntentRevision;
+            var storeRevision = _storeRevision;
+            var root          = session.WorkspaceRoot;
+            var directory     = await ResolveProtectedDirectoryAsync(root, _lifetime.Token);
+            if (!CanApplyTarget(session, revision)           ||
+                !IsApplicableStore(directory, storeRevision) ||
+                session.StoreDirectory is not null           ||
                 session.WorkspaceRoot != root)
                 return;
-            await session.SelectProjectAsync(project?.Id, root, directory);
+            var project = _projects.FirstOrDefault(item =>
+                                                       item.Roots.Any(projectRoot =>
+                                                                          ProjectRoots
+                                                                             .AreEqual(projectRoot.Path, root)));
+            session.CaptureTargetIntent();
+            await session.SelectProjectAsync(project?.Id, root, directory, userSelected : false);
         }
         catch (OperationCanceledException)
         {
@@ -485,16 +668,68 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
             if (!_loadingCatalog &&
                 args.PropertyName is nameof(SessionViewModel.ProjectId) or nameof(SessionViewModel.LastActivityUtc))
                 RebuildProjects();
-            if (args.PropertyName == nameof(SessionViewModel.ProjectId) && session.ProjectId is { } id &&
-                !_projects.Any(project => project.Id == id) && !_closing && !_loadingCatalog &&
-                _organizeSource is null)
-                _ = InitializeAsync();
+            if (args.PropertyName == nameof(SessionViewModel.ProjectId)) ReloadCatalogForUnknownProject(session);
         };
         if (!_loadingCatalog) RebuildProjects();
+        // 首发登记时 ProjectId 通知早于上方订阅到达（OpenRuntimeAsync 先改属性再触发 Established），登记本身也补查一次。
+        ReloadCatalogForUnknownProject(session);
+    }
+
+    /// <summary>
+    ///     <para>
+    ///         行所属项目不在当前目录册时按 store 只读补载一次；行不属于当前 store、加载中或整理整轮在途时不触发，
+    ///         普通历史行加载与整轮尾部统一刷新不叠加额外刷新，同一项目 ID 至多重试一次。
+    ///     </para>
+    ///     <para>
+    ///         Reloads the catalog read-only once when the row's project is unknown in its own store; rows outside the
+    ///         current store, loading states and running organize rounds never trigger it, and each project ID retries at
+    ///         most once.
+    ///     </para>
+    /// </summary>
+    private void ReloadCatalogForUnknownProject(SessionViewModel session)
+    {
+        if (_closing || _loadingCatalog || _organizeSource is not null) return;
+        if (session.ProjectId is not { } id            ||
+            _storeDirectory is not { } current         ||
+            session.StoreDirectory is not { } rowStore ||
+            !ProjectRoots.AreEqual(rowStore, current)  ||
+            _projects.Any(project => project.Id == id))
+            return;
+        if (!_projectReloadRetried.Add(id)) return;
+        _ = InitializeAsync();
+    }
+
+    /// <summary>
+    ///     <para>
+    ///         统一加载结束后的补查：加载期间首发建立的项目可能不在本次目录册快照内；
+    ///         仅对当前 store 内仍未知的项目 ID 触发一次只读补载，每个 ID 至多重试一次。
+    ///     </para>
+    ///     <para>
+    ///         Post-load reconciliation: a project established during the load may miss its catalog snapshot; at most one
+    ///         read-only reload runs per still-unknown project ID within the current store.
+    ///     </para>
+    /// </summary>
+    private void ReloadCatalogForUnknownProjectsAfterLoad()
+    {
+        if (_closing || _organizeSource is not null || _storeDirectory is not { } current) return;
+        var reload = false;
+        foreach (var session in Sessions)
+        {
+            if (session.ProjectId is not { } id            ||
+                session.StoreDirectory is not { } rowStore ||
+                !ProjectRoots.AreEqual(rowStore, current)  ||
+                _projects.Any(project => project.Id == id) ||
+                !_projectReloadRetried.Add(id))
+                continue;
+            reload = true;
+        }
+
+        if (reload) _ = InitializeAsync();
     }
 
     private void RebuildProjects()
     {
+        var labels   = CaptureWorkspaceTargetLabels();
         var previous = Projects.ToDictionary(group => group.Key);
         var groups   = new Dictionary<string, ProjectViewModel>();
 
@@ -520,17 +755,8 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         foreach (var project in _projects)
             Group(project.Id, project, project.Name, project.PrimaryRoot);
 
-        // 未发送且未归属的草稿独立成组；纯内存投影，不创建项目、日志或宿主。
-        var drafts = Sessions.Where(session => session.Id is null && session.ProjectId is null).ToList();
-        if (drafts.Count > 0)
-        {
-            var group = Group("drafts", null, "草稿", string.Empty);
-            foreach (var draft in drafts) group.Sessions.Add(draft);
-        }
-
-        // 已归属草稿与已保存会话同样进入所属项目分组；只有未归属草稿留在上面的草稿组。
-        foreach (var session in Sessions.Where(session => session.Id is not null || session.ProjectId is not null)
-                                       .OrderByDescending(session => session.LastActivityUtc))
+        // 正式会话行进入所属项目分组；空白新对话页不属于 Sessions，不出现在侧栏投影中。
+        foreach (var session in Sessions.OrderByDescending(session => session.LastActivityUtc))
         {
             var project = _projects.FirstOrDefault(project => project.Id == session.ProjectId);
             // 未归属的存储行构造即带 store，且根目录固定后不可再清空（见 SessionViewModel.WorkspaceRoot 守卫）；
@@ -562,6 +788,45 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
                           .DefaultIfEmpty(group.Project?.CreatedUtc ?? DateTimeOffset.MinValue).Max()))
             Projects.Add(group);
         RebuildSidebarRows();
+        NotifyChangedWorkspaceTargetLabels(labels);
+    }
+
+    /// <summary>
+    ///     <para>枚举显示目标标签的正式页、失败草稿、空白页与选中页；由调用方按引用去重。</para>
+    ///     <para>
+    ///         Enumerates formal pages, failed drafts, the blank page and the selected page showing target labels;
+    ///         callers deduplicate by reference.
+    ///     </para>
+    /// </summary>
+    private IEnumerable<SessionViewModel> TargetLabelPages()
+    {
+        foreach (var session in Sessions) yield return session;
+        foreach (var draft in _failedDrafts) yield return draft;
+        if (_newConversation is { } page) yield return page;
+        if (SelectedSession is { } selected) yield return selected;
+    }
+
+    /// <summary>
+    ///     <para>记录各页面当前目标标签，供分组投影变化后按值差集通知。</para>
+    ///     <para>Captures current page target labels so projection changes notify only pages whose labels differ.</para>
+    /// </summary>
+    private Dictionary<SessionViewModel, string> CaptureWorkspaceTargetLabels() =>
+        TargetLabelPages().Distinct().ToDictionary(page => page, page => page.WorkspaceTargetLabel);
+
+    /// <summary>
+    ///     <para>
+    ///         分组名变化后仅向标签值实际变化的页面发出通知；页面不订阅分组实例，避免泄漏订阅和无意义刷新。
+    ///     </para>
+    ///     <para>
+    ///         Notifies only pages whose target label actually changed after group renames; pages never subscribe to group
+    ///         instances, avoiding leaked subscriptions and meaningless refreshes.
+    ///     </para>
+    /// </summary>
+    private void NotifyChangedWorkspaceTargetLabels(Dictionary<SessionViewModel, string> previous)
+    {
+        foreach (var (page, label) in previous)
+            if (page.WorkspaceTargetLabel != label)
+                page.NotifyWorkspaceTargetLabelChanged();
     }
 
     /// <summary>
@@ -625,43 +890,96 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     public async Task OpenProjectAsync(string root)
     {
         if (_closing) return;
-        var draft = SelectedSession is { CanChooseWorkspace: true } selected ? selected : null;
         if (!Directory.Exists(root)) throw new DirectoryNotFoundException(root);
-        var directory = await ResolveProtectedDirectoryAsync(root, _lifetime.Token);
-        var project   = await SessionProjectBinding.GetProjectAsync(directory, root, _lifetime.Token);
-        // OpenProjectAsync 同样可能观察到配置变化：生效 store 真正变化时取消旧轮并重启整理。
-        var changed = _storeDirectory is not null && !ProjectRoots.AreEqual(_storeDirectory, directory);
-        if (changed)
+        // 操作开始即冻结页面和意图；期间建立会话或有更新选择时，不能另取新页落入迟到结果。
+        var draft         = SelectedSession is { CanChooseWorkspace: true } selected ? selected : ConversationDraft();
+        var revision      = draft.BeginTargetIntent();
+        var storeRevision = _storeRevision;
+        var draftTargets  = CaptureDraftTargets();
+        try
         {
-            _organizeSource?.Cancel();
-            _initializationCursor = null;
-            ResetOrganizeDisplay();
-        }
-        _storeDirectory = directory;
-        _projects       = (await ProjectStore.LoadAsync(ProjectStore.FilePath(directory), _lifetime.Token)).Projects;
-        if (_closing) return;
-        if (changed) await StopOrganizeMigrationAsync();
-        if (draft is not { CanChooseWorkspace: true })
-        {
-            NewSession();
-            draft = SelectedSession!;
-        }
+            var directory = await ResolveProtectedDirectoryAsync(root, _lifetime.Token);
+            if (!CanApplyTarget(draft, revision) ||
+                (storeRevision != _storeRevision && !IsApplicableStore(directory, storeRevision))) return;
+            var project = await SessionProjectBinding.GetProjectAsync(directory, root, _lifetime.Token);
+            if (!CanApplyTarget(draft, revision) ||
+                (storeRevision != _storeRevision && !IsApplicableStore(directory, storeRevision))) return;
+            var catalog = await ProjectStore.LoadAsync(ProjectStore.FilePath(directory), _lifetime.Token);
+            if (!CanApplyTarget(draft, revision) ||
+                (storeRevision != _storeRevision && !IsApplicableStore(directory, storeRevision))) return;
 
-        await draft.SelectProjectAsync(project.Id, project.PrimaryRoot, directory);
-        RebuildProjects();
-        if (changed) _ = StartOrganizeRound(directory);
+            var changed = _storeDirectory is not null && !ProjectRoots.AreEqual(_storeDirectory, directory);
+            if (changed)
+            {
+                _organizeSource?.Cancel();
+                _initializationCursor = null;
+                ResetOrganizeDisplay();
+            }
+
+            if (_storeDirectory is null || !ProjectRoots.AreEqual(_storeDirectory, directory)) _storeRevision++;
+            _storeDirectory = directory;
+            _projects       = catalog.Projects;
+            storeRevision   = _storeRevision;
+            RebuildProjects();
+            if (changed)
+            {
+                await StopOrganizeMigrationAsync();
+                if (!CanApplyTarget(draft, revision) || !IsApplicableStore(directory, storeRevision)) return;
+            }
+
+            await draft.SelectProjectAsync(project.Id, project.PrimaryRoot, directory);
+            if (!CanApplyTarget(draft, revision) || !IsApplicableStore(directory, storeRevision)) return;
+            SelectedSession = draft;
+            if (changed)
+            {
+                await RebindUnboundDraftsAsync(directory, draftTargets);
+                if (IsApplicableStore(directory, storeRevision)) _ = StartOrganizeRound(directory);
+            }
+        }
+        finally
+        {
+            draft.CompleteTargetIntent(revision);
+        }
     }
 
     /// <summary>
-    ///     <para>在指定项目内新建独立草稿，不打开宿主。</para>
-    ///     <para>Creates an independent draft in the chosen project without opening a host.</para>
+    ///     <para>项目组头「+」：把空白新对话页切到该项目并保留输入；不新建页、不写目录册。</para>
+    ///     <para>Project group "+": moves the blank new-conversation page onto the project keeping its input; it creates no page and writes no catalog.</para>
     /// </summary>
     public async Task NewProjectSessionAsync(ProjectViewModel group)
     {
         if (_closing || group.Project is not { } project) return;
-        var directory = await ResolveProtectedDirectoryAsync(project.PrimaryRoot, _lifetime.Token);
-        NewSession();
-        await SelectedSession!.SelectProjectAsync(project.Id, project.PrimaryRoot, directory);
+        var page          = ConversationDraft();
+        var revision      = page.BeginTargetIntent();
+        var storeRevision = _storeRevision;
+        try
+        {
+            var directory = await ApplyProjectChoiceAsync(page, project.PrimaryRoot, revision);
+            if (directory is null               ||
+                !CanApplyTarget(page, revision) ||
+                !IsApplicableStore(directory, storeRevision)) return;
+            SelectedSession = page;
+        }
+        finally
+        {
+            page.CompleteTargetIntent(revision);
+        }
+    }
+
+    private async Task<string?> ApplyProjectChoiceAsync(SessionViewModel page, string root, int revision)
+    {
+        var storeRevision = _storeRevision;
+        var directory = await ResolveProtectedDirectoryAsync(root, _lifetime.Token);
+        if (!CanApplyTarget(page, revision) || !IsApplicableStore(directory, storeRevision)) return null;
+        // 菜单和组头只读取当前 store 的目录册，不能复制旧 store 分组的项目 ID，也不预创建项目。
+        var catalog = await ProjectStore.LoadAsync(ProjectStore.FilePath(directory), _lifetime.Token);
+        if (!CanApplyTarget(page, revision) || !IsApplicableStore(directory, storeRevision)) return null;
+        var project = catalog.Projects.FirstOrDefault(item =>
+                                                          item.Roots.Any(projectRoot =>
+                                                                             ProjectRoots.AreEqual(projectRoot.Path,
+                                                                                 root)));
+        await page.SelectProjectAsync(project?.Id, root, directory);
+        return directory;
     }
 
     /// <summary>
@@ -674,8 +992,11 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         var directory = await ResolveProtectedDirectoryAsync(project.PrimaryRoot, _lifetime.Token);
         var renamed = await ProjectStore.RenameAsync(ProjectStore.FilePath(directory), project.Id, group.EditedName,
                                                      project.Revision, cancellationToken : _lifetime.Token);
+        // 改名改变组名：按标签值差集通知相关页面；值未变的页面不刷新。
+        var labels = CaptureWorkspaceTargetLabels();
         _projects = _projects.Select(item => item.Id == renamed.Id ? renamed : item).ToArray();
         group.Update(renamed);
+        NotifyChangedWorkspaceTargetLabels(labels);
     }
 
     /// <summary>组头「重命名」：以该组为对象打开重命名弹窗并预填当前名称。</summary>
@@ -752,6 +1073,8 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
     private async Task<string> ResolveProtectedDirectoryAsync(string root, CancellationToken token)
     {
+        // 确定性测试注入点：控制解析完成顺序以复现竞态；生产保持为空走真实受保护解析。
+        if (ResolveDirectoryOverride is { } resolver) return await resolver(root, token);
         var user      = await UserConfigStore.LoadAsync(UserConfigPath, token);
         var directory = SessionStorePaths.ResolveProtected(user.Settings?.SessionStoreDirectory, root);
         if (user.Settings?.WindowsSandbox is { Enabled: true } sandbox)
@@ -759,6 +1082,12 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
                 SessionStorePaths.EnsureOutsideWorkspace(directory, writable, "settings.sessionStoreDirectory");
         return directory;
     }
+
+    /// <summary>
+    ///     <para>受保护目录解析的内部测试注入点；生产不设置。</para>
+    ///     <para>Internal test seam for protected-directory resolution; production leaves it unset.</para>
+    /// </summary>
+    internal Func<string, CancellationToken, Task<string>>? ResolveDirectoryOverride { get; set; }
 
     /// <summary>
     ///     <para>保留的单批显式入口：与自动整轮共用单飞与游标；已有迁移在途时直接合并返回。</para>

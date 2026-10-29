@@ -299,6 +299,10 @@
     <Style Selector="Button.new-session:focus-visible /template/ ContentPresenter#PART_ContentPresenter">
         <Setter Property="Background" Value="{DynamicResource NewSessionButtonHoverBrush}" />
     </Style>
+    <!-- 激活态（选中空白页期间）：沿用按下的实底色并保持悬停可用；声明在状态样式之后以覆盖悬停。 -->
+    <Style Selector="Button.new-session.current /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource NewSessionButtonActiveBrush}" />
+    </Style>
     <!-- 侧栏分隔条：自绘模板去掉 Fluent 默认外观，常态完全透明、不占视觉宽度，
          悬停时以列表悬停色轻微提示可拖拽。 -->
     <Style Selector="GridSplitter.sidebar-splitter">

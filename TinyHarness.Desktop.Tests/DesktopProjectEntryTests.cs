@@ -104,7 +104,7 @@ public sealed class DesktopProjectEntryTests
         {
             await model.OpenProjectAsync(fixture.First);
             var page = model.SelectedSession!;
-            projectId = page.ProjectId;
+            projectId  = page.ProjectId;
             page.Draft = "first request";
             await page.SendAsync();
             await page.Completion;
@@ -124,30 +124,34 @@ public sealed class DesktopProjectEntryTests
     }
 
     [Test]
-    public async Task NewProjectDraftAndRenameLeaveOtherPageAndExecutionRootUntouched()
+    public async Task ProjectPlusRetargetsTheBlankPageAndRenameLeavesItUntouched()
     {
         var             fixture = await Fixture.CreateAsync();
         await using var model   = fixture.Window();
         await model.OpenProjectAsync(fixture.First);
-        var original = model.SelectedSession!;
-        original.Draft = "original input";
-        var group = model.Projects.Single(item => item.Key == original.ProjectId);
-        await model.NewProjectSessionAsync(group);
-        Assert.That(model.SelectedSession, Is.Not.SameAs(original));
-        Assert.That(original.Draft, Is.EqualTo("original input"));
-        var activity = original.LastActivityUtc;
-        group.EditedName = "renamed";
-        await model.RenameProjectAsync(group);
-        Assert.That(group.Name, Is.EqualTo("renamed"));
-        Assert.That(original.WorkspaceRoot, Is.EqualTo(fixture.First));
-        Assert.That(original.LastActivityUtc, Is.EqualTo(activity));
+        var blank = model.SelectedSession!;
+        blank.Draft = "original input";
+        var firstGroup = model.Projects.Single(item => item.Key == blank.ProjectId);
+        await model.OpenProjectAsync(fixture.Second);
+        var secondGroup = model.Projects.Single(item => item.Project!.Id != firstGroup.Project!.Id);
+        await model.NewProjectSessionAsync(secondGroup);
+        Assert.That(model.SelectedSession, Is.SameAs(blank), "项目「+」切换同一份空白页，不新建草稿页。");
+        Assert.That(blank.Draft, Is.EqualTo("original input"));
+        Assert.That(blank.ProjectId, Is.EqualTo(secondGroup.Project!.Id));
+        var activity = blank.LastActivityUtc;
+        secondGroup.EditedName = "renamed";
+        await model.RenameProjectAsync(secondGroup);
+        Assert.That(secondGroup.Name, Is.EqualTo("renamed"));
+        Assert.That(blank.WorkspaceRoot, Is.EqualTo(fixture.Second));
+        Assert.That(blank.LastActivityUtc, Is.EqualTo(activity));
         Assert.That(fixture.Credentials.Reads, Is.Zero);
         var saved = await ProjectStore.LoadAsync(ProjectStore.FilePath(fixture.Store), CancellationToken.None);
-        Assert.That(saved.Projects.Single().Name, Is.EqualTo("renamed"));
-        await ProjectStore.RenameAsync(ProjectStore.FilePath(fixture.Store), group.Project!.Id, "external",
-                                       group.Project.Revision);
-        group.EditedName = "stale";
-        await Assert.ThrowsAsync<ProjectStoreException>(() => model.RenameProjectAsync(group));
+        Assert.That(saved.Projects.Single(project => project.Id == secondGroup.Project.Id).Name,
+                    Is.EqualTo("renamed"));
+        await ProjectStore.RenameAsync(ProjectStore.FilePath(fixture.Store), secondGroup.Project!.Id, "external",
+                                       secondGroup.Project.Revision);
+        secondGroup.EditedName = "stale";
+        await Assert.ThrowsAsync<ProjectStoreException>(() => model.RenameProjectAsync(secondGroup));
     }
 
     [Test]
@@ -265,15 +269,15 @@ public sealed class DesktopProjectEntryTests
     }
 
     [Test]
-    public async Task NewDraftAfterStoreSwitchSendsInCurrentStoreAndKeepsOldPageBinding()
+    public async Task StoreSwitchRebindsTheBlankPageAndFirstSendTargetsTheCurrentStore()
     {
         var             fixture     = await Fixture.CreateAsync();
         var             secondStore = Path.Combine(Path.GetDirectoryName(fixture.Store)!, "sessions-2");
         await using var model       = fixture.Window();
         await model.OpenProjectAsync(fixture.First);
-        var oldPage      = model.SelectedSession!;
-        var oldProjectId = oldPage.ProjectId;
-        oldPage.Draft = "old page keeps its binding";
+        var blank        = model.SelectedSession!;
+        var oldProjectId = blank.ProjectId;
+        blank.Draft = "draft survives store switch";
 
         var user = await UserConfigStore.LoadAsync(fixture.Config, CancellationToken.None);
         await UserConfigStore.SaveAsync(fixture.Config, user with
@@ -282,25 +286,20 @@ public sealed class DesktopProjectEntryTests
         }, CancellationToken.None);
         await model.InitializeAsync();
 
-        model.NewSessionCommand.Execute(null);
-        var draft = model.SelectedSession!;
-        Assert.That(draft, Is.Not.SameAs(oldPage));
-        for (var attempts = 0; draft.StoreDirectory is null && attempts < 500; attempts++)
-            await Task.Delay(10);
-        Assert.That(draft.StoreDirectory, Is.EqualTo(secondStore));
+        Assert.That(blank.StoreDirectory, Is.EqualTo(secondStore), "空白页必须绑定到当前 store。");
+        Assert.That(blank.ProjectId, Is.Null, "不得沿用旧 store 的项目 ID，新 store 目录册暂无匹配项目。");
+        Assert.That(blank.Draft, Is.EqualTo("draft survives store switch"));
+        Assert.That(blank.WorkspaceRoot, Is.EqualTo(fixture.First));
 
-        draft.Draft = "current store request";
-        await draft.SendAsync();
-        await draft.Completion.WaitAsync(TimeSpan.FromSeconds(10));
-        Assert.That(draft.Id, Is.Not.Null);
-        Assert.That(Directory.GetFiles(secondStore, "*.session.jsonl").Length, Is.EqualTo(1));
-        Assert.That(Directory.GetFiles(fixture.Store, "*.session.jsonl"), Is.Empty);
-        var stored = await SessionStoreReader.ReadAsync(secondStore, draft.Id!, CancellationToken.None);
-        Assert.That(stored!.ProjectId, Is.EqualTo(draft.ProjectId));
+        await blank.SendAsync();
+        await blank.Completion.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.That(blank.Id, Is.Not.Null);
+        Assert.That(Directory.GetFiles(secondStore, "*" + SessionStoreWriter.LogFileSuffix).Length, Is.EqualTo(1));
+        Assert.That(Directory.GetFiles(fixture.Store, "*" + SessionStoreWriter.LogFileSuffix), Is.Empty,
+                    "旧 store 不得落新会话日志。");
+        var stored = await SessionStoreReader.ReadAsync(secondStore, blank.Id!, CancellationToken.None);
+        Assert.That(stored!.ProjectId, Is.Not.Null.And.Not.EqualTo(oldProjectId), "首发在当前 store 建立归属。");
         Assert.That(stored.WorkspaceRoot, Is.EqualTo(fixture.First));
-        Assert.That(oldPage.ProjectId, Is.EqualTo(oldProjectId));
-        Assert.That(oldPage.StoreDirectory, Is.EqualTo(fixture.Store));
-        Assert.That(oldPage.Draft, Is.EqualTo("old page keeps its binding"));
         Assert.That(fixture.Models, Is.GreaterThan(0));
     }
 
@@ -387,8 +386,8 @@ public sealed class DesktopProjectEntryTests
             var root = Path.Combine(Path.GetTempPath(), "tinyharness-project-entry-" + Guid.NewGuid().ToString("N"));
             var fixture = new Fixture
             {
-                First  = Path.Combine(root, "a", "same"), Second = Path.Combine(root, "b", "same"),
-                Store  = Path.Combine(root, "sessions"), Config = Path.Combine(root, "user.json")
+                First = Path.Combine(root, "a", "same"), Second = Path.Combine(root, "b", "same"),
+                Store = Path.Combine(root, "sessions"), Config  = Path.Combine(root, "user.json")
             };
             Directory.CreateDirectory(fixture.First);
             Directory.CreateDirectory(fixture.Second);

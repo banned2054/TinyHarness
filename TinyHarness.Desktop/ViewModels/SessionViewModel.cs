@@ -29,6 +29,7 @@ public sealed partial class SessionViewModel : ObservableObject
     private          Task?                                         _completion;
     private          string                                        _draft = string.Empty;
     private          long                                          _draftRevision;
+    private          bool                                          _established;
     private          ModelReasoningEffort?                         _effort;
     private          SessionModelIdentity?                         _historicalIdentity;
     private          SessionHistoryCursor?                         _historyCursor;
@@ -45,6 +46,8 @@ public sealed partial class SessionViewModel : ObservableObject
     private          bool                                          _selected;
     private          string                                        _status = "就绪";
     private          MessageItemViewModel?                         _stream;
+    private          int                                           _targetIntentRevision;
+    private          bool                                          _targetIntentPending;
     private          long?                                         _submittedDraftRevision;
     private          string                                        _title;
     private          string                                        _workspaceRoot;
@@ -97,6 +100,18 @@ public sealed partial class SessionViewModel : ObservableObject
 
     public string? Id { get; private set; }
 
+    /// <summary>
+    ///     <para>首次取得真实 SessionId 与宿主（首发进入发送流程）时触发一次；主窗口据此把页面登记为正式会话行。</para>
+    ///     <para>Fires once when the page first gains a real SessionId and host (the first send enters its flow); the main window registers the formal row here.</para>
+    /// </summary>
+    public event Action<SessionViewModel>? Established;
+
+    /// <summary>
+    ///     <para>首发在取得真实 SessionId 前失败时触发；页面保持草稿并保留文字与预选，主窗口决定是否回收或保留恢复入口。</para>
+    ///     <para>Fires when the first send fails before a real SessionId exists; the page stays a draft with its text and preselections, and the main window decides reclamation or recovery.</para>
+    /// </summary>
+    public event Action<SessionViewModel>? FirstSendFailed;
+
     public bool IsSelected
     {
         get => _selected;
@@ -106,6 +121,51 @@ public sealed partial class SessionViewModel : ObservableObject
     public string?                                         StoreDirectory { get; private set; }
     public string?                                         ProjectId { get; private set; }
     public DateTimeOffset                                  LastActivityUtc { get; private set; }
+
+    /// <summary>
+    ///     <para>用户是否在页面未发送前做过显式预选（项目／目录、模型或权限）；自动解析与默认刷新不算。</para>
+    ///     <para>Whether the user made an explicit preselection (project/directory, model or permission) before sending; automatic resolution and default refresh never count.</para>
+    /// </summary>
+    public bool HasUserPreselection { get; private set; }
+
+    /// <summary>
+    ///     <para>页面目标选择的当前代际；目标意图登记时递增。</para>
+    ///     <para>The page's target-intent revision, advanced whenever a target intent is registered.</para>
+    /// </summary>
+    internal int TargetIntentRevision => _targetIntentRevision;
+
+    /// <summary>
+    ///     <para>登记一次新的目标意图并返回其代际；意图的异步解析在应用前须确认代际未前进，过时解析不得改归属。</para>
+    ///     <para>Registers a new target intent and returns its revision; the intent's async resolution must confirm the revision has not advanced before applying, so stale resolutions never rewrite ownership.</para>
+    /// </summary>
+    internal int CaptureTargetIntent() => ++_targetIntentRevision;
+
+    /// <summary>
+    ///     <para>当前显式目标解析是否在途；自动绑定不得抢占。</para>
+    ///     <para>Whether an explicit target resolution is pending; automatic binding must not outrank it.</para>
+    /// </summary>
+    internal bool TargetIntentPending => _targetIntentPending;
+
+    /// <summary>
+    ///     <para>开始显式目标选择并保留用户预选事实；返回用于异步结果校验的代际。</para>
+    ///     <para>Begins an explicit target choice and retains the user-preselection fact, returning its async-result revision.</para>
+    /// </summary>
+    internal int BeginTargetIntent()
+    {
+        _targetIntentPending = true;
+        HasUserPreselection = true;
+        return CaptureTargetIntent();
+    }
+
+    /// <summary>
+    ///     <para>仅结束同一代显式解析；旧操作的 finally 不清除更新意图的在途状态。</para>
+    ///     <para>Ends only the same explicit resolution; an older finally never clears a newer pending intent.</para>
+    /// </summary>
+    internal void CompleteTargetIntent(int revision)
+    {
+        if (revision == TargetIntentRevision) _targetIntentPending = false;
+    }
+
     public ObservableCollection<ConversationItemViewModel> Items { get; } = [];
     public ObservableCollection<string>                    WorkItems { get; } = [];
     public Task                                            Completion => _completion ?? Task.CompletedTask;
@@ -150,12 +210,16 @@ public sealed partial class SessionViewModel : ObservableObject
         {
             if (string.Equals(_workspaceRoot, value, StringComparison.Ordinal)) return;
             if (!CanChooseWorkspace) throw new InvalidOperationException("会话根目录已固定，请新建对话选择其他目录。");
+            CaptureTargetIntent();
+            _targetIntentPending = false;
+            HasUserPreselection = true;
             if (SetProperty(ref _workspaceRoot, value))
             {
                 ProjectId      = null;
                 StoreDirectory = null;
                 OnPropertyChanged(nameof(ProjectId));
                 OnPropertyChanged(nameof(WorkspaceLabel));
+                OnPropertyChanged(nameof(WorkspaceTargetLabel));
                 _ = RefreshDefaultModelAsync();
             }
         }
@@ -168,7 +232,12 @@ public sealed partial class SessionViewModel : ObservableObject
         {
             if (_allowChanges == value) return;
             if (!CanConfigure) throw new InvalidOperationException("当前会话的权限设置已经生效。");
-            if (SetProperty(ref _allowChanges, value)) OnPropertyChanged(nameof(PermissionPickerLabel));
+            if (SetProperty(ref _allowChanges, value))
+            {
+                // 权限预选是用户显式选择，参与空白页回收判定。
+                HasUserPreselection = true;
+                OnPropertyChanged(nameof(PermissionPickerLabel));
+            }
         }
     }
 
@@ -227,15 +296,17 @@ public sealed partial class SessionViewModel : ObservableObject
     ///         ownership to the first send. Established or opening sessions reject changes.
     ///     </para>
     /// </summary>
-    public async Task SelectProjectAsync(string? projectId, string root, string directory)
+    public async Task SelectProjectAsync(string? projectId, string root, string directory, bool userSelected = true)
     {
         if (!CanChooseWorkspace) throw new InvalidOperationException("会话执行目录已固定。");
         _workspaceRoot = root;
         ProjectId      = projectId;
         StoreDirectory = directory;
+        if (userSelected) HasUserPreselection = true;
         OnPropertyChanged(nameof(WorkspaceRoot));
         OnPropertyChanged(nameof(WorkspaceLabel));
         OnPropertyChanged(nameof(ProjectId));
+        OnPropertyChanged(nameof(WorkspaceTargetLabel));
         await RefreshDefaultModelAsync();
     }
 
@@ -289,6 +360,7 @@ public sealed partial class SessionViewModel : ObservableObject
         {
             ProjectId = projectId;
             OnPropertyChanged(nameof(ProjectId));
+            OnPropertyChanged(nameof(WorkspaceTargetLabel));
         }
 
         // 运行中的行是本地活动权威；目录快照只允许推进排序，不允许回退。
@@ -343,6 +415,8 @@ public sealed partial class SessionViewModel : ObservableObject
         catch
         {
             IsRunning = false;
+            // 尚无真实 ID：页面仍是草稿并保留文字与预选；通知主窗口回收空白槽或登记恢复入口。
+            if (!_established) FirstSendFailed?.Invoke(this);
             throw;
         }
         finally
