@@ -1,4 +1,4 @@
-TinyHarness.NET 0.0.1 - initial release / 首次发布
+TinyHarness.NET CLI - prototype preview / 原型预览版
 
 English
 -------
@@ -15,6 +15,7 @@ Basic use
    and any sandbox write roots. Keep sandbox/, LICENSE, NOTICE and
    THIRD-PARTY-LICENSES.txt beside TinyHarness.exe.
 2. Add the extracted directory to PATH, then open PowerShell in the target project.
+   Keep CLI and Desktop in separate directories; only add the CLI directory to PATH.
    Without PATH, invoke TinyHarness.exe by its full path, keeping the target project
    as the current working directory. The command is tinyharness, without a hyphen.
 3. Run: tinyharness init
@@ -76,6 +77,7 @@ build-info.json，ZIP 校验文件为 SHA256SUMS.txt。
    LICENSE、NOTICE、THIRD-PARTY-LICENSES.txt。
 2. 把解压目录加入 PATH，再进入要处理的项目目录；也可保持项目为当前目录，
    使用 TinyHarness.exe 的绝对路径启动。命令写作 tinyharness，不带连字符。
+   CLI 和 Desktop 须分别解压到不同目录，仅将 CLI 目录加入 PATH。
 3. 运行 tinyharness init，配置服务、密钥引用、模型与上下文窗口。选择环境变量
    密钥时，启动前自行设置该变量。
 4. 运行 tinyharness config show 和 tinyharness doctor，均为离线检查。
