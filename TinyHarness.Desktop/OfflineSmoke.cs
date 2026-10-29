@@ -75,7 +75,8 @@ internal static class OfflineSmoke
                 var firstRun  = first.SubmitAsync("offline first");
                 var secondRun = second.SubmitAsync("offline second");
                 var runs      = await Task.WhenAll(firstRun, secondRun).WaitAsync(TimeSpan.FromSeconds(20));
-                if (first.Id == second.Id || runs.Any(run => run.Result?.Status != AgentStatus.Completed))
+                if (first.Id == second.Id || runs.Any(run => run.Result?.Status      != AgentStatus.Completed ||
+                                                             run.Result.FinalMessage != "offline desktop response"))
                     throw new InvalidOperationException("Parallel desktop sessions did not complete independently.");
                 if (first.Host.PersistenceWarning is not null || second.Host.PersistenceWarning is not null)
                     throw new InvalidOperationException("Desktop sessions were not reliably saved.");
@@ -123,6 +124,13 @@ internal static class OfflineSmoke
             var saved = await SessionStoreReader.ReadAsync(store, firstId, CancellationToken.None);
             if (saved?.Turns.Count != 4 || saved.ProjectId is null || createdModels != 6)
                 throw new InvalidOperationException("Persistence or client ownership failed.");
+            if (saved.Conversation?.Messages.LastOrDefault(message => message.Role == "Assistant")?.TextItems is not
+                [
+                    { Phase: "commentary", Text  : "offline progress" },
+                    { Phase: "final_answer", Text: "offline desktop response" }
+                ])
+                throw new
+                    InvalidOperationException("Assistant message boundaries or phases did not survive native persistence.");
             Console.WriteLine($"PASS desktop: parallel=2 switched=A/B/A/B refreshed=true resumedTurns=4 disposedClients={createdModels}; fixture={root}");
             return 0;
         }
@@ -152,8 +160,28 @@ internal static class OfflineSmoke
                                                                      CancellationToken cancellationToken)
         {
             await started(cancellationToken);
-            yield return new ChatStreamEvent
-                { Kind = ChatStreamEventKind.ContentDelta, ContentDelta = "offline desktop response" };
+            foreach (var item in new AssistantTextItem[]
+                     {
+                         new("offline progress", "msg-progress", "commentary"),
+                         new("offline desktop response", "msg-answer", "final_answer")
+                     })
+            {
+                yield return new ChatStreamEvent
+                {
+                    Kind          = ChatStreamEventKind.ContentDelta,
+                    ContentDelta  = item.Text,
+                    TextMessageId = item.MessageId,
+                    TextPhase     = item.Phase
+                };
+                yield return new ChatStreamEvent
+                {
+                    Kind          = ChatStreamEventKind.TextMessageCompleted,
+                    ContentDelta  = item.Text,
+                    TextMessageId = item.MessageId,
+                    TextPhase     = item.Phase
+                };
+            }
+
             yield return new ChatStreamEvent { Kind = ChatStreamEventKind.End, FinishReason = "stop" };
         }
 

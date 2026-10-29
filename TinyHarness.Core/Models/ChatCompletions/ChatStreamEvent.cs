@@ -54,7 +54,19 @@ public enum ChatStreamEventKind
     ///     <para>首次收到 SDK 流更新；不代表已测量 HTTP 响应头或网络首字节。</para>
     ///     <para>The first SDK stream update arrived; this does not measure HTTP headers or the first network byte.</para>
     /// </summary>
-    ResponseStarted
+    ResponseStarted,
+
+    /// <summary>
+    ///     <para>助手文本消息开始；携带消息标识与可用阶段，不追加正文。</para>
+    ///     <para>An assistant text message started, carrying its identity and available phase without appending text.</para>
+    /// </summary>
+    TextMessageStarted,
+
+    /// <summary>
+    ///     <para>助手文本消息落定；ContentDelta 为完整正文，阶段以此事件为准。</para>
+    ///     <para>An assistant text message settled; ContentDelta holds its complete text and the phase is authoritative.</para>
+    /// </summary>
+    TextMessageCompleted
 }
 
 /// <summary>
@@ -70,6 +82,18 @@ public sealed record ChatStreamEvent
     ///     Text appended when <see cref="Kind" /> is ContentDelta.
     /// </summary>
     public string ContentDelta { get; init; } = string.Empty;
+
+    /// <summary>
+    ///     <para>文本增量或边界所属的助手消息标识；无消息边界的协议可为空。</para>
+    ///     <para>The assistant message identity for text deltas or boundaries; null for protocols without message boundaries.</para>
+    /// </summary>
+    public string? TextMessageId { get; init; }
+
+    /// <summary>
+    ///     <para>文本用途的原始协议阶段；缺失时保留未知，不猜测或改写。</para>
+    ///     <para>The original protocol phase of the text; absence remains unknown without guessing or rewriting.</para>
+    /// </summary>
+    public string? TextPhase { get; init; }
 
     /// <summary>
     ///     同一 choice 内稳定不变的工具调用索引。

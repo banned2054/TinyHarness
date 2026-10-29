@@ -21,21 +21,22 @@ public sealed partial class SessionViewModel : ObservableObject
     private readonly DesktopSessionFactory                         _factory;
     private readonly HashSet<string>                               _historyIds = new(StringComparer.Ordinal);
     private readonly DesktopSessionManager                         _manager;
-    private readonly Dictionary<string, string>                    _runLabels = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, ToolActivityItemViewModel> _tools     = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, ProcessGroupItemViewModel> _processGroups = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string>                    _runLabels     = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, ToolActivityItemViewModel> _tools         = new(StringComparer.Ordinal);
+    private          string?                                       _activeRunId;
     private          bool                                          _allowChanges;
     private          DesktopApproval?                              _approval;
     private          bool                                          _changing;
     private          Task?                                         _completion;
     private          string                                        _draft = string.Empty;
     private          long                                          _draftRevision;
-    private          bool                                          _established;
     private          ModelReasoningEffort?                         _effort;
+    private          bool                                          _established;
     private          SessionModelIdentity?                         _historicalIdentity;
     private          SessionHistoryCursor?                         _historyCursor;
     private          Task?                                         _historyLoad;
     private          bool                                          _historyLoaded;
-    private          string?                                       _lastAssistantRunId;
     private          ModelChoice?                                  _model;
     private          string                                        _notice = string.Empty;
     private          bool                                          _opening;
@@ -46,8 +47,6 @@ public sealed partial class SessionViewModel : ObservableObject
     private          bool                                          _selected;
     private          string                                        _status = "就绪";
     private          MessageItemViewModel?                         _stream;
-    private          int                                           _targetIntentRevision;
-    private          bool                                          _targetIntentPending;
     private          long?                                         _submittedDraftRevision;
     private          string                                        _title;
     private          string                                        _workspaceRoot;
@@ -100,31 +99,22 @@ public sealed partial class SessionViewModel : ObservableObject
 
     public string? Id { get; private set; }
 
-    /// <summary>
-    ///     <para>首次取得真实 SessionId 与宿主（首发进入发送流程）时触发一次；主窗口据此把页面登记为正式会话行。</para>
-    ///     <para>Fires once when the page first gains a real SessionId and host (the first send enters its flow); the main window registers the formal row here.</para>
-    /// </summary>
-    public event Action<SessionViewModel>? Established;
-
-    /// <summary>
-    ///     <para>首发在取得真实 SessionId 前失败时触发；页面保持草稿并保留文字与预选，主窗口决定是否回收或保留恢复入口。</para>
-    ///     <para>Fires when the first send fails before a real SessionId exists; the page stays a draft with its text and preselections, and the main window decides reclamation or recovery.</para>
-    /// </summary>
-    public event Action<SessionViewModel>? FirstSendFailed;
-
     public bool IsSelected
     {
         get => _selected;
         set => SetProperty(ref _selected, value);
     }
 
-    public string?                                         StoreDirectory { get; private set; }
-    public string?                                         ProjectId { get; private set; }
-    public DateTimeOffset                                  LastActivityUtc { get; private set; }
+    public string?        StoreDirectory  { get; private set; }
+    public string?        ProjectId       { get; private set; }
+    public DateTimeOffset LastActivityUtc { get; private set; }
 
     /// <summary>
     ///     <para>用户是否在页面未发送前做过显式预选（项目／目录、模型或权限）；自动解析与默认刷新不算。</para>
-    ///     <para>Whether the user made an explicit preselection (project/directory, model or permission) before sending; automatic resolution and default refresh never count.</para>
+    ///     <para>
+    ///         Whether the user made an explicit preselection (project/directory, model or permission) before sending;
+    ///         automatic resolution and default refresh never count.
+    ///     </para>
     /// </summary>
     public bool HasUserPreselection { get; private set; }
 
@@ -132,39 +122,13 @@ public sealed partial class SessionViewModel : ObservableObject
     ///     <para>页面目标选择的当前代际；目标意图登记时递增。</para>
     ///     <para>The page's target-intent revision, advanced whenever a target intent is registered.</para>
     /// </summary>
-    internal int TargetIntentRevision => _targetIntentRevision;
-
-    /// <summary>
-    ///     <para>登记一次新的目标意图并返回其代际；意图的异步解析在应用前须确认代际未前进，过时解析不得改归属。</para>
-    ///     <para>Registers a new target intent and returns its revision; the intent's async resolution must confirm the revision has not advanced before applying, so stale resolutions never rewrite ownership.</para>
-    /// </summary>
-    internal int CaptureTargetIntent() => ++_targetIntentRevision;
+    internal int TargetIntentRevision { get; private set; }
 
     /// <summary>
     ///     <para>当前显式目标解析是否在途；自动绑定不得抢占。</para>
     ///     <para>Whether an explicit target resolution is pending; automatic binding must not outrank it.</para>
     /// </summary>
-    internal bool TargetIntentPending => _targetIntentPending;
-
-    /// <summary>
-    ///     <para>开始显式目标选择并保留用户预选事实；返回用于异步结果校验的代际。</para>
-    ///     <para>Begins an explicit target choice and retains the user-preselection fact, returning its async-result revision.</para>
-    /// </summary>
-    internal int BeginTargetIntent()
-    {
-        _targetIntentPending = true;
-        HasUserPreselection = true;
-        return CaptureTargetIntent();
-    }
-
-    /// <summary>
-    ///     <para>仅结束同一代显式解析；旧操作的 finally 不清除更新意图的在途状态。</para>
-    ///     <para>Ends only the same explicit resolution; an older finally never clears a newer pending intent.</para>
-    /// </summary>
-    internal void CompleteTargetIntent(int revision)
-    {
-        if (revision == TargetIntentRevision) _targetIntentPending = false;
-    }
+    internal bool TargetIntentPending { get; private set; }
 
     public ObservableCollection<ConversationItemViewModel> Items { get; } = [];
     public ObservableCollection<string>                    WorkItems { get; } = [];
@@ -211,7 +175,7 @@ public sealed partial class SessionViewModel : ObservableObject
             if (string.Equals(_workspaceRoot, value, StringComparison.Ordinal)) return;
             if (!CanChooseWorkspace) throw new InvalidOperationException("会话根目录已固定，请新建对话选择其他目录。");
             CaptureTargetIntent();
-            _targetIntentPending = false;
+            TargetIntentPending = false;
             HasUserPreselection = true;
             if (SetProperty(ref _workspaceRoot, value))
             {
@@ -288,6 +252,53 @@ public sealed partial class SessionViewModel : ObservableObject
     public string ApprovalText => _approval is { } approval
         ? $"{approval.ToolName}\n{approval.Summary}\n{approval.Arguments}\n{string.Join('\n', approval.TargetPaths)}\n{approval.ExecutionPolicy}"
         : string.Empty;
+
+    /// <summary>
+    ///     <para>首次取得真实 SessionId 与宿主（首发进入发送流程）时触发一次；主窗口据此把页面登记为正式会话行。</para>
+    ///     <para>
+    ///         Fires once when the page first gains a real SessionId and host (the first send enters its flow); the main
+    ///         window registers the formal row here.
+    ///     </para>
+    /// </summary>
+    public event Action<SessionViewModel>? Established;
+
+    /// <summary>
+    ///     <para>首发在取得真实 SessionId 前失败时触发；页面保持草稿并保留文字与预选，主窗口决定是否回收或保留恢复入口。</para>
+    ///     <para>
+    ///         Fires when the first send fails before a real SessionId exists; the page stays a draft with its text and
+    ///         preselections, and the main window decides reclamation or recovery.
+    ///     </para>
+    /// </summary>
+    public event Action<SessionViewModel>? FirstSendFailed;
+
+    /// <summary>
+    ///     <para>登记一次新的目标意图并返回其代际；意图的异步解析在应用前须确认代际未前进，过时解析不得改归属。</para>
+    ///     <para>
+    ///         Registers a new target intent and returns its revision; the intent's async resolution must confirm the
+    ///         revision has not advanced before applying, so stale resolutions never rewrite ownership.
+    ///     </para>
+    /// </summary>
+    internal int CaptureTargetIntent() => ++TargetIntentRevision;
+
+    /// <summary>
+    ///     <para>开始显式目标选择并保留用户预选事实；返回用于异步结果校验的代际。</para>
+    ///     <para>Begins an explicit target choice and retains the user-preselection fact, returning its async-result revision.</para>
+    /// </summary>
+    internal int BeginTargetIntent()
+    {
+        TargetIntentPending = true;
+        HasUserPreselection = true;
+        return CaptureTargetIntent();
+    }
+
+    /// <summary>
+    ///     <para>仅结束同一代显式解析；旧操作的 finally 不清除更新意图的在途状态。</para>
+    ///     <para>Ends only the same explicit resolution; an older finally never clears a newer pending intent.</para>
+    /// </summary>
+    internal void CompleteTargetIntent(int revision)
+    {
+        if (revision == TargetIntentRevision) TargetIntentPending = false;
+    }
 
     /// <summary>
     ///     <para>把未发送草稿切到指定绑定；项目为空时仅绑定当前存储目录，归属留待首次发送解析。正式会话与正在打开的草稿拒绝切换。</para>
@@ -438,7 +449,6 @@ public sealed partial class SessionViewModel : ObservableObject
             LastActivityUtc = DateTimeOffset.UtcNow;
             OnPropertyChanged(nameof(LastActivityUtc));
             Status = run.Result?.Status.ToString() ?? "运行结束";
-            StopStream();
             WorkItems.Clear();
             foreach (var item in _runtime!.Host.Session.WorkItems)
                 WorkItems.Add($"[{item.Status}] {item.DisplayTitle}");
@@ -450,7 +460,10 @@ public sealed partial class SessionViewModel : ObservableObject
         }
         finally
         {
-            IsRunning = false;
+            StopStream();
+            if (_activeRunId is { } runId && _processGroups.TryGetValue(runId, out var group)) group.Complete();
+            _activeRunId = null;
+            IsRunning    = false;
             NotifyModelSelection();
         }
     }
@@ -477,6 +490,7 @@ public sealed partial class SessionViewModel : ObservableObject
                 EnsureStream(update.RunId).AppendReasoning(update.Text);
                 break;
             case "state" when update.RunId is { } runId :
+                _activeRunId = runId;
                 if (_submittedDraftRevision is { } submitted && _draftRevision == submitted) Draft = string.Empty;
                 _submittedDraftRevision = null;
                 if (!_runLabels.ContainsKey(runId) && _runtime?.Host.Session.ModelSelection is { } selection)
@@ -494,25 +508,23 @@ public sealed partial class SessionViewModel : ObservableObject
     }
 
     /// <summary>
-    ///     <para>惰性创建流式条目；分割线按运行判断，等正式消息替换后才推进运行边界。</para>
-    ///     <para>
-    ///         Lazily creates a stream item; its divider follows the run, whose boundary advances only on recorded
-    ///         replacement.
-    ///     </para>
+    ///     <para>未分类的流式内容先放入过程组，正式历史到达后再决定正文归属。</para>
+    ///     <para>Keeps unclassified streaming content in the process group until recorded history determines its placement.</para>
     /// </summary>
     private MessageItemViewModel EnsureStream(string? runId)
     {
         if (_stream is null)
         {
-            _stream = MessageItemViewModel.CreateStreaming(runId is null || runId != _lastAssistantRunId,
-                                                           runId is null ? null : _runLabels.GetValueOrDefault(runId));
-            Items.Add(_stream);
+            var group = EnsureProcessGroup(runId ?? _activeRunId ?? "unidentified-run", -1);
+            _stream = MessageItemViewModel.CreateStreaming();
+            _stream.MarkInProcessGroup();
+            group.Items.Add(_stream);
         }
 
         return _stream;
     }
 
-    private void ApplyHistory(SessionHistoryItem item)
+    internal void ApplyHistory(SessionHistoryItem item)
     {
         if (!_historyIds.Add(item.Id)) return;
         if (item.Kind is SessionHistoryKind.User or SessionHistoryKind.Process or SessionHistoryKind.Final)
@@ -525,19 +537,28 @@ public sealed partial class SessionViewModel : ObservableObject
                 Title = firstLine[..Math.Min(firstLine.Length, 48)];
             }
 
-            var assistantRunId = item.RunId ?? item.TurnId;
-            Items.Add(new MessageItemViewModel(new ConversationMessage(item.Sequence, item.Id, role,
-                                                                       item.Text ?? string.Empty, DateTimeOffset.Now,
-                                                                       HasToolCalls : item.Kind ==
-                                                                       SessionHistoryKind.Process,
-                                                                       Reasoning : item.Reasoning,
-                                                                       ModelLabel : item.RunId is { } runId
-                                                                           ? _runLabels.GetValueOrDefault(runId)
-                                                                           : null))
+            var message = new MessageItemViewModel(new ConversationMessage(item.Sequence, item.Id, role,
+                                                                           item.Text ?? string.Empty,
+                                                                           DateTimeOffset.Now,
+                                                                           Reasoning : item.Reasoning));
+            if (role == MessageRole.User)
             {
-                StartsRun = role == MessageRole.Assistant && assistantRunId != _lastAssistantRunId
-            });
-            if (role == MessageRole.Assistant) _lastAssistantRunId = assistantRunId;
+                Items.Add(message);
+            }
+            else
+            {
+                var group = EnsureProcessGroup(item.RunId ?? item.TurnId, item.Sequence);
+                if (item.Kind == SessionHistoryKind.Process)
+                {
+                    message.MarkInProcessGroup();
+                    group.Items.Add(message);
+                }
+                else
+                {
+                    if (message.GetProcessReasoningProjection() is { } reasoning) group.Items.Add(reasoning);
+                    Items.Add(message);
+                }
+            }
         }
         else if (item.Kind == SessionHistoryKind.Tool)
         {
@@ -565,7 +586,8 @@ public sealed partial class SessionViewModel : ObservableObject
             {
                 var tool = new ToolActivityItemViewModel(activity);
                 _tools.Add(key, tool);
-                Items.Add(tool);
+                tool.MarkInProcessGroup();
+                EnsureProcessGroup(item.RunId ?? item.TurnId, item.Sequence).Items.Add(tool);
             }
         }
     }
@@ -573,9 +595,28 @@ public sealed partial class SessionViewModel : ObservableObject
     private void StopStream(bool replace = false)
     {
         if (_stream is null) return;
-        if (replace) Items.Remove(_stream);
-        else _stream.MarkInterrupted();
+        if (replace)
+        {
+            foreach (var group in _processGroups.Values)
+                if (group.Items.Remove(_stream))
+                    break;
+        }
+        else
+        {
+            _stream.MarkInterrupted();
+        }
+
         _stream = null;
+    }
+
+    private ProcessGroupItemViewModel EnsureProcessGroup(string runId, long sequence)
+    {
+        if (_processGroups.TryGetValue(runId, out var existing)) return existing;
+        var group = new ProcessGroupItemViewModel(sequence, runId, _runLabels.GetValueOrDefault(runId),
+                                                  IsRunning && runId == _activeRunId);
+        _processGroups.Add(runId, group);
+        Items.Add(group);
+        return group;
     }
 
     private void Respond(ApprovalAction action)

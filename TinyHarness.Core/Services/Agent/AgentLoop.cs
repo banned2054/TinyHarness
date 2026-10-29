@@ -23,7 +23,10 @@ internal enum InstructionBoundaryStatus
 }
 
 internal readonly record struct InstructionBoundaryCheck(
-    InstructionBoundaryStatus Status, string? Error, string? NewRevision, InstructionCoverage? Coverage);
+    InstructionBoundaryStatus Status,
+    string?                   Error,
+    string?                   NewRevision,
+    InstructionCoverage?      Coverage);
 
 /// <summary>
 ///     <para>宿主提供给循环的项目指令边界；所有可靠提交和生效仍由宿主协调。</para>
@@ -382,7 +385,7 @@ public sealed partial class AgentLoop
                         return await FinishAsync(new AgentResult
                         {
                             Status         = AgentStatus.Completed,
-                            FinalMessage   = assistant.Content,
+                            FinalMessage   = assistant.AnswerText,
                             Steps          = steps,
                             ToolExecutions = toolExecutions,
                             Compactions    = compactions
@@ -594,7 +597,8 @@ public sealed partial class AgentLoop
                                 var changedEvent =
                                     await _instructionBoundary
                                          .ApplyToolRoundUpdateAsync(deferred.Select(candidate =>
-                                                                        roundRecords[candidate.RoundCall.Call.Id]).ToArray(),
+                                                                        roundRecords[candidate.RoundCall.Call
+                                                                           .Id]).ToArray(),
                                                                     cancellationToken).ConfigureAwait(false);
                                 await PublishInstructionChangedAsync(changedEvent, cancellationToken)
                                    .ConfigureAwait(false);

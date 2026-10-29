@@ -50,7 +50,9 @@ internal enum SessionWriterOpenStatus
 ///     </para>
 /// </summary>
 internal sealed record SessionWriterOpenResult(
-    SessionWriterOpenStatus Status, SessionStoreWriter? Writer, SessionStoreException? Error)
+    SessionWriterOpenStatus Status,
+    SessionStoreWriter?     Writer,
+    SessionStoreException?  Error)
 {
     internal static SessionWriterOpenResult FromOpened(SessionStoreWriter writer) =>
         new(SessionWriterOpenStatus.Opened, writer, null);
@@ -72,8 +74,12 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
     public const int  MaxSnapshotBytes = 8    * 1024 * 1024;
     public const long MaxLogBytes      = 256L * 1024 * 1024;
 
-    public const     string                               LogFileSuffix = ".session.jsonl";
-    private readonly SemaphoreSlim                        _gate         = new(1, 1);
+    public const string LogFileSuffix = ".session.jsonl";
+
+    // Win32 ERROR_SHARING_VIOLATION / ERROR_LOCK_VIOLATION 的 HRESULT，仅 Windows 的共享检查会返回。
+    private const    int                                  SharingViolationHResult = unchecked((int)0x80070020);
+    private const    int                                  LockViolationHResult    = unchecked((int)0x80070021);
+    private readonly SemaphoreSlim                        _gate                   = new(1, 1);
     private readonly IReadOnlyDictionary<string, string>? _knownSecrets;
 
     private readonly FileStream     _lockStream;
@@ -81,7 +87,6 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
     private readonly SecretRedactor _redactor;
 
     private string? _checkpointFingerprint;
-    private int _persistedModelSelectionCount;
 
     private Func<SessionHistoryItem, CancellationToken, ValueTask>? _historyItemCommitted;
 
@@ -93,8 +98,8 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
     private long    _persistedMessageCount;
     private int     _persistedProjectInstructionRecordCount;
     private int     _persistedTurnCount;
-    private string? _projectId;
     private bool    _poisoned;
+    private string? _projectId;
     private string? _trackedTurnId;
     private int     _trackedTurnRunCount;
 
@@ -105,7 +110,7 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
     }
 
     private SessionStoreWriter(
-        string directory, string sessionId, bool requireNew, IReadOnlyDictionary<string, string>? knownSecrets,
+        string      directory, string sessionId, bool requireNew, IReadOnlyDictionary<string, string>? knownSecrets,
         FileStream? acquiredLockStream = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(directory);
@@ -168,13 +173,16 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
     public string            SessionId      { get; }
     public PersistedSession? LoadedSnapshot { get; private set; }
 
+    internal Action<SessionLogBatch, string>? InjectWriteFault { get; init; }
+
     /// <summary>
     ///     <para>已可靠提交的模型选择数量；恢复时从日志快照续种，供调用方判断当前选择是否已持久化。</para>
-    ///     <para>The number of reliably committed model selections; resumed sessions seed it from the log snapshot so callers can tell whether the current selection is durable.</para>
+    ///     <para>
+    ///         The number of reliably committed model selections; resumed sessions seed it from the log snapshot so callers
+    ///         can tell whether the current selection is durable.
+    ///     </para>
     /// </summary>
-    public int PersistedModelSelectionCount => _persistedModelSelectionCount;
-
-    internal Action<SessionLogBatch, string>? InjectWriteFault { get; init; }
+    public int PersistedModelSelectionCount { get; private set; }
 
     /// <summary>
     ///     <para>权威 JSONL 会话日志路径。</para>
@@ -251,9 +259,10 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
                             var boundItem = item with { Id = recordId, Sequence = sequence };
                             normalized[i] = record with
                             {
-                                Id      = recordId,
+                                Id = recordId,
                                 Payload = JsonSerializer.SerializeToElement(boundItem,
-                                                                  SessionHistoryJsonContext.Default.SessionHistoryItem)
+                                                                            SessionHistoryJsonContext.Default
+                                                                               .SessionHistoryItem)
                             };
                         }
                         else
@@ -378,8 +387,8 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
             void Add<T>(string kind, T payload) =>
                 records.Add(new SessionLogRecord(RecordId(SessionId, nextSequence, records.Count), kind,
                                                  JsonSerializer.SerializeToElement(payload,
-                                                     (JsonTypeInfo<T>)SessionLogJsonContext.Default
-                                                        .GetTypeInfo(typeof(T))!)));
+                                                          (JsonTypeInfo<T>)SessionLogJsonContext.Default
+                                                             .GetTypeInfo(typeof(T))!)));
 
             var persistedTurnCount    = _persistedTurnCount;
             var trackedTurnId         = _trackedTurnId;
@@ -399,7 +408,7 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
                         new SessionLogProjectBinding(SessionLogProjectBinding.SchemaName, initialProjectId));
             }
 
-            var modelSelectionCount = _persistedModelSelectionCount;
+            var modelSelectionCount = PersistedModelSelectionCount;
             for (var i = modelSelectionCount; i < session.ModelSelections.Count; i++)
             {
                 Add("model-selection", session.ModelSelections[i]);
@@ -489,7 +498,7 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
                 };
                 records.Add(new SessionLogRecord(item.Id, "history",
                                                  JsonSerializer.SerializeToElement(item,
-                                                     SessionHistoryJsonContext.Default.SessionHistoryItem)));
+                                                          SessionHistoryJsonContext.Default.SessionHistoryItem)));
                 (committedHistoryItems ??= []).Add(item);
             }
 
@@ -547,7 +556,7 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
             await WriteBatchAsync(batch, bytes, cancellationToken).ConfigureAwait(false);
 
             CommitSequence                          = nextSequence;
-            _persistedModelSelectionCount           = modelSelectionCount;
+            PersistedModelSelectionCount            = modelSelectionCount;
             _persistedMessageCount                  = context.Messages.Count;
             _persistedProjectInstructionRecordCount = projectInstructionRecords.Count;
             _persistedTurnCount                     = persistedTurnCount;
@@ -668,7 +677,7 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
     ///     </para>
     /// </remarks>
     internal static async Task<SessionWriterOpenResult> TryOpenExistingAsync(
-        string directory, string sessionId, IReadOnlyDictionary<string, string>? knownSecrets,
+        string            directory, string sessionId, IReadOnlyDictionary<string, string>? knownSecrets,
         CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(directory);
@@ -679,7 +688,8 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
         var path = Path.Combine(directory, sessionId + LogFileSuffix);
         if (!File.Exists(path))
             return SessionWriterOpenResult.FromFailure(
-                new SessionStoreException($"No JSONL session log '{path}' exists."));
+                                                       new
+                                                           SessionStoreException($"No JSONL session log '{path}' exists."));
 
         var                 lockPath   = Path.Combine(directory, $"{sessionId}.lock");
         FileStream?         lockStream = null;
@@ -698,7 +708,7 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
             }
 
             SessionStorePaths.EnsureStoreLeaf(directory, lockPath);
-            writer = new SessionStoreWriter(directory, sessionId, false, knownSecrets, lockStream);
+            writer     = new SessionStoreWriter(directory, sessionId, false, knownSecrets, lockStream);
             lockStream = null;
             var snapshot = await SessionStoreReader.ReadAsync(directory, sessionId, cancellationToken)
                                                    .ConfigureAwait(false)
@@ -713,8 +723,8 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
             return SessionWriterOpenResult.FromFailure(ex is SessionStoreException storeFailure
                                                            ? storeFailure
                                                            : new SessionStoreException(
-                                                               $"Cannot open session '{sessionId}' for ownership initialization: {ex.Message}",
-                                                               ex));
+                                                                $"Cannot open session '{sessionId}' for ownership initialization: {ex.Message}",
+                                                                ex));
         }
         finally
         {
@@ -723,10 +733,6 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
             lockStream?.Dispose();
         }
     }
-
-    // Win32 ERROR_SHARING_VIOLATION / ERROR_LOCK_VIOLATION 的 HRESULT，仅 Windows 的共享检查会返回。
-    private const int SharingViolationHResult = unchecked((int)0x80070020);
-    private const int LockViolationHResult    = unchecked((int)0x80070021);
 
     internal static bool IsRecoverableOpenFailure(Exception exception) =>
         exception is SessionStoreException or IOException or UnauthorizedAccessException or JsonException or
@@ -739,13 +745,16 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
 
     /// <summary>
     ///     <para>以严格读取的快照续种 writer 的提交游标与各持久化缓存；归属缓存一并从日志镜像。</para>
-    ///     <para>Reseeds the writer's commit cursor and persistence caches from a strictly read snapshot, mirroring the project binding too.</para>
+    ///     <para>
+    ///         Reseeds the writer's commit cursor and persistence caches from a strictly read snapshot, mirroring the
+    ///         project binding too.
+    ///     </para>
     /// </summary>
     private void SeedFromSnapshot(PersistedSession snapshot)
     {
         CommitSequence               = snapshot.CommitSequence;
         LoadedSnapshot               = snapshot;
-        _persistedModelSelectionCount = snapshot.ModelSelections.Count;
+        PersistedModelSelectionCount = snapshot.ModelSelections.Count;
         _persistedTurnCount          = snapshot.Turns.Count;
         _trackedTurnId               = snapshot.Turns.LastOrDefault()?.Id;
         _trackedTurnRunCount         = snapshot.Turns.LastOrDefault()?.Runs.Count ?? 0;
@@ -783,8 +792,9 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
             InputTokens            = run.Result?.InputTokens,
             OutputTokens           = run.Result?.OutputTokens,
             Budget                 = run.Result?.Budget,
-            NeedsInspection        = toolCalls?.Any(c => c is { SideEffects: true, State: ToolCallExecutionState.UnknownResult }),
-            ToolCalls              = toolCalls?.Select(c => new PersistedToolCallRecord
+            NeedsInspection =
+                toolCalls?.Any(c => c is { SideEffects: true, State: ToolCallExecutionState.UnknownResult }),
+            ToolCalls = toolCalls?.Select(c => new PersistedToolCallRecord
             {
                 CallId           = c.CallId,
                 InvocationId     = c.InvocationId,
@@ -844,22 +854,36 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
         }
     }
 
-    private static PersistedMessage PersistMessage(ChatMessage message) => new()
+    private static PersistedMessage PersistMessage(ChatMessage message)
     {
-        Role       = message.Role.ToString(),
-        Content    = message.Content,
-        ToolCallId = message.ToolCallId,
-        Name       = message.Name,
-        ToolCalls  = message.ToolCalls?.Select(c => new PersistedToolCall(c.Id, c.FunctionName, c.ArgumentsJson))
-                           .ToArray(),
-        Reasoning  = message.Reasoning?.Select(r => new PersistedReasoning
+        var persisted = new PersistedMessage
         {
-            Text          = r.Text,
-            ProtectedData = r.ProtectedData,
-            ItemId        = r.ItemId,
-            OpaqueHash    = PersistedReasoning.ComputeOpaqueHash(r.ProtectedData, r.ItemId)
-        }).ToArray()
-    };
+            Role       = message.Role.ToString(),
+            Content    = message.Content,
+            TextItems  = message.TextItems?.ToArray(),
+            ToolCallId = message.ToolCallId,
+            Name       = message.Name,
+            ToolCalls = message.ToolCalls?.Select(c => new PersistedToolCall(c.Id, c.FunctionName, c.ArgumentsJson))
+                               .ToArray(),
+            Reasoning = message.Reasoning?.Select(r => new PersistedReasoning
+            {
+                Text          = r.Text,
+                ProtectedData = r.ProtectedData,
+                ItemId        = r.ItemId,
+                OpaqueHash    = PersistedReasoning.ComputeOpaqueHash(r.ProtectedData, r.ItemId)
+            }).ToArray()
+        };
+        try
+        {
+            persisted.ValidateTextItems();
+        }
+        catch (InvalidDataException ex)
+        {
+            throw new SessionStoreException($"Invalid canonical message text items: {ex.Message}", ex);
+        }
+
+        return persisted;
+    }
 
     internal static string BatchId(string sessionId, long sequence) => $"{sessionId}:{sequence:D20}";
 
@@ -932,6 +956,7 @@ public static class SessionStoreReader
         private readonly Dictionary<string, RunAmendment> _amendments = new(StringComparer.Ordinal);
         private readonly Dictionary<string, PersistedToolCallRecord> _completedToolFacts = new(StringComparer.Ordinal);
         private readonly List<PersistedMessage> _messages = [];
+        private readonly List<SessionModelSelection> _modelSelections = [];
         private readonly List<ProjectInstructionRecord> _projectInstructionRecords = [];
         private readonly List<PersistedTurn> _turns = [];
         private readonly HashSet<string> _unknownSideEffectCalls = new(StringComparer.Ordinal);
@@ -943,11 +968,10 @@ public static class SessionStoreReader
             _expectedInstructionHistory;
 
         private SessionLogIdentity?     _identity;
-        private readonly List<SessionModelSelection> _modelSelections = [];
-        private SessionLogSessionState? _state;
-        private DateTimeOffset          _updatedUtc;
         private DateTimeOffset          _lastActivityUtc;
         private string?                 _projectId;
+        private SessionLogSessionState? _state;
+        private DateTimeOffset          _updatedUtc;
 
         public void Apply(SessionLogBatch batch)
         {
@@ -999,24 +1023,25 @@ public static class SessionStoreReader
                         break;
                     case "model-selection" :
                         var selection =
-                            Read<SessionModelSelection>(record.Payload, SessionLogJsonContext.Default.SessionModelSelection);
+                            Read<SessionModelSelection>(record.Payload,
+                                                        SessionLogJsonContext.Default.SessionModelSelection);
                         selection.Validate();
                         var previousSelection = _modelSelections.LastOrDefault();
                         // /2 记录显式携带前驱并须与链上一致；/1 旧记录无前驱字段，按修订连续性推导。
                         if (!selection.IsLegacySchema &&
                             selection.PreviousRevision != (previousSelection?.Revision ?? 0))
                             throw new SessionStoreException("Invalid model selection predecessor revision.");
-                        var identityChanged   = (previousSelection?.Model ?? _identity?.Model) != selection.Model;
-                        var previousEpoch     = previousSelection?.ContinuationEpoch          ?? 0;
-                        var previousStart     = previousSelection?.ReasoningStartMessageIndex ?? 0;
+                        var identityChanged = (previousSelection?.Model ?? _identity?.Model) != selection.Model;
+                        var previousEpoch   = previousSelection?.ContinuationEpoch          ?? 0;
+                        var previousStart   = previousSelection?.ReasoningStartMessageIndex ?? 0;
                         if (selection.Revision != (previousSelection?.Revision ?? 0) + 1 ||
                             (selection.MessageBoundary != _messages.Count &&
                              !(previousSelection is null && !identityChanged && selection.MessageBoundary == 0)) ||
-                            (identityChanged && selection.ContinuationEpoch != previousEpoch + 1) ||
+                            (identityChanged && selection.ContinuationEpoch != previousEpoch + 1)                ||
                             (!identityChanged && selection.ContinuationEpoch != previousEpoch &&
-                             selection.ContinuationEpoch != previousEpoch + 1) ||
+                             selection.ContinuationEpoch                     != previousEpoch + 1) ||
                             selection.ReasoningStartMessageIndex !=
-                                (selection.ContinuationEpoch == previousEpoch ? previousStart : _messages.Count) ||
+                            (selection.ContinuationEpoch == previousEpoch ? previousStart : _messages.Count) ||
                             (_messages.Count > 0 &&
                              ChatHistoryInvariants.LastCompleteBoundary(_messages.Select(ToChatMessage).ToArray()) !=
                              _messages.Count))
@@ -1032,7 +1057,7 @@ public static class SessionStoreReader
                         var oldTurn  = _turns[index];
                         var runs     = oldTurn.Runs.ToList();
                         var runIndex = runs.FindIndex(r => r.Id == run.Run.Id);
-                        if (runIndex < 0
+                        if (runIndex                             < 0
                                 ? run.Run.ModelSelectionRevision != _modelSelections.LastOrDefault()?.Revision
                                 : run.Run.ModelSelectionRevision != runs[runIndex].ModelSelectionRevision)
                             throw new SessionStoreException("A run has an unknown or changed model selection.");
@@ -1057,8 +1082,23 @@ public static class SessionStoreReader
 
                         break;
                     case "message" :
-                        _messages.Add(Read<SessionLogMessage>(record.Payload,
-                                                              SessionLogJsonContext.Default.SessionLogMessage).Message);
+                        var message = Read<SessionLogMessage>(record.Payload,
+                                                              SessionLogJsonContext.Default.SessionLogMessage).Message;
+                        if (message is null)
+                            throw
+                                new SessionStoreException($"Session '{sessionId}' contains a null canonical message.");
+                        try
+                        {
+                            message.ValidateTextItems();
+                        }
+                        catch (InvalidDataException ex)
+                        {
+                            throw new
+                                SessionStoreException($"Session '{sessionId}' contains invalid text items: {ex.Message}",
+                                                      ex);
+                        }
+
+                        _messages.Add(message);
                         break;
                     case "run-amendment" :
                         var amendment = Read<RunAmendment>(record.Payload, SessionLogJsonContext.Default.RunAmendment);
@@ -1183,21 +1223,22 @@ public static class SessionStoreReader
                         : _state?.PendingInspectionReason;
             return new PersistedSession
             {
-                Id                        = _identity.Id,
-                WorkspaceRoot             = _identity.WorkspaceRoot,
-                ProjectId                 = _projectId,
-                Model                     = _identity.Model,
-                ModelSelections           = _modelSelections.ToArray(),
-                CreatedUtc                = _identity.CreatedUtc,
-                UpdatedUtc                = _updatedUtc,
-                LastActivityUtc           = _lastActivityUtc,
-                CommitSequence            = sequence,
-                PendingInspectionReason   = pendingReason,
-                InspectionAcknowledgedUtc = hasUnknownSideEffects || _state?.ExecutionIntent == true ? null : acknowledged,
-                Turns                     = _turns,
-                Amendments                = _amendments.Values.ToArray(),
-                WorkItems                 = _workItems.Values.ToArray(),
-                Conversation              = new PersistedConversation
+                Id                      = _identity.Id,
+                WorkspaceRoot           = _identity.WorkspaceRoot,
+                ProjectId               = _projectId,
+                Model                   = _identity.Model,
+                ModelSelections         = _modelSelections.ToArray(),
+                CreatedUtc              = _identity.CreatedUtc,
+                UpdatedUtc              = _updatedUtc,
+                LastActivityUtc         = _lastActivityUtc,
+                CommitSequence          = sequence,
+                PendingInspectionReason = pendingReason,
+                InspectionAcknowledgedUtc =
+                    hasUnknownSideEffects || _state?.ExecutionIntent == true ? null : acknowledged,
+                Turns      = _turns,
+                Amendments = _amendments.Values.ToArray(),
+                WorkItems  = _workItems.Values.ToArray(),
+                Conversation = new PersistedConversation
                 {
                     Messages                         = _messages,
                     State                            = checkpoint.State,
@@ -1318,7 +1359,7 @@ public static class SessionStoreReader
 
             calls[callIndex] = calls[callIndex] with
             {
-                State            = callState,
+                State = callState,
                 NotStartedReason = item.NotStartedReason
             };
             _completedToolFacts.Add(factKey, calls[callIndex]);
@@ -1337,7 +1378,7 @@ public static class SessionStoreReader
 
             runs[runIndex] = run with
             {
-                ToolCalls       = calls,
+                ToolCalls = calls,
                 NeedsInspection = calls.Any(call => call is
                 {
                     SideEffects: true, State: nameof(ToolCallExecutionState.UnknownResult)
@@ -1600,9 +1641,10 @@ public static class SessionStoreReader
         {
             Role       = Enum.Parse<ChatRole>(message.Role),
             Content    = message.Content,
+            TextItems  = message.TextItems?.ToArray(),
             ToolCallId = message.ToolCallId,
             Name       = message.Name,
-            ToolCalls  = message.ToolCalls?.Select(call => new ChatToolCall(call.Id, call.Name, call.Arguments))
+            ToolCalls = message.ToolCalls?.Select(call => new ChatToolCall(call.Id, call.Name, call.Arguments))
                                .ToArray()
         };
 
@@ -1627,6 +1669,7 @@ public static class SessionStoreReader
 [JsonSerializable(typeof(PersistedRun))]
 [JsonSerializable(typeof(PersistedTurn))]
 [JsonSerializable(typeof(PersistedMessage))]
+[JsonSerializable(typeof(AssistantTextItem))]
 [JsonSerializable(typeof(PersistedToolCall))]
 [JsonSerializable(typeof(PersistedToolCallRecord))]
 [JsonSerializable(typeof(PersistedReasoning))]

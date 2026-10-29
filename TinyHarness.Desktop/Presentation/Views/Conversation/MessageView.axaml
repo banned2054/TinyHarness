@@ -23,12 +23,6 @@
              与 tool-card 机制相同），块间用 Margin 而非容器 Spacing——子块折叠不留幻影间距。
              纯思考消息（无正文）只出思考行，与相邻行零额外空隙。 -->
         <StackPanel IsVisible="{Binding IsAssistantMessage}">
-            <StackPanel Margin="0,12" IsVisible="{Binding StartsRun}">
-                <TextBlock Text="{Binding ModelLabel}" Classes="caption" Margin="0,0,0,8"
-                           IsVisible="{Binding HasRunModelLabel}" />
-                <Border Height="1" HorizontalAlignment="Stretch"
-                        Background="{DynamicResource AssistantReplyDividerBrush}" />
-            </StackPanel>
             <!-- 状态行仅在生成中/已中断时出现。 -->
             <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,0,0,4"
                         IsVisible="{Binding HasStatusHint}">

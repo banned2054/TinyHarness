@@ -78,10 +78,7 @@ internal sealed class SecretRedactor
 
     private readonly IReadOnlyDictionary<string, string>? _knownSecrets;
 
-    public SecretRedactor(IReadOnlyDictionary<string, string>? knownSecrets)
-    {
-        _knownSecrets = knownSecrets;
-    }
+    public SecretRedactor(IReadOnlyDictionary<string, string>? knownSecrets) => _knownSecrets = knownSecrets;
 
     public string Redact(string value)
     {
@@ -126,20 +123,45 @@ internal sealed class SecretRedactor
         State            = record.State
     };
 
-    public ChatMessage Redact(ChatMessage message) => new()
+    /// <summary>
+    ///     <para>创建脱敏消息投影并保持文本条目与聚合正文一致；不修改可续聊原文。</para>
+    ///     <para>
+    ///         Creates a redacted message projection with consistent item and aggregate text, without changing resumable
+    ///         originals.
+    ///     </para>
+    /// </summary>
+    public ChatMessage Redact(ChatMessage message)
     {
-        Role       = message.Role,
-        Content    = Redact(message.Content),
-        Name       = RedactNullable(message.Name),
-        ToolCallId = RedactNullable(message.ToolCallId),
-        ToolCalls = message.ToolCalls?.Select(call =>
-                                                  new ChatToolCall(Redact(call.Id), Redact(call.FunctionName),
-                                                                   Redact(call.ArgumentsJson))).ToArray(),
-        // 检查投影中的 opaque 字段同样必须脱敏；此投影不能用于无损续聊。
-        Reasoning = message.Reasoning?.Select(entry => new ReasoningContent(RedactNullable(entry.Text),
-                                                                            RedactNullable(entry.ProtectedData),
-                                                                            RedactNullable(entry.ItemId))).ToArray()
-    };
+        var content = Redact(message.Content);
+        var textItems = message.TextItems?.Select(item => new AssistantTextItem(Redact(item.Text),
+                                                                                    RedactNullable(item.MessageId),
+                                                                                    RedactNullable(item.Phase)))
+                               .ToArray();
+        if (textItems is not null)
+        {
+            // 跨条目秘密或 JSON 规范化可能改变拼接结果；诊断投影保守隐藏正文，避免残留秘密或矛盾内容。
+            if (!string.Equals(content, string.Concat(textItems.Select(item => item.Text)), StringComparison.Ordinal))
+                textItems = textItems.Select(item => item with { Text = "[REDACTED]" }).ToArray();
+            content = string.Concat(textItems.Select(item => item.Text));
+        }
+
+        return new ChatMessage
+        {
+            Role       = message.Role,
+            Content    = content,
+            TextItems  = textItems,
+            Name       = RedactNullable(message.Name),
+            ToolCallId = RedactNullable(message.ToolCallId),
+            ToolCalls = message.ToolCalls?.Select(call =>
+                                                      new ChatToolCall(Redact(call.Id), Redact(call.FunctionName),
+                                                                       Redact(call.ArgumentsJson))).ToArray(),
+            // 检查投影中的 opaque 字段同样必须脱敏；此投影不能用于无损续聊。
+            Reasoning = message.Reasoning?.Select(entry => new ReasoningContent(RedactNullable(entry.Text),
+                                                                                    RedactNullable(entry.ProtectedData),
+                                                                                    RedactNullable(entry.ItemId)))
+                               .ToArray()
+        };
+    }
 
     private bool TryRedactJson(string value, out string redacted)
     {

@@ -23,16 +23,32 @@ public sealed class StreamAccumulator
     // bearing a different item id or an explicit item event closes it.
     private readonly List<ReasoningContent> _reasoning = [];
 
-    private readonly StringBuilder _reasoningText = new();
+    private readonly StringBuilder           _reasoningText = new();
+    private readonly List<TextMessageBuffer> _textMessages  = [];
 
     private readonly List<ChatToolCall> _toolCalls = [];
+    private          long               _closedReasoningCharacters;
+    private          TextMessageBuffer? _currentTextMessage;
 
     private string? _openReasoningItemId;
-    private long    _closedReasoningCharacters;
 
     public string Content => _content.ToString();
 
     public long TextCharacters => _content.Length;
+
+    /// <summary>
+    ///     <para>按消息边界保留的正文与阶段；没有消息元数据的旧流为空。</para>
+    ///     <para>Text and phases preserved by message boundary; null for legacy streams without message metadata.</para>
+    /// </summary>
+    public IReadOnlyList<AssistantTextItem>? TextItems => _textMessages.Count == 0
+        ? null
+        : _textMessages.Select(item => new AssistantTextItem(item.Text.ToString(), item.Id, item.Phase)).ToArray();
+
+    /// <summary>
+    ///     <para>本次新增的可见正文；完整条目只补未流出的后缀，不重复展示。</para>
+    ///     <para>New visible text from the last append; complete items emit only an unseen suffix without duplication.</para>
+    /// </summary>
+    internal string? TextDisplayDelta { get; private set; }
 
     /// <summary>
     ///     <para>已拼装的推理文本字符数；条目完成时的完整文本覆盖增量，不重复计数 opaque 载荷。</para>
@@ -85,10 +101,22 @@ public sealed class StreamAccumulator
     public void Append(ChatStreamEvent @event)
     {
         ReasoningDisplayDelta = null;
+        TextDisplayDelta      = null;
         switch (@event.Kind)
         {
             case ChatStreamEventKind.ContentDelta :
+                if (_textMessages.Count > 0 || @event.TextMessageId is not null || @event.TextPhase is not null)
+                    FindTextMessage(@event).Text.Append(@event.ContentDelta);
                 _content.Append(@event.ContentDelta);
+                TextDisplayDelta = @event.ContentDelta;
+                break;
+
+            case ChatStreamEventKind.TextMessageStarted :
+                FindTextMessage(@event);
+                break;
+
+            case ChatStreamEventKind.TextMessageCompleted :
+                CompleteTextMessage(@event);
                 break;
 
             case ChatStreamEventKind.ToolCallDelta :
@@ -108,6 +136,42 @@ public sealed class StreamAccumulator
                 AppendStreamMetadata(@event);
                 break;
         }
+    }
+
+    private TextMessageBuffer FindTextMessage(ChatStreamEvent @event)
+    {
+        if (_textMessages.Count == 0 && _content.Length > 0)
+        {
+            var legacy = new TextMessageBuffer(null);
+            legacy.Text.Append(_content);
+            _textMessages.Add(legacy);
+        }
+
+        var message = @event.TextMessageId is { } id
+            ? _textMessages.FirstOrDefault(item => item.Id == id)
+            : _currentTextMessage;
+        if (message is null)
+        {
+            message = new TextMessageBuffer(@event.TextMessageId);
+            _textMessages.Add(message);
+        }
+
+        if (@event.TextPhase is not null) message.Phase = @event.TextPhase;
+        _currentTextMessage = message;
+        return message;
+    }
+
+    private void CompleteTextMessage(ChatStreamEvent @event)
+    {
+        var message = FindTextMessage(@event);
+        message.Phase = @event.TextPhase;
+        var streamed = message.Text.ToString();
+        if (@event.ContentDelta.StartsWith(streamed, StringComparison.Ordinal))
+            TextDisplayDelta = @event.ContentDelta[streamed.Length..];
+        message.Text.Clear();
+        message.Text.Append(@event.ContentDelta);
+        _content.Clear();
+        foreach (var item in _textMessages) _content.Append(item.Text);
     }
 
     /// <summary>
@@ -250,5 +314,12 @@ public sealed class StreamAccumulator
         public          string?       Id { get; set; }
 
         public string? Name { get; set; }
+    }
+
+    private sealed class TextMessageBuffer(string? id)
+    {
+        public string?       Id    { get; } = id;
+        public string?       Phase { get; set; }
+        public StringBuilder Text  { get; } = new();
     }
 }

@@ -128,7 +128,9 @@ public class SessionResumeTests
 
             var second =
                 await TestAssert.ThrowsAsync<SessionStoreException>(() =>
-                    SessionStoreWriter.OpenExistingAsync(dir.Root, sessionId, null, CancellationToken.None));
+                                                                        SessionStoreWriter.OpenExistingAsync(dir.Root,
+                                                                                 sessionId, null,
+                                                                                 CancellationToken.None));
             TestAssert.Contains("already open", second.Message, StringComparison.Ordinal);
         }
 
@@ -141,7 +143,9 @@ public class SessionResumeTests
 
         var missing =
             await TestAssert.ThrowsAsync<SessionStoreException>(() =>
-                SessionStoreWriter.OpenExistingAsync(dir.Root, new string('a', 32), null, CancellationToken.None));
+                                                                    SessionStoreWriter.OpenExistingAsync(dir.Root,
+                                                                             new string('a', 32), null,
+                                                                             CancellationToken.None));
         TestAssert.Contains("No JSONL session log", missing.Message, StringComparison.Ordinal);
     }
 
@@ -186,7 +190,8 @@ public class SessionResumeTests
             await SessionStoreWriter.OpenExistingAsync(dir.Root, sessionId, null, CancellationToken.None);
         var error =
             TestAssert.Throws<SessionStoreException>(() =>
-                SessionResume.Restore(writer.LoadedSnapshot!, ws.Root, Identity, SystemPrompt));
+                                                         SessionResume.Restore(writer.LoadedSnapshot!, ws.Root,
+                                                                               Identity, SystemPrompt));
         TestAssert.Contains("integrity check", error.Message, StringComparison.Ordinal);
     }
 
@@ -194,8 +199,11 @@ public class SessionResumeTests
     public void Restore_RejectsSnapshotsWithoutResumableConversation()
     {
         var error = TestAssert.Throws<SessionStoreException>(() =>
-            SessionResume.Restore(ValidSnapshot() with { Conversation = null },
-                                  WorkspaceRoot, Identity, SystemPrompt));
+                                                                 SessionResume.Restore(ValidSnapshot() with
+                                                                          {
+                                                                              Conversation = null
+                                                                          },
+                                                                          WorkspaceRoot, Identity, SystemPrompt));
         TestAssert.Contains("no resumable conversation", error.Message, StringComparison.Ordinal);
     }
 
@@ -204,23 +212,39 @@ public class SessionResumeTests
     public void Restore_RejectsWorkspaceAndModelIdentityMismatches()
     {
         var workspaceError = TestAssert.Throws<SessionStoreException>(() =>
-            SessionResume.Restore(ValidSnapshot(), Path.Combine(Path.GetTempPath(), "another-workspace"),
-                                  Identity, SystemPrompt));
+                                                                          SessionResume.Restore(ValidSnapshot(),
+                                                                                   Path.Combine(Path.GetTempPath(),
+                                                                                            "another-workspace"),
+                                                                                   Identity, SystemPrompt));
         TestAssert.Contains("fixed to one workspace", workspaceError.Message, StringComparison.Ordinal);
 
         var endpointError = TestAssert.Throws<SessionStoreException>(() =>
-            SessionResume.Restore(ValidSnapshot(), WorkspaceRoot,
-                                  Identity with { Endpoint = "https://other.invalid/v1" }, SystemPrompt));
+                                                                         SessionResume.Restore(ValidSnapshot(),
+                                                                                  WorkspaceRoot,
+                                                                                  Identity with
+                                                                                  {
+                                                                                      Endpoint =
+                                                                                      "https://other.invalid/v1"
+                                                                                  }, SystemPrompt));
         TestAssert.Contains("never silently replayed", endpointError.Message, StringComparison.Ordinal);
 
         var modelError = TestAssert.Throws<SessionStoreException>(() =>
-            SessionResume.Restore(ValidSnapshot(), WorkspaceRoot,
-                                  Identity with { ModelId = "other-model" }, SystemPrompt));
+                                                                      SessionResume.Restore(ValidSnapshot(),
+                                                                               WorkspaceRoot,
+                                                                               Identity with
+                                                                               {
+                                                                                   ModelId = "other-model"
+                                                                               }, SystemPrompt));
         TestAssert.Contains("never silently replayed", modelError.Message, StringComparison.Ordinal);
 
         var protocolError = TestAssert.Throws<SessionStoreException>(() =>
-            SessionResume.Restore(ValidSnapshot(), WorkspaceRoot,
-                                  Identity with { ChatApi = ChatApiKind.Responses }, SystemPrompt));
+                                                                         SessionResume.Restore(ValidSnapshot(),
+                                                                                  WorkspaceRoot,
+                                                                                  Identity with
+                                                                                  {
+                                                                                      ChatApi = ChatApiKind
+                                                                                         .Responses
+                                                                                  }, SystemPrompt));
         TestAssert.Contains("never silently replayed", protocolError.Message, StringComparison.Ordinal);
     }
 
@@ -228,7 +252,8 @@ public class SessionResumeTests
     public void Restore_RejectsADifferentSystemPrompt()
     {
         var error = TestAssert.Throws<SessionStoreException>(() =>
-            SessionResume.Restore(ValidSnapshot(), WorkspaceRoot, Identity, "a different instruction set"));
+                                                                 SessionResume.Restore(ValidSnapshot(), WorkspaceRoot,
+                                                                          Identity, "a different instruction set"));
         TestAssert.Contains("same system prompt", error.Message, StringComparison.Ordinal);
     }
 
@@ -328,7 +353,8 @@ public class SessionResumeTests
         ]);
 
         var error = TestAssert.Throws<SessionStoreException>(() =>
-            SessionResume.Restore(ValidSnapshot(conversation), WorkspaceRoot, Identity, SystemPrompt));
+                                                                 SessionResume.Restore(ValidSnapshot(conversation),
+                                                                          WorkspaceRoot, Identity, SystemPrompt));
         TestAssert.Contains("not the trailing round", error.Message, StringComparison.Ordinal);
     }
 
@@ -364,7 +390,8 @@ public class SessionResumeTests
 
         var error =
             TestAssert.Throws<SessionStoreException>(() =>
-                SessionResume.Restore(snapshot, WorkspaceRoot, Identity, SystemPrompt));
+                                                         SessionResume.Restore(snapshot, WorkspaceRoot, Identity,
+                                                                               SystemPrompt));
         TestAssert.Contains("unknown execution state", error.Message, StringComparison.Ordinal);
     }
 
@@ -373,39 +400,47 @@ public class SessionResumeTests
     {
         var unknownRole =
             TestAssert.Throws<SessionStoreException>(() =>
-                SessionResume.Restore(ValidSnapshot(ValidConversation(messages :
-                [
-                    new PersistedMessage
-                    {
-                        Role    = "Wizard",
-                        Content = "hi"
-                    }
-                ])), WorkspaceRoot, Identity, SystemPrompt));
+                                                         SessionResume
+                                                            .Restore(ValidSnapshot(ValidConversation(messages :
+                                                             [
+                                                                 new PersistedMessage
+                                                                 {
+                                                                     Role    = "Wizard",
+                                                                     Content = "hi"
+                                                                 }
+                                                             ])), WorkspaceRoot, Identity, SystemPrompt));
         TestAssert.Contains("not a known conversation role", unknownRole.Message, StringComparison.Ordinal);
 
         var emptyConversation =
             TestAssert.Throws<SessionStoreException>(() =>
-                SessionResume.Restore(ValidSnapshot(ValidConversation(messages : [])),
-                                      WorkspaceRoot, Identity, SystemPrompt));
+                                                         SessionResume
+                                                            .Restore(ValidSnapshot(ValidConversation(messages : [])),
+                                                                     WorkspaceRoot, Identity, SystemPrompt));
         TestAssert.Contains("empty conversation", emptyConversation.Message, StringComparison.Ordinal);
 
         var badState =
             TestAssert.Throws<SessionStoreException>(() =>
-                SessionResume.Restore(ValidSnapshot(ValidConversation(new CompactionState
-                {
-                    Schema  = "unknown",
-                    Summary = "bad"
-                }, true, 1, 2)), WorkspaceRoot, Identity, SystemPrompt));
+                                                         SessionResume
+                                                            .Restore(ValidSnapshot(ValidConversation(new CompactionState
+                                                             {
+                                                                 Schema  = "unknown",
+                                                                 Summary = "bad"
+                                                             }, true, 1, 2)), WorkspaceRoot, Identity, SystemPrompt));
         TestAssert.Contains("Invalid compaction checkpoint schema", badState.Message, StringComparison.Ordinal);
 
         var badFold =
             TestAssert.Throws<SessionStoreException>(() =>
-                SessionResume.Restore(ValidSnapshot(ValidConversation(foldStart : 2, foldEnd : 5)),
-                                      WorkspaceRoot, Identity, SystemPrompt));
+                                                         SessionResume
+                                                            .Restore(ValidSnapshot(ValidConversation(foldStart : 2,
+                                                                                       foldEnd : 5)),
+                                                                     WorkspaceRoot, Identity, SystemPrompt));
         TestAssert.Contains("fold position", badFold.Message, StringComparison.Ordinal);
 
         var badStatus = TestAssert.Throws<SessionStoreException>(() =>
-            SessionResume.Restore(ValidSnapshot(ValidConversation(), "Exploded"), WorkspaceRoot, Identity, SystemPrompt));
+                                                                     SessionResume
+                                                                        .Restore(ValidSnapshot(ValidConversation(),
+                                                                                           "Exploded"), WorkspaceRoot,
+                                                                                  Identity, SystemPrompt));
         TestAssert.Contains("unknown terminal status", badStatus.Message, StringComparison.Ordinal);
     }
 
@@ -453,7 +488,8 @@ public class SessionResumeTests
             { ["MY_API_KEY"] = "sk-test-secret-value" };
         string sessionId;
         using (var host = new ChatSessionHost(ws.Root, Identity, Options(), client, new ToolRegistry([]), SystemPrompt,
-                                              sessionWriterFactory : id => new SessionStoreWriter(dir.Root, id, secrets)))
+                                              sessionWriterFactory : id =>
+                                                  new SessionStoreWriter(dir.Root, id, secrets)))
         {
             sessionId = host.Session.Id;
             await host.SubmitTurnAsync("use key sk-test-secret-value", CancellationToken.None);
@@ -480,13 +516,15 @@ public class SessionResumeTests
         TestAssert.ContainsAll(message => message is { Role: ChatRole.User, Content: "use key sk-test-secret-value" },
                                sent);
         TestAssert.ContainsAll(message =>
-            message is { Role: ChatRole.Assistant, Content: "done with sk-test-secret-value" }, sent);
+                                   message is { Role: ChatRole.Assistant, Content: "done with sk-test-secret-value" },
+                               sent);
         var retainedAudit =
             string.Join('\n', (await ReadLinesSharedAsync(
-                Path.Combine(dir.Root, sessionId + SessionStoreWriter.LogFileSuffix)))
-                .SelectMany(line => JsonNode.Parse(line)!["records"]!.AsArray()
-                                           .Where(record => record!["kind"]!.GetValue<string>() == "audit")
-                                           .Select(record => record!["payload"]!.ToJsonString())));
+                                                          Path.Combine(dir.Root,
+                                                                       sessionId + SessionStoreWriter.LogFileSuffix)))
+                       .SelectMany(line => JsonNode.Parse(line)!["records"]!.AsArray()
+                                                   .Where(record => record!["kind"]!.GetValue<string>() == "audit")
+                                                   .Select(record => record!["payload"]!.ToJsonString())));
         TestAssert.DoesNotContain("sk-test-secret-value", retainedAudit, StringComparison.Ordinal);
         TestAssert.DoesNotContain("opaque-payload-1", retainedAudit, StringComparison.Ordinal);
     }
@@ -507,7 +545,8 @@ public class SessionResumeTests
             { ["MY_API_KEY"] = "sk-test-secret-value" };
         string sessionId;
         using (var host = new ChatSessionHost(ws.Root, Identity, Options(), client, new ToolRegistry([]), SystemPrompt,
-                                              sessionWriterFactory : id => new SessionStoreWriter(dir.Root, id, secrets)))
+                                              sessionWriterFactory : id =>
+                                                  new SessionStoreWriter(dir.Root, id, secrets)))
         {
             sessionId = host.Session.Id;
             await host.SubmitTurnAsync("turn", CancellationToken.None);
@@ -554,17 +593,34 @@ public class SessionResumeTests
         ChatMessage[] messages =
         [
             ChatMessage.System(systemPrompt),
-            ChatMessage.User("old "             + secret + " " + numericSecret),
-            ChatMessage.Assistant("old answer " + secret),
-            ChatMessage.User("current "         + secret + " " + numericSecret),
+            ChatMessage.User("old " + secret + " " + numericSecret),
+            ChatMessage.Assistant("old answer " + secret) with
+            {
+                TextItems = [new AssistantTextItem("old answer " + secret, "old-message", "future-phase")]
+            },
+            ChatMessage.User("current " + secret + " " + numericSecret),
             ChatMessage.Assistant("calling " + secret,
                                   [new ChatToolCall(callId, toolName, arguments)],
                                   [
                                       new ReasoningContent("reason " + secret + " " + numericSecret, opaque, itemId),
                                       new ReasoningContent(null, null, "item-only_" + secret)
-                                  ]),
+                                  ]) with
+            {
+                TextItems =
+                [
+                    new AssistantTextItem("calling ", "message-commentary", "commentary"),
+                    new AssistantTextItem(secret, "message-future", "future-phase")
+                ]
+            },
             ChatMessage.Tool(toolName, callId, "result " + secret + " " + numericSecret),
-            ChatMessage.Assistant("done "                + secret, [], [])
+            ChatMessage.Assistant("done " + secret, [], []) with
+            {
+                TextItems =
+                [
+                    new AssistantTextItem("done ", "message-final", "final_answer"),
+                    new AssistantTextItem(secret)
+                ]
+            }
         ];
         var contextOptions = new ContextOptions { ContextWindowTokens = 100_000, ReservedOutputTokens = 1_000 };
         var context        = new ConversationContext(contextOptions);
@@ -606,6 +662,7 @@ public class SessionResumeTests
             var stored   = conversation.Messages[i];
             Assert.That(stored.Role, Is.EqualTo(original.Role.ToString()));
             Assert.That(stored.Content, Is.EqualTo(original.Content));
+            Assert.That(stored.TextItems, Is.EqualTo(original.TextItems));
             Assert.That(stored.Name, Is.EqualTo(original.Name));
             Assert.That(stored.ToolCallId, Is.EqualTo(original.ToolCallId));
             Assert.That(stored.ToolCalls?.Select(c => (c.Id, c.Name, c.Arguments)),
@@ -640,15 +697,18 @@ public class SessionResumeTests
         Assert.That(sentCall.FunctionName, Is.EqualTo(toolName));
         Assert.That(sentCall.ArgumentsJson, Is.EqualTo(arguments));
         Assert.That(sentCallMessage.Content, Is.EqualTo(messages[4].Content));
+        Assert.That(sentCallMessage.TextItems, Is.EqualTo(messages[4].TextItems));
         Assert.That(sentCallMessage.Reasoning, Is.EqualTo(messages[4].Reasoning));
         var sentTool = sent.Single(m => m.Role == ChatRole.Tool);
         Assert.That(sentTool.Name, Is.EqualTo(toolName));
         Assert.That(sentTool.ToolCallId, Is.EqualTo(callId));
         Assert.That(sentTool.Content, Is.EqualTo(messages[5].Content));
+        Assert.That(sent.Single(m => m.Content == messages[6].Content).TextItems, Is.EqualTo(messages[6].TextItems));
         if (compacted)
         {
             TestAssert.ContainsAll(m =>
-                m.Role == ChatRole.User && m.Content.EndsWith(state.Summary, StringComparison.Ordinal), sent);
+                                       m.Role == ChatRole.User &&
+                                       m.Content.EndsWith(state.Summary, StringComparison.Ordinal), sent);
             TestAssert.DoesNotContainAny(m => m.Content == messages[1].Content, sent);
         }
         else

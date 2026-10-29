@@ -34,7 +34,7 @@
                            Classes.error="{Binding IsFailed}" />
                 <TextBlock Grid.Column="4" Text="{Binding StatusText}" Classes="caption"
                            VerticalAlignment="Center"
-                           IsVisible="{Binding !IsInProcessGroup}" />
+                           IsVisible="{Binding ShowStatusText}" />
             </Grid>
         </Button>
         <StackPanel Spacing="8" IsVisible="{Binding IsExpanded}">

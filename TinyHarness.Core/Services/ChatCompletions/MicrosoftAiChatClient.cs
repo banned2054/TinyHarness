@@ -74,6 +74,7 @@ public sealed class MicrosoftAiChatClient : IChatCompletionClient, IDisposable
         // inside a try-with-catch.)
         var callIndexes   = new Dictionary<string, int>(StringComparer.Ordinal);
         var nextCallIndex = 0;
+        var textPhases    = new Dictionary<string, string?>(StringComparer.Ordinal);
 
         // usage 与结束原因按流内增量捕获，不再为流末聚合而驻留全部 update：结束原因取
         // 最后一个非空值；usage 以 update.Contents 中的 UsageContent 计数累加——
@@ -107,6 +108,17 @@ public sealed class MicrosoftAiChatClient : IChatCompletionClient, IDisposable
 
             if (update.FinishReason is { } reason) finishReason = reason;
 
+            if (_api == ChatApiKind.Responses && ToTextMessageBoundary(update.RawRepresentation) is { } boundary)
+            {
+                if (boundary.TextMessageId is { } id) textPhases[id] = boundary.TextPhase;
+                yield return boundary;
+            }
+
+            var textMessageId = _api == ChatApiKind.Responses ? TextMessageIdOf(update) : null;
+            var textPhase = textMessageId is not null && textPhases.TryGetValue(textMessageId, out var phase)
+                ? phase
+                : null;
+
             foreach (var content in update.Contents)
                 switch (content)
                 {
@@ -132,8 +144,10 @@ public sealed class MicrosoftAiChatClient : IChatCompletionClient, IDisposable
                     case TextContent text when !string.IsNullOrEmpty(text.Text) :
                         yield return new ChatStreamEvent
                         {
-                            Kind         = ChatStreamEventKind.ContentDelta,
-                            ContentDelta = text.Text
+                            Kind          = ChatStreamEventKind.ContentDelta,
+                            ContentDelta  = text.Text,
+                            TextMessageId = textMessageId,
+                            TextPhase     = textPhase
                         };
                         break;
 
@@ -207,6 +221,73 @@ public sealed class MicrosoftAiChatClient : IChatCompletionClient, IDisposable
     }
 
     /// <summary>
+    ///     <para>从 Responses 原始事件恢复文本消息边界；完成事件携带权威正文和阶段，不重发正文增量。</para>
+    ///     <para>
+    ///         Restores text boundaries from raw Responses events; completion carries authoritative text and phase
+    ///         without replaying deltas.
+    ///     </para>
+    /// </summary>
+    private static ChatStreamEvent? ToTextMessageBoundary(object? rawRepresentation)
+    {
+        // 已核实 OpenAI 2.14.0 的事件及 Patch API；phase 尚无 typed 属性，未知字段由 Patch 保留。
+#pragma warning disable OPENAI001, SCME0001
+        var (item, kind) = rawRepresentation switch
+        {
+            StreamingResponseOutputItemAddedUpdate { Item: MessageResponseItem message } =>
+                (message, ChatStreamEventKind.TextMessageStarted),
+            StreamingResponseOutputItemDoneUpdate { Item: MessageResponseItem message } =>
+                (message, ChatStreamEventKind.TextMessageCompleted),
+            _ => ((MessageResponseItem?)null, default(ChatStreamEventKind))
+        };
+        if (item is null || item.Role != MessageRole.Assistant) return null;
+
+        item.Patch.TryGetValue("$.phase"u8, out string? phase);
+        return new ChatStreamEvent
+        {
+            Kind          = kind,
+            TextMessageId = item.Id,
+            TextPhase     = phase,
+            ContentDelta = kind == ChatStreamEventKind.TextMessageCompleted
+                ? string.Concat(item.Content.Where(part => part.Kind == ResponseContentPartKind.OutputText)
+                                    .Select(part => part.Text))
+                : string.Empty
+        };
+#pragma warning restore OPENAI001, SCME0001
+    }
+
+    /// <summary>
+    ///     <para>优先使用 typed 文本增量的 item id；M.E.AI 的 MessageId 可能仍指向最近添加的其他消息。</para>
+    ///     <para>
+    ///         Prefers the typed text delta's item id; the M.E.AI MessageId can still refer to a different,
+    ///         most recently added message.
+    ///     </para>
+    /// </summary>
+    private static string? TextMessageIdOf(ChatResponseUpdate update)
+    {
+#pragma warning disable OPENAI001
+        return update.RawRepresentation is StreamingResponseOutputTextDeltaUpdate delta
+            ? delta.ItemId
+            : update.MessageId;
+#pragma warning restore OPENAI001
+    }
+
+    /// <summary>
+    ///     <para>逐条构造 assistant ResponseItem，供 M.E.AI 优先原样回传消息 id、阶段与正文。</para>
+    ///     <para>
+    ///         Builds individual assistant ResponseItems for M.E.AI to replay message ids, phases, and text verbatim.
+    ///     </para>
+    /// </summary>
+    private static TextContent ToAssistantTextContent(AssistantTextItem text)
+    {
+#pragma warning disable OPENAI001, SCME0001
+        var item                                = ResponseItem.CreateAssistantMessageItem(text.Text);
+        if (text.MessageId is not null) item.Id = text.MessageId;
+        if (text.Phase is not null) item.Patch.Set("$.phase"u8, text.Phase);
+        return new TextContent(text.Text) { RawRepresentation = item };
+#pragma warning restore OPENAI001, SCME0001
+    }
+
+    /// <summary>
     ///     为每个工具调用分配稳定索引；M.E.AI 内容不含 wire 索引，同一非空 CallId 复用同一索引。
     ///     缺失（null 或空串）的 CallId 不注册字典，因此分配新索引时推进独立计数器
     ///     <paramref name="nextIndex" /> 而不是读取字典数量，否则多个无 id 的调用拿到相同索引，
@@ -248,15 +329,17 @@ public sealed class MicrosoftAiChatClient : IChatCompletionClient, IDisposable
     }
 
     /// <summary>
-    ///     把项目消息转换为 M.E.AI 消息。assistant 消息的文本与工具调用以多内容形式同时保留；
-    ///     tool 消息映射为 <see cref="FunctionResultContent" />。Responses 协议下，assistant 消息携带的
-    ///     推理条目以 <see cref="TextReasoningContent" /> 形式插到其余内容之前，供适配器原样回传。
-    ///     Translates protocol messages into M.E.AI messages. An assistant
-    ///     message's text and tool calls are preserved together as multiple
-    ///     contents; tool messages map to <see cref="FunctionResultContent" />.
-    ///     Under the Responses protocol, an assistant message's reasoning entries
-    ///     are injected as <see cref="TextReasoningContent" /> ahead of all other
-    ///     contents so the adapter replays them verbatim.
+    ///     <para>
+    ///         把项目消息转换为 M.E.AI 消息，同时保留 assistant 的文本与工具调用；tool 消息映射为
+    ///         <see cref="FunctionResultContent" />。Responses 下先插入 <see cref="TextReasoningContent" />，
+    ///         再逐条回传 TextItems 的消息 id、阶段和正文；缺少条目时沿用 Content。
+    ///     </para>
+    ///     <para>
+    ///         Translates protocol messages into M.E.AI messages, preserving assistant text and tool calls together;
+    ///         tool messages map to <see cref="FunctionResultContent" />. Responses inserts
+    ///         <see cref="TextReasoningContent" /> first, then replays each TextItems message id, phase, and text,
+    ///         falling back to Content when no items exist.
+    ///     </para>
     /// </summary>
     private IList<ChatMessage> ToMicrosoftMessages(ChatCompletionRequest request)
     {
@@ -301,7 +384,10 @@ public sealed class MicrosoftAiChatClient : IChatCompletionClient, IDisposable
                             contents.Add(reasoning);
                         }
 
-                    if (!string.IsNullOrEmpty(message.Content)) contents.Add(new TextContent(message.Content));
+                    if (_api == ChatApiKind.Responses && message.TextItems is { Count: > 0 })
+                        foreach (var text in message.TextItems)
+                            contents.Add(ToAssistantTextContent(text));
+                    else if (!string.IsNullOrEmpty(message.Content)) contents.Add(new TextContent(message.Content));
 
                     if (message.ToolCalls is { Count: > 0 })
                         foreach (var call in message.ToolCalls)

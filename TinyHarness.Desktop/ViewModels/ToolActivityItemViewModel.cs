@@ -56,6 +56,7 @@ public sealed class ToolActivityItemViewModel : ConversationItemViewModel
             OnPropertyChanged(nameof(IsSucceeded));
             OnPropertyChanged(nameof(HasError));
             OnPropertyChanged(nameof(SummaryText));
+            OnPropertyChanged(nameof(ShowStatusText));
         }
     }
 
@@ -99,8 +100,17 @@ public sealed class ToolActivityItemViewModel : ConversationItemViewModel
 
     public bool HasError => !string.IsNullOrWhiteSpace(ErrorReason) || IsFailed;
 
-    /// <summary>条目已折叠进过程组：组内工具行不再显示状态与时间尾注。</summary>
+    /// <summary>条目已折叠进过程组：组内隐藏成功状态尾注，异常与未定状态保留可见。</summary>
     public bool IsInProcessGroup { get; private set; }
+
+    /// <summary>
+    ///     <para>折叠行是否显示状态尾注：顶层恒显示；过程组内仅成功收口后隐藏，异常与未定状态保留。</para>
+    ///     <para>
+    ///         Whether the collapsed row keeps its status tail: always at top level; inside a process group only settled
+    ///         successes hide it, so uncertain or blocked results stay visible.
+    ///     </para>
+    /// </summary>
+    public bool ShowStatusText => !IsInProcessGroup || Status is not ToolActivityStatus.Succeeded;
 
     /// <summary>结果文本的截断展示，仅在展开时渲染。</summary>
     public string ResultPreview => Truncate(ResultText);
@@ -133,15 +143,7 @@ public sealed class ToolActivityItemViewModel : ConversationItemViewModel
 
         IsInProcessGroup = true;
         OnPropertyChanged(nameof(IsInProcessGroup));
-    }
-
-    /// <summary>条目移出过程组时复位；当前仅最终回复会走该路径。</summary>
-    public void UnmarkInProcessGroup()
-    {
-        if (!IsInProcessGroup) return;
-
-        IsInProcessGroup = false;
-        OnPropertyChanged(nameof(IsInProcessGroup));
+        OnPropertyChanged(nameof(ShowStatusText));
     }
 
     private static string JoinWithDiff(string summary, string? diffSummary)

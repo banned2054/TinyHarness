@@ -25,7 +25,10 @@ namespace TinyHarness.Core.Services.Session;
 ///     </para>
 /// </remarks>
 public sealed record SessionRestoration(
-    ChatSession Session, ConversationContext Context, string? NeedsInspection = null, bool RewoundTail = false);
+    ChatSession         Session,
+    ConversationContext Context,
+    string?             NeedsInspection = null,
+    bool                RewoundTail     = false);
 
 /// <summary>
 ///     <para>校验会话日志投影并重建可续聊的会话与上下文，不解析凭据、调用模型、启动工具或读写文件。</para>
@@ -118,6 +121,17 @@ public static class SessionResume
 
         foreach (var message in conversation.Messages)
         {
+            try
+            {
+                message.ValidateTextItems();
+            }
+            catch (InvalidDataException ex)
+            {
+                throw new
+                    SessionStoreException($"Stored session '{snapshot.Id}' contains invalid text items: {ex.Message}",
+                                          ex);
+            }
+
             if (message.Reasoning is null) continue;
 
             foreach (var reasoning in message.Reasoning)
@@ -147,13 +161,14 @@ public static class SessionResume
             {
                 Role       = role,
                 Content    = persisted.Content ?? string.Empty,
+                TextItems  = persisted.TextItems?.ToArray(),
                 ToolCallId = persisted.ToolCallId,
                 Name       = persisted.Name,
-                ToolCalls  = persisted.ToolCalls?.Select(call => new ChatToolCall(call.Id, call.Name, call.Arguments))
+                ToolCalls = persisted.ToolCalls?.Select(call => new ChatToolCall(call.Id, call.Name, call.Arguments))
                                      .ToArray(),
-                Reasoning  = persisted.Reasoning?.Select(entry =>
+                Reasoning = persisted.Reasoning?.Select(entry =>
                                                             new ReasoningContent(entry.Text, entry.ProtectedData,
-                                                                entry.ItemId)).ToArray()
+                                                                     entry.ItemId)).ToArray()
             });
         }
 
@@ -182,7 +197,8 @@ public static class SessionResume
 
         var checkpointSelection =
             snapshot.ModelSelections.FirstOrDefault(selection =>
-                                                       selection.Revision == conversation.CheckpointModelSelectionRevision);
+                                                        selection.Revision ==
+                                                        conversation.CheckpointModelSelectionRevision);
         var checkpointOptions = checkpointSelection?.Context ??
                                 snapshot.ModelSelections.FirstOrDefault()?.Context ?? legacyContextOptions;
         var context = new ConversationContext(checkpointOptions);
@@ -236,7 +252,10 @@ public static class SessionResume
 
     /// <summary>
     ///     <para>校验传入目标与快照最后已提交选择（无选择记录时为初始身份）完全一致；不一致拒绝续聊。</para>
-    ///     <para>Requires the supplied target to equal the snapshot's last committed selection (or initial identity); mismatches refuse resume.</para>
+    ///     <para>
+    ///         Requires the supplied target to equal the snapshot's last committed selection (or initial identity);
+    ///         mismatches refuse resume.
+    ///     </para>
     /// </summary>
     public static void EnsureTargetMatchesLastSelection(PersistedSession snapshot, SessionModelIdentity model)
     {
@@ -326,7 +345,7 @@ public static class SessionResume
                 run.Budget?.Validate(run.ToolExecutions);
                 var restoredRun = new SessionRun(run.Id, snapshot.Id, turn.Id, run.StartedUtc,
                                                  snapshot.ModelSelections.FirstOrDefault(selection =>
-                                                     selection.Revision == run.ModelSelectionRevision));
+                                                              selection.Revision == run.ModelSelectionRevision));
                 var records = run.ToolCalls is { Count: > 0 } calls
                     ? calls.Select(call => RebuildToolCallRecord(snapshot.Id, call)).ToArray()
                     : null;

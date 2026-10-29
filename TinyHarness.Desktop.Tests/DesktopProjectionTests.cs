@@ -150,41 +150,47 @@ public sealed class DesktopProjectionTests
         var finish       = Signal();
         var factory = new DesktopSessionFactory((_, _) => new MultiStepModel(toolRounds, finalEntered, finish),
                                                 new Credentials(), fixture.Config);
-        await using var manager           = new DesktopSessionManager();
-        var             page              = Page(manager, factory, fixture.First);
-        var             streamDividers    = new List<bool>();
-        var             streamModelLabels = new List<bool>();
+        await using var manager = new DesktopSessionManager();
+        var             page    = Page(manager, factory, fixture.First);
+        var             streams = new List<MessageItemViewModel>();
         page.Items.CollectionChanged += (_, change) =>
         {
             if (change.NewItems is null) return;
-            foreach (var message in change.NewItems.OfType<MessageItemViewModel>().Where(message => message.IsStreaming))
-            {
-                streamDividers.Add(message.StartsRun);
-                streamModelLabels.Add(message.HasRunModelLabel);
-            }
+            foreach (var group in change.NewItems.OfType<ProcessGroupItemViewModel>())
+                group.Items.CollectionChanged += (_, added) =>
+                {
+                    if (added.NewItems is not null)
+                        streams.AddRange(added.NewItems.OfType<MessageItemViewModel>()
+                                              .Where(message => message.IsStreaming));
+                };
         };
         page.Draft = "first run";
         await page.SendAsync();
         await finalEntered.Task.WaitAsync(TimeSpan.FromSeconds(30));
-        Assert.That(page.Items.OfType<MessageItemViewModel>().Count(message => message.StartsRun), Is.EqualTo(1));
-        Assert.That(streamDividers, Is.EqualTo(Enumerable.Range(0, toolRounds + 1).Select(index => index == 0)));
-        Assert.That(streamModelLabels, Is.EqualTo(streamDividers));
+        var firstGroup = page.Items.OfType<ProcessGroupItemViewModel>().Single();
+        Assert.That(firstGroup.HasRunModelLabel, Is.True);
+        Assert.That(firstGroup.IsExpanded && firstGroup.IsRunning, Is.True);
+        Assert.That(streams, Has.Count.EqualTo(toolRounds + 1));
+        Assert.That(streams.All(message => message.IsInProcessGroup), Is.True);
         if (cancel) page.CancelCommand.Execute(null);
         else finish.SetResult();
         await page.Completion.WaitAsync(TimeSpan.FromSeconds(30));
         Assert.That(page.Status, Is.EqualTo(cancel ? "Cancelled" : "Completed"));
-        Assert.That(page.Items.OfType<MessageItemViewModel>().Count(message => message.StartsRun), Is.EqualTo(1));
-        Assert.That(page.Items.OfType<ToolActivityItemViewModel>().Count(), Is.EqualTo(toolRounds));
+        Assert.That(page.Items.OfType<ProcessGroupItemViewModel>().Single(), Is.SameAs(firstGroup));
+        Assert.That(firstGroup.IsExpanded || firstGroup.IsRunning, Is.False);
+        Assert.That(firstGroup.Items.OfType<ToolActivityItemViewModel>().Count(), Is.EqualTo(toolRounds));
+        Assert.That(firstGroup.Items.OfType<MessageItemViewModel>().Any(message => message.IsInterrupted),
+                    Is.EqualTo(cancel));
+        Assert.That(page.Items.OfType<MessageItemViewModel>().Count(message => message.IsAssistantMessage),
+                    Is.EqualTo(cancel ? 0 : 1));
         finish.TrySetResult();
         page.Draft = "second run";
         await page.SendAsync();
         await page.Completion.WaitAsync(TimeSpan.FromSeconds(30));
         Assert.That(page.Status, Is.EqualTo("Completed"));
-        Assert.That(page.Items.OfType<MessageItemViewModel>().Count(message => message.StartsRun), Is.EqualTo(2));
-        Assert.That(page.Items.OfType<MessageItemViewModel>().Count(message => message.HasRunModelLabel),
+        Assert.That(page.Items.OfType<ProcessGroupItemViewModel>().Count(), Is.EqualTo(2));
+        Assert.That(page.Items.OfType<ProcessGroupItemViewModel>().Count(group => group.HasRunModelLabel),
                     Is.EqualTo(2));
-        Assert.That(page.Items.OfType<MessageItemViewModel>().Where(message => message.IsUserMessage)
-                        .Any(message => message.StartsRun), Is.False);
         var browse = new SessionViewModel(manager, factory, fixture.First, page.Id, fixture.Store,
                                           dispatch : action =>
                                           {
@@ -198,11 +204,26 @@ public sealed class DesktopProjectionTests
             pages++;
         } while (browse.HasMoreHistory);
 
-        Assert.That(browse.Items.OfType<MessageItemViewModel>().Count(message => message.StartsRun), Is.EqualTo(2));
-        Assert.That(browse.Items.OfType<MessageItemViewModel>().Count(message => message.HasRunModelLabel),
+        Assert.That(browse.Items.OfType<ProcessGroupItemViewModel>().Count(), Is.EqualTo(2));
+        Assert.That(browse.Items.OfType<ProcessGroupItemViewModel>().Count(group => group.HasRunModelLabel),
                     Is.EqualTo(2));
         Assert.That(browse.Items.OfType<MessageItemViewModel>().Count(message => message.IsAssistantMessage),
-                    Is.EqualTo(2 * (toolRounds + 1) - (cancel ? 1 : 0)));
+                    Is.EqualTo(cancel ? 1 : 2));
+        Assert.That(browse.Items.OfType<ProcessGroupItemViewModel>()
+                          .Sum(group => group.Items.OfType<ToolActivityItemViewModel>().Count()),
+                    Is.EqualTo(2 * toolRounds));
+        Assert.That(browse.Items.OfType<ProcessGroupItemViewModel>().All(group => !group.IsExpanded), Is.True);
+        if (!cancel)
+        {
+            var liveProcess = page.Items.OfType<ProcessGroupItemViewModel>()
+                                  .SelectMany(group => group.Items).OfType<MessageItemViewModel>()
+                                  .Select(message => (message.Content, message.Reasoning)).ToArray();
+            var savedProcess = browse.Items.OfType<ProcessGroupItemViewModel>()
+                                     .SelectMany(group => group.Items).OfType<MessageItemViewModel>()
+                                     .Select(message => (message.Content, message.Reasoning)).ToArray();
+            Assert.That(savedProcess, Is.EqualTo(liveProcess));
+        }
+
         if (toolRounds > 100) Assert.That(pages, Is.GreaterThan(1));
     }
 
@@ -221,11 +242,16 @@ public sealed class DesktopProjectionTests
         page.Items.CollectionChanged += (_, args) =>
         {
             if (args.NewItems is null) return;
-            foreach (var message in args.NewItems.OfType<MessageItemViewModel>())
-                message.PropertyChanged += (_, change) =>
+            foreach (var group in args.NewItems.OfType<ProcessGroupItemViewModel>())
+                group.Items.CollectionChanged += (_, added) =>
                 {
-                    if (message.IsStreaming && change.PropertyName == nameof(MessageItemViewModel.Reasoning))
-                        streamedReasoning = message.Reasoning;
+                    if (added.NewItems is null) return;
+                    foreach (var message in added.NewItems.OfType<MessageItemViewModel>())
+                        message.PropertyChanged += (_, change) =>
+                        {
+                            if (message.IsStreaming && change.PropertyName == nameof(MessageItemViewModel.Reasoning))
+                                streamedReasoning = message.Reasoning;
+                        };
                 };
         };
         page.Draft = "request";
@@ -233,14 +259,20 @@ public sealed class DesktopProjectionTests
         await page.Completion.WaitAsync(TimeSpan.FromSeconds(10));
         var settled = page.Items.OfType<MessageItemViewModel>().Last(message => message.IsAssistantMessage);
         Assert.That(settled.HasReasoning, Is.True);
+        Assert.That(settled.HasVisibleReasoning, Is.False);
+        var processReasoning = page.Items.OfType<ProcessGroupItemViewModel>().Single().Items
+                                   .OfType<MessageItemViewModel>().Single();
+        Assert.That(processReasoning.HasVisibleReasoning, Is.True);
+        Assert.That(processReasoning.Content, Is.Empty);
+        Assert.That(processReasoning.Reasoning, Is.EqualTo(settled.Reasoning));
         Assert.That(settled.Reasoning, Is.EqualTo("thinking about fixture-secret-key before answering"));
         Assert.That(streamedReasoning, Is.EqualTo(settled.Reasoning));
         Assert.That(settled.ReasoningSummary, Is.Not.Null);
-        Assert.That(settled.IsReasoningExpanded, Is.False);
-        settled.ToggleReasoningCommand.Execute(null);
-        Assert.That(settled.IsReasoningExpanded, Is.True);
-        settled.ToggleReasoningCommand.Execute(null);
-        Assert.That(settled.IsReasoningExpanded, Is.False);
+        Assert.That(processReasoning.IsReasoningExpanded, Is.False);
+        processReasoning.ToggleReasoningCommand.Execute(null);
+        Assert.That(processReasoning.IsReasoningExpanded, Is.True);
+        processReasoning.ToggleReasoningCommand.Execute(null);
+        Assert.That(processReasoning.IsReasoningExpanded, Is.False);
         Assert.That(settled.Reasoning, Is.EqualTo("thinking about fixture-secret-key before answering"));
         var browse = new SessionViewModel(manager, factory, fixture.First, page.Id, fixture.Store,
                                           dispatch : action =>
@@ -251,7 +283,131 @@ public sealed class DesktopProjectionTests
         await browse.LoadHistoryAsync();
         var reloaded = browse.Items.OfType<MessageItemViewModel>().Last(message => message.IsAssistantMessage);
         Assert.That(reloaded.HasReasoning, Is.True);
+        Assert.That(reloaded.HasVisibleReasoning, Is.False);
+        Assert.That(browse.Items.OfType<ProcessGroupItemViewModel>().Single().Items
+                          .OfType<MessageItemViewModel>().Single().Reasoning, Is.EqualTo(settled.Reasoning));
         Assert.That(reloaded.Reasoning, Is.EqualTo(settled.Reasoning));
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task InterruptedStreamStaysInProcessAndNeverBecomesAFinalAnswer(bool cancel)
+    {
+        var fixture = await Fixture.CreateAsync();
+        var entered = Signal();
+        var finish  = Signal();
+        var factory = new DesktopSessionFactory((_, _) => new InterruptedModel(entered, finish),
+                                                new Credentials(), fixture.Config);
+        await using var manager = new DesktopSessionManager();
+        var             page    = Page(manager, factory, fixture.First);
+        page.Draft = "request";
+        await page.SendAsync();
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        var group  = page.Items.OfType<ProcessGroupItemViewModel>().Single();
+        var stream = group.Items.OfType<MessageItemViewModel>().Single();
+        Assert.That(group.IsExpanded && group.IsRunning && stream.IsStreaming, Is.True);
+        Assert.That(stream.Content, Is.EqualTo("partial text"));
+        Assert.That(stream.Reasoning, Is.EqualTo("partial thinking"));
+        group.ToggleCommand.Execute(null);
+        group.ToggleCommand.Execute(null);
+        if (cancel) page.CancelCommand.Execute(null);
+        else finish.SetResult();
+        await page.Completion.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.That(group.IsExpanded, Is.True, "用户显式展开必须跨终态保留。");
+        Assert.That(group.IsRunning || stream.IsStreaming, Is.False);
+        Assert.That(stream.IsInterrupted && stream.IsInProcessGroup, Is.True);
+        Assert.That(stream.Content, Is.EqualTo("partial text"));
+        Assert.That(page.Items.OfType<MessageItemViewModel>().Any(item => item.IsAssistantMessage), Is.False);
+        Assert.That(page.Status, Is.EqualTo(cancel ? "Cancelled" : "Failed"));
+    }
+
+    [TestCase(false, false, false)]
+    [TestCase(false, true, false)]
+    [TestCase(true, false, false)]
+    [TestCase(true, true, false)]
+    [TestCase(true, false, true)]
+    [TestCase(true, true, true)]
+    public async Task ResponseTextItemsKeepAllAnswersWhenNavigatingAwayAndReloading(
+        bool phases, bool tools, bool cancel)
+    {
+        var fixture = await Fixture.CreateAsync();
+        var entered = Signal();
+        var finish  = Signal();
+        var factory = new DesktopSessionFactory((_, _) => new PhaseModel(phases, tools, entered, finish),
+                                                new Credentials(), fixture.Config);
+        await using var window = new MainWindowViewModel(factory, fixture.Config, action =>
+        {
+            action();
+            return ValueTask.CompletedTask;
+        });
+        var page = window.SelectedSession!;
+        await page.SelectProjectAsync(null, fixture.First, fixture.Store);
+        var removedStreams = 0;
+        page.Items.CollectionChanged += (_, added) =>
+        {
+            if (added.NewItems is null) return;
+            foreach (var group in added.NewItems.OfType<ProcessGroupItemViewModel>())
+                group.Items.CollectionChanged += (_, change) =>
+                {
+                    if (change.OldItems is not null)
+                        removedStreams += change.OldItems.OfType<MessageItemViewModel>()
+                                                .Count(item => item.IsStreaming);
+                };
+        };
+        page.Draft = "question";
+        await page.SendAsync();
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        var process = page.Items.OfType<ProcessGroupItemViewModel>().Single();
+        Assert.That(process.IsExpanded && process.IsRunning, Is.True);
+        window.NewSessionCommand.Execute(null);
+        var other = window.SelectedSession!;
+        Assert.That(other, Is.Not.SameAs(page));
+        other.Draft = "keep this draft";
+        if (cancel) page.CancelCommand.Execute(null);
+        else finish.SetResult();
+        await page.Completion.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.That(other.Items, Is.Empty);
+        Assert.That(other.Draft, Is.EqualTo("keep this draft"));
+        window.SelectSessionCommand.Execute(page);
+        Assert.That(page.Items.OfType<ProcessGroupItemViewModel>().Single(), Is.SameAs(process));
+        Assert.That(process.IsExpanded || process.IsRunning, Is.False);
+
+        var answers = page.Items.OfType<MessageItemViewModel>().Where(item => item.IsAssistantMessage)
+                          .Select(item => item.Content).ToArray();
+        string[] expected = cancel ? []
+            : phases ? tools ? ["first answer", "last answer", "after tool"] : ["first answer", "last answer"]
+            : tools ? ["after tool"] : ["checking", "future", "first answer", "last answer"];
+        Assert.That(answers, Is.EqualTo(expected));
+        Assert.That(removedStreams, Is.EqualTo(cancel ? 0 : tools ? 2 : 1),
+                    "同一响应拆成多条 history 时，只能移除一次临时 stream。");
+        var processText = process.Items.OfType<MessageItemViewModel>().Where(item => item.Content.Length > 0)
+                                 .Select(item => item.Content).ToArray();
+        Assert.That(processText, Is.EqualTo(cancel   ? new[] { "checkingfuturefirst answerlast answer" }
+                                            : phases ? new[] { "checking", "future" }
+                                            : tools  ? new[] { "checking", "future", "first answer", "last answer" }
+                                                       : Array.Empty<string>()));
+        Assert.That(process.Items.OfType<MessageItemViewModel>().Any(item => item.IsInterrupted), Is.EqualTo(cancel));
+
+        await using var manager = new DesktopSessionManager();
+        var browse = new SessionViewModel(manager, factory, fixture.First, page.Id, fixture.Store,
+                                          dispatch : action =>
+                                          {
+                                              action();
+                                              return ValueTask.CompletedTask;
+                                          });
+        await browse.LoadHistoryAsync();
+        Assert.That(browse.Items.OfType<MessageItemViewModel>().Where(item => item.IsAssistantMessage)
+                          .Select(item => item.Content), Is.EqualTo(expected));
+        if (!cancel)
+        {
+            var savedProcess = browse.Items.OfType<ProcessGroupItemViewModel>().Single();
+            Assert.That(savedProcess.IsExpanded, Is.False);
+            Assert.That(savedProcess.ModelLabel, Is.EqualTo(process.ModelLabel));
+            Assert.That(savedProcess.Items.OfType<MessageItemViewModel>()
+                                    .Select(item => (item.Content, item.Reasoning)),
+                        Is.EqualTo(process.Items.OfType<MessageItemViewModel>()
+                                          .Select(item => (item.Content, item.Reasoning))));
+        }
     }
 
     [Test]
@@ -520,7 +676,8 @@ public sealed class DesktopProjectionTests
             return new Model(Signal(), finish, config.Model,
                              observed : request => requests.Add((request.Model, request.ReasoningEffort)));
         }, new Credentials(), fixture.Config);
-        string id;
+        string   id;
+        string[] labels;
         await using (var manager = new DesktopSessionManager())
         {
             var page = Page(manager, factory, fixture.First);
@@ -542,8 +699,8 @@ public sealed class DesktopProjectionTests
             Assert.That(requests,
                         Is.EqualTo(new (string, ModelReasoningEffort?)[]
                                        { ("offline", null), ("offline", ModelReasoningEffort.High), ("flash", null) }));
-            var labels = page.Items.OfType<MessageItemViewModel>().Where(item => item.IsAssistantMessage)
-                             .Select(item => item.ModelLabel).ToArray();
+            labels = page.Items.OfType<ProcessGroupItemViewModel>().Select(group => group.ModelLabel).ToArray();
+            Assert.That(labels, Has.Length.EqualTo(3));
             Assert.That(labels[0], Does.Contain("offline · 默认"));
             Assert.That(labels[1], Does.Contain("offline · high"));
             Assert.That(labels[2], Does.Contain("flash · 默认"));
@@ -560,6 +717,8 @@ public sealed class DesktopProjectionTests
         Assert.That(resumed.CurrentModelNameText, Is.EqualTo("flash"));
         Assert.That(resumed.CurrentModelLabel, Is.EqualTo("flash"));
         Assert.That(resumed.ModelPickerLabel, Is.EqualTo("flash · 默认"));
+        Assert.That(resumed.Items.OfType<ProcessGroupItemViewModel>().Select(group => group.ModelLabel).Take(3),
+                    Is.EqualTo(labels), "恢复后的历史运行标签必须保持原模型与强度归属。");
         resumed.Draft = "fourth";
         await resumed.SendAsync();
         await resumed.Completion;
@@ -1122,7 +1281,9 @@ public sealed class DesktopProjectionTests
     }
 
     private sealed class MultiStepModel(
-        int toolRounds, TaskCompletionSource finalEntered, TaskCompletionSource finish) : IChatCompletionClient
+        int                  toolRounds,
+        TaskCompletionSource finalEntered,
+        TaskCompletionSource finish) : IChatCompletionClient
     {
         private int _requests;
 
@@ -1149,6 +1310,87 @@ public sealed class DesktopProjectionTests
                 await finish.Task.WaitAsync(cancellationToken);
                 yield return new ChatStreamEvent { Kind = ChatStreamEventKind.End, FinishReason = "stop" };
             }
+        }
+    }
+
+    private sealed class PhaseModel(
+        bool                 phases,
+        bool                 tools,
+        TaskCompletionSource entered,
+        TaskCompletionSource finish) : IChatCompletionClient
+    {
+        private int _requests;
+
+        public async IAsyncEnumerable<ChatStreamEvent> CompleteAsync(
+            ChatCompletionRequest request, [EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            if (_requests++ > 0)
+            {
+                yield return new ChatStreamEvent
+                    { Kind = ChatStreamEventKind.ContentDelta, ContentDelta = "after tool" };
+                yield return new ChatStreamEvent { Kind = ChatStreamEventKind.End, FinishReason = "stop" };
+                yield break;
+            }
+
+            yield return new ChatStreamEvent { Kind = ChatStreamEventKind.ReasoningDelta, ReasoningDelta = "thinking" };
+            var textItems = new[]
+            {
+                new AssistantTextItem("checking", "commentary", phases ? "commentary" : null),
+                new AssistantTextItem("future", "unknown", phases ? "future_phase" : null),
+                new AssistantTextItem("first answer", "partial", phases ? "partial_answer" : null),
+                new AssistantTextItem("last answer", "final", phases ? "final_answer" : null)
+            };
+            foreach (var item in textItems)
+            {
+                yield return new ChatStreamEvent
+                {
+                    Kind          = ChatStreamEventKind.TextMessageStarted,
+                    TextMessageId = item.MessageId,
+                    TextPhase     = item.Phase
+                };
+                yield return new ChatStreamEvent
+                {
+                    Kind          = ChatStreamEventKind.ContentDelta,
+                    TextMessageId = item.MessageId,
+                    ContentDelta  = item.Text
+                };
+                yield return new ChatStreamEvent
+                {
+                    Kind          = ChatStreamEventKind.TextMessageCompleted,
+                    TextMessageId = item.MessageId,
+                    ContentDelta  = item.Text,
+                    TextPhase     = item.Phase
+                };
+            }
+
+            entered.TrySetResult();
+            await finish.Task.WaitAsync(cancellationToken);
+            if (tools)
+                yield return new ChatStreamEvent
+                {
+                    Kind                   = ChatStreamEventKind.ToolCallDelta,
+                    ToolCallIndex          = 0,
+                    ToolCallId             = "call-phase",
+                    ToolCallFunctionName   = "work_items",
+                    ToolCallArgumentsDelta = "{\"action\":\"list\"}"
+                };
+            yield return new ChatStreamEvent
+                { Kind = ChatStreamEventKind.End, FinishReason = tools ? "tool_calls" : "stop" };
+        }
+    }
+
+    private sealed class InterruptedModel(TaskCompletionSource entered, TaskCompletionSource finish)
+        : IChatCompletionClient
+    {
+        public async IAsyncEnumerable<ChatStreamEvent> CompleteAsync(
+            ChatCompletionRequest request, [EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            yield return new ChatStreamEvent
+                { Kind = ChatStreamEventKind.ReasoningDelta, ReasoningDelta = "partial thinking" };
+            yield return new ChatStreamEvent { Kind = ChatStreamEventKind.ContentDelta, ContentDelta = "partial text" };
+            entered.TrySetResult();
+            await finish.Task.WaitAsync(cancellationToken);
+            throw new InvalidOperationException("offline failure");
         }
     }
 

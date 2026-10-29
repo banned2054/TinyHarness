@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace TinyHarness.Core.Models.ChatCompletions;
 
 /// <summary>
@@ -12,6 +14,32 @@ public sealed record ChatMessage
     public ChatRole Role { get; init; }
 
     public string Content { get; init; } = string.Empty;
+
+    /// <summary>
+    ///     <para>按到达顺序保存的助手文本消息；旧协议为空，拼接正文必须与 Content 一致。</para>
+    ///     <para>Assistant text messages in arrival order; null for legacy protocols, with concatenated text matching Content.</para>
+    /// </summary>
+    public IReadOnlyList<AssistantTextItem>? TextItems { get; init; }
+
+    /// <summary>
+    ///     <para>展示与历史投影共用的文本条目；旧消息没有 TextItems 时按 Content 合成单条兜底，不写回 canonical。</para>
+    ///     <para>
+    ///         Text items shared by display and history projection; legacy messages without TextItems synthesize one
+    ///         from Content as a fallback, never written back to canonical data.
+    ///     </para>
+    /// </summary>
+    [JsonIgnore]
+    public IReadOnlyList<AssistantTextItem> DisplayTextItems =>
+        TextItems is { Count: > 0 } ? TextItems : [new AssistantTextItem(Content)];
+
+    /// <summary>
+    ///     <para>按阶段筛选本次响应的回答正文；缺少阶段时沿用工具调用判断。</para>
+    ///     <para>Selects answer text by phase, falling back to tool-call inference when phase is absent.</para>
+    /// </summary>
+    [JsonIgnore]
+    public string AnswerText =>
+        string.Concat(DisplayTextItems.Where(item => item.IsAnswer(ToolCalls is { Count: > 0 }))
+                                      .Select(item => item.Text));
 
     /// <summary>
     ///     assistant 请求执行工具时设置。

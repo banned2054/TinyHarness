@@ -44,8 +44,18 @@ public sealed partial class AgentLoop
                               .ConfigureAwait(false))
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                charge.Append(value);
+                var previousCharacters = accumulator.TextCharacters;
                 accumulator.Append(value);
+                // 完整消息与增量重叠；仅新增长度计入估算，避免预算重复扣除。
+                charge.Append(value.Kind == ChatStreamEventKind.TextMessageCompleted
+                                  ? value with
+                                  {
+                                      ContentDelta = accumulator.TextCharacters > previousCharacters
+                                          ? value.ContentDelta
+                                              [^(int)(accumulator.TextCharacters - previousCharacters)..]
+                                          : string.Empty
+                                  }
+                                  : value);
                 if (observation.Observe(value))
                     await PublishEventAsync(HostEventKind.ModelRequestActivity, observation.Snapshot(),
                                             cancellationToken)
@@ -55,10 +65,10 @@ public sealed partial class AgentLoop
                     accumulator.ReasoningDisplayDelta is { Length: > 0 } reasoningDelta)
                     await PublishEventAsync(HostEventKind.AssistantReasoningDelta, reasoningDelta, cancellationToken)
                        .ConfigureAwait(false);
-                if (publishTextDeltas && value.Kind == ChatStreamEventKind.ContentDelta)
+                if (publishTextDeltas && accumulator.TextDisplayDelta is { Length: > 0 } textDelta)
                 {
-                    streamedText |= !string.IsNullOrWhiteSpace(value.ContentDelta);
-                    await PublishEventAsync(HostEventKind.AssistantTextDelta, value.ContentDelta, cancellationToken)
+                    streamedText |= !string.IsNullOrWhiteSpace(textDelta);
+                    await PublishEventAsync(HostEventKind.AssistantTextDelta, textDelta, cancellationToken)
                        .ConfigureAwait(false);
                 }
             }
@@ -103,7 +113,10 @@ public sealed partial class AgentLoop
 
             ValidateModelCompletion(accumulator, ended);
             outcome = "completed";
-            return ChatMessage.Assistant(accumulator.Content, accumulator.ToolCalls, accumulator.Reasoning);
+            return ChatMessage.Assistant(accumulator.Content, accumulator.ToolCalls, accumulator.Reasoning) with
+            {
+                TextItems = accumulator.TextItems
+            };
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {

@@ -1,0 +1,34 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:TinyHarness.Desktop.ViewModels"
+             x:Class="TinyHarness.Desktop.Presentation.Views.Conversation.ProcessGroupView"
+             x:DataType="vm:ProcessGroupItemViewModel">
+    <StackPanel>
+        <StackPanel Margin="0,12">
+            <TextBlock Text="{Binding ModelLabel}" Classes="caption" Margin="0,0,0,8"
+                       IsVisible="{Binding HasRunModelLabel}" />
+            <Border Height="1" HorizontalAlignment="Stretch"
+                    Background="{DynamicResource AssistantReplyDividerBrush}" />
+        </StackPanel>
+        <StackPanel IsVisible="{Binding HasItems}">
+            <Button Classes="reason-row" Classes.expanded="{Binding IsExpanded}"
+                    Focusable="True" Command="{Binding ToggleCommand}"
+                    AutomationProperties.Name="{Binding Summary}">
+                <Grid ColumnDefinitions="Auto,*" ColumnSpacing="6">
+                    <Panel Classes="row-leading" Width="16" Height="16" VerticalAlignment="Center">
+                        <Path Data="{StaticResource Icon.RowChevronDown}" IsVisible="{Binding !IsExpanded}"
+                              Stroke="{Binding $parent[Button].Foreground}" StrokeThickness="1" />
+                        <Path Data="{StaticResource Icon.RowChevronUp}" IsVisible="{Binding IsExpanded}"
+                              Stroke="{Binding $parent[Button].Foreground}" StrokeThickness="1" />
+                    </Panel>
+                    <TextBlock Grid.Column="1" Text="{Binding Summary}" FontSize="13" />
+                </Grid>
+            </Button>
+            <Border Margin="7,8,0,8" Padding="14,0,0,0" BorderThickness="1,0,0,0"
+                    BorderBrush="{DynamicResource SubtleBorderBrush}"
+                    IsVisible="{Binding IsExpanded}">
+                <ItemsControl ItemsSource="{Binding Items}" />
+            </Border>
+        </StackPanel>
+    </StackPanel>
+</UserControl>

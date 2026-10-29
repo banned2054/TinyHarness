@@ -16,6 +16,9 @@
         <DataTemplate DataType="vm:ToolActivityItemViewModel">
             <tooling:ToolActivityView />
         </DataTemplate>
+        <DataTemplate DataType="vm:ProcessGroupItemViewModel">
+            <conversation:ProcessGroupView />
+        </DataTemplate>
     </Window.DataTemplates>
     <!-- 窗口只负责窗口级布局：侧栏 / 分隔条 / 会话主区域。侧栏可拖拽：GridSplitter 只调整
          左列固定像素宽，右列保持 1* 吃掉差值，拖拽等量挤压右栏而窗口总宽不变。左列宽度由

@@ -32,6 +32,54 @@ public sealed class RunPersistenceTests
         Assert.That(summary, Is.EqualTo("handoff "        + secret));
     }
 
+    [Test]
+    public void SecretRedactorRedactsTextItemTextAndMetadataWithoutMutatingCanonicalItems()
+    {
+        const string secret   = "synthetic-secret";
+        var          redactor = new SecretRedactor(new Dictionary<string, string> { ["TEST_KEY"] = secret });
+        var message = ChatMessage.Assistant("answer " + secret + " tail") with
+        {
+            TextItems =
+            [
+                new AssistantTextItem("answer " + secret, "msg-" + secret, "future-" + secret),
+                new AssistantTextItem(" tail", null, "future-phase")
+            ]
+        };
+
+        var redacted = redactor.Redact(message);
+
+        Assert.That(redacted.TextItems, Is.EqualTo(new AssistantTextItem[]
+        {
+            new("answer [REDACTED]", "msg-[REDACTED]", "future-[REDACTED]"),
+            new(" tail", null, "future-phase")
+        }));
+        Assert.That(redacted.Content, Is.EqualTo(string.Concat(redacted.TextItems!.Select(item => item.Text))));
+        Assert.That(message.Content, Is.EqualTo("answer " + secret + " tail"));
+        Assert.That(message.TextItems![0], Is.EqualTo(new AssistantTextItem("answer " + secret, "msg-" + secret,
+                                                                            "future-" + secret)));
+    }
+
+    [TestCase("synthetic-", "secret", "synthetic-secret")]
+    [TestCase("{\"token\":", "\"hidden\"}", "unrelated")]
+    public void SecretRedactorHidesTextWhenCrossItemRedactionCannotPreserveBoundaries(
+        string first, string second, string secret)
+    {
+        var redactor = new SecretRedactor(new Dictionary<string, string> { ["TEST_KEY"] = secret });
+        var message = ChatMessage.Assistant(first + second) with
+        {
+            TextItems = [new AssistantTextItem(first, "msg-1", "commentary"), new AssistantTextItem(second)]
+        };
+
+        var redacted = redactor.Redact(message);
+
+        Assert.That(redacted.TextItems!.Select(item => item.Text), Is.EqualTo(new[] { "[REDACTED]", "[REDACTED]" }));
+        Assert.That(redacted.Content, Is.EqualTo(string.Concat(redacted.TextItems!.Select(item => item.Text))));
+        Assert.That(redacted.TextItems![0].MessageId, Is.EqualTo("msg-1"));
+        Assert.That(redacted.TextItems![0].Phase, Is.EqualTo("commentary"));
+        Assert.That(message.TextItems![0].Text, Is.EqualTo(first));
+        Assert.That(message.TextItems[1].Text, Is.EqualTo(second));
+    }
+
     [TestCase("{\"value\":\"synthetic-\\u0073ecret\"}", "synthetic-secret", "{\"value\":\"[REDACTED]\"}")]
     [TestCase("[null,42,true,{\"items\":[\"prefix synthetic-\\u0073ecret suffix\"]}]", "synthetic-secret",
               "[null,42,true,{\"items\":[\"prefix [REDACTED] suffix\"]}]")]

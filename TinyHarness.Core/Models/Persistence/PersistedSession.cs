@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using TinyHarness.Core.Models.Context;
 using TinyHarness.Core.Models.Agent;
 using System.Text;
+using System.Text.Json.Serialization;
 using TinyHarness.Core.Models.ChatCompletions;
 using TinyHarness.Core.Models.ProjectInstructions;
 using TinyHarness.Core.Models.Session;
@@ -162,6 +163,13 @@ public sealed record PersistedMessage
 
     public string Content { get; init; } = string.Empty;
 
+    /// <summary>
+    ///     <para>按协议顺序保存的 assistant 文本条目；旧日志缺失时为 null，拼接文本必须等于 Content。</para>
+    ///     <para>Assistant text items in protocol order; null in legacy logs, with concatenated text equal to Content.</para>
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<AssistantTextItem>? TextItems { get; init; }
+
     public IReadOnlyList<PersistedToolCall>? ToolCalls { get; init; }
 
     public string? ToolCallId { get; init; }
@@ -169,6 +177,27 @@ public sealed record PersistedMessage
     public string? Name { get; init; }
 
     public IReadOnlyList<PersistedReasoning>? Reasoning { get; init; }
+
+    /// <summary>
+    ///     <para>校验可选文本条目的角色、文本、消息 ID 与聚合正文；phase 按原值保留。</para>
+    ///     <para>Validates optional text item roles, text, message IDs and aggregate content; preserves phase verbatim.</para>
+    /// </summary>
+    internal void ValidateTextItems()
+    {
+        if (TextItems is null) return;
+        if (Role != nameof(ChatRole.Assistant))
+            throw new InvalidDataException("Only assistant messages may carry text items.");
+
+        foreach (var item in TextItems)
+            if (item is null      ||
+                item.Text is null ||
+                (item.MessageId is not null && string.IsNullOrWhiteSpace(item.MessageId)))
+                throw new
+                    InvalidDataException("Assistant text items require text and a nonempty message ID when supplied.");
+
+        if (!string.Equals(Content, string.Concat(TextItems.Select(item => item.Text)), StringComparison.Ordinal))
+            throw new InvalidDataException("Assistant text items do not match the aggregate message content.");
+    }
 }
 
 /// <summary>

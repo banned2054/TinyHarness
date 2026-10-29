@@ -10,12 +10,11 @@ public sealed class MessageItemViewModel : ConversationItemViewModel
     /// <summary>思考摘要的截断长度（对齐参考实现的收起形态：首行 + 省略号）。</summary>
     private const int ReasoningSummaryLimit = 80;
 
-    private readonly bool   _hasToolCalls;
-    private          string _content;
-    private          bool   _isInterrupted;
-    private          bool   _isReasoningExpanded;
-    private          bool   _isReasoningProjected;
-    private          bool   _isStreaming;
+    private string _content;
+    private bool   _isInterrupted;
+    private bool   _isReasoningExpanded;
+    private bool   _isReasoningProjected;
+    private bool   _isStreaming;
 
     private MessageItemViewModel? _processReasoningProjection;
     private string?               _reasoning;
@@ -24,8 +23,6 @@ public sealed class MessageItemViewModel : ConversationItemViewModel
     {
         Id                     = message.Id;
         Role                   = message.Role;
-        ModelLabel             = message.ModelLabel ?? string.Empty;
-        _hasToolCalls          = message.HasToolCalls;
         _content               = message.Content;
         _reasoning             = message.Reasoning;
         _isInterrupted         = message.IsInterrupted;
@@ -34,11 +31,10 @@ public sealed class MessageItemViewModel : ConversationItemViewModel
         ToggleReasoningCommand = new RelayCommand(() => IsReasoningExpanded = !IsReasoningExpanded);
     }
 
-    private MessageItemViewModel(string id, string content, string? modelLabel) : base(-1)
+    private MessageItemViewModel(string id, string content) : base(-1)
     {
         Id                     = id;
         Role                   = MessageRole.Assistant;
-        ModelLabel             = modelLabel ?? string.Empty;
         _content               = content;
         _reasoning             = null;
         CreatedAtText          = string.Empty;
@@ -59,20 +55,7 @@ public sealed class MessageItemViewModel : ConversationItemViewModel
         IsInProcessGroup       = true;
     }
 
-    public string ModelLabel { get; } = string.Empty;
-    public string Id         { get; }
-
-    /// <summary>
-    ///     <para>本条目是否承载当前运行开头的唯一分割线。</para>
-    ///     <para>Whether this item carries the single divider at the start of its run.</para>
-    /// </summary>
-    public bool StartsRun { get; init; }
-
-    /// <summary>
-    ///     <para>仅运行首条消息在分割线上方显示模型标签，流式与历史共用。</para>
-    ///     <para>Shows a model label above the divider only on the run's first item, for both streaming and history.</para>
-    /// </summary>
-    public bool HasRunModelLabel => StartsRun && !string.IsNullOrWhiteSpace(ModelLabel);
+    public string Id { get; }
 
     public MessageRole Role { get; }
 
@@ -162,11 +145,14 @@ public sealed class MessageItemViewModel : ConversationItemViewModel
     }
 
     /// <summary>
-    ///     <para>仅在组外助手正文旁显示时间；思考和工具调用过程不显示。</para>
-    ///     <para>Shows time beside standalone assistant content, excluding reasoning and tool-call steps.</para>
+    ///     <para>仅组外、正文非空的助手消息显示时间；过程条目与思考行不显示。</para>
+    ///     <para>
+    ///         Shows time only beside non-empty assistant bodies outside process groups; process entries and reasoning rows
+    ///         never do.
+    ///     </para>
     /// </summary>
     public bool HasResponseMetadata =>
-        IsAssistantMessage && !_hasToolCalls && !IsInProcessGroup && !string.IsNullOrWhiteSpace(Content);
+        IsAssistantMessage && !IsInProcessGroup && !string.IsNullOrWhiteSpace(Content);
 
     public string CreatedAtText { get; }
 
@@ -207,34 +193,12 @@ public sealed class MessageItemViewModel : ConversationItemViewModel
         OnPropertyChanged(nameof(HasResponseMetadata));
     }
 
-    /// <summary>消息移出过程组时恢复时间戳与正文消息中的思考行。</summary>
-    public void UnmarkInProcessGroup()
-    {
-        if (IsInProcessGroup)
-        {
-            IsInProcessGroup = false;
-            OnPropertyChanged(nameof(IsInProcessGroup));
-            OnPropertyChanged(nameof(HasResponseMetadata));
-        }
-
-        if (_processReasoningProjection is null) return;
-
-        _processReasoningProjection = null;
-        IsReasoningProjected        = false;
-    }
-
     /// <summary>
-    ///     <para>创建临时流式条目并指定运行分割线和模型标签；正式消息到达后替换。</para>
-    ///     <para>Creates a temporary streaming item with its run divider and model label, replaced by the recorded message.</para>
+    ///     <para>创建临时流式条目；正式消息到达后替换。</para>
+    ///     <para>Creates a temporary streaming item, replaced once the recorded message arrives.</para>
     /// </summary>
-    public static MessageItemViewModel CreateStreaming(bool startsRun = false, string? modelLabel = null) =>
-        new($"streaming-{Guid.NewGuid():N}", string.Empty, modelLabel) { StartsRun = startsRun };
-
-    /// <summary>标记最终回复的思考已由过程组展示；只影响可见性，不丢弃协议数据。</summary>
-    public void ProjectReasoning()
-    {
-        IsReasoningProjected = true;
-    }
+    public static MessageItemViewModel CreateStreaming() =>
+        new($"streaming-{Guid.NewGuid():N}", string.Empty);
 
     /// <summary>
     ///     供过程投影使用的稳定 reasoning-only 条目。正文消息仍保留独立展示，
@@ -244,7 +208,7 @@ public sealed class MessageItemViewModel : ConversationItemViewModel
     {
         if (!HasReasoning) return null;
 
-        ProjectReasoning();
+        IsReasoningProjected = true;
         return _processReasoningProjection ??= new MessageItemViewModel(this);
     }
 
@@ -266,11 +230,6 @@ public sealed class MessageItemViewModel : ConversationItemViewModel
     {
         if (text.Length <= 0) return;
         Reasoning += text;
-    }
-
-    public void StopStreaming()
-    {
-        IsStreaming = false;
     }
 
     /// <summary>流式尝试被放弃（取消/失败）且不会有正式消息：保留已生成内容并标注中断。</summary>

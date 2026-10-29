@@ -324,12 +324,19 @@ public sealed class SessionLogRunRecorder : IRunRecorder
                         InvalidOperationException("Assistant tool call ids must be nonempty and unique within one round.");
         }
 
-        var kind = assistantMessage.ToolCalls is { Count: > 0 }
-            ? SessionHistoryKind.Process
-            : SessionHistoryKind.Final;
-        var item = NewHistoryItem(kind, assistantMessage.Content,
-                                  ReasoningText(assistantMessage.Reasoning));
-        var appended = await AppendBatchAsync([HistoryRecord(item)], cancellationToken).ConfigureAwait(false);
+        var hasTools  = assistantMessage.ToolCalls is { Count: > 0 };
+        var texts     = assistantMessage.DisplayTextItems;
+        var records   = new List<SessionLogRecord>();
+        var reasoning = ReasoningText(assistantMessage.Reasoning);
+        foreach (var text in texts)
+        {
+            var kind = text.IsAnswer(hasTools) ? SessionHistoryKind.Final : SessionHistoryKind.Process;
+            var item = NewHistoryItem(kind, text.Text, reasoning);
+            records.Add(HistoryRecord(item));
+            reasoning = null;
+        }
+
+        var appended = await AppendBatchAsync(records, cancellationToken).ConfigureAwait(false);
         _currentInvocationIds.Clear();
         if (assistantMessage.ToolCalls is { } recordedCalls)
             foreach (var call in recordedCalls)
