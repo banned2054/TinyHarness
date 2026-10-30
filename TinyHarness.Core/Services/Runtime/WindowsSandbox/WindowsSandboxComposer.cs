@@ -107,6 +107,11 @@ public static class WindowsSandboxComposer
         };
 
         var backend = new WindowsSandboxBackend(components, plan.Policy, plan.TargetEnvironment, knownSecrets);
+        SandboxDiagnosticLog.Event("compose",
+                                   $"kind={PolicyKindDisplay(plan.Policy.Kind)} tcpLoopback={settings.AllowTcpLoopback} " +
+                                   $"workspace='{workspaceRoot}' writeRoots=[{string.Join(";", plan.Policy.EffectiveWriteRoots)}] " +
+                                   $"tempRoot='{plan.TempRoot}' setup='{plan.SetupExecutablePath}' runner='{plan.RunnerExecutablePath}' " +
+                                   $"home='{plan.SandboxHome}'");
         return new WindowsSandboxExecution(components, plan.Policy, plan.TargetEnvironment, executionPolicy, backend);
     }
 

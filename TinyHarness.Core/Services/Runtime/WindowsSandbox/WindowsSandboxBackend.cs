@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Security.Principal;
 using System.Text;
 using TinyHarness.Core.Models.Runtime;
@@ -105,21 +106,21 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
 
         ArgumentNullException.ThrowIfNull(targetEnvironment);
 
-        _components = components;
-        _policy     = policy;
+        _components            = components;
+        _policy                = policy;
         // 与策略临时根共用可信配置构建的冻结环境，避免 ACL 与实际进程环境漂移。
-        _targetEnvironment  = targetEnvironment;
-        _knownSecrets       = knownSecrets ?? new Dictionary<string, string>(StringComparer.Ordinal);
-        _stateInspector     = new WindowsSandboxStateInspector(components);
-        _setupInvoker       = setupInvoker       ?? new ProcessSandboxSetupInvoker(components, limits?.RefreshTimeout);
-        _credentialSource   = credentialSource   ?? new SandboxCredentialReader(components);
-        _capabilitySidStore = capabilitySidStore ?? new SandboxCapabilitySidStore(components);
-        _desktopFactory     = desktopFactory     ?? new WindowsSandboxDesktopFactory();
-        _runnerLauncher     = runnerLauncher     ?? new WindowsSandboxRunnerLauncher();
-        _limits             = limits             ?? WindowsSandboxBackendLimits.Default;
+        _targetEnvironment     = targetEnvironment;
+        _knownSecrets          = knownSecrets ?? new Dictionary<string, string>(StringComparer.Ordinal);
+        _stateInspector        = new WindowsSandboxStateInspector(components);
+        _setupInvoker          = setupInvoker ?? new ProcessSandboxSetupInvoker(components, limits?.RefreshTimeout);
+        _credentialSource      = credentialSource ?? new SandboxCredentialReader(components);
+        _capabilitySidStore    = capabilitySidStore ?? new SandboxCapabilitySidStore(components);
+        _desktopFactory        = desktopFactory ?? new WindowsSandboxDesktopFactory();
+        _runnerLauncher        = runnerLauncher ?? new WindowsSandboxRunnerLauncher();
+        _limits                = limits ?? WindowsSandboxBackendLimits.Default;
         // NUL 设备 ACE 是机器级共享状态；默认测试注入空操作，避免修改宿主 ACL。
         _allowNullDeviceAccess = allowNullDeviceAccess ?? SandboxNullDeviceAcl.AllowCapabilitySid;
-        _validateWriteAcls     = validateWriteAcls     ?? WorkspaceAclInheritance.ValidateAsync;
+        _validateWriteAcls     = validateWriteAcls ?? WorkspaceAclInheritance.ValidateAsync;
     }
 
     public async Task<ProcessExecutionResult> ExecuteAsync(
@@ -237,24 +238,51 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
     {
         var status = await _stateInspector.InspectAsync(cancellationToken).ConfigureAwait(false);
         if (!status.Ready)
+        {
+            SandboxDiagnosticLog.Event("readiness", $"blocked problems=[{string.Join(" | ", status.Problems)}]");
             throw new ProcessExecutionStartException("The Windows sandbox is not ready; refusing to execute: " +
                                                      string.Join("; ", status.Problems),
                                                      new
                                                          InvalidOperationException("Sandbox readiness check failed; failing closed without fallback."));
+        }
 
         var payload = _policy.CreateSetupPayload(_components, execution.WorkingDirectory, Environment.UserName, true);
+#if DEBUG
+        // run id 经 AsyncLocal 流入本轮 helper/validate/acl 诊断事件；不新增参数，也不改变执行语义。
+        SandboxDiagnosticLog.BeginRun(Guid.NewGuid().ToString("N")[..8]);
+#endif
+        SandboxDiagnosticLog.Event("refresh",
+                                   $"request workspace='{_policy.WorkspaceRoot}' cwd='{execution.WorkingDirectory}' " +
+                                   $"writeRoots=[{string.Join(";", payload.WriteRoots)}] denyWriteCount={payload.DenyWritePaths.Count} " +
+                                   $"version={payload.Version} refreshOnly={payload.RefreshOnly}");
+#if DEBUG
+        // 宿主 token 单独成行并显式标注 subject=host；不得与 helper 实际身份混淆。
+        SandboxProcessDiagnostics.LogHostToken();
+#endif
+        var stopwatch = Stopwatch.StartNew();
+        // 诊断只输出本地 phase 与异常类型；ex.Message 可携带 setup_error.json 的任意 helper 文本，不属白名单。
+        var phase     = "refresh";
         try
         {
             await _setupInvoker
                  .RefreshAsync(payload, cancellationToken).ConfigureAwait(false);
+            SandboxDiagnosticLog.Event("refresh", $"helper-finished elapsedMs={stopwatch.ElapsedMilliseconds}");
+            stopwatch.Restart();
+            phase = "validate";
+            SandboxDiagnosticLog.Event("validate", $"start writeRoots=[{string.Join(";", payload.WriteRoots)}]");
             await _validateWriteAcls(payload, cancellationToken).ConfigureAwait(false);
+            SandboxDiagnosticLog.Event("validate", $"passed elapsedMs={stopwatch.ElapsedMilliseconds}");
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException ex)
         {
+            SandboxDiagnosticLog.Event("preflight",
+                                       $"phase={phase} cancelled type={ex.GetType().Name} elapsedMs={stopwatch.ElapsedMilliseconds}");
             throw;
         }
         catch (Exception ex)
         {
+            SandboxDiagnosticLog.Event("preflight",
+                                       $"phase={phase} failed elapsedMs={stopwatch.ElapsedMilliseconds} type={ex.GetType().Name}");
             throw new ProcessExecutionStartException($"The sandbox ACL refresh failed: {ex.Message}", ex);
         }
     }

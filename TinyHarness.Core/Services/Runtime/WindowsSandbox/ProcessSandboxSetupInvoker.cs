@@ -2,6 +2,9 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Text.Json;
 using TinyHarness.Core.Models.Runtime.WindowsSandbox;
+#if DEBUG
+using TinyHarness.Core.Services.Runtime;
+#endif
 
 namespace TinyHarness.Core.Services.Runtime.WindowsSandbox;
 
@@ -64,6 +67,22 @@ public sealed class ProcessSandboxSetupInvoker(WindowsSandboxComponents componen
         var payloadJson =
             JsonSerializer.SerializeToUtf8Bytes(payload, WindowsSandboxJsonContext.Default.SandboxSetupPayload);
         var base64Payload = Convert.ToBase64String(payloadJson);
+        var stopwatch     = Stopwatch.StartNew();
+#if DEBUG
+        // 启动前先取写根 ACL 快照；快照差异只反映宿主可观察的目录状态，不代表 helper 内部 API 返回。
+        var aclBefore = WorkspaceAclInheritanceDiagnostics.CaptureWriteRootAcls(payload);
+        WorkspaceAclInheritanceDiagnostics.LogWriteRootAclSnapshot("before-helper", aclBefore);
+#endif
+        SandboxDiagnosticLog.Event("helper",
+                                   $"start path='{components.SetupExecutablePath}' cwd='{payload.CommandWorkingDirectory}' " +
+                                   $"home='{components.SandboxHome}' version={payload.Version} " +
+                                   $"channel={(base64Payload.Length <= PayloadArgumentCharacterLimit ? "argv" : "env-chunks")} " +
+                                   $"payloadChars={base64Payload.Length} " +
+#if DEBUG
+                                   // helper 二进制哈希帮助把日志与用户 VS 实际编译的 setup.exe 对应起来。
+                                   $"sha256={SandboxProcessDiagnostics.DescribeFileSha256(components.SetupExecutablePath)} " +
+#endif
+                                   $"timeoutSecs={(int)(refreshTimeout ?? DefaultRefreshTimeout).TotalSeconds}");
 
         using var timeoutSource = new CancellationTokenSource(refreshTimeout ?? DefaultRefreshTimeout);
         using var linkedSource =
@@ -76,10 +95,20 @@ public sealed class ProcessSandboxSetupInvoker(WindowsSandboxComponents componen
         }
         catch (Exception ex) when (ex is Win32Exception or InvalidOperationException)
         {
+            // 诊断只记异常类型、Win32 错误码与已知路径；ex.Message 不属白名单。
+            SandboxDiagnosticLog.Event("helper",
+                                       $"launch-failed type={ex.GetType().Name} " +
+                                       $"win32Error={(ex is Win32Exception win32 ? win32.NativeErrorCode.ToString() : "<none>")} " +
+                                       $"path='{components.SetupExecutablePath}'");
             throw new
                 InvalidOperationException($"Failed to launch the sandbox setup helper '{components.SetupExecutablePath}': {ex.Message}",
                                           ex);
         }
+
+#if DEBUG
+        // 只在存活窗口内读取 helper 实际 token；查询失败只记 win32Error，不改变启动顺序与后续等待。
+        SandboxProcessDiagnostics.LogChildProcessToken(process);
+#endif
 
         try
         {
@@ -87,16 +116,28 @@ public sealed class ProcessSandboxSetupInvoker(WindowsSandboxComponents componen
         }
         catch (OperationCanceledException) when (timeoutSource.IsCancellationRequested)
         {
+            SandboxDiagnosticLog.Event("helper", $"timeout elapsedMs={stopwatch.ElapsedMilliseconds}");
+#if DEBUG
+            WorkspaceAclInheritanceDiagnostics.LogWriteRootAclComparison("after-helper-timeout", aclBefore, payload);
+#endif
             await KillAsync(process).ConfigureAwait(false);
             throw new TimeoutException($"The sandbox setup helper did not finish refreshing ACLs within " +
                                        $"{(int)(refreshTimeout ?? DefaultRefreshTimeout).TotalSeconds}s.");
         }
         catch (OperationCanceledException)
         {
+            SandboxDiagnosticLog.Event("helper", $"cancelled elapsedMs={stopwatch.ElapsedMilliseconds}");
+#if DEBUG
+            WorkspaceAclInheritanceDiagnostics.LogWriteRootAclComparison("after-helper-cancel", aclBefore, payload);
+#endif
             await KillAsync(process).ConfigureAwait(false);
             throw;
         }
 
+        SandboxDiagnosticLog.Event("helper", $"exit code={process.ExitCode} elapsedMs={stopwatch.ElapsedMilliseconds}");
+#if DEBUG
+        WorkspaceAclInheritanceDiagnostics.LogWriteRootAclComparison("after-helper-exit", aclBefore, payload);
+#endif
         if (process.ExitCode != 0)
             throw new InvalidOperationException($"Sandbox ACL refresh failed with exit code {process.ExitCode}: " +
                                                 $"{await SandboxSetupErrorReader.DescribeAsync(components.SetupErrorPath).ConfigureAwait(false)}; " +

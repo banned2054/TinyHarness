@@ -4,6 +4,9 @@ using System.Text.Json;
 using TinyHarness.Cli.Services;
 using TinyHarness.Core.Models.Configuration;
 using TinyHarness.Core.Services.Runtime;
+using ProcessWorkspaceAclGrant = TinyHarness.Core.Services.Runtime.ProcessWorkspaceAclGrant;
+using WorkspaceGrantOutcome = TinyHarness.Core.Services.Runtime.WorkspaceGrantOutcome;
+using WorkspaceSandboxAclRepair = TinyHarness.Cli.Services.WorkspaceSandboxAclRepair;
 
 namespace TinyHarness.Tests;
 
@@ -112,6 +115,52 @@ public class WorkspaceAclInheritanceTests
                                                AccessControlType.Allow);
         Assert.That(WorkspaceAclInheritance.HasMissingAllow([objects], [], true), Is.False);
         Assert.That(WorkspaceAclInheritance.HasMissingAllow([objects], [], false), Is.True);
+    }
+
+    [Test]
+    public void PreparedRootAce_RejectsInheritOnlyNoPropagateAndInsufficientMask()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var sid = new SecurityIdentifier("S-1-5-21-1-2-3-1001");
+        var full = new FileSystemAccessRule(sid, (FileSystemRights)0x1301BF,
+                                            InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
+                                            PropagationFlags.None, AccessControlType.Allow);
+        Assert.That(WorkspaceSandboxAclContext.HasRequiredWriteFlags(full), Is.True);
+        Assert.That(WorkspaceSandboxAclContext.HasRequiredWriteFlags(new FileSystemAccessRule(
+                                                                          sid, FileSystemRights.FullControl,
+                                                                          InheritanceFlags.ContainerInherit |
+                                                                          InheritanceFlags.ObjectInherit,
+                                                                          PropagationFlags.None,
+                                                                          AccessControlType.Allow)),
+                    Is.True);
+        var inheritOnly = new FileSystemAccessRule(sid, (FileSystemRights)0x1301BF,
+                                                   InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
+                                                   PropagationFlags.InheritOnly, AccessControlType.Allow);
+        Assert.That(WorkspaceSandboxAclContext.HasRequiredWriteFlags(inheritOnly), Is.False,
+                    "Inherit-only ACE 不能作为根授权就绪证据。");
+        var noPropagate = new FileSystemAccessRule(sid, (FileSystemRights)0x1301BF,
+                                                   InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
+                                                   PropagationFlags.NoPropagateInherit, AccessControlType.Allow);
+        Assert.That(WorkspaceSandboxAclContext.HasRequiredWriteFlags(noPropagate), Is.False,
+                    "停止传播的 ACE 不能作为根授权就绪证据。");
+        var containerOnly = new FileSystemAccessRule(sid, (FileSystemRights)0x1301BF, InheritanceFlags.ContainerInherit,
+                                                     PropagationFlags.None, AccessControlType.Allow);
+        Assert.That(WorkspaceSandboxAclContext.HasRequiredWriteFlags(containerOnly), Is.False);
+        var insufficient = new FileSystemAccessRule(sid, (FileSystemRights)0x1301BE,
+                                                    InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
+                                                    PropagationFlags.None, AccessControlType.Allow);
+        Assert.That(WorkspaceSandboxAclContext.HasRequiredWriteFlags(insufficient), Is.False,
+                    "缺少任一必需位的掩码不能视为完整写授权。");
+    }
+
+    [Test]
+    public void GrantExchangeFailure_RequiresConfirmedExitBeforeFailedOutcome()
+    {
+        Assert.That(ProcessWorkspaceAclGrant.ClassifyFailedExchange(true),
+                    Is.EqualTo(WorkspaceGrantOutcome.Failed));
+        Assert.That(ProcessWorkspaceAclGrant.ClassifyFailedExchange(false),
+                    Is.EqualTo(WorkspaceGrantOutcome.DidNotFinish),
+                    "子进程已启动且无法确认退出时，结果必须保持未知，禁止自动重试。");
     }
 
     [Test]

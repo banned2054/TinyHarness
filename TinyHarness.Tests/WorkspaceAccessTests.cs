@@ -15,6 +15,10 @@ using TinyHarness.Core.Services.Runtime;
 using TinyHarness.Core.Services.Runtime.WindowsSandbox;
 using TinyHarness.Core.Services.Session;
 using TinyHarness.Core.Services.Tools;
+using IWorkspaceAclGrant = TinyHarness.Cli.Services.IWorkspaceAclGrant;
+using ProcessWorkspaceAclGrant = TinyHarness.Cli.Services.ProcessWorkspaceAclGrant;
+using WorkspaceGrantOutcome = TinyHarness.Cli.Services.WorkspaceGrantOutcome;
+using WorkspaceGrantChannel = TinyHarness.Cli.Services.WorkspaceGrantChannel;
 
 namespace TinyHarness.Tests;
 
@@ -330,11 +334,11 @@ public class WorkspaceAccessTests
 
     private sealed class Fixture : IDisposable
     {
-        private readonly TestTempDir  _storage = new();
-        public readonly  FakeGrant    Grant    = new();
+        public readonly  FakeGrant    Grant = new();
         public readonly  StringReader Input;
         public readonly  StringWriter Output    = new();
         public readonly  TestTempDir  Workspace = new();
+        private readonly TestTempDir  _storage  = new();
         public           int          Activations;
         public           bool         FailActivation;
 

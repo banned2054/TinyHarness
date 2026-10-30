@@ -177,6 +177,42 @@ public static partial class WorkspaceDirectoryAcl
             : true;
     }
 
+    /// <summary>
+    ///     <para>
+    ///         以 READ_CONTROL|WRITE_DAC 打开既有路径并立即关闭，只读探测普通权限能否取得 ACL 管理句柄；
+    ///         绝不写入 ACL，也不持有长句柄。
+    ///     </para>
+    ///     <para>
+    ///         Opens an existing path with READ_CONTROL|WRITE_DAC and closes it immediately, probing read-only
+    ///         whether normal privilege can obtain an ACL-management handle; it never writes an ACL and never
+    ///         holds a long-lived handle.
+    ///     </para>
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         与 <see cref="CanChangeObjectPermissions" /> 相同的打开参数（不共享删除、OPEN_EXISTING、
+    ///         BACKUP_SEMANTICS|OPEN_REPARSE_POINT，不跨越 reparse point）；生产结构化问题与 Debug 诊断共用，
+    ///         失败只返回 Win32 错误码，不抛出。
+    ///     </para>
+    ///     <para>
+    ///         The same open parameters as <see cref="CanChangeObjectPermissions" /> (no delete sharing,
+    ///         OPEN_EXISTING, BACKUP_SEMANTICS|OPEN_REPARSE_POINT, never crossing a reparse point);
+    ///         shared by production structured problems and Debug diagnostics, returning the
+    ///         Win32 error code on failure instead of throwing.
+    ///     </para>
+    /// </remarks>
+    internal static (bool Opened, int Win32Error, string FileIdentity, bool ReparsePoint)
+        ProbeAclManagementAccess(string path)
+    {
+        using var handle = CreateFileW(path, ReadControl | WriteDac, 3, IntPtr.Zero, 3, 0x02200000, IntPtr.Zero);
+        if (handle.IsInvalid) return (false, Marshal.GetLastPInvokeError(), "<unavailable>", false);
+        if (!GetFileInformationByHandle(handle, out var information))
+            return (true, Marshal.GetLastPInvokeError(), "<unavailable>", false);
+
+        var reparse = (information.Attributes & 0x400) != 0;
+        return (true, 0, $"{information.Volume:X8}:{information.IndexHigh:X8}{information.IndexLow:X8}", reparse);
+    }
+
     internal static void ValidateRepairObject(string path, bool checkInheritedDenies)
     {
         if (!OperatingSystem.IsWindows())
