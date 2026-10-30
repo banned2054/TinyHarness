@@ -173,7 +173,6 @@ public sealed partial class AgentLoop
     {
         await using var stream = _model.CompleteAsync(request, cancellationToken).GetAsyncEnumerator(cancellationToken);
         using var       timer  = new PeriodicTimer(TimeSpan.FromSeconds(10));
-        Task<bool>?     tick   = null;
         while (true)
         {
             var  next = stream.MoveNextAsync();
@@ -184,27 +183,51 @@ public sealed partial class AgentLoop
             }
             else
             {
-                var pending = next.AsTask();
-                while (!pending.IsCompleted)
+                // ValueTask.AsTask 会让取消异常先落入非用户代码 ValueTaskSourceAsTask 的
+                // catch 暂存，VS「仅我的代码」据此把停止中断为用户未处理异常；原生等待
+                // 该 ValueTask，异常直接在本迭代器边界浮出，由调用方的取消分类捕获。
+                using var waitingScope = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                var       notices      = PublishWaitingNoticesAsync(timer, observation, waitingScope.Token);
+                try
                 {
-                    tick ??= timer.WaitForNextTickAsync().AsTask();
-                    await Task.WhenAny(pending, tick).ConfigureAwait(false);
-                    if (pending.IsCompleted) break;
-                    await tick.ConfigureAwait(false);
-                    tick = null;
-                    // 展示取消不能中断当前 MoveNext 的回收；请求令牌仍传给模型流。
-                    await PublishEventAsync(HostEventKind.ModelRequestWaiting, observation.Snapshot(),
-                                            CancellationToken.None)
-                       .ConfigureAwait(false);
+                    hasNext = await next.ConfigureAwait(false);
                 }
-
-                hasNext = await pending.ConfigureAwait(false);
+                finally
+                {
+                    // 先停止等待通知并等它退出，再让消费方继续发布；事件接收方不被并发调用。
+                    waitingScope.Cancel();
+                    try
+                    {
+                        await notices.ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        // 通知循环只经取消退出；其余异常维持原传播路径。
+                    }
+                }
             }
 
             if (!hasNext) yield break;
 
             yield return stream.Current;
         }
+    }
+
+    /// <summary>
+    ///     <para>在模型流推进挂起期间每十秒发布一次等待状态；令牌取消即退出，等待发布不经请求令牌中断回收。</para>
+    ///     <para>
+    ///         Publishes a ten-second waiting notice while the model stream move is pending; the loop exits on
+    ///         cancellation, and the notice itself never aborts the pending move via the request token.
+    ///     </para>
+    /// </summary>
+    private async Task PublishWaitingNoticesAsync(
+        PeriodicTimer timer, ModelRequestObservation observation, CancellationToken cancellationToken)
+    {
+        while (await timer.WaitForNextTickAsync(cancellationToken).ConfigureAwait(false))
+            // 展示取消不能中断当前 MoveNext 的回收；请求令牌仍传给模型流，等待通知用 None 发布。
+            await PublishEventAsync(HostEventKind.ModelRequestWaiting, observation.Snapshot(),
+                                    CancellationToken.None)
+               .ConfigureAwait(false);
     }
 
     /// <summary>
