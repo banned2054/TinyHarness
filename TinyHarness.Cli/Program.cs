@@ -28,6 +28,7 @@ using TinyHarness.Core.Services.Session;
 using TinyHarness.Core.Services.Tools;
 using TinyHarness.Core.Services.Worker;
 using WindowsCredentialStore = TinyHarness.Core.Services.Runtime.WindowsCredentialStore;
+using ProcessWorkspaceAclGrant = TinyHarness.Cli.Services.ProcessWorkspaceAclGrant;
 
 namespace TinyHarness.Cli;
 
@@ -690,19 +691,23 @@ internal static class Program
                                                     new ProcessWorkspaceAclGrant(protectedPaths, writeRoots, settings),
                                                     () =>
                                                     {
-                                                        sandbox = SandboxCliComposition.TryCompose(settings,
-                                                                 config.WorkspaceRoot, knownSecrets,
-                                                                 sessionStoreDirectory);
+                                                        sandbox =
+                                                            SandboxCliComposition.TryCompose(settings,
+                                                                     config.WorkspaceRoot, knownSecrets,
+                                                                     sessionStoreDirectory);
                                                         var policy = sandbox?.ExecutionPolicy ??
                                                                      ProcessExecutionPolicy.Host();
-                                                        return Task.FromResult((
-                                                            new ShellTool(new Workspace(config.WorkspaceRoot),
-                                                                          config.DefaultToolTimeoutSeconds,
-                                                                          knownSecrets,
-                                                                          processBackend : sandbox?.Backend ??
-                                                                              new HostProcessBackend(knownSecrets),
-                                                                          executionPolicy : policy),
-                                                            policy));
+                                                        return
+                                                            Task.FromResult((new ShellTool(new Workspace(config
+                                                                                                  .WorkspaceRoot),
+                                                                                      config.DefaultToolTimeoutSeconds,
+                                                                                      knownSecrets,
+                                                                                      processBackend :
+                                                                                      sandbox?.Backend ??
+                                                                                      new
+                                                                                          HostProcessBackend(knownSecrets),
+                                                                                      executionPolicy : policy),
+                                                                             policy));
                                                     });
         await access.InitializeAsync(cancellationToken).ConfigureAwait(false);
         var executionPolicy = access.Policy;
