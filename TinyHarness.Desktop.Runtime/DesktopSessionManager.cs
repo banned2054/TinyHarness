@@ -8,6 +8,7 @@ public sealed class DesktopSessionManager : IAsyncDisposable
 {
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly Dictionary<string, DesktopSession> _sessions = new(StringComparer.Ordinal);
+    private readonly List<Exception> _openCleanupErrors = [];
     private readonly CancellationTokenSource _lifetime = new();
     private readonly object _shutdownSync = new();
     private Task? _shutdown;
@@ -29,7 +30,16 @@ public sealed class DesktopSessionManager : IAsyncDisposable
             var created = await factory(linked.Token).ConfigureAwait(false);
             if (linked.IsCancellationRequested || _sessions.ContainsKey(created.Id))
             {
-                await created.DisposeAsync().ConfigureAwait(false);
+                try
+                {
+                    await created.DisposeAsync().ConfigureAwait(false);
+                }
+                catch (Exception exception)
+                {
+                    _openCleanupErrors.Add(exception);
+                    throw;
+                }
+
                 linked.Token.ThrowIfCancellationRequested();
                 throw new InvalidOperationException("The session is already open.");
             }
@@ -43,6 +53,10 @@ public sealed class DesktopSessionManager : IAsyncDisposable
     /// <para>取消所有会话并等待每个宿主收尾；重复调用等待同一次关闭。</para>
     /// <para>Cancels every session and awaits all hosts; repeated calls await the same shutdown.</para>
     /// </summary>
+    /// <remarks>
+    ///     <para>取消异常不跳过会话释放；全部尝试结束后汇总异常及未可靠保存的警告。</para>
+    ///     <para>Cancellation failures do not skip session disposal; aggregates failures and persistence warnings after all attempts finish.</para>
+    /// </remarks>
     public ValueTask DisposeAsync()
     {
         lock (_shutdownSync)
@@ -54,13 +68,45 @@ public sealed class DesktopSessionManager : IAsyncDisposable
 
     private async Task ShutdownAsync()
     {
-        await _lifetime.CancelAsync().ConfigureAwait(false);
+        List<Exception> errors = [];
+        try
+        {
+            await _lifetime.CancelAsync().ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            errors.Add(exception);
+        }
+
         await _gate.WaitAsync().ConfigureAwait(false);
         try
         {
-            await Task.WhenAll(_sessions.Values.Select(session => session.DisposeAsync().AsTask())).ConfigureAwait(false);
-            _sessions.Clear();
+            errors.AddRange(_openCleanupErrors);
+            _openCleanupErrors.Clear();
+            var outcomes = await Task.WhenAll(_sessions.Values.Select(async session =>
+            {
+                List<Exception> failures = [];
+                try
+                {
+                    await session.DisposeAsync().ConfigureAwait(false);
+                }
+                catch (Exception exception)
+                {
+                    failures.Add(exception);
+                }
+
+                if (session.Host.PersistenceWarning is { } warning)
+                    failures.Add(new IOException($"会话 {session.Id} 未可靠保存：{warning}"));
+                return failures;
+            })).ConfigureAwait(false);
+            errors.AddRange(outcomes.SelectMany(outcome => outcome));
         }
-        finally { _gate.Release(); }
+        finally
+        {
+            _sessions.Clear();
+            _gate.Release();
+        }
+
+        if (errors.Count > 0) throw new AggregateException("关闭会话时发生错误；已尝试完成所有会话清理。", errors);
     }
 }

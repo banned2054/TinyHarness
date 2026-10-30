@@ -25,6 +25,7 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     private readonly SemaphoreSlim                 _refreshGate = new(1, 1);
     private readonly HashSet<string>               _projectReloadRetried = new(StringComparer.Ordinal);
     private          bool                          _closing;
+    private          Task?                         _shutdown;
     private          string?                       _initializationCursor;
     private          bool                          _loadingCatalog;
     private          int                           _migrationBusy;
@@ -241,15 +242,63 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     ///         session's cancellation, cleanup and saving.
     ///     </para>
     /// </summary>
-    public async ValueTask DisposeAsync()
+    /// <remarks>
+    ///     <para>各阶段失败不跳过其余阶段；重复调用等待同一次关闭及其汇总结果。</para>
+    ///     <para>A failed stage does not skip later stages; repeated calls await the same shutdown and aggregate outcome.</para>
+    /// </remarks>
+    public ValueTask DisposeAsync() => new(_shutdown ??= ShutdownAsync());
+
+    private async Task ShutdownAsync()
     {
         _closing = true;
-        await _lifetime.CancelAsync();
+        List<Exception> errors = [];
+        try
+        {
+            await _lifetime.CancelAsync();
+        }
+        catch (Exception exception)
+        {
+            errors.Add(exception);
+        }
+
         // linked 取消源已随 lifetime 触发；显式取消覆盖未关联路径，随后等待迁移真正退出。
-        _organizeSource?.Cancel();
-        if (_organizeFinished is { } finished) await finished.Task;
-        Notice = "正在关闭：等待所有会话取消、工具清理和日志保存…";
-        await _manager.DisposeAsync();
+        try
+        {
+            _organizeSource?.Cancel();
+        }
+        catch (Exception exception)
+        {
+            errors.Add(exception);
+        }
+
+        try
+        {
+            if (_organizeFinished is { } finished) await finished.Task;
+        }
+        catch (Exception exception)
+        {
+            errors.Add(exception);
+        }
+
+        try
+        {
+            Notice = "正在关闭：等待所有会话取消、工具清理和日志保存…";
+        }
+        catch (Exception exception)
+        {
+            errors.Add(exception);
+        }
+
+        try
+        {
+            await _manager.DisposeAsync();
+        }
+        catch (Exception exception)
+        {
+            errors.Add(exception);
+        }
+
+        if (errors.Count > 0) throw new AggregateException("关闭清理发生错误。", errors);
     }
 
     /// <summary>

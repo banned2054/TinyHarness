@@ -7,6 +7,7 @@ using TinyHarness.Core.Models.Permissions;
 using TinyHarness.Core.Models.Session;
 using TinyHarness.Core.Models.Tools;
 using TinyHarness.Core.Services.ChatCompletions;
+using TinyHarness.Core.Services.Context;
 using TinyHarness.Core.Services.Persistence;
 using TinyHarness.Core.Services.Session;
 using TinyHarness.Core.Services.Tools;
@@ -76,6 +77,86 @@ public sealed class DesktopLifecycleTests
         await shutdown.WaitAsync(Timeout);
         Assert.That(model.Disposed, Is.True);
         Assert.Throws<ObjectDisposedException>(() => session.SubmitAsync("late"));
+    }
+
+    [Test]
+    public async Task ShutdownAggregatesEveryWriterFailureAndDisposesOtherSessions()
+    {
+        var manager = new DesktopSessionManager();
+        var first   = new WaitingModel(Signal());
+        var second  = new WaitingModel(Signal());
+        var third   = new WaitingModel(Signal());
+        await manager.OpenAsync(null, _ =>
+                                    Task.FromResult(Create(first,
+                                                           new DelayedFailingWriter(Signal(), Signal(),
+                                                               "first disposal failure"))));
+        await manager.OpenAsync(null, _ =>
+                                    Task.FromResult(Create(second,
+                                                           new DelayedFailingWriter(Signal(), Signal(),
+                                                               "second disposal failure"))));
+        await manager.OpenAsync(null, _ => Task.FromResult(Create(third)));
+        var close   = manager.DisposeAsync().AsTask();
+        var failure = await Assert.CatchAsync<AggregateException>(async () => await close.WaitAsync(Timeout));
+        Assert.That(failure!.Flatten().InnerExceptions.Select(error => error.Message),
+                    Is.EquivalentTo(new[] { "first disposal failure", "second disposal failure" }));
+        Assert.That(first.Disposed && second.Disposed && third.Disposed, Is.True);
+        Assert.That(manager.DisposeAsync().AsTask(), Is.SameAs(close));
+    }
+
+    [Test]
+    public async Task OpenCancellationCallbackFailureDoesNotSkipExistingSessionCleanup()
+    {
+        var manager    = new DesktopSessionManager();
+        var existing   = new WaitingModel(Signal());
+        var late       = new WaitingModel(Signal());
+        var lateWriter = new DelayedFailingWriter(Signal(), Signal(), "late session disposal failure");
+        await manager.OpenAsync(null, _ => Task.FromResult(Create(existing)));
+        var entered = Signal();
+        var open = manager.OpenAsync(null, async token =>
+        {
+            using var registration = token.Register(() => throw new IOException("open callback failure"));
+            entered.TrySetResult();
+            try
+            {
+                await Task.Delay(System.Threading.Timeout.Infinite, token);
+            }
+            catch (OperationCanceledException)
+            {
+            }
+
+            return Create(late, lateWriter);
+        });
+        await entered.Task.WaitAsync(Timeout);
+        var close       = manager.DisposeAsync().AsTask();
+        var openFailure = await Assert.CatchAsync<AggregateException>(async () => await open.WaitAsync(Timeout));
+        Assert.That(openFailure!.Flatten().InnerExceptions.Any(error =>
+                                                                   error.Message == "late session disposal failure"),
+                    Is.True);
+        var failure = await Assert.CatchAsync<AggregateException>(async () => await close.WaitAsync(Timeout));
+        Assert.That(failure!.Flatten().InnerExceptions.Select(error => error.Message),
+                    Does.Contain("open callback failure").And.Contain("late session disposal failure"));
+        Assert.That(existing.Disposed && late.Disposed && lateWriter.Disposed, Is.True);
+    }
+
+    [Test]
+    public async Task ShutdownReportsSaveWarningsAfterWaitingForTerminalSaveAndDisposingWriter()
+    {
+        var manager     = new DesktopSessionManager();
+        var enteredSave = Signal();
+        var releaseSave = Signal();
+        var writer      = new DelayedFailingWriter(enteredSave, releaseSave);
+        var model       = new WaitingModel(Signal(), CompletedSignal());
+        var session     = await manager.OpenAsync(null, _ => Task.FromResult(Create(model, writer)));
+        var run         = session.SubmitAsync("save before shutdown");
+        await enteredSave.Task.WaitAsync(Timeout);
+        var close = manager.DisposeAsync().AsTask();
+        Assert.That(close.IsCompleted, Is.False);
+        releaseSave.TrySetResult();
+        var failure = await Assert.CatchAsync<AggregateException>(async () => await close.WaitAsync(Timeout));
+        await run.WaitAsync(Timeout);
+        Assert.That(failure!.Flatten().InnerExceptions.Any(error => error.Message.Contains("fixture save failed")),
+                    Is.True);
+        Assert.That(writer.Disposed && model.Disposed, Is.True);
     }
 
     [Test]
@@ -312,13 +393,17 @@ public sealed class DesktopLifecycleTests
         public void Dispose() => Disposed = true;
     }
 
-    private sealed class DelayedFailingWriter(TaskCompletionSource entered, TaskCompletionSource release)
+    private sealed class DelayedFailingWriter(
+        TaskCompletionSource entered,
+        TaskCompletionSource release,
+        string?              disposalError = null)
         : ISessionStoreWriter
     {
+        public bool   Disposed       { get; private set; }
         public string SnapshotPath   => "offline";
         public long   CommitSequence => 0;
-        public bool Disposed { get; private set; }
-        public async Task CommitAsync(ChatSession       session, Core.Services.Context.ConversationContext context,
+
+        public async Task CommitAsync(ChatSession       session, ConversationContext context,
                                       CancellationToken cancellationToken)
         {
             entered.TrySetResult();
@@ -326,6 +411,10 @@ public sealed class DesktopLifecycleTests
             throw new IOException("fixture save failed");
         }
 
-        public void Dispose() => Disposed = true;
+        public void Dispose()
+        {
+            Disposed = true;
+            if (disposalError is not null) throw new IOException(disposalError);
+        }
     }
 }

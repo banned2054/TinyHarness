@@ -1,6 +1,9 @@
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Interactivity;
+using Avalonia.Layout;
+using Avalonia.Media;
 using Avalonia.Platform.Storage;
 using TinyHarness.Desktop.ViewModels;
 
@@ -10,14 +13,14 @@ public sealed partial class MainWindow : Window
 {
     // 侧栏拖拽常量：宽度上限 = min(480, 可用宽 - 右栏最小 560)；
     // splitter 布局列宽 0，命中区悬跨分界线、不占布局宽度。
-    private const double SidebarMinWidth     = 240;
-    private const double SidebarMaxWidth     = 480;
-    private const double SidebarDefaultWidth = 280;
-    private const double ContentMinWidth     = 560;
+    private const    double               SidebarMinWidth     = 240;
+    private const    double               SidebarMaxWidth     = 480;
+    private const    double               SidebarDefaultWidth = 280;
+    private const    double               ContentMinWidth     = 560;
+    private readonly DesktopCloseWorkflow _closeWorkflow;
 
     private readonly MainWindowViewModel _model;
     private          bool                _allowClose;
-    private          bool                _closing;
 
     public MainWindow() : this(new MainWindowViewModel())
     {
@@ -26,7 +29,12 @@ public sealed partial class MainWindow : Window
     public MainWindow(MainWindowViewModel model)
     {
         InitializeComponent();
-        _model                  =  model;
+        _model = model;
+        _closeWorkflow = new DesktopCloseWorkflow(async () =>
+        {
+            await _model.DisposeAsync();
+            DesktopLifecycleDiagnostics.Record("window-cleanup-completed");
+        }, ConfirmExitAsync, Exit);
         DataContext             =  model;
         Closing                 += OnClosing;
         ContentGrid.SizeChanged += OnContentGridSizeChanged;
@@ -64,24 +72,71 @@ public sealed partial class MainWindow : Window
     {
         if (_allowClose) return;
         args.Cancel = true;
-        if (_closing) return;
         DesktopLifecycleDiagnostics.Record("window-close-requested");
-        _closing  = true;
-        IsEnabled = false;
+        if (Content is Control content) content.IsEnabled = false;
         try
         {
-            await _model.DisposeAsync();
-            _allowClose = true;
-            DesktopLifecycleDiagnostics.Record("window-cleanup-completed");
-            if (App.Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop) desktop.Shutdown();
+            await _closeWorkflow.RequestCloseAsync();
         }
         catch (Exception exception)
         {
-            DesktopLifecycleDiagnostics.Record("window-cleanup-failed", exception);
-            _model.Notice = $"关闭未完成：{exception.Message}";
-            _closing      = false;
-            IsEnabled     = true;
+            DesktopLifecycleDiagnostics.Record("window-close-prompt-failed", exception);
+            _model.Notice = "退出确认未完成，请再次关闭窗口。";
         }
+    }
+
+    /// <summary>
+    ///     <para>清理尝试结束后询问是否仍然退出；默认选择保留窗口，异常详情仅进入诊断。</para>
+    ///     <para>
+    ///         Asks whether to exit after cleanup attempts finish; defaults to retaining the window and sends exception
+    ///         details only to diagnostics.
+    ///     </para>
+    /// </summary>
+    private Task<bool> ConfirmExitAsync(Exception exception)
+    {
+        DesktopLifecycleDiagnostics.Record("window-cleanup-failed", exception);
+        _model.Notice = "关闭清理异常，可能有内容未保存。再次关闭窗口可重新确认退出。";
+        var dialog = new Window
+        {
+            Title                 = "关闭清理异常",
+            Width                 = 460,
+            SizeToContent         = SizeToContent.Height,
+            CanResize             = false,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner
+        };
+        var stay  = new Button { Content = "暂不退出", IsCancel = true, IsDefault = true };
+        var leave = new Button { Content = "仍然退出" };
+        stay.Click  += (_, _) => dialog.Close(false);
+        leave.Click += (_, _) => dialog.Close(true);
+        dialog.Content = new StackPanel
+        {
+            Margin  = new Thickness(24),
+            Spacing = 20,
+            Children =
+            {
+                new TextBlock
+                {
+                    Text         = "关闭清理异常，可能有内容未保存，是否仍然退出？\n\n暂不退出后，应用将保持关闭状态；再次关闭窗口可重新确认。",
+                    TextWrapping = TextWrapping.Wrap
+                },
+                new StackPanel
+                {
+                    Orientation         = Orientation.Horizontal,
+                    HorizontalAlignment = HorizontalAlignment.Right,
+                    Spacing             = 12,
+                    Children            = { stay, leave }
+                }
+            }
+        };
+        return dialog.ShowDialog<bool>(this);
+    }
+
+    private void Exit()
+    {
+        _allowClose = true;
+        DesktopLifecycleDiagnostics.Record("window-exit-approved");
+        if (App.Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop) desktop.Shutdown();
+        else Close();
     }
 
     /// <summary>窗口尺寸变化后重新 clamp 左栏宽度。</summary>
