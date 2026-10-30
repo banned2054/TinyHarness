@@ -1,3 +1,4 @@
+using System.Globalization;
 using TinyHarness.Core.Models.Configuration;
 using TinyHarness.Core.Models.Runtime.WindowsSandbox;
 
@@ -44,8 +45,8 @@ internal static class WindowsSandboxPolicyPlanner
             throw new
                 InvalidOperationException($"The workspace root must be a fully qualified absolute path to enable the Windows sandbox: '{workspaceRoot}'.");
 
-        var setupPath  = RequireAbsoluteSetting(settings.SetupExecutablePath, "setupExecutablePath");
-        var runnerPath = RequireAbsoluteSetting(settings.RunnerExecutablePath, "runnerExecutablePath");
+        var setupPath   = RequireAbsoluteSetting(settings.SetupExecutablePath, "setupExecutablePath");
+        var runnerPath  = RequireAbsoluteSetting(settings.RunnerExecutablePath, "runnerExecutablePath");
         // 空白 home 解析为独立的固定默认 home；显式值必须保持绝对（fail closed）。
         var sandboxHome = WindowsSandboxComponents.ResolveSandboxHome(settings.SandboxHome, settings.AllowTcpLoopback);
         var extraRoots =
@@ -55,7 +56,8 @@ internal static class WindowsSandboxPolicyPlanner
             ? Path.Combine(sandboxHome, "tmp")
             : RequireAbsoluteSetting(settings.SandboxTempRoot, "sandboxTempRoot");
 
-        var targetEnvironment = SandboxTargetEnvironment.Build(tempRoot, settings.ExtraEnvironment, knownSecrets);
+        var gitEnvironment    = BuildGitEnvironment(settings.ExtraEnvironment, workspaceRoot);
+        var targetEnvironment = SandboxTargetEnvironment.Build(tempRoot, gitEnvironment, knownSecrets);
         var policy = SandboxPolicyResolver.Resolve(settings.Policy, workspaceRoot, targetEnvironment,
                                                    settings.AdditionalWriteRoots, settings.AllowTcpLoopback);
         return new PolicyPlan
@@ -68,6 +70,52 @@ internal static class WindowsSandboxPolicyPlanner
             TargetEnvironment    = targetEnvironment,
             Policy               = policy
         };
+    }
+
+    /// <summary>
+    ///     <para>保留可信附加配置，以进程级 Git 配置精确信任当前工作区；畸形配置拒绝启动。</para>
+    ///     <para>
+    ///         Preserves trusted extras and trusts the exact workspace through process-scoped Git configuration; rejects
+    ///         malformed configuration.
+    ///     </para>
+    /// </summary>
+    private static IReadOnlyDictionary<string, string> BuildGitEnvironment(
+        IReadOnlyDictionary<string, string>? extras, string workspaceRoot)
+    {
+        var environment = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (extras is not null)
+            foreach (var (name, value) in extras)
+            {
+                ArgumentException.ThrowIfNullOrWhiteSpace(name);
+                environment[name.Trim()] = value;
+            }
+
+        var count = 0;
+        if (environment.TryGetValue("GIT_CONFIG_COUNT", out var configuredCount) &&
+            !string.IsNullOrEmpty(configuredCount)                               &&
+            (!int.TryParse(configuredCount, NumberStyles.None, CultureInfo.InvariantCulture, out count) ||
+             count > 1024))
+            throw new InvalidOperationException("Sandbox GIT_CONFIG_COUNT must be an integer between 0 and 1024.");
+
+        for (var index = 0; index < count; index++)
+        {
+            var suffix = index.ToString(CultureInfo.InvariantCulture);
+            if (!environment.TryGetValue("GIT_CONFIG_KEY_" + suffix, out var key) ||
+                string.IsNullOrEmpty(key)                                         ||
+                !environment.ContainsKey("GIT_CONFIG_VALUE_" + suffix))
+                throw new InvalidOperationException($"Sandbox Git configuration pair {suffix} is incomplete.");
+        }
+
+        // 清除系统、全局及附加配置中的旧信任列表，只自动信任本工作区，不包含子仓库通配符。
+        var resetIndex     = count.ToString(CultureInfo.InvariantCulture);
+        var workspaceIndex = (count + 1).ToString(CultureInfo.InvariantCulture);
+        environment["GIT_CONFIG_KEY_"   + resetIndex]     = "safe.directory";
+        environment["GIT_CONFIG_VALUE_" + resetIndex]     = "";
+        environment["GIT_CONFIG_KEY_"   + workspaceIndex] = "safe.directory";
+        environment["GIT_CONFIG_VALUE_" + workspaceIndex] =
+            Path.TrimEndingDirectorySeparator(Path.GetFullPath(workspaceRoot)).Replace('\\', '/');
+        environment["GIT_CONFIG_COUNT"] = (count + 2).ToString(CultureInfo.InvariantCulture);
+        return environment;
     }
 
     private static string RequireAbsoluteSetting(string? value, string fieldName) =>
