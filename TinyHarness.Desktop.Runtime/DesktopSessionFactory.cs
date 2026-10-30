@@ -30,10 +30,11 @@ namespace TinyHarness.Desktop.Runtime;
 ///     </para>
 /// </summary>
 public sealed record DesktopEvent(
-    string              Kind,
-    string?             RunId,
-    string?             Text    = null,
-    SessionHistoryItem? History = null);
+    string                       Kind,
+    string?                      RunId,
+    string?                      Text            = null,
+    SessionHistoryItem?          History         = null,
+    DesktopWorkspaceRepairState? WorkspaceRepair = null);
 
 /// <summary>
 ///     <para>一次打开请求；工作区及写入许可由人类界面显式选择，恢复不继承历史批准。</para>
@@ -147,14 +148,45 @@ public sealed class DesktopSessionFactory
             sandbox = WindowsSandboxComposer.Compose(settings, root, secrets);
         }
 
+        SandboxDiagnosticLog.Event("session",
+                                   $"workspace='{root}' identity='{access.Identity.FileIdentity}' allowChanges={request.AllowChanges} " +
+                                   $"sandbox={(sandbox is null ? "disabled" : "enabled")} store='{directory}' user='{Environment.UserName}'");
+
         var permissions = new PermissionEngine(root, config.CommandRules, workspaceReadOnly : () => access.IsReadOnly);
-        var workspace   = new Workspace(root);
+        DesktopWorkspaceCoordinator? repair = null;
+        var backend = sandbox?.Backend ?? new HostProcessBackend(secrets);
+        if (sandbox is not null && user.Settings?.WindowsSandbox is { } sandboxSettings)
+        {
+            var grant = new ProcessWorkspaceAclGrant(
+                                                     [
+                                                         userPath, directory, sandbox.Components.SetupExecutablePath,
+                                                         sandbox.Components.RunnerExecutablePath,
+                                                         sandbox.Components.SandboxHome
+                                                     ],
+                                                     [root, .. sandboxSettings.AdditionalWriteRoots], sandboxSettings);
+            var services = new DesktopWorkspaceRepairServices(async token =>
+            {
+                if (!await grant.CanChangePermissionsAsync(access.Identity, token).ConfigureAwait(false)) return false;
+                await grant.PrepareWithoutElevationAsync(access.Identity, token).ConfigureAwait(false);
+                return true;
+            }, grant, async token =>
+            {
+                if (!await grant.IsReadyAsync(access.Identity, token).ConfigureAwait(false))
+                    throw new InvalidOperationException("工作区沙箱权限仍未就绪。");
+            }, () => grant.ValidatePreparationScope(access.Identity));
+            repair = new DesktopWorkspaceCoordinator(access.Identity, services, state =>
+                                                         events(new DesktopEvent("workspace-repair", null,
+                                                                         WorkspaceRepair : state)));
+            backend = new DesktopWorkspaceBackend(backend, repair);
+        }
+
+        var workspace = new Workspace(root);
         ITool[] toolSet =
         [
             new ListFilesTool(workspace), new SearchTextTool(workspace), new ReadFileTool(workspace),
             new ApplyPatchTool(workspace),
             new ShellTool(workspace, config.DefaultToolTimeoutSeconds, secrets,
-                          processBackend : sandbox?.Backend ?? new HostProcessBackend(secrets),
+                          processBackend : backend,
                           executionPolicy : sandbox?.ExecutionPolicy)
         ];
         var tools = new ToolRegistry(toolSet.Select(tool => access.Guard(() => tool)));
@@ -281,7 +313,7 @@ public sealed class DesktopSessionFactory
             return new DesktopSession(host, approvals,
                                       (profile, modelId, effort, revision, token) =>
                                           ChangeAsync(host, profile, modelId, effort, revision, token),
-                                      token => RefreshCurrentAsync(host, token));
+                                      token => RefreshCurrentAsync(host, token), repair);
         }
         catch
         {

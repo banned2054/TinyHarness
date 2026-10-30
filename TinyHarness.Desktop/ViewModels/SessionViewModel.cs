@@ -96,6 +96,7 @@ public sealed partial class SessionViewModel : ObservableObject
             UpdateNotices();
         }, ShowError);
         InitializeComposer();
+        InitializeWorkspaceRepair();
     }
 
     public string? Id { get; private set; }
@@ -241,6 +242,8 @@ public sealed partial class SessionViewModel : ObservableObject
             if (!SetProperty(ref _running, value)) return;
             OnPropertyChanged(nameof(CanChangeModel));
             OnPropertyChanged(nameof(ComposerSendHint));
+            OnPropertyChanged(nameof(CanRepairWorkspace));
+            OpenWorkspaceRepairCommand.RaiseCanExecuteChanged();
         }
     }
 
@@ -512,6 +515,7 @@ public sealed partial class SessionViewModel : ObservableObject
                 _runError = update.Text ?? "运行失败";
                 Notice    = _runError;
                 break;
+            case "workspace-repair" when update.WorkspaceRepair is { } repair : ApplyWorkspaceRepair(repair); break;
             case "history" when update.History is { } history : ApplyHistory(history); break;
         }
     }

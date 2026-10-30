@@ -13,7 +13,9 @@ public sealed class DesktopSession(
     DesktopApprovalProvider approvals,
     Func<string, string, ModelReasoningEffort?, long, CancellationToken, Task<SessionModelSelection>>? changeModel =
         null,
-    Func<CancellationToken, Task>? validateCurrent = null) : IAsyncDisposable
+    Func<CancellationToken, Task>? validateCurrent = null,
+    DesktopWorkspaceCoordinator? workspaceRepair = null,
+    DesktopWorkspaceOperationScope? workspaceScope = null) : IAsyncDisposable
 {
     private readonly object                   _sync     = new();
     private readonly CancellationTokenSource  _lifetime = new();
@@ -26,6 +28,7 @@ public sealed class DesktopSession(
     public ChatSessionHost         Host      { get; } = host;
     public DesktopApprovalProvider Approvals { get; } = approvals;
     public string                  Id        => Host.Session.Id;
+    public DesktopWorkspaceCoordinator? WorkspaceRepair { get; } = workspaceRepair;
 
     public bool IsRunning
     {
@@ -49,13 +52,17 @@ public sealed class DesktopSession(
                 throw new InvalidOperationException("Model selection is in progress.");
             if (_run is { IsCompleted: false })
                 throw new InvalidOperationException("This session already has an active run.");
+            var lease = (workspaceScope ?? DesktopWorkspaceOperationScope.Shared).EnterRun(Host.Session.WorkspaceRoot);
             _runCancellation?.Dispose();
             var linked = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token, cancellationToken);
             _runCancellation = linked;
             _run = Task.Run(async () =>
             {
-                if (validateCurrent is not null) await validateCurrent(linked.Token).ConfigureAwait(false);
-                return await Host.SubmitTurnAsync(text, linked.Token).ConfigureAwait(false);
+                using (lease)
+                {
+                    if (validateCurrent is not null) await validateCurrent(linked.Token).ConfigureAwait(false);
+                    return await Host.SubmitTurnAsync(text, linked.Token).ConfigureAwait(false);
+                }
             });
             return _run;
         }
@@ -119,6 +126,9 @@ public sealed class DesktopSession(
         Host.CancelRun();
         try
         {
+            if (WorkspaceRepair is not null)
+                await WorkspaceRepair.DisposeAsync().ConfigureAwait(false);
+
             Task? run;
             Task? change;
             lock (_sync)

@@ -68,6 +68,39 @@
                                 </Border>
                                 <TextBlock Text="{Binding Notice}" IsVisible="{Binding HasNotice}" TextWrapping="Wrap"
                                            Classes="caption" />
+                                <StackPanel IsVisible="{Binding HasWorkspaceProblem}" Spacing="8">
+                                    <TextBlock Text="{Binding WorkspaceRepairMessage}" TextWrapping="Wrap" />
+                                    <WrapPanel>
+                                        <Button Content="查看权限详情" Command="{Binding ShowWorkspaceDetailsCommand}" Margin="0,0,8,0" />
+                                        <Button Content="{Binding WorkspaceRepairAction}" Command="{Binding OpenWorkspaceRepairCommand}"
+                                                IsEnabled="{Binding CanRepairWorkspace}" Margin="0,0,8,0" />
+                                        <Button Content="取消修复，等待收尾" Command="{Binding CancelWorkspaceRepairCommand}"
+                                                IsVisible="{Binding IsWorkspaceRepairBusy}" />
+                                    </WrapPanel>
+                                    <Border IsVisible="{Binding WorkspaceRepairDetailsOpen}" Padding="12"
+                                            Background="{DynamicResource PanelBackgroundBrush}" CornerRadius="8">
+                                        <StackPanel Spacing="8">
+                                            <ScrollViewer MaxHeight="240">
+                                                <SelectableTextBlock Text="{Binding WorkspaceRepairDetails}" TextWrapping="Wrap" />
+                                            </ScrollViewer>
+                                            <Button Content="关闭详情" Command="{Binding CloseWorkspaceDetailsCommand}" />
+                                        </StackPanel>
+                                    </Border>
+                                    <Border IsVisible="{Binding WorkspaceRepairConfirmationOpen}" Padding="12"
+                                            Background="{DynamicResource PanelBackgroundBrush}" CornerRadius="8">
+                                        <StackPanel Spacing="8">
+                                            <TextBlock Text="确认目录权限修复范围" FontWeight="SemiBold" />
+                                            <ScrollViewer MaxHeight="240">
+                                                <TextBlock Text="{Binding WorkspaceRepairConfirmationText}" TextWrapping="Wrap" />
+                                            </ScrollViewer>
+                                            <WrapPanel>
+                                                <Button Content="取消" Command="{Binding CancelWorkspaceRepairCommand}" Margin="0,0,8,0" />
+                                                <Button Content="确认此范围" Command="{Binding ConfirmWorkspaceRepairCommand}"
+                                                        IsEnabled="{Binding CanRepairWorkspace}" />
+                                            </WrapPanel>
+                                        </StackPanel>
+                                    </Border>
+                                </StackPanel>
                                 <Button Content="我已检查中断产生的变更，解除检查阻断" IsVisible="{Binding InspectionPending}"
                                         IsEnabled="{Binding !IsRunning}"
                                         Command="{Binding AcknowledgeInspectionCommand}" />

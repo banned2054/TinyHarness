@@ -1,4 +1,6 @@
 using Avalonia;
+using TinyHarness.Core.Services.Runtime;
+using TinyHarness.Core.Services.Runtime.WindowsSandbox;
 
 namespace TinyHarness.Desktop;
 
@@ -11,6 +13,20 @@ internal static class Program
     [STAThread]
     public static int Main(string[] args)
     {
+        if (args.FirstOrDefault() == ProcessWorkspaceAclGrant.HelperArgument)
+        {
+            if (args.Length != 2) return 2;
+            try
+            {
+                return ProcessWorkspaceAclGrant.ExecuteHelperAsync(args[1]).GetAwaiter().GetResult();
+            }
+            catch (Exception)
+            {
+                return 1;
+            }
+        }
+
+        SandboxDiagnosticLog.Initialize();
         if (args.Contains("--offline-smoke", StringComparer.Ordinal))
             return OfflineSmoke.RunAsync().GetAwaiter().GetResult();
         BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
