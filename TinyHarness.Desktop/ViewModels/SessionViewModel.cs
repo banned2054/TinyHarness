@@ -27,6 +27,7 @@ public sealed partial class SessionViewModel : ObservableObject
     private          string?                                       _activeRunId;
     private          bool                                          _allowChanges;
     private          DesktopApproval?                              _approval;
+    private          string?                                       _cancellationError;
     private          bool                                          _changing;
     private          Task?                                         _completion;
     private          string                                        _draft = string.Empty;
@@ -76,11 +77,7 @@ public sealed partial class SessionViewModel : ObservableObject
         _title             = title           ?? "新对话";
         SendCommand        = new AsyncCommand(SendAsync, ShowError);
         LoadHistoryCommand = new AsyncCommand(LoadHistoryAsync, ShowError);
-        CancelCommand = new RelayCommand(() =>
-        {
-            _openingCancellation?.Cancel();
-            if (_runtime?.Cancel() == true) Status = "取消中，等待清理和保存";
-        });
+        CancelCommand      = new RelayCommand(CancelRun);
         PauseCommand = new RelayCommand(() =>
         {
             if (_runtime?.Host.RequestPause() == true) Status = "已请求暂停";
@@ -411,7 +408,8 @@ public sealed partial class SessionViewModel : ObservableObject
             return;
         }
 
-        IsRunning = true;
+        _cancellationError = null;
+        IsRunning          = true;
         try
         {
             if (_runtime is null)
@@ -449,12 +447,44 @@ public sealed partial class SessionViewModel : ObservableObject
         }
     }
 
+    private void CancelRun()
+    {
+        DesktopLifecycleDiagnostics.Record("turn-cancel-requested");
+        List<Exception> errors = [];
+        try
+        {
+            _openingCancellation?.Cancel();
+        }
+        catch (Exception exception)
+        {
+            errors.Add(exception);
+        }
+
+        try
+        {
+            if (_runtime?.Cancel() == true) Status = "取消中，等待清理和保存";
+        }
+        catch (Exception exception)
+        {
+            errors.Add(exception);
+        }
+
+        if (errors.Count == 0) return;
+
+        var failure = new AggregateException(errors).Flatten();
+        _cancellationError = "取消请求发生错误：" +
+                             _factory.Redact(string.Join("；", failure.InnerExceptions.Select(item => item.Message)));
+        Notice = _cancellationError + "\n仍在等待清理和保存。";
+        Status = "取消请求异常，等待清理和保存";
+    }
+
     private async Task CompleteRunAsync(Task<SessionRun> execution)
     {
         try
         {
             var run = await execution;
-            _runError       = run.Result?.Error is { } error ? _factory.Redact(error) : null;
+            _runError = run.Result?.Error is { } error ? _factory.Redact(error) : null;
+            DesktopLifecycleDiagnostics.Record("turn-completed-" + run.Result?.Status);
             LastActivityUtc = DateTimeOffset.UtcNow;
             OnPropertyChanged(nameof(LastActivityUtc));
             Status = run.Result?.Status.ToString() ?? "运行结束";
@@ -465,6 +495,7 @@ public sealed partial class SessionViewModel : ObservableObject
         }
         catch (Exception exception)
         {
+            DesktopLifecycleDiagnostics.Record("turn-completion-failed", exception);
             ShowError(exception);
         }
         finally
@@ -516,7 +547,7 @@ public sealed partial class SessionViewModel : ObservableObject
                 Notice    = _runError;
                 break;
             case "workspace-repair" when update.WorkspaceRepair is { } repair : ApplyWorkspaceRepair(repair); break;
-            case "history" when update.History is { } history : ApplyHistory(history); break;
+            case "history" when update.History is { } history :                 ApplyHistory(history); break;
         }
     }
 
@@ -645,7 +676,7 @@ public sealed partial class SessionViewModel : ObservableObject
         {
             host.PersistenceWarning is { } warning ? $"本次未可靠保存：{warning}" : null,
             _runError,
-            host.DisplayWarning, host.InspectionPendingNote,
+            host.DisplayWarning, host.InspectionPendingNote, _cancellationError,
             host.Session.Amendments.Any(item => item.CanonicalMessageIndex is null)
                 ? "有已保存但未生效的补充；重启不会自动发送。"
                 : null

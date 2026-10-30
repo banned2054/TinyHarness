@@ -6,41 +6,67 @@ namespace TinyHarness.Desktop.Runtime;
 
 /// <summary>
 ///     <para>拥有一个宿主；页面选择不影响运行，释放必须等待取消与保存结束，客户端随宿主绑定释放。</para>
-///     <para>Owns one host; page selection never affects runs, disposal awaits cancellation and saving, and the model client is released with the host's binding.</para>
+///     <para>
+///         Owns one host; page selection never affects runs, disposal awaits cancellation and saving, and the model
+///         client is released with the host's binding.
+///     </para>
 /// </summary>
 public sealed class DesktopSession(
     ChatSessionHost         host,
     DesktopApprovalProvider approvals,
     Func<string, string, ModelReasoningEffort?, long, CancellationToken, Task<SessionModelSelection>>? changeModel =
         null,
-    Func<CancellationToken, Task>? validateCurrent = null,
-    DesktopWorkspaceCoordinator? workspaceRepair = null,
-    DesktopWorkspaceOperationScope? workspaceScope = null) : IAsyncDisposable
+    Func<CancellationToken, Task>?  validateCurrent = null,
+    DesktopWorkspaceCoordinator?    workspaceRepair = null,
+    DesktopWorkspaceOperationScope? workspaceScope  = null) : IAsyncDisposable
 {
-    private readonly object                   _sync     = new();
     private readonly CancellationTokenSource  _lifetime = new();
+    private readonly object                   _sync     = new();
+    private          Task?                    _change;
+    private          bool                     _closing;
+    private          Task?                    _disposeTask;
     private          Task<SessionRun>?        _run;
     private          CancellationTokenSource? _runCancellation;
-    private          Task?                    _disposeTask;
-    private          bool                     _closing;
-    private          Task?                    _change;
 
-    public ChatSessionHost         Host      { get; } = host;
-    public DesktopApprovalProvider Approvals { get; } = approvals;
-    public string                  Id        => Host.Session.Id;
+    public ChatSessionHost              Host            { get; } = host;
+    public DesktopApprovalProvider      Approvals       { get; } = approvals;
+    public string                       Id              => Host.Session.Id;
     public DesktopWorkspaceCoordinator? WorkspaceRepair { get; } = workspaceRepair;
 
     public bool IsRunning
     {
         get
         {
-            lock (_sync) return _run is { IsCompleted: false };
+            lock (_sync)
+            {
+                return _run is { IsCompleted: false };
+            }
+        }
+    }
+
+    /// <summary>
+    ///     <para>阻止后续提交，取消并等待本会话所有工作，然后随宿主释放 writer 与模型客户端。</para>
+    ///     <para>
+    ///         Rejects later submissions, cancels and awaits this session's work, then releases the writer and model client
+    ///         with the host.
+    ///     </para>
+    /// </summary>
+    public ValueTask DisposeAsync()
+    {
+        lock (_sync)
+        {
+            _closing     =   true;
+            _disposeTask ??= Task.Run(DisposeCoreAsync);
+            return new ValueTask(_disposeTask);
         }
     }
 
     /// <summary>
     ///     <para>预留本会话运行槽后在后台执行；重复提交在创建回合前被拒绝。</para>
-    ///     <para>Reserves this session's run slot before background execution; duplicate submissions fail before creating a turn.</para>
+    ///     <para>
+    ///         Reserves this session's run slot before background execution; duplicate submissions fail before creating a
+    ///         turn.
+    ///     </para>
     /// </summary>
     public Task<SessionRun> SubmitAsync(string text, CancellationToken cancellationToken = default)
     {
@@ -100,35 +126,62 @@ public sealed class DesktopSession(
         lock (_sync)
         {
             if (_run is not { IsCompleted: false }) return false;
-            _runCancellation?.Cancel();
-            Host.CancelRun();
-            return true;
-        }
-    }
+            List<Exception> errors = [];
+            try
+            {
+                _runCancellation?.Cancel();
+            }
+            catch (Exception exception)
+            {
+                errors.Add(exception);
+            }
 
-    /// <summary>
-    /// <para>阻止后续提交，取消并等待本会话所有工作，然后随宿主释放 writer 与模型客户端。</para>
-    /// <para>Rejects later submissions, cancels and awaits this session's work, then releases the writer and model client with the host.</para>
-    /// </summary>
-    public ValueTask DisposeAsync()
-    {
-        lock (_sync)
-        {
-            _closing = true;
-            _disposeTask ??= Task.Run(DisposeCoreAsync);
-            return new ValueTask(_disposeTask);
+            try
+            {
+                Host.CancelRun();
+            }
+            catch (Exception exception)
+            {
+                errors.Add(exception);
+            }
+
+            if (errors.Count > 0) throw new AggregateException("请求取消运行时发生错误；仍需等待清理和保存。", errors);
+            return true;
         }
     }
 
     private async Task DisposeCoreAsync()
     {
-        await _lifetime.CancelAsync().ConfigureAwait(false);
-        Host.CancelRun();
+        List<Exception> errors = [];
         try
         {
-            if (WorkspaceRepair is not null)
-                await WorkspaceRepair.DisposeAsync().ConfigureAwait(false);
+            await _lifetime.CancelAsync().ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            errors.Add(exception);
+        }
 
+        try
+        {
+            Host.CancelRun();
+        }
+        catch (Exception exception)
+        {
+            errors.Add(exception);
+        }
+
+        try
+        {
+            if (WorkspaceRepair is not null) await WorkspaceRepair.DisposeAsync().ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            errors.Add(exception);
+        }
+
+        try
+        {
             Task? run;
             Task? change;
             lock (_sync)
@@ -163,11 +216,17 @@ public sealed class DesktopSession(
             {
                 Host.Dispose();
             }
+            catch (Exception exception)
+            {
+                errors.Add(exception);
+            }
             finally
             {
                 _runCancellation?.Dispose();
                 _lifetime.Dispose();
             }
         }
+
+        if (errors.Count > 0) throw new AggregateException("关闭会话时发生错误；已完成其余清理。", errors);
     }
 }

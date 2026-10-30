@@ -32,6 +32,9 @@ public sealed partial class MainWindow : Window
         ContentGrid.SizeChanged += OnContentGridSizeChanged;
     }
 
+    // Avalonia 不为 ColumnDefinition 的 x:Name 生成字段，按位置取列。
+    private ColumnDefinition SidebarColumn => ContentGrid.ColumnDefinitions[0];
+
     private async void BrowseFolder(object? sender, RoutedEventArgs args)
     {
         if (sender is not Control { DataContext: SessionViewModel session } || !session.CanChooseWorkspace) return;
@@ -62,24 +65,24 @@ public sealed partial class MainWindow : Window
         if (_allowClose) return;
         args.Cancel = true;
         if (_closing) return;
+        DesktopLifecycleDiagnostics.Record("window-close-requested");
         _closing  = true;
         IsEnabled = false;
         try
         {
             await _model.DisposeAsync();
             _allowClose = true;
+            DesktopLifecycleDiagnostics.Record("window-cleanup-completed");
             if (App.Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop) desktop.Shutdown();
         }
         catch (Exception exception)
         {
+            DesktopLifecycleDiagnostics.Record("window-cleanup-failed", exception);
             _model.Notice = $"关闭未完成：{exception.Message}";
             _closing      = false;
             IsEnabled     = true;
         }
     }
-
-    // Avalonia 不为 ColumnDefinition 的 x:Name 生成字段，按位置取列。
-    private ColumnDefinition SidebarColumn => ContentGrid.ColumnDefinitions[0];
 
     /// <summary>窗口尺寸变化后重新 clamp 左栏宽度。</summary>
     private void OnContentGridSizeChanged(object? sender, SizeChangedEventArgs e)
