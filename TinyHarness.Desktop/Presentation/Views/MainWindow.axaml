@@ -16,6 +16,9 @@
         <DataTemplate DataType="vm:ToolActivityItemViewModel">
             <tooling:ToolActivityView />
         </DataTemplate>
+        <DataTemplate DataType="vm:ProcessSegmentItemViewModel">
+            <conversation:ProcessSegmentView />
+        </DataTemplate>
         <DataTemplate DataType="vm:ProcessGroupItemViewModel">
             <conversation:ProcessGroupView />
         </DataTemplate>

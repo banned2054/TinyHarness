@@ -1,0 +1,30 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:TinyHarness.Desktop.ViewModels"
+             x:Class="TinyHarness.Desktop.Presentation.Views.Conversation.ProcessSegmentView"
+             x:DataType="vm:ProcessSegmentItemViewModel">
+    <StackPanel>
+        <Button Classes="reason-row" Classes.expanded="{Binding IsExpanded}"
+                Focusable="True" Command="{Binding ToggleCommand}"
+                AutomationProperties.Name="{Binding SummaryText}">
+            <Grid ColumnDefinitions="Auto,*" ColumnSpacing="6">
+                <Panel Classes="row-leading" Width="16" Height="16" VerticalAlignment="Center">
+                    <Path Classes="row-icon" Data="{Binding LeadingIconStroke}"
+                          Stroke="{Binding $parent[Button].Foreground}" StrokeThickness="1" />
+                    <Path Classes="row-icon" Data="{Binding LeadingIconFill}"
+                          Fill="{Binding $parent[Button].Foreground}" />
+                    <Path Classes="row-chev row-chev-hover" Data="{StaticResource Icon.RowChevronDown}"
+                          Stroke="{Binding $parent[Button].Foreground}" StrokeThickness="1" />
+                    <Path Classes="row-chev row-chev-open" Data="{StaticResource Icon.RowChevronUp}"
+                          Stroke="{Binding $parent[Button].Foreground}" StrokeThickness="1" />
+                </Panel>
+                <TextBlock Grid.Column="1" Text="{Binding SummaryText}" Classes="tool-summary" />
+            </Grid>
+        </Button>
+        <Border Margin="7,4,0,8" Padding="14,0,0,0" BorderThickness="1,0,0,0"
+                BorderBrush="{DynamicResource SubtleBorderBrush}"
+                IsVisible="{Binding IsExpanded}">
+            <ItemsControl ItemsSource="{Binding Items}" />
+        </Border>
+    </StackPanel>
+</UserControl>

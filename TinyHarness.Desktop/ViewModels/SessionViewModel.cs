@@ -573,8 +573,8 @@ public sealed partial class SessionViewModel : ObservableObject
         if (!_historyIds.Add(item.Id)) return;
         if (item.Kind is SessionHistoryKind.User or SessionHistoryKind.Process or SessionHistoryKind.Final)
         {
-            if (item.Kind is SessionHistoryKind.Process or SessionHistoryKind.Final) StopStream(true);
-            var role = item.Kind == SessionHistoryKind.User ? MessageRole.User : MessageRole.Assistant;
+            var replacedStream = item.Kind is SessionHistoryKind.Process or SessionHistoryKind.Final ? _stream : null;
+            var role           = item.Kind == SessionHistoryKind.User ? MessageRole.User : MessageRole.Assistant;
             if (role == MessageRole.User && Title == "新对话" && !string.IsNullOrWhiteSpace(item.Text))
             {
                 var firstLine = item.Text.Split('\n')[0];
@@ -585,6 +585,8 @@ public sealed partial class SessionViewModel : ObservableObject
                                                                            item.Text ?? string.Empty,
                                                                            DateTimeOffset.Now,
                                                                            Reasoning : item.Reasoning));
+            if (replacedStream is not null) message.PreserveReasoningExpansion(replacedStream);
+
             if (role == MessageRole.User)
             {
                 Items.Add(message);
@@ -595,11 +597,11 @@ public sealed partial class SessionViewModel : ObservableObject
                 if (item.Kind == SessionHistoryKind.Process)
                 {
                     message.MarkInProcessGroup();
-                    group.Items.Add(message);
+                    ReplaceStream(group, message);
                 }
                 else
                 {
-                    if (message.GetProcessReasoningProjection() is { } reasoning) group.Items.Add(reasoning);
+                    ReplaceStream(group, message.GetProcessReasoningProjection());
                     Items.Add(message);
                 }
             }
@@ -636,20 +638,38 @@ public sealed partial class SessionViewModel : ObservableObject
         }
     }
 
-    private void StopStream(bool replace = false)
+    /// <summary>
+    ///     <para>在原位置用正式过程条目替换临时流，避免移除再添加造成中间重分段。</para>
+    ///     <para>Replaces a temporary stream in place with its recorded process item, avoiding intermediate regrouping.</para>
+    /// </summary>
+    private void ReplaceStream(ProcessGroupItemViewModel group, MessageItemViewModel? historyItem)
+    {
+        var stream = _stream;
+        _stream = null;
+        if (stream is not null)
+            foreach (var existing in _processGroups.Values)
+            {
+                var index = existing.Items.IndexOf(stream);
+                if (index < 0) continue;
+
+                if (ReferenceEquals(existing, group) && historyItem is not null)
+                {
+                    existing.Items[index] = historyItem;
+                    return;
+                }
+
+                existing.Items.RemoveAt(index);
+                break;
+            }
+
+        if (historyItem is not null) group.Items.Add(historyItem);
+    }
+
+    private void StopStream()
     {
         if (_stream is null) return;
-        if (replace)
-        {
-            foreach (var group in _processGroups.Values)
-                if (group.Items.Remove(_stream))
-                    break;
-        }
-        else
-        {
-            _stream.MarkInterrupted();
-        }
 
+        _stream.MarkInterrupted();
         _stream = null;
     }
 

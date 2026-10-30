@@ -227,8 +227,14 @@ public sealed class DesktopProjectionTests
         if (toolRounds > 100) Assert.That(pages, Is.GreaterThan(1));
     }
 
-    [Test]
-    public async Task ReasoningIsShownByDefaultAndPreservesOriginalTextAcrossHistoryReload()
+    [TestCase(0, false, false)]
+    [TestCase(1, true, false)]
+    [TestCase(2, false, false)]
+    [TestCase(0, false, true)]
+    [TestCase(1, true, true)]
+    [TestCase(2, false, true)]
+    public async Task ReasoningIsShownByDefaultAndPreservesOriginalTextAcrossHistoryReload(
+        int toggles, bool expanded, bool chooseAfterBody)
     {
         var fixture = await Fixture.CreateAsync();
         var finish  = Signal();
@@ -236,9 +242,12 @@ public sealed class DesktopProjectionTests
         var factory = new DesktopSessionFactory((_, _) => new Model(Signal(), finish, "offline answer",
                                                                     "thinking about fixture-secret-key before answering"),
                                                 new Credentials(), fixture.Config);
-        await using var manager           = new DesktopSessionManager();
-        var             page              = Page(manager, factory, fixture.First);
-        string?         streamedReasoning = null;
+        await using var              manager                 = new DesktopSessionManager();
+        var                          page                    = Page(manager, factory, fixture.First);
+        string?                      streamedReasoning       = null;
+        var                          expandedStreamedSegment = false;
+        ProcessSegmentItemViewModel? streamedSegment         = null;
+        var                          choseProjectedReasoning = false;
         page.Items.CollectionChanged += (_, args) =>
         {
             if (args.NewItems is null) return;
@@ -250,7 +259,32 @@ public sealed class DesktopProjectionTests
                         message.PropertyChanged += (_, change) =>
                         {
                             if (message.IsStreaming && change.PropertyName == nameof(MessageItemViewModel.Reasoning))
+                            {
                                 streamedReasoning = message.Reasoning;
+                                var segment = page.Items.OfType<ProcessGroupItemViewModel>().Single()
+                                                  .SegmentedItems.OfType<ProcessSegmentItemViewModel>().Single();
+                                if (!segment.IsExpanded) segment.ToggleCommand.Execute(null);
+                                if (!expandedStreamedSegment)
+                                {
+                                    streamedSegment = segment;
+                                    if (!chooseAfterBody)
+                                        for (var index = 0; index < toggles; index++)
+                                            message.ToggleReasoningCommand.Execute(null);
+                                }
+
+                                expandedStreamedSegment = true;
+                            }
+
+                            if (chooseAfterBody        &&
+                                message.IsStreaming    &&
+                                message.HasProcessBody &&
+                                change.PropertyName == nameof(MessageItemViewModel.HasProcessBody))
+                            {
+                                var reasoning = message.GetProcessReasoningProjection()!;
+                                for (var index = 0; index < toggles; index++)
+                                    reasoning.ToggleReasoningCommand.Execute(null);
+                                choseProjectedReasoning = true;
+                            }
                         };
                 };
         };
@@ -262,17 +296,24 @@ public sealed class DesktopProjectionTests
         Assert.That(settled.HasVisibleReasoning, Is.False);
         var processReasoning = page.Items.OfType<ProcessGroupItemViewModel>().Single().Items
                                    .OfType<MessageItemViewModel>().Single();
+        Assert.That(expandedStreamedSegment, Is.True, "流式推理期间展开了过程段。");
+        Assert.That(choseProjectedReasoning, Is.EqualTo(chooseAfterBody));
+        Assert.That(page.Items.OfType<ProcessGroupItemViewModel>().Single().SegmentedItems.Single(),
+                    Is.SameAs(streamedSegment), "正式历史替换临时流时保留过程段实例。");
+        Assert.That(page.Items.OfType<ProcessGroupItemViewModel>().Single().SegmentedItems
+                        .OfType<ProcessSegmentItemViewModel>().Single().IsExpanded,
+                    Is.True, "历史推理条目替换临时流时保留过程段展开选择。");
         Assert.That(processReasoning.HasVisibleReasoning, Is.True);
         Assert.That(processReasoning.Content, Is.Empty);
         Assert.That(processReasoning.Reasoning, Is.EqualTo(settled.Reasoning));
         Assert.That(settled.Reasoning, Is.EqualTo("thinking about fixture-secret-key before answering"));
         Assert.That(streamedReasoning, Is.EqualTo(settled.Reasoning));
         Assert.That(settled.ReasoningSummary, Is.Not.Null);
-        Assert.That(processReasoning.IsReasoningExpanded, Is.False);
+        Assert.That(processReasoning.IsReasoningExpanded, Is.EqualTo(expanded));
         processReasoning.ToggleReasoningCommand.Execute(null);
-        Assert.That(processReasoning.IsReasoningExpanded, Is.True);
+        Assert.That(processReasoning.IsReasoningExpanded, Is.EqualTo(!expanded));
         processReasoning.ToggleReasoningCommand.Execute(null);
-        Assert.That(processReasoning.IsReasoningExpanded, Is.False);
+        Assert.That(processReasoning.IsReasoningExpanded, Is.EqualTo(expanded));
         Assert.That(settled.Reasoning, Is.EqualTo("thinking about fixture-secret-key before answering"));
         var browse = new SessionViewModel(manager, factory, fixture.First, page.Id, fixture.Store,
                                           dispatch : action =>

@@ -88,82 +88,15 @@ public static class ToolCallText
     private const string TrashStroke =
         "M1.28149,3.88831 L14.7187,3.88831 M5.41602,3.88833 L5.41602,2.47962 C5.41602,2.29282 5.52492,2.11366 5.71876,1.98157 C5.9126,1.84948 6.17551,1.77527 6.44964,1.77527 L9.55053,1.77527 C9.82466,1.77527 10.0876,1.84948 10.2814,1.98157 C10.4753,2.11366 10.5842,2.29282 10.5842,2.47962 L10.5842,3.88833 M2.57349,3.88831 L3.19366,13.2943 C3.21937,13.5502 3.33952,13.7872 3.53065,13.9593 C3.72178,14.1313 3.97016,14.2259 4.22729,14.2246 L11.7728,14.2246 C12.0299,14.2259 12.2783,14.1313 12.4694,13.9593 C12.6605,13.7872 12.7807,13.5502 12.8064,13.2943 L13.4266,3.88831 M6.44946,6.98926 L6.44946,11.1238 M9.55054,6.98926 L9.55054,11.1238";
 
-    /// <summary>已知工具名 → 中文标题（对齐官方 tool.title.* 词典与插件词典）。</summary>
-    private static readonly Dictionary<string, string> Titles = new()
-    {
-        ["shell"] = "运行命令",
-        ["read_file"] = "读取文件",
-        ["list_files"] = "查看目录",
-        ["search_text"] = "搜索文本",
-        ["apply_patch"] = "应用补丁",
-        ["work_items"] = "更新工作项",
-        ["bash"]                   = "运行命令",
-        ["pwsh"]                   = "运行命令",
-        ["read"]                   = "读取",
-        ["read_image"]             = "读取图片",
-        ["web_fetch"]              = "读取",
-        ["web_search"]             = "搜索",
-        ["grep"]                   = "搜索",
-        ["glob"]                   = "搜索",
-        ["write"]                  = "写入",
-        ["edit"]                   = "编辑",
-        ["run_code"]               = "代码",
-        ["present"]                = "交付文件",
-        ["todo_write"]             = "更新任务清单",
-        ["ask_user_question"]      = "提问",
-        ["subagent"]               = "创建子智能体",
-        ["list_subagent_models"]   = "查看可用模型",
-        ["list_agents"]            = "查看子智能体",
-        ["send_message"]           = "发送消息",
-        ["interrupt_agent"]        = "中断智能体",
-        ["wait_agent"]             = "等待子智能体",
-        ["spawn_teammate"]         = "创建队友",
-        ["team_task_create"]       = "创建团队任务",
-        ["team_task_get"]          = "读取团队任务",
-        ["team_task_update"]       = "更新团队任务",
-        ["team_task_list"]         = "查看团队任务",
-        ["create_goal"]            = "创建目标",
-        ["get_goal"]               = "查看目标",
-        ["update_goal"]            = "更新目标",
-        ["schedule_create"]        = "创建定时任务",
-        ["schedule_list"]          = "查看定时任务",
-        ["schedule_update"]        = "修改定时任务",
-        ["schedule_delete"]        = "删除定时任务",
-        ["job_list"]               = "查看后台任务",
-        ["job_output"]             = "读取任务输出",
-        ["job_kill"]               = "取消后台任务",
-        ["terminal_open"]          = "创建终端",
-        ["terminal_read"]          = "读取终端",
-        ["terminal_list"]          = "查看终端",
-        ["terminal_signal"]        = "发送终端信号",
-        ["terminal_close"]         = "关闭终端",
-        ["lsp"]                    = "查询代码符号",
-        ["workflow"]               = "运行工作流",
-        ["ralph"]                  = "运行循环工作流",
-        ["session_event_read"]     = "读取事件",
-        ["session_event_search"]   = "搜索事件",
-        ["session_event_trace"]    = "追踪事件",
-        ["session_search"]         = "搜索会话",
-        ["session_trace"]          = "追踪会话",
-        ["cordis_package_inspect"] = "查询 Cordis 环境",
-        ["cordis_runtime_inspect"] = "查询 Cordis 环境",
-        ["cordis_inspect_list"]    = "检查提供方",
-        ["cordis_inspect_query"]   = "查询运行时",
-        ["cordis_inspect_self"]    = "检查动态插件",
-        ["cordis_run"]             = "运行 Cordis 插件",
-        ["cordis_stop"]            = "停止 Cordis 插件",
-        ["cordis_undefine"]        = "移除 Cordis 插件"
-    };
-
     /// <summary>工具名 → 摘要变体（对齐官方 TOOL_VARIANTS；缺席即 others 变体）。</summary>
     private static readonly Dictionary<string, string> Variants = new()
     {
-        ["shell"] = "bash",
-        ["read_file"] = "read",
-        ["list_files"] = "read",
-        ["search_text"] = "search",
-        ["apply_patch"] = "edit",
-        ["work_items"] = "todo",
+        ["shell"]                  = "bash",
+        ["read_file"]              = "read",
+        ["list_files"]             = "read",
+        ["search_text"]            = "search",
+        ["apply_patch"]            = "edit",
+        ["work_items"]             = "todo",
         ["bash"]                   = "bash",
         ["pwsh"]                   = "bash",
         ["read"]                   = "read",
@@ -274,38 +207,22 @@ public static class ToolCallText
     public static readonly StreamGeometry ThinkingIconFill = Parse(ThinkFill);
 
     /// <summary>折叠行图标描边部件；先查官方专属覆盖，再按变体，未知工具回退通用四角星。</summary>
-    public static StreamGeometry GetIconStroke(string? name)
-    {
-        return IconParts.GetValueOrDefault(IconKey(name)).Stroke;
-    }
+    public static StreamGeometry GetIconStroke(string? name) => IconParts.GetValueOrDefault(IconKey(name)).Stroke;
 
     /// <summary>折叠行图标填充部件；纯描边图标为 null。</summary>
-    public static StreamGeometry? GetIconFill(string? name)
-    {
-        return IconParts.GetValueOrDefault(IconKey(name)).Fill;
-    }
+    public static StreamGeometry? GetIconFill(string? name) => IconParts.GetValueOrDefault(IconKey(name)).Fill;
 
     /// <summary>图标键：官方专属覆盖优先，缺席回落摘要变体（不影响摘要逻辑）。</summary>
-    private static string IconKey(string? name)
-    {
-        return name != null && IconOverrides.TryGetValue(name, out var icon) ? icon : VariantKey(name);
-    }
+    private static string IconKey(string? name) =>
+        name != null && IconOverrides.TryGetValue(name, out var icon) ? icon : VariantKey(name);
 
-    private static string VariantKey(string? name)
-    {
-        return name != null && Variants.TryGetValue(name, out var variant) ? variant : "others";
-    }
+    private static string VariantKey(string? name) =>
+        name != null && Variants.TryGetValue(name, out var variant) ? variant : "others";
 
-    private static StreamGeometry Parse(string data)
-    {
-        return StreamGeometry.Parse(data);
-    }
+    private static StreamGeometry Parse(string data) => StreamGeometry.Parse(data);
 
     /// <summary>折叠行标题；未知或空白名回退通用「工具调用」。</summary>
-    public static string GetTitle(string? name)
-    {
-        return name != null && Titles.TryGetValue(name, out var title) ? title : "工具调用";
-    }
+    public static string GetTitle(string? name) => ToolCallLabels.GetTitle(name);
 
     /// <summary>
     ///     折叠行摘要：已知工具按变体取参数字段，未知名在摘要前保留原始名
@@ -314,26 +231,14 @@ public static class ToolCallText
     public static string GetSummary(string? name, string? argumentsJson)
     {
         var summary = DeriveSummary(name, argumentsJson);
-        if (string.IsNullOrWhiteSpace(name) || Titles.ContainsKey(name)) return summary;
+        if (string.IsNullOrWhiteSpace(name) || ToolCallLabels.IsKnown(name)) return summary;
 
         return string.IsNullOrEmpty(summary) ? name : $"{name} · {summary}";
     }
 
     /// <summary>状态词：present 工具对齐官方交付文案，其余用通用词。</summary>
     public static string GetStatusText(string? name, ToolActivityStatus status)
-    {
-        var delivering = name == "present";
-        return status switch
-        {
-            ToolActivityStatus.Running   => delivering ? "正在交付" : "运行中…",
-            ToolActivityStatus.Succeeded => delivering ? "已交付" : "已完成",
-            ToolActivityStatus.Failed    => delivering ? "交付失败" : "失败",
-            ToolActivityStatus.NotStarted => "未开始",
-            ToolActivityStatus.Denied     => "已拒绝",
-            ToolActivityStatus.Unknown    => "结果未知",
-            _                            => string.Empty
-        };
-    }
+        => ToolCallLabels.GetStatusText(name, status);
 
     /// <summary>取首行（对齐官方 firstLine）：摘要与失败摘要都只展示一行。</summary>
     public static string FirstLine(string text)

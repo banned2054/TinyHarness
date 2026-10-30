@@ -63,7 +63,7 @@ public sealed class ToolActivityItemViewModel : ConversationItemViewModel
     public string DisplayName => string.IsNullOrWhiteSpace(Name) ? "工具调用" : Name;
 
     /// <summary>折叠行口语化标题：已知工具映射中文动词，未知名回退通用词。</summary>
-    public string Title => ToolCallText.GetTitle(Name);
+    public string Title => ToolCallLabels.GetTitle(Name);
 
     /// <summary>
     ///     折叠行摘要：失败时显示错误首行，否则按工具变体从参数推导；
@@ -73,7 +73,7 @@ public sealed class ToolActivityItemViewModel : ConversationItemViewModel
         ? ToolCallText.FirstLine(ErrorReason)
         : JoinWithDiff(ToolCallText.GetSummary(Name, ArgumentsText), _todoDiffSummary);
 
-    public string StatusText => ToolCallText.GetStatusText(Name, Status);
+    public string StatusText => ToolCallLabels.GetStatusText(Name, Status);
 
     public bool IsRunning => Status == ToolActivityStatus.Running;
 

@@ -49,6 +49,7 @@ public sealed class MessageItemViewModel : ConversationItemViewModel
         Role                   = source.Role;
         _content               = string.Empty;
         _reasoning             = source._reasoning;
+        _isReasoningExpanded   = source.IsReasoningExpanded;
         CreatedAtText          = source.CreatedAtText;
         MarkdownBuilder        = new ObservableStringBuilder(string.Empty);
         ToggleReasoningCommand = new RelayCommand(() => IsReasoningExpanded = !IsReasoningExpanded);
@@ -77,6 +78,7 @@ public sealed class MessageItemViewModel : ConversationItemViewModel
             OnPropertyChanged(nameof(HasReasoning));
             OnPropertyChanged(nameof(HasVisibleReasoning));
             OnPropertyChanged(nameof(ReasoningSummary));
+            if (_processReasoningProjection is { } projection) projection.Reasoning = value;
         }
     }
 
@@ -140,9 +142,17 @@ public sealed class MessageItemViewModel : ConversationItemViewModel
         get => _content;
         private set
         {
-            if (SetProperty(ref _content, value)) OnPropertyChanged(nameof(HasResponseMetadata));
+            if (!SetProperty(ref _content, value)) return;
+            OnPropertyChanged(nameof(HasResponseMetadata));
+            OnPropertyChanged(nameof(HasProcessBody));
         }
     }
+
+    /// <summary>
+    ///     <para>正文非空时作为相邻思考与工具段之间的独立边界。</para>
+    ///     <para>Indicates whether a non-empty body separates adjacent reasoning and tool segments.</para>
+    /// </summary>
+    public bool HasProcessBody => !string.IsNullOrWhiteSpace(Content);
 
     /// <summary>
     ///     <para>仅组外、正文非空的助手消息显示时间；过程条目与思考行不显示。</para>
@@ -210,6 +220,15 @@ public sealed class MessageItemViewModel : ConversationItemViewModel
 
         IsReasoningProjected = true;
         return _processReasoningProjection ??= new MessageItemViewModel(this);
+    }
+
+    /// <summary>
+    ///     <para>沿用临时条目当前可见思考行的展开选择。</para>
+    ///     <para>Inherits the expansion choice of the temporary item's currently displayed reasoning row.</para>
+    /// </summary>
+    internal void PreserveReasoningExpansion(MessageItemViewModel source)
+    {
+        IsReasoningExpanded = (source._processReasoningProjection ?? source).IsReasoningExpanded;
     }
 
     public void AppendText(string text)
