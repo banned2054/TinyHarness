@@ -319,6 +319,23 @@ public sealed class DesktopProjectionTests
         Assert.That(stream.Content, Is.EqualTo("partial text"));
         Assert.That(page.Items.OfType<MessageItemViewModel>().Any(item => item.IsAssistantMessage), Is.False);
         Assert.That(page.Status, Is.EqualTo(cancel ? "Cancelled" : "Failed"));
+        if (!cancel)
+        {
+            Assert.That(page.Notice, Does.Contain("offline failure"));
+            var browse = new SessionViewModel(manager, factory, fixture.First, page.Id, fixture.Store,
+                                              dispatch : action =>
+                                              {
+                                                  action();
+                                                  return ValueTask.CompletedTask;
+                                              });
+            await browse.LoadHistoryAsync();
+            Assert.That(browse.Notice, Does.Contain("offline failure"));
+            page.Draft = "retry";
+            await page.SendAsync();
+            await page.Completion;
+            Assert.That(page.Status, Is.EqualTo("Completed"));
+            Assert.That(page.Notice, Is.Empty);
+        }
     }
 
     [TestCase(false, false, false)]
@@ -1382,9 +1399,19 @@ public sealed class DesktopProjectionTests
     private sealed class InterruptedModel(TaskCompletionSource entered, TaskCompletionSource finish)
         : IChatCompletionClient
     {
+        private int _requests;
+
         public async IAsyncEnumerable<ChatStreamEvent> CompleteAsync(
             ChatCompletionRequest request, [EnumeratorCancellation] CancellationToken cancellationToken)
         {
+            if (_requests++ > 0)
+            {
+                yield return new ChatStreamEvent
+                    { Kind = ChatStreamEventKind.ContentDelta, ContentDelta = "recovered" };
+                yield return new ChatStreamEvent { Kind = ChatStreamEventKind.End, FinishReason = "stop" };
+                yield break;
+            }
+
             yield return new ChatStreamEvent
                 { Kind = ChatStreamEventKind.ReasoningDelta, ReasoningDelta = "partial thinking" };
             yield return new ChatStreamEvent { Kind = ChatStreamEventKind.ContentDelta, ContentDelta = "partial text" };

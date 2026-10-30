@@ -7,6 +7,7 @@ using TinyHarness.Core.Models.ProjectInstructions;
 using TinyHarness.Core.Models.Session;
 using TinyHarness.Core.Models.Tools;
 using TinyHarness.Core.Services.Permissions;
+using TinyHarness.Core.Services.Persistence;
 using TinyHarness.Core.Services.ProjectInstructions;
 using TinyHarness.Core.Services.Session;
 using TinyHarness.Core.Services.Tools;
@@ -33,6 +34,134 @@ public class InstructionScopeTests
         Assert.That(covered.SessionGrantConstraint, Is.EqualTo(prepared.SessionGrantConstraint));
         Assert.That(covered.Arguments.ToJsonString(), Is.EqualTo(prepared.Arguments.ToJsonString()));
         Assert.That(prepared.Coverage, Is.Null);
+    }
+
+    [Test]
+    public async Task RecursiveListingDoesNotActivateDescendantRulesButFileReadsStillRequireThem()
+    {
+        using var dir = new TestTempDir();
+        dir.WriteFile("AGENTS.md", "ROOT_RULE");
+        for (var index = 0; index < 3; index++)
+            dir.WriteFile($"artifacts/copy{index}/AGENTS.md", new string('x', 16_000));
+        dir.WriteBytes("artifacts/invalid/AGENTS.md", [0xFF]);
+        var client = new FakeChatClient();
+        client.Enqueue(FakeChatClient.ToolCall("list_files", """{"path":"artifacts","recursive":true,"maxDepth":2}"""));
+        client.Enqueue(FakeChatClient.Text("listed"));
+        client.Enqueue(FakeChatClient.ToolCall("read_file", """{"path":"artifacts/invalid/data.txt"}""", "read"));
+        var       loader = new ProjectInstructionLoader(dir.Workspace);
+        using var host = Host(dir, client, [new ListFilesTool(dir.Workspace), new ReadFileTool(dir.Workspace)], loader);
+        var       listed = await host.SubmitTurnAsync("list names", CancellationToken.None);
+        Assert.That(listed.Result!.Status, Is.EqualTo(AgentStatus.Completed));
+        Assert.That(listed.Result.ToolExecutions, Is.EqualTo(1));
+        Assert.That(client.RequestLog[1].Messages.Last(message => message.Role == ChatRole.Tool).Content,
+                    Does.Contain("artifacts/copy0/AGENTS.md"));
+        Assert.That(client.RequestLog[1].Messages[1].Content, Does.Not.Contain("Source: artifacts/"));
+        var read = await host.SubmitTurnAsync("read content", CancellationToken.None);
+        Assert.That(read.Result!.Status, Is.EqualTo(AgentStatus.Failed));
+        Assert.That(read.Result.ToolExecutions, Is.Zero);
+        Assert.That(read.Result.Error, Does.Contain("UTF-8"));
+    }
+
+    [Test]
+    public async Task BroadSearchReturnsAnUnstartedResultAndCanContinueWithANarrowerPath()
+    {
+        using var dir   = new TestTempDir();
+        using var store = new TestTempDir();
+        dir.WriteFile("AGENTS.md", "ROOT_RULE");
+        for (var index = 0; index < 3; index++)
+            dir.WriteFile($"artifacts/copy{index}/AGENTS.md", new string('x', 16_000));
+        dir.WriteFile("artifacts/copy0/data.txt", "needle");
+        dir.WriteFile("untouched.txt", "old\n");
+        var client = new FakeChatClient();
+        client.Enqueue([
+            new ChatStreamEvent
+            {
+                Kind                 = ChatStreamEventKind.ToolCallDelta, ToolCallIndex = 0, ToolCallId = "write",
+                ToolCallFunctionName = "apply_patch",
+                ToolCallArgumentsDelta = new JsonObject
+                {
+                    ["patch"] = "--- a/untouched.txt\n+++ b/untouched.txt\n@@ -1 +1 @@\n-old\n+changed\n"
+                }.ToJsonString()
+            },
+            new ChatStreamEvent
+            {
+                Kind                   = ChatStreamEventKind.ToolCallDelta, ToolCallIndex = 1, ToolCallId = "broad",
+                ToolCallFunctionName   = "search_text",
+                ToolCallArgumentsDelta = """{"path":"artifacts","pattern":"needle"}"""
+            },
+            new ChatStreamEvent { Kind = ChatStreamEventKind.End, FinishReason = "tool_calls" }
+        ]);
+        client.Enqueue(FakeChatClient.ToolCall("search_text", """{"path":"artifacts/copy0","pattern":"needle"}""",
+                                               "narrow"));
+        client.Enqueue(FakeChatClient.ToolCall("search_text", """{"path":"artifacts/copy0","pattern":"needle"}""",
+                                               "retry"));
+        client.Enqueue(FakeChatClient.Text("found"));
+        var loader = new ProjectInstructionLoader(dir.Workspace);
+        using var host =
+            new ChatSessionHost(dir.Root,
+                                new SessionModelIdentity("test-model", "https://example.invalid/v1",
+                                                         ChatApiKind.ChatCompletions),
+                                new AgentOptions
+                                    { Model = "test-model", MaxAgentSteps = 10, DefaultToolTimeoutSeconds = 30 },
+                                client,
+                                new ToolRegistry([
+                                    new ApplyPatchTool(dir.Workspace), new SearchTextTool(dir.Workspace)
+                                ]), "system",
+                                sessionWriterFactory : id => new SessionStoreWriter(store.Root, id),
+                                instructionLoader : loader);
+        var run = await host.SubmitTurnAsync("search", CancellationToken.None);
+        Assert.That(run.Result!.Status, Is.EqualTo(AgentStatus.Completed));
+        Assert.That(run.Result.ToolExecutions, Is.EqualTo(1));
+        Assert.That(run.Result.ToolCalls!.Take(2).All(call => call.State == ToolCallExecutionState.KnownNotStarted),
+                    Is.True);
+        Assert.That(await File.ReadAllTextAsync(Path.Combine(dir.Root, "untouched.txt")), Is.EqualTo("old\n"));
+        Assert.That(run.Result.ToolCalls!.First().NotStartedReason,
+                    Does.Contain("8,000-token").And.Contain("narrower path"));
+        Assert.That(client.RequestLog[1].Messages.Last(message => message.Role == ChatRole.Tool).Content,
+                    Does.Contain("no tool in this round ran"));
+        Assert.That(client.RequestLog[3].Messages.Last(message => message.Role == ChatRole.Tool).Content,
+                    Does.Contain("artifacts/copy0/data.txt:1: needle"));
+        var restored = await SessionStoreReader.ReadAsync(store.Root, host.Session.Id, CancellationToken.None);
+        Assert.That(restored!.Turns.Single().Runs.Single().ToolCalls!.First().NotStartedReason,
+                    Is.EqualTo(run.Result.ToolCalls!.First().NotStartedReason));
+    }
+
+    [Test]
+    public async Task SiblingFileReadsReplaceTheModelRulesAndRestoreOnlyTheLastActiveScope()
+    {
+        using var dir   = new TestTempDir();
+        using var store = new TestTempDir();
+        dir.WriteFile("AGENTS.md", "ROOT_RULE");
+        dir.WriteFile("a/AGENTS.md", "A_LOCAL_RULE");
+        dir.WriteFile("b/AGENTS.md", "B_LOCAL_RULE");
+        dir.WriteFile("a/file.txt", "first");
+        dir.WriteFile("b/file.txt", "second");
+        var client = new FakeChatClient();
+        client.Enqueue(FakeChatClient.ToolCall("read_file", """{"path":"a/file.txt"}""", "a_old"));
+        client.Enqueue(FakeChatClient.ToolCall("read_file", """{"path":"a/file.txt"}""", "a_new"));
+        client.Enqueue(FakeChatClient.ToolCall("read_file", """{"path":"b/file.txt"}""", "b_old"));
+        client.Enqueue(FakeChatClient.ToolCall("read_file", """{"path":"b/file.txt"}""", "b_new"));
+        client.Enqueue(FakeChatClient.Text("done"));
+        using var host =
+            new ChatSessionHost(dir.Root,
+                                new SessionModelIdentity("test-model", "https://example.invalid/v1",
+                                                         ChatApiKind.ChatCompletions),
+                                new AgentOptions
+                                    { Model = "test-model", MaxAgentSteps = 10, DefaultToolTimeoutSeconds = 30 },
+                                client,
+                                new ToolRegistry([new ReadFileTool(dir.Workspace)]), "system",
+                                sessionWriterFactory : id => new SessionStoreWriter(store.Root, id),
+                                instructionLoader : new ProjectInstructionLoader(dir.Workspace));
+        var run = await host.SubmitTurnAsync("read both files", CancellationToken.None);
+        Assert.That(run.Result!.Status, Is.EqualTo(AgentStatus.Completed));
+        Assert.That(run.Result.ToolExecutions, Is.EqualTo(2));
+        Assert.That(client.RequestLog[1].Messages[1].Content, Does.Contain("A_LOCAL_RULE"));
+        Assert.That(client.RequestLog[3].Messages[1].Content,
+                    Does.Contain("B_LOCAL_RULE").And.Not.Contain("A_LOCAL_RULE"));
+        var stored   = await SessionStoreReader.ReadAsync(store.Root, host.Session.Id, CancellationToken.None);
+        var restored = SessionResume.Restore(stored!, dir.Root, "system");
+        Assert.That(restored.Context.ProjectInstructions!.Documents.Select(document => document.ScopeDirectory),
+                    Is.EqualTo([".", "b"]));
     }
 
     [Test]

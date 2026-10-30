@@ -94,7 +94,19 @@ public static class ProjectInstructionRenderer
     ///     </para>
     /// </summary>
     public static ProjectInstructionSnapshot Create(
-        IReadOnlyList<ProjectInstructionDocument> documents, IReadOnlyList<string> probedDirectories)
+        IReadOnlyList<ProjectInstructionDocument> documents, IReadOnlyList<string> probedDirectories) =>
+        CreateCandidate(documents, probedDirectories, false);
+
+    /// <summary>
+    ///     <para>为工具范围创建完整候选，将规则 token 超限报告为可缩小范围的失败。</para>
+    ///     <para>Creates a complete tool-scope candidate, reporting excess instruction tokens as a scope that can be narrowed.</para>
+    /// </summary>
+    internal static ProjectInstructionSnapshot CreateForToolScope(
+        IReadOnlyList<ProjectInstructionDocument> documents, IReadOnlyList<string> probedDirectories) =>
+        CreateCandidate(documents, probedDirectories, true);
+
+    private static ProjectInstructionSnapshot CreateCandidate(
+        IReadOnlyList<ProjectInstructionDocument> documents, IReadOnlyList<string> probedDirectories, bool toolScope)
     {
         ArgumentNullException.ThrowIfNull(documents);
         ArgumentNullException.ThrowIfNull(probedDirectories);
@@ -111,6 +123,10 @@ public static class ProjectInstructionRenderer
             RenderedHash         = string.Empty
         };
         snapshot = snapshot with { RenderedHash = HashText(Render(snapshot)) };
+        if (toolScope &&
+            TokenEstimator.EstimateMessage(ChatMessage.User(Render(snapshot))) > ProjectInstructionLimits.MaxTokens)
+            throw new
+                InstructionScopeLimitException("Rendered project instructions exceed the 8,000-token budget. Narrow the operation to fewer directories or files.");
         Validate(snapshot);
         return snapshot;
     }

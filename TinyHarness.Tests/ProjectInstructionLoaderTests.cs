@@ -71,6 +71,27 @@ public class ProjectInstructionLoaderTests
     }
 
     [Test]
+    public async Task NewToolScopesReplacePreviousSiblingsAndRefreshOnlyTheActiveChain()
+    {
+        using var dir = new TestTempDir();
+        dir.WriteFile("AGENTS.md", "root");
+        dir.WriteFile("a/AGENTS.md", "a rule");
+        dir.WriteFile("b/AGENTS.md", "b rule");
+        var loader = new ProjectInstructionLoader(dir.Workspace);
+        var first = await loader.LoadAsync(null, [new InstructionScope("a/file.cs", InstructionScopeKind.File)],
+                                           CancellationToken.None);
+        var second = await loader.LoadAsync(first, [new InstructionScope("b/file.cs", InstructionScopeKind.File)],
+                                            CancellationToken.None);
+        Assert.That(second.Documents.Select(document => document.ScopeDirectory), Is.EqualTo([".", "b"]));
+        Assert.That(second.ProbedDirectories, Does.Not.Contain("a"));
+        dir.WriteBytes("a/AGENTS.md", [0xFF]);
+        dir.WriteFile("b/AGENTS.md", "updated b rule");
+        var refreshed = await loader.LoadAsync(second, [], CancellationToken.None);
+        Assert.That(refreshed.Documents.Last().Content, Is.EqualTo("updated b rule"));
+        Assert.That(refreshed.ProbedDirectories, Is.EqualTo(second.ProbedDirectories));
+    }
+
+    [Test]
     public async Task MissingPositionsAreTrackedAndLaterCreationAndRemovalRefreshTheWholeSet()
     {
         using var dir    = new TestTempDir();

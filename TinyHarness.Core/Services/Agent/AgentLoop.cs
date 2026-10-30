@@ -19,6 +19,7 @@ internal enum InstructionBoundaryStatus
 {
     Unchanged,
     Updated,
+    ScopeTooBroad,
     Failed
 }
 
@@ -405,6 +406,16 @@ public sealed partial class AgentLoop
                                                   cancellationToken).ConfigureAwait(false);
                     switch (instructionCheck.Status)
                     {
+                        case InstructionBoundaryStatus.ScopeTooBroad :
+                        {
+                            var records = RecordRound(round);
+                            AppendDeferredToolResults(round,
+                                                      "The tool round was not started because its project instruction scope is too broad. " +
+                                                      instructionCheck.Error +
+                                                      " Retry with fewer calls or a narrower path; no tool in this round ran.");
+                            await RecordNotStartedRoundAsync(records, cancellationToken).ConfigureAwait(false);
+                            continue;
+                        }
                         case InstructionBoundaryStatus.Failed :
                         {
                             var records = RecordRound(round);

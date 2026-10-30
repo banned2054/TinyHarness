@@ -41,6 +41,7 @@ public sealed partial class SessionViewModel : ObservableObject
     private          string                                        _notice = string.Empty;
     private          bool                                          _opening;
     private          CancellationTokenSource?                      _openingCancellation;
+    private          string?                                       _runError;
     private          bool                                          _running;
     private          DesktopSession?                               _runtime;
     private          SessionModelSelection?                        _savedSelection;
@@ -333,8 +334,9 @@ public sealed partial class SessionViewModel : ObservableObject
             var stored = await SessionStoreReader.ReadAsync(StoreDirectory, Id, CancellationToken.None);
             if (stored is not null)
             {
-                _savedSelection     = stored.ModelSelection;
+                _savedSelection = stored.ModelSelection;
                 _historicalIdentity = stored.Model;
+                _runError = _factory.Redact(stored.Turns.LastOrDefault()?.Runs.LastOrDefault()?.Error ?? string.Empty);
                 foreach (var run in stored.Turns.SelectMany(turn => turn.Runs))
                 {
                     var selection =
@@ -352,7 +354,8 @@ public sealed partial class SessionViewModel : ObservableObject
         foreach (var item in page.Items) ApplyHistory(item);
         _historyCursor = page.NextCursor;
         _historyLoaded = true;
-        if (page.Warning is { } warning) Notice = warning;
+        if (!string.IsNullOrEmpty(_runError) || page.Warning is not null)
+            Notice = string.Join('\n', new[] { _runError, page.Warning }.Where(value => !string.IsNullOrEmpty(value)));
         OnPropertyChanged(nameof(HasMoreHistory));
     }
 
@@ -421,7 +424,9 @@ public sealed partial class SessionViewModel : ObservableObject
             }
 
             _submittedDraftRevision = revision;
-            _completion             = CompleteRunAsync(_runtime!.SubmitAsync(text));
+            _runError               = null;
+            UpdateNotices();
+            _completion = CompleteRunAsync(_runtime!.SubmitAsync(text));
         }
         catch
         {
@@ -446,6 +451,7 @@ public sealed partial class SessionViewModel : ObservableObject
         try
         {
             var run = await execution;
+            _runError       = run.Result?.Error is { } error ? _factory.Redact(error) : null;
             LastActivityUtc = DateTimeOffset.UtcNow;
             OnPropertyChanged(nameof(LastActivityUtc));
             Status = run.Result?.Status.ToString() ?? "运行结束";
@@ -501,8 +507,11 @@ public sealed partial class SessionViewModel : ObservableObject
 
                 Status = update.Text ?? "运行中";
                 break;
-            case "state" :                                      Status = update.Text ?? "运行中"; break;
-            case "error" :                                      Notice = update.Text ?? "运行失败"; break;
+            case "state" : Status = update.Text ?? "运行中"; break;
+            case "error" :
+                _runError = update.Text ?? "运行失败";
+                Notice    = _runError;
+                break;
             case "history" when update.History is { } history : ApplyHistory(history); break;
         }
     }
@@ -631,6 +640,7 @@ public sealed partial class SessionViewModel : ObservableObject
         Notice = string.Join('\n', new[]
         {
             host.PersistenceWarning is { } warning ? $"本次未可靠保存：{warning}" : null,
+            _runError,
             host.DisplayWarning, host.InspectionPendingNote,
             host.Session.Amendments.Any(item => item.CanonicalMessageIndex is null)
                 ? "有已保存但未生效的补充；重启不会自动发送。"

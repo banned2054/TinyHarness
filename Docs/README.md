@@ -197,6 +197,8 @@ Desktop 模型菜单支持空闲时切换已有会话的模型与已声明强度
 
 `maxAgentSteps` 默认 `0`，表示不限普通步数。可信用户 `settings.runBudget` 默认每次运行最多 128 次逻辑模型请求（含压缩）和 256 次工具执行。累计 token 和总时长默认只统计、不设限（`maxTotalTokens`／`maxWallClockSeconds` 为 `0`），正数可启用相应上限；单工具超时与取消仍有效。详细契约见[运行预算](Archive/task-control-design.md)。
 
+项目规则另有固定的 8,000 token 加载上限，与累计运行预算独立。规则按当前工具目标的祖先链加载；`list_files` 即使递归列举也只激活目标目录及其祖先规则，不读取后代 `AGENTS.md`。读取、修改文件与递归搜索正文仍在执行前检查适用规则。新操作范围替换旧的活动范围，不累计所有历史访问目录；没有新工具范围时刷新当前集合。工具轮预检因范围过大而超限时，整轮保持未执行并向模型返回缩小路径或拆分调用的提示；规则编码、访问权限或派发前刷新失败仍停止运行。Desktop 保留运行失败原因，历史重新打开后仍可查看。
+
 MCP worker 使用用户配置，将获准读取的工作区内容发送给模型，但不能写文件或执行命令；它是 MCP server，不是连接外部工具的 client。`sandbox provision` 会提权修改机器账户、ACL 与网络规则，`sandbox verify` 会执行真实隔离检查；使用前请阅读[沙箱配置与验收说明](Archive/windows-sandbox-management.md)。
 
 <a id="platform-status"></a>

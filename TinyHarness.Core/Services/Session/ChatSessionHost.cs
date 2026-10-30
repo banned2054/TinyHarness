@@ -756,6 +756,10 @@ public sealed partial class ChatSessionHost : IDisposable
                 var snapshot = await LoadForScopesAsync(preparations, cancellationToken).ConfigureAwait(false);
                 return CheckSnapshot(snapshot);
             }
+            catch (InstructionScopeLimitException ex)
+            {
+                return new InstructionBoundaryCheck(InstructionBoundaryStatus.ScopeTooBroad, ex.Message, null, null);
+            }
             catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException)
             {
                 return new InstructionBoundaryCheck(InstructionBoundaryStatus.Failed, ex.Message, null, null);
@@ -795,7 +799,7 @@ public sealed partial class ChatSessionHost : IDisposable
                                      .Distinct()
                                      .ToArray();
             var previous = _toolRoundSnapshot ?? host._context.ProjectInstructions;
-            var snapshot = await loader.LoadAsync(previous, scopes, cancellationToken)
+            var snapshot = await loader.LoadForToolScopeAsync(previous, scopes, cancellationToken)
                                        .ConfigureAwait(false);
             _toolRoundSnapshot = snapshot;
             return snapshot;

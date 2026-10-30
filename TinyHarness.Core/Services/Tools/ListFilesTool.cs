@@ -53,8 +53,11 @@ public sealed class ListFilesTool(Workspace workspace, WorkerReadPolicy? workerP
     };
 
     /// <summary>
-    ///     校验路径、递归和深度参数，并生成绑定到工作区绝对路径的只读计划。
-    ///     Validates path, recursion, and depth arguments and creates a read-only plan bound to an absolute workspace path.
+    ///     <para>校验路径与遍历参数；只读计划的规则范围限于列举目标的祖先链。</para>
+    ///     <para>
+    ///         Validates paths and traversal arguments; the read-only plan's instruction scope follows the target's ancestor
+    ///         chain.
+    ///     </para>
     /// </summary>
     public ToolPreparation Prepare(ChatToolCall call)
     {
@@ -83,11 +86,7 @@ public sealed class ListFilesTool(Workspace workspace, WorkerReadPolicy? workerP
             TargetPaths = [absolute],
             InstructionScopes =
             [
-                new InstructionScope(absolute,
-                                     recursive
-                                         ? InstructionScopeKind.RecursiveDirectory
-                                         : InstructionScopeKind.Directory,
-                                     maxDepth ?? int.MaxValue, MaxEntries)
+                new InstructionScope(absolute, InstructionScopeKind.Directory)
             ]
         };
     }
@@ -113,6 +112,7 @@ public sealed class ListFilesTool(Workspace workspace, WorkerReadPolicy? workerP
         // listed directory must also be inside the worker read scope, or a junction could list
         // names from outside the focus.
         workerPolicy?.EnsureFinalAccessAllowed(absolute);
+        preparation.Coverage?.EnsureCoveredDirectory(absolute);
         var recursive = JsonArgs.OptionalBool(preparation.Arguments, "recursive", false);
         var maxDepth  = JsonArgs.OptionalInt(preparation.Arguments, "maxDepth");
 
@@ -121,10 +121,7 @@ public sealed class ListFilesTool(Workspace workspace, WorkerReadPolicy? workerP
         var result = DirectoryWalker.CollectEntries(absolute, recursive, maxDepth, MaxEntries, cancellationToken,
                                                     workerPolicy is null
                                                         ? null
-                                                        : child => !workerPolicy.IsEntryAllowed(child),
-                                                    preparation.Coverage is { } coverage
-                                                        ? coverage.EnsureCoveredDirectory
-                                                        : null);
+                                                        : child => !workerPolicy.IsEntryAllowed(child));
         if (result.Entries.Count == 0)
             return Task.FromResult(new ToolResult
             {

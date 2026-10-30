@@ -21,15 +21,38 @@ public sealed class ProjectInstructionLoader(Workspace workspace)
         : StringComparer.Ordinal;
 
     /// <summary>
-    ///     <para>重新探测根、全部已知位置和本次工具范围；全部读取与预算通过后返回完整候选。</para>
+    ///     <para>按本次工具范围替换规则集合；无工具范围时刷新当前集合，全部读取与预算通过后返回完整候选。</para>
     ///     <para>
-    ///         Reprobes the root, all tracked locations, and current tool scopes, returning a complete candidate only after
-    ///         all reads and budgets pass.
+    ///         Replaces rules with the current tool scopes, or refreshes the active set when scopes are empty, returning
+    ///         a complete candidate only after all reads and budgets pass.
     ///     </para>
     /// </summary>
     public async Task<ProjectInstructionSnapshot> LoadAsync(ProjectInstructionSnapshot?     previous,
                                                             IReadOnlyList<InstructionScope> scopes,
                                                             CancellationToken               cancellationToken)
+    {
+        try
+        {
+            return await LoadCandidateAsync(previous, scopes, cancellationToken).ConfigureAwait(false);
+        }
+        catch (InstructionScopeLimitException ex)
+        {
+            throw new InvalidDataException(ex.Message, ex);
+        }
+    }
+
+    /// <summary>
+    ///     <para>供工具派发边界区分可缩小范围的超限与不可恢复的规则读取失败。</para>
+    ///     <para>Lets the tool dispatch boundary distinguish limits that permit a narrower scope from rule-read failures.</para>
+    /// </summary>
+    internal Task<ProjectInstructionSnapshot> LoadForToolScopeAsync(
+        ProjectInstructionSnapshot? previous, IReadOnlyList<InstructionScope> scopes,
+        CancellationToken           cancellationToken) =>
+        LoadCandidateAsync(previous, scopes, cancellationToken);
+
+    private async Task<ProjectInstructionSnapshot> LoadCandidateAsync(
+        ProjectInstructionSnapshot? previous, IReadOnlyList<InstructionScope> scopes,
+        CancellationToken           cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(workspace);
         ArgumentNullException.ThrowIfNull(scopes);
@@ -41,8 +64,9 @@ public sealed class ProjectInstructionLoader(Workspace workspace)
                 InvalidDataException($"Project instruction workspace '{workspace.Root}' does not exist or is not a directory.");
         var directories = new HashSet<string>(PathComparer);
         AddChain(workspace.Root, directories);
-        foreach (var directory in previous?.ProbedDirectories ?? [])
-            AddChain(workspace.ResolveInside(directory, "tracked instruction directory"), directories);
+        if (scopes.Count == 0)
+            foreach (var directory in previous?.ProbedDirectories ?? [])
+                AddChain(workspace.ResolveInside(directory, "tracked instruction directory"), directories);
         foreach (var scope in scopes)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -65,7 +89,7 @@ public sealed class ProjectInstructionLoader(Workspace workspace)
             if (walk.EnumerationLimited ||
                 (walk.Truncated && scope.MaxEntries == ProjectInstructionLimits.MaxDiscoveryEntries))
                 throw new
-                    InvalidDataException($"Instruction discovery for '{workspace.ToDisplay(target)}' exceeds the 16,384-entry budget; narrow the operation.");
+                    InstructionScopeLimitException($"Instruction discovery for '{workspace.ToDisplay(target)}' exceeds the 16,384-entry budget; narrow the operation.");
             foreach (var visitedDirectory in walk.VisitedDirectories)
                 AddChain(visitedDirectory, directories);
             foreach (var entry in walk.Entries)
@@ -96,10 +120,12 @@ public sealed class ProjectInstructionLoader(Workspace workspace)
             if (documents.Count > ProjectInstructionLimits.MaxDocuments ||
                 totalBytes      > ProjectInstructionLimits.MaxTotalBytes)
                 throw new
-                    InvalidDataException($"Project instructions exceed the 64-document or 128-KiB budget at '{document.SourcePath}'. Narrow the operation.");
+                    InstructionScopeLimitException($"Project instructions exceed the 64-document or 128-KiB budget at '{document.SourcePath}'. Narrow the operation.");
         }
 
-        return ProjectInstructionRenderer.Create(documents, directories.ToArray());
+        return scopes.Count == 0
+            ? ProjectInstructionRenderer.Create(documents, directories.ToArray())
+            : ProjectInstructionRenderer.CreateForToolScope(documents, directories.ToArray());
     }
 
     /// <summary>
@@ -114,7 +140,7 @@ public sealed class ProjectInstructionLoader(Workspace workspace)
             directories.Add(workspace.ToDisplay(current));
             if (directories.Count > ProjectInstructionLimits.MaxProbedDirectories)
                 throw new
-                    InvalidDataException("Project instruction discovery exceeds 2,048 tracked directories; narrow the operation.");
+                    InstructionScopeLimitException("Project instruction discovery exceeds 2,048 tracked directories; narrow the operation.");
             if (PathComparer.Equals(current.TrimEnd(Path.DirectorySeparatorChar),
                                     workspace.Root.TrimEnd(Path.DirectorySeparatorChar))) break;
             current = Path.GetDirectoryName(current)
