@@ -121,6 +121,75 @@
     <Style Selector="md|MarkdownRenderer md|MarkdownTextBlock.ParagraphBlock">
         <Setter Property="LineHeight" Value="27" />
     </Style>
+    <!-- 标记沿用正文的字号与行高，编号按首行基线排版；保持库默认的顶对齐、右对齐与边距，
+         多行列表项的标记仍停留在首行。字号与行高须与正文覆盖联动。 -->
+    <Style Selector="md|MarkdownRenderer TextBlock.ListBlockNumber, md|MarkdownRenderer TextBlock.ListBlockBullet">
+        <Setter Property="FontFamily" Value="{DynamicResource FontFamilyNormal}" />
+        <Setter Property="FontSize" Value="15" />
+        <Setter Property="LineHeight" Value="27" />
+    </Style>
+    <!-- 无序标记的字形中心依赖字体，不能仅靠相同行高保证视觉居中。保留原文本以维持
+         标记语义与列宽，以前景色填充并用几何蒙版绘制；不拉伸的形状居中于标记自身的
+         单行行框，不随整段高度移动。各级仍使用实心圆、空心圆、实心方块、空心方块。 -->
+    <Style Selector="md|MarkdownRenderer TextBlock.ListBlockBullet">
+        <Setter Property="Background" Value="{Binding Foreground, RelativeSource={RelativeSource Self}}" />
+        <Setter Property="OpacityMask">
+            <DrawingBrush Stretch="None">
+                <DrawingBrush.Drawing>
+                    <GeometryDrawing Brush="Black">
+                        <GeometryDrawing.Geometry>
+                            <EllipseGeometry Rect="0,0,6,6" />
+                        </GeometryDrawing.Geometry>
+                    </GeometryDrawing>
+                </DrawingBrush.Drawing>
+            </DrawingBrush>
+        </Setter>
+    </Style>
+    <Style Selector="md|MarkdownRenderer TextBlock.ListBlockBullet.Level1">
+        <Setter Property="OpacityMask">
+            <DrawingBrush Stretch="None">
+                <DrawingBrush.Drawing>
+                    <GeometryDrawing>
+                        <GeometryDrawing.Pen>
+                            <Pen Brush="Black" Thickness="1" />
+                        </GeometryDrawing.Pen>
+                        <GeometryDrawing.Geometry>
+                            <EllipseGeometry Rect="0,0,10,10" />
+                        </GeometryDrawing.Geometry>
+                    </GeometryDrawing>
+                </DrawingBrush.Drawing>
+            </DrawingBrush>
+        </Setter>
+    </Style>
+    <Style Selector="md|MarkdownRenderer TextBlock.ListBlockBullet.Level2">
+        <Setter Property="OpacityMask">
+            <DrawingBrush Stretch="None">
+                <DrawingBrush.Drawing>
+                    <GeometryDrawing Brush="Black">
+                        <GeometryDrawing.Geometry>
+                            <RectangleGeometry Rect="0,0,6,6" />
+                        </GeometryDrawing.Geometry>
+                    </GeometryDrawing>
+                </DrawingBrush.Drawing>
+            </DrawingBrush>
+        </Setter>
+    </Style>
+    <Style Selector="md|MarkdownRenderer TextBlock.ListBlockBullet.Level3">
+        <Setter Property="OpacityMask">
+            <DrawingBrush Stretch="None">
+                <DrawingBrush.Drawing>
+                    <GeometryDrawing>
+                        <GeometryDrawing.Pen>
+                            <Pen Brush="Black" Thickness="1" />
+                        </GeometryDrawing.Pen>
+                        <GeometryDrawing.Geometry>
+                            <RectangleGeometry Rect="0,0,10,10" />
+                        </GeometryDrawing.Geometry>
+                    </GeometryDrawing>
+                </DrawingBrush.Drawing>
+            </DrawingBrush>
+        </Setter>
+    </Style>
     <!-- 文档级块间距（相邻段落等块元素之间）：库默认 4px 过密，取 18。
          只改文档根容器（MarkdownDocument）；列表项、表格单元格与引用块内部的
          StackPanel 间距仍按库默认，避免列表被拉开。 -->
