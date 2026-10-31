@@ -24,10 +24,10 @@ internal sealed class CommandContext
     public string? UserConfigPath { get; init; }
 
     /// <summary>
-    ///     <para>项目配置与相对路径解析所使用的工作目录；null 表示进程当前目录。</para>
+    ///     <para>命令级工作目录（如沙箱 provision 计划）；null 表示进程当前目录。配置解析不使用该目录。</para>
     ///     <para>
-    ///         Working directory used for project-config and relative-path resolution; null means the process current
-    ///         directory.
+    ///         Command-level working directory (for example the sandbox provision plan); null means the process
+    ///         current directory. Config resolution never uses this directory.
     ///     </para>
     /// </summary>
     public string? WorkingDirectory { get; init; }

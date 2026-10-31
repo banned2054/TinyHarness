@@ -80,12 +80,6 @@ public sealed partial class SessionViewModel
             ? group.Name
             : WorkspaceLabel;
 
-    /// <summary>
-    ///     <para>主窗口在项目组名可能变化后请求重算目标标签；仅标签实际变化的页面被调用。</para>
-    ///     <para>Requests a target-label recompute after group names may change; only pages whose label changed are called.</para>
-    /// </summary>
-    internal void NotifyWorkspaceTargetLabelChanged() => OnPropertyChanged(nameof(WorkspaceTargetLabel));
-
     public bool IsModelMenuRootPage => _modelMenuPage == 0;
     public bool IsModelsMenuPage    => _modelMenuPage == 1;
     public bool IsEffortsMenuPage   => _modelMenuPage == 2;
@@ -130,6 +124,18 @@ public sealed partial class SessionViewModel
             RebuildProjectMenu();
         }
     }
+
+    /// <summary>
+    ///     <para>项目菜单是否有可选项；用于控制项目分区标题的可见性。</para>
+    ///     <para>Whether the project menu has choices, controlling its project-section heading visibility.</para>
+    /// </summary>
+    public bool HasProjectChoices => ProjectMenuOptions.Count > 0;
+
+    /// <summary>
+    ///     <para>主窗口在项目组名可能变化后请求重算目标标签；仅标签实际变化的页面被调用。</para>
+    ///     <para>Requests a target-label recompute after group names may change; only pages whose label changed are called.</para>
+    /// </summary>
+    internal void NotifyWorkspaceTargetLabelChanged() => OnPropertyChanged(nameof(WorkspaceTargetLabel));
 
     private static string EffortText(ModelReasoningEffort? effort) =>
         effort is { } level ? ModelReasoningEffortParser.ToValueString(level) : "默认";
@@ -186,10 +192,10 @@ public sealed partial class SessionViewModel
         };
 
     /// <summary>
-    ///     <para>刷新未手动选择的草稿默认项；迟到结果不能覆盖新目录、手动选择或已建立会话。</para>
+    ///     <para>刷新未手动选择的草稿默认项；默认目标只来自全局用户配置，迟到结果不能覆盖手动选择或已建立会话。</para>
     ///     <para>
-    ///         Refreshes an implicit draft default; late results cannot replace a new directory,
-    ///         explicit choice or established session.
+    ///         Refreshes an implicit draft default; the default target comes from the global user config only, and
+    ///         late results cannot replace an explicit choice or established session.
     ///     </para>
     /// </summary>
     public async Task RefreshDefaultModelAsync()
@@ -197,17 +203,15 @@ public sealed partial class SessionViewModel
         var revision = ++_defaultModelRevision;
         if (!CanChooseWorkspace || SelectedModel is not null) return;
         var targetRevision = TargetIntentRevision;
-        var root = WorkspaceRoot;
         _defaultModel = null;
         NotifyModelSelection();
         try
         {
-            var resolution = await _factory.ResolveDefaultConfigAsync(root, CancellationToken.None);
+            var resolution = await _factory.ResolveDefaultConfigAsync(CancellationToken.None);
             if (revision       != _defaultModelRevision ||
                 targetRevision != TargetIntentRevision  ||
                 !CanChooseWorkspace                     ||
-                SelectedModel is not null               ||
-                root != WorkspaceRoot) return;
+                SelectedModel is not null) return;
             var user   = await UserConfigStore.LoadAsync(resolution.UserConfigPath, CancellationToken.None);
             var config = resolution.Config;
             var profiles =
@@ -225,8 +229,7 @@ public sealed partial class SessionViewModel
             if (revision       != _defaultModelRevision ||
                 targetRevision != TargetIntentRevision  ||
                 !CanChooseWorkspace                     ||
-                SelectedModel is not null               ||
-                root != WorkspaceRoot) return;
+                SelectedModel is not null) return;
             _defaultModel = string.IsNullOrWhiteSpace(config.Model)
                 ? null
                 : new ModelChoice(profile?.Name ?? config.Endpoint, config.Model, model?.DisplayName,
@@ -241,8 +244,7 @@ public sealed partial class SessionViewModel
             if (revision       != _defaultModelRevision ||
                 targetRevision != TargetIntentRevision  ||
                 !CanChooseWorkspace                     ||
-                SelectedModel is not null               ||
-                root != WorkspaceRoot) return;
+                SelectedModel is not null) return;
             _defaultModel = null;
             NotifyModelSelection();
             RebuildModelMenu();
@@ -293,8 +295,8 @@ public sealed partial class SessionViewModel
         if (!CanChangeModel) throw new InvalidOperationException("当前运行结束后可切换。");
         if (Id is null)
         {
-            SelectedModel = choice;
-            _effort       = effort;
+            SelectedModel       = choice;
+            _effort             = effort;
             // 草稿模型偏好是用户显式选择，参与空白页回收判定。
             HasUserPreselection = true;
             NotifyModelSelection();
@@ -368,14 +370,11 @@ public sealed partial class SessionViewModel
     }
 
     /// <summary>
-    ///     <para>项目菜单是否有可选项；用于控制项目分区标题的可见性。</para>
-    ///     <para>Whether the project menu has choices, controlling its project-section heading visibility.</para>
-    /// </summary>
-    public bool HasProjectChoices => ProjectMenuOptions.Count > 0;
-
-    /// <summary>
     ///     <para>按打开时的侧栏分组重建空白页项目菜单；只列已有项目，不在此创建项目或写目录册。</para>
-    ///     <para>Rebuilds the blank-page project menu from the sidebar groups at open time; it lists existing projects only and never writes the catalog.</para>
+    ///     <para>
+    ///         Rebuilds the blank-page project menu from the sidebar groups at open time; it lists existing projects only
+    ///         and never writes the catalog.
+    ///     </para>
     /// </summary>
     private void RebuildProjectMenu()
     {

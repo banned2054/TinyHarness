@@ -5,44 +5,31 @@ namespace TinyHarness.Core.Services.ChatCompletions.Configuration;
 
 /// <summary>
 ///     <para>
-///         按固定顺序解析生效配置：显式 `--config` → 当前目录 tinyharness.json → 用户配置 → 内置默认值。
-///         不隐式合并多份文件；旧文件的相对路径继续按当前工作目录解释。
+///         按固定顺序解析生效配置：显式 `--config` → 用户配置 → 内置默认值。不隐式合并多份文件，
+///         也绝不自动读取工作目录中的 tinyharness.json；显式指定的配置文件才参与解析。
 ///     </para>
 ///     <para>
-///         Resolves the effective configuration in a fixed order: explicit `--config` → current-directory
-///         tinyharness.json → user config → built-in defaults. Multiple files are never merged implicitly, and
-///         relative paths in older files keep being interpreted against the current working directory.
+///         Resolves the effective configuration in a fixed order: explicit `--config` → user config → built-in
+///         defaults. Multiple files are never merged implicitly, and a tinyharness.json in the working directory is
+///         never read automatically; only an explicitly specified config file participates.
 ///     </para>
 /// </summary>
 public static class ConfigResolver
 {
     /// <summary>
-    ///     <para>当前目录项目配置文件名。</para>
-    ///     <para>The project config file name in the current directory.</para>
-    /// </summary>
-    public const string ProjectConfigFileName = "tinyharness.json";
-
-    /// <summary>
     ///     <para>
     ///         解析生效配置与来源信息。显式指定但不存在的配置文件抛出使用错误，不发模型请求。
-    ///         工作目录与用户配置路径可注入，供测试与嵌入式调用使用；省略时使用进程当前目录与默认用户配置路径。
+    ///         用户配置路径可注入，供测试与嵌入式调用使用；省略时使用默认用户配置路径。
     ///     </para>
     ///     <para>
     ///         Resolves the effective configuration and its source. An explicitly specified but missing file throws
-    ///         a usage error before any model request is made. The working directory and user config path can be
-    ///         injected for tests and embedded callers; omitted values mean the process current directory and the
-    ///         default user config path.
+    ///         a usage error before any model request is made. The user config path can be injected for tests and
+    ///         embedded callers; an omitted value means the default user config path.
     ///     </para>
     /// </summary>
     public static async Task<ConfigResolution> ResolveAsync(
-        string? explicitConfigPath, CancellationToken cancellationToken, string? workingDirectory = null,
-        string? userConfigPath = null)
+        string? explicitConfigPath, CancellationToken cancellationToken, string? userConfigPath = null)
     {
-        var projectConfigPath = Path.GetFullPath(ProjectConfigFileName,
-                                                 string.IsNullOrWhiteSpace(workingDirectory)
-                                                     ? Environment.CurrentDirectory
-                                                     : workingDirectory);
-        var projectExists = File.Exists(projectConfigPath);
         var userConfigPathResolved = string.IsNullOrWhiteSpace(userConfigPath)
             ? UserConfigStore.DefaultFilePath()
             : Path.GetFullPath(userConfigPath);
@@ -60,56 +47,34 @@ public static class ConfigResolver
                                                           .ConfigureAwait(false);
             return new ConfigResolution
             {
-                Config              = explicitConfig,
-                Source              = ConfigSourceKind.ExplicitFile,
-                SourcePath          = explicitPath,
-                UserConfigPath      = userConfigPathResolved,
-                UserConfigExists    = userExists,
-                ProjectConfigPath   = projectConfigPath,
-                ProjectConfigExists = projectExists
-            };
-        }
-
-        if (projectExists)
-        {
-            var projectConfig = await ConfigurationLoader.LoadAsync(projectConfigPath, cancellationToken)
-                                                         .ConfigureAwait(false);
-            return new ConfigResolution
-            {
-                Config              = projectConfig,
-                Source              = ConfigSourceKind.ProjectFile,
-                SourcePath          = projectConfigPath,
-                UserConfigPath      = userConfigPathResolved,
-                UserConfigExists    = userExists,
-                ProjectConfigPath   = projectConfigPath,
-                ProjectConfigExists = true
+                Config           = explicitConfig,
+                Source           = ConfigSourceKind.ExplicitFile,
+                SourcePath       = explicitPath,
+                UserConfigPath   = userConfigPathResolved,
+                UserConfigExists = userExists
             };
         }
 
         if (!userExists)
             return new ConfigResolution
             {
-                Config              = ConfigurationLoader.NormalizePaths(new TinyHarnessConfig()),
-                Source              = ConfigSourceKind.Defaults,
-                UserConfigPath      = userConfigPathResolved,
-                UserConfigExists    = false,
-                ProjectConfigPath   = projectConfigPath,
-                ProjectConfigExists = false
+                Config           = ConfigurationLoader.NormalizePaths(new TinyHarnessConfig()),
+                Source           = ConfigSourceKind.Defaults,
+                UserConfigPath   = userConfigPathResolved,
+                UserConfigExists = false
             };
         var userConfig = await UserConfigStore.LoadAsync(userConfigPathResolved, cancellationToken)
                                               .ConfigureAwait(false);
         var config = FromUserConfig(userConfig, userConfigPathResolved);
         return new ConfigResolution
         {
-            Config = ConfigurationLoader.NormalizePaths(config),
-            Source = ConfigSourceKind.UserConfig,
-            SourcePath = userConfigPathResolved,
-            ProfileName = string.IsNullOrWhiteSpace(userConfig.DefaultProfile) ? null : userConfig.DefaultProfile,
-            ModelName = string.IsNullOrWhiteSpace(config.Model) ? null : config.Model,
-            UserConfigPath = userConfigPathResolved,
-            UserConfigExists = true,
-            ProjectConfigPath = projectConfigPath,
-            ProjectConfigExists = false
+            Config           = ConfigurationLoader.NormalizePaths(config),
+            Source           = ConfigSourceKind.UserConfig,
+            SourcePath       = userConfigPathResolved,
+            ProfileName      = string.IsNullOrWhiteSpace(userConfig.DefaultProfile) ? null : userConfig.DefaultProfile,
+            ModelName        = string.IsNullOrWhiteSpace(config.Model) ? null : config.Model,
+            UserConfigPath   = userConfigPathResolved,
+            UserConfigExists = true
         };
     }
 

@@ -117,7 +117,7 @@ $env:TINYHARNESS_API_KEY = Read-Host "API key" -MaskInput
 
 用户配置位于 `%APPDATA%\tinyharness\user-config.json`，保存密钥引用而非密钥值。`TINYHARNESS_USER_CONFIG_DIR` 可覆盖该目录。`config show` 显示生效配置与来源，`doctor` 离线检查配置；`doctor --connect` 会实际请求模型，可能产生费用。
 
-配置查找顺序为：显式 `--config <文件>`、当前目录的 `tinyharness.json`、用户配置、内置默认值；这些文件不会隐式合并。**仓库自带的 `tinyharness.json` 是使用占位 endpoint 的 smoke 示例。** 实际任务请从目标项目目录启动，或显式指定配置，避免它覆盖 `init` 创建的 profile。
+配置查找顺序为：显式 `--config <文件>`、用户配置、内置默认值；这些文件不会隐式合并，工作目录中的 `tinyharness.json` 不会被自动读取——打开某个项目目录不会接管应用配置。**仓库自带的 `tinyharness.json` 是使用占位 endpoint 的 smoke 示例，只通过显式 `--config` 使用**（例如离线 `smoke` 命令）。实际任务使用 `init` 创建的 profile；仅在需要不同配置时显式指定。
 
 ### 开始任务或对话
 

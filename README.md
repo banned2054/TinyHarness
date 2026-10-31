@@ -117,7 +117,7 @@ $env:TINYHARNESS_API_KEY = Read-Host "API key" -MaskInput
 
 User configuration is stored at `%APPDATA%\tinyharness\user-config.json`; it stores key references rather than key values. `TINYHARNESS_USER_CONFIG_DIR` overrides that directory. `config show` identifies the effective configuration and its source; `doctor` checks it offline. `doctor --connect` makes a real model request and may incur charges.
 
-Configuration lookup is: explicit `--config <file>`, current-directory `tinyharness.json`, user configuration, then built-in defaults. Files are not implicitly merged. **The repository's bundled `tinyharness.json` is a smoke example with a placeholder endpoint.** Run real tasks from your target project, or supply an explicit configuration, so it does not override the profile created by `init`.
+Configuration lookup is: explicit `--config <file>`, user configuration, then built-in defaults. Files are not implicitly merged, and a `tinyharness.json` in the working directory is never read automatically — opening a project directory cannot override the application configuration. **The repository's bundled `tinyharness.json` is a smoke example with a placeholder endpoint, used only through an explicit `--config`** (for example the offline `smoke` command). Real tasks use the profile created by `init`; supply an explicit configuration only when you want a different one.
 
 ### Start a task or conversation
 

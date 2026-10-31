@@ -649,20 +649,11 @@ public sealed class DesktopProjectionTests
     }
 
     [Test]
-    public async Task DraftDefaultFollowsProjectConfigurationAndKeepsExplicitSelection()
+    public async Task DraftDefaultIgnoresWorkspaceProjectConfigAndKeepsExplicitSelection()
     {
         var fixture = await Fixture.CreateAsync();
-        var user    = await UserConfigStore.LoadAsync(fixture.Config, CancellationToken.None);
-        var project = user.Profiles[0] with
-        {
-            Name = "project-provider", Endpoint = "https://project.invalid/v1", DefaultModel = "project-model",
-            Models = [new UserProfileModel { Id = "project-model", ContextWindowTokens = 128_000 }]
-        };
-        await UserConfigStore.SaveAsync(fixture.Config, user with
-        {
-            Profiles = [user.Profiles[0], project]
-        }, CancellationToken.None);
-        await File.WriteAllTextAsync(Path.Combine(fixture.Second, ConfigResolver.ProjectConfigFileName),
+        // 工作目录中的 tinyharness.json 不得接管应用配置；草稿默认项只来自全局默认 profile。
+        await File.WriteAllTextAsync(Path.Combine(fixture.Second, "tinyharness.json"),
                                      """
                                      {"endpoint":"https://project.invalid/v1","model":"project-model","apiKeyCredentialTarget":"fixture"}
                                      """);
@@ -676,13 +667,41 @@ public sealed class DesktopProjectionTests
         Assert.That(page.ModelPickerLabel, Is.EqualTo("offline · 默认"));
         page.WorkspaceRoot = fixture.Second;
         await page.RefreshDefaultModelAsync();
-        Assert.That(page.CurrentModelLabel, Is.EqualTo("project-model"));
-        Assert.That(page.ModelGroups[1].Options[0].IsSelected, Is.True);
+        Assert.That(page.CurrentModelLabel, Is.EqualTo("offline"));
+        Assert.That(page.ModelGroups[0].Options[0].IsSelected, Is.True);
         await page.SelectModelAsync(new ModelChoice("offline", "offline"), null);
         await page.RefreshDefaultModelAsync();
         Assert.That(page.CurrentModelLabel, Is.EqualTo("offline"));
         Assert.That(page.Id, Is.Null);
         Assert.That(Directory.Exists(fixture.Store), Is.False);
+    }
+
+    [Test]
+    public async Task FirstSendBindingMatchesDraftDefaultDespiteWorkspaceProjectConfig()
+    {
+        var fixture = await Fixture.CreateAsync();
+        // 首次发送的绑定与草稿显示一致：工作目录配置即使声明了不同模型与 Endpoint 也不参与。
+        await File.WriteAllTextAsync(Path.Combine(fixture.First, "tinyharness.json"),
+                                     """
+                                     {"endpoint":"https://project.invalid/v1","model":"project-model","apiKeyCredentialTarget":"fixture"}
+                                     """);
+        TinyHarnessConfig? bound  = null;
+        var                finish = Signal();
+        var factory = new DesktopSessionFactory((config, _) =>
+        {
+            bound = config;
+            return new Model(Signal(), finish, "answer");
+        }, new Credentials(), fixture.Config);
+        await using (var session = await factory.OpenAsync(new DesktopSessionRequest(fixture.First),
+                                                           _ => ValueTask.CompletedTask,
+                                                           _ => ValueTask.CompletedTask, CancellationToken.None))
+        {
+            Assert.That(bound, Is.Not.Null);
+            Assert.That(bound!.Model, Is.EqualTo("offline"));
+            Assert.That(bound.Endpoint, Is.EqualTo("https://offline.invalid/v1"));
+            Assert.That(session.Host.Session.Model.ModelId, Is.EqualTo("offline"));
+            Assert.That(session.Host.Session.Model.Endpoint, Is.EqualTo("https://offline.invalid/v1"));
+        }
     }
 
     [Test]

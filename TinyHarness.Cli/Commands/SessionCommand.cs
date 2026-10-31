@@ -161,7 +161,6 @@ internal static class SessionCommand
         CommandContext context, CancellationToken cancellationToken)
     {
         var resolution = await ConfigResolver.ResolveAsync(null, cancellationToken,
-                                                           context.ResolveWorkingDirectory(),
                                                            context.ResolveUserConfigPath()).ConfigureAwait(false);
         var userConfig = await UserConfigStore.LoadAsync(context.ResolveUserConfigPath(), cancellationToken)
                                               .ConfigureAwait(false);

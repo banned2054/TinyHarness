@@ -47,7 +47,6 @@ internal static class ConfigCommand
         var io = context.Io;
         var resolution = await ConfigResolver
                               .ResolveAsync(null, cancellationToken,
-                                            context.ResolveWorkingDirectory(),
                                             context.ResolveUserConfigPath()).ConfigureAwait(false);
         var config = resolution.Config;
 
@@ -87,10 +86,8 @@ internal static class ConfigCommand
                                 cancellationToken).ConfigureAwait(false);
 
         await io.WriteLineAsync(string.Empty, cancellationToken).ConfigureAwait(false);
-        await io.WriteLineAsync("Lookup paths (no implicit merging; first existing file wins):", cancellationToken)
-                .ConfigureAwait(false);
         await io
-             .WriteLineAsync($"  project config  : {resolution.ProjectConfigPath}{(resolution.ProjectConfigExists ? " (exists)" : string.Empty)}",
+             .WriteLineAsync("Lookup paths (no implicit merging; a tinyharness.json in the working directory is never read automatically):",
                              cancellationToken).ConfigureAwait(false);
         await io
              .WriteLineAsync($"  user config     : {resolution.UserConfigPath}{(resolution.UserConfigExists ? " (exists)" : string.Empty)}",
@@ -101,10 +98,10 @@ internal static class ConfigCommand
     }
 
     /// <summary>
-    ///     <para>更新用户配置中的非敏感默认值；只写入用户配置，不触碰项目配置。</para>
+    ///     <para>更新用户配置中的非敏感默认值；只写入用户配置，不改写其他配置文件。</para>
     ///     <para>
-    ///         Updates a non-sensitive default in the user config; only the user config is written, never the project
-    ///         config.
+    ///         Updates a non-sensitive default in the user config; only the user config is written, never any other
+    ///         config file.
     ///     </para>
     /// </summary>
     private static async Task<int> SetAsync(
@@ -206,7 +203,6 @@ internal static class ConfigCommand
     private static string DescribeSource(ConfigResolution resolution) => resolution.Source switch
     {
         ConfigSourceKind.ExplicitFile => $"explicit file {resolution.SourcePath}",
-        ConfigSourceKind.ProjectFile  => $"project file {resolution.SourcePath}",
         ConfigSourceKind.UserConfig   => $"user config {resolution.SourcePath}",
         _                             => "built-in defaults (no config file found)"
     };

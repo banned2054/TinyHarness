@@ -26,7 +26,7 @@ internal static class InitCommand
              .WriteLineAsync($"  user config : {userPath}{(File.Exists(userPath) ? string.Empty : " (will be created)")}",
                              cancellationToken).ConfigureAwait(false);
         await io
-             .WriteLineAsync("  lookup order: .\\tinyharness.json in the current directory -> user config -> built-in defaults",
+             .WriteLineAsync("  lookup order: explicit --config <file> -> user config -> built-in defaults; a tinyharness.json in the working directory is never read automatically",
                              cancellationToken).ConfigureAwait(false);
 
         var config = await UserConfigStore.LoadAsync(userPath, cancellationToken).ConfigureAwait(false);

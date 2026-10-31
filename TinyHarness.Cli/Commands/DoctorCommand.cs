@@ -26,7 +26,6 @@ internal static class DoctorCommand
     {
         var io = context.Io;
         var resolution = await ConfigResolver.ResolveAsync(null, cancellationToken,
-                                                           context.ResolveWorkingDirectory(),
                                                            context.ResolveUserConfigPath())
                                              .ConfigureAwait(false);
         var config   = resolution.Config;
@@ -98,20 +97,15 @@ internal static class DoctorCommand
                     .ConfigureAwait(false);
         }
 
-        // Session directory：必须可创建/可写；此处的创建动作与 run 记录器执行的是同一步骤。
-        try
-        {
-            Directory.CreateDirectory(config.SessionDirectory);
+        // Session directory：只报告存在性；doctor 是诊断命令，不创建、不写入任何目录。
+        // 会话持久化实际使用工作区外的受保护会话存储，该目录不再是运行必需。
+        if (Directory.Exists(config.SessionDirectory))
             await io.WriteLineAsync($"  [ok]   session dir {config.SessionDirectory}", cancellationToken)
                     .ConfigureAwait(false);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
+        else
             await io
-                 .WriteLineAsync($"  [fail] session directory cannot be created: {config.SessionDirectory} ({ex.Message})",
+                 .WriteLineAsync($"  [info] session dir {config.SessionDirectory} is not present; doctor creates nothing",
                                  cancellationToken).ConfigureAwait(false);
-            failures++;
-        }
 
         // API key 可用性（离线）：只检查是否存在，绝不输出密钥值。
         var key = ApiKeyReader.Describe(config.ApiKeyEnvironmentVariable, config.ApiKeyCredentialTarget,

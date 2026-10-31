@@ -1,6 +1,7 @@
 using System.Text;
 using TinyHarness.Cli.Commands;
 using TinyHarness.Cli.Services;
+using TinyHarness.Core.Models.ChatCompletions;
 using TinyHarness.Core.Models.Configuration;
 using TinyHarness.Core.Services.ChatCompletions.Configuration;
 using TinyHarness.Core.Services.Runtime;
@@ -10,26 +11,29 @@ namespace TinyHarness.Tests;
 public sealed class CliCommandExecutionTests
 {
     [Test]
-    public async Task ConfigShow_ProjectFileDisplaysTheEffectiveModel()
+    public async Task ConfigShow_IgnoresWorkspaceProjectFileAndShowsUserConfig()
     {
         using var fixture = new CliFixture();
-        await File.WriteAllTextAsync(Path.Combine(fixture.Root, "tinyharness.json"), $$"""
+        // 工作目录中的同名配置不再自动接管应用配置；生效值只来自用户配置。
+        await File.WriteAllTextAsync(Path.Combine(fixture.Root, "tinyharness.json"), """
                                      {
                                        "endpoint": "https://project.example/v1",
                                        "model": "project-model",
-                                       "contextWindowTokens": 64000,
-                                       "workspaceRoot": "{{fixture.Root.Replace("\\", "\\\\")}}"
+                                       "contextWindowTokens": 64000
                                      }
                                      """);
+        await UserConfigStore.SaveAsync(fixture.UserConfigPath, ProfileConfig("work"), CancellationToken.None);
 
         var context = fixture.CreateContext();
         var result =
             await ConfigCommand.ExecuteAsync(context, CommandLine.Parse(["config", "show"]), CancellationToken.None);
 
         Assert.That(result, Is.EqualTo(0));
-        Assert.That(fixture.Io.Output, Does.Contain("model           : project-model (64,000 tokens context window)"));
+        Assert.That(fixture.Io.Output, Does.Contain("model           : model-x (64,000 tokens context window)"));
         Assert.That(fixture.Io.Output, Does.Not.Contain("model           : (not set)"));
-        Assert.That(fixture.Io.Output, Does.Contain("source          : project file"));
+        Assert.That(fixture.Io.Output, Does.Contain("source          : user config"));
+        Assert.That(fixture.Io.Output, Does.Not.Contain("project file"));
+        Assert.That(fixture.Io.Output, Does.Not.Contain("project-model"));
     }
 
     [Test]
@@ -157,10 +161,10 @@ public sealed class CliCommandExecutionTests
 
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
                                                                 ConfigCommand.ExecuteAsync(context,
-                                                                    CommandLine.Parse([
-                                                                        "config", "set", "maxAgentSteps", "-1"
-                                                                    ]),
-                                                                    CancellationToken.None));
+                                                                         CommandLine.Parse([
+                                                                             "config", "set", "maxAgentSteps", "-1"
+                                                                         ]),
+                                                                         CancellationToken.None));
         Assert.That(await File.ReadAllTextAsync(fixture.UserConfigPath), Is.EqualTo(before));
     }
 
@@ -213,21 +217,25 @@ public sealed class CliCommandExecutionTests
     {
         using var fixture          = new CliFixture();
         var       sessionDirectory = Path.Combine(fixture.Root, "sessions");
-        await File.WriteAllTextAsync(Path.Combine(fixture.Root, "tinyharness.json"), $$"""
-                                     {
-                                       "endpoint": "https://api.example/v1",
-                                       "model": "model-x",
-                                       "workspaceRoot": "{{fixture.Root.Replace("\\", "\\\\")}}",
-                                       "sessionDirectory": "{{sessionDirectory.Replace("\\", "\\\\")}}"
-                                     }
-                                     """);
+        // Endpoint、模型与会话目录来自可信用户配置；工作目录中的 tinyharness.json 不参与解析。
+        await UserConfigStore.SaveAsync(fixture.UserConfigPath,
+                                        ProfileConfig("work") with
+                                        {
+                                            Settings = new UserConfigSettings
+                                            {
+                                                SessionDirectory = sessionDirectory
+                                            }
+                                        },
+                                        CancellationToken.None);
 
         var result =
             await DoctorCommand.ExecuteAsync(fixture.CreateContext(), CommandLine.Parse(["doctor"]),
                                              CancellationToken.None);
 
         Assert.That(result, Is.EqualTo(0));
-        Assert.That(Directory.Exists(sessionDirectory), Is.True);
+        // doctor 是诊断命令：只报告会话目录存在性，不向工作区创建任何目录。
+        Assert.That(Directory.Exists(sessionDirectory), Is.False);
+        Assert.That(fixture.Io.Output, Does.Contain($"[info] session dir {sessionDirectory} is not present"));
         Assert.That(fixture.Io.Output, Does.Contain("[ok]   endpoint https://api.example/v1"));
         Assert.That(fixture.Io.Output, Does.Contain("[ok]   model model-x"));
         Assert.That(fixture.Io.Output, Does.Contain("offline mode; pass --connect"));
@@ -251,7 +259,7 @@ public sealed class CliCommandExecutionTests
         var saved = await UserConfigStore.LoadAsync(fixture.UserConfigPath, CancellationToken.None);
         Assert.That(saved.Profiles[0].Models[0].DisplayName, Is.EqualTo("Model X"));
         Assert.That(saved.Profiles[0].Models[0].ContextWindowTokens, Is.EqualTo(96000));
-        Assert.That(saved.Profiles[0].Models[0].DefaultReasoningEffort, Is.EqualTo(Core.Models.ChatCompletions.ModelReasoningEffort.High));
+        Assert.That(saved.Profiles[0].Models[0].DefaultReasoningEffort, Is.EqualTo(ModelReasoningEffort.High));
         Assert.That(saved.Profiles[0].DefaultModel, Is.EqualTo("model-x"));
         Assert.That(saved.Settings, Is.EqualTo(original.Settings));
     }
@@ -277,7 +285,7 @@ public sealed class CliCommandExecutionTests
         using var fixture = new CliFixture(["work", "https://api.example/v1", "2", "secret-before-eof"]);
         fixture.Credentials.IsSupported = true;
         await Assert.ThrowsAsync<InvalidOperationException>(() => InitCommand.ExecuteAsync(fixture.CreateContext(),
-                                                                CancellationToken.None));
+                                                                     CancellationToken.None));
         Assert.That(fixture.Credentials.Saves, Is.Zero);
         Assert.That(File.Exists(fixture.UserConfigPath), Is.False);
     }
@@ -323,10 +331,9 @@ public sealed class CliCommandExecutionTests
 
         public CommandContext CreateContext() => new()
         {
-            Io               = Io,
-            Credentials      = Credentials,
-            UserConfigPath   = UserConfigPath,
-            WorkingDirectory = Root
+            Io             = Io,
+            Credentials    = Credentials,
+            UserConfigPath = UserConfigPath
         };
     }
 
@@ -370,8 +377,8 @@ public sealed class CliCommandExecutionTests
     private sealed class FakeCredentialStore : ICredentialStore
     {
         private readonly Dictionary<string, string> _entries = new(StringComparer.Ordinal);
-        public bool IsSupported { get; set; }
-        public int Saves { get; private set; }
+        public           int                        Saves       { get; private set; }
+        public           bool                       IsSupported { get; set; }
 
         public void Save(string targetName, string secret)
         {

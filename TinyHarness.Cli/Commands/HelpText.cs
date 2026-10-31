@@ -64,9 +64,12 @@ internal static class HelpText
         internal compaction text are never displayed. This option does not change model settings.
 
         Without --config the lookup order is:
-          1. .\tinyharness.json in the current directory (project config)
-          2. the user config (tinyharness init creates it)
-          3. built-in defaults
+          1. the user config (tinyharness init creates it)
+          2. built-in defaults
+
+        A tinyharness.json in the working directory is never read automatically; only
+        an explicit --config file participates, so opening a directory cannot silently
+        override the application configuration.
 
         A workspace without saved trust is read-only in noninteractive runs. Interactive
         startup asks whether to trust it; trust permits normal approval prompts, not automatic

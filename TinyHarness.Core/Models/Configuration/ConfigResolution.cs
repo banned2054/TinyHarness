@@ -1,22 +1,16 @@
 namespace TinyHarness.Core.Models.Configuration;
 
 /// <summary>
-///     配置查找来源。显式 `--config` 与当前目录项目文件直接来自文件；用户配置来自平台用户配置目录；
-///     都不存在时使用内置默认值。
-///     Where the effective configuration came from. An explicit `--config` and the current-directory project
-///     file are read directly; the user config lives in the platform user config directory; built-in defaults
-///     apply when no file exists.
+///     配置查找来源。显式 `--config` 直接来自文件；用户配置来自平台用户配置目录；
+///     都不存在时使用内置默认值。工作目录中的 tinyharness.json 不会被自动读取。
+///     Where the effective configuration came from. An explicit `--config` is read directly; the user config
+///     lives in the platform user config directory; built-in defaults apply when no file exists. A
+///     tinyharness.json in the working directory is never read automatically.
 /// </summary>
 public enum ConfigSourceKind
 {
     /// <summary>未找到任何配置文件，全部使用内置默认值。No config file found; built-in defaults only.</summary>
     Defaults,
-
-    /// <summary>
-    ///     未指定 --config 时自动发现的当前目录 tinyharness.json。The auto-discovered current-directory tinyharness.json when --config
-    ///     is absent.
-    /// </summary>
-    ProjectFile,
 
     /// <summary>通过 --config 显式指定的配置文件。The file explicitly selected through --config.</summary>
     ExplicitFile,
@@ -49,9 +43,4 @@ public sealed record ConfigResolution
     public required string UserConfigPath { get; init; }
 
     public bool UserConfigExists { get; init; }
-
-    /// <summary>当前目录项目配置文件的绝对路径。Absolute path of the current-directory project config file.</summary>
-    public required string ProjectConfigPath { get; init; }
-
-    public bool ProjectConfigExists { get; init; }
 }

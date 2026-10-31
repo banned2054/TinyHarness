@@ -5,13 +5,13 @@ namespace TinyHarness.Core.Models.Configuration;
 /// <summary>
 ///     <para>
 ///         Windows 沙箱的可信用户设置。只存放在用户配置（user-config.json）的 settings.windowsSandbox；
-///         目标项目的 tinyharness.json、模型请求和命令规则都不能设置或覆盖这些字段。enabled 缺省为
+///         任何 tinyharness.json 配置文件、模型请求和命令规则都不能设置或覆盖这些字段。enabled 缺省为
 ///         false：未显式启用时保持宿主执行并明示"无 OS 隔离"；显式启用后组件缺失、路径非法或平台不符
 ///         都拒绝执行，绝不自动回退宿主。外部网络始终阻断；TCP 环回仅能由可信用户设置显式启用。
 ///     </para>
 ///     <para>
 ///         Trusted user settings for the Windows sandbox. They live only in the user
-///         config's settings.windowsSandbox; the target project's tinyharness.json,
+///         config's settings.windowsSandbox; any tinyharness.json config file,
 ///         model requests, and command rules cannot set or override them. enabled
 ///         defaults to false: without an explicit opt-in the harness keeps host
 ///         execution and states "no OS isolation"; once enabled, missing components,

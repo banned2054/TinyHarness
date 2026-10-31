@@ -61,12 +61,13 @@ public sealed class StepLimitTests
     public void NegativeSteps_AreRejectedAtRuntimeComposition()
     {
         Assert.Throws<ArgumentOutOfRangeException>(() =>
-            new AgentLoop(new FakeChatClient(), new ToolRegistry([]), Options(-1)));
+                                                       new AgentLoop(new FakeChatClient(), new ToolRegistry([]),
+                                                                     Options(-1)));
     }
 
     [TestCase(0)]
     [TestCase(3)]
-    public async Task StepSetting_RoundTripsAndResolvesForUserAndProjectConfiguration(int steps)
+    public async Task StepSetting_RoundTripsForUserConfigAndExplicitFile(int steps)
     {
         using var directory = new TestTempDir();
         var       userPath  = Path.Combine(directory.Root, "user-config.json");
@@ -74,31 +75,35 @@ public sealed class StepLimitTests
         {
             Settings = new UserConfigSettings { MaxAgentSteps = steps }
         }, CancellationToken.None);
-        var user = await ConfigResolver.ResolveAsync(null, CancellationToken.None, directory.Root, userPath);
+        var user = await ConfigResolver.ResolveAsync(null, CancellationToken.None, userPath);
         Assert.That(user.Config.MaxAgentSteps, Is.EqualTo(steps));
 
-        var projectPath = directory.WriteFile("project.json", $"{{\"maxAgentSteps\":{steps}}}");
-        var project     = await ConfigurationLoader.LoadAsync(projectPath, CancellationToken.None);
-        Assert.That(project.MaxAgentSteps, Is.EqualTo(steps));
+        var explicitPath   = directory.WriteFile("explicit.json", $"{{\"maxAgentSteps\":{steps}}}");
+        var explicitConfig = await ConfigurationLoader.LoadAsync(explicitPath, CancellationToken.None);
+        Assert.That(explicitConfig.MaxAgentSteps, Is.EqualTo(steps));
         var client = ScriptedClient();
-        var loop   = new AgentLoop(client, new ToolRegistry([new FakeTool("loop")]), Options(project.MaxAgentSteps));
+        var loop = new AgentLoop(client, new ToolRegistry([new FakeTool("loop")]),
+                                 Options(explicitConfig.MaxAgentSteps));
         var result = await loop.RunAsync("sys", "go", CancellationToken.None);
         Assert.That(result.Status, Is.EqualTo(steps   == 0 ? AgentStatus.Completed : AgentStatus.StepLimitReached));
         Assert.That(client.Requests, Is.EqualTo(steps == 0 ? 46 : steps));
     }
 
     [Test]
-    public async Task NegativeStepSettings_AreRejectedInBothConfigurationSources()
+    public async Task NegativeStepSettings_AreRejectedByUserConfigAndExplicitFiles()
     {
         using var directory = new TestTempDir();
         var       userPath  = directory.WriteFile("user-config.json", "{\"settings\":{\"maxAgentSteps\":-1}}");
         var userError = await Assert.ThrowsAsync<InvalidDataException>(() =>
-            UserConfigStore.LoadAsync(userPath, CancellationToken.None));
+                                                                           UserConfigStore.LoadAsync(userPath,
+                                                                                    CancellationToken.None));
         Assert.That(userError!.Message, Does.Contain("maxAgentSteps"));
-        var projectPath = directory.WriteFile("project.json", "{\"maxAgentSteps\":-1}");
-        var projectError = await Assert.ThrowsAsync<InvalidDataException>(() =>
-            ConfigurationLoader.LoadAsync(projectPath, CancellationToken.None));
-        Assert.That(projectError!.Message, Does.Contain("maxAgentSteps"));
+        var explicitPath = directory.WriteFile("explicit.json", "{\"maxAgentSteps\":-1}");
+        var explicitError = await Assert.ThrowsAsync<InvalidDataException>(() =>
+                                                                               ConfigurationLoader
+                                                                                  .LoadAsync(explicitPath,
+                                                                                            CancellationToken.None));
+        Assert.That(explicitError!.Message, Does.Contain("maxAgentSteps"));
     }
 
     private static AgentOptions Options(int steps) => new()

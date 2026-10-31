@@ -17,7 +17,6 @@ public class ConfigResolverTests
 
             var error = await TestAssert.ThrowsAsync<ConfigException>(() => ConfigResolver.ResolveAsync(missing,
                                                                                CancellationToken.None,
-                                                                               dir,
                                                                                Path.Combine(dir, "user-config.json")));
 
             Assert.That(error.IsUsageError, Is.True);
@@ -41,7 +40,6 @@ public class ConfigResolverTests
                                          """{"endpoint":"https://explicit.test/v1","model":"m-explicit","maxAgentSteps":7}""");
 
             var resolution = await ConfigResolver.ResolveAsync(explicitPath, CancellationToken.None,
-                                                               dir,
                                                                Path.Combine(dir, "user-config.json"));
 
             Assert.That(resolution.Source, Is.EqualTo(ConfigSourceKind.ExplicitFile));
@@ -58,25 +56,32 @@ public class ConfigResolverTests
     }
 
     [Test]
-    public async Task ProjectFileInWorkingDirectory_TakesPrecedenceOverUserConfig()
+    public async Task ProjectFileInWorkingDirectory_IsIgnoredInFavorOfUserConfig()
     {
         var dir = Path.Combine(Path.GetTempPath(), $"tinyharness-{Guid.NewGuid():N}");
         Directory.CreateDirectory(dir);
         try
         {
+            // 工作目录中的同名配置不再自动接管应用配置；生效值一律来自用户配置。
             await File.WriteAllTextAsync(Path.Combine(dir, "tinyharness.json"),
                                          """{"endpoint":"https://project.test/v1","model":"m-project"}""");
             var userPath = Path.Combine(dir, "user-config.json");
-            await File.WriteAllTextAsync(userPath, """{"defaultProfile":"work"}""");
+            await File.WriteAllTextAsync(userPath, """
+                                         {
+                                           "defaultProfile": "work",
+                                           "profiles": [
+                                             {"name": "work", "endpoint": "https://work.test/v1", "defaultModel": "m-user",
+                                              "models": [{"id": "m-user", "contextWindowTokens": 64000}]}
+                                           ]
+                                         }
+                                         """);
 
-            var resolution = await ConfigResolver.ResolveAsync(null, CancellationToken.None,
-                                                               dir,
-                                                               userPath);
+            var resolution = await ConfigResolver.ResolveAsync(null, CancellationToken.None, userPath);
 
-            Assert.That(resolution.Source, Is.EqualTo(ConfigSourceKind.ProjectFile));
-            Assert.That(resolution.SourcePath, Is.EqualTo(Path.Combine(dir, "tinyharness.json")));
-            Assert.That(resolution.Config.Endpoint, Is.EqualTo("https://project.test/v1"));
-            Assert.That(resolution.ProjectConfigExists, Is.True);
+            Assert.That(resolution.Source, Is.EqualTo(ConfigSourceKind.UserConfig));
+            Assert.That(resolution.SourcePath, Is.EqualTo(userPath));
+            Assert.That(resolution.Config.Endpoint, Is.EqualTo("https://work.test/v1"));
+            Assert.That(resolution.Config.Model, Is.EqualTo("m-user"));
             Assert.That(resolution.UserConfigExists, Is.True);
         }
         finally
@@ -112,9 +117,7 @@ public class ConfigResolverTests
                                          }
                                          """);
 
-            var resolution = await ConfigResolver.ResolveAsync(null, CancellationToken.None,
-                                                               dir,
-                                                               userPath);
+            var resolution = await ConfigResolver.ResolveAsync(null, CancellationToken.None, userPath);
 
             Assert.That(resolution.Source, Is.EqualTo(ConfigSourceKind.UserConfig));
             Assert.That(resolution.SourcePath, Is.EqualTo(userPath));
@@ -146,9 +149,7 @@ public class ConfigResolverTests
             var userPath = Path.Combine(dir, "user-config.json");
             await File.WriteAllTextAsync(userPath, """{"profiles":[]}""");
 
-            var resolution = await ConfigResolver.ResolveAsync(null, CancellationToken.None,
-                                                               dir,
-                                                               userPath);
+            var resolution = await ConfigResolver.ResolveAsync(null, CancellationToken.None, userPath);
 
             Assert.That(resolution.Source, Is.EqualTo(ConfigSourceKind.UserConfig));
             Assert.That(resolution.ProfileName, Is.Null);
@@ -178,9 +179,7 @@ public class ConfigResolverTests
                                          }
                                          """);
 
-            var resolution = await ConfigResolver.ResolveAsync(null, CancellationToken.None,
-                                                               dir,
-                                                               userPath);
+            var resolution = await ConfigResolver.ResolveAsync(null, CancellationToken.None, userPath);
 
             Assert.That(resolution.Config.ChatApi, Is.EqualTo(ChatApiKind.ChatCompletions));
         }
@@ -203,7 +202,6 @@ public class ConfigResolverTests
             var error =
                 await TestAssert.ThrowsAsync<ConfigException>(() => ConfigResolver.ResolveAsync(null,
                                                                        CancellationToken.None,
-                                                                       dir,
                                                                        userPath));
 
             Assert.That(error.IsUsageError, Is.False);
@@ -236,7 +234,6 @@ public class ConfigResolverTests
             var error =
                 await TestAssert.ThrowsAsync<ConfigException>(() => ConfigResolver.ResolveAsync(null,
                                                                        CancellationToken.None,
-                                                                       dir,
                                                                        userPath));
 
             Assert.That(error.IsUsageError, Is.False);
@@ -250,7 +247,7 @@ public class ConfigResolverTests
     }
 
     [Test]
-    public async Task NoFilesAtAll_ReturnsDefaultsAndLookupPaths()
+    public async Task NoFilesAtAll_ReturnsDefaultsAndUserConfigLookupPath()
     {
         var dir = Path.Combine(Path.GetTempPath(), $"tinyharness-{Guid.NewGuid():N}");
         Directory.CreateDirectory(dir);
@@ -258,16 +255,44 @@ public class ConfigResolverTests
         {
             var userPath = Path.Combine(dir, "user-config.json");
 
-            var resolution = await ConfigResolver.ResolveAsync(null, CancellationToken.None,
-                                                               dir,
-                                                               userPath);
+            var resolution = await ConfigResolver.ResolveAsync(null, CancellationToken.None, userPath);
 
             Assert.That(resolution.Source, Is.EqualTo(ConfigSourceKind.Defaults));
             Assert.That(resolution.SourcePath, Is.Null);
-            Assert.That(resolution.ProjectConfigExists, Is.False);
             Assert.That(resolution.UserConfigExists, Is.False);
             Assert.That(resolution.Config.ContextWindowTokens, Is.EqualTo(128_000));
-            Assert.That(resolution.ProjectConfigPath, Is.EqualTo(Path.Combine(dir, "tinyharness.json")));
+            Assert.That(resolution.UserConfigPath, Is.EqualTo(userPath));
+        }
+        finally
+        {
+            Directory.Delete(dir, true);
+        }
+    }
+
+    [Test]
+    public async Task MalformedProjectFileInWorkingDirectory_DoesNotAffectInitialization()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"tinyharness-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        try
+        {
+            // 损坏的工作目录配置不再被读取，也不影响正常初始化。
+            await File.WriteAllTextAsync(Path.Combine(dir, "tinyharness.json"), "{ not valid json");
+            var userPath = Path.Combine(dir, "user-config.json");
+            await File.WriteAllTextAsync(userPath, """
+                                         {
+                                           "defaultProfile": "work",
+                                           "profiles": [
+                                             {"name": "work", "endpoint": "https://work.test/v1", "defaultModel": "model-x",
+                                              "models": [{"id": "model-x", "contextWindowTokens": 64000}]}
+                                           ]
+                                         }
+                                         """);
+
+            var resolution = await ConfigResolver.ResolveAsync(null, CancellationToken.None, userPath);
+
+            Assert.That(resolution.Source, Is.EqualTo(ConfigSourceKind.UserConfig));
+            Assert.That(resolution.Config.Model, Is.EqualTo("model-x"));
         }
         finally
         {

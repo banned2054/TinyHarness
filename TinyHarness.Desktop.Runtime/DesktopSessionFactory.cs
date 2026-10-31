@@ -89,12 +89,15 @@ public sealed class DesktopSessionFactory
     public string Redact(string text) => new DisplaySecretRedactor(_secrets).Redact(text);
 
     /// <summary>
-    ///     <para>只读解析草稿的生效模型配置；不读取密钥、不创建客户端或会话。</para>
-    ///     <para>Resolves the effective draft model configuration without reading secrets or creating clients or sessions.</para>
+    ///     <para>只读解析草稿的生效模型配置（仅来自全局用户配置，不读取工作目录配置）；不读取密钥、不创建客户端或会话。</para>
+    ///     <para>
+    ///         Resolves the effective draft model configuration from the global user config only (never a working
+    ///         directory config), without reading secrets or creating clients or sessions.
+    ///     </para>
     /// </summary>
     public Task<ConfigResolution>
-        ResolveDefaultConfigAsync(string workspaceRoot, CancellationToken cancellationToken) =>
-        ConfigResolver.ResolveAsync(null, cancellationToken, workspaceRoot, _userConfigPath);
+        ResolveDefaultConfigAsync(CancellationToken cancellationToken) =>
+        ConfigResolver.ResolveAsync(null, cancellationToken, _userConfigPath);
 
     /// <summary>
     ///     <para>读取可信设置，建立新会话或严格恢复；失败释放所有已打开的资源，不发送模型请求。</para>
@@ -111,21 +114,18 @@ public sealed class DesktopSessionFactory
         if (!Directory.Exists(root)) throw new DirectoryNotFoundException(root);
         var userPath = _userConfigPath ?? UserConfigStore.DefaultFilePath();
         var user     = await UserConfigStore.LoadAsync(userPath, cancellationToken).ConfigureAwait(false);
-        // 恢复和显式选择不依赖全局默认目标可用；项目执行策略仍按原优先级读取。
+        // 恢复和显式选择不依赖全局默认目标可用；配置一律来自可信用户设置，不读取工作目录的 tinyharness.json。
         var resolution = request.SessionId is null && request.ProfileName is null
-            ? await ConfigResolver.ResolveAsync(null, cancellationToken, root, userPath).ConfigureAwait(false)
+            ? await ConfigResolver.ResolveAsync(null, cancellationToken, userPath).ConfigureAwait(false)
             : null;
-        var projectPath = Path.Combine(root, ConfigResolver.ProjectConfigFileName);
-        var config = (resolution?.Config ?? (File.Exists(projectPath)
-                ? await ConfigurationLoader.LoadAsync(projectPath, cancellationToken).ConfigureAwait(false)
-                : new TinyHarnessConfig
-                {
-                    MaxAgentSteps             = user.Settings?.MaxAgentSteps ?? 0,
-                    ReservedOutputTokens      = user.Settings?.ReservedOutputTokens ?? 8000,
-                    CompactionThreshold       = user.Settings?.CompactionThreshold ?? 0,
-                    DefaultToolTimeoutSeconds = user.Settings?.DefaultToolTimeoutSeconds ?? 120,
-                    CommandRules              = user.Settings?.CommandRules ?? new TinyHarnessConfig().CommandRules
-                })) with
+        var config = (resolution?.Config ?? new TinyHarnessConfig
+            {
+                MaxAgentSteps             = user.Settings?.MaxAgentSteps ?? 0,
+                ReservedOutputTokens      = user.Settings?.ReservedOutputTokens ?? 8000,
+                CompactionThreshold       = user.Settings?.CompactionThreshold ?? 0,
+                DefaultToolTimeoutSeconds = user.Settings?.DefaultToolTimeoutSeconds ?? 120,
+                CommandRules              = user.Settings?.CommandRules ?? new TinyHarnessConfig().CommandRules
+            }) with
             {
                 WorkspaceRoot = root
             };

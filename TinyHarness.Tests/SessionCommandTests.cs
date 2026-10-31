@@ -196,8 +196,8 @@ public class SessionCommandTests
                 }.Select(item =>
                              new SessionLogRecord("", "history",
                                                   JsonSerializer.SerializeToElement(
-                                                   item,
-                                                   SessionHistoryJsonContext.Default.SessionHistoryItem)))
+                                                       item,
+                                                       SessionHistoryJsonContext.Default.SessionHistoryItem)))
                  .ToArray();
             await writer.AppendRecordsAsync(items, CancellationToken.None);
         }
@@ -513,32 +513,32 @@ public class SessionCommandTests
         foreach (var turn in session.Turns)
         {
             records.Add(new SessionLogRecord("", "turn", JsonSerializer.SerializeToElement(
-                                              new SessionLogTurn(turn.Id, turn.UserInput, turn.CreatedUtc),
-                                              SessionLogJsonContext.Default.SessionLogTurn)));
+                                                  new SessionLogTurn(turn.Id, turn.UserInput, turn.CreatedUtc),
+                                                  SessionLogJsonContext.Default.SessionLogTurn)));
             foreach (var run in turn.Runs)
                 records.Add(new SessionLogRecord("", "run", JsonSerializer.SerializeToElement(
-                                                  new SessionLogRun(turn.Id, run),
-                                                  SessionLogJsonContext.Default.SessionLogRun)));
+                                                      new SessionLogRun(turn.Id, run),
+                                                      SessionLogJsonContext.Default.SessionLogRun)));
         }
 
         if (session.Conversation is { } conversation)
         {
             foreach (var message in conversation.Messages)
                 records.Add(new SessionLogRecord("", "message", JsonSerializer.SerializeToElement(
-                                                  new SessionLogMessage(message),
-                                                  SessionLogJsonContext.Default.SessionLogMessage)));
+                                                      new SessionLogMessage(message),
+                                                      SessionLogJsonContext.Default.SessionLogMessage)));
             records.Add(new SessionLogRecord("", "compaction-checkpoint", JsonSerializer.SerializeToElement(
-                                              new SessionLogCheckpoint(conversation.State,
-                                                                       conversation.HasState,
-                                                                       conversation.FoldStartMessageIndex,
-                                                                       conversation.FoldEndMessageIndex),
-                                              SessionLogJsonContext.Default.SessionLogCheckpoint)));
+                                                  new SessionLogCheckpoint(conversation.State,
+                                                                           conversation.HasState,
+                                                                           conversation.FoldStartMessageIndex,
+                                                                           conversation.FoldEndMessageIndex),
+                                                  SessionLogJsonContext.Default.SessionLogCheckpoint)));
         }
 
         records.Add(new SessionLogRecord("", "session-state", JsonSerializer.SerializeToElement(
-                                          new SessionLogSessionState(session.InspectionAcknowledgedUtc,
-                                                                     session.PendingInspectionReason),
-                                          SessionLogJsonContext.Default.SessionLogSessionState)));
+                                              new SessionLogSessionState(session.InspectionAcknowledgedUtc,
+                                                                         session.PendingInspectionReason),
+                                              SessionLogJsonContext.Default.SessionLogSessionState)));
         // CLI 读取测试直接构造完整日志批次，避免借用旧快照格式。
         var batch = new SessionLogBatch
         {
@@ -570,17 +570,7 @@ public class SessionCommandTests
             Io                 = new FakeCliConsole();
             Directory.CreateDirectory(Workspace);
 
-            // 项目配置指定工作区和旧 run 快照目录；
-            // 可信用户配置指定工作区外的受保护会话存储。
-            File.WriteAllText(Path.Combine(Root, "tinyharness.json"),
-                              $$"""
-                              {
-                                "endpoint": "https://example.invalid/v1",
-                                "model": "test-model",
-                                "workspaceRoot": {{JsonSerializer.Serialize(Workspace)}},
-                                "sessionDirectory": {{JsonSerializer.Serialize(RunOutputDirectory)}}
-                              }
-                              """);
+            // 可信用户配置指定工作区外的受保护会话存储；工作目录不提供应用配置。
             File.WriteAllText(UserConfigPath,
                               $$"""
                               {
@@ -610,10 +600,9 @@ public class SessionCommandTests
 
         public CommandContext CreateContext() => new()
         {
-            Io               = Io,
-            Credentials      = new FakeCredentialStore(),
-            UserConfigPath   = UserConfigPath,
-            WorkingDirectory = Root
+            Io             = Io,
+            Credentials    = new FakeCredentialStore(),
+            UserConfigPath = UserConfigPath
         };
     }
 
