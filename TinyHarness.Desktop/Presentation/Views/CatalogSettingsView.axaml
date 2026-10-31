@@ -260,9 +260,60 @@
                         </Border>
                         <ItemsControl ItemsSource="{Binding ModelEntries}"
                                       ItemTemplate="{StaticResource ModelEntryTemplate}" />
-                        <Button Classes="settings-secondary" Content="+ 添加模型" HorizontalAlignment="Left"
-                                Command="{Binding AddModelCommand}"
-                                AutomationProperties.Name="添加模型" />
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <Button Classes="settings-secondary" Content="+ 添加模型"
+                                    Command="{Binding AddModelCommand}"
+                                    AutomationProperties.Name="添加模型" />
+                            <Panel>
+                                <Button x:Name="FetchModelsButton" Classes="settings-secondary" Content="获取模型…"
+                                        Command="{Binding FetchModelsCommand}"
+                                        AutomationProperties.Name="获取模型" />
+                                <Popup PlacementTarget="{Binding #FetchModelsButton}"
+                                       Placement="BottomEdgeAlignedLeft" VerticalOffset="4"
+                                       IsOpen="{Binding IsModelPickerOpen, Mode=TwoWay}"
+                                       IsLightDismissEnabled="True">
+                                    <Border Classes="popup-surface" Width="420" Padding="16">
+                                        <StackPanel Spacing="12">
+                                            <TextBlock Classes="settings-card-title" Text="选择要添加的模型" />
+                                            <TextBlock Classes="settings-card-description" TextWrapping="Wrap"
+                                                       Text="{Binding ModelDiscoveryStatus}" />
+                                            <ProgressBar IsIndeterminate="True" Height="3"
+                                                         IsVisible="{Binding IsFetchingModels}" />
+                                            <TextBox Classes="settings-input" PlaceholderText="搜索模型 ID"
+                                                     Text="{Binding ModelSearch, Mode=TwoWay}"
+                                                     AutomationProperties.Name="搜索可添加模型" />
+                                            <ScrollViewer MaxHeight="280" HorizontalScrollBarVisibility="Disabled">
+                                                <ItemsControl ItemsSource="{Binding FilteredDiscoveredModels}">
+                                                    <ItemsControl.ItemTemplate>
+                                                        <DataTemplate x:DataType="vm:CatalogDiscoveredModelViewModel">
+                                                            <CheckBox IsChecked="{Binding IsSelected, Mode=TwoWay}"
+                                                                      IsEnabled="{Binding !IsAlreadyAdded}"
+                                                                      HorizontalAlignment="Stretch"
+                                                                      Foreground="{DynamicResource PopupForegroundBrush}"
+                                                                      AutomationProperties.Name="{Binding Label}">
+                                                                <TextBlock Text="{Binding Label}" TextWrapping="Wrap" />
+                                                            </CheckBox>
+                                                        </DataTemplate>
+                                                    </ItemsControl.ItemTemplate>
+                                                </ItemsControl>
+                                            </ScrollViewer>
+                                            <TextBlock Classes="settings-card-description" TextWrapping="Wrap"
+                                                       Text="仅获取模型 ID；上下文窗口暂用 128K，请按供应商说明调整后保存。推理能力需手动配置。" />
+                                            <Grid ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="8">
+                                                <Button Classes="settings-secondary" Content="重新获取"
+                                                        Command="{Binding FetchModelsCommand}" />
+                                                <Button Grid.Column="2" Classes="settings-secondary" Content="取消"
+                                                        Command="{Binding CloseModelPickerCommand}" />
+                                                <Button Grid.Column="3" Classes="settings-primary"
+                                                        Content="{Binding AddSelectedModelsText}"
+                                                        Command="{Binding AddSelectedModelsCommand}"
+                                                        IsEnabled="{Binding CanAddSelectedModels}" />
+                                            </Grid>
+                                        </StackPanel>
+                                    </Border>
+                                </Popup>
+                            </Panel>
+                        </StackPanel>
 
                         <Rectangle Height="1" Fill="{DynamicResource PopupDividerBrush}" />
                         <CheckBox Content="设为全局默认供应商" FontSize="13"

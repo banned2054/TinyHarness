@@ -23,15 +23,15 @@ namespace TinyHarness.Desktop.ViewModels;
 /// </summary>
 public sealed class CatalogSettingsViewModel : SettingsSectionViewModel
 {
-    private readonly string _path;
-    private readonly Func<Task> _refresh;
-    private readonly ICredentialStore _credentials;
-    private UserConfig _baseline = new();
-    private CatalogProviderRowViewModel? _editingRow;
-    private CatalogProviderEditorViewModel? _editor;
-    private bool _isAddOpen;
-    private bool _isRefreshing;
-    private string _sectionNotice = string.Empty;
+    private readonly string                          _path;
+    private readonly Func<Task>                      _refresh;
+    private readonly ICredentialStore                _credentials;
+    private          UserConfig                      _baseline = new();
+    private          CatalogProviderRowViewModel?    _editingRow;
+    private          CatalogProviderEditorViewModel? _editor;
+    private          bool                            _isAddOpen;
+    private          bool                            _isRefreshing;
+    private          string                          _sectionNotice = string.Empty;
 
     /// <summary>
     ///     <para>使用可信用户配置路径与保存后刷新回调建立分区。</para>
@@ -163,6 +163,7 @@ public sealed class CatalogSettingsViewModel : SettingsSectionViewModel
 
     private void CloseCards()
     {
+        Editor?.CloseModelPicker();
         _editingRow = null;
         Editor      = null;
         IsAddOpen   = false;
@@ -241,13 +242,16 @@ public sealed class CatalogSettingsViewModel : SettingsSectionViewModel
 
 /// <summary>
 ///     <para>供应商行：名称、说明、凭据引用圆点与编辑按钮；编辑时行内展开编辑卡。</para>
-///     <para>A provider row: name, caption, credential reference dot and the edit button; editing expands the editor card inline.</para>
+///     <para>
+///         A provider row: name, caption, credential reference dot and the edit button; editing expands the editor card
+///         inline.
+///     </para>
 /// </summary>
 public sealed class CatalogProviderRowViewModel : ObservableObject
 {
     private readonly Action<CatalogProviderRowViewModel> _onEdit;
-    private bool _isEditing;
-    private CatalogProviderEditorViewModel? _editor;
+    private          bool                                _isEditing;
+    private          CatalogProviderEditorViewModel?     _editor;
 
     /// <summary>
     ///     <para>建立供应商行；卡片操作是否可用由所属分区统一决定。</para>
@@ -314,29 +318,29 @@ public sealed class CatalogProviderRowViewModel : ObservableObject
 ///         below. Saving submits the whole card at once; failures retain every draft.
 ///     </para>
 /// </summary>
-public sealed class CatalogProviderEditorViewModel : ObservableObject
+public sealed partial class CatalogProviderEditorViewModel : ObservableObject
 {
-    private readonly string _path;
-    private readonly ICredentialStore _credentials;
-    private readonly UserConfig _baseline;
-    private readonly UserProfile? _source;
+    private readonly string                                 _path;
+    private readonly ICredentialStore                       _credentials;
+    private readonly UserConfig                             _baseline;
+    private readonly UserProfile?                           _source;
     private readonly Action<CatalogProviderEditorViewModel> _saved;
     private readonly Action<CatalogProviderEditorViewModel> _cancelled;
 
-    private string _name = string.Empty;
-    private string _endpoint = string.Empty;
-    private string _protocol = ChatApiKindParser.ChatCompletionsValue;
-    private string _environmentVariable = string.Empty;
-    private string _credentialTarget = string.Empty;
-    private string _secret = string.Empty;
-    private bool _makeDefaultProvider;
-    private string _defaultModelId = string.Empty;
-    private bool _isSaving;
+    private string  _name     = string.Empty;
+    private          string                                 _endpoint            = string.Empty;
+    private string  _protocol = ChatApiKindParser.ChatCompletionsValue;
+    private          string                                 _environmentVariable = string.Empty;
+    private          string                                 _credentialTarget    = string.Empty;
+    private string  _secret = string.Empty;
+    private          bool                                   _makeDefaultProvider;
+    private          string                                 _defaultModelId      = string.Empty;
+    private          bool                                   _isSaving;
     private string? _saveError;
-    private bool _isProtocolMenuOpen;
-    private bool _isDefaultModelMenuOpen;
-    private bool _isCustomExpanded = true;
-    private bool _isCredentialOptionsExpanded;
+    private          bool                                   _isProtocolMenuOpen;
+    private          bool                                   _isDefaultModelMenuOpen;
+    private          bool                                   _isCustomExpanded = true;
+    private          bool                                   _isCredentialOptionsExpanded;
     private IReadOnlyList<CatalogChoiceOptionViewModel> _defaultModelOptions = [];
 
     private CatalogProviderEditorViewModel(string path, ICredentialStore credentials, UserConfig baseline,
@@ -373,9 +377,12 @@ public sealed class CatalogProviderEditorViewModel : ObservableObject
             new(ChatApiKindParser.ResponsesValue, "OpenAI Responses", _protocol == ChatApiKindParser.ResponsesValue,
                 SelectProtocol)
         ];
-        SaveCommand     = new AsyncCommand(SaveAsync, exception => SaveError = Redact(exception.Message));
-        CancelCommand   = new RelayCommand(() => _cancelled(this));
-        AddModelCommand = new RelayCommand(AddModel);
+        SaveCommand              = new AsyncCommand(SaveAsync, exception => SaveError = Redact(exception.Message));
+        CancelCommand            = new RelayCommand(() => _cancelled(this));
+        AddModelCommand          = new RelayCommand(AddModel);
+        FetchModelsCommand       = new AsyncCommand(FetchModelsAsync, _ => ModelDiscoveryStatus = "获取模型失败，请检查配置后重试。");
+        AddSelectedModelsCommand = new RelayCommand(AddSelectedModels, () => CanAddSelectedModels);
+        CloseModelPickerCommand  = new RelayCommand(CloseModelPicker);
         ToggleProtocolMenuCommand =
             new RelayCommand(() => IsProtocolMenuOpen = !IsProtocolMenuOpen);
         ToggleDefaultModelMenuCommand =
@@ -426,6 +433,7 @@ public sealed class CatalogProviderEditorViewModel : ObservableObject
             if (!SetProperty(ref _isCustomExpanded, value) || value) return;
             IsProtocolMenuOpen     = false;
             IsDefaultModelMenuOpen = false;
+            CloseModelPicker();
         }
     }
 
@@ -459,6 +467,7 @@ public sealed class CatalogProviderEditorViewModel : ObservableObject
         {
             if (SetProperty(ref _endpoint, value))
             {
+                CloseModelPicker();
                 OnPropertyChanged(nameof(RequestPreview));
                 NotifyFormChanged();
             }
@@ -493,6 +502,7 @@ public sealed class CatalogProviderEditorViewModel : ObservableObject
         {
             if (SetProperty(ref _environmentVariable, value))
             {
+                CloseModelPicker();
                 OnPropertyChanged(nameof(SecretWatermark));
                 NotifyFormChanged();
             }
@@ -506,6 +516,7 @@ public sealed class CatalogProviderEditorViewModel : ObservableObject
         {
             if (SetProperty(ref _credentialTarget, value))
             {
+                CloseModelPicker();
                 OnPropertyChanged(nameof(SecretWatermark));
                 NotifyFormChanged();
             }
@@ -521,7 +532,11 @@ public sealed class CatalogProviderEditorViewModel : ObservableObject
         get => _secret;
         set
         {
-            if (SetProperty(ref _secret, value)) NotifyFormChanged();
+            if (SetProperty(ref _secret, value))
+            {
+                CloseModelPicker();
+                NotifyFormChanged();
+            }
         }
     }
 
@@ -551,7 +566,10 @@ public sealed class CatalogProviderEditorViewModel : ObservableObject
 
     /// <summary>
     ///     <para>密钥框按当前凭据来源提示留空保留或直接粘贴；不读取或回显已存密钥。</para>
-    ///     <para>The key placeholder explains retaining the current source or pasting a key, without reading or revealing stored keys.</para>
+    ///     <para>
+    ///         The key placeholder explains retaining the current source or pasting a key, without reading or revealing
+    ///         stored keys.
+    ///     </para>
     /// </summary>
     public string SecretWatermark =>
         !string.IsNullOrWhiteSpace(EnvironmentVariable) || !string.IsNullOrWhiteSpace(CredentialTarget)
@@ -639,12 +657,16 @@ public sealed class CatalogProviderEditorViewModel : ObservableObject
 
     /// <summary>
     ///     <para>保存整卡：供应商字段、全部模型条目与默认项一次提交；冲突或校验失败保留草稿。</para>
-    ///     <para>Saves the whole card: provider fields, every model entry and defaults in one commit; conflicts or validation failures retain drafts.</para>
+    ///     <para>
+    ///         Saves the whole card: provider fields, every model entry and defaults in one commit; conflicts or validation
+    ///         failures retain drafts.
+    ///     </para>
     /// </summary>
     public async Task SaveAsync()
     {
         if (!CanSave) return;
 
+        CloseModelPicker();
         IsSaving  = true;
         SaveError = null;
         try
@@ -798,16 +820,16 @@ public sealed class CatalogModelEntryViewModel : ObservableObject
     ];
 
     private readonly Action _onChanged;
-    private string _id;
-    private string _displayName;
-    private string _windowDraft;
-    private bool _isExpanded;
-    private bool _isEffortMenuOpen;
-    private bool _isNoneSelected;
-    private bool _isLowSelected;
-    private bool _isMediumSelected;
-    private bool _isHighSelected;
-    private bool _isExtraHighSelected;
+    private          string _id;
+    private          string _displayName;
+    private          string _windowDraft;
+    private          bool   _isExpanded;
+    private          bool   _isEffortMenuOpen;
+    private          bool   _isNoneSelected;
+    private          bool   _isLowSelected;
+    private          bool   _isMediumSelected;
+    private          bool   _isHighSelected;
+    private          bool   _isExtraHighSelected;
     private string _defaultEffortValue;
     private IReadOnlyList<CatalogChoiceOptionViewModel> _defaultEffortOptions = [];
 

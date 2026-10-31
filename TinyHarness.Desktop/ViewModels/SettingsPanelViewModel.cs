@@ -23,8 +23,12 @@ public sealed class SettingsPanelViewModel : ObservableObject
         Sections = [General, Catalog];
         foreach (var section in Sections) section.SelectCommand = new RelayCommand(() => SelectSection(section));
         ActiveSection = General;
-        CloseCommand  = new RelayCommand(() => CloseRequested?.Invoke(this, EventArgs.Empty));
-        RetryCommand  = new AsyncCommand(() => OpenAsync(), ShowError);
+        CloseCommand = new RelayCommand(() =>
+        {
+            Catalog.Editor?.CloseModelPicker();
+            CloseRequested?.Invoke(this, EventArgs.Empty);
+        });
+        RetryCommand = new AsyncCommand(() => OpenAsync(), ShowError);
     }
 
     public GeneralSettingsSectionViewModel General { get; }
@@ -44,9 +48,9 @@ public sealed class SettingsPanelViewModel : ObservableObject
     public event EventHandler? CloseRequested;
 
     private SettingsSectionViewModel? _activeSection;
-    private bool _isLoading = true;
-    private bool _hasError;
-    private string _errorText = string.Empty;
+    private bool                      _isLoading = true;
+    private bool                      _hasError;
+    private string                    _errorText = string.Empty;
 
     public SettingsSectionViewModel ActiveSection
     {
@@ -90,7 +94,10 @@ public sealed class SettingsPanelViewModel : ObservableObject
 
     /// <summary>
     ///     <para>打开面板：重新读取目录并复位错误态；失败转入错误态等待重试，不抛出。</para>
-    ///     <para>Opens the panel by reloading the catalog and clearing errors; failures enter the error state for retry instead of throwing.</para>
+    ///     <para>
+    ///         Opens the panel by reloading the catalog and clearing errors; failures enter the error state for retry
+    ///         instead of throwing.
+    ///     </para>
     /// </summary>
     public async Task OpenAsync()
     {
@@ -118,6 +125,7 @@ public sealed class SettingsPanelViewModel : ObservableObject
     {
         if (ReferenceEquals(ActiveSection, section)) return;
 
+        Catalog.Editor?.CloseModelPicker();
         ActiveSection = section;
     }
 
@@ -130,7 +138,10 @@ public sealed class SettingsPanelViewModel : ObservableObject
 
 /// <summary>
 ///     <para>设置分区导航项：标题固定，选中与激活状态由面板壳同步。</para>
-///     <para>A settings section navigation item: fixed title with selection and activation state synced by the panel shell.</para>
+///     <para>
+///         A settings section navigation item: fixed title with selection and activation state synced by the panel
+///         shell.
+///     </para>
 /// </summary>
 public abstract class SettingsSectionViewModel : ObservableObject
 {
