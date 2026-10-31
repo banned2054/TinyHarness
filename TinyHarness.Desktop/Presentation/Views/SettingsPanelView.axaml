@@ -14,133 +14,140 @@
 
         <Border x:Name="PanelRoot" Classes="settings-panel" Width="800" Height="700"
                 HorizontalAlignment="Center" VerticalAlignment="Center" Focusable="True">
-            <Grid ColumnDefinitions="188,*">
+            <Grid>
+                <Grid ColumnDefinitions="188,*" IsEnabled="{Binding !Catalog.IsModelPickerOpen}">
 
-                <!-- 左导航：标题「设置」+ 分区列表（纯文字行，无图标）。 -->
-                <Border Width="188" Padding="22,14,10,14"
-                        BorderBrush="{DynamicResource PopupDividerBrush}" BorderThickness="0,0,1,0">
-                    <StackPanel>
-                        <TextBlock Text="设置" Classes="settings-nav-title" />
-                        <ItemsControl ItemsSource="{Binding Sections}">
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate x:DataType="vm:SettingsSectionViewModel">
-                                    <Button Classes="settings-nav-item"
-                                            Classes.selected="{Binding IsSelected}"
-                                            Command="{Binding SelectCommand}"
-                                            Content="{Binding Title}"
-                                            AutomationProperties.Name="{Binding Title}"
-                                            Margin="0,0,0,4" />
-                                </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
-                    </StackPanel>
-                </Border>
+                    <!-- 左导航：标题「设置」+ 分区列表（纯文字行，无图标）。 -->
+                    <Border Width="188" Padding="22,14,10,14"
+                            BorderBrush="{DynamicResource PopupDividerBrush}" BorderThickness="0,0,1,0">
+                        <StackPanel>
+                            <TextBlock Text="设置" Classes="settings-nav-title" />
+                            <ItemsControl ItemsSource="{Binding Sections}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:SettingsSectionViewModel">
+                                        <Button Classes="settings-nav-item"
+                                                Classes.selected="{Binding IsSelected}"
+                                                Command="{Binding SelectCommand}"
+                                                Content="{Binding Title}"
+                                                AutomationProperties.Name="{Binding Title}"
+                                                Margin="0,0,0,4" />
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
+                    </Border>
 
-                <!-- 右内容列：header + 仅内容区滚动。 -->
-                <Grid Grid.Column="1" RowDefinitions="54,*">
-                    <Grid Grid.Row="0" Margin="0,0,24,0" ColumnDefinitions="*,Auto">
-                        <TextBlock Text="{Binding ActiveSection.Title}"
-                                   FontSize="16" FontWeight="SemiBold"
-                                   Foreground="{DynamicResource PopupForegroundBrush}"
-                                   VerticalAlignment="Center" Margin="24,0,0,0" />
-                        <Button Grid.Column="1" Classes="settings-close-icon"
-                                Command="{Binding CloseCommand}"
-                                AutomationProperties.Name="关闭设置" ToolTip.Tip="关闭设置"
-                                VerticalAlignment="Center">
-                            <!-- Path 尺寸须等于图标 viewBox（16）：Stretch=None 按原始坐标绘制，
-                                 槽位不符会把 X 推离按钮圆心。 -->
-                            <Path Width="16" Height="16" Stretch="None"
-                                  Data="{StaticResource Icon.CloseOutline}"
-                                  Stroke="{Binding $parent[Button].Foreground}" StrokeThickness="1.4"
-                                  StrokeLineCap="Round"
-                                  HorizontalAlignment="Center" VerticalAlignment="Center" />
-                        </Button>
-                    </Grid>
+                    <!-- 右内容列：header + 仅内容区滚动。 -->
+                    <Grid Grid.Column="1" RowDefinitions="54,*">
+                        <Grid Grid.Row="0" Margin="0,0,24,0" ColumnDefinitions="*,Auto">
+                            <TextBlock Text="{Binding ActiveSection.Title}"
+                                       FontSize="16" FontWeight="SemiBold"
+                                       Foreground="{DynamicResource PopupForegroundBrush}"
+                                       VerticalAlignment="Center" Margin="24,0,0,0" />
+                            <Button Grid.Column="1" Classes="settings-close-icon"
+                                    Command="{Binding CloseCommand}"
+                                    AutomationProperties.Name="关闭设置" ToolTip.Tip="关闭设置"
+                                    VerticalAlignment="Center">
+                                <!-- Path 尺寸须等于图标 viewBox（16）：Stretch=None 按原始坐标绘制，
+                                     槽位不符会把 X 推离按钮圆心。 -->
+                                <Path Width="16" Height="16" Stretch="None"
+                                      Data="{StaticResource Icon.CloseOutline}"
+                                      Stroke="{Binding $parent[Button].Foreground}" StrokeThickness="1.4"
+                                      StrokeLineCap="Round"
+                                      HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            </Button>
+                        </Grid>
 
-                    <ScrollViewer Grid.Row="1" Padding="24,0,24,24">
-                        <Panel>
-                            <!-- 加载态 / 错误态 / 就绪内容三选一。 -->
-                            <StackPanel IsVisible="{Binding IsLoading}" Margin="0,16,0,0">
-                                <TextBlock Text="正在加载设置…" FontSize="13"
-                                           Foreground="{DynamicResource PopupMutedForegroundBrush}" />
-                            </StackPanel>
-                            <StackPanel IsVisible="{Binding HasError}" Spacing="12" Margin="0,16,0,0">
-                                <TextBlock Classes="settings-error" FontSize="13" Text="{Binding ErrorText}" />
-                                <Button Classes="settings-secondary" Content="重试"
-                                        Command="{Binding RetryCommand}"
-                                        AutomationProperties.Name="重试" HorizontalAlignment="Left" />
-                            </StackPanel>
-
-                            <StackPanel IsVisible="{Binding IsReady}">
-                                <!-- 通用分区：主题选择与配置文件路径；本分区不写入用户配置。 -->
-                                <StackPanel IsVisible="{Binding General.IsActive}" Margin="0,10,0,0">
-                                    <Border Classes="settings-row">
-                                        <Grid ColumnDefinitions="*,Auto" MinHeight="56">
-                                            <StackPanel Grid.Column="0" Margin="0,0,48,0"
-                                                        VerticalAlignment="Center" Spacing="2">
-                                                <TextBlock Text="主题" FontSize="14"
-                                                           Foreground="{DynamicResource PopupForegroundBrush}" />
-                                                <TextBlock Text="深浅配色立即生效，不需要重启。" FontSize="12"
-                                                           TextWrapping="Wrap"
-                                                           Foreground="{DynamicResource PopupMutedForegroundBrush}" />
-                                            </StackPanel>
-                                            <StackPanel Grid.Column="1" Orientation="Horizontal"
-                                                        Spacing="8" Margin="0,8" VerticalAlignment="Center">
-                                                <Button Classes="settings-choice"
-                                                        Classes.selected="{Binding General.IsLightSelected}"
-                                                        Command="{Binding General.SelectLightCommand}"
-                                                        AutomationProperties.Name="浅色主题">
-                                                    <StackPanel Spacing="4" HorizontalAlignment="Center">
-                                                        <Path Width="16" Height="16" Stretch="None"
-                                                              Data="{StaticResource Icon.SunOutline}"
-                                                              Stroke="{Binding $parent[Button].Foreground}"
-                                                              StrokeThickness="1.2" StrokeLineCap="Round"
-                                                              StrokeJoin="Round"
-                                                              HorizontalAlignment="Center" />
-                                                        <TextBlock Text="浅色" FontSize="12"
-                                                                   HorizontalAlignment="Center" />
-                                                    </StackPanel>
-                                                </Button>
-                                                <Button Classes="settings-choice"
-                                                        Classes.selected="{Binding General.IsDarkSelected}"
-                                                        Command="{Binding General.SelectDarkCommand}"
-                                                        AutomationProperties.Name="深色主题">
-                                                    <StackPanel Spacing="4" HorizontalAlignment="Center">
-                                                        <Path Width="16" Height="16" Stretch="None"
-                                                              Data="{StaticResource Icon.MoonOutline}"
-                                                              Stroke="{Binding $parent[Button].Foreground}"
-                                                              StrokeThickness="1.2" StrokeLineCap="Round"
-                                                              StrokeJoin="Round"
-                                                              HorizontalAlignment="Center" />
-                                                        <TextBlock Text="深色" FontSize="12"
-                                                                   HorizontalAlignment="Center" />
-                                                    </StackPanel>
-                                                </Button>
-                                            </StackPanel>
-                                        </Grid>
-                                    </Border>
-                                    <Border Classes="settings-row last">
-                                        <Grid ColumnDefinitions="*,Auto" MinHeight="56">
-                                            <StackPanel Grid.Column="0" Margin="0,0,48,0"
-                                                        VerticalAlignment="Center" Spacing="2">
-                                                <TextBlock Text="配置文件" FontSize="14"
-                                                           Foreground="{DynamicResource PopupForegroundBrush}" />
-                                                <SelectableTextBlock Text="{Binding General.ConfigPath}"
-                                                                     FontSize="12" TextWrapping="Wrap"
-                                                                     Foreground="{DynamicResource PopupMutedForegroundBrush}" />
-                                                <TextBlock Text="凭据引用与模型目录保存在该文件；密钥值只进系统凭据存储。"
-                                                           FontSize="12" TextWrapping="Wrap"
-                                                           Foreground="{DynamicResource PopupMutedForegroundBrush}" />
-                                            </StackPanel>
-                                        </Grid>
-                                    </Border>
+                        <ScrollViewer Grid.Row="1" Padding="24,0,24,24">
+                            <Panel>
+                                <!-- 加载态 / 错误态 / 就绪内容三选一。 -->
+                                <StackPanel IsVisible="{Binding IsLoading}" Margin="0,16,0,0">
+                                    <TextBlock Text="正在加载设置…" FontSize="13"
+                                               Foreground="{DynamicResource PopupMutedForegroundBrush}" />
+                                </StackPanel>
+                                <StackPanel IsVisible="{Binding HasError}" Spacing="12" Margin="0,16,0,0">
+                                    <TextBlock Classes="settings-error" FontSize="13" Text="{Binding ErrorText}" />
+                                    <Button Classes="settings-secondary" Content="重试"
+                                            Command="{Binding RetryCommand}"
+                                            AutomationProperties.Name="重试" HorizontalAlignment="Left" />
                                 </StackPanel>
 
-                                <!-- 模型分区：供应商行列表与添加/编辑卡。 -->
-                                <views:CatalogSettingsView DataContext="{Binding Catalog}" Margin="0,10,0,0" />
-                            </StackPanel>
-                        </Panel>
-                    </ScrollViewer>
+                                <StackPanel IsVisible="{Binding IsReady}">
+                                    <!-- 通用分区：主题选择与配置文件路径；本分区不写入用户配置。 -->
+                                    <StackPanel IsVisible="{Binding General.IsActive}" Margin="0,10,0,0">
+                                        <Border Classes="settings-row">
+                                            <Grid ColumnDefinitions="*,Auto" MinHeight="56">
+                                                <StackPanel Grid.Column="0" Margin="0,0,48,0"
+                                                            VerticalAlignment="Center" Spacing="2">
+                                                    <TextBlock Text="主题" FontSize="14"
+                                                               Foreground="{DynamicResource PopupForegroundBrush}" />
+                                                    <TextBlock Text="深浅配色立即生效，不需要重启。" FontSize="12"
+                                                               TextWrapping="Wrap"
+                                                               Foreground="{DynamicResource PopupMutedForegroundBrush}" />
+                                                </StackPanel>
+                                                <StackPanel Grid.Column="1" Orientation="Horizontal"
+                                                            Spacing="8" Margin="0,8" VerticalAlignment="Center">
+                                                    <Button Classes="settings-choice"
+                                                            Classes.selected="{Binding General.IsLightSelected}"
+                                                            Command="{Binding General.SelectLightCommand}"
+                                                            AutomationProperties.Name="浅色主题">
+                                                        <StackPanel Spacing="4" HorizontalAlignment="Center">
+                                                            <Path Width="16" Height="16" Stretch="None"
+                                                                  Data="{StaticResource Icon.SunOutline}"
+                                                                  Stroke="{Binding $parent[Button].Foreground}"
+                                                                  StrokeThickness="1.2" StrokeLineCap="Round"
+                                                                  StrokeJoin="Round"
+                                                                  HorizontalAlignment="Center" />
+                                                            <TextBlock Text="浅色" FontSize="12"
+                                                                       HorizontalAlignment="Center" />
+                                                        </StackPanel>
+                                                    </Button>
+                                                    <Button Classes="settings-choice"
+                                                            Classes.selected="{Binding General.IsDarkSelected}"
+                                                            Command="{Binding General.SelectDarkCommand}"
+                                                            AutomationProperties.Name="深色主题">
+                                                        <StackPanel Spacing="4" HorizontalAlignment="Center">
+                                                            <Path Width="16" Height="16" Stretch="None"
+                                                                  Data="{StaticResource Icon.MoonOutline}"
+                                                                  Stroke="{Binding $parent[Button].Foreground}"
+                                                                  StrokeThickness="1.2" StrokeLineCap="Round"
+                                                                  StrokeJoin="Round"
+                                                                  HorizontalAlignment="Center" />
+                                                            <TextBlock Text="深色" FontSize="12"
+                                                                       HorizontalAlignment="Center" />
+                                                        </StackPanel>
+                                                    </Button>
+                                                </StackPanel>
+                                            </Grid>
+                                        </Border>
+                                        <Border Classes="settings-row last">
+                                            <Grid ColumnDefinitions="*,Auto" MinHeight="56">
+                                                <StackPanel Grid.Column="0" Margin="0,0,48,0"
+                                                            VerticalAlignment="Center" Spacing="2">
+                                                    <TextBlock Text="配置文件" FontSize="14"
+                                                               Foreground="{DynamicResource PopupForegroundBrush}" />
+                                                    <SelectableTextBlock Text="{Binding General.ConfigPath}"
+                                                                         FontSize="12" TextWrapping="Wrap"
+                                                                         Foreground="{DynamicResource PopupMutedForegroundBrush}" />
+                                                    <TextBlock Text="凭据引用与模型目录保存在该文件；密钥值只进系统凭据存储。"
+                                                               FontSize="12" TextWrapping="Wrap"
+                                                               Foreground="{DynamicResource PopupMutedForegroundBrush}" />
+                                                </StackPanel>
+                                            </Grid>
+                                        </Border>
+                                    </StackPanel>
+
+                                    <!-- 模型分区：供应商行列表与添加/编辑卡。 -->
+                                    <views:CatalogSettingsView DataContext="{Binding Catalog}" Margin="0,10,0,0" />
+                                </StackPanel>
+                            </Panel>
+                        </ScrollViewer>
+                    </Grid>
+                </Grid>
+                <Grid IsVisible="{Binding Catalog.IsModelPickerOpen}">
+                    <Border Background="#99000000" PointerPressed="OnMaskPointerPressed" />
+                    <views:ModelDiscoveryDialogView x:Name="ModelDiscoveryDialog" Margin="24"
+                                                    DataContext="{Binding Catalog.Editor}" />
                 </Grid>
             </Grid>
         </Border>

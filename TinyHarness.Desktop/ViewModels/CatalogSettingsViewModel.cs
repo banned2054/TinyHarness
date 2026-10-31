@@ -12,13 +12,13 @@ namespace TinyHarness.Desktop.ViewModels;
 ///     <para>
 ///         模型分区：供应商行列表加行内编辑卡与添加卡，一次只展开一张卡。保存经
 ///         <see cref="ModelCatalogEditor" /> 写入可信用户配置；编辑冲突保留草稿，
-///         由用户重开面板后重试。不提供删除：目录管理本期不含删除入口。
+///         由用户重开面板后重试。模型增删先留在供应商草稿，整卡保存时提交。
 ///     </para>
 ///     <para>
 ///         The models section: provider rows with an inline editor card and the add card, one card open at
 ///         a time. Saving goes through <see cref="ModelCatalogEditor" /> into the trusted user config;
-///         edit conflicts retain drafts for a retry after reopening the panel. No deletion is offered:
-///         catalog management has no delete entry in this phase.
+///         edit conflicts retain drafts for a retry after reopening the panel. Model additions and removals
+///         remain in the provider draft until the whole card is saved.
 ///     </para>
 /// </summary>
 public sealed class CatalogSettingsViewModel : SettingsSectionViewModel
@@ -80,6 +80,7 @@ public sealed class CatalogSettingsViewModel : SettingsSectionViewModel
             if (_editor is not null) _editor.PropertyChanged -= OnEditorPropertyChanged;
             SetProperty(ref _editor, value);
             if (_editor is not null) _editor.PropertyChanged += OnEditorPropertyChanged;
+            OnPropertyChanged(nameof(IsModelPickerOpen));
             NotifyCardCommands();
         }
     }
@@ -98,6 +99,8 @@ public sealed class CatalogSettingsViewModel : SettingsSectionViewModel
     }
 
     public bool HasSectionNotice => _sectionNotice.Length > 0;
+
+    public bool IsModelPickerOpen => Editor?.IsModelPickerOpen == true;
 
     /// <summary>
     ///     <para>重新读取可信用户配置并重建行；展开的卡与未保存草稿一并丢弃。</para>
@@ -195,6 +198,8 @@ public sealed class CatalogSettingsViewModel : SettingsSectionViewModel
     private void OnEditorPropertyChanged(object? sender, PropertyChangedEventArgs args)
     {
         if (args.PropertyName == nameof(CatalogProviderEditorViewModel.IsSaving)) NotifyCardCommands();
+        if (args.PropertyName == nameof(CatalogProviderEditorViewModel.IsModelPickerOpen))
+            OnPropertyChanged(nameof(IsModelPickerOpen));
     }
 
     private void SetRefreshing(bool value)
@@ -381,8 +386,9 @@ public sealed partial class CatalogProviderEditorViewModel : ObservableObject
         CancelCommand            = new RelayCommand(() => _cancelled(this));
         AddModelCommand          = new RelayCommand(AddModel);
         FetchModelsCommand       = new AsyncCommand(FetchModelsAsync, _ => ModelDiscoveryStatus = "获取模型失败，请检查配置后重试。");
-        AddSelectedModelsCommand = new RelayCommand(AddSelectedModels, () => CanAddSelectedModels);
+        SaveModelSelectionCommand = new RelayCommand(SaveModelSelection, () => CanSaveModelSelection);
         CloseModelPickerCommand  = new RelayCommand(CloseModelPicker);
+        SelectAllModelsCommand   = new RelayCommand(SelectAllModels);
         ToggleProtocolMenuCommand =
             new RelayCommand(() => IsProtocolMenuOpen = !IsProtocolMenuOpen);
         ToggleDefaultModelMenuCommand =
@@ -648,7 +654,8 @@ public sealed partial class CatalogProviderEditorViewModel : ObservableObject
             if (provider.ApiKeyEnvironmentVariable                != EnvironmentVariable.Trim()) return true;
             if (provider.ApiKeyCredentialTarget                   != CredentialTarget.Trim()) return true;
             if (_makeDefaultProvider && _baseline.DefaultProfile != provider.Name) return true;
-            if (_defaultModelId != provider.DefaultModel) return true;
+            if (_defaultModelId    != provider.DefaultModel) return true;
+            if (ModelEntries.Count != provider.Models.Count) return true;
             return ModelEntries.Any(entry => entry.IsDraft || !entry.MatchesSource());
         }
     }
@@ -687,14 +694,21 @@ public sealed partial class CatalogProviderEditorViewModel : ObservableObject
             {
                 if (!entry.TryGetModel(out var model))
                     throw new InvalidDataException("模型目录存在未填完的条目。");
-                candidate = ModelCatalogEditor.PutModel(candidate, name, model, !entry.IsDraft);
+                var edit = candidate.Profiles.Single(item => item.Name == name).Models.Any(item => item.Id == model.Id);
+                candidate = ModelCatalogEditor.PutModel(candidate, name, model, edit);
             }
 
+            var retainedIds = ModelEntries.Select(entry => entry.Id.Trim()).ToHashSet(StringComparer.Ordinal);
             candidate = candidate with
             {
                 Profiles = candidate.Profiles
                                     .Select(item => item.Name == name
-                                                ? item with { DefaultModel = _defaultModelId }
+                                                ? item with
+                                                {
+                                                    Models = item.Models.Where(model => retainedIds.Contains(model.Id))
+                                                                 .ToArray(),
+                                                    DefaultModel = _defaultModelId
+                                                }
                                                 : item)
                                     .ToArray()
             };

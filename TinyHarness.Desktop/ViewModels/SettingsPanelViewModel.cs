@@ -29,6 +29,11 @@ public sealed class SettingsPanelViewModel : ObservableObject
             CloseRequested?.Invoke(this, EventArgs.Empty);
         });
         RetryCommand = new AsyncCommand(() => OpenAsync(), ShowError);
+        DismissCommand = new RelayCommand(() =>
+        {
+            if (Catalog.IsModelPickerOpen) Catalog.Editor?.CloseModelPicker();
+            else CloseCommand.Execute(null);
+        });
     }
 
     public GeneralSettingsSectionViewModel General { get; }
@@ -38,6 +43,8 @@ public sealed class SettingsPanelViewModel : ObservableObject
     public IReadOnlyList<SettingsSectionViewModel> Sections { get; }
 
     public RelayCommand CloseCommand { get; }
+
+    public RelayCommand DismissCommand { get; }
 
     public AsyncCommand RetryCommand { get; }
 

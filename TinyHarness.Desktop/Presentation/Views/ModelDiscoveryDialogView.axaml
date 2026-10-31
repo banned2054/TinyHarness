@@ -1,0 +1,66 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:TinyHarness.Desktop.ViewModels"
+             x:Class="TinyHarness.Desktop.Presentation.Views.ModelDiscoveryDialogView"
+             x:DataType="vm:CatalogProviderEditorViewModel">
+    <Border x:Name="DialogRoot" Classes="settings-model-dialog" Width="420" Height="584"
+            HorizontalAlignment="Center" VerticalAlignment="Center"
+            KeyboardNavigation.TabNavigation="Cycle">
+        <Grid RowDefinitions="Auto,Auto,Auto,*,Auto">
+            <StackPanel Grid.Row="0" Spacing="10" Margin="0,0,0,14">
+                <Grid ColumnDefinitions="*,Auto">
+                    <TextBlock Text="管理供应商模型" FontSize="16" FontWeight="SemiBold"
+                               Foreground="{DynamicResource PopupForegroundBrush}" VerticalAlignment="Center" />
+                    <Button Grid.Column="1" Classes="settings-close-icon" Command="{Binding CloseModelPickerCommand}"
+                            AutomationProperties.Name="关闭模型选择" ToolTip.Tip="关闭">
+                        <Path Width="16" Height="16" Stretch="None" Data="{StaticResource Icon.CloseOutline}"
+                              Stroke="{Binding $parent[Button].Foreground}" StrokeThickness="1.4"
+                              StrokeLineCap="Round" />
+                    </Button>
+                </Grid>
+                <TextBlock Classes="settings-card-description" TextWrapping="Wrap"
+                           Text="已添加模型默认勾选，取消勾选移除，勾选新模型添加。" />
+            </StackPanel>
+            <StackPanel Grid.Row="1" Margin="0,0,0,12" IsVisible="{Binding !IsFetchingModels}">
+                <TextBlock Classes="settings-card-description" Text="{Binding ModelDiscoveryStatus}"
+                           TextWrapping="Wrap" />
+            </StackPanel>
+            <Grid Grid.Row="2" ColumnDefinitions="*,Auto" ColumnSpacing="12" Margin="0,0,0,8">
+                <TextBox x:Name="ModelSearchBox" Classes="settings-input" PlaceholderText="搜索模型"
+                         Text="{Binding ModelSearch, Mode=TwoWay}" AutomationProperties.Name="搜索可添加模型" />
+                <Button Grid.Column="1" Classes="settings-text-action" Content="{Binding SelectAllModelsText}"
+                        Command="{Binding SelectAllModelsCommand}" IsEnabled="{Binding !IsFetchingModels}" />
+            </Grid>
+            <Grid Grid.Row="3">
+                <ScrollViewer x:Name="ModelsViewport" VerticalScrollBarVisibility="Visible"
+                              HorizontalScrollBarVisibility="Disabled" AllowAutoHide="False">
+                    <ItemsControl ItemsSource="{Binding FilteredDiscoveredModels}" Margin="0,0,8,0">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:CatalogDiscoveredModelViewModel">
+                                <CheckBox Classes="settings-discovered-model"
+                                          IsChecked="{Binding IsSelected, Mode=TwoWay}"
+                                          AutomationProperties.Name="{Binding Label}">
+                                    <TextBlock Text="{Binding Label}" TextWrapping="Wrap" FontFamily="Consolas" />
+                                </CheckBox>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </ScrollViewer>
+                <TextBlock Classes="settings-card-description" IsVisible="{Binding !HasFilteredModels}"
+                           Text="{Binding ModelListMessage}" HorizontalAlignment="Center" VerticalAlignment="Center" />
+            </Grid>
+            <StackPanel Grid.Row="4" Spacing="16" Margin="0,16,0,0">
+                <TextBlock Classes="settings-card-description" Text="{Binding ModelSelectionSummary}" />
+                <TextBlock Classes="settings-card-description" TextWrapping="Wrap" FontSize="11"
+                           Text="更改先应用到供应商草稿，点击供应商“保存”后生效。新增模型窗口暂用 128K。" />
+                <Grid ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="8">
+                    <Button Classes="settings-text-action" Content="重新获取" Command="{Binding FetchModelsCommand}" />
+                    <Button Grid.Column="2" Classes="settings-secondary" Content="取消"
+                            Command="{Binding CloseModelPickerCommand}" />
+                    <Button Grid.Column="3" Classes="settings-primary" Content="保存更改"
+                            Command="{Binding SaveModelSelectionCommand}" IsEnabled="{Binding CanSaveModelSelection}" />
+                </Grid>
+            </StackPanel>
+        </Grid>
+    </Border>
+</UserControl>

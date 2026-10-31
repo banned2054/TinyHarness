@@ -117,8 +117,11 @@ public sealed class ModelDiscoveryTests
         Assert.That(editor.IsModelPickerOpen, Is.True);
         var existing = editor.FilteredDiscoveredModels.Single(model => model.Id == "existing");
         Assert.That(existing.IsAlreadyAdded, Is.True);
+        Assert.That(existing.IsSelected, Is.True);
+        existing.IsSelected = false;
+        Assert.That(editor.ModelsToRemoveCount, Is.EqualTo(1));
         existing.IsSelected = true;
-        Assert.That(existing.IsSelected, Is.False);
+        Assert.That(editor.ModelsToRemoveCount, Is.Zero);
         var listReplacements = 0;
         editor.PropertyChanged += (_, args) =>
         {
@@ -129,12 +132,12 @@ public sealed class ModelDiscoveryTests
                     "Checking a row must not replace the list and reset scrolling or focus.");
         editor.ModelSearch = "NEW-B";
         Assert.That(editor.FilteredDiscoveredModels.Select(model => model.Id), Is.EqualTo(new[] { "new-b" }));
-        Assert.That(editor.SelectedModelCount, Is.EqualTo(1));
+        Assert.That(editor.ModelsToAddCount, Is.EqualTo(1));
         Assert.That(credentials.SaveCount, Is.Zero);
         Assert.That((await UserConfigStore.LoadAsync(path, CancellationToken.None)).Profiles[0].Models.Count,
                     Is.EqualTo(1));
 
-        editor.AddSelectedModelsCommand.Execute(null);
+        editor.SaveModelSelectionCommand.Execute(null);
         Assert.That(editor.IsModelPickerOpen, Is.False);
         Assert.That(editor.ModelEntries.Select(model => model.Id), Is.EqualTo(new[] { "existing", "new-a" }));
         Assert.That(editor.DefaultModelOptions.Any(option => option.Value == "new-a"), Is.True);
@@ -164,10 +167,10 @@ public sealed class ModelDiscoveryTests
         };
         await editor.FetchModelsCommand.ExecuteAsync();
         editor.FilteredDiscoveredModels.Single().IsSelected = true;
-        editor.AddSelectedModelsCommand.Execute(null);
+        editor.SaveModelSelectionCommand.Execute(null);
         await editor.FetchModelsCommand.ExecuteAsync();
         Assert.That(editor.FilteredDiscoveredModels.Single().IsAlreadyAdded, Is.True);
-        Assert.That(editor.CanAddSelectedModels, Is.False);
+        Assert.That(editor.CanSaveModelSelection, Is.False);
         Assert.That(editor.ModelEntries.Count, Is.EqualTo(2));
         Assert.That(credentials.ReadCount, Is.Zero);
         Assert.That(credentials.SaveCount, Is.Zero);
@@ -251,7 +254,7 @@ public sealed class ModelDiscoveryTests
         editor.FetchModels = (_, _, _) => Task.FromResult<IReadOnlyList<string>>(["new-model"]);
         await editor.FetchModelsCommand.ExecuteAsync();
         editor.FilteredDiscoveredModels.Single().IsSelected = true;
-        editor.AddSelectedModelsCommand.Execute(null);
+        editor.SaveModelSelectionCommand.Execute(null);
         Assert.That(File.Exists(path), Is.False);
         Assert.That(credentials.SaveCount, Is.Zero);
         await editor.SaveAsync();
@@ -295,6 +298,260 @@ public sealed class ModelDiscoveryTests
         completion.SetResult(["late-model"]);
         await fetch;
         Assert.That(editor.FilteredDiscoveredModels, Is.Empty);
+    }
+
+    [Test]
+    public async Task SelectAllUsesCurrentFilterAndPreservesOtherSelections()
+    {
+        var (editor, _, _) = CreateEditor(new Credentials());
+        editor.FetchModels = (_, _, _) =>
+            Task.FromResult<IReadOnlyList<string>>(["existing", "glm-a", "glm-b", "other"]);
+        await editor.FetchModelsCommand.ExecuteAsync();
+        editor.FilteredDiscoveredModels.Single(model => model.Id == "other").IsSelected = true;
+        editor.ModelSearch                                                              = "glm";
+        editor.SelectAllModelsCommand.Execute(null);
+        Assert.That(editor.ModelsToAddCount, Is.EqualTo(3));
+        Assert.That(editor.SelectAllModelsText, Is.EqualTo("取消全选"));
+        editor.SelectAllModelsCommand.Execute(null);
+        Assert.That(editor.ModelsToAddCount, Is.EqualTo(1));
+        editor.ModelSearch = string.Empty;
+        Assert.That(editor.FilteredDiscoveredModels.Single(model => model.Id == "other").IsSelected, Is.True);
+        Assert.That(editor.FilteredDiscoveredModels.Single(model => model.Id == "existing").IsSelected, Is.True);
+        editor.ModelSearch = "no-match";
+        Assert.That(editor.HasFilteredModels, Is.False);
+        editor.SelectAllModelsCommand.Execute(null);
+        Assert.That(editor.ModelsToAddCount, Is.EqualTo(1));
+    }
+
+    [Test]
+    public async Task DismissClosesModelDialogBeforeSettingsAndRetainsProviderDraft()
+    {
+        var credentials = new Credentials();
+        var (_, path, baseline) = CreateEditor(credentials);
+        await UserConfigStore.SaveAsync(path, baseline, CancellationToken.None);
+        var catalog = new CatalogSettingsViewModel(path, () => Task.CompletedTask, credentials);
+        var panel   = new SettingsPanelViewModel(new GeneralSettingsSectionViewModel(path), catalog);
+        await panel.OpenAsync();
+        panel.SelectSection(catalog);
+        catalog.Providers[0].EditCommand.Execute(null);
+        var editor = catalog.Editor!;
+        editor.Endpoint    = "https://edited.invalid/v1";
+        editor.FetchModels = (_, _, _) => Task.FromResult<IReadOnlyList<string>>(["new-model"]);
+        var notifications = 0;
+        catalog.PropertyChanged += (_, args) =>
+        {
+            if (args.PropertyName == nameof(catalog.IsModelPickerOpen)) notifications++;
+        };
+        var closed = 0;
+        panel.CloseRequested += (_, _) => closed++;
+        await editor.FetchModelsCommand.ExecuteAsync();
+        Assert.That(catalog.IsModelPickerOpen, Is.True);
+        panel.DismissCommand.Execute(null);
+        Assert.That(catalog.IsModelPickerOpen, Is.False);
+        Assert.That(closed, Is.Zero);
+        Assert.That(catalog.Editor, Is.SameAs(editor));
+        Assert.That(editor.Endpoint, Is.EqualTo("https://edited.invalid/v1"));
+        Assert.That(notifications, Is.EqualTo(2));
+        panel.DismissCommand.Execute(null);
+        Assert.That(closed, Is.EqualTo(1));
+    }
+
+    [Test]
+    public async Task LoadingDotsCycleAndResetOnRetryWhileExistingModelsStayUnchanged()
+    {
+        var (editor, _, _) = CreateEditor(new Credentials());
+        var completion =
+            new TaskCompletionSource<IReadOnlyList<string>>(TaskCreationOptions.RunContinuationsAsynchronously);
+        editor.FetchModels = (_, _, _) => completion.Task;
+        var fetch = editor.FetchModelsCommand.ExecuteAsync();
+        Assert.That(editor.ModelListMessage, Is.EqualTo("正在获取模型."));
+        foreach (var expected in new[] { "正在获取模型..", "正在获取模型...", "正在获取模型." })
+        {
+            editor.AdvanceLoadingIndicator();
+            Assert.That(editor.ModelListMessage, Is.EqualTo(expected));
+        }
+
+        completion.SetResult(["new-model"]);
+        await fetch;
+        Assert.That(editor.HasFilteredModels, Is.True);
+        Assert.That(editor.IsFetchingModels, Is.False);
+        editor.AdvanceLoadingIndicator();
+        Assert.That(editor.ModelListMessage, Is.EqualTo("暂无可选结果"));
+        Assert.That(editor.ModelEntries.Single().Id, Is.EqualTo("existing"));
+
+        completion =
+            new TaskCompletionSource<IReadOnlyList<string>>(TaskCreationOptions.RunContinuationsAsynchronously);
+        fetch = editor.FetchModelsCommand.ExecuteAsync();
+        Assert.That(editor.ModelListMessage, Is.EqualTo("正在获取模型."));
+        editor.AdvanceLoadingIndicator();
+        editor.CloseModelPickerCommand.Execute(null);
+        editor.AdvanceLoadingIndicator();
+        Assert.That(editor.ModelListMessage, Is.EqualTo("正在获取模型.."));
+        completion.SetCanceled();
+        await fetch;
+        Assert.That(editor.IsFetchingModels, Is.False);
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task LoadingStopsForEmptyAndFailedResults(bool fail)
+    {
+        var (editor, _, _) = CreateEditor(new Credentials());
+        editor.FetchModels = (_, _, _) => fail
+            ? Task.FromException<IReadOnlyList<string>>(new HttpRequestException("offline failure"))
+            : Task.FromResult<IReadOnlyList<string>>([]);
+        await editor.FetchModelsCommand.ExecuteAsync();
+        Assert.That(editor.IsFetchingModels, Is.False);
+        Assert.That(editor.HasFilteredModels, Is.False);
+        editor.AdvanceLoadingIndicator();
+        Assert.That(editor.ModelListMessage, Is.EqualTo("暂无可选结果"));
+        if (fail) Assert.That(editor.ModelDiscoveryStatus, Does.Contain("无法连接"));
+    }
+
+    [Test]
+    public async Task SelectionAddsAndRemovesOnlyConfirmedModelsAndPreservesUnreturnedModels()
+    {
+        var credentials = new Credentials();
+        var (_, path, original) = CreateEditor(credentials);
+        var retained = new UserProfileModel
+        {
+            Id               = "not-returned", DisplayName = "Keep me", ContextWindowTokens = 32000,
+            ReasoningEfforts = [ModelReasoningEffort.High], DefaultReasoningEffort = ModelReasoningEffort.High
+        };
+        var profile = original.Profiles[0] with { Models = [original.Profiles[0].Models[0], retained] };
+        var other   = new UserProfile { Name = "other", Endpoint = "https://other.invalid/v1" };
+        var baseline = original with
+        {
+            Profiles = [profile, other], Settings = new UserConfigSettings { MaxAgentSteps = 17 }
+        };
+        await UserConfigStore.SaveAsync(path, baseline, CancellationToken.None);
+        var editor = CatalogProviderEditorViewModel.ForEdit(path, credentials, baseline, profile, _ => { }, _ => { });
+        editor.FetchModels = (_, _, _) => Task.FromResult<IReadOnlyList<string>>(["existing", "new-model"]);
+        await editor.FetchModelsCommand.ExecuteAsync();
+        editor.FilteredDiscoveredModels.Single(model => model.Id == "existing").IsSelected  = false;
+        editor.FilteredDiscoveredModels.Single(model => model.Id == "new-model").IsSelected = true;
+        editor.ModelSearch                                                                  = "new-model";
+        Assert.That(editor.ModelSelectionSummary, Is.EqualTo("新增 1 个，移除 1 个"));
+        Assert.That(editor.ModelEntries.Select(entry => entry.Id), Is.EqualTo(new[] { "existing", "not-returned" }));
+        editor.SaveModelSelectionCommand.Execute(null);
+        Assert.That(editor.ModelEntries.Select(entry => entry.Id), Is.EqualTo(new[] { "not-returned", "new-model" }));
+        Assert.That(editor.DefaultModelLabel, Is.EqualTo("无默认"));
+        Assert.That(editor.DefaultModelOptions.Any(option => option.Value == "existing"), Is.False);
+        Assert.That((await UserConfigStore.LoadAsync(path, CancellationToken.None)).Profiles[0].Models.Count,
+                    Is.EqualTo(2));
+        Assert.That(editor.CanSave, Is.True);
+        await editor.SaveAsync();
+        var saved = await UserConfigStore.LoadAsync(path, CancellationToken.None);
+        Assert.That(saved.Profiles[0].Models.Select(model => model.Id),
+                    Is.EqualTo(new[] { "not-returned", "new-model" }));
+        Assert.That(saved.Profiles[0].Models[0].DisplayName, Is.EqualTo(retained.DisplayName));
+        Assert.That(saved.Profiles[0].Models[0].ContextWindowTokens, Is.EqualTo(retained.ContextWindowTokens));
+        Assert.That(saved.Profiles[0].Models[0].ReasoningEfforts, Is.EqualTo(retained.ReasoningEfforts));
+        Assert.That(saved.Profiles[0].Models[0].DefaultReasoningEffort, Is.EqualTo(retained.DefaultReasoningEffort));
+        Assert.That(saved.Profiles[0].DefaultModel, Is.Empty);
+        Assert.That(saved.Profiles[0].ApiKeyCredentialTarget, Is.EqualTo(profile.ApiKeyCredentialTarget));
+        Assert.That(saved.DefaultProfile, Is.EqualTo(baseline.DefaultProfile));
+        Assert.That(saved.Profiles[1].Models, Is.Empty);
+        Assert.That(saved.Profiles[1] with { Models = other.Models }, Is.EqualTo(other));
+        Assert.That(saved.Settings, Is.EqualTo(baseline.Settings));
+        Assert.That(credentials.SaveCount, Is.Zero);
+    }
+
+    [Test]
+    public async Task CancelledUncheckDoesNotModifyProviderDraftOrStoredCatalog()
+    {
+        var (editor, path, baseline) = CreateEditor(new Credentials());
+        await UserConfigStore.SaveAsync(path, baseline, CancellationToken.None);
+        var before = await File.ReadAllTextAsync(path);
+        editor.FetchModels = (_, _, _) => Task.FromResult<IReadOnlyList<string>>(["existing"]);
+        await editor.FetchModelsCommand.ExecuteAsync();
+        editor.FilteredDiscoveredModels.Single().IsSelected = false;
+        Assert.That(editor.CanSaveModelSelection, Is.True);
+        editor.CloseModelPickerCommand.Execute(null);
+        Assert.That(editor.IsDirty, Is.False);
+        Assert.That(editor.ModelEntries.Single().Id, Is.EqualTo("existing"));
+        Assert.That(editor.DefaultModelLabel, Is.EqualTo("existing"));
+        await editor.FetchModelsCommand.ExecuteAsync();
+        Assert.That(editor.FilteredDiscoveredModels.Single().IsSelected, Is.True);
+        Assert.That(editor.ModelsToRemoveCount, Is.Zero);
+        Assert.That(editor.CanSaveModelSelection, Is.False);
+        Assert.That(await File.ReadAllTextAsync(path), Is.EqualTo(before));
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task RemovingNonDefaultOrAllModelsIsDirtyAndPersists(bool removeAll)
+    {
+        var credentials = new Credentials();
+        var (_, path, original) = CreateEditor(credentials);
+        var profile = original.Profiles[0] with
+        {
+            Models =
+            [
+                original.Profiles[0].Models[0], new UserProfileModel { Id = "second", ContextWindowTokens = 64000 }
+            ]
+        };
+        var baseline = original with { Profiles = [profile] };
+        await UserConfigStore.SaveAsync(path, baseline, CancellationToken.None);
+        var editor = CatalogProviderEditorViewModel.ForEdit(path, credentials, baseline, profile, _ => { }, _ => { });
+        editor.FetchModels = (_, _, _) => Task.FromResult<IReadOnlyList<string>>(["existing", "second"]);
+        await editor.FetchModelsCommand.ExecuteAsync();
+        if (removeAll) editor.SelectAllModelsCommand.Execute(null);
+        else editor.FilteredDiscoveredModels.Single(model => model.Id == "second").IsSelected = false;
+        Assert.That(editor.ModelsToRemoveCount, Is.EqualTo(removeAll ? 2 : 1));
+        Assert.That(editor.ModelsToAddCount, Is.Zero);
+        editor.SaveModelSelectionCommand.Execute(null);
+        Assert.That(editor.IsDirty, Is.True);
+        Assert.That(editor.CanSave, Is.True);
+        await editor.SaveAsync();
+        var saved = (await UserConfigStore.LoadAsync(path, CancellationToken.None)).Profiles.Single();
+        Assert.That(saved.Models.Count, Is.EqualTo(removeAll ? 0 : 1));
+        Assert.That(saved.DefaultModel, Is.EqualTo(removeAll ? string.Empty : "existing"));
+    }
+
+    [Test]
+    public async Task ReaddingRemovedDraftRestoresItsEditedParameters()
+    {
+        var (editor, path, baseline) = CreateEditor(new Credentials());
+        await UserConfigStore.SaveAsync(path, baseline, CancellationToken.None);
+        var entry = editor.ModelEntries.Single();
+        entry.DisplayName  = "Unsaved name";
+        entry.WindowDraft  = "96K";
+        editor.FetchModels = (_, _, _) => Task.FromResult<IReadOnlyList<string>>(["existing"]);
+        await editor.FetchModelsCommand.ExecuteAsync();
+        editor.FilteredDiscoveredModels.Single().IsSelected = false;
+        editor.SaveModelSelectionCommand.Execute(null);
+        Assert.That(editor.ModelEntries, Is.Empty);
+        await editor.FetchModelsCommand.ExecuteAsync();
+        editor.FilteredDiscoveredModels.Single().IsSelected = true;
+        editor.SaveModelSelectionCommand.Execute(null);
+        Assert.That(editor.ModelEntries.Single(), Is.SameAs(entry));
+        Assert.That(entry.DisplayName, Is.EqualTo("Unsaved name"));
+        Assert.That(entry.WindowDraft, Is.EqualTo("96K"));
+        await editor.SaveAsync();
+        var saved = (await UserConfigStore.LoadAsync(path, CancellationToken.None)).Profiles.Single().Models.Single();
+        Assert.That(saved.DisplayName, Is.EqualTo("Unsaved name"));
+        Assert.That(saved.ContextWindowTokens, Is.EqualTo(96000));
+    }
+
+    [Test]
+    public async Task ConcurrentCatalogEditRejectsRemovalAndRetainsTheDraft()
+    {
+        var (editor, path, baseline) = CreateEditor(new Credentials());
+        await UserConfigStore.SaveAsync(path, baseline, CancellationToken.None);
+        editor.FetchModels = (_, _, _) => Task.FromResult<IReadOnlyList<string>>(["existing"]);
+        await editor.FetchModelsCommand.ExecuteAsync();
+        editor.FilteredDiscoveredModels.Single().IsSelected = false;
+        editor.SaveModelSelectionCommand.Execute(null);
+        var concurrent = ModelCatalogEditor.PutModel(baseline, "test",
+                                                     new UserProfileModel
+                                                         { Id = "external", ContextWindowTokens = 32000 }, false);
+        await UserConfigStore.SaveAsync(path, concurrent, CancellationToken.None);
+        await Assert.ThrowsAsync<InvalidDataException>(() => editor.SaveAsync());
+        Assert.That(editor.ModelEntries, Is.Empty);
+        Assert.That(editor.CanSave, Is.True);
+        var saved = await UserConfigStore.LoadAsync(path, CancellationToken.None);
+        Assert.That(saved.Profiles[0].Models.Select(model => model.Id), Is.EqualTo(new[] { "existing", "external" }));
     }
 
     [Test]

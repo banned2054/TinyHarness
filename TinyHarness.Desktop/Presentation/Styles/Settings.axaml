@@ -313,4 +313,32 @@
         <Setter Property="Background" Value="Transparent" />
         <Setter Property="Foreground" Value="{DynamicResource AccentTextBrush}" />
     </Style>
+    <!-- 模型选择置于设置壳前方，搜索和操作区固定，仅中间模型列表滚动。 -->
+    <Style Selector="Border.settings-model-dialog">
+        <Setter Property="Background" Value="{DynamicResource PopupSurfaceBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource PopupDividerBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="20" />
+        <Setter Property="Padding" Value="24" />
+        <Setter Property="BoxShadow" Value="0 16 48 0 #50000000" />
+    </Style>
+    <Style Selector="Button.settings-text-action">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Padding" Value="4,6" />
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="Foreground" Value="{DynamicResource PopupMutedForegroundBrush}" />
+    </Style>
+    <Style Selector="Button.settings-text-action:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Foreground" Value="{DynamicResource PopupForegroundBrush}" />
+    </Style>
+    <Style Selector="CheckBox.settings-discovered-model">
+        <Setter Property="MinHeight" Value="34" />
+        <Setter Property="Padding" Value="8,4" />
+        <Setter Property="HorizontalAlignment" Value="Stretch" />
+        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+        <Setter Property="Foreground" Value="{DynamicResource PopupForegroundBrush}" />
+        <Setter Property="FontSize" Value="13" />
+    </Style>
 </Styles>

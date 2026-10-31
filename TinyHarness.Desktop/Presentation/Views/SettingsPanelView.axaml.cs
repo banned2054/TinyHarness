@@ -2,6 +2,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Threading;
+using System.ComponentModel;
 using TinyHarness.Desktop.ViewModels;
 
 namespace TinyHarness.Desktop.Presentation.Views;
@@ -21,13 +22,39 @@ namespace TinyHarness.Desktop.Presentation.Views;
 /// </summary>
 public partial class SettingsPanelView : UserControl
 {
-    private const double PanelMargin    = 48;
-    private const double MinClampedSize = 240;
+    private const double                    PanelMargin    = 48;
+    private const double                    MinClampedSize = 240;
+    private       CatalogSettingsViewModel? _catalog;
 
     public SettingsPanelView()
     {
         InitializeComponent();
         SizeChanged += OnSizeChanged;
+    }
+
+    /// <summary>
+    ///     <para>跟随目录弹层状态，在打开时聚焦搜索框，关闭后恢复设置面板的键盘导航。</para>
+    ///     <para>
+    ///         Follows catalog dialog state, focusing search when opened
+    ///         and restoring settings keyboard navigation when closed.
+    ///     </para>
+    /// </summary>
+    protected override void OnDataContextChanged(EventArgs e)
+    {
+        base.OnDataContextChanged(e);
+        if (_catalog is not null) _catalog.PropertyChanged -= OnCatalogPropertyChanged;
+        _catalog = (DataContext as SettingsPanelViewModel)?.Catalog;
+        if (_catalog is not null) _catalog.PropertyChanged += OnCatalogPropertyChanged;
+    }
+
+    private void OnCatalogPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName != nameof(CatalogSettingsViewModel.IsModelPickerOpen)) return;
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (_catalog?.IsModelPickerOpen == true) ModelDiscoveryDialog.FocusSearch();
+            else if (IsEffectivelyVisible) PanelRoot.Focus();
+        }, DispatcherPriority.Input);
     }
 
     /// <summary>
@@ -52,15 +79,15 @@ public partial class SettingsPanelView : UserControl
     }
 
     /// <summary>
-    ///     <para>Esc 等价关闭（焦点在面板内任意输入控件时经冒泡到达此处）。</para>
-    ///     <para>Closes on Escape as the key bubbles from input controls inside the panel.</para>
+    ///     <para>Esc 优先关闭模型选择，下一次才关闭设置；焦点在输入控件内时同样生效。</para>
+    ///     <para>Escape dismisses model selection before settings, including when focus is inside an input.</para>
     /// </summary>
     protected override void OnKeyDown(KeyEventArgs e)
     {
         if (e.Key == Key.Escape && DataContext is SettingsPanelViewModel viewModel)
         {
             e.Handled = true;
-            viewModel.CloseCommand.Execute(null);
+            viewModel.DismissCommand.Execute(null);
             return;
         }
 
@@ -68,14 +95,14 @@ public partial class SettingsPanelView : UserControl
     }
 
     /// <summary>
-    ///     <para>遮罩左键点击关闭面板；面板本体是遮罩的兄弟节点，点击不会冒泡到这里。</para>
-    ///     <para>Closes on a left click on the mask; the sibling panel does not bubble clicks here.</para>
+    ///     <para>遮罩左键点击优先关闭模型选择；没有子面板时关闭设置。</para>
+    ///     <para>Left clicks on a mask dismiss model selection first, or settings when no child dialog is open.</para>
     /// </summary>
     private void OnMaskPointerPressed(object? sender, PointerPressedEventArgs e)
     {
         if (!e.GetCurrentPoint(null).Properties.IsLeftButtonPressed) return;
 
         e.Handled = true;
-        if (DataContext is SettingsPanelViewModel viewModel) viewModel.CloseCommand.Execute(null);
+        if (DataContext is SettingsPanelViewModel viewModel) viewModel.DismissCommand.Execute(null);
     }
 }

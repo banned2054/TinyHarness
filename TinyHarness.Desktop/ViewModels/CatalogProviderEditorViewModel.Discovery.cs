@@ -8,19 +8,22 @@ namespace TinyHarness.Desktop.ViewModels;
 
 public sealed partial class CatalogProviderEditorViewModel
 {
-    private CancellationTokenSource?                       _discoveryCancellation;
-    private bool                                           _isModelPickerOpen;
-    private bool                                           _isFetchingModels;
-    private string                                         _modelDiscoveryStatus = string.Empty;
-    private string                                         _modelSearch          = string.Empty;
-    private IReadOnlyList<CatalogDiscoveredModelViewModel> _discoveredModels = [];
+    private          CancellationTokenSource?                       _discoveryCancellation;
+    private          bool                                           _isModelPickerOpen;
+    private          bool                                           _isFetchingModels;
+    private          string                                         _modelDiscoveryStatus = string.Empty;
+    private          string                                         _modelSearch          = string.Empty;
+    private          IReadOnlyList<CatalogDiscoveredModelViewModel> _discoveredModels    = [];
+    private          int                                            _loadingDotCount      = 1;
+    private readonly Dictionary<string, CatalogModelEntryViewModel> _removedModelEntries = new(StringComparer.Ordinal);
 
     internal Func<string, string?, CancellationToken, Task<IReadOnlyList<string>>> FetchModels { get; set; } =
         ProviderModelDiscovery.FetchAsync;
 
-    public AsyncCommand FetchModelsCommand       { get; }
-    public RelayCommand AddSelectedModelsCommand { get; }
-    public RelayCommand CloseModelPickerCommand  { get; }
+    public AsyncCommand FetchModelsCommand        { get; }
+    public RelayCommand SaveModelSelectionCommand { get; }
+    public RelayCommand CloseModelPickerCommand   { get; }
+    public RelayCommand SelectAllModelsCommand    { get; }
 
     public bool IsModelPickerOpen
     {
@@ -29,8 +32,8 @@ public sealed partial class CatalogProviderEditorViewModel
         {
             if (!SetProperty(ref _isModelPickerOpen, value)) return;
             if (!value) _discoveryCancellation?.Cancel();
-            OnPropertyChanged(nameof(CanAddSelectedModels));
-            AddSelectedModelsCommand.RaiseCanExecuteChanged();
+            OnPropertyChanged(nameof(CanSaveModelSelection));
+            SaveModelSelectionCommand.RaiseCanExecuteChanged();
         }
     }
 
@@ -40,8 +43,10 @@ public sealed partial class CatalogProviderEditorViewModel
         private set
         {
             if (!SetProperty(ref _isFetchingModels, value)) return;
-            OnPropertyChanged(nameof(CanAddSelectedModels));
-            AddSelectedModelsCommand.RaiseCanExecuteChanged();
+            if (value) _loadingDotCount = 1;
+            OnPropertyChanged(nameof(ModelListMessage));
+            OnPropertyChanged(nameof(CanSaveModelSelection));
+            SaveModelSelectionCommand.RaiseCanExecuteChanged();
         }
     }
 
@@ -56,7 +61,10 @@ public sealed partial class CatalogProviderEditorViewModel
         get => _modelSearch;
         set
         {
-            if (SetProperty(ref _modelSearch, value)) OnPropertyChanged(nameof(FilteredDiscoveredModels));
+            if (!SetProperty(ref _modelSearch, value)) return;
+            OnPropertyChanged(nameof(FilteredDiscoveredModels));
+            OnPropertyChanged(nameof(HasFilteredModels));
+            NotifyModelSelectionChanged();
         }
     }
 
@@ -64,9 +72,24 @@ public sealed partial class CatalogProviderEditorViewModel
         _discoveredModels.Where(model => model.Id.Contains(ModelSearch.Trim(), StringComparison.OrdinalIgnoreCase))
                          .ToArray();
 
-    public int    SelectedModelCount    => _discoveredModels.Count(model => model.IsSelected && !model.IsAlreadyAdded);
-    public string AddSelectedModelsText => $"添加所选（{SelectedModelCount}）";
-    public bool   CanAddSelectedModels  => IsModelPickerOpen && !IsFetchingModels && CanEdit && SelectedModelCount > 0;
+    public int    ModelsToAddCount      => _discoveredModels.Count(model => model.IsSelected  && !model.IsAlreadyAdded);
+    public int    ModelsToRemoveCount   => _discoveredModels.Count(model => !model.IsSelected && model.IsAlreadyAdded);
+    public string ModelSelectionSummary => $"新增 {ModelsToAddCount} 个，移除 {ModelsToRemoveCount} 个";
+
+    public bool CanSaveModelSelection => IsModelPickerOpen &&
+                                         !IsFetchingModels &&
+                                         CanEdit &&
+                                         (ModelsToAddCount > 0 || ModelsToRemoveCount > 0);
+
+    public bool HasFilteredModels => FilteredDiscoveredModels.Count > 0;
+
+    public string ModelListMessage => IsFetchingModels
+        ? "正在获取模型" + new string('.', _loadingDotCount)
+        : "暂无可选结果";
+
+    public string SelectAllModelsText => HasFilteredModels && FilteredDiscoveredModels.All(model => model.IsSelected)
+        ? "取消全选"
+        : "全选";
 
     /// <summary>
     ///     <para>显式点击后才读取凭据和请求模型列表；关闭弹层或更改连接设置会取消并丢弃迟到结果。</para>
@@ -124,10 +147,9 @@ public sealed partial class CatalogProviderEditorViewModel
                                    .Select(id => new CatalogDiscoveredModelViewModel(id, existing.Contains(id),
                                                NotifyModelSelectionChanged))
                                    .ToArray();
-            var available = _discoveredModels.Count(model => !model.IsAlreadyAdded);
-            ModelDiscoveryStatus = ids.Count == 0 ? "服务未返回可用的模型。"
-                : available                  == 0 ? "获取到的模型均已添加。"
-                                                    : $"找到 {_discoveredModels.Count} 个模型，{available} 个可添加。";
+            ModelDiscoveryStatus = ids.Count == 0
+                ? "服务未返回可用的模型。"
+                : $"找到 {_discoveredModels.Count} 个模型，已添加 {_discoveredModels.Count(model => model.IsAlreadyAdded)} 个。";
             NotifyDiscoveredModelsChanged();
         }
         catch (OperationCanceledException)
@@ -160,24 +182,48 @@ public sealed partial class CatalogProviderEditorViewModel
     internal void CloseModelPicker() => IsModelPickerOpen = false;
 
     /// <summary>
-    ///     <para>只追加尚不存在的勾选项到表单草稿；窗口沿用应用默认值，能力保持未声明，保存仍走整卡事务。</para>
+    ///     <para>仅在模型面板正在获取时推进一至三个点的加载提示。</para>
+    ///     <para>Advances the loading indicator through one to three dots only while the model panel is fetching.</para>
+    /// </summary>
+    internal void AdvanceLoadingIndicator()
+    {
+        if (!IsFetchingModels || !IsModelPickerOpen) return;
+        _loadingDotCount = _loadingDotCount % 3 + 1;
+        OnPropertyChanged(nameof(ModelListMessage));
+    }
+
+    /// <summary>
+    ///     <para>将明确勾选的增删应用到表单草稿；保留未返回项与已有参数，最终保存仍走整卡事务。</para>
     ///     <para>
-    ///         Appends checked missing IDs to the draft using the app's default window and undeclared capabilities; saving
-    ///         still uses the whole-card transaction.
+    ///         Applies explicit selection changes to the draft, preserving unreturned models and existing parameters;
+    ///         persistence still uses the whole-card transaction.
     ///     </para>
     /// </summary>
-    private void AddSelectedModels()
+    private void SaveModelSelection()
     {
-        if (!CanAddSelectedModels) return;
+        if (!CanSaveModelSelection) return;
+        var removed = _discoveredModels.Where(model => model.IsAlreadyAdded && !model.IsSelected)
+                                       .Select(model => model.Id).ToHashSet(StringComparer.Ordinal);
+        foreach (var entry in ModelEntries.Where(entry => removed.Contains(entry.Id.Trim())).ToArray())
+        {
+            entry.PropertyChanged -= OnEntryPropertyChanged;
+            _removedModelEntries[entry.Id.Trim()] = entry;
+            ModelEntries.Remove(entry);
+        }
+        if (removed.Contains(_defaultModelId)) SelectDefaultModel(string.Empty);
+
         var existing = ModelEntries.Select(entry => entry.Id.Trim()).ToHashSet(StringComparer.Ordinal);
         foreach (var model in _discoveredModels.Where(model => model.IsSelected && !model.IsAlreadyAdded))
         {
             if (!existing.Add(model.Id)) continue;
-            var entry = new CatalogModelEntryViewModel(null, NotifyFormChanged)
+            if (!_removedModelEntries.Remove(model.Id, out var entry))
             {
-                Id          = model.Id,
-                WindowDraft = CatalogModelEntryViewModel.FormatTokenCount(new TinyHarnessConfig().ContextWindowTokens)
-            };
+                entry = new CatalogModelEntryViewModel(null, NotifyFormChanged)
+                {
+                    Id          = model.Id,
+                    WindowDraft = CatalogModelEntryViewModel.FormatTokenCount(new TinyHarnessConfig().ContextWindowTokens)
+                };
+            }
             AttachEntry(entry);
             ModelEntries.Add(entry);
         }
@@ -191,25 +237,46 @@ public sealed partial class CatalogProviderEditorViewModel
     private void NotifyDiscoveredModelsChanged()
     {
         OnPropertyChanged(nameof(FilteredDiscoveredModels));
+        OnPropertyChanged(nameof(HasFilteredModels));
         NotifyModelSelectionChanged();
     }
 
     private void NotifyModelSelectionChanged()
     {
-        OnPropertyChanged(nameof(SelectedModelCount));
-        OnPropertyChanged(nameof(AddSelectedModelsText));
-        OnPropertyChanged(nameof(CanAddSelectedModels));
-        AddSelectedModelsCommand.RaiseCanExecuteChanged();
+        OnPropertyChanged(nameof(ModelsToAddCount));
+        OnPropertyChanged(nameof(ModelsToRemoveCount));
+        OnPropertyChanged(nameof(ModelSelectionSummary));
+        OnPropertyChanged(nameof(CanSaveModelSelection));
+        OnPropertyChanged(nameof(SelectAllModelsText));
+        SaveModelSelectionCommand.RaiseCanExecuteChanged();
+    }
+
+    /// <summary>
+    ///     <para>切换当前搜索结果的勾选状态，保留筛选外的选择；已有模型也可取消。</para>
+    ///     <para>
+    ///         Toggles current search results while preserving selections outside the filter; existing models can be
+    ///         unchecked.
+    ///     </para>
+    /// </summary>
+    private void SelectAllModels()
+    {
+        if (IsFetchingModels) return;
+        var models                                     = FilteredDiscoveredModels;
+        var select                                     = models.Any(model => !model.IsSelected);
+        foreach (var model in models) model.IsSelected = select;
     }
 }
 
 /// <summary>
-///     <para>发现列表中的可选 ID；已有模型只显示状态，不可重复勾选。</para>
-///     <para>A selectable discovered ID; existing models show their status and cannot be selected again.</para>
+///     <para>发现列表中的模型与打开时的目录归属；已有项默认勾选，可显式取消以移除。</para>
+///     <para>
+///         A discovered model and its initial catalog membership; existing entries start checked and can be unchecked
+///         for removal.
+///     </para>
 /// </summary>
 public sealed class CatalogDiscoveredModelViewModel(string id, bool isAlreadyAdded, Action changed) : ObservableObject
 {
-    private bool _isSelected;
+    private bool _isSelected = isAlreadyAdded;
 
     public string Id             { get; } = id;
     public bool   IsAlreadyAdded { get; } = isAlreadyAdded;
@@ -220,7 +287,7 @@ public sealed class CatalogDiscoveredModelViewModel(string id, bool isAlreadyAdd
         get => _isSelected;
         set
         {
-            if (IsAlreadyAdded || !SetProperty(ref _isSelected, value)) return;
+            if (!SetProperty(ref _isSelected, value)) return;
             changed();
         }
     }
