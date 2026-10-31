@@ -42,15 +42,16 @@
                         <Grid RowDefinitions="Auto,*,Auto,Auto,Auto" Margin="0,12,0,0">
                             <!-- 页头只保留标题占位；空白页为「新对话」，正式会话为首条输入摘要。 -->
                             <TextBlock Margin="28,6,28,12" Text="{Binding Title}" Classes="heading" />
-                            <ScrollViewer Grid.Row="1" HorizontalScrollBarVisibility="Disabled"
-                                          VerticalScrollBarVisibility="Auto">
+                            <conversation:BottomFollowScrollViewer Grid.Row="1"
+                                                                   HorizontalScrollBarVisibility="Disabled"
+                                                                   VerticalScrollBarVisibility="Auto">
                                 <StackPanel MaxWidth="816" Margin="28,8" Spacing="4">
                                     <ItemsControl ItemsSource="{Binding Items}" />
                                     <Button Content="加载后续历史" Command="{Binding LoadHistoryCommand}"
                                             IsVisible="{Binding HasMoreHistory}" />
                                     <ItemsControl ItemsSource="{Binding WorkItems}" />
                                 </StackPanel>
-                            </ScrollViewer>
+                            </conversation:BottomFollowScrollViewer>
                             <StackPanel Grid.Row="2" MaxWidth="816" Margin="28,8" Spacing="8">
                                 <Border IsVisible="{Binding HasApproval}"
                                         Background="{DynamicResource PanelBackgroundBrush}" Padding="16"

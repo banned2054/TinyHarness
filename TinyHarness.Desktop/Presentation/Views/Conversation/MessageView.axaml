@@ -3,6 +3,7 @@
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              xmlns:vm="using:TinyHarness.Desktop.ViewModels"
+             xmlns:conversation="using:TinyHarness.Desktop.Presentation.Views.Conversation"
              xmlns:md="clr-namespace:LiveMarkdown.Avalonia;assembly=LiveMarkdown.Avalonia"
              x:Class="TinyHarness.Desktop.Presentation.Views.Conversation.MessageView"
              x:DataType="vm:MessageItemViewModel"
@@ -59,13 +60,13 @@
                                    Classes="tool-summary" />
                     </Grid>
                 </Button>
-                <ScrollViewer MaxHeight="{StaticResource ReasoningBodyMaxHeight}"
-                              HorizontalScrollBarVisibility="Disabled"
-                              VerticalScrollBarVisibility="Auto"
-                              Margin="22,4,0,4"
-                              IsVisible="{Binding IsReasoningExpanded}">
+                <conversation:BottomFollowScrollViewer MaxHeight="{StaticResource ReasoningBodyMaxHeight}"
+                                                       HorizontalScrollBarVisibility="Disabled"
+                                                       VerticalScrollBarVisibility="Auto"
+                                                       Margin="22,4,0,4"
+                                                       IsVisible="{Binding IsReasoningExpanded}">
                     <TextBlock Text="{Binding Reasoning}" Classes="reason-body" />
-                </ScrollViewer>
+                </conversation:BottomFollowScrollViewer>
             </StackPanel>
             <!-- 正文块：上下呼吸位由本块 Margin 提供；按 Markdown 渲染，
                  流式增量经 MarkdownBuilder 增量更新。 -->
