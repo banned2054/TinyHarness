@@ -22,7 +22,7 @@
 		     离线 mock 与 win-x64 NativeAOT 验证；协议兼容探针还覆盖非生产供应商 SDK。 -->
 		<PackageReference Include="Microsoft.Extensions.AI.OpenAI" Version="10.11.0" />
 		<PackageReference Include="OpenAI" Version="2.14.0" />
-		<PackageReference Include="System.Security.Cryptography.ProtectedData" Version="10.0.13" />
+		<PackageReference Include="System.Security.Cryptography.ProtectedData" Version="10.0.14" />
 	</ItemGroup>
 
 </Project>

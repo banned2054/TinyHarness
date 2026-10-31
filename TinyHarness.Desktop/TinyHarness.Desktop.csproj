@@ -12,11 +12,11 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../TinyHarness.Desktop.Runtime/TinyHarness.Desktop.Runtime.csproj" />
-    <PackageReference Include="Avalonia" Version="12.1.3" />
-    <PackageReference Include="Avalonia.Desktop" Version="12.1.3" />
-    <PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.3" />
-    <PackageReference Include="Avalonia.Fonts.Inter" Version="12.1.3" />
-    <PackageReference Include="LiveMarkdown.Avalonia" Version="2.4.3" />
+    <PackageReference Include="Avalonia" Version="12.1.4" />
+    <PackageReference Include="Avalonia.Desktop" Version="12.1.4" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.4" />
+    <PackageReference Include="Avalonia.Fonts.Inter" Version="12.1.4" />
+    <PackageReference Include="LiveMarkdown.Avalonia" Version="2.5.1" />
   </ItemGroup>
   <ItemGroup>
     <!-- 仅暴露确定性测试注入点（受保护目录解析顺序、空白页项目选择入口），不构成公开契约。 -->
