@@ -16,6 +16,71 @@ namespace TinyHarness.Desktop.Tests;
 [TestFixture]
 public sealed class DesktopSidebarTests
 {
+    [TestCase(0)]
+    [TestCase(5)]
+    [TestCase(6)]
+    [TestCase(10)]
+    [TestCase(12)]
+    public async Task ProjectSessionsExpandFiveAtATimeUntilAllAreVisible(int count)
+    {
+        var             fixture = await SidebarFixture.CreateAsync();
+        await using var model   = fixture.Window();
+        await model.OpenProjectAsync(fixture.First);
+        for (var index = 0; index < count; index++)
+            await PromoteConversationAsync(model, fixture.First, "request " + index);
+        var group = model.Projects.Single();
+
+        for (var limit = 5;; limit += 5)
+        {
+            var expected = new List<object> { group };
+            expected.AddRange(group.Sessions.Take(limit));
+            if (count > limit) expected.Add(group.MoreSessionsRow);
+            Assert.That(model.SidebarRows, Is.EqualTo(expected), "每次只展示当前批次，展开入口位于项目会话底部。");
+            Assert.That(group.Sessions.Count, Is.EqualTo(count), "分页不删除项目成员。");
+            if (count <= limit) break;
+            model.ShowMoreSessionsCommand.Execute(group);
+        }
+
+        model.ShowMoreSessionsCommand.Execute(group);
+        Assert.That(model.SidebarRows, Is.EqualTo(group.Sessions.Cast<object>().Prepend(group)),
+                    "全部显示后重复执行不增加行或展开入口。");
+    }
+
+    [Test]
+    public async Task ShowMoreIsIndependentPerProjectAndSurvivesCollapseSelectionAndRefresh()
+    {
+        var             fixture = await SidebarFixture.CreateAsync();
+        await using var model   = fixture.Window();
+        for (var index = 0; index < 12; index++)
+            await PromoteConversationAsync(model, fixture.First, "first " + index);
+        for (var index = 0; index < 6; index++)
+            await PromoteConversationAsync(model, fixture.Second, "second " + index);
+        var first  = model.Projects.Single(group => ProjectRoots.AreEqual(group.Root, fixture.First));
+        var second = model.Projects.Single(group => ProjectRoots.AreEqual(group.Root, fixture.Second));
+        var more   = first.MoreSessionsRow;
+        model.ShowMoreSessionsCommand.Execute(first);
+        Assert.That(model.SidebarRows.OfType<SessionViewModel>(),
+                    Is.EquivalentTo(first.Sessions.Take(10).Concat(second.Sessions.Take(5))));
+
+        model.ToggleProjectCommand.Execute(first);
+        Assert.That(model.SidebarRows, Does.Not.Contain(more));
+        Assert.That(model.SidebarRows.OfType<SessionViewModel>(), Is.EqualTo(second.Sessions.Take(5)));
+        model.ToggleProjectCommand.Execute(first);
+        model.SelectSessionCommand.Execute(first.Sessions[9]);
+        await model.InitializeAsync();
+
+        Assert.That(model.Projects.Single(group => group.Key == first.Key), Is.SameAs(first));
+        Assert.That(first.MoreSessionsRow, Is.SameAs(more));
+        Assert.That(model.SidebarRows.OfType<SessionViewModel>(),
+                    Is.EquivalentTo(first.Sessions.Take(10).Concat(second.Sessions.Take(5))));
+        Assert.That(model.SelectedSession, Is.SameAs(first.Sessions[9]));
+
+        model.ShowMoreSessionsCommand.Execute(second);
+        Assert.That(model.SidebarRows, Does.Not.Contain(second.MoreSessionsRow).And.Contain(more));
+        Assert.That(model.SidebarRows.OfType<SessionViewModel>(),
+                    Is.EquivalentTo(first.Sessions.Take(10).Concat(second.Sessions)));
+    }
+
     [Test]
     public async Task SidebarRowsFlattenGroupsWithMembersAndCollapseByExpansion()
     {

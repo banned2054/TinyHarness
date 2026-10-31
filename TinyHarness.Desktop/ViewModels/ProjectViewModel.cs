@@ -5,13 +5,17 @@ namespace TinyHarness.Desktop.ViewModels;
 
 /// <summary>
 ///     <para>项目侧栏投影；草稿、缺失项目与整理未完成分组仅用于展示，不推断持久化归属。</para>
-///     <para>Sidebar projection; draft, missing-project and unfinished-organize groups are display-only and never infer persisted ownership.</para>
+///     <para>
+///         Sidebar projection; draft, missing-project and unfinished-organize groups are display-only and never infer
+///         persisted ownership.
+///     </para>
 /// </summary>
 public sealed class ProjectViewModel : ObservableObject
 {
-    private string  _editedName;
-    private bool    _expanded = true;
-    private string? _detail;
+    internal const int SessionPageSize = 5;
+
+    private string _editedName;
+    private bool   _expanded = true;
 
     public ProjectViewModel(string                       key, Project? project, string name, string root,
                             Func<ProjectViewModel, Task> create,
@@ -22,22 +26,25 @@ public sealed class ProjectViewModel : ObservableObject
         Name              = name;
         Root              = root;
         _editedName       = name;
+        MoreSessionsRow   = new ProjectSessionsMoreViewModel(this);
         NewSessionCommand = new AsyncCommand(() => create(this), error);
     }
 
-    public string                                 Key               { get; }
-    public Project?                               Project           { get; private set; }
-    public string                                 Name              { get; private set; }
-    public string                                 Root              { get; }
-    public bool                                   CanEdit           => Project is not null;
-    public ObservableCollection<SessionViewModel> Sessions          { get; } = [];
-    public AsyncCommand                           NewSessionCommand { get; }
+    public   string                                 Key                 { get; }
+    public   Project?                               Project             { get; private set; }
+    public   string                                 Name                { get; private set; }
+    public   string                                 Root                { get; }
+    public   bool                                   CanEdit             => Project is not null;
+    public   ObservableCollection<SessionViewModel> Sessions            { get; } = [];
+    public   AsyncCommand                           NewSessionCommand   { get; }
+    internal int                                    VisibleSessionCount { get; set; } = SessionPageSize;
+    internal ProjectSessionsMoreViewModel           MoreSessionsRow     { get; }
 
     /// <summary>纯展示组的附加说明（如整理未完成原因）；真实项目组不使用。</summary>
-    public string? Detail => _detail;
+    public string? Detail { get; private set; }
 
     /// <summary>组头提示：有附加说明时优先展示，否则显示目录路径；草稿组无目录时为空。</summary>
-    public string? HeaderTip => _detail ?? (Root.Length > 0 ? Root : null);
+    public string? HeaderTip => Detail ?? (Root.Length > 0 ? Root : null);
 
     public string EditedName
     {
@@ -94,8 +101,8 @@ public sealed class ProjectViewModel : ObservableObject
             OnPropertyChanged(nameof(Name));
         }
 
-        if (_detail == detail) return;
-        _detail = detail;
+        if (Detail == detail) return;
+        Detail = detail;
         OnPropertyChanged(nameof(Detail));
         OnPropertyChanged(nameof(HeaderTip));
     }

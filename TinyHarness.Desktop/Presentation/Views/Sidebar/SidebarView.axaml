@@ -70,6 +70,14 @@
                     </ItemsPanelTemplate>
                 </ListBox.ItemsPanel>
                 <ListBox.DataTemplates>
+                    <DataTemplate x:DataType="vm:ProjectSessionsMoreViewModel">
+                        <Button Classes="session-row"
+                                Content="展开显示"
+                                Foreground="{DynamicResource TextMutedBrush}"
+                                AutomationProperties.Name="展开显示"
+                                Command="{Binding $parent[sidebar:SidebarView].DataContext.ShowMoreSessionsCommand}"
+                                CommandParameter="{Binding Project}" />
+                    </DataTemplate>
                     <DataTemplate x:DataType="vm:ProjectViewModel">
                         <!-- 项目组头行：整行一个圆角矩形（Border.group-row）承担悬停/选中底色；
                              右侧悬浮按钮组（重命名 + 项目内新对话）平时隐藏，悬停整行时淡入

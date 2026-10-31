@@ -17,36 +17,36 @@ namespace TinyHarness.Desktop.ViewModels;
 /// </summary>
 public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
 {
+    private const    int                           OrganizeBatchSize = 100;
     private readonly Func<Action, ValueTask>?      _dispatch;
     private readonly DesktopSessionFactory         _factory;
-    private readonly List<SessionViewModel>         _failedDrafts = [];
-    private readonly CancellationTokenSource       _lifetime    = new();
-    private readonly DesktopSessionManager         _manager     = new();
-    private readonly SemaphoreSlim                 _refreshGate = new(1, 1);
+    private readonly List<SessionViewModel>        _failedDrafts         = [];
+    private readonly CancellationTokenSource       _lifetime             = new();
+    private readonly DesktopSessionManager         _manager              = new();
     private readonly HashSet<string>               _projectReloadRetried = new(StringComparer.Ordinal);
+    private readonly SemaphoreSlim                 _refreshGate          = new(1, 1);
     private          bool                          _closing;
-    private          Task?                         _shutdown;
     private          string?                       _initializationCursor;
     private          bool                          _loadingCatalog;
+    private          bool                          _loadingHistory;
     private          int                           _migrationBusy;
     private          SessionViewModel?             _newConversation;
-    private          IReadOnlyList<OrganizeIssue>? _organizeIssues;
-    private          string?                       _organizeIssuesStore;
-    private          CancellationTokenSource?      _organizeSource;
+    private          string                        _notice = string.Empty;
     private          TaskCompletionSource?         _organizeFinished;
     private          int                           _organizeGeneration;
+    private          IReadOnlyList<OrganizeIssue>? _organizeIssues;
+    private          string?                       _organizeIssuesStore;
     private          string                        _organizeNotice = string.Empty;
-    private          bool                          _loadingHistory;
-    private          string                        _notice = string.Empty;
+    private          CancellationTokenSource?      _organizeSource;
+    private          string                        _projectRenameDraft = string.Empty;
+    private          bool                          _projectRenameOpen;
+    private          IReadOnlyList<Project>        _projects = [];
     private          int                           _renameDialogVersion;
     private          ProjectViewModel?             _renameTarget;
     private          bool                          _renamingProject;
-    private          string                        _projectRenameDraft = string.Empty;
-    private          string?                       _projectRenameError;
-    private          bool                          _projectRenameOpen;
-    private          IReadOnlyList<Project>        _projects = [];
     private          SessionViewModel?             _selected;
     private          bool                          _settingsOpen;
+    private          Task?                         _shutdown;
     private          string?                       _storeDirectory;
     private          int                           _storeRevision;
 
@@ -69,6 +69,15 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         {
             if (group is null) return;
             group.IsExpanded = !group.IsExpanded;
+            RebuildSidebarRows();
+        });
+        ShowMoreSessionsCommand = new RelayCommand<ProjectViewModel>(group =>
+        {
+            if (group is null             ||
+                !Projects.Contains(group) ||
+                group.VisibleSessionCount >= group.Sessions.Count)
+                return;
+            group.VisibleSessionCount += ProjectViewModel.SessionPageSize;
             RebuildSidebarRows();
         });
         ReturnToFailedDraftCommand = new RelayCommand(() =>
@@ -106,12 +115,18 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     public ObservableCollection<ProjectViewModel> Projects { get; } = [];
     public ObservableCollection<ModelChoice>      Models   { get; } = [];
 
-    /// <summary>侧栏呈现行：项目组头行与成员会话行混排的铺平投影，按各组的展开态生成。</summary>
+    /// <summary>
+    ///     <para>侧栏铺平投影：按各组展开态与可见数量混排组头、会话和展开入口。</para>
+    ///     <para>
+    ///         Flattened sidebar projection of headers, sessions and show-more entries by group expansion and visible count.
+    ///     </para>
+    /// </summary>
     public ObservableCollection<object> SidebarRows { get; } = [];
 
     public RelayCommand                   NewSessionCommand           { get; }
     public RelayCommand<SessionViewModel> SelectSessionCommand        { get; }
     public RelayCommand<ProjectViewModel> ToggleProjectCommand        { get; }
+    public RelayCommand<ProjectViewModel> ShowMoreSessionsCommand     { get; }
     public RelayCommand<ProjectViewModel> OpenProjectRenameCommand    { get; }
     public RelayCommand                   ConfirmProjectRenameCommand { get; }
     public RelayCommand                   CancelProjectRenameCommand  { get; }
@@ -200,22 +215,22 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         {
             if (!SetProperty(ref _projectRenameDraft, value ?? string.Empty)) return;
             // 输入变化即重算本地校验；上一次确认失败的错误随之让位。
-            _projectRenameError = null;
+            ProjectRenameErrorText = null;
             NotifyProjectRenameValidation();
         }
     }
 
     /// <summary>项目重命名错误提示：目录册保存失败在弹窗内呈现，可修改后重试。</summary>
-    public string? ProjectRenameErrorText => _projectRenameError;
+    public string? ProjectRenameErrorText { get; private set; }
 
-    public bool HasProjectRenameError => _projectRenameError is not null;
+    public bool HasProjectRenameError => ProjectRenameErrorText is not null;
 
     /// <summary>确认重命名是否可用：存在目标、名称非空、与当前名不同且不在途。</summary>
     public bool CanConfirmProjectRename =>
-        !_renamingProject &&
-        _renameTarget is not null &&
+        !_renamingProject                        &&
+        _renameTarget is not null                &&
         ProjectRenameDraftText.Trim().Length > 0 &&
-        ProjectRenameDraftText.Trim() != _renameTarget.Name;
+        ProjectRenameDraftText.Trim()        != _renameTarget.Name;
 
     public SessionViewModel? SelectedSession
     {
@@ -232,6 +247,12 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
             _ = LoadSelectedHistoryAsync(value);
         }
     }
+
+    /// <summary>
+    ///     <para>受保护目录解析的内部测试注入点；生产不设置。</para>
+    ///     <para>Internal test seam for protected-directory resolution; production leaves it unset.</para>
+    /// </summary>
+    internal Func<string, CancellationToken, Task<string>>? ResolveDirectoryOverride { get; set; }
 
     /// <summary>
     ///     <para>
@@ -356,7 +377,7 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         }
         catch (Exception exception)
         {
-            Notice = exception.Message;
+            Notice          =   exception.Message;
             SelectedSession ??= ConversationDraft();
         }
         finally
@@ -471,6 +492,7 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
             _organizeSource?.Cancel();
             ResetOrganizeDisplay();
         }
+
         if (_storeDirectory is null || !ProjectRoots.AreEqual(_storeDirectory, directory)) _storeRevision++;
         _storeDirectory = directory;
         revision        = _storeRevision;
@@ -501,7 +523,10 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
     /// <summary>
     ///     <para>在配置 I/O 前捕获可自动绑定的草稿与意图代际；显式目标解析在途的页面不参与。</para>
-    ///     <para>Captures drafts and intent revisions before config I/O; pages with pending explicit target resolutions are excluded.</para>
+    ///     <para>
+    ///         Captures drafts and intent revisions before config I/O; pages with pending explicit target resolutions are
+    ///         excluded.
+    ///     </para>
     /// </summary>
     private List<(SessionViewModel Page, int Revision)> CaptureDraftTargets()
     {
@@ -514,7 +539,10 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
     /// <summary>
     ///     <para>仅为意图未变且未绑定当前 store 的草稿重解析项目；不沿用旧 store 的项目 ID。</para>
-    ///     <para>Re-resolves projects only for unchanged drafts not bound to the current store; old-store project IDs are never reused.</para>
+    ///     <para>
+    ///         Re-resolves projects only for unchanged drafts not bound to the current store; old-store project IDs are
+    ///         never reused.
+    ///     </para>
     /// </summary>
     private async Task RebindUnboundDraftsAsync(
         string directory, IReadOnlyList<(SessionViewModel Page, int Revision)> targets)
@@ -532,8 +560,10 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
             draft.CaptureTargetIntent();
             var root = draft.WorkspaceRoot;
             var project = _projects.FirstOrDefault(item =>
-                item.Roots.Any(projectRoot => ProjectRoots.AreEqual(projectRoot.Path, root)));
-            await draft.SelectProjectAsync(project?.Id, root, directory, userSelected : false);
+                                                       item.Roots.Any(projectRoot =>
+                                                                          ProjectRoots
+                                                                             .AreEqual(projectRoot.Path, root)));
+            await draft.SelectProjectAsync(project?.Id, root, directory, false);
         }
     }
 
@@ -547,7 +577,10 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
     /// <summary>
     ///     <para>顶部「新对话」：进入同一份未发送的空白页；当前空白页在途或已提升时才另起下一份。</para>
-    ///     <para>Top "new conversation": enters the same unsent blank page; a fresh one starts only while the current page is sending or established.</para>
+    ///     <para>
+    ///         Top "new conversation": enters the same unsent blank page; a fresh one starts only while the current page is
+    ///         sending or established.
+    ///     </para>
     /// </summary>
     private void NewConversation()
     {
@@ -557,7 +590,10 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
     /// <summary>
     ///     <para>返回可进入的空白新对话页：优先复用未发送的当前空白页，在途或已提升时新建下一份并接管空白槽。</para>
-    ///     <para>Returns the enterable blank page: reuses the unsent current one, or starts the next page taking over the blank slot when it is sending or established.</para>
+    ///     <para>
+    ///         Returns the enterable blank page: reuses the unsent current one, or starts the next page taking over the
+    ///         blank slot when it is sending or established.
+    ///     </para>
     /// </summary>
     private SessionViewModel ConversationDraft()
     {
@@ -567,7 +603,10 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
     /// <summary>
     ///     <para>新建下一份空白页；root 继承上一份空白页的目标，不继承刚浏览的历史会话目录。</para>
-    ///     <para>Creates the next blank page; the root follows the previous blank page's target, never the just-visited history session's directory.</para>
+    ///     <para>
+    ///         Creates the next blank page; the root follows the previous blank page's target, never the just-visited
+    ///         history session's directory.
+    ///     </para>
     /// </summary>
     private SessionViewModel CreateConversationDraft()
     {
@@ -592,7 +631,10 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
     /// <summary>
     ///     <para>空白页首发取得真实 SessionId：登记为正式会话行（仅一次）；迟到登记不抢选中、不清其他页输入。</para>
-    ///     <para>A blank page gains a real SessionId on its first send: register the formal row exactly once; late registration never steals selection or clears other pages' input.</para>
+    ///     <para>
+    ///         A blank page gains a real SessionId on its first send: register the formal row exactly once; late
+    ///         registration never steals selection or clears other pages' input.
+    ///     </para>
     /// </summary>
     private void OnConversationEstablished(SessionViewModel session)
     {
@@ -632,7 +674,10 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
     /// <summary>
     ///     <para>登记一份仍有内容或显式预选的失败草稿；重复登记与已提升页面被忽略。</para>
-    ///     <para>Registers a failed draft that still holds content or explicit preselections; duplicates and established pages are ignored.</para>
+    ///     <para>
+    ///         Registers a failed draft that still holds content or explicit preselections; duplicates and established pages
+    ///         are ignored.
+    ///     </para>
     /// </summary>
     private void RegisterFailedDraft(SessionViewModel session)
     {
@@ -697,7 +742,7 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
                                                                           ProjectRoots
                                                                              .AreEqual(projectRoot.Path, root)));
             session.CaptureTargetIntent();
-            await session.SelectProjectAsync(project?.Id, root, directory, userSelected : false);
+            await session.SelectProjectAsync(project?.Id, root, directory, false);
         }
         catch (OperationCanceledException)
         {
@@ -787,7 +832,7 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
             if (!groups.TryGetValue(key, out var group))
             {
                 var existing = previous.GetValueOrDefault(key);
-                group = (existing is not null && (existing.Project is null) == (project is null) ? existing : null) ??
+                group = (existing is not null && existing.Project is null == project is null ? existing : null) ??
                         new ProjectViewModel(key, project, name, root,
                                              NewProjectSessionAsync,
                                              exception => Notice = exception.Message);
@@ -807,7 +852,7 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         // 正式会话行进入所属项目分组；空白新对话页不属于 Sessions，不出现在侧栏投影中。
         foreach (var session in Sessions.OrderByDescending(session => session.LastActivityUtc))
         {
-            var project = _projects.FirstOrDefault(project => project.Id == session.ProjectId);
+            var    project = _projects.FirstOrDefault(project => project.Id == session.ProjectId);
             // 未归属的存储行构造即带 store，且根目录固定后不可再清空（见 SessionViewModel.WorkspaceRoot 守卫）；
             // 分组键纳入 store，两个 store 的同一执行目录不得并成一组，整理明细才能按 store 精确定位。
             string key;
@@ -817,10 +862,16 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
                 key = PendingGroupKey(pendingStore, session.WorkspaceRoot);
             else
                 key = "pending:" + ProjectRoots.Normalize(session.WorkspaceRoot);
-            string name;
+            string  name;
             string? detail = null;
-            if (project is not null) name = project.Name;
-            else if (session.ProjectId is not null) name = "项目信息缺失";
+            if (project is not null)
+            {
+                name = project.Name;
+            }
+            else if (session.ProjectId is not null)
+            {
+                name = "项目信息缺失";
+            }
             else
             {
                 // 旧日志未归属：整理结束时仍有待处理或失败项才标记“整理未完成”，否则只按目录展示。
@@ -833,8 +884,10 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
         Projects.Clear();
         foreach (var group in groups.Values.OrderByDescending(group =>
-                     group.Sessions.Select(session => session.LastActivityUtc)
-                          .DefaultIfEmpty(group.Project?.CreatedUtc ?? DateTimeOffset.MinValue).Max()))
+                                                                  group.Sessions.Select(session => session
+                                                                           .LastActivityUtc)
+                                                                       .DefaultIfEmpty(group.Project?.CreatedUtc ??
+                                                                            DateTimeOffset.MinValue).Max()))
             Projects.Add(group);
         RebuildSidebarRows();
         NotifyChangedWorkspaceTargetLabels(labels);
@@ -880,7 +933,10 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
     /// <summary>
     ///     <para>未归属旧日志的侧栏分组键：长度前缀分隔 store 与执行目录，避免路径中合法分隔符字符造成键歧义。</para>
-    ///     <para>Group key for unbound legacy rows: a length prefix separates store and root so legal path separators cannot collide.</para>
+    ///     <para>
+    ///         Group key for unbound legacy rows: a length prefix separates store and root so legal path separators cannot
+    ///         collide.
+    ///     </para>
     /// </summary>
     private static string PendingGroupKey(string store, string workspaceRoot)
     {
@@ -890,11 +946,14 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
     /// <summary>
     ///     <para>按会话 store 与执行目录查询整理未完成明细；行 store 与结果所属 store 不一致时不得串用原因。</para>
-    ///     <para>Looks up unfinished-organize detail by the row's store and root; a store mismatch never reuses another store's reason.</para>
+    ///     <para>
+    ///         Looks up unfinished-organize detail by the row's store and root; a store mismatch never reuses another
+    ///         store's reason.
+    ///     </para>
     /// </summary>
     private string? OrganizeIssueFor(string? sessionStore, string workspaceRoot)
     {
-        if (_organizeIssues is null || _organizeIssuesStore is not { } issueStore ||
+        if (_organizeIssues is null     || _organizeIssuesStore is not { } issueStore ||
             sessionStore is not { } row || !ProjectRoots.AreEqual(row, issueStore))
             return null;
         var normalized = ProjectRoots.Normalize(workspaceRoot);
@@ -905,8 +964,11 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     }
 
     /// <summary>
-    ///     <para>把项目分组与成员会话铺平为侧栏呈现行；折叠组只保留组头行。</para>
-    ///     <para>Flattens project groups and member sessions into sidebar rows; collapsed groups keep only their header.</para>
+    ///     <para>按可见数量铺平项目会话，剩余成员由底部入口逐批展开；折叠组只保留组头。</para>
+    ///     <para>
+    ///         Flattens visible project sessions with a show-more entry for remaining members;
+    ///         collapsed groups keep only their header.
+    ///     </para>
     /// </summary>
     private void RebuildSidebarRows()
     {
@@ -915,7 +977,9 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         foreach (var group in Projects)
         {
             rows.Add(group);
-            if (group.IsExpanded) rows.AddRange(group.Sessions);
+            if (!group.IsExpanded) continue;
+            rows.AddRange(group.Sessions.Take(group.VisibleSessionCount));
+            if (group.Sessions.Count > group.VisibleSessionCount) rows.Add(group.MoreSessionsRow);
         }
 
         // 保留未变行与控件；刷新不 Reset，排序只移动、增删实际变化的行，避免整表重建闪动。
@@ -993,7 +1057,10 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
     /// <summary>
     ///     <para>项目组头「+」：把空白新对话页切到该项目并保留输入；不新建页、不写目录册。</para>
-    ///     <para>Project group "+": moves the blank new-conversation page onto the project keeping its input; it creates no page and writes no catalog.</para>
+    ///     <para>
+    ///         Project group "+": moves the blank new-conversation page onto the project keeping its input; it creates no
+    ///         page and writes no catalog.
+    ///     </para>
     /// </summary>
     public async Task NewProjectSessionAsync(ProjectViewModel group)
     {
@@ -1018,7 +1085,7 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     private async Task<string?> ApplyProjectChoiceAsync(SessionViewModel page, string root, int revision)
     {
         var storeRevision = _storeRevision;
-        var directory = await ResolveProtectedDirectoryAsync(root, _lifetime.Token);
+        var directory     = await ResolveProtectedDirectoryAsync(root, _lifetime.Token);
         if (!CanApplyTarget(page, revision) || !IsApplicableStore(directory, storeRevision)) return null;
         // 菜单和组头只读取当前 store 的目录册，不能复制旧 store 分组的项目 ID，也不预创建项目。
         var catalog = await ProjectStore.LoadAsync(ProjectStore.FilePath(directory), _lifetime.Token);
@@ -1056,7 +1123,7 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         // 每次打开都是新的弹窗实例：身份递增，使仍在途的上一次确认结果不落回本弹窗。
         _renameDialogVersion++;
         ProjectRenameDraftText = group.Name;
-        _projectRenameError    = null;
+        ProjectRenameErrorText = null;
         IsProjectRenameOpen    = true;
         // 预填与残留草稿相同时草稿 setter 不通知，开窗即补齐校验通知（确认按钮的可用态）。
         NotifyProjectRenameValidation();
@@ -1076,7 +1143,7 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
             group.EditedName = name;
             await RenameProjectAsync(group);
             if (_renameDialogVersion != dialogVersion) return;
-            _projectRenameError = null;
+            ProjectRenameErrorText = null;
             CloseProjectRename();
         }
         catch (Exception exception)
@@ -1088,7 +1155,7 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
                 return;
             }
 
-            _projectRenameError = _factory.Redact(exception.Message);
+            ProjectRenameErrorText = _factory.Redact(exception.Message);
             NotifyProjectRenameValidation();
         }
         finally
@@ -1101,9 +1168,9 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     /// <summary>关闭并清理重命名弹窗状态（取消、确认成功与浅失焦共用）。</summary>
     private void CloseProjectRename()
     {
-        IsProjectRenameOpen = false;
-        _renameTarget       = null;
-        _projectRenameError = null;
+        IsProjectRenameOpen    = false;
+        _renameTarget          = null;
+        ProjectRenameErrorText = null;
         NotifyProjectRenameValidation();
     }
 
@@ -1131,12 +1198,6 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
                 SessionStorePaths.EnsureOutsideWorkspace(directory, writable, "settings.sessionStoreDirectory");
         return directory;
     }
-
-    /// <summary>
-    ///     <para>受保护目录解析的内部测试注入点；生产不设置。</para>
-    ///     <para>Internal test seam for protected-directory resolution; production leaves it unset.</para>
-    /// </summary>
-    internal Func<string, CancellationToken, Task<string>>? ResolveDirectoryOverride { get; set; }
 
     /// <summary>
     ///     <para>保留的单批显式入口：与自动整轮共用单飞与游标；已有迁移在途时直接合并返回。</para>
@@ -1169,18 +1230,13 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
         // 单批入口保留逐批全库刷新；整轮编排不使用该路径，避免每批重读整个 store。
         await InitializeAsync();
-        Notice = $"项目初始化：{result.Outcomes.Count(item => item.Status == SessionProjectBindingStatus.Bound)} 已绑定，" +
+        Notice = $"项目初始化：{result.Outcomes.Count(item => item.Status == SessionProjectBindingStatus.Bound)} 已绑定，"   +
                  $"{result.Outcomes.Count(item => item.Status       == SessionProjectBindingStatus.Pending)} 待处理，" +
                  $"{result.Outcomes.Count(item => item.Status       == SessionProjectBindingStatus.Failed)} 失败；"   +
                  (result.Cancelled ? "已取消，可继续。" : result.HasMore ? "仍有日志，可继续。" : "本轮扫描完成，可重试待处理项。")                +
                  string.Join("", result.Outcomes.Where(item => item.Detail is not null)
                                        .Select(item => $"\n{item.SessionId}: {item.Detail}"));
     }
-
-    private const int OrganizeBatchSize = 100;
-
-    /// <summary>一条整理未完成明细：按目录定位的原因摘要，仅用于侧栏展示。</summary>
-    private sealed record OrganizeIssue(string Root, string Detail);
 
     /// <summary>占用迁移单飞槽位；已有迁移（整轮或保留的单批入口）在途时返回 false。</summary>
     private bool TryBeginMigration(out CancellationTokenSource source, out TaskCompletionSource finished)
@@ -1254,16 +1310,17 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     ///     </para>
     /// </summary>
     private async Task RunOrganizeRoundAsync(CancellationTokenSource source, string store, int generation,
-                                             TaskCompletionSource finished)
+                                             TaskCompletionSource    finished)
     {
         string? failureSummary = null;
-        var merged = new Dictionary<string, SessionProjectBindingOutcome>(StringComparer.Ordinal);
+        var     merged         = new Dictionary<string, SessionProjectBindingOutcome>(StringComparer.Ordinal);
         try
         {
             // 写入前复用与显式入口一致的完整保护校验：轻量准备只解析路径，不构成创建目录册或追加归属的授权；
             // 沙箱附加写根等边界只有这里与显式入口检查，Core 仅校验各日志自己的执行根。
             var protectedStore = await ResolveProtectedDirectoryAsync(
-                SelectedSession?.WorkspaceRoot ?? Environment.CurrentDirectory, source.Token);
+                                                                      SelectedSession?.WorkspaceRoot ??
+                                                                      Environment.CurrentDirectory, source.Token);
             if (!ProjectRoots.AreEqual(protectedStore, store))
             {
                 // 配置在本轮启动后变化（含 trim 后与轻量解析不一致）：不写捕获的 store，按未完成报告而非静默成功；
@@ -1279,8 +1336,8 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
                 {
                     // 批内扫描与迁移放工作线程：Core 首个 await 前有同步枚举与排序，不占用 UI 线程。
                     var result = await Task.Run(() => SessionProjectInitializer.InitializeAsync(
-                                                    store, cursor, OrganizeBatchSize,
-                                                    cancellationToken : source.Token), source.Token);
+                                                 store, cursor, OrganizeBatchSize,
+                                                 cancellationToken : source.Token), source.Token);
                     // 迟到防护：store 已切换的批次不再推进共享游标。
                     if (IsCurrentStore(store, generation))
                         _initializationCursor = result.HasMore ? result.NextCursor : null;
@@ -1312,8 +1369,8 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
             // 整轮异常只进独立摘要通道，不覆盖其他操作的错误；结束后仍按当前状态统一加载一次。
             if (IsCurrentStore(store, generation))
             {
-                failureSummary = _factory.Redact(exception.Message);
-                OrganizeNotice = $"历史整理未完成：{failureSummary}";
+                failureSummary       = _factory.Redact(exception.Message);
+                OrganizeNotice       = $"历史整理未完成：{failureSummary}";
                 // 异常轮按已观测事实结算明细：先清掉本 store 上一轮残留，已见批次的待处理／失败照常按目录汇总；
                 // 未扫到的目录取不到按目录事实，统一加载后由下方 failureSummary 分支用摘要补标。
                 _organizeIssues      = BuildOrganizeIssues(merged.Values);
@@ -1328,7 +1385,6 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
         // 取消只停止本轮写入：统一只读加载仍是整理后的必经步骤，否则侧栏停在空态；迟到防护由 _closing 与代次保持。
         if (!_closing && IsCurrentStore(store, generation))
-        {
             try
             {
                 await InitializeAsync();
@@ -1339,7 +1395,6 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
             {
                 // 关闭竞态中的取消不构成错误。
             }
-        }
     }
 
     /// <summary>迟到防护：整轮结果只在其代次仍是最新且 store 未变化时进入共享展示状态。</summary>
@@ -1351,7 +1406,7 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     private void PublishOrganizeOutcome(IEnumerable<SessionProjectBindingOutcome> outcomes)
     {
         var stuck = outcomes.Where(outcome => outcome.Status is SessionProjectBindingStatus.Pending
-                                                                  or SessionProjectBindingStatus.Failed).ToArray();
+                                                             or SessionProjectBindingStatus.Failed).ToArray();
         if (stuck.Length == 0)
         {
             ResetOrganizeDisplay();
@@ -1366,7 +1421,10 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
     /// <summary>
     ///     <para>把仍待处理或失败的事实按目录归并为侧栏「整理未完成」明细；无法定位目录的事实只进摘要。</para>
-    ///     <para>Groups pending or failed facts into per-directory unfinished details; facts without a locatable root stay in the summary only.</para>
+    ///     <para>
+    ///         Groups pending or failed facts into per-directory unfinished details; facts without a locatable root stay in
+    ///         the summary only.
+    ///     </para>
     /// </summary>
     private IReadOnlyList<OrganizeIssue> BuildOrganizeIssues(IEnumerable<SessionProjectBindingOutcome> outcomes)
     {
@@ -1411,9 +1469,9 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         var issues = _organizeIssues is { } existing ? new List<OrganizeIssue>(existing) : [];
         // 只补标本轮 store 的行：切换 store 后旧页面保留原 store 绑定，旧 store 的未绑定组不归本轮解释。
         foreach (var session in Sessions.Where(session => session.Id is not null            &&
-                                                           session.ProjectId is null         &&
-                                                           session.StoreDirectory is { } row &&
-                                                           ProjectRoots.AreEqual(row, store)))
+                                                          session.ProjectId is null         &&
+                                                          session.StoreDirectory is { } row &&
+                                                          ProjectRoots.AreEqual(row, store)))
         {
             var normalized = ProjectRoots.Normalize(session.WorkspaceRoot);
             if (issues.Any(issue => ProjectRoots.AreEqual(issue.Root, normalized))) continue;
@@ -1439,4 +1497,7 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
             session.ShowError(exception);
         }
     }
+
+    /// <summary>一条整理未完成明细：按目录定位的原因摘要，仅用于侧栏展示。</summary>
+    private sealed record OrganizeIssue(string Root, string Detail);
 }
