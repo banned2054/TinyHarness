@@ -135,7 +135,11 @@ Interactive startup asks about trust for a new workspace. Read-only workspaces a
 
 At an approval prompt, `a` allows once, `s` allows matching requests for the current run, and `d` denies. Run-scoped approvals are not restored in later turns. Review the proposed action before approving it.
 
-In Desktop, registering a project, allowing changes, and approving a tool do not establish Windows sandbox directory readiness. If directory preparation blocks a command before launch, the idle session offers details and an explicit sandbox-directory repair action. Confirm the exact workspace and inheritance-propagation scope first; a separate UAC confirmation is requested only when normal privilege is insufficient. There is no need to launch CLI `/trust`. Repair does not take ownership, reset the whole tree's ACLs, or reprovision the machine sandbox. It must pass a final check and never replays the failed command. An unknown authorization result blocks immediate retries and requires inspection and an application restart.
+In Desktop, registering a project, selecting a permission mode, and approving a tool do not establish Windows sandbox directory readiness. If directory preparation blocks a command before launch, the idle session offers details and an explicit sandbox-directory repair action. Confirm the exact workspace and inheritance-propagation scope first; a separate UAC confirmation is requested only when normal privilege is insufficient. There is no need to launch CLI `/trust`. Repair does not take ownership, reset the whole tree's ACLs, or reprovision the machine sandbox. It must pass a final check and never replays the failed command. An unknown authorization result blocks immediate retries and requires inspection and an application restart.
+
+### Desktop permission modes
+
+Settings → Permissions and approvals lists seven presets. Choose which appear in the composer, a default for new sessions, and either the current session model or a separate AI reviewer. Read-only permits approval of individual writes and shell calls. Idle sessions can change and durably save their mode; resume restores the selection without restoring temporary grants. Stop active work and await cleanup before switching. See the [permission guide](Docs/Guides/permission-modes.md).
 
 ### Reasoning and basic controls
 
