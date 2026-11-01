@@ -109,6 +109,7 @@
             <SolidColorBrush x:Key="TextMutedBrush" Color="#8D96A6" />
             <SolidColorBrush x:Key="AccentTextBrush" Color="#AFC0FF" />
             <SolidColorBrush x:Key="StatusRunningBrush" Color="#F0B45A" />
+            <SolidColorBrush x:Key="SidebarRunningIndicatorBrush" Color="#FFFFFF" />
             <SolidColorBrush x:Key="StatusConnectedBrush" Color="#5ED6A0" />
             <SolidColorBrush x:Key="StatusErrorBrush" Color="#FF9A9A" />
             <!-- 折叠行（工具/思考）：label-tertiary / label-secondary(hover) / label-caption -->
@@ -197,6 +198,7 @@
             <SolidColorBrush x:Key="TextMutedBrush" Color="#81858C" />
             <SolidColorBrush x:Key="AccentTextBrush" Color="#4176E6" />
             <SolidColorBrush x:Key="StatusRunningBrush" Color="#DD8629" />
+            <SolidColorBrush x:Key="SidebarRunningIndicatorBrush" Color="#DD8629" />
             <SolidColorBrush x:Key="StatusConnectedBrush" Color="#22C55E" />
             <SolidColorBrush x:Key="StatusErrorBrush" Color="#EC1313" />
             <!-- 折叠行（工具/思考）：label-tertiary / label-secondary(hover) / label-caption -->

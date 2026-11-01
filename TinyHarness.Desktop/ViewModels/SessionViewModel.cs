@@ -33,6 +33,7 @@ public sealed partial class SessionViewModel : ObservableObject
     private          long                                          _draftRevision;
     private          ModelReasoningEffort?                         _effort;
     private          bool                                          _established;
+    private          bool                                          _hasUnreadCompletion;
     private          SessionModelIdentity?                         _historicalIdentity;
     private          SessionHistoryCursor?                         _historyCursor;
     private          Task?                                         _historyLoad;
@@ -49,7 +50,7 @@ public sealed partial class SessionViewModel : ObservableObject
     private          DesktopSession?                               _runtime;
     private          SessionModelSelection?                        _savedSelection;
     private          bool                                          _selected;
-    private          string                                        _status = "就绪";
+    private          string                                        _status = string.Empty;
     private          MessageItemViewModel?                         _stream;
     private          long?                                         _submittedDraftRevision;
     private          string                                        _title;
@@ -102,7 +103,21 @@ public sealed partial class SessionViewModel : ObservableObject
     public bool IsSelected
     {
         get => _selected;
-        set => SetProperty(ref _selected, value);
+        set
+        {
+            if (!SetProperty(ref _selected, value)) return;
+            if (value) HasUnreadCompletion = false;
+        }
+    }
+
+    /// <summary>
+    ///     <para>该会话是否有用户尚未查看的后台运行结果。</para>
+    ///     <para>Whether this session has a background run result the user has not viewed.</para>
+    /// </summary>
+    public bool HasUnreadCompletion
+    {
+        get => _hasUnreadCompletion;
+        private set => SetProperty(ref _hasUnreadCompletion, value);
     }
 
     public string?        StoreDirectory  { get; private set; }
@@ -521,6 +536,7 @@ public sealed partial class SessionViewModel : ObservableObject
         }
         finally
         {
+            if (!IsSelected) HasUnreadCompletion = true;
             StopStream();
             if (_activeRunId is { } runId && _processGroups.TryGetValue(runId, out var group)) group.Complete();
             _activeRunId = null;

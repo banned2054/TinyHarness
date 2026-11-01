@@ -8,6 +8,107 @@
              x:DataType="vm:MainWindowViewModel"
              mc:Ignorable="d"
              d:DesignHeight="760" d:DesignWidth="280">
+    <UserControl.Styles>
+        <Style Selector="Ellipse.session-spinner-dot">
+            <Setter Property="Opacity" Value="0.2" />
+        </Style>
+        <Style Selector="Ellipse.session-spinner-dot.dot-0.running">
+            <Style.Animations>
+                <Animation Duration="0:0:0.8" Delay="0:0:0" IterationCount="Infinite">
+                    <KeyFrame Cue="0%">
+                        <Setter Property="Opacity" Value="1" />
+                    </KeyFrame>
+                    <KeyFrame Cue="100%">
+                        <Setter Property="Opacity" Value="0.2" />
+                    </KeyFrame>
+                </Animation>
+            </Style.Animations>
+        </Style>
+        <Style Selector="Ellipse.session-spinner-dot.dot-1.running">
+            <Style.Animations>
+                <Animation Duration="0:0:0.8" Delay="0:0:0.1" IterationCount="Infinite">
+                    <KeyFrame Cue="0%">
+                        <Setter Property="Opacity" Value="1" />
+                    </KeyFrame>
+                    <KeyFrame Cue="100%">
+                        <Setter Property="Opacity" Value="0.2" />
+                    </KeyFrame>
+                </Animation>
+            </Style.Animations>
+        </Style>
+        <Style Selector="Ellipse.session-spinner-dot.dot-2.running">
+            <Style.Animations>
+                <Animation Duration="0:0:0.8" Delay="0:0:0.2" IterationCount="Infinite">
+                    <KeyFrame Cue="0%">
+                        <Setter Property="Opacity" Value="1" />
+                    </KeyFrame>
+                    <KeyFrame Cue="100%">
+                        <Setter Property="Opacity" Value="0.2" />
+                    </KeyFrame>
+                </Animation>
+            </Style.Animations>
+        </Style>
+        <Style Selector="Ellipse.session-spinner-dot.dot-3.running">
+            <Style.Animations>
+                <Animation Duration="0:0:0.8" Delay="0:0:0.3" IterationCount="Infinite">
+                    <KeyFrame Cue="0%">
+                        <Setter Property="Opacity" Value="1" />
+                    </KeyFrame>
+                    <KeyFrame Cue="100%">
+                        <Setter Property="Opacity" Value="0.2" />
+                    </KeyFrame>
+                </Animation>
+            </Style.Animations>
+        </Style>
+        <Style Selector="Ellipse.session-spinner-dot.dot-4.running">
+            <Style.Animations>
+                <Animation Duration="0:0:0.8" Delay="0:0:0.4" IterationCount="Infinite">
+                    <KeyFrame Cue="0%">
+                        <Setter Property="Opacity" Value="1" />
+                    </KeyFrame>
+                    <KeyFrame Cue="100%">
+                        <Setter Property="Opacity" Value="0.2" />
+                    </KeyFrame>
+                </Animation>
+            </Style.Animations>
+        </Style>
+        <Style Selector="Ellipse.session-spinner-dot.dot-5.running">
+            <Style.Animations>
+                <Animation Duration="0:0:0.8" Delay="0:0:0.5" IterationCount="Infinite">
+                    <KeyFrame Cue="0%">
+                        <Setter Property="Opacity" Value="1" />
+                    </KeyFrame>
+                    <KeyFrame Cue="100%">
+                        <Setter Property="Opacity" Value="0.2" />
+                    </KeyFrame>
+                </Animation>
+            </Style.Animations>
+        </Style>
+        <Style Selector="Ellipse.session-spinner-dot.dot-6.running">
+            <Style.Animations>
+                <Animation Duration="0:0:0.8" Delay="0:0:0.6" IterationCount="Infinite">
+                    <KeyFrame Cue="0%">
+                        <Setter Property="Opacity" Value="1" />
+                    </KeyFrame>
+                    <KeyFrame Cue="100%">
+                        <Setter Property="Opacity" Value="0.2" />
+                    </KeyFrame>
+                </Animation>
+            </Style.Animations>
+        </Style>
+        <Style Selector="Ellipse.session-spinner-dot.dot-7.running">
+            <Style.Animations>
+                <Animation Duration="0:0:0.8" Delay="0:0:0.7" IterationCount="Infinite">
+                    <KeyFrame Cue="0%">
+                        <Setter Property="Opacity" Value="1" />
+                    </KeyFrame>
+                    <KeyFrame Cue="100%">
+                        <Setter Property="Opacity" Value="0.2" />
+                    </KeyFrame>
+                </Animation>
+            </Style.Animations>
+        </Style>
+    </UserControl.Styles>
     <!-- 侧栏内容视图：拖拽调宽等窗口级布局由 MainWindow 统一协调（见 MainWindow.axaml.cs），
          宽度上限经 SetSurfaceMaxWidth 与外层 Grid 列同步。 -->
     <Border x:Name="Surface"
@@ -225,11 +326,51 @@
                                                ToolTip.Tip="{Binding WorkspaceRoot}" />
                                     <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="6"
                                                 HorizontalAlignment="Right" VerticalAlignment="Center">
+                                        <Canvas Width="14" Height="14" IsVisible="{Binding IsRunning}">
+                                            <Ellipse Classes="session-spinner-dot dot-0"
+                                                     Classes.running="{Binding IsRunning}"
+                                                     Canvas.Left="5.5" Canvas.Top="0"
+                                                     Width="2.5" Height="2.5"
+                                                     Fill="{DynamicResource SidebarRunningIndicatorBrush}" />
+                                            <Ellipse Classes="session-spinner-dot dot-1"
+                                                     Classes.running="{Binding IsRunning}"
+                                                     Canvas.Left="10" Canvas.Top="2"
+                                                     Width="2.5" Height="2.5"
+                                                     Fill="{DynamicResource SidebarRunningIndicatorBrush}" />
+                                            <Ellipse Classes="session-spinner-dot dot-2"
+                                                     Classes.running="{Binding IsRunning}"
+                                                     Canvas.Left="11.5" Canvas.Top="5.5"
+                                                     Width="2.5" Height="2.5"
+                                                     Fill="{DynamicResource SidebarRunningIndicatorBrush}" />
+                                            <Ellipse Classes="session-spinner-dot dot-3"
+                                                     Classes.running="{Binding IsRunning}"
+                                                     Canvas.Left="10" Canvas.Top="9.5"
+                                                     Width="2.5" Height="2.5"
+                                                     Fill="{DynamicResource SidebarRunningIndicatorBrush}" />
+                                            <Ellipse Classes="session-spinner-dot dot-4"
+                                                     Classes.running="{Binding IsRunning}"
+                                                     Canvas.Left="5.5" Canvas.Top="11.5"
+                                                     Width="2.5" Height="2.5"
+                                                     Fill="{DynamicResource SidebarRunningIndicatorBrush}" />
+                                            <Ellipse Classes="session-spinner-dot dot-5"
+                                                     Classes.running="{Binding IsRunning}"
+                                                     Canvas.Left="2" Canvas.Top="9.5"
+                                                     Width="2.5" Height="2.5"
+                                                     Fill="{DynamicResource SidebarRunningIndicatorBrush}" />
+                                            <Ellipse Classes="session-spinner-dot dot-6"
+                                                     Classes.running="{Binding IsRunning}"
+                                                     Canvas.Left="0" Canvas.Top="5.5"
+                                                     Width="2.5" Height="2.5"
+                                                     Fill="{DynamicResource SidebarRunningIndicatorBrush}" />
+                                            <Ellipse Classes="session-spinner-dot dot-7"
+                                                     Classes.running="{Binding IsRunning}"
+                                                     Canvas.Left="2" Canvas.Top="2"
+                                                     Width="2.5" Height="2.5"
+                                                     Fill="{DynamicResource SidebarRunningIndicatorBrush}" />
+                                        </Canvas>
                                         <Ellipse Width="7" Height="7" VerticalAlignment="Center"
-                                                 Fill="{DynamicResource StatusRunningBrush}"
-                                                 IsVisible="{Binding IsRunning}" />
-                                        <TextBlock Text="{Binding Status}" Classes="caption"
-                                                   VerticalAlignment="Center" />
+                                                 Fill="{DynamicResource AccentTextBrush}"
+                                                 IsVisible="{Binding HasUnreadCompletion}" />
                                     </StackPanel>
                                 </Grid>
                             </Button>
