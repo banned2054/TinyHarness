@@ -67,6 +67,7 @@
 | `project-instructions` | `tinyharness.project-instructions/1` | `rules-applied` 绑定同批 canonical 宿主消息和完整规则；`scopes-tracked` 仅更新完整探测集合，引用当前 revision，不重复正文 |
 | `compaction-checkpoint` | `state.schema = tinyharness.compaction/1` | 保存有界交接、真实用户原话的 canonical 下标／内容及折叠边界；替换旧 `checkpoint`，不做隐式迁移 |
 | `project-binding` | `tinyharness.project-binding/1` | 保存一次性 ProjectId；初始身份批次或旧日志后续追加，不支持重复或转移 |
+| `permission-selection` | `tinyharness.permission-selection/1` | 空闲边界可靠保存权限模式和连续修订；恢复选择，不恢复单次批准或可执行计划 |
 
 外层仍为 `tinyharness.session-log/1`，批次、顺序、锁与资源上限保持原契约。没有项目规则记录的统一日志仍可读取，规则状态为尚未管理；下一次真实发送才加载当前规则。首次写入此必需记录后，旧二进制按未知必需 kind 明确拒绝；新 reader 拒绝未知 payload schema、renderer 或损坏来源绑定，不忽略规则后继续执行。此扩展不重新引入旧快照读取、迁移或独立规则文件。
 

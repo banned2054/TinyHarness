@@ -104,6 +104,23 @@ public sealed class PermissionEngine
     public string? NonReadOnlyBlockReason { get; private set; }
 
     /// <summary>
+    ///     <para>当前显式预设；null 保留 CLI 与旧宿主的命令规则策略。</para>
+    ///     <para>The explicit preset; null retains command-rule policy for CLI and legacy hosts.</para>
+    /// </summary>
+    public SessionPermissionMode? Mode { get; private set; }
+
+    /// <summary>
+    ///     <para>在宿主空闲边界切换预设并撤销临时允许；硬拒绝仍然有效。</para>
+    ///     <para>Changes the preset at the host's idle boundary and revokes temporary allows, retaining hard denials.</para>
+    /// </summary>
+    public void SetMode(SessionPermissionMode mode)
+    {
+        if (!Enum.IsDefined(mode)) throw new ArgumentOutOfRangeException(nameof(mode));
+        ClearTemporaryAllows();
+        Mode = mode;
+    }
+
+    /// <summary>
     ///     <para>
     ///         只读地计算当前调用的权限结论；重复调用不会消费一次性授权或改变会话状态。
     ///     </para>
@@ -119,14 +136,33 @@ public sealed class PermissionEngine
             !ToolCapabilities.IsReadOnly(preparation.Capability))
             return PermissionDecision.Deny;
 
-        // 即使 Prepare 漏检，越界目标仍须拒绝。
-        if (preparation.TargetPaths.Any(target => !Workspace.IsInside(_workspaceRoot, target)))
+        // 未选择预设的传统宿主仍维持硬工作区边界；新预设在下方决定越界审批。
+        if (Mode is null && preparation.TargetPaths.Any(target => !Workspace.IsInside(_workspaceRoot, target)))
             return PermissionDecision.Deny;
 
         if (_sessionDenies.Any(rule => rule.Matches(preparation, true))) return PermissionDecision.Deny;
 
         // NeedsInspection 优先于所有授权与命令规则；仅由宿主在用户确认检查后解除。
         if (NonReadOnlyBlock(preparation) is not null) return PermissionDecision.Deny;
+
+        if (Mode is { } mode)
+        {
+            if (mode == SessionPermissionMode.FullAccess) return PermissionDecision.Allow;
+            if (mode is SessionPermissionMode.ConfirmEveryAction or SessionPermissionMode.ReviewEveryAction)
+                return PermissionDecision.Ask;
+            if (preparation.TargetPaths.Any(target => !Workspace.IsInside(_workspaceRoot, target)))
+                return PermissionDecision.Ask;
+            if (ToolCapabilities.IsReadOnly(preparation.Capability)) return PermissionDecision.Allow;
+            if (preparation.TargetPaths.Any(target =>
+                                                new[] { ".git", ".agents", ".codex", ".aws" }.Any(name =>
+                                                             Workspace.IsInside(Path.Combine(_workspaceRoot, name),
+                                                                                    target))))
+                return PermissionDecision.Ask;
+            return preparation.Capability == "filesystem.write" &&
+                   mode is SessionPermissionMode.ProjectWrite or SessionPermissionMode.ProjectWriteAutoReview
+                ? PermissionDecision.Allow
+                : PermissionDecision.Ask;
+        }
 
         if (_oneShotApprovals.Contains(Fingerprint(preparation)) ||
             _sessionGrants.Any(rule => rule.Matches(preparation)))
@@ -415,7 +451,7 @@ public sealed class PermissionEngine
             var directory  = args["workingDirectory"]?.GetValue<string>();
             var arguments  = args["arguments"] as JsonArray;
             if (!string.Equals(Mode, mode, StringComparison.Ordinal) ||
-                directory is null ||
+                directory is null                                    ||
                 !string.Equals(WorkingDirectory, directory, ExecutableComparison))
                 return false;
 
@@ -427,8 +463,8 @@ public sealed class PermissionEngine
                        string.Equals(Command, command, StringComparison.Ordinal);
             }
 
-            if (executable is null ||
-                arguments is null ||
+            if (executable is null                                           ||
+                arguments is null                                            ||
                 !string.Equals(Executable, executable, ExecutableComparison) ||
                 arguments.Count != ArgumentPatterns.Count)
                 return false;

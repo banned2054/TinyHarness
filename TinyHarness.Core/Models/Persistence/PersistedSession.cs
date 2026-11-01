@@ -6,6 +6,7 @@ using System.Text.Json.Serialization;
 using TinyHarness.Core.Models.ChatCompletions;
 using TinyHarness.Core.Models.ProjectInstructions;
 using TinyHarness.Core.Models.Session;
+using TinyHarness.Core.Models.Permissions;
 
 namespace TinyHarness.Core.Models.Persistence;
 
@@ -29,6 +30,12 @@ namespace TinyHarness.Core.Models.Persistence;
 /// </remarks>
 public sealed record PersistedSession
 {
+    /// <summary>
+    ///     <para>日志中的最近权限模式选择；旧日志未记录时为 null，不恢复临时批准。</para>
+    ///     <para>The latest journaled permission mode; null for legacy logs and never a restored temporary approval.</para>
+    /// </summary>
+    public SessionPermissionSelection? PermissionSelection { get; init; }
+
     public string Id { get; init; } = string.Empty;
 
     public string WorkspaceRoot { get; init; } = string.Empty;

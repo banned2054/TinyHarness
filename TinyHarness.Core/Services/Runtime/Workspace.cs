@@ -1,16 +1,17 @@
 namespace TinyHarness.Core.Services.Runtime;
 
 /// <summary>
-///     为文件工具提供相对工作区根目录的路径解析与边界检查。Prepare 阶段做纯词法检查，
-///     Execute 阶段再解析符号链接与 junction，防止两阶段之间目标变化后逃逸工作区。
-///     Root-relative path resolution for file tools. Every path a model
-///     passes to a tool is resolved against the configured workspace root and must
-///     stay inside it.
-///     Two checks exist because they run at different times:
+///     <para>为文件工具解析路径并复查链接。默认限制在工作区；启用外部路径时，调用方必须先审批具体目标。</para>
+///     <para>
+///         Resolves file-tool paths and rechecks links. Confined by default; external paths require the caller to
+///         authorize each concrete target.
+///     </para>
+///     <para>准备和执行分别进行检查。</para>
+///     <para>Preparation and execution perform separate checks.</para>
 ///     <list type="bullet">
 ///         <item>
 ///             <see cref="ResolveInside" /> is a pure, lexical check used in Prepare:
-///             normalized absolute path, no ".." or outside absolute path.
+///             normalized absolute path, confined unless external paths are explicitly enabled.
 ///         </item>
 ///         <item>
 ///             <see cref="EnsureFinalTargetInside" /> runs in Execute, right before the
@@ -23,26 +24,34 @@ namespace TinyHarness.Core.Services.Runtime;
 public sealed class Workspace
 {
     /// <summary>
-    ///     验证并保存规范化的绝对工作区根目录。
-    ///     Validates and stores the normalized absolute workspace root.
+    ///     <para>保存工作区根及外部路径解析开关；开关本身不授予访问权限。</para>
+    ///     <para>Stores the workspace root and external-path resolution option; the option itself grants no access.</para>
     /// </summary>
-    public Workspace(string root)
+    public Workspace(string root, bool allowExternalPaths = false)
     {
         if (string.IsNullOrWhiteSpace(root)) throw new ArgumentException("A workspace root is required.", nameof(root));
 
-        Root = Path.GetFullPath(root);
+        Root               = Path.GetFullPath(root);
+        AllowExternalPaths = allowExternalPaths;
     }
 
     public string Root { get; }
+
+    /// <summary>
+    ///     <para>是否允许准备外部目标；实际执行仍需权限引擎批准。</para>
+    ///     <para>Whether external targets can be prepared; execution still requires permission-engine approval.</para>
+    /// </summary>
+    public bool AllowExternalPaths { get; }
 
     private static StringComparison Comparison =>
         OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
 
     /// <summary>
-    ///     将用户路径解析为工作区内的规范化绝对路径；拒绝“..”或外部绝对路径造成的词法逃逸。
-    ///     Resolves a user-supplied path to a normalized absolute path that stays
-    ///     inside the workspace root. Throws <see cref="InvalidDataException" /> on
-    ///     lexical escapes ("..", an outside absolute path).
+    ///     <para>解析规范化绝对路径；未启用外部路径时拒绝词法越界，不读取文件或授予权限。</para>
+    ///     <para>
+    ///         Resolves an absolute path without reading files or granting access; rejects lexical escapes unless external
+    ///         paths are enabled.
+    ///     </para>
     /// </summary>
     public string ResolveInside(string path, string argumentName)
     {
@@ -59,7 +68,7 @@ public sealed class Workspace
             throw new InvalidDataException($"Argument '{argumentName}': '{path}' is not a valid path.", ex);
         }
 
-        if (!IsInside(Root, full))
+        if (!AllowExternalPaths && !IsInside(Root, full))
             throw new
                 InvalidDataException($"Argument '{argumentName}': path '{path}' escapes the workspace root '{Root}'.");
 
@@ -67,17 +76,32 @@ public sealed class Workspace
     }
 
     /// <summary>
-    ///     在真正访问前解析目标及各级祖先链接，确认最终位置仍位于工作区内。
-    ///     Verifies at execution time that the final target of <paramref name="path" />
-    ///     stays inside the workspace root. Checks the entry itself (when it is a
-    ///     symlink/junction) and every ancestor directory, because a junction can sit
-    ///     on any level of the path (e.g. root/link/secret.txt where 'link' points
-    ///     outside). Throws <see cref="InvalidDataException" /> when a link escapes.
+    ///     <para>访问前复查链接：内部目标不得逃逸工作区，外部目标不得通过链接改向其他位置。</para>
+    ///     <para>
+    ///         Rechecks links before access: internal targets cannot escape the workspace, and external targets cannot
+    ///         redirect elsewhere.
+    ///     </para>
     /// </summary>
     public void EnsureFinalTargetInside(string path, bool isDirectory, string what)
     {
         var current      = Path.GetFullPath(path);
         var currentIsDir = isDirectory;
+        if (AllowExternalPaths && !IsInside(Root, current))
+        {
+            // 外部路径仍绑定审批时的词法目标；拒绝链接改向，不让批准范围暗中改变。
+            while (current is not null)
+            {
+                var parent = Path.GetDirectoryName(current);
+                if (parent is null) break;
+                if (!string.Equals(current, ResolveLinkTarget(current, currentIsDir), Comparison))
+                    throw new InvalidDataException($"{what} '{path}' contains a linked external path.");
+                current      = parent;
+                currentIsDir = true;
+            }
+
+            return;
+        }
+
         if (!IsInside(Root, current))
             throw new InvalidDataException($"{what} '{path}' is outside the workspace root '{Root}'.");
 

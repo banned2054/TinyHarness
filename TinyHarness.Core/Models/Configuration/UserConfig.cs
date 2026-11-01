@@ -14,7 +14,10 @@ public sealed record UserProfileModel
 
     /// <summary>
     ///     <para>可选显示名，仅用于界面展示；不参与请求标识、选择键或模型身份。</para>
-    ///     <para>Optional display name for presentation only; never part of request identity, selection keys, or model identity.</para>
+    ///     <para>
+    ///         Optional display name for presentation only; never part of request identity, selection keys, or model
+    ///         identity.
+    ///     </para>
     /// </summary>
     public string? DisplayName { get; init; }
 
@@ -83,6 +86,12 @@ public sealed record UserProfile
 /// </summary>
 public sealed record UserConfigSettings
 {
+    /// <summary>
+    ///     <para>桌面权限预设、输入区菜单与审批模型的可信设置。</para>
+    ///     <para>Trusted desktop permission presets, composer menu, and reviewer model settings.</para>
+    /// </summary>
+    public PermissionSettings? Permissions { get; init; }
+
     /// <summary>
     ///     <para>可信运行预算；项目配置不能覆盖。</para>
     ///     <para>Trusted run budget; project configuration cannot override it.</para>

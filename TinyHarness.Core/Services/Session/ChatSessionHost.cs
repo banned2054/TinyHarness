@@ -12,6 +12,7 @@ using TinyHarness.Core.Services.Permissions;
 using TinyHarness.Core.Services.Persistence;
 using TinyHarness.Core.Services.ProjectInstructions;
 using TinyHarness.Core.Services.Tools;
+using TinyHarness.Core.Services.Runtime;
 
 namespace TinyHarness.Core.Services.Session;
 
@@ -53,8 +54,6 @@ public sealed partial class ChatSessionHost : IDisposable
     private readonly IHostEventSink?             _events;
     private readonly ProjectInstructionSnapshot? _initialInstructions;
     private readonly ProjectInstructionLoader?   _instructionLoader;
-    private          SessionModelBinding?        _binding;
-    private          AgentOptions                _options;
     private readonly PermissionEngine?           _permissions;
     private readonly Func<string, IRunRecorder>? _recorderFactory;
     private readonly ISessionStoreWriter?        _sessionWriter;
@@ -62,7 +61,8 @@ public sealed partial class ChatSessionHost : IDisposable
     private readonly ToolRegistry                _tools;
     private          IRunRecorder?               _activeRecorder;
 
-    private int _activeRuns;
+    private int                  _activeRuns;
+    private SessionModelBinding? _binding;
 
     /// <summary>
     ///     <para>当前 NeedsInspection 阻断原因；null 表示未阻断，仅用户检查确认可清除。</para>
@@ -72,6 +72,8 @@ public sealed partial class ChatSessionHost : IDisposable
     ///     </para>
     /// </summary>
     private string? _inspectionNote;
+
+    private AgentOptions _options;
 
     public ChatSessionHost(string                               workspaceRoot,
                            SessionModelIdentity                 model,
@@ -172,11 +174,11 @@ public sealed partial class ChatSessionHost : IDisposable
                             Func<string, IRunRecorder>?          recorderFactory,
                             Func<string, ISessionStoreWriter>?   sessionWriterFactory,
                             string?                              needsInspection,
-                           ProjectInstructionLoader?            instructionLoader,
-                           ProjectInstructionSnapshot?          initialInstructions,
-                           IReadOnlyDictionary<string, string>? knownSecrets,
-                           string?                              credentialRoute,
-                           bool                                 ownsModelClient)
+                            ProjectInstructionLoader?            instructionLoader,
+                            ProjectInstructionSnapshot?          initialInstructions,
+                            IReadOnlyDictionary<string, string>? knownSecrets,
+                            string?                              credentialRoute,
+                            bool                                 ownsModelClient)
     {
         ArgumentNullException.ThrowIfNull(session);
         ArgumentNullException.ThrowIfNull(context);
@@ -257,7 +259,7 @@ public sealed partial class ChatSessionHost : IDisposable
                                                session.ModelSelection.CredentialRoute,
                                                session.ModelSelection.ProfileHint,
                                                session.ModelSelection.ReasoningCapabilities,
-                                               ownsClient: ownsModelClient);
+                                               ownsModelClient);
         _sessionWriter = sessionWriterFactory?.Invoke(session.Id);
     }
 
@@ -275,7 +277,10 @@ public sealed partial class ChatSessionHost : IDisposable
 
     /// <summary>
     ///     <para>是否已有可执行模型绑定；未绑定宿主在应用候选选择前禁止发送。</para>
-    ///     <para>Whether an executable model binding exists; an unbound host refuses sending until a candidate selection is applied.</para>
+    ///     <para>
+    ///         Whether an executable model binding exists; an unbound host refuses sending until a candidate selection is
+    ///         applied.
+    ///     </para>
     /// </summary>
     public bool HasModelBinding => Volatile.Read(ref _binding) is not null;
 
@@ -661,9 +666,15 @@ public sealed partial class ChatSessionHost : IDisposable
                                                          events is null ? null : events.PublishHistoryItemAsync);
         _activeRecorder = recorder;
         var permissions = _permissions;
-        if (InspectionPending && permissions is null)
+        if (Session.PermissionSelection is { } permission)
         {
-            permissions = new PermissionEngine(Session.WorkspaceRoot);
+            permissions ??= new PermissionEngine(Session.WorkspaceRoot);
+            permissions.SetMode(permission.Mode);
+        }
+
+        if (InspectionPending)
+        {
+            permissions ??= new PermissionEngine(Session.WorkspaceRoot);
             permissions.SetNonReadOnlyBlock(_inspectionNote);
         }
 
@@ -677,7 +688,7 @@ public sealed partial class ChatSessionHost : IDisposable
                                                           WorkEvidenceCandidates,
                                                           (id, title, status, evidence, token) =>
                                                               UpdateWorkItemAsync(run, id, title,
-                                                                  status, evidence, token))
+                                                                       status, evidence, token))
             ])
             : _tools;
         return new AgentLoop(_binding!.Client, tools, _options, permissions, _approver, recorder, events, _context,
@@ -711,7 +722,9 @@ public sealed partial class ChatSessionHost : IDisposable
     ///     </para>
     /// </summary>
     private sealed class ProjectInstructionBoundary(
-        ChatSessionHost host, SessionRun run, ProjectInstructionLoader loader) : IAgentInstructionBoundary
+        ChatSessionHost          host,
+        SessionRun               run,
+        ProjectInstructionLoader loader) : IAgentInstructionBoundary
     {
         private ProjectInstructionRecord?   _pendingRecord;
         private ProjectInstructionSnapshot? _toolRoundSnapshot;
@@ -796,6 +809,8 @@ public sealed partial class ChatSessionHost : IDisposable
             IReadOnlyList<ToolPreparation> preparations, CancellationToken cancellationToken)
         {
             var scopes = preparations.SelectMany(preparation => preparation.InstructionScopes)
+                                     .Where(scope => host.Session.PermissionSelection is null ||
+                                                     Workspace.IsInside(host.Session.WorkspaceRoot, scope.Path))
                                      .Distinct()
                                      .ToArray();
             var previous = _toolRoundSnapshot ?? host._context.ProjectInstructions;
@@ -816,7 +831,8 @@ public sealed partial class ChatSessionHost : IDisposable
             var current = host._context.ProjectInstructions;
             return current?.Revision == snapshot.Revision
                 ? new InstructionBoundaryCheck(InstructionBoundaryStatus.Unchanged, null, null,
-                                               new InstructionCoverage(host.Session.WorkspaceRoot, snapshot))
+                                               new InstructionCoverage(host.Session.WorkspaceRoot, snapshot,
+                                                                       host.Session.PermissionSelection is not null))
                 : new InstructionBoundaryCheck(InstructionBoundaryStatus.Updated, null, snapshot.Revision, null);
         }
 
@@ -895,18 +911,17 @@ public sealed partial class ChatSessionHost : IDisposable
     private sealed class RunEventCorrelator(string sessionId, string turnId, string runId, IHostEventSink inner)
         : IHostEventSink
     {
-        public bool IncludeReasoningText => inner.IncludeReasoningText;
-
         private long _sequence;
+        public  bool IncludeReasoningText => inner.IncludeReasoningText;
 
         public async ValueTask PublishAsync(HostEvent @event, CancellationToken cancellationToken)
         {
             await inner.PublishAsync(@event with
                                      {
-                                         Sequence  = Interlocked.Increment(ref _sequence),
+                                         Sequence = Interlocked.Increment(ref _sequence),
                                          SessionId = sessionId,
-                                         TurnId    = turnId,
-                                         RunId     = runId
+                                         TurnId = turnId,
+                                         RunId = runId
                                      },
                                      cancellationToken)
                        .ConfigureAwait(false);

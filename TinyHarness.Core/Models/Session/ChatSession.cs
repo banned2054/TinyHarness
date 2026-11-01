@@ -1,4 +1,5 @@
 using TinyHarness.Core.Models.Persistence;
+using TinyHarness.Core.Models.Permissions;
 
 namespace TinyHarness.Core.Models.Session;
 
@@ -22,8 +23,8 @@ namespace TinyHarness.Core.Models.Session;
 /// </remarks>
 public sealed partial class ChatSession
 {
-    private readonly List<SessionTurn>           _turns           = [];
     private readonly List<SessionModelSelection> _modelSelections = [];
+    private readonly List<SessionTurn>           _turns           = [];
 
     /// <summary>
     ///     <para>创建固定执行目录的未绑定会话，不读写持久化数据。</para>
@@ -37,10 +38,13 @@ public sealed partial class ChatSession
 
     /// <summary>
     ///     <para>创建带可选初始项目归属的会话；持久化由调用方提交，归属不授予执行权限。</para>
-    ///     <para>Creates a session with optional initial project ownership; the caller persists it, and ownership grants no execution permissions.</para>
+    ///     <para>
+    ///         Creates a session with optional initial project ownership; the caller persists it, and ownership grants no
+    ///         execution permissions.
+    ///     </para>
     /// </summary>
     public ChatSession(
-        string id, string workspaceRoot, SessionModelIdentity model, DateTimeOffset? createdUtc,
+        string  id, string workspaceRoot, SessionModelIdentity model, DateTimeOffset? createdUtc,
         string? projectId)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(id);
@@ -57,6 +61,12 @@ public sealed partial class ChatSession
     }
 
     public string Id { get; }
+
+    /// <summary>
+    ///     <para>最近一次可靠提交的权限模式；不是单次或运行期批准。</para>
+    ///     <para>The last durably committed permission mode, distinct from one-shot or run-scoped approvals.</para>
+    /// </summary>
+    public SessionPermissionSelection? PermissionSelection { get; internal set; }
 
     /// <summary>
     ///     <para>会话固定的工作区根绝对路径。</para>
@@ -84,6 +94,25 @@ public sealed partial class ChatSession
     ///     </para>
     /// </summary>
     public string? ProjectId { get; private set; }
+
+    public DateTimeOffset CreatedUtc { get; }
+
+    /// <summary>
+    ///     <para>用户最近一次确认 NeedsInspection 检查的时间；未确认时为 null，新的未知结果中断清空旧确认。</para>
+    ///     <para>
+    ///         When the user last acknowledged NeedsInspection; null before acknowledgement,
+    ///         and cleared by a new unknown-result interruption.
+    ///     </para>
+    /// </summary>
+    public DateTimeOffset? InspectionAcknowledgedUtc { get; internal set; }
+
+    public string? PendingInspectionReason { get; internal set; }
+
+    /// <summary>
+    ///     <para>按提交顺序排列的用户回合。</para>
+    ///     <para>User turns in submission order.</para>
+    /// </summary>
+    public IReadOnlyList<SessionTurn> Turns => _turns;
 
     /// <summary>
     ///     <para>
@@ -128,25 +157,6 @@ public sealed partial class ChatSession
             throw new InvalidDataException("Model selection predecessors must continue the recorded chain.");
         _modelSelections.Add(selection);
     }
-
-    public DateTimeOffset CreatedUtc { get; }
-
-    /// <summary>
-    ///     <para>用户最近一次确认 NeedsInspection 检查的时间；未确认时为 null，新的未知结果中断清空旧确认。</para>
-    ///     <para>
-    ///         When the user last acknowledged NeedsInspection; null before acknowledgement,
-    ///         and cleared by a new unknown-result interruption.
-    ///     </para>
-    /// </summary>
-    public DateTimeOffset? InspectionAcknowledgedUtc { get; internal set; }
-
-    public string? PendingInspectionReason { get; internal set; }
-
-    /// <summary>
-    ///     <para>按提交顺序排列的用户回合。</para>
-    ///     <para>User turns in submission order.</para>
-    /// </summary>
-    public IReadOnlyList<SessionTurn> Turns => _turns;
 
     internal void AddTurn(SessionTurn turn)
     {

@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using TinyHarness.Core.Models.Permissions;
 using System.Text.Json.Serialization;
 using System.Text.Json.Serialization.Metadata;
 using TinyHarness.Core.Exceptions;
@@ -816,6 +817,10 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
             throw new SessionStoreException("Control record IDs are assigned by the writer.");
         switch (record.Kind)
         {
+            case "permission-selection" :
+                (record.Payload.Deserialize(SessionLogJsonContext.Default.SessionPermissionSelection)
+              ?? throw new InvalidDataException("Missing permission selection.")).Validate();
+                break;
             case "model-selection" :
                 (record.Payload.Deserialize(SessionLogJsonContext.Default.SessionModelSelection)
               ?? throw new InvalidDataException("Missing model selection payload.")).Validate();
@@ -967,11 +972,12 @@ public static class SessionStoreReader
         private (string Id, long Sequence, string TurnId, string RunId, string Revision, int DocumentCount)?
             _expectedInstructionHistory;
 
-        private SessionLogIdentity?     _identity;
-        private DateTimeOffset          _lastActivityUtc;
-        private string?                 _projectId;
-        private SessionLogSessionState? _state;
-        private DateTimeOffset          _updatedUtc;
+        private SessionLogIdentity?         _identity;
+        private DateTimeOffset              _lastActivityUtc;
+        private SessionPermissionSelection? _permissionSelection;
+        private string?                     _projectId;
+        private SessionLogSessionState?     _state;
+        private DateTimeOffset              _updatedUtc;
 
         public void Apply(SessionLogBatch batch)
         {
@@ -1020,6 +1026,15 @@ public static class SessionStoreReader
                             throw new SessionStoreException($"Session '{sessionId}' repeats turn id '{turn.Id}'.");
                         _turns.Add(new PersistedTurn
                                        { Id = turn.Id, UserInput = turn.UserInput, CreatedUtc = turn.CreatedUtc });
+                        break;
+                    case "permission-selection" :
+                        var permission = Read<SessionPermissionSelection>(record.Payload,
+                                                                          SessionLogJsonContext.Default
+                                                                             .SessionPermissionSelection);
+                        permission.Validate();
+                        if (permission.Revision != (_permissionSelection?.Revision ?? 0) + 1)
+                            throw new SessionStoreException("Permission selection revisions must be contiguous.");
+                        _permissionSelection = permission;
                         break;
                     case "model-selection" :
                         var selection =
@@ -1228,6 +1243,7 @@ public static class SessionStoreReader
                 ProjectId               = _projectId,
                 Model                   = _identity.Model,
                 ModelSelections         = _modelSelections.ToArray(),
+                PermissionSelection     = _permissionSelection,
                 CreatedUtc              = _identity.CreatedUtc,
                 UpdatedUtc              = _updatedUtc,
                 LastActivityUtc         = _lastActivityUtc,
@@ -1675,6 +1691,7 @@ public static class SessionStoreReader
 [JsonSerializable(typeof(PersistedReasoning))]
 [JsonSerializable(typeof(SessionModelIdentity))]
 [JsonSerializable(typeof(SessionModelSelection))]
+[JsonSerializable(typeof(SessionPermissionSelection))]
 [JsonSerializable(typeof(ChatApiKind))]
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase,
                              UseStringEnumConverter = true,

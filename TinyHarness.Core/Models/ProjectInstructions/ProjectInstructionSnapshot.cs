@@ -171,8 +171,9 @@ public static class ProjectInstructionRenderer
                 throw new InvalidDataException("Duplicate project instruction discovery directory.");
         }
 
-        if (!directories.Contains(".") || !snapshot.ProbedDirectories.SequenceEqual(
-                 snapshot.ProbedDirectories.OrderBy(Depth).ThenBy(path => path, StringComparer.Ordinal)))
+        if (!directories.Contains(".") ||
+            !snapshot.ProbedDirectories.SequenceEqual(snapshot.ProbedDirectories.OrderBy(Depth)
+                                                              .ThenBy(path => path, StringComparer.Ordinal)))
             throw new InvalidDataException("Project instruction discovery directories are not rooted and ordered.");
         foreach (var directory in snapshot.ProbedDirectories)
         {
@@ -222,9 +223,9 @@ public static class ProjectInstructionRenderer
             totalBytes += rawBytes.Length;
         }
 
-        if (totalBytes > ProjectInstructionLimits.MaxTotalBytes || !snapshot.Documents.SequenceEqual(
-                 snapshot.Documents.OrderBy(document => Depth(document.ScopeDirectory))
-                         .ThenBy(document => document.SourcePath, StringComparer.Ordinal)))
+        if (totalBytes > ProjectInstructionLimits.MaxTotalBytes ||
+            !snapshot.Documents.SequenceEqual(snapshot.Documents.OrderBy(document => Depth(document.ScopeDirectory))
+                                                      .ThenBy(document => document.SourcePath, StringComparer.Ordinal)))
             throw new InvalidDataException("Project instruction documents exceed the total budget or are unordered.");
         if (snapshot.Revision             != ComputeRevision(snapshot.Documents, snapshot.RendererVersion) ||
             snapshot.DiscoveryFingerprint != HashFields(snapshot.ProbedDirectories)                        ||
@@ -275,6 +276,7 @@ public static class ProjectInstructionRenderer
 /// </summary>
 public sealed class InstructionCoverage
 {
+    private readonly bool            _allowExternalPaths;
     private readonly HashSet<string> _directories;
     private readonly Workspace       _workspace;
 
@@ -282,12 +284,14 @@ public sealed class InstructionCoverage
     ///     <para>绑定当前工作区和已校验规则快照。</para>
     ///     <para>Binds the current workspace and a validated rules snapshot.</para>
     /// </summary>
-    public InstructionCoverage(string workspaceRoot, ProjectInstructionSnapshot snapshot)
+    public InstructionCoverage(string workspaceRoot, ProjectInstructionSnapshot snapshot,
+                               bool   allowExternalPaths = false)
     {
         ProjectInstructionRenderer.Validate(snapshot);
-        _workspace        = new Workspace(workspaceRoot);
-        Revision          = snapshot.Revision;
-        ProbedDirectories = Array.AsReadOnly(snapshot.ProbedDirectories.ToArray());
+        _allowExternalPaths = allowExternalPaths;
+        _workspace          = new Workspace(workspaceRoot);
+        Revision            = snapshot.Revision;
+        ProbedDirectories   = Array.AsReadOnly(snapshot.ProbedDirectories.ToArray());
         _directories = new HashSet<string>(ProbedDirectories, OperatingSystem.IsWindows()
                                                ? StringComparer.OrdinalIgnoreCase
                                                : StringComparer.Ordinal);
@@ -302,6 +306,8 @@ public sealed class InstructionCoverage
     /// </summary>
     public void EnsureCoveredDirectory(string absoluteDirectory)
     {
+        // 项目外目标单独审批；不在审批前读取其他项目的规则文件。
+        if (_allowExternalPaths && !Workspace.IsInside(_workspace.Root, absoluteDirectory)) return;
         var full = _workspace.ResolveInside(absoluteDirectory, "instruction coverage");
         if (!_directories.Contains(_workspace.ToDisplay(full)))
             throw new

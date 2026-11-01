@@ -608,8 +608,8 @@ public sealed partial class AgentLoop
                                 var changedEvent =
                                     await _instructionBoundary
                                          .ApplyToolRoundUpdateAsync(deferred.Select(candidate =>
-                                                                        roundRecords[candidate.RoundCall.Call
-                                                                           .Id]).ToArray(),
+                                                                                 roundRecords[candidate.RoundCall.Call
+                                                                                             .Id]).ToArray(),
                                                                     cancellationToken).ConfigureAwait(false);
                                 await PublishInstructionChangedAsync(changedEvent, cancellationToken)
                                    .ConfigureAwait(false);
@@ -1060,7 +1060,7 @@ public sealed partial class AgentLoop
     {
         Model           = _options.Model,
         ReasoningEffort = _options.ReasoningEffort,
-        Messages        = _context.BuildModelView(),
+        Messages        = PermissionModelView(),
         Tools           = definitions.Count == 0 ? null : definitions
     };
 

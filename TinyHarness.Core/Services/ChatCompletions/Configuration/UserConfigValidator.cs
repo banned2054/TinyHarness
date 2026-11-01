@@ -16,17 +16,24 @@ namespace TinyHarness.Core.Services.ChatCompletions.Configuration;
 /// </summary>
 /// <remarks>
 ///     <para>只校验结构与取值，不解析凭据、不探测服务、不读写磁盘；非法字段抛出带字段路径的异常。</para>
-///     <para>Validates structure and values only — no credential resolution, service probing, or disk access; invalid fields throw with field paths.</para>
+///     <para>
+///         Validates structure and values only — no credential resolution, service probing, or disk access; invalid
+///         fields throw with field paths.
+///     </para>
 /// </remarks>
 public static class UserConfigValidator
 {
     /// <summary>
     ///     <para>校验完整候选配置；规则与加载端一致，保证已保存文件始终可以再次保存。</para>
-    ///     <para>Validates a complete candidate config; the rules mirror the loading side so a saved file can always be saved again.</para>
+    ///     <para>
+    ///         Validates a complete candidate config; the rules mirror the loading side so a saved file can always be saved
+    ///         again.
+    ///     </para>
     /// </summary>
     public static void Validate(UserConfig config)
     {
         ArgumentNullException.ThrowIfNull(config);
+        config.Settings?.Permissions?.Validate();
 
         var seenProfiles = new HashSet<string>(StringComparer.Ordinal);
         for (var i = 0; i < config.Profiles.Count; i++)
@@ -65,7 +72,10 @@ public static class UserConfigValidator
 
     /// <summary>
     ///     <para>校验候选供应商字段：名称非空、Endpoint 为空（待配置）或绝对 http(s) URL、协议为已实现枚举。</para>
-    ///     <para>Validates a candidate provider: non-empty name, an empty (pending) or absolute http(s) endpoint, and an implemented protocol kind.</para>
+    ///     <para>
+    ///         Validates a candidate provider: non-empty name, an empty (pending) or absolute http(s) endpoint, and an
+    ///         implemented protocol kind.
+    ///     </para>
     /// </summary>
     public static void ValidateProfileEntry(string name, string endpoint, ChatApiKind chatApi, string fieldPath)
     {
@@ -87,7 +97,7 @@ public static class UserConfigValidator
     ///     </para>
     /// </summary>
     public static void ValidateModelEntry(
-        string id, int contextWindowTokens, IReadOnlyList<ModelReasoningEffort>? reasoningEfforts,
+        string                id, int contextWindowTokens, IReadOnlyList<ModelReasoningEffort>? reasoningEfforts,
         ModelReasoningEffort? defaultReasoningEffort, string fieldPath)
     {
         if (string.IsNullOrWhiteSpace(id))
@@ -108,7 +118,10 @@ public static class UserConfigValidator
 
     /// <summary>
     ///     <para>Endpoint 为空表示待配置状态；非空时必须是绝对 http(s) URL。加载与保存共用同一规则。</para>
-    ///     <para>An empty endpoint marks a pending profile; otherwise it must be an absolute http(s) URL. Loading and saving share this rule.</para>
+    ///     <para>
+    ///         An empty endpoint marks a pending profile; otherwise it must be an absolute http(s) URL. Loading and saving
+    ///         share this rule.
+    ///     </para>
     /// </summary>
     public static void ValidateEndpoint(string endpoint, string fieldPath)
     {
@@ -118,13 +131,16 @@ public static class UserConfigValidator
 
     /// <summary>
     ///     <para>返回 Endpoint 的校验错误片段，空或绝对 http(s) URL 时为 null；规则只有一个来源，加载端据此拼入文件路径。</para>
-    ///     <para>Returns the endpoint validation error fragment, or null when it is empty or an absolute http(s) URL; the rule has a single source and the loading side appends the file path.</para>
+    ///     <para>
+    ///         Returns the endpoint validation error fragment, or null when it is empty or an absolute http(s) URL; the rule
+    ///         has a single source and the loading side appends the file path.
+    ///     </para>
     /// </summary>
     public static string? GetEndpointError(string endpoint)
     {
         if (string.IsNullOrWhiteSpace(endpoint)) return null;
 
-        return Uri.TryCreate(endpoint.Trim(), UriKind.Absolute, out var uri) && uri.Scheme is ("http" or "https")
+        return Uri.TryCreate(endpoint.Trim(), UriKind.Absolute, out var uri) && uri.Scheme is "http" or "https"
             ? null
             : "must be an absolute http(s) URL, or empty for a pending profile";
     }

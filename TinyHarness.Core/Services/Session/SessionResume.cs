@@ -336,6 +336,8 @@ public static class SessionResume
             InspectionAcknowledgedUtc = snapshot.InspectionAcknowledgedUtc,
             PendingInspectionReason   = snapshot.PendingInspectionReason
         };
+        snapshot.PermissionSelection?.Validate();
+        session.PermissionSelection = snapshot.PermissionSelection;
         foreach (var selection in snapshot.ModelSelections) session.RecordModelSelection(selection);
         foreach (var turn in snapshot.Turns)
         {

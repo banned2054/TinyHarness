@@ -4,6 +4,7 @@ using TinyHarness.Core.Models.Agent;
 using TinyHarness.Core.Models.ChatCompletions;
 using TinyHarness.Core.Models.Configuration;
 using TinyHarness.Core.Models.Runtime.WindowsSandbox;
+using TinyHarness.Core.Models.Permissions;
 
 namespace TinyHarness.Core.Services.ChatCompletions.Configuration;
 
@@ -29,19 +30,56 @@ public static class UserConfigStore
     public const string FileName = "user-config.json";
 
     /// <summary>
+    ///     <para>保存锁文件名后缀；锁以独占句柄为准，进程崩溃即由操作系统释放，残留文件不阻塞后续保存。</para>
+    ///     <para>
+    ///         Save-lock file name suffix; the lock is the exclusive handle, released by the OS on process death, and a
+    ///         leftover file never blocks later saves.
+    ///     </para>
+    /// </summary>
+    public const string SaveLockSuffix = ".lock";
+
+    private const int SaveLockTimeoutMs    = 5000;
+    private const int SaveLockRetryDelayMs = 25;
+
+    /// <summary>
     ///     <para>保存与基线比较共用的写出设置，保证两侧产生同一规范形式。</para>
     ///     <para>Serialization settings shared by saving and baseline comparison so both produce one canonical form.</para>
     /// </summary>
     private static readonly JsonSerializerOptions SerializedJsonOptions = new() { WriteIndented = true };
 
     /// <summary>
-    ///     <para>保存锁文件名后缀；锁以独占句柄为准，进程崩溃即由操作系统释放，残留文件不阻塞后续保存。</para>
-    ///     <para>Save-lock file name suffix; the lock is the exclusive handle, released by the OS on process death, and a leftover file never blocks later saves.</para>
+    ///     <para>严格绑定用户权限设置；未知枚举不得回退成开放模式。</para>
+    ///     <para>Strictly binds user permission settings; unknown enums never fall back to open access.</para>
     /// </summary>
-    public const string SaveLockSuffix = ".lock";
+    private static PermissionSettings? BindPermissions(JsonObject settings)
+    {
+        if (!settings.TryGetPropertyValue("permissions", out var node)) return null;
+        if (node is not JsonObject value) throw new InvalidDataException("settings.permissions must be an object.");
 
-    private const int SaveLockTimeoutMs    = 5000;
-    private const int SaveLockRetryDelayMs = 25;
+        static SessionPermissionMode Parse(JsonNode? item)
+        {
+            var text = item?.GetValue<string>();
+            if (text is null          || !Enum.TryParse<SessionPermissionMode>(text, out var mode) ||
+                !Enum.IsDefined(mode) || mode.ToString() != text)
+                throw new InvalidDataException("Unknown permission mode.");
+            return mode;
+        }
+
+        var modes = value["composerModes"] is null    ? SessionPermissionModes.All :
+            value["composerModes"] is JsonArray array ? array.Select(Parse).ToArray() :
+                                                        throw new
+                                                            InvalidDataException("permissions.composerModes must be an array.");
+        var result = new PermissionSettings
+        {
+            DefaultMode = value["defaultMode"] is null ? SessionPermissionMode.ReadOnly : Parse(value["defaultMode"]),
+            ComposerModes = modes,
+            UseCurrentModel = value["useCurrentModel"]?.GetValue<bool>() ?? true,
+            ReviewerProfile = value["reviewerProfile"]?.GetValue<string>(),
+            ReviewerModel = value["reviewerModel"]?.GetValue<string>()
+        };
+        result.Validate();
+        return result;
+    }
 
     /// <summary>
     ///     <para>
@@ -101,10 +139,13 @@ public static class UserConfigStore
 
     /// <summary>
     ///     <para>保存用户配置：获取同目录保存锁，锁内校验候选、临时写入并安全替换，自动创建父目录。</para>
-    ///     <para>Saves the user config: acquires the sibling save lock, then validates the candidate, writes a temp file, and safely replaces the target inside it, creating parent directories.</para>
+    ///     <para>
+    ///         Saves the user config: acquires the sibling save lock, then validates the candidate, writes a temp file, and
+    ///         safely replaces the target inside it, creating parent directories.
+    ///     </para>
     /// </summary>
     public static Task SaveAsync(string filePath, UserConfig config, CancellationToken cancellationToken)
-        => SaveAsync(filePath, config, expectedBaseline: null, cancellationToken);
+        => SaveAsync(filePath, config, null, cancellationToken);
 
     /// <summary>
     ///     <para>
@@ -151,7 +192,7 @@ public static class UserConfigStore
         }
 
         var content  = WriteRoot(config).ToJsonString(SerializedJsonOptions) + Environment.NewLine;
-        var tempPath = filePath + ".tmp-" + Guid.NewGuid().ToString("N");
+        var tempPath = filePath                                              + ".tmp-" + Guid.NewGuid().ToString("N");
         try
         {
             await File.WriteAllTextAsync(tempPath, content, cancellationToken).ConfigureAwait(false);
@@ -177,11 +218,14 @@ public static class UserConfigStore
 
     /// <summary>
     ///     <para>获取配置文件的跨进程保存锁；被占用时短暂等待，超时抛出带锁路径的 IOException。</para>
-    ///     <para>Acquires the cross-process save lock for a config file; waits briefly while held and throws an IOException naming the lock path on timeout.</para>
+    ///     <para>
+    ///         Acquires the cross-process save lock for a config file; waits briefly while held and throws an IOException
+    ///         naming the lock path on timeout.
+    ///     </para>
     /// </summary>
     private static async Task<FileStream> OpenSaveLockAsync(string filePath, CancellationToken cancellationToken)
     {
-        var lockPath = filePath + SaveLockSuffix;
+        var lockPath = filePath                + SaveLockSuffix;
         var deadline = Environment.TickCount64 + SaveLockTimeoutMs;
         while (true)
         {
@@ -237,7 +281,8 @@ public static class UserConfigStore
                     {
                         var effortArray = new JsonArray();
                         foreach (var effort in efforts)
-                            effortArray.Add((JsonNode?)JsonValue.Create(ModelReasoningEffortParser.ToValueString(effort)));
+                            effortArray.Add((JsonNode?)
+                                            JsonValue.Create(ModelReasoningEffortParser.ToValueString(effort)));
                         modelNode["reasoningEfforts"] = effortArray;
                     }
 
@@ -274,6 +319,21 @@ public static class UserConfigStore
         if (settings is not null)
         {
             var settingsNode = new JsonObject();
+            if (settings.Permissions is { } permissions)
+            {
+                permissions.Validate();
+                settingsNode["permissions"] = new JsonObject
+                {
+                    ["defaultMode"] = permissions.DefaultMode.ToString(),
+                    ["composerModes"] = new JsonArray(permissions.ComposerModes
+                                                                 .Select(mode =>
+                                                                             (JsonNode?)JsonValue
+                                                                                .Create(mode.ToString())).ToArray()),
+                    ["useCurrentModel"] = permissions.UseCurrentModel,
+                    ["reviewerProfile"] = permissions.ReviewerProfile,
+                    ["reviewerModel"]   = permissions.ReviewerModel
+                };
+            }
 
             if (settings.RunBudget is { } budget)
             {
@@ -445,7 +505,7 @@ public static class UserConfigStore
                             var seenEfforts = new HashSet<ModelReasoningEffort>();
                             for (var e = 0; e < effortArray.Count; e++)
                             {
-                                if (effortArray[e] is not JsonValue { } effortValue ||
+                                if (effortArray[e] is not JsonValue { } effortValue        ||
                                     effortValue.GetValueKind() is not JsonValueKind.String ||
                                     !ModelReasoningEffortParser.TryParse(effortValue.GetValue<string>(),
                                                                          out var effort))
@@ -543,6 +603,7 @@ public static class UserConfigStore
 
         settings = new UserConfigSettings
         {
+            Permissions   = BindPermissions(settingsNode),
             RunBudget     = BindRunBudget(settingsNode, filePath),
             MaxAgentSteps = ReadNonNegativeInt(settingsNode, "maxAgentSteps", filePath, "settings.maxAgentSteps"),
             ReservedOutputTokens =
