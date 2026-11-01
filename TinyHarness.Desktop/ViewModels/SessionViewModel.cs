@@ -25,7 +25,6 @@ public sealed partial class SessionViewModel : ObservableObject
     private readonly Dictionary<string, string>                    _runLabels     = new(StringComparer.Ordinal);
     private readonly Dictionary<string, ToolActivityItemViewModel> _tools         = new(StringComparer.Ordinal);
     private          string?                                       _activeRunId;
-    private          bool                                          _allowChanges;
     private          DesktopApproval?                              _approval;
     private          string?                                       _cancellationError;
     private          bool                                          _changing;
@@ -42,6 +41,8 @@ public sealed partial class SessionViewModel : ObservableObject
     private          string                                        _notice = string.Empty;
     private          bool                                          _opening;
     private          CancellationTokenSource?                      _openingCancellation;
+    private          bool                                          _permissionExplicit;
+    private          PermissionSettings                            _permissionSettings = new();
     private          string?                                       _runError;
     private          bool                                          _running;
     private          DesktopSession?                               _runtime;
@@ -84,7 +85,6 @@ public sealed partial class SessionViewModel : ObservableObject
         });
         ResumeCommand    = new RelayCommand(() => _runtime?.Host.ResumeRun());
         AllowOnceCommand = new RelayCommand(() => Respond(ApprovalAction.AllowOnce));
-        AllowRunCommand  = new RelayCommand(() => Respond(ApprovalAction.AllowSession));
         DenyCommand      = new RelayCommand(() => Respond(ApprovalAction.Deny));
         AcknowledgeInspectionCommand = new AsyncCommand(async () =>
         {
@@ -139,7 +139,6 @@ public sealed partial class SessionViewModel : ObservableObject
     public RelayCommand                                    PauseCommand { get; }
     public RelayCommand                                    ResumeCommand { get; }
     public RelayCommand                                    AllowOnceCommand { get; }
-    public RelayCommand                                    AllowRunCommand { get; }
     public RelayCommand                                    DenyCommand { get; }
     public AsyncCommand                                    AcknowledgeInspectionCommand { get; }
 
@@ -188,22 +187,6 @@ public sealed partial class SessionViewModel : ObservableObject
         }
     }
 
-    public bool AllowChanges
-    {
-        get => _allowChanges;
-        set
-        {
-            if (_allowChanges == value) return;
-            if (!CanConfigure) throw new InvalidOperationException("当前会话的权限设置已经生效。");
-            if (SetProperty(ref _allowChanges, value))
-            {
-                // 权限预选是用户显式选择，参与空白页回收判定。
-                HasUserPreselection = true;
-                OnPropertyChanged(nameof(PermissionPickerLabel));
-            }
-        }
-    }
-
     public ModelChoice? SelectedModel
     {
         get => _model;
@@ -238,6 +221,7 @@ public sealed partial class SessionViewModel : ObservableObject
         {
             if (!SetProperty(ref _running, value)) return;
             OnPropertyChanged(nameof(CanChangeModel));
+            OnPropertyChanged(nameof(PermissionChangeHint));
             OnPropertyChanged(nameof(ComposerSendHint));
             OnPropertyChanged(nameof(CanRepairWorkspace));
             OpenWorkspaceRepairCommand.RaiseCanExecuteChanged();
@@ -251,7 +235,7 @@ public sealed partial class SessionViewModel : ObservableObject
     public bool HasApproval       => _approval is not null;
 
     public string ApprovalText => _approval is { } approval
-        ? $"{approval.ToolName}\n{approval.Summary}\n{approval.Arguments}\n{string.Join('\n', approval.TargetPaths)}\n{approval.ExecutionPolicy}"
+        ? $"{approval.ReviewNote}\n{approval.ToolName}\n{approval.Summary}\n{approval.Arguments}\n{string.Join('\n', approval.TargetPaths)}\n{approval.ExecutionPolicy}"
         : string.Empty;
 
     /// <summary>
@@ -335,6 +319,7 @@ public sealed partial class SessionViewModel : ObservableObject
             if (stored is not null)
             {
                 _savedSelection = stored.ModelSelection;
+                if (stored.PermissionSelection is { } permission) SetPermissionMode(permission.Mode, false);
                 _historicalIdentity = stored.Model;
                 _runError = _factory.Redact(stored.Turns.LastOrDefault()?.Runs.LastOrDefault()?.Error ?? string.Empty);
                 foreach (var run in stored.Turns.SelectMany(turn => turn.Runs))

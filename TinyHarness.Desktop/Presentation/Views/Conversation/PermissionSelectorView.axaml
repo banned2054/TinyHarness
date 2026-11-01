@@ -17,19 +17,20 @@
         <Popup x:Name="PermissionPickerPopup" PlacementTarget="{Binding #PermissionPickerButton}"
                Placement="TopEdgeAlignedLeft" VerticalOffset="-4"
                IsOpen="{Binding IsPermissionMenuOpen, Mode=TwoWay}" IsLightDismissEnabled="True">
-            <Border Classes="popup-surface" Width="252" MaxHeight="360">
+            <Border Classes="popup-surface" Width="288" MaxHeight="420">
                 <StackPanel>
                     <TextBlock Text="执行权限" Classes="popup-section" />
-                    <TextBlock Text="会话开始后固定权限；工具仍按规则审批。" Classes="popup-value"
-                               TextWrapping="Wrap" MaxWidth="230" Margin="10,4,10,8" />
+                    <TextBlock Text="{Binding PermissionChangeHint}" Classes="popup-value"
+                               TextWrapping="Wrap" MaxWidth="266" Margin="10,4,10,8" />
                     <ItemsControl ItemsSource="{Binding PermissionOptions}">
                         <ItemsControl.ItemTemplate>
                             <DataTemplate x:DataType="vm:ComposerMenuOption">
                                 <Button Classes="popup-item" Classes.selected="{Binding IsSelected}"
-                                        Command="{Binding SelectCommand}">
+                                        Command="{Binding SelectCommand}" ToolTip.Tip="{Binding ToolTip}">
                                     <Grid ColumnDefinitions="*,Auto">
                                         <TextBlock Text="{Binding Label}" TextTrimming="CharacterEllipsis" />
-                                        <TextBlock Grid.Column="1" Classes="popup-check" Text="✓" IsVisible="{Binding IsSelected}" />
+                                        <TextBlock Grid.Column="1" Classes="popup-check" Text="✓"
+                                                   IsVisible="{Binding IsSelected}" />
                                     </Grid>
                                 </Button>
                             </DataTemplate>

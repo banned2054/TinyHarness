@@ -38,6 +38,7 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     private          string?                       _organizeIssuesStore;
     private          string                        _organizeNotice = string.Empty;
     private          CancellationTokenSource?      _organizeSource;
+    private          PermissionSettings            _permissionSettings = new();
     private          string                        _projectRenameDraft = string.Empty;
     private          bool                          _projectRenameOpen;
     private          IReadOnlyList<Project>        _projects = [];
@@ -57,14 +58,15 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     public MainWindowViewModel(DesktopSessionFactory    factory, string userConfigPath,
                                Func<Action, ValueTask>? dispatch = null)
     {
-        _factory = factory;
-        _dispatch = dispatch;
+        _factory       = factory;
+        _dispatch      = dispatch;
         UserConfigPath = userConfigPath;
-        Catalog = new CatalogSettingsViewModel(UserConfigPath, InitializeAsync);
-        Settings = new SettingsPanelViewModel(new GeneralSettingsSectionViewModel(UserConfigPath), Catalog);
+        Catalog        = new CatalogSettingsViewModel(UserConfigPath, InitializeAsync);
+        Settings = new SettingsPanelViewModel(new GeneralSettingsSectionViewModel(UserConfigPath), Catalog,
+                                              new PermissionSettingsViewModel(UserConfigPath, InitializeAsync));
         Settings.CloseRequested += (_, _) => SettingsOpen = false;
-        NewSessionCommand = new RelayCommand(NewConversation);
-        SelectSessionCommand = new RelayCommand<SessionViewModel>(session => SelectedSession = session);
+        NewSessionCommand       =  new RelayCommand(NewConversation);
+        SelectSessionCommand    =  new RelayCommand<SessionViewModel>(session => SelectedSession = session);
         ToggleProjectCommand = new RelayCommand<ProjectViewModel>(group =>
         {
             if (group is null) return;
@@ -356,6 +358,7 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
                                                        ProjectRoots.AreEqual(source, store)) is { } existing)
                 {
                     existing.ApplyStoredMetadata(stored.ProjectId, stored.LastActivityUtc);
+                    existing.ApplyStoredPermissionMode(stored.PermissionSelection?.Mode);
                     continue;
                 }
 
@@ -368,6 +371,8 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
                     ModelOptions = Models, ManageModelsCommand = OpenSettingsCommand, ProjectOptions = Projects
                 };
                 // 标签来自最后选择；历史页面不解析凭据，目标缺失也保留页面。
+                row.ApplyPermissionSettings(_permissionSettings);
+                row.ApplyStoredPermissionMode(stored.PermissionSelection?.Mode);
                 AddSession(row);
             }
 
@@ -475,6 +480,10 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     {
         var revision = _storeRevision;
         var user     = await UserConfigStore.LoadAsync(UserConfigPath, _lifetime.Token);
+        _permissionSettings = user.Settings?.Permissions ?? new PermissionSettings();
+        foreach (var page in Sessions.Concat(_failedDrafts).Append(_newConversation).Where(page => page is not null)
+                                     .Distinct())
+            page!.ApplyPermissionSettings(_permissionSettings);
         if (revision != _storeRevision && _storeDirectory is { } current) return (current, false);
         Models.Clear();
         foreach (var profile in user.Profiles)
@@ -621,7 +630,8 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
                                                                                   group),
                                                                           group => group is { CanEdit: true } &&
                                                                               session.CanChooseWorkspace);
-        session.Established     += OnConversationEstablished;
+        session.Established += OnConversationEstablished;
+        session.ApplyPermissionSettings(_permissionSettings);
         session.FirstSendFailed += OnConversationFirstSendFailed;
         _newConversation        =  session;
         _                       =  session.RefreshDefaultModelAsync();

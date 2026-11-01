@@ -8,6 +8,8 @@ using TinyHarness.Core.Models.Persistence;
 using TinyHarness.Core.Models.Project;
 using TinyHarness.Core.Models.Session;
 using TinyHarness.Core.Models.Tools;
+using TinyHarness.Core.Models.Permissions;
+using TinyHarness.Core.Models.Runtime;
 using TinyHarness.Core.Services.ChatCompletions;
 using TinyHarness.Core.Services.ChatCompletions.Configuration;
 using TinyHarness.Core.Services.Context;
@@ -37,19 +39,22 @@ public sealed record DesktopEvent(
     DesktopWorkspaceRepairState? WorkspaceRepair = null);
 
 /// <summary>
-///     <para>一次打开请求；工作区及写入许可由人类界面显式选择，恢复不继承历史批准。</para>
-///     <para>An opening request; workspace and write consent come from the human UI, and resume inherits no old approvals.</para>
+///     <para>一次打开请求；新会话采用用户选择，恢复已有会话模式但不继承临时批准。</para>
+///     <para>
+///         An opening request; new sessions use the user's choice, while resume restores the mode without temporary
+///         approvals.
+///     </para>
 /// </summary>
 public sealed record DesktopSessionRequest(
-    string                WorkspaceRoot,
-    bool                  AllowChanges    = false,
-    string?               SessionId       = null,
-    string?               ProfileName     = null,
-    string?               ModelId         = null,
-    bool                  ShowReasoning   = false,
-    ModelReasoningEffort? Effort          = null,
-    bool                  EffortSpecified = false,
-    bool                  Reselect        = false)
+    string                 WorkspaceRoot,
+    SessionPermissionMode? PermissionMode  = null,
+    string?                SessionId       = null,
+    string?                ProfileName     = null,
+    string?                ModelId         = null,
+    bool                   ShowReasoning   = false,
+    ModelReasoningEffort?  Effort          = null,
+    bool                   EffortSpecified = false,
+    bool                   Reselect        = false)
 {
     public string? ProjectId      { get; init; }
     public string? StoreDirectory { get; init; }
@@ -59,7 +64,7 @@ public sealed record DesktopSessionRequest(
 ///     <para>独立于 CLI 组装桌面宿主，复用 Core 的模型、权限、工具和唯一日志。</para>
 ///     <para>Composes desktop hosts independently of the CLI, reusing Core models, permissions, tools and journal.</para>
 /// </summary>
-public sealed class DesktopSessionFactory
+public sealed partial class DesktopSessionFactory
 {
     private readonly ICredentialStore                                       _credentials;
     private readonly Func<TinyHarnessConfig, string, IChatCompletionClient> _modelFactory;
@@ -138,9 +143,10 @@ public sealed class DesktopSessionFactory
         var approvals = new DesktopApprovalProvider(approvalChanged, redactor.Redact);
         var sink      = new DesktopEventSink(events, secrets, request.ShowReasoning);
         var access    = new WorkspaceAccessState(WorkspaceDirectoryIdentity.Capture(root));
-        access.SetReadOnly(!request.AllowChanges);
+        // 用户模式由权限引擎审批；硬只读仍专用于未信任工作区和 worker。
+        access.SetReadOnly(false);
         WindowsSandboxExecution? sandbox = null;
-        if (request.AllowChanges && user.Settings?.WindowsSandbox is { Enabled: true } settings)
+        if (user.Settings?.WindowsSandbox is { Enabled: true } settings)
         {
             // 会话存储不能落入任一可信写根；此处不进行 provisioning 或机器权限变更。
             foreach (var writeRoot in settings.AdditionalWriteRoots)
@@ -149,7 +155,7 @@ public sealed class DesktopSessionFactory
         }
 
         SandboxDiagnosticLog.Event("session",
-                                   $"workspace='{root}' identity='{access.Identity.FileIdentity}' allowChanges={request.AllowChanges} " +
+                                   $"workspace='{root}' identity='{access.Identity.FileIdentity}' requestedMode={request.PermissionMode} " +
                                    $"sandbox={(sandbox is null ? "disabled" : "enabled")} store='{directory}' user='{Environment.UserName}'");
 
         var permissions = new PermissionEngine(root, config.CommandRules, workspaceReadOnly : () => access.IsReadOnly);
@@ -180,14 +186,23 @@ public sealed class DesktopSessionFactory
             backend = new DesktopWorkspaceBackend(backend, repair);
         }
 
-        var workspace = new Workspace(root);
+        var              workspace      = new Workspace(root, true);
+        ChatSessionHost? permissionHost = null;
+        var routedApprovals = new DesktopAutoApprovalProvider(approvals, () => permissions.Mode,
+                                                              token => CreateReviewerAsync(permissionHost!, token),
+                                                              () => ReviewInstructions(permissionHost!),
+                                                              text => events(new DesktopEvent("state", null, text)));
+        var restrictedShell = new ShellTool(workspace, config.DefaultToolTimeoutSeconds, secrets,
+                                            processBackend : backend,
+                                            executionPolicy : sandbox?.ExecutionPolicy ??
+                                                              ProcessExecutionPolicy.Host());
+        var hostShell = new ShellTool(workspace, config.DefaultToolTimeoutSeconds, secrets,
+                                      executionPolicy : ProcessExecutionPolicy.Host());
         ITool[] toolSet =
         [
             new ListFilesTool(workspace), new SearchTextTool(workspace), new ReadFileTool(workspace),
             new ApplyPatchTool(workspace),
-            new ShellTool(workspace, config.DefaultToolTimeoutSeconds, secrets,
-                          processBackend : backend,
-                          executionPolicy : sandbox?.ExecutionPolicy)
+            new PermissionShellTool(restrictedShell, hostShell, () => permissions.Mode)
         ];
         var tools = new ToolRegistry(toolSet.Select(tool => access.Guard(() => tool)));
         var options = new AgentOptions
@@ -205,7 +220,7 @@ public sealed class DesktopSessionFactory
             }
         };
         var identity     = new SessionModelIdentity(config.Model, config.Endpoint, config.ChatApi);
-        var instructions = new ProjectInstructionLoader(workspace);
+        var instructions = new ProjectInstructionLoader(new Workspace(root));
 
         IChatCompletionClient? model  = null;
         SessionStoreWriter?    writer = null;
@@ -244,7 +259,8 @@ public sealed class DesktopSessionFactory
                                                Model = savedModel.ModelId,
                                                Context = saved is null ? options.Context : saved.Context,
                                                ReasoningEffort = savedEffort
-                                           }, model, tools, WorkspacePrompts.Current, permissions, approvals, sink,
+                                           }, model, tools, WorkspacePrompts.Current, permissions, routedApprovals,
+                                           sink,
                                            sessionWriter : writer, needsInspection : restored.NeedsInspection,
                                            instructionLoader : instructions, knownSecrets : secrets);
                 if (request.Reselect || target is null)
@@ -300,7 +316,7 @@ public sealed class DesktopSessionFactory
                 context.Append(ChatMessage.System(WorkspacePrompts.Current));
                 writer = new SessionStoreWriter(directory, session.Id, secrets);
                 host = new ChatSessionHost(session, context, options, model, tools, WorkspacePrompts.Current,
-                                           permissions, approvals, sink, sessionWriter : writer,
+                                           permissions, routedApprovals, sink, sessionWriter : writer,
                                            instructionLoader : instructions, initialInstructions : initial,
                                            knownSecrets : secrets, credentialRoute : credentialRoute);
                 await host.ChangeModelAsync(new SessionModelBinding(identity, model!, options.Context,
@@ -310,6 +326,13 @@ public sealed class DesktopSessionFactory
                                             cancellationToken).ConfigureAwait(false);
             }
 
+            permissionHost = host;
+            var mode = host.Session.PermissionSelection?.Mode ??
+                       (request.SessionId is not null
+                           ? SessionPermissionMode.ReadOnly
+                           : request.PermissionMode ??
+                             user.Settings?.Permissions?.DefaultMode ?? SessionPermissionMode.ReadOnly);
+            await host.ChangePermissionModeAsync(mode, cancellationToken).ConfigureAwait(false);
             return new DesktopSession(host, approvals,
                                       (profile, modelId, effort, revision, token) =>
                                           ChangeAsync(host, profile, modelId, effort, revision, token),

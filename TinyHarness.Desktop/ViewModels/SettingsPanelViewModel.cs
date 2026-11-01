@@ -16,11 +16,18 @@ namespace TinyHarness.Desktop.ViewModels;
 /// </summary>
 public sealed class SettingsPanelViewModel : ObservableObject
 {
-    public SettingsPanelViewModel(GeneralSettingsSectionViewModel general, CatalogSettingsViewModel catalog)
+    private SettingsSectionViewModel? _activeSection;
+    private string                    _errorText = string.Empty;
+    private bool                      _hasError;
+    private bool                      _isLoading = true;
+
+    public SettingsPanelViewModel(GeneralSettingsSectionViewModel general, CatalogSettingsViewModel catalog,
+                                  PermissionSettingsViewModel?    permissions = null)
     {
-        General  = general;
-        Catalog  = catalog;
-        Sections = [General, Catalog];
+        General     = general;
+        Catalog     = catalog;
+        Permissions = permissions ?? new PermissionSettingsViewModel(general.ConfigPath);
+        Sections    = [General, Catalog, Permissions];
         foreach (var section in Sections) section.SelectCommand = new RelayCommand(() => SelectSection(section));
         ActiveSection = General;
         CloseCommand = new RelayCommand(() =>
@@ -38,7 +45,8 @@ public sealed class SettingsPanelViewModel : ObservableObject
 
     public GeneralSettingsSectionViewModel General { get; }
 
-    public CatalogSettingsViewModel Catalog { get; }
+    public CatalogSettingsViewModel    Catalog     { get; }
+    public PermissionSettingsViewModel Permissions { get; }
 
     public IReadOnlyList<SettingsSectionViewModel> Sections { get; }
 
@@ -47,17 +55,6 @@ public sealed class SettingsPanelViewModel : ObservableObject
     public RelayCommand DismissCommand { get; }
 
     public AsyncCommand RetryCommand { get; }
-
-    /// <summary>
-    ///     <para>关闭请求（关闭按钮、Esc 或遮罩点击触发）；宿主订阅后把面板置为不可见。</para>
-    ///     <para>The host hides the panel when the close button, Escape key or mask requests closing.</para>
-    /// </summary>
-    public event EventHandler? CloseRequested;
-
-    private SettingsSectionViewModel? _activeSection;
-    private bool                      _isLoading = true;
-    private bool                      _hasError;
-    private string                    _errorText = string.Empty;
 
     public SettingsSectionViewModel ActiveSection
     {
@@ -100,6 +97,12 @@ public sealed class SettingsPanelViewModel : ObservableObject
     }
 
     /// <summary>
+    ///     <para>关闭请求（关闭按钮、Esc 或遮罩点击触发）；宿主订阅后把面板置为不可见。</para>
+    ///     <para>The host hides the panel when the close button, Escape key or mask requests closing.</para>
+    /// </summary>
+    public event EventHandler? CloseRequested;
+
+    /// <summary>
     ///     <para>打开面板：重新读取目录并复位错误态；失败转入错误态等待重试，不抛出。</para>
     ///     <para>
     ///         Opens the panel by reloading the catalog and clearing errors; failures enter the error state for retry
@@ -113,6 +116,7 @@ public sealed class SettingsPanelViewModel : ObservableObject
         try
         {
             await Catalog.LoadAsync();
+            await Permissions.LoadAsync();
         }
         catch (Exception exception)
         {
@@ -152,14 +156,14 @@ public sealed class SettingsPanelViewModel : ObservableObject
 /// </summary>
 public abstract class SettingsSectionViewModel : ObservableObject
 {
+    private bool _isActive;
+
+    private bool _isSelected;
     protected SettingsSectionViewModel(string title) => Title = title;
 
     public string Title { get; }
 
     public RelayCommand? SelectCommand { get; internal set; }
-
-    private bool _isSelected;
-    private bool _isActive;
 
     public bool IsSelected
     {

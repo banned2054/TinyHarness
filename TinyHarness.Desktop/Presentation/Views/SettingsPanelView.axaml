@@ -139,6 +139,7 @@
 
                                     <!-- 模型分区：供应商行列表与添加/编辑卡。 -->
                                     <views:CatalogSettingsView DataContext="{Binding Catalog}" Margin="0,10,0,0" />
+                                    <views:PermissionSettingsView DataContext="{Binding Permissions}" />
                                 </StackPanel>
                             </Panel>
                         </ScrollViewer>

@@ -2,6 +2,7 @@ using System.Runtime.CompilerServices;
 using TinyHarness.Core.Models.Agent;
 using TinyHarness.Core.Models.ChatCompletions;
 using TinyHarness.Core.Models.Configuration;
+using TinyHarness.Core.Models.Permissions;
 using TinyHarness.Core.Services.ChatCompletions;
 using TinyHarness.Core.Services.ChatCompletions.Configuration;
 using TinyHarness.Core.Services.Persistence;
@@ -42,7 +43,7 @@ internal static class OfflineSmoke
                     ]
                 }
             ],
-            Settings = new UserConfigSettings { SessionStoreDirectory = store }
+            Settings = new UserConfigSettings { SessionStoreDirectory = store, Permissions = new PermissionSettings() }
         };
         await UserConfigStore.SaveAsync(configPath, user, CancellationToken.None);
         var bothStarted   = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -72,6 +73,8 @@ internal static class OfflineSmoke
                     first.Host.Session.ProjectId != second.Host.Session.ProjectId)
                     throw new InvalidOperationException("Desktop sessions did not share the reliably saved project.");
                 firstId = first.Id;
+                foreach (var mode in SessionPermissionModes.All)
+                    await first.ChangePermissionModeAsync(mode);
                 var firstRun  = first.SubmitAsync("offline first");
                 var secondRun = second.SubmitAsync("offline second");
                 var runs      = await Task.WhenAll(firstRun, secondRun).WaitAsync(TimeSpan.FromSeconds(20));
@@ -109,6 +112,8 @@ internal static class OfflineSmoke
                                                                                  SessionId : firstId),
                                                                              _ => ValueTask.CompletedTask,
                                                                              _ => ValueTask.CompletedTask, token));
+                if (restored.Host.Session.PermissionSelection?.Mode != SessionPermissionMode.ProjectWriteAutoReview)
+                    throw new InvalidOperationException("The saved session permission mode did not survive resume.");
                 if (restored.Host.Session.Turns.Count                    != 3                              ||
                     restored.Host.Session.ModelSelection?.Model.ModelId  != "flash"                        ||
                     restored.Host.Session.ModelSelection.ReasoningEffort != ModelReasoningEffort.High      ||

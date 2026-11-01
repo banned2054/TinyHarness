@@ -3,6 +3,8 @@ using TinyHarness.Core.Models.ChatCompletions;
 using TinyHarness.Core.Models.Session;
 using TinyHarness.Core.Services.ChatCompletions.Configuration;
 using TinyHarness.Desktop.Runtime;
+using TinyHarness.Core.Models.Configuration;
+using TinyHarness.Core.Models.Permissions;
 
 namespace TinyHarness.Desktop.ViewModels;
 
@@ -46,8 +48,13 @@ public sealed partial class SessionViewModel
             ? "未记录"
             : EffortText(SelectedModel is null ? _defaultModel?.DefaultEffort : _effort);
 
-    public string ChangeModelHint       => CanChangeModel ? "选择将可靠保存到本会话" : "当前运行结束后可切换";
-    public string PermissionPickerLabel => AllowChanges ? "按规则审批" : "只读";
+    public string                ChangeModelHint       => CanChangeModel ? "选择将可靠保存到本会话" : "当前运行结束后可切换";
+    public string                PermissionPickerLabel => PermissionMode.Label();
+    public SessionPermissionMode PermissionMode        { get; private set; } = SessionPermissionMode.ReadOnly;
+
+    public string PermissionChangeHint => CanChangeModel
+        ? "选择将保存到本会话；默认与菜单显示可在设置中调整。"
+        : "请先停止当前运行，再切换权限；对话会保留。";
 
     public string WorkspaceLabel => Path.GetFileName(Path.TrimEndingDirectorySeparator(WorkspaceRoot)) is
         { Length: > 0 } name
@@ -212,7 +219,8 @@ public sealed partial class SessionViewModel
                 targetRevision != TargetIntentRevision  ||
                 !CanChooseWorkspace                     ||
                 SelectedModel is not null) return;
-            var user   = await UserConfigStore.LoadAsync(resolution.UserConfigPath, CancellationToken.None);
+            var user = await UserConfigStore.LoadAsync(resolution.UserConfigPath, CancellationToken.None);
+            ApplyPermissionSettings(user.Settings?.Permissions ?? new PermissionSettings());
             var config = resolution.Config;
             var profiles =
                 user.Profiles.Where(profile => profile.Endpoint                  == config.Endpoint                  &&
@@ -331,7 +339,7 @@ public sealed partial class SessionViewModel
 
     private async Task OpenRuntimeAsync(bool reselect)
     {
-        var request = new DesktopSessionRequest(WorkspaceRoot, AllowChanges, Id, SelectedModel?.ProfileName,
+        var request = new DesktopSessionRequest(WorkspaceRoot, PermissionMode, Id, SelectedModel?.ProfileName,
                                                 SelectedModel?.ModelId, true, _effort,
                                                 SelectedModel is not null, reselect)
         {
@@ -344,6 +352,7 @@ public sealed partial class SessionViewModel
         _workspaceRoot = _runtime.Host.Session.WorkspaceRoot;
         StoreDirectory = Path.GetDirectoryName(_runtime.Host.PersistencePath);
         ProjectId      = _runtime.Host.Session.ProjectId;
+        if (_runtime.Host.Session.PermissionSelection is { } permission) SetPermissionMode(permission.Mode, false);
         OnPropertyChanged(nameof(ProjectId));
         OnPropertyChanged(nameof(WorkspaceRoot));
         OnPropertyChanged(nameof(WorkspaceLabel));
@@ -363,10 +372,12 @@ public sealed partial class SessionViewModel
     private void RebuildPermissionMenu()
     {
         PermissionOptions.Clear();
-        PermissionOptions.Add(PermissionOption("只读", false));
-        PermissionOptions.Add(PermissionOption("允许修改 · 按规则审批", true));
-        PermissionOptions.Add(new ComposerMenuOption("完全访问（未接入）", () => { }, () => false));
-        PermissionOptions.Add(new ComposerMenuOption("自动（未接入）", () => { }, () => false));
+        foreach (var mode in _permissionSettings.ComposerModes)
+            PermissionOptions.Add(new ComposerMenuOption(mode.Label(), () => _ = ApplyPermissionSelectionAsync(mode),
+                                                         () => CanChangeModel)
+            {
+                IsSelected = PermissionMode == mode, ToolTip = mode.Description()
+            });
     }
 
     /// <summary>
@@ -394,15 +405,93 @@ public sealed partial class SessionViewModel
         OnPropertyChanged(nameof(HasProjectChoices));
     }
 
-    private ComposerMenuOption PermissionOption(string label, bool allowChanges) =>
-        new(label, () =>
+    /// <summary>
+    ///     <para>刷新菜单和新会话默认值，保留显式选择与已有会话模式。</para>
+    ///     <para>Refreshes the menu and draft default while preserving explicit choices and established session modes.</para>
+    /// </summary>
+    public void ApplyPermissionSettings(PermissionSettings settings)
+    {
+        settings.Validate();
+        _permissionSettings = settings;
+        if (Id is null && !_permissionExplicit && _runtime is null) SetPermissionMode(settings.DefaultMode, false);
+        RebuildPermissionMenu();
+    }
+
+    /// <summary>
+    ///     <para>历史列表只投影已保存模式，不打开宿主或授予执行权限。</para>
+    ///     <para>Projects a saved mode in history without opening a host or granting execution.</para>
+    /// </summary>
+    public void ApplyStoredPermissionMode(SessionPermissionMode? mode)
+    {
+        if (_runtime is null && Id is not null && !_changing)
+            SetPermissionMode(mode ?? SessionPermissionMode.ReadOnly, false);
+    }
+
+    private void SetPermissionMode(SessionPermissionMode mode, bool userSelected)
+    {
+        PermissionMode = mode;
+        if (userSelected)
         {
-            if (!CanConfigure) return;
-            // 显式重选当前权限也属于用户预选，不能被空白槽回收忽略。
-            HasUserPreselection  = true;
-            AllowChanges         = allowChanges;
-            IsPermissionMenuOpen = false;
-        }, () => CanConfigure) { IsSelected = AllowChanges == allowChanges };
+            _permissionExplicit = true;
+            HasUserPreselection = true;
+        }
+
+        OnPropertyChanged(nameof(PermissionPickerLabel));
+        OnPropertyChanged(nameof(PermissionMode));
+    }
+
+    private async Task ApplyPermissionSelectionAsync(SessionPermissionMode mode)
+    {
+        try
+        {
+            await SelectPermissionModeAsync(mode);
+        }
+        catch (Exception exception)
+        {
+            ShowError(exception);
+        }
+    }
+
+    /// <summary>
+    ///     <para>草稿只更新选择；正式会话在空闲时可靠提交，失败保留旧标签和对话。</para>
+    ///     <para>
+    ///         Updates drafts locally or durably commits an idle established session, retaining its old label and
+    ///         conversation on failure.
+    ///     </para>
+    /// </summary>
+    public async Task SelectPermissionModeAsync(SessionPermissionMode mode)
+    {
+        if (!Enum.IsDefined(mode)) throw new ArgumentOutOfRangeException(nameof(mode));
+        if (!CanChangeModel) throw new InvalidOperationException("请先停止当前运行，再切换权限。");
+        if (Id is null)
+        {
+            SetPermissionMode(mode, true);
+            RebuildPermissionMenu();
+            CloseComposerMenus();
+            return;
+        }
+
+        _changing = true;
+        OnPropertyChanged(nameof(CanChangeModel));
+        OnPropertyChanged(nameof(PermissionChangeHint));
+        try
+        {
+            await EnsureHistoryLoadedAsync();
+            while (HasMoreHistory) await LoadHistoryAsync();
+            if (_runtime is null) await OpenRuntimeAsync(false);
+            var selection = await _runtime!.ChangePermissionModeAsync(mode);
+            SetPermissionMode(selection.Mode, true);
+            Status = "权限模式已保存并生效";
+            CloseComposerMenus();
+        }
+        finally
+        {
+            _changing = false;
+            OnPropertyChanged(nameof(CanChangeModel));
+            OnPropertyChanged(nameof(PermissionChangeHint));
+            RebuildPermissionMenu();
+        }
+    }
 
     private void NotifyModelSelection()
     {

@@ -2,6 +2,7 @@ using NUnit.Framework;
 using System.Runtime.CompilerServices;
 using TinyHarness.Core.Models.ChatCompletions;
 using TinyHarness.Core.Models.Configuration;
+using TinyHarness.Core.Models.Permissions;
 using TinyHarness.Core.Services.ChatCompletions;
 using TinyHarness.Core.Services.ChatCompletions.Configuration;
 using TinyHarness.Core.Services.Persistence;
@@ -577,7 +578,7 @@ public sealed class DesktopProjectionTests
         staleModel.SelectCommand.Execute(null);
         stalePermission.SelectCommand.Execute(null);
         Assert.That(page.SelectedModel, Is.Null);
-        Assert.That(page.AllowChanges, Is.False);
+        Assert.That(page.PermissionMode, Is.EqualTo(SessionPermissionMode.ReadOnly));
         Assert.Throws<InvalidOperationException>(() => page.WorkspaceRoot = fixture.Second);
         finish.SetResult();
         await page.Completion.WaitAsync(TimeSpan.FromSeconds(10));
@@ -586,7 +587,7 @@ public sealed class DesktopProjectionTests
     }
 
     [Test]
-    public async Task ComposerMenusPreselectModelsAndPermissionsButLeaveUnsupportedEntriesDisabled()
+    public async Task ComposerMenusPreselectModelsAndExposeSevenPermissionModes()
     {
         await using var manager = new DesktopSessionManager();
         var             choice  = new ModelChoice("provider", "model");
@@ -601,9 +602,9 @@ public sealed class DesktopProjectionTests
         Assert.That(page.ModelGroups[0].Options[0].Label, Is.EqualTo("model"));
         Assert.That(page.IsModelMenuOpen, Is.False);
         page.IsPermissionMenuOpen = true;
-        page.PermissionOptions[1].SelectCommand.Execute(null);
-        Assert.That(page.AllowChanges, Is.True);
-        Assert.That(page.PermissionPickerLabel, Is.EqualTo("按规则审批"));
+        page.PermissionOptions.Single(option => option.Label == "项目内读写").SelectCommand.Execute(null);
+        Assert.That(page.PermissionMode, Is.EqualTo(SessionPermissionMode.ProjectWrite));
+        Assert.That(page.PermissionPickerLabel, Is.EqualTo("项目内读写"));
         foreach (var option in page.EffortOptions)
         {
             Assert.That(option.SelectCommand.CanExecute(null), Is.False);
@@ -612,7 +613,8 @@ public sealed class DesktopProjectionTests
 
         Assert.That(page.CurrentEffortText, Is.EqualTo("默认"));
         page.IsPermissionMenuOpen = true;
-        Assert.That(page.PermissionOptions.Skip(2).All(option => !option.SelectCommand.CanExecute(null)), Is.True);
+        Assert.That(page.PermissionOptions, Has.Count.EqualTo(7));
+        Assert.That(page.PermissionOptions.All(option => option.SelectCommand.CanExecute(null)), Is.True);
     }
 
     [Test]
