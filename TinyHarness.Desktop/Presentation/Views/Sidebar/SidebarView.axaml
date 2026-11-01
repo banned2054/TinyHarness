@@ -36,25 +36,36 @@
                 </StackPanel>
             </Button>
 
-            <!-- 头部行：会话标签 + 打开目录/项目图标按钮（文件夹加号，语义同 DSH
-                 WorkspaceBrowser 的添加工作区）。文件夹对话框是视图行为，见 code-behind，
-                 登记编排走 MainWindowViewModel.OpenProjectAsync。 -->
+            <!-- 头部行：列表设置与添加项目入口。 -->
             <Grid Grid.Row="2" Margin="0,0,0,4" ColumnDefinitions="*,Auto">
                 <TextBlock Text="会话" Classes="caption" VerticalAlignment="Center" />
-                <Button Grid.Column="1" Classes="sidebar-icon"
-                        AutomationProperties.Name="打开目录 / 项目"
-                        ToolTip.Tip="打开目录 / 项目"
-                        Click="OnOpenProjectClick">
-                    <Panel>
+                <Grid Grid.Column="1" ColumnDefinitions="28,28">
+                    <Button x:Name="SidebarSettingsButton" Grid.Column="0" Classes="sidebar-icon"
+                            IsEnabled="{Binding SidebarPreferencesReady}"
+                            AutomationProperties.Name="列表设置"
+                            ToolTip.Tip="列表设置"
+                            Command="{Binding ToggleSidebarSettingsMenuCommand}">
                         <Path Width="16" Height="16"
-                              Data="{StaticResource Icon.ProjectAddFolderFill}"
-                              Fill="{DynamicResource TextMutedBrush}" />
-                        <Path Width="16" Height="16"
-                              Data="{StaticResource Icon.ProjectAddPlusStroke}"
-                              Stroke="{DynamicResource TextMutedBrush}" StrokeThickness="1"
+                              Data="{StaticResource Icon.SlidersTwoOutlineRegular}"
+                              Stroke="{DynamicResource TextMutedBrush}" StrokeThickness="1.2"
                               StrokeLineCap="Round" />
-                    </Panel>
-                </Button>
+                    </Button>
+                    <Button Grid.Column="1" Classes="sidebar-icon"
+                            IsEnabled="{Binding SidebarPreferencesReady}"
+                            AutomationProperties.Name="添加项目"
+                            ToolTip.Tip="添加项目"
+                            Click="OnOpenProjectClick">
+                        <Panel>
+                            <Path Width="16" Height="16"
+                                  Data="{StaticResource Icon.ProjectAddFolderFill}"
+                                  Fill="{DynamicResource TextMutedBrush}" />
+                            <Path Width="16" Height="16"
+                                  Data="{StaticResource Icon.ProjectAddPlusStroke}"
+                                  Stroke="{DynamicResource TextMutedBrush}" StrokeThickness="1"
+                                  StrokeLineCap="Round" />
+                        </Panel>
+                    </Button>
+                </Grid>
             </Grid>
 
             <!-- ListBox 的滚动视口驱动虚拟化，只创建可见行；行按钮继续负责选择与键盘操作。 -->
@@ -70,6 +81,10 @@
                     </ItemsPanelTemplate>
                 </ListBox.ItemsPanel>
                 <ListBox.DataTemplates>
+                    <DataTemplate x:DataType="vm:SidebarCategoryViewModel">
+                        <TextBlock Classes="sidebar-category-title"
+                                   Text="{Binding Title}" />
+                    </DataTemplate>
                     <DataTemplate x:DataType="vm:ProjectSessionsMoreViewModel">
                         <Button Classes="session-row"
                                 Content="展开显示"
@@ -83,7 +98,10 @@
                              右侧悬浮按钮组（重命名 + 项目内新对话）平时隐藏，悬停整行时淡入
                              （显隐样式见 Sidebar.axaml 的 workspace-actions）。草稿、整理未完成
                              与缺失分组不可编辑（CanEdit=false），不显示悬浮操作。 -->
-                        <Border Classes="group-row" Classes.current="{Binding IsCurrent}">
+                        <Border Classes="group-row" Classes.current="{Binding IsCurrent}"
+                                DragDrop.AllowDrop="True"
+                                DragDrop.DragOver="OnProjectHeaderDragOver"
+                                DragDrop.Drop="OnProjectHeaderDrop">
                             <Grid ColumnDefinitions="*,Auto" HorizontalAlignment="Stretch">
                                 <Button Grid.Column="0" Classes="group-header" Margin="0"
                                         HorizontalAlignment="Stretch"
@@ -135,6 +153,16 @@
                                 <StackPanel Grid.Column="1" Classes="workspace-actions"
                                             Orientation="Horizontal" Spacing="2"
                                             IsVisible="{Binding CanEdit}">
+                                    <Button Classes="project-pin-action"
+                                            Classes.pinned="{Binding IsPinned}"
+                                            AutomationProperties.Name="{Binding PinActionName}"
+                                            ToolTip.Tip="{Binding PinActionName}"
+                                            Command="{Binding $parent[sidebar:SidebarView].DataContext.ToggleProjectPinCommand}"
+                                            CommandParameter="{Binding}">
+                                        <Path Width="16" Height="16"
+                                              Data="{StaticResource Icon.PinOutlineRegular}"
+                                              Stroke="{DynamicResource TextMutedBrush}" StrokeThickness="1.2" />
+                                    </Button>
                                     <Button Classes="workspace-menu"
                                             AutomationProperties.Name="重命名项目"
                                             ToolTip.Tip="重命名项目"
@@ -159,39 +187,144 @@
                                               Data="{StaticResource Icon.NewChatOutlineMedium}"
                                               Stroke="{DynamicResource TextMutedBrush}" StrokeThickness="1.3" />
                                     </Button>
+                                    <Button Classes="project-drag-handle"
+                                            IsVisible="{Binding CanReorder}"
+                                            AutomationProperties.Name="拖动以调整项目顺序"
+                                            ToolTip.Tip="拖动以调整项目顺序"
+                                            PointerPressed="OnProjectDragHandlePointerPressed">
+                                        <Path Width="16" Height="16"
+                                              Data="{StaticResource Icon.DotsHorizontalFill}"
+                                              Fill="{DynamicResource TextMutedBrush}" />
+                                    </Button>
                                 </StackPanel>
                             </Grid>
                         </Border>
                     </DataTemplate>
                     <DataTemplate x:DataType="vm:SessionViewModel">
-                        <!-- 会话行：整行按钮驱动选择；右侧常驻运行指示与状态文案
-                             （不使用 session-trailing：本行没有悬浮操作条可与之互换）。 -->
-                        <Button Classes="session-row"
-                                Classes.current="{Binding IsSelected}"
-                                HorizontalAlignment="Stretch"
-                                AutomationProperties.Name="{Binding Title}"
-                                Command="{Binding $parent[sidebar:SidebarView].DataContext.SelectSessionCommand}"
-                                CommandParameter="{Binding}">
-                            <Grid ColumnDefinitions="*,Auto" HorizontalAlignment="Stretch">
-                                <TextBlock Grid.Column="0"
-                                           Text="{Binding Title}"
-                                           FontSize="14"
-                                           VerticalAlignment="Center"
-                                           TextTrimming="CharacterEllipsis"
-                                           ToolTip.Tip="{Binding WorkspaceRoot}" />
-                                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6"
-                                            HorizontalAlignment="Right" VerticalAlignment="Center">
-                                    <Ellipse Width="7" Height="7" VerticalAlignment="Center"
-                                             Fill="{DynamicResource StatusRunningBrush}"
-                                             IsVisible="{Binding IsRunning}" />
-                                    <TextBlock Text="{Binding Status}" Classes="caption"
-                                               VerticalAlignment="Center" />
+                        <!-- 选择按钮与置顶按钮为同级控件，避免在 Button 内嵌套另一个 Button。 -->
+                        <Grid Classes="session-row-container" ColumnDefinitions="*,Auto">
+                            <Button Grid.Column="0" Classes="session-row"
+                                    Classes.current="{Binding IsSelected}"
+                                    HorizontalAlignment="Stretch"
+                                    AutomationProperties.Name="{Binding Title}"
+                                    Command="{Binding $parent[sidebar:SidebarView].DataContext.SelectSessionCommand}"
+                                    CommandParameter="{Binding}">
+                                <Grid ColumnDefinitions="*,Auto" HorizontalAlignment="Stretch">
+                                    <TextBlock Grid.Column="0"
+                                               Text="{Binding Title}"
+                                               FontSize="14"
+                                               VerticalAlignment="Center"
+                                               TextTrimming="CharacterEllipsis"
+                                               ToolTip.Tip="{Binding WorkspaceRoot}" />
+                                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6"
+                                                HorizontalAlignment="Right" VerticalAlignment="Center">
+                                        <Ellipse Width="7" Height="7" VerticalAlignment="Center"
+                                                 Fill="{DynamicResource StatusRunningBrush}"
+                                                 IsVisible="{Binding IsRunning}" />
+                                        <TextBlock Text="{Binding Status}" Classes="caption"
+                                                   VerticalAlignment="Center" />
+                                    </StackPanel>
+                                </Grid>
+                            </Button>
+                            <StackPanel Grid.Column="1" IsVisible="{Binding CanPin}">
+                                <StackPanel IsVisible="{Binding !$parent[sidebar:SidebarView].DataContext.IsProjectMode}">
+                                    <Button Classes="session-pin-action"
+                                            Classes.pinned="{Binding IsPinned}"
+                                            AutomationProperties.Name="{Binding PinActionName}"
+                                            ToolTip.Tip="{Binding PinActionName}"
+                                            Command="{Binding $parent[sidebar:SidebarView].DataContext.ToggleSessionPinCommand}"
+                                            CommandParameter="{Binding}">
+                                        <Path Width="16" Height="16"
+                                              Data="{StaticResource Icon.PinOutlineRegular}"
+                                              Stroke="{DynamicResource TextMutedBrush}" StrokeThickness="1.2" />
+                                    </Button>
                                 </StackPanel>
-                            </Grid>
-                        </Button>
+                            </StackPanel>
+                        </Grid>
                     </DataTemplate>
                 </ListBox.DataTemplates>
             </ListBox>
+
+            <Popup x:Name="SidebarSettingsPopup"
+                   PlacementTarget="{Binding #SidebarSettingsButton}"
+                   Placement="BottomEdgeAlignedRight" VerticalOffset="4"
+                   IsOpen="{Binding IsSidebarSettingsMenuOpen, Mode=TwoWay}"
+                   IsLightDismissEnabled="True">
+                <Border Classes="popup-surface" Width="224" Padding="4" CornerRadius="16">
+                    <StackPanel>
+                        <TextBlock Text="分组方式" Classes="popup-section"
+                                   FontSize="11" Margin="10,6,10,2" />
+                        <Button Classes="popup-item" MinHeight="30" Padding="8,0" Margin="0"
+                                AutomationProperties.Name="按项目"
+                                Command="{Binding SelectProjectSidebarModeCommand}">
+                            <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="8">
+                                <Path Width="14" Height="14" VerticalAlignment="Center"
+                                      Data="{StaticResource Icon.FolderCloseRegular}"
+                                      Stroke="{DynamicResource PopupMutedForegroundBrush}" StrokeThickness="1" />
+                                <TextBlock Grid.Column="1" Text="按项目" VerticalAlignment="Center" />
+                                <Path Grid.Column="2" Classes="popup-check" Width="14" Height="14"
+                                      Data="{StaticResource Icon.Check}"
+                                      Stroke="{DynamicResource PopupForegroundBrush}" StrokeThickness="1"
+                                      IsVisible="{Binding IsProjectMode}" />
+                            </Grid>
+                        </Button>
+                        <Button Classes="popup-item" MinHeight="30" Padding="8,0" Margin="0"
+                                AutomationProperties.Name="单列表"
+                                Command="{Binding SelectSessionSidebarModeCommand}">
+                            <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="8">
+                                <Path Width="14" Height="14" VerticalAlignment="Center"
+                                      Data="{StaticResource Icon.FlatListOutlineRegular}"
+                                      Stroke="{DynamicResource PopupMutedForegroundBrush}" StrokeThickness="1"
+                                      StrokeLineCap="Round" />
+                                <TextBlock Grid.Column="1" Text="单列表" VerticalAlignment="Center" />
+                                <Path Grid.Column="2" Classes="popup-check" Width="14" Height="14"
+                                      Data="{StaticResource Icon.Check}"
+                                      Stroke="{DynamicResource PopupForegroundBrush}" StrokeThickness="1"
+                                      IsVisible="{Binding !IsProjectMode}" />
+                            </Grid>
+                        </Button>
+
+                        <Border Height="1" Margin="8,5"
+                                Background="{DynamicResource SubtleBorderBrush}"
+                                IsVisible="{Binding IsProjectMode}" />
+                        <TextBlock Text="排序方式" Classes="popup-section"
+                                   FontSize="11" Margin="10,4,10,2"
+                                   IsVisible="{Binding IsProjectMode}" />
+                        <Button Classes="popup-item" MinHeight="30" Padding="8,0" Margin="0"
+                                IsVisible="{Binding IsProjectMode}"
+                                AutomationProperties.Name="手动排序"
+                                Command="{Binding SelectManualProjectOrderCommand}">
+                            <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="8">
+                                <Path Width="14" Height="14" VerticalAlignment="Center"
+                                      Data="{StaticResource Icon.ChevronsUpDownOutlineRegular}"
+                                      Stroke="{DynamicResource PopupMutedForegroundBrush}" StrokeThickness="1"
+                                      StrokeLineCap="Round" />
+                                <TextBlock Grid.Column="1" Text="手动排序" VerticalAlignment="Center" />
+                                <Path Grid.Column="2" Classes="popup-check" Width="14" Height="14"
+                                      Data="{StaticResource Icon.Check}"
+                                      Stroke="{DynamicResource PopupForegroundBrush}" StrokeThickness="1"
+                                      IsVisible="{Binding IsManualProjectOrder}" />
+                            </Grid>
+                        </Button>
+                        <Button Classes="popup-item" MinHeight="30" Padding="8,0" Margin="0"
+                                IsVisible="{Binding IsProjectMode}"
+                                AutomationProperties.Name="最近更新"
+                                Command="{Binding SelectRecentProjectOrderCommand}">
+                            <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="8">
+                                <Path Width="14" Height="14" VerticalAlignment="Center"
+                                      Data="{StaticResource Icon.ClockOutlineRegular}"
+                                      Stroke="{DynamicResource PopupMutedForegroundBrush}" StrokeThickness="1"
+                                      StrokeLineCap="Round" />
+                                <TextBlock Grid.Column="1" Text="最近更新" VerticalAlignment="Center" />
+                                <Path Grid.Column="2" Classes="popup-check" Width="14" Height="14"
+                                      Data="{StaticResource Icon.Check}"
+                                      Stroke="{DynamicResource PopupForegroundBrush}" StrokeThickness="1"
+                                      IsVisible="{Binding !IsManualProjectOrder}" />
+                            </Grid>
+                        </Button>
+                    </StackPanel>
+                </Border>
+            </Popup>
 
             <!-- 底部卡片：设置与历史刷新入口；启动加载状态与历史整理摘要为轻量提示，
                  成功静默，异常才出现，不覆盖其他操作的错误提示。 -->

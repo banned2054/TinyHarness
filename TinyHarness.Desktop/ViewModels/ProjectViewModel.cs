@@ -12,10 +12,12 @@ namespace TinyHarness.Desktop.ViewModels;
 /// </summary>
 public sealed class ProjectViewModel : ObservableObject
 {
-    internal const int SessionPageSize = 5;
+    internal const int  SessionPageSize = 5;
+    private        bool _canReorder;
 
     private string _editedName;
     private bool   _expanded = true;
+    private bool   _isPinned;
 
     public ProjectViewModel(string                       key, Project? project, string name, string root,
                             Func<ProjectViewModel, Task> create,
@@ -58,8 +60,48 @@ public sealed class ProjectViewModel : ObservableObject
         set => SetProperty(ref _expanded, value);
     }
 
+    /// <summary>
+    ///     <para>项目是否处于置顶分类；展示组不能置顶。</para>
+    ///     <para>Whether the project belongs to the pinned category; display-only groups cannot be pinned.</para>
+    /// </summary>
+    public bool IsPinned
+    {
+        get => _isPinned;
+        private set
+        {
+            if (!SetProperty(ref _isPinned, value)) return;
+            OnPropertyChanged(nameof(PinActionName));
+        }
+    }
+
+    /// <summary>
+    ///     <para>当前是否允许通过鼠标拖动调整项目顺序。</para>
+    ///     <para>Whether mouse dragging can reorder this project in the current sidebar mode.</para>
+    /// </summary>
+    public bool CanReorder
+    {
+        get => _canReorder;
+        private set => SetProperty(ref _canReorder, value);
+    }
+
+    /// <summary>
+    ///     <para>项目置顶按钮当前执行的操作名称。</para>
+    ///     <para>The current action name for the project pin button.</para>
+    /// </summary>
+    public string PinActionName => IsPinned ? "取消置顶项目" : "置顶项目";
+
     /// <summary>该组是否包含当前选中的会话；驱动组头行的选中高亮。</summary>
     public bool IsCurrent => Sessions.Any(session => session.IsSelected);
+
+    /// <summary>
+    ///     <para>刷新侧栏置顶和拖动状态，不改变项目归属或展开状态。</para>
+    ///     <para>Refreshes pinned and drag state without changing project ownership or expansion.</para>
+    /// </summary>
+    internal void SetSidebarState(bool isPinned, bool canReorder)
+    {
+        IsPinned   = isPinned   && CanEdit;
+        CanReorder = canReorder && CanEdit;
+    }
 
     /// <summary>
     ///     <para>选中变化或成员列表重建后统一刷新 IsCurrent 通知；高亮本身按成员实时求值。</para>

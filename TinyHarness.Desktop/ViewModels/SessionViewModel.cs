@@ -37,6 +37,7 @@ public sealed partial class SessionViewModel : ObservableObject
     private          SessionHistoryCursor?                         _historyCursor;
     private          Task?                                         _historyLoad;
     private          bool                                          _historyLoaded;
+    private          bool                                          _isPinned;
     private          ModelChoice?                                  _model;
     private          string                                        _notice = string.Empty;
     private          bool                                          _opening;
@@ -107,6 +108,32 @@ public sealed partial class SessionViewModel : ObservableObject
     public string?        StoreDirectory  { get; private set; }
     public string?        ProjectId       { get; private set; }
     public DateTimeOffset LastActivityUtc { get; private set; }
+
+    /// <summary>
+    ///     <para>该正式会话是否在纯会话模式中置顶。</para>
+    ///     <para>Whether this established session is pinned in flat session mode.</para>
+    /// </summary>
+    public bool IsPinned
+    {
+        get => _isPinned;
+        private set
+        {
+            if (!SetProperty(ref _isPinned, value)) return;
+            OnPropertyChanged(nameof(PinActionName));
+        }
+    }
+
+    /// <summary>
+    ///     <para>该会话是否已建立且可由侧栏置顶。</para>
+    ///     <para>Whether this session is established and can be pinned from the sidebar.</para>
+    /// </summary>
+    public bool CanPin => Id is not null && StoreDirectory is not null;
+
+    /// <summary>
+    ///     <para>会话置顶按钮当前执行的操作名称。</para>
+    ///     <para>The current action name for the session pin button.</para>
+    /// </summary>
+    public string PinActionName => IsPinned ? "取消置顶会话" : "置顶会话";
 
     /// <summary>
     ///     <para>用户是否在页面未发送前做过显式预选（项目／目录、模型或权限）；自动解析与默认刷新不算。</para>
@@ -237,6 +264,15 @@ public sealed partial class SessionViewModel : ObservableObject
     public string ApprovalText => _approval is { } approval
         ? $"{approval.ReviewNote}\n{approval.ToolName}\n{approval.Summary}\n{approval.Arguments}\n{string.Join('\n', approval.TargetPaths)}\n{approval.ExecutionPolicy}"
         : string.Empty;
+
+    /// <summary>
+    ///     <para>更新会话侧栏置顶状态；未建立会话不参与置顶。</para>
+    ///     <para>Updates sidebar pin state; an unestablished draft cannot be pinned.</para>
+    /// </summary>
+    internal void SetPinned(bool isPinned)
+    {
+        IsPinned = isPinned && CanPin;
+    }
 
     /// <summary>
     ///     <para>首次取得真实 SessionId 与宿主（首发进入发送流程）时触发一次；主窗口据此把页面登记为正式会话行。</para>

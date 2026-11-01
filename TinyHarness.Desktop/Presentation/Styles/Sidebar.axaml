@@ -1,6 +1,6 @@
 <Styles xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
-    <!-- 侧栏样式：会话列表行、分组头行、新建会话按钮与分隔条。 -->
+    <!-- 侧栏样式：分类标题、会话列表行、分组头行、新建会话按钮与分隔条。 -->
 
     <Style Selector="ListBox.session-list">
         <Setter Property="Background" Value="Transparent" />
@@ -93,6 +93,12 @@
     <Style Selector="Border.group-row.category:pointerover">
         <Setter Property="Background" Value="Transparent" />
     </Style>
+    <Style Selector="TextBlock.sidebar-category-title">
+        <Setter Property="Margin" Value="8,12,8,3" />
+        <Setter Property="FontSize" Value="11" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="Foreground" Value="{DynamicResource TextMutedBrush}" />
+    </Style>
     <!-- 工作区行悬浮按钮组：常态隐藏且不参与命中（避免透明按钮拦截行内
          点击），悬停整行圆角矩形时淡入。Opacity 显隐保持布局稳定——按钮
          常驻占位，标题列宽与行高不因显隐跳动。 -->
@@ -167,7 +173,7 @@
     </Style>
     <!-- 会话行悬浮操作按钮（三点菜单 / 归档 / 置顶）：24×24 小圆角块（行高 32 内
          上下留 4），自身悬停叠一层行悬停色形成按钮层次（同 workspace-menu）。 -->
-    <Style Selector="Button.session-action">
+    <Style Selector="Button.session-action, Button.session-pin-action">
         <Setter Property="Width" Value="24" />
         <Setter Property="Height" Value="24" />
         <Setter Property="MinWidth" Value="0" />
@@ -180,7 +186,31 @@
         <Setter Property="HorizontalContentAlignment" Value="Center" />
         <Setter Property="VerticalContentAlignment" Value="Center" />
     </Style>
+    <Style Selector="Button.session-pin-action">
+        <Setter Property="Opacity" Value="0" />
+        <Setter Property="IsHitTestVisible" Value="False" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <DoubleTransition Property="Opacity" Duration="0:0:0.12" />
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="Grid.session-row-container:pointerover Button.session-pin-action">
+        <Setter Property="Opacity" Value="1" />
+        <Setter Property="IsHitTestVisible" Value="True" />
+    </Style>
+    <Style Selector="Button.session-pin-action.pinned">
+        <Setter Property="Opacity" Value="1" />
+        <Setter Property="IsHitTestVisible" Value="True" />
+    </Style>
+    <Style Selector="Button.session-pin-action:focus-visible">
+        <Setter Property="Opacity" Value="1" />
+        <Setter Property="IsHitTestVisible" Value="True" />
+    </Style>
     <Style Selector="Button.session-action:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource SessionHoverBrush}" />
+    </Style>
+    <Style Selector="Button.session-pin-action:pointerover /template/ ContentPresenter#PART_ContentPresenter">
         <Setter Property="Background" Value="{DynamicResource SessionHoverBrush}" />
     </Style>
     <!-- 头部图标按钮（搜索 / 分组方式 / 添加工作区 / 关闭搜索）：对齐 DSH
@@ -253,6 +283,24 @@
     <Style
         Selector="Button.workspace-menu:pointerover /template/ ContentPresenter#PART_ContentPresenter,
                      Button.workspace-new-session:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource SessionHoverBrush}" />
+    </Style>
+    <Style Selector="Button.project-pin-action, Button.project-drag-handle">
+        <Setter Property="Width" Value="24" />
+        <Setter Property="Height" Value="24" />
+        <Setter Property="MinWidth" Value="0" />
+        <Setter Property="MinHeight" Value="0" />
+        <Setter Property="Margin" Value="0" />
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="CornerRadius" Value="6" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="HorizontalContentAlignment" Value="Center" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+    </Style>
+    <Style
+        Selector="Button.project-pin-action:pointerover /template/ ContentPresenter#PART_ContentPresenter,
+                     Button.project-drag-handle:pointerover /template/ ContentPresenter#PART_ContentPresenter">
         <Setter Property="Background" Value="{DynamicResource SessionHoverBrush}" />
     </Style>
     <!-- 状态样式声明顺序即优先级：悬停与焦点在前、选中（.current）最后，

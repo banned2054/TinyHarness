@@ -363,6 +363,7 @@ public sealed partial class SessionViewModel
         {
             _established = true;
             OnPropertyChanged(nameof(Id));
+            OnPropertyChanged(nameof(CanPin));
             OnPropertyChanged(nameof(CanConfigure));
             OnPropertyChanged(nameof(CanChooseWorkspace));
             Established?.Invoke(this);

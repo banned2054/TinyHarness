@@ -15,6 +15,12 @@
     <StreamGeometry x:Key="Icon.SearchOutlineRegular">M6.58727,11.8586 C9.55061,11.8586 11.9529,9.45637 11.9529,6.49304 C11.9529,3.5297 9.55061,1.12744 6.58727,1.12744 C3.62394,1.12744 1.22168,3.5297 1.22168,6.49304 C1.22168,9.45637 3.62394,11.8586 6.58727,11.8586 Z M10.2991,10.3933 L14.7783,14.8725</StreamGeometry>
     <!-- DSH IconSlidersTwoOutlineRegular：双滑块，各带一枚圆钮（16 viewBox）。 -->
     <StreamGeometry x:Key="Icon.SlidersTwoOutlineRegular">M2.3,5 L8.15,5 M12.05,5 L13.7,5 M8.5,5 A1.45,1.45 0 1 0 11.4,5 A1.45,1.45 0 1 0 8.5,5 Z M2.3,11 L3.95,11 M7.85,11 L13.7,11 M4.3,11 A1.45,1.45 0 1 0 7.2,11 A1.45,1.45 0 1 0 4.3,11 Z</StreamGeometry>
+    <!-- DSH IconFlatListOutlineRegular：单列表（三行圆点与横线，16 viewBox）。 -->
+    <StreamGeometry x:Key="Icon.FlatListOutlineRegular">M6,3.5 H13.5 M6,8 H13.5 M6,12.5 H13.5 M2.6,3.5 H2.61 M2.6,8 H2.61 M2.6,12.5 H2.61</StreamGeometry>
+    <!-- DSH IconChevronsUpDownOutlineRegular：手动排序（16 viewBox）。 -->
+    <StreamGeometry x:Key="Icon.ChevronsUpDownOutlineRegular">M5.1,6 L8,3.1 L10.9,6 M5.1,10 L8,12.9 L10.9,10</StreamGeometry>
+    <!-- DSH IconClockOutlineRegular：最近更新（16 viewBox）。 -->
+    <StreamGeometry x:Key="Icon.ClockOutlineRegular">M8,14 C11.3137,14 14,11.3137 14,8 C14,4.68629 11.3137,2 8,2 C4.68629,2 2,4.68629 2,8 C2,11.3137 4.68629,14 8,14 Z M8,4.31 L8,8.46 L11,10.08</StreamGeometry>
     <!-- 菜单选中勾（16 viewBox）：popup-check 类配套。 -->
     <StreamGeometry x:Key="Icon.Check">M2.25,8.5 L5.49732,11.7473 C5.90519,12.1552 6.57263,12.1344 6.95426,11.7018 L13.75,4</StreamGeometry>
     <!-- DSH IconProjectAddOutlineRegular 两段：文件夹描边形（fill）+ 右上加号（stroke）。 -->
