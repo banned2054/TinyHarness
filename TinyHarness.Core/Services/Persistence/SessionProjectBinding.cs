@@ -41,15 +41,17 @@ public static class SessionProjectBinding
     {
         if (writer.SessionId != session.Id)
             throw new InvalidOperationException("The writer does not belong to the restored session.");
-        if (session.ProjectId is not null) return;
+        if (session.ProjectAssignmentState != SessionProjectAssignmentState.PendingInitialization) return;
         var project = await GetProjectAsync(storeDirectory, session.WorkspaceRoot, cancellationToken)
-                            .ConfigureAwait(false);
+           .ConfigureAwait(false);
         await writer.AppendRecordsAsync(
         [
             new SessionLogRecord(string.Empty, "project-binding",
                                  JsonSerializer.SerializeToElement(
-                                     new SessionLogProjectBinding(SessionLogProjectBinding.SchemaName, project.Id),
-                                     SessionLogJsonContext.Default.SessionLogProjectBinding))
+                                                                   new SessionLogProjectBinding(SessionLogProjectBinding
+                                                                               .SchemaName, project.Id),
+                                                                   SessionLogJsonContext.Default
+                                                                      .SessionLogProjectBinding))
         ], cancellationToken).ConfigureAwait(false);
         session.BindProject(project.Id);
     }

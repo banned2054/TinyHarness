@@ -11,6 +11,20 @@ using TinyHarness.Core.Models.Permissions;
 namespace TinyHarness.Core.Models.Persistence;
 
 /// <summary>
+///     <para>会话项目归属状态；旧日志未写入归属时仍待整理，明确无项目是独立的持久状态。</para>
+///     <para>
+///         Session project-assignment state; legacy logs without an assignment remain pending, while no project is an
+///         explicit persisted state.
+///     </para>
+/// </summary>
+public enum SessionProjectAssignmentState
+{
+    PendingInitialization,
+    Project,
+    NoProject
+}
+
+/// <summary>
 ///     <para>由会话日志重建的本地投影，保存身份、提交序号、运行事实及可续聊协议原文。</para>
 ///     <para>
 ///         A local session-log projection containing identity, commit sequence, run facts and verbatim resumable
@@ -45,6 +59,12 @@ public sealed record PersistedSession
     ///     <para>Project ownership from the log's project-binding record; null for unbound legacy logs and never transferred.</para>
     /// </summary>
     public string? ProjectId { get; init; }
+
+    /// <summary>
+    ///     <para>日志中的项目归属状态；旧日志无 project-binding 时为待整理。</para>
+    ///     <para>The journaled project-assignment state; legacy logs without a project binding remain pending initialization.</para>
+    /// </summary>
+    public SessionProjectAssignmentState ProjectAssignmentState { get; init; }
 
     public SessionModelIdentity? Model { get; init; }
 

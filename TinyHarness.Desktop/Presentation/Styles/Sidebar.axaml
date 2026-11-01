@@ -173,7 +173,7 @@
     </Style>
     <!-- 会话行悬浮操作按钮（三点菜单 / 归档 / 置顶）：24×24 小圆角块（行高 32 内
          上下留 4），自身悬停叠一层行悬停色形成按钮层次（同 workspace-menu）。 -->
-    <Style Selector="Button.session-action, Button.session-pin-action">
+    <Style Selector="Button.session-action, Button.session-pin-action, Button.session-archive-action">
         <Setter Property="Width" Value="24" />
         <Setter Property="Height" Value="24" />
         <Setter Property="MinWidth" Value="0" />
@@ -195,15 +195,32 @@
             </Transitions>
         </Setter>
     </Style>
+    <Style Selector="Button.session-archive-action">
+        <Setter Property="Opacity" Value="0" />
+        <Setter Property="IsHitTestVisible" Value="False" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <DoubleTransition Property="Opacity" Duration="0:0:0.12" />
+            </Transitions>
+        </Setter>
+    </Style>
     <Style Selector="Grid.session-row-container:pointerover Button.session-pin-action">
         <Setter Property="Opacity" Value="1" />
         <Setter Property="IsHitTestVisible" Value="True" />
     </Style>
-    <Style Selector="Button.session-pin-action.pinned">
+    <Style Selector="Grid.session-row-container:pointerover Button.session-archive-action">
         <Setter Property="Opacity" Value="1" />
         <Setter Property="IsHitTestVisible" Value="True" />
     </Style>
+    <!-- 状态与置顶操作共用行内右侧槽位，鼠标经过整行时切换。 -->
+    <Style Selector="Grid.session-row-container:pointerover Panel.session-status">
+        <Setter Property="IsVisible" Value="False" />
+    </Style>
     <Style Selector="Button.session-pin-action:focus-visible">
+        <Setter Property="Opacity" Value="1" />
+        <Setter Property="IsHitTestVisible" Value="True" />
+    </Style>
+    <Style Selector="Button.session-archive-action:focus-visible">
         <Setter Property="Opacity" Value="1" />
         <Setter Property="IsHitTestVisible" Value="True" />
     </Style>
@@ -211,7 +228,10 @@
         <Setter Property="Background" Value="{DynamicResource SessionHoverBrush}" />
     </Style>
     <Style Selector="Button.session-pin-action:pointerover /template/ ContentPresenter#PART_ContentPresenter">
-        <Setter Property="Background" Value="{DynamicResource SessionHoverBrush}" />
+        <Setter Property="Background" Value="{DynamicResource SidebarIconHoverBrush}" />
+    </Style>
+    <Style Selector="Button.session-archive-action:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource SidebarIconHoverBrush}" />
     </Style>
     <!-- 头部图标按钮（搜索 / 分组方式 / 添加工作区 / 关闭搜索）：对齐 DSH
          WorkspaceBrowser 的 iconButton——28×28 正圆、透明底，悬停 interactive-bg-hover
@@ -309,7 +329,8 @@
     </Style>
     <!-- 状态样式声明顺序即优先级：悬停与焦点在前、选中（.current）最后，
          保证行被悬停或键盘聚焦时当前选中态不被覆盖。 -->
-    <Style Selector="Button.session-row:pointerover /template/ Border#PART_Surface">
+    <Style Selector="Button.session-row:pointerover /template/ Border#PART_Surface,
+                     Grid.session-row-container:pointerover Button.session-row /template/ Border#PART_Surface">
         <Setter Property="Background" Value="{DynamicResource SessionHoverBrush}" />
     </Style>
     <Style

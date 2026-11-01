@@ -4,10 +4,10 @@ using TinyHarness.Core.Models.Project;
 namespace TinyHarness.Desktop.ViewModels;
 
 /// <summary>
-///     <para>项目侧栏投影；草稿、缺失项目与整理未完成分组仅用于展示，不推断持久化归属。</para>
+///     <para>项目侧栏投影；无项目归属来自日志，缺失项目与整理未完成分组仅用于展示。</para>
 ///     <para>
-///         Sidebar projection; draft, missing-project and unfinished-organize groups are display-only and never infer
-///         persisted ownership.
+///         Sidebar projection; no-project ownership comes from the journal, while missing-project and unfinished-organize
+///         groups are display-only.
 ///     </para>
 /// </summary>
 public sealed class ProjectViewModel : ObservableObject
@@ -32,15 +32,16 @@ public sealed class ProjectViewModel : ObservableObject
         NewSessionCommand = new AsyncCommand(() => create(this), error);
     }
 
-    public   string                                 Key                 { get; }
-    public   Project?                               Project             { get; private set; }
-    public   string                                 Name                { get; private set; }
-    public   string                                 Root                { get; }
-    public   bool                                   CanEdit             => Project is not null;
-    public   ObservableCollection<SessionViewModel> Sessions            { get; } = [];
-    public   AsyncCommand                           NewSessionCommand   { get; }
-    internal int                                    VisibleSessionCount { get; set; } = SessionPageSize;
-    internal ProjectSessionsMoreViewModel           MoreSessionsRow     { get; }
+    public   string Key { get; }
+    public   bool IsNoProjectGroup => Key.StartsWith("no-project:", StringComparison.Ordinal);
+    public   Project? Project { get; private set; }
+    public   string Name { get; private set; }
+    public   string Root { get; }
+    public   bool CanEdit => Project is not null;
+    public   ObservableCollection<SessionViewModel> Sessions { get; } = [];
+    public   AsyncCommand NewSessionCommand { get; }
+    internal int VisibleSessionCount { get; set; } = SessionPageSize;
+    internal ProjectSessionsMoreViewModel MoreSessionsRow { get; }
 
     /// <summary>纯展示组的附加说明（如整理未完成原因）；真实项目组不使用。</summary>
     public string? Detail { get; private set; }

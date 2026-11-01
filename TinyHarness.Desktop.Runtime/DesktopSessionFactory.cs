@@ -58,6 +58,9 @@ public sealed record DesktopSessionRequest(
 {
     public string? ProjectId      { get; init; }
     public string? StoreDirectory { get; init; }
+
+    public SessionProjectAssignmentState ProjectAssignmentState { get; init; } =
+        SessionProjectAssignmentState.PendingInitialization;
 }
 
 /// <summary>
@@ -115,6 +118,8 @@ public sealed partial class DesktopSessionFactory
         DesktopSessionRequest             request,         Func<DesktopEvent, ValueTask> events,
         Func<DesktopApproval?, ValueTask> approvalChanged, CancellationToken             cancellationToken)
     {
+        if (!Enum.IsDefined(request.ProjectAssignmentState))
+            throw new ArgumentOutOfRangeException(nameof(request), "The project-assignment state is invalid.");
         var root = Path.GetFullPath(request.WorkspaceRoot);
         if (!Directory.Exists(root)) throw new DirectoryNotFoundException(root);
         var userPath = _userConfigPath ?? UserConfigStore.DefaultFilePath();
@@ -306,12 +311,25 @@ public sealed partial class DesktopSessionFactory
                 var credentialRoute =
                     CredentialRoute.Describe(profile?.Name, config.ApiKeyEnvironmentVariable,
                                              config.ApiKeyCredentialTarget);
-                var initial = await instructions.LoadAsync(null, [], cancellationToken).ConfigureAwait(false);
-                var project = await SessionProjectBinding.GetProjectAsync(directory, root, cancellationToken)
+                var      initial = await instructions.LoadAsync(null, [], cancellationToken).ConfigureAwait(false);
+                Project? project = null;
+                if (request.ProjectAssignmentState != SessionProjectAssignmentState.NoProject)
+                {
+                    project = await SessionProjectBinding.GetProjectAsync(directory, root, cancellationToken)
                                                          .ConfigureAwait(false);
-                if (request.ProjectId is { } expectedProject && expectedProject != project.Id)
-                    throw new InvalidOperationException("项目归属已改变，请刷新项目后重试。");
-                var session = new ChatSession(Guid.NewGuid().ToString("N"), root, identity, null, project.Id);
+                    if (request.ProjectId is { } expectedProject && expectedProject != project.Id)
+                        throw new InvalidOperationException("项目归属已改变，请刷新项目后重试。");
+                }
+                else if (request.ProjectId is not null)
+                {
+                    throw new InvalidOperationException("无项目会话不能同时携带项目 ID。");
+                }
+
+                var assignmentState = project is null
+                    ? SessionProjectAssignmentState.NoProject
+                    : SessionProjectAssignmentState.Project;
+                var session = new ChatSession(Guid.NewGuid().ToString("N"), root, identity, null, project?.Id,
+                                              assignmentState);
                 var context = new ConversationContext(options.Context);
                 context.Append(ChatMessage.System(WorkspacePrompts.Current));
                 writer = new SessionStoreWriter(directory, session.Id, secrets);

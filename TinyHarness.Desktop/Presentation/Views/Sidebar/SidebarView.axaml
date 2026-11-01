@@ -139,8 +139,16 @@
 
             <!-- 头部行：列表设置与添加项目入口。 -->
             <Grid Grid.Row="2" Margin="0,0,0,4" ColumnDefinitions="*,Auto">
-                <Grid Grid.Column="1" ColumnDefinitions="28,28">
-                    <Button x:Name="SidebarSettingsButton" Grid.Column="0" Classes="sidebar-icon"
+                <Grid Grid.Column="1" ColumnDefinitions="28,28,28">
+                    <Button Grid.Column="0" Classes="sidebar-icon"
+                            AutomationProperties.Name="{Binding ArchiveViewButtonName}"
+                            ToolTip.Tip="{Binding ArchiveViewButtonName}"
+                            Command="{Binding ToggleArchiveViewCommand}">
+                        <Path Width="16" Height="16"
+                              Data="{StaticResource Icon.ArchiveOutlineRegular}"
+                              Stroke="{DynamicResource TextMutedBrush}" StrokeThickness="1.2" />
+                    </Button>
+                    <Button x:Name="SidebarSettingsButton" Grid.Column="1" Classes="sidebar-icon"
                             IsEnabled="{Binding SidebarPreferencesReady}"
                             AutomationProperties.Name="列表设置"
                             ToolTip.Tip="列表设置"
@@ -150,7 +158,7 @@
                               Stroke="{DynamicResource TextMutedBrush}" StrokeThickness="1.2"
                               StrokeLineCap="Round" />
                     </Button>
-                    <Button Grid.Column="1" Classes="sidebar-icon"
+                    <Button Grid.Column="2" Classes="sidebar-icon"
                             IsEnabled="{Binding SidebarPreferencesReady}"
                             AutomationProperties.Name="添加项目"
                             ToolTip.Tip="添加项目"
@@ -208,8 +216,7 @@
                                         AutomationProperties.Name="{Binding Name}"
                                         Command="{Binding $parent[sidebar:SidebarView].DataContext.ToggleProjectCommand}"
                                         CommandParameter="{Binding}">
-                                    <!-- 项目行：左侧折叠箭头（收起向右、展开向下）+
-                                         文件夹图标（随展开态切换：折叠闭合、展开打开）+ 标题。 -->
+                                    <!-- 分组行：项目用文件夹图标，无项目分组用对话图标；箭头控制折叠。 -->
                                     <Grid ColumnDefinitions="Auto,Auto,*" ColumnSpacing="4"
                                           HorizontalAlignment="Stretch">
                                         <Panel Grid.Column="0" Width="8" Height="16" VerticalAlignment="Center">
@@ -226,7 +233,12 @@
                                                       IsVisible="{Binding IsExpanded}" />
                                             </Panel>
                                         </Panel>
-                                        <Panel Grid.Column="1" Width="16" Height="16" VerticalAlignment="Center">
+                                        <Path Grid.Column="1" Width="16" Height="16" VerticalAlignment="Center"
+                                              Data="{StaticResource Icon.ChatOutlineRegular}"
+                                              Fill="{DynamicResource TextMutedBrush}"
+                                              IsVisible="{Binding IsNoProjectGroup}" />
+                                        <Panel Grid.Column="1" Width="16" Height="16" VerticalAlignment="Center"
+                                               IsVisible="{Binding !IsNoProjectGroup}">
                                             <Path Width="16" Height="16"
                                                   IsVisible="{Binding !IsExpanded}"
                                                   Data="{StaticResource Icon.FolderCloseRegular}"
@@ -301,15 +313,15 @@
                         </Border>
                     </DataTemplate>
                     <DataTemplate x:DataType="vm:SessionViewModel">
-                        <!-- 选择按钮与置顶按钮为同级控件，避免在 Button 内嵌套另一个 Button。 -->
-                        <Grid Classes="session-row-container" ColumnDefinitions="*,Auto">
-                            <Button Grid.Column="0" Classes="session-row"
+                        <!-- 选择按钮铺满整行；归档和置顶按钮叠放在行内，避免嵌套 Button。 -->
+                        <Grid Classes="session-row-container">
+                            <Button Classes="session-row" Padding="20,0,4,0"
                                     Classes.current="{Binding IsSelected}"
                                     HorizontalAlignment="Stretch"
                                     AutomationProperties.Name="{Binding Title}"
                                     Command="{Binding $parent[sidebar:SidebarView].DataContext.SelectSessionCommand}"
                                     CommandParameter="{Binding}">
-                                <Grid ColumnDefinitions="20,*,Auto" HorizontalAlignment="Stretch">
+                                <Grid ColumnDefinitions="20,*,24" HorizontalAlignment="Stretch">
                                     <!-- 常驻 20px 气泡槽；仅置顶会话显示气泡，标题与项目文件夹标题对齐。 -->
                                     <Panel Grid.Column="0" Width="20" VerticalAlignment="Center">
                                         <Path Width="16" Height="16" HorizontalAlignment="Left"
@@ -324,8 +336,9 @@
                                                VerticalAlignment="Center"
                                                TextTrimming="CharacterEllipsis"
                                                ToolTip.Tip="{Binding WorkspaceRoot}" />
-                                    <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="6"
-                                                HorizontalAlignment="Right" VerticalAlignment="Center">
+                                    <Panel Grid.Column="2" Classes="session-status" IsHitTestVisible="False"
+                                           Width="24" Height="24"
+                                           HorizontalAlignment="Center" VerticalAlignment="Center">
                                         <Canvas Width="14" Height="14" IsVisible="{Binding IsRunning}">
                                             <Ellipse Classes="session-spinner-dot dot-0"
                                                      Classes.running="{Binding IsRunning}"
@@ -368,24 +381,35 @@
                                                      Width="2.5" Height="2.5"
                                                      Fill="{DynamicResource SidebarRunningIndicatorBrush}" />
                                         </Canvas>
-                                        <Ellipse Width="7" Height="7" VerticalAlignment="Center"
-                                                 Fill="{DynamicResource AccentTextBrush}"
-                                                 IsVisible="{Binding HasUnreadCompletion}" />
-                                    </StackPanel>
+                                        <Panel IsVisible="{Binding !IsRunning}">
+                                            <Ellipse Width="7" Height="7" VerticalAlignment="Center"
+                                                     Fill="{DynamicResource AccentTextBrush}"
+                                                     IsVisible="{Binding HasUnreadCompletion}" />
+                                        </Panel>
+                                    </Panel>
                                 </Grid>
                             </Button>
-                            <StackPanel Grid.Column="1" IsVisible="{Binding CanPin}">
-                                <Button Classes="session-pin-action"
-                                        Classes.pinned="{Binding IsPinned}"
-                                        AutomationProperties.Name="{Binding PinActionName}"
-                                        ToolTip.Tip="{Binding PinActionName}"
-                                        Command="{Binding $parent[sidebar:SidebarView].DataContext.ToggleSessionPinCommand}"
-                                        CommandParameter="{Binding}">
-                                    <Path Width="14" Height="14"
-                                          Data="{StaticResource Icon.PinOutlineRegular}"
-                                          Stroke="{DynamicResource TextMutedBrush}" StrokeThickness="1.2" />
-                                </Button>
-                            </StackPanel>
+                            <Button Classes="session-archive-action" IsVisible="{Binding CanArchive}"
+                                    HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,32,0"
+                                    AutomationProperties.Name="{Binding ArchiveActionName}"
+                                    ToolTip.Tip="{Binding ArchiveActionName}"
+                                    Command="{Binding $parent[sidebar:SidebarView].DataContext.ToggleSessionArchiveCommand}"
+                                    CommandParameter="{Binding}">
+                                <Path Width="14" Height="14"
+                                      Data="{StaticResource Icon.ArchiveOutlineRegular}"
+                                      Stroke="{DynamicResource TextMutedBrush}" StrokeThickness="1.2" />
+                            </Button>
+                            <Button Classes="session-pin-action" IsVisible="{Binding CanPin}"
+                                    HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,4,0"
+                                    Classes.pinned="{Binding IsPinned}"
+                                    AutomationProperties.Name="{Binding PinActionName}"
+                                    ToolTip.Tip="{Binding PinActionName}"
+                                    Command="{Binding $parent[sidebar:SidebarView].DataContext.ToggleSessionPinCommand}"
+                                    CommandParameter="{Binding}">
+                                <Path Width="14" Height="14"
+                                      Data="{StaticResource Icon.PinOutlineRegular}"
+                                      Stroke="{DynamicResource TextMutedBrush}" StrokeThickness="1.2" />
+                            </Button>
                         </Grid>
                     </DataTemplate>
                 </ListBox.DataTemplates>

@@ -107,14 +107,15 @@ internal static class SessionLogScanner
             throw new
                 SessionStoreException($"Session log '{path}' exceeds the {SessionStoreWriter.MaxLogBytes:N0}-byte limit.");
 
-        var     expectedSequence = 1L;
-        long    bytesFetched     = 0;
-        long    bytesScanned     = 0;
-        // 跨批次归属状态：整份日志只允许一条 project-binding，全量与分页读取共用同一去重。
-        string? boundProjectId   = null;
-        var     line             = ArrayPool<byte>.Shared.Rent(4 * 1024);
-        var     lineLength       = 0;
-        var     buffer           = new byte[BufferSize];
+        var     expectedSequence       = 1L;
+        long    bytesFetched           = 0;
+        long    bytesScanned           = 0;
+        // 跨批次归属状态：整份日志只允许一条项目归属事实，全量与分页读取共用同一校验。
+        string? boundProjectId         = null;
+        var     projectAssignmentState = SessionProjectAssignmentState.PendingInitialization;
+        var     line                   = ArrayPool<byte>.Shared.Rent(4 * 1024);
+        var     lineLength             = 0;
+        var     buffer                 = new byte[BufferSize];
         try
         {
             while (bytesScanned < capturedLength && (upperSequence is null || expectedSequence <= upperSequence))
@@ -154,7 +155,8 @@ internal static class SessionLogScanner
                         using var document = JsonDocument.Parse(line.AsMemory(0, jsonLength),
                                                                 new JsonDocumentOptions { MaxDepth = MaxJsonDepth });
                         var batch = ReadBatch(document.RootElement);
-                        ValidateBatch(batch, sessionId, expectedSequence, path, ref boundProjectId);
+                        ValidateBatch(batch, sessionId, expectedSequence, path, ref boundProjectId,
+                                      ref projectAssignmentState);
                         lineLength = 0;
                         await onBatch(batch, cancellationToken).ConfigureAwait(false);
                         expectedSequence++;
@@ -260,7 +262,8 @@ internal static class SessionLogScanner
     ///     <para>Thrown when format, IDs, kind, or payload is invalid.</para>
     /// </exception>
     private static void ValidateBatch(
-        SessionLogBatch batch, string sessionId, long sequence, string path, ref string? boundProjectId)
+        SessionLogBatch batch, string sessionId, long sequence, string path, ref string? boundProjectId,
+        ref SessionProjectAssignmentState projectAssignmentState)
     {
         if (batch.Format != SessionLogFormat.FormatName)
             throw new SessionStoreException($"Session log '{path}' uses unknown format '{batch.Format}'.");
@@ -289,7 +292,7 @@ internal static class SessionLogScanner
                 record.Payload.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
                 throw new
                     SessionStoreException($"Session log '{path}' has a duplicate or invalid record id in sequence {sequence}.");
-            ValidatePayload(record, batch, path, i, ref boundProjectId);
+            ValidatePayload(record, batch, path, i, ref boundProjectId, ref projectAssignmentState);
         }
     }
 
@@ -318,7 +321,8 @@ internal static class SessionLogScanner
     ///     <para>Thrown when a required kind is unknown or its payload type is invalid.</para>
     /// </exception>
     private static void ValidatePayload(
-        SessionLogRecord record, SessionLogBatch batch, string path, int index, ref string? boundProjectId)
+        SessionLogRecord record, SessionLogBatch batch, string path, int index, ref string? boundProjectId,
+        ref SessionProjectAssignmentState projectAssignmentState)
     {
         try
         {
@@ -404,10 +408,20 @@ internal static class SessionLogScanner
                     break;
                 case "project-binding" :
                     var boundId = SessionLogProjectBinding.Parse(record.Payload);
-                    if (boundProjectId is not null)
+                    if (projectAssignmentState != SessionProjectAssignmentState.PendingInitialization ||
+                        boundProjectId is not null)
                         throw new
-                            SessionStoreException($"Session log '{path}' repeats its project binding at sequence {batch.Sequence}; ownership is bound exactly once and never transferred.");
-                    boundProjectId = boundId;
+                            SessionStoreException($"Session log '{path}' contains a conflicting or repeated project assignment at sequence {batch.Sequence}; ownership is assigned exactly once.");
+                    boundProjectId         = boundId;
+                    projectAssignmentState = SessionProjectAssignmentState.Project;
+                    break;
+                case "project-assignment" :
+                    SessionLogProjectAssignment.ValidateNoProject(record.Payload);
+                    if (projectAssignmentState != SessionProjectAssignmentState.PendingInitialization ||
+                        boundProjectId is not null)
+                        throw new
+                            SessionStoreException($"Session log '{path}' contains a conflicting or repeated no-project assignment at sequence {batch.Sequence}.");
+                    projectAssignmentState = SessionProjectAssignmentState.NoProject;
                     break;
                 case "audit" :
                     RequireObject(record.Payload, "audit payload");

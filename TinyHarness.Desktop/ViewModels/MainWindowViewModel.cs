@@ -20,16 +20,29 @@ namespace TinyHarness.Desktop.ViewModels;
 /// </summary>
 public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
 {
-    private const           int                      OrganizeBatchSize = 100;
-    private static readonly SidebarCategoryViewModel PinnedCategory    = new("置顶");
-    private static readonly SidebarCategoryViewModel ProjectsCategory  = new("项目");
-    private static readonly SidebarCategoryViewModel SessionsCategory  = new("会话");
-    private readonly        Func<Action, ValueTask>? _dispatch;
-    private readonly        DesktopSessionFactory    _factory;
-    private readonly        List<SessionViewModel>   _failedDrafts         = [];
-    private readonly        CancellationTokenSource  _lifetime             = new();
-    private readonly        DesktopSessionManager    _manager              = new();
-    private readonly        SemaphoreSlim            _pinStateMutationGate = new(1, 1);
+    private const           int                      OrganizeBatchSize          = 100;
+    private static readonly SidebarCategoryViewModel PinnedCategory             = new("置顶");
+    private static readonly SidebarCategoryViewModel ProjectsCategory           = new("项目");
+    private static readonly SidebarCategoryViewModel RecentCategory             = new("最近");
+    private static readonly SidebarCategoryViewModel SessionsCategory           = new("会话");
+    private static readonly SidebarCategoryViewModel ArchivedCategory           = new("已归档");
+    private static readonly SidebarCategoryViewModel ArchivedEmptyCategory      = new("暂无已归档会话");
+    private static readonly SidebarCategoryViewModel ArchiveUnavailableCategory = new("归档状态暂不可用");
+
+    private readonly HashSet<string> _archiveStateUnavailableStores = new(
+                                                                          OperatingSystem.IsWindows()
+                                                                              ? StringComparer.OrdinalIgnoreCase
+                                                                              : StringComparer.Ordinal);
+
+    private readonly Dictionary<string, SessionStoreArchives> _archiveStatesByStore =
+        new(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
+
+    private readonly Func<Action, ValueTask>? _dispatch;
+    private readonly DesktopSessionFactory    _factory;
+    private readonly List<SessionViewModel>   _failedDrafts         = [];
+    private readonly CancellationTokenSource  _lifetime             = new();
+    private readonly DesktopSessionManager    _manager              = new();
+    private readonly SemaphoreSlim            _pinStateMutationGate = new(1, 1);
 
     private readonly HashSet<string> _pinStateUnavailableStores = new(
                                                                       OperatingSystem.IsWindows()
@@ -97,6 +110,8 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         SelectRecentProjectOrderCommand  =  new RelayCommand(() => SelectProjectSort(true));
         ToggleProjectPinCommand          =  new RelayCommand<ProjectViewModel>(ToggleProjectPin);
         ToggleSessionPinCommand          =  new RelayCommand<SessionViewModel>(ToggleSessionPin);
+        ToggleSessionArchiveCommand      =  new RelayCommand<SessionViewModel>(ToggleSessionArchive);
+        ToggleArchiveViewCommand         =  new RelayCommand(ToggleArchiveView);
         ToggleProjectCommand = new RelayCommand<ProjectViewModel>(group =>
         {
             if (group is null) return;
@@ -161,6 +176,10 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
     public bool SidebarPreferencesReady { get; private set; }
 
+    public bool IsArchiveView { get; private set; }
+
+    public string ArchiveViewButtonName => IsArchiveView ? "返回会话列表" : "查看已归档会话";
+
     public bool IsSidebarSettingsMenuOpen
     {
         get => _sidebarSettingsMenuOpen;
@@ -176,6 +195,8 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     public RelayCommand                   SelectRecentProjectOrderCommand  { get; }
     public RelayCommand<ProjectViewModel> ToggleProjectPinCommand          { get; }
     public RelayCommand<SessionViewModel> ToggleSessionPinCommand          { get; }
+    public RelayCommand<SessionViewModel> ToggleSessionArchiveCommand      { get; }
+    public RelayCommand                   ToggleArchiveViewCommand         { get; }
     public RelayCommand<ProjectViewModel> ToggleProjectCommand             { get; }
     public RelayCommand<ProjectViewModel> ShowMoreSessionsCommand          { get; }
     public RelayCommand<ProjectViewModel> OpenProjectRenameCommand         { get; }
@@ -416,7 +437,9 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
                                                        session.StoreDirectory is { } source &&
                                                        ProjectRoots.AreEqual(source, store)) is { } existing)
                 {
-                    existing.ApplyStoredMetadata(stored.ProjectId, stored.LastActivityUtc);
+                    existing.ApplyStoredMetadata(stored.ProjectId, stored.ProjectAssignmentState,
+                                                 stored.LastActivityUtc);
+                    existing.SetArchived(IsSessionArchived(existing));
                     existing.ApplyStoredPermissionMode(stored.PermissionSelection?.Mode);
                     continue;
                 }
@@ -425,13 +448,14 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
                 var title = string.IsNullOrWhiteSpace(text) ? stored.Id[..8] : text.Split('\n')[0];
                 var row = new SessionViewModel(_manager, _factory, stored.WorkspaceRoot, stored.Id, store,
                                                title[..Math.Min(title.Length, 48)], _dispatch, stored.ProjectId,
-                                               stored.LastActivityUtc)
+                                               stored.LastActivityUtc, stored.ProjectAssignmentState)
                 {
                     ModelOptions = Models, ManageModelsCommand = OpenSettingsCommand, ProjectOptions = Projects
                 };
                 // 标签来自最后选择；历史页面不解析凭据，目标缺失也保留页面。
                 row.ApplyPermissionSettings(_permissionSettings);
                 row.ApplyStoredPermissionMode(stored.PermissionSelection?.Mode);
+                row.SetArchived(IsSessionArchived(row));
                 AddSession(row);
             }
 
@@ -580,6 +604,7 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         }
 
         await PreparePinStateAsync(directory, _lifetime.Token);
+        await PrepareArchiveStateAsync(directory, _lifetime.Token);
 
         return (directory, changed);
     }
@@ -637,6 +662,44 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         }
     }
 
+    private async Task PrepareArchiveStateAsync(string storeDirectory, CancellationToken cancellationToken)
+    {
+        var storeKey = PinStoreKey(storeDirectory);
+        await _pinStateMutationGate.WaitAsync(cancellationToken);
+        try
+        {
+            var protectedStoreDirectory = await ResolveProtectedDirectoryAsync(
+                                                                               SelectedSession?.WorkspaceRoot ??
+                                                                               Environment.CurrentDirectory,
+                                                                               cancellationToken);
+            if (!ProjectRoots.AreEqual(protectedStoreDirectory, storeDirectory))
+                throw new SessionStoreException(
+                                                "The configured session-store directory changed before its archive state was loaded.");
+
+            storeKey = PinStoreKey(protectedStoreDirectory);
+            var archives = await SessionStoreArchiveStore.LoadAsync(storeKey, cancellationToken);
+            _archiveStatesByStore[storeKey] = archives;
+            _archiveStateUnavailableStores.Remove(storeKey);
+            foreach (var session in Sessions.Where(session => session.StoreDirectory is { } source &&
+                                                              ProjectRoots.AreEqual(source, storeKey)))
+                session.SetArchived(archives.ArchivedSessionIds.Contains(session.Id, StringComparer.Ordinal));
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception) when (exception is SessionStoreArchiveException or SessionStoreException
+                                           or IOException or UnauthorizedAccessException)
+        {
+            _archiveStateUnavailableStores.Add(storeKey);
+            Notice = $"归档信息无法读取，会话归档状态未知：{exception.Message}";
+        }
+        finally
+        {
+            _pinStateMutationGate.Release();
+        }
+    }
+
     /// <summary>切换 store 后清空上一 store 的整理展示残留；新一轮结束时会重新汇总。</summary>
     private void ResetOrganizeDisplay()
     {
@@ -683,10 +746,11 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
             // 自动操作在配置读取前捕获代际；只有期间没有用户新意图时才登记实际重绑。
             draft.CaptureTargetIntent();
             var root = draft.WorkspaceRoot;
-            var project = _projects.FirstOrDefault(item =>
-                                                       item.Roots.Any(projectRoot =>
-                                                                          ProjectRoots
-                                                                             .AreEqual(projectRoot.Path, root)));
+            var project = draft.ProjectAssignmentState == SessionProjectAssignmentState.NoProject
+                ? null
+                : _projects.FirstOrDefault(item =>
+                                               item.Roots.Any(projectRoot =>
+                                                                  ProjectRoots.AreEqual(projectRoot.Path, root)));
             await draft.SelectProjectAsync(project?.Id, root, directory, false);
         }
     }
@@ -735,16 +799,17 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     private SessionViewModel CreateConversationDraft()
     {
         var root = _newConversation?.WorkspaceRoot ?? Environment.CurrentDirectory;
-        var session = new SessionViewModel(_manager, _factory, root, null, null, null, _dispatch, null, null)
+        var session = new SessionViewModel(_manager, _factory, root, null, null, null, _dispatch, null, null,
+                                           SessionProjectAssignmentState.NoProject)
         {
             ModelOptions = Models, ManageModelsCommand = OpenSettingsCommand, ProjectOptions = Projects
         };
-        session.SelectProjectCommand = new RelayCommand<ProjectViewModel>(
-                                                                          group => _ =
-                                                                              SelectConversationProjectAsync(session,
-                                                                                  group),
-                                                                          group => group is { CanEdit: true } &&
-                                                                              session.CanChooseWorkspace);
+        session.SelectProjectCommand = new RelayCommand<ProjectViewModel?>(
+                                                                           group => _ =
+                                                                               SelectConversationProjectAsync(session,
+                                                                                   group),
+                                                                           group => session.CanChooseWorkspace &&
+                                                                               (group is null || group.CanEdit));
         session.Established += OnConversationEstablished;
         session.ApplyPermissionSettings(_permissionSettings);
         session.FirstSendFailed += OnConversationFirstSendFailed;
@@ -822,11 +887,20 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     /// </summary>
     internal async Task SelectConversationProjectAsync(SessionViewModel page, ProjectViewModel? group)
     {
-        if (_closing || !page.CanChooseWorkspace || group is not { Project: { } project }) return;
+        if (_closing || !page.CanChooseWorkspace) return;
         var revision = page.BeginTargetIntent();
         try
         {
-            await ApplyProjectChoiceAsync(page, project.PrimaryRoot, revision);
+            if (group?.Project is { } project)
+            {
+                await ApplyProjectChoiceAsync(page, project.PrimaryRoot, revision);
+                return;
+            }
+
+            var storeRevision = _storeRevision;
+            var directory     = await ResolveProtectedDirectoryAsync(page.WorkspaceRoot, _lifetime.Token);
+            if (!CanApplyTarget(page, revision) || !IsApplicableStore(directory, storeRevision)) return;
+            await page.SelectProjectAsync(null, page.WorkspaceRoot, directory);
         }
         catch (OperationCanceledException)
         {
@@ -862,12 +936,11 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
                 session.StoreDirectory is not null           ||
                 session.WorkspaceRoot != root)
                 return;
-            var project = _projects.FirstOrDefault(item =>
-                                                       item.Roots.Any(projectRoot =>
-                                                                          ProjectRoots
-                                                                             .AreEqual(projectRoot.Path, root)));
+            var projectId = session.ProjectAssignmentState == SessionProjectAssignmentState.Project
+                ? session.ProjectId
+                : null;
             session.CaptureTargetIntent();
-            await session.SelectProjectAsync(project?.Id, root, directory, false);
+            await session.SelectProjectAsync(projectId, root, directory, false);
         }
         catch (OperationCanceledException)
         {
@@ -885,7 +958,9 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         session.PropertyChanged += (_, args) =>
         {
             if (!_loadingCatalog &&
-                args.PropertyName is nameof(SessionViewModel.ProjectId) or nameof(SessionViewModel.LastActivityUtc))
+                args.PropertyName is nameof(SessionViewModel.ProjectId) or
+                                     nameof(SessionViewModel.ProjectAssignmentState) or
+                                     nameof(SessionViewModel.LastActivityUtc))
                 RebuildProjects();
             if (args.PropertyName == nameof(SessionViewModel.ProjectId)) ReloadCatalogForUnknownProject(session);
         };
@@ -1095,6 +1170,26 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         _ = SetSessionPinAsync(store, id, !session.IsPinned);
     }
 
+    private void ToggleSessionArchive(SessionViewModel? session)
+    {
+        if (session is not
+                { CanArchive: true, Id: { } id, StoreDirectory: { } store, WorkspaceRoot: { } root } ||
+            !CanUseArchiveState(store))
+            return;
+
+        if (!session.TryBeginArchiveMutation()) return;
+        _ = SetSessionArchivedAsync(session, store, root, id, !session.IsArchived);
+    }
+
+    private void ToggleArchiveView()
+    {
+        if (!IsArchiveView && _storeDirectory is { } store && !CanUseArchiveState(store)) return;
+        IsArchiveView = !IsArchiveView;
+        OnPropertyChanged(nameof(IsArchiveView));
+        OnPropertyChanged(nameof(ArchiveViewButtonName));
+        RebuildSidebarRows();
+    }
+
     /// <summary>
     ///     <para>持久化项目的目标置顶状态，并同步侧栏与普通项目顺序。</para>
     ///     <para>Persists the requested project pin state and updates the sidebar and regular-project order.</para>
@@ -1164,6 +1259,44 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         }
     }
 
+    private async Task SetSessionArchivedAsync(
+        SessionViewModel session, string storeDirectory, string workspaceRoot, string sessionId, bool isArchived)
+    {
+        var acquired = false;
+        try
+        {
+            await _pinStateMutationGate.WaitAsync(_lifetime.Token);
+            acquired = true;
+            var protectedStoreDirectory = await ResolveProtectedDirectoryAsync(workspaceRoot, _lifetime.Token);
+            if (!ProjectRoots.AreEqual(protectedStoreDirectory, storeDirectory))
+                throw new SessionStoreException(
+                                                "The configured session-store directory changed before its archive state was saved.");
+
+            var archives = await SessionStoreArchiveStore.SetArchivedAsync(
+                                                                           storeDirectory, sessionId, isArchived,
+                                                                           _lifetime.Token);
+            SetStoreArchiveState(storeDirectory, archives);
+            foreach (var row in Sessions.Where(row => row.Id == sessionId              &&
+                                                      row.StoreDirectory is { } source &&
+                                                      ProjectRoots.AreEqual(source, storeDirectory)))
+                row.SetArchived(isArchived);
+            RebuildProjects();
+        }
+        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
+        {
+            // 关闭窗口时放弃尚未提交的归档操作。
+        }
+        catch (Exception exception)
+        {
+            Notice = $"会话归档状态保存失败：{exception.Message}";
+        }
+        finally
+        {
+            if (acquired) _pinStateMutationGate.Release();
+            session.EndArchiveMutation();
+        }
+    }
+
     private async Task MovePinnedProjectAsync(
         string storeDirectory, string sourceProjectId, string targetProjectId, bool insertAfter)
     {
@@ -1199,6 +1332,13 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         return false;
     }
 
+    private bool CanUseArchiveState(string storeDirectory)
+    {
+        if (!_archiveStateUnavailableStores.Contains(PinStoreKey(storeDirectory))) return true;
+        Notice = "当前归档状态未知，无法查看或修改归档状态；请刷新历史后重试。";
+        return false;
+    }
+
     private void SetStorePinState(string storeDirectory, SessionStorePins pins)
     {
         var storeKey = PinStoreKey(storeDirectory);
@@ -1210,6 +1350,26 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     {
         if (storeDirectory is null) return SessionStorePins.Empty();
         return _pinStatesByStore.GetValueOrDefault(PinStoreKey(storeDirectory)) ?? SessionStorePins.Empty();
+    }
+
+    private void SetStoreArchiveState(string storeDirectory, SessionStoreArchives archives)
+    {
+        var storeKey = PinStoreKey(storeDirectory);
+        _archiveStatesByStore[storeKey] = archives;
+        _archiveStateUnavailableStores.Remove(storeKey);
+    }
+
+    private SessionStoreArchives ArchivesForStore(string? storeDirectory)
+    {
+        if (storeDirectory is null) return SessionStoreArchives.Empty();
+        return _archiveStatesByStore.GetValueOrDefault(PinStoreKey(storeDirectory)) ??
+               SessionStoreArchives.Empty();
+    }
+
+    private bool IsSessionArchived(SessionViewModel session)
+    {
+        if (session.Id is not { } id || session.StoreDirectory is not { } store) return false;
+        return ArchivesForStore(store).ArchivedSessionIds.Contains(id, StringComparer.Ordinal);
     }
 
     private static string PinStoreKey(string storeDirectory) =>
@@ -1347,19 +1507,23 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
             Group(project.Id, project, project.Name, project.PrimaryRoot);
 
         // 正式会话行进入所属项目分组；空白新对话页不属于 Sessions，不出现在侧栏投影中。
-        foreach (var session in Sessions.OrderByDescending(session => session.LastActivityUtc))
+        foreach (var session in Sessions.Where(session => !session.IsArchived)
+                                        .OrderByDescending(session => session.LastActivityUtc))
         {
             var sessionStore = session.StoreDirectory;
             var sameStore = sessionStore is null ||
                             (_storeDirectory is { } activeStoreDirectory &&
                              ProjectRoots.AreEqual(sessionStore, activeStoreDirectory));
-            var project = sameStore
+            var isNoProject = session.ProjectAssignmentState == SessionProjectAssignmentState.NoProject;
+            var project = sameStore && !isNoProject
                 ? _projects.FirstOrDefault(project => project.Id == session.ProjectId)
                 : null;
             // 未归属的存储行构造即带 store，且根目录固定后不可再清空（见 SessionViewModel.WorkspaceRoot 守卫）；
             // 分组键纳入 store，两个 store 的同一执行目录不得并成一组，整理明细才能按 store 精确定位。
             string key;
-            if (session.ProjectId is { } projectId)
+            if (isNoProject)
+                key = NoProjectGroupKey(sessionStore);
+            else if (session.ProjectId is { } projectId)
                 key = sessionStore is { } otherStore && !sameStore
                     ? OtherStoreProjectGroupKey(otherStore, projectId)
                     : projectId;
@@ -1369,7 +1533,11 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
                 key = "pending:" + ProjectRoots.Normalize(session.WorkspaceRoot);
             string  name;
             string? detail = null;
-            if (project is not null)
+            if (isNoProject)
+            {
+                name = "最近";
+            }
+            else if (project is not null)
             {
                 name = project.Name;
             }
@@ -1384,7 +1552,8 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
                 name   = detail is null ? session.WorkspaceLabel : "整理未完成 · " + session.WorkspaceLabel;
             }
 
-            Group(key, project, name, session.WorkspaceRoot, detail).Sessions.Add(session);
+            Group(key, project, name, isNoProject ? string.Empty : session.WorkspaceRoot, detail)
+               .Sessions.Add(session);
         }
 
         var activityOrder    = groups.Values.OrderByDescending(ProjectGroupActivity).ToArray();
@@ -1422,7 +1591,9 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
         Projects.Clear();
         foreach (var group in orderedPinned.Concat(orderedProjects)
-                                           .Concat(activityOrder.Where(group => group.Project is null)))
+                                           .Concat(activityOrder.Where(group => group.Project is null &&
+                                                                           !group.IsNoProjectGroup))
+                                           .Concat(activityOrder.Where(group => group.IsNoProjectGroup)))
             Projects.Add(group);
         RebuildSidebarRows();
         NotifyChangedWorkspaceTargetLabels(labels);
@@ -1497,6 +1668,13 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         return "pending:" + normalizedStore.Length + ":" + normalizedStore + ProjectRoots.Normalize(workspaceRoot);
     }
 
+    private static string NoProjectGroupKey(string? storeDirectory)
+    {
+        if (storeDirectory is null) return "no-project:unknown-store";
+        var normalizedStore = ProjectRoots.Normalize(storeDirectory);
+        return "no-project:" + normalizedStore.Length + ":" + normalizedStore;
+    }
+
     /// <summary>
     ///     <para>按会话 store 与执行目录查询整理未完成明细；行 store 与结果所属 store 不一致时不得串用原因。</para>
     ///     <para>
@@ -1517,25 +1695,48 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     }
 
     /// <summary>
-    ///     <para>按视图模式生成侧栏分类；项目模式下置顶会话显示在置顶项目之后。</para>
+    ///     <para>按视图模式生成侧栏分类；项目模式下无项目会话直接列在底部“最近”分类。</para>
     ///     <para>
-    ///         Builds sidebar categories for the active view; pinned sessions follow pinned projects in project mode.
+    ///         Builds sidebar categories for the active view; unpinned no-project sessions appear directly under a bottom
+    ///         Recent category in project mode.
     ///     </para>
     /// </summary>
     private void RebuildSidebarRows()
     {
         foreach (var session in Sessions)
+        {
             session.SetPinned(session.CanPin && IsSessionPinned(session));
+            if (session.StoreDirectory is not { } archiveStore ||
+                !_archiveStateUnavailableStores.Contains(PinStoreKey(archiveStore)))
+                session.SetArchived(IsSessionArchived(session));
+        }
+
         foreach (var group in Projects) group.NotifyCurrentChanged();
         var rows = new List<object>(Projects.Count + Sessions.Count);
-        if (IsProjectMode)
+        if (IsArchiveView)
+        {
+            var archived = Sessions.Where(session => session.IsArchived)
+                                   .OrderByDescending(session => session.LastActivityUtc).ToArray();
+            if (archived.Length > 0)
+            {
+                rows.Add(ArchivedCategory);
+                rows.AddRange(archived);
+            }
+            else
+            {
+                var stateUnknown = _storeDirectory is { } store &&
+                                   _archiveStateUnavailableStores.Contains(PinStoreKey(store));
+                rows.Add(stateUnknown ? ArchiveUnavailableCategory : ArchivedEmptyCategory);
+            }
+        }
+        else if (IsProjectMode)
         {
             var pinnedProjects = Projects.Where(group => group.IsPinned).ToArray();
-            var regularProjects = Projects.Where(group => !group.IsPinned &&
+            var regularProjects = Projects.Where(group => !group.IsPinned && !group.IsNoProjectGroup &&
                                                           (group.CanEdit ||
                                                            group.Sessions.Any(session => !session.IsPinned)))
                                           .ToArray();
-            var pinnedSessions = Sessions.Where(session => session.IsPinned)
+            var pinnedSessions = Sessions.Where(session => !session.IsArchived && session.IsPinned)
                                          .OrderByDescending(session => session.LastActivityUtc).ToArray();
             if (pinnedProjects.Length > 0 || pinnedSessions.Length > 0)
             {
@@ -1549,12 +1750,22 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
                 rows.Add(ProjectsCategory);
                 AppendProjectRows(rows, regularProjects);
             }
+
+            var recentSessions = Sessions.Where(session => !session.IsArchived && !session.IsPinned &&
+                                                           session.ProjectAssignmentState ==
+                                                           SessionProjectAssignmentState.NoProject)
+                                         .OrderByDescending(session => session.LastActivityUtc).ToArray();
+            if (recentSessions.Length > 0)
+            {
+                rows.Add(RecentCategory);
+                rows.AddRange(recentSessions);
+            }
         }
         else
         {
-            var pinned = Sessions.Where(session => session.IsPinned)
+            var pinned = Sessions.Where(session => !session.IsArchived && session.IsPinned)
                                  .OrderByDescending(session => session.LastActivityUtc).ToArray();
-            var regular = Sessions.Where(session => !session.IsPinned)
+            var regular = Sessions.Where(session => !session.IsArchived && !session.IsPinned)
                                   .OrderByDescending(session => session.LastActivityUtc).ToArray();
             if (pinned.Length > 0)
             {

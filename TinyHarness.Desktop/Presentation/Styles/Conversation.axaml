@@ -139,25 +139,60 @@
     <Style Selector="Button.reason-row.expanded Path.row-chev-open">
         <Setter Property="Opacity" Value="1" />
     </Style>
-    <!-- 新对话草稿页的工作区下拉：紧贴输入框上缘左对齐的圆角下拉按钮（Codex 风格），
-         宽度随内容收缩；弹出列表行复用 PopupMenus 的 popup-item 样式。 -->
-    <Style Selector="Button.workspace-picker">
+    <!-- 新对话草稿页的项目选择器：紧贴输入框上缘，项目图标和移除操作分开命中。 -->
+    <Style Selector="Border.workspace-picker-shell">
         <Setter Property="Height" Value="36" />
-        <Setter Property="Padding" Value="14,0" />
-        <Setter Property="CornerRadius" Value="10" />
-        <Setter Property="FontSize" Value="13" />
-        <!-- Fluent 12 的 Button 主题不再默认内容居中（回落到 Stretch）：固定高度下
-             不显式设置会让文字贴顶，同 model-picker-button 等固定高文字按钮的处理。 -->
-        <Setter Property="HorizontalContentAlignment" Value="Center" />
-        <Setter Property="VerticalContentAlignment" Value="Center" />
+        <Setter Property="Padding" Value="3,0" />
+        <Setter Property="CornerRadius" Value="18" />
         <Setter Property="Background" Value="{DynamicResource PanelBackgroundBrush}" />
         <Setter Property="BorderBrush" Value="{DynamicResource SubtleBorderBrush}" />
         <Setter Property="BorderThickness" Value="1" />
     </Style>
-    <Style Selector="Button.workspace-picker:pointerover">
+    <Style Selector="Border.workspace-picker-shell:pointerover">
         <Setter Property="Background" Value="{DynamicResource SessionHoverBrush}" />
     </Style>
-
+    <Style Selector="Button.workspace-picker">
+        <Setter Property="MinWidth" Value="0" />
+        <Setter Property="Height" Value="28" />
+        <Setter Property="Padding" Value="8,0" />
+        <Setter Property="CornerRadius" Value="14" />
+        <Setter Property="FontSize" Value="13" />
+        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+        <Setter Property="Foreground" Value="{DynamicResource ComposerTextBrush}" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+    </Style>
+    <Style Selector="Button.workspace-picker:pointerover">
+        <Setter Property="Background" Value="Transparent" />
+    </Style>
+    <Style Selector="Button.workspace-picker-clear">
+        <Setter Property="Width" Value="28" />
+        <Setter Property="Height" Value="28" />
+        <Setter Property="MinWidth" Value="0" />
+        <Setter Property="MinHeight" Value="0" />
+        <Setter Property="Margin" Value="0" />
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="CornerRadius" Value="14" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="HorizontalContentAlignment" Value="Center" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+    </Style>
+    <Style
+        Selector="Button.workspace-picker-clear:pointerover /template/ ContentPresenter#PART_ContentPresenter,
+                     Border.workspace-picker-shell:pointerover Button.workspace-picker-clear /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource SidebarIconHoverBrush}" />
+    </Style>
+    <Style Selector="Path.workspace-picker-clear-icon">
+        <Setter Property="Opacity" Value="0" />
+    </Style>
+    <Style Selector="Border.workspace-picker-shell:pointerover Path.workspace-picker-folder">
+        <Setter Property="Opacity" Value="0" />
+    </Style>
+    <Style Selector="Border.workspace-picker-shell:pointerover Path.workspace-picker-clear-icon">
+        <Setter Property="Opacity" Value="1" />
+    </Style>
     <!-- 文件改动卡片（已编辑）：对齐 Codex 的中性圆角表面——深色底 #262626、悬停/选中
          #2A2A2A，浅色底 #FFFEFF、悬停/选中 #FBFAFC（见 ThemeResources）。单文件时整卡
          是一个可点按钮；多文件容器头部静态，仅文件行可点，超过 3 行折叠。 -->

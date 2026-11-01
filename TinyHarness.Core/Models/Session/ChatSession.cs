@@ -46,6 +46,20 @@ public sealed partial class ChatSession
     public ChatSession(
         string  id, string workspaceRoot, SessionModelIdentity model, DateTimeOffset? createdUtc,
         string? projectId)
+        : this(id, workspaceRoot, model, createdUtc, projectId,
+               projectId is null
+                   ? SessionProjectAssignmentState.PendingInitialization
+                   : SessionProjectAssignmentState.Project)
+    {
+    }
+
+    /// <summary>
+    ///     <para>创建带明确归属状态的会话；无项目状态会随初始身份记录持久化。</para>
+    ///     <para>Creates a session with an explicit assignment state; no-project state is persisted with the initial identity.</para>
+    /// </summary>
+    public ChatSession(
+        string  id,        string workspaceRoot, SessionModelIdentity model, DateTimeOffset? createdUtc,
+        string? projectId, SessionProjectAssignmentState projectAssignmentState)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(id);
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
@@ -53,11 +67,18 @@ public sealed partial class ChatSession
         if (projectId is not null && !SessionLogProjectBinding.IsValidProjectId(projectId))
             throw new ArgumentException("A project id must contain exactly 32 lowercase hexadecimal characters.",
                                         nameof(projectId));
-        Id            = id;
-        WorkspaceRoot = Path.GetFullPath(workspaceRoot);
-        InitialModel  = model;
-        CreatedUtc    = createdUtc ?? DateTimeOffset.UtcNow;
-        ProjectId     = projectId;
+        if ((projectId is null     && projectAssignmentState == SessionProjectAssignmentState.Project) ||
+            (projectId is not null && projectAssignmentState != SessionProjectAssignmentState.Project))
+            throw new ArgumentException("The project id and project-assignment state are inconsistent.",
+                                        nameof(projectAssignmentState));
+        if (!Enum.IsDefined(projectAssignmentState))
+            throw new ArgumentOutOfRangeException(nameof(projectAssignmentState));
+        Id                     = id;
+        WorkspaceRoot          = Path.GetFullPath(workspaceRoot);
+        InitialModel           = model;
+        CreatedUtc             = createdUtc ?? DateTimeOffset.UtcNow;
+        ProjectId              = projectId;
+        ProjectAssignmentState = projectAssignmentState;
     }
 
     public string Id { get; }
@@ -95,6 +116,8 @@ public sealed partial class ChatSession
     /// </summary>
     public string? ProjectId { get; private set; }
 
+    public SessionProjectAssignmentState ProjectAssignmentState { get; private set; }
+
     public DateTimeOffset CreatedUtc { get; }
 
     /// <summary>
@@ -116,14 +139,14 @@ public sealed partial class ChatSession
 
     /// <summary>
     ///     <para>
-    ///         绑定项目归属：同值重复绑定幂等，绑定到不同项目被拒绝。仅在归属记录可靠提交到会话日志后调用，
-    ///         使内存会话与日志镜像一致；未提交归属就绑定会使后续提交被 writer 的一致性检查拒绝。
+    ///         绑定项目归属：同值重复绑定幂等，明确无项目的会话或绑定到不同项目时拒绝。仅在归属记录可靠提交到
+    ///         会话日志后调用，使内存会话与日志镜像一致；未提交归属就绑定会使后续提交被 writer 的一致性检查拒绝。
     ///     </para>
     ///     <para>
-    ///         Binds project ownership: rebinding the same value is idempotent while binding to a different
-    ///         project is rejected. Call only after the ownership record is durably committed to the session log
-    ///         so the in-memory session mirrors the journal; binding before that commit makes later commits fail
-    ///         the writer's consistency check.
+    ///         Binds project ownership: rebinding the same value is idempotent, while an explicitly unassigned session
+    ///         or a session bound to a different project is rejected. Call only after the ownership record is durably
+    ///         committed to the session log so the in-memory session mirrors the journal; binding before that commit
+    ///         makes later commits fail the writer's consistency check.
     ///     </para>
     /// </summary>
     /// <exception cref="ArgumentException">
@@ -131,8 +154,8 @@ public sealed partial class ChatSession
     ///     <para>The project id is malformed.</para>
     /// </exception>
     /// <exception cref="InvalidOperationException">
-    ///     <para>已绑定到其他项目时尝试改绑。</para>
-    ///     <para>Attempting to rebind a session already owned by a different project.</para>
+    ///     <para>会话已明确无项目，或已绑定到其他项目。</para>
+    ///     <para>The session is explicitly unassigned or already belongs to another project.</para>
     /// </exception>
     public void BindProject(string projectId)
     {
@@ -140,10 +163,14 @@ public sealed partial class ChatSession
         if (!SessionLogProjectBinding.IsValidProjectId(projectId))
             throw new ArgumentException("A project id must contain exactly 32 lowercase hexadecimal characters.",
                                         nameof(projectId));
+        if (ProjectAssignmentState == SessionProjectAssignmentState.NoProject)
+            throw new InvalidOperationException(
+                                                $"Session '{Id}' is explicitly assigned no project; project ownership cannot be added.");
         if (ProjectId is not null && !string.Equals(ProjectId, projectId, StringComparison.Ordinal))
             throw new
                 InvalidOperationException($"Session '{Id}' is already bound to project '{ProjectId}'; project ownership is never transferred to '{projectId}'.");
-        ProjectId = projectId;
+        ProjectId              = projectId;
+        ProjectAssignmentState = SessionProjectAssignmentState.Project;
     }
 
     internal void RecordModelSelection(SessionModelSelection selection)

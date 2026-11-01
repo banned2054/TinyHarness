@@ -39,8 +39,9 @@ public class SessionProjectBindingTests
     private static SessionLogRecord BindingRecord(string projectId) =>
         new(string.Empty, "project-binding",
             JsonSerializer.SerializeToElement(
-                new SessionLogProjectBinding(SessionLogProjectBinding.SchemaName, projectId),
-                SessionLogJsonContext.Default.SessionLogProjectBinding));
+                                              new SessionLogProjectBinding(SessionLogProjectBinding.SchemaName,
+                                                                           projectId),
+                                              SessionLogJsonContext.Default.SessionLogProjectBinding));
 
     private static SessionLogRecord RawBindingRecord(JsonObject payload) =>
         new(string.Empty, "project-binding", JsonSerializer.SerializeToElement(payload));
@@ -339,15 +340,16 @@ public class SessionProjectBindingTests
             ["projectId"] = NewId()
         });
 
-        var error = await TestAssert.ThrowsAsync<SessionStoreException>(
-            () => SessionStoreReader.ReadAsync(dir.Root, session.Id, CancellationToken.None));
-        TestAssert.Contains("project binding", error.Message, StringComparison.Ordinal);
+        var error =
+            await TestAssert.ThrowsAsync<SessionStoreException>(() => SessionStoreReader.ReadAsync(dir.Root, session.Id,
+                                                                    CancellationToken.None));
+        TestAssert.Contains("project assignment", error.Message, StringComparison.Ordinal);
 
         error = await TestAssert.ThrowsAsync<SessionStoreException>(() => new SessionHistoryReader().ReadPageAsync(
-                                                                        dir.Root, session.Id,
-                                                                        SessionHistoryReader.MaxPageItems, null,
-                                                                        CancellationToken.None));
-        TestAssert.Contains("project binding", error.Message, StringComparison.Ordinal);
+                                                                     dir.Root, session.Id,
+                                                                     SessionHistoryReader.MaxPageItems, null,
+                                                                     CancellationToken.None));
+        TestAssert.Contains("project assignment", error.Message, StringComparison.Ordinal);
     }
 
     [Test]
@@ -373,17 +375,20 @@ public class SessionProjectBindingTests
             ["projectId"] = projectId
         });
 
-        var error = await TestAssert.ThrowsAsync<SessionStoreException>(
-            () => SessionStoreReader.ReadAsync(dir.Root, session.Id, CancellationToken.None));
-        TestAssert.Contains("project binding", error.Message, StringComparison.Ordinal);
+        var error =
+            await TestAssert.ThrowsAsync<SessionStoreException>(() => SessionStoreReader.ReadAsync(dir.Root, session.Id,
+                                                                    CancellationToken.None));
+        TestAssert.Contains("project assignment", error.Message, StringComparison.Ordinal);
     }
 
     [Test]
     public async Task Reader_RejectsMalformedBindingPayloads()
     {
         var projectId = NewId();
+
         JsonObject Payload(string schema, string id) =>
             new() { ["schema"] = schema, ["projectId"] = id };
+
         var extraProperty = Payload(SessionLogProjectBinding.SchemaName, projectId);
         extraProperty["note"] = "extra";
         var cases = new (string Name, JsonObject Payload)[]
@@ -403,8 +408,10 @@ public class SessionProjectBindingTests
             var sessionIds = Directory.GetFiles(dir.Root, "*" + SessionStoreWriter.LogFileSuffix);
             var sessionId  = Path.GetFileName(sessionIds[0])[..^SessionStoreWriter.LogFileSuffix.Length];
             await AppendRawBindingBatchAsync(sessionIds[0], sessionId, 2, payload);
-            var error = await TestAssert.ThrowsAsync<SessionStoreException>(
-                () => SessionStoreReader.ReadAsync(dir.Root, sessionId, CancellationToken.None));
+            var error =
+                await TestAssert.ThrowsAsync<SessionStoreException>(() =>
+                                                                        SessionStoreReader.ReadAsync(dir.Root,
+                                                                            sessionId, CancellationToken.None));
             TestAssert.Contains("project-binding", error.Message, StringComparison.Ordinal);
         }
     }
@@ -413,18 +420,19 @@ public class SessionProjectBindingTests
     public void BindingParse_RejectsMalformedStructures()
     {
         var projectId = NewId();
-        Assert.Throws<InvalidDataException>(() => SessionLogProjectBinding.Parse(JsonDocument.Parse("null").RootElement));
+        Assert.Throws<InvalidDataException>(() => SessionLogProjectBinding.Parse(JsonDocument.Parse("null")
+                                               .RootElement));
         Assert.Throws<InvalidDataException>(() => SessionLogProjectBinding.Parse(
-            JsonDocument.Parse(
-                $"{{\"schema\":\"{SessionLogProjectBinding.SchemaName}\",\"schema\":\"x\",\"projectId\":\"{projectId}\"}}")
-                .RootElement));
+                                             JsonDocument.Parse(
+                                                                $"{{\"schema\":\"{SessionLogProjectBinding.SchemaName}\",\"schema\":\"x\",\"projectId\":\"{projectId}\"}}")
+                                                         .RootElement));
         Assert.Throws<InvalidDataException>(() => SessionLogProjectBinding.Parse(
-            JsonDocument.Parse(
-                $"{{\"schema\":\"{SessionLogProjectBinding.SchemaName}\",\"projectId\":null}}")
-                .RootElement));
+                                             JsonDocument.Parse(
+                                                                $"{{\"schema\":\"{SessionLogProjectBinding.SchemaName}\",\"projectId\":null}}")
+                                                         .RootElement));
         Assert.That(SessionLogProjectBinding.Parse(JsonDocument.Parse(
-                                               $"{{\"schema\":\"{SessionLogProjectBinding.SchemaName}\",\"projectId\":\"{projectId}\"}}")
-                                               .RootElement),
+                                                                      $"{{\"schema\":\"{SessionLogProjectBinding.SchemaName}\",\"projectId\":\"{projectId}\"}}")
+                                                               .RootElement),
                     Is.EqualTo(projectId));
     }
 
@@ -451,8 +459,11 @@ public class SessionProjectBindingTests
             Assert.That(writer.CommitSequence, Is.EqualTo(2));
             var length = new FileInfo(path).Length;
 
-            var error = await TestAssert.ThrowsAsync<SessionStoreException>(
-                () => writer.AppendRecordsAsync([BindingRecord(NewId())], CancellationToken.None));
+            var error =
+                await TestAssert.ThrowsAsync<SessionStoreException>(() =>
+                                                                        writer.AppendRecordsAsync([
+                                                                            BindingRecord(NewId())
+                                                                        ], CancellationToken.None));
             TestAssert.Contains("already carries a project binding", error.Message, StringComparison.Ordinal);
             Assert.That(new FileInfo(path).Length, Is.EqualTo(length));
             Assert.That(writer.CommitSequence, Is.EqualTo(2));
@@ -493,9 +504,12 @@ public class SessionProjectBindingTests
                                                                        CancellationToken.None))
         {
             var projectId = NewId();
-            var error     = await TestAssert.ThrowsAsync<SessionStoreException>(
-                () => writer.AppendRecordsAsync([BindingRecord(projectId), BindingRecord(projectId)],
-                                                CancellationToken.None));
+            var error = await TestAssert.ThrowsAsync<SessionStoreException>(() =>
+                                                                                writer.AppendRecordsAsync([
+                                                                                        BindingRecord(projectId),
+                                                                                        BindingRecord(projectId)
+                                                                                    ],
+                                                                                    CancellationToken.None));
             TestAssert.Contains("already carries a project binding", error.Message, StringComparison.Ordinal);
             Assert.That(new FileInfo(path).Length, Is.EqualTo(length));
             Assert.That(writer.CommitSequence, Is.EqualTo(1));
@@ -538,8 +552,11 @@ public class SessionProjectBindingTests
         {
             foreach (var payload in malformed)
             {
-                var error = await TestAssert.ThrowsAsync<SessionStoreException>(
-                    () => writer.AppendRecordsAsync([RawBindingRecord(payload)], CancellationToken.None));
+                var error =
+                    await TestAssert.ThrowsAsync<SessionStoreException>(() =>
+                                                                            writer.AppendRecordsAsync([
+                                                                                RawBindingRecord(payload)
+                                                                            ], CancellationToken.None));
                 TestAssert.Contains("project-binding", error.Message, StringComparison.Ordinal);
                 Assert.That(writer.CommitSequence, Is.EqualTo(1));
                 Assert.That(writer.IsHealthy, Is.True);
@@ -576,14 +593,19 @@ public class SessionProjectBindingTests
                                                                        CancellationToken.None))
         {
             var transferred = NewSession(projectIdB, session.Id);
-            var error       = await TestAssert.ThrowsAsync<SessionStoreException>(
-                () => writer.CommitAsync(transferred, new ConversationContext(), CancellationToken.None));
-            TestAssert.Contains("never transferred", error.Message, StringComparison.Ordinal);
+            var error =
+                await TestAssert.ThrowsAsync<SessionStoreException>(() => writer.CommitAsync(transferred,
+                                                                        new ConversationContext(),
+                                                                        CancellationToken.None));
+            TestAssert.Contains("project state", error.Message, StringComparison.Ordinal);
 
             var dropped = NewSession(id : session.Id);
-            error = await TestAssert.ThrowsAsync<SessionStoreException>(
-                () => writer.CommitAsync(dropped, new ConversationContext(), CancellationToken.None));
-            TestAssert.Contains("never transferred", error.Message, StringComparison.Ordinal);
+            error =
+                await TestAssert.ThrowsAsync<SessionStoreException>(() =>
+                                                                        writer.CommitAsync(dropped,
+                                                                            new ConversationContext(),
+                                                                            CancellationToken.None));
+            TestAssert.Contains("project state", error.Message, StringComparison.Ordinal);
 
             AddTurn(session, "question two", "answer two");
             context.Append(ChatMessage.User("question two"));
@@ -619,9 +641,10 @@ public class SessionProjectBindingTests
         using (var writer = await SessionStoreWriter.OpenExistingAsync(dir.Root, session.Id, null,
                                                                        CancellationToken.None))
         {
-            var error = await TestAssert.ThrowsAsync<SessionStoreException>(
-                () => writer.CommitAsync(session, context, CancellationToken.None));
-            TestAssert.Contains("never transferred", error.Message, StringComparison.Ordinal);
+            var error =
+                await TestAssert.ThrowsAsync<SessionStoreException>(() => writer.CommitAsync(session, context,
+                                                                        CancellationToken.None));
+            TestAssert.Contains("project state", error.Message, StringComparison.Ordinal);
 
             await writer.AppendRecordsAsync([BindingRecord(projectId)], CancellationToken.None);
             await writer.CommitAsync(session, context, CancellationToken.None);
@@ -674,12 +697,11 @@ public class SessionProjectBindingTests
     public void ChatSession_ProjectBindingContract()
     {
         Assert.That(NewSession().ProjectId, Is.Null);
-        Assert.Throws<ArgumentException>(
-            () => new ChatSession(NewId(), Path.GetTempPath(), Model, null, "abc"));
-        Assert.Throws<ArgumentException>(
-            () => new ChatSession(NewId(), Path.GetTempPath(), Model, null, "0123456789ABCDEF0123456789ABCDEF"));
-        Assert.Throws<ArgumentException>(
-            () => new ChatSession(NewId(), Path.GetTempPath(), Model, null, new string('z', 32)));
+        Assert.Throws<ArgumentException>(() => new ChatSession(NewId(), Path.GetTempPath(), Model, null, "abc"));
+        Assert.Throws<ArgumentException>(() => new ChatSession(NewId(), Path.GetTempPath(), Model, null,
+                                                               "0123456789ABCDEF0123456789ABCDEF"));
+        Assert.Throws<ArgumentException>(() => new ChatSession(NewId(), Path.GetTempPath(), Model, null,
+                                                               new string('z', 32)));
 
         var projectId = NewId();
         var session   = NewSession(projectId);
@@ -693,6 +715,13 @@ public class SessionProjectBindingTests
         var unbound = NewSession();
         unbound.BindProject(projectId);
         Assert.That(unbound.ProjectId, Is.EqualTo(projectId));
+
+        var explicitlyNoProject = new ChatSession(NewId(), Path.GetTempPath(), Model, null, null,
+                                                  SessionProjectAssignmentState.NoProject);
+        Assert.Throws<InvalidOperationException>(() => explicitlyNoProject.BindProject(projectId));
+        Assert.That(explicitlyNoProject.ProjectId, Is.Null);
+        Assert.That(explicitlyNoProject.ProjectAssignmentState,
+                    Is.EqualTo(SessionProjectAssignmentState.NoProject));
     }
 
     [Test]
@@ -702,14 +731,18 @@ public class SessionProjectBindingTests
         var binder    = default(Binder);
         var modifiers = Array.Empty<ParameterModifier>();
         var legacy = typeof(ChatSession).GetConstructor(flags, binder,
-                                                       [typeof(string), typeof(string), typeof(SessionModelIdentity),
-                                                        typeof(DateTimeOffset?)], modifiers);
+        [
+            typeof(string), typeof(string), typeof(SessionModelIdentity),
+            typeof(DateTimeOffset?)
+        ], modifiers);
         Assert.That(legacy, Is.Not.Null,
                     "The original four-parameter constructor must keep its CLR signature for binary compatibility.");
         var withProject = typeof(ChatSession).GetConstructor(flags, binder,
-                                                             [typeof(string), typeof(string),
-                                                              typeof(SessionModelIdentity), typeof(DateTimeOffset?),
-                                                              typeof(string)], modifiers);
+        [
+            typeof(string), typeof(string),
+            typeof(SessionModelIdentity), typeof(DateTimeOffset?),
+            typeof(string)
+        ], modifiers);
         Assert.That(withProject, Is.Not.Null);
     }
 
@@ -735,15 +768,21 @@ public class SessionProjectBindingTests
         var path   = writer.SnapshotPath;
         var length = new FileInfo(path).Length;
 
-        var error = await TestAssert.ThrowsAsync<SessionStoreException>(
-            () => writer.AppendRecordsAsync([BindingRecord(projectId)], CancellationToken.None));
+        var error =
+            await TestAssert.ThrowsAsync<SessionStoreException>(() =>
+                                                                    writer.AppendRecordsAsync([
+                                                                        BindingRecord(projectId)
+                                                                    ], CancellationToken.None));
         TestAssert.Contains("poisoned", error.Message, StringComparison.Ordinal);
         Assert.That(writer.IsHealthy, Is.False);
         Assert.That(new FileInfo(path).Length, Is.EqualTo(length));
 
         // poison 后再次追加按既有契约直接拒绝。
-        var retry = await TestAssert.ThrowsAsync<SessionStoreException>(
-            () => writer.AppendRecordsAsync([BindingRecord(projectId)], CancellationToken.None));
+        var retry =
+            await TestAssert.ThrowsAsync<SessionStoreException>(() =>
+                                                                    writer.AppendRecordsAsync([
+                                                                        BindingRecord(projectId)
+                                                                    ], CancellationToken.None));
         TestAssert.Contains("poisoned", retry.Message, StringComparison.Ordinal);
         writer.Dispose();
 
@@ -774,8 +813,11 @@ public class SessionProjectBindingTests
         var length = new FileInfo(writer.SnapshotPath).Length;
 
         // flush 完成后的故障：报告不确定失败，但字节实际落盘；可靠事实以下一轮严格重读为准。
-        var error = await TestAssert.ThrowsAsync<SessionStoreException>(
-            () => writer.AppendRecordsAsync([BindingRecord(projectId)], CancellationToken.None));
+        var error =
+            await TestAssert.ThrowsAsync<SessionStoreException>(() =>
+                                                                    writer.AppendRecordsAsync([
+                                                                        BindingRecord(projectId)
+                                                                    ], CancellationToken.None));
         TestAssert.Contains("poisoned", error.Message, StringComparison.Ordinal);
         Assert.That(writer.IsHealthy, Is.False);
         Assert.That(new FileInfo(writer.SnapshotPath).Length, Is.GreaterThan(length));
@@ -843,7 +885,8 @@ public class SessionProjectBindingTests
         Assert.That(before.Conversation.FoldStartMessageIndex, Is.EqualTo(1));
         Assert.That(before.Conversation.FoldEndMessageIndex, Is.EqualTo(2));
         Assert.That(before.LastActivityUtc, Is.EqualTo(before.UpdatedUtc));
-        var prefix = await File.ReadAllBytesAsync(Path.Combine(dir.Root, session.Id + SessionStoreWriter.LogFileSuffix));
+        var prefix =
+            await File.ReadAllBytesAsync(Path.Combine(dir.Root, session.Id + SessionStoreWriter.LogFileSuffix));
 
         var projectId = NewId();
         using (var writer = await SessionStoreWriter.OpenExistingAsync(dir.Root, session.Id, null,

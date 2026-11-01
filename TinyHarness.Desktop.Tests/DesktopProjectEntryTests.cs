@@ -285,6 +285,36 @@ public sealed class DesktopProjectEntryTests
     }
 
     [Test]
+    public async Task ProjectMenuSelectionUpdatesWhileMenuRemainsOpen()
+    {
+        var             fixture = await Fixture.CreateAsync();
+        await using var model   = fixture.Window();
+        await model.OpenProjectAsync(fixture.First);
+        var page = model.SelectedSession!;
+        await SessionProjectBinding.GetProjectAsync(fixture.Store, fixture.Second, CancellationToken.None);
+        await model.InitializeAsync();
+        var target = model.Projects.Single(group => group.Project?.PrimaryRoot == fixture.Second);
+
+        page.IsWorkspaceMenuOpen = true;
+        var projectGroups     = page.ProjectOptions!.Where(group => group.Project is not null).ToArray();
+        var targetIndex       = Array.FindIndex(projectGroups, group => group.Project!.Id == target.Project!.Id);
+        var targetOption      = page.ProjectMenuOptions[targetIndex];
+        var selectionNotified = false;
+        targetOption.PropertyChanged += (_, args) =>
+        {
+            if (args.PropertyName == nameof(ComposerMenuOption.IsSelected)) selectionNotified = true;
+        };
+        Assert.That(targetOption.IsSelected, Is.False);
+
+        await model.SelectConversationProjectAsync(page, target);
+
+        Assert.That(page.IsWorkspaceMenuOpen, Is.True);
+        Assert.That(targetOption.IsSelected, Is.True);
+        Assert.That(selectionNotified, Is.True);
+        Assert.That(page.ProjectMenuOptions.Count(option => option.IsSelected), Is.EqualTo(1));
+    }
+
+    [Test]
     public async Task RefreshAfterExternalBindingUpdatesTheExistingRowInPlace()
     {
         var             fixture   = await Fixture.CreateAsync();
@@ -354,6 +384,32 @@ public sealed class DesktopProjectEntryTests
         Assert.That(stored!.ProjectId, Is.Not.Null.And.Not.EqualTo(oldProjectId), "首发在当前 store 建立归属。");
         Assert.That(stored.WorkspaceRoot, Is.EqualTo(fixture.First));
         Assert.That(fixture.Models, Is.GreaterThan(0));
+    }
+
+    [Test]
+    public async Task StoreSwitchPreservesExplicitNoProjectSelectionEvenWhenNewStoreHasMatchingProject()
+    {
+        var             fixture     = await Fixture.CreateAsync();
+        var             secondStore = Path.Combine(Path.GetDirectoryName(fixture.Store)!, "sessions-2");
+        await using var model       = fixture.Window();
+        await model.OpenProjectAsync(fixture.First);
+        var blank = model.SelectedSession!;
+        blank.Draft = "keep this no-project draft";
+        await model.SelectConversationProjectAsync(blank, null);
+
+        Directory.CreateDirectory(secondStore);
+        await SessionProjectBinding.GetProjectAsync(secondStore, fixture.First, CancellationToken.None);
+        var user = await UserConfigStore.LoadAsync(fixture.Config, CancellationToken.None);
+        await UserConfigStore.SaveAsync(fixture.Config, user with
+        {
+            Settings = (user.Settings ?? new UserConfigSettings()) with { SessionStoreDirectory = secondStore }
+        }, CancellationToken.None);
+        await model.InitializeAsync();
+
+        Assert.That(blank.StoreDirectory, Is.EqualTo(secondStore));
+        Assert.That(blank.ProjectId, Is.Null);
+        Assert.That(blank.ProjectAssignmentState, Is.EqualTo(SessionProjectAssignmentState.NoProject));
+        Assert.That(blank.Draft, Is.EqualTo("keep this no-project draft"));
     }
 
     /// <summary>

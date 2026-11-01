@@ -1,8 +1,8 @@
 # 项目实体、会话归属与多目录扩展
 
-更新日期：2026-11-01。
+更新日期：2026-11-02。
 
-**状态：阶段一至三已实现，阶段四综合验收待完成。** 本文记录独立 Project、现有会话按目录归属、Desktop／CLI 接入和后续多目录执行的方案；已完成部分与验证见[实施状态](#15-实施状态)。CLI／Desktop 新建持久化会话保存归属，恢复旧日志在原 writer 内补齐；列表与历史只读，旧日志归属由 Desktop 在启动、生效 store 变化与“刷新历史”时自动分批整理，CLI 保留 `session initialize-projects` 显式命令。尚未对真实用户会话追加归属。
+**状态：阶段一至三已实现，明确无项目会话与可恢复归档已接入；阶段四综合验收待完成。** 本文记录独立 Project、会话归属、Desktop／CLI 接入和后续多目录执行的方案；已完成部分与验证见[实施状态](#15-实施状态)。CLI／Desktop 新建持久化会话保存项目归属，恢复旧日志在原 writer 内补齐；列表与历史只读，旧日志归属由 Desktop 在启动、生效 store 变化与“刷新历史”时自动分批整理，CLI 保留 `session initialize-projects` 显式命令。明确无项目的新会话使用单独日志记录，项目视图以底部“最近”分类直接列出无项目会话，空白会话的项目选择器支持搜索与创建项目；归档状态保存在 session store 的独立元数据中，不改写对话日志。项目删除和已有会话解绑仍未实施。
 
 入口见 [PLAN.md](../PLAN.md)。既有契约见[会话持久化](Archive/session-persistence-design.md)、[项目规则](Archive/project-instructions-design.md)、[桌面 GUI 迁移](desktop-migration-plan.md)和[Windows 沙箱管理](Archive/windows-sandbox-management.md)。操作授权以用户当前要求和 [AGENTS.md](../AGENTS.md) 为准，保存计划不构成代码实施、实际数据接入、Git 或发布授权。
 
@@ -13,9 +13,11 @@
 第一版交付：
 
 - 项目持久化、目录精确匹配、创建或复用、改名。
-- 一个项目包含多个会话，一个会话只属于一个项目。
+- 一个项目包含多个会话；会话可以属于一个项目，也可以明确选择无项目。
 - 现有统一日志的归属初始化，支持中断后幂等重试。
 - Desktop 项目分组、项目内草稿与新会话、历史浏览。
+- Desktop 空白新对话页可明确选择无项目；无项目会话仍保留自己的执行目录和权限边界。
+- Desktop 可归档与恢复空闲会话；归档只影响默认列表展示，不删除对话历史。
 - CLI 与 Desktop 共用归属逻辑；运行入口建立归属，历史检查展示归属。
 - 重启后保留项目身份、名称、归属和会话原执行环境。
 
@@ -90,12 +92,13 @@ ProjectRoot
 ```text
 Session
   Id
-  ProjectId
+  ProjectId?                 可选项目身份
+  ProjectAssignmentState     PendingInitialization / Project / NoProject
   WorkspaceRoot
   ……已有字段
 ```
 
-读取未绑定的旧会话时 `ProjectId` 可缺失；新版生产入口创建的持久化会话应提交归属。纯内存和测试入口按其既有职责处理，不为填充字段写入真实用户目录。
+读取未绑定的旧会话时 `ProjectId` 可缺失且状态为 `PendingInitialization`；新建持久化会话必须在初始身份批次内明确保存 `Project` 或 `NoProject`。无项目仅表示没有 Project 归属，仍保留 `WorkspaceRoot`、模型、权限和工具能力；它不表示没有工作区。纯内存和测试入口按其既有职责处理，不为填充字段写入真实用户目录。
 
 保留 `WorkspaceRoot` 当前“本会话固定执行根目录”的语义，不替换为动态查询 `Project.PrimaryRoot`。第一版绑定建立后固定，不提供转移入口。项目名称从 ProjectId 解析，不在会话中维护第二份权威名称。
 
@@ -126,6 +129,8 @@ Session
   projects.json.lock
   pinned-items.json
   pinned-items.json.lock
+  archived-sessions.json
+  archived-sessions.json.lock
   <session-id>.session.jsonl
   ……现有文件
 ```
@@ -135,8 +140,9 @@ Session
 | 数据 | 唯一权威来源 |
 | --- | --- |
 | 项目名称、目录、主目录、修订号 | `projects.json` |
-| 会话项目归属 | 会话 JSONL 的 `project-binding` |
+| 会话项目归属 | 会话 JSONL 的 `project-binding` 或 `project-assignment` |
 | 会话执行目录 | 原有会话身份记录 |
+| 会话归档状态 | `archived-sessions.json` 中的 session ID 集合 |
 | 项目成员列表、最近对话活动 | 从会话记录生成的投影 |
 | 置顶项目顺序、置顶会话 ID | Core 的 `pinned-items.json` |
 
@@ -152,18 +158,26 @@ kind: project-binding
 payload:
   schema: tinyharness.project-binding/1
   projectId: ...
+
+kind: project-assignment
+
+payload:
+  schema: tinyharness.project-assignment/1
+  state: no-project
 ```
 
-- 新会话在初始身份批次内提交归属，不先请求模型再补写。
+- 新会话在初始身份批次内且只提交一条归属事实：有项目时写 `project-binding`，明确无项目时写 `project-assignment`，不先请求模型再补写。
 - 旧会话仅追加归属记录，不重写原有 JSONL 字节前缀、消息、规则、检查点和执行事实。
-- 第一版只允许未绑定变为绑定，不提供后续转移记录。
-- 幂等重试在追加前读取当前归属；已绑定就跳过。reader 拒绝重复或冲突绑定，不采用最后一条覆盖。
+- 旧会话项目初始化只将 `PendingInitialization` 变为 `Project`；明确无项目的会话跳过自动初始化。
+- `project-binding` 与 `project-assignment` 都是一次性归属事实；第一版不提供项目会话解绑或重新归属入口。
+- 幂等重试在追加前读取当前归属；已有任一归属就跳过。reader 拒绝重复或冲突记录，不采用最后一条覆盖。
 - scanner、writer、恢复投影和 source-generated JSON 元数据共同接入，严格校验 schema 与 ID。
 - 归属追加不改变执行目录、协议消息或检查阻断。
+- `LastActivityUtc` 排除仅包含归属维护记录的批次；归属初始化不伪造新对话活动。
 
 沿用 `tinyharness.session-log/1` envelope，以显式版本的新必需记录族扩展。
 
-**兼容边界：新 reader 支持未绑定的统一日志；写入 `project-binding` 后，不支持它的旧程序会拒绝读取该会话。** 初始化与交付说明必须明确此影响；不忽略未知必需记录，不复活旧快照读取器，不将“前缀未重写”描述为“旧程序兼容”。
+**兼容边界：新 reader 支持无归属记录的旧统一日志；写入 `project-binding` 或 `project-assignment` 后，不支持对应必需记录的旧程序会拒绝读取该会话。** 初始化与交付说明必须明确此影响；不忽略未知必需记录，不复活旧快照读取器，不将“前缀未重写”描述为“旧程序兼容”。
 
 ### 6.3 缺失与损坏
 
@@ -260,6 +274,8 @@ mixagents
 | 项目分类与置顶 | 项目模式显示「置顶」和「项目」分类；置顶分类先显示置顶项目，再显示脱离项目列表的置顶会话；置顶状态由 Core 按 session store 持久化，普通项目的默认顺序由 Desktop 偏好维护 |
 | 项目排序模式 | 可选按最近会话活动排列普通项目；切回手动模式恢复保存顺序，置顶项目仍保留置顶顺序 |
 | 纯会话模式 | 会话置顶在两种视图中通用；纯会话模式以同级的「置顶」和「会话」分类显示，两个分类都按最近活动时间排列 |
+| 无项目会话 | 空白新对话页默认无项目并提供项目选择；项目模式将明确无项目会话放在固定的「无项目」分组中，仍使用各自保存的执行目录 |
+| 会话归档 | 空闲会话可归档或恢复；默认项目／会话列表隐藏已归档项，「已归档」视图集中列出，可从该视图恢复 |
 
 - 旧版 Desktop 偏好中的置顶项目顺序与会话 ID 首次加载对应 store 时迁入 Core；Core 文件保存成功后清除旧字段。视图模式与普通项目顺序继续由 Desktop 保存。
 
@@ -267,7 +283,7 @@ mixagents
 - 桌面保持单一可复用的空白新对话页：顶部「新对话」与项目组「+」进入同一份未发送草稿，空白页不出现在正式会话列表、项目成员或侧栏投影中；发送被接受（取得真实 SessionId）即提升为正式会话行且仅登记一次，无真实 ID 的失败保持草稿并可重试。仅当下一份未被选中、无文字且无任何显式预选时才无损回收空白槽；其他被换出的失败草稿留在进程内去重列表，经显式「返回未发送草稿」逐份轮转访问，不覆盖当前空白页输入或已恢复页的修改，不新增持久化或正式侧栏草稿行。
 - 未发送草稿切换项目时保留输入并刷新适用默认模型配置；异步发送继续绑定原会话和草稿版本。菜单、项目「+」、打开目录与自动 store 重绑共用每页意图代际，操作开始时固定页面，异步结果仅在意图、可选目录状态及 store 仍适用时应用；旧结果不改目标、默认模型或选择。自动刷新在配置 I/O 前捕获代际，显式解析在途或之后出现用户意图时不抢占。空白页目标仅在尚无绑定、生效 store 真正变化或显式选择时解析，store 变化时丢弃旧 store 的项目 ID 并按当前目录册只读重解析；正式会话的执行根与 store 固定。
 - 正式会话第一版归属和执行目录固定，不提供移动入口。
-- 现阶段不提供无项目会话专属目录、自定义分类或分类拖动排序；未来分类需位于置顶与普通项目之间，无项目会话分类固定在底部。
+- 无项目会话使用自身 `WorkspaceRoot`，不提供专属目录；固定的「无项目」分组位于项目列表底部，不提供自定义分类或分类拖动排序。
 - 目录缺失仍可查看历史；发送报告不可用，不自动切到其他路径。
 - 同名项目在组头与空白页项目选择菜单中均通过完整路径提示区分；按成员最近对话活动排序，空项目按创建时间，改名不制造活动。
 - 旧日志归属自动整理：Desktop 启动、生效 session store 真正变化和用户点击“刷新历史”时自动执行一轮分批整理（每批最多检查 100 份日志，幂等续扫、占用跳过、损坏只报告不修复）；选择会话、历史分页、折叠展开与普通只读刷新不触发。成功静默，异常才显示简短摘要，未完成的旧日志保留只读目录组并标注原因；空白新对话页不属于侧栏投影。CLI `session initialize-projects [after-session-id]` 保留为显式入口。
@@ -287,6 +303,7 @@ mixagents
 | 会话归属初始化服务 | 协调未绑定日志的幂等追加与失败结果 |
 | 会话日志 reader／writer | 唯一归属提交和投影链路 |
 | SessionStorePinStore | 会话存储目录内的置顶项目顺序与会话 ID，使用独立 sidecar，不改会话日志 |
+| SessionStoreArchiveStore | 会话存储目录内的归档 session ID 集合，独立于对话日志保存并支持恢复 |
 | Desktop 项目投影 | 分组、草稿选择、改名和状态展示 |
 
 名称实施时按规模确定，不为表格强行增加接口或通用框架。
@@ -332,7 +349,7 @@ SessionWorkspace
 
 ## 12. 实施顺序
 
-阶段一至三已实现，阶段四综合验收待完成；不要求碎片提交。
+阶段一至三已实现；本轮补充无项目会话与会话归档，阶段四综合验收仍待完成；不要求碎片提交。
 
 | 阶段 | 工作 | 完成标准 |
 | --- | --- | --- |
@@ -367,6 +384,8 @@ SessionWorkspace
 | 草稿与空交互 | 不新增空日志；CLI `/new` 只进入空白态，首次发送才创建（2026-10-28 起） |
 | 模型／凭据失效 | 列表历史可浏览，初始化不读取 key、不请求模型 |
 | CLI／Desktop 一致 | 同一 store 和最终根目录解析到同一项目 |
+| 明确无项目会话 | 初始批次保存 `project-assignment`；恢复、历史分页和自动项目初始化均保留无项目状态 |
+| 会话归档 | 独立状态文件往返、并发目标状态更新与恢复入口正确；正文日志字节不变 |
 | NativeAOT | 受影响入口发布和离线产物 smoke 通过，无被忽略的新增 trimming／AOT warning |
 
 先运行直接受影响测试；持久化公共边界和两个生产入口变化时扩大到相应回归。真实 GUI 交互单独记录，fake 测试不代替 GUI、真实模型、断电或 OS 沙箱隔离验证。
@@ -375,6 +394,7 @@ SessionWorkspace
 
 - 实施时维护状态、实际文件、关键偏差、验证命令和未验证范围。
 - 同步格式扩展与旧程序读取限制，不能把计划写成已实现行为。
+- 明确无项目日志记录与独立归档 sidecar 分别维护兼容、保护和恢复契约；项目删除另行设计和实施。
 - 第一版新旧契约衔接时同步持久化和桌面计划，不改写历史验收结论。
 - 完成后按仓库规则归档本计划，更新 PLAN 和文档导航。
 
@@ -509,3 +529,17 @@ SessionWorkspace
 - 新增 `SessionStorePins` 与 `SessionStorePinStore`，在每个受保护 session store 中用 `pinned-items.json` 保存置顶项目顺序和置顶会话 ID；采用独立 schema、锁内更新和同目录替换，不写入项目目录册或会话日志，供后续 CLI／TUI 读取。Core 提供原子 toggle、幂等目标状态设置和项目顺序调整 API。
 - Desktop 在首次加载各 store 时迁移旧 `desktop-sidebar.json` 中的置顶列表；Core sidecar 保存迁移标记并合并尚未导入的旧 ID，成功后 Desktop 清空旧字段。置顶状态读写前复用受保护 store 校验；视图模式与普通项目手动顺序继续留在 Desktop 偏好中。
 - 已验证：Core 与 Desktop Debug 构建均 0 警告／错误；Core 定向回归 8/8、Desktop 迁移回归 1/1 通过。CLI 与 Desktop Release `win-x64` NativeAOT 发布成功且无 compiler／trimming／AOT 警告；原生 CLI `smoke` 为 17 步／16 次工具执行，Desktop `--offline-smoke` PASS。Avalonia 统计任务通过进程级 `UsedAvaloniaProducts=` 跳过，以避开 sandbox 不可读的本机许可票据目录。ReSharper CleanupCode 在受限环境中未能完成（访问 JetBrains 用户级文化配置受拒后挂起）；按 `.editorconfig` 与邻近代码手工检查，真实 GUI 和跨进程即时 UI 刷新未验证。
+
+2026-11-01 明确无项目会话与可恢复归档：
+
+- Desktop 空白新对话默认保存为 `NoProject`，可从项目菜单选择已有项目或改回无项目；无项目会话仍保留执行目录和原权限边界。项目模式在底部显示无项目分组，CLI `session list/show` 显示 `no project`。
+- 会话日志新增必需 kind `project-assignment`，在初始身份批次保存 `no-project`；scanner、历史分页、恢复投影、writer 与旧日志初始化共用严格状态校验。旧程序不识别该 kind 时会拒绝读取。项目会话解绑和项目删除仍未实施。
+- `archived-sessions.json` 独立保存最多 10,000 个 session ID（文件上限 1 MiB），用跨进程锁内重读与同目录替换；Desktop 默认列表隐藏已归档会话，顶部归档视图可恢复。写入前重验受保护 store，store 消失时不创建目录；读取失败会报告并保留已有展示状态。
+- 已验证：Desktop Debug 构建（含 Core／Desktop.Runtime）与 CLI Debug 构建均成功，0 警告／错误；CLI 与 Desktop `win-x64` NativeAOT publish 均生成原生代码，0 compiler／trimming／AOT warning。Desktop publish 使用进程级 `UsedAvaloniaProducts=` 并从 VS 18 Community 开发环境加载链接工具链，产物分别位于 `artifacts/session-no-project-archive-20261101/cli-aot/` 与 `desktop-aot/`。
+- 未验证：本轮未运行测试、离线 smoke 或真实 GUI。ReSharper CleanupCode 因环境拒绝 JetBrains 用户级配置访问而无法完成；未改共享设置，按 `.editorconfig` 与邻近代码人工检查。项目删除仍是后续切片。
+
+2026-11-02 项目选择器与无项目会话侧栏分类：
+
+- 项目视图底部增加“最近”分类，直接列出未归档、未置顶的无项目会话，不使用项目组分页。置顶会话仍留在“置顶”分类；归档会话仍由归档视图展示。
+- 空白对话在未选项目时显示“选择项目”；选择器顶部支持按名称搜索，项目顺序沿用侧栏；底部提供“创建项目”和“不在项目中工作”。“创建项目”复用文件夹选择，选择目录后将其加入或复用为项目并切换当前草稿；选择项目后显示文件夹图标，悬停时显示独立圆形清除按钮。
+- 已验证：Desktop Debug 构建通过；本轮未运行测试、NativeAOT publish 或真实 GUI 检查。

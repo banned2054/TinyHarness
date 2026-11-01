@@ -115,9 +115,10 @@ internal static class SessionCommand
     }
 
     private static string ProjectLabel(PersistedSession session, IReadOnlyList<Project> projects) =>
-        session.ProjectId is not { } id                                     ? "unbound (initialization pending)" :
-        projects.FirstOrDefault(project => project.Id == id) is { } project ? $"{project.Name} <{id}>" :
-                                                                              $"missing project information <{id}>";
+        session.ProjectAssignmentState == SessionProjectAssignmentState.NoProject ? "no project" :
+        session.ProjectId is not { } id                                           ? "unbound (initialization pending)" :
+        projects.FirstOrDefault(project => project.Id == id) is { } project       ? $"{project.Name} <{id}>" :
+            $"missing project information <{id}>";
 
     /// <summary>
     ///     <para>显式初始化一个有界批次；展示兼容边界、逐项结果和续扫游标，不读取凭据。</para>

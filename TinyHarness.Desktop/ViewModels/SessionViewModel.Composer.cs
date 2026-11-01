@@ -5,17 +5,20 @@ using TinyHarness.Core.Services.ChatCompletions.Configuration;
 using TinyHarness.Desktop.Runtime;
 using TinyHarness.Core.Models.Configuration;
 using TinyHarness.Core.Models.Permissions;
+using TinyHarness.Core.Models.Persistence;
 
 namespace TinyHarness.Desktop.ViewModels;
 
 public sealed partial class SessionViewModel
 {
-    private ModelChoice? _defaultModel;
-    private long         _defaultModelRevision;
-    private bool         _isModelMenuOpen;
-    private bool         _isPermissionMenuOpen;
-    private bool         _isWorkspaceMenuOpen;
-    private int          _modelMenuPage;
+    private readonly Dictionary<ComposerMenuOption, string> _projectMenuProjectIds = [];
+    private          ModelChoice?                           _defaultModel;
+    private          long                                   _defaultModelRevision;
+    private          bool                                   _isModelMenuOpen;
+    private          bool                                   _isPermissionMenuOpen;
+    private          bool                                   _isWorkspaceMenuOpen;
+    private          int                                    _modelMenuPage;
+    private          string                                 _projectSearchText = string.Empty;
 
     public RelayCommand                             ToggleModelMenuCommand { get; private set; } = null!;
     public RelayCommand                             ShowModelMenuRootCommand { get; private set; } = null!;
@@ -26,6 +29,7 @@ public sealed partial class SessionViewModel
     public ObservableCollection<ComposerModelGroup> ModelGroups { get; } = [];
     public ObservableCollection<ComposerMenuOption> PermissionOptions { get; } = [];
     public ObservableCollection<ComposerMenuOption> ProjectMenuOptions { get; } = [];
+    public ObservableCollection<ComposerMenuOption> VisibleProjectMenuOptions { get; } = [];
     public IReadOnlyList<ComposerMenuOption>        EffortOptions { get; private set; } = [];
     public bool                                     CanChangeModel => !IsRunning && !_opening && !_changing;
     public bool                                     CanSelectModel => CanChangeModel;
@@ -65,7 +69,7 @@ public sealed partial class SessionViewModel
     ///     <para>由主窗口按页注入的项目选择命令，切换本页空白草稿的目标。</para>
     ///     <para>The page-bound project selection command injected by the main window to retarget this blank draft.</para>
     /// </summary>
-    public RelayCommand<ProjectViewModel>? SelectProjectCommand { get; set; }
+    public RelayCommand<ProjectViewModel?>? SelectProjectCommand { get; set; }
 
     /// <summary>
     ///     <para>项目分组投影，供项目菜单与目标标签解析；不复制第二份目录册。</para>
@@ -73,19 +77,38 @@ public sealed partial class SessionViewModel
     /// </summary>
     public IReadOnlyList<ProjectViewModel>? ProjectOptions { get; init; }
 
+    public string ProjectSearchText
+    {
+        get => _projectSearchText;
+        set
+        {
+            if (!SetProperty(ref _projectSearchText, value)) return;
+            RebuildVisibleProjectMenu();
+        }
+    }
+
+    public bool HasVisibleProjectChoices => VisibleProjectMenuOptions.Count > 0;
+    public bool HasNoProjects            => ProjectMenuOptions.Count        == 0;
+
+    public bool HasProjectSearchNoResults => HasProjectChoices && !HasVisibleProjectChoices &&
+                                             !string.IsNullOrWhiteSpace(ProjectSearchText);
+
+    public bool HasSelectedProject => ProjectId is not null;
+
+    public bool IsNoProjectSelection => ProjectId is null &&
+                                        ProjectAssignmentState == SessionProjectAssignmentState.NoProject;
+
     /// <summary>
     ///     <para>
-    ///         空白页目标标签：已绑定项目时显示项目名，否则显示执行目录名；未绑定页面不得套用无项目的展示组。
+    ///         空白页目标标签：已绑定项目时显示项目名；无项目时显示项目选择提示。
     ///     </para>
     ///     <para>
-    ///         Blank-page target label: shows the project name when bound, else the execution directory; an unbound page
-    ///         never borrows a display-only group's name.
+    ///         Blank-page target label: shows the project name when bound and a project-selection prompt otherwise.
     ///     </para>
     /// </summary>
-    public string WorkspaceTargetLabel =>
-        ProjectId is { } id && ProjectOptions?.FirstOrDefault(item => item.Project?.Id == id) is { } group
-            ? group.Name
-            : WorkspaceLabel;
+    public string WorkspaceTargetLabel => ProjectId is { } id
+        ? ProjectOptions?.FirstOrDefault(item => item.Project?.Id == id)?.Name ?? WorkspaceLabel
+        : "选择项目";
 
     public bool IsModelMenuRootPage => _modelMenuPage == 0;
     public bool IsModelsMenuPage    => _modelMenuPage == 1;
@@ -133,8 +156,8 @@ public sealed partial class SessionViewModel
     }
 
     /// <summary>
-    ///     <para>项目菜单是否有可选项；用于控制项目分区标题的可见性。</para>
-    ///     <para>Whether the project menu has choices, controlling its project-section heading visibility.</para>
+    ///     <para>当前项目菜单是否包含任何已存在项目。</para>
+    ///     <para>Whether the project menu contains any existing projects.</para>
     /// </summary>
     public bool HasProjectChoices => ProjectMenuOptions.Count > 0;
 
@@ -343,17 +366,23 @@ public sealed partial class SessionViewModel
                                                 SelectedModel?.ModelId, true, _effort,
                                                 SelectedModel is not null, reselect)
         {
-            ProjectId = ProjectId, StoreDirectory = StoreDirectory
+            ProjectId              = ProjectId, StoreDirectory = StoreDirectory,
+            ProjectAssignmentState = ProjectAssignmentState
         };
         _runtime = await _manager.OpenAsync(Id,
                                             token => _factory.OpenAsync(request, OnEventAsync, OnApprovalAsync, token),
                                             _openingCancellation?.Token ?? CancellationToken.None);
-        Id             = _runtime.Id;
-        _workspaceRoot = _runtime.Host.Session.WorkspaceRoot;
-        StoreDirectory = Path.GetDirectoryName(_runtime.Host.PersistencePath);
-        ProjectId      = _runtime.Host.Session.ProjectId;
+        Id                     = _runtime.Id;
+        _workspaceRoot         = _runtime.Host.Session.WorkspaceRoot;
+        StoreDirectory         = Path.GetDirectoryName(_runtime.Host.PersistencePath);
+        ProjectId              = _runtime.Host.Session.ProjectId;
+        ProjectAssignmentState = _runtime.Host.Session.ProjectAssignmentState;
         if (_runtime.Host.Session.PermissionSelection is { } permission) SetPermissionMode(permission.Mode, false);
         OnPropertyChanged(nameof(ProjectId));
+        RefreshProjectMenuSelection();
+        OnPropertyChanged(nameof(HasSelectedProject));
+        OnPropertyChanged(nameof(IsNoProjectSelection));
+        OnPropertyChanged(nameof(ProjectAssignmentState));
         OnPropertyChanged(nameof(WorkspaceRoot));
         OnPropertyChanged(nameof(WorkspaceLabel));
         OnPropertyChanged(nameof(WorkspaceTargetLabel));
@@ -364,6 +393,7 @@ public sealed partial class SessionViewModel
             _established = true;
             OnPropertyChanged(nameof(Id));
             OnPropertyChanged(nameof(CanPin));
+            OnPropertyChanged(nameof(CanArchive));
             OnPropertyChanged(nameof(CanConfigure));
             OnPropertyChanged(nameof(CanChooseWorkspace));
             Established?.Invoke(this);
@@ -390,20 +420,44 @@ public sealed partial class SessionViewModel
     /// </summary>
     private void RebuildProjectMenu()
     {
+        ProjectSearchText = string.Empty;
         ProjectMenuOptions.Clear();
+        _projectMenuProjectIds.Clear();
         foreach (var group in ProjectOptions ?? [])
         {
             if (group.Project is not { } project) continue;
-            ProjectMenuOptions.Add(new ComposerMenuOption(group.Name,
-                                                          () => SelectProjectCommand?.Execute(group),
-                                                          () => CanChooseWorkspace)
+            var option = new ComposerMenuOption(group.Name,
+                                                () => SelectProjectCommand?.Execute(group),
+                                                () => CanChooseWorkspace)
             {
                 IsSelected = project.Id == ProjectId,
                 ToolTip    = group.HeaderTip
-            });
+            };
+            ProjectMenuOptions.Add(option);
+            _projectMenuProjectIds.Add(option, project.Id);
         }
 
         OnPropertyChanged(nameof(HasProjectChoices));
+        OnPropertyChanged(nameof(HasNoProjects));
+        RebuildVisibleProjectMenu();
+    }
+
+    private void RefreshProjectMenuSelection()
+    {
+        foreach (var (option, projectId) in _projectMenuProjectIds)
+            option.IsSelected = projectId == ProjectId;
+    }
+
+    private void RebuildVisibleProjectMenu()
+    {
+        VisibleProjectMenuOptions.Clear();
+        var search = ProjectSearchText.Trim();
+        foreach (var option in ProjectMenuOptions)
+            if (search.Length == 0 || option.Label.Contains(search, StringComparison.CurrentCultureIgnoreCase))
+                VisibleProjectMenuOptions.Add(option);
+
+        OnPropertyChanged(nameof(HasVisibleProjectChoices));
+        OnPropertyChanged(nameof(HasProjectSearchNoResults));
     }
 
     /// <summary>
@@ -521,11 +575,19 @@ public sealed record ComposerModelGroup(string Name, IReadOnlyList<ComposerMenuO
 ///     <para>菜单展示值与带可用性检查的操作；禁用项不会更改配置。</para>
 ///     <para>A menu label and guarded action; disabled entries never change configuration.</para>
 /// </summary>
-public sealed class ComposerMenuOption(string label, Action select, Func<bool> canSelect)
+public sealed class ComposerMenuOption(string label, Action select, Func<bool> canSelect) : ObservableObject
 {
-    public string  Label      { get; } = label;
-    public bool    IsSelected { get; init; }
-    public string? ToolTip    { get; init; }
+    private bool _isSelected;
+
+    public string Label { get; } = label;
+
+    public bool IsSelected
+    {
+        get => _isSelected;
+        set => SetProperty(ref _isSelected, value);
+    }
+
+    public string? ToolTip { get; init; }
 
     public RelayCommand SelectCommand { get; } = new(() =>
     {

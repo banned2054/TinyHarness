@@ -331,7 +331,7 @@ public static class SessionResume
     private static ChatSession RebuildSession(PersistedSession snapshot)
     {
         var session = new ChatSession(snapshot.Id, snapshot.WorkspaceRoot, snapshot.Model!, snapshot.CreatedUtc,
-                                      snapshot.ProjectId)
+                                      snapshot.ProjectId, snapshot.ProjectAssignmentState)
         {
             InspectionAcknowledgedUtc = snapshot.InspectionAcknowledgedUtc,
             PendingInspectionReason   = snapshot.PendingInspectionReason

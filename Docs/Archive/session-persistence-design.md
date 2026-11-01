@@ -67,13 +67,16 @@
 | `project-instructions` | `tinyharness.project-instructions/1` | `rules-applied` 绑定同批 canonical 宿主消息和完整规则；`scopes-tracked` 仅更新完整探测集合，引用当前 revision，不重复正文 |
 | `compaction-checkpoint` | `state.schema = tinyharness.compaction/1` | 保存有界交接、真实用户原话的 canonical 下标／内容及折叠边界；替换旧 `checkpoint`，不做隐式迁移 |
 | `project-binding` | `tinyharness.project-binding/1` | 保存一次性 ProjectId；初始身份批次或旧日志后续追加，不支持重复或转移 |
+| `project-assignment` | `tinyharness.project-assignment/1` | 初始身份批次内明确保存 `no-project`；与旧日志缺失归属记录的待整理状态区分 |
 | `permission-selection` | `tinyharness.permission-selection/1` | 空闲边界可靠保存权限模式和连续修订；恢复选择，不恢复单次批准或可执行计划 |
 
 外层仍为 `tinyharness.session-log/1`，批次、顺序、锁与资源上限保持原契约。没有项目规则记录的统一日志仍可读取，规则状态为尚未管理；下一次真实发送才加载当前规则。首次写入此必需记录后，旧二进制按未知必需 kind 明确拒绝；新 reader 拒绝未知 payload schema、renderer 或损坏来源绑定，不忽略规则后继续执行。此扩展不重新引入旧快照读取、迁移或独立规则文件。
 
-项目归属扩展的 Core 实现与初始化契约见[项目会话计划](../project-session-plan.md)。新 reader 支持没有绑定的统一日志；绑定载荷严格要求 `schema` 与 32 位小写十六进制 `projectId`，拒绝缺失、未知、重复或错误类型字段。scanner、分页读取、全量投影与 writer 均拒绝重复／冲突绑定。写入后旧程序会按未知必需记录拒绝读取，保留原字节前缀不等于旧程序兼容。
+项目归属扩展的 Core 实现与初始化契约见[项目会话计划](../project-session-plan.md)。新 reader 支持没有归属记录的旧统一日志；`project-binding` 严格校验 `schema` 与 32 位小写十六进制 `projectId`，`project-assignment` 严格校验 `schema` 与 `no-project` 状态。scanner、分页读取、全量投影与 writer 均拒绝重复或互相冲突的归属事实。写入任一新必需记录后，旧程序会拒绝读取该会话，保留原字节前缀不等于旧程序兼容。
 
-归属不改变原执行根、canonical、opaque、项目规则、压缩检查点或 NeedsInspection；`UpdatedUtc` 仍为最近提交时间，派生 `LastActivityUtc` 排除纯归属维护批次。旧日志初始化仅经初始化服务显式调用（Desktop 在启动、生效 store 变化与刷新历史时自动发起，CLI 提供显式命令），先可靠保存项目并释放目录册锁，再获取会话排他 writer 严格重读、追加；reader 与历史列举不会隐式写入。分批限制正文检查数量，文件名枚举仍为全量轻量操作；取消与不确定写入遵循既有 writer 契约。CLI／Desktop 生产入口现已在新会话初始批次保存归属，恢复入口通过原 writer 补齐未绑定归属；已绑定值不依赖目录册可用性。批量初始化由 CLI `session initialize-projects [after-session-id]` 显式触发，Desktop 在启动、生效 store 变化与刷新历史时自动执行，每批最多检查 100 份日志；真实用户旧会话自动归属经 2026-10-28 用户实测反馈确认成功（Agent 未读取真实日志复核）。
+归属不改变原执行根、canonical、opaque、项目规则、压缩检查点或 NeedsInspection；`UpdatedUtc` 仍为最近提交时间，派生 `LastActivityUtc` 排除纯归属维护批次。旧日志初始化仅经初始化服务显式调用（Desktop 在启动、生效 store 变化与刷新历史时自动发起，CLI 提供显式命令），先可靠保存项目并释放目录册锁，再获取会话排他 writer 严格重读、追加；reader 与历史列举不会隐式写入。分批限制正文检查数量，文件名枚举仍为全量轻量操作；取消与不确定写入遵循既有 writer 契约。CLI／Desktop 生产入口现已在新会话初始批次保存归属，恢复入口通过原 writer 补齐未绑定归属；已绑定值不依赖目录册可用性。批量初始化由 CLI `session initialize-projects [after-session-id]` 显式触发，Desktop 在启动、生效 store 变化与刷新历史时自动执行，每批最多检查 100 份日志；真实用户旧会话自动归属经 2026-10-28 用户实测反馈确认成功（Agent 未读取真实日志复核）。项目会话解绑仍须另行实施，不因无项目初始状态而隐式允许改绑。
+
+会话归档状态由 session store 中的 `archived-sessions.json` 侧车独立保存，使用专用 schema、锁内重读和同目录替换；归档／恢复不改写 session log，不改变模型续聊、权限或执行事实。Desktop 默认列表隐藏已归档会话，归档视图可恢复；旧程序忽略此 sidecar 时仍会显示这些会话。该状态不代表日志分段、压缩或删除。
 
 ### 4.2 写入边界与故障
 
@@ -128,6 +131,7 @@
 - 2026-10-21 压缩替换沿用同一 writer 和 envelope，使用必需 kind `compaction-checkpoint` 及 `tinyharness.compaction/1` 状态。旧七字段 `checkpoint` 明确拒绝，既有文件不删除或改写，也不保留旧读取器；尚无旧检查点的统一日志继续可读。旧程序会拒绝新的必需 kind，不能静默当作未压缩。新 schema／原话来源／预算／工具边界仍严格校验。
 - `session list/show` 只消费受保护目录中的 `.session.jsonl` 日志。旧 `.session.json` 与独立 audit 文件被忽略，不扫描旧运行输出目录，不自动转换、删除或覆盖旧文件。
 - 日志自身保留格式标识，未知格式、必需记录、重复、截断、poison、资源限额与身份校验继续有效。恢复投影不再带旧快照的 FormatVersion 和 OpaqueRedacted 标记。
+- `project-assignment` 是新增必需 kind；旧程序读取含该记录的会话时会按未知必需 kind 拒绝，不会误把明确无项目当成尚待初始化。
 - `run` 与 `chat` 共用统一持久化核心。协议 DTO、恢复投影、opaque 哈希、NeedsInspection 和用户确认属于当前功能，不因移除兼容层而删除；不复活旧 grant，也不恢复逐轮全量重复写入。
 
 ### 6.2 可按需增加的能力

@@ -12,6 +12,20 @@
         <Setter Property="CornerRadius" Value="14" />
         <Setter Property="Padding" Value="6" />
     </Style>
+    <Style Selector="Border.popup-search">
+        <Setter Property="Height" Value="36" />
+        <Setter Property="Margin" Value="0,0,0,4" />
+        <Setter Property="Padding" Value="8,0" />
+        <Setter Property="BorderBrush" Value="{DynamicResource PopupDividerBrush}" />
+        <Setter Property="BorderThickness" Value="0,0,0,1" />
+    </Style>
+    <Style Selector="TextBlock.popup-empty-state">
+        <Setter Property="MinHeight" Value="42" />
+        <Setter Property="Margin" Value="10,0" />
+        <Setter Property="Foreground" Value="{DynamicResource PopupMutedForegroundBrush}" />
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
     <!-- 分区标题（如提供方名、分组方式）：弱化说明文字，不是可点击项。
          视觉接近 Typography.caption 但语义不同，弹层配色调整不应波及正文说明文字。 -->
     <Style Selector="TextBlock.popup-section">

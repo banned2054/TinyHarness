@@ -16,6 +16,7 @@ public enum SessionProjectBindingStatus
 {
     Bound,
     AlreadyBound,
+    NoProject,
     Pending,
     Failed
 }
@@ -259,6 +260,9 @@ public static class SessionProjectInitializer
                     outcomes.Add(new SessionProjectBindingOutcome(sessionId, snapshot.Session.WorkspaceRoot,
                                                                   SessionProjectBindingStatus.AlreadyBound,
                                                                   boundProjectId, null));
+                else if (snapshot.Session.ProjectAssignmentState == SessionProjectAssignmentState.NoProject)
+                    outcomes.Add(new SessionProjectBindingOutcome(sessionId, snapshot.Session.WorkspaceRoot,
+                                                                  SessionProjectBindingStatus.NoProject, null, null));
                 else if (RootValidationError(storeDirectory, snapshot.Session.WorkspaceRoot) is { } rootError)
                     outcomes.Add(new SessionProjectBindingOutcome(sessionId, snapshot.Session.WorkspaceRoot,
                                                                   SessionProjectBindingStatus.Failed, null,
@@ -331,6 +335,14 @@ public static class SessionProjectInitializer
                         outcomes.Add(new SessionProjectBindingOutcome(sessionId, reloaded.WorkspaceRoot,
                                                                       SessionProjectBindingStatus.AlreadyBound,
                                                                       existingProjectId, null));
+                        continue;
+                    }
+
+                    if (reloaded.ProjectAssignmentState == SessionProjectAssignmentState.NoProject)
+                    {
+                        outcomes.Add(new SessionProjectBindingOutcome(sessionId, reloaded.WorkspaceRoot,
+                                                                      SessionProjectBindingStatus.NoProject, null,
+                                                                      null));
                         continue;
                     }
 
@@ -428,8 +440,10 @@ public static class SessionProjectInitializer
         [
             new SessionLogRecord(string.Empty, "project-binding",
                                  JsonSerializer.SerializeToElement(
-                                     new SessionLogProjectBinding(SessionLogProjectBinding.SchemaName, projectId),
-                                     SessionLogJsonContext.Default.SessionLogProjectBinding))
+                                                                   new SessionLogProjectBinding(SessionLogProjectBinding
+                                                                               .SchemaName, projectId),
+                                                                   SessionLogJsonContext.Default
+                                                                      .SessionLogProjectBinding))
         ], cancellationToken);
     }
 

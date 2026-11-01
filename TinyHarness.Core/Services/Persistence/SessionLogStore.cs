@@ -96,13 +96,14 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
     private string?                 _lastRunJson;
     private SessionLogSessionState? _lastSessionState;
 
-    private long    _persistedMessageCount;
-    private int     _persistedProjectInstructionRecordCount;
-    private int     _persistedTurnCount;
-    private bool    _poisoned;
-    private string? _projectId;
-    private string? _trackedTurnId;
-    private int     _trackedTurnRunCount;
+    private long                          _persistedMessageCount;
+    private int                           _persistedProjectInstructionRecordCount;
+    private int                           _persistedTurnCount;
+    private bool                          _poisoned;
+    private SessionProjectAssignmentState _projectAssignmentState;
+    private string?                       _projectId;
+    private string?                       _trackedTurnId;
+    private int                           _trackedTurnRunCount;
 
     public SessionStoreWriter(
         string directory, string sessionId, IReadOnlyDictionary<string, string>? knownSecrets = null)
@@ -228,9 +229,10 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
                 throw new
                     SessionStoreException("The session identity batch must be committed before appending run records.");
 
-            var     sequence         = CommitSequence + 1;
-            var     normalized       = new SessionLogRecord[records.Count];
-            string? bindingProjectId = null;
+            var     sequence            = CommitSequence + 1;
+            var     normalized          = new SessionLogRecord[records.Count];
+            string? bindingProjectId    = null;
+            var     explicitlyNoProject = false;
             for (var i = 0; i < records.Count; i++)
             {
                 var record = records[i] ?? throw new SessionStoreException("The record batch contains a null record.");
@@ -290,7 +292,8 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
                 }
                 else if (record.Kind == "project-binding")
                 {
-                    if (_projectId is not null || bindingProjectId is not null)
+                    if (_projectId is not null || bindingProjectId is not null ||
+                        _projectAssignmentState == SessionProjectAssignmentState.NoProject || explicitlyNoProject)
                         throw new
                             SessionStoreException($"Session '{SessionId}' already carries a project binding; ownership is bound once and never appended again or transferred.");
                     try
@@ -305,6 +308,28 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
                     }
 
                     normalized[i] = record with { Id = recordId };
+                }
+                else if (record.Kind == "project-assignment")
+                {
+                    if (_projectId is not null                                                         ||
+                        bindingProjectId is not null                                                   ||
+                        _projectAssignmentState != SessionProjectAssignmentState.PendingInitialization ||
+                        explicitlyNoProject)
+                        throw new SessionStoreException(
+                                                        $"Session '{SessionId}' already has a project assignment; an explicit no-project state can only initialize an unbound legacy session.");
+                    try
+                    {
+                        SessionLogProjectAssignment.ValidateNoProject(record.Payload);
+                    }
+                    catch (InvalidDataException ex)
+                    {
+                        throw new SessionStoreException(
+                                                        $"Journal record 'project-assignment' has an invalid typed payload: {ex.Message}",
+                                                        ex);
+                    }
+
+                    explicitlyNoProject = true;
+                    normalized[i]       = record with { Id = recordId };
                 }
                 else
                 {
@@ -333,7 +358,13 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
 
             CommitSequence = sequence;
             // 校验只暂存待绑定值，成功落盘后才推进 writer 归属缓存。
-            if (bindingProjectId is not null) _projectId = bindingProjectId;
+            if (bindingProjectId is not null)
+            {
+                _projectId              = bindingProjectId;
+                _projectAssignmentState = SessionProjectAssignmentState.Project;
+            }
+
+            if (explicitlyNoProject) _projectAssignmentState = SessionProjectAssignmentState.NoProject;
             return normalized;
         }
         finally
@@ -375,9 +406,11 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
         try
         {
             if (_poisoned) throw PoisonedException();
-            if (CommitSequence > 0 && !string.Equals(session.ProjectId, _projectId, StringComparison.Ordinal))
+            if (CommitSequence > 0 &&
+                (!string.Equals(session.ProjectId, _projectId, StringComparison.Ordinal) ||
+                 session.ProjectAssignmentState != _projectAssignmentState))
                 throw new
-                    SessionStoreException($"Session '{SessionId}' carries project '{session.ProjectId ?? "(unbound)"}' while the committed journal carries '{_projectId ?? "(unbound)"}'; project ownership is bound once and never transferred or dropped.");
+                    SessionStoreException($"Session '{SessionId}' carries project state '{session.ProjectAssignmentState}' and project '{session.ProjectId ?? "(none)"}' while the committed journal carries '{_projectAssignmentState}' and '{_projectId ?? "(none)"}'.");
             if (context.Messages.Count < _persistedMessageCount)
                 throw new
                     SessionStoreException("The in-memory conversation rewound behind the committed journal prefix.");
@@ -407,6 +440,10 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
                 if (session.ProjectId is { } initialProjectId)
                     Add("project-binding",
                         new SessionLogProjectBinding(SessionLogProjectBinding.SchemaName, initialProjectId));
+                else if (session.ProjectAssignmentState == SessionProjectAssignmentState.NoProject)
+                    Add("project-assignment",
+                        new SessionLogProjectAssignment(SessionLogProjectAssignment.SchemaName,
+                                                        SessionLogProjectAssignment.NoProject));
             }
 
             var modelSelectionCount = PersistedModelSelectionCount;
@@ -568,6 +605,7 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
             _checkpointFingerprint                  = checkpointFingerprint;
             _lastSessionState                       = lastSessionState;
             _projectId                              = session.ProjectId;
+            _projectAssignmentState                 = session.ProjectAssignmentState;
         }
         finally
         {
@@ -764,7 +802,8 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
             snapshot.Conversation?.ProjectInstructionRecords.Count ?? 0;
         _lastSessionState = new SessionLogSessionState(snapshot.InspectionAcknowledgedUtc,
                                                        snapshot.PendingInspectionReason);
-        _projectId = snapshot.ProjectId;
+        _projectId              = snapshot.ProjectId;
+        _projectAssignmentState = snapshot.ProjectAssignmentState;
         if (snapshot.Conversation is { } seededConversation)
             _checkpointFingerprint = $"{seededConversation.HasState}:{seededConversation.FoldStartMessageIndex}:" +
                                      $"{seededConversation.FoldEndMessageIndex}:" + (seededConversation.HasState
@@ -972,18 +1011,19 @@ public static class SessionStoreReader
         private (string Id, long Sequence, string TurnId, string RunId, string Revision, int DocumentCount)?
             _expectedInstructionHistory;
 
-        private SessionLogIdentity?         _identity;
-        private DateTimeOffset              _lastActivityUtc;
-        private SessionPermissionSelection? _permissionSelection;
-        private string?                     _projectId;
-        private SessionLogSessionState?     _state;
-        private DateTimeOffset              _updatedUtc;
+        private SessionLogIdentity?           _identity;
+        private DateTimeOffset                _lastActivityUtc;
+        private SessionPermissionSelection?   _permissionSelection;
+        private SessionProjectAssignmentState _projectAssignmentState;
+        private string?                       _projectId;
+        private SessionLogSessionState?       _state;
+        private DateTimeOffset                _updatedUtc;
 
         public void Apply(SessionLogBatch batch)
         {
             _updatedUtc = batch.WrittenUtc;
             // 纯归属维护批次不构成对话活动；含任何其他记录的批次按其提交时间推进。
-            if (batch.Records.Any(record => record.Kind != "project-binding"))
+            if (batch.Records.Any(record => record.Kind is not ("project-binding" or "project-assignment")))
                 _lastActivityUtc = batch.WrittenUtc;
             for (var recordIndex = 0; recordIndex < batch.Records.Count; recordIndex++)
             {
@@ -1205,10 +1245,30 @@ public static class SessionStoreReader
                                                       ex);
                         }
 
-                        if (_projectId is not null)
+                        if (_projectId is not null ||
+                            _projectAssignmentState != SessionProjectAssignmentState.PendingInitialization)
                             throw new
-                                SessionStoreException($"Session '{sessionId}' repeats or conflicts with its project binding '{_projectId}'; ownership is bound exactly once and never transferred.");
-                        _projectId = boundProjectId;
+                                SessionStoreException($"Session '{sessionId}' repeats or conflicts with project assignment '{_projectAssignmentState}'; ownership is assigned exactly once.");
+                        _projectId              = boundProjectId;
+                        _projectAssignmentState = SessionProjectAssignmentState.Project;
+                        break;
+                    case "project-assignment" :
+                        try
+                        {
+                            SessionLogProjectAssignment.ValidateNoProject(record.Payload);
+                        }
+                        catch (InvalidDataException ex)
+                        {
+                            throw new SessionStoreException(
+                                                            $"Session '{sessionId}' contains an invalid project-assignment record: {ex.Message}",
+                                                            ex);
+                        }
+
+                        if (_projectId is not null ||
+                            _projectAssignmentState != SessionProjectAssignmentState.PendingInitialization)
+                            throw new SessionStoreException(
+                                                            $"Session '{sessionId}' has a conflicting or duplicate explicit no-project assignment.");
+                        _projectAssignmentState = SessionProjectAssignmentState.NoProject;
                         break;
                     default :
                         throw new
@@ -1241,6 +1301,7 @@ public static class SessionStoreReader
                 Id                      = _identity.Id,
                 WorkspaceRoot           = _identity.WorkspaceRoot,
                 ProjectId               = _projectId,
+                ProjectAssignmentState  = _projectAssignmentState,
                 Model                   = _identity.Model,
                 ModelSelections         = _modelSelections.ToArray(),
                 PermissionSelection     = _permissionSelection,
@@ -1673,6 +1734,7 @@ public static class SessionStoreReader
 [JsonSerializable(typeof(SessionLogRecord))]
 [JsonSerializable(typeof(SessionLogIdentity))]
 [JsonSerializable(typeof(SessionLogProjectBinding))]
+[JsonSerializable(typeof(SessionLogProjectAssignment))]
 [JsonSerializable(typeof(SessionLogTurn))]
 [JsonSerializable(typeof(SessionLogRun))]
 [JsonSerializable(typeof(SessionLogMessage))]

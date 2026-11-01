@@ -49,7 +49,10 @@ public sealed record SessionLogProjectBinding(string Schema, string ProjectId)
 
     /// <summary>
     ///     <para>校验项目 ID 形态：32 位小写十六进制字符；与目录、名称和修订号无关。</para>
-    ///     <para>Validates the project-id shape: 32 lowercase hexadecimal characters, independent of roots, names, and revisions.</para>
+    ///     <para>
+    ///         Validates the project-id shape: 32 lowercase hexadecimal characters, independent of roots, names, and
+    ///         revisions.
+    ///     </para>
     /// </summary>
     internal static bool IsValidProjectId(string id) =>
         id.Length == 32 && id.All(char.IsAsciiHexDigit) && !id.Any(char.IsUpper);
@@ -113,6 +116,60 @@ public sealed record SessionLogProjectBinding(string Schema, string ProjectId)
         {
             if (property.Value.ValueKind != JsonValueKind.String)
                 throw new InvalidDataException($"A project-binding property '{property.Name}' must be a string.");
+            return property.Value.GetString()!;
+        }
+    }
+}
+
+/// <summary>
+///     <para>标记会话明确选择无项目；与旧日志缺少归属记录的待整理状态区分。</para>
+///     <para>Marks an explicit no-project choice, distinct from legacy logs that are pending ownership initialization.</para>
+/// </summary>
+public sealed record SessionLogProjectAssignment(string Schema, string State)
+{
+    public const string SchemaName = "tinyharness.project-assignment/1";
+    public const string NoProject  = "no-project";
+
+    /// <summary>
+    ///     <para>严格校验无项目归属记录。</para>
+    ///     <para>Strictly validates a no-project assignment record.</para>
+    /// </summary>
+    /// <exception cref="InvalidDataException">
+    ///     <para>载荷字段、schema 或状态不符合当前协议。</para>
+    ///     <para>The payload fields, schema, or state do not match the current protocol.</para>
+    /// </exception>
+    internal static void ValidateNoProject(JsonElement payload)
+    {
+        if (payload.ValueKind != JsonValueKind.Object)
+            throw new InvalidDataException("A project-assignment payload must be an object.");
+        string? schema = null;
+        string? state  = null;
+        foreach (var property in payload.EnumerateObject())
+            switch (property.Name)
+            {
+                case "schema" :
+                    if (schema is not null)
+                        throw new InvalidDataException("A project-assignment payload repeats its 'schema' property.");
+                    schema = ReadStringProperty(property);
+                    break;
+                case "state" :
+                    if (state is not null)
+                        throw new InvalidDataException("A project-assignment payload repeats its 'state' property.");
+                    state = ReadStringProperty(property);
+                    break;
+                default :
+                    throw new InvalidDataException(
+                                                   $"A project-assignment payload must not contain the unknown property '{property.Name}'.");
+            }
+
+        if (schema != SchemaName || state != NoProject)
+            throw new
+                InvalidDataException("A project-assignment payload must identify the 'no-project' state and supported schema.");
+
+        static string ReadStringProperty(JsonProperty property)
+        {
+            if (property.Value.ValueKind != JsonValueKind.String)
+                throw new InvalidDataException($"A project-assignment property '{property.Name}' must be a string.");
             return property.Value.GetString()!;
         }
     }

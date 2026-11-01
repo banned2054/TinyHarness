@@ -117,57 +117,126 @@
                                  行常驻等高（MinHeight），转正不使输入卡跳位。 -->
                             <Grid Grid.Row="3" MaxWidth="816" Margin="28,0,28,10" MinHeight="36">
                                 <Panel IsVisible="{Binding CanChooseWorkspace}" HorizontalAlignment="Left">
-                                    <Button x:Name="WorkspacePickerButton"
-                                            Classes="workspace-picker"
-                                            Command="{Binding ToggleWorkspaceMenuCommand}"
-                                            AutomationProperties.Name="选择项目与目录"
-                                            ToolTip.Tip="{Binding WorkspaceRoot}">
-                                        <Grid ColumnDefinitions="Auto,Auto" ColumnSpacing="8">
-                                            <TextBlock Text="{Binding WorkspaceTargetLabel}"
-                                                       TextTrimming="CharacterEllipsis" MaxWidth="360" />
-                                            <Path Grid.Column="1"
-                                                  Data="{StaticResource Icon.DropdownChevron}"
-                                                  Width="8" Height="4"
-                                                  Stretch="None"
-                                                  Stroke="{Binding $parent[Button].Foreground}"
-                                                  StrokeThickness="1.6"
-                                                  VerticalAlignment="Center" />
+                                    <Border x:Name="WorkspacePickerShell" Classes="workspace-picker-shell">
+                                        <Grid ColumnDefinitions="Auto,Auto">
+                                            <Button Classes="workspace-picker-clear"
+                                                    IsVisible="{Binding HasSelectedProject}"
+                                                    Command="{Binding SelectProjectCommand}"
+                                                    CommandParameter="{x:Null}"
+                                                    AutomationProperties.Name="移除项目，改为无项目"
+                                                    ToolTip.Tip="移除项目，改为无项目">
+                                                <Panel Width="16" Height="16">
+                                                    <Path Classes="workspace-picker-folder"
+                                                          Data="{StaticResource Icon.FolderCloseRegular}"
+                                                          Stroke="{DynamicResource TextMutedBrush}"
+                                                          StrokeThickness="1" />
+                                                    <Path Classes="workspace-picker-clear-icon"
+                                                          Data="{StaticResource Icon.CloseOutline}"
+                                                          Stroke="{DynamicResource TextMutedBrush}"
+                                                          StrokeThickness="1.4" />
+                                                </Panel>
+                                            </Button>
+                                            <Button x:Name="WorkspacePickerButton" Grid.Column="1"
+                                                    Classes="workspace-picker"
+                                                    Command="{Binding ToggleWorkspaceMenuCommand}"
+                                                    AutomationProperties.Name="选择项目"
+                                                    ToolTip.Tip="{Binding WorkspaceRoot}">
+                                                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                                                    <TextBlock Text="{Binding WorkspaceTargetLabel}"
+                                                               TextTrimming="CharacterEllipsis" MaxWidth="360" />
+                                                    <Path Grid.Column="1"
+                                                          Data="{StaticResource Icon.DropdownChevron}"
+                                                          Width="8" Height="4"
+                                                          Stretch="None"
+                                                          Stroke="{Binding $parent[Button].Foreground}"
+                                                          StrokeThickness="1.6"
+                                                          VerticalAlignment="Center" />
+                                                </Grid>
+                                            </Button>
                                         </Grid>
-                                    </Button>
-                                    <Popup PlacementTarget="{Binding #WorkspacePickerButton}"
+                                    </Border>
+                                    <Popup PlacementTarget="{Binding #WorkspacePickerShell}"
                                            Placement="TopEdgeAlignedLeft"
                                            VerticalOffset="-4"
                                            IsOpen="{Binding IsWorkspaceMenuOpen, Mode=TwoWay}"
                                            IsLightDismissEnabled="True">
                                         <Border Classes="popup-surface" Width="300" MaxHeight="420">
                                             <StackPanel>
-                                                <TextBlock Classes="popup-section" Text="项目"
-                                                           IsVisible="{Binding HasProjectChoices}" />
-                                                <ScrollViewer MaxHeight="288" HorizontalScrollBarVisibility="Disabled">
-                                                    <ItemsControl ItemsSource="{Binding ProjectMenuOptions}">
+                                                <Border Classes="popup-search">
+                                                    <Grid ColumnDefinitions="16,*" ColumnSpacing="8">
+                                                        <Path Width="16" Height="16"
+                                                              Data="{StaticResource Icon.SearchOutlineRegular}"
+                                                              Stroke="{DynamicResource PopupMutedForegroundBrush}"
+                                                              StrokeThickness="1.2" />
+                                                        <TextBox Grid.Column="1"
+                                                                 Classes="popup-search"
+                                                                 MinHeight="0"
+                                                                 Text="{Binding ProjectSearchText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                                 PlaceholderText="搜索项目或设备"
+                                                                 AutomationProperties.Name="搜索项目或设备" />
+                                                    </Grid>
+                                                </Border>
+                                                <ScrollViewer MaxHeight="240"
+                                                              HorizontalScrollBarVisibility="Disabled"
+                                                              IsVisible="{Binding HasVisibleProjectChoices}">
+                                                    <ItemsControl ItemsSource="{Binding VisibleProjectMenuOptions}">
                                                         <ItemsControl.ItemTemplate>
                                                             <DataTemplate x:DataType="vm:ComposerMenuOption">
                                                                 <Button Classes="popup-item"
                                                                         Classes.selected="{Binding IsSelected}"
                                                                         Command="{Binding SelectCommand}"
                                                                         ToolTip.Tip="{Binding ToolTip}">
-                                                                    <Grid ColumnDefinitions="*,Auto">
-                                                                        <TextBlock Text="{Binding Label}"
-                                                                                TextTrimming="CharacterEllipsis" />
-                                                                        <TextBlock Grid.Column="1"
-                                                                                Classes="popup-check"
-                                                                                Text="✓"
-                                                                                IsVisible="{Binding IsSelected}" />
+                                                                    <Grid ColumnDefinitions="16,*,Auto" ColumnSpacing="8">
+                                                                        <Path Width="16" Height="16"
+                                                                              Data="{StaticResource Icon.FolderCloseRegular}"
+                                                                              Stroke="{DynamicResource PopupMutedForegroundBrush}"
+                                                                              StrokeThickness="1" />
+                                                                        <TextBlock Grid.Column="1" Text="{Binding Label}"
+                                                                                   TextTrimming="CharacterEllipsis" />
+                                                                        <TextBlock Grid.Column="2"
+                                                                                   Classes="popup-check"
+                                                                                   Text="✓"
+                                                                                   IsVisible="{Binding IsSelected}" />
                                                                     </Grid>
                                                                 </Button>
                                                             </DataTemplate>
                                                         </ItemsControl.ItemTemplate>
                                                     </ItemsControl>
                                                 </ScrollViewer>
-                                                <TextBlock Classes="popup-section" Text="目录" />
+                                                <TextBlock Classes="popup-empty-state" Text="还没有项目"
+                                                           IsVisible="{Binding HasNoProjects}" />
+                                                <TextBlock Classes="popup-empty-state" Text="没有匹配的项目"
+                                                           IsVisible="{Binding HasProjectSearchNoResults}" />
+                                                <Rectangle Height="1" Fill="{DynamicResource PopupDividerBrush}"
+                                                           Margin="4,6" />
                                                 <Button Classes="popup-item" Click="BrowseFolder"
-                                                        AutomationProperties.Name="打开目录">
-                                                    <TextBlock Text="打开目录…" />
+                                                        AutomationProperties.Name="创建项目">
+                                                    <Grid ColumnDefinitions="16,*" ColumnSpacing="8">
+                                                        <Panel Width="16" Height="16">
+                                                            <Path Data="{StaticResource Icon.ProjectAddFolderFill}"
+                                                                  Fill="{DynamicResource PopupMutedForegroundBrush}" />
+                                                            <Path Data="{StaticResource Icon.ProjectAddPlusStroke}"
+                                                                  Stroke="{DynamicResource PopupMutedForegroundBrush}"
+                                                                  StrokeThickness="1"
+                                                                  StrokeLineCap="Round" />
+                                                        </Panel>
+                                                        <TextBlock Grid.Column="1" Text="创建项目" />
+                                                    </Grid>
+                                                </Button>
+                                                <Button Classes="popup-item"
+                                                        Classes.selected="{Binding IsNoProjectSelection}"
+                                                        Command="{Binding SelectProjectCommand}"
+                                                        CommandParameter="{x:Null}"
+                                                        AutomationProperties.Name="不在项目中工作">
+                                                    <Grid ColumnDefinitions="16,*,Auto" ColumnSpacing="8">
+                                                        <Path Width="16" Height="16"
+                                                              Data="{StaticResource Icon.ChatOutlineRegular}"
+                                                              Stroke="{DynamicResource PopupMutedForegroundBrush}"
+                                                              StrokeThickness="1.1" />
+                                                        <TextBlock Grid.Column="1" Text="不在项目中工作" />
+                                                        <TextBlock Grid.Column="2" Classes="popup-check" Text="✓"
+                                                                   IsVisible="{Binding IsNoProjectSelection}" />
+                                                    </Grid>
                                                 </Button>
                                             </StackPanel>
                                         </Border>

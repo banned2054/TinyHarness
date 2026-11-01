@@ -26,6 +26,7 @@ public sealed partial class SessionViewModel : ObservableObject
     private readonly Dictionary<string, ToolActivityItemViewModel> _tools         = new(StringComparer.Ordinal);
     private          string?                                       _activeRunId;
     private          DesktopApproval?                              _approval;
+    private          bool                                          _archiveMutationPending;
     private          string?                                       _cancellationError;
     private          bool                                          _changing;
     private          Task?                                         _completion;
@@ -38,6 +39,7 @@ public sealed partial class SessionViewModel : ObservableObject
     private          SessionHistoryCursor?                         _historyCursor;
     private          Task?                                         _historyLoad;
     private          bool                                          _historyLoaded;
+    private          bool                                          _isArchived;
     private          bool                                          _isPinned;
     private          ModelChoice?                                  _model;
     private          string                                        _notice = string.Empty;
@@ -68,19 +70,32 @@ public sealed partial class SessionViewModel : ObservableObject
         DesktopSessionManager manager,   DesktopSessionFactory factory, string workspaceRoot,
         string?               id,        string? storeDirectory, string? title, Func<Action, ValueTask>? dispatch,
         string?               projectId, DateTimeOffset? lastActivityUtc)
+        : this(manager, factory, workspaceRoot, id, storeDirectory, title, dispatch, projectId, lastActivityUtc,
+               projectId is null
+                   ? SessionProjectAssignmentState.PendingInitialization
+                   : SessionProjectAssignmentState.Project)
     {
-        _manager           = manager;
-        _factory           = factory;
-        _dispatch          = dispatch ?? (async action => await Dispatcher.UIThread.InvokeAsync(action));
-        _workspaceRoot     = workspaceRoot;
-        Id                 = id;
-        StoreDirectory     = storeDirectory;
-        ProjectId          = projectId;
-        LastActivityUtc    = lastActivityUtc ?? DateTimeOffset.UtcNow;
-        _title             = title           ?? "新对话";
-        SendCommand        = new AsyncCommand(SendAsync, ShowError);
-        LoadHistoryCommand = new AsyncCommand(LoadHistoryAsync, ShowError);
-        CancelCommand      = new RelayCommand(CancelRun);
+    }
+
+    public SessionViewModel(
+        DesktopSessionManager         manager, DesktopSessionFactory factory, string workspaceRoot,
+        string?                       id, string? storeDirectory, string? title, Func<Action, ValueTask>? dispatch,
+        string?                       projectId, DateTimeOffset? lastActivityUtc,
+        SessionProjectAssignmentState projectAssignmentState)
+    {
+        _manager               = manager;
+        _factory               = factory;
+        _dispatch              = dispatch ?? (async action => await Dispatcher.UIThread.InvokeAsync(action));
+        _workspaceRoot         = workspaceRoot;
+        Id                     = id;
+        StoreDirectory         = storeDirectory;
+        ProjectId              = projectId;
+        ProjectAssignmentState = projectAssignmentState;
+        LastActivityUtc        = lastActivityUtc ?? DateTimeOffset.UtcNow;
+        _title                 = title           ?? "新对话";
+        SendCommand            = new AsyncCommand(SendAsync, ShowError);
+        LoadHistoryCommand     = new AsyncCommand(LoadHistoryAsync, ShowError);
+        CancelCommand          = new RelayCommand(CancelRun);
         PauseCommand = new RelayCommand(() =>
         {
             if (_runtime?.Host.RequestPause() == true) Status = "已请求暂停";
@@ -120,8 +135,10 @@ public sealed partial class SessionViewModel : ObservableObject
         private set => SetProperty(ref _hasUnreadCompletion, value);
     }
 
-    public string?        StoreDirectory  { get; private set; }
-    public string?        ProjectId       { get; private set; }
+    public string?                       StoreDirectory         { get; private set; }
+    public string?                       ProjectId              { get; private set; }
+    public SessionProjectAssignmentState ProjectAssignmentState { get; private set; }
+
     public DateTimeOffset LastActivityUtc { get; private set; }
 
     /// <summary>
@@ -139,16 +156,34 @@ public sealed partial class SessionViewModel : ObservableObject
     }
 
     /// <summary>
+    ///     <para>该正式会话是否已归档。</para>
+    ///     <para>Whether this established session is archived.</para>
+    /// </summary>
+    public bool IsArchived
+    {
+        get => _isArchived;
+        private set
+        {
+            if (!SetProperty(ref _isArchived, value)) return;
+            OnPropertyChanged(nameof(ArchiveActionName));
+        }
+    }
+
+    /// <summary>
     ///     <para>该会话是否已建立且可由侧栏置顶。</para>
     ///     <para>Whether this session is established and can be pinned from the sidebar.</para>
     /// </summary>
     public bool CanPin => Id is not null && StoreDirectory is not null;
+
+    public bool CanArchive => CanPin && !IsRunning && !_archiveMutationPending;
 
     /// <summary>
     ///     <para>会话置顶按钮当前执行的操作名称。</para>
     ///     <para>The current action name for the session pin button.</para>
     /// </summary>
     public string PinActionName => IsPinned ? "取消置顶会话" : "置顶会话";
+
+    public string ArchiveActionName => IsArchived ? "取消归档会话" : "归档会话";
 
     /// <summary>
     ///     <para>用户是否在页面未发送前做过显式预选（项目／目录、模型或权限）；自动解析与默认刷新不算。</para>
@@ -219,9 +254,14 @@ public sealed partial class SessionViewModel : ObservableObject
             HasUserPreselection = true;
             if (SetProperty(ref _workspaceRoot, value))
             {
-                ProjectId      = null;
-                StoreDirectory = null;
+                ProjectId              = null;
+                ProjectAssignmentState = SessionProjectAssignmentState.NoProject;
+                StoreDirectory         = null;
                 OnPropertyChanged(nameof(ProjectId));
+                RefreshProjectMenuSelection();
+                OnPropertyChanged(nameof(HasSelectedProject));
+                OnPropertyChanged(nameof(IsNoProjectSelection));
+                OnPropertyChanged(nameof(ProjectAssignmentState));
                 OnPropertyChanged(nameof(WorkspaceLabel));
                 OnPropertyChanged(nameof(WorkspaceTargetLabel));
                 _ = RefreshDefaultModelAsync();
@@ -266,6 +306,7 @@ public sealed partial class SessionViewModel : ObservableObject
             OnPropertyChanged(nameof(PermissionChangeHint));
             OnPropertyChanged(nameof(ComposerSendHint));
             OnPropertyChanged(nameof(CanRepairWorkspace));
+            OnPropertyChanged(nameof(CanArchive));
             OpenWorkspaceRepairCommand.RaiseCanExecuteChanged();
         }
     }
@@ -287,6 +328,35 @@ public sealed partial class SessionViewModel : ObservableObject
     internal void SetPinned(bool isPinned)
     {
         IsPinned = isPinned && CanPin;
+    }
+
+    /// <summary>
+    ///     <para>更新侧栏归档投影；归档状态由会话存储的独立元数据保存。</para>
+    ///     <para>Updates the sidebar archive projection; archive state is stored as separate session-store metadata.</para>
+    /// </summary>
+    internal void SetArchived(bool isArchived) => IsArchived = isArchived && CanPin;
+
+    /// <summary>
+    ///     <para>为侧栏归档操作保留会话状态，使其不能与运行启动交错。</para>
+    ///     <para>Reserves the session state for a sidebar archive operation so it cannot race with run startup.</para>
+    /// </summary>
+    internal bool TryBeginArchiveMutation()
+    {
+        if (!CanArchive) return false;
+        _archiveMutationPending = true;
+        OnPropertyChanged(nameof(CanArchive));
+        return true;
+    }
+
+    /// <summary>
+    ///     <para>释放侧栏归档操作保留的会话状态。</para>
+    ///     <para>Releases the session-state reservation held by a sidebar archive operation.</para>
+    /// </summary>
+    internal void EndArchiveMutation()
+    {
+        if (!_archiveMutationPending) return;
+        _archiveMutationPending = false;
+        OnPropertyChanged(nameof(CanArchive));
     }
 
     /// <summary>
@@ -348,11 +418,18 @@ public sealed partial class SessionViewModel : ObservableObject
         if (!CanChooseWorkspace) throw new InvalidOperationException("会话执行目录已固定。");
         _workspaceRoot = root;
         ProjectId      = projectId;
+        ProjectAssignmentState = projectId is null
+            ? SessionProjectAssignmentState.NoProject
+            : SessionProjectAssignmentState.Project;
         StoreDirectory = directory;
         if (userSelected) HasUserPreselection = true;
         OnPropertyChanged(nameof(WorkspaceRoot));
         OnPropertyChanged(nameof(WorkspaceLabel));
         OnPropertyChanged(nameof(ProjectId));
+        RefreshProjectMenuSelection();
+        OnPropertyChanged(nameof(HasSelectedProject));
+        OnPropertyChanged(nameof(IsNoProjectSelection));
+        OnPropertyChanged(nameof(ProjectAssignmentState));
         OnPropertyChanged(nameof(WorkspaceTargetLabel));
         await RefreshDefaultModelAsync();
     }
@@ -404,12 +481,24 @@ public sealed partial class SessionViewModel : ObservableObject
     ///         projection; activity only moves forward.
     ///     </para>
     /// </summary>
-    public void ApplyStoredMetadata(string? projectId, DateTimeOffset lastActivityUtc)
+    public void ApplyStoredMetadata(
+        string?        projectId, SessionProjectAssignmentState projectAssignmentState,
+        DateTimeOffset lastActivityUtc)
     {
+        if (ProjectAssignmentState != projectAssignmentState)
+        {
+            ProjectAssignmentState = projectAssignmentState;
+            OnPropertyChanged(nameof(ProjectAssignmentState));
+            OnPropertyChanged(nameof(IsNoProjectSelection));
+        }
+
         if (ProjectId != projectId)
         {
             ProjectId = projectId;
             OnPropertyChanged(nameof(ProjectId));
+            RefreshProjectMenuSelection();
+            OnPropertyChanged(nameof(HasSelectedProject));
+            OnPropertyChanged(nameof(IsNoProjectSelection));
             OnPropertyChanged(nameof(WorkspaceTargetLabel));
         }
 
@@ -421,6 +510,13 @@ public sealed partial class SessionViewModel : ObservableObject
         }
     }
 
+    public void ApplyStoredMetadata(string? projectId, DateTimeOffset lastActivityUtc) =>
+        ApplyStoredMetadata(projectId,
+                            projectId is null
+                                ? SessionProjectAssignmentState.PendingInitialization
+                                : SessionProjectAssignmentState.Project,
+                            lastActivityUtc);
+
     /// <summary>
     ///     <para>捕获本页草稿和版本后发送；运行中输入走 Core 补充入口，完成只消费原始草稿。</para>
     ///     <para>
@@ -431,6 +527,7 @@ public sealed partial class SessionViewModel : ObservableObject
     public async Task SendAsync()
     {
         if (_changing) throw new InvalidOperationException("正在切换模型，请稍后发送。");
+        if (_archiveMutationPending) throw new InvalidOperationException("正在保存会话归档状态，请稍后发送。");
         var text = Draft;
         if (string.IsNullOrWhiteSpace(text)) return;
         var revision = _draftRevision;
