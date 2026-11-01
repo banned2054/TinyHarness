@@ -22,6 +22,59 @@ namespace TinyHarness.Desktop.Tests;
 [TestFixture]
 public sealed class DesktopProjectEntryTests
 {
+    /// <summary>
+    ///     <para>确认旧侧栏置顶迁入 Core，且 Desktop 偏好中的旧字段随后清空。</para>
+    ///     <para>Verifies legacy sidebar pins migrate to Core and the old Desktop preference fields are cleared.</para>
+    /// </summary>
+    [Test]
+    public async Task LegacySidebarPins_MigrateToCoreAndClearFromDesktopPreferences()
+    {
+        var fixture = await Fixture.CreateAsync();
+        var project = await ProjectStore.GetOrCreateAsync(ProjectStore.FilePath(fixture.Store), fixture.First,
+                                                          DateTimeOffset.UtcNow, CancellationToken.None);
+        var session = new ChatSession(new string('a', 32), fixture.First, Fixture.Identity);
+        using (var writer = new SessionStoreWriter(fixture.Store, session.Id))
+        {
+            await writer.CommitAsync(session, new ConversationContext(new ContextOptions()), CancellationToken.None);
+        }
+
+        var sidebarPath = Path.Combine(Path.GetDirectoryName(fixture.Config)!, "desktop-sidebar.json");
+        var legacy = new
+        {
+            schema                 = "tinyharness.desktop-sidebar/1",
+            isProjectMode          = true,
+            sortProjectsByActivity = false,
+            stores = new[]
+            {
+                new
+                {
+                    storeDirectory     = fixture.Store,
+                    manualProjectOrder = Array.Empty<string>(),
+                    pinnedProjectOrder = new[] { project.Id },
+                    pinnedSessionIds   = new[] { session.Id }
+                }
+            }
+        };
+        await File.WriteAllTextAsync(sidebarPath, JsonSerializer.Serialize(legacy), CancellationToken.None);
+
+        await using (var model = fixture.Window())
+        {
+            await model.InitializeAsync();
+
+            Assert.That(model.Projects.Single(group => group.Project?.Id == project.Id).IsPinned, Is.True);
+            Assert.That(model.Sessions.Single(row => row.Id              == session.Id).IsPinned, Is.True);
+            var pins = await SessionStorePinStore.LoadAsync(fixture.Store, CancellationToken.None);
+            Assert.That(pins.PinnedProjectIds, Is.EqualTo(new[] { project.Id }));
+            Assert.That(pins.PinnedSessionIds, Is.EqualTo(new[] { session.Id }));
+            Assert.That(pins.LegacySidebarPinsImported, Is.True);
+        }
+
+        using var document   = JsonDocument.Parse(await File.ReadAllTextAsync(sidebarPath, CancellationToken.None));
+        var       storeState = document.RootElement.GetProperty("stores").EnumerateArray().Single();
+        Assert.That(storeState.GetProperty("pinnedProjectOrder").GetArrayLength(), Is.Zero);
+        Assert.That(storeState.GetProperty("pinnedSessionIds").GetArrayLength(), Is.Zero);
+    }
+
     [Test]
     public async Task InitializationBeforeRefreshContinuesPastTheFirstBatch()
     {

@@ -90,8 +90,13 @@ public sealed class ProjectViewModel : ObservableObject
     /// </summary>
     public string PinActionName => IsPinned ? "取消置顶项目" : "置顶项目";
 
-    /// <summary>该组是否包含当前选中的会话；驱动组头行的选中高亮。</summary>
-    public bool IsCurrent => Sessions.Any(session => session.IsSelected);
+    /// <summary>
+    ///     <para>该组是否包含当前选中且未置顶的会话；置顶会话显示在全局分类中。</para>
+    ///     <para>
+    ///         Whether this group contains the selected unpinned session; pinned sessions appear in the global category.
+    ///     </para>
+    /// </summary>
+    public bool IsCurrent => Sessions.Any(session => session.IsSelected && !session.IsPinned);
 
     /// <summary>
     ///     <para>刷新侧栏置顶和拖动状态，不改变项目归属或展开状态。</para>

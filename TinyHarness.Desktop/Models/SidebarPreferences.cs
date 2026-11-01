@@ -1,8 +1,10 @@
+using System.Text.Json.Serialization;
+
 namespace TinyHarness.Desktop.Models;
 
 /// <summary>
-///     <para>桌面侧栏偏好设置，保存视图模式以及各会话存储目录的排序和置顶状态。</para>
-///     <para>Desktop sidebar preferences for view mode and per-session-store ordering and pin state.</para>
+///     <para>桌面侧栏偏好设置，保存视图模式与普通项目顺序；置顶状态由 Core 持久化。</para>
+///     <para>Desktop sidebar preferences for view mode and regular project order; Core persists pin state.</para>
 /// </summary>
 internal sealed record SidebarPreferences
 {
@@ -32,8 +34,8 @@ internal sealed record SidebarPreferences
 }
 
 /// <summary>
-///     <para>单个会话存储目录对应的项目顺序和置顶会话。</para>
-///     <para>Project ordering and pinned sessions for one session-store directory.</para>
+///     <para>单个会话存储目录对应的普通项目顺序，以及供迁移使用的旧置顶值。</para>
+///     <para>Regular project order for one session store, plus legacy pin values used during migration.</para>
 /// </summary>
 internal sealed record SidebarStorePreferences
 {
@@ -50,14 +52,16 @@ internal sealed record SidebarStorePreferences
     public IReadOnlyList<string> ManualProjectOrder { get; init; } = [];
 
     /// <summary>
-    ///     <para>置顶项目的手动顺序。</para>
-    ///     <para>The manual order of pinned projects.</para>
+    ///     <para>旧版 Desktop 偏好中的置顶项目顺序；启动时迁入 Core 后清空。</para>
+    ///     <para>The pinned project order from legacy Desktop preferences; cleared after migration to Core.</para>
     /// </summary>
-    public IReadOnlyList<string> PinnedProjectOrder { get; init; } = [];
+    [JsonPropertyName("pinnedProjectOrder")]
+    public IReadOnlyList<string> LegacyPinnedProjectOrder { get; init; } = [];
 
     /// <summary>
-    ///     <para>置顶会话的 ID 列表。</para>
-    ///     <para>The IDs of pinned sessions.</para>
+    ///     <para>旧版 Desktop 偏好中的置顶会话 ID；启动时迁入 Core 后清空。</para>
+    ///     <para>The pinned session IDs from legacy Desktop preferences; cleared after migration to Core.</para>
     /// </summary>
-    public IReadOnlyList<string> PinnedSessionIds { get; init; } = [];
+    [JsonPropertyName("pinnedSessionIds")]
+    public IReadOnlyList<string> LegacyPinnedSessionIds { get; init; } = [];
 }

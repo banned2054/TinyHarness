@@ -298,6 +298,10 @@
         <Setter Property="HorizontalContentAlignment" Value="Center" />
         <Setter Property="VerticalContentAlignment" Value="Center" />
     </Style>
+    <!-- 置顶时填充同一枚线框图钉；未置顶只显示 Stroke。 -->
+    <Style Selector="Button.session-pin-action.pinned Path, Button.project-pin-action.pinned Path">
+        <Setter Property="Fill" Value="{DynamicResource TextMutedBrush}" />
+    </Style>
     <Style
         Selector="Button.project-pin-action:pointerover /template/ ContentPresenter#PART_ContentPresenter,
                      Button.project-drag-handle:pointerover /template/ ContentPresenter#PART_ContentPresenter">

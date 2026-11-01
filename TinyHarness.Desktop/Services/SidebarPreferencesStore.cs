@@ -353,9 +353,9 @@ internal static class SidebarPreferencesStore
 
             totalEntries += ValidateIds(store.ManualProjectOrder, MaxProjectsPerOrder,
                                         $"stores[{i}].manualProjectOrder", filePath);
-            totalEntries += ValidateIds(store.PinnedProjectOrder, MaxProjectsPerOrder,
+            totalEntries += ValidateIds(store.LegacyPinnedProjectOrder, MaxProjectsPerOrder,
                                         $"stores[{i}].pinnedProjectOrder", filePath);
-            totalEntries += ValidateIds(store.PinnedSessionIds, MaxPinnedSessionsPerStore,
+            totalEntries += ValidateIds(store.LegacyPinnedSessionIds, MaxPinnedSessionsPerStore,
                                         $"stores[{i}].pinnedSessionIds", filePath);
 
             if (totalEntries > MaxTotalEntries)

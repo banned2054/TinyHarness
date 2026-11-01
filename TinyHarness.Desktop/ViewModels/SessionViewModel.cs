@@ -110,8 +110,8 @@ public sealed partial class SessionViewModel : ObservableObject
     public DateTimeOffset LastActivityUtc { get; private set; }
 
     /// <summary>
-    ///     <para>该正式会话是否在纯会话模式中置顶。</para>
-    ///     <para>Whether this established session is pinned in flat session mode.</para>
+    ///     <para>该正式会话是否在侧栏中置顶。</para>
+    ///     <para>Whether this established session is pinned in the sidebar.</para>
     /// </summary>
     public bool IsPinned
     {
