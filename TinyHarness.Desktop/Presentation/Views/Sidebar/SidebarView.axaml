@@ -321,7 +321,8 @@
                                     AutomationProperties.Name="{Binding Title}"
                                     Command="{Binding $parent[sidebar:SidebarView].DataContext.SelectSessionCommand}"
                                     CommandParameter="{Binding}">
-                                <Grid ColumnDefinitions="20,*,24" HorizontalAlignment="Stretch">
+                                <!-- 标题按剩余宽度截断；右侧依次预留归档按钮、4px 间距和状态/置顶槽。 -->
+                                <Grid ColumnDefinitions="20,*,24,4,24" HorizontalAlignment="Stretch">
                                     <!-- 常驻 20px 气泡槽；仅置顶会话显示气泡，标题与项目文件夹标题对齐。 -->
                                     <Panel Grid.Column="0" Width="20" VerticalAlignment="Center">
                                         <Path Width="16" Height="16" HorizontalAlignment="Left"
@@ -336,7 +337,7 @@
                                                VerticalAlignment="Center"
                                                TextTrimming="CharacterEllipsis"
                                                ToolTip.Tip="{Binding WorkspaceRoot}" />
-                                    <Panel Grid.Column="2" Classes="session-status" IsHitTestVisible="False"
+                                    <Panel Grid.Column="4" Classes="session-status" IsHitTestVisible="False"
                                            Width="24" Height="24"
                                            HorizontalAlignment="Center" VerticalAlignment="Center">
                                         <Canvas Width="14" Height="14" IsVisible="{Binding IsRunning}">
