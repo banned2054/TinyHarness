@@ -4,6 +4,7 @@ using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
 using TinyHarness.Desktop.ViewModels;
 
 namespace TinyHarness.Desktop.Presentation.Views.Sidebar;
@@ -39,6 +40,7 @@ public sealed partial class SidebarView : UserControl
         ProjectRenameInput.AddHandler(KeyDownEvent, OnRenameInputKeyDown, RoutingStrategies.Tunnel);
         ProjectRenamePopup.Opened += OnProjectRenamePopupOpened;
         ProjectRenamePopup.AddHandler(KeyDownEvent, OnRenamePopupKeyDown, RoutingStrategies.Tunnel);
+        ProjectDeletionPopup.Closed += OnProjectDeletionPopupClosed;
     }
 
     /// <summary>
@@ -322,6 +324,56 @@ public sealed partial class SidebarView : UserControl
 
         project.IsActionsMenuOpen = false;
         viewModel.OpenProjectRenameCommand.Execute(project);
+    }
+
+    /// <summary>
+    ///     <para>从项目三点菜单按设置显示删除确认或直接开始删除，并关闭当前菜单。</para>
+    ///     <para>Shows deletion confirmation when enabled or starts deletion directly, then closes the current menu.</para>
+    /// </summary>
+    private void OnProjectDeleteMenuClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not Control { DataContext: ProjectViewModel project } ||
+            DataContext is not MainWindowViewModel viewModel)
+            return;
+
+        UpdateProjectDeletionPopupPosition(project);
+        project.IsActionsMenuOpen = false;
+        viewModel.OpenProjectDeletionCommand.Execute(project);
+        if (viewModel.IsProjectDeletionOpen) return;
+
+        ProjectDeletionPopup.HorizontalOffset = 0;
+        ProjectDeletionPopup.VerticalOffset   = 0;
+    }
+
+    /// <summary>
+    ///     <para>按待删除项目行调整确认面板：左边缘贴窗口内容左侧，垂直中心对齐项目行。</para>
+    ///     <para>
+    ///         Positions the confirmation panel at the window's left edge and centers it vertically on the target project
+    ///         row.
+    ///     </para>
+    /// </summary>
+    private void UpdateProjectDeletionPopupPosition(ProjectViewModel project)
+    {
+        var row = Surface.GetVisualDescendants().OfType<Border>()
+                         .FirstOrDefault(border => border.Classes.Contains("project-header-row") &&
+                                                   ReferenceEquals(border.DataContext, project));
+        var rowCenter = Surface.Bounds.Height / 2;
+        if (row is not null &&
+            row.TranslatePoint(new Point(0, row.Bounds.Height / 2), Surface) is { } rowCenterPoint)
+            rowCenter = rowCenterPoint.Y;
+
+        ProjectDeletionPopup.HorizontalOffset = (ProjectDeletionPanel.Width - Surface.Bounds.Width) / 2;
+        ProjectDeletionPopup.VerticalOffset   = rowCenter - Surface.Bounds.Height / 2;
+    }
+
+    /// <summary>
+    ///     <para>确认面板关闭后清除临时定位偏移。</para>
+    ///     <para>Clears temporary placement offsets after the confirmation panel closes.</para>
+    /// </summary>
+    private void OnProjectDeletionPopupClosed(object? sender, EventArgs e)
+    {
+        ProjectDeletionPopup.HorizontalOffset = 0;
+        ProjectDeletionPopup.VerticalOffset   = 0;
     }
 
     /// <summary>

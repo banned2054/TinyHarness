@@ -203,11 +203,13 @@ public abstract class SettingsSectionViewModel : ObservableObject
 }
 
 /// <summary>
-///     <para>通用分区：主题选择与配置文件路径展示；本分区不写入用户配置。</para>
-///     <para>The general section: theme choice and config path display; this section never writes the user config.</para>
+///     <para>通用分区：主题选择、项目删除提示与配置文件路径展示。</para>
+///     <para>The general section: theme selection, project-deletion confirmation and config path display.</para>
 /// </summary>
 public sealed class GeneralSettingsSectionViewModel : SettingsSectionViewModel
 {
+    private bool _showProjectDeletionPrompt = true;
+
     public GeneralSettingsSectionViewModel(string configPath) : base("通用")
     {
         ConfigPath         = configPath;
@@ -221,10 +223,37 @@ public sealed class GeneralSettingsSectionViewModel : SettingsSectionViewModel
 
     public RelayCommand SelectDarkCommand { get; }
 
+    /// <summary>
+    ///     <para>删除项目时是否显示确认面板。</para>
+    ///     <para>Whether to show a confirmation panel before deleting a project.</para>
+    /// </summary>
+    public bool ShowProjectDeletionPrompt
+    {
+        get => _showProjectDeletionPrompt;
+        set
+        {
+            if (!SetProperty(ref _showProjectDeletionPrompt, value)) return;
+            ProjectDeletionPromptChanged?.Invoke(value);
+        }
+    }
+
     // 主题由 Application 全局承担；不引入第二份状态，选中态即时读取当前生效变体。
     public bool IsLightSelected => Application.Current?.ActualThemeVariant != ThemeVariant.Dark;
 
     public bool IsDarkSelected => Application.Current?.ActualThemeVariant == ThemeVariant.Dark;
+
+    /// <summary>
+    ///     <para>项目删除提示设置变更；宿主负责更新并保存桌面偏好。</para>
+    ///     <para>Raised when project-deletion confirmation changes so the host can update and save desktop preferences.</para>
+    /// </summary>
+    public event Action<bool>? ProjectDeletionPromptChanged;
+
+    /// <summary>
+    ///     <para>应用已加载的项目删除提示偏好，不触发保存回调。</para>
+    ///     <para>Applies the loaded project-deletion preference without raising the save callback.</para>
+    /// </summary>
+    internal void ApplyProjectDeletionPromptPreference(bool showPrompt) =>
+        SetProperty(ref _showProjectDeletionPrompt, showPrompt, nameof(ShowProjectDeletionPrompt));
 
     private void SelectTheme(ThemeVariant variant)
     {

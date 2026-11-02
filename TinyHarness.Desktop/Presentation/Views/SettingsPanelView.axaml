@@ -73,7 +73,7 @@
                                 </StackPanel>
 
                                 <StackPanel IsVisible="{Binding IsReady}">
-                                    <!-- 通用分区：主题选择与配置文件路径；本分区不写入用户配置。 -->
+                                    <!-- 通用分区：主题选择、项目删除提示与配置文件路径。 -->
                                     <StackPanel IsVisible="{Binding General.IsActive}" Margin="0,10,0,0">
                                         <Border Classes="settings-row">
                                             <Grid ColumnDefinitions="*,Auto" MinHeight="56">
@@ -118,6 +118,22 @@
                                                         </StackPanel>
                                                     </Button>
                                                 </StackPanel>
+                                            </Grid>
+                                        </Border>
+                                        <Border Classes="settings-row">
+                                            <Grid ColumnDefinitions="*,Auto" MinHeight="56">
+                                                <StackPanel Grid.Column="0" Margin="0,0,48,0"
+                                                            VerticalAlignment="Center" Spacing="2">
+                                                    <TextBlock Text="项目删除提示" FontSize="14"
+                                                               Foreground="{DynamicResource PopupForegroundBrush}" />
+                                                    <TextBlock Text="删除项目时先显示确认面板。"
+                                                               FontSize="12" TextWrapping="Wrap"
+                                                               Foreground="{DynamicResource PopupMutedForegroundBrush}" />
+                                                </StackPanel>
+                                                <ToggleSwitch Grid.Column="1"
+                                                              IsChecked="{Binding General.ShowProjectDeletionPrompt, Mode=TwoWay}"
+                                                              AutomationProperties.Name="项目删除提示"
+                                                              VerticalAlignment="Center" />
                                             </Grid>
                                         </Border>
                                         <Border Classes="settings-row last">

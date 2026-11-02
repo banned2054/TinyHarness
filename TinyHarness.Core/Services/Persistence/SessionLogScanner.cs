@@ -110,7 +110,7 @@ internal static class SessionLogScanner
         var     expectedSequence       = 1L;
         long    bytesFetched           = 0;
         long    bytesScanned           = 0;
-        // 跨批次归属状态：整份日志只允许一条项目归属事实，全量与分页读取共用同一校验。
+        // 跨批次归属状态：初始归属只能写一次；删除项目时允许一次匹配的解除归属。
         string? boundProjectId         = null;
         var     projectAssignmentState = SessionProjectAssignmentState.PendingInitialization;
         var     line                   = ArrayPool<byte>.Shared.Rent(4 * 1024);
@@ -421,6 +421,15 @@ internal static class SessionLogScanner
                         boundProjectId is not null)
                         throw new
                             SessionStoreException($"Session log '{path}' contains a conflicting or repeated no-project assignment at sequence {batch.Sequence}.");
+                    projectAssignmentState = SessionProjectAssignmentState.NoProject;
+                    break;
+                case "project-unassignment" :
+                    var unassignedId = SessionLogProjectUnassignment.Parse(record.Payload);
+                    if (projectAssignmentState != SessionProjectAssignmentState.Project ||
+                        boundProjectId         != unassignedId)
+                        throw new SessionStoreException(
+                                                        $"Session log '{path}' contains a project-unassignment record that does not match its current project at sequence {batch.Sequence}.");
+                    boundProjectId         = null;
                     projectAssignmentState = SessionProjectAssignmentState.NoProject;
                     break;
                 case "audit" :

@@ -85,6 +85,40 @@ public sealed class DesktopSession(
     }
 
     /// <summary>
+    ///     <para>在会话操作槽内可靠解除项目归属；活动运行或其他会话变更期间拒绝执行。</para>
+    ///     <para>
+    ///         Durably removes project ownership inside the session operation slot; rejects while a run or another session
+    ///         change is active.
+    ///     </para>
+    /// </summary>
+    /// <param name="projectId">
+    ///     <para>必须与当前会话归属一致的项目 ID。</para>
+    ///     <para>The project id that must match the current session assignment.</para>
+    /// </param>
+    /// <param name="cancellationToken">
+    ///     <para>取消本次日志追加。</para>
+    ///     <para>Cancels this journal append.</para>
+    /// </param>
+    public Task UnassignProjectAsync(string projectId, CancellationToken cancellationToken = default)
+    {
+        lock (_sync)
+        {
+            ObjectDisposedException.ThrowIf(_closing, this);
+            if (_run is { IsCompleted: false } || _change is { IsCompleted: false })
+                throw new InvalidOperationException("请先停止当前运行，再删除所属项目。");
+
+            var task = Task.Run(async () =>
+            {
+                using var linked = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token,
+                         cancellationToken);
+                await Host.UnassignProjectAsync(projectId, linked.Token).ConfigureAwait(false);
+            });
+            _change = task;
+            return task;
+        }
+    }
+
+    /// <summary>
     ///     <para>预留本会话运行槽后在后台执行；重复提交在创建回合前被拒绝。</para>
     ///     <para>
     ///         Reserves this session's run slot before background execution; duplicate submissions fail before creating a

@@ -303,6 +303,12 @@ public sealed partial class SessionViewModel : ObservableObject
     public bool CanConfigure       => _runtime is null && !_opening && !_changing;
     public bool CanChooseWorkspace => Id is null       && CanConfigure;
 
+    /// <summary>
+    ///     <para>当前是否持有已打开的会话运行时。</para>
+    ///     <para>Whether this view model currently owns an open session runtime.</para>
+    /// </summary>
+    internal bool HasOpenRuntime => _runtime is not null;
+
     public bool IsRunning
     {
         get => _running;
@@ -516,6 +522,21 @@ public sealed partial class SessionViewModel : ObservableObject
             LastActivityUtc = lastActivityUtc;
             OnPropertyChanged(nameof(LastActivityUtc));
         }
+    }
+
+    /// <summary>
+    ///     <para>通过当前宿主解除项目归属，并同步侧栏投影；未打开宿主的会话由目录级维护流程处理。</para>
+    ///     <para>
+    ///         Removes project ownership through the current host and updates the sidebar projection; store-level
+    ///         maintenance handles sessions without an open host.
+    ///     </para>
+    /// </summary>
+    internal async Task UnassignProjectAsync(string projectId, CancellationToken cancellationToken)
+    {
+        if (_runtime is null || ProjectId != projectId) return;
+
+        await _runtime.UnassignProjectAsync(projectId, cancellationToken);
+        ApplyStoredMetadata(null, SessionProjectAssignmentState.NoProject, LastActivityUtc);
     }
 
     public void ApplyStoredMetadata(string? projectId, DateTimeOffset lastActivityUtc) =>

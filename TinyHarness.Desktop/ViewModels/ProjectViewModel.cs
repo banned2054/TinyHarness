@@ -12,43 +12,61 @@ namespace TinyHarness.Desktop.ViewModels;
 /// </summary>
 public sealed class ProjectViewModel : ObservableObject
 {
-    internal const int SessionPageSize = 5;
-    private bool _canReorder;
+    internal const int  SessionPageSize = 5;
+    private        bool _canReorder;
 
     private string _editedName;
-    private bool _expanded = true;
-    private bool _isActionsMenuOpen;
-    private bool _isPinned;
+    private bool   _expanded = true;
+    private bool   _isActionsMenuOpen;
+    private bool   _isPinned;
 
-    public ProjectViewModel(string key, Project? project, string name, string root,
+    public ProjectViewModel(string                       key, Project? project, string name, string root,
                             Func<ProjectViewModel, Task> create,
-                            Action<Exception> error)
+                            Action<Exception>            error)
     {
-        Key = key;
-        Project = project;
-        Name = name;
-        Root = root;
-        _editedName = name;
-        MoreSessionsRow = new ProjectSessionsMoreViewModel(this);
+        Key               = key;
+        Project           = project;
+        Name              = name;
+        Root              = root;
+        _editedName       = name;
+        MoreSessionsRow   = new ProjectSessionsMoreViewModel(this);
         NewSessionCommand = new AsyncCommand(() => create(this), error);
     }
 
-    public string Key { get; }
-    public bool IsNoProjectGroup => Key.StartsWith("no-project:", StringComparison.Ordinal);
-    public Project? Project { get; private set; }
-    public string Name { get; private set; }
-    public string Root { get; }
+    public string   Key              { get; }
+    public bool     IsNoProjectGroup => Key.StartsWith("no-project:", StringComparison.Ordinal);
+    public Project? Project          { get; private set; }
+    public string   Name             { get; private set; }
+    public string   Root             { get; }
+
     /// <summary>
     ///     <para>该侧栏分组所属的会话存储目录。</para>
     ///     <para>The session-store directory that owns this sidebar group.</para>
     /// </summary>
     internal string? StoreDirectory { get; set; }
 
-    public bool CanEdit => Project is not null;
-    public ObservableCollection<SessionViewModel> Sessions { get; } = [];
-    public AsyncCommand NewSessionCommand { get; }
-    internal int VisibleSessionCount { get; set; } = SessionPageSize;
-    internal ProjectSessionsMoreViewModel MoreSessionsRow { get; }
+    /// <summary>
+    ///     <para>项目是否允许新建会话、置顶和改名。</para>
+    ///     <para>Whether the project allows new sessions, pinning, and renaming.</para>
+    /// </summary>
+    public bool CanEdit => Project is { IsDeleting: false };
+
+    /// <summary>
+    ///     <para>是否显示真实项目的操作菜单。</para>
+    ///     <para>Whether to show the actions menu for a real project.</para>
+    /// </summary>
+    public bool CanShowActions => Project is not null;
+
+    /// <summary>
+    ///     <para>项目删除是否已开始。</para>
+    ///     <para>Whether project deletion has started.</para>
+    /// </summary>
+    public bool IsDeleting => Project?.IsDeleting == true;
+
+    public   ObservableCollection<SessionViewModel> Sessions            { get; } = [];
+    public   AsyncCommand                           NewSessionCommand   { get; }
+    internal int                                    VisibleSessionCount { get; set; } = SessionPageSize;
+    internal ProjectSessionsMoreViewModel           MoreSessionsRow     { get; }
 
     /// <summary>纯展示组的附加说明（如整理未完成原因）；真实项目组不使用。</summary>
     public string? Detail { get; private set; }
@@ -109,6 +127,12 @@ public sealed class ProjectViewModel : ObservableObject
     public string PinActionName => IsPinned ? "取消置顶项目" : "置顶项目";
 
     /// <summary>
+    ///     <para>返回项目菜单中删除或继续删除的动作名称。</para>
+    ///     <para>Returns the project-menu action label for starting or resuming deletion.</para>
+    /// </summary>
+    public string DeleteActionText => IsDeleting ? "继续删除项目" : "删除项目";
+
+    /// <summary>
     ///     <para>该组是否包含当前选中且未置顶的会话；置顶会话显示在全局分类中。</para>
     ///     <para>
     ///         Whether this group contains the selected unpinned session; pinned sessions appear in the global category.
@@ -122,7 +146,7 @@ public sealed class ProjectViewModel : ObservableObject
     /// </summary>
     internal void SetSidebarState(bool isPinned, bool canReorder)
     {
-        IsPinned = isPinned && CanEdit;
+        IsPinned   = isPinned   && CanShowActions;
         CanReorder = canReorder && CanEdit;
     }
 
@@ -142,11 +166,14 @@ public sealed class ProjectViewModel : ObservableObject
     public void Update(Project project)
     {
         if (Project == project) return;
-        Project = project;
-        Name = project.Name;
+        Project    = project;
+        Name       = project.Name;
         EditedName = project.Name;
         OnPropertyChanged(nameof(Name));
         OnPropertyChanged(nameof(CanEdit));
+        OnPropertyChanged(nameof(CanShowActions));
+        OnPropertyChanged(nameof(IsDeleting));
+        OnPropertyChanged(nameof(DeleteActionText));
     }
 
     /// <summary>
@@ -161,7 +188,7 @@ public sealed class ProjectViewModel : ObservableObject
         if (Project is not null) return;
         if (Name != name)
         {
-            Name = name;
+            Name       = name;
             EditedName = name;
             OnPropertyChanged(nameof(Name));
         }

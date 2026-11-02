@@ -133,7 +133,7 @@ public static class ProjectStore
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(filePath);
         cancellationToken.ThrowIfCancellationRequested();
-        return await LoadCoreAsync(filePath, coordinateOnMissing: true, cancellationToken).ConfigureAwait(false);
+        return await LoadCoreAsync(filePath, true, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -164,7 +164,7 @@ public static class ProjectStore
 
         // 严格 UTF-8 解码并关闭 BOM 探测：非法字节按损坏报告，UTF-16/32 BOM 也不再切换解码器绕过
         // 严格校验（目录册契约只允许 UTF-8）；UTF-8 BOM 按既有行为在解码后剥离。
-        using var reader = new StreamReader(stream, StrictUtf8, detectEncodingFromByteOrderMarks: false);
+        using var reader = new StreamReader(stream, StrictUtf8, false);
         string    json;
         try
         {
@@ -254,7 +254,7 @@ public static class ProjectStore
                     // 已观察到文件存在，打开时瞬时消失：短暂等待后有界重试。
                     await Task.Delay(TransientRetryDelayMs, cancellationToken).ConfigureAwait(false);
                 }
-                catch (IOException ex) when ((ex.HResult is SharingViolationHResult or LockViolationHResult) &&
+                catch (IOException ex) when (ex.HResult is SharingViolationHResult or LockViolationHResult &&
                                              Environment.TickCount64 < deadline)
                 {
                     // Windows 共享冲突：外部程序短暂占用目标文件时有界重试；权限等其他错误立即传播。
@@ -354,7 +354,7 @@ public static class ProjectStore
     ///     <para>An invalid root, a damaged catalog, a budget violation, or an unobtainable save lock.</para>
     /// </exception>
     public static async Task<Project> GetOrCreateAsync(
-        string filePath, string workspaceRoot, DateTimeOffset? utcNow = null,
+        string            filePath, string workspaceRoot, DateTimeOffset? utcNow = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(filePath);
@@ -364,10 +364,15 @@ public static class ProjectStore
 
         await using var saveLock = await OpenSaveLockAsync(filePath, cancellationToken).ConfigureAwait(false);
         // 锁内重读目录册再匹配，避免并发生成两个项目。
-        var catalog = await LoadCoreAsync(filePath, coordinateOnMissing: false, cancellationToken).ConfigureAwait(false);
+        var             catalog  = await LoadCoreAsync(filePath, false, cancellationToken).ConfigureAwait(false);
         if (catalog.Projects.FirstOrDefault(project => ProjectRoots.AreEqual(project.Roots[0].Path, root)) is
             { } existing)
+        {
+            if (existing.IsDeleting)
+                throw new ProjectStoreException(
+                                                $"Project '{existing.Id}' for root '{root}' is being deleted; wait for deletion to finish before creating a session.");
             return existing;
+        }
 
         var project = Project.CreateNew(root, utcNow ?? DateTimeOffset.UtcNow);
         await SaveAsync(filePath,
@@ -399,7 +404,7 @@ public static class ProjectStore
     ///     </para>
     /// </exception>
     public static async Task<Project> RenameAsync(
-        string filePath, string projectId, string newName, long expectedRevision,
+        string          filePath,      string            projectId, string newName, long expectedRevision,
         DateTimeOffset? utcNow = null, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(filePath);
@@ -408,7 +413,7 @@ public static class ProjectStore
 
         EnsureParentDirectory(filePath);
         await using var saveLock = await OpenSaveLockAsync(filePath, cancellationToken).ConfigureAwait(false);
-        var catalog = await LoadCoreAsync(filePath, coordinateOnMissing: false, cancellationToken).ConfigureAwait(false);
+        var             catalog  = await LoadCoreAsync(filePath, false, cancellationToken).ConfigureAwait(false);
 
         var index = -1;
         for (var i = 0; i < catalog.Projects.Count; i++)
@@ -422,14 +427,16 @@ public static class ProjectStore
             throw new ProjectStoreException($"Project '{projectId}' was not found in the catalog '{filePath}'.");
 
         var project = catalog.Projects[index];
+        if (project.IsDeleting)
+            throw new ProjectStoreException($"Project '{projectId}' is being deleted and cannot be renamed.");
         if (project.Revision != expectedRevision)
             throw new
                 ProjectStoreException($"Project '{projectId}' in '{filePath}' changed while it was being edited (stored revision {project.Revision}, expected {expectedRevision}); reload it and retry.");
 
         var renamed = project with
         {
-            Name       = name,
-            Revision   = project.Revision + 1,
+            Name = name,
+            Revision = project.Revision + 1,
             UpdatedUtc = utcNow ?? DateTimeOffset.UtcNow
         };
         await SaveAsync(filePath,
@@ -440,6 +447,131 @@ public static class ProjectStore
                         },
                         cancellationToken).ConfigureAwait(false);
         return renamed;
+    }
+
+    /// <summary>
+    ///     <para>锁内将项目标记为删除中并递增修订号；重复调用返回已标记项目，便于中断后继续。</para>
+    ///     <para>
+    ///         Marks a project as deleting under the catalog lock and increments its revision; repeated calls return the
+    ///         existing marker so interrupted deletion can resume.
+    ///     </para>
+    /// </summary>
+    /// <param name="filePath">
+    ///     <para>项目目录册文件路径。</para>
+    ///     <para>The project-catalog file path.</para>
+    /// </param>
+    /// <param name="projectId">
+    ///     <para>要标记的项目 ID。</para>
+    ///     <para>The id of the project to mark.</para>
+    /// </param>
+    /// <param name="expectedRevision">
+    ///     <para>用户确认时显示的修订号；已标记项目的重试忽略此值。</para>
+    ///     <para>The revision shown at confirmation; retries of an already marked project ignore this value.</para>
+    /// </param>
+    /// <param name="utcNow">
+    ///     <para>可选的更新时间。</para>
+    ///     <para>An optional update timestamp.</para>
+    /// </param>
+    /// <param name="cancellationToken">
+    ///     <para>取消等待锁或目录册写入。</para>
+    ///     <para>Cancels lock acquisition or catalog persistence.</para>
+    /// </param>
+    /// <returns>
+    ///     <para>已持久标记的项目。</para>
+    ///     <para>The project with its deletion marker durably saved.</para>
+    /// </returns>
+    /// <exception cref="ProjectStoreException">
+    ///     <para>项目不存在或修订号与当前目录册冲突。</para>
+    ///     <para>The project does not exist or its revision conflicts with the current catalog.</para>
+    /// </exception>
+    public static async Task<Project> BeginDeletionAsync(
+        string          filePath,      string            projectId, long expectedRevision,
+        DateTimeOffset? utcNow = null, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(filePath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(projectId);
+        EnsureParentDirectory(filePath);
+        await using var saveLock = await OpenSaveLockAsync(filePath, cancellationToken).ConfigureAwait(false);
+        var             catalog  = await LoadCoreAsync(filePath, false, cancellationToken).ConfigureAwait(false);
+        var             index    = IndexOf(catalog.Projects, projectId);
+        if (index < 0)
+            throw new ProjectStoreException($"Project '{projectId}' was not found in the catalog '{filePath}'.");
+
+        var project = catalog.Projects[index];
+        if (project.IsDeleting) return project;
+        if (project.Revision != expectedRevision)
+            throw new ProjectStoreException(
+                                            $"Project '{projectId}' in '{filePath}' changed while deletion was being confirmed (stored revision {project.Revision}, expected {expectedRevision}); reload it and retry.");
+
+        var deleting = project with
+        {
+            IsDeleting = true,
+            Revision = project.Revision + 1,
+            UpdatedUtc = utcNow ?? DateTimeOffset.UtcNow
+        };
+        await SaveAsync(filePath,
+                        catalog with
+                        {
+                            Revision = catalog.Revision + 1,
+                            Projects = ReplaceAt(catalog.Projects, index, deleting)
+                        },
+                        cancellationToken).ConfigureAwait(false);
+        return deleting;
+    }
+
+    /// <summary>
+    ///     <para>所有会话解除归属并完成侧栏清理后，按删除标记修订号从目录册移除项目；重复完成视为成功。</para>
+    ///     <para>
+    ///         Removes a project from the catalog after all sessions are unassigned and sidebar state is cleaned; an already
+    ///         completed deletion is treated as success.
+    ///     </para>
+    /// </summary>
+    /// <param name="filePath">
+    ///     <para>项目目录册文件路径。</para>
+    ///     <para>The project-catalog file path.</para>
+    /// </param>
+    /// <param name="projectId">
+    ///     <para>要移除的项目 ID。</para>
+    ///     <para>The id of the project to remove.</para>
+    /// </param>
+    /// <param name="expectedRevision">
+    ///     <para>持久删除标记的修订号。</para>
+    ///     <para>The revision of the persisted deletion marker.</para>
+    /// </param>
+    /// <param name="cancellationToken">
+    ///     <para>取消等待锁或目录册写入。</para>
+    ///     <para>Cancels lock acquisition or catalog persistence.</para>
+    /// </param>
+    /// <exception cref="ProjectStoreException">
+    ///     <para>项目未标记删除或其修订号发生变化。</para>
+    ///     <para>The project is not marked for deletion or its revision changed.</para>
+    /// </exception>
+    public static async Task CompleteDeletionAsync(
+        string            filePath, string projectId, long expectedRevision,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(filePath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(projectId);
+        EnsureParentDirectory(filePath);
+        await using var saveLock = await OpenSaveLockAsync(filePath, cancellationToken).ConfigureAwait(false);
+        var             catalog  = await LoadCoreAsync(filePath, false, cancellationToken).ConfigureAwait(false);
+        var             index    = IndexOf(catalog.Projects, projectId);
+        if (index < 0) return;
+
+        var project = catalog.Projects[index];
+        if (!project.IsDeleting)
+            throw new ProjectStoreException($"Project '{projectId}' is not marked for deletion.");
+        if (project.Revision != expectedRevision)
+            throw new ProjectStoreException(
+                                            $"Project '{projectId}' in '{filePath}' changed while deletion was being completed (stored revision {project.Revision}, expected {expectedRevision}); reload and retry.");
+
+        await SaveAsync(filePath,
+                        catalog with
+                        {
+                            Revision = catalog.Revision + 1,
+                            Projects = RemoveAt(catalog.Projects, index)
+                        },
+                        cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -531,7 +663,7 @@ public static class ProjectStore
 
                 return;
             }
-            catch (IOException ex) when ((ex.HResult is SharingViolationHResult or LockViolationHResult) &&
+            catch (IOException ex) when (ex.HResult is SharingViolationHResult or LockViolationHResult &&
                                          Environment.TickCount64 < deadline)
             {
                 // Windows 共享冲突（外部程序短暂占用目标文件）时有界重试；其他错误不掩盖。
@@ -663,6 +795,31 @@ public static class ProjectStore
         var list = new List<Project>(projects.Count);
         for (var i = 0; i < projects.Count; i++) list.Add(i == index ? updated : projects[i]);
         return list;
+    }
+
+    /// <summary>
+    ///     <para>查找项目 ID 对应的目录索引。</para>
+    ///     <para>Finds the catalog index for a project id.</para>
+    /// </summary>
+    private static int IndexOf(IReadOnlyList<Project> projects, string projectId)
+    {
+        for (var i = 0; i < projects.Count; i++)
+            if (projects[i].Id == projectId)
+                return i;
+        return -1;
+    }
+
+    /// <summary>
+    ///     <para>返回移除指定项目后的新目录列表。</para>
+    ///     <para>Returns a new catalog list with the specified project removed.</para>
+    /// </summary>
+    private static IReadOnlyList<Project> RemoveAt(IReadOnlyList<Project> projects, int index)
+    {
+        var result = new List<Project>(projects.Count - 1);
+        for (var i = 0; i < projects.Count; i++)
+            if (i != index)
+                result.Add(projects[i]);
+        return result;
     }
 }
 

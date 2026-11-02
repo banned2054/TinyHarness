@@ -232,6 +232,7 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
             var     sequence            = CommitSequence + 1;
             var     normalized          = new SessionLogRecord[records.Count];
             string? bindingProjectId    = null;
+            string? unassignedProjectId = null;
             var     explicitlyNoProject = false;
             for (var i = 0; i < records.Count; i++)
             {
@@ -331,6 +332,29 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
                     explicitlyNoProject = true;
                     normalized[i]       = record with { Id = recordId };
                 }
+                else if (record.Kind == "project-unassignment")
+                {
+                    string unassignmentProjectId;
+                    try
+                    {
+                        unassignmentProjectId = SessionLogProjectUnassignment.Parse(record.Payload);
+                    }
+                    catch (InvalidDataException ex)
+                    {
+                        throw new SessionStoreException(
+                                                        $"Journal record 'project-unassignment' has an invalid typed payload: {ex.Message}",
+                                                        ex);
+                    }
+
+                    if (_projectAssignmentState != SessionProjectAssignmentState.Project ||
+                        _projectId              != unassignmentProjectId || bindingProjectId is not null ||
+                        explicitlyNoProject || unassignedProjectId is not null)
+                        throw new SessionStoreException(
+                                                        $"Session '{SessionId}' cannot remove project ownership that does not match '{unassignmentProjectId}'.");
+
+                    unassignedProjectId = unassignmentProjectId;
+                    normalized[i]       = record with { Id = recordId };
+                }
                 else
                 {
                     throw new SessionStoreException($"Unknown required journal record kind '{record.Kind}'.");
@@ -365,6 +389,12 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
             }
 
             if (explicitlyNoProject) _projectAssignmentState = SessionProjectAssignmentState.NoProject;
+            if (unassignedProjectId is not null)
+            {
+                _projectId              = null;
+                _projectAssignmentState = SessionProjectAssignmentState.NoProject;
+            }
+
             return normalized;
         }
         finally
@@ -421,8 +451,8 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
             void Add<T>(string kind, T payload) =>
                 records.Add(new SessionLogRecord(RecordId(SessionId, nextSequence, records.Count), kind,
                                                  JsonSerializer.SerializeToElement(payload,
-                                                          (JsonTypeInfo<T>)SessionLogJsonContext.Default
-                                                             .GetTypeInfo(typeof(T))!)));
+                                                     (JsonTypeInfo<T>)SessionLogJsonContext.Default
+                                                        .GetTypeInfo(typeof(T))!)));
 
             var persistedTurnCount    = _persistedTurnCount;
             var trackedTurnId         = _trackedTurnId;
@@ -536,7 +566,7 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
                 };
                 records.Add(new SessionLogRecord(item.Id, "history",
                                                  JsonSerializer.SerializeToElement(item,
-                                                          SessionHistoryJsonContext.Default.SessionHistoryItem)));
+                                                     SessionHistoryJsonContext.Default.SessionHistoryItem)));
                 (committedHistoryItems ??= []).Add(item);
             }
 
@@ -762,8 +792,8 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
             return SessionWriterOpenResult.FromFailure(ex is SessionStoreException storeFailure
                                                            ? storeFailure
                                                            : new SessionStoreException(
-                                                                $"Cannot open session '{sessionId}' for ownership initialization: {ex.Message}",
-                                                                ex));
+                                                            $"Cannot open session '{sessionId}' for ownership initialization: {ex.Message}",
+                                                            ex));
         }
         finally
         {
@@ -1023,7 +1053,8 @@ public static class SessionStoreReader
         {
             _updatedUtc = batch.WrittenUtc;
             // 纯归属维护批次不构成对话活动；含任何其他记录的批次按其提交时间推进。
-            if (batch.Records.Any(record => record.Kind is not ("project-binding" or "project-assignment")))
+            if (batch.Records.Any(record => record.Kind is not ("project-binding" or "project-assignment" or
+                                                                "project-unassignment")))
                 _lastActivityUtc = batch.WrittenUtc;
             for (var recordIndex = 0; recordIndex < batch.Records.Count; recordIndex++)
             {
@@ -1268,6 +1299,26 @@ public static class SessionStoreReader
                             _projectAssignmentState != SessionProjectAssignmentState.PendingInitialization)
                             throw new SessionStoreException(
                                                             $"Session '{sessionId}' has a conflicting or duplicate explicit no-project assignment.");
+                        _projectAssignmentState = SessionProjectAssignmentState.NoProject;
+                        break;
+                    case "project-unassignment" :
+                        string unassignedProjectId;
+                        try
+                        {
+                            unassignedProjectId = SessionLogProjectUnassignment.Parse(record.Payload);
+                        }
+                        catch (Exception ex) when (ex is InvalidDataException or JsonException)
+                        {
+                            throw new SessionStoreException(
+                                                            $"Session '{sessionId}' contains an invalid project-unassignment record: {ex.Message}",
+                                                            ex);
+                        }
+
+                        if (_projectAssignmentState != SessionProjectAssignmentState.Project ||
+                            _projectId              != unassignedProjectId)
+                            throw new SessionStoreException(
+                                                            $"Session '{sessionId}' contains a project-unassignment record that does not match its current project.");
+                        _projectId              = null;
                         _projectAssignmentState = SessionProjectAssignmentState.NoProject;
                         break;
                     default :
@@ -1735,6 +1786,7 @@ public static class SessionStoreReader
 [JsonSerializable(typeof(SessionLogIdentity))]
 [JsonSerializable(typeof(SessionLogProjectBinding))]
 [JsonSerializable(typeof(SessionLogProjectAssignment))]
+[JsonSerializable(typeof(SessionLogProjectUnassignment))]
 [JsonSerializable(typeof(SessionLogTurn))]
 [JsonSerializable(typeof(SessionLogRun))]
 [JsonSerializable(typeof(SessionLogMessage))]

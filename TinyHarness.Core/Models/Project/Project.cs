@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using TinyHarness.Core.Exceptions;
 
 namespace TinyHarness.Core.Models.Project;
@@ -77,6 +78,13 @@ public sealed record Project
     ///     </para>
     /// </summary>
     public required long Revision { get; init; }
+
+    /// <summary>
+    ///     <para>项目删除正在进行；所有会话解除归属后才会从目录册移除。</para>
+    ///     <para>Project deletion is in progress; the catalog entry is removed only after its sessions are unassigned.</para>
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool IsDeleting { get; init; }
 
     public required DateTimeOffset CreatedUtc { get; init; }
 
@@ -170,8 +178,8 @@ public sealed record Project
         if (Name is null)
             throw new ProjectStoreException($"Project field 'name' in '{filePath}' must not be null.");
 
-        if (Name.Length == 0 ||
-            Name != Name.Trim() ||
+        if (Name.Length == 0            ||
+            Name        != Name.Trim()  ||
             Name.Length > MaxNameLength ||
             Name.Any(char.IsControl))
             throw new

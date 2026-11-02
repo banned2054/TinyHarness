@@ -32,11 +32,11 @@ public sealed record SessionLogIdentity(
 
 /// <summary>
 ///     <para>
-///         会话的项目归属事实；随初始身份批次或后续单条追加恰好提交一次，不支持转移或改绑。
+///         会话的初始项目归属事实；随身份批次或后续单条追加提交一次。删除项目时可追加匹配的解除归属，之后不能再绑定项目。
 ///     </para>
 ///     <para>
-///         The session's project ownership fact; committed exactly once inside the initial identity batch or as a
-///         later single append, never transferred or rebound.
+///         The session's initial project-assignment fact, committed once inside the identity batch or as a later
+///         single append. Project deletion may append a matching unassignment, after which the session cannot be rebound.
 ///     </para>
 /// </summary>
 public sealed record SessionLogProjectBinding(string Schema, string ProjectId)
@@ -170,6 +170,79 @@ public sealed record SessionLogProjectAssignment(string Schema, string State)
         {
             if (property.Value.ValueKind != JsonValueKind.String)
                 throw new InvalidDataException($"A project-assignment property '{property.Name}' must be a string.");
+            return property.Value.GetString()!;
+        }
+    }
+}
+
+/// <summary>
+///     <para>解除会话项目归属的日志事实；仅将项目归属转为明确无项目，不改变历史或执行目录。</para>
+///     <para>
+///         A journal fact that removes project ownership by transitioning the assignment to explicit no-project,
+///         preserving history and the workspace root.
+///     </para>
+/// </summary>
+/// <param name="Schema">
+///     <para>解除归属载荷 schema。</para>
+///     <para>The unassignment payload schema.</para>
+/// </param>
+/// <param name="ProjectId">
+///     <para>必须与日志当前归属匹配的项目 ID。</para>
+///     <para>The project id that must match the journal's current assignment.</para>
+/// </param>
+public sealed record SessionLogProjectUnassignment(string Schema, string ProjectId)
+{
+    /// <summary>
+    ///     <para>当前解除归属载荷 schema。</para>
+    ///     <para>The current unassignment payload schema.</para>
+    /// </summary>
+    public const string SchemaName = "tinyharness.project-unassignment/1";
+
+    /// <summary>
+    ///     <para>严格解析解除归属载荷并验证项目 ID。</para>
+    ///     <para>Strictly parses an unassignment payload and validates its project id.</para>
+    /// </summary>
+    /// <exception cref="InvalidDataException">
+    ///     <para>载荷字段、schema 或项目 ID 不符合当前协议。</para>
+    ///     <para>The payload fields, schema, or project id do not match the current protocol.</para>
+    /// </exception>
+    internal static string Parse(JsonElement payload)
+    {
+        if (payload.ValueKind != JsonValueKind.Object)
+            throw new InvalidDataException("A project-unassignment payload must be an object.");
+
+        string? schema    = null;
+        string? projectId = null;
+        foreach (var property in payload.EnumerateObject())
+            switch (property.Name)
+            {
+                case "schema" :
+                    if (schema is not null)
+                        throw new InvalidDataException("A project-unassignment payload repeats its 'schema' property.");
+                    schema = ReadStringProperty(property);
+                    break;
+                case "projectId" :
+                    if (projectId is not null)
+                        throw new
+                            InvalidDataException("A project-unassignment payload repeats its 'projectId' property.");
+                    projectId = ReadStringProperty(property);
+                    break;
+                default :
+                    throw new InvalidDataException(
+                                                   $"A project-unassignment payload must not contain the unknown property '{property.Name}'.");
+            }
+
+        if (schema != SchemaName || projectId is null || !SessionLogProjectBinding.IsValidProjectId(projectId))
+            throw new InvalidDataException(
+                                           "A project-unassignment payload must contain the supported schema and a 32-character lowercase project id.");
+
+        return projectId;
+
+        static string ReadStringProperty(JsonProperty property)
+        {
+            if (property.Value.ValueKind != JsonValueKind.String)
+                throw new InvalidDataException(
+                                               $"A project-unassignment property '{property.Name}' must be a string.");
             return property.Value.GetString()!;
         }
     }

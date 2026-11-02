@@ -18,6 +18,7 @@ public sealed partial class SessionViewModel
     private          bool                                   _isPermissionMenuOpen;
     private          bool                                   _isWorkspaceMenuOpen;
     private          int                                    _modelMenuPage;
+    private          IReadOnlyList<ProjectViewModel>?       _projectOptions;
     private          string                                 _projectSearchText = string.Empty;
 
     public RelayCommand                             ToggleModelMenuCommand { get; private set; } = null!;
@@ -75,7 +76,17 @@ public sealed partial class SessionViewModel
     ///     <para>项目分组投影，供项目菜单与目标标签解析；不复制第二份目录册。</para>
     ///     <para>The project-group projection used by the project menu and target label, without duplicating the catalog.</para>
     /// </summary>
-    public IReadOnlyList<ProjectViewModel>? ProjectOptions { get; init; }
+    public IReadOnlyList<ProjectViewModel>? ProjectOptions
+    {
+        get => _projectOptions;
+        set
+        {
+            if (!SetProperty(ref _projectOptions, value)) return;
+            var search = ProjectSearchText;
+            RebuildProjectMenu();
+            ProjectSearchText = search;
+        }
+    }
 
     public string ProjectSearchText
     {

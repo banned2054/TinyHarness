@@ -173,6 +173,27 @@ public sealed partial class ChatSession
         ProjectAssignmentState = SessionProjectAssignmentState.Project;
     }
 
+    /// <summary>
+    ///     <para>将当前项目归属变为明确无项目；调用前必须已把解除归属事实可靠追加到日志。</para>
+    ///     <para>
+    ///         Changes the current project assignment to explicit no-project; the unassignment fact must already be durably
+    ///         appended to the journal.
+    ///     </para>
+    /// </summary>
+    /// <exception cref="InvalidOperationException">
+    ///     <para>会话不属于指定项目。</para>
+    ///     <para>The session is not assigned to the specified project.</para>
+    /// </exception>
+    internal void UnassignProject(string projectId)
+    {
+        if (ProjectAssignmentState != SessionProjectAssignmentState.Project || ProjectId != projectId)
+            throw new InvalidOperationException(
+                                                $"Session '{Id}' is not assigned to project '{projectId}'.");
+
+        ProjectId              = null;
+        ProjectAssignmentState = SessionProjectAssignmentState.NoProject;
+    }
+
     internal void RecordModelSelection(SessionModelSelection selection)
     {
         selection.Validate();
