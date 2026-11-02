@@ -1191,8 +1191,11 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     }
 
     /// <summary>
-    ///     <para>持久化项目的目标置顶状态，并同步侧栏与普通项目顺序。</para>
-    ///     <para>Persists the requested project pin state and updates the sidebar and regular-project order.</para>
+    ///     <para>持久化项目置顶状态并重建侧栏，保留项目在普通分类中的手动位置。</para>
+    ///     <para>
+    ///         Persists a project's pin state and rebuilds the sidebar while preserving its manual position
+    ///         among regular projects.
+    ///     </para>
     /// </summary>
     private async Task SetProjectPinAsync(string projectId, string storeDirectory, bool isPinned)
     {
@@ -1204,16 +1207,7 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
             var pins = await SessionStorePinStore.SetProjectPinnedAsync(storeDirectory, projectId, isPinned,
                                                                         _lifetime.Token);
             SetStorePinState(storeDirectory, pins);
-            var isPinnedAfterSave = pins.PinnedProjectIds.Contains(projectId, StringComparer.Ordinal);
-            UpdateStoreSidebarPreferences(storeDirectory, preferences =>
-            {
-                var manualOrder = preferences.ManualProjectOrder.ToList();
-                manualOrder.Remove(projectId);
-                if (!isPinnedAfterSave) manualOrder.Insert(0, projectId);
-                return preferences with { ManualProjectOrder = manualOrder };
-            });
             RebuildProjects();
-            QueueSidebarPreferencesSave(true);
         }
         catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
         {
@@ -1563,9 +1557,10 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         var pinnedOrder      = PinsForStore(_storeDirectory).PinnedProjectIds.ToList();
         var pinnedIds        = pinnedOrder.ToHashSet(StringComparer.Ordinal);
         var orderChanged     = false;
+        // 置顶项目也保留手动顺序中的位置，取消置顶后才能回到原位。
         foreach (var group in projectGroups)
         {
-            if (pinnedIds.Contains(group.Key) || manualOrder.Contains(group.Key, StringComparer.Ordinal)) continue;
+            if (manualOrder.Contains(group.Key, StringComparer.Ordinal)) continue;
             manualOrder.Add(group.Key);
             orderChanged = true;
         }

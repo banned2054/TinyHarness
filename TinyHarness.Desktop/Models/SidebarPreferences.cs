@@ -46,8 +46,11 @@ internal sealed record SidebarStorePreferences
     public string StoreDirectory { get; init; } = "";
 
     /// <summary>
-    ///     <para>普通项目的手动顺序。</para>
-    ///     <para>The manual order of regular projects.</para>
+    ///     <para>项目在普通分类中的手动顺序；置顶期间保留原位置，供取消置顶后恢复。</para>
+    ///     <para>
+    ///         The manual order of projects in the regular category; pinned projects retain their position
+    ///         for restoration when unpinned.
+    ///     </para>
     /// </summary>
     public IReadOnlyList<string> ManualProjectOrder { get; init; } = [];
 
