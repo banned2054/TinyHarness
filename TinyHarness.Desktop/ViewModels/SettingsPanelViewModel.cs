@@ -6,12 +6,12 @@ namespace TinyHarness.Desktop.ViewModels;
 /// <summary>
 ///     <para>
 ///         应用内居中设置面板：分区导航、加载与错误态、关闭请求；关闭只发事件，
-///         由宿主（MainWindowViewModel）收起面板。目录分区承担全部配置写入。
+///         由宿主（MainWindowViewModel）收起面板。目录、网络与权限分区各自保存对应可信设置。
 ///     </para>
 ///     <para>
 ///         The in-app centered settings panel: section navigation, loading and error states, and the close
 ///         request. Closing only raises an event for the host (MainWindowViewModel) to hide the panel;
-///         the catalog section owns all configuration writes.
+///         the catalog, network and permissions sections save their respective trusted settings.
 ///     </para>
 /// </summary>
 public sealed class SettingsPanelViewModel : ObservableObject
@@ -22,17 +22,35 @@ public sealed class SettingsPanelViewModel : ObservableObject
     private bool                      _isLoading = true;
 
     public SettingsPanelViewModel(GeneralSettingsSectionViewModel general, CatalogSettingsViewModel catalog,
-                                  PermissionSettingsViewModel?    permissions = null)
+                                  PermissionSettingsViewModel?    permissions = null,
+                                  NetworkSettingsViewModel?       network     = null)
     {
         General     = general;
         Catalog     = catalog;
         Permissions = permissions ?? new PermissionSettingsViewModel(general.ConfigPath);
-        Sections    = [General, Catalog, Permissions];
+        Network     = network     ?? new NetworkSettingsViewModel(general.ConfigPath);
+        Sections    = [General, Catalog, Network, Permissions];
+        Catalog.ConfigSaved += baseline =>
+        {
+            Network.AcceptBaseline(baseline);
+            Permissions.AcceptBaseline(baseline);
+        };
+        Network.ConfigSaved += baseline =>
+        {
+            Catalog.AcceptBaseline(baseline);
+            Permissions.AcceptBaseline(baseline);
+        };
+        Permissions.ConfigSaved += baseline =>
+        {
+            Catalog.AcceptBaseline(baseline);
+            Network.AcceptBaseline(baseline);
+        };
         foreach (var section in Sections) section.SelectCommand = new RelayCommand(() => SelectSection(section));
         ActiveSection = General;
         CloseCommand = new RelayCommand(() =>
         {
             Catalog.Editor?.CloseModelPicker();
+            Network.CancelProxyEditCommand.Execute(null);
             CloseRequested?.Invoke(this, EventArgs.Empty);
         });
         RetryCommand = new AsyncCommand(() => OpenAsync(), ShowError);
@@ -46,6 +64,7 @@ public sealed class SettingsPanelViewModel : ObservableObject
     public GeneralSettingsSectionViewModel General { get; }
 
     public CatalogSettingsViewModel    Catalog     { get; }
+    public NetworkSettingsViewModel    Network     { get; }
     public PermissionSettingsViewModel Permissions { get; }
 
     public IReadOnlyList<SettingsSectionViewModel> Sections { get; }
@@ -116,6 +135,7 @@ public sealed class SettingsPanelViewModel : ObservableObject
         try
         {
             await Catalog.LoadAsync();
+            await Network.LoadAsync();
             await Permissions.LoadAsync();
         }
         catch (Exception exception)

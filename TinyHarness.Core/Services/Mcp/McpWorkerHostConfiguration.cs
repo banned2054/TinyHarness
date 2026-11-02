@@ -21,7 +21,8 @@ public sealed class McpWorkerHostConfiguration
 {
     private McpWorkerHostConfiguration(string model, string endpoint, ChatApiKind chatApi, string endpointType,
                                        string apiKey, string workspaceRoot, string userConfigPath,
-                                       WorkerExecutionOptions executionOptions)
+                                       WorkerExecutionOptions executionOptions, NetworkSettings? network,
+                                       NetworkRoute? providerNetwork)
     {
         Model            = model;
         Endpoint         = endpoint;
@@ -31,6 +32,8 @@ public sealed class McpWorkerHostConfiguration
         WorkspaceRoot    = workspaceRoot;
         UserConfigPath   = userConfigPath;
         ExecutionOptions = executionOptions;
+        Network          = network;
+        ProviderNetwork  = providerNetwork;
     }
 
     public string Model { get; }
@@ -60,6 +63,18 @@ public sealed class McpWorkerHostConfiguration
     public string UserConfigPath { get; }
 
     public WorkerExecutionOptions ExecutionOptions { get; }
+
+    /// <summary>
+    ///     <para>启动时固定的可信全局网络配置。</para>
+    ///     <para>The trusted global network configuration fixed at startup.</para>
+    /// </summary>
+    public NetworkSettings? Network { get; }
+
+    /// <summary>
+    ///     <para>默认 Provider 的可空网络覆盖。</para>
+    ///     <para>The default provider's nullable network override.</para>
+    /// </summary>
+    public NetworkRoute? ProviderNetwork { get; }
 
     /// <summary>
     ///     <para>
@@ -179,7 +194,7 @@ public sealed class McpWorkerHostConfiguration
 
         return new McpWorkerHostConfiguration(profile.DefaultModel, profile.Endpoint, profile.ChatApi,
                                               endpointUri.Scheme.ToUpperInvariant(), apiKey, workspaceRoot, configPath,
-                                              options);
+                                              options, userConfig.Settings?.Network, profile.Network);
     }
 
     private static int Value(int? configured, int defaultValue, int maximum, string field)

@@ -5,7 +5,10 @@ namespace TinyHarness.Core.Models.Session;
 
 /// <summary>
 ///     <para>一次已选模型的不可变请求配置、能力与策略版本快照及历史连续性边界，不包含客户端或凭据。</para>
-///     <para>Immutable request configuration, capability and policy-version snapshots with continuity boundaries for a model selection, without clients or credentials.</para>
+///     <para>
+///         Immutable request configuration, capability and policy-version snapshots with continuity boundaries for a
+///         model selection, without clients or credentials.
+///     </para>
 /// </summary>
 /// <remarks>
 ///     <para>
@@ -43,12 +46,15 @@ public sealed record SessionModelSelection
     /// <summary>当前历史投影策略版本：跨模型请求视图、连续性区间与 opaque 隔离规则。The current history-projection policy version.</summary>
     public const string CurrentProjectionVersion = "tinyharness.history-projection/1";
 
-    public          string               Schema   { get; init; } = CurrentSchema;
+    public string Schema   { get; init; } = CurrentSchema;
     public long   Revision { get; init; }
 
     /// <summary>
     ///     <para>前一选择修订；首份记录引用隐式修订 0。/2 必填并由写入端、读取端共同验证前驱一致。</para>
-    ///     <para>The previous selection revision; the first record references implicit revision zero. Required on /2 and validated for predecessor consistency by both writer and reader.</para>
+    ///     <para>
+    ///         The previous selection revision; the first record references implicit revision zero. Required on /2 and
+    ///         validated for predecessor consistency by both writer and reader.
+    ///     </para>
     /// </summary>
     public long? PreviousRevision { get; init; }
 
@@ -86,6 +92,15 @@ public sealed record SessionModelSelection
     /// </summary>
     public string? CredentialRoute { get; init; }
 
+    /// <summary>
+    ///     <para>产生本选择的网络客户端绑定身份；只包含非秘密路由指纹，null 表示旧记录或未跟踪。</para>
+    ///     <para>
+    ///         The network-client binding identity for this selection; a non-secret route fingerprint, with null for legacy
+    ///         or untracked records.
+    ///     </para>
+    /// </summary>
+    public string? NetworkRouteIdentity { get; init; }
+
     public ContextOptions?       Context         { get; init; }
     public ModelReasoningEffort? ReasoningEffort { get; init; }
 
@@ -104,13 +119,19 @@ public sealed record SessionModelSelection
 
     /// <summary>
     ///     <para>本选择的强度请求映射版本；/2 必填且须为已知实现，未知版本拒绝续聊。</para>
-    ///     <para>The effort request-mapping version for this selection; required and known on /2, unknown versions refuse continuation.</para>
+    ///     <para>
+    ///         The effort request-mapping version for this selection; required and known on /2, unknown versions refuse
+    ///         continuation.
+    ///     </para>
     /// </summary>
     public string? ReasoningMappingVersion { get; init; }
 
     /// <summary>
     ///     <para>按哪套规则构造目标历史视图（请求投影、预算与 opaque 隔离）；/2 必填且须为已知版本。</para>
-    ///     <para>Which rules build the target history view (request projection, budgeting, and opaque isolation); required and known on /2.</para>
+    ///     <para>
+    ///         Which rules build the target history view (request projection, budgeting, and opaque isolation); required and
+    ///         known on /2.
+    ///     </para>
     /// </summary>
     public string? ProjectionVersion { get; init; }
 
@@ -127,18 +148,19 @@ public sealed record SessionModelSelection
     /// </summary>
     public void Validate()
     {
-        if (Revision <= 0 ||
-            Model is null ||
-            string.IsNullOrWhiteSpace(Model.ModelId) ||
-            string.IsNullOrWhiteSpace(Model.Endpoint) ||
-            !Enum.IsDefined(Model.ChatApi) ||
-            MessageBoundary < 0 ||
-            ContinuationEpoch < 0 ||
-            ReasoningStartMessageIndex < 0 ||
-            ReasoningStartMessageIndex > MessageBoundary ||
-            (CredentialRoute is not null && string.IsNullOrWhiteSpace(CredentialRoute)) ||
-            (ProfileHint is not null && string.IsNullOrWhiteSpace(ProfileHint)) ||
-            (ReasoningEffort is { } effort && !Enum.IsDefined(effort)))
+        if (Revision <= 0                                                                         ||
+            Model is null                                                                         ||
+            string.IsNullOrWhiteSpace(Model.ModelId)                                              ||
+            string.IsNullOrWhiteSpace(Model.Endpoint)                                             ||
+            !Enum.IsDefined(Model.ChatApi)                                                        ||
+            MessageBoundary            < 0                                                        ||
+            ContinuationEpoch          < 0                                                        ||
+            ReasoningStartMessageIndex < 0                                                        ||
+            ReasoningStartMessageIndex > MessageBoundary                                          ||
+            (CredentialRoute is not null      && string.IsNullOrWhiteSpace(CredentialRoute))      ||
+            (NetworkRouteIdentity is not null && string.IsNullOrWhiteSpace(NetworkRouteIdentity)) ||
+            (ProfileHint is not null          && string.IsNullOrWhiteSpace(ProfileHint))          ||
+            (ReasoningEffort is { } effort    && !Enum.IsDefined(effort)))
             throw new
                 InvalidDataException("Invalid model selection schema, identity, route, effort or continuity boundary.");
 
@@ -150,7 +172,7 @@ public sealed record SessionModelSelection
                     SelectedUtc is null ||
                     !ReasoningEffortMappings.IsKnown(ReasoningMappingVersion) ||
                     !string.Equals(ProjectionVersion, CurrentProjectionVersion, StringComparison.Ordinal) ||
-                    (ReasoningEffort is { } declared &&
+                    (ReasoningEffort is { } declared           &&
                      ReasoningCapabilities is { } capabilities &&
                      !capabilities.Contains(declared)))
                     throw new

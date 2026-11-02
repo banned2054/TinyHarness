@@ -309,6 +309,8 @@ public static class UserConfigStore
                         string.IsNullOrWhiteSpace(profile.DefaultModel) ? null : profile.DefaultModel,
                     ["models"] = models
                 };
+                if (profile.Network is { } networkRoute)
+                    profileNode["network"] = WriteNetworkRoute(networkRoute);
                 profiles.Add((JsonNode?)profileNode);
             }
 
@@ -426,6 +428,32 @@ public static class UserConfigStore
 
                 if (sandboxNode.Count > 0)
                     settingsNode["windowsSandbox"] = sandboxNode;
+            }
+
+            if (settings.Network is { } network)
+            {
+                var networkNode = new JsonObject
+                {
+                    ["defaultRoute"] = WriteNetworkRoute(network.DefaultRoute)
+                };
+                var proxies = new JsonArray();
+                foreach (var proxy in network.Proxies)
+                {
+                    var proxyNode = new JsonObject
+                    {
+                        ["id"]       = proxy.Id,
+                        ["name"]     = proxy.Name,
+                        ["protocol"] = ProxyProtocolParser.ToValueString(proxy.Protocol),
+                        ["host"]     = proxy.Host,
+                        ["port"]     = proxy.Port
+                    };
+                    if (!string.IsNullOrWhiteSpace(proxy.CredentialTarget))
+                        proxyNode["credentialTarget"] = proxy.CredentialTarget;
+                    proxies.Add((JsonNode?)proxyNode);
+                }
+
+                networkNode["proxies"]  = proxies;
+                settingsNode["network"] = networkNode;
             }
 
             if (settingsNode.Count > 0) root["settings"] = settingsNode;
@@ -557,19 +585,26 @@ public static class UserConfigStore
                     ApiKeyCredentialTarget    = apiKeyCredentialTarget,
                     ChatApi                   = chatApi,
                     DefaultModel              = ReadString(profileNode, "defaultModel", filePath) ?? string.Empty,
-                    Models                    = models                                            ?? []
+                    Models                    = models                                            ?? [],
+                    Network = BindNetworkRoute(profileNode, "network", filePath,
+                                               $"profiles[{i}].network")
                 };
             }
         }
 
         UserConfigSettings? settings = null;
         if (root["settings"] is not JsonObject settingsNode)
-            return new UserConfig
+        {
+            var config = new UserConfig
             {
                 DefaultProfile = defaultProfile,
                 Profiles       = profiles ?? [],
-                Settings       = settings
+                Settings       = null
             };
+            UserConfigValidator.Validate(config);
+            return config;
+        }
+
         UserWorkerSettings? workerSettings = null;
         if (settingsNode["worker"] is not null)
         {
@@ -618,15 +653,91 @@ public static class UserConfigStore
                 ? CommandRuleJson.Read(settingsNode, "commandRules", $"user config '{filePath}'")
                 : null,
             Worker         = workerSettings,
-            WindowsSandbox = BindWindowsSandbox(settingsNode, filePath)
+            WindowsSandbox = BindWindowsSandbox(settingsNode, filePath),
+            Network        = BindNetworkSettings(settingsNode, filePath)
         };
 
-        return new UserConfig
+        var result = new UserConfig
         {
             DefaultProfile = defaultProfile,
             Profiles       = profiles ?? [],
             Settings       = settings
         };
+        UserConfigValidator.Validate(result);
+        return result;
+    }
+
+    private static JsonObject WriteNetworkRoute(NetworkRoute route) => new()
+    {
+        ["mode"]    = NetworkModeParser.ToValueString(route.Mode),
+        ["proxyId"] = route.ProxyId
+    };
+
+    private static NetworkRoute? BindNetworkRoute(JsonObject parent, string property, string filePath,
+                                                  string     fieldPath)
+    {
+        if (parent[property] is null) return null;
+        if (parent[property] is not JsonObject routeNode)
+            throw new InvalidDataException($"User config field '{fieldPath}' in '{filePath}' must be an object.");
+
+        var modeValue = ReadString(routeNode, "mode", filePath)
+                     ?? throw new
+                            InvalidDataException($"User config field '{fieldPath}.mode' in '{filePath}' is required.");
+        if (!NetworkModeParser.TryParse(modeValue, out var mode))
+            throw new
+                InvalidDataException($"User config field '{fieldPath}.mode' in '{filePath}' has an invalid value '{modeValue}'; expected 'system', 'direct', or 'proxy'.");
+
+        return new NetworkRoute
+        {
+            Mode    = mode,
+            ProxyId = ReadString(routeNode, "proxyId", filePath)
+        };
+    }
+
+    private static NetworkSettings? BindNetworkSettings(JsonObject settingsNode, string filePath)
+    {
+        if (settingsNode["network"] is null) return null;
+        if (settingsNode["network"] is not JsonObject networkNode)
+            throw new InvalidDataException($"User config field 'settings.network' in '{filePath}' must be an object.");
+
+        var defaultRoute = networkNode["defaultRoute"] is null
+            ? new NetworkRoute()
+            : BindNetworkRoute(networkNode, "defaultRoute", filePath, "settings.network.defaultRoute")!;
+        ProxyDefinition[] proxies = [];
+        if (networkNode["proxies"] is not null)
+        {
+            if (networkNode["proxies"] is not JsonArray proxyArray)
+                throw new
+                    InvalidDataException($"User config field 'settings.network.proxies' in '{filePath}' must be an array.");
+
+            proxies = new ProxyDefinition[proxyArray.Count];
+            for (var i = 0; i < proxyArray.Count; i++)
+            {
+                if (proxyArray[i] is not JsonObject proxyNode)
+                    throw new
+                        InvalidDataException($"User config field 'settings.network.proxies[{i}]' in '{filePath}' must be an object.");
+                var protocolText = ReadString(proxyNode, "protocol", filePath)
+                                ?? throw new
+                                       InvalidDataException($"User config field 'settings.network.proxies[{i}].protocol' in '{filePath}' is required.");
+                if (!ProxyProtocolParser.TryParse(protocolText, out var protocol))
+                    throw new
+                        InvalidDataException($"User config field 'settings.network.proxies[{i}].protocol' in '{filePath}' has an invalid value '{protocolText}'; expected 'http', 'https', or 'socks5'.");
+                var port = ReadPositiveInt(proxyNode, "port", filePath, $"settings.network.proxies[{i}].port")
+                        ?? throw new
+                               InvalidDataException($"User config field 'settings.network.proxies[{i}].port' in '{filePath}' is required.");
+                proxies[i] = new ProxyDefinition
+                {
+                    Id               = ReadString(proxyNode, "id", filePath)   ?? string.Empty,
+                    Name             = ReadString(proxyNode, "name", filePath) ?? string.Empty,
+                    Protocol         = protocol,
+                    Host             = ReadString(proxyNode, "host", filePath) ?? string.Empty,
+                    Port             = port,
+                    CredentialTarget = ReadString(proxyNode, "credentialTarget", filePath)
+                };
+            }
+        }
+
+        return new NetworkSettings { DefaultRoute = defaultRoute, Proxies = proxies };
     }
 
     /// <summary>

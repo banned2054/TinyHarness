@@ -1,6 +1,9 @@
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text.Json;
+using TinyHarness.Core.Models.Configuration;
+using TinyHarness.Core.Services.ChatCompletions;
+using TinyHarness.Core.Services.Runtime;
 
 namespace TinyHarness.Desktop.Services;
 
@@ -13,12 +16,19 @@ namespace TinyHarness.Desktop.Services;
 /// </summary>
 internal static class ProviderModelDiscovery
 {
-    private static readonly HttpClient Client           = new(new HttpClientHandler { AllowAutoRedirect = false });
-    private const           int        MaxResponseBytes = 4 * 1024 * 1024;
+    private const int MaxResponseBytes = 4 * 1024 * 1024;
 
     internal static Task<IReadOnlyList<string>> FetchAsync(
         string endpoint, string? apiKey, CancellationToken cancellationToken) =>
-        FetchAsync(Client, endpoint, apiKey, cancellationToken);
+        FetchAsync(endpoint, apiKey, null, null, null, cancellationToken);
+
+    internal static async Task<IReadOnlyList<string>> FetchAsync(
+        string endpoint, string? apiKey, NetworkSettings? networkSettings, NetworkRoute? providerNetwork,
+        ICredentialStore? credentials, CancellationToken cancellationToken)
+    {
+        using var client = ProviderTransportFactory.CreateHttpClient(networkSettings, providerNetwork, credentials);
+        return await FetchAsync(client, endpoint, apiKey, cancellationToken).ConfigureAwait(false);
+    }
 
     /// <summary>
     ///     <para>只接受不带认证信息、查询参数或片段的 HTTP(S) 基地址，保留自定义路径。</para>

@@ -65,6 +65,12 @@ public sealed record UserProfile
     public string ApiKeyCredentialTarget { get; init; } = string.Empty;
 
     /// <summary>
+    ///     <para>null 表示跟随软件全局默认；非 null 时为该 Provider 的独立网络覆盖。</para>
+    ///     <para>null follows the software-wide default; a non-null value overrides networking for this provider.</para>
+    /// </summary>
+    public NetworkRoute? Network { get; init; }
+
+    /// <summary>
     ///     该 profile 使用的 Chat API 协议；只能显式选择，不按模型名猜测。旧配置缺省该字段时沿用
     ///     Chat Completions。
     ///     The Chat API protocol this profile uses; an explicit choice that is never guessed from model names.
@@ -138,6 +144,12 @@ public sealed record UserConfigSettings
     ///     or override them. Absent (null or enabled=false) keeps host execution.
     /// </summary>
     public WindowsSandboxSettings? WindowsSandbox { get; init; }
+
+    /// <summary>
+    ///     <para>软件全局默认网络路由与可复用代理；缺失时默认使用系统代理。</para>
+    ///     <para>The software-wide default network route and reusable proxies; missing values default to the system proxy.</para>
+    /// </summary>
+    public NetworkSettings? Network { get; init; }
 }
 
 /// <summary>

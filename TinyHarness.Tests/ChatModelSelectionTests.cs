@@ -4,6 +4,7 @@ using TinyHarness.Core.Models.ChatCompletions;
 using TinyHarness.Core.Models.Configuration;
 using TinyHarness.Core.Models.Session;
 using TinyHarness.Core.Services.ChatCompletions;
+using TinyHarness.Core.Services.ChatCompletions.Configuration;
 using TinyHarness.Core.Services.Session;
 using TinyHarness.Core.Services.Tools;
 
@@ -139,8 +140,8 @@ public class ChatModelSelectionTests
         await host.ChangeReasoningEffortAsync(ModelReasoningEffort.High, TestToken());
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
                                                                 host.ChangeReasoningEffortAsync(ModelReasoningEffort
-                                                                            .Low, TestToken(),
-                                                                         expectedRevision : revision));
+                                                                       .Low, TestToken(),
+                                                                    expectedRevision : revision));
         Assert.That(host.Session.ModelSelection!.ReasoningEffort, Is.EqualTo(ModelReasoningEffort.High));
     }
 
@@ -161,7 +162,7 @@ public class ChatModelSelectionTests
         var       output    = new StringWriter();
         var       selection = NewSelection(new StringReader(string.Empty), output, []);
 
-        await selection.HandleAsync(host, "/models list", duringRun : false, TestToken());
+        await selection.HandleAsync(host, "/models list", false, TestToken());
 
         var text = output.ToString();
         Assert.That(text, Does.Contain("* work / big (Big Model)"));
@@ -178,7 +179,7 @@ public class ChatModelSelectionTests
         var       created   = new List<(string Profile, string Model)>();
         var       selection = NewSelection(new StringReader(string.Empty), output, created);
 
-        await selection.HandleAsync(host, "/models use flash --provider work", duringRun : false, TestToken());
+        await selection.HandleAsync(host, "/models use flash --provider work", false, TestToken());
 
         var current = host.Session.ModelSelection!;
         Assert.That(created, Is.EqualTo([("work", "flash")]));
@@ -199,7 +200,7 @@ public class ChatModelSelectionTests
         var       created   = new List<(string Profile, string Model)>();
         var       selection = NewSelection(new StringReader(string.Empty), output, created);
 
-        await selection.HandleAsync(host, "/models use big", duringRun : false, TestToken());
+        await selection.HandleAsync(host, "/models use big", false, TestToken());
 
         var text = output.ToString();
         Assert.That(text, Does.Contain("multiple profiles"));
@@ -217,7 +218,7 @@ public class ChatModelSelectionTests
         var       created   = new List<(string Profile, string Model)>();
         var       selection = NewSelection(new StringReader(string.Empty), output, created);
 
-        await selection.HandleAsync(host, "/models use big --provider alt --effort high", duringRun : false,
+        await selection.HandleAsync(host, "/models use big --provider alt --effort high", false,
                                     TestToken());
 
         Assert.That(output.ToString(), Does.Contain("does not declare effort 'high'"));
@@ -233,12 +234,12 @@ public class ChatModelSelectionTests
         var       created   = new List<(string Profile, string Model)>();
         var       selection = NewSelection(new StringReader(string.Empty), output, created);
 
-        await selection.HandleAsync(host, "/models use big --provider work --effort medium", duringRun : false,
+        await selection.HandleAsync(host, "/models use big --provider work --effort medium", false,
                                     TestToken());
         Assert.That(host.Session.ModelSelection!.ReasoningEffort, Is.EqualTo(ModelReasoningEffort.Medium));
 
         // 换到未声明默认强度的另一目标：不沿用 work/big 的 medium。
-        await selection.HandleAsync(host, "/models use big --provider alt", duringRun : false, TestToken());
+        await selection.HandleAsync(host, "/models use big --provider alt", false, TestToken());
         var current = host.Session.ModelSelection!;
         Assert.That(current.Model.Endpoint, Is.EqualTo("https://two.example/v1"));
         Assert.That(current.ReasoningEffort, Is.Null);
@@ -254,7 +255,7 @@ public class ChatModelSelectionTests
         var       created   = new List<(string Profile, string Model)>();
         var       selection = NewSelection(new StringReader("1\n4\n"), output, created);
 
-        await selection.HandleAsync(host, "/models", duringRun : false, TestToken());
+        await selection.HandleAsync(host, "/models", false, TestToken());
 
         var current = host.Session.ModelSelection!;
         Assert.That(created, Is.EqualTo([("work", "big")]));
@@ -270,14 +271,14 @@ public class ChatModelSelectionTests
         var       output    = new StringWriter();
         var       created   = new List<(string Profile, string Model)>();
         var       selection = NewSelection(new StringReader("1\n/cancel\n"), output, created);
-        await selection.HandleAsync(host, "/models", duringRun : false, TestToken());
+        await selection.HandleAsync(host, "/models", false, TestToken());
         Assert.That(output.ToString(), Does.Contain("cancelled"));
         Assert.That(created, Is.Empty);
         Assert.That(host.Session.ModelSelection!.Revision, Is.EqualTo(1));
 
         var invalidOutput    = new StringWriter();
         var invalidSelection = NewSelection(new StringReader("9\n"), invalidOutput, []);
-        await invalidSelection.HandleAsync(host, "/models", duringRun : false, TestToken());
+        await invalidSelection.HandleAsync(host, "/models", false, TestToken());
         Assert.That(invalidOutput.ToString(), Does.Contain("Invalid choice"));
         Assert.That(host.Session.ModelSelection!.Revision, Is.EqualTo(1));
     }
@@ -290,7 +291,7 @@ public class ChatModelSelectionTests
         var       created   = new List<(string Profile, string Model)>();
         var       selection = NewSelection(new StringReader("2\n"), output, created);
 
-        await selection.HandleAsync(host, "/models", duringRun : false, TestToken());
+        await selection.HandleAsync(host, "/models", false, TestToken());
 
         var current = host.Session.ModelSelection!;
         Assert.That(created, Is.EqualTo([("work", "flash")]));
@@ -307,14 +308,14 @@ public class ChatModelSelectionTests
         var       created   = new List<(string Profile, string Model)>();
         var       selection = NewSelection(new StringReader(string.Empty), output, created);
 
-        await selection.HandleAsync(host, "/models effort high", duringRun : false, TestToken());
+        await selection.HandleAsync(host, "/models effort high", false, TestToken());
         var raised = host.Session.ModelSelection!;
         Assert.That(raised.ReasoningEffort, Is.EqualTo(ModelReasoningEffort.High));
         Assert.That(raised.Model.ModelId, Is.EqualTo("big"));
         Assert.That(raised.Revision, Is.EqualTo(2));
         Assert.That(created, Is.Empty);
 
-        await selection.HandleAsync(host, "/models effort default", duringRun : false, TestToken());
+        await selection.HandleAsync(host, "/models effort default", false, TestToken());
         var cleared = host.Session.ModelSelection!;
         Assert.That(cleared.ReasoningEffort, Is.Null);
         Assert.That(cleared.Revision, Is.EqualTo(3));
@@ -327,10 +328,10 @@ public class ChatModelSelectionTests
         var       output    = new StringWriter();
         var       created   = new List<(string Profile, string Model)>();
         var       selection = NewSelection(new StringReader(string.Empty), output, created);
-        await selection.HandleAsync(host, "/models use flash --provider work", duringRun : false, TestToken());
+        await selection.HandleAsync(host, "/models use flash --provider work", false, TestToken());
         output.GetStringBuilder().Clear();
 
-        await selection.HandleAsync(host, "/models effort low", duringRun : false, TestToken());
+        await selection.HandleAsync(host, "/models effort low", false, TestToken());
 
         Assert.That(output.ToString(), Does.Contain("does not declare effort 'low'"));
         Assert.That(host.Session.ModelSelection!.ReasoningEffort, Is.Null);
@@ -345,11 +346,11 @@ public class ChatModelSelectionTests
         var       created   = new List<(string Profile, string Model)>();
         var       selection = NewSelection(new StringReader(string.Empty), output, created);
 
-        await selection.HandleAsync(host, "/models use flash --provider work", duringRun : true, TestToken());
-        await selection.HandleAsync(host, "/models effort high", duringRun : true, TestToken());
-        await selection.HandleAsync(host, "/models", duringRun : true, TestToken());
+        await selection.HandleAsync(host, "/models use flash --provider work", true, TestToken());
+        await selection.HandleAsync(host, "/models effort high", true, TestToken());
+        await selection.HandleAsync(host, "/models", true, TestToken());
         output.GetStringBuilder().Clear();
-        await selection.HandleAsync(host, "/models list", duringRun : true, TestToken());
+        await selection.HandleAsync(host, "/models list", true, TestToken());
 
         var text = output.ToString();
         Assert.That(text, Does.Contain("* work / big"));
@@ -365,7 +366,7 @@ public class ChatModelSelectionTests
         var       output    = new StringWriter();
         var       selection = NewSelection(new StringReader(string.Empty), output, []);
 
-        await selection.HandleAsync(host, "/models frobnicate", duringRun : false, TestToken());
+        await selection.HandleAsync(host, "/models frobnicate", false, TestToken());
 
         var text = output.ToString();
         Assert.That(text, Does.Contain("Usage: /models"));
@@ -406,9 +407,9 @@ public class ChatModelSelectionTests
                                                (_, _, _) =>
                                                    Task.FromResult<IChatCompletionClient>(new FakeChatClient()));
 
-        await selection.HandleAsync(host, "/models use big --provider work", duringRun : false, TestToken());
+        await selection.HandleAsync(host, "/models use big --provider work", false, TestToken());
         var first = host.Session.ModelSelection!;
-        await selection.HandleAsync(host, "/models use big --provider alt", duringRun : false, TestToken());
+        await selection.HandleAsync(host, "/models use big --provider alt", false, TestToken());
         var second = host.Session.ModelSelection!;
 
         // 同一模型三元组、不同凭据路由：开启新 epoch，隔离旧账户产生的 opaque 推理。
@@ -417,6 +418,60 @@ public class ChatModelSelectionTests
         Assert.That(second.CredentialRoute, Is.EqualTo("alt|credential:alt-account"));
         Assert.That(second.ContinuationEpoch, Is.EqualTo(first.ContinuationEpoch + 1));
         Assert.That(second.MessageBoundary, Is.EqualTo(first.MessageBoundary));
+    }
+
+    [Test]
+    public async Task InheritedNetworkRouteRefreshesBeforeNextRequestAndKeepsContinuity()
+    {
+        var catalog = Catalog();
+        var clients = new List<FakeChatClient>();
+        var output  = new StringWriter();
+        var selection = new ChatModelSelection(new StringReader(string.Empty), output,
+                                               _ => Task.FromResult(catalog),
+                                               (_, _, _) =>
+                                               {
+                                                   var client = new FakeChatClient();
+                                                   clients.Add(client);
+                                                   return Task.FromResult<IChatCompletionClient>(client);
+                                               });
+        using var host = NewHost();
+
+        await selection.HandleAsync(host, "/models use big --provider work", false, TestToken());
+        await selection.ValidateBeforeSendAsync(host, TestToken());
+        var systemSelection = host.Session.ModelSelection!;
+        Assert.That(systemSelection.NetworkRouteIdentity, Is.EqualTo("system"));
+
+        var proxy = new ProxyDefinition
+        {
+            Id       = "local",
+            Name     = "本地代理",
+            Protocol = ProxyProtocol.Http,
+            Host     = "127.0.0.1",
+            Port     = 8080
+        };
+        catalog = catalog with
+        {
+            Settings = new UserConfigSettings
+            {
+                Network = new NetworkSettings
+                {
+                    DefaultRoute = new NetworkRoute { Mode = NetworkMode.Proxy, ProxyId = proxy.Id },
+                    Proxies      = [proxy]
+                }
+            }
+        };
+
+        await selection.ValidateBeforeSendAsync(host, TestToken());
+
+        var expectedIdentity = NetworkRouteResolver.BindingIdentity(
+                                                                    NetworkRouteResolver.Resolve(catalog.Settings
+                                                                       .Network, catalog.Profiles[0].Network));
+        var proxySelection = host.Session.ModelSelection!;
+        Assert.That(proxySelection.NetworkRouteIdentity, Is.EqualTo(expectedIdentity));
+        Assert.That(proxySelection.Revision, Is.EqualTo(systemSelection.Revision + 1));
+        Assert.That(proxySelection.ContinuationEpoch, Is.EqualTo(systemSelection.ContinuationEpoch));
+        Assert.That(clients, Has.Count.EqualTo(3));
+        Assert.That(output.ToString(), Does.Contain("network    : applied 代理 本地代理"));
     }
 
     [Test]

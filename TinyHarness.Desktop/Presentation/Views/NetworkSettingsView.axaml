@@ -1,0 +1,163 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:TinyHarness.Desktop.ViewModels"
+             x:Class="TinyHarness.Desktop.Presentation.Views.NetworkSettingsView"
+             x:DataType="vm:NetworkSettingsViewModel">
+    <UserControl.Resources>
+        <DataTemplate x:Key="DefaultNetworkChoiceTemplate" x:DataType="vm:DefaultNetworkChoice">
+            <TextBlock Text="{Binding Label}" />
+        </DataTemplate>
+        <DataTemplate x:Key="NetworkProxyChoiceTemplate" x:DataType="vm:NetworkProxyChoice">
+            <TextBlock Text="{Binding Label}" />
+        </DataTemplate>
+        <DataTemplate x:Key="ProxyProtocolChoiceTemplate" x:DataType="vm:ProxyProtocolChoice">
+            <TextBlock Text="{Binding Label}" />
+        </DataTemplate>
+        <DataTemplate x:Key="NetworkProxyRowTemplate" x:DataType="vm:NetworkProxyRowViewModel">
+            <Border Classes="settings-row" Padding="12,10">
+                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                    <StackPanel Spacing="3" VerticalAlignment="Center">
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <TextBlock Classes="settings-card-title" Text="{Binding Name}" />
+                            <TextBlock Classes="settings-card-description" Text="{Binding Details}"
+                                       VerticalAlignment="Center" />
+                        </StackPanel>
+                        <TextBlock Classes="settings-card-description" Text="{Binding ReferenceText}"
+                                   IsVisible="{Binding IsReferenced}" />
+                        <TextBlock Classes="settings-card-description" Text="{Binding TestStatus}"
+                                   IsVisible="{Binding !IsTesting}" />
+                        <TextBlock Classes="settings-card-description" Text="正在测试代理与 HTTPS 目标…"
+                                   IsVisible="{Binding IsTesting}" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6"
+                                VerticalAlignment="Center">
+                        <Button Classes="settings-secondary" Content="编辑" Command="{Binding EditCommand}"
+                                AutomationProperties.Name="编辑代理" />
+                        <Button Classes="settings-secondary" Content="{Binding TestButtonText}"
+                                Command="{Binding TestCommand}" AutomationProperties.Name="测试代理连接" />
+                        <Button Classes="settings-secondary" Content="删除" Command="{Binding DeleteCommand}"
+                                IsEnabled="{Binding !IsReferenced}"
+                                AutomationProperties.Name="删除代理" />
+                    </StackPanel>
+                </Grid>
+            </Border>
+        </DataTemplate>
+    </UserControl.Resources>
+
+    <StackPanel IsVisible="{Binding IsActive}" Spacing="14">
+        <TextBlock Classes="settings-section-intro" Text="{Binding Intro}" />
+
+        <Border Classes="settings-card">
+            <StackPanel Spacing="10">
+                <TextBlock Classes="settings-card-title" Text="全局默认网络" />
+                <TextBlock Classes="settings-card-description"
+                           Text="系统代理遵循当前 .NET/操作系统设置，未设置时允许直连。直连只关闭应用层代理；指定代理失败时不会切换到其他出口。" />
+                <ComboBox MinHeight="34" ItemsSource="{Binding DefaultModeOptions}"
+                          SelectedItem="{Binding SelectedDefaultMode, Mode=TwoWay}"
+                          ItemTemplate="{StaticResource DefaultNetworkChoiceTemplate}"
+                          AutomationProperties.Name="全局默认网络方式" />
+                <ComboBox MinHeight="34" IsVisible="{Binding IsDefaultProxyMode}"
+                          ItemsSource="{Binding ProxyChoices}"
+                          SelectedItem="{Binding SelectedDefaultProxy, Mode=TwoWay}"
+                          ItemTemplate="{StaticResource NetworkProxyChoiceTemplate}"
+                          AutomationProperties.Name="全局默认代理" />
+                <Button Classes="settings-primary" Content="保存全局默认"
+                        Command="{Binding SaveDefaultRouteCommand}"
+                        IsEnabled="{Binding CanSaveDefaultRoute}"
+                        HorizontalAlignment="Left" AutomationProperties.Name="保存全局默认网络方式" />
+            </StackPanel>
+        </Border>
+
+        <Grid ColumnDefinitions="*,Auto">
+            <StackPanel Spacing="3">
+                <TextBlock Classes="settings-card-title" Text="代理列表" />
+                <TextBlock Classes="settings-card-description"
+                           Text="测试会检查代理连接，并显示到达 HTTPS 测试目标的延迟。" />
+            </StackPanel>
+            <Button Grid.Column="1" Classes="settings-secondary" Content="+ 添加代理"
+                    Command="{Binding AddProxyCommand}" AutomationProperties.Name="添加代理" />
+        </Grid>
+
+        <Border Classes="settings-card">
+            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
+                <StackPanel Spacing="4">
+                    <TextBlock Classes="settings-field-label" Text="HTTPS 测试目标" />
+                    <TextBox Classes="settings-input" Text="{Binding TestTarget, Mode=TwoWay}"
+                             PlaceholderText="https://api.example.com/v1/models"
+                             AutomationProperties.Name="HTTPS 连接测试目标" />
+                </StackPanel>
+                <TextBlock Classes="settings-card-description" Grid.Column="1"
+                           Text="仅请求目标并测量响应延迟，不发送 API Key。"
+                           VerticalAlignment="Center" />
+            </Grid>
+        </Border>
+
+        <StackPanel IsVisible="{Binding !HasProxies}" Spacing="3">
+            <TextBlock Classes="settings-card-description" Text="还没有已保存的代理。" />
+        </StackPanel>
+        <ItemsControl ItemsSource="{Binding Proxies}" ItemTemplate="{StaticResource NetworkProxyRowTemplate}" />
+
+        <Border Classes="settings-card" IsVisible="{Binding IsProxyEditorOpen}">
+            <StackPanel Spacing="10">
+                <TextBlock Classes="settings-card-title" Text="{Binding ProxyEditorTitle}" />
+                <StackPanel Spacing="4">
+                    <TextBlock Classes="settings-field-label" Text="名称" />
+                    <TextBox Classes="settings-input" Text="{Binding ProxyName, Mode=TwoWay}"
+                             PlaceholderText="例如 本地 Mihomo" AutomationProperties.Name="代理名称" />
+                </StackPanel>
+                <Grid ColumnDefinitions="*,2*" ColumnSpacing="8">
+                    <StackPanel Spacing="4">
+                        <TextBlock Classes="settings-field-label" Text="协议" />
+                        <ComboBox MinHeight="34" ItemsSource="{Binding ProxyProtocolOptions}"
+                                  SelectedItem="{Binding SelectedProxyProtocol, Mode=TwoWay}"
+                                  ItemTemplate="{StaticResource ProxyProtocolChoiceTemplate}"
+                                  AutomationProperties.Name="代理协议" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" Spacing="4">
+                        <TextBlock Classes="settings-field-label" Text="主机" />
+                        <TextBox Classes="settings-input" Text="{Binding ProxyHost, Mode=TwoWay}"
+                                 PlaceholderText="127.0.0.1" AutomationProperties.Name="代理主机" />
+                    </StackPanel>
+                </Grid>
+                <StackPanel Spacing="4">
+                    <TextBlock Classes="settings-field-label" Text="端口" />
+                    <TextBox Classes="settings-input" Text="{Binding ProxyPort, Mode=TwoWay}"
+                             PlaceholderText="7890" AutomationProperties.Name="代理端口" />
+                </StackPanel>
+                <TextBlock Classes="settings-card-description" Text="用户名和密码会存入系统凭据存储，不会写入普通配置文件。编辑时留空保留现有凭据。"
+                           TextWrapping="Wrap" />
+                <TextBlock Classes="settings-card-description" Text="当前代理已有认证凭据。"
+                           IsVisible="{Binding HasSavedCredentials}" />
+                <Grid ColumnDefinitions="*,*" ColumnSpacing="8">
+                    <StackPanel Spacing="4">
+                        <TextBlock Classes="settings-field-label" Text="代理用户名（可选）" />
+                        <TextBox Classes="settings-input" Text="{Binding ProxyUsername, Mode=TwoWay}"
+                                 AutomationProperties.Name="代理用户名" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" Spacing="4">
+                        <TextBlock Classes="settings-field-label" Text="代理密码（可选）" />
+                        <TextBox Classes="settings-input" Text="{Binding ProxyPassword, Mode=TwoWay}"
+                                 PasswordChar="●" AutomationProperties.Name="代理密码" />
+                    </StackPanel>
+                </Grid>
+                <CheckBox Content="清除已有认证凭据" IsVisible="{Binding HasSavedCredentials}"
+                          IsChecked="{Binding ClearSavedCredentials, Mode=TwoWay}"
+                          Foreground="{DynamicResource PopupForegroundBrush}" />
+                <TextBlock Classes="settings-error" Text="{Binding FirstProxyValidationError}"
+                           IsVisible="{Binding IsProxyEditorOpen}" />
+                <TextBlock Classes="settings-error" Text="{Binding ProxyError}"
+                           IsVisible="{Binding HasProxyError}" />
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8">
+                    <Button Classes="settings-secondary" Content="取消" Command="{Binding CancelProxyEditCommand}"
+                            AutomationProperties.Name="取消代理编辑" />
+                    <Button Classes="settings-primary" Content="保存代理"
+                            Command="{Binding SaveProxyCommand}" IsEnabled="{Binding CanSaveProxy}"
+                            AutomationProperties.Name="保存代理配置" />
+                </StackPanel>
+            </StackPanel>
+        </Border>
+
+        <TextBlock Classes="settings-error" Text="{Binding Notice}"
+                   IsVisible="{Binding HasNotice}" />
+    </StackPanel>
+</UserControl>

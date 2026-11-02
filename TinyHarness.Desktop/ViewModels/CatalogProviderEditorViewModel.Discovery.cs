@@ -8,17 +8,16 @@ namespace TinyHarness.Desktop.ViewModels;
 
 public sealed partial class CatalogProviderEditorViewModel
 {
+    private readonly Dictionary<string, CatalogModelEntryViewModel> _removedModelEntries = new(StringComparer.Ordinal);
+    private          IReadOnlyList<CatalogDiscoveredModelViewModel> _discoveredModels    = [];
     private          CancellationTokenSource?                       _discoveryCancellation;
-    private          bool                                           _isModelPickerOpen;
     private          bool                                           _isFetchingModels;
+    private          bool                                           _isModelPickerOpen;
+    private          int                                            _loadingDotCount      = 1;
     private          string                                         _modelDiscoveryStatus = string.Empty;
     private          string                                         _modelSearch          = string.Empty;
-    private          IReadOnlyList<CatalogDiscoveredModelViewModel> _discoveredModels    = [];
-    private          int                                            _loadingDotCount      = 1;
-    private readonly Dictionary<string, CatalogModelEntryViewModel> _removedModelEntries = new(StringComparer.Ordinal);
 
-    internal Func<string, string?, CancellationToken, Task<IReadOnlyList<string>>> FetchModels { get; set; } =
-        ProviderModelDiscovery.FetchAsync;
+    internal Func<string, string?, CancellationToken, Task<IReadOnlyList<string>>>? FetchModels { get; set; }
 
     public AsyncCommand FetchModelsCommand        { get; }
     public RelayCommand SaveModelSelectionCommand { get; }
@@ -78,7 +77,7 @@ public sealed partial class CatalogProviderEditorViewModel
 
     public bool CanSaveModelSelection => IsModelPickerOpen &&
                                          !IsFetchingModels &&
-                                         CanEdit &&
+                                         CanEdit           &&
                                          (ModelsToAddCount > 0 || ModelsToRemoveCount > 0);
 
     public bool HasFilteredModels => FilteredDiscoveredModels.Count > 0;
@@ -140,7 +139,11 @@ public sealed partial class CatalogProviderEditorViewModel
                 }
             }
 
-            var ids = await FetchModels(endpoint, key, cancellation.Token);
+            var ids = FetchModels is { } fetchOverride
+                ? await fetchOverride(endpoint, key, cancellation.Token)
+                : await ProviderModelDiscovery.FetchAsync(endpoint, key, _baseline.Settings?.Network,
+                                                          GetProviderNetworkRoute(), _credentials,
+                                                          cancellation.Token);
             if (cancellation.IsCancellationRequested || !IsModelPickerOpen) return;
             var existing = ModelEntries.Select(entry => entry.Id.Trim()).ToHashSet(StringComparer.Ordinal);
             _discoveredModels = ids.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)
@@ -206,10 +209,11 @@ public sealed partial class CatalogProviderEditorViewModel
                                        .Select(model => model.Id).ToHashSet(StringComparer.Ordinal);
         foreach (var entry in ModelEntries.Where(entry => removed.Contains(entry.Id.Trim())).ToArray())
         {
-            entry.PropertyChanged -= OnEntryPropertyChanged;
-            _removedModelEntries[entry.Id.Trim()] = entry;
+            entry.PropertyChanged                 -= OnEntryPropertyChanged;
+            _removedModelEntries[entry.Id.Trim()] =  entry;
             ModelEntries.Remove(entry);
         }
+
         if (removed.Contains(_defaultModelId)) SelectDefaultModel(string.Empty);
 
         var existing = ModelEntries.Select(entry => entry.Id.Trim()).ToHashSet(StringComparer.Ordinal);
@@ -217,13 +221,12 @@ public sealed partial class CatalogProviderEditorViewModel
         {
             if (!existing.Add(model.Id)) continue;
             if (!_removedModelEntries.Remove(model.Id, out var entry))
-            {
                 entry = new CatalogModelEntryViewModel(null, NotifyFormChanged)
                 {
-                    Id          = model.Id,
-                    WindowDraft = CatalogModelEntryViewModel.FormatTokenCount(new TinyHarnessConfig().ContextWindowTokens)
+                    Id = model.Id,
+                    WindowDraft =
+                        CatalogModelEntryViewModel.FormatTokenCount(new TinyHarnessConfig().ContextWindowTokens)
                 };
-            }
             AttachEntry(entry);
             ModelEntries.Add(entry);
         }

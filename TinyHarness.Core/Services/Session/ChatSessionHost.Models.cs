@@ -97,6 +97,7 @@ public sealed partial class ChatSessionHost
                 Model                      = candidate.Model,
                 ProfileHint                = candidate.ProfileHint,
                 CredentialRoute            = candidate.CredentialRoute,
+                NetworkRouteIdentity       = candidate.NetworkRouteIdentity,
                 Context                    = candidate.Context,
                 ReasoningEffort            = candidate.ReasoningEffort,
                 ReasoningCapabilities      = candidate.ReasoningCapabilities?.ToArray(),
@@ -162,7 +163,10 @@ public sealed partial class ChatSessionHost
 
     /// <summary>
     ///     <para>仅调整下一次运行的强度并保留当前凭据路由与连续性；活动运行或过时选择拒绝修改。</para>
-    ///     <para>Changes only the next run's effort while keeping the current credential route and continuity, rejecting active runs and stale selections.</para>
+    ///     <para>
+    ///         Changes only the next run's effort while keeping the current credential route and continuity, rejecting
+    ///         active runs and stale selections.
+    ///     </para>
     /// </summary>
     /// <remarks>
     ///     <para>
@@ -184,9 +188,10 @@ public sealed partial class ChatSessionHost
         return ChangeModelAsync(new SessionModelBinding(current.Model, binding.Client, current.Context,
                                                         reasoningEffort, current.CredentialRoute, current.ProfileHint,
                                                         declaredCapabilities ?? current.ReasoningCapabilities,
-                                                        ownsClient           : false),
+                                                        false,
+                                                        current.NetworkRouteIdentity),
                                 cancellationToken,
-                                expectedRevision : expectedRevision ?? current.Revision);
+                                expectedRevision ?? current.Revision);
     }
 
     /// <summary>
@@ -227,9 +232,32 @@ public sealed partial class ChatSessionHost
         return ChangeModelAsync(new SessionModelBinding(current.Model, binding.Client, current.Context,
                                                         current.ReasoningEffort, credentialRoute, current.ProfileHint,
                                                         current.ReasoningCapabilities,
-                                                        ownsClient           : false),
+                                                        false,
+                                                        current.NetworkRouteIdentity),
                                 cancellationToken,
-                                expectedRevision : current.Revision);
+                                current.Revision);
+    }
+
+    /// <summary>
+    ///     <para>在首次发送前将当前客户端的网络路由身份写入选择快照，不替换客户端或重置推理连续性。</para>
+    ///     <para>
+    ///         Before the first request, records the current client's network-route identity without replacing the client or
+    ///         resetting reasoning continuity.
+    ///     </para>
+    /// </summary>
+    public Task<SessionModelSelection> EnsureNetworkRouteIdentityAsync(
+        string networkRouteIdentity, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(networkRouteIdentity);
+        var current = Session.ModelSelection!;
+        var binding = BoundBindingOrThrow();
+        return ChangeModelAsync(new SessionModelBinding(current.Model, binding.Client, current.Context,
+                                                        current.ReasoningEffort, current.CredentialRoute,
+                                                        current.ProfileHint, current.ReasoningCapabilities,
+                                                        false,
+                                                        networkRouteIdentity),
+                                cancellationToken,
+                                current.Revision);
     }
 
     private SessionModelBinding BoundBindingOrThrow() =>
@@ -239,7 +267,10 @@ public sealed partial class ChatSessionHost
 
     /// <summary>
     ///     <para>比较影响请求与历史解释的全部策略信息；profile 提示仅影响展示，不参与 no-op 判定。</para>
-    ///     <para>Compares every policy input affecting requests and history interpretation; the profile hint affects display only and never decides a no-op.</para>
+    ///     <para>
+    ///         Compares every policy input affecting requests and history interpretation; the profile hint affects display
+    ///         only and never decides a no-op.
+    ///     </para>
     /// </summary>
     private static bool PolicyEquals(SessionModelSelection current, SessionModelSelection candidate) =>
         current.Schema          == candidate.Schema                                                                 &&
@@ -247,6 +278,7 @@ public sealed partial class ChatSessionHost
         current.Context         == candidate.Context                                                                &&
         current.ReasoningEffort == candidate.ReasoningEffort                                                        &&
         string.Equals(current.CredentialRoute, candidate.CredentialRoute, StringComparison.Ordinal)                 &&
+        string.Equals(current.NetworkRouteIdentity, candidate.NetworkRouteIdentity, StringComparison.Ordinal)       &&
         CapabilitiesEqual(current.ReasoningCapabilities, candidate.ReasoningCapabilities)                           &&
         string.Equals(current.ReasoningMappingVersion, candidate.ReasoningMappingVersion, StringComparison.Ordinal) &&
         string.Equals(current.ProjectionVersion, candidate.ProjectionVersion, StringComparison.Ordinal);
@@ -260,7 +292,10 @@ public sealed partial class ChatSessionHost
 
     /// <summary>
     ///     <para>no-op 采纳调用但未启用候选：借用当前客户端的候选只结束生命周期，自有客户端的候选释放一次。</para>
-    ///     <para>Drops an unadopted candidate after an accepted no-op: a candidate borrowing the current client only ends its lifetime, an owning candidate releases its client once.</para>
+    ///     <para>
+    ///         Drops an unadopted candidate after an accepted no-op: a candidate borrowing the current client only ends its
+    ///         lifetime, an owning candidate releases its client once.
+    ///     </para>
     /// </summary>
     private void ReleaseCandidateAfterNoOp(SessionModelBinding candidate)
     {

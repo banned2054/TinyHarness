@@ -28,7 +28,14 @@ internal static class DoctorCommand
         var resolution = await ConfigResolver.ResolveAsync(null, cancellationToken,
                                                            context.ResolveUserConfigPath())
                                              .ConfigureAwait(false);
-        var config   = resolution.Config;
+        var config = resolution.Config;
+        var userConfig = await UserConfigStore.LoadAsync(context.ResolveUserConfigPath(), cancellationToken)
+                                              .ConfigureAwait(false);
+        var networkProfile = resolution.ProfileName is null
+            ? null
+            : userConfig.Profiles.SingleOrDefault(profile => profile.Name == resolution.ProfileName)
+           ?? throw new
+                  ConfigException("The selected provider changed while doctor was preparing; reload configuration and retry.");
         var failures = 0;
 
         await io.WriteLineAsync("TinyHarness doctor (offline checks)", cancellationToken).ConfigureAwait(false);
@@ -133,7 +140,9 @@ internal static class DoctorCommand
 
         if (options.Connect)
         {
-            var connectOk = await ConnectAsync(context, config, endpointValid, key, cancellationToken)
+            var connectOk = await ConnectAsync(context, config, endpointValid, key,
+                                               userConfig.Settings?.Network, networkProfile?.Network,
+                                               cancellationToken)
                .ConfigureAwait(false);
             if (!connectOk) failures++;
         }
@@ -153,8 +162,9 @@ internal static class DoctorCommand
     ///     <para>发送一次最小模型请求；联网与计费提示先行，工具定义不随请求发送。</para>
     ///     <para>Sends one minimal model request; the network/charge notice comes first and no tool definitions are sent.</para>
     /// </summary>
-    private static async Task<bool> ConnectAsync(CommandContext context, TinyHarnessConfig config, bool endpointValid,
-                                                 ApiKeyStatus   key,     CancellationToken cancellationToken)
+    private static async Task<bool> ConnectAsync(
+        CommandContext   context,         TinyHarnessConfig config,          bool endpointValid, ApiKeyStatus key,
+        NetworkSettings? networkSettings, NetworkRoute?     providerNetwork, CancellationToken cancellationToken)
     {
         var io = context.Io;
         await io.WriteLineAsync(string.Empty, cancellationToken).ConfigureAwait(false);
@@ -199,8 +209,9 @@ internal static class DoctorCommand
         timeout.CancelAfter(TimeSpan.FromSeconds(60));
         try
         {
-            var client = ModelClientFactory.Create(config.Model, config.Endpoint, apiKey,
-                                                   config.ChatApi);
+            var client = ModelClientFactory.Create(config.Model, config.Endpoint, apiKey, config.ChatApi,
+                                                   networkSettings, providerNetwork, context.Credentials);
+            using var ownedClient = client as IDisposable;
             var request = new ChatCompletionRequest
             {
                 Model    = config.Model,

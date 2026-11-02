@@ -22,6 +22,12 @@
                 </Grid>
             </Button>
         </DataTemplate>
+        <DataTemplate x:Key="ProviderNetworkChoiceTemplate" x:DataType="vm:ProviderNetworkChoice">
+            <TextBlock Text="{Binding Label}" />
+        </DataTemplate>
+        <DataTemplate x:Key="NetworkProxyChoiceTemplate" x:DataType="vm:NetworkProxyChoice">
+            <TextBlock Text="{Binding Label}" />
+        </DataTemplate>
         <!-- 模型目录单条目：折叠仅 ID/名称行（API ID 是保存键，已有条目只读）；展开补窗口、
              支持档位与默认档位。模型增删在获取模型面板中勾选确认，行内不设删除按钮。 -->
         <DataTemplate x:Key="ModelEntryTemplate" x:DataType="vm:CatalogModelEntryViewModel">
@@ -122,7 +128,7 @@
                 </StackPanel>
             </Border>
         </DataTemplate>
-        <!-- 密钥输入常显；地址、协议与模型放入自定义设置，凭据引用另置于高级区域。 -->
+        <!-- 密钥输入常显；地址、协议、网络连接与模型放入自定义设置，凭据引用另置于高级区域。 -->
         <DataTemplate x:Key="ProviderEditorTemplate" x:DataType="vm:CatalogProviderEditorViewModel">
             <Border Classes="settings-provider-editor">
                 <StackPanel Spacing="12" IsEnabled="{Binding CanEdit}">
@@ -206,6 +212,22 @@
                                     </Border>
                                 </Popup>
                             </Panel>
+                        </StackPanel>
+
+                        <StackPanel Spacing="6">
+                            <TextBlock Classes="settings-field-label" Text="网络连接" />
+                            <ComboBox MinHeight="34"
+                                      ItemsSource="{Binding ProviderNetworkOptions}"
+                                      SelectedItem="{Binding SelectedProviderNetwork, Mode=TwoWay}"
+                                      ItemTemplate="{StaticResource ProviderNetworkChoiceTemplate}"
+                                      AutomationProperties.Name="Provider 网络连接方式" />
+                            <ComboBox MinHeight="34" IsVisible="{Binding IsProviderProxyMode}"
+                                      ItemsSource="{Binding NetworkProxyOptions}"
+                                      SelectedItem="{Binding SelectedProviderProxy, Mode=TwoWay}"
+                                      ItemTemplate="{StaticResource NetworkProxyChoiceTemplate}"
+                                      AutomationProperties.Name="Provider 指定代理" />
+                            <TextBlock Classes="settings-card-description"
+                                       Text="{Binding ProviderNetworkDescription}" />
                         </StackPanel>
 
                         <!-- 模型目录：条目草稿在保存时一次提交；默认模型下拉覆盖供应商默认项。 -->

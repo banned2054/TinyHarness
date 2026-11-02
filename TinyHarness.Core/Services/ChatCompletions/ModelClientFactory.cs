@@ -4,6 +4,8 @@ using OpenAI.Chat;
 using OpenAI.Responses;
 using System.ClientModel;
 using TinyHarness.Core.Models.Configuration;
+using TinyHarness.Core.Services.ChatCompletions.Configuration;
+using TinyHarness.Core.Services.Runtime;
 
 namespace TinyHarness.Core.Services.ChatCompletions;
 
@@ -28,7 +30,9 @@ public static class ModelClientFactory
     ///     dispose it explicitly.
     /// </summary>
     public static IChatCompletionClient Create(
-        string model, string endpoint, string apiKey, ChatApiKind api = ChatApiKind.ChatCompletions)
+        string            model, string endpoint, string apiKey, ChatApiKind api = ChatApiKind.ChatCompletions,
+        NetworkSettings?  networkSettings = null, NetworkRoute? providerNetwork = null,
+        ICredentialStore? credentials     = null)
     {
         if (string.IsNullOrWhiteSpace(model)) throw new ArgumentException("A model is required.", nameof(model));
 
@@ -39,36 +43,43 @@ public static class ModelClientFactory
 
         if (!Uri.TryCreate(endpoint, UriKind.Absolute, out var endpointUri) ||
             (endpointUri.Scheme != Uri.UriSchemeHttp && endpointUri.Scheme != Uri.UriSchemeHttps))
-            throw new ArgumentException($"Endpoint must be an absolute http(s) URL, got '{endpoint}'.",
-                                        nameof(endpoint));
+            throw new ArgumentException("Endpoint must be an absolute http(s) URL.", nameof(endpoint));
 
         // Ensure the SDK appends "chat/completions" to the base URL instead of
         // gluing it onto the last path segment.
-        var baseUri = new Uri(endpoint.TrimEnd('/') + "/");
-
-        switch (api)
+        var baseUri       = new Uri(endpoint.TrimEnd('/') + "/");
+        var transport     = ProviderTransportFactory.Create(networkSettings, providerNetwork, credentials);
+        var routeIdentity = NetworkRouteResolver.BindingIdentity(transport.Route);
+        try
         {
-            case ChatApiKind.ChatCompletions :
-                var chatClient = new ChatClient(model, new ApiKeyCredential(apiKey),
-                                                new OpenAIClientOptions { Endpoint = baseUri });
-                return new MicrosoftAiChatClient(chatClient.AsIChatClient());
+            var options = new OpenAIClientOptions { Endpoint = baseUri, Transport = transport.Transport };
+            switch (api)
+            {
+                case ChatApiKind.ChatCompletions :
+                    var chatClient = new ChatClient(model, new ApiKeyCredential(apiKey), options);
+                    return new MicrosoftAiChatClient(chatClient.AsIChatClient(), ownedResource : transport,
+                                                     networkRouteIdentity : routeIdentity);
 
-            case ChatApiKind.Responses :
-                // OPENAI001（Responses 属实验 API）在此最小范围关闭：PLAN §21 已离线验证该
-                // 传输路径，并经 win-x64 NativeAOT 发布确认零 trim/AOT 警告；探针见
-                // artifacts/protocol-compat/ProviderProbe.cs。
-                // OPENAI001 (experimental Responses API) is suppressed for this
-                // minimal scope only: PLAN §21 verified this transport offline and
-                // confirmed zero trim/AOT warnings in a win-x64 NativeAOT publish;
-                // see the probe in artifacts/protocol-compat/ProviderProbe.cs.
+                case ChatApiKind.Responses :
+                    // OPENAI001（Responses 属实验 API）在此最小范围关闭：传输仍使用相同的显式网络路由。
 #pragma warning disable OPENAI001
-                var responsesClient = new ResponsesClient(new ApiKeyCredential(apiKey),
-                                                          new ResponsesClientOptions { Endpoint = baseUri });
-                return new MicrosoftAiChatClient(responsesClient.AsIChatClient(model), api);
+                    var responsesOptions = new ResponsesClientOptions
+                    {
+                        Endpoint  = baseUri,
+                        Transport = transport.Transport
+                    };
+                    var responsesClient = new ResponsesClient(new ApiKeyCredential(apiKey), responsesOptions);
+                    return new MicrosoftAiChatClient(responsesClient.AsIChatClient(model), api, transport,
+                                                     routeIdentity);
 #pragma warning restore OPENAI001
-
-            default :
-                throw new ArgumentOutOfRangeException(nameof(api), api, "Unknown chat API kind.");
+                default :
+                    throw new ArgumentOutOfRangeException(nameof(api), api, "Unknown chat API kind.");
+            }
+        }
+        catch
+        {
+            transport.Dispose();
+            throw;
         }
     }
 }

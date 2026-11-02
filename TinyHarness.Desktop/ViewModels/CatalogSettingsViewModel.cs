@@ -23,9 +23,9 @@ namespace TinyHarness.Desktop.ViewModels;
 /// </summary>
 public sealed class CatalogSettingsViewModel : SettingsSectionViewModel
 {
+    private readonly ICredentialStore                _credentials;
     private readonly string                          _path;
     private readonly Func<Task>                      _refresh;
-    private readonly ICredentialStore                _credentials;
     private          UserConfig                      _baseline = new();
     private          CatalogProviderRowViewModel?    _editingRow;
     private          CatalogProviderEditorViewModel? _editor;
@@ -102,6 +102,8 @@ public sealed class CatalogSettingsViewModel : SettingsSectionViewModel
 
     public bool IsModelPickerOpen => Editor?.IsModelPickerOpen == true;
 
+    public event Action<UserConfig>? ConfigSaved;
+
     /// <summary>
     ///     <para>重新读取可信用户配置并重建行；展开的卡与未保存草稿一并丢弃。</para>
     ///     <para>Reloads the trusted user config and rebuilds rows; open cards and unsaved drafts are discarded.</para>
@@ -118,6 +120,19 @@ public sealed class CatalogSettingsViewModel : SettingsSectionViewModel
         {
             SetRefreshing(false);
         }
+    }
+
+    /// <summary>
+    ///     <para>接收其他设置分区已保存的完整基线，不重建 Provider 行或丢弃当前编辑草稿。</para>
+    ///     <para>
+    ///         Accepts a complete baseline saved by another settings section without rebuilding provider rows or discarding
+    ///         the current draft.
+    ///     </para>
+    /// </summary>
+    public void AcceptBaseline(UserConfig baseline)
+    {
+        _baseline = baseline;
+        Editor?.AcceptBaseline(baseline);
     }
 
     private async Task ReloadAsync()
@@ -221,6 +236,7 @@ public sealed class CatalogSettingsViewModel : SettingsSectionViewModel
             try
             {
                 await ReloadAsync();
+                ConfigSaved?.Invoke(_baseline);
             }
             catch (Exception exception)
             {
@@ -255,8 +271,8 @@ public sealed class CatalogSettingsViewModel : SettingsSectionViewModel
 public sealed class CatalogProviderRowViewModel : ObservableObject
 {
     private readonly Action<CatalogProviderRowViewModel> _onEdit;
-    private          bool                                _isEditing;
     private          CatalogProviderEditorViewModel?     _editor;
+    private          bool                                _isEditing;
 
     /// <summary>
     ///     <para>建立供应商行；卡片操作是否可用由所属分区统一决定。</para>
@@ -325,28 +341,29 @@ public sealed class CatalogProviderRowViewModel : ObservableObject
 /// </summary>
 public sealed partial class CatalogProviderEditorViewModel : ObservableObject
 {
-    private readonly string                                 _path;
-    private readonly ICredentialStore                       _credentials;
-    private readonly UserConfig                             _baseline;
-    private readonly UserProfile?                           _source;
-    private readonly Action<CatalogProviderEditorViewModel> _saved;
     private readonly Action<CatalogProviderEditorViewModel> _cancelled;
-
-    private string  _name     = string.Empty;
-    private          string                                 _endpoint            = string.Empty;
-    private string  _protocol = ChatApiKindParser.ChatCompletionsValue;
-    private          string                                 _environmentVariable = string.Empty;
+    private readonly ICredentialStore                       _credentials;
+    private readonly string                                 _path;
+    private readonly Action<CatalogProviderEditorViewModel> _saved;
+    private readonly UserProfile?                           _source;
+    private          UserConfig                             _baseline;
     private          string                                 _credentialTarget    = string.Empty;
-    private string  _secret = string.Empty;
-    private          bool                                   _makeDefaultProvider;
     private          string                                 _defaultModelId      = string.Empty;
-    private          bool                                   _isSaving;
-    private string? _saveError;
-    private          bool                                   _isProtocolMenuOpen;
-    private          bool                                   _isDefaultModelMenuOpen;
-    private          bool                                   _isCustomExpanded = true;
+    private          string                                 _endpoint            = string.Empty;
+    private          string                                 _environmentVariable = string.Empty;
     private          bool                                   _isCredentialOptionsExpanded;
-    private IReadOnlyList<CatalogChoiceOptionViewModel> _defaultModelOptions = [];
+    private          bool                                   _isCustomExpanded = true;
+    private          bool                                   _isDefaultModelMenuOpen;
+    private          bool                                   _isProtocolMenuOpen;
+    private          bool                                   _isSaving;
+    private          bool                                   _makeDefaultProvider;
+
+    private string  _name                = string.Empty;
+    private string  _protocol            = ChatApiKindParser.ChatCompletionsValue;
+    private string  _providerNetworkMode = "follow";
+    private string? _providerProxyId;
+    private string? _saveError;
+    private string  _secret = string.Empty;
 
     private CatalogProviderEditorViewModel(string path, ICredentialStore credentials, UserConfig baseline,
                                            UserProfile? source, Action<CatalogProviderEditorViewModel> saved,
@@ -366,6 +383,16 @@ public sealed partial class CatalogProviderEditorViewModel : ObservableObject
             _environmentVariable = provider.ApiKeyEnvironmentVariable;
             _credentialTarget    = provider.ApiKeyCredentialTarget;
             _defaultModelId      = provider.DefaultModel;
+            _providerNetworkMode = provider.Network is null
+                ? "follow"
+                : provider.Network.Mode switch
+                {
+                    NetworkMode.System => "system",
+                    NetworkMode.Direct => "direct",
+                    NetworkMode.Proxy  => "proxy",
+                    _                  => "follow"
+                };
+            _providerProxyId     = provider.Network?.ProxyId;
             _makeDefaultProvider = baseline.DefaultProfile == provider.Name;
             foreach (var model in provider.Models)
             {
@@ -377,18 +404,19 @@ public sealed partial class CatalogProviderEditorViewModel : ObservableObject
 
         ProtocolOptions =
         [
-            new(ChatApiKindParser.ChatCompletionsValue, "OpenAI Chat Completions",
-                _protocol == ChatApiKindParser.ChatCompletionsValue, SelectProtocol),
-            new(ChatApiKindParser.ResponsesValue, "OpenAI Responses", _protocol == ChatApiKindParser.ResponsesValue,
-                SelectProtocol)
+            new CatalogChoiceOptionViewModel(ChatApiKindParser.ChatCompletionsValue, "OpenAI Chat Completions",
+                                             _protocol == ChatApiKindParser.ChatCompletionsValue, SelectProtocol),
+            new CatalogChoiceOptionViewModel(ChatApiKindParser.ResponsesValue, "OpenAI Responses",
+                                             _protocol == ChatApiKindParser.ResponsesValue,
+                                             SelectProtocol)
         ];
-        SaveCommand              = new AsyncCommand(SaveAsync, exception => SaveError = Redact(exception.Message));
-        CancelCommand            = new RelayCommand(() => _cancelled(this));
-        AddModelCommand          = new RelayCommand(AddModel);
-        FetchModelsCommand       = new AsyncCommand(FetchModelsAsync, _ => ModelDiscoveryStatus = "获取模型失败，请检查配置后重试。");
+        SaveCommand               = new AsyncCommand(SaveAsync, exception => SaveError = Redact(exception.Message));
+        CancelCommand             = new RelayCommand(() => _cancelled(this));
+        AddModelCommand           = new RelayCommand(AddModel);
+        FetchModelsCommand        = new AsyncCommand(FetchModelsAsync, _ => ModelDiscoveryStatus = "获取模型失败，请检查配置后重试。");
         SaveModelSelectionCommand = new RelayCommand(SaveModelSelection, () => CanSaveModelSelection);
-        CloseModelPickerCommand  = new RelayCommand(CloseModelPicker);
-        SelectAllModelsCommand   = new RelayCommand(SelectAllModels);
+        CloseModelPickerCommand   = new RelayCommand(CloseModelPicker);
+        SelectAllModelsCommand    = new RelayCommand(SelectAllModels);
         ToggleProtocolMenuCommand =
             new RelayCommand(() => IsProtocolMenuOpen = !IsProtocolMenuOpen);
         ToggleDefaultModelMenuCommand =
@@ -396,20 +424,15 @@ public sealed partial class CatalogProviderEditorViewModel : ObservableObject
         ToggleCustomCommand = new RelayCommand(() => IsCustomExpanded = !IsCustomExpanded);
         ToggleCredentialOptionsCommand =
             new RelayCommand(() => IsCredentialOptionsExpanded = !IsCredentialOptionsExpanded);
+        ProviderNetworkOptions =
+        [
+            new ProviderNetworkChoice("follow", "跟随软件默认"),
+            new ProviderNetworkChoice("system", "使用系统代理"),
+            new ProviderNetworkChoice("direct", "直连"),
+            new ProviderNetworkChoice("proxy", "指定代理")
+        ];
         RefreshDefaultModelOptions();
     }
-
-    public static CatalogProviderEditorViewModel ForCreate(string path, ICredentialStore credentials,
-                                                           UserConfig baseline,
-                                                           Action<CatalogProviderEditorViewModel> saved,
-                                                           Action<CatalogProviderEditorViewModel> cancelled) =>
-        new(path, credentials, baseline, null, saved, cancelled);
-
-    public static CatalogProviderEditorViewModel ForEdit(string path, ICredentialStore credentials,
-                                                         UserConfig baseline, UserProfile source,
-                                                         Action<CatalogProviderEditorViewModel> saved,
-                                                         Action<CatalogProviderEditorViewModel> cancelled) =>
-        new(path, credentials, baseline, source, saved, cancelled);
 
     public bool IsCreate => _source is null;
 
@@ -419,7 +442,59 @@ public sealed partial class CatalogProviderEditorViewModel : ObservableObject
 
     public IReadOnlyList<CatalogChoiceOptionViewModel> ProtocolOptions { get; }
 
-    public IReadOnlyList<CatalogChoiceOptionViewModel> DefaultModelOptions => _defaultModelOptions;
+    public IReadOnlyList<CatalogChoiceOptionViewModel> DefaultModelOptions { get; private set; } = [];
+
+    public IReadOnlyList<ProviderNetworkChoice> ProviderNetworkOptions { get; }
+
+    public IReadOnlyList<NetworkProxyChoice> NetworkProxyOptions =>
+        (_baseline.Settings?.Network?.Proxies ?? []).Select(NetworkProxyDisplay.ToChoice).ToArray();
+
+    public ProviderNetworkChoice? SelectedProviderNetwork
+    {
+        get => ProviderNetworkOptions.FirstOrDefault(option => option.Value == _providerNetworkMode);
+        set
+        {
+            if (value is null || _providerNetworkMode == value.Value) return;
+            _providerNetworkMode = value.Value;
+            if (_providerNetworkMode == "proxy" && _providerProxyId is null)
+                _providerProxyId = NetworkProxyOptions.FirstOrDefault()?.Id;
+            CloseModelPicker();
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(IsProviderProxyMode));
+            OnPropertyChanged(nameof(SelectedProviderProxy));
+            OnPropertyChanged(nameof(ProviderNetworkDescription));
+            NotifyFormChanged();
+        }
+    }
+
+    public NetworkProxyChoice? SelectedProviderProxy
+    {
+        get => NetworkProxyOptions.FirstOrDefault(option => option.Id == _providerProxyId);
+        set
+        {
+            if (value is null || _providerProxyId == value.Id) return;
+            _providerProxyId = value.Id;
+            CloseModelPicker();
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(ProviderNetworkDescription));
+            NotifyFormChanged();
+        }
+    }
+
+    public bool IsProviderProxyMode => _providerNetworkMode == "proxy";
+
+    public string ProviderNetworkDescription
+    {
+        get
+        {
+            if (IsProviderProxyMode && SelectedProviderProxy is null) return "请选择一个已保存的代理。";
+            var route     = GetProviderNetworkRoute();
+            var effective = NetworkRouteResolver.Resolve(_baseline.Settings?.Network, route);
+            return route is null
+                ? $"跟随软件默认（当前：{NetworkRouteResolver.Describe(effective)}）"
+                : $"当前：{NetworkRouteResolver.Describe(effective)}";
+        }
+    }
 
     public AsyncCommand SaveCommand { get; }
 
@@ -621,6 +696,7 @@ public sealed partial class CatalogProviderEditorViewModel : ObservableObject
             if (Endpoint.Trim().Length == 0) return "请填写接口地址。";
             if (Secret.Length == 0 && EnvironmentVariable.Trim().Length > 0 && CredentialTarget.Trim().Length > 0)
                 return "凭据引用请只填写环境变量或系统凭据目标中的一种。";
+            if (IsProviderProxyMode && SelectedProviderProxy is null) return "请选择一个已保存的代理。";
             var identifiers = new HashSet<string>(StringComparer.Ordinal);
             foreach (var entry in ModelEntries)
             {
@@ -646,13 +722,14 @@ public sealed partial class CatalogProviderEditorViewModel : ObservableObject
             if (Secret.Length > 0) return true;
             if (IsCreate)
                 return Name.Trim().Length       > 0 || Endpoint.Trim().Length > 0 || _environmentVariable.Length > 0 ||
-                       _credentialTarget.Length > 0 || _makeDefaultProvider       || _defaultModelId.Length      > 0 ||
-                       ModelEntries.Count       > 0;
+                       _credentialTarget.Length > 0 || _makeDefaultProvider       || _defaultModelId.Length > 0 ||
+                       ModelEntries.Count       > 0 || _providerNetworkMode != "follow" || _providerProxyId is not null;
             var provider = _source!;
             if (provider.Endpoint                                 != Endpoint.Trim().TrimEnd('/')) return true;
             if (ChatApiKindParser.ToValueString(provider.ChatApi) != _protocol) return true;
             if (provider.ApiKeyEnvironmentVariable                != EnvironmentVariable.Trim()) return true;
             if (provider.ApiKeyCredentialTarget                   != CredentialTarget.Trim()) return true;
+            if (provider.Network                                  != GetProviderNetworkRoute()) return true;
             if (_makeDefaultProvider && _baseline.DefaultProfile != provider.Name) return true;
             if (_defaultModelId    != provider.DefaultModel) return true;
             if (ModelEntries.Count != provider.Models.Count) return true;
@@ -661,6 +738,18 @@ public sealed partial class CatalogProviderEditorViewModel : ObservableObject
     }
 
     public bool CanSave => CanEdit && IsDirty && !HasValidationError;
+
+    public static CatalogProviderEditorViewModel ForCreate(string path, ICredentialStore credentials,
+                                                           UserConfig baseline,
+                                                           Action<CatalogProviderEditorViewModel> saved,
+                                                           Action<CatalogProviderEditorViewModel> cancelled) =>
+        new(path, credentials, baseline, null, saved, cancelled);
+
+    public static CatalogProviderEditorViewModel ForEdit(string path, ICredentialStore credentials,
+                                                         UserConfig baseline, UserProfile source,
+                                                         Action<CatalogProviderEditorViewModel> saved,
+                                                         Action<CatalogProviderEditorViewModel> cancelled) =>
+        new(path, credentials, baseline, source, saved, cancelled);
 
     /// <summary>
     ///     <para>保存整卡：供应商字段、全部模型条目与默认项一次提交；冲突或校验失败保留草稿。</para>
@@ -687,7 +776,8 @@ public sealed partial class CatalogProviderEditorViewModel : ObservableObject
                 Endpoint                  = Endpoint.Trim().TrimEnd('/'),
                 ChatApi                   = kind,
                 ApiKeyEnvironmentVariable = EnvironmentVariable.Trim(),
-                ApiKeyCredentialTarget    = CredentialTarget.Trim()
+                ApiKeyCredentialTarget    = CredentialTarget.Trim(),
+                Network                   = GetProviderNetworkRoute()
             };
             var candidate = ModelCatalogEditor.PutProvider(_baseline, provider, !IsCreate);
             foreach (var entry in ModelEntries)
@@ -739,6 +829,30 @@ public sealed partial class CatalogProviderEditorViewModel : ObservableObject
         OnPropertyChanged(nameof(HasModelEntries));
     }
 
+    private NetworkRoute? GetProviderNetworkRoute() => _providerNetworkMode switch
+    {
+        "follow" => null,
+        "system" => new NetworkRoute { Mode = NetworkMode.System },
+        "direct" => new NetworkRoute { Mode = NetworkMode.Direct },
+        "proxy" when !string.IsNullOrWhiteSpace(_providerProxyId) =>
+            new NetworkRoute { Mode = NetworkMode.Proxy, ProxyId = _providerProxyId },
+        "proxy" => null,
+        _       => throw new InvalidOperationException("请选择有效的 Provider 网络方式。")
+    };
+
+    /// <summary>
+    ///     <para>更新表单的配置基线并刷新可选代理；保留用户正在编辑的路由选择。</para>
+    ///     <para>Updates the form baseline and proxy choices while retaining the route currently being edited.</para>
+    /// </summary>
+    public void AcceptBaseline(UserConfig baseline)
+    {
+        _baseline = baseline;
+        OnPropertyChanged(nameof(NetworkProxyOptions));
+        OnPropertyChanged(nameof(SelectedProviderProxy));
+        OnPropertyChanged(nameof(ProviderNetworkDescription));
+        NotifyFormChanged();
+    }
+
     private void AttachEntry(CatalogModelEntryViewModel entry) =>
         entry.PropertyChanged += OnEntryPropertyChanged;
 
@@ -786,7 +900,7 @@ public sealed partial class CatalogProviderEditorViewModel : ObservableObject
             options.Add(new CatalogChoiceOptionViewModel(id, id, _defaultModelId == id, SelectDefaultModel));
         }
 
-        _defaultModelOptions = options;
+        DefaultModelOptions = options;
         OnPropertyChanged(nameof(DefaultModelOptions));
         OnPropertyChanged(nameof(DefaultModelLabel));
     }
@@ -834,18 +948,16 @@ public sealed class CatalogModelEntryViewModel : ObservableObject
     ];
 
     private readonly Action _onChanged;
-    private          string _id;
     private          string _displayName;
-    private          string _windowDraft;
-    private          bool   _isExpanded;
+    private          string _id;
     private          bool   _isEffortMenuOpen;
-    private          bool   _isNoneSelected;
+    private          bool   _isExpanded;
+    private          bool   _isExtraHighSelected;
+    private          bool   _isHighSelected;
     private          bool   _isLowSelected;
     private          bool   _isMediumSelected;
-    private          bool   _isHighSelected;
-    private          bool   _isExtraHighSelected;
-    private string _defaultEffortValue;
-    private IReadOnlyList<CatalogChoiceOptionViewModel> _defaultEffortOptions = [];
+    private          bool   _isNoneSelected;
+    private          string _windowDraft;
 
     public CatalogModelEntryViewModel(UserProfileModel? source, Action onChanged)
     {
@@ -858,7 +970,7 @@ public sealed class CatalogModelEntryViewModel : ObservableObject
         if (source?.ReasoningEfforts is { } efforts)
             foreach (var effort in efforts)
                 SetEffortTick(effort, true);
-        _defaultEffortValue = source?.DefaultReasoningEffort is { } level
+        DefaultEffortValue = source?.DefaultReasoningEffort is { } level
             ? ModelReasoningEffortParser.ToValueString(level)
             : NoEffortValue;
         ToggleExpandCommand     = new RelayCommand(() => IsExpanded       = !IsExpanded);
@@ -964,27 +1076,27 @@ public sealed class CatalogModelEntryViewModel : ObservableObject
         }
     }
 
-    public string DefaultEffortValue => _defaultEffortValue;
+    public string DefaultEffortValue { get; private set; }
 
-    public string DefaultEffortLabel => _defaultEffortValue == NoEffortValue ? "默认（由服务决定）" : _defaultEffortValue;
+    public string DefaultEffortLabel => DefaultEffortValue == NoEffortValue ? "默认（由服务决定）" : DefaultEffortValue;
 
-    public IReadOnlyList<CatalogChoiceOptionViewModel> DefaultEffortOptions => _defaultEffortOptions;
+    public IReadOnlyList<CatalogChoiceOptionViewModel> DefaultEffortOptions { get; private set; } = [];
 
     /// <summary>
     ///     <para>默认档位必须属于已勾选的支持档位；选择“默认”始终合法。</para>
     ///     <para>The default effort must be among the declared levels; the service default is always valid.</para>
     /// </summary>
     public bool InvalidDefaultEffort =>
-        _defaultEffortValue != NoEffortValue && !IsEffortTicked(_defaultEffortValue);
+        DefaultEffortValue != NoEffortValue && !IsEffortTicked(DefaultEffortValue);
 
     public bool TryGetModel(out UserProfileModel model)
     {
         model = new UserProfileModel();
         if (!TryParseWindow(_windowDraft, out var window)) return false;
         ModelReasoningEffort? defaultEffort = null;
-        if (_defaultEffortValue != NoEffortValue)
+        if (DefaultEffortValue != NoEffortValue)
         {
-            if (!ModelReasoningEffortParser.TryParse(_defaultEffortValue, out var parsed)) return false;
+            if (!ModelReasoningEffortParser.TryParse(DefaultEffortValue, out var parsed)) return false;
             defaultEffort = parsed;
         }
 
@@ -1056,12 +1168,12 @@ public sealed class CatalogModelEntryViewModel : ObservableObject
     private void SelectDefaultEffort(string value)
     {
         IsEffortMenuOpen = false;
-        if (_defaultEffortValue == value) return;
+        if (DefaultEffortValue == value) return;
 
-        _defaultEffortValue = value;
+        DefaultEffortValue = value;
         OnPropertyChanged(nameof(DefaultEffortValue));
         OnPropertyChanged(nameof(DefaultEffortLabel));
-        foreach (var option in _defaultEffortOptions) option.Refresh(option.Value == value);
+        foreach (var option in DefaultEffortOptions) option.Refresh(option.Value == value);
         _onChanged();
     }
 
@@ -1069,17 +1181,18 @@ public sealed class CatalogModelEntryViewModel : ObservableObject
     {
         var options = new List<CatalogChoiceOptionViewModel>
         {
-            new(NoEffortValue, "默认（由服务决定）", _defaultEffortValue == NoEffortValue, SelectDefaultEffort)
+            new(NoEffortValue, "默认（由服务决定）", DefaultEffortValue == NoEffortValue, SelectDefaultEffort)
         };
         foreach (var effort in EffortOrder)
         {
             var value = ModelReasoningEffortParser.ToValueString(effort);
-            if (IsEffortTicked(value)) options.Add(new CatalogChoiceOptionViewModel(value, value,
-                                                                                    _defaultEffortValue == value,
-                                                                                    SelectDefaultEffort));
+            if (IsEffortTicked(value))
+                options.Add(new CatalogChoiceOptionViewModel(value, value,
+                                                             DefaultEffortValue == value,
+                                                             SelectDefaultEffort));
         }
 
-        _defaultEffortOptions = options;
+        DefaultEffortOptions = options;
         OnPropertyChanged(nameof(DefaultEffortOptions));
     }
 

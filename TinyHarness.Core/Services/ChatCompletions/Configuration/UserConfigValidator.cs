@@ -35,6 +35,9 @@ public static class UserConfigValidator
         ArgumentNullException.ThrowIfNull(config);
         config.Settings?.Permissions?.Validate();
 
+        var network = config.Settings?.Network ?? new NetworkSettings();
+        NetworkSettingsValidator.Validate(network);
+
         var seenProfiles = new HashSet<string>(StringComparer.Ordinal);
         for (var i = 0; i < config.Profiles.Count; i++)
         {
@@ -47,6 +50,7 @@ public static class UserConfigValidator
                     InvalidDataException($"User config field '{fieldPath}.name' duplicates profile name '{profile.Name}'.");
 
             ValidateEndpoint(profile.Endpoint, $"{fieldPath}.endpoint");
+            NetworkSettingsValidator.ValidateProviderRoute(profile.Network, $"{fieldPath}.network", network);
             if (!Enum.IsDefined(profile.ChatApi))
                 throw new
                     InvalidDataException($"User config field '{fieldPath}.chatApi' has an unknown value '{profile.ChatApi}'.");

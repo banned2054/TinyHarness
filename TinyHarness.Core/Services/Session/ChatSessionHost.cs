@@ -259,7 +259,8 @@ public sealed partial class ChatSessionHost : IDisposable
                                                session.ModelSelection.CredentialRoute,
                                                session.ModelSelection.ProfileHint,
                                                session.ModelSelection.ReasoningCapabilities,
-                                               ownsModelClient);
+                                               ownsModelClient,
+                                               session.ModelSelection.NetworkRouteIdentity);
         _sessionWriter = sessionWriterFactory?.Invoke(session.Id);
     }
 

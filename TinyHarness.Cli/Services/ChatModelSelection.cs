@@ -4,6 +4,7 @@ using TinyHarness.Core.Models.Configuration;
 using TinyHarness.Core.Models.Context;
 using TinyHarness.Core.Models.Session;
 using TinyHarness.Core.Services.ChatCompletions;
+using TinyHarness.Core.Services.ChatCompletions.Configuration;
 using TinyHarness.Core.Services.Session;
 
 namespace TinyHarness.Cli.Services;
@@ -44,29 +45,21 @@ namespace TinyHarness.Cli.Services;
 /// </remarks>
 internal sealed class ChatModelSelection
 {
-    internal sealed record DraftChoice(UserProfile Profile, UserProfileModel Model, ModelReasoningEffort? Effort);
-    public DraftChoice? DraftTarget { get; private set; }
-    public Func<CancellationToken, Task>? ManageCatalog { get; set; }
-    private SessionModelSelection? Current(ChatSessionHost? host) => host?.Session.ModelSelection ??
-        (DraftTarget is { } draft ? new SessionModelSelection
-        {
-            Model = new SessionModelIdentity(draft.Model.Id, draft.Profile.Endpoint, draft.Profile.ChatApi),
-            CredentialRoute = CredentialRoute.Describe(draft.Profile.Name, draft.Profile.ApiKeyEnvironmentVariable, draft.Profile.ApiKeyCredentialTarget),
-            ProfileHint = draft.Profile.Name, ReasoningEffort = draft.Effort
-        } : null);
-
     private const string EffortDefaultToken = "default";
 
     private readonly Func<CancellationToken, Task<UserConfig>> _catalogLoader;
     private readonly Func<UserProfile, string, CancellationToken, Task<IChatCompletionClient>> _clientFactory;
+    private readonly TextReader _input;
     private readonly bool _interactiveInputAvailable;
-    private readonly TextReader                  _input;
     private readonly TextWriter _output;
     private readonly IDictionary<string, string> _secrets;
 
     /// <summary>
     ///     <para>用共享读取器、目录加载器与候选客户端工厂构造选择服务；secrets 在展示前合并脱敏。</para>
-    ///     <para>Creates the selection service with the shared reader, catalog loader, and candidate-client factory; secrets are merged for redaction before display.</para>
+    ///     <para>
+    ///         Creates the selection service with the shared reader, catalog loader, and candidate-client factory; secrets
+    ///         are merged for redaction before display.
+    ///     </para>
     /// </summary>
     public ChatModelSelection(
         TextReader input, TextWriter output, Func<CancellationToken, Task<UserConfig>> catalogLoader,
@@ -85,9 +78,36 @@ internal sealed class ChatModelSelection
         _interactiveInputAvailable = interactiveInputAvailable;
     }
 
+    public DraftChoice?                   DraftTarget   { get; private set; }
+    public Func<CancellationToken, Task>? ManageCatalog { get; set; }
+
+    private SessionModelSelection? Current(ChatSessionHost? host) => host?.Session.ModelSelection ??
+                                                                     (DraftTarget is { } draft
+                                                                         ? new SessionModelSelection
+                                                                         {
+                                                                             Model =
+                                                                                 new SessionModelIdentity(draft.Model
+                                                                                        .Id,
+                                                                                     draft.Profile.Endpoint,
+                                                                                     draft.Profile.ChatApi),
+                                                                             CredentialRoute =
+                                                                                 CredentialRoute.Describe(draft.Profile
+                                                                                        .Name,
+                                                                                     draft.Profile
+                                                                                        .ApiKeyEnvironmentVariable,
+                                                                                     draft.Profile
+                                                                                        .ApiKeyCredentialTarget),
+                                                                             ProfileHint     = draft.Profile.Name,
+                                                                             ReasoningEffort = draft.Effort
+                                                                         }
+                                                                         : null);
+
     /// <summary>
     ///     <para>发送前核对当前目录，配置漂移要求显式应用；不解析密钥。</para>
-    ///     <para>Checks the catalog before sending, requiring explicit application of configuration drift without resolving keys.</para>
+    ///     <para>
+    ///         Checks the catalog before sending, requiring explicit application of configuration drift without resolving
+    ///         keys.
+    ///     </para>
     /// </summary>
     public async Task ValidateBeforeSendAsync(ChatSessionHost host, CancellationToken token)
     {
@@ -102,17 +122,50 @@ internal sealed class ChatModelSelection
                                                               current.CredentialRoute);
         if (provider is null && current.ProfileHint is null) return;
         var model = provider?.Models.SingleOrDefault(item => item.Id == current.Model.ModelId);
-        if (provider is null ||
-            model is null ||
+        if (provider is null                            ||
+            model is null                               ||
             provider.Endpoint != current.Model.Endpoint ||
-            provider.ChatApi != current.Model.ChatApi ||
+            provider.ChatApi  != current.Model.ChatApi  ||
             CredentialRoute.Describe(provider.Name, provider.ApiKeyEnvironmentVariable,
                                      provider.ApiKeyCredentialTarget) != current.CredentialRoute ||
             current.Context?.ContextWindowTokens != model.ContextWindowTokens                    ||
-            current.ReasoningCapabilities is { } capabilities &&
-             !capabilities.SequenceEqual(model.ReasoningEfforts ?? []))
+            (current.ReasoningCapabilities is { } capabilities &&
+             !capabilities.SequenceEqual(model.ReasoningEfforts ?? [])))
             throw new
                 InvalidOperationException("Model configuration changed; use /models use to apply it explicitly before sending.");
+
+        var expectedNetworkIdentity = NetworkRouteResolver.BindingIdentity(
+                                                                           NetworkRouteResolver.Resolve(catalog.Settings
+                                                                             ?.Network, provider.Network));
+        if (string.Equals(current.NetworkRouteIdentity, expectedNetworkIdentity, StringComparison.Ordinal)) return;
+
+        var client                = await _clientFactory(provider, model.Id, token).ConfigureAwait(false);
+        var actualNetworkIdentity = (client as MicrosoftAiChatClient)?.NetworkRouteIdentity;
+        if (actualNetworkIdentity is not null &&
+            !string.Equals(actualNetworkIdentity, expectedNetworkIdentity, StringComparison.Ordinal))
+        {
+            (client as IDisposable)?.Dispose();
+            throw new InvalidOperationException(
+                                                "Network configuration changed while preparing the model client; retry before sending.");
+        }
+
+        var candidate = new SessionModelBinding(current.Model, client, current.Context, current.ReasoningEffort,
+                                                current.CredentialRoute, provider.Name,
+                                                current.ReasoningCapabilities,
+                                                networkRouteIdentity : expectedNetworkIdentity);
+        try
+        {
+            await host.ChangeModelAsync(candidate, token, current.Revision).ConfigureAwait(false);
+        }
+        catch
+        {
+            candidate.Dispose();
+            throw;
+        }
+
+        await WriteAsync($"network    : applied {NetworkRouteResolver.Describe(
+                                                                               NetworkRouteResolver.Resolve(catalog.Settings?.Network, provider.Network))} before the next request.",
+                         token);
     }
 
     /// <summary>
@@ -132,7 +185,7 @@ internal sealed class ChatModelSelection
         var arguments = SplitArguments(input);
         if (arguments.Length < 2)
         {
-            if (duringRun) await WriteCurrentSelectionAsync(host, running : true, cancellationToken);
+            if (duringRun) await WriteCurrentSelectionAsync(host, true, cancellationToken);
             else await RunMenuAsync(host, cancellationToken);
             return;
         }
@@ -201,7 +254,10 @@ internal sealed class ChatModelSelection
 
     /// <summary>
     ///     <para>直接形式：原子选择目标模型与强度；省略强度时采用目标模型声明的默认值。</para>
-    ///     <para>Direct form: atomically selects the target model and effort; an omitted effort uses the target model's declared default.</para>
+    ///     <para>
+    ///         Direct form: atomically selects the target model and effort; an omitted effort uses the target model's
+    ///         declared default.
+    ///     </para>
     /// </summary>
     private async Task UseAsync(ChatSessionHost?  host, string[] arguments, bool duringRun,
                                 CancellationToken cancellationToken)
@@ -217,7 +273,6 @@ internal sealed class ChatModelSelection
         string? effortToken  = null;
         var     modelId      = arguments[0];
         for (var i = 1; i < arguments.Length; i++)
-        {
             switch (arguments[i])
             {
                 case "--provider" when i + 1 < arguments.Length :
@@ -231,7 +286,6 @@ internal sealed class ChatModelSelection
                                      "[--provider <profile>] [--effort <id>].", cancellationToken);
                     return;
             }
-        }
 
         var config  = await _catalogLoader(cancellationToken).ConfigureAwait(false);
         var targets = ResolveTargets(config, modelId, providerName);
@@ -253,7 +307,10 @@ internal sealed class ChatModelSelection
 
         var (profile, model) = targets[0];
         ModelReasoningEffort? effort;
-        if (effortToken is null) effort = model.DefaultReasoningEffort;
+        if (effortToken is null)
+        {
+            effort = model.DefaultReasoningEffort;
+        }
         else if (!TryResolveEffortToken(effortToken, model, out effort, out var effortError))
         {
             await WriteAsync(effortError, cancellationToken);
@@ -316,7 +373,7 @@ internal sealed class ChatModelSelection
                 throw new
                     InvalidOperationException("Model configuration changed; use /models use to apply it explicitly.");
             var selection = await host.ChangeReasoningEffortAsync(effort, cancellationToken, model.ReasoningEfforts,
-                                                                  expectedRevision: current.Revision)
+                                                                  current.Revision)
                                       .ConfigureAwait(false);
             await WriteAsync($"model      : {targets[0].Profile.Name} / {selection.Model.ModelId}", cancellationToken);
             await WriteAsync($"effort     : {EffortDisplay(selection.ReasoningEffort)}", cancellationToken);
@@ -328,7 +385,10 @@ internal sealed class ChatModelSelection
 
     /// <summary>
     ///     <para>两级交互菜单：先选模型，再选该模型支持的强度，一次性应用；取消或无效输入不部分更改。</para>
-    ///     <para>The two-step menu: pick a model, then one of its supported efforts, and apply once; cancellation or invalid input never applies partially.</para>
+    ///     <para>
+    ///         The two-step menu: pick a model, then one of its supported efforts, and apply once; cancellation or invalid
+    ///         input never applies partially.
+    ///     </para>
     /// </summary>
     private async Task RunMenuAsync(ChatSessionHost? host, CancellationToken cancellationToken)
     {
@@ -398,9 +458,13 @@ internal sealed class ChatModelSelection
                 if (effortIndex < 0) continue;
                 effort = effortIndex == 0 ? null : efforts[effortIndex.Value - 1];
             }
-            else await
+            else
+            {
+                await
                     WriteAsync("This model declares no reasoning efforts; using the default (decided by the service).",
                                cancellationToken);
+            }
+
             await ApplyAsync(host, chosenProfile, chosenModel, effort, cancellationToken);
             return;
         }
@@ -408,7 +472,10 @@ internal sealed class ChatModelSelection
 
     /// <summary>
     ///     <para>解析目标档位标识；未知标识或超出模型声明能力时本地拒绝并说明原因。</para>
-    ///     <para>Resolves an effort token; unknown ids or levels outside the model's declared capability are rejected locally with the reason.</para>
+    ///     <para>
+    ///         Resolves an effort token; unknown ids or levels outside the model's declared capability are rejected locally
+    ///         with the reason.
+    ///     </para>
     /// </summary>
     private static bool TryResolveEffortToken(string                    token,  UserProfileModel model,
                                               out ModelReasoningEffort? effort, out string       error)
@@ -446,7 +513,10 @@ internal sealed class ChatModelSelection
 
     /// <summary>
     ///     <para>构造候选绑定并经宿主原子保存；打印最终模型与强度。失败时候选仍归本层，释放一次。</para>
-    ///     <para>Builds the candidate binding and saves it atomically through the host, then prints the final model and effort. On failure the candidate stays here and is released once.</para>
+    ///     <para>
+    ///         Builds the candidate binding and saves it atomically through the host, then prints the final model and
+    ///         effort. On failure the candidate stays here and is released once.
+    ///     </para>
     /// </summary>
     private async Task ApplyAsync(
         ChatSessionHost?      host,   UserProfile       profile, UserProfileModel model,
@@ -479,13 +549,15 @@ internal sealed class ChatModelSelection
                                                 CredentialRoute.Describe(profile.Name,
                                                                          profile.ApiKeyEnvironmentVariable,
                                                                          profile.ApiKeyCredentialTarget),
-                                                profile.Name, model.ReasoningEfforts);
+                                                profile.Name, model.ReasoningEfforts,
+                                                networkRouteIdentity :
+                                                (client as MicrosoftAiChatClient)?.NetworkRouteIdentity);
         SessionModelSelection selection;
         try
         {
             // 宿主拒绝、取消或提交失败时候选所有权未转交，由本层释放一次；成功后归宿主。
             selection = await host.ChangeModelAsync(candidate, cancellationToken,
-                                                    expectedRevision : current.Revision).ConfigureAwait(false);
+                                                    current.Revision).ConfigureAwait(false);
         }
         catch
         {
@@ -504,7 +576,10 @@ internal sealed class ChatModelSelection
 
     /// <summary>
     ///     <para>读取一个菜单编号（0 基）；取消、EOF、取消令牌或无效输入都返回 null 且不产生部分更改。</para>
-    ///     <para>Reads one menu number (0-based); cancellation, EOF, the cancellation token, or invalid input all return null without partial changes.</para>
+    ///     <para>
+    ///         Reads one menu number (0-based); cancellation, EOF, the cancellation token, or invalid input all return null
+    ///         without partial changes.
+    ///     </para>
     /// </summary>
     private async Task<int?> ReadMenuChoiceAsync(int  choiceCount, CancellationToken cancellationToken,
                                                  int? defaultIndex = null)
@@ -578,7 +653,7 @@ internal sealed class ChatModelSelection
         current.Model.ChatApi == profile.ChatApi                                          &&
         (current.CredentialRoute is null ||
          current.CredentialRoute == CredentialRoute.Describe(profile.Name, profile.ApiKeyEnvironmentVariable,
-                                                            profile.ApiKeyCredentialTarget));
+                                                             profile.ApiKeyCredentialTarget));
 
     private static string DescribeModel(UserProfile profile, UserProfileModel model)
     {
@@ -602,7 +677,10 @@ internal sealed class ChatModelSelection
 
     /// <summary>
     ///     <para>按空白拆分参数，双引号内的空白保留；用于含空格的模型或供应商名称。</para>
-    ///     <para>Splits arguments on whitespace while preserving double-quoted segments; used for model or provider names containing spaces.</para>
+    ///     <para>
+    ///         Splits arguments on whitespace while preserving double-quoted segments; used for model or provider names
+    ///         containing spaces.
+    ///     </para>
     /// </summary>
     private static string[] SplitArguments(string input)
     {
@@ -610,7 +688,10 @@ internal sealed class ChatModelSelection
         var current = new StringBuilder();
         var inQuote = false;
         foreach (var ch in input)
-            if (ch == '"') inQuote = !inQuote;
+            if (ch == '"')
+            {
+                inQuote = !inQuote;
+            }
             else if (char.IsWhiteSpace(ch) && !inQuote)
             {
                 if (current.Length > 0)
@@ -619,10 +700,15 @@ internal sealed class ChatModelSelection
                     current.Clear();
                 }
             }
-            else current.Append(ch);
+            else
+            {
+                current.Append(ch);
+            }
 
         if (inQuote) throw new ArgumentException("Unclosed quoted argument; the selection was not changed.");
         if (current.Length > 0) parts.Add(current.ToString());
         return [.. parts];
     }
+
+    internal sealed record DraftChoice(UserProfile Profile, UserProfileModel Model, ModelReasoningEffort? Effort);
 }

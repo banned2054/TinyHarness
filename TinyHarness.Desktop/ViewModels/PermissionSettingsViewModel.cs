@@ -66,6 +66,8 @@ public sealed class PermissionSettingsViewModel : SettingsSectionViewModel
         set => SetProperty(ref _reviewer, value);
     }
 
+    public event Action<UserConfig>? ConfigSaved;
+
     /// <summary>
     ///     <para>只读加载设置与模型目录，不读取凭据或请求模型。</para>
     ///     <para>Loads settings and the model catalog without credentials or model requests.</para>
@@ -88,6 +90,24 @@ public sealed class PermissionSettingsViewModel : SettingsSectionViewModel
         Notice = !UseCurrentModel && ReviewerModel is null
             ? "原审批模型已不存在，请重新选择；此时 AI 审批会转交用户。"
             : string.Empty;
+    }
+
+    /// <summary>
+    ///     <para>同步其他设置分区保存后的基线和模型候选，不覆盖当前用户选择。</para>
+    ///     <para>
+    ///         Synchronizes the baseline and model choices after another section saves without replacing the current
+    ///         selection.
+    ///     </para>
+    /// </summary>
+    public void AcceptBaseline(UserConfig baseline)
+    {
+        var selected = ReviewerModel;
+        _baseline = baseline;
+        Models.Clear();
+        foreach (var profile in baseline.Profiles)
+        foreach (var model in profile.Models)
+            Models.Add(new ApprovalModelChoice(profile.Name, model.Id));
+        ReviewerModel = Models.FirstOrDefault(choice => choice == selected);
     }
 
     /// <summary>
@@ -114,6 +134,7 @@ public sealed class PermissionSettingsViewModel : SettingsSectionViewModel
         await UserConfigStore.SaveAsync(_path, candidate, _baseline, CancellationToken.None);
         _baseline = candidate;
         Notice    = "已保存。默认模式用于新会话，已有会话保留自己的模式。";
+        ConfigSaved?.Invoke(candidate);
         await _refresh();
     }
 }

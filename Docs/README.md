@@ -36,7 +36,7 @@
 - **项目组织** — CLI／Desktop 共用项目身份，桌面支持项目侧栏、项目内草稿和改名。已有统一日志由 Desktop 在启动、切换存储目录或刷新历史时自动分批归属（每批最多检查 100 份）；CLI 保留 `session initialize-projects [after-session-id]` 显式初始化。写入归属后旧版本无法读取这些日志。已有会话仍使用原执行目录和权限。
 - **文件与进程工具** — 列举文件、搜索文本、读取文件、应用补丁和运行命令，带审批、超时与有界输出。
 - **上下文与项目规则** — 加载根目录和局部 `AGENTS.md`，统计 token，自动压缩模型上下文并保留完整本地历史。
-- **模型与配置** — Provider profile、显式模型上下文窗口、环境变量或 Windows Credential Manager 密钥引用，以及离线配置检查。
+- **模型与配置** — Provider profile、显式模型上下文窗口、环境变量或 Windows Credential Manager 密钥引用、全局与 Provider 网络路由，以及离线配置检查。
 - **附加集成** — 本机只读 MCP worker，以及可选的 Windows `shell` 工具进程隔离。
 
 ## 🗺️ 限制
@@ -118,6 +118,47 @@ $env:TINYHARNESS_API_KEY = Read-Host "API key" -MaskInput
 用户配置位于 `%APPDATA%\tinyharness\user-config.json`，保存密钥引用而非密钥值。`TINYHARNESS_USER_CONFIG_DIR` 可覆盖该目录。`config show` 显示生效配置与来源，`doctor` 离线检查配置；`doctor --connect` 会实际请求模型，可能产生费用。
 
 配置查找顺序为：显式 `--config <文件>`、用户配置、内置默认值；这些文件不会隐式合并，工作目录中的 `tinyharness.json` 不会被自动读取——打开某个项目目录不会接管应用配置。**仓库自带的 `tinyharness.json` 是使用占位 endpoint 的 smoke 示例，只通过显式 `--config` 使用**（例如离线 `smoke` 命令）。实际任务使用 `init` 创建的 profile；仅在需要不同配置时显式指定。
+
+### 网络设置
+
+Desktop「设置 → 网络」可选择全局默认的系统代理、直连或已保存代理，并添加、编辑、删除和测试 HTTP、HTTPS、SOCKS5 代理。用户名和密码只存入受支持平台的系统凭据存储；普通用户配置只保留凭据目标引用。CLI、Desktop、MCP worker、`doctor --connect` 和在线模型发现共享同一套网络路由。
+
+Provider 编辑页默认选择「跟随软件默认」，也可独立指定系统代理、直连或某个已保存代理。同一 Provider 下的所有模型共用该路由。旧用户配置没有 `settings.network` 时按系统代理处理；旧 Provider 没有 `network` 时继承全局默认。
+
+- **系统代理**遵循当前 .NET／操作系统代理设置与适用的代理环境变量；没有系统代理时可直连。
+- **直连**关闭 TinyHarness HTTP 请求的应用层代理，不会绕过操作系统 VPN 或 TUN。
+- **指定代理**固定使用所选代理；连接、代理认证或 DNS 失败时不会回退到系统代理或直连。
+
+网络路由只影响 TinyHarness 自己发出的模型请求、模型目录请求和用户触发的代理测试，不修改 Agent 的 Shell、git、npm 等进程环境，也不设置操作系统代理。代理测试通过选定代理请求 HTTPS 测试目标；收到目标响应后显示连接成功和响应头延迟，不发送 Provider 凭据。
+
+可信用户配置中的路由结构如下；通常通过 Desktop 设置页维护：
+
+```json
+{
+  "settings": {
+    "network": {
+      "defaultRoute": { "mode": "proxy", "proxyId": "local-mihomo" },
+      "proxies": [
+        {
+          "id": "local-mihomo",
+          "name": "本地 Mihomo",
+          "protocol": "socks5",
+          "host": "127.0.0.1",
+          "port": 7890
+        }
+      ]
+    }
+  },
+  "profiles": [
+    {
+      "name": "openai",
+      "network": { "mode": "proxy", "proxyId": "local-mihomo" }
+    }
+  ]
+}
+```
+
+省略 Provider 的 `network` 字段表示继承。`mode` 只接受 `system`、`direct` 或 `proxy`；`proxy` 必须引用现存代理 ID。SOCKS5 目标域名交由代理解析；兼容输入 `socks5h` 时会规范化保存为 `socks5`。
 
 ### 开始任务或对话
 

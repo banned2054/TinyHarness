@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Runtime.CompilerServices;
 using TinyHarness.Core.Exceptions;
 using TinyHarness.Core.Models.Agent;
 using TinyHarness.Core.Models.ChatCompletions;
@@ -69,10 +70,11 @@ public sealed record DesktopSessionRequest(
 /// </summary>
 public sealed partial class DesktopSessionFactory
 {
-    private readonly ICredentialStore                                       _credentials;
-    private readonly Func<TinyHarnessConfig, string, IChatCompletionClient> _modelFactory;
-    private readonly ConcurrentDictionary<string, string>                   _secrets = new(StringComparer.Ordinal);
-    private readonly string?                                                _userConfigPath;
+    private readonly ICredentialStore                                            _credentials;
+    private readonly Func<TinyHarnessConfig, string, IChatCompletionClient>?     _modelFactory;
+    private readonly ConditionalWeakTable<ChatSessionHost, ResolvedNetworkRoute> _networkRoutes = new();
+    private readonly ConcurrentDictionary<string, string>                        _secrets = new(StringComparer.Ordinal);
+    private readonly string?                                                     _userConfigPath;
 
     /// <summary>
     ///     <para>允许离线验收注入模型与凭据存储；生产默认使用 Core 的正式客户端和系统凭据。</para>
@@ -84,8 +86,7 @@ public sealed partial class DesktopSessionFactory
     public DesktopSessionFactory(Func<TinyHarnessConfig, string, IChatCompletionClient>? modelFactory = null,
                                  ICredentialStore? credentials = null, string? userConfigPath = null)
     {
-        _modelFactory = modelFactory ?? ((config, key) =>
-            ModelClientFactory.Create(config.Model, config.Endpoint, key, config.ChatApi));
+        _modelFactory   = modelFactory;
         _credentials    = credentials ?? new WindowsCredentialStore();
         _userConfigPath = userConfigPath;
     }
@@ -250,7 +251,7 @@ public sealed partial class DesktopSessionFactory
                     try
                     {
                         model = CreateClient(ConfigFor(config, resolved.Profile, resolved.Model),
-                                             resolved.Profile.Name);
+                                             resolved.Profile, user.Settings?.Network);
                     }
                     catch (Exception ex) when (ex is ConfigException or InvalidOperationException)
                     {
@@ -279,7 +280,8 @@ public sealed partial class DesktopSessionFactory
                     {
                         await ChangeAsync(host, target.Value.Profile, target.Value.Model,
                                           CurrentEffort(savedEffort, target.Value.Model),
-                                          host.Session.ModelSelection!.Revision, cancellationToken, model)
+                                          host.Session.ModelSelection!.Revision, cancellationToken, model,
+                                          user.Settings?.Network)
                            .ConfigureAwait(false);
                     }
                     catch (Exception ex) when (ex is ConfigException or InvalidOperationException)
@@ -291,16 +293,15 @@ public sealed partial class DesktopSessionFactory
             else
             {
                 config = SelectConfig(config, user, request);
-                model  = CreateClient(config, request.ProfileName ?? resolution?.ProfileName);
+                var profileName = request.ProfileName ?? resolution?.ProfileName;
+                var profile     = user.Profiles.SingleOrDefault(item => item.Name == profileName);
+                model = CreateClient(config, profile, user.Settings?.Network);
                 options = options with
                 {
                     Model = config.Model,
                     Context = options.Context! with { ContextWindowTokens = config.ContextWindowTokens }
                 };
                 identity = new SessionModelIdentity(config.Model, config.Endpoint, config.ChatApi);
-                var profile =
-                    user.Profiles.SingleOrDefault(item => item.Name ==
-                                                          (request.ProfileName ?? resolution?.ProfileName));
                 var selected = profile?.Models.SingleOrDefault(item => item.Id == config.Model);
                 options = options with
                 {
@@ -311,8 +312,9 @@ public sealed partial class DesktopSessionFactory
                 var credentialRoute =
                     CredentialRoute.Describe(profile?.Name, config.ApiKeyEnvironmentVariable,
                                              config.ApiKeyCredentialTarget);
-                var      initial = await instructions.LoadAsync(null, [], cancellationToken).ConfigureAwait(false);
-                Project? project = null;
+                var      networkRoute = NetworkRouteResolver.Resolve(user.Settings?.Network, profile?.Network);
+                var      initial      = await instructions.LoadAsync(null, [], cancellationToken).ConfigureAwait(false);
+                Project? project      = null;
                 if (request.ProjectAssignmentState != SessionProjectAssignmentState.NoProject)
                 {
                     project = await SessionProjectBinding.GetProjectAsync(directory, root, cancellationToken)
@@ -340,8 +342,10 @@ public sealed partial class DesktopSessionFactory
                 await host.ChangeModelAsync(new SessionModelBinding(identity, model!, options.Context,
                                                                     options.ReasoningEffort,
                                                                     credentialRoute, profile?.Name,
-                                                                    selected?.ReasoningEfforts, false),
+                                                                    selected?.ReasoningEfforts, false,
+                                                                    NetworkRouteResolver.BindingIdentity(networkRoute)),
                                             cancellationToken).ConfigureAwait(false);
+                _networkRoutes.Add(host, networkRoute);
             }
 
             permissionHost = host;
@@ -373,14 +377,18 @@ public sealed partial class DesktopSessionFactory
         }
     }
 
-    private IChatCompletionClient CreateClient(TinyHarnessConfig config, string? profileName)
+    private IChatCompletionClient CreateClient(TinyHarnessConfig config, UserProfile? profile,
+                                               NetworkSettings?  networkSettings)
     {
         var key = ApiKeyReader.Read(config.ApiKeyEnvironmentVariable, config.ApiKeyCredentialTarget, _credentials,
-                                    profileName)
+                                    profile?.Name)
                ?? throw new InvalidOperationException("没有可用的模型凭据，请重新选择模型或配置凭据引用。");
         _secrets[Guid.NewGuid().ToString("N")] = key;
         if (config.ApiKeyEnvironmentVariable.Length > 0) _secrets[config.ApiKeyEnvironmentVariable] = key;
-        return _modelFactory(config, key);
+        return _modelFactory is null
+            ? ModelClientFactory.Create(config.Model, config.Endpoint, key, config.ChatApi,
+                                        networkSettings, profile?.Network, _credentials)
+            : _modelFactory(config, key);
     }
 
     private static string Route(UserProfile profile) =>
@@ -405,42 +413,50 @@ public sealed partial class DesktopSessionFactory
                       throw new InvalidOperationException("供应商已不存在。");
         var model = profile.Models.SingleOrDefault(item => item.Id == modelId) ??
                     throw new InvalidOperationException("模型已不存在。");
-        return await ChangeAsync(host, profile, model, effort, revision, token).ConfigureAwait(false);
+        return await ChangeAsync(host, profile, model, effort, revision, token,
+                                 networkSettings : user.Settings?.Network).ConfigureAwait(false);
     }
 
     private async Task<SessionModelSelection> ChangeAsync(
-        ChatSessionHost host,     UserProfile       profile, UserProfileModel       model, ModelReasoningEffort? effort,
-        long            revision, CancellationToken token,   IChatCompletionClient? preparedClient = null)
+        ChatSessionHost  host,     UserProfile       profile, UserProfileModel model, ModelReasoningEffort? effort,
+        long             revision, CancellationToken token,   IChatCompletionClient? preparedClient = null,
+        NetworkSettings? networkSettings = null)
     {
         if (effort is { } level && model.ReasoningEfforts?.Contains(level) != true)
             throw new InvalidOperationException("模型未声明该强度。");
         if (string.IsNullOrWhiteSpace(profile.Endpoint)) throw new InvalidOperationException("请先配置供应商 Endpoint。");
-        var current = host.Session.ModelSelection!;
+        var current              = host.Session.ModelSelection!;
+        var networkRoute         = NetworkRouteResolver.Resolve(networkSettings, profile.Network);
+        var networkRouteIdentity = NetworkRouteResolver.BindingIdentity(networkRoute);
         var context = (current.Context ?? new ContextOptions()) with
         {
             ContextWindowTokens = model.ContextWindowTokens
         };
-        if (host.HasModelBinding                        &&
-            current.Revision        == revision         &&
-            current.Model.ModelId   == model.Id         &&
+        if (host.HasModelBinding &&
+            current.Revision        == revision &&
+            current.Model.ModelId   == model.Id &&
             current.Model.Endpoint  == profile.Endpoint &&
-            current.Model.ChatApi   == profile.ChatApi  &&
-            current.CredentialRoute == Route(profile)   &&
-            current.ProfileHint     == profile.Name     &&
-            current.Context         == context          &&
-            (current.ReasoningCapabilities ?? []).SequenceEqual(model.ReasoningEfforts ?? []))
+            current.Model.ChatApi   == profile.ChatApi &&
+            current.CredentialRoute == Route(profile) &&
+            current.ProfileHint     == profile.Name &&
+            current.Context         == context &&
+            (current.ReasoningCapabilities ?? []).SequenceEqual(model.ReasoningEfforts ?? []) &&
+            _networkRoutes.TryGetValue(host, out var previousRoute) && previousRoute == networkRoute)
             return await host.ChangeReasoningEffortAsync(effort, token, model.ReasoningEfforts,
                                                          revision).ConfigureAwait(false);
         var client = preparedClient ??
                      CreateClient(ConfigFor(new TinyHarnessConfig { WorkspaceRoot = host.Session.WorkspaceRoot },
-                                            profile, model), profile.Name);
+                                            profile, model), profile, networkSettings);
         var candidate = new SessionModelBinding(new SessionModelIdentity(model.Id, profile.Endpoint, profile.ChatApi),
                                                 client,
                                                 context, effort, Route(profile), profile.Name, model.ReasoningEfforts,
-                                                preparedClient is null);
+                                                preparedClient is null, networkRouteIdentity);
         try
         {
-            return await host.ChangeModelAsync(candidate, token, revision).ConfigureAwait(false);
+            var selection = await host.ChangeModelAsync(candidate, token, revision).ConfigureAwait(false);
+            _networkRoutes.Remove(host);
+            _networkRoutes.Add(host, networkRoute);
+            return selection;
         }
         catch
         {
@@ -467,7 +483,7 @@ public sealed partial class DesktopSessionFactory
         var target = FindTarget(user, current, current.Model) ??
                      throw new InvalidOperationException("当前供应商或模型已不存在，请重新选择模型后发送。");
         await ChangeAsync(host, target.Profile, target.Model, CurrentEffort(current.ReasoningEffort, target.Model),
-                          current.Revision, token).ConfigureAwait(false);
+                          current.Revision, token, networkSettings : user.Settings?.Network).ConfigureAwait(false);
     }
 
     private static ModelReasoningEffort? CurrentEffort(ModelReasoningEffort? saved, UserProfileModel model) =>

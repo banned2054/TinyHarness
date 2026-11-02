@@ -42,10 +42,10 @@ public class SessionModelBindingTests
     };
 
     private static ChatSessionHost NewHost(TrackingClient client, string? credentialRoute = null,
-                                           TestTempDir? store = null) =>
+                                           TestTempDir?   store = null) =>
         new(Path.GetTempPath(), Identity, Options(), client, new ToolRegistry([]), SystemPrompt,
             sessionWriterFactory : store is null ? null : id => new SessionStoreWriter(store.Root, id),
-            credentialRoute      : credentialRoute);
+            credentialRoute : credentialRoute);
 
     [Test]
     public async Task ChangeModel_CommittedSwitchReleasesOldClientOnceAndCloseReleasesCurrentClientOnce()
@@ -56,8 +56,9 @@ public class SessionModelBindingTests
         using var host      = NewHost(oldClient, "work|env:WORK_KEY", store);
 
         var selection = await host.ChangeModelAsync(
-            new SessionModelBinding(Other, newClient, Options().Context, null, "work|env:WORK_KEY", "work"),
-            CancellationToken.None);
+                                                    new SessionModelBinding(Other, newClient, Options().Context, null,
+                                                                            "work|env:WORK_KEY", "work"),
+                                                    CancellationToken.None);
 
         Assert.That(selection.Model, Is.EqualTo(Other));
         Assert.That(oldClient.DisposeCount, Is.EqualTo(1), "a committed switch must release the old client once");
@@ -74,16 +75,17 @@ public class SessionModelBindingTests
         var       startup       = new TrackingClient();
         using var host          = NewHost(startup, "work|env:WORK_KEY");
         var       staleRevision = host.Session.ModelSelection!.Revision + 5;
-        var       candidate      = new TrackingClient();
+        var       candidate     = new TrackingClient();
 
         var candidateBinding = new SessionModelBinding(Other, candidate, Options().Context, null,
                                                        "work|env:WORK_KEY", "work");
         await TestAssert.ThrowsAsync<InvalidOperationException>(() =>
                                                                     host.ChangeModelAsync(candidateBinding,
                                                                         CancellationToken.None,
-                                                                        expectedRevision : staleRevision));
+                                                                        staleRevision));
 
-        Assert.That(candidate.DisposeCount, Is.EqualTo(0), "a rejected candidate stays with the caller, host never releases it");
+        Assert.That(candidate.DisposeCount, Is.EqualTo(0),
+                    "a rejected candidate stays with the caller, host never releases it");
         Assert.That(host.HasModelBinding, Is.True);
         host.Dispose();
         Assert.That(candidate.DisposeCount, Is.EqualTo(0), "host disposal must not touch a caller-owned candidate");
@@ -98,15 +100,15 @@ public class SessionModelBindingTests
         // 所有权转交在构造成功返回后才完成：写入端工厂抛出时宿主不得提前释放客户端。
         var client = new TrackingClient();
         Assert.Throws<InvalidOperationException>(() =>
-                                                 {
-                                                     var neverReturned = new ChatSessionHost(
-                                                         Path.GetTempPath(), Identity, Options(), client,
-                                                         new ToolRegistry([]), SystemPrompt,
-                                                         sessionWriterFactory :
-                                                         _ => throw new InvalidOperationException(
-                                                             "writer factory failed"));
-                                                     Assert.Fail("construction must not succeed");
-                                                 });
+        {
+            var neverReturned = new ChatSessionHost(
+                                                    Path.GetTempPath(), Identity, Options(), client,
+                                                    new ToolRegistry([]), SystemPrompt,
+                                                    sessionWriterFactory :
+                                                    _ => throw new InvalidOperationException(
+                                                     "writer factory failed"));
+            Assert.Fail("construction must not succeed");
+        });
 
         Assert.That(client.DisposeCount, Is.EqualTo(0),
                     "a failed construction must not release the caller-owned client");
@@ -140,17 +142,45 @@ public class SessionModelBindingTests
         var       before          = host.Session.ModelSelection!;
 
         var selection = await host.ChangeModelAsync(
-            new SessionModelBinding(Identity, freshEquivalent, before.Context, before.ReasoningEffort,
-                                    before.CredentialRoute, "work"),
-            CancellationToken.None, expectedRevision : before.Revision);
+                                                    new SessionModelBinding(Identity, freshEquivalent, before.Context,
+                                                                            before.ReasoningEffort,
+                                                                            before.CredentialRoute, "work"),
+                                                    CancellationToken.None, before.Revision);
 
-        Assert.That(selection.Revision, Is.EqualTo(before.Revision), "an equivalent rebuilt client must not create a revision");
+        Assert.That(selection.Revision, Is.EqualTo(before.Revision),
+                    "an equivalent rebuilt client must not create a revision");
         Assert.That(host.Session.ModelSelections.Count, Is.EqualTo(1));
-        Assert.That(freshEquivalent.DisposeCount, Is.EqualTo(1), "the redundant candidate client is released once by the host");
+        Assert.That(freshEquivalent.DisposeCount, Is.EqualTo(1),
+                    "the redundant candidate client is released once by the host");
         Assert.That(startup.DisposeCount, Is.EqualTo(0), "the in-use client survives the no-op");
         host.Dispose();
         Assert.That(startup.DisposeCount, Is.EqualTo(1));
         Assert.That(freshEquivalent.DisposeCount, Is.EqualTo(1), "the redundant candidate is never released twice");
+    }
+
+    [Test]
+    public async Task ChangeModel_NetworkRouteChangeReplacesEquivalentModelClient()
+    {
+        var       startup = new TrackingClient();
+        var       routed  = new TrackingClient();
+        using var host    = NewHost(startup, "work|env:WORK_KEY");
+        var       before  = host.Session.ModelSelection!;
+
+        var selection = await host.ChangeModelAsync(
+                                                    new SessionModelBinding(Identity, routed, before.Context,
+                                                                            before.ReasoningEffort,
+                                                                            before.CredentialRoute, "work",
+                                                                            before.ReasoningCapabilities,
+                                                                            networkRouteIdentity : "proxy:new"),
+                                                    CancellationToken.None, before.Revision);
+
+        Assert.That(selection.Revision, Is.EqualTo(before.Revision + 1));
+        Assert.That(selection.NetworkRouteIdentity, Is.EqualTo("proxy:new"));
+        Assert.That(host.Session.ModelSelections.Count, Is.EqualTo(2));
+        Assert.That(startup.DisposeCount, Is.EqualTo(1), "the prior client is released after the route swap commits");
+        Assert.That(routed.DisposeCount, Is.Zero, "the new route client stays owned by the host");
+        host.Dispose();
+        Assert.That(routed.DisposeCount, Is.EqualTo(1));
     }
 
     [Test]
@@ -161,8 +191,9 @@ public class SessionModelBindingTests
         using var host      = NewHost(oldClient, "work|env:WORK_KEY");
 
         var selection = await host.ChangeModelAsync(
-            new SessionModelBinding(Other, newClient, Options().Context, null, "work|env:WORK_KEY", "work"),
-            CancellationToken.None);
+                                                    new SessionModelBinding(Other, newClient, Options().Context, null,
+                                                                            "work|env:WORK_KEY", "work"),
+                                                    CancellationToken.None);
 
         Assert.That(selection.Revision, Is.EqualTo(2), "the switch stays committed after a failed old-client release");
         Assert.That(host.Session.ModelSelection!.Model, Is.EqualTo(Other));
@@ -187,10 +218,11 @@ public class SessionModelBindingTests
         // 运行中拒绝切换；切换不得因拒绝而释放任何客户端。
         await TestAssert.ThrowsAsync<InvalidOperationException>(() =>
                                                                     host.ChangeModelAsync(
-                                                                        new SessionModelBinding(Other,
-                                                                            new TrackingClient(), Options().Context,
-                                                                            null, "work|env:WORK_KEY", "work"),
-                                                                        CancellationToken.None));
+                                                                     new SessionModelBinding(Other,
+                                                                         new TrackingClient(),
+                                                                         Options().Context,
+                                                                         null, "work|env:WORK_KEY", "work"),
+                                                                     CancellationToken.None));
         Assert.That(client.DisposeCount, Is.EqualTo(0));
 
         // 运行中拒绝关闭；关闭不得释放正在使用的客户端。
@@ -200,16 +232,17 @@ public class SessionModelBindingTests
         host.CancelRun();
         await run.WaitAsync(TimeSpan.FromSeconds(10));
         host.Dispose();
-        Assert.That(client.DisposeCount, Is.EqualTo(1), "after the run settles, close releases the client exactly once");
+        Assert.That(client.DisposeCount, Is.EqualTo(1),
+                    "after the run settles, close releases the client exactly once");
     }
 
     [Test]
     public void BorrowedStartupClient_IsNotReleasedByHostDisposal()
     {
         // CLI 的 /new 宿主共用组合根的启动客户端：借用方式绑定，宿主释放不得影响其他宿主。
-        var       client = new TrackingClient();
-        var       session = new ChatSession(new string('b', 32), Path.GetTempPath(), Identity);
-        var       context = new ConversationContext(Options().Context);
+        var client  = new TrackingClient();
+        var session = new ChatSession(new string('b', 32), Path.GetTempPath(), Identity);
+        var context = new ConversationContext(Options().Context);
         using var host = new ChatSessionHost(session, context, Options(), client, new ToolRegistry([]),
                                              SystemPrompt, ownsModelClient : false);
         host.Dispose();
@@ -219,8 +252,8 @@ public class SessionModelBindingTests
     [Test]
     public async Task UnboundHost_RefusesSendingUntilACandidateSelectionIsApplied()
     {
-        var       session = new ChatSession(new string('c', 32), Path.GetTempPath(), Identity);
-        var       context = new ConversationContext(Options().Context);
+        var session = new ChatSession(new string('c', 32), Path.GetTempPath(), Identity);
+        var context = new ConversationContext(Options().Context);
         session.RecordModelSelection(new SessionModelSelection
         {
             Revision                = 1,
@@ -233,18 +266,19 @@ public class SessionModelBindingTests
             ProjectionVersion       = SessionModelSelection.CurrentProjectionVersion,
             MessageBoundary         = 0
         });
-        using var host = new ChatSessionHost(session, context, Options(), modelClient : null,
+        using var host = new ChatSessionHost(session, context, Options(), null,
                                              new ToolRegistry([]), SystemPrompt);
 
         Assert.That(host.HasModelBinding, Is.False);
         Assert.That(host.InspectionPending, Is.False);
-        await TestAssert.ThrowsAsync<InvalidOperationException>(
-            () => host.SubmitTurnAsync("too early", CancellationToken.None));
+        await TestAssert.ThrowsAsync<InvalidOperationException>(() => host.SubmitTurnAsync("too early",
+                                                                    CancellationToken.None));
 
         var client = new TrackingClient();
         var selection = await host.ChangeModelAsync(
-            new SessionModelBinding(Identity, client, Options().Context, null, "work|env:WORK_KEY", "work"),
-            CancellationToken.None, expectedRevision : 1);
+                                                    new SessionModelBinding(Identity, client, Options().Context, null,
+                                                                            "work|env:WORK_KEY", "work"),
+                                                    CancellationToken.None, 1);
         Assert.That(host.HasModelBinding, Is.True);
         Assert.That(selection.Revision, Is.EqualTo(2));
 
@@ -263,7 +297,8 @@ public class SessionModelBindingTests
             WorkspaceRoot           = Path.GetTempPath(),
             Model                   = Identity,
             PendingInspectionReason = "inspect the workspace first",
-            ModelSelections         = [
+            ModelSelections =
+            [
                 new SessionModelSelection
                 {
                     Revision                = 1,
@@ -277,7 +312,7 @@ public class SessionModelBindingTests
                     MessageBoundary         = 1
                 }
             ],
-            Conversation            = new PersistedConversation
+            Conversation = new PersistedConversation
             {
                 Messages = [new PersistedMessage { Role = "System", Content = SystemPrompt }]
             }
@@ -289,9 +324,11 @@ public class SessionModelBindingTests
 
         Assert.That(host.InspectionPending, Is.True);
         var selection = await host.ChangeModelAsync(
-            new SessionModelBinding(Other, new TrackingClient(), Options().Context, null, "work|env:WORK_KEY",
-                                    "work"),
-            CancellationToken.None);
+                                                    new SessionModelBinding(Other, new TrackingClient(),
+                                                                            Options().Context, null,
+                                                                            "work|env:WORK_KEY",
+                                                                            "work"),
+                                                    CancellationToken.None);
         Assert.That(selection.Model, Is.EqualTo(Other));
         Assert.That(host.InspectionPending, Is.True, "switching models never lifts NeedsInspection");
         Assert.That(host.Session.PendingInspectionReason, Is.EqualTo("inspect the workspace first"));
@@ -299,7 +336,10 @@ public class SessionModelBindingTests
 
     /// <summary>
     ///     <para>可计数的假客户端：默认挂起直至取消（模拟长运行），可脚本一个立即完成的回答。</para>
-    ///     <para>Counting fake client: hangs until cancelled by default (a long run), with an optional scripted immediate answer.</para>
+    ///     <para>
+    ///         Counting fake client: hangs until cancelled by default (a long run), with an optional scripted immediate
+    ///         answer.
+    ///     </para>
     /// </summary>
     private sealed class TrackingClient(TaskCompletionSource? entered = null) : IChatCompletionClient, IDisposable
     {
@@ -310,8 +350,6 @@ public class SessionModelBindingTests
         public int  DisposeCount   { get; private set; }
         public bool ThrowOnDispose { get; set; }
 
-        public void EnqueueAnswer() => _answer.TrySetResult();
-
         public async IAsyncEnumerable<ChatStreamEvent> CompleteAsync(
             ChatCompletionRequest request, [EnumeratorCancellation] CancellationToken cancellationToken)
         {
@@ -321,7 +359,8 @@ public class SessionModelBindingTests
                 ? Task.CompletedTask
                 : Task.Delay(Timeout.Infinite, cancellationToken));
             cancellationToken.ThrowIfCancellationRequested();
-            yield return new ChatStreamEvent { Kind = ChatStreamEventKind.ContentDelta, ContentDelta = "tracked answer" };
+            yield return new ChatStreamEvent
+                { Kind = ChatStreamEventKind.ContentDelta, ContentDelta = "tracked answer" };
             yield return new ChatStreamEvent { Kind = ChatStreamEventKind.End, FinishReason = "stop" };
         }
 
@@ -330,5 +369,7 @@ public class SessionModelBindingTests
             DisposeCount++;
             if (ThrowOnDispose) throw new InvalidOperationException("client teardown failed");
         }
+
+        public void EnqueueAnswer() => _answer.TrySetResult();
     }
 }

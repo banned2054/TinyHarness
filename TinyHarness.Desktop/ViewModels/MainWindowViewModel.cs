@@ -98,8 +98,10 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         UserConfigPath          = userConfigPath;
         _sidebarPreferencesPath = SidebarPreferencesStore.FilePathForUserConfig(userConfigPath);
         Catalog                 = new CatalogSettingsViewModel(UserConfigPath, InitializeAsync);
+        Network                 = new NetworkSettingsViewModel(UserConfigPath, InitializeAsync);
         Settings = new SettingsPanelViewModel(new GeneralSettingsSectionViewModel(UserConfigPath), Catalog,
-                                              new PermissionSettingsViewModel(UserConfigPath, InitializeAsync));
+                                              new PermissionSettingsViewModel(UserConfigPath, InitializeAsync),
+                                              Network);
         Settings.CloseRequested          += (_, _) => SettingsOpen = false;
         NewSessionCommand                =  new RelayCommand(NewConversation);
         SelectSessionCommand             =  new RelayCommand<SessionViewModel>(session => SelectedSession = session);
@@ -157,6 +159,7 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     }
 
     public CatalogSettingsViewModel               Catalog  { get; }
+    public NetworkSettingsViewModel               Network  { get; }
     public SettingsPanelViewModel                 Settings { get; }
     public ObservableCollection<SessionViewModel> Sessions { get; } = [];
     public ObservableCollection<ProjectViewModel> Projects { get; } = [];

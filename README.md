@@ -36,7 +36,7 @@ The terminal interface is unfinished: permission requests, AI replies, and user 
 - **Projects** — Shared CLI/Desktop project identities, a desktop project sidebar, per-project drafts and renaming. Existing unified logs are organized automatically by the desktop app on startup, store switches, and manual history refresh (up to 100 logs checked per batch); the CLI keeps the explicit `session initialize-projects [after-session-id]` command. Writing project ownership makes those logs unreadable by older versions. Sessions retain their original execution directory and permissions.
 - **File and process tools** — List files, search text, read files, apply patches, and run commands with approval, timeouts, and bounded output.
 - **Context and project rules** — Root and scoped `AGENTS.md` loading, token accounting, and automatic context compaction while retaining full local history.
-- **Models and configuration** — Provider profiles, explicit model context windows, environment-variable or Windows Credential Manager key references, and offline configuration checks.
+- **Models and configuration** — Provider profiles, explicit model context windows, environment-variable or Windows Credential Manager key references, global and per-provider network routes, and offline configuration checks.
 - **Additional integrations** — A local read-only MCP worker and optional Windows isolation for `shell` tool processes.
 
 ## 🗺️ Limitations
@@ -118,6 +118,47 @@ $env:TINYHARNESS_API_KEY = Read-Host "API key" -MaskInput
 User configuration is stored at `%APPDATA%\tinyharness\user-config.json`; it stores key references rather than key values. `TINYHARNESS_USER_CONFIG_DIR` overrides that directory. `config show` identifies the effective configuration and its source; `doctor` checks it offline. `doctor --connect` makes a real model request and may incur charges.
 
 Configuration lookup is: explicit `--config <file>`, user configuration, then built-in defaults. Files are not implicitly merged, and a `tinyharness.json` in the working directory is never read automatically — opening a project directory cannot override the application configuration. **The repository's bundled `tinyharness.json` is a smoke example with a placeholder endpoint, used only through an explicit `--config`** (for example the offline `smoke` command). Real tasks use the profile created by `init`; supply an explicit configuration only when you want a different one.
+
+### Network settings
+
+Desktop **Settings → Network** sets the global default route to the system proxy, direct, or a saved HTTP, HTTPS, or SOCKS5 proxy. It also manages reusable proxy entries. Usernames and passwords are kept in the system credential store on supported platforms; the ordinary user config contains only a credential target reference. CLI, Desktop, the MCP worker, `doctor --connect`, and online model discovery share the same route behavior.
+
+Provider editing defaults to **Follow software default**. A provider can instead use the system proxy, direct, or a saved proxy; all models under that provider share the route. Older user configs without `settings.network` default to the system proxy, and older providers without `network` inherit the global route.
+
+- **System proxy** follows the current .NET and operating-system proxy configuration, including applicable proxy environment variables. Requests can connect directly when no system proxy is configured.
+- **Direct** disables the application-level proxy for TinyHarness HTTP requests. It does not bypass an operating-system VPN or TUN.
+- **Selected proxy** uses the chosen proxy strictly. Connection, proxy-authentication, or DNS failures do not fall back to the system proxy or a direct connection.
+
+Network routes affect only TinyHarness-managed model requests, model-list requests, and user-triggered proxy tests. They do not change the environment of Agent shell, git, npm, or other child processes, and they do not configure the operating system proxy. The proxy test requests an HTTPS target through the selected proxy and reports success with response-header latency when it receives a target response; it does not send provider credentials.
+
+The network-specific portion of the trusted user config has this shape; the Desktop settings pages are the usual way to manage it:
+
+```json
+{
+  "settings": {
+    "network": {
+      "defaultRoute": { "mode": "proxy", "proxyId": "local-mihomo" },
+      "proxies": [
+        {
+          "id": "local-mihomo",
+          "name": "Local Mihomo",
+          "protocol": "socks5",
+          "host": "127.0.0.1",
+          "port": 7890
+        }
+      ]
+    }
+  },
+  "profiles": [
+    {
+      "name": "openai",
+      "network": { "mode": "proxy", "proxyId": "local-mihomo" }
+    }
+  ]
+}
+```
+
+Omitting a provider's `network` field means inherit. `mode` accepts only `system`, `direct`, or `proxy`; `proxy` must reference an existing proxy ID. SOCKS5 destination names are sent for proxy-side DNS resolution. Input `socks5h` is accepted and normalized to `socks5`.
 
 ### Start a task or conversation
 

@@ -7,7 +7,10 @@ namespace TinyHarness.Core.Services.Session;
 
 /// <summary>
 ///     <para>选择快照、模型客户端与请求参数的整体运行时绑定，持有明确的客户端资源所有权。</para>
-///     <para>One runtime binding of a selection snapshot, the model client, and request parameters, holding explicit client ownership.</para>
+///     <para>
+///         One runtime binding of a selection snapshot, the model client, and request parameters, holding explicit
+///         client ownership.
+///     </para>
 /// </summary>
 /// <remarks>
 ///     <para>
@@ -32,17 +35,20 @@ namespace TinyHarness.Core.Services.Session;
 /// </remarks>
 public sealed class SessionModelBinding : IDisposable
 {
-    private bool _ownsClient;
     private int _released;
 
     /// <summary>
     ///     <para>构造一个候选绑定；<paramref name="ownsClient" /> 为 false 时仅借用客户端，不承担释放责任。</para>
-    ///     <para>Creates a candidate binding; a false <paramref name="ownsClient" /> borrows the client without disposal responsibility.</para>
+    ///     <para>
+    ///         Creates a candidate binding; a false <paramref name="ownsClient" /> borrows the client without disposal
+    ///         responsibility.
+    ///     </para>
     /// </summary>
     public SessionModelBinding(
         SessionModelIdentity model, IChatCompletionClient client, ContextOptions? context,
         ModelReasoningEffort? reasoningEffort, string? credentialRoute = null, string? profileHint = null,
-        IReadOnlyList<ModelReasoningEffort>? reasoningCapabilities = null, bool ownsClient = true)
+        IReadOnlyList<ModelReasoningEffort>? reasoningCapabilities = null, bool ownsClient = true,
+        string? networkRouteIdentity = null)
     {
         ArgumentNullException.ThrowIfNull(model);
         ArgumentNullException.ThrowIfNull(client);
@@ -52,6 +58,9 @@ public sealed class SessionModelBinding : IDisposable
         if (profileHint is not null && string.IsNullOrWhiteSpace(profileHint))
             throw new ArgumentException("The profile hint must be a non-empty string when provided.",
                                         nameof(profileHint));
+        if (networkRouteIdentity is not null && string.IsNullOrWhiteSpace(networkRouteIdentity))
+            throw new ArgumentException("The network route identity must be a non-empty string when provided.",
+                                        nameof(networkRouteIdentity));
         Model                 = model;
         Client                = client;
         Context               = context;
@@ -59,7 +68,8 @@ public sealed class SessionModelBinding : IDisposable
         CredentialRoute       = credentialRoute;
         ProfileHint           = profileHint;
         ReasoningCapabilities = reasoningCapabilities?.ToArray();
-        _ownsClient           = ownsClient;
+        NetworkRouteIdentity  = networkRouteIdentity;
+        OwnsClient            = ownsClient;
     }
 
     public SessionModelIdentity                 Model                 { get; }
@@ -69,21 +79,25 @@ public sealed class SessionModelBinding : IDisposable
     public string?                              CredentialRoute       { get; }
     public string?                              ProfileHint           { get; }
     public IReadOnlyList<ModelReasoningEffort>? ReasoningCapabilities { get; }
+    public string?                              NetworkRouteIdentity  { get; }
 
     /// <summary>是否已结束生命周期；释放幂等，重复释放不再次触碰客户端。Whether the binding is spent; disposal is idempotent.</summary>
     public bool IsReleased => Volatile.Read(ref _released) != 0;
 
     /// <summary>当前是否持有客户端释放责任。Whether this binding currently owns client disposal.</summary>
-    internal bool OwnsClient => _ownsClient;
+    internal bool OwnsClient { get; private set; }
 
     /// <summary>
     ///     <para>结束生命周期并按所有权释放客户端一次；借用客户端时不释放。释放异常由调用方报告。</para>
-    ///     <para>Ends the lifetime and releases the client once when owned; borrowed clients are not released. Release failures propagate to the caller for reporting.</para>
+    ///     <para>
+    ///         Ends the lifetime and releases the client once when owned; borrowed clients are not released. Release
+    ///         failures propagate to the caller for reporting.
+    ///     </para>
     /// </summary>
     public void Dispose()
     {
         if (Interlocked.Exchange(ref _released, 1) != 0) return;
-        if (!_ownsClient) return;
+        if (!OwnsClient) return;
         (Client as IDisposable)?.Dispose();
     }
 
@@ -102,10 +116,10 @@ public sealed class SessionModelBinding : IDisposable
     {
         ArgumentNullException.ThrowIfNull(successor);
         if (!ReferenceEquals(Client, successor.Client)) return false;
-        var ownedByThis   = _ownsClient;
-        _ownsClient       = false;
+        var ownedByThis = OwnsClient;
+        OwnsClient = false;
         Interlocked.Exchange(ref _released, 1);
-        successor._ownsClient |= ownedByThis;
+        successor.OwnsClient |= ownedByThis;
         return true;
     }
 

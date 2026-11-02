@@ -39,6 +39,8 @@ public sealed class MicrosoftAiChatClient : IChatCompletionClient, IDisposable
 
     private readonly IChatClient _inner;
 
+    private readonly IDisposable? _ownedResource;
+
     /// <summary>
     ///     包装一个已配置好的 M.E.AI 客户端；本实例负责其释放。<paramref name="api" /> 决定协议感知
     ///     行为（Responses 无服务端会话状态、reasoning 注入/回传），缺省 Chat Completions。
@@ -46,12 +48,21 @@ public sealed class MicrosoftAiChatClient : IChatCompletionClient, IDisposable
     ///     <paramref name="api" /> selects the protocol-aware behavior (stateless
     ///     Responses requests, reasoning injection/replay); it defaults to Chat Completions.
     /// </summary>
-    public MicrosoftAiChatClient(IChatClient inner, ChatApiKind api = ChatApiKind.ChatCompletions)
+    public MicrosoftAiChatClient(IChatClient  inner,                ChatApiKind api = ChatApiKind.ChatCompletions,
+                                 IDisposable? ownedResource = null, string?     networkRouteIdentity = null)
     {
         ArgumentNullException.ThrowIfNull(inner);
-        _inner = inner;
-        _api   = api;
+        _inner               = inner;
+        _api                 = api;
+        _ownedResource       = ownedResource;
+        NetworkRouteIdentity = networkRouteIdentity;
     }
+
+    /// <summary>
+    ///     <para>创建本客户端时采用的非秘密网络路由身份。</para>
+    ///     <para>The non-secret network-route identity used when this client was created.</para>
+    /// </summary>
+    public string? NetworkRouteIdentity { get; }
 
     /// <summary>
     ///     将内部请求转换为 M.E.AI 输入，并把 M.E.AI 的文本与工具调用增量映射为项目流事件。
@@ -217,7 +228,14 @@ public sealed class MicrosoftAiChatClient : IChatCompletionClient, IDisposable
     /// </summary>
     public void Dispose()
     {
-        _inner.Dispose();
+        try
+        {
+            _inner.Dispose();
+        }
+        finally
+        {
+            _ownedResource?.Dispose();
+        }
     }
 
     /// <summary>
