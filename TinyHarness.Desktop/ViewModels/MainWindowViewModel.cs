@@ -832,6 +832,7 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     private void OnConversationEstablished(SessionViewModel session)
     {
         if (_closing || session.Id is null || Sessions.Contains(session)) return;
+        PrioritizeSessionInManualOrder(session);
         AddSession(session);
         if (_failedDrafts.RemoveAll(item => ReferenceEquals(item, session)) > 0)
             OnPropertyChanged(nameof(HasFailedDraft));
@@ -960,10 +961,13 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         Sessions.Insert(0, session);
         session.PropertyChanged += (_, args) =>
         {
+            if (!_loadingCatalog && args.PropertyName == nameof(SessionViewModel.LastActivityUtc))
+                PrioritizeSessionInManualOrder(session);
             if (!_loadingCatalog &&
                 args.PropertyName is nameof(SessionViewModel.ProjectId) or
                                      nameof(SessionViewModel.ProjectAssignmentState) or
-                                     nameof(SessionViewModel.LastActivityUtc))
+                                     nameof(SessionViewModel.LastActivityUtc) or
+                                     nameof(SessionViewModel.IsRunning))
                 RebuildProjects();
             if (args.PropertyName == nameof(SessionViewModel.ProjectId)) ReloadCatalogForUnknownProject(session);
         };
@@ -1157,6 +1161,78 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         if (!moved) return;
 
         RebuildProjects();
+        QueueSidebarPreferencesSave(true);
+    }
+
+    /// <summary>
+    ///     <para>检查两个空闲会话是否能在当前侧栏分类中重排。</para>
+    ///     <para>Checks whether two idle sessions can be reordered within their current sidebar category.</para>
+    /// </summary>
+    internal bool CanMoveSession(SessionViewModel source, SessionViewModel target)
+    {
+        if (ReferenceEquals(source, target)              || !source.CanReorder || !target.CanReorder ||
+            source.IsPinned != target.IsPinned           || !Sessions.Contains(source) || !Sessions.Contains(target) ||
+            source.Id is null                            || target.Id is null ||
+            source.StoreDirectory is not { } sourceStore || target.StoreDirectory is not { } targetStore ||
+            !ProjectRoots.AreEqual(sourceStore, targetStore))
+            return false;
+
+        if (!IsProjectMode || source.IsPinned) return true;
+        if (source.ProjectAssignmentState != target.ProjectAssignmentState) return false;
+
+        return source.ProjectAssignmentState switch
+        {
+            SessionProjectAssignmentState.Project => source.ProjectId == target.ProjectId,
+            SessionProjectAssignmentState.PendingInitialization =>
+                ProjectRoots.AreEqual(source.WorkspaceRoot, target.WorkspaceRoot),
+            SessionProjectAssignmentState.NoProject => true,
+            _                                       => false
+        };
+    }
+
+    /// <summary>
+    ///     <para>按拖放位置调整同一侧栏分类内的空闲会话顺序。</para>
+    ///     <para>Applies a drop position to reorder idle sessions within one sidebar category.</para>
+    /// </summary>
+    public void MoveSession(SessionViewModel source, SessionViewModel target, bool insertAfter)
+    {
+        if (!CanMoveSession(source, target) || source.StoreDirectory is not { } store ||
+            source.Id is not { } sourceId   || target.Id is not { } targetId)
+            return;
+
+        var changed = false;
+        UpdateStoreSidebarPreferences(store, preferences =>
+        {
+            var order    = preferences.ManualSessionOrder.ToList();
+            var original = order.ToArray();
+            var known    = order.ToHashSet(StringComparer.Ordinal);
+            var missing = Sessions.Where(session => session.Id is not null                     &&
+                                                    session.StoreDirectory is { } sessionStore &&
+                                                    ProjectRoots.AreEqual(sessionStore, store))
+                                  .OrderByDescending(session => session.LastActivityUtc)
+                                  .Select(session => session.Id!)
+                                  .Where(known.Add)
+                                  .Take(Math.Max(0, SidebarPreferencesStore.MaxSessionOrderEntries - order.Count))
+                                  .ToArray();
+            if (order.Count == 0) order.InsertRange(0, missing);
+            else order.AddRange(missing);
+
+            var sourceIndex = order.IndexOf(sourceId);
+            var targetIndex = order.IndexOf(targetId);
+            if (sourceIndex >= 0 && targetIndex >= 0)
+            {
+                order.RemoveAt(sourceIndex);
+                var insertIndex = targetIndex + (insertAfter ? 1 : 0);
+                if (sourceIndex < insertIndex) insertIndex--;
+                order.Insert(Math.Clamp(insertIndex, 0, order.Count), sourceId);
+            }
+
+            changed = !order.SequenceEqual(original, StringComparer.Ordinal);
+            return changed ? preferences with { ManualSessionOrder = order } : preferences;
+        });
+        if (!changed) return;
+
+        RebuildSidebarRows();
         QueueSidebarPreferencesSave(true);
     }
 
@@ -1392,6 +1468,29 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     }
 
     /// <summary>
+    ///     <para>将新建或最近活动的会话放到所属 store 的手动顺序顶部。</para>
+    ///     <para>Places a new or recently active session at the top of its store's manual order.</para>
+    /// </summary>
+    private void PrioritizeSessionInManualOrder(SessionViewModel session)
+    {
+        if (!SidebarPreferencesReady || session.Id is not { } id || session.StoreDirectory is not { } store) return;
+
+        var changed = false;
+        UpdateStoreSidebarPreferences(store, preferences =>
+        {
+            if (preferences.ManualSessionOrder.FirstOrDefault() == id) return preferences;
+
+            var order = preferences.ManualSessionOrder.Where(item => item != id).ToList();
+            order.Insert(0, id);
+            if (order.Count > SidebarPreferencesStore.MaxSessionOrderEntries)
+                order.RemoveAt(order.Count - 1);
+            changed = true;
+            return preferences with { ManualSessionOrder = order };
+        });
+        if (changed) QueueSidebarPreferencesSave();
+    }
+
+    /// <summary>
     ///     <para>通知绑定侧栏列表设置选项的偏好属性。</para>
     ///     <para>Notifies preference properties bound to sidebar list-settings options.</para>
     /// </summary>
@@ -1559,23 +1658,20 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         var manualOrder      = storePreferences.ManualProjectOrder.ToList();
         var pinnedOrder      = PinsForStore(_storeDirectory).PinnedProjectIds.ToList();
         var pinnedIds        = pinnedOrder.ToHashSet(StringComparer.Ordinal);
-        var orderChanged     = false;
-        // 置顶项目也保留手动顺序中的位置，取消置顶后才能回到原位。
-        foreach (var group in projectGroups)
-        {
-            if (manualOrder.Contains(group.Key, StringComparer.Ordinal)) continue;
-            manualOrder.Add(group.Key);
-            orderChanged = true;
-        }
+        var newProjectKeys = projectGroups.Select(group => group.Key)
+                                          .Where(key => !manualOrder.Contains(key, StringComparer.Ordinal)).ToArray();
+        var orderChanged = newProjectKeys.Length > 0;
+        manualOrder.InsertRange(0, newProjectKeys);
+        // 置顶项目保留手动顺序中的位置，取消置顶后回到原位；新项目则补到普通分类顶部。
 
         if (orderChanged && _storeDirectory is { } currentStore && SidebarPreferencesReady)
-        {
             UpdateStoreSidebarPreferences(currentStore, preferences => preferences with
             {
                 ManualProjectOrder = manualOrder
             });
-            QueueSidebarPreferencesSave();
-        }
+
+        var sessionOrderChanged = SeedManualSessionOrders();
+        if (orderChanged || sessionOrderChanged) QueueSidebarPreferencesSave();
 
         foreach (var group in groups.Values)
             group.SetSidebarState(pinnedIds.Contains(group.Key), IsProjectMode && IsManualProjectOrder);
@@ -1604,6 +1700,81 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     private static DateTimeOffset ProjectGroupActivity(ProjectViewModel group) =>
         group.Sessions.Select(session => session.LastActivityUtc)
              .DefaultIfEmpty(group.Project?.CreatedUtc ?? DateTimeOffset.MinValue).Max();
+
+    /// <summary>
+    ///     <para>将运行中的会话按最近活动排列在前，其余会话按对应 store 的手动顺序排列。</para>
+    ///     <para>Orders running sessions first by recent activity and idle sessions by their store's manual order.</para>
+    /// </summary>
+    private SessionViewModel[] OrderSidebarSessions(IEnumerable<SessionViewModel> sessions)
+    {
+        var items = sessions.ToArray();
+        if (items.Length < 2) return items;
+
+        var pathComparer = OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+        var orders       = new Dictionary<string, Dictionary<string, int>>(pathComparer);
+        foreach (var session in items)
+        {
+            if (session.StoreDirectory is not { } store) continue;
+            var key = PinStoreKey(store);
+            if (orders.ContainsKey(key)) continue;
+
+            var manualOrder = StoreSidebarPreferences(key).ManualSessionOrder;
+            orders.Add(key, manualOrder.Select((id, index) => (id, index))
+                                       .ToDictionary(entry => entry.id, entry => entry.index,
+                                                     StringComparer.Ordinal));
+        }
+
+        int ManualIndex(SessionViewModel session)
+        {
+            if (session.Id is { } id                                  && session.StoreDirectory is { } store &&
+                orders.TryGetValue(PinStoreKey(store), out var order) && order.TryGetValue(id, out var index))
+                return index;
+            return int.MaxValue;
+        }
+
+        var running = items.Where(session => session.IsRunning)
+                           .OrderByDescending(session => session.LastActivityUtc)
+                           .ThenBy(ManualIndex);
+        var idle = items.Where(session => !session.IsRunning)
+                        .OrderBy(ManualIndex)
+                        .ThenByDescending(session => session.LastActivityUtc);
+        return running.Concat(idle).ToArray();
+    }
+
+    /// <summary>
+    ///     <para>为尚未记录的历史会话补齐手动顺序；后续分页加载的会话追加在已保存顺序之后。</para>
+    ///     <para>Adds unrecorded history sessions to the manual order; sessions loaded by later pages follow saved entries.</para>
+    /// </summary>
+    private bool SeedManualSessionOrders()
+    {
+        if (!SidebarPreferencesReady) return false;
+
+        var pathComparer = OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+        var changed      = false;
+        var sessionsByStore = Sessions.Where(session => session.Id is not null && session.StoreDirectory is not null)
+                                      .GroupBy(session => PinStoreKey(session.StoreDirectory!), pathComparer);
+        foreach (var storeSessions in sessionsByStore)
+        {
+            var order = StoreSidebarPreferences(storeSessions.Key).ManualSessionOrder.ToList();
+            var known = order.ToHashSet(StringComparer.Ordinal);
+            var missing = storeSessions.OrderByDescending(session => session.LastActivityUtc)
+                                       .Select(session => session.Id!)
+                                       .Where(known.Add)
+                                       .Take(Math.Max(0, SidebarPreferencesStore.MaxSessionOrderEntries - order.Count))
+                                       .ToArray();
+            if (missing.Length == 0) continue;
+
+            if (order.Count == 0) order.InsertRange(0, missing);
+            else order.AddRange(missing);
+            UpdateStoreSidebarPreferences(storeSessions.Key, preferences => preferences with
+            {
+                ManualSessionOrder = order
+            });
+            changed = true;
+        }
+
+        return changed;
+    }
 
     /// <summary>
     ///     <para>为其他 store 的已归属会话生成展示键，避免同 ID 合并到当前目录册项目。</para>
@@ -1734,8 +1905,8 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
                                                           (group.CanEdit ||
                                                            group.Sessions.Any(session => !session.IsPinned)))
                                           .ToArray();
-            var pinnedSessions = Sessions.Where(session => !session.IsArchived && session.IsPinned)
-                                         .OrderByDescending(session => session.LastActivityUtc).ToArray();
+            var pinnedSessions = OrderSidebarSessions(Sessions.Where(session => !session.IsArchived &&
+                                                                         session.IsPinned));
             if (pinnedProjects.Length > 0 || pinnedSessions.Length > 0)
             {
                 rows.Add(PinnedCategory);
@@ -1749,10 +1920,10 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
                 AppendProjectRows(rows, regularProjects);
             }
 
-            var recentSessions = Sessions.Where(session => !session.IsArchived && !session.IsPinned &&
-                                                           session.ProjectAssignmentState ==
-                                                           SessionProjectAssignmentState.NoProject)
-                                         .OrderByDescending(session => session.LastActivityUtc).ToArray();
+            var recentSessions = OrderSidebarSessions(Sessions.Where(session => !session.IsArchived &&
+                                                                         !session.IsPinned          &&
+                                                                         session.ProjectAssignmentState ==
+                                                                         SessionProjectAssignmentState.NoProject));
             if (recentSessions.Length > 0)
             {
                 rows.Add(RecentCategory);
@@ -1761,10 +1932,8 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         }
         else
         {
-            var pinned = Sessions.Where(session => !session.IsArchived && session.IsPinned)
-                                 .OrderByDescending(session => session.LastActivityUtc).ToArray();
-            var regular = Sessions.Where(session => !session.IsArchived && !session.IsPinned)
-                                  .OrderByDescending(session => session.LastActivityUtc).ToArray();
+            var pinned  = OrderSidebarSessions(Sessions.Where(session => !session.IsArchived && session.IsPinned));
+            var regular = OrderSidebarSessions(Sessions.Where(session => !session.IsArchived && !session.IsPinned));
             if (pinned.Length > 0)
             {
                 rows.Add(PinnedCategory);
@@ -1796,13 +1965,13 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     ///     <para>按展开态与分页数量铺平项目头、未置顶会话和展开入口。</para>
     ///     <para>Flattens project headers, unpinned sessions and show-more entries by expansion and paging state.</para>
     /// </summary>
-    private static void AppendProjectRows(List<object> rows, IEnumerable<ProjectViewModel> groups)
+    private void AppendProjectRows(List<object> rows, IEnumerable<ProjectViewModel> groups)
     {
         foreach (var group in groups)
         {
             rows.Add(group);
             if (!group.IsExpanded) continue;
-            var sessions = group.Sessions.Where(session => !session.IsPinned).ToArray();
+            var sessions = OrderSidebarSessions(group.Sessions.Where(session => !session.IsPinned));
             rows.AddRange(sessions.Take(group.VisibleSessionCount));
             if (sessions.Length > group.VisibleSessionCount) rows.Add(group.MoreSessionsRow);
         }

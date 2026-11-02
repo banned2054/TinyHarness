@@ -165,6 +165,7 @@ public sealed partial class SessionViewModel : ObservableObject
         private set
         {
             if (!SetProperty(ref _isArchived, value)) return;
+            OnPropertyChanged(nameof(CanReorder));
             OnPropertyChanged(nameof(ArchiveActionName));
         }
     }
@@ -174,6 +175,12 @@ public sealed partial class SessionViewModel : ObservableObject
     ///     <para>Whether this session is established and can be pinned from the sidebar.</para>
     /// </summary>
     public bool CanPin => Id is not null && StoreDirectory is not null;
+
+    /// <summary>
+    ///     <para>空闲且未归档的正式会话可在所属侧栏分类中手动排序。</para>
+    ///     <para>An idle, unarchived session can be manually reordered within its sidebar category.</para>
+    /// </summary>
+    public bool CanReorder => CanPin && !IsRunning && !IsArchived;
 
     public bool CanArchive => CanPin && !IsRunning && !_archiveMutationPending;
 
@@ -302,6 +309,7 @@ public sealed partial class SessionViewModel : ObservableObject
         private set
         {
             if (!SetProperty(ref _running, value)) return;
+            OnPropertyChanged(nameof(CanReorder));
             OnPropertyChanged(nameof(CanChangeModel));
             OnPropertyChanged(nameof(PermissionChangeHint));
             OnPropertyChanged(nameof(ComposerSendHint));
@@ -536,13 +544,15 @@ public sealed partial class SessionViewModel : ObservableObject
         {
             if (_runtime is null) throw new InvalidOperationException("会话正在打开，请稍后发送补充。");
             await _runtime.Host.QueueAmendmentAsync(text, CancellationToken.None);
+            RecordActivity();
             if (_draftRevision == revision) Draft = string.Empty;
             Status = "补充已保存，等待安全边界生效";
             return;
         }
 
         _cancellationError = null;
-        IsRunning          = true;
+        RecordActivity();
+        IsRunning = true;
         try
         {
             if (_runtime is null)
@@ -618,8 +628,7 @@ public sealed partial class SessionViewModel : ObservableObject
             var run = await execution;
             _runError = run.Result?.Error is { } error ? _factory.Redact(error) : null;
             DesktopLifecycleDiagnostics.Record("turn-completed-" + run.Result?.Status);
-            LastActivityUtc = DateTimeOffset.UtcNow;
-            OnPropertyChanged(nameof(LastActivityUtc));
+            RecordActivity();
             Status = run.Result?.Status.ToString() ?? "运行结束";
             WorkItems.Clear();
             foreach (var item in _runtime!.Host.Session.WorkItems)
@@ -640,6 +649,20 @@ public sealed partial class SessionViewModel : ObservableObject
             IsRunning    = false;
             NotifyModelSelection();
         }
+    }
+
+    /// <summary>
+    ///     <para>记录用户活动时间且不回退；即使时钟未推进，也通知侧栏提升该会话。</para>
+    ///     <para>
+    ///         Records user activity without moving time backwards and notifies the sidebar even if the clock has not
+    ///         advanced.
+    ///     </para>
+    /// </summary>
+    private void RecordActivity()
+    {
+        var activityUtc                                    = DateTimeOffset.UtcNow;
+        if (activityUtc > LastActivityUtc) LastActivityUtc = activityUtc;
+        OnPropertyChanged(nameof(LastActivityUtc));
     }
 
     private ValueTask OnEventAsync(DesktopEvent update) => _dispatch(() => ApplyEvent(update));

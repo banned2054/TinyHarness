@@ -328,13 +328,18 @@
                     </DataTemplate>
                     <DataTemplate x:DataType="vm:SessionViewModel">
                         <!-- 选择按钮铺满整行；归档和置顶按钮叠放在行内，避免嵌套 Button。 -->
-                        <Grid Classes="session-row-container">
+                        <Grid Classes="session-row-container"
+                              DragDrop.AllowDrop="True"
+                              DragDrop.DragOver="OnSessionRowDragOver"
+                              DragDrop.Drop="OnSessionRowDrop">
                             <Button Classes="session-row" Padding="20,0,4,0"
                                     Classes.current="{Binding IsSelected}"
                                     HorizontalAlignment="Stretch"
                                     AutomationProperties.Name="{Binding Title}"
-                                    Command="{Binding $parent[sidebar:SidebarView].DataContext.SelectSessionCommand}"
-                                    CommandParameter="{Binding}">
+                                    Click="OnSessionRowClick"
+                                    PointerPressed="OnSessionRowPointerPressed"
+                                    PointerMoved="OnSessionRowPointerMoved"
+                                    PointerReleased="OnSessionRowPointerReleased">
                                 <!-- 标题按剩余宽度截断；右侧依次预留归档按钮、4px 间距和状态/置顶槽。 -->
                                 <Grid ColumnDefinitions="20,*,24,4,24" HorizontalAlignment="Stretch">
                                     <!-- 常驻 20px 气泡槽；仅置顶会话显示气泡，标题与项目文件夹标题对齐。 -->

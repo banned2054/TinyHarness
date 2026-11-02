@@ -34,8 +34,8 @@ internal sealed record SidebarPreferences
 }
 
 /// <summary>
-///     <para>单个会话存储目录对应的普通项目顺序，以及供迁移使用的旧置顶值。</para>
-///     <para>Regular project order for one session store, plus legacy pin values used during migration.</para>
+///     <para>单个会话存储目录对应的普通项目与会话顺序，以及供迁移使用的旧置顶值。</para>
+///     <para>Regular project and session order for one session store, plus legacy pin values used during migration.</para>
 /// </summary>
 internal sealed record SidebarStorePreferences
 {
@@ -53,6 +53,12 @@ internal sealed record SidebarStorePreferences
     ///     </para>
     /// </summary>
     public IReadOnlyList<string> ManualProjectOrder { get; init; } = [];
+
+    /// <summary>
+    ///     <para>此会话存储目录中的手动会话顺序；运行中的会话仍按最近活动排列。</para>
+    ///     <para>The manual session order for this store; running sessions remain ordered by recent activity.</para>
+    /// </summary>
+    public IReadOnlyList<string> ManualSessionOrder { get; init; } = [];
 
     /// <summary>
     ///     <para>旧版 Desktop 偏好中的置顶项目顺序；启动时迁入 Core 后清空。</para>

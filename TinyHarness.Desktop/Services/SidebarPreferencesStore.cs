@@ -48,10 +48,16 @@ internal static class SidebarPreferencesStore
     private const int MaxPinnedSessionsPerStore = 10_000;
 
     /// <summary>
+    ///     <para>每个存储目录的手动会话顺序条目上限。</para>
+    ///     <para>The manual-session-order entry limit per store directory.</para>
+    /// </summary>
+    internal const int MaxSessionOrderEntries = 10_000;
+
+    /// <summary>
     ///     <para>单个文件中项目和会话 ID 的总条目上限。</para>
     ///     <para>The total project and session ID entry limit per file.</para>
     /// </summary>
-    private const int MaxTotalEntries = 20_000;
+    private const int MaxTotalEntries = 30_000;
 
     /// <summary>
     ///     <para>项目和会话 ID 的最大字符数。</para>
@@ -353,6 +359,8 @@ internal static class SidebarPreferencesStore
 
             totalEntries += ValidateIds(store.ManualProjectOrder, MaxProjectsPerOrder,
                                         $"stores[{i}].manualProjectOrder", filePath);
+            totalEntries += ValidateIds(store.ManualSessionOrder, MaxSessionOrderEntries,
+                                        $"stores[{i}].manualSessionOrder", filePath);
             totalEntries += ValidateIds(store.LegacyPinnedProjectOrder, MaxProjectsPerOrder,
                                         $"stores[{i}].pinnedProjectOrder", filePath);
             totalEntries += ValidateIds(store.LegacyPinnedSessionIds, MaxPinnedSessionsPerStore,
