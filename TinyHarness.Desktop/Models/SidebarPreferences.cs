@@ -3,8 +3,8 @@ using System.Text.Json.Serialization;
 namespace TinyHarness.Desktop.Models;
 
 /// <summary>
-///     <para>桌面侧栏偏好设置，保存视图模式与普通项目顺序；置顶状态由 Core 持久化。</para>
-///     <para>Desktop sidebar preferences for view mode and regular project order; Core persists pin state.</para>
+///     <para>桌面侧栏偏好设置，保存视图模式、分类状态和普通项目顺序；置顶状态由 Core 持久化。</para>
+///     <para>Desktop sidebar preferences for view mode, category state and regular project order; Core persists pin state.</para>
 /// </summary>
 internal sealed record SidebarPreferences
 {
@@ -27,6 +27,12 @@ internal sealed record SidebarPreferences
     public bool SortProjectsByActivity { get; init; } = false;
 
     /// <summary>
+    ///     <para>已折叠的固定侧栏分类键；未列出的分类默认展开。</para>
+    ///     <para>Collapsed fixed sidebar category keys; categories not listed are expanded by default.</para>
+    /// </summary>
+    public IReadOnlyList<string> CollapsedCategoryKeys { get; init; } = [];
+
+    /// <summary>
     ///     <para>按会话存储目录区分的侧栏状态。</para>
     ///     <para>Sidebar state keyed by session-store directory.</para>
     /// </summary>
@@ -34,8 +40,8 @@ internal sealed record SidebarPreferences
 }
 
 /// <summary>
-///     <para>单个会话存储目录对应的普通项目与会话顺序，以及供迁移使用的旧置顶值。</para>
-///     <para>Regular project and session order for one session store, plus legacy pin values used during migration.</para>
+///     <para>单个会话存储目录对应的排序与分组展开状态，以及供迁移使用的旧置顶值。</para>
+///     <para>Ordering and group expansion state for one session store, plus legacy pin values used during migration.</para>
 /// </summary>
 internal sealed record SidebarStorePreferences
 {
@@ -59,6 +65,18 @@ internal sealed record SidebarStorePreferences
     ///     <para>The manual session order for this store; running sessions remain ordered by recent activity.</para>
     /// </summary>
     public IReadOnlyList<string> ManualSessionOrder { get; init; } = [];
+
+    /// <summary>
+    ///     <para>已折叠的项目或展示组键；未列出的组默认展开。</para>
+    ///     <para>Collapsed project or display-group keys; groups not listed are expanded by default.</para>
+    /// </summary>
+    public IReadOnlyList<string> CollapsedGroupKeys { get; init; } = [];
+
+    /// <summary>
+    ///     <para>是否已将旧版追加到末尾的最新项目顺序迁移到顶部。</para>
+    ///     <para>Whether the latest project appended by an older version has been migrated to the top.</para>
+    /// </summary>
+    public bool ManualProjectOrderMigrationCompleted { get; init; }
 
     /// <summary>
     ///     <para>旧版 Desktop 偏好中的置顶项目顺序；启动时迁入 Core 后清空。</para>

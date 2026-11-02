@@ -1,4 +1,6 @@
 using System.Collections.ObjectModel;
+using System.Security.Cryptography;
+using System.Text;
 using TinyHarness.Core.Exceptions;
 using TinyHarness.Core.Models.Configuration;
 using TinyHarness.Core.Models.Persistence;
@@ -20,14 +22,20 @@ namespace TinyHarness.Desktop.ViewModels;
 /// </summary>
 public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
 {
-    private const           int                      OrganizeBatchSize          = 100;
-    private static readonly SidebarCategoryViewModel PinnedCategory             = new("置顶");
-    private static readonly SidebarCategoryViewModel ProjectsCategory           = new("项目");
-    private static readonly SidebarCategoryViewModel RecentCategory             = new("最近");
-    private static readonly SidebarCategoryViewModel SessionsCategory           = new("会话");
-    private static readonly SidebarCategoryViewModel ArchivedCategory           = new("已归档");
-    private static readonly SidebarCategoryViewModel ArchivedEmptyCategory      = new("暂无已归档会话");
-    private static readonly SidebarCategoryViewModel ArchiveUnavailableCategory = new("归档状态暂不可用");
+    private const int OrganizeBatchSize = 100;
+    private static readonly SidebarCategoryViewModel PinnedCategory = new("pinned", "置顶");
+    private static readonly SidebarCategoryViewModel ProjectsCategory = new("projects", "项目");
+    private static readonly SidebarCategoryViewModel RecentCategory = new("recent", "最近");
+    private static readonly SidebarCategoryViewModel SessionsCategory = new("sessions", "会话");
+    private static readonly SidebarCategoryViewModel ArchivedCategory = new("archived", "已归档");
+    private static readonly SidebarCategoryViewModel ArchivedEmptyCategory = new("archived-empty", "暂无已归档会话",
+                                                                                  canCollapse: false);
+    private static readonly SidebarCategoryViewModel ArchiveUnavailableCategory =
+        new("archive-unavailable", "归档状态暂不可用", canCollapse: false);
+    private static readonly SidebarCategoryViewModel[] CollapsibleCategories =
+    [
+        PinnedCategory, ProjectsCategory, RecentCategory, SessionsCategory, ArchivedCategory
+    ];
 
     private readonly HashSet<string> _archiveStateUnavailableStores = new(
                                                                           OperatingSystem.IsWindows()
@@ -38,11 +46,11 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         new(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
 
     private readonly Func<Action, ValueTask>? _dispatch;
-    private readonly DesktopSessionFactory    _factory;
-    private readonly List<SessionViewModel>   _failedDrafts         = [];
-    private readonly CancellationTokenSource  _lifetime             = new();
-    private readonly DesktopSessionManager    _manager              = new();
-    private readonly SemaphoreSlim            _pinStateMutationGate = new(1, 1);
+    private readonly DesktopSessionFactory _factory;
+    private readonly List<SessionViewModel> _failedDrafts = [];
+    private readonly CancellationTokenSource _lifetime = new();
+    private readonly DesktopSessionManager _manager = new();
+    private readonly SemaphoreSlim _pinStateMutationGate = new(1, 1);
 
     private readonly HashSet<string> _pinStateUnavailableStores = new(
                                                                       OperatingSystem.IsWindows()
@@ -52,77 +60,73 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     private readonly Dictionary<string, SessionStorePins> _pinStatesByStore =
         new(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
 
-    private readonly HashSet<string>               _projectReloadRetried       = new(StringComparer.Ordinal);
-    private readonly SemaphoreSlim                 _refreshGate                = new(1, 1);
-    private readonly SemaphoreSlim                 _sidebarPreferencesLoadGate = new(1, 1);
-    private readonly string                        _sidebarPreferencesPath     = string.Empty;
-    private readonly SemaphoreSlim                 _sidebarPreferencesSaveGate = new(1, 1);
-    private          bool                          _closing;
-    private          string?                       _initializationCursor;
-    private          bool                          _loadingCatalog;
-    private          bool                          _loadingHistory;
-    private          int                           _migrationBusy;
-    private          SessionViewModel?             _newConversation;
-    private          string                        _notice = string.Empty;
-    private          TaskCompletionSource?         _organizeFinished;
-    private          int                           _organizeGeneration;
-    private          IReadOnlyList<OrganizeIssue>? _organizeIssues;
-    private          string?                       _organizeIssuesStore;
-    private          string                        _organizeNotice = string.Empty;
-    private          CancellationTokenSource?      _organizeSource;
-    private          PermissionSettings            _permissionSettings = new();
-    private          string                        _projectRenameDraft = string.Empty;
-    private          bool                          _projectRenameOpen;
-    private          IReadOnlyList<Project>        _projects = [];
-    private          int                           _renameDialogVersion;
-    private          ProjectViewModel?             _renameTarget;
-    private          bool                          _renamingProject;
-    private          SessionViewModel?             _selected;
-    private          bool                          _settingsOpen;
-    private          Task?                         _shutdown;
-    private          SidebarPreferences            _sidebarPreferences = new();
-    private          bool                          _sidebarPreferencesSaveAllowed;
-    private          bool                          _sidebarSettingsMenuOpen;
-    private          string?                       _storeDirectory;
-    private          int                           _storeRevision;
+    private readonly HashSet<string> _projectReloadRetried = new(StringComparer.Ordinal);
+    private readonly SemaphoreSlim _refreshGate = new(1, 1);
+    private readonly SemaphoreSlim _sidebarPreferencesLoadGate = new(1, 1);
+    private readonly string _sidebarPreferencesPath = string.Empty;
+    private readonly SemaphoreSlim _sidebarPreferencesSaveGate = new(1, 1);
+    private bool _closing;
+    private string? _initializationCursor;
+    private bool _loadingCatalog;
+    private bool _loadingHistory;
+    private int _migrationBusy;
+    private SessionViewModel? _newConversation;
+    private string _notice = string.Empty;
+    private TaskCompletionSource? _organizeFinished;
+    private int _organizeGeneration;
+    private IReadOnlyList<OrganizeIssue>? _organizeIssues;
+    private string? _organizeIssuesStore;
+    private string _organizeNotice = string.Empty;
+    private CancellationTokenSource? _organizeSource;
+    private PermissionSettings _permissionSettings = new();
+    private string _projectRenameDraft = string.Empty;
+    private bool _projectRenameOpen;
+    private IReadOnlyList<Project> _projects = [];
+    private int _renameDialogVersion;
+    private ProjectViewModel? _renameTarget;
+    private bool _renamingProject;
+    private SessionViewModel? _selected;
+    private bool _settingsOpen;
+    private Task? _shutdown;
+    private SidebarPreferences _sidebarPreferences = new();
+    private bool _sidebarPreferencesSaveAllowed;
+    private bool _sidebarSettingsMenuOpen;
+    private string? _storeDirectory;
+    private int _storeRevision;
 
     public MainWindowViewModel() : this(new DesktopSessionFactory(), UserConfigStore.DefaultFilePath())
     {
     }
 
-    public MainWindowViewModel(DesktopSessionFactory    factory, string userConfigPath,
+    public MainWindowViewModel(DesktopSessionFactory factory, string userConfigPath,
                                Func<Action, ValueTask>? dispatch = null)
     {
-        _factory                = factory;
-        _dispatch               = dispatch;
-        UserConfigPath          = userConfigPath;
+        _factory = factory;
+        _dispatch = dispatch;
+        UserConfigPath = userConfigPath;
         _sidebarPreferencesPath = SidebarPreferencesStore.FilePathForUserConfig(userConfigPath);
-        Catalog                 = new CatalogSettingsViewModel(UserConfigPath, InitializeAsync);
-        Network                 = new NetworkSettingsViewModel(UserConfigPath, InitializeAsync);
+        Catalog = new CatalogSettingsViewModel(UserConfigPath, InitializeAsync);
+        Network = new NetworkSettingsViewModel(UserConfigPath, InitializeAsync);
         Settings = new SettingsPanelViewModel(new GeneralSettingsSectionViewModel(UserConfigPath), Catalog,
                                               new PermissionSettingsViewModel(UserConfigPath, InitializeAsync),
                                               Network);
-        Settings.CloseRequested          += (_, _) => SettingsOpen = false;
-        NewSessionCommand                =  new RelayCommand(NewConversation);
-        SelectSessionCommand             =  new RelayCommand<SessionViewModel>(session => SelectedSession = session);
-        ToggleSidebarSettingsMenuCommand =  new RelayCommand(ToggleSidebarSettingsMenu);
-        SelectSessionSidebarModeCommand  =  new RelayCommand(() => SelectSidebarMode(false));
-        SelectProjectSidebarModeCommand  =  new RelayCommand(() => SelectSidebarMode(true));
-        SelectManualProjectOrderCommand  =  new RelayCommand(() => SelectProjectSort(false));
-        SelectRecentProjectOrderCommand  =  new RelayCommand(() => SelectProjectSort(true));
-        ToggleProjectPinCommand          =  new RelayCommand<ProjectViewModel>(ToggleProjectPin);
-        ToggleSessionPinCommand          =  new RelayCommand<SessionViewModel>(ToggleSessionPin);
-        ToggleSessionArchiveCommand      =  new RelayCommand<SessionViewModel>(ToggleSessionArchive);
-        ToggleArchiveViewCommand         =  new RelayCommand(ToggleArchiveView);
-        ToggleProjectCommand = new RelayCommand<ProjectViewModel>(group =>
-        {
-            if (group is null) return;
-            group.IsExpanded = !group.IsExpanded;
-            RebuildSidebarRows();
-        });
+        Settings.CloseRequested += (_, _) => SettingsOpen = false;
+        NewSessionCommand = new RelayCommand(NewConversation);
+        SelectSessionCommand = new RelayCommand<SessionViewModel>(session => SelectedSession = session);
+        ToggleSidebarSettingsMenuCommand = new RelayCommand(ToggleSidebarSettingsMenu);
+        SelectSessionSidebarModeCommand = new RelayCommand(() => SelectSidebarMode(false));
+        SelectProjectSidebarModeCommand = new RelayCommand(() => SelectSidebarMode(true));
+        SelectManualProjectOrderCommand = new RelayCommand(() => SelectProjectSort(false));
+        SelectRecentProjectOrderCommand = new RelayCommand(() => SelectProjectSort(true));
+        ToggleProjectPinCommand = new RelayCommand<ProjectViewModel>(ToggleProjectPin);
+        ToggleSidebarCategoryCommand = new RelayCommand<SidebarCategoryViewModel>(ToggleSidebarCategory);
+        ToggleSessionPinCommand = new RelayCommand<SessionViewModel>(ToggleSessionPin);
+        ToggleSessionArchiveCommand = new RelayCommand<SessionViewModel>(ToggleSessionArchive);
+        ToggleArchiveViewCommand = new RelayCommand(ToggleArchiveView);
+        ToggleProjectCommand = new RelayCommand<ProjectViewModel>(ToggleProjectGroup);
         ShowMoreSessionsCommand = new RelayCommand<ProjectViewModel>(group =>
         {
-            if (group is null             ||
+            if (group is null ||
                 !Projects.Contains(group) ||
                 group.VisibleSessionCount >= group.Sessions.Count)
                 return;
@@ -142,7 +146,7 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         OpenProjectRenameCommand =
             new RelayCommand<ProjectViewModel>(OpenProjectRename, group => group is { CanEdit: true });
         ConfirmProjectRenameCommand = new RelayCommand(() => _ = ConfirmProjectRenameAsync());
-        CancelProjectRenameCommand  = new RelayCommand(CancelProjectRename);
+        CancelProjectRenameCommand = new RelayCommand(CancelProjectRename);
         OpenSettingsCommand = new RelayCommand(() =>
         {
             SettingsOpen = !SettingsOpen;
@@ -158,12 +162,12 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         SelectedSession = ConversationDraft();
     }
 
-    public CatalogSettingsViewModel               Catalog  { get; }
-    public NetworkSettingsViewModel               Network  { get; }
-    public SettingsPanelViewModel                 Settings { get; }
+    public CatalogSettingsViewModel Catalog { get; }
+    public NetworkSettingsViewModel Network { get; }
+    public SettingsPanelViewModel Settings { get; }
     public ObservableCollection<SessionViewModel> Sessions { get; } = [];
     public ObservableCollection<ProjectViewModel> Projects { get; } = [];
-    public ObservableCollection<ModelChoice>      Models   { get; } = [];
+    public ObservableCollection<ModelChoice> Models { get; } = [];
 
     /// <summary>
     ///     <para>侧栏铺平投影：按各组展开态与可见数量混排组头、会话和展开入口。</para>
@@ -189,28 +193,33 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         set => SetProperty(ref _sidebarSettingsMenuOpen, value);
     }
 
-    public RelayCommand                   NewSessionCommand                { get; }
-    public RelayCommand<SessionViewModel> SelectSessionCommand             { get; }
-    public RelayCommand                   ToggleSidebarSettingsMenuCommand { get; }
-    public RelayCommand                   SelectSessionSidebarModeCommand  { get; }
-    public RelayCommand                   SelectProjectSidebarModeCommand  { get; }
-    public RelayCommand                   SelectManualProjectOrderCommand  { get; }
-    public RelayCommand                   SelectRecentProjectOrderCommand  { get; }
-    public RelayCommand<ProjectViewModel> ToggleProjectPinCommand          { get; }
-    public RelayCommand<SessionViewModel> ToggleSessionPinCommand          { get; }
-    public RelayCommand<SessionViewModel> ToggleSessionArchiveCommand      { get; }
-    public RelayCommand                   ToggleArchiveViewCommand         { get; }
-    public RelayCommand<ProjectViewModel> ToggleProjectCommand             { get; }
-    public RelayCommand<ProjectViewModel> ShowMoreSessionsCommand          { get; }
-    public RelayCommand<ProjectViewModel> OpenProjectRenameCommand         { get; }
-    public RelayCommand                   ConfirmProjectRenameCommand      { get; }
-    public RelayCommand                   CancelProjectRenameCommand       { get; }
-    public RelayCommand                   OpenSettingsCommand              { get; }
-    public AsyncCommand                   RefreshCommand                   { get; }
-    public string                         UserConfigPath                   { get; }
-    public AsyncCommand                   InitializeProjectsCommand        { get; }
-    public RelayCommand                   CancelInitializationCommand      { get; }
-    public RelayCommand                   ReturnToFailedDraftCommand       { get; }
+    public RelayCommand NewSessionCommand { get; }
+    public RelayCommand<SessionViewModel> SelectSessionCommand { get; }
+    public RelayCommand ToggleSidebarSettingsMenuCommand { get; }
+    public RelayCommand SelectSessionSidebarModeCommand { get; }
+    public RelayCommand SelectProjectSidebarModeCommand { get; }
+    public RelayCommand SelectManualProjectOrderCommand { get; }
+    public RelayCommand SelectRecentProjectOrderCommand { get; }
+    public RelayCommand<ProjectViewModel> ToggleProjectPinCommand { get; }
+    /// <summary>
+    ///     <para>切换固定侧栏分类展开状态的命令。</para>
+    ///     <para>The command that toggles a fixed sidebar category's expansion.</para>
+    /// </summary>
+    public RelayCommand<SidebarCategoryViewModel> ToggleSidebarCategoryCommand { get; }
+    public RelayCommand<SessionViewModel> ToggleSessionPinCommand { get; }
+    public RelayCommand<SessionViewModel> ToggleSessionArchiveCommand { get; }
+    public RelayCommand ToggleArchiveViewCommand { get; }
+    public RelayCommand<ProjectViewModel> ToggleProjectCommand { get; }
+    public RelayCommand<ProjectViewModel> ShowMoreSessionsCommand { get; }
+    public RelayCommand<ProjectViewModel> OpenProjectRenameCommand { get; }
+    public RelayCommand ConfirmProjectRenameCommand { get; }
+    public RelayCommand CancelProjectRenameCommand { get; }
+    public RelayCommand OpenSettingsCommand { get; }
+    public AsyncCommand RefreshCommand { get; }
+    public string UserConfigPath { get; }
+    public AsyncCommand InitializeProjectsCommand { get; }
+    public RelayCommand CancelInitializationCommand { get; }
+    public RelayCommand ReturnToFailedDraftCommand { get; }
 
     /// <summary>
     ///     <para>当前选中页是否为未发送的空白新对话页；驱动顶部「新对话」按钮的激活态。</para>
@@ -302,10 +311,10 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
     /// <summary>确认重命名是否可用：存在目标、名称非空、与当前名不同且不在途。</summary>
     public bool CanConfirmProjectRename =>
-        !_renamingProject                        &&
-        _renameTarget is not null                &&
+        !_renamingProject &&
+        _renameTarget is not null &&
         ProjectRenameDraftText.Trim().Length > 0 &&
-        ProjectRenameDraftText.Trim()        != _renameTarget.Name;
+        ProjectRenameDraftText.Trim() != _renameTarget.Name;
 
     public SessionViewModel? SelectedSession
     {
@@ -418,8 +427,8 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         if (_closing) return;
         await EnsureSidebarPreferencesLoadedAsync(_lifetime.Token);
         var draftTargets = CaptureDraftTargets();
-        var changed      = false;
-        var store        = string.Empty;
+        var changed = false;
+        var store = string.Empty;
         await _refreshGate.WaitAsync(_lifetime.Token);
         _loadingCatalog = true;
         try
@@ -436,7 +445,7 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
                 }
 
                 // 会话身份按 store 限定；已有行仅刷新归属与活动元数据，不重建实例、宿主、草稿和历史投影。
-                if (Sessions.FirstOrDefault(session => session.Id == entry.Id               &&
+                if (Sessions.FirstOrDefault(session => session.Id == entry.Id &&
                                                        session.StoreDirectory is { } source &&
                                                        ProjectRoots.AreEqual(source, store)) is { } existing)
                 {
@@ -447,13 +456,15 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
                     continue;
                 }
 
-                var text  = stored.Turns.FirstOrDefault()?.UserInput;
+                var text = stored.Turns.FirstOrDefault()?.UserInput;
                 var title = string.IsNullOrWhiteSpace(text) ? stored.Id[..8] : text.Split('\n')[0];
                 var row = new SessionViewModel(_manager, _factory, stored.WorkspaceRoot, stored.Id, store,
                                                title[..Math.Min(title.Length, 48)], _dispatch, stored.ProjectId,
                                                stored.LastActivityUtc, stored.ProjectAssignmentState)
                 {
-                    ModelOptions = Models, ManageModelsCommand = OpenSettingsCommand, ProjectOptions = Projects
+                    ModelOptions = Models,
+                    ManageModelsCommand = OpenSettingsCommand,
+                    ProjectOptions = Projects
                 };
                 // 标签来自最后选择；历史页面不解析凭据，目标缺失也保留页面。
                 row.ApplyPermissionSettings(_permissionSettings);
@@ -468,7 +479,7 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         }
         catch (Exception exception)
         {
-            Notice          =   exception.Message;
+            Notice = exception.Message;
             SelectedSession ??= ConversationDraft();
         }
         finally
@@ -566,7 +577,7 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     private async Task<(string Store, bool StoreChanged)> PrepareAsync()
     {
         var revision = _storeRevision;
-        var user     = await UserConfigStore.LoadAsync(UserConfigPath, _lifetime.Token);
+        var user = await UserConfigStore.LoadAsync(UserConfigPath, _lifetime.Token);
         _permissionSettings = user.Settings?.Permissions ?? new PermissionSettings();
         foreach (var page in Sessions.Concat(_failedDrafts).Append(_newConversation).Where(page => page is not null)
                                      .Distinct())
@@ -574,9 +585,9 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         if (revision != _storeRevision && _storeDirectory is { } current) return (current, false);
         Models.Clear();
         foreach (var profile in user.Profiles)
-        foreach (var model in profile.Models)
-            Models.Add(new ModelChoice(profile.Name, model.Id, model.DisplayName, model.ReasoningEfforts,
-                                       model.DefaultReasoningEffort));
+            foreach (var model in profile.Models)
+                Models.Add(new ModelChoice(profile.Name, model.Id, model.DisplayName, model.ReasoningEfforts,
+                                           model.DefaultReasoningEffort));
         var directory = user.Settings?.SessionStoreDirectory ?? SessionStorePaths.DefaultDirectory();
         directory = Path.GetFullPath(directory);
         var changed = _storeDirectory is not null && !ProjectRoots.AreEqual(_storeDirectory, directory);
@@ -591,7 +602,7 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
         if (_storeDirectory is null || !ProjectRoots.AreEqual(_storeDirectory, directory)) _storeRevision++;
         _storeDirectory = directory;
-        revision        = _storeRevision;
+        revision = _storeRevision;
         try
         {
             var catalog = await ProjectStore.LoadAsync(ProjectStore.FilePath(directory), _lifetime.Token);
@@ -603,7 +614,7 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         {
             if (revision != _storeRevision) return (_storeDirectory!, false);
             _projects = [];
-            Notice    = $"项目信息无法读取：{exception.Message}";
+            Notice = $"项目信息无法读取：{exception.Message}";
         }
 
         await PreparePinStateAsync(directory, _lifetime.Token);
@@ -706,9 +717,9 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     /// <summary>切换 store 后清空上一 store 的整理展示残留；新一轮结束时会重新汇总。</summary>
     private void ResetOrganizeDisplay()
     {
-        _organizeIssues      = null;
+        _organizeIssues = null;
         _organizeIssuesStore = null;
-        OrganizeNotice       = string.Empty;
+        OrganizeNotice = string.Empty;
     }
 
     /// <summary>
@@ -805,7 +816,9 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         var session = new SessionViewModel(_manager, _factory, root, null, null, null, _dispatch, null, null,
                                            SessionProjectAssignmentState.NoProject)
         {
-            ModelOptions = Models, ManageModelsCommand = OpenSettingsCommand, ProjectOptions = Projects
+            ModelOptions = Models,
+            ManageModelsCommand = OpenSettingsCommand,
+            ProjectOptions = Projects
         };
         session.SelectProjectCommand = new RelayCommand<ProjectViewModel?>(
                                                                            group => _ =
@@ -816,9 +829,9 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         session.Established += OnConversationEstablished;
         session.ApplyPermissionSettings(_permissionSettings);
         session.FirstSendFailed += OnConversationFirstSendFailed;
-        _newConversation        =  session;
-        _                       =  session.RefreshDefaultModelAsync();
-        _                       =  BindNewDraftAsync(session);
+        _newConversation = session;
+        _ = session.RefreshDefaultModelAsync();
+        _ = BindNewDraftAsync(session);
         return session;
     }
 
@@ -902,7 +915,7 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
             }
 
             var storeRevision = _storeRevision;
-            var directory     = await ResolveProtectedDirectoryAsync(page.WorkspaceRoot, _lifetime.Token);
+            var directory = await ResolveProtectedDirectoryAsync(page.WorkspaceRoot, _lifetime.Token);
             if (!CanApplyTarget(page, revision) || !IsApplicableStore(directory, storeRevision)) return;
             await page.SelectProjectAsync(null, page.WorkspaceRoot, directory);
         }
@@ -931,13 +944,13 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     {
         try
         {
-            var revision      = session.TargetIntentRevision;
+            var revision = session.TargetIntentRevision;
             var storeRevision = _storeRevision;
-            var root          = session.WorkspaceRoot;
-            var directory     = await ResolveProtectedDirectoryAsync(root, _lifetime.Token);
-            if (!CanApplyTarget(session, revision)           ||
+            var root = session.WorkspaceRoot;
+            var directory = await ResolveProtectedDirectoryAsync(root, _lifetime.Token);
+            if (!CanApplyTarget(session, revision) ||
                 !IsApplicableStore(directory, storeRevision) ||
-                session.StoreDirectory is not null           ||
+                session.StoreDirectory is not null ||
                 session.WorkspaceRoot != root)
                 return;
             var projectId = session.ProjectAssignmentState == SessionProjectAssignmentState.Project
@@ -990,10 +1003,10 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     private void ReloadCatalogForUnknownProject(SessionViewModel session)
     {
         if (_closing || _loadingCatalog || _organizeSource is not null) return;
-        if (session.ProjectId is not { } id            ||
-            _storeDirectory is not { } current         ||
+        if (session.ProjectId is not { } id ||
+            _storeDirectory is not { } current ||
             session.StoreDirectory is not { } rowStore ||
-            !ProjectRoots.AreEqual(rowStore, current)  ||
+            !ProjectRoots.AreEqual(rowStore, current) ||
             _projects.Any(project => project.Id == id))
             return;
         if (!_projectReloadRetried.Add(id)) return;
@@ -1016,9 +1029,9 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         var reload = false;
         foreach (var session in Sessions)
         {
-            if (session.ProjectId is not { } id            ||
+            if (session.ProjectId is not { } id ||
                 session.StoreDirectory is not { } rowStore ||
-                !ProjectRoots.AreEqual(rowStore, current)  ||
+                !ProjectRoots.AreEqual(rowStore, current) ||
                 _projects.Any(project => project.Id == id) ||
                 !_projectReloadRetried.Add(id))
                 continue;
@@ -1054,10 +1067,11 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
             }
             catch (Exception exception)
             {
-                Notice                         = $"侧栏设置无法读取，已使用默认设置：{exception.Message}";
+                Notice = $"侧栏设置无法读取，已使用默认设置：{exception.Message}";
                 _sidebarPreferencesSaveAllowed = false;
             }
 
+            RestoreSidebarCategoryExpansion();
             SidebarPreferencesReady = true;
             NotifySidebarPreferenceProperties();
         }
@@ -1065,6 +1079,16 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         {
             _sidebarPreferencesLoadGate.Release();
         }
+    }
+
+    /// <summary>
+    ///     <para>按已保存的分类键恢复固定分类展开状态；未保存的分类保持默认展开。</para>
+    ///     <para>Restores fixed category expansion from saved keys; categories without saved keys remain expanded.</para>
+    /// </summary>
+    private void RestoreSidebarCategoryExpansion()
+    {
+        var collapsed = _sidebarPreferences.CollapsedCategoryKeys.ToHashSet(StringComparer.Ordinal);
+        foreach (var category in CollapsibleCategories) category.IsExpanded = !collapsed.Contains(category.Key);
     }
 
     /// <summary>
@@ -1112,14 +1136,68 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     }
 
     /// <summary>
+    ///     <para>切换项目或展示组的展开状态，并按所属 store 保存折叠键。</para>
+    ///     <para>Toggles a project or display group's expansion and saves its collapse key by owning store.</para>
+    /// </summary>
+    private void ToggleProjectGroup(ProjectViewModel? group)
+    {
+        if (group is null || !SidebarPreferencesReady) return;
+
+        group.IsExpanded = !group.IsExpanded;
+        if (SidebarStoreForGroup(group) is { } storeDirectory)
+        {
+            var key = SidebarGroupExpansionKey(group.Key);
+            UpdateStoreSidebarPreferences(storeDirectory, preferences =>
+            {
+                var collapsed = preferences.CollapsedGroupKeys.ToHashSet(StringComparer.Ordinal);
+                var changed = group.IsExpanded ? collapsed.Remove(key) : collapsed.Add(key);
+                return changed
+                    ? preferences with
+                    {
+                        CollapsedGroupKeys = collapsed.OrderBy(item => item, StringComparer.Ordinal).ToArray()
+                    }
+                    : preferences;
+            });
+            QueueSidebarPreferencesSave(true);
+        }
+
+        RebuildSidebarRows();
+    }
+
+    /// <summary>
+    ///     <para>切换固定侧栏分类的展开状态并保存分类键。</para>
+    ///     <para>Toggles a fixed sidebar category and saves its category key.</para>
+    /// </summary>
+    private void ToggleSidebarCategory(SidebarCategoryViewModel? category)
+    {
+        if (category is not { CanCollapse: true } || !SidebarPreferencesReady ||
+            !CollapsibleCategories.Contains(category))
+            return;
+
+        category.IsExpanded = !category.IsExpanded;
+        var collapsed = _sidebarPreferences.CollapsedCategoryKeys.ToHashSet(StringComparer.Ordinal);
+        var changed = category.IsExpanded ? collapsed.Remove(category.Key) : collapsed.Add(category.Key);
+        if (changed)
+        {
+            _sidebarPreferences = _sidebarPreferences with
+            {
+                CollapsedCategoryKeys = collapsed.OrderBy(item => item, StringComparer.Ordinal).ToArray()
+            };
+            QueueSidebarPreferencesSave(true);
+        }
+
+        RebuildSidebarRows();
+    }
+
+    /// <summary>
     ///     <para>将项目移入或移出置顶分类；新置顶项目插入置顶分类顶部。</para>
     ///     <para>Moves a project into or out of the pinned category; newly pinned projects enter at its top.</para>
     /// </summary>
     private void ToggleProjectPin(ProjectViewModel? group)
     {
         if (group?.Project is not { } project ||
-            _storeDirectory is not { } store  ||
-            !Projects.Contains(group)         ||
+            _storeDirectory is not { } store ||
+            !Projects.Contains(group) ||
             !CanUsePinState(store))
             return;
 
@@ -1132,8 +1210,8 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     /// </summary>
     public void MoveProject(ProjectViewModel source, ProjectViewModel target, bool insertAfter)
     {
-        if (!IsProjectMode             || !IsManualProjectOrder      || source          == target          ||
-            !source.CanReorder         || !target.CanReorder         || source.IsPinned != target.IsPinned ||
+        if (!IsProjectMode || !IsManualProjectOrder || source == target ||
+            !source.CanReorder || !target.CanReorder || source.IsPinned != target.IsPinned ||
             !Projects.Contains(source) || !Projects.Contains(target) || _storeDirectory is not { } store)
             return;
 
@@ -1146,7 +1224,7 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         var moved = false;
         UpdateStoreSidebarPreferences(store, preferences =>
         {
-            var order       = preferences.ManualProjectOrder.ToList();
+            var order = preferences.ManualProjectOrder.ToList();
             var sourceIndex = order.IndexOf(source.Key);
             var targetIndex = order.IndexOf(target.Key);
             if (sourceIndex < 0 || targetIndex < 0) return preferences;
@@ -1170,9 +1248,9 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     /// </summary>
     internal bool CanMoveSession(SessionViewModel source, SessionViewModel target)
     {
-        if (ReferenceEquals(source, target)              || !source.CanReorder || !target.CanReorder ||
-            source.IsPinned != target.IsPinned           || !Sessions.Contains(source) || !Sessions.Contains(target) ||
-            source.Id is null                            || target.Id is null ||
+        if (ReferenceEquals(source, target) || !source.CanReorder || !target.CanReorder ||
+            source.IsPinned != target.IsPinned || !Sessions.Contains(source) || !Sessions.Contains(target) ||
+            source.Id is null || target.Id is null ||
             source.StoreDirectory is not { } sourceStore || target.StoreDirectory is not { } targetStore ||
             !ProjectRoots.AreEqual(sourceStore, targetStore))
             return false;
@@ -1186,7 +1264,7 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
             SessionProjectAssignmentState.PendingInitialization =>
                 ProjectRoots.AreEqual(source.WorkspaceRoot, target.WorkspaceRoot),
             SessionProjectAssignmentState.NoProject => true,
-            _                                       => false
+            _ => false
         };
     }
 
@@ -1197,16 +1275,16 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     public void MoveSession(SessionViewModel source, SessionViewModel target, bool insertAfter)
     {
         if (!CanMoveSession(source, target) || source.StoreDirectory is not { } store ||
-            source.Id is not { } sourceId   || target.Id is not { } targetId)
+            source.Id is not { } sourceId || target.Id is not { } targetId)
             return;
 
         var changed = false;
         UpdateStoreSidebarPreferences(store, preferences =>
         {
-            var order    = preferences.ManualSessionOrder.ToList();
+            var order = preferences.ManualSessionOrder.ToList();
             var original = order.ToArray();
-            var known    = order.ToHashSet(StringComparer.Ordinal);
-            var missing = Sessions.Where(session => session.Id is not null                     &&
+            var known = order.ToHashSet(StringComparer.Ordinal);
+            var missing = Sessions.Where(session => session.Id is not null &&
                                                     session.StoreDirectory is { } sessionStore &&
                                                     ProjectRoots.AreEqual(sessionStore, store))
                                   .OrderByDescending(session => session.LastActivityUtc)
@@ -1252,7 +1330,7 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     private void ToggleSessionArchive(SessionViewModel? session)
     {
         if (session is not
-                { CanArchive: true, Id: { } id, StoreDirectory: { } store, WorkspaceRoot: { } root } ||
+            { CanArchive: true, Id: { } id, StoreDirectory: { } store, WorkspaceRoot: { } root } ||
             !CanUseArchiveState(store))
             return;
 
@@ -1349,7 +1427,7 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
                                                                            storeDirectory, sessionId, isArchived,
                                                                            _lifetime.Token);
             SetStoreArchiveState(storeDirectory, archives);
-            foreach (var row in Sessions.Where(row => row.Id == sessionId              &&
+            foreach (var row in Sessions.Where(row => row.Id == sessionId &&
                                                       row.StoreDirectory is { } source &&
                                                       ProjectRoots.AreEqual(source, storeDirectory)))
                 row.SetArchived(isArchived);
@@ -1452,12 +1530,12 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     ///     <para>按目录定位偏好状态并替换对应快照，不把不同 store 的同名 ID 合并。</para>
     ///     <para>Replaces one store's preference snapshot without merging matching ids from other stores.</para>
     /// </summary>
-    private void UpdateStoreSidebarPreferences(string                                                 storeDirectory,
+    private void UpdateStoreSidebarPreferences(string storeDirectory,
                                                Func<SidebarStorePreferences, SidebarStorePreferences> update)
     {
         var normalized = Path.GetFullPath(storeDirectory);
-        var stores     = _sidebarPreferences.Stores.ToList();
-        var index      = stores.FindIndex(item => ProjectRoots.AreEqual(item.StoreDirectory, normalized));
+        var stores = _sidebarPreferences.Stores.ToList();
+        var index = stores.FindIndex(item => ProjectRoots.AreEqual(item.StoreDirectory, normalized));
         var current = index < 0
             ? new SidebarStorePreferences { StoreDirectory = normalized }
             : stores[index];
@@ -1574,21 +1652,58 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
                new SidebarStorePreferences { StoreDirectory = Path.GetFullPath(storeDirectory) };
     }
 
+    /// <summary>
+    ///     <para>按组成员的存储目录定位折叠偏好；无成员项目使用当前目录册。</para>
+    ///     <para>Finds a group's collapse preferences by member store; empty projects use the current store.</para>
+    /// </summary>
+    private string? SidebarStoreForGroup(ProjectViewModel group) =>
+        group.StoreDirectory ??
+        group.Sessions.Select(session => session.StoreDirectory).FirstOrDefault(store => store is not null) ??
+        _storeDirectory;
+
+    /// <summary>
+    ///     <para>比较两个侧栏分组的所属存储目录。</para>
+    ///     <para>Compares the owning store directories of two sidebar groups.</para>
+    /// </summary>
+    private static bool SameSidebarStore(string? left, string? right) =>
+        left is null ? right is null : right is not null && ProjectRoots.AreEqual(left, right);
+
+    /// <summary>
+    ///     <para>将可能较长的展示组身份转换为有界且跨重启稳定的偏好键。</para>
+    ///     <para>Converts a potentially long display-group identity into a bounded, restart-stable preference key.</para>
+    /// </summary>
+    private static string SidebarGroupExpansionKey(string groupKey) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(groupKey)));
+
     private void RebuildProjects()
     {
-        var labels   = CaptureWorkspaceTargetLabels();
+        var labels = CaptureWorkspaceTargetLabels();
         var previous = Projects.ToDictionary(group => group.Key);
-        var groups   = new Dictionary<string, ProjectViewModel>();
+        var groups = new Dictionary<string, ProjectViewModel>();
 
-        ProjectViewModel Group(string key, Project? project, string name, string root, string? detail = null)
+        ProjectViewModel Group(string key, Project? project, string name, string root, string? detail = null,
+                               string? storeDirectory = null)
         {
             if (!groups.TryGetValue(key, out var group))
             {
                 var existing = previous.GetValueOrDefault(key);
-                group = (existing is not null && existing.Project is null == project is null ? existing : null) ??
-                        new ProjectViewModel(key, project, name, root,
-                                             NewProjectSessionAsync,
-                                             exception => Notice = exception.Message);
+                var groupStoreDirectory = storeDirectory ?? _storeDirectory;
+                if (existing is not null && existing.Project is null == project is null &&
+                    SameSidebarStore(existing.StoreDirectory, groupStoreDirectory))
+                {
+                    group = existing;
+                }
+                else
+                {
+                    group = new ProjectViewModel(key, project, name, root,
+                                                 NewProjectSessionAsync,
+                                                 exception => Notice = exception.Message);
+                    group.StoreDirectory = groupStoreDirectory;
+                    var preferences = StoreSidebarPreferences(groupStoreDirectory);
+                    group.IsExpanded = !preferences.CollapsedGroupKeys.Contains(SidebarGroupExpansionKey(key),
+                                                                                StringComparer.Ordinal);
+                }
+
                 // 本轮首次遇到该分组时清一次成员；同组逐会话追加成员时不得再次清空。
                 group.Sessions.Clear();
                 groups.Add(key, group);
@@ -1600,7 +1715,7 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         }
 
         foreach (var project in _projects)
-            Group(project.Id, project, project.Name, project.PrimaryRoot);
+            Group(project.Id, project, project.Name, project.PrimaryRoot, storeDirectory: _storeDirectory);
 
         // 正式会话行进入所属项目分组；空白新对话页不属于 Sessions，不出现在侧栏投影中。
         foreach (var session in Sessions.Where(session => !session.IsArchived)
@@ -1627,7 +1742,7 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
                 key = PendingGroupKey(pendingStore, session.WorkspaceRoot);
             else
                 key = "pending:" + ProjectRoots.Normalize(session.WorkspaceRoot);
-            string  name;
+            string name;
             string? detail = null;
             if (isNoProject)
             {
@@ -1645,33 +1760,46 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
             {
                 // 旧日志未归属：整理结束时仍有待处理或失败项才标记“整理未完成”，否则只按目录展示。
                 detail = OrganizeIssueFor(session.StoreDirectory, session.WorkspaceRoot);
-                name   = detail is null ? session.WorkspaceLabel : "整理未完成 · " + session.WorkspaceLabel;
+                name = detail is null ? session.WorkspaceLabel : "整理未完成 · " + session.WorkspaceLabel;
             }
 
-            Group(key, project, name, isNoProject ? string.Empty : session.WorkspaceRoot, detail)
+            Group(key, project, name, isNoProject ? string.Empty : session.WorkspaceRoot, detail, sessionStore)
                .Sessions.Add(session);
         }
 
-        var activityOrder    = groups.Values.OrderByDescending(ProjectGroupActivity).ToArray();
-        var projectGroups    = activityOrder.Where(group => group.Project is not null).ToArray();
+        var activityOrder = groups.Values.OrderByDescending(ProjectGroupActivity).ToArray();
+        var projectGroups = activityOrder.Where(group => group.Project is not null).ToArray();
         var storePreferences = StoreSidebarPreferences(_storeDirectory);
-        var manualOrder      = storePreferences.ManualProjectOrder.ToList();
-        var pinnedOrder      = PinsForStore(_storeDirectory).PinnedProjectIds.ToList();
-        var pinnedIds        = pinnedOrder.ToHashSet(StringComparer.Ordinal);
+        var manualOrder = storePreferences.ManualProjectOrder.ToList();
+        var pinnedOrder = PinsForStore(_storeDirectory).PinnedProjectIds.ToList();
+        var pinnedIds = pinnedOrder.ToHashSet(StringComparer.Ordinal);
         var newProjectKeys = projectGroups.Select(group => group.Key)
                                           .Where(key => !manualOrder.Contains(key, StringComparer.Ordinal)).ToArray();
         var orderChanged = newProjectKeys.Length > 0;
         manualOrder.InsertRange(0, newProjectKeys);
+        var completeProjectOrderMigration = SidebarPreferencesReady &&
+                                            _storeDirectory is not null &&
+                                            projectGroups.Length > 0 &&
+                                            !storePreferences.ManualProjectOrderMigrationCompleted &&
+                                            manualOrder.Count == projectGroups.Length &&
+                                            manualOrder.All(key => projectGroups.Any(group => group.Key == key));
+        if (completeProjectOrderMigration)
+        {
+            orderChanged |= PromoteLatestCreatedProject(manualOrder, projectGroups);
+        }
+
         // 置顶项目保留手动顺序中的位置，取消置顶后回到原位；新项目则补到普通分类顶部。
 
-        if (orderChanged && _storeDirectory is { } currentStore && SidebarPreferencesReady)
+        if ((orderChanged || completeProjectOrderMigration) && _storeDirectory is { } currentStore &&
+            SidebarPreferencesReady)
             UpdateStoreSidebarPreferences(currentStore, preferences => preferences with
             {
-                ManualProjectOrder = manualOrder
+                ManualProjectOrder = manualOrder,
+                ManualProjectOrderMigrationCompleted = true
             });
 
         var sessionOrderChanged = SeedManualSessionOrders();
-        if (orderChanged || sessionOrderChanged) QueueSidebarPreferencesSave();
+        if (orderChanged || completeProjectOrderMigration || sessionOrderChanged) QueueSidebarPreferencesSave();
 
         foreach (var group in groups.Values)
             group.SetSidebarState(pinnedIds.Contains(group.Key), IsProjectMode && IsManualProjectOrder);
@@ -1702,6 +1830,26 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
              .DefaultIfEmpty(group.Project?.CreatedUtc ?? DateTimeOffset.MinValue).Max();
 
     /// <summary>
+    ///     <para>一次性将旧顺序中唯一最新创建且不在顶部的项目移到顶部。</para>
+    ///     <para>Promotes the uniquely newest project when it is not first in a legacy order.</para>
+    /// </summary>
+    private static bool PromoteLatestCreatedProject(
+        List<string> manualOrder, IReadOnlyCollection<ProjectViewModel> groups)
+    {
+        var latestCreatedUtc = groups.Max(group => group.Project!.CreatedUtc);
+        var latestProjects = groups.Where(group => group.Project!.CreatedUtc == latestCreatedUtc).ToArray();
+        if (latestProjects.Length != 1) return false;
+
+        var latestProjectKey = latestProjects[0].Key;
+        var index = manualOrder.IndexOf(latestProjectKey);
+        if (index <= 0) return false;
+
+        manualOrder.RemoveAt(index);
+        manualOrder.Insert(0, latestProjectKey);
+        return true;
+    }
+
+    /// <summary>
     ///     <para>将运行中的会话按最近活动排列在前，其余会话按对应 store 的手动顺序排列。</para>
     ///     <para>Orders running sessions first by recent activity and idle sessions by their store's manual order.</para>
     /// </summary>
@@ -1711,7 +1859,7 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         if (items.Length < 2) return items;
 
         var pathComparer = OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
-        var orders       = new Dictionary<string, Dictionary<string, int>>(pathComparer);
+        var orders = new Dictionary<string, Dictionary<string, int>>(pathComparer);
         foreach (var session in items)
         {
             if (session.StoreDirectory is not { } store) continue;
@@ -1726,7 +1874,7 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
         int ManualIndex(SessionViewModel session)
         {
-            if (session.Id is { } id                                  && session.StoreDirectory is { } store &&
+            if (session.Id is { } id && session.StoreDirectory is { } store &&
                 orders.TryGetValue(PinStoreKey(store), out var order) && order.TryGetValue(id, out var index))
                 return index;
             return int.MaxValue;
@@ -1750,7 +1898,7 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         if (!SidebarPreferencesReady) return false;
 
         var pathComparer = OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
-        var changed      = false;
+        var changed = false;
         var sessionsByStore = Sessions.Where(session => session.Id is not null && session.StoreDirectory is not null)
                                       .GroupBy(session => PinStoreKey(session.StoreDirectory!), pathComparer);
         foreach (var storeSessions in sessionsByStore)
@@ -1853,7 +2001,7 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     /// </summary>
     private string? OrganizeIssueFor(string? sessionStore, string workspaceRoot)
     {
-        if (_organizeIssues is null     || _organizeIssuesStore is not { } issueStore ||
+        if (_organizeIssues is null || _organizeIssuesStore is not { } issueStore ||
             sessionStore is not { } row || !ProjectRoots.AreEqual(row, issueStore))
             return null;
         var normalized = ProjectRoots.Normalize(workspaceRoot);
@@ -1888,8 +2036,7 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
                                    .OrderByDescending(session => session.LastActivityUtc).ToArray();
             if (archived.Length > 0)
             {
-                rows.Add(ArchivedCategory);
-                rows.AddRange(archived);
+                AppendCategoryRows(rows, ArchivedCategory, archived);
             }
             else
             {
@@ -1909,42 +2056,35 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
                                                                          session.IsPinned));
             if (pinnedProjects.Length > 0 || pinnedSessions.Length > 0)
             {
-                rows.Add(PinnedCategory);
-                AppendProjectRows(rows, pinnedProjects);
-                rows.AddRange(pinnedSessions);
+                var pinnedRows = new List<object>(pinnedProjects.Length + pinnedSessions.Length);
+                AppendProjectRows(pinnedRows, pinnedProjects);
+                pinnedRows.AddRange(pinnedSessions);
+                AppendCategoryRows(rows, PinnedCategory, pinnedRows);
             }
 
             if (regularProjects.Length > 0)
             {
-                rows.Add(ProjectsCategory);
-                AppendProjectRows(rows, regularProjects);
+                var projectRows = new List<object>(regularProjects.Length);
+                AppendProjectRows(projectRows, regularProjects);
+                AppendCategoryRows(rows, ProjectsCategory, projectRows);
             }
 
             var recentSessions = OrderSidebarSessions(Sessions.Where(session => !session.IsArchived &&
-                                                                         !session.IsPinned          &&
+                                                                         !session.IsPinned &&
                                                                          session.ProjectAssignmentState ==
                                                                          SessionProjectAssignmentState.NoProject));
             if (recentSessions.Length > 0)
-            {
-                rows.Add(RecentCategory);
-                rows.AddRange(recentSessions);
-            }
+                AppendCategoryRows(rows, RecentCategory, recentSessions);
         }
         else
         {
-            var pinned  = OrderSidebarSessions(Sessions.Where(session => !session.IsArchived && session.IsPinned));
+            var pinned = OrderSidebarSessions(Sessions.Where(session => !session.IsArchived && session.IsPinned));
             var regular = OrderSidebarSessions(Sessions.Where(session => !session.IsArchived && !session.IsPinned));
             if (pinned.Length > 0)
-            {
-                rows.Add(PinnedCategory);
-                rows.AddRange(pinned);
-            }
+                AppendCategoryRows(rows, PinnedCategory, pinned);
 
             if (regular.Length > 0)
-            {
-                rows.Add(SessionsCategory);
-                rows.AddRange(regular);
-            }
+                AppendCategoryRows(rows, SessionsCategory, regular);
         }
 
         // 保留未变行与控件；刷新不 Reset，排序只移动、增删实际变化的行，避免整表重建闪动。
@@ -1978,6 +2118,17 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     }
 
     /// <summary>
+    ///     <para>添加分类标题，并仅在其展开时添加分类内容。</para>
+    ///     <para>Adds a category header and its contents only while the category is expanded.</para>
+    /// </summary>
+    private static void AppendCategoryRows(List<object> rows, SidebarCategoryViewModel category,
+                                           IEnumerable<object> categoryRows)
+    {
+        rows.Add(category);
+        if (category.IsExpanded) rows.AddRange(categoryRows);
+    }
+
+    /// <summary>
     ///     <para>按会话所属 store 查询其置顶状态。</para>
     ///     <para>Looks up the pinned state in the session's owning store.</para>
     /// </summary>
@@ -1996,10 +2147,10 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         if (_closing) return;
         if (!Directory.Exists(root)) throw new DirectoryNotFoundException(root);
         // 操作开始即冻结页面和意图；期间建立会话或有更新选择时，不能另取新页落入迟到结果。
-        var draft         = SelectedSession is { CanChooseWorkspace: true } selected ? selected : ConversationDraft();
-        var revision      = draft.BeginTargetIntent();
+        var draft = SelectedSession is { CanChooseWorkspace: true } selected ? selected : ConversationDraft();
+        var revision = draft.BeginTargetIntent();
         var storeRevision = _storeRevision;
-        var draftTargets  = CaptureDraftTargets();
+        var draftTargets = CaptureDraftTargets();
         try
         {
             var directory = await ResolveProtectedDirectoryAsync(root, _lifetime.Token);
@@ -2022,8 +2173,8 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
             if (_storeDirectory is null || !ProjectRoots.AreEqual(_storeDirectory, directory)) _storeRevision++;
             _storeDirectory = directory;
-            _projects       = catalog.Projects;
-            storeRevision   = _storeRevision;
+            _projects = catalog.Projects;
+            storeRevision = _storeRevision;
             RebuildProjects();
             if (changed)
             {
@@ -2056,13 +2207,13 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     public async Task NewProjectSessionAsync(ProjectViewModel group)
     {
         if (_closing || group.Project is not { } project) return;
-        var page          = ConversationDraft();
-        var revision      = page.BeginTargetIntent();
+        var page = ConversationDraft();
+        var revision = page.BeginTargetIntent();
         var storeRevision = _storeRevision;
         try
         {
             var directory = await ApplyProjectChoiceAsync(page, project.PrimaryRoot, revision);
-            if (directory is null               ||
+            if (directory is null ||
                 !CanApplyTarget(page, revision) ||
                 !IsApplicableStore(directory, storeRevision)) return;
             SelectedSession = page;
@@ -2076,7 +2227,7 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     private async Task<string?> ApplyProjectChoiceAsync(SessionViewModel page, string root, int revision)
     {
         var storeRevision = _storeRevision;
-        var directory     = await ResolveProtectedDirectoryAsync(root, _lifetime.Token);
+        var directory = await ResolveProtectedDirectoryAsync(root, _lifetime.Token);
         if (!CanApplyTarget(page, revision) || !IsApplicableStore(directory, storeRevision)) return null;
         // 菜单和组头只读取当前 store 的目录册，不能复制旧 store 分组的项目 ID，也不预创建项目。
         var catalog = await ProjectStore.LoadAsync(ProjectStore.FilePath(directory), _lifetime.Token);
@@ -2098,7 +2249,7 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         if (_closing || group.Project is not { } project) return;
         var directory = await ResolveProtectedDirectoryAsync(project.PrimaryRoot, _lifetime.Token);
         var renamed = await ProjectStore.RenameAsync(ProjectStore.FilePath(directory), project.Id, group.EditedName,
-                                                     project.Revision, cancellationToken : _lifetime.Token);
+                                                     project.Revision, cancellationToken: _lifetime.Token);
         // 改名改变组名：按标签值差集通知相关页面；值未变的页面不刷新。
         var labels = CaptureWorkspaceTargetLabels();
         _projects = _projects.Select(item => item.Id == renamed.Id ? renamed : item).ToArray();
@@ -2115,7 +2266,7 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         _renameDialogVersion++;
         ProjectRenameDraftText = group.Name;
         ProjectRenameErrorText = null;
-        IsProjectRenameOpen    = true;
+        IsProjectRenameOpen = true;
         // 预填与残留草稿相同时草稿 setter 不通知，开窗即补齐校验通知（确认按钮的可用态）。
         NotifyProjectRenameValidation();
     }
@@ -2124,8 +2275,8 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     private async Task ConfirmProjectRenameAsync()
     {
         if (_renameTarget is null || !CanConfirmProjectRename) return;
-        var group         = _renameTarget;
-        var name          = ProjectRenameDraftText.Trim();
+        var group = _renameTarget;
+        var name = ProjectRenameDraftText.Trim();
         var dialogVersion = _renameDialogVersion;
         _renamingProject = true;
         NotifyProjectRenameValidation();
@@ -2159,8 +2310,8 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     /// <summary>关闭并清理重命名弹窗状态（取消、确认成功与浅失焦共用）。</summary>
     private void CloseProjectRename()
     {
-        IsProjectRenameOpen    = false;
-        _renameTarget          = null;
+        IsProjectRenameOpen = false;
+        _renameTarget = null;
         ProjectRenameErrorText = null;
         NotifyProjectRenameValidation();
     }
@@ -2182,7 +2333,7 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     {
         // 确定性测试注入点：控制解析完成顺序以复现竞态；生产保持为空走真实受保护解析。
         if (ResolveDirectoryOverride is { } resolver) return await resolver(root, token);
-        var user      = await UserConfigStore.LoadAsync(UserConfigPath, token);
+        var user = await UserConfigStore.LoadAsync(UserConfigPath, token);
         var directory = SessionStorePaths.ResolveProtected(user.Settings?.SessionStoreDirectory, root);
         if (user.Settings?.WindowsSandbox is { Enabled: true } sandbox)
             foreach (var writable in sandbox.AdditionalWriteRoots)
@@ -2211,7 +2362,7 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
                 _initializationCursor = null;
             _storeDirectory = directory;
             result = await SessionProjectInitializer.InitializeAsync(directory, _initializationCursor, 100,
-                                                                     cancellationToken : source.Token);
+                                                                     cancellationToken: source.Token);
             _initializationCursor = result.HasMore ? result.NextCursor : null;
         }
         finally
@@ -2221,10 +2372,10 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
         // 单批入口保留逐批全库刷新；整轮编排不使用该路径，避免每批重读整个 store。
         await InitializeAsync();
-        Notice = $"项目初始化：{result.Outcomes.Count(item => item.Status == SessionProjectBindingStatus.Bound)} 已绑定，"   +
-                 $"{result.Outcomes.Count(item => item.Status       == SessionProjectBindingStatus.Pending)} 待处理，" +
-                 $"{result.Outcomes.Count(item => item.Status       == SessionProjectBindingStatus.Failed)} 失败；"   +
-                 (result.Cancelled ? "已取消，可继续。" : result.HasMore ? "仍有日志，可继续。" : "本轮扫描完成，可重试待处理项。")                +
+        Notice = $"项目初始化：{result.Outcomes.Count(item => item.Status == SessionProjectBindingStatus.Bound)} 已绑定，" +
+                 $"{result.Outcomes.Count(item => item.Status == SessionProjectBindingStatus.Pending)} 待处理，" +
+                 $"{result.Outcomes.Count(item => item.Status == SessionProjectBindingStatus.Failed)} 失败；" +
+                 (result.Cancelled ? "已取消，可继续。" : result.HasMore ? "仍有日志，可继续。" : "本轮扫描完成，可重试待处理项。") +
                  string.Join("", result.Outcomes.Where(item => item.Detail is not null)
                                        .Select(item => $"\n{item.SessionId}: {item.Detail}"));
     }
@@ -2234,14 +2385,14 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     {
         if (_closing || Interlocked.CompareExchange(ref _migrationBusy, 1, 0) != 0)
         {
-            source   = null!;
+            source = null!;
             finished = null!;
             return false;
         }
 
-        source            = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
-        finished          = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        _organizeSource   = source;
+        source = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
+        finished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _organizeSource = source;
         _organizeFinished = finished;
         return true;
     }
@@ -2251,7 +2402,7 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     {
         if (ReferenceEquals(_organizeSource, source))
         {
-            _organizeSource   = null;
+            _organizeSource = null;
             _organizeFinished = null;
         }
 
@@ -2301,10 +2452,10 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     ///     </para>
     /// </summary>
     private async Task RunOrganizeRoundAsync(CancellationTokenSource source, string store, int generation,
-                                             TaskCompletionSource    finished)
+                                             TaskCompletionSource finished)
     {
         string? failureSummary = null;
-        var     merged         = new Dictionary<string, SessionProjectBindingOutcome>(StringComparer.Ordinal);
+        var merged = new Dictionary<string, SessionProjectBindingOutcome>(StringComparer.Ordinal);
         try
         {
             // 写入前复用与显式入口一致的完整保护校验：轻量准备只解析路径，不构成创建目录册或追加归属的授权；
@@ -2328,7 +2479,7 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
                     // 批内扫描与迁移放工作线程：Core 首个 await 前有同步枚举与排序，不占用 UI 线程。
                     var result = await Task.Run(() => SessionProjectInitializer.InitializeAsync(
                                                  store, cursor, OrganizeBatchSize,
-                                                 cancellationToken : source.Token), source.Token);
+                                                 cancellationToken: source.Token), source.Token);
                     // 迟到防护：store 已切换的批次不再推进共享游标。
                     if (IsCurrentStore(store, generation))
                         _initializationCursor = result.HasMore ? result.NextCursor : null;
@@ -2360,11 +2511,11 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
             // 整轮异常只进独立摘要通道，不覆盖其他操作的错误；结束后仍按当前状态统一加载一次。
             if (IsCurrentStore(store, generation))
             {
-                failureSummary       = _factory.Redact(exception.Message);
-                OrganizeNotice       = $"历史整理未完成：{failureSummary}";
+                failureSummary = _factory.Redact(exception.Message);
+                OrganizeNotice = $"历史整理未完成：{failureSummary}";
                 // 异常轮按已观测事实结算明细：先清掉本 store 上一轮残留，已见批次的待处理／失败照常按目录汇总；
                 // 未扫到的目录取不到按目录事实，统一加载后由下方 failureSummary 分支用摘要补标。
-                _organizeIssues      = BuildOrganizeIssues(merged.Values);
+                _organizeIssues = BuildOrganizeIssues(merged.Values);
                 _organizeIssuesStore = _storeDirectory;
             }
         }
@@ -2405,8 +2556,8 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         }
 
         var pending = stuck.Count(item => item.Status == SessionProjectBindingStatus.Pending);
-        OrganizeNotice       = $"历史整理未完成：{pending} 项待处理、{stuck.Length - pending} 项失败。";
-        _organizeIssues      = BuildOrganizeIssues(outcomes);
+        OrganizeNotice = $"历史整理未完成：{pending} 项待处理、{stuck.Length - pending} 项失败。";
+        _organizeIssues = BuildOrganizeIssues(outcomes);
         _organizeIssuesStore = _storeDirectory;
     }
 
@@ -2427,7 +2578,7 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
             // 读取失败等无法定位目录的事实只进摘要，不挂到任何目录组。
             if (string.IsNullOrWhiteSpace(item.WorkspaceRoot)) continue;
             var normalized = ProjectRoots.Normalize(item.WorkspaceRoot);
-            var index      = groups.FindIndex(group => ProjectRoots.AreEqual(group.Root, normalized));
+            var index = groups.FindIndex(group => ProjectRoots.AreEqual(group.Root, normalized));
             if (index < 0)
             {
                 groups.Add((normalized, []));
@@ -2459,8 +2610,8 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     {
         var issues = _organizeIssues is { } existing ? new List<OrganizeIssue>(existing) : [];
         // 只补标本轮 store 的行：切换 store 后旧页面保留原 store 绑定，旧 store 的未绑定组不归本轮解释。
-        foreach (var session in Sessions.Where(session => session.Id is not null            &&
-                                                          session.ProjectId is null         &&
+        foreach (var session in Sessions.Where(session => session.Id is not null &&
+                                                          session.ProjectId is null &&
                                                           session.StoreDirectory is { } row &&
                                                           ProjectRoots.AreEqual(row, store)))
         {
@@ -2469,7 +2620,7 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
             issues.Add(new OrganizeIssue(normalized, detail));
         }
 
-        _organizeIssues      = issues.ToArray();
+        _organizeIssues = issues.ToArray();
         _organizeIssuesStore = _storeDirectory;
         RebuildProjects();
     }

@@ -190,8 +190,29 @@
                 </ListBox.ItemsPanel>
                 <ListBox.DataTemplates>
                     <DataTemplate x:DataType="vm:SidebarCategoryViewModel">
-                        <TextBlock Classes="sidebar-category-title"
-                                   Text="{Binding Title}" />
+                        <Grid>
+                            <Button Classes="sidebar-category-toggle"
+                                    IsVisible="{Binding CanCollapse}"
+                                    AutomationProperties.Name="{Binding AccessibilityName}"
+                                    Command="{Binding $parent[sidebar:SidebarView].DataContext.ToggleSidebarCategoryCommand}"
+                                    CommandParameter="{Binding}">
+                                <Grid ColumnDefinitions="*,Auto">
+                                    <TextBlock Classes="sidebar-category-title" Text="{Binding Title}" />
+                                    <Path Grid.Column="1" Width="8" Height="8" Margin="0,12,8,3"
+                                          Data="{StaticResource Icon.ChevronRight}"
+                                          Stroke="{DynamicResource TextMutedBrush}" StrokeThickness="1.5"
+                                          StrokeLineCap="Round"
+                                          IsVisible="{Binding !IsExpanded}" />
+                                    <Path Grid.Column="1" Width="8" Height="8" Margin="0,12,8,3"
+                                          Data="{StaticResource Icon.ChevronDown}"
+                                          Stroke="{DynamicResource TextMutedBrush}" StrokeThickness="1.5"
+                                          StrokeLineCap="Round"
+                                          IsVisible="{Binding IsExpanded}" />
+                                </Grid>
+                            </Button>
+                            <TextBlock Classes="sidebar-category-title" Text="{Binding Title}"
+                                       IsVisible="{Binding !CanCollapse}" />
+                        </Grid>
                     </DataTemplate>
                     <DataTemplate x:DataType="vm:ProjectSessionsMoreViewModel">
                         <Button Classes="session-row"

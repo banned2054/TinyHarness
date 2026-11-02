@@ -99,6 +99,35 @@
         <Setter Property="FontWeight" Value="SemiBold" />
         <Setter Property="Foreground" Value="{DynamicResource TextMutedBrush}" />
     </Style>
+    <Style Selector="Button.sidebar-category-toggle">
+        <Setter Property="MinHeight" Value="26" />
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="Margin" Value="0" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="HorizontalAlignment" Value="Stretch" />
+        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate>
+                    <Border x:Name="PART_Surface" CornerRadius="6" Padding="{TemplateBinding Padding}"
+                            Background="Transparent">
+                        <ContentPresenter Content="{TemplateBinding Content}"
+                                          ContentTemplate="{TemplateBinding ContentTemplate}"
+                                          HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                          VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}" />
+                    </Border>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+    <Style Selector="Button.sidebar-category-toggle:pointerover /template/ Border#PART_Surface">
+        <Setter Property="Background" Value="{DynamicResource SessionHoverBrush}" />
+    </Style>
+    <Style Selector="Button.sidebar-category-toggle:focus-visible /template/ Border#PART_Surface">
+        <Setter Property="Background" Value="{DynamicResource SessionHoverBrush}" />
+    </Style>
     <!-- 工作区行悬浮按钮组：常态隐藏且不参与命中（避免透明按钮拦截行内
          点击），悬停整行圆角矩形时淡入。Opacity 显隐保持布局稳定——按钮
          常驻占位，标题列宽与行高不因显隐跳动。 -->

@@ -54,14 +54,26 @@ internal static class SidebarPreferencesStore
     internal const int MaxSessionOrderEntries = 10_000;
 
     /// <summary>
-    ///     <para>单个文件中项目和会话 ID 的总条目上限。</para>
-    ///     <para>The total project and session ID entry limit per file.</para>
+    ///     <para>每个存储目录的折叠项目组键上限。</para>
+    ///     <para>The collapsed-project-group key limit per store directory.</para>
     /// </summary>
-    private const int MaxTotalEntries = 30_000;
+    private const int MaxCollapsedGroupKeys = 10_000;
 
     /// <summary>
-    ///     <para>项目和会话 ID 的最大字符数。</para>
-    ///     <para>The maximum character count for project and session IDs.</para>
+    ///     <para>固定侧栏分类折叠键的上限。</para>
+    ///     <para>The maximum number of collapsed fixed-sidebar category keys.</para>
+    /// </summary>
+    private const int MaxCollapsedCategoryKeys = 100;
+
+    /// <summary>
+    ///     <para>单个文件中排序 ID 与折叠状态键的总条目上限。</para>
+    ///     <para>The total ordering ID and collapsed-state key limit per file.</para>
+    /// </summary>
+    private const int MaxTotalEntries = 50_000;
+
+    /// <summary>
+    ///     <para>偏好标识键的最大字符数。</para>
+    ///     <para>The maximum character count for a preference key.</para>
     /// </summary>
     private const int MaxIdentifierLength = 256;
 
@@ -128,7 +140,7 @@ internal static class SidebarPreferencesStore
     public static string FilePathForUserConfig(string userConfigPath)
     {
         var fullConfigPath = NormalizeFilePath(userConfigPath, nameof(userConfigPath));
-        var directory      = Path.GetDirectoryName(fullConfigPath);
+        var directory = Path.GetDirectoryName(fullConfigPath);
         if (string.IsNullOrEmpty(directory))
             throw new ArgumentException($"User configuration path '{userConfigPath}' has no parent directory.",
                                         nameof(userConfigPath));
@@ -137,10 +149,10 @@ internal static class SidebarPreferencesStore
     }
 
     /// <summary>
-    ///     <para>读取并校验侧栏偏好；文件缺失时返回默认设置，文件损坏或超预算时保留原文件并报错。</para>
+    ///     <para>读取并校验侧栏偏好；空列表显式为 null 时修复为空列表并保存，其他损坏文件保留并报错。</para>
     ///     <para>
-    ///         Loads and validates sidebar preferences; returns defaults when missing and preserves damaged or oversized
-    ///         files.
+    ///         Loads and validates sidebar preferences; repairs and saves null lists as empty, while preserving other
+    ///         damaged or oversized files.
     ///     </para>
     /// </summary>
     /// <param name="filePath">
@@ -160,11 +172,15 @@ internal static class SidebarPreferencesStore
         var fullPath = NormalizeFilePath(filePath, nameof(filePath));
         cancellationToken.ThrowIfCancellationRequested();
 
+        if (TryGetAttributes(fullPath) is null) return new SidebarPreferences();
+
+        // 读取与可能的修复写回必须和所有保存共享同一把跨进程锁。
+        await using var loadSaveLock = await OpenSaveLockAsync(fullPath, cancellationToken).ConfigureAwait(false);
+
         byte[] bytes;
         try
         {
-            var attributes = TryGetAttributes(fullPath);
-            if (attributes is null) return new SidebarPreferences();
+            if (TryGetAttributes(fullPath) is null) return new SidebarPreferences();
 
             EnsureRegularLeaf(fullPath, "Sidebar preferences");
             await using var stream = new FileStream(fullPath, FileMode.Open, FileAccess.Read,
@@ -193,33 +209,17 @@ internal static class SidebarPreferencesStore
             throw new UnauthorizedAccessException($"Could not load sidebar preferences '{fullPath}': {ex.Message}", ex);
         }
 
-        string json;
-        try
-        {
-            json = StrictUtf8.GetString(bytes);
-        }
-        catch (DecoderFallbackException ex)
-        {
-            throw InvalidPreferences(fullPath, $"The file is not valid UTF-8: {ex.Message}", ex);
-        }
+        var preferences = DeserializePreferences(bytes, fullPath);
 
-        if (json.Length > 0 && json[0] == '\uFEFF') json = json[1..];
-
-        SidebarPreferences? preferences;
-        try
+        var (normalized, repaired) = NormalizeNullLists(preferences);
+        ValidatePreferences(normalized, fullPath);
+        if (repaired)
         {
-            preferences = JsonSerializer.Deserialize(json, SidebarPreferencesJsonContext.Default.SidebarPreferences);
-        }
-        catch (JsonException ex)
-        {
-            throw InvalidPreferences(fullPath, $"The file contains invalid JSON: {ex.Message}", ex);
+            var repairedBytes = SerializePreferences(normalized, fullPath);
+            await WriteAtomicallyAsync(fullPath, repairedBytes, cancellationToken).ConfigureAwait(false);
         }
 
-        if (preferences is null)
-            throw InvalidPreferences(fullPath, "The file must contain a JSON object.");
-
-        ValidatePreferences(preferences, fullPath);
-        return preferences;
+        return normalized;
     }
 
     /// <summary>
@@ -246,13 +246,7 @@ internal static class SidebarPreferencesStore
     {
         ArgumentNullException.ThrowIfNull(preferences);
         var fullPath = NormalizeFilePath(filePath, nameof(filePath));
-        ValidatePreferences(preferences, fullPath);
-
-        var bytes = JsonSerializer.SerializeToUtf8Bytes(preferences,
-                                                        SidebarPreferencesJsonContext.Default.SidebarPreferences);
-        if (bytes.Length > MaxFileBytes)
-            throw InvalidPreferences(fullPath,
-                                     $"Serialized preferences exceed the budget of {MaxFileBytes} bytes; reduce stored sidebar entries.");
+        var bytes = SerializePreferences(preferences, fullPath);
 
         var directory = Path.GetDirectoryName(fullPath)!;
         try
@@ -261,30 +255,7 @@ internal static class SidebarPreferencesStore
             Directory.CreateDirectory(directory);
 
             await using var saveLock = await OpenSaveLockAsync(fullPath, cancellationToken).ConfigureAwait(false);
-            EnsureRegularLeaf(fullPath, "Sidebar preferences");
-
-            var tempPath  = fullPath + ".tmp-" + Guid.NewGuid().ToString("N");
-            var created   = false;
-            var committed = false;
-            try
-            {
-                await using (var temp = new FileStream(tempPath, FileMode.CreateNew, FileAccess.Write,
-                                                       FileShare.None, 4096, FileOptions.Asynchronous))
-                {
-                    created = true;
-                    await temp.WriteAsync(bytes, cancellationToken).ConfigureAwait(false);
-                    await temp.FlushAsync(cancellationToken).ConfigureAwait(false);
-                }
-
-                await CommitTempAsync(tempPath, fullPath, cancellationToken).ConfigureAwait(false);
-                committed = true;
-            }
-            catch
-            {
-                if (created && !committed) TryDeleteTempFile(tempPath);
-
-                throw;
-            }
+            await WriteAtomicallyAsync(fullPath, bytes, cancellationToken).ConfigureAwait(false);
         }
         catch (IOException ex)
         {
@@ -297,6 +268,56 @@ internal static class SidebarPreferencesStore
         catch (NotSupportedException ex)
         {
             throw new NotSupportedException($"Could not save sidebar preferences '{fullPath}': {ex.Message}", ex);
+        }
+    }
+
+    /// <summary>
+    ///     <para>校验并序列化偏好，同时执行文件大小预算检查。</para>
+    ///     <para>Validates and serializes preferences while enforcing the file-size budget.</para>
+    /// </summary>
+    private static byte[] SerializePreferences(SidebarPreferences preferences, string filePath)
+    {
+        ValidatePreferences(preferences, filePath);
+
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(preferences,
+                                                        SidebarPreferencesJsonContext.Default.SidebarPreferences);
+        if (bytes.Length > MaxFileBytes)
+            throw InvalidPreferences(filePath,
+                                     $"Serialized preferences exceed the budget of {MaxFileBytes} bytes; reduce stored sidebar entries.");
+
+        return bytes;
+    }
+
+    /// <summary>
+    ///     <para>在调用方持有保存锁时原子写入偏好文件。</para>
+    ///     <para>Atomically writes the preferences file while the caller holds its save lock.</para>
+    /// </summary>
+    private static async Task WriteAtomicallyAsync(
+        string filePath, byte[] bytes, CancellationToken cancellationToken)
+    {
+        EnsureRegularLeaf(filePath, "Sidebar preferences");
+
+        var tempPath = filePath + ".tmp-" + Guid.NewGuid().ToString("N");
+        var created = false;
+        var committed = false;
+        try
+        {
+            await using (var temp = new FileStream(tempPath, FileMode.CreateNew, FileAccess.Write,
+                                                   FileShare.None, 4096, FileOptions.Asynchronous))
+            {
+                created = true;
+                await temp.WriteAsync(bytes, cancellationToken).ConfigureAwait(false);
+                await temp.FlushAsync(cancellationToken).ConfigureAwait(false);
+            }
+
+            await CommitTempAsync(tempPath, filePath, cancellationToken).ConfigureAwait(false);
+            committed = true;
+        }
+        catch
+        {
+            if (created && !committed) TryDeleteTempFile(tempPath);
+
+            throw;
         }
     }
 
@@ -325,6 +346,37 @@ internal static class SidebarPreferencesStore
     }
 
     /// <summary>
+    ///     <para>使用严格 UTF-8 与源生成元数据反序列化偏好对象。</para>
+    ///     <para>Deserializes preferences with strict UTF-8 and source-generated metadata.</para>
+    /// </summary>
+    private static SidebarPreferences DeserializePreferences(byte[] bytes, string filePath)
+    {
+        string json;
+        try
+        {
+            json = StrictUtf8.GetString(bytes);
+        }
+        catch (DecoderFallbackException ex)
+        {
+            throw InvalidPreferences(filePath, $"The file is not valid UTF-8: {ex.Message}", ex);
+        }
+
+        if (json.Length > 0 && json[0] == '\uFEFF') json = json[1..];
+
+        SidebarPreferences? preferences;
+        try
+        {
+            preferences = JsonSerializer.Deserialize(json, SidebarPreferencesJsonContext.Default.SidebarPreferences);
+        }
+        catch (JsonException ex)
+        {
+            throw InvalidPreferences(filePath, $"The file contains invalid JSON: {ex.Message}", ex);
+        }
+
+        return preferences ?? throw InvalidPreferences(filePath, "The file must contain a JSON object.");
+    }
+
+    /// <summary>
     ///     <para>校验 schema、存储目录、列表内容、重复项和条目预算。</para>
     ///     <para>Validates the schema, store directories, list contents, duplicates, and entry budgets.</para>
     /// </summary>
@@ -343,9 +395,10 @@ internal static class SidebarPreferencesStore
         if (preferences.Stores.Count > MaxStores)
             throw InvalidPreferences(filePath, $"The file exceeds its budget of {MaxStores} stores.");
 
-        var pathComparer     = OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+        var pathComparer = OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
         var storeDirectories = new HashSet<string>(pathComparer);
-        var totalEntries     = 0;
+        var totalEntries = ValidateIds(preferences.CollapsedCategoryKeys, MaxCollapsedCategoryKeys,
+                                       "collapsedCategoryKeys", filePath);
         for (var i = 0; i < preferences.Stores.Count; i++)
         {
             var store = preferences.Stores[i];
@@ -361,6 +414,8 @@ internal static class SidebarPreferencesStore
                                         $"stores[{i}].manualProjectOrder", filePath);
             totalEntries += ValidateIds(store.ManualSessionOrder, MaxSessionOrderEntries,
                                         $"stores[{i}].manualSessionOrder", filePath);
+            totalEntries += ValidateIds(store.CollapsedGroupKeys, MaxCollapsedGroupKeys,
+                                        $"stores[{i}].collapsedGroupKeys", filePath);
             totalEntries += ValidateIds(store.LegacyPinnedProjectOrder, MaxProjectsPerOrder,
                                         $"stores[{i}].pinnedProjectOrder", filePath);
             totalEntries += ValidateIds(store.LegacyPinnedSessionIds, MaxPinnedSessionsPerStore,
@@ -369,6 +424,53 @@ internal static class SidebarPreferencesStore
             if (totalEntries > MaxTotalEntries)
                 throw InvalidPreferences(filePath, $"The file exceeds its budget of {MaxTotalEntries} total entries.");
         }
+    }
+
+    /// <summary>
+    ///     <para>将可恢复的 null 列表归一化为空列表，并报告是否需要回写文件。</para>
+    ///     <para>Normalizes recoverable null lists to empty lists and reports whether the file needs to be rewritten.</para>
+    /// </summary>
+    private static (SidebarPreferences Preferences, bool Repaired) NormalizeNullLists(
+        SidebarPreferences preferences)
+    {
+        if (preferences.Stores is null) return (preferences, false);
+
+        var repaired = preferences.CollapsedCategoryKeys is null;
+        var stores = new SidebarStorePreferences[preferences.Stores.Count];
+        for (var index = 0; index < stores.Length; index++)
+        {
+            var store = preferences.Stores[index];
+            if (store is null)
+            {
+                stores[index] = store!;
+                continue;
+            }
+
+            var repairStore = store.ManualProjectOrder is null ||
+                              store.ManualSessionOrder is null ||
+                              store.CollapsedGroupKeys is null ||
+                              store.LegacyPinnedProjectOrder is null ||
+                              store.LegacyPinnedSessionIds is null;
+            repaired |= repairStore;
+            stores[index] = repairStore
+                ? store with
+                {
+                    ManualProjectOrder = store.ManualProjectOrder ?? [],
+                    ManualSessionOrder = store.ManualSessionOrder ?? [],
+                    CollapsedGroupKeys = store.CollapsedGroupKeys ?? [],
+                    LegacyPinnedProjectOrder = store.LegacyPinnedProjectOrder ?? [],
+                    LegacyPinnedSessionIds = store.LegacyPinnedSessionIds ?? []
+                }
+                : store;
+        }
+
+        if (!repaired) return (preferences, false);
+
+        return (preferences with
+        {
+            CollapsedCategoryKeys = preferences.CollapsedCategoryKeys ?? [],
+            Stores = stores
+        }, true);
     }
 
     /// <summary>
@@ -436,7 +538,7 @@ internal static class SidebarPreferencesStore
     /// </summary>
     private static async Task<FileStream> OpenSaveLockAsync(string filePath, CancellationToken cancellationToken)
     {
-        var lockPath = filePath                + SaveLockSuffix;
+        var lockPath = filePath + SaveLockSuffix;
         var deadline = Environment.TickCount64 + SaveLockTimeoutMs;
         while (true)
         {
@@ -551,7 +653,7 @@ internal static class SidebarPreferencesStore
     ///     <para>创建包含文件路径的无效偏好数据异常。</para>
     ///     <para>Creates an invalid-preferences exception that includes the file path.</para>
     /// </summary>
-    private static InvalidDataException InvalidPreferences(string     filePath, string message,
+    private static InvalidDataException InvalidPreferences(string filePath, string message,
                                                            Exception? innerException = null) =>
         new($"Sidebar preferences '{filePath}' are invalid: {message}", innerException);
 
