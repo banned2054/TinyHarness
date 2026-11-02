@@ -69,11 +69,20 @@ public sealed class MicrosoftAiChatClient : IChatCompletionClient, IDisposable
     ///     Converts the internal request to M.E.AI input and maps M.E.AI text/tool
     ///     deltas back to project stream events.
     /// </summary>
+    /// <remarks>
+    ///     <para>单次流式响应受共享模型请求期限限制；调用方取消仍传播为取消。</para>
+    ///     <para>
+    ///         Each streaming response uses the shared model-request deadline; caller cancellation still propagates as
+    ///         cancellation.
+    ///     </para>
+    /// </remarks>
     public async IAsyncEnumerable<ChatStreamEvent> CompleteAsync(
         ChatCompletionRequest request, [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         if (request is null) throw new ArgumentNullException(nameof(request));
 
+        using var requestTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        requestTimeout.CancelAfter(ModelClientFactory.ModelRequestTimeout);
         var messages = ToMicrosoftMessages(request);
         var options  = ToChatOptions(request);
 
@@ -105,11 +114,15 @@ public sealed class MicrosoftAiChatClient : IChatCompletionClient, IDisposable
         ChatFinishReason? finishReason      = null;
         var               started           = false;
 
-        await foreach (var update in _inner
-                                    .GetStreamingResponseAsync(messages, options, cancellationToken)
-                                    .ConfigureAwait(false))
+        await using var updates = _inner.GetStreamingResponseAsync(messages, options, requestTimeout.Token)
+                                        .GetAsyncEnumerator(requestTimeout.Token);
+        while (true)
         {
-            cancellationToken.ThrowIfCancellationRequested();
+            ThrowIfRequestTimedOut(requestTimeout, cancellationToken);
+            if (!await MoveNextWithTimeoutAsync(updates, requestTimeout, cancellationToken).ConfigureAwait(false))
+                break;
+            ThrowIfRequestTimedOut(requestTimeout, cancellationToken);
+            var update = updates.Current;
 
             if (!started)
             {
@@ -207,6 +220,8 @@ public sealed class MicrosoftAiChatClient : IChatCompletionClient, IDisposable
                 }
         }
 
+        ThrowIfRequestTimedOut(requestTimeout, cancellationToken);
+
         // 枚举结束不证明响应完整；保留缺失的结束原因，由循环在执行工具前统一拒绝。
         yield return new ChatStreamEvent
         {
@@ -236,6 +251,39 @@ public sealed class MicrosoftAiChatClient : IChatCompletionClient, IDisposable
         {
             _ownedResource?.Dispose();
         }
+    }
+
+    /// <summary>
+    ///     <para>读取下一条模型增量；非调用方取消的取消结果统一转换为超时错误。</para>
+    ///     <para>Reads the next model update and converts cancellation not requested by the caller into a timeout error.</para>
+    /// </summary>
+    private static async ValueTask<bool> MoveNextWithTimeoutAsync(
+        IAsyncEnumerator<ChatResponseUpdate> updates, CancellationTokenSource requestTimeout,
+        CancellationToken                    callerCancellationToken)
+    {
+        try
+        {
+            return await updates.MoveNextAsync().ConfigureAwait(false);
+        }
+        catch (OperationCanceledException exception) when (!callerCancellationToken.IsCancellationRequested)
+        {
+            var message = requestTimeout.IsCancellationRequested
+                ? $"The model response exceeded the configured timeout of {ModelClientFactory.ModelRequestTimeout}."
+                : exception.Message;
+            throw new TimeoutException(message, exception);
+        }
+    }
+
+    /// <summary>
+    ///     <para>在流读取前后检查调用方取消和单次模型请求期限。</para>
+    ///     <para>Checks caller cancellation and the per-request deadline before and after reading the stream.</para>
+    /// </summary>
+    private static void ThrowIfRequestTimedOut(
+        CancellationTokenSource requestTimeout, CancellationToken callerCancellationToken)
+    {
+        callerCancellationToken.ThrowIfCancellationRequested();
+        if (requestTimeout.IsCancellationRequested)
+            throw new TimeoutException($"The model response exceeded the configured timeout of {ModelClientFactory.ModelRequestTimeout}.");
     }
 
     /// <summary>

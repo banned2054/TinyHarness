@@ -33,13 +33,11 @@ public sealed class DesktopAutoApprovalProvider(
     public async Task<ApprovalAction> PromptAsync(ToolPreparation preparation, CancellationToken cancellationToken)
     {
         if (mode()?.UsesAutoReview() != true) return await human.PromptAsync(preparation, cancellationToken);
-        string    note;
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeout.CancelAfter(TimeSpan.FromSeconds(60));
+        string note;
         try
         {
             await status("AI 正在审核操作").ConfigureAwait(false);
-            var (client, model) = await createReviewer(timeout.Token).ConfigureAwait(false);
+            var (client, model) = await createReviewer(cancellationToken).ConfigureAwait(false);
             try
             {
                 var users =
@@ -71,7 +69,8 @@ public sealed class DesktopAutoApprovalProvider(
                 };
                 var output = new StringBuilder();
                 var ended  = false;
-                await foreach (var item in client.CompleteAsync(request, timeout.Token).WithCancellation(timeout.Token))
+                await foreach (var item in client.CompleteAsync(request, cancellationToken)
+                                                 .WithCancellation(cancellationToken))
                 {
                     if (item.Kind == ChatStreamEventKind.ToolCallDelta)
                         throw new InvalidDataException("审批模型返回了工具调用。");
@@ -85,7 +84,7 @@ public sealed class DesktopAutoApprovalProvider(
                     }
                 }
 
-                timeout.Token.ThrowIfCancellationRequested();
+                cancellationToken.ThrowIfCancellationRequested();
                 if (!ended) throw new InvalidDataException("审批响应没有完成。");
                 using var result = JsonDocument.Parse(output.ToString());
                 var root = result.RootElement;
@@ -115,7 +114,9 @@ public sealed class DesktopAutoApprovalProvider(
         }
         catch (Exception exception)
         {
-            note = exception is OperationCanceledException ? "AI 审批超时。" : "AI 审批失败：" + exception.Message;
+            note = exception is OperationCanceledException or TimeoutException
+                ? "AI 审批超时。"
+                : "AI 审批失败：" + exception.Message;
         }
 
         cancellationToken.ThrowIfCancellationRequested();

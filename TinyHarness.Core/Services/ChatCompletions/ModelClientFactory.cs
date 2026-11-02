@@ -17,6 +17,12 @@ namespace TinyHarness.Core.Services.ChatCompletions;
 public static class ModelClientFactory
 {
     /// <summary>
+    ///     <para>普通对话和 AI 审批共用的单次模型请求总时限。</para>
+    ///     <para>The shared end-to-end timeout for one chat or AI approval model request.</para>
+    /// </summary>
+    internal static TimeSpan ModelRequestTimeout { get; } = TimeSpan.FromMinutes(5);
+
+    /// <summary>
     ///     验证模型、端点与密钥，并按所选协议构造 Chat Completions 客户端。
     ///     返回的 <see cref="MicrosoftAiChatClient" /> 持有底层 M.E.AI IChatClient 并实现
     ///     IDisposable；<see cref="IChatCompletionClient" /> 接口本身无释放语义，CLI 组合根的
@@ -52,7 +58,12 @@ public static class ModelClientFactory
         var routeIdentity = NetworkRouteResolver.BindingIdentity(transport.Route);
         try
         {
-            var options = new OpenAIClientOptions { Endpoint = baseUri, Transport = transport.Transport };
+            var options = new OpenAIClientOptions
+            {
+                Endpoint       = baseUri,
+                Transport      = transport.Transport,
+                NetworkTimeout = ModelRequestTimeout
+            };
             switch (api)
             {
                 case ChatApiKind.ChatCompletions :
@@ -65,8 +76,9 @@ public static class ModelClientFactory
 #pragma warning disable OPENAI001
                     var responsesOptions = new ResponsesClientOptions
                     {
-                        Endpoint  = baseUri,
-                        Transport = transport.Transport
+                        Endpoint       = baseUri,
+                        Transport      = transport.Transport,
+                        NetworkTimeout = ModelRequestTimeout
                     };
                     var responsesClient = new ResponsesClient(new ApiKeyCredential(apiKey), responsesOptions);
                     return new MicrosoftAiChatClient(responsesClient.AsIChatClient(model), api, transport,
