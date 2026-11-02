@@ -202,11 +202,9 @@
                                 CommandParameter="{Binding Project}" />
                     </DataTemplate>
                     <DataTemplate x:DataType="vm:ProjectViewModel">
-                        <!-- 项目组头行：整行一个圆角矩形（Border.group-row）承担悬停/选中底色；
-                             右侧悬浮按钮组（重命名 + 项目内新对话）平时隐藏，悬停整行时淡入
-                             （显隐样式见 Sidebar.axaml 的 workspace-actions）。草稿、整理未完成
-                             与缺失分组不可编辑（CanEdit=false），不显示悬浮操作。 -->
+                        <!-- 项目组头行：右侧只显示三点菜单与项目内新会话；置顶和重命名收纳在菜单中。 -->
                         <Border Classes="group-row" Classes.current="{Binding IsCurrent}"
+                                Classes.menu-open="{Binding IsActionsMenuOpen}"
                                 DragDrop.AllowDrop="True"
                                 DragDrop.DragOver="OnProjectHeaderDragOver"
                                 DragDrop.Drop="OnProjectHeaderDrop">
@@ -265,30 +263,16 @@
                                 <StackPanel Grid.Column="1" Classes="workspace-actions"
                                             Orientation="Horizontal" Spacing="2"
                                             IsVisible="{Binding CanEdit}">
-                                    <Button Classes="project-pin-action"
-                                            Classes.pinned="{Binding IsPinned}"
-                                            AutomationProperties.Name="{Binding PinActionName}"
-                                            ToolTip.Tip="{Binding PinActionName}"
-                                            Command="{Binding $parent[sidebar:SidebarView].DataContext.ToggleProjectPinCommand}"
-                                            CommandParameter="{Binding}">
-                                        <Path Width="14" Height="14"
-                                              Data="{StaticResource Icon.PinOutlineRegular}"
-                                              Stroke="{DynamicResource TextMutedBrush}" StrokeThickness="1.2" />
-                                    </Button>
-                                    <Button Classes="workspace-menu"
-                                            AutomationProperties.Name="重命名项目"
-                                            ToolTip.Tip="重命名项目"
-                                            Command="{Binding $parent[sidebar:SidebarView].DataContext.OpenProjectRenameCommand}"
-                                            CommandParameter="{Binding}">
-                                        <!-- DSH IconEditOutlineRegular：fill 框身 + stroke 笔杆。 -->
-                                        <Panel Width="16" Height="16">
-                                            <Path Width="16" Height="16"
-                                                  Data="{StaticResource Icon.EditBodyFill}"
-                                                  Fill="{DynamicResource TextMutedBrush}" />
-                                            <Path Width="16" Height="16"
-                                                  Data="{StaticResource Icon.EditPenStroke}"
-                                                  Stroke="{DynamicResource TextMutedBrush}" StrokeThickness="1" />
-                                        </Panel>
+                                    <Button x:Name="ProjectActionsButton" Classes="workspace-menu"
+                                            AutomationProperties.Name="项目操作"
+                                            ToolTip.Tip="项目操作"
+                                            Click="OnProjectActionsButtonClick"
+                                            PointerPressed="OnProjectActionsPointerPressed"
+                                            PointerMoved="OnProjectActionsPointerMoved"
+                                            PointerReleased="OnProjectActionsPointerReleased">
+                                        <Path Width="16" Height="16"
+                                              Data="{StaticResource Icon.DotsHorizontalFill}"
+                                              Fill="{DynamicResource TextMutedBrush}" />
                                     </Button>
                                     <Button Classes="workspace-new-session"
                                             AutomationProperties.Name="在此项目内新建对话"
@@ -299,16 +283,46 @@
                                               Data="{StaticResource Icon.NewChatOutlineMedium}"
                                               Stroke="{DynamicResource TextMutedBrush}" StrokeThickness="1.3" />
                                     </Button>
-                                    <Button Classes="project-drag-handle"
-                                            IsVisible="{Binding CanReorder}"
-                                            AutomationProperties.Name="拖动以调整项目顺序"
-                                            ToolTip.Tip="拖动以调整项目顺序"
-                                            PointerPressed="OnProjectDragHandlePointerPressed">
-                                        <Path Width="16" Height="16"
-                                              Data="{StaticResource Icon.DotsHorizontalFill}"
-                                              Fill="{DynamicResource TextMutedBrush}" />
-                                    </Button>
                                 </StackPanel>
+                                <Popup DataContext="{Binding}"
+                                       PlacementTarget="{Binding #ProjectActionsButton}"
+                                       Placement="BottomEdgeAlignedLeft" VerticalOffset="4"
+                                       IsOpen="{Binding IsActionsMenuOpen, Mode=TwoWay}"
+                                       IsLightDismissEnabled="True">
+                                    <Border Classes="popup-surface" Width="184" Padding="4" CornerRadius="16">
+                                        <StackPanel>
+                                            <Button Classes="popup-item" MinHeight="32" Padding="8,0" Margin="0"
+                                                    AutomationProperties.Name="{Binding PinActionName}"
+                                                    Click="OnToggleProjectPinMenuClick">
+                                                <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8">
+                                                    <Path Width="14" Height="14" VerticalAlignment="Center"
+                                                          Data="{StaticResource Icon.PinOutlineRegular}"
+                                                          Stroke="{DynamicResource PopupMutedForegroundBrush}"
+                                                          StrokeThickness="1" />
+                                                    <TextBlock Grid.Column="1" Text="{Binding PinActionName}"
+                                                               VerticalAlignment="Center" />
+                                                </Grid>
+                                            </Button>
+                                            <Button Classes="popup-item" MinHeight="32" Padding="8,0" Margin="0"
+                                                    AutomationProperties.Name="重命名项目"
+                                                    Click="OnRenameProjectMenuClick">
+                                                <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8">
+                                                    <Panel Width="14" Height="14">
+                                                        <Path Width="14" Height="14"
+                                                              Data="{StaticResource Icon.EditBodyFill}"
+                                                              Fill="{DynamicResource PopupMutedForegroundBrush}" />
+                                                        <Path Width="14" Height="14"
+                                                              Data="{StaticResource Icon.EditPenStroke}"
+                                                              Stroke="{DynamicResource PopupMutedForegroundBrush}"
+                                                              StrokeThickness="1" />
+                                                    </Panel>
+                                                    <TextBlock Grid.Column="1" Text="重命名项目"
+                                                               VerticalAlignment="Center" />
+                                                </Grid>
+                                            </Button>
+                                        </StackPanel>
+                                    </Border>
+                                </Popup>
                             </Grid>
                         </Border>
                     </DataTemplate>

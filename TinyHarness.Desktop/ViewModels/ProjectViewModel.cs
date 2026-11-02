@@ -17,6 +17,7 @@ public sealed class ProjectViewModel : ObservableObject
 
     private string _editedName;
     private bool   _expanded = true;
+    private bool   _isActionsMenuOpen;
     private bool   _isPinned;
 
     public ProjectViewModel(string                       key, Project? project, string name, string root,
@@ -53,6 +54,16 @@ public sealed class ProjectViewModel : ObservableObject
     {
         get => _editedName;
         set => SetProperty(ref _editedName, value);
+    }
+
+    /// <summary>
+    ///     <para>项目操作菜单是否展开。</para>
+    ///     <para>Whether the project actions menu is open.</para>
+    /// </summary>
+    public bool IsActionsMenuOpen
+    {
+        get => _isActionsMenuOpen;
+        set => SetProperty(ref _isActionsMenuOpen, value);
     }
 
     public bool IsExpanded

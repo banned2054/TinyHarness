@@ -116,7 +116,7 @@
         <Setter Property="Opacity" Value="1" />
         <Setter Property="IsHitTestVisible" Value="True" />
     </Style>
-    <!-- 菜单弹层打开期间（menu-open，code-behind 开合时标记）按钮组保持显现：
+    <!-- 菜单弹层打开期间（menu-open，由组头操作菜单状态绑定）按钮组保持显现：
          鼠标移入弹层后行 hover 丢失，锚点按钮随之隐藏会让弹层看起来悬空。 -->
     <Style Selector="Border.group-row.menu-open StackPanel.workspace-actions">
         <Setter Property="Opacity" Value="1" />
@@ -305,31 +305,14 @@
                      Button.workspace-new-session:pointerover /template/ ContentPresenter#PART_ContentPresenter">
         <Setter Property="Background" Value="{DynamicResource SessionHoverBrush}" />
     </Style>
-    <Style Selector="Button.project-pin-action, Button.project-drag-handle">
-        <Setter Property="Width" Value="24" />
-        <Setter Property="Height" Value="24" />
-        <Setter Property="MinWidth" Value="0" />
-        <Setter Property="MinHeight" Value="0" />
-        <Setter Property="Margin" Value="0" />
-        <Setter Property="Padding" Value="0" />
-        <Setter Property="CornerRadius" Value="6" />
-        <Setter Property="Background" Value="Transparent" />
-        <Setter Property="BorderThickness" Value="0" />
-        <Setter Property="HorizontalContentAlignment" Value="Center" />
-        <Setter Property="VerticalContentAlignment" Value="Center" />
-    </Style>
     <!-- 置顶时填充同一枚线框图钉；未置顶只显示 Stroke。 -->
-    <Style Selector="Button.session-pin-action.pinned Path, Button.project-pin-action.pinned Path">
+    <Style Selector="Button.session-pin-action.pinned Path">
         <Setter Property="Fill" Value="{DynamicResource TextMutedBrush}" />
-    </Style>
-    <Style
-        Selector="Button.project-pin-action:pointerover /template/ ContentPresenter#PART_ContentPresenter,
-                     Button.project-drag-handle:pointerover /template/ ContentPresenter#PART_ContentPresenter">
-        <Setter Property="Background" Value="{DynamicResource SessionHoverBrush}" />
     </Style>
     <!-- 状态样式声明顺序即优先级：悬停与焦点在前、选中（.current）最后，
          保证行被悬停或键盘聚焦时当前选中态不被覆盖。 -->
-    <Style Selector="Button.session-row:pointerover /template/ Border#PART_Surface,
+    <Style
+        Selector="Button.session-row:pointerover /template/ Border#PART_Surface,
                      Grid.session-row-container:pointerover Button.session-row /template/ Border#PART_Surface">
         <Setter Property="Background" Value="{DynamicResource SessionHoverBrush}" />
     </Style>

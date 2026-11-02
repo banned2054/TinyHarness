@@ -1,3 +1,4 @@
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
@@ -8,13 +9,21 @@ using TinyHarness.Desktop.ViewModels;
 namespace TinyHarness.Desktop.Presentation.Views.Sidebar;
 
 /// <summary>
-///     <para>侧栏视图：打开项目目录的文件夹对话框与重命名弹窗的开关聚焦属于界面行为。</para>
-///     <para>Sidebar view: the project folder picker and rename-popup focus are view behaviors.</para>
+///     <para>侧栏视图：文件夹选择、项目操作菜单、重命名弹窗焦点和手动排序拖动属于界面行为。</para>
+///     <para>
+///         Sidebar view: folder picking, project actions, rename-popup focus, and manual-reorder dragging are view
+///         behaviors.
+///     </para>
 /// </summary>
 public sealed partial class SidebarView : UserControl
 {
     private static readonly DataFormat<ProjectViewModel> ProjectReorderDataFormat =
         DataFormat.CreateInProcessFormat<ProjectViewModel>("TinyHarness.ProjectViewModel");
+
+    private Button? _projectReorderClickToSuppress;
+
+    private (Button Button, ProjectViewModel Project, PointerPressedEventArgs Pressed, Point Start)?
+        _projectReorderGesture;
 
     public SidebarView()
     {
@@ -36,27 +45,119 @@ public sealed partial class SidebarView : UserControl
     }
 
     /// <summary>
-    ///     <para>仅从可编辑项目的鼠标拖动手柄启动重排。</para>
-    ///     <para>Starts project reordering only from an editable project's mouse drag handle.</para>
+    ///     <para>记录三点按钮上的鼠标按下，移动超过拖动阈值时仍可重排项目。</para>
+    ///     <para>Records a mouse press on the ellipsis button so dragging beyond the threshold can still reorder projects.</para>
     /// </summary>
-    private async void OnProjectDragHandlePointerPressed(object? sender, PointerPressedEventArgs e)
+    private void OnProjectActionsPointerPressed(object? sender, PointerPressedEventArgs e)
     {
-        if (sender is not Control handle                              || e.Pointer.Type != PointerType.Mouse ||
-            !e.GetCurrentPoint(handle).Properties.IsLeftButtonPressed ||
-            handle.DataContext is not ProjectViewModel project        || !project.CanReorder ||
-            DataContext is not MainWindowViewModel viewModel) return;
+        _projectReorderGesture         = null;
+        _projectReorderClickToSuppress = null;
+        if (sender is not Button button                               ||
+            e.Pointer.Type != PointerType.Mouse                       ||
+            !e.GetCurrentPoint(button).Properties.IsLeftButtonPressed ||
+            button.DataContext is not ProjectViewModel { CanReorder: true } project)
+            return;
 
-        e.Handled = true;
+        _projectReorderGesture = (button, project, e, e.GetPosition(button));
+    }
+
+    /// <summary>
+    ///     <para>三点按钮保持点击开菜单；鼠标移动超过阈值时启动项目重排。</para>
+    ///     <para>A click opens the actions menu; moving the mouse beyond the threshold starts project reordering.</para>
+    /// </summary>
+    private async void OnProjectActionsPointerMoved(object? sender, PointerEventArgs e)
+    {
+        if (_projectReorderGesture is not { } gesture ||
+            !ReferenceEquals(sender, gesture.Button)  ||
+            !ReferenceEquals(e.Pointer, gesture.Pressed.Pointer))
+            return;
+
+        if (!gesture.Project.CanReorder || !e.GetCurrentPoint(gesture.Button).Properties.IsLeftButtonPressed)
+        {
+            _projectReorderGesture = null;
+            return;
+        }
+
+        var offset = e.GetPosition(gesture.Button) - gesture.Start;
+        if (offset.X * offset.X + offset.Y * offset.Y < 25) return;
+
+        _projectReorderGesture         = null;
+        _projectReorderClickToSuppress = gesture.Button;
+        e.Handled                      = true;
+        if (DataContext is not MainWindowViewModel viewModel) return;
+
         try
         {
             var transfer = new DataTransfer();
-            transfer.Add(DataTransferItem.Create(ProjectReorderDataFormat, project));
-            await DragDrop.DoDragDropAsync(e, transfer, DragDropEffects.Move);
+            transfer.Add(DataTransferItem.Create(ProjectReorderDataFormat, gesture.Project));
+            await DragDrop.DoDragDropAsync(gesture.Pressed, transfer, DragDropEffects.Move);
         }
         catch (Exception exception)
         {
             viewModel.Notice = exception.Message;
         }
+    }
+
+    /// <summary>
+    ///     <para>鼠标点击三点按钮时切换项目操作菜单；拖动手势不打开菜单。</para>
+    ///     <para>Toggles the project actions menu on click and ignores a click consumed by dragging.</para>
+    /// </summary>
+    private void OnProjectActionsButtonClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { DataContext: ProjectViewModel project } button) return;
+        if (ReferenceEquals(_projectReorderClickToSuppress, button))
+        {
+            _projectReorderClickToSuppress = null;
+            return;
+        }
+
+        project.IsActionsMenuOpen = !project.IsActionsMenuOpen;
+    }
+
+    /// <summary>
+    ///     <para>释放三点按钮上的鼠标时结束尚未启动重排的手势，并清理拖动后的点击抑制状态。</para>
+    ///     <para>Ends an unstarted reorder gesture on release and clears click suppression after dragging.</para>
+    /// </summary>
+    private void OnProjectActionsPointerReleased(object? sender, PointerReleasedEventArgs e)
+    {
+        if (sender is not Button button) return;
+        if (_projectReorderGesture is { } gesture && ReferenceEquals(button, gesture.Button))
+            _projectReorderGesture = null;
+        if (!ReferenceEquals(_projectReorderClickToSuppress, button)) return;
+
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (ReferenceEquals(_projectReorderClickToSuppress, button))
+                _projectReorderClickToSuppress = null;
+        });
+    }
+
+    /// <summary>
+    ///     <para>从项目操作菜单切换置顶状态，并关闭菜单。</para>
+    ///     <para>Toggles the pin state from the project actions menu and closes the menu.</para>
+    /// </summary>
+    private void OnToggleProjectPinMenuClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not Control { DataContext: ProjectViewModel project } ||
+            DataContext is not MainWindowViewModel viewModel)
+            return;
+
+        project.IsActionsMenuOpen = false;
+        viewModel.ToggleProjectPinCommand.Execute(project);
+    }
+
+    /// <summary>
+    ///     <para>从项目操作菜单打开重命名弹窗，并关闭菜单。</para>
+    ///     <para>Opens the rename dialog from the project actions menu and closes the menu.</para>
+    /// </summary>
+    private void OnRenameProjectMenuClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not Control { DataContext: ProjectViewModel project } ||
+            DataContext is not MainWindowViewModel viewModel)
+            return;
+
+        project.IsActionsMenuOpen = false;
+        viewModel.OpenProjectRenameCommand.Execute(project);
     }
 
     /// <summary>
