@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
@@ -114,14 +115,85 @@ public sealed partial class SidebarView : UserControl
     /// </summary>
     private void OnProjectActionsButtonClick(object? sender, RoutedEventArgs e)
     {
-        if (sender is not Button { DataContext: ProjectViewModel project } button) return;
+        if (sender is not Button { DataContext: ProjectViewModel project } button ||
+            DataContext is not MainWindowViewModel viewModel)
+            return;
         if (ReferenceEquals(_projectReorderClickToSuppress, button))
         {
             _projectReorderClickToSuppress = null;
             return;
         }
 
-        project.IsActionsMenuOpen = !project.IsActionsMenuOpen;
+        project.ActionsMenuHorizontalOffset = 0;
+        project.ActionsMenuVerticalOffset   = 4;
+        SetProjectActionsMenuOpen(viewModel, project, !project.IsActionsMenuOpen);
+    }
+
+    /// <summary>
+    ///     <para>右键项目行时打开该项目的操作菜单。</para>
+    ///     <para>Opens the project's actions menu when its row is right-clicked.</para>
+    /// </summary>
+    private void OnProjectHeaderContextRequested(object? sender, ContextRequestedEventArgs e)
+    {
+        if (sender is not Border { DataContext: ProjectViewModel { CanShowActions: true } project } header ||
+            DataContext is not MainWindowViewModel viewModel)
+            return;
+
+        var actionsButton = header.GetVisualDescendants().OfType<Button>()
+                                  .FirstOrDefault(button => button.Classes.Contains("workspace-menu"));
+        if (actionsButton is null) return;
+
+        if (e.TryGetPosition(actionsButton, out var pointerPosition))
+        {
+            project.ActionsMenuHorizontalOffset = pointerPosition.X;
+            project.ActionsMenuVerticalOffset   = pointerPosition.Y - actionsButton.Bounds.Height;
+        }
+        else
+        {
+            project.ActionsMenuHorizontalOffset = 0;
+            project.ActionsMenuVerticalOffset   = 4;
+        }
+
+        SetProjectActionsMenuOpen(viewModel, project, true);
+        e.Handled = true;
+    }
+
+    /// <summary>
+    ///     <para>同一时刻只展开一个项目菜单。</para>
+    ///     <para>Keeps at most one project actions menu open at a time.</para>
+    /// </summary>
+    private static void SetProjectActionsMenuOpen(MainWindowViewModel viewModel, ProjectViewModel project,
+                                                  bool                isOpen)
+    {
+        foreach (var item in viewModel.Projects)
+            if (!ReferenceEquals(item, project))
+                item.IsActionsMenuOpen = false;
+
+        project.IsActionsMenuOpen = isOpen;
+    }
+
+    /// <summary>
+    ///     <para>关闭菜单并通过系统 Shell 打开项目目录。</para>
+    ///     <para>Closes the menu and asks the system shell to open the project directory.</para>
+    /// </summary>
+    private void OnOpenProjectDirectoryMenuClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not Control { DataContext: ProjectViewModel project } ||
+            DataContext is not MainWindowViewModel viewModel)
+            return;
+
+        project.IsActionsMenuOpen = false;
+        try
+        {
+            if (!Directory.Exists(project.Root))
+                throw new DirectoryNotFoundException($"项目目录不存在：{project.Root}");
+
+            Process.Start(new ProcessStartInfo(project.Root) { UseShellExecute = true })?.Dispose();
+        }
+        catch (Exception exception)
+        {
+            viewModel.Notice = exception.Message;
+        }
     }
 
     /// <summary>

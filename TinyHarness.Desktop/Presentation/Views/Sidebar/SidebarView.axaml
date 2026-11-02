@@ -226,6 +226,7 @@
                         <!-- 项目组头行：右侧只显示三点菜单与项目内新会话；置顶和重命名收纳在菜单中。 -->
                         <Border Classes="group-row project-header-row" Classes.current="{Binding IsCurrent}"
                                 Classes.menu-open="{Binding IsActionsMenuOpen}"
+                                ContextRequested="OnProjectHeaderContextRequested"
                                 DragDrop.AllowDrop="True"
                                 DragDrop.DragOver="OnProjectHeaderDragOver"
                                 DragDrop.Drop="OnProjectHeaderDrop">
@@ -308,11 +309,25 @@
                                 </StackPanel>
                                 <Popup DataContext="{Binding}"
                                        PlacementTarget="{Binding #ProjectActionsButton}"
-                                       Placement="BottomEdgeAlignedLeft" VerticalOffset="4"
+                                       Placement="BottomEdgeAlignedLeft"
+                                       HorizontalOffset="{Binding ActionsMenuHorizontalOffset}"
+                                       VerticalOffset="{Binding ActionsMenuVerticalOffset}"
                                        IsOpen="{Binding IsActionsMenuOpen, Mode=TwoWay}"
                                        IsLightDismissEnabled="True">
                                     <Border Classes="popup-surface" Width="184" Padding="4" CornerRadius="16">
                                         <StackPanel>
+                                            <Button Classes="popup-item" MinHeight="32" Padding="8,0" Margin="0"
+                                                    AutomationProperties.Name="打开项目所在目录"
+                                                    Click="OnOpenProjectDirectoryMenuClick">
+                                                <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8">
+                                                    <Path Width="14" Height="14" VerticalAlignment="Center"
+                                                          Data="{StaticResource Icon.FolderOpenFront}"
+                                                          Stroke="{DynamicResource PopupMutedForegroundBrush}"
+                                                          StrokeThickness="1" />
+                                                    <TextBlock Grid.Column="1" Text="打开项目所在目录"
+                                                               VerticalAlignment="Center" />
+                                                </Grid>
+                                            </Button>
                                             <Button Classes="popup-item" MinHeight="32" Padding="8,0" Margin="0"
                                                     AutomationProperties.Name="{Binding PinActionName}"
                                                     Click="OnToggleProjectPinMenuClick"

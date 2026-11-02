@@ -12,8 +12,10 @@ namespace TinyHarness.Desktop.ViewModels;
 /// </summary>
 public sealed class ProjectViewModel : ObservableObject
 {
-    internal const int  SessionPageSize = 5;
-    private        bool _canReorder;
+    internal const int    SessionPageSize = 5;
+    private        double _actionsMenuHorizontalOffset;
+    private        double _actionsMenuVerticalOffset = 4;
+    private        bool   _canReorder;
 
     private string _editedName;
     private bool   _expanded = true;
@@ -88,6 +90,26 @@ public sealed class ProjectViewModel : ObservableObject
     {
         get => _isActionsMenuOpen;
         set => SetProperty(ref _isActionsMenuOpen, value);
+    }
+
+    /// <summary>
+    ///     <para>项目菜单相对三点按钮左边缘的水平偏移。</para>
+    ///     <para>The project menu's horizontal offset from the ellipsis button's left edge.</para>
+    /// </summary>
+    public double ActionsMenuHorizontalOffset
+    {
+        get => _actionsMenuHorizontalOffset;
+        set => SetProperty(ref _actionsMenuHorizontalOffset, value);
+    }
+
+    /// <summary>
+    ///     <para>项目菜单相对三点按钮下边缘的垂直偏移。</para>
+    ///     <para>The project menu's vertical offset from the ellipsis button's bottom edge.</para>
+    /// </summary>
+    public double ActionsMenuVerticalOffset
+    {
+        get => _actionsMenuVerticalOffset;
+        set => SetProperty(ref _actionsMenuVerticalOffset, value);
     }
 
     public bool IsExpanded
