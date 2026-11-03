@@ -193,6 +193,24 @@ public sealed class MessageItemViewModel : ConversationItemViewModel
 
     public bool IsSystemMessage => Role == MessageRole.System;
 
+    /// <summary>
+    ///     <para>整轮复制文本：点击复制时由所属会话现算本轮截至本条的可见正文；未关联会话时退回本条正文。</para>
+    ///     <para>
+    ///         Turn copy text: computed by the owning session at copy time for the run's visible body up to this
+    ///         reply; falls back to this item's own body when no session is attached.
+    ///     </para>
+    /// </summary>
+    public string TurnCopyText => TurnCopyTextSource?.Invoke() ?? Content;
+
+    /// <summary>
+    ///     <para>会话在条目创建时注入的提取器；视图点击复制时经 <see cref="TurnCopyText" /> 触发现算，不落快照。</para>
+    ///     <para>
+    ///         Extractor injected by the session at item creation; invoked through <see cref="TurnCopyText" /> when
+    ///         the view's copy button is clicked, so no snapshot is stored.
+    ///     </para>
+    /// </summary>
+    internal Func<string>? TurnCopyTextSource { get; set; }
+
     /// <summary>过程组收纳条目时置位；最终回复留在组外，不受影响。</summary>
     public void MarkInProcessGroup()
     {

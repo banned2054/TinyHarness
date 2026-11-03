@@ -20,7 +20,7 @@
             </Border>
             <StackPanel Classes="user-message-meta" Orientation="Horizontal" Spacing="4">
                 <TextBlock Text="{Binding CreatedAtText}" Classes="caption" VerticalAlignment="Center" />
-                <Button Classes="user-message-copy" Click="OnCopyMessageClick"
+                <Button Classes="message-action-copy" Click="OnCopyMessageClick"
                         AutomationProperties.Name="复制消息" ToolTip.Tip="复制">
                     <Viewbox Width="12" Height="12">
                         <Path Width="24" Height="24" Data="{DynamicResource Icon.CodeCopy}"
@@ -78,13 +78,23 @@
                 </conversation:BottomFollowScrollViewer>
             </StackPanel>
             <!-- 正文块：上下呼吸位由本块 Margin 提供；按 Markdown 渲染，
-                 流式增量经 MarkdownBuilder 增量更新。 -->
-            <StackPanel Margin="0,10,0,16" Spacing="7"
+                 流式增量经 MarkdownBuilder 增量更新。底部元信息行挂本块悬停淡入。 -->
+            <StackPanel Classes="assistant-body" Margin="0,10,0,16" Spacing="7"
                         IsVisible="{Binding Content, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
                 <md:MarkdownRenderer MarkdownBuilder="{Binding MarkdownBuilder}" />
-                <!-- 仅回复正文显示时间戳，思考与工具调用过程不显示。 -->
-                <TextBlock Text="{Binding CreatedAtText}" Classes="caption"
-                           IsVisible="{Binding HasResponseMetadata}" />
+                <!-- 底部元信息行：复制按钮居左、时间随行；过程组内的中间条目不显示
+                     （HasResponseMetadata）。复制取整轮可见正文，见 TurnCopyText。 -->
+                <StackPanel Classes="assistant-message-meta" Orientation="Horizontal" Spacing="4"
+                            IsVisible="{Binding HasResponseMetadata}">
+                    <Button Classes="message-action-copy" Click="OnCopyAssistantClick"
+                            AutomationProperties.Name="复制回复" ToolTip.Tip="复制">
+                        <Viewbox Width="12" Height="12">
+                            <Path Width="24" Height="24" Data="{DynamicResource Icon.CodeCopy}"
+                                  Stroke="{DynamicResource TextMutedBrush}" StrokeThickness="2" />
+                        </Viewbox>
+                    </Button>
+                    <TextBlock Text="{Binding CreatedAtText}" Classes="caption" VerticalAlignment="Center" />
+                </StackPanel>
             </StackPanel>
         </StackPanel>
         <Border Classes="message-bubble system-bubble"

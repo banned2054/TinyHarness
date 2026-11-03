@@ -41,6 +41,64 @@ public sealed class DesktopProcessGroupTests
     }
 
     [Test]
+    public async Task FinalReplyCopyTextMergesProcessNotesAndAnswerSegmentsInRecordOrder()
+    {
+        await using var manager = new DesktopSessionManager();
+        var             page    = new SessionViewModel(manager, new DesktopSessionFactory(), Path.GetTempPath());
+        page.ApplyHistory(History("commentary", "run", SessionHistoryKind.Process, "checking files") with
+        {
+            Sequence = 1
+        });
+        page.ApplyHistory(History("partial", "run", SessionHistoryKind.Final, "first answer") with
+        {
+            Sequence = 2, Reasoning = "hidden reasoning"
+        });
+        page.ApplyHistory(History("commentary-2", "run", SessionHistoryKind.Process, "checking more") with
+        {
+            Sequence = 3
+        });
+        page.ApplyHistory(History("final", "run", SessionHistoryKind.Final, "last answer") with { Sequence = 4 });
+
+        var finals = page.Items.OfType<MessageItemViewModel>().ToArray();
+        Assert.That(finals.Select(item => item.TurnCopyText), Is.EqualTo(new[]
+        {
+            "checking files\n\nfirst answer",
+            "checking files\n\nfirst answer\n\nchecking more\n\nlast answer"
+        }));
+        Assert.That(finals[1].TurnCopyText, Does.Not.Contain("hidden reasoning"),
+                    "整轮复制只含正文段，思考内容不参与。");
+    }
+
+    [Test]
+    public async Task TurnCopyTextStopsAtRunBoundaryAndFallsBackToOwnContent()
+    {
+        await using var manager = new DesktopSessionManager();
+        var             page    = new SessionViewModel(manager, new DesktopSessionFactory(), Path.GetTempPath());
+        page.ApplyHistory(History("answer", "run-1", SessionHistoryKind.Final, "answer") with { Sequence = 1 });
+        page.ApplyHistory(History("question", "run-2", SessionHistoryKind.User, "question") with { Sequence = 2 });
+        page.ApplyHistory(History("answer-2", "run-2", SessionHistoryKind.Final, "next answer") with { Sequence = 3 });
+
+        var finals = page.Items.OfType<MessageItemViewModel>().Where(item => item.IsAssistantMessage).ToArray();
+        Assert.That(finals.Select(item => item.TurnCopyText),
+                    Is.EqualTo(new[] { "answer", "next answer" }),
+                    "复制范围止于本轮：不得并入用户消息或跨 run 正文。");
+    }
+
+    [Test]
+    public async Task TurnCopyTextExcludesNotesRecordedAfterTheReply()
+    {
+        await using var manager = new DesktopSessionManager();
+        var             page    = new SessionViewModel(manager, new DesktopSessionFactory(), Path.GetTempPath());
+        page.ApplyHistory(History("note", "run", SessionHistoryKind.Process, "before") with { Sequence = 1 });
+        page.ApplyHistory(History("final", "run", SessionHistoryKind.Final, "answer") with { Sequence = 2 });
+        page.ApplyHistory(History("late", "run", SessionHistoryKind.Process, "after") with { Sequence = 3 });
+
+        var final = page.Items.OfType<MessageItemViewModel>().Single(item => item.IsAssistantMessage);
+        Assert.That(final.TurnCopyText, Is.EqualTo("before\n\nanswer"),
+                    "点击时提取必须应用截止序号：本条之后落盘的说明段不得并入复制文本。");
+    }
+
+    [Test]
     public async Task ToolFirstHistoryAndRepeatedCallIdsRemainIsolatedByRun()
     {
         await using var manager = new DesktopSessionManager();

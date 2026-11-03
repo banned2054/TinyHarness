@@ -789,6 +789,7 @@ public sealed partial class SessionViewModel : ObservableObject
                 else
                 {
                     ReplaceStream(group, message.GetProcessReasoningProjection());
+                    message.TurnCopyTextSource = () => GetTurnCopyText(message);
                     Items.Add(message);
                 }
             }
@@ -850,6 +851,41 @@ public sealed partial class SessionViewModel : ObservableObject
             }
 
         if (historyItem is not null) group.Items.Add(historyItem);
+    }
+
+    /// <summary>
+    ///     <para>
+    ///         点击复制时现算本条回复的整轮文本：从时间线回溯到本轮过程组，收集组内序号不晚于本条的说明段
+    ///         与本组之后、本条之前的回答段，按序号排序、空行连接；思考与工具活动不参与。
+    ///     </para>
+    ///     <para>
+    ///         Computes the turn copy text for a reply at copy time: walks the timeline back to the run's process
+    ///         group, collects process notes whose sequence is not after this reply plus answer segments between the
+    ///         group and this reply, ordered by sequence and joined with blank lines; reasoning and tool activity
+    ///         never participate.
+    ///     </para>
+    /// </summary>
+    internal string GetTurnCopyText(MessageItemViewModel reply)
+    {
+        var segments = new List<(long Seq, string Text)> { (reply.Seq, reply.Content) };
+        for (var index = Items.IndexOf(reply) - 1; index >= 0; index--)
+        {
+            if (Items[index] is MessageItemViewModel { IsInProcessGroup: false, IsAssistantMessage: true } answer)
+            {
+                segments.Add((answer.Seq, answer.Content));
+                continue;
+            }
+
+            // 过程组即本轮起点；说明段按本条序号截止，其后落盘的段落不得并入更早回复的复制文本。
+            if (Items[index] is ProcessGroupItemViewModel group)
+                foreach (var item in group.Items)
+                    if (item is MessageItemViewModel { HasProcessBody: true } note && note.Seq <= reply.Seq)
+                        segments.Add((note.Seq, note.Content));
+
+            break;
+        }
+
+        return string.Join("\n\n", segments.OrderBy(segment => segment.Seq).Select(segment => segment.Text));
     }
 
     private void StopStream()

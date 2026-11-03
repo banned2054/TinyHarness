@@ -40,8 +40,9 @@
     <Style Selector="StackPanel.user-message:pointerover > StackPanel.user-message-meta">
         <Setter Property="Opacity" Value="1" />
     </Style>
-    <!-- 悬停时间行的复制按钮：幽灵形态对齐代码块复制按钮，悬停只亮底不改图标色。 -->
-    <Style Selector="Button.user-message-copy">
+    <!-- 消息悬停行的复制按钮（用户时间行与助手正文底部共用）：幽灵形态对齐代码块
+         复制按钮，悬停只亮底不改图标色。 -->
+    <Style Selector="Button.message-action-copy">
         <Setter Property="Width" Value="18" />
         <Setter Property="Height" Value="18" />
         <Setter Property="Padding" Value="0" />
@@ -50,11 +51,24 @@
         <Setter Property="VerticalAlignment" Value="Center" />
         <Setter Property="Focusable" Value="False" />
     </Style>
-    <Style Selector="Button.user-message-copy /template/ ContentPresenter#PART_ContentPresenter">
+    <Style Selector="Button.message-action-copy /template/ ContentPresenter#PART_ContentPresenter">
         <Setter Property="Background" Value="Transparent" />
     </Style>
-    <Style Selector="Button.user-message-copy:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+    <Style Selector="Button.message-action-copy:pointerover /template/ ContentPresenter#PART_ContentPresenter">
         <Setter Property="Background" Value="{DynamicResource MessageActionHoverBrush}" />
+    </Style>
+    <!-- 助手正文底部元信息行：复制按钮居左、时间随行；默认透明，悬停正文块时淡入
+         （触发含按钮自身，不脱离悬停链），行常驻占位不引起时间线跳动。 -->
+    <Style Selector="StackPanel.assistant-message-meta">
+        <Setter Property="Opacity" Value="0" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <DoubleTransition Property="Opacity" Duration="0:0:0.1" />
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="StackPanel.assistant-body:pointerover > StackPanel.assistant-message-meta">
+        <Setter Property="Opacity" Value="1" />
     </Style>
     <!-- 助手回复不用气泡底色，直接融入聊天背景；思考行与工具行同节奏（无包装间距），
          正文块自带呼吸位，因此助手消息不再套 message-bubble。 -->
