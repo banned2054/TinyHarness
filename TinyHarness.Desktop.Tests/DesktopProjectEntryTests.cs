@@ -352,14 +352,14 @@ public sealed class DesktopProjectEntryTests
     }
 
     [Test]
-    public async Task StoreSwitchRebindsTheBlankPageAndFirstSendTargetsTheCurrentStore()
+    public async Task StoreSwitchClearsTheOldProjectAndFirstSendPersistsNoProjectInTheCurrentStore()
     {
         var             fixture     = await Fixture.CreateAsync();
         var             secondStore = Path.Combine(Path.GetDirectoryName(fixture.Store)!, "sessions-2");
         await using var model       = fixture.Window();
         await model.OpenProjectAsync(fixture.First);
-        var blank        = model.SelectedSession!;
-        var oldProjectId = blank.ProjectId;
+        var blank = model.SelectedSession!;
+        Assert.That(blank.ProjectId, Is.Not.Null);
         blank.Draft = "draft survives store switch";
 
         var user = await UserConfigStore.LoadAsync(fixture.Config, CancellationToken.None);
@@ -381,7 +381,9 @@ public sealed class DesktopProjectEntryTests
         Assert.That(Directory.GetFiles(fixture.Store, "*" + SessionStoreWriter.LogFileSuffix), Is.Empty,
                     "旧 store 不得落新会话日志。");
         var stored = await SessionStoreReader.ReadAsync(secondStore, blank.Id!, CancellationToken.None);
-        Assert.That(stored!.ProjectId, Is.Not.Null.And.Not.EqualTo(oldProjectId), "首发在当前 store 建立归属。");
+        Assert.That(stored!.ProjectId, Is.Null, "首发不得重新建立旧 store 的项目归属。");
+        Assert.That(stored.ProjectAssignmentState, Is.EqualTo(SessionProjectAssignmentState.NoProject));
+        Assert.That(File.Exists(ProjectStore.FilePath(secondStore)), Is.False);
         Assert.That(stored.WorkspaceRoot, Is.EqualTo(fixture.First));
         Assert.That(fixture.Models, Is.GreaterThan(0));
     }

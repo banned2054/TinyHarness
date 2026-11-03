@@ -1,10 +1,10 @@
 using NUnit.Framework;
-using System.Collections.Specialized;
 using System.Runtime.CompilerServices;
 using TinyHarness.Core.Models.ChatCompletions;
 using TinyHarness.Core.Models.Configuration;
 using TinyHarness.Core.Models.Permissions;
 using TinyHarness.Core.Models.Context;
+using TinyHarness.Core.Models.Persistence;
 using TinyHarness.Core.Models.Project;
 using TinyHarness.Core.Models.Session;
 using TinyHarness.Core.Services.ChatCompletions;
@@ -53,8 +53,10 @@ public sealed class DesktopBlankConversationTests
         Assert.That(blank.ProjectId, Is.EqualTo(secondGroup.Project!.Id));
 
         Assert.That(model.Sessions, Is.Empty, "未发送不登记正式会话行。");
-        Assert.That(model.SidebarRows, Is.EquivalentTo(new object[] { firstGroup, secondGroup }),
-                    "侧栏只呈现项目组头，不出现草稿行。");
+        var category = model.SidebarRows.OfType<SidebarCategoryViewModel>().Single();
+        Assert.That(category.Key, Is.EqualTo("projects"));
+        Assert.That(model.SidebarRows, Is.EquivalentTo(new object[] { category, firstGroup, secondGroup }),
+                    "侧栏只呈现项目分类与项目组头，不出现草稿行。");
         Assert.That(Directory.GetFiles(fixture.Store, "*" + SessionStoreWriter.LogFileSuffix), Is.Empty);
         Assert.That(fixture.Credentials.Reads, Is.Zero);
         Assert.That(fixture.ClientOpens, Is.Zero);
@@ -773,7 +775,7 @@ public sealed class DesktopBlankConversationTests
     }
 
     [Test]
-    public async Task UnboundPagesKeepTheirOwnWorkspaceLabelWhenNullProjectGroupsExist()
+    public async Task UnboundPagesShowProjectSelectionPromptWhenNullProjectGroupsExist()
     {
         var fixture = await Fixture.CreateAsync();
         await CommitLegacySessionAsync(fixture.Store, fixture.First);
@@ -786,8 +788,9 @@ public sealed class DesktopBlankConversationTests
         var blank = model.SelectedSession!;
         Assert.That(blank.Id, Is.Null);
         blank.WorkspaceRoot = fixture.Second;
-        Assert.That(blank.WorkspaceTargetLabel, Is.EqualTo("work-b"),
-                    "未绑定页面必须显示自身目录标签，不得套用 null 项目的展示组名。");
+        Assert.That(blank.WorkspaceTargetLabel, Is.EqualTo("选择项目"),
+                    "无项目页面显示选择提示，不得套用 null 项目的展示组名。");
+        Assert.That(blank.WorkspaceRoot, Is.EqualTo(fixture.Second));
 
         // 绑定项目后仍按项目名显示，防止修复破坏正常解析。
         await model.OpenProjectAsync(fixture.Second);
@@ -798,7 +801,7 @@ public sealed class DesktopBlankConversationTests
     }
 
     [Test]
-    public async Task DirectFirstSendWithoutOpenProjectBackfillsTheNewProjectGroup()
+    public async Task DirectFirstSendWithoutOpenProjectPersistsNoProjectAndAppearsInRecent()
     {
         var             fixture = await Fixture.CreateAsync();
         await using var model   = fixture.Window();
@@ -809,27 +812,21 @@ public sealed class DesktopBlankConversationTests
 
         blank.WorkspaceRoot = fixture.First;
         blank.Draft         = "first message";
-        // 补载完成的可观察信号：目录册分组投影重新加入带真实项目的组；不轮询不睡眠。
-        var backfilled = Signal();
-        model.Projects.CollectionChanged += (_, args) =>
-        {
-            if (args.Action == NotifyCollectionChangedAction.Add &&
-                args.NewItems?.OfType<ProjectViewModel>().Any(group => group.Project is not null) == true)
-                backfilled.TrySetResult();
-        };
         await blank.SendAsync();
         await blank.Completion.WaitAsync(TimeSpan.FromSeconds(10));
 
         Assert.That(blank.Id, Is.Not.Null);
-        Assert.That(blank.ProjectId, Is.Not.Null);
-        await backfilled.Task.WaitAsync(TimeSpan.FromSeconds(10));
-        var group = model.Projects.Single(item => item.Project?.Id == blank.ProjectId);
-        Assert.That(group.Sessions, Does.Contain(blank), "首发建立的会话行必须进入补载后的项目分组。");
-        Assert.That(model.Projects.All(item => item.Name != "项目信息缺失"), Is.True,
-                    "项目已由首发可靠建立，不得按项目信息缺失展示。");
-        var catalog = await ProjectStore.LoadAsync(ProjectStore.FilePath(fixture.Store), CancellationToken.None);
-        Assert.That(catalog.Projects.Select(project => project.Id), Is.EqualTo(new[] { blank.ProjectId! }),
-                    "补载按目录册只读，不创建第二个项目。");
+        Assert.That(blank.ProjectId, Is.Null);
+        Assert.That(blank.ProjectAssignmentState, Is.EqualTo(SessionProjectAssignmentState.NoProject));
+        var category = model.SidebarRows.OfType<SidebarCategoryViewModel>().Single();
+        Assert.That(category.Key, Is.EqualTo("recent"));
+        Assert.That(model.SidebarRows, Is.EqualTo(new object[] { category, blank }),
+                    "无项目会话直接显示在最近分类中，不显示项目组头。");
+        var stored = await SessionStoreReader.ReadAsync(fixture.Store, blank.Id!, CancellationToken.None);
+        Assert.That(stored!.ProjectId, Is.Null);
+        Assert.That(stored.ProjectAssignmentState, Is.EqualTo(SessionProjectAssignmentState.NoProject));
+        Assert.That(stored.WorkspaceRoot, Is.EqualTo(fixture.First));
+        Assert.That(File.Exists(ProjectStore.FilePath(fixture.Store)), Is.False, "首发不隐式创建项目。");
         Assert.That(Directory.GetFiles(fixture.Store, "*" + SessionStoreWriter.LogFileSuffix).Length, Is.EqualTo(1));
     }
 

@@ -7,6 +7,7 @@ using TinyHarness.Core.Models.Agent;
 using TinyHarness.Core.Models.ChatCompletions;
 using TinyHarness.Core.Models.Configuration;
 using TinyHarness.Core.Models.Context;
+using TinyHarness.Core.Models.Persistence;
 using TinyHarness.Core.Models.Project;
 using TinyHarness.Core.Services.ChatCompletions;
 using TinyHarness.Core.Services.ChatCompletions.Configuration;
@@ -54,8 +55,8 @@ public sealed class DesktopStartupOrganizeTests
     [Test]
     public async Task StartupOnMissingStoreCreatesNoCatalogOrLogsAndKeepsBlankPageOutOfSidebar()
     {
-        var fixture = await Fixture.CreateAsync();
-        await using var model = fixture.Window();
+        var             fixture = await Fixture.CreateAsync();
+        await using var model   = fixture.Window();
         await model.StartAsync();
         Assert.That(File.Exists(ProjectStore.FilePath(fixture.Store)), Is.False, "空 store 不得生成项目目录册。");
         if (Directory.Exists(fixture.Store))
@@ -92,7 +93,7 @@ public sealed class DesktopStartupOrganizeTests
     }
 
     [Test]
-    public async Task SendingDuringTheRoundBindsTheNewSessionWithoutDisturbingTheScan()
+    public async Task SendingDuringTheRoundPreservesNoProjectWhileLegacySessionsAreBound()
     {
         var fixture = await Fixture.CreateAsync();
         for (var index = 0; index < 101; index++)
@@ -105,7 +106,15 @@ public sealed class DesktopStartupOrganizeTests
         await model.SelectedSession.Completion.WaitAsync(TimeSpan.FromSeconds(10));
         Assert.That(model.SelectedSession.Id, Is.Not.Null);
         await startup;
-        Assert.That(model.SelectedSession.ProjectId, Is.Not.Null);
+        var page = model.SelectedSession;
+        Assert.That(page.ProjectId, Is.Null);
+        Assert.That(page.ProjectAssignmentState, Is.EqualTo(SessionProjectAssignmentState.NoProject));
+        var entries = await SessionStoreReader.ListAsync(fixture.Store, CancellationToken.None);
+        Assert.That(entries.Single(entry => entry.Session!.Id == page.Id).Session!.ProjectAssignmentState,
+                    Is.EqualTo(SessionProjectAssignmentState.NoProject));
+        Assert.That(entries.Where(entry => entry.Session!.Id != page.Id)
+                           .All(entry => entry.Session!.ProjectId is not null), Is.True);
+        Assert.That(entries, Has.Count.EqualTo(102));
         Assert.That(fixture.Models, Is.GreaterThan(0));
     }
 
@@ -124,7 +133,7 @@ public sealed class DesktopStartupOrganizeTests
             var entries = await SessionStoreReader.ListAsync(fixture.Store, CancellationToken.None);
             Assert.That(entries.Single(entry => entry.Id == ids[0]).Session!.ProjectId, Is.Null);
             Assert.That(entries.Where(entry => entry.Id != ids[0])
-                              .All(entry => entry.Session!.ProjectId is not null), Is.True,
+                               .All(entry => entry.Session!.ProjectId is not null), Is.True,
                         "占用项跳过时其他会话必须继续。");
             Assert.That(model.OrganizeNotice, Does.Contain("1 项待处理"));
             var group = model.Projects.Single(item => item.Key == PendingKey(fixture.Store, fixture.First));
@@ -148,14 +157,14 @@ public sealed class DesktopStartupOrganizeTests
         var damagedLog = Path.Combine(fixture.Store, damagedId + SessionStoreWriter.LogFileSuffix);
         Directory.CreateDirectory(fixture.Store);
         await File.WriteAllTextAsync(damagedLog, "{broken");
-        var bytes = await File.ReadAllBytesAsync(damagedLog);
+        var             bytes = await File.ReadAllBytesAsync(damagedLog);
         await using var model = fixture.Window();
         await model.StartAsync();
         Assert.That(await File.ReadAllBytesAsync(damagedLog), Is.EqualTo(bytes), "损坏日志不得被改写。");
         Assert.That(model.OrganizeNotice, Does.Contain("1 项失败"));
         // 严格读取对损坏日志抛结构化异常（只有文件缺失才返回 null），不修复也不伪装成可读会话。
-        await Assert.ThrowsAsync<SessionStoreException>(
-            () => SessionStoreReader.ReadAsync(fixture.Store, damagedId, CancellationToken.None));
+        await Assert.ThrowsAsync<SessionStoreException>(() => SessionStoreReader.ReadAsync(fixture.Store, damagedId,
+                                                            CancellationToken.None));
     }
 
     [Test]
@@ -226,7 +235,7 @@ public sealed class DesktopStartupOrganizeTests
         Assert.That(draftStore, Is.EqualTo(fixture.Store));
 
         var switchedId = await CommitLegacySessionAsync(secondStore, fixture.Second);
-        var user = await UserConfigStore.LoadAsync(fixture.Config, CancellationToken.None);
+        var user       = await UserConfigStore.LoadAsync(fixture.Config, CancellationToken.None);
         await UserConfigStore.SaveAsync(fixture.Config, user with
         {
             Settings = (user.Settings ?? new UserConfigSettings()) with { SessionStoreDirectory = secondStore }
@@ -257,26 +266,28 @@ public sealed class DesktopStartupOrganizeTests
                                .Select(File.ReadAllBytes).Select(bytes => bytes.Length).ToArray();
         await Task.Delay(300);
         Assert.That(Directory.GetFiles(fixture.Store, "*" + SessionStoreWriter.LogFileSuffix)
-                              .Select(File.ReadAllBytes).Select(bytes => bytes.Length).ToArray(),
+                             .Select(File.ReadAllBytes).Select(bytes => bytes.Length).ToArray(),
                     Is.EqualTo(lengths), "关闭后不得再有后台写入。");
     }
 
     [Test]
     public async Task UnboundLegacyRowsKeepDirectoryGroupsAndBlankPageStaysOutOfSidebar()
     {
-        var fixture = await Fixture.CreateAsync();
-        var id      = await CommitLegacySessionAsync(fixture.Store, fixture.First);
-        await using var model  = fixture.Window();
-        var             log    = Path.Combine(fixture.Store, id + SessionStoreWriter.LogFileSuffix);
-        var             prefix = await File.ReadAllBytesAsync(log);
+        var             fixture = await Fixture.CreateAsync();
+        var             id      = await CommitLegacySessionAsync(fixture.Store, fixture.First);
+        await using var model   = fixture.Window();
+        var             log     = Path.Combine(fixture.Store, id + SessionStoreWriter.LogFileSuffix);
+        var             prefix  = await File.ReadAllBytesAsync(log);
         await model.InitializeAsync();
         var blank = model.SelectedSession!;
         Assert.That(blank.Id, Is.Null, "启动后选中空白新对话页。");
         var legacy = model.Sessions.Single(session => session.Id == id);
-        var group  = model.Projects.Single(item => item.Key == PendingKey(fixture.Store, fixture.First));
+        var group  = model.Projects.Single(item => item.Key      == PendingKey(fixture.Store, fixture.First));
         Assert.That(model.Projects.Count, Is.EqualTo(1), "只有旧日志目录分组，空白页不产生草稿分组。");
-        Assert.That(model.SidebarRows, Is.EqualTo(new object[] { group, legacy }),
-                    "侧栏只含旧日志目录分组及其正式行，空白新对话页不出现。");
+        var category = model.SidebarRows.OfType<SidebarCategoryViewModel>().Single();
+        Assert.That(category.Key, Is.EqualTo("projects"));
+        Assert.That(model.SidebarRows, Is.EqualTo(new object[] { category, group, legacy }),
+                    "项目分类只含旧日志目录分组及其正式行，空白新对话页不出现。");
         Assert.That(group.Sessions, Does.Contain(legacy));
         Assert.That(group.Name, Is.EqualTo(legacy.WorkspaceLabel), "旧日志未整理前只按目录展示，不叫待初始化。");
         Assert.That(group.CanEdit, Is.False);
@@ -296,8 +307,8 @@ public sealed class DesktopStartupOrganizeTests
         var ids     = new List<string>();
         for (var index = 0; index < 3; index++)
             ids.Add(await CommitLegacySessionAsync(fixture.Store, fixture.First));
-        await using var model = fixture.Window();
-        var raised = new List<bool>();
+        await using var model  = fixture.Window();
+        var             raised = new List<bool>();
         model.PropertyChanged += (_, args) =>
         {
             if (args.PropertyName == nameof(MainWindowViewModel.HasOrganizeNotice))
@@ -367,8 +378,8 @@ public sealed class DesktopStartupOrganizeTests
 
         // 拒绝列目录使 Core 的目录枚举整体失败：整轮以异常结束，而不是逐项失败事实。
         var storeInfo = new DirectoryInfo(fixture.Store);
-        var deny      = new FileSystemAccessRule(new NTAccount(Environment.UserDomainName, Environment.UserName),
-                                                 FileSystemRights.ListDirectory, AccessControlType.Deny);
+        var deny = new FileSystemAccessRule(new NTAccount(Environment.UserDomainName, Environment.UserName),
+                                            FileSystemRights.ListDirectory, AccessControlType.Deny);
         try
         {
             var acl = storeInfo.GetAccessControl();
@@ -376,8 +387,9 @@ public sealed class DesktopStartupOrganizeTests
             storeInfo.SetAccessControl(acl);
             await model.RefreshAsync();
             await WaitUntilAsync(() => model.OrganizeNotice.Contains("Cannot enumerate"), "整轮异常摘要未出现。");
-            await WaitUntilAsync(() => model.Projects.Single(item => item.Key == PendingKey(fixture.Store, fixture.First))
-                                           .Detail?.Contains("Cannot enumerate") == true,
+            await WaitUntilAsync(() => model
+                                      .Projects.Single(item => item.Key == PendingKey(fixture.Store, fixture.First))
+                                      .Detail?.Contains("Cannot enumerate") == true,
                                  "异常轮未为未绑定组补标统一原因。");
             Assert.That(model.OrganizeNotice, Does.Not.Contain("待处理"), "上一轮的摘要明细不得残留。");
             var group = model.Projects.Single(item => item.Key == PendingKey(fixture.Store, fixture.First));
@@ -401,18 +413,18 @@ public sealed class DesktopStartupOrganizeTests
             return;
         }
 
-        var fixture     = await Fixture.CreateAsync();
-        var secondStore = Path.Combine(Path.GetDirectoryName(fixture.Store)!, "sessions-2");
-        var oldId       = await CommitLegacySessionAsync(fixture.Store, fixture.First);
-        var newId       = await CommitLegacySessionAsync(secondStore, fixture.Second);
-        await using var model = fixture.Window();
+        var             fixture     = await Fixture.CreateAsync();
+        var             secondStore = Path.Combine(Path.GetDirectoryName(fixture.Store)!, "sessions-2");
+        var             oldId       = await CommitLegacySessionAsync(fixture.Store, fixture.First);
+        var             newId       = await CommitLegacySessionAsync(secondStore, fixture.Second);
+        await using var model       = fixture.Window();
         await using (var gate = new FileStream(Path.Combine(fixture.Store, oldId + ".lock"), FileMode.Open,
                                                FileAccess.ReadWrite, FileShare.None))
         {
             await model.StartAsync();
             // 前置：旧 store 的未绑定旧日志行留在 Sessions，且保留原 store 绑定。
             Assert.That(model.Projects.Single(item => item.Key == PendingKey(fixture.Store, fixture.First))
-                          .Sessions.Single().StoreDirectory, Is.EqualTo(fixture.Store));
+                             .Sessions.Single().StoreDirectory, Is.EqualTo(fixture.Store));
         }
 
         await using (var gate = new FileStream(Path.Combine(secondStore, newId + ".lock"), FileMode.Open,
@@ -425,13 +437,13 @@ public sealed class DesktopStartupOrganizeTests
             }, CancellationToken.None);
             await model.StartAsync();
             Assert.That(model.Projects.Single(item => item.Key == PendingKey(secondStore, fixture.Second))
-                          .Sessions.Single().StoreDirectory, Is.EqualTo(secondStore), "前置：新 store 的未绑定行已加载。");
+                             .Sessions.Single().StoreDirectory, Is.EqualTo(secondStore), "前置：新 store 的未绑定行已加载。");
         }
 
         // 拒绝列目录使新 store 的整轮以异常结束：异常摘要只应标到新 store 的未绑定组。
         var storeInfo = new DirectoryInfo(secondStore);
-        var deny      = new FileSystemAccessRule(new NTAccount(Environment.UserDomainName, Environment.UserName),
-                                                 FileSystemRights.ListDirectory, AccessControlType.Deny);
+        var deny = new FileSystemAccessRule(new NTAccount(Environment.UserDomainName, Environment.UserName),
+                                            FileSystemRights.ListDirectory, AccessControlType.Deny);
         try
         {
             var acl = storeInfo.GetAccessControl();
@@ -439,8 +451,9 @@ public sealed class DesktopStartupOrganizeTests
             storeInfo.SetAccessControl(acl);
             await model.RefreshAsync();
             await WaitUntilAsync(() => model.OrganizeNotice.Contains("Cannot enumerate"), "整轮异常摘要未出现。");
-            await WaitUntilAsync(() => model.Projects.Single(item => item.Key == PendingKey(secondStore, fixture.Second))
-                                           .Detail?.Contains("Cannot enumerate") == true,
+            await WaitUntilAsync(() => model
+                                      .Projects.Single(item => item.Key == PendingKey(secondStore, fixture.Second))
+                                      .Detail?.Contains("Cannot enumerate") == true,
                                  "新 store 自身的未绑定组应获得统一原因。");
             var marked = model.Projects.Single(item => item.Key == PendingKey(secondStore, fixture.Second));
             Assert.That(marked.Detail, Does.Contain("Cannot enumerate"));
@@ -462,17 +475,19 @@ public sealed class DesktopStartupOrganizeTests
         var fixture = await Fixture.CreateAsync();
         // 交错提交制造可区分的活动时间：A1(t1) < B1(t2) < B2(t3) < A2(t4)，正确的组序为 First 在 Second 前；
         // 丢失成员的错误实现只剩各组最旧成员（t1、t2），组序会翻转为 Second 在前。
-        var a1 = await CommitLegacySessionAsync(fixture.Store, fixture.First);
+        var a1      = await CommitLegacySessionAsync(fixture.Store, fixture.First);
         await Task.Delay(20);
         var b1 = await CommitLegacySessionAsync(fixture.Store, fixture.Second);
         await Task.Delay(20);
         var b2 = await CommitLegacySessionAsync(fixture.Store, fixture.Second);
         await Task.Delay(20);
-        var a2 = await CommitLegacySessionAsync(fixture.Store, fixture.First);
+        var             a2    = await CommitLegacySessionAsync(fixture.Store, fixture.First);
         await using var model = fixture.Window();
         await model.StartAsync();
 
         SessionViewModel ById(string id) => model.Sessions.Single(session => session.Id == id);
+        model.SelectRecentProjectOrderCommand.Execute(null);
+        Assert.That(model.IsManualProjectOrder, Is.False);
         var first  = model.Projects.Single(group => ProjectRoots.AreEqual(group.Root, fixture.First));
         var second = model.Projects.Single(group => ProjectRoots.AreEqual(group.Root, fixture.Second));
         Assert.That(first.Sessions.Select(session => session.Id), Is.EqualTo(new[] { a2, a1 }),
@@ -481,8 +496,10 @@ public sealed class DesktopStartupOrganizeTests
         // First 的最近活动 t4 晚于 Second 的 t3；空白新对话页没有分组，也不参与排序。
         Assert.That(model.Projects, Is.EqualTo(new object[] { first, second }),
                     "项目组必须按成员最近对话活动排序。");
+        var category = model.SidebarRows.OfType<SidebarCategoryViewModel>().Single();
+        Assert.That(category.Key, Is.EqualTo("projects"));
         Assert.That(model.SidebarRows,
-                    Is.EqualTo(new object[] { first, ById(a2), ById(a1), second, ById(b2), ById(b1) }),
+                    Is.EqualTo(new object[] { category, first, ById(a2), ById(a1), second, ById(b2), ById(b1) }),
                     "铺平侧栏行必须与分组投影一致：组头在前、成员随后且顺序稳定。");
 
         // 项目「+」把空白页切到该项目并保留输入，但不产生草稿侧栏行。
@@ -495,7 +512,7 @@ public sealed class DesktopStartupOrganizeTests
         Assert.That(first.Sessions.Select(session => session.Id), Is.EqualTo(new[] { a2, a1 }),
                     "空白页切换项目不得在分组中新增草稿成员。");
         Assert.That(model.SidebarRows,
-                    Is.EqualTo(new object[] { first, ById(a2), ById(a1), second, ById(b2), ById(b1) }),
+                    Is.EqualTo(new object[] { category, first, ById(a2), ById(a1), second, ById(b2), ById(b1) }),
                     "侧栏行不因空白页切换目标而改变。");
     }
 
@@ -505,7 +522,7 @@ public sealed class DesktopStartupOrganizeTests
         var fixture = await Fixture.CreateAsync();
         var id1     = await CommitLegacySessionAsync(fixture.Store, fixture.First);
         await Task.Delay(20);
-        var id2 = await CommitLegacySessionAsync(fixture.Store, fixture.First);
+        var             id2   = await CommitLegacySessionAsync(fixture.Store, fixture.First);
         await using var model = fixture.Window();
         await model.StartAsync();
 
@@ -529,8 +546,8 @@ public sealed class DesktopStartupOrganizeTests
         var fixture = await Fixture.CreateAsync();
         // 沙箱启用且整个 fixture 根（含 store）是额外写根：store 不在任何日志的 WorkspaceRoot 内，
         // Core 的逐日志校验发现不了，必须由 Desktop 在写入前拒绝。
-        var root = Path.GetDirectoryName(fixture.Store)!;
-        var user = await UserConfigStore.LoadAsync(fixture.Config, CancellationToken.None);
+        var root    = Path.GetDirectoryName(fixture.Store)!;
+        var user    = await UserConfigStore.LoadAsync(fixture.Config, CancellationToken.None);
         await UserConfigStore.SaveAsync(fixture.Config, user with
         {
             Settings = (user.Settings ?? new UserConfigSettings()) with
@@ -559,11 +576,11 @@ public sealed class DesktopStartupOrganizeTests
     [Test]
     public async Task SameRootAcrossTwoStoresKeepsPendingGroupsAndIssuesIsolated()
     {
-        var fixture     = await Fixture.CreateAsync();
-        var secondStore = Path.Combine(Path.GetDirectoryName(fixture.Store)!, "sessions-2");
-        var oldId       = await CommitLegacySessionAsync(fixture.Store, fixture.First);
-        var newId       = await CommitLegacySessionAsync(secondStore, fixture.First);
-        await using var model = fixture.Window();
+        var             fixture     = await Fixture.CreateAsync();
+        var             secondStore = Path.Combine(Path.GetDirectoryName(fixture.Store)!, "sessions-2");
+        var             oldId       = await CommitLegacySessionAsync(fixture.Store, fixture.First);
+        var             newId       = await CommitLegacySessionAsync(secondStore, fixture.First);
+        await using var model       = fixture.Window();
         await using (var gate = new FileStream(Path.Combine(fixture.Store, oldId + ".lock"), FileMode.Open,
                                                FileAccess.ReadWrite, FileShare.None))
         {
@@ -584,8 +601,8 @@ public sealed class DesktopStartupOrganizeTests
             }, CancellationToken.None);
             await model.RefreshAsync();
             await WaitUntilAsync(() => model.Projects.Any(item =>
-                                        item.Key == PendingKey(secondStore, fixture.First) &&
-                                        item.Detail?.Contains("待处理") == true),
+                                                              item.Key == PendingKey(secondStore, fixture.First) &&
+                                                              item.Detail?.Contains("待处理") == true),
                                  "新 store 的未完成组未带原因。");
         }
 
@@ -609,7 +626,9 @@ public sealed class DesktopStartupOrganizeTests
         await UserConfigStore.SaveAsync(fixture.Config, user with
         {
             Settings = (user.Settings ?? new UserConfigSettings()) with
-                { SessionStoreDirectory = " " + fixture.Store }
+            {
+                SessionStoreDirectory = " " + fixture.Store
+            }
         }, CancellationToken.None);
         var before = SnapshotStore(fixture.Store);
 
@@ -644,8 +663,8 @@ public sealed class DesktopStartupOrganizeTests
 
     private static async Task<string> CommitLegacySessionAsync(string store, string root)
     {
-        var session = new ChatSession(Guid.NewGuid().ToString("N"), root, Fixture.Identity);
-        using var writer = new SessionStoreWriter(store, session.Id);
+        var       session = new ChatSession(Guid.NewGuid().ToString("N"), root, Fixture.Identity);
+        using var writer  = new SessionStoreWriter(store, session.Id);
         await writer.CommitAsync(session, new ConversationContext(new ContextOptions()), CancellationToken.None);
         return session.Id;
     }
@@ -669,12 +688,12 @@ public sealed class DesktopStartupOrganizeTests
         public static readonly SessionModelIdentity Identity =
             new("offline", "https://offline.invalid/v1", ChatApiKind.ChatCompletions);
 
-        public required string                First       { get; init; }
-        public required string                Second      { get; init; }
-        public required string                Store       { get; init; }
-        public required string                Config      { get; init; }
-        public          Credentials           Credentials { get; } = new();
-        public          int                   Models      { get; private set; }
+        public required string      First       { get; init; }
+        public required string      Second      { get; init; }
+        public required string      Store       { get; init; }
+        public required string      Config      { get; init; }
+        public          Credentials Credentials { get; } = new();
+        public          int         Models      { get; private set; }
 
         public DesktopSessionFactory Factory => new((_, _) =>
         {

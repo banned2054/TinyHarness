@@ -7,7 +7,7 @@ namespace TinyHarness.Desktop.Tests;
 public sealed class DesktopWorkspaceMenuLayoutTests
 {
     [Test]
-    public void ProjectMenuScrollsOnlyItsListAndKeepsTheDirectoryEntryOutsideTheViewport()
+    public void ProjectMenuScrollsFilteredChoicesAndKeepsSearchAndActionsOutsideTheViewport()
     {
         var root = new DirectoryInfo(AppContext.BaseDirectory);
         while (root is not null && !File.Exists(Path.Combine(root.FullName, "TinyHarness.slnx"))) root = root.Parent;
@@ -17,11 +17,11 @@ public sealed class DesktopWorkspaceMenuLayoutTests
         XNamespace controls = "https://github.com/avaloniaui";
         var list = document.Descendants(controls + "ItemsControl")
                            .Single(element => (string?)element.Attribute("ItemsSource") ==
-                                              "{Binding ProjectMenuOptions}");
+                                              "{Binding VisibleProjectMenuOptions}");
         var viewport = list.Parent;
         Assert.That(viewport?.Name, Is.EqualTo(controls + "ScrollViewer"),
                     "项目列表必须具有独立滚动视口，ItemsControl 限高不能替代滚动。");
-        Assert.That((double?)viewport!.Attribute("MaxHeight"), Is.EqualTo(288));
+        Assert.That((double?)viewport!.Attribute("MaxHeight"), Is.EqualTo(240));
         Assert.That((string?)viewport.Attribute("HorizontalScrollBarVisibility"), Is.EqualTo("Disabled"));
         Assert.That(list.Attribute("MaxHeight"), Is.Null);
         var popup = viewport.Ancestors(controls + "Popup").Single();
@@ -30,5 +30,14 @@ public sealed class DesktopWorkspaceMenuLayoutTests
                                   .Single(element => (string?)element.Attribute("Click") == "BrowseFolder");
         Assert.That(directoryEntry.Ancestors(), Does.Not.Contain(viewport), "打开目录入口应固定在滚动列表之外。");
         Assert.That(directoryEntry.Parent, Is.SameAs(viewport.Parent));
+        var search = popup.Descendants(controls + "TextBox")
+                          .Single(element => (string?)element.Attribute("Text") ==
+                                             "{Binding ProjectSearchText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}");
+        Assert.That(search.Ancestors(), Does.Not.Contain(viewport), "搜索框应固定在滚动列表之外。");
+        var noProject = popup.Descendants(controls + "Button")
+                             .Single(element => (string?)element.Attribute("Command") ==
+                                                "{Binding SelectProjectCommand}");
+        Assert.That(noProject.Ancestors(), Does.Not.Contain(viewport), "无项目入口应固定在滚动列表之外。");
+        Assert.That(noProject.Parent, Is.SameAs(viewport.Parent));
     }
 }

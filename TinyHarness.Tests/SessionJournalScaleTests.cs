@@ -47,9 +47,11 @@ public class SessionJournalScaleTests
                     Is.LessThanOrEqualTo(scale100.MedianAppendAllocatedBytes * 4),
                     "10000-message allocation exceeded 4x the 100-message allocation");
         Assert.That(scales.Max(scale =>
-            scale.Appends.Max(item => item.FileBytes) - scales.Min(scale => scale.Appends.Min(item => item.FileBytes))),
+                                   scale.Appends.Max(item => item.FileBytes - item.WrittenUtcBytes) -
+                                   scales.Min(scale =>
+                                                  scale.Appends.Min(item => item.FileBytes - item.WrittenUtcBytes))),
                     Is.LessThanOrEqualTo(4),
-                    "append bytes depended on history size beyond sequence digits");
+                    "append bytes depended on history size beyond sequence digits after excluding timestamp width");
         Assert.That(scale10000.RecoveryMilliseconds, Is.LessThanOrEqualTo(RecoveryLimitMs),
                     "10000-message recovery exceeded 5 seconds");
         Assert.That(scale10000.RecoveryAllocatedBytes, Is.LessThanOrEqualTo(RecoveryAllocationLimit),
@@ -94,7 +96,11 @@ public class SessionJournalScaleTests
                 var allocated = GC.GetTotalAllocatedBytes(true)          - beforeAllocated;
                 var fileBytes = new FileInfo(writer.SnapshotPath).Length - beforeBytes;
                 if (measureAppends)
-                    measurements.Add(new JournalMeasurement(index, elapsed, allocated, fileBytes));
+                {
+                    // JSON 会省略时间戳小数秒的尾零；排除这个可变元数据宽度，保留原始字节与性能测量。
+                    var writtenUtcBytes = await ReadWrittenUtcBytesAsync(writer.SnapshotPath, beforeBytes, fileBytes);
+                    measurements.Add(new JournalMeasurement(index, elapsed, allocated, fileBytes, writtenUtcBytes));
+                }
             }
 
             var checkpointMessages = context.Messages.ToArray();
@@ -130,8 +136,7 @@ public class SessionJournalScaleTests
                         Text      = Message(i)
                     };
                     records.Add(new SessionLogRecord(string.Empty, "history",
-                                                     JsonSerializer.SerializeToElement(
-                                                              item,
+                                                     JsonSerializer.SerializeToElement(item,
                                                               SessionHistoryJsonContext.Default.SessionHistoryItem)));
                 }
 
@@ -176,13 +181,13 @@ public class SessionJournalScaleTests
                                                            page.NextCursor is not null,
                                                            page.Warning,
                                                            page.Items.All(item =>
-                    item.Kind ==
-                    SessionHistoryKind.Process &&
-                    item.Text?.Length == MessageLength &&
-                    item.Id.Length    > 0 &&
-                    item.Sequence     > 0 &&
-                    item.TurnId       == turnId &&
-                    item.RunId        == runId));
+                                                                              item.Kind ==
+                                                                              SessionHistoryKind.Process         &&
+                                                                              item.Text?.Length == MessageLength &&
+                                                                              item.Id.Length    > 0              &&
+                                                                              item.Sequence     > 0              &&
+                                                                              item.TurnId       == turnId        &&
+                                                                              item.RunId        == runId));
             }
 
             var beforeRecoveryAllocated = GC.GetTotalAllocatedBytes(true);
@@ -207,6 +212,21 @@ public class SessionJournalScaleTests
                                           restoration.Session.Turns.Sum(turn => turn.Runs.Count),
                                           historyPage);
         }
+    }
+
+    /// <summary>
+    ///     <para>读取刚追加批次的时间戳字节数；不将测量读取计入追加耗时或分配量。</para>
+    ///     <para>Reads the appended batch's timestamp width outside append timing and allocation measurements.</para>
+    /// </summary>
+    private static async Task<int> ReadWrittenUtcBytesAsync(string path, long offset, long length)
+    {
+        await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite,
+                                                4096, FileOptions.Asynchronous);
+        stream.Position = offset;
+        var bytes = new byte[checked((int)length)];
+        await stream.ReadExactlyAsync(bytes);
+        using var batch = JsonDocument.Parse(bytes);
+        return batch.RootElement.GetProperty("writtenUtc").GetRawText().Length;
     }
 
     private static async Task AppendTurnAsync(
@@ -260,7 +280,12 @@ public class SessionJournalScaleTests
     }
 }
 
-internal sealed record JournalMeasurement(long MessageIndex, double Milliseconds, long AllocatedBytes, long FileBytes);
+internal sealed record JournalMeasurement(
+    long   MessageIndex,
+    double Milliseconds,
+    long   AllocatedBytes,
+    long   FileBytes,
+    int    WrittenUtcBytes = 0);
 
 internal sealed record JournalScaleResult(
     int                               Scale,

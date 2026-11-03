@@ -25,14 +25,17 @@ public sealed class DesktopSidebarTests
     {
         var             fixture = await SidebarFixture.CreateAsync();
         await using var model   = fixture.Window();
+        await model.InitializeAsync();
         await model.OpenProjectAsync(fixture.First);
         for (var index = 0; index < count; index++)
             await PromoteConversationAsync(model, fixture.First, "request " + index);
         var group = model.Projects.Single();
 
+        var category = model.SidebarRows.OfType<SidebarCategoryViewModel>().Single();
+        Assert.That(category.Key, Is.EqualTo("projects"));
         for (var limit = 5;; limit += 5)
         {
-            var expected = new List<object> { group };
+            var expected = new List<object> { category, group };
             expected.AddRange(group.Sessions.Take(limit));
             if (count > limit) expected.Add(group.MoreSessionsRow);
             Assert.That(model.SidebarRows, Is.EqualTo(expected), "每次只展示当前批次，展开入口位于项目会话底部。");
@@ -42,7 +45,7 @@ public sealed class DesktopSidebarTests
         }
 
         model.ShowMoreSessionsCommand.Execute(group);
-        Assert.That(model.SidebarRows, Is.EqualTo(group.Sessions.Cast<object>().Prepend(group)),
+        Assert.That(model.SidebarRows, Is.EqualTo(group.Sessions.Cast<object>().Prepend(group).Prepend(category)),
                     "全部显示后重复执行不增加行或展开入口。");
     }
 
@@ -51,6 +54,7 @@ public sealed class DesktopSidebarTests
     {
         var             fixture = await SidebarFixture.CreateAsync();
         await using var model   = fixture.Window();
+        await model.InitializeAsync();
         for (var index = 0; index < 12; index++)
             await PromoteConversationAsync(model, fixture.First, "first " + index);
         for (var index = 0; index < 6; index++)
@@ -84,18 +88,21 @@ public sealed class DesktopSidebarTests
     [Test]
     public async Task SidebarRowsFlattenGroupsWithMembersAndCollapseByExpansion()
     {
-        var             fixture     = await SidebarFixture.CreateAsync();
-        await using var model       = fixture.Window();
-        var             first       = await PromoteConversationAsync(model, fixture.First, "first request");
-        var             second      = await PromoteConversationAsync(model, fixture.Second, "second request");
-        var             firstGroup  = model.Projects.Single(item => item.Key == first.ProjectId);
-        var             secondGroup = model.Projects.Single(item => item.Key == second.ProjectId);
+        var             fixture = await SidebarFixture.CreateAsync();
+        await using var model   = fixture.Window();
+        await model.InitializeAsync();
+        var first       = await PromoteConversationAsync(model, fixture.First, "first request");
+        var second      = await PromoteConversationAsync(model, fixture.Second, "second request");
+        var firstGroup  = model.Projects.Single(item => item.Key == first.ProjectId);
+        var secondGroup = model.Projects.Single(item => item.Key == second.ProjectId);
 
+        var category = model.SidebarRows.OfType<SidebarCategoryViewModel>().Single();
+        Assert.That(category.Key, Is.EqualTo("projects"));
         Assert.That(model.SidebarRows,
                     Is.EqualTo(model.Projects.SelectMany(group => group.IsExpanded
                                                              ? group.Sessions.Cast<object>().Prepend(group)
-                                                             : [group]).ToList()),
-                    "侧栏行必须按项目顺序铺平，成员会话内联在展开的组头之后。");
+                                                             : [group]).Prepend(category).ToList()),
+                    "项目分类下按项目顺序铺平，成员会话内联在展开的组头之后。");
         Assert.That(model.SidebarRows.OfType<ProjectViewModel>().Select(group => group.Key),
                     Is.EquivalentTo(new[] { firstGroup.Key, secondGroup.Key }));
 

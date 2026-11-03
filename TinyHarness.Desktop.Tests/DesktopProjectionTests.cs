@@ -596,7 +596,7 @@ public sealed class DesktopProjectionTests
         page.IsModelMenuOpen = true;
         page.ModelGroups[0].Options[0].SelectCommand.Execute(null);
         Assert.That(page.SelectedModel, Is.EqualTo(choice));
-        Assert.That(page.ModelPickerLabel, Is.EqualTo("model · 默认"));
+        Assert.That(page.ModelPickerLabel, Is.EqualTo("model"));
         Assert.That(page.CurrentModelLabel, Is.EqualTo("model"));
         Assert.That(page.ModelGroups[0].Name, Is.EqualTo("provider"));
         Assert.That(page.ModelGroups[0].Options[0].Label, Is.EqualTo("model"));
@@ -611,7 +611,7 @@ public sealed class DesktopProjectionTests
             option.SelectCommand.Execute(null);
         }
 
-        Assert.That(page.CurrentEffortText, Is.EqualTo("默认"));
+        Assert.That(page.CurrentEffortText, Is.Empty);
         page.IsPermissionMenuOpen = true;
         Assert.That(page.PermissionOptions, Has.Count.EqualTo(7));
         Assert.That(page.PermissionOptions.All(option => option.SelectCommand.CanExecute(null)), Is.True);
@@ -638,7 +638,14 @@ public sealed class DesktopProjectionTests
                                       fixture.Config);
         await using var manager = new DesktopSessionManager();
         var page = new SessionViewModel(manager, factory, fixture.First)
-            { ModelOptions = [new ModelChoice("offline", "offline", Efforts : model.ReasoningEfforts)] };
+        {
+            // 与主窗口构造一致：目录选项携带模型默认档。
+            ModelOptions =
+            [
+                new ModelChoice("offline", "offline", Efforts : model.ReasoningEfforts,
+                                DefaultEffort : model.DefaultReasoningEffort)
+            ]
+        };
         await page.RefreshDefaultModelAsync();
         Assert.That(page.CurrentModelLabel, Is.EqualTo("offline"));
         Assert.That(page.ModelPickerLabel, Is.EqualTo("offline · high"));
@@ -666,7 +673,7 @@ public sealed class DesktopProjectionTests
             ModelOptions = [new ModelChoice("offline", "offline"), new ModelChoice("project-provider", "project-model")]
         };
         await page.RefreshDefaultModelAsync();
-        Assert.That(page.ModelPickerLabel, Is.EqualTo("offline · 默认"));
+        Assert.That(page.ModelPickerLabel, Is.EqualTo("offline"));
         page.WorkspaceRoot = fixture.Second;
         await page.RefreshDefaultModelAsync();
         Assert.That(page.CurrentModelLabel, Is.EqualTo("offline"));
@@ -780,9 +787,9 @@ public sealed class DesktopProjectionTests
                                        { ("offline", null), ("offline", ModelReasoningEffort.High), ("flash", null) }));
             labels = page.Items.OfType<ProcessGroupItemViewModel>().Select(group => group.ModelLabel).ToArray();
             Assert.That(labels, Has.Length.EqualTo(3));
-            Assert.That(labels[0], Does.Contain("offline · 默认"));
+            Assert.That(labels[0], Does.Contain("offline").And.Not.Contain(" · "));
             Assert.That(labels[1], Does.Contain("offline · high"));
-            Assert.That(labels[2], Does.Contain("flash · 默认"));
+            Assert.That(labels[2], Does.Contain("flash").And.Not.Contain(" · "));
         }
 
         await using var resumedManager = new DesktopSessionManager();
@@ -791,11 +798,18 @@ public sealed class DesktopProjectionTests
                                            {
                                                action();
                                                return ValueTask.CompletedTask;
-                                           });
+                                           })
+        {
+            // 与主窗口构造一致：目录选项携带当前目录投影。
+            ModelOptions =
+            [
+                new ModelChoice("offline", "offline", Efforts : a.ReasoningEfforts), new ModelChoice("offline", "flash")
+            ]
+        };
         await resumed.LoadHistoryAsync();
         Assert.That(resumed.CurrentModelNameText, Is.EqualTo("flash"));
         Assert.That(resumed.CurrentModelLabel, Is.EqualTo("flash"));
-        Assert.That(resumed.ModelPickerLabel, Is.EqualTo("flash · 默认"));
+        Assert.That(resumed.ModelPickerLabel, Is.EqualTo("flash"));
         Assert.That(resumed.Items.OfType<ProcessGroupItemViewModel>().Select(group => group.ModelLabel).Take(3),
                     Is.EqualTo(labels), "恢复后的历史运行标签必须保持原模型与强度归属。");
         resumed.Draft = "fourth";
@@ -953,16 +967,78 @@ public sealed class DesktopProjectionTests
         {
             action();
             return ValueTask.CompletedTask;
-        });
+        })
+        {
+            // 与主窗口构造一致：目录只含新供应商，原目标缺失、重选后可见。
+            ModelOptions = [new ModelChoice("new", "new")]
+        };
         history.Draft = "preserved";
+        await history.LoadHistoryAsync();
+        // 目标缺失时选择器回退到选择提示，发送被拒绝且草稿保留，对话不出现恢复错误。
+        Assert.That(history.ModelPickerLabel, Is.EqualTo("请选择模型"));
+        Assert.That(history.CurrentEffortText, Is.Empty);
+        await history.SendAsync();
+        Assert.That(history.Draft, Is.EqualTo("preserved"));
+        Assert.That(history.Notice, Does.Contain("重新选择"));
         await history.SelectModelAsync(new ModelChoice("new", "new"), null);
         Assert.That(history.Draft, Is.EqualTo("preserved"));
+        Assert.That(history.Notice, Is.Empty);
+        Assert.That(history.CurrentModelNameText, Is.EqualTo("new"));
         var stored = await SessionStoreReader.ReadAsync(fixture.Store, id, CancellationToken.None);
         Assert.That(stored!.Turns, Has.Count.EqualTo(1));
         Assert.That(stored.ModelSelection!.Model.ModelId, Is.EqualTo("new"));
         await history.SendAsync();
         await history.Completion;
         Assert.That(Text(history), Does.Contain("new answer"));
+    }
+
+    [Test]
+    public async Task ResumedSessionWithMissingTargetStaysUnboundWithoutConversationError()
+    {
+        var fixture = await Fixture.CreateAsync();
+        var finish  = Signal();
+        finish.SetResult();
+        string id;
+        await using (var manager = new DesktopSessionManager())
+        {
+            var page = Page(manager, new DesktopSessionFactory((_, _) => new Model(Signal(), finish, "old"),
+                                                               new Credentials(), fixture.Config), fixture.First);
+            page.Draft = "first";
+            await page.SendAsync();
+            await page.Completion;
+            id = page.Id!;
+        }
+
+        var user = await UserConfigStore.LoadAsync(fixture.Config, CancellationToken.None);
+        await UserConfigStore.SaveAsync(fixture.Config, user with
+        {
+            Profiles =
+            [
+                new UserProfile
+                {
+                    Name         = "new", Endpoint = "https://new.invalid/v1", ApiKeyCredentialTarget = "fixture",
+                    DefaultModel = "new",
+                    Models       = [new UserProfileModel { Id = "new", ContextWindowTokens = 128000 }]
+                }
+            ]
+        }, CancellationToken.None);
+        var events = new List<string>();
+        var factory =
+            new DesktopSessionFactory((_, _) =>
+                                          throw new AssertionException("Missing target must not construct a client."),
+                                      new Credentials(), fixture.Config);
+        await using var resumed = await factory.OpenAsync(new DesktopSessionRequest(fixture.First, SessionId : id),
+                                                          update =>
+                                                          {
+                                                              events.Add(update.Kind);
+                                                              return ValueTask.CompletedTask;
+                                                          },
+                                                          _ => ValueTask.CompletedTask, CancellationToken.None);
+        // 目标缺失时保持未绑定，历史完整保留；不向对话流追加恢复错误。
+        Assert.That(resumed.Host.HasModelBinding, Is.False);
+        Assert.That(resumed.Host.Session.ModelSelection, Is.Not.Null);
+        Assert.That(resumed.Host.Session.Turns, Has.Count.EqualTo(1));
+        Assert.That(events, Has.None.EqualTo("error"));
     }
 
     [TestCase("endpoint", false)]
@@ -1059,7 +1135,11 @@ public sealed class DesktopProjectionTests
                                         {
                                             action();
                                             return ValueTask.CompletedTask;
-                                        });
+                                        })
+            {
+                // 与主窗口构造一致：供应商与模型仍在目录中，不触发选择提示。
+                ModelOptions = [new ModelChoice("offline", "offline")]
+            };
         }
 
         page.Draft = "second";
@@ -1138,7 +1218,11 @@ public sealed class DesktopProjectionTests
                                         {
                                             action();
                                             return ValueTask.CompletedTask;
-                                        });
+                                        })
+            {
+                // 与主窗口构造一致：目录只含剩余供应商，原目标已缺失。
+                ModelOptions = [new ModelChoice("alternative", "offline")]
+            };
         }
 
         page.Draft = "must stay";
@@ -1186,7 +1270,11 @@ public sealed class DesktopProjectionTests
                                         {
                                             action();
                                             return ValueTask.CompletedTask;
-                                        });
+                                        })
+            {
+                // 与主窗口构造一致：模型仍在目录中，凭据暂不可用不触发选择提示。
+                ModelOptions = [new ModelChoice("offline", "offline")]
+            };
         }
 
         page.Draft = "retry me";
