@@ -336,7 +336,7 @@ public class UserConfigStoreTests
     [TestCase("""{"profiles":[{"name":"a","models":[{"id":"m","contextWindowTokens":1,"reasoningEfforts":"high"}]}]}""",
               "must be an array")]
     [TestCase("""{"profiles":[{"name":"a","models":[{"id":"m","contextWindowTokens":1,"reasoningEfforts":["turbo"]}]}]}""",
-              "expected one of: none, low, medium, high, extra-high")]
+              "expected one of: none, minimal, low, medium, high, xhigh, max")]
     [TestCase("""{"profiles":[{"name":"a","models":[{"id":"m","contextWindowTokens":1,"reasoningEfforts":["low","LOW"]}]}]}""",
               "duplicates effort 'low'")]
     [TestCase("""{"profiles":[{"name":"a","models":[{"id":"m","contextWindowTokens":1,"defaultReasoningEffort":"turbo"}]}]}""",
@@ -397,8 +397,8 @@ public class UserConfigStoreTests
             };
 
             var error =
-                await TestAssert.ThrowsAsync<InvalidDataException>(
-                    () => UserConfigStore.SaveAsync(path, config, CancellationToken.None));
+                await TestAssert.ThrowsAsync<InvalidDataException>(() => UserConfigStore.SaveAsync(path, config,
+                                                                            CancellationToken.None));
 
             Assert.That(error.Message, Does.Contain("defaultReasoningEffort"));
             Assert.That(File.Exists(path), Is.False);
@@ -425,8 +425,8 @@ public class UserConfigStoreTests
             var error =
                 await TestAssert.ThrowsAsync<InvalidDataException>(() =>
                                                                        UserConfigStore.SaveAsync(path,
-                                                                           baseline with { DefaultProfile = "a" },
-                                                                           baseline, CancellationToken.None));
+                                                                                baseline with { DefaultProfile = "a" },
+                                                                                baseline, CancellationToken.None));
 
             Assert.That(error.Message, Does.Contain("changed while it was being edited"));
             var loaded = await UserConfigStore.LoadAsync(path, CancellationToken.None);
@@ -571,8 +571,8 @@ public class UserConfigStoreTests
     }
 
     /// <summary>
-    ///     构造只有一个供应商、一个模型的最小合法配置。
-    ///     Builds a minimal valid config with a single provider holding one model.
+    ///     <para>构造只有一个供应商、一个模型的最小合法配置。</para>
+    ///     <para>Builds a minimal valid config with a single provider holding one model.</para>
     /// </summary>
     private static UserConfig ConfigWithModel(string modelId) => new()
     {

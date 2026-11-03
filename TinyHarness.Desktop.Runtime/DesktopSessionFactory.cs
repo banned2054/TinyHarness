@@ -114,6 +114,12 @@ public sealed partial class DesktopSessionFactory
     ///         Reads trusted settings and creates or strictly resumes a session; failures release resources without model
     ///         calls.
     ///     </para>
+    ///     <para>恢复按最后选择绑定当前目录目标，已保存强度失效时改用模型默认档；目标缺失时保持未绑定并等待显式选择，不在对话中追加错误。</para>
+    ///     <para>
+    ///         Resume binds the last selection against the current catalog and adopts the model's default effort when
+    ///         the saved one is unsupported; a missing target stays unbound and awaits explicit selection without
+    ///         appending errors to the conversation.
+    ///     </para>
     /// </summary>
     public async Task<DesktopSession> OpenAsync(
         DesktopSessionRequest             request,         Func<DesktopEvent, ValueTask> events,
@@ -269,26 +275,28 @@ public sealed partial class DesktopSessionFactory
                                            sink,
                                            sessionWriter : writer, needsInspection : restored.NeedsInspection,
                                            instructionLoader : instructions, knownSecrets : secrets);
-                if (request.Reselect || target is null)
-                    await events(new DesktopEvent("error", null, "需要重新选择模型；历史已恢复。"))
-                       .ConfigureAwait(false);
-                else if (model is null)
-                    await events(new DesktopEvent("error", null, "模型配置暂不可用，请检查配置后重试。" + reason))
-                       .ConfigureAwait(false);
-                else
-                    try
-                    {
-                        await ChangeAsync(host, target.Value.Profile, target.Value.Model,
-                                          CurrentEffort(savedEffort, target.Value.Model),
-                                          host.Session.ModelSelection!.Revision, cancellationToken, model,
-                                          user.Settings?.Network)
+                // 目标缺失或显式重选时保持未绑定，历史仍可浏览；缺失由选择器状态提示，不向对话追加错误。
+                if (!request.Reselect && target is not null)
+                {
+                    if (model is null)
+                        await events(new DesktopEvent("error", null, "模型配置暂不可用，请检查配置后重试。" + reason))
                            .ConfigureAwait(false);
-                    }
-                    catch (Exception ex) when (ex is ConfigException or InvalidOperationException)
-                    {
-                        await events(new DesktopEvent("error", null, "模型配置暂不可用，请检查配置后重试。" + Redact(ex.Message)))
-                           .ConfigureAwait(false);
-                    }
+                    else
+                        try
+                        {
+                            await ChangeAsync(host, target.Value.Profile, target.Value.Model,
+                                              CurrentEffort(savedEffort, target.Value.Model),
+                                              host.Session.ModelSelection!.Revision, cancellationToken, model,
+                                              user.Settings?.Network)
+                               .ConfigureAwait(false);
+                        }
+                        catch (Exception ex) when (ex is ConfigException or InvalidOperationException)
+                        {
+                            await events(new DesktopEvent("error", null,
+                                                          "模型配置暂不可用，请检查配置后重试。" + Redact(ex.Message)))
+                               .ConfigureAwait(false);
+                        }
+                }
             }
             else
             {

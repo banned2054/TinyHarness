@@ -943,8 +943,9 @@ public sealed class CatalogModelEntryViewModel : ObservableObject
 
     private static readonly ModelReasoningEffort[] EffortOrder =
     [
-        ModelReasoningEffort.None, ModelReasoningEffort.Low, ModelReasoningEffort.Medium, ModelReasoningEffort.High,
-        ModelReasoningEffort.ExtraHigh
+        ModelReasoningEffort.None, ModelReasoningEffort.Minimal, ModelReasoningEffort.Low,
+        ModelReasoningEffort.Medium, ModelReasoningEffort.High, ModelReasoningEffort.ExtraHigh,
+        ModelReasoningEffort.Max
     ];
 
     private readonly Action _onChanged;
@@ -955,7 +956,9 @@ public sealed class CatalogModelEntryViewModel : ObservableObject
     private          bool   _isExtraHighSelected;
     private          bool   _isHighSelected;
     private          bool   _isLowSelected;
+    private          bool   _isMaxSelected;
     private          bool   _isMediumSelected;
+    private          bool   _isMinimalSelected;
     private          bool   _isNoneSelected;
     private          bool   _supportsImageInput;
     private          bool   _supportsPdfInput;
@@ -964,12 +967,12 @@ public sealed class CatalogModelEntryViewModel : ObservableObject
 
     public CatalogModelEntryViewModel(UserProfileModel? source, Action onChanged)
     {
-        Source       = source;
-        IsDraft      = source is null;
-        _onChanged   = onChanged;
-        _id          = source?.Id          ?? string.Empty;
-        _displayName = source?.DisplayName ?? string.Empty;
-        _windowDraft = source is null ? string.Empty : FormatTokenCount(source.ContextWindowTokens);
+        Source              = source;
+        IsDraft             = source is null;
+        _onChanged          = onChanged;
+        _id                 = source?.Id          ?? string.Empty;
+        _displayName        = source?.DisplayName ?? string.Empty;
+        _windowDraft        = source is null ? string.Empty : FormatTokenCount(source.ContextWindowTokens);
         _supportsImageInput = source?.SupportsImageInput ?? false;
         _supportsVideoInput = source?.SupportsVideoInput ?? false;
         _supportsPdfInput   = source?.SupportsPdfInput   ?? false;
@@ -1073,6 +1076,15 @@ public sealed class CatalogModelEntryViewModel : ObservableObject
         }
     }
 
+    public bool IsMinimalSelected
+    {
+        get => _isMinimalSelected;
+        set
+        {
+            if (SetProperty(ref _isMinimalSelected, value)) OnEffortsChanged();
+        }
+    }
+
     public bool IsLowSelected
     {
         get => _isLowSelected;
@@ -1106,6 +1118,15 @@ public sealed class CatalogModelEntryViewModel : ObservableObject
         set
         {
             if (SetProperty(ref _isExtraHighSelected, value)) OnEffortsChanged();
+        }
+    }
+
+    public bool IsMaxSelected
+    {
+        get => _isMaxSelected;
+        set
+        {
+            if (SetProperty(ref _isMaxSelected, value)) OnEffortsChanged();
         }
     }
 
@@ -1160,9 +1181,9 @@ public sealed class CatalogModelEntryViewModel : ObservableObject
         if (model.Id                            != source.Id) return false;
         if ((model.DisplayName ?? string.Empty) != (source.DisplayName ?? string.Empty)) return false;
         if (model.ContextWindowTokens           != source.ContextWindowTokens) return false;
-        if (model.SupportsImageInput             != source.SupportsImageInput) return false;
-        if (model.SupportsVideoInput             != source.SupportsVideoInput) return false;
-        if (model.SupportsPdfInput               != source.SupportsPdfInput) return false;
+        if (model.SupportsImageInput            != source.SupportsImageInput) return false;
+        if (model.SupportsVideoInput            != source.SupportsVideoInput) return false;
+        if (model.SupportsPdfInput              != source.SupportsPdfInput) return false;
         if (model.ReasoningEfforts is { } efforts)
         {
             if (source.ReasoningEfforts is not { } sourceEfforts || efforts.Count != sourceEfforts.Count) return false;
@@ -1179,10 +1200,12 @@ public sealed class CatalogModelEntryViewModel : ObservableObject
     private bool IsEffortTicked(string value) => value switch
     {
         ModelReasoningEffortParser.NoneValue      => _isNoneSelected,
+        ModelReasoningEffortParser.MinimalValue   => _isMinimalSelected,
         ModelReasoningEffortParser.LowValue       => _isLowSelected,
         ModelReasoningEffortParser.MediumValue    => _isMediumSelected,
         ModelReasoningEffortParser.HighValue      => _isHighSelected,
         ModelReasoningEffortParser.ExtraHighValue => _isExtraHighSelected,
+        ModelReasoningEffortParser.MaxValue       => _isMaxSelected,
         _                                         => false
     };
 
@@ -1191,10 +1214,12 @@ public sealed class CatalogModelEntryViewModel : ObservableObject
         switch (effort)
         {
             case ModelReasoningEffort.None :      _isNoneSelected      = value; break;
+            case ModelReasoningEffort.Minimal :   _isMinimalSelected   = value; break;
             case ModelReasoningEffort.Low :       _isLowSelected       = value; break;
             case ModelReasoningEffort.Medium :    _isMediumSelected    = value; break;
             case ModelReasoningEffort.High :      _isHighSelected      = value; break;
             case ModelReasoningEffort.ExtraHigh : _isExtraHighSelected = value; break;
+            case ModelReasoningEffort.Max :       _isMaxSelected       = value; break;
         }
     }
 

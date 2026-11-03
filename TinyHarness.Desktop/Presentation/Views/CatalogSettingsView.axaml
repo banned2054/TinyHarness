@@ -104,6 +104,10 @@
                                           IsChecked="{Binding IsNoneSelected, Mode=TwoWay}"
                                           Foreground="{DynamicResource PopupForegroundBrush}"
                                           AutomationProperties.Name="支持 none 档位" />
+                                <CheckBox Content="minimal" FontSize="13" Margin="0,0,16,0"
+                                          IsChecked="{Binding IsMinimalSelected, Mode=TwoWay}"
+                                          Foreground="{DynamicResource PopupForegroundBrush}"
+                                          AutomationProperties.Name="支持 minimal 档位" />
                                 <CheckBox Content="low" FontSize="13" Margin="0,0,16,0"
                                           IsChecked="{Binding IsLowSelected, Mode=TwoWay}"
                                           Foreground="{DynamicResource PopupForegroundBrush}"
@@ -116,10 +120,14 @@
                                           IsChecked="{Binding IsHighSelected, Mode=TwoWay}"
                                           Foreground="{DynamicResource PopupForegroundBrush}"
                                           AutomationProperties.Name="支持 high 档位" />
-                                <CheckBox Content="extra-high" FontSize="13"
+                                <CheckBox Content="xhigh" FontSize="13" Margin="0,0,16,0"
                                           IsChecked="{Binding IsExtraHighSelected, Mode=TwoWay}"
                                           Foreground="{DynamicResource PopupForegroundBrush}"
-                                          AutomationProperties.Name="支持 extra-high 档位" />
+                                          AutomationProperties.Name="支持 xhigh 档位" />
+                                <CheckBox Content="max" FontSize="13"
+                                          IsChecked="{Binding IsMaxSelected, Mode=TwoWay}"
+                                          Foreground="{DynamicResource PopupForegroundBrush}"
+                                          AutomationProperties.Name="支持 max 档位" />
                             </WrapPanel>
                             <TextBlock Classes="settings-card-description"
                                        Text="留空表示未声明能力，此时只能使用默认（由服务决定）。" />

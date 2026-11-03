@@ -1,5 +1,7 @@
 using Microsoft.Extensions.AI;
 using OpenAI.Responses;
+using ChatCompletionOptions = OpenAI.Chat.ChatCompletionOptions;
+using ChatReasoningEffortLevel = OpenAI.Chat.ChatReasoningEffortLevel;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -13,25 +15,33 @@ using InternalChatRole = TinyHarness.Core.Models.ChatCompletions.ChatRole;
 namespace TinyHarness.Core.Services.ChatCompletions;
 
 /// <summary>
-///     基于 Microsoft.Extensions.AI <see cref="IChatClient" /> 的流式客户端，覆盖 Chat Completions 与
-///     Responses 两种协议。它把项目内部请求映射为 M.E.AI 消息与 <see cref="ChatOptions" />，再将文本、
-///     工具调用增量、推理内容与流元数据转换回内部事件。协议适配的验证探针见 artifacts/protocol-compat。
-///     Streaming client backed by a Microsoft.Extensions.AI <see cref="IChatClient" />, covering both
-///     the Chat Completions and the Responses protocol. It maps internal requests to M.E.AI
-///     messages and <see cref="ChatOptions" />, and converts text, tool-call deltas, reasoning
-///     content, and stream metadata back into internal events. See artifacts/protocol-compat
-///     for the protocol compatibility probes.
+///     <para>
+///         基于 Microsoft.Extensions.AI <see cref="IChatClient" /> 的流式客户端，覆盖 Chat Completions 与
+///         Responses 两种协议。它把项目内部请求映射为 M.E.AI 消息与 <see cref="ChatOptions" />，再将文本、
+///         工具调用增量、推理内容与流元数据转换回内部事件。协议适配的验证探针见 artifacts/protocol-compat。
+///     </para>
+///     <para>
+///         Streaming client backed by a Microsoft.Extensions.AI <see cref="IChatClient" />, covering both
+///         the Chat Completions and the Responses protocol. It maps internal requests to M.E.AI
+///         messages and <see cref="ChatOptions" />, and converts text, tool-call deltas, reasoning
+///         content, and stream metadata back into internal events. See artifacts/protocol-compat
+///         for the protocol compatibility probes.
+///     </para>
 /// </summary>
 public sealed class MicrosoftAiChatClient : IChatCompletionClient, IDisposable
 {
     /// <summary>
-    ///     M.E.AI.OpenAI Responses 适配器存放 reasoning item id 的 AdditionalProperties 键，
-    ///     回传时由其按该键重建 {type:"reasoning", id, encrypted_content} 条目。出处：
-    ///     artifacts/protocol-compat/source/OpenAIResponsesChatClient.cs 的 ReasoningItemIdKey。
-    ///     The AdditionalProperties key under which the M.E.AI.OpenAI Responses adapter
-    ///     stashes the reasoning item id and later rebuilds the
-    ///     {type:"reasoning", id, encrypted_content} item on replay. Source:
-    ///     ReasoningItemIdKey in artifacts/protocol-compat/source/OpenAIResponsesChatClient.cs.
+    ///     <para>
+    ///         M.E.AI.OpenAI Responses 适配器存放 reasoning item id 的 AdditionalProperties 键，
+    ///         回传时由其按该键重建 {type:"reasoning", id, encrypted_content} 条目。出处：
+    ///         artifacts/protocol-compat/source/OpenAIResponsesChatClient.cs 的 ReasoningItemIdKey。
+    ///     </para>
+    ///     <para>
+    ///         The AdditionalProperties key under which the M.E.AI.OpenAI Responses adapter
+    ///         stashes the reasoning item id and later rebuilds the
+    ///         {type:"reasoning", id, encrypted_content} item on replay. Source:
+    ///         ReasoningItemIdKey in artifacts/protocol-compat/source/OpenAIResponsesChatClient.cs.
+    ///     </para>
     /// </summary>
     private const string ReasoningItemIdKey = "reasoningItemId";
 
@@ -42,11 +52,15 @@ public sealed class MicrosoftAiChatClient : IChatCompletionClient, IDisposable
     private readonly IDisposable? _ownedResource;
 
     /// <summary>
-    ///     包装一个已配置好的 M.E.AI 客户端；本实例负责其释放。<paramref name="api" /> 决定协议感知
-    ///     行为（Responses 无服务端会话状态、reasoning 注入/回传），缺省 Chat Completions。
-    ///     Wraps a configured M.E.AI client; this instance owns its disposal.
-    ///     <paramref name="api" /> selects the protocol-aware behavior (stateless
-    ///     Responses requests, reasoning injection/replay); it defaults to Chat Completions.
+    ///     <para>
+    ///         包装一个已配置好的 M.E.AI 客户端；本实例负责其释放。<paramref name="api" /> 决定协议感知
+    ///         行为（Responses 无服务端会话状态、reasoning 注入/回传），缺省 Chat Completions。
+    ///     </para>
+    ///     <para>
+    ///         Wraps a configured M.E.AI client; this instance owns its disposal.
+    ///         <paramref name="api" /> selects the protocol-aware behavior (stateless
+    ///         Responses requests, reasoning injection/replay); it defaults to Chat Completions.
+    ///     </para>
     /// </summary>
     public MicrosoftAiChatClient(IChatClient  inner,                ChatApiKind api = ChatApiKind.ChatCompletions,
                                  IDisposable? ownedResource = null, string?     networkRouteIdentity = null)
@@ -65,9 +79,11 @@ public sealed class MicrosoftAiChatClient : IChatCompletionClient, IDisposable
     public string? NetworkRouteIdentity { get; }
 
     /// <summary>
-    ///     将内部请求转换为 M.E.AI 输入，并把 M.E.AI 的文本与工具调用增量映射为项目流事件。
-    ///     Converts the internal request to M.E.AI input and maps M.E.AI text/tool
-    ///     deltas back to project stream events.
+    ///     <para>将内部请求转换为 M.E.AI 输入，并把 M.E.AI 的文本与工具调用增量映射为项目流事件。</para>
+    ///     <para>
+    ///         Converts the internal request to M.E.AI input and maps M.E.AI text/tool
+    ///         deltas back to project stream events.
+    ///     </para>
     /// </summary>
     /// <remarks>
     ///     <para>单次流式响应受共享模型请求期限限制；调用方取消仍传播为取消。</para>
@@ -235,11 +251,15 @@ public sealed class MicrosoftAiChatClient : IChatCompletionClient, IDisposable
     }
 
     /// <summary>
-    ///     M.E.AI 客户端实现 IDisposable；<see cref="IChatCompletionClient" /> 本身无释放语义，
-    ///     持有完整生命周期的调用方（如测试）应通过具体类型释放。
-    ///     The M.E.AI client implements IDisposable; <see cref="IChatCompletionClient" /> itself
-    ///     carries no dispose semantics, so owners of the full lifetime (e.g. tests)
-    ///     dispose through the concrete type.
+    ///     <para>
+    ///         M.E.AI 客户端实现 IDisposable；<see cref="IChatCompletionClient" /> 本身无释放语义，
+    ///         持有完整生命周期的调用方（如测试）应通过具体类型释放。
+    ///     </para>
+    ///     <para>
+    ///         The M.E.AI client implements IDisposable; <see cref="IChatCompletionClient" /> itself
+    ///         carries no dispose semantics, so owners of the full lifetime (e.g. tests)
+    ///         dispose through the concrete type.
+    ///     </para>
     /// </summary>
     public void Dispose()
     {
@@ -283,7 +303,8 @@ public sealed class MicrosoftAiChatClient : IChatCompletionClient, IDisposable
     {
         callerCancellationToken.ThrowIfCancellationRequested();
         if (requestTimeout.IsCancellationRequested)
-            throw new TimeoutException($"The model response exceeded the configured timeout of {ModelClientFactory.ModelRequestTimeout}.");
+            throw new
+                TimeoutException($"The model response exceeded the configured timeout of {ModelClientFactory.ModelRequestTimeout}.");
     }
 
     /// <summary>
@@ -354,17 +375,21 @@ public sealed class MicrosoftAiChatClient : IChatCompletionClient, IDisposable
     }
 
     /// <summary>
-    ///     为每个工具调用分配稳定索引；M.E.AI 内容不含 wire 索引，同一非空 CallId 复用同一索引。
-    ///     缺失（null 或空串）的 CallId 不注册字典，因此分配新索引时推进独立计数器
-    ///     <paramref name="nextIndex" /> 而不是读取字典数量，否则多个无 id 的调用拿到相同索引，
-    ///     累加器按索引合并时会把它们的参数 JSON 叠成非法文本。
-    ///     Assigns a stable index per tool call. M.E.AI content carries no wire
-    ///     index, so the same non-empty CallId reuses the same index. A missing
-    ///     (null or empty) CallId registers nothing, so each allocation advances
-    ///     the independent counter <paramref name="nextIndex" /> instead of reading
-    ///     the dictionary size; otherwise id-less calls would all share one index
-    ///     and the accumulator's index-based merge would fold their argument JSON
-    ///     into invalid text.
+    ///     <para>
+    ///         为每个工具调用分配稳定索引；M.E.AI 内容不含 wire 索引，同一非空 CallId 复用同一索引。
+    ///         缺失（null 或空串）的 CallId 不注册字典，因此分配新索引时推进独立计数器
+    ///         <paramref name="nextIndex" /> 而不是读取字典数量，否则多个无 id 的调用拿到相同索引，
+    ///         累加器按索引合并时会把它们的参数 JSON 叠成非法文本。
+    ///     </para>
+    ///     <para>
+    ///         Assigns a stable index per tool call. M.E.AI content carries no wire
+    ///         index, so the same non-empty CallId reuses the same index. A missing
+    ///         (null or empty) CallId registers nothing, so each allocation advances
+    ///         the independent counter <paramref name="nextIndex" /> instead of reading
+    ///         the dictionary size; otherwise id-less calls would all share one index
+    ///         and the accumulator's index-based merge would fold their argument JSON
+    ///         into invalid text.
+    ///     </para>
     /// </summary>
     private static int IndexForCall(Dictionary<string, int> callIndexes, string? callId, ref int nextIndex)
     {
@@ -377,14 +402,18 @@ public sealed class MicrosoftAiChatClient : IChatCompletionClient, IDisposable
     }
 
     /// <summary>
-    ///     从 <see cref="TextReasoningContent.AdditionalProperties" /> 提取 reasoning item id。
-    ///     值形态照抄 M.E.AI.OpenAI Responses 适配器的读取方式（反编译 L1562-1566）：进程内为
-    ///     string，历史经序列化再水化后为 JsonElement(string)。
-    ///     Extracts the reasoning item id from
-    ///     <see cref="TextReasoningContent.AdditionalProperties" />. The value shape
-    ///     mirrors the M.E.AI.OpenAI Responses adapter's own reader (decompiled
-    ///     L1562-1566): a string in-process, or a JsonElement(string) after the
-    ///     history has been serialized and rehydrated.
+    ///     <para>
+    ///         从 <see cref="TextReasoningContent.AdditionalProperties" /> 提取 reasoning item id。
+    ///         值形态照抄 M.E.AI.OpenAI Responses 适配器的读取方式（反编译 L1562-1566）：进程内为
+    ///         string，历史经序列化再水化后为 JsonElement(string)。
+    ///     </para>
+    ///     <para>
+    ///         Extracts the reasoning item id from
+    ///         <see cref="TextReasoningContent.AdditionalProperties" />. The value shape
+    ///         mirrors the M.E.AI.OpenAI Responses adapter's own reader (decompiled
+    ///         L1562-1566): a string in-process, or a JsonElement(string) after the
+    ///         history has been serialized and rehydrated.
+    ///     </para>
     /// </summary>
     private static string? ReasoningItemIdOf(TextReasoningContent reasoning)
     {
@@ -478,12 +507,16 @@ public sealed class MicrosoftAiChatClient : IChatCompletionClient, IDisposable
     }
 
     /// <summary>
-    ///     将内部工具调用转换为 M.E.AI 函数调用内容；参数 JSON 解析为 JsonElement 值的字典，
-    ///     与适配器入站方向的值形态一致（离线探针已验证该形态可安全回传并经 NativeAOT 发布）。
-    ///     Converts an internal tool call into an M.E.AI function-call content. The
-    ///     arguments JSON is parsed into a dictionary of JsonElement values, matching
-    ///     the inbound value shape (the offline probes verified this shape round-trips
-    ///     and survives NativeAOT publishing).
+    ///     <para>
+    ///         将内部工具调用转换为 M.E.AI 函数调用内容；参数 JSON 解析为 JsonElement 值的字典，
+    ///         与适配器入站方向的值形态一致（离线探针已验证该形态可安全回传并经 NativeAOT 发布）。
+    ///     </para>
+    ///     <para>
+    ///         Converts an internal tool call into an M.E.AI function-call content. The
+    ///         arguments JSON is parsed into a dictionary of JsonElement values, matching
+    ///         the inbound value shape (the offline probes verified this shape round-trips
+    ///         and survives NativeAOT publishing).
+    ///     </para>
     /// </summary>
     private static FunctionCallContent ToFunctionCall(ChatToolCall call) =>
         new(call.Id, call.FunctionName, ToArgumentDictionary(call.ArgumentsJson));
@@ -505,57 +538,49 @@ public sealed class MicrosoftAiChatClient : IChatCompletionClient, IDisposable
     }
 
     /// <summary>
-    ///     把工具定义映射为 <see cref="ChatOptions" /> 的声明式工具；Chat Completions 无工具时返回 null。
-    ///     Responses 即使无工具也创建 ChatOptions，并通过 RawRepresentationFactory 固定
-    ///     <c>StoredOutputEnabled = false</c>：服务端不存储输出、不依赖 previous_response_id 会话状态，
-    ///     全部上下文（含 reasoning）由本地历史逐轮回传（PLAN §21；探针 ProviderProbe.cs）。
-    ///     Maps tool definitions to declaration-only tools on <see cref="ChatOptions" />;
-    ///     Chat Completions returns null when the request carries no tools. Responses
-    ///     always creates a ChatOptions and pins <c>StoredOutputEnabled = false</c> via
-    ///     RawRepresentationFactory: no server-side stored output and no
-    ///     previous_response_id session state — every round replays the full local
-    ///     history, reasoning included (PLAN §21; the ProviderProbe.cs probe).
+    ///     <para>
+    ///         把工具定义映射为 <see cref="ChatOptions" /> 的声明式工具；Chat Completions 无工具时返回 null。
+    ///         Responses 即使无工具也创建 ChatOptions，并通过 RawRepresentationFactory 固定
+    ///         <c>StoredOutputEnabled = false</c>：服务端不存储输出、不依赖 previous_response_id 会话状态，
+    ///         全部上下文（含 reasoning）由本地历史逐回合传（PLAN §21；探针 ProviderProbe.cs）。
+    ///     </para>
+    ///     <para>
+    ///         推理档位不经 <see cref="ChatOptions.Reasoning" />（M.E.AI 枚举缺 Minimal），一律随 raw
+    ///         representation 写入 OpenAI 原生选项，wire 串取自 <see cref="ModelReasoningEffortParser" />；
+    ///         连接器对 raw 选项按 <c>??=</c> 合并，raw 值优先（artifacts/protocol-compat/source/
+    ///         OpenAIResponsesChatClient.cs；Chat 通路经离线抓包验证）。
+    ///     </para>
+    ///     <para>
+    ///         Maps tool definitions to declaration-only tools on <see cref="ChatOptions" />;
+    ///         Chat Completions returns null when the request carries no tools. Responses
+    ///         always creates a ChatOptions and pins <c>StoredOutputEnabled = false</c> via
+    ///         RawRepresentationFactory: no server-side stored output and no
+    ///         previous_response_id session state — every round replays the full local
+    ///         history, reasoning included (PLAN §21; the ProviderProbe.cs probe).
+    ///     </para>
+    ///     <para>
+    ///         Reasoning efforts bypass <see cref="ChatOptions.Reasoning" /> (the M.E.AI
+    ///         enum lacks Minimal); they ride the raw representation into the native
+    ///         OpenAI options with wire strings from <see cref="ModelReasoningEffortParser" />.
+    ///         The connector merges raw options with <c>??=</c>, so raw values win
+    ///         (artifacts/protocol-compat/source/OpenAIResponsesChatClient.cs; the Chat
+    ///         path was verified by offline request capture).
+    ///     </para>
     /// </summary>
     private ChatOptions? ToChatOptions(ChatCompletionRequest request)
     {
         ChatOptions? options;
         if (_api == ChatApiKind.Responses)
-        {
-            // OPENAI001（CreateResponseOptions 属实验 API）在此最小范围关闭：PLAN §21 已离线
-            // 验证该请求构造路径并经 win-x64 NativeAOT 发布确认零 trim/AOT 警告。
-            // OPENAI001 (experimental CreateResponseOptions) is suppressed for this
-            // minimal scope only: PLAN §21 verified this request construction
-            // offline and confirmed zero trim/AOT warnings in a win-x64
-            // NativeAOT publish.
-#pragma warning disable OPENAI001
             options = new ChatOptions
             {
-                RawRepresentationFactory = _ => new CreateResponseOptions { StoredOutputEnabled = false }
+                RawRepresentationFactory = _ => CreateResponsesOptions(request.ReasoningEffort)
             };
-#pragma warning restore OPENAI001
-        }
         else if (request.Tools is { Count: > 0 } || request.ReasoningEffort is not null)
-        {
-            options = new ChatOptions();
-        }
+            options = request.ReasoningEffort is { } level
+                ? new ChatOptions { RawRepresentationFactory = _ => CreateChatCompletionsOptions(level) }
+                : new ChatOptions();
         else
-        {
             return null;
-        }
-
-        if (request.ReasoningEffort is { } effort)
-            options.Reasoning = new ReasoningOptions
-            {
-                Effort = effort switch
-                {
-                    ModelReasoningEffort.None => ReasoningEffort.None,
-                    ModelReasoningEffort.Low => ReasoningEffort.Low,
-                    ModelReasoningEffort.Medium => ReasoningEffort.Medium,
-                    ModelReasoningEffort.High => ReasoningEffort.High,
-                    ModelReasoningEffort.ExtraHigh => ReasoningEffort.ExtraHigh,
-                    _ => throw new ArgumentOutOfRangeException(nameof(request), "Unsupported reasoning effort.")
-                }
-            };
 
         if (request.Tools is not { Count: > 0 }) return options;
 
@@ -573,13 +598,17 @@ public sealed class MicrosoftAiChatClient : IChatCompletionClient, IDisposable
     }
 
     /// <summary>
-    ///     以 JsonNode 组装工具参数的完整 JSON 字符串。禁止用 JsonSerializer 序列化
-    ///     <see cref="FunctionCallContent.Arguments" /> 字典：其值为 object（实际是 JsonElement），
-    ///     在禁用反射 JSON 的 NativeAOT 产物中不可依赖运行时类型解析。
-    ///     Assembles the full argument JSON with JsonNodes. The arguments dictionary
-    ///     must never be serialized via JsonSerializer: its values are object-typed
-    ///     (JsonElement in practice), and runtime type resolution is unavailable in
-    ///     reflection-disabled NativeAOT artifacts.
+    ///     <para>
+    ///         以 JsonNode 组装工具参数的完整 JSON 字符串。禁止用 JsonSerializer 序列化
+    ///         <see cref="FunctionCallContent.Arguments" /> 字典：其值为 object（实际是 JsonElement），
+    ///         在禁用反射 JSON 的 NativeAOT 产物中不可依赖运行时类型解析。
+    ///     </para>
+    ///     <para>
+    ///         Assembles the full argument JSON with JsonNodes. The arguments dictionary
+    ///         must never be serialized via JsonSerializer: its values are object-typed
+    ///         (JsonElement in practice), and runtime type resolution is unavailable in
+    ///         reflection-disabled NativeAOT artifacts.
+    ///     </para>
     /// </summary>
     private static string SerializeArguments(string? callId, IDictionary<string, object?>? arguments)
     {
@@ -593,12 +622,16 @@ public sealed class MicrosoftAiChatClient : IChatCompletionClient, IDisposable
     }
 
     /// <summary>
-    ///     JsonElement 值按原始文本重新解析为 JsonNode；其余仅接受 <see cref="JsonValue" /> 可覆盖的
-    ///     标量，超出该范围抛出带上下文的 <see cref="InvalidDataException" />。
-    ///     JsonElement values are re-parsed from their raw text into JsonNodes;
-    ///     everything else is accepted only when a <see cref="JsonValue" /> overload
-    ///     covers the scalar, otherwise an <see cref="InvalidDataException" /> with
-    ///     context is thrown.
+    ///     <para>
+    ///         JsonElement 值按原始文本重新解析为 JsonNode；其余仅接受 <see cref="JsonValue" /> 可覆盖的
+    ///         标量，超出该范围抛出带上下文的 <see cref="InvalidDataException" />。
+    ///     </para>
+    ///     <para>
+    ///         JsonElement values are re-parsed from their raw text into JsonNodes;
+    ///         everything else is accepted only when a <see cref="JsonValue" /> overload
+    ///         covers the scalar, otherwise an <see cref="InvalidDataException" /> with
+    ///         context is thrown.
+    ///     </para>
     /// </summary>
     private static JsonNode? ToJsonNode(string? callId, string name, object? value) => value switch
     {
@@ -625,4 +658,36 @@ public sealed class MicrosoftAiChatClient : IChatCompletionClient, IDisposable
         _ => throw new
             InvalidDataException($"Tool call '{callId ?? "?"}' argument '{name}' has unsupported type '{value.GetType().FullName}'.")
     };
+
+    // OPENAI001（CreateResponseOptions/ChatCompletionOptions 的推理档位属实验 API）在此最小范围
+    // 关闭：两条请求构造路径已离线抓包验证 wire 值，并随本轮 win-x64 NativeAOT 发布复查。
+    // OPENAI001 (the reasoning-effort surface on CreateResponseOptions/ChatCompletionOptions
+    // is experimental) is suppressed for this minimal scope only: both request
+    // construction paths were verified offline by request capture and are
+    // re-checked by this round's win-x64 NativeAOT publish.
+#pragma warning disable OPENAI001
+    /// <summary>
+    ///     <para>构造 Responses 请求的原生选项：固定不存储输出，并在声明档位时写入推理强度。</para>
+    ///     <para>Builds the native Responses options: stored output stays off, and a declared effort is written.</para>
+    /// </summary>
+    private static CreateResponseOptions CreateResponsesOptions(ModelReasoningEffort? effort) => new()
+    {
+        StoredOutputEnabled = false,
+        ReasoningOptions = effort is { } level
+            ? new ResponseReasoningOptions
+            {
+                ReasoningEffortLevel = new ResponseReasoningEffortLevel(ModelReasoningEffortParser.ToValueString(level))
+            }
+            : null
+    };
+
+    /// <summary>
+    ///     <para>构造 Chat Completions 请求的原生选项，仅承载推理强度。</para>
+    ///     <para>Builds the native Chat Completions options, carrying only the reasoning effort.</para>
+    /// </summary>
+    private static ChatCompletionOptions CreateChatCompletionsOptions(ModelReasoningEffort effort) => new()
+    {
+        ReasoningEffortLevel = new ChatReasoningEffortLevel(ModelReasoningEffortParser.ToValueString(effort))
+    };
+#pragma warning restore OPENAI001
 }

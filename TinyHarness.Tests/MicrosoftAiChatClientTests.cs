@@ -10,6 +10,7 @@ using TinyHarness.Core.Services.Agent;
 using TinyHarness.Core.Services.ChatCompletions;
 using TinyHarness.Core.Services.Tools;
 using ChatMessage = TinyHarness.Core.Models.ChatCompletions.ChatMessage;
+using ChatRole = TinyHarness.Core.Models.ChatCompletions.ChatRole;
 using MicrosoftChatMessage = Microsoft.Extensions.AI.ChatMessage;
 
 namespace TinyHarness.Tests;
@@ -128,7 +129,7 @@ public class MicrosoftAiChatClientTests
         Assert.That(result.Status, Is.EqualTo(AgentStatus.Failed));
         Assert.That(tool.ExecuteCount, Is.Zero);
         Assert.That(server.Requests.Count, Is.EqualTo(1));
-        Assert.That(loop.History.Any(m => m.Role == TinyHarness.Core.Models.ChatCompletions.ChatRole.Assistant), Is.False);
+        Assert.That(loop.History.Any(m => m.Role == ChatRole.Assistant), Is.False);
     }
 
     [Test]
@@ -158,6 +159,37 @@ public class MicrosoftAiChatClientTests
         Assert.That(sent.Path, Does.EndWith("/chat/completions"));
         Assert.That(sent.Body, Does.Contain("mock-model"));
         Assert.That(sent.Body, Does.Contain("Hi there"));
+    }
+
+    /// <summary>
+    ///     <para>
+    ///         推理档位经 raw representation 以规范 wire 值写入 reasoning_effort；枚举全集逐档断言，
+    ///         防止档位与 wire 串漂移——M.E.AI 枚举缺 Minimal，档位不经 ChatOptions.Reasoning。
+    ///     </para>
+    ///     <para>
+    ///         Reasoning efforts ride the raw representation into reasoning_effort with canonical
+    ///         wire values; every enum level is asserted so levels and wire strings cannot drift —
+    ///         the M.E.AI enum lacks Minimal, hence efforts bypass ChatOptions.Reasoning.
+    ///     </para>
+    /// </summary>
+    [TestCase(ModelReasoningEffort.None, "none")]
+    [TestCase(ModelReasoningEffort.Minimal, "minimal")]
+    [TestCase(ModelReasoningEffort.Low, "low")]
+    [TestCase(ModelReasoningEffort.Medium, "medium")]
+    [TestCase(ModelReasoningEffort.High, "high")]
+    [TestCase(ModelReasoningEffort.ExtraHigh, "xhigh")]
+    [TestCase(ModelReasoningEffort.Max, "max")]
+    public async Task ReasoningEffort_WritesCanonicalWireValue(ModelReasoningEffort effort, string wire)
+    {
+        using var server = new MockSseServer();
+        server.Start();
+        server.EnqueueRaw(Sse(RoleDelta(), ContentDelta("ok"), StopDelta()));
+        var client = NewClient(server);
+
+        await CollectAsync(client, Request(ChatMessage.User("hi")) with { ReasoningEffort = effort });
+
+        var sent = TestAssert.Single(server.Requests);
+        Assert.That(sent.Body, Does.Contain($"\"reasoning_effort\":\"{wire}\""));
     }
 
     [Test]

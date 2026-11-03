@@ -571,6 +571,14 @@ public sealed partial class SessionViewModel : ObservableObject
             return;
         }
 
+        // 已保存选择在目录中缺失：不打开宿主、不创建运行，与目标失效的发送失败同样走提示；
+        // 仅凭据失效的未绑定宿主不拦截，由发送时按原目标刷新绑定，修复凭据后可直接重试。
+        if (_runtime is null && IsSavedSelectionMissing)
+        {
+            ShowError(new InvalidOperationException("会话原模型已不在配置中，请重新选择模型后再发送。"));
+            return;
+        }
+
         _cancellationError = null;
         RecordActivity();
         IsRunning = true;
@@ -588,6 +596,7 @@ public sealed partial class SessionViewModel : ObservableObject
                 await OpenRuntimeAsync(false);
             }
 
+            // 恢复目标失效时宿主未绑定：拒绝发送，保留草稿等待显式选择。
             _submittedDraftRevision = revision;
             _runError               = null;
             UpdateNotices();

@@ -109,7 +109,7 @@
                                 <TextBlock Text="推理等级" />
                             </StackPanel>
                         </Button>
-                        <TextBlock Text="默认表示不传强度参数；其他档位来自模型配置。" TextWrapping="Wrap" Margin="10,6"
+                        <TextBlock Text="档位来自模型配置；切换模型时使用其默认档。" TextWrapping="Wrap" Margin="10,6"
                                    Foreground="{DynamicResource PopupMutedForegroundBrush}" FontSize="12" />
                         <ItemsControl ItemsSource="{Binding EffortOptions}" Margin="0,2,0,0">
                             <ItemsControl.ItemTemplate>

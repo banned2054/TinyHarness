@@ -262,6 +262,35 @@ public class MicrosoftAiChatClientResponsesTests
         Assert.That(sent.Path, Is.EqualTo("/v1/responses"));
     }
 
+    /// <summary>
+    ///     <para>推理档位随 raw representation 写入 reasoning.effort，逐档断言规范 wire 值与往返一致。</para>
+    ///     <para>
+    ///         Reasoning efforts ride the raw representation into reasoning.effort; canonical wire values are asserted per
+    ///         level.
+    ///     </para>
+    /// </summary>
+    [TestCase(ModelReasoningEffort.None, "none")]
+    [TestCase(ModelReasoningEffort.Minimal, "minimal")]
+    [TestCase(ModelReasoningEffort.Low, "low")]
+    [TestCase(ModelReasoningEffort.Medium, "medium")]
+    [TestCase(ModelReasoningEffort.High, "high")]
+    [TestCase(ModelReasoningEffort.ExtraHigh, "xhigh")]
+    [TestCase(ModelReasoningEffort.Max, "max")]
+    public async Task ReasoningEffort_WritesCanonicalWireValue(ModelReasoningEffort effort, string wire)
+    {
+        using var server = new MockSseServer();
+        server.Start();
+        server.EnqueueRaw(TextSse("done"));
+        var client = NewClient(server);
+
+        await CollectAsync(client, Request(ChatMessage.User("hi")) with { ReasoningEffort = effort });
+
+        var sent    = TestAssert.Single(server.Requests);
+        var body    = JsonNode.Parse(sent.Body)!.AsObject();
+        var textual = body["reasoning"]?["effort"]?.GetValue<string>();
+        Assert.That(textual, Is.EqualTo(wire));
+    }
+
     [Test]
     public async Task SecondRound_IsStatelessAndReplaysReasoningAndToolOutputs()
     {

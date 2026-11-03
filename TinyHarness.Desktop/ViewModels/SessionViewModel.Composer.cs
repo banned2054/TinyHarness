@@ -35,23 +35,41 @@ public sealed partial class SessionViewModel
     public bool                                     CanChangeModel => !IsRunning && !_opening && !_changing;
     public bool                                     CanSelectModel => CanChangeModel;
     public RelayCommand?                            ManageModelsCommand { get; init; }
-    public string                                   ModelPickerLabel => $"{CurrentModelLabel} · {CurrentEffortText}";
 
-    public string CurrentModelNameText => (_runtime?.Host.Session.ModelSelection ?? _savedSelection)?.Model.ModelId ??
-                                          _historicalIdentity?.ModelId ?? SelectedModel?.ModelId ??
-                                          _defaultModel?.ModelId ?? "请选择模型";
+    public string ModelPickerLabel => CurrentEffortText.Length == 0
+        ? CurrentModelLabel
+        : $"{CurrentModelLabel} · {CurrentEffortText}";
 
-    public string CurrentModelLabel => (_runtime?.Host.Session.ModelSelection ?? _savedSelection) is { } selection
-        ? selection.Model.ModelId
-        : Id is not null
-            ? CurrentModelNameText
-            : (SelectedModel ?? _defaultModel)?.Label ?? "请选择模型";
+    // 未打开宿主时按供应商名与模型 ID 预判已保存选择是否仍在目录中：缺失则选择器显示选择提示、发送被拦截；
+    // 宿主已打开后标签以运行时选择为准，仅凭据失效的未绑定宿主不视为缺失，等待发送时自动刷新。
+    private bool IsSavedSelectionMissing =>
+        Id is not null                        && _runtime is null && _savedSelection is { } saved &&
+        SavedSelectionName(saved) is { } name &&
+        !ModelOptions.Any(option => option.ProfileName == name && option.ModelId == saved.Model.ModelId);
 
-    public string CurrentEffortText => (_runtime?.Host.Session.ModelSelection ?? _savedSelection) is { } selection
-        ? EffortText(selection.ReasoningEffort)
-        : Id is not null
-            ? "未记录"
-            : EffortText(SelectedModel is null ? _defaultModel?.DefaultEffort : _effort);
+    public string CurrentModelNameText => IsSavedSelectionMissing
+        ? "请选择模型"
+        : (_runtime?.Host.Session.ModelSelection ?? _savedSelection)?.Model.ModelId ??
+          _historicalIdentity?.ModelId ?? SelectedModel?.ModelId ??
+          _defaultModel?.ModelId ?? "请选择模型";
+
+    public string CurrentModelLabel => IsSavedSelectionMissing
+        ? "请选择模型"
+        : (_runtime?.Host.Session.ModelSelection ?? _savedSelection) is { } selection
+            ? selection.Model.ModelId
+            : Id is not null
+                ? CurrentModelNameText
+                : (SelectedModel ?? _defaultModel)?.Label ?? "请选择模型";
+
+    public string CurrentEffortText => IsSavedSelectionMissing
+        ? string.Empty
+        : (_runtime?.Host.Session.ModelSelection ?? _savedSelection) is { } selection
+            ? EffortText(selection.ReasoningEffort ?? CurrentChoice()?.DefaultEffort)
+            : Id is not null
+                ? "未记录"
+                : EffortText(SelectedModel is null
+                                 ? _defaultModel?.DefaultEffort
+                                 : _effort ?? SelectedModel.DefaultEffort);
 
     public string                ChangeModelHint       => CanChangeModel ? "选择将可靠保存到本会话" : "当前运行结束后可切换";
     public string                PermissionPickerLabel => PermissionMode.Label();
@@ -178,11 +196,31 @@ public sealed partial class SessionViewModel
     /// </summary>
     internal void NotifyWorkspaceTargetLabelChanged() => OnPropertyChanged(nameof(WorkspaceTargetLabel));
 
+    // 档位未指定时各标签自行省略强度段；composer 不再提供“默认”档位项。
     private static string EffortText(ModelReasoningEffort? effort) =>
-        effort is { } level ? ModelReasoningEffortParser.ToValueString(level) : "默认";
+        effort is { } level ? ModelReasoningEffortParser.ToValueString(level) : string.Empty;
 
-    private static string SelectionLabel(SessionModelSelection selection) =>
-        $"{selection.ProfileHint ?? ""} / {selection.Model.ModelId} · {EffortText(selection.ReasoningEffort)}";
+    private static string SelectionLabel(SessionModelSelection selection)
+    {
+        var label  = $"{selection.ProfileHint ?? ""} / {selection.Model.ModelId}";
+        var effort = EffortText(selection.ReasoningEffort);
+        return effort.Length == 0 ? label : $"{label} · {effort}";
+    }
+
+    /// <summary>
+    ///     <para>推导已保存选择的供应商名：优先供应商提示，其次凭据路由前缀；两者皆无返回 null。</para>
+    ///     <para>
+    ///         Derives the provider name of a saved selection: the profile hint first, then the credential-route
+    ///         prefix; null when neither is recorded.
+    ///     </para>
+    /// </summary>
+    private static string? SavedSelectionName(SessionModelSelection selection)
+    {
+        if (selection.ProfileHint is { } hint) return hint;
+        var route     = selection.CredentialRoute;
+        var separator = route is null ? -1 : route.IndexOf('|');
+        return separator > 0 ? route![..separator] : null;
+    }
 
     /// <summary>
     ///     <para>建立输入区菜单；模型强度来自目录，未接入的权限预设禁用。</para>
@@ -303,15 +341,24 @@ public sealed partial class SessionViewModel
                                                                    item.ModelId     == _defaultModel?.ModelId)
             : ModelOptions.FirstOrDefault(item => item.ProfileName == selection.ProfileHint &&
                                                   item.ModelId     == selection.Model.ModelId);
-        var levels = choice?.Efforts ?? selection?.ReasoningCapabilities ?? [];
-        EffortOptions = new ModelReasoningEffort?[] { null }
-                       .Concat(levels.Select(level => (ModelReasoningEffort?)level))
-                       .Select(level => new ComposerMenuOption(EffortText(level),
-                                                               () => _ = ApplyMenuSelectionAsync(choice, level),
-                                                               () => CanChangeModel && choice is not null)
-                                   { IsSelected = CurrentEffortText == EffortText(level) }).ToArray();
+        var levels  = choice?.Efforts            ?? selection?.ReasoningCapabilities ?? [];
+        // 选中态取真实生效档位，未显式选择时以模型默认档为当前档；都没有则不高亮任何项。
+        var current = selection?.ReasoningEffort ?? (Id is null ? _effort : null)    ?? choice?.DefaultEffort;
+        EffortOptions = levels.Select(level => new ComposerMenuOption(EffortText(level),
+                                                                      () => _ = ApplyMenuSelectionAsync(choice, level),
+                                                                      () => CanChangeModel && choice is not null)
+                                          { IsSelected = current == level }).ToArray();
         OnPropertyChanged(nameof(EffortOptions));
     }
+
+    /// <summary>
+    ///     <para>按会话选择的 profile 与模型 ID 解析目录选项；未声明时返回 null。</para>
+    ///     <para>Resolves the catalog choice for a session selection; returns null when it is not declared.</para>
+    /// </summary>
+    private ModelChoice? CurrentChoice() => (_runtime?.Host.Session.ModelSelection ?? _savedSelection) is { } selection
+        ? ModelOptions.FirstOrDefault(item => item.ProfileName == selection.ProfileHint &&
+                                              item.ModelId     == selection.Model.ModelId)
+        : null;
 
     private async Task ApplyMenuSelectionAsync(ModelChoice? choice, ModelReasoningEffort? effort)
     {

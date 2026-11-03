@@ -7,10 +7,12 @@ namespace TinyHarness.Core.Models.ChatCompletions;
 public enum ModelReasoningEffort
 {
     None,
+    Minimal,
     Low,
     Medium,
     High,
-    ExtraHigh
+    ExtraHigh,
+    Max
 }
 
 /// <summary>
@@ -28,38 +30,62 @@ public enum ModelReasoningEffort
 public static class ModelReasoningEffortParser
 {
     /// <summary>
-    ///     <para>关闭推理的规范 JSON 值。The canonical JSON value for disabling reasoning.</para>
+    ///     <para>关闭推理的规范 JSON 值。</para>
+    ///     <para>The canonical JSON value for disabling reasoning.</para>
     /// </summary>
     public const string NoneValue = "none";
 
     /// <summary>
-    ///     <para>低强度的规范 JSON 值。The canonical JSON value for the low level.</para>
+    ///     <para>极低强度的规范 JSON 值。</para>
+    ///     <para>The canonical JSON value for the minimal level.</para>
+    /// </summary>
+    public const string MinimalValue = "minimal";
+
+    /// <summary>
+    ///     <para>低强度的规范 JSON 值。</para>
+    ///     <para>The canonical JSON value for the low level.</para>
     /// </summary>
     public const string LowValue = "low";
 
     /// <summary>
-    ///     <para>中等强度的规范 JSON 值。The canonical JSON value for the medium level.</para>
+    ///     <para>中等强度的规范 JSON 值。</para>
+    ///     <para>The canonical JSON value for the medium level.</para>
     /// </summary>
     public const string MediumValue = "medium";
 
     /// <summary>
-    ///     <para>高强度的规范 JSON 值。The canonical JSON value for the high level.</para>
+    ///     <para>高强度的规范 JSON 值。</para>
+    ///     <para>The canonical JSON value for the high level.</para>
     /// </summary>
     public const string HighValue = "high";
 
     /// <summary>
-    ///     <para>最高强度的规范 JSON 值。The canonical JSON value for the extra-high level.</para>
+    ///     <para>极高强度的规范 JSON 值，与 OpenAI wire 值一致。</para>
+    ///     <para>The canonical JSON value for the extra-high level, matching the OpenAI wire value.</para>
     /// </summary>
-    public const string ExtraHighValue = "extra-high";
+    public const string ExtraHighValue = "xhigh";
 
     /// <summary>
-    ///     <para>错误消息中列出的全部可接受档位值。All accepted effort values, listed in error messages.</para>
+    ///     <para>最高强度的规范 JSON 值。</para>
+    ///     <para>The canonical JSON value for the max level.</para>
     /// </summary>
-    public const string AcceptedValuesText = "none, low, medium, high, extra-high";
+    public const string MaxValue = "max";
 
     /// <summary>
-    ///     <para>大小写不敏感地解析档位标识；接受规范 kebab-case 值与关闭推理的同义词 "off"。</para>
-    ///     <para>Parses an effort id case-insensitively; accepts the canonical kebab-case values and the "off" synonym for none.</para>
+    ///     <para>错误消息中列出的全部可接受档位值。</para>
+    ///     <para>All accepted effort values, listed in error messages.</para>
+    /// </summary>
+    public const string AcceptedValuesText = "none, minimal, low, medium, high, xhigh, max";
+
+    /// <summary>
+    ///     <para>
+    ///         大小写不敏感地解析档位标识；接受规范值与同义词 "off"（none）和旧拼写 "extra-high"（xhigh，
+    ///         读取旧配置与会话时保持兼容）。
+    ///     </para>
+    ///     <para>
+    ///         Parses an effort id case-insensitively; accepts the canonical values plus the "off" synonym for none and
+    ///         the legacy "extra-high" spelling of xhigh, keeping old configs and sessions readable.
+    ///     </para>
     /// </summary>
     public static bool TryParse(string? text, out ModelReasoningEffort value)
     {
@@ -68,6 +94,9 @@ public static class ModelReasoningEffortParser
             case NoneValue :
             case "off" :
                 value = ModelReasoningEffort.None;
+                return true;
+            case MinimalValue :
+                value = ModelReasoningEffort.Minimal;
                 return true;
             case LowValue :
                 value = ModelReasoningEffort.Low;
@@ -79,7 +108,11 @@ public static class ModelReasoningEffortParser
                 value = ModelReasoningEffort.High;
                 return true;
             case ExtraHighValue :
+            case "extra-high" :
                 value = ModelReasoningEffort.ExtraHigh;
+                return true;
+            case MaxValue :
+                value = ModelReasoningEffort.Max;
                 return true;
             default :
                 value = ModelReasoningEffort.None;
@@ -88,16 +121,18 @@ public static class ModelReasoningEffortParser
     }
 
     /// <summary>
-    ///     <para>写出规范 kebab-case 值，与读取端互逆。</para>
-    ///     <para>Writes the canonical kebab-case value, the inverse of the reading side.</para>
+    ///     <para>写出规范值，与读取端互逆（不含兼容同义词）。</para>
+    ///     <para>Writes the canonical value, the inverse of the reading side (compatibility synonyms excluded).</para>
     /// </summary>
     public static string ToValueString(ModelReasoningEffort value) => value switch
     {
         ModelReasoningEffort.None => NoneValue,
+        ModelReasoningEffort.Minimal => MinimalValue,
         ModelReasoningEffort.Low => LowValue,
         ModelReasoningEffort.Medium => MediumValue,
         ModelReasoningEffort.High => HighValue,
         ModelReasoningEffort.ExtraHigh => ExtraHighValue,
+        ModelReasoningEffort.Max => MaxValue,
         _ => throw new ArgumentOutOfRangeException(nameof(value), value, "Unknown model reasoning effort.")
     };
 }
