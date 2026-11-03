@@ -18,7 +18,8 @@
         <Setter Property="CornerRadius" Value="14" />
     </Style>
     <!-- 用户消息：右对齐容器（气泡 + 悬停时间行）。时间默认透明、悬停整条消息时淡入；
-         时间行常驻占位（高度约等于原气泡底距 16），悬停不引起时间线跳动。 -->
+         时间行常驻占位（时间 + 复制按钮，高度约 18），悬停不引起时间线跳动。行内时间右侧
+         是复制按钮；淡入触发挂在本容器而非气泡上，鼠标移到按钮不脱离悬停链。 -->
     <Style Selector="StackPanel.user-message">
         <Setter Property="HorizontalAlignment" Value="Right" />
     </Style>
@@ -27,7 +28,7 @@
         <Setter Property="Background" Value="{DynamicResource UserBubbleBrush}" />
         <Setter Property="Margin" Value="0,0,0,2" />
     </Style>
-    <Style Selector="TextBlock.user-message-time">
+    <Style Selector="StackPanel.user-message-meta">
         <Setter Property="HorizontalAlignment" Value="Right" />
         <Setter Property="Opacity" Value="0" />
         <Setter Property="Transitions">
@@ -36,8 +37,24 @@
             </Transitions>
         </Setter>
     </Style>
-    <Style Selector="StackPanel.user-message:pointerover > TextBlock.user-message-time">
+    <Style Selector="StackPanel.user-message:pointerover > StackPanel.user-message-meta">
         <Setter Property="Opacity" Value="1" />
+    </Style>
+    <!-- 悬停时间行的复制按钮：幽灵形态对齐代码块复制按钮，悬停只亮底不改图标色。 -->
+    <Style Selector="Button.user-message-copy">
+        <Setter Property="Width" Value="18" />
+        <Setter Property="Height" Value="18" />
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="CornerRadius" Value="4" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+        <Setter Property="Focusable" Value="False" />
+    </Style>
+    <Style Selector="Button.user-message-copy /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+    </Style>
+    <Style Selector="Button.user-message-copy:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource MessageActionHoverBrush}" />
     </Style>
     <!-- 助手回复不用气泡底色，直接融入聊天背景；思考行与工具行同节奏（无包装间距），
          正文块自带呼吸位，因此助手消息不再套 message-bubble。 -->

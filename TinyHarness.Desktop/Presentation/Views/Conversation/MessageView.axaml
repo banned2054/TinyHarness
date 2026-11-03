@@ -10,15 +10,24 @@
              mc:Ignorable="d"
              d:DesignHeight="120" d:DesignWidth="480">
     <!-- 消息气泡：主时间线与过程组内的中间消息复用（DataTemplate 实例化本视图）。
-         用户消息不带角色标签；时间移出气泡，悬停整条消息时淡入（user-message 样式）。
+         用户消息不带角色标签；时间与复制按钮同行移出气泡，悬停整条消息时淡入（user-message-meta）。
          助手/系统消息的底部间距由内部块与各自样式管理（思考行零间距）。 -->
     <Grid>
         <StackPanel Classes="user-message" IsVisible="{Binding IsUserMessage}">
             <Border Classes="message-bubble user-bubble">
-                <TextBlock Text="{Binding Content}" TextWrapping="Wrap" LineHeight="22"
-                           Foreground="{DynamicResource OnAccentBrush}" />
+                <SelectableTextBlock Text="{Binding Content}" TextWrapping="Wrap" LineHeight="22"
+                                     Foreground="{DynamicResource OnAccentBrush}" />
             </Border>
-            <TextBlock Text="{Binding CreatedAtText}" Classes="caption user-message-time" />
+            <StackPanel Classes="user-message-meta" Orientation="Horizontal" Spacing="4">
+                <TextBlock Text="{Binding CreatedAtText}" Classes="caption" VerticalAlignment="Center" />
+                <Button Classes="user-message-copy" Click="OnCopyMessageClick"
+                        AutomationProperties.Name="复制消息" ToolTip.Tip="复制">
+                    <Viewbox Width="12" Height="12">
+                        <Path Width="24" Height="24" Data="{DynamicResource Icon.CodeCopy}"
+                              Stroke="{DynamicResource TextMutedBrush}" StrokeThickness="2" />
+                    </Viewbox>
+                </Button>
+            </StackPanel>
         </StackPanel>
         <!-- 助手消息不用气泡包装：思考行与工具调用行同一互锁节奏（行内 4px 呼吸位，
              与 tool-card 机制相同），块间用 Margin 而非容器 Spacing——子块折叠不留幻影间距。

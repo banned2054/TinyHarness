@@ -38,7 +38,7 @@
             <SolidColorBrush x:Key="ScrollBarTrackStrokePointerOver" Color="Transparent" />
             <SolidColorBrush x:Key="ScrollBarBackground" Color="Transparent" />
             <SolidColorBrush x:Key="ScrollBarBorderBrush" Color="Transparent" />
-            <!-- 表面：侧栏底色为本轮指定的 #1B1B1C 中性灰。 -->
+            <!-- 表面：侧栏底色 #1B1B1C 中性灰。 -->
             <SolidColorBrush x:Key="SidebarBackgroundBrush" Color="#1B1B1C" />
             <!-- 会话区画布：对齐 Codex 的中性深灰 #1E1E1E。 -->
             <SolidColorBrush x:Key="ChatBackgroundBrush" Color="#1E1E1E" />
@@ -57,8 +57,8 @@
             <SolidColorBrush x:Key="ComposerActionBrush" Color="#679EFE" />
             <!-- 输入框聚焦时的面板描边：中性灰轻微提亮，避免强调色矩形观感。 -->
             <SolidColorBrush x:Key="ComposerFocusRingBrush" Color="#3F3F47" />
-            <!-- 会话列表：选中态为本轮指定的 #2D2D2E；悬停取其与底色之间的
-                 中性灰 #262627——清晰但不过亮，也不会盖过选中态。 -->
+            <!-- 会话列表：选中态 #2D2D2E；悬停取其与底色之间的中性灰 #262627——
+                 清晰但不过亮，也不会盖过选中态。 -->
             <SolidColorBrush x:Key="SessionHoverBrush" Color="#262627" />
             <SolidColorBrush x:Key="SessionSelectedBrush" Color="#2D2D2E" />
             <!-- 侧栏顶部「新建会话」按钮三态（对齐 DSH newSession 的实底形态）：
@@ -91,6 +91,8 @@
             <SolidColorBrush x:Key="UserBubbleBrush" Color="#272727" />
             <SolidColorBrush x:Key="OnAccentBrush" Color="#FFFFFF" />
             <SolidColorBrush x:Key="OnAccentMutedBrush" Color="#DCE5FF" />
+            <!-- 用户消息悬停行内操作按钮（复制）的悬停底：8% 白，对齐侧栏图标按钮的淡入强度。 -->
+            <SolidColorBrush x:Key="MessageActionHoverBrush" Color="#14FFFFFF" />
             <!-- 强调色实底：审批允许、设置保存等主按钮共用（原气泡蓝拆出，与气泡解耦）。 -->
             <SolidColorBrush x:Key="AccentFillBrush" Color="#3B5CCC" />
             <!-- 悬浮输入面板发送按钮悬停：强调色提亮一档。 -->
@@ -158,6 +160,8 @@
             <SolidColorBrush x:Key="UserBubbleBrush" Color="#4176E6" />
             <SolidColorBrush x:Key="OnAccentBrush" Color="#FFFFFF" />
             <SolidColorBrush x:Key="OnAccentMutedBrush" Color="#E7EEFF" />
+            <!-- 用户消息悬停行内操作按钮（复制）的悬停底：白底上的 8% 黑对应深色 8% 白。 -->
+            <SolidColorBrush x:Key="MessageActionHoverBrush" Color="#14000000" />
             <!-- 强调色实底：与 Dark 的 AccentFillBrush 同语义（浅色沿用 deepseek-500）。 -->
             <SolidColorBrush x:Key="AccentFillBrush" Color="#4176E6" />
             <!-- 悬浮输入面板发送按钮悬停：气泡强调色加深一档。 -->
