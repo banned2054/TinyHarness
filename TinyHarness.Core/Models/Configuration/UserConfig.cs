@@ -4,10 +4,21 @@ using TinyHarness.Core.Models.ChatCompletions;
 namespace TinyHarness.Core.Models.Configuration;
 
 /// <summary>
-///     用户配置中一个 provider profile 声明的模型及其显式声明的上下文窗口；窗口大小不从模型名称推断。
-///     A model declared by a provider profile in the user config, with its explicitly declared context window;
-///     the window size is never inferred from the model name.
+///     <para>用户配置中一个 provider profile 声明的模型、显式上下文窗口与媒体输入能力；窗口和能力不从模型名称推断。</para>
+///     <para>
+///         A model declared by a provider profile in the user config, with its explicit context window and media-input
+///         capabilities; neither the window nor capabilities are inferred from the model name.
+///     </para>
 /// </summary>
+/// <remarks>
+///     <para>
+///         媒体能力字段只记录目录声明，不单独启用附件读取、媒体转换或协议请求编码。
+///     </para>
+///     <para>
+///         Media capability fields record catalog declarations only; they do not enable attachment reading, media
+///         conversion, or protocol request encoding.
+///     </para>
+/// </remarks>
 public sealed record UserProfileModel
 {
     public string Id { get; init; } = string.Empty;
@@ -22,6 +33,24 @@ public sealed record UserProfileModel
     public string? DisplayName { get; init; }
 
     public int ContextWindowTokens { get; init; }
+
+    /// <summary>
+    ///     <para>模型目录是否声明该模型支持图片输入。</para>
+    ///     <para>Whether the model catalog declares image input support for this model.</para>
+    /// </summary>
+    public bool SupportsImageInput { get; init; }
+
+    /// <summary>
+    ///     <para>模型目录是否声明该模型支持视频输入。</para>
+    ///     <para>Whether the model catalog declares video input support for this model.</para>
+    /// </summary>
+    public bool SupportsVideoInput { get; init; }
+
+    /// <summary>
+    ///     <para>模型目录是否声明该模型支持 PDF 输入。</para>
+    ///     <para>Whether the model catalog declares PDF input support for this model.</para>
+    /// </summary>
+    public bool SupportsPdfInput { get; init; }
 
     /// <summary>
     ///     <para>

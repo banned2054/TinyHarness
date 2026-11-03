@@ -273,7 +273,10 @@ public static class UserConfigStore
                     var modelNode = new JsonObject
                     {
                         ["id"]                  = model.Id,
-                        ["contextWindowTokens"] = model.ContextWindowTokens
+                        ["contextWindowTokens"] = model.ContextWindowTokens,
+                        ["supportsImageInput"]  = model.SupportsImageInput,
+                        ["supportsVideoInput"]  = model.SupportsVideoInput,
+                        ["supportsPdfInput"]    = model.SupportsPdfInput
                     };
                     if (!string.IsNullOrWhiteSpace(model.DisplayName))
                         modelNode["displayName"] = model.DisplayName;
@@ -561,6 +564,12 @@ public static class UserConfigStore
                             Id                     = id,
                             DisplayName            = displayName,
                             ContextWindowTokens    = contextWindow,
+                            SupportsImageInput     = ReadBool(modelNode, "supportsImageInput", filePath,
+                                                              $"profiles[{i}].models[{m}].supportsImageInput") ?? false,
+                            SupportsVideoInput     = ReadBool(modelNode, "supportsVideoInput", filePath,
+                                                              $"profiles[{i}].models[{m}].supportsVideoInput") ?? false,
+                            SupportsPdfInput       = ReadBool(modelNode, "supportsPdfInput", filePath,
+                                                              $"profiles[{i}].models[{m}].supportsPdfInput") ?? false,
                             ReasoningEfforts       = reasoningEfforts,
                             DefaultReasoningEffort = defaultEffort
                         };

@@ -29,7 +29,7 @@
             <TextBlock Text="{Binding Label}" />
         </DataTemplate>
         <!-- 模型目录单条目：折叠仅 ID/名称行（API ID 是保存键，已有条目只读）；展开补窗口、
-             支持档位与默认档位。模型增删在获取模型面板中勾选确认，行内不设删除按钮。 -->
+             推理档位、多模态输入能力与默认档位。模型增删在获取模型面板中勾选确认，行内不设删除按钮。 -->
         <DataTemplate x:Key="ModelEntryTemplate" x:DataType="vm:CatalogModelEntryViewModel">
             <Border Classes="settings-model-entry" Margin="0,0,0,8">
                 <StackPanel Spacing="10">
@@ -123,6 +123,25 @@
                             </WrapPanel>
                             <TextBlock Classes="settings-card-description"
                                        Text="留空表示未声明能力，此时只能使用默认（由服务决定）。" />
+                        </StackPanel>
+                        <StackPanel Spacing="4">
+                            <TextBlock Classes="settings-field-label" Text="多模态输入能力" />
+                            <WrapPanel Orientation="Horizontal">
+                                <CheckBox Content="图片" FontSize="13" Margin="0,0,16,0"
+                                          IsChecked="{Binding SupportsImageInput, Mode=TwoWay}"
+                                          Foreground="{DynamicResource PopupForegroundBrush}"
+                                          AutomationProperties.Name="支持图片输入" />
+                                <CheckBox Content="视频" FontSize="13" Margin="0,0,16,0"
+                                          IsChecked="{Binding SupportsVideoInput, Mode=TwoWay}"
+                                          Foreground="{DynamicResource PopupForegroundBrush}"
+                                          AutomationProperties.Name="支持视频输入" />
+                                <CheckBox Content="PDF" FontSize="13"
+                                          IsChecked="{Binding SupportsPdfInput, Mode=TwoWay}"
+                                          Foreground="{DynamicResource PopupForegroundBrush}"
+                                          AutomationProperties.Name="支持 PDF 输入" />
+                            </WrapPanel>
+                            <TextBlock Classes="settings-card-description"
+                                       Text="按当前供应商接口和模型的实际能力勾选。" />
                         </StackPanel>
                     </StackPanel>
                 </StackPanel>

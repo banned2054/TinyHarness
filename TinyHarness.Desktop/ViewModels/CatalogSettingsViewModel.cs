@@ -925,12 +925,12 @@ public sealed partial class CatalogProviderEditorViewModel : ObservableObject
 /// <summary>
 ///     <para>
 ///         模型目录的单条草稿：折叠仅显示 ID 与显示名，展开补上下文窗口、支持的推理档位
-///         与默认档位。API ID 是保存键：已有条目只读，替换 ID 走另行添加。
+///         、媒体输入能力与默认档位。API ID 是保存键：已有条目只读，替换 ID 走另行添加。
 ///     </para>
 ///     <para>
 ///         One catalog draft entry: collapsed to ID and display name, expanded for the context window,
-///         supported reasoning efforts and the default effort. The API ID is the save key: existing
-///         entries are read-only, and replacing an ID means adding another entry.
+///         supported reasoning efforts, media input capabilities and the default effort. The API ID is
+///         the save key: existing entries are read-only, and replacing an ID means adding another entry.
 ///     </para>
 /// </summary>
 public sealed class CatalogModelEntryViewModel : ObservableObject
@@ -957,6 +957,9 @@ public sealed class CatalogModelEntryViewModel : ObservableObject
     private          bool   _isLowSelected;
     private          bool   _isMediumSelected;
     private          bool   _isNoneSelected;
+    private          bool   _supportsImageInput;
+    private          bool   _supportsPdfInput;
+    private          bool   _supportsVideoInput;
     private          string _windowDraft;
 
     public CatalogModelEntryViewModel(UserProfileModel? source, Action onChanged)
@@ -967,6 +970,9 @@ public sealed class CatalogModelEntryViewModel : ObservableObject
         _id          = source?.Id          ?? string.Empty;
         _displayName = source?.DisplayName ?? string.Empty;
         _windowDraft = source is null ? string.Empty : FormatTokenCount(source.ContextWindowTokens);
+        _supportsImageInput = source?.SupportsImageInput ?? false;
+        _supportsVideoInput = source?.SupportsVideoInput ?? false;
+        _supportsPdfInput   = source?.SupportsPdfInput   ?? false;
         if (source?.ReasoningEfforts is { } efforts)
             foreach (var effort in efforts)
                 SetEffortTick(effort, true);
@@ -1030,6 +1036,33 @@ public sealed class CatalogModelEntryViewModel : ObservableObject
     public RelayCommand ToggleExpandCommand { get; }
 
     public RelayCommand ToggleEffortMenuCommand { get; }
+
+    public bool SupportsImageInput
+    {
+        get => _supportsImageInput;
+        set
+        {
+            if (SetProperty(ref _supportsImageInput, value)) _onChanged();
+        }
+    }
+
+    public bool SupportsVideoInput
+    {
+        get => _supportsVideoInput;
+        set
+        {
+            if (SetProperty(ref _supportsVideoInput, value)) _onChanged();
+        }
+    }
+
+    public bool SupportsPdfInput
+    {
+        get => _supportsPdfInput;
+        set
+        {
+            if (SetProperty(ref _supportsPdfInput, value)) _onChanged();
+        }
+    }
 
     public bool IsNoneSelected
     {
@@ -1107,6 +1140,9 @@ public sealed class CatalogModelEntryViewModel : ObservableObject
             Id                     = _id.Trim(),
             DisplayName            = string.IsNullOrWhiteSpace(_displayName) ? null : _displayName.Trim(),
             ContextWindowTokens    = window,
+            SupportsImageInput     = SupportsImageInput,
+            SupportsVideoInput     = SupportsVideoInput,
+            SupportsPdfInput       = SupportsPdfInput,
             ReasoningEfforts       = efforts.Length == 0 ? null : efforts,
             DefaultReasoningEffort = defaultEffort
         };
@@ -1124,6 +1160,9 @@ public sealed class CatalogModelEntryViewModel : ObservableObject
         if (model.Id                            != source.Id) return false;
         if ((model.DisplayName ?? string.Empty) != (source.DisplayName ?? string.Empty)) return false;
         if (model.ContextWindowTokens           != source.ContextWindowTokens) return false;
+        if (model.SupportsImageInput             != source.SupportsImageInput) return false;
+        if (model.SupportsVideoInput             != source.SupportsVideoInput) return false;
+        if (model.SupportsPdfInput               != source.SupportsPdfInput) return false;
         if (model.ReasoningEfforts is { } efforts)
         {
             if (source.ReasoningEfforts is not { } sourceEfforts || efforts.Count != sourceEfforts.Count) return false;

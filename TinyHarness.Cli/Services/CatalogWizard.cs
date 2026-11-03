@@ -113,7 +113,12 @@ internal static class CatalogWizard
                                       existing?.DefaultReasoningEffort is { } level
                                           ? ModelReasoningEffortParser.ToValueString(level)
                                           : "default", token);
-        var model       = ModelCatalogEditor.Model(id, display, window, efforts, effort);
+        var model = ModelCatalogEditor.Model(id, display, window, efforts, effort) with
+        {
+            SupportsImageInput = existing?.SupportsImageInput ?? false,
+            SupportsVideoInput = existing?.SupportsVideoInput ?? false,
+            SupportsPdfInput   = existing?.SupportsPdfInput ?? false
+        };
         var makeDefault = await ConfirmAsync(io, "Set as this provider's default model?", false, token);
         var candidate   = ModelCatalogEditor.PutModel(baseline, providerName, model, edit, makeDefault);
         if (!await ConfirmAsync(io, "Save model?", false, token)) return;
