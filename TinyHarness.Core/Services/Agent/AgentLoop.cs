@@ -25,9 +25,9 @@ internal enum InstructionBoundaryStatus
 
 internal readonly record struct InstructionBoundaryCheck(
     InstructionBoundaryStatus Status,
-    string?                   Error,
-    string?                   NewRevision,
-    InstructionCoverage?      Coverage);
+    string? Error,
+    string? NewRevision,
+    InstructionCoverage? Coverage);
 
 /// <summary>
 ///     <para>宿主提供给循环的项目指令边界；所有可靠提交和生效仍由宿主协调。</para>
@@ -49,6 +49,13 @@ internal interface IAgentInstructionBoundary
 
     Task<ProjectInstructionsChanged?> ApplyToolRoundUpdateAsync(
         IReadOnlyList<ToolCallRecord> records, CancellationToken cancellationToken);
+
+    /// <summary>
+    ///     <para>记录循环的实际延期决定；诊断不改变边界检查或工具执行结果。</para>
+    ///     <para>Records actual loop deferral decisions without changing boundary checks or tool outcomes.</para>
+    /// </summary>
+    Task RecordDecisionAsync(string phase, string decision, int? deferrals, int steps, int toolExecutions) =>
+        Task.CompletedTask;
 }
 
 /// <summary>
@@ -75,17 +82,17 @@ internal interface IAgentInstructionBoundary
 /// </remarks>
 public sealed partial class AgentLoop
 {
-    private readonly IApprovalProvider?  _approver;
+    private readonly IApprovalProvider? _approver;
     private readonly ConversationContext _context;
-    private readonly IHostEventSink?     _events;
+    private readonly IHostEventSink? _events;
 
     private readonly Func<IReadOnlyList<ToolCallRecord>, CancellationToken, Task>? _executionCheckpoint;
 
     private readonly IAgentInstructionBoundary? _instructionBoundary;
-    private readonly IChatCompletionClient      _model;
-    private readonly AgentOptions               _options;
-    private readonly PermissionEngine?          _permissions;
-    private readonly IRunRecorder?              _recorder;
+    private readonly IChatCompletionClient _model;
+    private readonly AgentOptions _options;
+    private readonly PermissionEngine? _permissions;
+    private readonly IRunRecorder? _recorder;
 
     /// <summary>
     ///     <para>
@@ -107,7 +114,7 @@ public sealed partial class AgentLoop
     private readonly List<ToolCallRecord> _toolCallRecords = [];
 
     private readonly ToolRegistry _tools;
-    private          RunBudget?   _budget;
+    private RunBudget? _budget;
 
     private long _eventSequence;
     private long _nextInvocationSequence;
@@ -160,17 +167,17 @@ public sealed partial class AgentLoop
         ArgumentNullException.ThrowIfNull(tools);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentOutOfRangeException.ThrowIfNegative(options.MaxAgentSteps);
-        _model               = model;
-        _tools               = tools;
-        _options             = options;
-        _permissions         = permissions;
-        _approver            = approver;
-        _recorder            = recorder;
-        _events              = events;
-        _context             = context ?? new ConversationContext(options.Context);
+        _model = model;
+        _tools = tools;
+        _options = options;
+        _permissions = permissions;
+        _approver = approver;
+        _recorder = recorder;
+        _events = events;
+        _context = context ?? new ConversationContext(options.Context);
         _executionCheckpoint = executionCheckpoint;
         _instructionBoundary = instructionBoundary;
-        _control             = control;
+        _control = control;
     }
 
     /// <summary>
@@ -275,20 +282,20 @@ public sealed partial class AgentLoop
         string systemPrompt, string userInput, CancellationToken cancellationToken)
     {
         // 复用主循环时，事件序号、故障和执行记录仍须隔离到本次运行。
-        _eventSequence                  = 0;
-        _sinkFault                      = null;
+        _eventSequence = 0;
+        _sinkFault = null;
         _modelRequestPersistenceWarning = null;
-        _reportedInputTokens            = null;
-        _reportedOutputTokens           = null;
+        _reportedInputTokens = null;
+        _reportedOutputTokens = null;
         _toolCallRecords.Clear();
         _nextInvocationSequence = 0;
         using var budget = new RunBudget(_options.Budget, cancellationToken);
-        _budget           = budget;
+        _budget = budget;
         cancellationToken = budget.Token;
 
-        var steps                              = 0;
-        var toolExecutions                     = 0;
-        var compactions                        = 0;
+        var steps = 0;
+        var toolExecutions = 0;
+        var compactions = 0;
         var instructionDeferralsSinceExecution = 0;
 
         try
@@ -354,10 +361,10 @@ public sealed partial class AgentLoop
                     if (total > context.ContextWindowTokens)
                         return await FinishAsync(new AgentResult
                         {
-                            Status         = AgentStatus.Failed,
-                            Steps          = steps,
+                            Status = AgentStatus.Failed,
+                            Steps = steps,
                             ToolExecutions = toolExecutions,
-                            Compactions    = compactions,
+                            Compactions = compactions,
                             Error = $"The context still exceeds the model window after compaction " +
                                     $"({total} > {context.ContextWindowTokens} tokens); the request was not sent."
                         }).ConfigureAwait(false);
@@ -385,11 +392,11 @@ public sealed partial class AgentLoop
                     if (_control is null || await _control.TryFinishAsync(cancellationToken).ConfigureAwait(false))
                         return await FinishAsync(new AgentResult
                         {
-                            Status         = AgentStatus.Completed,
-                            FinalMessage   = assistant.AnswerText,
-                            Steps          = steps,
+                            Status = AgentStatus.Completed,
+                            FinalMessage = assistant.AnswerText,
+                            Steps = steps,
                             ToolExecutions = toolExecutions,
-                            Compactions    = compactions
+                            Compactions = compactions
                         }).ConfigureAwait(false);
                     await ApplyAmendmentsAsync(cancellationToken).ConfigureAwait(false);
                     continue;
@@ -404,62 +411,76 @@ public sealed partial class AgentLoop
                              .CheckToolRoundAsync(round.Where(item => item.Preparation is not null)
                                                        .Select(item => item.Preparation!).ToArray(),
                                                   cancellationToken).ConfigureAwait(false);
+                    await _instructionBoundary.RecordDecisionAsync("tool-preflight",
+                                                                   instructionCheck.Status switch
+                                                                   {
+                                                                       InstructionBoundaryStatus.Updated =>
+                                                                           instructionDeferralsSinceExecution >= 1
+                                                                               ? "stop-deferral-limit"
+                                                                               : "retry",
+                                                                       InstructionBoundaryStatus.Failed =>
+                                                                           "stop-load-failure",
+                                                                       InstructionBoundaryStatus.ScopeTooBroad =>
+                                                                           "narrow-scope",
+                                                                       _ => "proceed"
+                                                                   }, instructionDeferralsSinceExecution, steps,
+                                                                   toolExecutions).ConfigureAwait(false);
                     switch (instructionCheck.Status)
                     {
-                        case InstructionBoundaryStatus.ScopeTooBroad :
-                        {
-                            var records = RecordRound(round);
-                            AppendDeferredToolResults(round,
-                                                      "The tool round was not started because its project instruction scope is too broad. " +
-                                                      instructionCheck.Error +
-                                                      " Retry with fewer calls or a narrower path; no tool in this round ran.");
-                            await RecordNotStartedRoundAsync(records, cancellationToken).ConfigureAwait(false);
-                            continue;
-                        }
-                        case InstructionBoundaryStatus.Failed :
-                        {
-                            var records = RecordRound(round);
-                            AppendDeferredToolResults(round,
-                                                      "The tool round was not started because project instructions could not be refreshed. " +
-                                                      instructionCheck.Error);
-                            await RecordNotStartedRoundAsync(records, cancellationToken).ConfigureAwait(false);
-                            return await FinishAsync(new AgentResult
+                        case InstructionBoundaryStatus.ScopeTooBroad:
                             {
-                                Status         = AgentStatus.Failed,
-                                Error          = instructionCheck.Error,
-                                Steps          = steps,
-                                ToolExecutions = toolExecutions,
-                                Compactions    = compactions
-                            }).ConfigureAwait(false);
-                        }
-                        case InstructionBoundaryStatus.Updated :
-                        {
-                            var records = RecordRound(round);
-                            AppendDeferredToolResults(round,
-                                                      $"Not started because project instructions changed to revision {instructionCheck.NewRevision}; the tool round will be retried.");
-                            if (instructionDeferralsSinceExecution >= 1)
+                                var records = RecordRound(round);
+                                AppendDeferredToolResults(round,
+                                                          "The tool round was not started because its project instruction scope is too broad. " +
+                                                          instructionCheck.Error +
+                                                          " Retry with fewer calls or a narrower path; no tool in this round ran.");
+                                await RecordNotStartedRoundAsync(records, cancellationToken).ConfigureAwait(false);
+                                continue;
+                            }
+                        case InstructionBoundaryStatus.Failed:
                             {
+                                var records = RecordRound(round);
+                                AppendDeferredToolResults(round,
+                                                          "The tool round was not started because project instructions could not be refreshed. " +
+                                                          instructionCheck.Error);
                                 await RecordNotStartedRoundAsync(records, cancellationToken).ConfigureAwait(false);
                                 return await FinishAsync(new AgentResult
                                 {
                                     Status = AgentStatus.Failed,
-                                    Error =
-                                        "Project instructions changed again after the tool round was already deferred once.",
-                                    Steps          = steps,
+                                    Error = instructionCheck.Error,
+                                    Steps = steps,
                                     ToolExecutions = toolExecutions,
-                                    Compactions    = compactions
+                                    Compactions = compactions
                                 }).ConfigureAwait(false);
                             }
+                        case InstructionBoundaryStatus.Updated:
+                            {
+                                var records = RecordRound(round);
+                                AppendDeferredToolResults(round,
+                                                          $"Not started because project instructions changed to revision {instructionCheck.NewRevision}; the tool round will be retried.");
+                                if (instructionDeferralsSinceExecution >= 1)
+                                {
+                                    await RecordNotStartedRoundAsync(records, cancellationToken).ConfigureAwait(false);
+                                    return await FinishAsync(new AgentResult
+                                    {
+                                        Status = AgentStatus.Failed,
+                                        Error =
+                                            "Project instructions changed again after the tool round was already deferred once.",
+                                        Steps = steps,
+                                        ToolExecutions = toolExecutions,
+                                        Compactions = compactions
+                                    }).ConfigureAwait(false);
+                                }
 
-                            await RecordNotStartedRoundAsync(records, cancellationToken).ConfigureAwait(false);
-                            var changedEvent = await _instructionBoundary
-                                                    .ApplyToolRoundUpdateAsync(records.Values.ToArray(),
-                                                                               cancellationToken).ConfigureAwait(false);
-                            await PublishInstructionChangedAsync(changedEvent, cancellationToken).ConfigureAwait(false);
-                            instructionDeferralsSinceExecution++;
-                            continue;
-                        }
-                        default :
+                                await RecordNotStartedRoundAsync(records, cancellationToken).ConfigureAwait(false);
+                                var changedEvent = await _instructionBoundary
+                                                        .ApplyToolRoundUpdateAsync(records.Values.ToArray(),
+                                                                                   cancellationToken).ConfigureAwait(false);
+                                await PublishInstructionChangedAsync(changedEvent, cancellationToken).ConfigureAwait(false);
+                                instructionDeferralsSinceExecution++;
+                                continue;
+                            }
+                        default:
                             round = BindInstructionCoverage(round, instructionCheck.Coverage);
                             break;
                     }
@@ -500,7 +521,7 @@ public sealed partial class AgentLoop
                     continue;
                 }
 
-                var                       authorized      = new List<AuthorizedRoundCall>(round.Count);
+                var authorized = new List<AuthorizedRoundCall>(round.Count);
                 InstructionBoundaryCheck? approvalRefresh = null;
                 foreach (var item in round)
                 {
@@ -528,21 +549,30 @@ public sealed partial class AgentLoop
 
                 if (approvalRefresh is { } approvalChange && _instructionBoundary is { } approvalBoundary)
                 {
+                    await approvalBoundary.RecordDecisionAsync("approval-recheck",
+                                                               approvalChange.Status ==
+                                                               InstructionBoundaryStatus.Failed
+                                                                   ? "stop-load-failure"
+                                                                   : instructionDeferralsSinceExecution >= 1
+                                                                       ? "stop-deferral-limit"
+                                                                       : "retry",
+                                                               instructionDeferralsSinceExecution, steps,
+                                                               toolExecutions).ConfigureAwait(false);
                     var reason = approvalChange.Status == InstructionBoundaryStatus.Updated
                         ? $"Not started because project instructions changed to revision {approvalChange.NewRevision}; approval is obsolete."
                         : "Not started because project instructions could not be refreshed. " + approvalChange.Error;
                     AppendDeferredToolResults(round, reason);
                     await RecordNotStartedRoundAsync(roundRecords, cancellationToken).ConfigureAwait(false);
-                    if (approvalChange.Status              == InstructionBoundaryStatus.Failed ||
+                    if (approvalChange.Status == InstructionBoundaryStatus.Failed ||
                         instructionDeferralsSinceExecution >= 1)
                         return await FinishAsync(new AgentResult
                         {
                             Status = AgentStatus.Failed,
                             Error = approvalChange.Error ??
                                     "Project instructions changed again after the tool round was already deferred once.",
-                            Steps          = steps,
+                            Steps = steps,
                             ToolExecutions = toolExecutions,
-                            Compactions    = compactions
+                            Compactions = compactions
                         }).ConfigureAwait(false);
                     var changedEvent = await approvalBoundary
                                             .ApplyToolRoundUpdateAsync(roundRecords.Values.ToArray(), cancellationToken)
@@ -577,6 +607,15 @@ public sealed partial class AgentLoop
                         if (dispatchCheck.Status is InstructionBoundaryStatus.Failed
                                                  or InstructionBoundaryStatus.Updated)
                         {
+                            await _instructionBoundary.RecordDecisionAsync("dispatch-recheck",
+                                                                           dispatchCheck.Status ==
+                                                                           InstructionBoundaryStatus.Failed
+                                                                               ? "stop-load-failure"
+                                                                               : instructionDeferralsSinceExecution >= 1
+                                                                                   ? "stop-deferral-limit"
+                                                                                   : "retry",
+                                                                           instructionDeferralsSinceExecution, steps,
+                                                                           toolExecutions).ConfigureAwait(false);
                             var deferred = authorized.SkipWhile(candidate => !ReferenceEquals(candidate, item))
                                                      .ToArray();
                             var deferredCalls = deferred.Select(candidate => candidate.RoundCall).ToArray();
@@ -597,9 +636,9 @@ public sealed partial class AgentLoop
                                         Status = AgentStatus.Failed,
                                         Error =
                                             "Project instructions changed again after the tool round was already deferred once.",
-                                        Steps          = steps,
+                                        Steps = steps,
                                         ToolExecutions = toolExecutions,
-                                        Compactions    = compactions
+                                        Compactions = compactions
                                     }).ConfigureAwait(false);
                                 }
 
@@ -622,11 +661,11 @@ public sealed partial class AgentLoop
                                .ConfigureAwait(false);
                             return await FinishAsync(new AgentResult
                             {
-                                Status         = AgentStatus.Failed,
-                                Error          = dispatchCheck.Error,
-                                Steps          = steps,
+                                Status = AgentStatus.Failed,
+                                Error = dispatchCheck.Error,
+                                Steps = steps,
                                 ToolExecutions = toolExecutions,
-                                Compactions    = compactions
+                                Compactions = compactions
                             }).ConfigureAwait(false);
                         }
                     }
@@ -682,6 +721,10 @@ public sealed partial class AgentLoop
                     }
 
                     // 首个真实启动构成新的安全推进边界；后续规则变化重新获得一次延期预算。
+                    if (_instructionBoundary is not null)
+                        await _instructionBoundary.RecordDecisionAsync("tool-start", "reset-deferrals",
+                                                                       instructionDeferralsSinceExecution, steps,
+                                                                       toolExecutions).ConfigureAwait(false);
                     instructionDeferralsSinceExecution = 0;
                     budget.ToolStarted();
                     toolExecutions++;
@@ -693,7 +736,7 @@ public sealed partial class AgentLoop
                     }
                     catch (ToolExecutionCanceledException ex)
                     {
-                        result       = ex.Result;
+                        result = ex.Result;
                         record.State = ToolCallExecutionState.UnknownResult;
                         _context.Append(ChatMessage.Tool(item.RoundCall.Call.FunctionName, item.RoundCall.Call.Id,
                                                          result.Content));
@@ -718,9 +761,9 @@ public sealed partial class AgentLoop
                             Error =
                                 "Run cancelled after tool execution started; partial results were retained for inspection.",
                             PersistenceWarning = persistenceWarning,
-                            Steps              = steps,
-                            ToolExecutions     = toolExecutions,
-                            Compactions        = compactions
+                            Steps = steps,
+                            ToolExecutions = toolExecutions,
+                            Compactions = compactions
                         }).ConfigureAwait(false);
                     }
 
@@ -744,9 +787,9 @@ public sealed partial class AgentLoop
                                 Error =
                                     "The tool ran but its result was not reliably recorded; later tools were stopped.",
                                 PersistenceWarning = ex.Message,
-                                Steps              = steps,
-                                ToolExecutions     = toolExecutions,
-                                Compactions        = compactions
+                                Steps = steps,
+                                ToolExecutions = toolExecutions,
+                                Compactions = compactions
                             }).ConfigureAwait(false);
                         }
 
@@ -764,9 +807,9 @@ public sealed partial class AgentLoop
                                 : AgentStatus.Failed,
                             Error =
                                 "The tool execution is incomplete or left file outcomes unknown; later tools were stopped pending inspection.",
-                            Steps          = steps,
+                            Steps = steps,
                             ToolExecutions = toolExecutions,
-                            Compactions    = compactions
+                            Compactions = compactions
                         }).ConfigureAwait(false);
                     }
 
@@ -782,33 +825,33 @@ public sealed partial class AgentLoop
 
             return await FinishAsync(new AgentResult
             {
-                Status         = AgentStatus.StepLimitReached,
-                FinalMessage   = string.Empty,
-                Steps          = steps,
+                Status = AgentStatus.StepLimitReached,
+                FinalMessage = string.Empty,
+                Steps = steps,
                 ToolExecutions = toolExecutions,
-                Compactions    = compactions
+                Compactions = compactions
             }).ConfigureAwait(false);
         }
         catch (RunBudgetExceededException ex)
         {
             return await FinishAsync(new AgentResult
             {
-                Status         = AgentStatus.BudgetLimitReached,
-                Steps          = steps,
+                Status = AgentStatus.BudgetLimitReached,
+                Steps = steps,
                 ToolExecutions = toolExecutions,
-                Compactions    = compactions,
-                Error          = ex.Message
+                Compactions = compactions,
+                Error = ex.Message
             }).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             return await FinishAsync(new AgentResult
             {
-                Status         = AgentStatus.Cancelled,
-                Steps          = steps,
+                Status = AgentStatus.Cancelled,
+                Steps = steps,
                 ToolExecutions = toolExecutions,
-                Compactions    = compactions,
-                Error          = "Run cancelled"
+                Compactions = compactions,
+                Error = "Run cancelled"
             }).ConfigureAwait(false);
         }
         catch (Exception ex)
@@ -816,11 +859,11 @@ public sealed partial class AgentLoop
             // SDK 超时也可能抛取消异常；只有调用方令牌已取消才进入上面的取消分支。
             return await FinishAsync(new AgentResult
             {
-                Status         = AgentStatus.Failed,
-                Steps          = steps,
+                Status = AgentStatus.Failed,
+                Steps = steps,
                 ToolExecutions = toolExecutions,
-                Compactions    = compactions,
-                Error          = ex.Message
+                Compactions = compactions,
+                Error = ex.Message
             }).ConfigureAwait(false);
         }
     }
@@ -890,6 +933,9 @@ public sealed partial class AgentLoop
     /// </remarks>
     private async Task<AgentResult> PublishRunFinishedAsync(AgentResult result)
     {
+        if (_instructionBoundary is not null)
+            await _instructionBoundary.RecordDecisionAsync("run-finished", result.Status.ToString(), null,
+                                                           result.Steps, result.ToolExecutions).ConfigureAwait(false);
         if (_events is null) return result;
 
         if (_sinkFault is not null)
@@ -904,11 +950,11 @@ public sealed partial class AgentLoop
             try
             {
                 await _events.PublishAsync(new HostEvent
-                                           {
-                                               Kind     = HostEventKind.RunError,
-                                               Sequence = Interlocked.Increment(ref _eventSequence),
-                                               Payload  = result.Error
-                                           },
+                {
+                    Kind = HostEventKind.RunError,
+                    Sequence = Interlocked.Increment(ref _eventSequence),
+                    Payload = result.Error
+                },
                                            CancellationToken.None).ConfigureAwait(false);
             }
             catch (Exception ex)
@@ -919,11 +965,11 @@ public sealed partial class AgentLoop
         try
         {
             await _events.PublishAsync(new HostEvent
-                                       {
-                                           Kind     = HostEventKind.RunFinished,
-                                           Sequence = Interlocked.Increment(ref _eventSequence),
-                                           Payload  = result
-                                       },
+            {
+                Kind = HostEventKind.RunFinished,
+                Sequence = Interlocked.Increment(ref _eventSequence),
+                Payload = result
+            },
                                        CancellationToken.None).ConfigureAwait(false);
         }
         catch (Exception ex)
@@ -965,9 +1011,9 @@ public sealed partial class AgentLoop
 
         var @event = new HostEvent
         {
-            Kind     = kind,
+            Kind = kind,
             Sequence = Interlocked.Increment(ref _eventSequence),
-            Payload  = payload
+            Payload = payload
         };
         try
         {
@@ -1058,10 +1104,10 @@ public sealed partial class AgentLoop
     /// </summary>
     private ChatCompletionRequest BuildRequest(IReadOnlyList<ToolDefinition> definitions) => new()
     {
-        Model           = _options.Model,
+        Model = _options.Model,
         ReasoningEffort = _options.ReasoningEffort,
-        Messages        = PermissionModelView(),
-        Tools           = definitions.Count == 0 ? null : definitions
+        Messages = PermissionModelView(),
+        Tools = definitions.Count == 0 ? null : definitions
     };
 
     /// <summary>
@@ -1125,10 +1171,10 @@ public sealed partial class AgentLoop
             // 摘要不得请求工具或产生副作用。
             var summaryRequest = new ChatCompletionRequest
             {
-                Model           = _options.Model,
+                Model = _options.Model,
                 ReasoningEffort = _options.ReasoningEffort,
-                Messages        = foldMessages,
-                Tools           = null
+                Messages = foldMessages,
+                Tools = null
             };
             // 摘要按自身输入校准并累计 usage，但内部文本不得作为回答展示。
             var estimatedSummaryTokens = TokenEstimator.EstimateMessages(foldMessages);
@@ -1151,8 +1197,8 @@ public sealed partial class AgentLoop
             _context.MarkCompactionAttempted(ex switch
             {
                 EmptyModelResponseException => CompactionFailureReason.EmptySummary,
-                InvalidDataException        => CompactionFailureReason.IncompleteResponse,
-                _                           => CompactionFailureReason.ModelRequestFailed
+                InvalidDataException => CompactionFailureReason.IncompleteResponse,
+                _ => CompactionFailureReason.ModelRequestFailed
             });
             await PublishCompactionFailureAsync(cancellationToken).ConfigureAwait(false);
             return false;
@@ -1166,7 +1212,7 @@ public sealed partial class AgentLoop
             return false;
         }
 
-        var after  = _context.EstimateViewTokens();
+        var after = _context.EstimateViewTokens();
         var change = new ContextChange(before, after);
         await PublishEventAsync(HostEventKind.CompactionApplied, change, cancellationToken).ConfigureAwait(false);
         if (_recorder is not null)
@@ -1278,7 +1324,7 @@ public sealed partial class AgentLoop
             return new ToolResult
             {
                 Succeeded = false,
-                Content   = $"Tool '{preparation.ToolName}' failed: {ex.Message}"
+                Content = $"Tool '{preparation.ToolName}' failed: {ex.Message}"
             };
         }
     }
@@ -1307,19 +1353,19 @@ public sealed partial class AgentLoop
             var record = item.Preparation is { } preparation
                 ? new ToolCallRecord
                 {
-                    CallId       = item.Call.Id,
+                    CallId = item.Call.Id,
                     InvocationId = NextInvocationId(),
-                    ToolName     = item.Call.FunctionName,
-                    Capability   = preparation.Capability,
-                    SideEffects  = !ToolCapabilities.IsReadOnly(preparation.Capability),
-                    Summary      = preparation.Summary
+                    ToolName = item.Call.FunctionName,
+                    Capability = preparation.Capability,
+                    SideEffects = !ToolCapabilities.IsReadOnly(preparation.Capability),
+                    Summary = preparation.Summary
                 }
                 : new ToolCallRecord
                 {
-                    CallId           = item.Call.Id,
-                    InvocationId     = NextInvocationId(),
-                    ToolName         = item.Call.FunctionName,
-                    Summary          = $"{item.Call.FunctionName}()",
+                    CallId = item.Call.Id,
+                    InvocationId = NextInvocationId(),
+                    ToolName = item.Call.FunctionName,
+                    Summary = $"{item.Call.FunctionName}()",
                     PreparationError = item.Error
                 };
             records[item.Call.Id] = record;
@@ -1374,7 +1420,7 @@ public sealed partial class AgentLoop
         var decision = _permissions!.Decide(preparation);
         switch (decision)
         {
-            case PermissionDecision.Allow :
+            case PermissionDecision.Allow:
                 // 授权阶段即消费预授权，避免同轮相同调用复用一次性 grant。
                 _permissions.TryConsumeOnce(preparation);
                 records[preparation.CallId].Approval = "allow";
@@ -1382,7 +1428,7 @@ public sealed partial class AgentLoop
                 await PublishResolutionAsync(decision, null, "allow", cancellationToken).ConfigureAwait(false);
                 return AuthorizationOutcome.Granted;
 
-            case PermissionDecision.Deny :
+            case PermissionDecision.Deny:
                 var blockedReason = _permissions.NonReadOnlyBlock(preparation);
                 var policyDenied = AuthorizationOutcome.Denied(blockedReason is not null
                                                                    ? $"Blocked pending inspection of an interrupted run ({blockedReason}); denied: {preparation.Summary}"
@@ -1394,61 +1440,61 @@ public sealed partial class AgentLoop
                    .ConfigureAwait(false);
                 return policyDenied;
 
-            case PermissionDecision.Ask :
-            {
-                var approvalProvider = _approver ??
-                                       throw new
-                                           InvalidOperationException("An approval provider is required when the permission engine returns Ask.");
-                await PublishEventAsync(HostEventKind.ApprovalRequested, preparation, cancellationToken)
-                   .ConfigureAwait(false);
-                var amendmentToken = _control?.AmendmentToken ?? CancellationToken.None;
-                using var approvalToken =
-                    CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, amendmentToken);
-                ApprovalAction action;
-                try
+            case PermissionDecision.Ask:
                 {
-                    action = await approvalProvider.PromptAsync(preparation, approvalToken.Token).ConfigureAwait(false);
-                }
-                catch (OperationCanceledException) when (amendmentToken.IsCancellationRequested &&
-                                                         !cancellationToken.IsCancellationRequested)
-                {
-                    await PublishResolutionAsync(decision, null, "approval obsolete: user amendment", cancellationToken)
+                    var approvalProvider = _approver ??
+                                           throw new
+                                               InvalidOperationException("An approval provider is required when the permission engine returns Ask.");
+                    await PublishEventAsync(HostEventKind.ApprovalRequested, preparation, cancellationToken)
                        .ConfigureAwait(false);
-                    return AuthorizationOutcome.Granted;
-                }
-
-                switch (action)
-                {
-                    case ApprovalAction.AllowOnce :
-                        // 交互批准只绑定当前调用；存入引擎会误批后续相同调用。
-                        records[preparation.CallId].Approval = "allow once";
-                        await RecordPermissionAsync(preparation, decision, "allow once", cancellationToken)
-                           .ConfigureAwait(false);
-                        await PublishResolutionAsync(decision, action, "allow once", cancellationToken)
-                           .ConfigureAwait(false);
-                        return AuthorizationOutcome.Granted;
-
-                    case ApprovalAction.AllowSession :
-                        _permissions.GrantSession(preparation);
-                        records[preparation.CallId].Approval = "allow session";
-                        await RecordPermissionAsync(preparation, decision, "allow session", cancellationToken)
-                           .ConfigureAwait(false);
-                        await PublishResolutionAsync(decision, action, "allow session", cancellationToken)
+                    var amendmentToken = _control?.AmendmentToken ?? CancellationToken.None;
+                    using var approvalToken =
+                        CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, amendmentToken);
+                    ApprovalAction action;
+                    try
+                    {
+                        action = await approvalProvider.PromptAsync(preparation, approvalToken.Token).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException) when (amendmentToken.IsCancellationRequested &&
+                                                             !cancellationToken.IsCancellationRequested)
+                    {
+                        await PublishResolutionAsync(decision, null, "approval obsolete: user amendment", cancellationToken)
                            .ConfigureAwait(false);
                         return AuthorizationOutcome.Granted;
+                    }
 
-                    default :
-                        var userDenied =
-                            AuthorizationOutcome.Denied($"Permission denied by user: {preparation.Summary}");
-                        records[preparation.CallId].Approval = userDenied.Reason;
-                        await RecordPermissionAsync(preparation, decision, userDenied.Reason, cancellationToken)
-                           .ConfigureAwait(false);
-                        await PublishResolutionAsync(decision, ApprovalAction.Deny, userDenied.Reason,
-                                                     cancellationToken).ConfigureAwait(false);
-                        return userDenied;
+                    switch (action)
+                    {
+                        case ApprovalAction.AllowOnce:
+                            // 交互批准只绑定当前调用；存入引擎会误批后续相同调用。
+                            records[preparation.CallId].Approval = "allow once";
+                            await RecordPermissionAsync(preparation, decision, "allow once", cancellationToken)
+                               .ConfigureAwait(false);
+                            await PublishResolutionAsync(decision, action, "allow once", cancellationToken)
+                               .ConfigureAwait(false);
+                            return AuthorizationOutcome.Granted;
+
+                        case ApprovalAction.AllowSession:
+                            _permissions.GrantSession(preparation);
+                            records[preparation.CallId].Approval = "allow session";
+                            await RecordPermissionAsync(preparation, decision, "allow session", cancellationToken)
+                               .ConfigureAwait(false);
+                            await PublishResolutionAsync(decision, action, "allow session", cancellationToken)
+                               .ConfigureAwait(false);
+                            return AuthorizationOutcome.Granted;
+
+                        default:
+                            var userDenied =
+                                AuthorizationOutcome.Denied($"Permission denied by user: {preparation.Summary}");
+                            records[preparation.CallId].Approval = userDenied.Reason;
+                            await RecordPermissionAsync(preparation, decision, userDenied.Reason, cancellationToken)
+                               .ConfigureAwait(false);
+                            await PublishResolutionAsync(decision, ApprovalAction.Deny, userDenied.Reason,
+                                                         cancellationToken).ConfigureAwait(false);
+                            return userDenied;
+                    }
                 }
-            }
-            default :
+            default:
                 throw new InvalidOperationException($"Unknown permission decision: {decision}");
         }
     }

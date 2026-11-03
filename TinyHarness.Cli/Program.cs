@@ -87,7 +87,7 @@ internal static class Program
         if (args is ["sandbox", "verify-network-probe", ..])
         {
             using var probeCancellation = new CancellationTokenSource();
-            using var registration      = new ConsoleCancellation(probeCancellation);
+            using var registration = new ConsoleCancellation(probeCancellation);
             return await SandboxNetworkProbe.RunCommandAsync(args[2..], Console.Out, probeCancellation.Token)
                                             .ConfigureAwait(false);
         }
@@ -98,31 +98,32 @@ internal static class Program
             return await ProcessWorkspaceAclGrant.ExecuteHelperAsync(args[1]).ConfigureAwait(false);
         }
 
+        ProjectInstructionDiagnosticLog.Initialize();
         var options = CommandLine.Parse(args);
         switch (options.Kind)
         {
-            case CliCommandKind.Help :
+            case CliCommandKind.Help:
                 await Console.Out.WriteLineAsync(HelpText.For(options.HelpTopic).TrimEnd());
                 return 0;
 
-            case CliCommandKind.ProcessSmokeChild :
+            case CliCommandKind.ProcessSmokeChild:
                 await Console.Out.WriteLineAsync("process stdout");
                 await Console.Error.WriteLineAsync("process stderr");
                 return 0;
 
-            case CliCommandKind.Smoke :
+            case CliCommandKind.Smoke:
                 return await RunSmokeAsync(options.ConfigPath);
 
-            case CliCommandKind.Mcp :
+            case CliCommandKind.Mcp:
                 return await RunMcpServerAsync();
 
-            case CliCommandKind.Run :
+            case CliCommandKind.Run:
                 return await RunAsync(options.Prompt!, options.ConfigPath, options.ReasoningDisplay);
 
-            case CliCommandKind.Chat :
+            case CliCommandKind.Chat:
                 return await RunChatAsync(options.ConfigPath, options.ResumeSessionId, options.ReasoningDisplay);
 
-            default :
+            default:
                 return await RunManagementCommandAsync(options).ConfigureAwait(false);
         }
     }
@@ -133,11 +134,11 @@ internal static class Program
     /// </summary>
     private static async Task<int> RunManagementCommandAsync(CliOptions options)
     {
-        using var cts                = new CancellationTokenSource();
+        using var cts = new CancellationTokenSource();
         using var cancelRegistration = new ConsoleCancellation(cts);
         var context = new CommandContext
         {
-            Io          = new ConsoleCliIo(),
+            Io = new ConsoleCliIo(),
             Credentials = new WindowsCredentialStore()
         };
 
@@ -148,7 +149,7 @@ internal static class Program
                                                         .ConfigureAwait(false),
             CliCommandKind.Provider => await ProviderCommand.ExecuteAsync(context, options, cts.Token)
                                                             .ConfigureAwait(false),
-            CliCommandKind.Auth  => await AuthCommand.ExecuteAsync(context, options, cts.Token).ConfigureAwait(false),
+            CliCommandKind.Auth => await AuthCommand.ExecuteAsync(context, options, cts.Token).ConfigureAwait(false),
             CliCommandKind.Model => await ModelCommand.ExecuteAsync(context, options, cts.Token).ConfigureAwait(false),
             CliCommandKind.Doctor => await DoctorCommand.ExecuteAsync(context, options, cts.Token)
                                                         .ConfigureAwait(false),
@@ -175,10 +176,10 @@ internal static class Program
     {
         using var cts = new CancellationTokenSource();
         using var cancelRegistration = new ConsoleCancellation(cts);
-        var       reader = new ExclusiveInputReader(Console.In);
-        var       composition = await ComposeAgentAsync(configPath, cts.Token, true, reader).ConfigureAwait(false);
+        var reader = new ExclusiveInputReader(Console.In);
+        var composition = await ComposeAgentAsync(configPath, cts.Token, true, reader).ConfigureAwait(false);
         await using var events =
-            new ConsoleHostEventSink(composition.KnownSecrets, reasoningDisplay : reasoningDisplay);
+            new ConsoleHostEventSink(composition.KnownSecrets, reasoningDisplay: reasoningDisplay);
 
         await WriteHeaderAsync("TinyHarness run", composition).ConfigureAwait(false);
 
@@ -203,15 +204,15 @@ internal static class Program
                                              composition.Permissions,
                                              approver,
                                              events,
-                                             sessionWriter : new SessionStoreWriter(composition.SessionStoreDirectory!,
-                                                 session.Id, composition.KnownSecrets),
-                                             instructionLoader : instructionLoader,
-                                             initialInstructions : initialInstructions,
-                                             knownSecrets : composition.KnownSecrets,
-                                             credentialRoute : composition.CredentialRoute);
+                                             sessionWriter: new SessionStoreWriter(composition.SessionStoreDirectory!,
+                                                      session.Id, composition.KnownSecrets),
+                                             instructionLoader: instructionLoader,
+                                             initialInstructions: initialInstructions,
+                                             knownSecrets: composition.KnownSecrets,
+                                             credentialRoute: composition.CredentialRoute);
 
-        var run      = await host.SubmitTurnAsync(prompt, cts.Token).ConfigureAwait(false);
-        var result   = run.Result!;
+        var run = await host.SubmitTurnAsync(prompt, cts.Token).ConfigureAwait(false);
+        var result = run.Result!;
         var redactor = new DisplaySecretRedactor(composition.KnownSecrets);
 
         await Console.Out.WriteLineAsync();
@@ -225,7 +226,7 @@ internal static class Program
                                        $"{(budget.HasEstimatedTokens ? "estimated/mixed" : "reported")} tokens; {budget.ElapsedMilliseconds} ms; limit={budget.LimitReason ?? "none"}");
         if (result.InputTokens is not null || result.OutputTokens is not null)
         {
-            var inputTokens  = (result.InputTokens  ?? 0).ToString("N0");
+            var inputTokens = (result.InputTokens ?? 0).ToString("N0");
             var outputTokens = (result.OutputTokens ?? 0).ToString("N0");
             await Console.Out
                          .WriteLineAsync($"usage      : {inputTokens} in / {outputTokens} out tokens (server-reported; absent requests not counted)");
@@ -248,7 +249,7 @@ internal static class Program
         {
             AgentStatus.Completed => 0,
             AgentStatus.Cancelled => 130,
-            _                     => 1
+            _ => 1
         };
     }
 
@@ -288,37 +289,37 @@ internal static class Program
         var composition = await ComposeAgentAsync(configPath, cancellation.SessionToken, true, reader,
                                                   true)
            .ConfigureAwait(false);
-        var config           = composition.Config;
+        var config = composition.Config;
         var selectionSecrets = (ConcurrentDictionary<string, string>)composition.KnownSecrets;
         await using var events =
-            new ConsoleHostEventSink(composition.KnownSecrets, reasoningDisplay : reasoningDisplay);
+            new ConsoleHostEventSink(composition.KnownSecrets, reasoningDisplay: reasoningDisplay);
 
         // 回合、审批与检查确认必须共享同一个读取器，不能另开 stdin 循环。
 
         var instructionLoader = new ProjectInstructionLoader(new Workspace(config.WorkspaceRoot));
-        var identity          = new SessionModelIdentity(config.Model, config.Endpoint, config.ChatApi);
+        var identity = new SessionModelIdentity(config.Model, config.Endpoint, config.ChatApi);
 
         PermissionEngine NewPermissions() => new(config.WorkspaceRoot, config.CommandRules,
-                                                 workspaceReadOnly : () => composition.Access.State.IsReadOnly);
+                                                 workspaceReadOnly: () => composition.Access.State.IsReadOnly);
 
         ChatModelSelection? draftSelector = null;
 
         async Task<ChatSessionHost> CreateHostAsync(CancellationToken token)
         {
-            var               instructions = await instructionLoader.LoadAsync(null, [], token).ConfigureAwait(false);
-            var               draft = draftSelector?.DraftTarget;
-            var               selectedOptions = composition.Options;
-            var               selectedIdentity = identity;
-            var               selectedClient = composition.Model;
-            var               selectedRoute = composition.CredentialRoute;
-            UserProfile?      initialProfile = null;
+            var instructions = await instructionLoader.LoadAsync(null, [], token).ConfigureAwait(false);
+            var draft = draftSelector?.DraftTarget;
+            var selectedOptions = composition.Options;
+            var selectedIdentity = identity;
+            var selectedClient = composition.Model;
+            var selectedRoute = composition.CredentialRoute;
+            UserProfile? initialProfile = null;
             UserProfileModel? initialModel = null;
             if (composition.Resolution.ProfileName is { } profileName)
             {
                 var user = await UserConfigStore.LoadAsync(UserConfigStore.DefaultFilePath(), token)
                                                 .ConfigureAwait(false);
-                initialProfile  = user.Profiles.SingleOrDefault(item => item.Name        == profileName);
-                initialModel    = initialProfile?.Models.SingleOrDefault(item => item.Id == selectedIdentity.ModelId);
+                initialProfile = user.Profiles.SingleOrDefault(item => item.Name == profileName);
+                initialModel = initialProfile?.Models.SingleOrDefault(item => item.Id == selectedIdentity.ModelId);
                 selectedOptions = selectedOptions with { ReasoningEffort = initialModel?.DefaultReasoningEffort };
             }
 
@@ -330,16 +331,17 @@ internal static class Program
                             ?? throw new InvalidOperationException("Draft provider was removed; select again.");
                 var model = provider.Models.SingleOrDefault(item => item.Id == draft.Model.Id)
                          ?? throw new InvalidOperationException("Draft model was removed; select again.");
-                if (provider.Endpoint                  != draft.Profile.Endpoint                  ||
-                    provider.ChatApi                   != draft.Profile.ChatApi                   ||
-                    provider.ApiKeyCredentialTarget    != draft.Profile.ApiKeyCredentialTarget    ||
+                if (provider.Endpoint != draft.Profile.Endpoint ||
+                    provider.ChatApi != draft.Profile.ChatApi ||
+                    provider.ApiKeyCredentialTarget != draft.Profile.ApiKeyCredentialTarget ||
                     provider.ApiKeyEnvironmentVariable != draft.Profile.ApiKeyEnvironmentVariable ||
-                    model.ContextWindowTokens          != draft.Model.ContextWindowTokens         ||
+                    model.ContextWindowTokens != draft.Model.ContextWindowTokens ||
                     !(model.ReasoningEfforts ?? []).SequenceEqual(draft.Model.ReasoningEfforts ?? []))
                     throw new InvalidOperationException("Draft configuration changed; select again before sending.");
                 selectedOptions = selectedOptions with
                 {
-                    Model = model.Id, ReasoningEffort = draft.Effort,
+                    Model = model.Id,
+                    ReasoningEffort = draft.Effort,
                     Context = (selectedOptions.Context ?? new ContextOptions()) with
                     {
                         ContextWindowTokens = model.ContextWindowTokens
@@ -376,11 +378,11 @@ internal static class Program
                                                   WorkspacePrompts.Current, NewPermissions(),
                                                   new ConsoleApprovalProvider(reader, Console.Out,
                                                                               composition.KnownSecrets),
-                                                  events, sessionWriter : writer, instructionLoader : instructionLoader,
-                                                  initialInstructions : instructions,
-                                                  knownSecrets : composition.KnownSecrets,
-                                                  credentialRoute : selectedRoute,
-                                                  ownsModelClient : draft is not null);
+                                                  events, sessionWriter: writer, instructionLoader: instructionLoader,
+                                                  initialInstructions: instructions,
+                                                  knownSecrets: composition.KnownSecrets,
+                                                  credentialRoute: selectedRoute,
+                                                  ownsModelClient: draft is not null);
                 await createdHost.ChangeModelAsync(new SessionModelBinding(selectedIdentity, selectedClient!,
                                                                            selectedOptions.Context,
                                                                            selectedOptions.ReasoningEffort,
@@ -415,7 +417,7 @@ internal static class Program
             var writer = await SessionStoreWriter.OpenExistingAsync(composition.SessionStoreDirectory!, sessionId,
                                                                     composition.KnownSecrets, token)
                                                  .ConfigureAwait(false);
-            ChatSessionHost?                  host     = null;
+            ChatSessionHost? host = null;
             ChatResumeBinding.ResolvedTarget? resolved = null;
             try
             {
@@ -449,10 +451,10 @@ internal static class Program
                                                NewPermissions(),
                                                new ConsoleApprovalProvider(reader, Console.Out,
                                                                            composition.KnownSecrets),
-                                               events, sessionWriter : writer,
-                                               needsInspection : restored.NeedsInspection,
-                                               instructionLoader : instructionLoader,
-                                               knownSecrets : composition.KnownSecrets);
+                                               events, sessionWriter: writer,
+                                               needsInspection: restored.NeedsInspection,
+                                               instructionLoader: instructionLoader,
+                                               knownSecrets: composition.KnownSecrets);
                     await Console.Out.WriteLineAsync("  model     : " + outcome.ReselectionReason);
                     await Console.Out.WriteLineAsync(
                                                      "  model     : the session history stays resumable; select a model with " +
@@ -465,11 +467,11 @@ internal static class Program
                 host = new ChatSessionHost(restored.Session, restored.Context, target.Options, target.Client,
                                            composition.Tools, WorkspacePrompts.Current, NewPermissions(),
                                            new ConsoleApprovalProvider(reader, Console.Out, composition.KnownSecrets),
-                                           events, sessionWriter : writer,
-                                           needsInspection : restored.NeedsInspection,
-                                           instructionLoader : instructionLoader,
-                                           knownSecrets : composition.KnownSecrets,
-                                           ownsModelClient : !ReferenceEquals(target.Client, composition.Model));
+                                           events, sessionWriter: writer,
+                                           needsInspection: restored.NeedsInspection,
+                                           instructionLoader: instructionLoader,
+                                           knownSecrets: composition.KnownSecrets,
+                                           ownsModelClient: !ReferenceEquals(target.Client, composition.Model));
 
                 // 恢复不经过会话内切换入口：把本次实际使用的客户端路由交给 Core 核对；
                 // 不一致时按选择事务采纳当前路由并开启新 epoch，隔离旧路由产生的 opaque 推理。
@@ -496,9 +498,9 @@ internal static class Program
                 }
 
                 if (target.SavedSelection is { } saved &&
-                    (saved.Model           != identity                            ||
+                    (saved.Model != identity ||
                      saved.ReasoningEffort != composition.Options.ReasoningEffort ||
-                     saved.Context         != composition.Options.Context))
+                     saved.Context != composition.Options.Context))
                 {
                     var effort = saved.ReasoningEffort is { } level
                         ? ModelReasoningEffortParser.ToValueString(level)
@@ -514,7 +516,7 @@ internal static class Program
                         await
                             Console.Out
                                    .WriteLineAsync("  route     : resumed with the session's saved credential route " +
-                                                   $"'{target.CredentialRoute}' (startup default: "                   +
+                                                   $"'{target.CredentialRoute}' (startup default: " +
                                                    $"{startupRoute})");
                 }
                 else
@@ -558,7 +560,7 @@ internal static class Program
 
         // 普通正文保留原文；所有诊断与审计出口共享本次进程使用过的密钥集合。
 
-        async Task<IChatCompletionClient> CreateSelectionClientAsync(UserProfile       profile, string modelId,
+        async Task<IChatCompletionClient> CreateSelectionClientAsync(UserProfile profile, string modelId,
                                                                      CancellationToken token)
         {
             var credentials = new WindowsCredentialStore();
@@ -583,7 +585,8 @@ internal static class Program
                                    CreateSelectionClientAsync, selectionSecrets, !Console.IsInputRedirected);
         draftSelector.ManageCatalog = token => CatalogWizard.MenuAsync(new CommandContext
         {
-            Io = new ChatCatalogConsole(reader, Console.Out), Credentials = new WindowsCredentialStore()
+            Io = new ChatCatalogConsole(reader, Console.Out),
+            Credentials = new WindowsCredentialStore()
         }, token);
         await WriteHeaderAsync("TinyHarness chat", composition, console.Host?.Session.Id).ConfigureAwait(false);
         await
@@ -591,7 +594,7 @@ internal static class Program
                                        "without harness encryption, so pasted secrets may be stored. Keep the session store private.");
 
         console.WorkspaceTrustHandler = composition.Access.ChangeAsync;
-        var exit         = await console.RunAsync().ConfigureAwait(false);
+        var exit = await console.RunAsync().ConfigureAwait(false);
         var attachedHost = console.Host;
 
         // 只报告存在的产物；末次保存不可靠时明确警告，不以终态代替保存证据。
@@ -644,10 +647,10 @@ internal static class Program
     /// </exception>
     private static async Task<AgentComposition> ComposeAgentAsync(
         string? configPath, CancellationToken cancellationToken, bool persistSessions = false, TextReader? input = null,
-        bool    allowMissingModelCredentials = false)
+        bool allowMissingModelCredentials = false)
     {
         var resolution = await ConfigResolver.ResolveAsync(configPath, cancellationToken).ConfigureAwait(false);
-        var config     = resolution.Config;
+        var config = resolution.Config;
 
         if (!allowMissingModelCredentials && string.IsNullOrWhiteSpace(config.Model))
             throw new
@@ -681,10 +684,10 @@ internal static class Program
         var knownSecrets =
             new ConcurrentDictionary<string, string>(SandboxCliComposition.KnownSecrets(config, apiKey),
                                                      StringComparer.Ordinal);
-        var settings    = userConfig.Settings?.WindowsSandbox;
+        var settings = userConfig.Settings?.WindowsSandbox;
         var accessState = new WorkspaceAccessState(WorkspaceDirectoryIdentity.Capture(config.WorkspaceRoot));
         var permissions = new PermissionEngine(config.WorkspaceRoot, config.CommandRules,
-                                               workspaceReadOnly : () => accessState.IsReadOnly);
+                                               workspaceReadOnly: () => accessState.IsReadOnly);
         var trustPath = Path.Combine(Path.GetDirectoryName(UserConfigStore.DefaultFilePath())!, "workspace-trust.json");
         IReadOnlyList<string> writeRoots = [config.WorkspaceRoot, .. settings?.AdditionalWriteRoots ?? []];
         var protectedPaths = new List<string> { trustPath, UserConfigStore.DefaultFilePath() };
@@ -702,26 +705,26 @@ internal static class Program
                                                     permissions, input ?? new ExclusiveInputReader(Console.In),
                                                     Console.Out, !Console.IsInputRedirected,
                                                     OperatingSystem.IsWindows() && settings is
-                                                        { Enabled: true, Policy: SandboxPolicyKind.WorkspaceWrite },
+                                                    { Enabled: true, Policy: SandboxPolicyKind.WorkspaceWrite },
                                                     new ProcessWorkspaceAclGrant(protectedPaths, writeRoots, settings),
                                                     () =>
                                                     {
                                                         sandbox =
                                                             SandboxCliComposition.TryCompose(settings,
-                                                                config.WorkspaceRoot, knownSecrets,
-                                                                sessionStoreDirectory);
+                                                                     config.WorkspaceRoot, knownSecrets,
+                                                                     sessionStoreDirectory);
                                                         var policy = sandbox?.ExecutionPolicy ??
                                                                      ProcessExecutionPolicy.Host();
                                                         return
                                                             Task.FromResult((new ShellTool(new Workspace(config
-                                                                                    .WorkspaceRoot),
-                                                                                 config.DefaultToolTimeoutSeconds,
-                                                                                 knownSecrets,
-                                                                                 processBackend :
-                                                                                 sandbox?.Backend ??
-                                                                                 new
-                                                                                     HostProcessBackend(knownSecrets),
-                                                                                 executionPolicy : policy),
+                                                                                                  .WorkspaceRoot),
+                                                                                      config.DefaultToolTimeoutSeconds,
+                                                                                      knownSecrets,
+                                                                                      processBackend:
+                                                                                      sandbox?.Backend ??
+                                                                                      new
+                                                                                          HostProcessBackend(knownSecrets),
+                                                                                      executionPolicy: policy),
                                                                              policy));
                                                     });
         await access.InitializeAsync(cancellationToken).ConfigureAwait(false);
@@ -734,18 +737,18 @@ internal static class Program
                                         userConfig.Settings?.Network, networkProfile?.Network,
                                         new WindowsCredentialStore());
         var workspace = new Workspace(config.WorkspaceRoot);
-        var tools     = BuildTools(workspace, config, apiKey, executionPolicy, sandbox?.Backend, knownSecrets, access);
+        var tools = BuildTools(workspace, config, apiKey, executionPolicy, sandbox?.Backend, knownSecrets, access);
         var options = new AgentOptions
         {
-            Model                     = config.Model,
-            MaxAgentSteps             = config.MaxAgentSteps,
-            Budget                    = userConfig.Settings?.RunBudget ?? new RunBudgetLimits(),
-            EnableWorkItems           = true,
+            Model = config.Model,
+            MaxAgentSteps = config.MaxAgentSteps,
+            Budget = userConfig.Settings?.RunBudget ?? new RunBudgetLimits(),
+            EnableWorkItems = true,
             DefaultToolTimeoutSeconds = config.DefaultToolTimeoutSeconds,
             Context = new ContextOptions
             {
-                ContextWindowTokens       = config.ContextWindowTokens,
-                ReservedOutputTokens      = config.ReservedOutputTokens,
+                ContextWindowTokens = config.ContextWindowTokens,
+                ReservedOutputTokens = config.ReservedOutputTokens,
                 CompactionThresholdTokens = config.CompactionThreshold
             }
         };
@@ -770,7 +773,7 @@ internal static class Program
     private static async Task WriteHeaderAsync(string title, AgentComposition composition, string? sessionId = null)
     {
         var resolution = composition.Resolution;
-        var config     = composition.Config;
+        var config = composition.Config;
 
         await Console.Out.WriteLineAsync(title);
         if (sessionId is not null) await Console.Out.WriteLineAsync($"  session   : {sessionId}");
@@ -800,20 +803,20 @@ internal static class Program
     /// </remarks>
     private static async Task<int> RunMcpServerAsync()
     {
-        using var cts                = new CancellationTokenSource();
+        using var cts = new CancellationTokenSource();
         using var cancelRegistration = new ConsoleCancellation(cts);
-        var       credentials        = new WindowsCredentialStore();
-        var hostConfig = await McpWorkerHostConfiguration.ResolveAsync(cts.Token, credentialStore : credentials)
+        var credentials = new WindowsCredentialStore();
+        var hostConfig = await McpWorkerHostConfiguration.ResolveAsync(cts.Token, credentialStore: credentials)
                                                          .ConfigureAwait(false);
         var model = ModelClientFactory.Create(hostConfig.Model, hostConfig.Endpoint,
                                               hostConfig.ApiKey, hostConfig.ChatApi,
                                               hostConfig.Network, hostConfig.ProviderNetwork, credentials);
         using var ownedModel = model as IDisposable;
-        var       runner     = new WorkerRunner(model, hostConfig.WorkspaceRoot, hostConfig.ExecutionOptions);
+        var runner = new WorkerRunner(model, hostConfig.WorkspaceRoot, hostConfig.ExecutionOptions);
 
         // 启动摘要不含凭据；stderr 提醒用户获准读取的文件内容会发送到模型 endpoint。
-        await Console.Error.WriteLineAsync($"TinyHarness MCP worker ready: model={hostConfig.Model}; "        +
-                                           $"endpointType={hostConfig.EndpointType}; "                        +
+        await Console.Error.WriteLineAsync($"TinyHarness MCP worker ready: model={hostConfig.Model}; " +
+                                           $"endpointType={hostConfig.EndpointType}; " +
                                            $"chatApi={ChatApiKindParser.ToValueString(hostConfig.ChatApi)}; " +
                                            $"workspace={hostConfig.WorkspaceRoot}");
         await Console.Error.WriteLineAsync("Read-permitted file contents are sent to the selected model endpoint; " +
@@ -887,7 +890,7 @@ internal static class Program
     /// </returns>
     private static async Task<WindowsSandboxExecution?> TryComposeWindowsSandboxAsync(
         TinyHarnessConfig config, IReadOnlyDictionary<string, string> knownSecrets, CancellationToken cancellationToken,
-        string?           sessionStoreDirectory = null)
+        string? sessionStoreDirectory = null)
     {
         var settings = await SandboxCliComposition.LoadSettingsAsync(cancellationToken).ConfigureAwait(false);
         return SandboxCliComposition.TryCompose(settings, config.WorkspaceRoot, knownSecrets, sessionStoreDirectory);
@@ -902,10 +905,10 @@ internal static class Program
     /// </summary>
     private static async Task<int> RunSmokeAsync(string? configPath)
     {
-        using var cts                = new CancellationTokenSource();
+        using var cts = new CancellationTokenSource();
         using var cancelRegistration = new ConsoleCancellation(cts);
-        var       resolution         = await ConfigResolver.ResolveAsync(configPath, cts.Token).ConfigureAwait(false);
-        var       config             = resolution.Config;
+        var resolution = await ConfigResolver.ResolveAsync(configPath, cts.Token).ConfigureAwait(false);
+        var config = resolution.Config;
 
         await Console.Out.WriteLineAsync("TinyHarness smoke");
         await Console.Out.WriteLineAsync($"  model        : {config.Model}");
@@ -920,22 +923,22 @@ internal static class Program
         using var fixture = await SmokeWorkspace.CreateAsync(cts.Token).ConfigureAwait(false);
         await Console.Out.WriteLineAsync($"  fixtureWs    : {fixture.Root}");
 
-        var plan        = SmokeScript.Build(ProcessProbeCommand(), fixture.Root);
-        var script      = new SmokeScriptClient(plan.Steps);
-        var workspace   = new Workspace(fixture.Root);
-        var tools       = BuildTools(workspace, config);
+        var plan = SmokeScript.Build(ProcessProbeCommand(), fixture.Root);
+        var script = new SmokeScriptClient(plan.Steps);
+        var workspace = new Workspace(fixture.Root);
+        var tools = BuildTools(workspace, config);
         // 冒烟使用默认策略，确保副作用审批不受用户现行规则影响。
         var permissions = new PermissionEngine(fixture.Root);
-        var approver    = new SmokeApprover();
+        var approver = new SmokeApprover();
         var options = new AgentOptions
         {
-            Model                     = config.Model,
-            MaxAgentSteps             = config.MaxAgentSteps,
+            Model = config.Model,
+            MaxAgentSteps = config.MaxAgentSteps,
             DefaultToolTimeoutSeconds = config.DefaultToolTimeoutSeconds,
             Context = new ContextOptions
             {
-                ContextWindowTokens       = config.ContextWindowTokens,
-                ReservedOutputTokens      = config.ReservedOutputTokens,
+                ContextWindowTokens = config.ContextWindowTokens,
+                ReservedOutputTokens = config.ReservedOutputTokens,
                 CompactionThresholdTokens = config.CompactionThreshold
             }
         };
@@ -958,16 +961,16 @@ internal static class Program
                                               systemPrompt,
                                               permissions,
                                               approver,
-                                              sessionWriterFactory : sessionId =>
+                                              sessionWriterFactory: sessionId =>
                                                   new SessionStoreWriter(sessionDirectory, sessionId),
-                                              instructionLoader : instructionLoader,
-                                              initialInstructions : initialInstructions))
+                                              instructionLoader: instructionLoader,
+                                              initialInstructions: initialInstructions))
         {
             result = (await host.SubmitTurnAsync("smoke: inspect the fixture workspace and apply one patch.",
                                                  cts.Token).ConfigureAwait(false)).Result!;
             persistenceWarning = host.PersistenceWarning;
-            sessionId          = host.Session.Id;
-            sessionLogPath     = host.PersistencePath;
+            sessionId = host.Session.Id;
+            sessionLogPath = host.PersistencePath;
         }
 
         await Console.Out.WriteLineAsync($"  status       : {result.Status}");
@@ -980,8 +983,8 @@ internal static class Program
             await Console.Out.WriteLineAsync($"  error        : {result.Error}");
 
         if (result.Status != AgentStatus.Completed ||
-            persistenceWarning is not null         ||
-            sessionId is null                      ||
+            persistenceWarning is not null ||
+            sessionId is null ||
             sessionLogPath is null)
         {
             TryDeleteSmokeDirectory(sessionDirectory);
@@ -1029,8 +1032,8 @@ internal static class Program
             var confirmedDiff = toolItems.SelectMany(item => item.PatchChanges ?? [])
                                          .Any(change => change.State == PatchChange.ConfirmedState &&
                                                         !string.IsNullOrWhiteSpace(change.Diff));
-            if (restoration.Session.Id != sessionId                   ||
-                toolItems.Length       != plan.ExpectedToolExecutions ||
+            if (restoration.Session.Id != sessionId ||
+                toolItems.Length != plan.ExpectedToolExecutions ||
                 !confirmedDiff)
                 throw new
                     SessionStoreException("Smoke journal restore/history did not contain the expected tools and confirmed patch diff.");
@@ -1047,18 +1050,18 @@ internal static class Program
                                          "Smoke refreshed project rules: preserve confirmed file facts.\n", cts.Token)
                       .ConfigureAwait(false);
             using (var resumedWriter = await SessionStoreWriter.OpenExistingAsync(sessionDirectory, sessionId,
-                       null, cts.Token).ConfigureAwait(false))
+                            null, cts.Token).ConfigureAwait(false))
             using (var refreshedHost = new ChatSessionHost(restoration.Session, restoration.Context, options,
                                                            new SmokeScriptClient([new SmokeStep()]), tools,
                                                            systemPrompt, permissions, approver,
-                                                           sessionWriter : resumedWriter,
-                                                           instructionLoader : instructionLoader))
+                                                           sessionWriter: resumedWriter,
+                                                           instructionLoader: instructionLoader))
             {
                 var refreshRun = await refreshedHost
                                       .SubmitTurnAsync("smoke: verify refreshed project instructions.", cts.Token)
                                       .ConfigureAwait(false);
                 if (refreshRun.Result?.Status != AgentStatus.Completed ||
-                    refreshedHost.PersistenceWarning is not null       ||
+                    refreshedHost.PersistenceWarning is not null ||
                     restoration.Context.ProjectInstructions?.Revision == initialInstructions.Revision)
                     throw new SessionStoreException("Smoke did not reliably refresh resumed project instructions.");
             }
@@ -1091,7 +1094,7 @@ internal static class Program
 
         // 脚本客户端拒绝工具闭环或内容不匹配；还需核对工具与审批次数，防止跳过补丁或进程执行。
         var passed = result.ToolExecutions == plan.ExpectedToolExecutions &&
-                     approver.Prompts      == plan.ExpectedApprovalPrompts;
+                     approver.Prompts == plan.ExpectedApprovalPrompts;
         if (passed)
         {
             await M15OfflineSmoke.RunAsync(fixture.Root, sessionDirectory,
@@ -1118,7 +1121,7 @@ internal static class Program
 
     private static void TryDeleteSmokeDirectory(string path)
     {
-        var target         = Path.GetFullPath(path);
+        var target = Path.GetFullPath(path);
         var expectedPrefix = Path.GetFullPath(Path.GetTempPath());
         if (!target.StartsWith(expectedPrefix, OperatingSystem.IsWindows()
                                    ? StringComparison.OrdinalIgnoreCase
@@ -1155,18 +1158,18 @@ internal static class Program
     ///     <para>Chat carries the protected session-store directory; it is null when persistence is disabled.</para>
     /// </remarks>
     private sealed record AgentComposition(
-        ConfigResolution                    Resolution,
-        TinyHarnessConfig                   Config,
-        string?                             CredentialRoute,
+        ConfigResolution Resolution,
+        TinyHarnessConfig Config,
+        string? CredentialRoute,
         IReadOnlyDictionary<string, string> KnownSecrets,
-        WindowsSandboxExecution?            Sandbox,
-        ProcessExecutionPolicy              ExecutionPolicy,
-        IChatCompletionClient?              Model,
-        ToolRegistry                        Tools,
-        PermissionEngine                    Permissions,
-        AgentOptions                        Options,
-        string?                             SessionStoreDirectory,
-        WorkspaceAccessCoordinator          Access);
+        WindowsSandboxExecution? Sandbox,
+        ProcessExecutionPolicy ExecutionPolicy,
+        IChatCompletionClient? Model,
+        ToolRegistry Tools,
+        PermissionEngine Permissions,
+        AgentOptions Options,
+        string? SessionStoreDirectory,
+        WorkspaceAccessCoordinator Access);
 
     /// <summary>
     ///     <para>将 Ctrl+C 转换为任务取消；释放时移除全局事件处理器。</para>
@@ -1175,12 +1178,12 @@ internal static class Program
     private sealed class ConsoleCancellation : IDisposable
     {
         private readonly ConsoleCancelEventHandler _handler;
-        private readonly CancellationTokenSource   _source;
+        private readonly CancellationTokenSource _source;
 
         public ConsoleCancellation(CancellationTokenSource source)
         {
-            _source                =  source;
-            _handler               =  OnCancel;
+            _source = source;
+            _handler = OnCancel;
             Console.CancelKeyPress += _handler;
         }
 
@@ -1236,10 +1239,10 @@ internal static class SandboxCliComposition
     ///     </para>
     /// </exception>
     public static WindowsSandboxExecution? TryCompose(
-        WindowsSandboxSettings?             settings,
-        string                              workspaceRoot,
+        WindowsSandboxSettings? settings,
+        string workspaceRoot,
         IReadOnlyDictionary<string, string> knownSecrets,
-        string?                             sessionStoreDirectory = null)
+        string? sessionStoreDirectory = null)
     {
         if (settings is not { Enabled: true }) return null;
 
@@ -1251,9 +1254,9 @@ internal static class SandboxCliComposition
         if (Workspace.IsInside(workspaceRoot, fullStoreDirectory) || offendingRoot is not null)
             throw new
                 InvalidOperationException($"The protected session store directory '{fullStoreDirectory}' lies inside " +
-                                          $"a sandbox-writable root '{offendingRoot ?? workspaceRoot}'; "              +
-                                          "sandboxed commands could tamper with resumable session snapshots. "         +
-                                          "Move it outside the workspace and every additional write root "             +
+                                          $"a sandbox-writable root '{offendingRoot ?? workspaceRoot}'; " +
+                                          "sandboxed commands could tamper with resumable session snapshots. " +
+                                          "Move it outside the workspace and every additional write root " +
                                           "(settings.sessionStoreDirectory) before enabling the Windows sandbox.");
 
         return WindowsSandboxComposer.Compose(settings, workspaceRoot, knownSecrets);

@@ -42,22 +42,22 @@ public sealed class SearchTextTool(Workspace workspace, WorkerReadPolicy? worker
         {
             ["pattern"] = new JsonObject
             {
-                ["type"]        = "string",
+                ["type"] = "string",
                 ["description"] = "Text to search for."
             },
             ["path"] = new JsonObject
             {
-                ["type"]        = "string",
+                ["type"] = "string",
                 ["description"] = "File or directory to search, relative to the workspace root (default \".\")."
             },
             ["caseSensitive"] = new JsonObject
             {
-                ["type"]        = "boolean",
+                ["type"] = "boolean",
                 ["description"] = "Case-sensitive match (default false)."
             },
             ["maxResults"] = new JsonObject
             {
-                ["type"]        = "integer",
+                ["type"] = "integer",
                 ["description"] = "Maximum matches to report (default 100, max 500)."
             }
         },
@@ -66,9 +66,9 @@ public sealed class SearchTextTool(Workspace workspace, WorkerReadPolicy? worker
 
     public ToolDefinition Definition { get; } = new()
     {
-        Name        = "search_text",
+        Name = "search_text",
         Description = "Searches for a substring in workspace text files. Reports 'path:line: text' matches.",
-        Parameters  = Schema
+        Parameters = Schema
     };
 
     /// <summary>
@@ -77,9 +77,9 @@ public sealed class SearchTextTool(Workspace workspace, WorkerReadPolicy? worker
     /// </summary>
     public ToolPreparation Prepare(ChatToolCall call)
     {
-        var args       = ToolArgs.ParseObject(call);
-        var pattern    = JsonArgs.Required(args, "pattern");
-        var rawPath    = JsonArgs.Optional(args, "path", ".");
+        var args = ToolArgs.ParseObject(call);
+        var pattern = JsonArgs.Required(args, "pattern");
+        var rawPath = JsonArgs.Optional(args, "path", ".");
         var maxResults = JsonArgs.OptionalInt(args, "maxResults") ?? DefaultMaxResults;
         if (maxResults is < 1 or > AbsoluteMaxResults)
             throw new InvalidDataException($"Tool argument 'maxResults' must be between 1 and {AbsoluteMaxResults}.");
@@ -89,11 +89,11 @@ public sealed class SearchTextTool(Workspace workspace, WorkerReadPolicy? worker
         args["path"] = absolute; // Normalized plan value; Execute never re-resolves raw input.
         return new ToolPreparation
         {
-            ToolName    = Definition.Name,
-            CallId      = call.Id,
-            Arguments   = args,
-            Capability  = "filesystem.search",
-            Summary     = $"search_text \"{pattern}\" in {workspace.ToDisplay(absolute)}",
+            ToolName = Definition.Name,
+            CallId = call.Id,
+            Arguments = args,
+            Capability = "filesystem.search",
+            Summary = $"search_text \"{pattern}\" in {workspace.ToDisplay(absolute)}",
             TargetPaths = [absolute],
             InstructionScopes =
             [
@@ -109,22 +109,26 @@ public sealed class SearchTextTool(Workspace workspace, WorkerReadPolicy? worker
     /// </summary>
     public async Task<ToolResult> ExecuteAsync(ToolPreparation preparation, CancellationToken cancellationToken)
     {
-        var absolute      = ToolArgs.ReadAbsolute(preparation, "path");
-        var pattern       = JsonArgs.Required(preparation.Arguments, "pattern");
+        var absolute = ToolArgs.ReadAbsolute(preparation, "path");
+        var pattern = JsonArgs.Required(preparation.Arguments, "pattern");
         var caseSensitive = JsonArgs.OptionalBool(preparation.Arguments, "caseSensitive", false);
-        var maxResults    = JsonArgs.OptionalInt(preparation.Arguments, "maxResults") ?? DefaultMaxResults;
-        var comparison    = caseSensitive ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
+        var maxResults = JsonArgs.OptionalInt(preparation.Arguments, "maxResults") ?? DefaultMaxResults;
+        var comparison = caseSensitive ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
 
         if (!File.Exists(absolute) && !Directory.Exists(absolute))
             return new ToolResult
             {
                 Succeeded = false,
-                Content   = $"Path not found: {workspace.ToDisplay(absolute)}"
+                Content = $"Path not found: {workspace.ToDisplay(absolute)}"
             };
 
         workspace.EnsureFinalTargetInside(absolute, Directory.Exists(absolute), "Path");
+        // 搜索只激活显式目标的祖先规则，不把候选文件的后代规则预加载到模型。
+        preparation.Coverage?.EnsureCoveredDirectory(File.Exists(absolute)
+                                                         ? Path.GetDirectoryName(absolute)!
+                                                         : absolute);
 
-        var files       = new List<string>();
+        var files = new List<string>();
         var walkLimited = false;
         if (File.Exists(absolute))
         {
@@ -138,26 +142,22 @@ public sealed class SearchTextTool(Workspace workspace, WorkerReadPolicy? worker
             var walk = DirectoryWalker.CollectFiles(absolute, MaxFilesScanned, cancellationToken,
                                                     workerPolicy is null
                                                         ? null
-                                                        : child => !workerPolicy.IsEntryAllowed(child),
-                                                    preparation.Coverage is { } coverage
-                                                        ? coverage.EnsureCoveredDirectory
-                                                        : null);
+                                                        : child => !workerPolicy.IsEntryAllowed(child));
             files.AddRange(walk.Entries);
             walkLimited = walk.Truncated;
         }
 
-        var output          = new List<string>(maxResults);
-        var filesScanned    = 0;
-        var skippedLarge    = 0;
-        var skippedBinary   = 0;
+        var output = new List<string>(maxResults);
+        var filesScanned = 0;
+        var skippedLarge = 0;
+        var skippedBinary = 0;
         var skippedEscaping = 0;
         var skippedExcluded = 0;
-        var stoppedAtCap    = false;
+        var stoppedAtCap = false;
 
         foreach (var file in files)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            preparation.Coverage?.EnsureCoveredDirectory(Path.GetDirectoryName(file)!);
             if (output.Count >= maxResults)
             {
                 stoppedAtCap = true;
@@ -175,13 +175,13 @@ public sealed class SearchTextTool(Workspace workspace, WorkerReadPolicy? worker
                                            workerPolicy, cancellationToken).ConfigureAwait(false);
             switch (scan.SkipReason)
             {
-                case ScanSkipReason.Binary :
+                case ScanSkipReason.Binary:
                     skippedBinary++;
                     continue;
-                case ScanSkipReason.OutsideWorkspace :
+                case ScanSkipReason.OutsideWorkspace:
                     skippedEscaping++;
                     continue;
-                case ScanSkipReason.Excluded :
+                case ScanSkipReason.Excluded:
                     skippedExcluded++;
                     continue;
             }
@@ -283,9 +283,9 @@ public sealed class SearchTextTool(Workspace workspace, WorkerReadPolicy? worker
         using var reader = new StreamReader(stream, Encoding.UTF8, true,
                                             64 * 1024, false);
 
-        var     display    = workspace.ToDisplay(file);
-        var     matches    = new List<string>(maxMatches);
-        var     lineNumber = 0;
+        var display = workspace.ToDisplay(file);
+        var matches = new List<string>(maxMatches);
+        var lineNumber = 0;
         string? line;
         while (matches.Count < maxMatches &&
                (line = await reader.ReadLineAsync(cancellationToken).ConfigureAwait(false)) is not null)

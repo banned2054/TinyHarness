@@ -21,15 +21,15 @@ public sealed class ProjectInstructionLoader(Workspace workspace)
         : StringComparer.Ordinal;
 
     /// <summary>
-    ///     <para>按本次工具范围替换规则集合；无工具范围时刷新当前集合，全部读取与预算通过后返回完整候选。</para>
+    ///     <para>按目标祖先链替换规则集合；无工具范围时刷新当前集合，保留读取预算导致的省略事实。</para>
     ///     <para>
-    ///         Replaces rules with the current tool scopes, or refreshes the active set when scopes are empty, returning
-    ///         a complete candidate only after all reads and budgets pass.
+    ///         Replaces rules with target ancestor chains, or refreshes the active set when scopes are empty,
+    ///         retaining omissions caused by read budgets.
     ///     </para>
     /// </summary>
-    public async Task<ProjectInstructionSnapshot> LoadAsync(ProjectInstructionSnapshot?     previous,
+    public async Task<ProjectInstructionSnapshot> LoadAsync(ProjectInstructionSnapshot? previous,
                                                             IReadOnlyList<InstructionScope> scopes,
-                                                            CancellationToken               cancellationToken)
+                                                            CancellationToken cancellationToken)
     {
         try
         {
@@ -47,12 +47,12 @@ public sealed class ProjectInstructionLoader(Workspace workspace)
     /// </summary>
     internal Task<ProjectInstructionSnapshot> LoadForToolScopeAsync(
         ProjectInstructionSnapshot? previous, IReadOnlyList<InstructionScope> scopes,
-        CancellationToken           cancellationToken) =>
+        CancellationToken cancellationToken) =>
         LoadCandidateAsync(previous, scopes, cancellationToken);
 
     private async Task<ProjectInstructionSnapshot> LoadCandidateAsync(
         ProjectInstructionSnapshot? previous, IReadOnlyList<InstructionScope> scopes,
-        CancellationToken           cancellationToken)
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(workspace);
         ArgumentNullException.ThrowIfNull(scopes);
@@ -73,59 +73,42 @@ public sealed class ProjectInstructionLoader(Workspace workspace)
             if (!Enum.IsDefined(scope.Kind) || scope.MaxDepth < 0 ||
                 scope.MaxEntries is < 1 or > ProjectInstructionLimits.MaxDiscoveryEntries)
                 throw new InvalidDataException("Invalid project instruction access scope or traversal budget.");
-            var target     = workspace.ResolveInside(scope.Path, "instruction scope");
-            var directory  = scope.Kind == InstructionScopeKind.File ? Path.GetDirectoryName(target)! : target;
-            var attributes = scope.Kind == InstructionScopeKind.RecursiveDirectory ? Attributes(target) : null;
+            var target = workspace.ResolveInside(scope.Path, "instruction scope");
+            var directory = scope.Kind == InstructionScopeKind.File ? Path.GetDirectoryName(target)! : target;
+            var attributes = scope.Kind != InstructionScopeKind.File ? Attributes(target) : null;
             if (attributes is { } targetAttributes && (targetAttributes & FileAttributes.Directory) == 0)
                 directory = Path.GetDirectoryName(target)!;
             AddChain(directory, directories);
             EnsureNoLinks(directory, true);
-            if (scope.Kind != InstructionScopeKind.RecursiveDirectory || attributes is null ||
-                (attributes.Value & FileAttributes.Directory) == 0) continue;
-            var walk = scope.FilesOnly
-                ? DirectoryWalker.CollectFiles(target, scope.MaxEntries, cancellationToken, strictErrors : true)
-                : DirectoryWalker.CollectEntries(target, true, scope.MaxDepth == int.MaxValue ? null : scope.MaxDepth,
-                                                 scope.MaxEntries, cancellationToken, strictErrors : true);
-            if (walk.EnumerationLimited ||
-                (walk.Truncated && scope.MaxEntries == ProjectInstructionLimits.MaxDiscoveryEntries))
-                throw new
-                    InstructionScopeLimitException($"Instruction discovery for '{workspace.ToDisplay(target)}' exceeds the 16,384-entry budget; narrow the operation.");
-            foreach (var visitedDirectory in walk.VisitedDirectories)
-                AddChain(visitedDirectory, directories);
-            foreach (var entry in walk.Entries)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                var entryAttributes = Attributes(entry);
-                if (entryAttributes is null || (entryAttributes.Value & FileAttributes.ReparsePoint) != 0) continue;
-                var isDirectory    = (entryAttributes.Value & FileAttributes.Directory) != 0;
-                var entryDirectory = isDirectory ? entry : Path.GetDirectoryName(entry)!;
-                var relative       = Path.GetRelativePath(target, entryDirectory);
-                var depth          = relative == "." ? 0 : relative.Split(Path.DirectorySeparatorChar).Length;
-                if (depth <= scope.MaxDepth) AddChain(entryDirectory, directories);
-            }
         }
 
-        var documents  = new List<ProjectInstructionDocument>();
+        var documents = new List<ProjectInstructionDocument>();
+        var omissions = new List<ProjectInstructionOmission>();
         var totalBytes = 0;
-        foreach (var relativeDirectory in directories.OrderBy(path => path, StringComparer.Ordinal))
+        // 读取与渲染都优先保留更具体的规则；同深度按路径稳定排序。
+        foreach (var relativeDirectory in directories
+                                         .OrderByDescending(path => path == "." ? 0 : path.Count(c => c == '/') + 1)
+                                         .ThenBy(path => path, StringComparer.Ordinal))
         {
             cancellationToken.ThrowIfCancellationRequested();
             var absoluteDirectory = workspace.ResolveInside(relativeDirectory, "instruction directory");
             EnsureNoLinks(absoluteDirectory, true);
-            var source   = Path.Combine(absoluteDirectory, "AGENTS.md");
-            var document = await ReadDocumentAsync(source, relativeDirectory, cancellationToken).ConfigureAwait(false);
-            if (document is null) continue;
-            documents.Add(document);
-            totalBytes += document.ByteCount;
-            if (documents.Count > ProjectInstructionLimits.MaxDocuments ||
-                totalBytes      > ProjectInstructionLimits.MaxTotalBytes)
+            var source = Path.Combine(absoluteDirectory, "AGENTS.md");
+            var document = await ReadDocumentAsync(source, relativeDirectory,
+                                                   ProjectInstructionLimits.MaxTotalBytes - totalBytes,
+                                                   omissions, cancellationToken).ConfigureAwait(false);
+            if (document is not null)
+            {
+                documents.Add(document);
+                totalBytes += document.ByteCount;
+            }
+
+            if (documents.Count + omissions.Count > ProjectInstructionLimits.MaxDocuments)
                 throw new
-                    InstructionScopeLimitException($"Project instructions exceed the 64-document or 128-KiB budget at '{document.SourcePath}'. Narrow the operation.");
+                    InstructionScopeLimitException($"Project instructions exceed the 64-document budget at '{workspace.ToDisplay(source)}'. Narrow the operation.");
         }
 
-        return scopes.Count == 0
-            ? ProjectInstructionRenderer.Create(documents, directories.ToArray())
-            : ProjectInstructionRenderer.CreateForToolScope(documents, directories.ToArray());
+        return ProjectInstructionRenderer.CreateWithOmissions(documents, directories.ToArray(), omissions);
     }
 
     /// <summary>
@@ -153,7 +136,8 @@ public sealed class ProjectInstructionLoader(Workspace workspace)
     ///     <para>Reads rules under a strict length bound, retaining BOM identity and retrying observed instability only once.</para>
     /// </summary>
     private async Task<ProjectInstructionDocument?> ReadDocumentAsync(
-        string source, string scope, CancellationToken cancellationToken)
+        string source, string scope, int remainingBytes, List<ProjectInstructionOmission> omissions,
+        CancellationToken cancellationToken)
     {
         for (var attempt = 0; attempt < 2; attempt++)
         {
@@ -162,18 +146,31 @@ public sealed class ProjectInstructionLoader(Workspace workspace)
             if (attributes is null) return null;
             if ((attributes.Value & FileAttributes.Directory) != 0)
                 throw new InvalidDataException($"Instruction source '{workspace.ToDisplay(source)}' is a directory.");
-            var before    = new FileInfo(source);
-            var length    = before.Length;
+            var before = new FileInfo(source);
+            var length = before.Length;
             var timestamp = before.LastWriteTimeUtc;
-            if (length > ProjectInstructionLimits.MaxDocumentBytes)
-                throw new InvalidDataException($"Instruction source '{workspace.ToDisplay(source)}' exceeds 32 KiB.");
+            if (length > ProjectInstructionLimits.MaxDocumentBytes || length > remainingBytes)
+            {
+                omissions.Add(new ProjectInstructionOmission
+                {
+                    SourcePath = workspace.ToDisplay(source),
+                    ScopeDirectory = scope,
+                    ByteCount = length,
+                    LastWriteUtc = timestamp,
+                    Reason = length > ProjectInstructionLimits.MaxDocumentBytes
+                        ? "source-byte-limit"
+                        : "total-byte-limit"
+                });
+                return null;
+            }
+
             try
             {
                 await using var stream = new FileStream(source, FileMode.Open, FileAccess.Read,
-                                                        FileShare.ReadWrite      | FileShare.Delete, 4_096,
+                                                        FileShare.ReadWrite | FileShare.Delete, 4_096,
                                                         FileOptions.Asynchronous | FileOptions.SequentialScan);
-                var buffer = new byte[ProjectInstructionLimits.MaxDocumentBytes + 1];
-                var count  = 0;
+                var buffer = new byte[Math.Min(ProjectInstructionLimits.MaxDocumentBytes, remainingBytes) + 1];
+                var count = 0;
                 while (count < buffer.Length)
                 {
                     var read = await stream.ReadAsync(buffer.AsMemory(count), cancellationToken).ConfigureAwait(false);
@@ -181,9 +178,6 @@ public sealed class ProjectInstructionLoader(Workspace workspace)
                     count += read;
                 }
 
-                if (count > ProjectInstructionLimits.MaxDocumentBytes)
-                    throw new
-                        InvalidDataException($"Instruction source '{workspace.ToDisplay(source)}' exceeds 32 KiB.");
                 EnsureNoLinks(source, false);
                 var after = new FileInfo(source);
                 if (!after.Exists || after.Length != length || count != length || after.LastWriteTimeUtc != timestamp)
@@ -193,8 +187,8 @@ public sealed class ProjectInstructionLoader(Workspace workspace)
                         InvalidDataException($"Instruction source '{workspace.ToDisplay(source)}' changed during both reads.");
                 }
 
-                var    bom    = count >= 3 && buffer[0] == 0xEF && buffer[1] == 0xBB && buffer[2] == 0xBF;
-                var    offset = bom ? 3 : 0;
+                var bom = count >= 3 && buffer[0] == 0xEF && buffer[1] == 0xBB && buffer[2] == 0xBF;
+                var offset = bom ? 3 : 0;
                 string content;
                 try
                 {
@@ -210,13 +204,13 @@ public sealed class ProjectInstructionLoader(Workspace workspace)
                 if (content.Length == 0) return null;
                 return new ProjectInstructionDocument
                 {
-                    SourcePath     = workspace.ToDisplay(source),
+                    SourcePath = workspace.ToDisplay(source),
                     ScopeDirectory = scope,
-                    Content        = content,
-                    ContentHash    = Convert.ToHexString(SHA256.HashData(buffer.AsSpan(0, count))),
-                    ByteCount      = count,
-                    HasUtf8Bom     = bom,
-                    LoadedUtc      = DateTimeOffset.UtcNow
+                    Content = content,
+                    ContentHash = Convert.ToHexString(SHA256.HashData(buffer.AsSpan(0, count))),
+                    ByteCount = count,
+                    HasUtf8Bom = bom,
+                    LoadedUtc = DateTimeOffset.UtcNow
                 };
             }
             catch (FileNotFoundException) when (attempt == 0)

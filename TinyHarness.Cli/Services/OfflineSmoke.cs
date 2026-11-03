@@ -2,11 +2,16 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Text.Json.Nodes;
+using System.Text.Json;
 using TinyHarness.Core.Models.ChatCompletions;
 using TinyHarness.Core.Models.Permissions;
+using TinyHarness.Core.Models.ProjectInstructions;
 using TinyHarness.Core.Models.Tools;
 using TinyHarness.Core.Services.ChatCompletions;
+using TinyHarness.Core.Services.Persistence;
 using TinyHarness.Core.Services.Permissions;
+using TinyHarness.Core.Services.ProjectInstructions;
+using TinyHarness.Core.Services.Runtime;
 
 namespace TinyHarness.Cli.Services;
 
@@ -81,9 +86,7 @@ internal sealed class SmokeWorkspace : IDisposable
         var workspace = new SmokeWorkspace(root);
         try
         {
-            await workspace.WriteAsync("AGENTS.md", "Smoke project rules: inspect before changing files.\n",
-                                       cancellationToken)
-                           .ConfigureAwait(false);
+            await workspace.VerifyInstructionBudgetsAsync(cancellationToken).ConfigureAwait(false);
             await workspace.WriteAsync("sample.txt", "alpha needle\nbeta\ngamma needle", cancellationToken)
                            .ConfigureAwait(false);
             await workspace.WriteAsync("long.txt", new string('x', 20_000) + "\ntail", cancellationToken)
@@ -136,12 +139,51 @@ internal sealed class SmokeWorkspace : IDisposable
     }
 
     /// <summary>
+    ///     <para>验证读取省略的静态 JSON 往返，并为后续真实宿主流程保留需要裁剪的根规则和超大技能规则。</para>
+    ///     <para>Verifies omitted-source JSON round trips and leaves large root and skill rules for the host smoke flow.</para>
+    /// </summary>
+    private async Task VerifyInstructionBudgetsAsync(CancellationToken cancellationToken)
+    {
+        var oversized = new string('x', ProjectInstructionLimits.MaxDocumentBytes + 1);
+        await WriteAsync("AGENTS.md", oversized, cancellationToken).ConfigureAwait(false);
+        var loader = new ProjectInstructionLoader(new Workspace(Root));
+        var omitted = await loader.LoadAsync(null, [], cancellationToken).ConfigureAwait(false);
+        var json =
+            JsonSerializer.SerializeToUtf8Bytes(omitted, SessionLogJsonContext.Default.ProjectInstructionSnapshot);
+        var restored = JsonSerializer.Deserialize(json, SessionLogJsonContext.Default.ProjectInstructionSnapshot)
+                    ?? throw new InvalidOperationException("Smoke could not restore omitted instruction sources.");
+        ProjectInstructionRenderer.Validate(restored);
+        if (restored.Omissions.Count != 1 || restored.Omissions[0].Reason != "source-byte-limit")
+            throw new InvalidOperationException("Smoke did not preserve the instruction source-size omission.");
+
+        await WriteAsync("AGENTS.md", "Smoke project rules: inspect before changing files.\n" +
+                                      new string('x', 100_000) +
+                                      "SOURCE_TAIL_NOT_IN_MODEL", cancellationToken).ConfigureAwait(false);
+        await WriteAsync(".agents/skills/react-best-practices/AGENTS.md", oversized, cancellationToken)
+           .ConfigureAwait(false);
+        var truncated = await loader.LoadAsync(restored, [], cancellationToken).ConfigureAwait(false);
+        var rendered = ProjectInstructionRenderer.Render(truncated);
+        if (!rendered.Contains("truncated AGENTS.md", StringComparison.Ordinal) ||
+            rendered.Contains("SOURCE_TAIL_NOT_IN_MODEL", StringComparison.Ordinal) ||
+            !truncated.Documents.Single().Content.EndsWith("SOURCE_TAIL_NOT_IN_MODEL", StringComparison.Ordinal))
+            throw new
+                InvalidOperationException("Smoke did not separate original instructions from their bounded projection.");
+        var withoutOmissions =
+            JsonSerializer.SerializeToNode(truncated, SessionLogJsonContext.Default.ProjectInstructionSnapshot)!;
+        withoutOmissions.AsObject().Remove("omissions");
+        var compatible = withoutOmissions.Deserialize(SessionLogJsonContext.Default.ProjectInstructionSnapshot)
+                      ?? throw new
+                             InvalidOperationException("Smoke could not restore the optional instruction metadata.");
+        ProjectInstructionRenderer.Validate(compatible);
+    }
+
+    /// <summary>
     ///     在临时工作区内创建父目录并异步写入一个固定文件。
     ///     Creates parent directories and asynchronously writes one fixture inside the temp workspace.
     /// </summary>
     private Task WriteAsync(string name, string content, CancellationToken cancellationToken)
     {
-        var full   = Path.Combine(Root, name);
+        var full = Path.Combine(Root, name);
         var parent = Path.GetDirectoryName(full);
         if (!string.IsNullOrEmpty(parent)) Directory.CreateDirectory(parent);
 
@@ -156,11 +198,11 @@ internal sealed class SmokeWorkspace : IDisposable
     /// </summary>
     private async Task RestoreFixtureAsync(CancellationToken cancellationToken)
     {
-        var projectPath   = Path.Combine(Root, "SmokeFixture.csproj");
-        var configPath    = Path.Combine(Root, "NuGet.Config");
-        var appDataPath   = Path.Combine(Root, ".appdata");
-        var cliHomePath   = Path.Combine(Root, ".dotnet-home");
-        var packagesPath  = Path.Combine(Root, ".nuget", "packages");
+        var projectPath = Path.Combine(Root, "SmokeFixture.csproj");
+        var configPath = Path.Combine(Root, "NuGet.Config");
+        var appDataPath = Path.Combine(Root, ".appdata");
+        var cliHomePath = Path.Combine(Root, ".dotnet-home");
+        var packagesPath = Path.Combine(Root, ".nuget", "packages");
         var httpCachePath = Path.Combine(Root, ".nuget", "http-cache");
         Directory.CreateDirectory(appDataPath);
         Directory.CreateDirectory(cliHomePath);
@@ -168,12 +210,12 @@ internal sealed class SmokeWorkspace : IDisposable
         Directory.CreateDirectory(httpCachePath);
         var startInfo = new ProcessStartInfo
         {
-            FileName               = "dotnet",
-            WorkingDirectory       = Root,
-            UseShellExecute        = false,
-            CreateNoWindow         = true,
+            FileName = "dotnet",
+            WorkingDirectory = Root,
+            UseShellExecute = false,
+            CreateNoWindow = true,
             RedirectStandardOutput = true,
-            RedirectStandardError  = true,
+            RedirectStandardError = true,
             Environment =
             {
                 ["APPDATA"]                           = appDataPath,
@@ -273,22 +315,22 @@ internal sealed class SmokeStep
         // Arguments are split across deltas (when long enough) to exercise the
         // same fragment assembly the real transport relies on.
         const string callId = "smoke_call";
-        var          events = new List<ChatStreamEvent>();
+        var events = new List<ChatStreamEvent>();
         if (ArgumentsJson!.Length > 2)
         {
             var mid = ArgumentsJson.Length / 2;
             events.Add(new ChatStreamEvent
             {
-                Kind                   = ChatStreamEventKind.ToolCallDelta,
-                ToolCallIndex          = 0,
-                ToolCallId             = callId,
-                ToolCallFunctionName   = ToolName,
+                Kind = ChatStreamEventKind.ToolCallDelta,
+                ToolCallIndex = 0,
+                ToolCallId = callId,
+                ToolCallFunctionName = ToolName,
                 ToolCallArgumentsDelta = ArgumentsJson[..mid]
             });
             events.Add(new ChatStreamEvent
             {
-                Kind                   = ChatStreamEventKind.ToolCallDelta,
-                ToolCallIndex          = 0,
+                Kind = ChatStreamEventKind.ToolCallDelta,
+                ToolCallIndex = 0,
                 ToolCallArgumentsDelta = ArgumentsJson[mid..]
             });
         }
@@ -296,10 +338,10 @@ internal sealed class SmokeStep
         {
             events.Add(new ChatStreamEvent
             {
-                Kind                   = ChatStreamEventKind.ToolCallDelta,
-                ToolCallIndex          = 0,
-                ToolCallId             = callId,
-                ToolCallFunctionName   = ToolName,
+                Kind = ChatStreamEventKind.ToolCallDelta,
+                ToolCallIndex = 0,
+                ToolCallId = callId,
+                ToolCallFunctionName = ToolName,
                 ToolCallArgumentsDelta = ArgumentsJson
             });
         }
@@ -314,7 +356,7 @@ internal sealed class SmokeStep
     /// </summary>
     private static ChatStreamEvent Content(string chunk) => new()
     {
-        Kind         = ChatStreamEventKind.ContentDelta,
+        Kind = ChatStreamEventKind.ContentDelta,
         ContentDelta = chunk
     };
 
@@ -324,7 +366,8 @@ internal sealed class SmokeStep
     /// </summary>
     private static ChatStreamEvent End(string reason) => new()
     {
-        Kind = ChatStreamEventKind.End, FinishReason = reason
+        Kind = ChatStreamEventKind.End,
+        FinishReason = reason
     };
 }
 
@@ -383,8 +426,8 @@ internal sealed class SmokeScriptClient(IReadOnlyList<SmokeStep> steps) : IChatC
 /// </summary>
 internal sealed record SmokePlan(
     IReadOnlyList<SmokeStep> Steps,
-    int                      ExpectedToolExecutions,
-    int                      ExpectedApprovalPrompts);
+    int ExpectedToolExecutions,
+    int ExpectedApprovalPrompts);
 
 /// <summary>
 ///     构造使用固定输入和预期结果的离线冒烟脚本。
@@ -498,9 +541,9 @@ internal static class SmokeScript
 
         return new JsonObject
         {
-            ["mode"]       = "direct",
+            ["mode"] = "direct",
             ["executable"] = executable,
-            ["arguments"]  = array
+            ["arguments"] = array
         }.ToJsonString();
     }
 
@@ -512,8 +555,8 @@ internal static class SmokeScript
             : "printf explicit-shell-stdout";
         return new JsonObject
         {
-            ["mode"]    = "shell",
-            ["shell"]   = shell,
+            ["mode"] = "shell",
+            ["shell"] = shell,
             ["command"] = command
         }.ToJsonString();
     }
@@ -542,9 +585,9 @@ internal static class SmokeScript
     /// </summary>
     private static SmokeStep Tool(string name, string argumentsJson, Action<string> verify) => new()
     {
-        ToolName      = name,
+        ToolName = name,
         ArgumentsJson = argumentsJson,
-        VerifyResult  = verify
+        VerifyResult = verify
     };
 
     /// <summary>

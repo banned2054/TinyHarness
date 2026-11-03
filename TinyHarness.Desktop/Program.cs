@@ -1,6 +1,7 @@
 using Avalonia;
 using TinyHarness.Core.Services.Runtime;
 using TinyHarness.Core.Services.Runtime.WindowsSandbox;
+using TinyHarness.Core.Services.ProjectInstructions;
 
 namespace TinyHarness.Desktop;
 
@@ -30,7 +31,8 @@ internal static class Program
             }
         }
 
-        // Debug 构建固定启用沙箱诊断文件日志；Release 下调用整体消失。
+        ProjectInstructionDiagnosticLog.Initialize();
+        // 沙箱细节仍仅在 Debug 构建记录；项目规则元数据在两种配置中均可诊断。
         SandboxDiagnosticLog.Initialize();
         if (args.Contains("--offline-smoke", StringComparer.Ordinal))
             return OfflineSmoke.RunAsync().GetAwaiter().GetResult();

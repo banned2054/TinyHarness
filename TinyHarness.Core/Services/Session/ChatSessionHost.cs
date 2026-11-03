@@ -48,20 +48,20 @@ namespace TinyHarness.Core.Services.Session;
 /// </remarks>
 public sealed partial class ChatSessionHost : IDisposable
 {
-    private readonly IApprovalProvider?          _approver;
-    private readonly ConversationContext         _context;
-    private readonly SecretRedactor?             _eventRedactor;
-    private readonly IHostEventSink?             _events;
+    private readonly IApprovalProvider? _approver;
+    private readonly ConversationContext _context;
+    private readonly SecretRedactor? _eventRedactor;
+    private readonly IHostEventSink? _events;
     private readonly ProjectInstructionSnapshot? _initialInstructions;
-    private readonly ProjectInstructionLoader?   _instructionLoader;
-    private readonly PermissionEngine?           _permissions;
+    private readonly ProjectInstructionLoader? _instructionLoader;
+    private readonly PermissionEngine? _permissions;
     private readonly Func<string, IRunRecorder>? _recorderFactory;
-    private readonly ISessionStoreWriter?        _sessionWriter;
-    private readonly string                      _systemPrompt;
-    private readonly ToolRegistry                _tools;
-    private          IRunRecorder?               _activeRecorder;
+    private readonly ISessionStoreWriter? _sessionWriter;
+    private readonly string _systemPrompt;
+    private readonly ToolRegistry _tools;
+    private IRunRecorder? _activeRecorder;
 
-    private int                  _activeRuns;
+    private int _activeRuns;
     private SessionModelBinding? _binding;
 
     /// <summary>
@@ -75,22 +75,22 @@ public sealed partial class ChatSessionHost : IDisposable
 
     private AgentOptions _options;
 
-    public ChatSessionHost(string                               workspaceRoot,
-                           SessionModelIdentity                 model,
-                           AgentOptions                         options,
-                           IChatCompletionClient                modelClient,
-                           ToolRegistry                         tools,
-                           string                               systemPrompt,
-                           PermissionEngine?                    permissions          = null,
-                           IApprovalProvider?                   approver             = null,
-                           IHostEventSink?                      events               = null,
-                           Func<string, IRunRecorder>?          recorderFactory      = null,
-                           Func<string, ISessionStoreWriter>?   sessionWriterFactory = null,
-                           ProjectInstructionLoader?            instructionLoader    = null,
-                           ProjectInstructionSnapshot?          initialInstructions  = null,
-                           IReadOnlyDictionary<string, string>? knownSecrets         = null,
-                           string?                              credentialRoute      = null,
-                           bool                                 ownsModelClient      = true)
+    public ChatSessionHost(string workspaceRoot,
+                           SessionModelIdentity model,
+                           AgentOptions options,
+                           IChatCompletionClient modelClient,
+                           ToolRegistry tools,
+                           string systemPrompt,
+                           PermissionEngine? permissions = null,
+                           IApprovalProvider? approver = null,
+                           IHostEventSink? events = null,
+                           Func<string, IRunRecorder>? recorderFactory = null,
+                           Func<string, ISessionStoreWriter>? sessionWriterFactory = null,
+                           ProjectInstructionLoader? instructionLoader = null,
+                           ProjectInstructionSnapshot? initialInstructions = null,
+                           IReadOnlyDictionary<string, string>? knownSecrets = null,
+                           string? credentialRoute = null,
+                           bool ownsModelClient = true)
         : this(new ChatSession(NewId(), workspaceRoot, model), ContextFor(options), options,
                // 新会话必须携带可执行客户端；仅恢复接管允许未绑定等待显式重选目标。
                modelClient ?? throw new ArgumentNullException(nameof(modelClient)), tools,
@@ -132,23 +132,23 @@ public sealed partial class ChatSessionHost : IDisposable
     ///         <c>ChangeModelAsync</c>. On failure the client stays with the caller.
     ///     </para>
     /// </remarks>
-    public ChatSessionHost(ChatSession                          session,
-                           ConversationContext                  context,
-                           AgentOptions                         options,
-                           IChatCompletionClient?               modelClient,
-                           ToolRegistry                         tools,
-                           string                               systemPrompt,
-                           PermissionEngine?                    permissions         = null,
-                           IApprovalProvider?                   approver            = null,
-                           IHostEventSink?                      events              = null,
-                           Func<string, IRunRecorder>?          recorderFactory     = null,
-                           ISessionStoreWriter?                 sessionWriter       = null,
-                           string?                              needsInspection     = null,
-                           ProjectInstructionLoader?            instructionLoader   = null,
-                           ProjectInstructionSnapshot?          initialInstructions = null,
-                           IReadOnlyDictionary<string, string>? knownSecrets        = null,
-                           string?                              credentialRoute     = null,
-                           bool                                 ownsModelClient     = true)
+    public ChatSessionHost(ChatSession session,
+                           ConversationContext context,
+                           AgentOptions options,
+                           IChatCompletionClient? modelClient,
+                           ToolRegistry tools,
+                           string systemPrompt,
+                           PermissionEngine? permissions = null,
+                           IApprovalProvider? approver = null,
+                           IHostEventSink? events = null,
+                           Func<string, IRunRecorder>? recorderFactory = null,
+                           ISessionStoreWriter? sessionWriter = null,
+                           string? needsInspection = null,
+                           ProjectInstructionLoader? instructionLoader = null,
+                           ProjectInstructionSnapshot? initialInstructions = null,
+                           IReadOnlyDictionary<string, string>? knownSecrets = null,
+                           string? credentialRoute = null,
+                           bool ownsModelClient = true)
         : this(session, context, options, modelClient, tools, systemPrompt, permissions, approver, events,
                recorderFactory, sessionWriter is null ? null : _ => sessionWriter, needsInspection,
                instructionLoader, initialInstructions, knownSecrets, credentialRoute, ownsModelClient)
@@ -162,23 +162,23 @@ public sealed partial class ChatSessionHost : IDisposable
     ///         and opens or takes over the writer last; any failure rejects startup.
     ///     </para>
     /// </summary>
-    private ChatSessionHost(ChatSession                          session,
-                            ConversationContext                  context,
-                            AgentOptions                         options,
-                            IChatCompletionClient?               modelClient,
-                            ToolRegistry                         tools,
-                            string                               systemPrompt,
-                            PermissionEngine?                    permissions,
-                            IApprovalProvider?                   approver,
-                            IHostEventSink?                      events,
-                            Func<string, IRunRecorder>?          recorderFactory,
-                            Func<string, ISessionStoreWriter>?   sessionWriterFactory,
-                            string?                              needsInspection,
-                            ProjectInstructionLoader?            instructionLoader,
-                            ProjectInstructionSnapshot?          initialInstructions,
+    private ChatSessionHost(ChatSession session,
+                            ConversationContext context,
+                            AgentOptions options,
+                            IChatCompletionClient? modelClient,
+                            ToolRegistry tools,
+                            string systemPrompt,
+                            PermissionEngine? permissions,
+                            IApprovalProvider? approver,
+                            IHostEventSink? events,
+                            Func<string, IRunRecorder>? recorderFactory,
+                            Func<string, ISessionStoreWriter>? sessionWriterFactory,
+                            string? needsInspection,
+                            ProjectInstructionLoader? instructionLoader,
+                            ProjectInstructionSnapshot? initialInstructions,
                             IReadOnlyDictionary<string, string>? knownSecrets,
-                            string?                              credentialRoute,
-                            bool                                 ownsModelClient)
+                            string? credentialRoute,
+                            bool ownsModelClient)
     {
         ArgumentNullException.ThrowIfNull(session);
         ArgumentNullException.ThrowIfNull(context);
@@ -205,23 +205,23 @@ public sealed partial class ChatSessionHost : IDisposable
                                       "a resumed session requires identical instructions.", nameof(context));
         }
 
-        Session              = session;
-        _options             = options;
-        _tools               = tools;
-        _systemPrompt        = systemPrompt;
-        _permissions         = permissions;
-        _approver            = approver;
-        _events              = events;
-        _recorderFactory     = recorderFactory;
-        _context             = context;
-        _instructionLoader   = instructionLoader;
+        Session = session;
+        _options = options;
+        _tools = tools;
+        _systemPrompt = systemPrompt;
+        _permissions = permissions;
+        _approver = approver;
+        _events = events;
+        _recorderFactory = recorderFactory;
+        _context = context;
+        _instructionLoader = instructionLoader;
         _initialInstructions = initialInstructions;
-        _eventRedactor       = knownSecrets is null ? null : new SecretRedactor(knownSecrets);
+        _eventRedactor = knownSecrets is null ? null : new SecretRedactor(knownSecrets);
         // 新中断会清空旧确认；保留的确认时间表示该中断已由用户检查。
         var pending = session.PendingInspectionReason ?? needsInspection;
         if (pending is not null && session.InspectionAcknowledgedUtc is null)
         {
-            _inspectionNote                 = pending;
+            _inspectionNote = pending;
             session.PendingInspectionReason = pending;
             _permissions?.SetNonReadOnlyBlock(pending);
         }
@@ -229,21 +229,21 @@ public sealed partial class ChatSessionHost : IDisposable
         if (session.ModelSelection is null)
             session.RecordModelSelection(new SessionModelSelection
             {
-                Revision                = 1,
-                PreviousRevision        = 0,
-                SelectedUtc             = DateTimeOffset.UtcNow,
-                Model                   = session.Model,
-                ProfileHint             = null,
-                CredentialRoute         = credentialRoute,
-                Context                 = options.Context,
-                ReasoningEffort         = options.ReasoningEffort,
-                ReasoningCapabilities   = null,
+                Revision = 1,
+                PreviousRevision = 0,
+                SelectedUtc = DateTimeOffset.UtcNow,
+                Model = session.Model,
+                ProfileHint = null,
+                CredentialRoute = credentialRoute,
+                Context = options.Context,
+                ReasoningEffort = options.ReasoningEffort,
+                ReasoningCapabilities = null,
                 ReasoningMappingVersion = ReasoningEffortMappings.CurrentVersion,
-                ProjectionVersion       = SessionModelSelection.CurrentProjectionVersion,
-                MessageBoundary         = 0
+                ProjectionVersion = SessionModelSelection.CurrentProjectionVersion,
+                MessageBoundary = 0
             });
         else if (modelClient is not null &&
-                 (session.ModelSelection.Context         != options.Context ||
+                 (session.ModelSelection.Context != options.Context ||
                   session.ModelSelection.ReasoningEffort != options.ReasoningEffort))
             throw new
                 ArgumentException("Options must match the restored model selection; change it explicitly after restoring.",
@@ -408,7 +408,7 @@ public sealed partial class ChatSessionHost : IDisposable
         DisplayWarning = null;
 
         var turn = new SessionTurn(NewId(), userInput);
-        var run  = new SessionRun(NewId(), Session.Id, turn.Id, modelSelection : Session.ModelSelection);
+        var run = new SessionRun(NewId(), Session.Id, turn.Id, modelSelection: Session.ModelSelection);
         Session.AddTurn(turn);
         turn.AddRun(run);
         using var control = CreateRunControl(run, cancellationToken);
@@ -417,7 +417,7 @@ public sealed partial class ChatSessionHost : IDisposable
         {
             if (_sessionWriter is not null)
                 await _sessionWriter.CommitAsync(Session, _context, cancellationToken).ConfigureAwait(false);
-            var loop   = ComposeRunLoop(run);
+            var loop = ComposeRunLoop(run);
             var result = await loop.RunTurnAsync(_systemPrompt, userInput, control.Token).ConfigureAwait(false);
             if (!string.IsNullOrWhiteSpace(result.PersistenceWarning))
                 PersistenceWarning = result.PersistenceWarning;
@@ -429,8 +429,8 @@ public sealed partial class ChatSessionHost : IDisposable
             // 循环之外的调用方取消也须留下终态；其他取消异常交由失败分支保留原因。
             run.Finish(new AgentResult
             {
-                Status    = AgentStatus.Cancelled,
-                Error     = "Run cancelled",
+                Status = AgentStatus.Cancelled,
+                Error = "Run cancelled",
                 ToolCalls = run.ExecutionRecords
             });
             return run;
@@ -439,8 +439,8 @@ public sealed partial class ChatSessionHost : IDisposable
         {
             run.Finish(new AgentResult
             {
-                Status    = AgentStatus.Failed,
-                Error     = ex.Message,
+                Status = AgentStatus.Failed,
+                Error = ex.Message,
                 ToolCalls = run.ExecutionRecords
             });
             return run;
@@ -456,9 +456,9 @@ public sealed partial class ChatSessionHost : IDisposable
             }
             finally
             {
-                DisplayWarning  = _activeRecorder?.DisplayWarning;
+                DisplayWarning = _activeRecorder?.DisplayWarning;
                 _activeRecorder = null;
-                _activeControl  = null;
+                _activeControl = null;
                 _permissions?.ClearTemporaryAllows();
                 Interlocked.Exchange(ref _activeRuns, 0);
             }
@@ -498,13 +498,13 @@ public sealed partial class ChatSessionHost : IDisposable
         try
         {
             var previousAcknowledgement = Session.InspectionAcknowledgedUtc;
-            var previousReason          = Session.PendingInspectionReason;
+            var previousReason = Session.PendingInspectionReason;
             Session.InspectionAcknowledgedUtc = DateTimeOffset.UtcNow;
-            Session.PendingInspectionReason   = null;
+            Session.PendingInspectionReason = null;
             if (!await CommitSnapshotAsync().ConfigureAwait(false))
             {
                 Session.InspectionAcknowledgedUtc = previousAcknowledgement;
-                Session.PendingInspectionReason   = previousReason;
+                Session.PendingInspectionReason = previousReason;
                 throw new
                     InvalidOperationException("Inspection acknowledgement was not reliably saved; non-read-only actions remain blocked.");
             }
@@ -526,7 +526,7 @@ public sealed partial class ChatSessionHost : IDisposable
         // 副作用前必须可靠保存执行意图；只截取完整协议边界，不为活动运行补造终态。
         var safeContext = CompleteContextSnapshot();
         run.RecordExecutionIntent(records);
-        var previousReason          = Session.PendingInspectionReason;
+        var previousReason = Session.PendingInspectionReason;
         var previousAcknowledgement = Session.InspectionAcknowledgedUtc;
         try
         {
@@ -545,7 +545,7 @@ public sealed partial class ChatSessionHost : IDisposable
         }
         finally
         {
-            Session.PendingInspectionReason   = previousReason;
+            Session.PendingInspectionReason = previousReason;
             Session.InspectionAcknowledgedUtc = previousAcknowledgement;
         }
     }
@@ -591,7 +591,7 @@ public sealed partial class ChatSessionHost : IDisposable
                                         .ToArray();
             if (unknownSideEffects is { Length: > 0 })
                 LatchNeedsInspection($"run '{run.Id}' ({status}) left side-effect tools with unknown results: " +
-                                     string.Join("; ", unknownSideEffects)                                      +
+                                     string.Join("; ", unknownSideEffects) +
                                      ". The workspace may carry their effects; inspect it before allowing more side effects.");
             else if (incompleteTail && run.Result?.ToolCalls is not { Count: > 0 })
                 // 缺少执行记录，无法证明副作用未发生。
@@ -614,8 +614,8 @@ public sealed partial class ChatSessionHost : IDisposable
     /// </summary>
     private void LatchNeedsInspection(string reason)
     {
-        _inspectionNote                   = reason;
-        Session.PendingInspectionReason   = reason;
+        _inspectionNote = reason;
+        Session.PendingInspectionReason = reason;
         Session.InspectionAcknowledgedUtc = null;
         _permissions?.SetNonReadOnlyBlock(reason);
     }
@@ -689,7 +689,7 @@ public sealed partial class ChatSessionHost : IDisposable
                                                           WorkEvidenceCandidates,
                                                           (id, title, status, evidence, token) =>
                                                               UpdateWorkItemAsync(run, id, title,
-                                                                       status, evidence, token))
+                                                                  status, evidence, token))
             ])
             : _tools;
         return new AgentLoop(_binding!.Client, tools, _options, permissions, _approver, recorder, events, _context,
@@ -723,18 +723,19 @@ public sealed partial class ChatSessionHost : IDisposable
     ///     </para>
     /// </summary>
     private sealed class ProjectInstructionBoundary(
-        ChatSessionHost          host,
-        SessionRun               run,
+        ChatSessionHost host,
+        SessionRun run,
         ProjectInstructionLoader loader) : IAgentInstructionBoundary
     {
-        private ProjectInstructionRecord?   _pendingRecord;
+        private ProjectInstructionRecord? _pendingRecord;
         private ProjectInstructionSnapshot? _toolRoundSnapshot;
 
         public async Task PrepareUserContextAsync(CancellationToken cancellationToken)
         {
             // 后续回合必须从当前有效快照继续；initial 只用于尚未纳入宿主管理的新会话。
             var previous = host._context.ProjectInstructions ?? host._initialInstructions;
-            var snapshot = await loader.LoadAsync(previous, [], cancellationToken).ConfigureAwait(false);
+            var snapshot = await LoadTrackedSnapshotAsync("turn-start", previous, cancellationToken)
+               .ConfigureAwait(false);
             StageIfChanged(snapshot);
         }
 
@@ -752,7 +753,8 @@ public sealed partial class ChatSessionHost : IDisposable
         {
             // 工具轮发现的无规则目录只改变探测集合；在同一运行内保留该候选，完整边界后再可靠提交。
             var previous = _toolRoundSnapshot ?? host._context.ProjectInstructions;
-            var snapshot = await loader.LoadAsync(previous, [], cancellationToken).ConfigureAwait(false);
+            var snapshot = await LoadTrackedSnapshotAsync("before-model", previous, cancellationToken)
+               .ConfigureAwait(false);
             _toolRoundSnapshot = snapshot;
 
             var current = host._context.ProjectInstructions;
@@ -767,15 +769,18 @@ public sealed partial class ChatSessionHost : IDisposable
         {
             try
             {
-                var snapshot = await LoadForScopesAsync(preparations, cancellationToken).ConfigureAwait(false);
+                var snapshot = await LoadForScopesAsync("tool-preflight", preparations, cancellationToken)
+                   .ConfigureAwait(false);
                 return CheckSnapshot(snapshot);
             }
             catch (InstructionScopeLimitException ex)
             {
+                await LogFailureAsync("tool-preflight", "scope-too-broad", ex, preparations).ConfigureAwait(false);
                 return new InstructionBoundaryCheck(InstructionBoundaryStatus.ScopeTooBroad, ex.Message, null, null);
             }
             catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException)
             {
+                await LogFailureAsync("tool-preflight", "failed", ex, preparations).ConfigureAwait(false);
                 return new InstructionBoundaryCheck(InstructionBoundaryStatus.Failed, ex.Message, null, null);
             }
         }
@@ -785,11 +790,13 @@ public sealed partial class ChatSessionHost : IDisposable
         {
             try
             {
-                var snapshot = await LoadForScopesAsync(preparations, cancellationToken).ConfigureAwait(false);
+                var snapshot = await LoadForScopesAsync("before-dispatch", preparations, cancellationToken)
+                   .ConfigureAwait(false);
                 return CheckSnapshot(snapshot);
             }
             catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException)
             {
+                await LogFailureAsync("before-dispatch", "failed", ex, preparations).ConfigureAwait(false);
                 return new InstructionBoundaryCheck(InstructionBoundaryStatus.Failed, ex.Message, null, null);
             }
         }
@@ -806,8 +813,38 @@ public sealed partial class ChatSessionHost : IDisposable
             return await CommitPendingAsync(cancellationToken).ConfigureAwait(false);
         }
 
+        /// <summary>
+        ///     <para>把循环决定与宿主身份及候选版本关联，不把诊断当作生效或工具执行事实。</para>
+        ///     <para>
+        ///         Correlates loop decisions with host identities and candidate revisions, never treating diagnostics as
+        ///         activation or execution facts.
+        ///     </para>
+        /// </summary>
+        public Task RecordDecisionAsync(string phase, string decision, int? deferrals, int steps, int toolExecutions)
+        {
+            var level = decision switch
+            {
+                "stop-deferral-limit" or "stop-load-failure" or nameof(AgentStatus.Failed) =>
+                    ProjectInstructionLogLevel.Error,
+                "narrow-scope" or nameof(AgentStatus.StepLimitReached) or nameof(AgentStatus.BudgetLimitReached) =>
+                    ProjectInstructionLogLevel.Warning,
+                "retry" => ProjectInstructionLogLevel.Information,
+                _ when phase == "run-finished" => ProjectInstructionLogLevel.Information,
+                _ => ProjectInstructionLogLevel.Debug
+            };
+#if !DEBUG
+            if (level == ProjectInstructionLogLevel.Debug) return Task.CompletedTask;
+#endif
+            return ProjectInstructionDiagnosticLog.EventAsync($"event=decision|{DiagnosticIdentity()}|phase={phase}" +
+                                                              $"|decision={decision}|deferrals={deferrals}|steps={steps}" +
+                                                              $"|tool_executions={toolExecutions}" +
+                                                              $"|active_revision={host._context.ProjectInstructions?.Revision}" +
+                                                              $"|candidate_revision={_toolRoundSnapshot?.Revision}",
+                                                              host._eventRedactor, level);
+        }
+
         private async Task<ProjectInstructionSnapshot> LoadForScopesAsync(
-            IReadOnlyList<ToolPreparation> preparations, CancellationToken cancellationToken)
+            string phase, IReadOnlyList<ToolPreparation> preparations, CancellationToken cancellationToken)
         {
             var scopes = preparations.SelectMany(preparation => preparation.InstructionScopes)
                                      .Where(scope => host.Session.PermissionSelection is null ||
@@ -817,14 +854,93 @@ public sealed partial class ChatSessionHost : IDisposable
             var previous = _toolRoundSnapshot ?? host._context.ProjectInstructions;
             var snapshot = await loader.LoadForToolScopeAsync(previous, scopes, cancellationToken)
                                        .ConfigureAwait(false);
+            await LogSnapshotAsync(phase, host._context.ProjectInstructions, snapshot, preparations)
+               .ConfigureAwait(false);
             _toolRoundSnapshot = snapshot;
             return snapshot;
         }
 
+        private async Task<ProjectInstructionSnapshot> LoadTrackedSnapshotAsync(
+            string phase, ProjectInstructionSnapshot? previous, CancellationToken cancellationToken)
+        {
+            try
+            {
+                var snapshot = await loader.LoadAsync(previous, [], cancellationToken).ConfigureAwait(false);
+                await LogSnapshotAsync(phase, host._context.ProjectInstructions ?? previous, snapshot, [])
+                   .ConfigureAwait(false);
+                return snapshot;
+            }
+            catch (Exception exception) when (exception is IOException or InvalidDataException
+                                                                       or UnauthorizedAccessException)
+            {
+                await LogFailureAsync(phase, "failed", exception, []).ConfigureAwait(false);
+                throw;
+            }
+        }
+
+        private string DiagnosticIdentity() =>
+            $"session={host.Session.Id}|turn={run.TurnId}|run={run.Id}";
+
+        private string DescribeScopes(IReadOnlyList<ToolPreparation> preparations) =>
+            string.Join(";", preparations.SelectMany(preparation => preparation.InstructionScopes.Select(scope =>
+                                                         $"{preparation.CallId}@{preparation.ToolName}:{scope.Kind}:{(Path.IsPathRooted(scope.Path) ? Path.GetRelativePath(host.Session.WorkspaceRoot, scope.Path) : scope.Path)}")));
+
+        /// <summary>
+        ///     <para>仅在 Debug 保留范围和来源状态差异；不推断省略来源的磁盘正文。</para>
+        ///     <para>
+        ///         Records scope and source-state differences only in Debug, without inferring omitted source contents.
+        ///     </para>
+        /// </summary>
+        private Task LogSnapshotAsync(string phase, ProjectInstructionSnapshot? previous,
+                                      ProjectInstructionSnapshot snapshot, IReadOnlyList<ToolPreparation> preparations)
+        {
+#if DEBUG
+            if (!ProjectInstructionDiagnosticLog.IsEnabled) return Task.CompletedTask;
+            var oldSources = previous?.Documents.ToDictionary(document => document.SourcePath,
+                                                              OperatingSystem.IsWindows()
+                                                                  ? StringComparer.OrdinalIgnoreCase
+                                                                  : StringComparer.Ordinal);
+            var changed = snapshot.Documents.Where(document => oldSources is not null &&
+                                                               oldSources.TryGetValue(document.SourcePath,
+                                                                   out var old) &&
+                                                               !string.Equals(old.ContentHash, document.ContentHash,
+                                                                              StringComparison.OrdinalIgnoreCase))
+                                  .Select(document => document.SourcePath);
+            return ProjectInstructionDiagnosticLog.EventAsync($"event=check|{DiagnosticIdentity()}|phase={phase}" +
+                                                              $"|workspace={host.Session.WorkspaceRoot}" +
+                                                              $"|requested_scopes={DescribeScopes(preparations)}" +
+                                                              $"|status={(previous?.Revision == snapshot.Revision ? "unchanged" : "updated")}" +
+                                                              $"|scope_set_changed={previous?.DiscoveryFingerprint != snapshot.DiscoveryFingerprint}" +
+                                                              $"|previous_revision={previous?.Revision}|candidate_revision={snapshot.Revision}" +
+                                                              $"|previous_renderer={previous?.RendererVersion}|renderer={snapshot.RendererVersion}" +
+                                                              $"|shared_content_changed={string.Join(';', changed)}" +
+                                                              $"|previous_sources={DescribeSources(previous)}" +
+                                                              $"|candidate_sources={DescribeSources(snapshot)}",
+                                                              host._eventRedactor, ProjectInstructionLogLevel.Debug);
+#else
+            return Task.CompletedTask;
+#endif
+        }
+
+        private Task LogFailureAsync(string phase, string status, Exception exception,
+                                     IReadOnlyList<ToolPreparation> preparations) =>
+            ProjectInstructionDiagnosticLog.EventAsync($"event=check|{DiagnosticIdentity()}|phase={phase}" +
+                                                       $"|status={status}|error_type={exception.GetType().Name}" +
+                                                       $"|requested_scopes={DescribeScopes(preparations)}" +
+                                                       $"|active_revision={host._context.ProjectInstructions?.Revision}",
+                                                       host._eventRedactor, ProjectInstructionLogLevel.Error);
+
+        private static string DescribeSources(ProjectInstructionSnapshot? snapshot) => snapshot is null
+            ? string.Empty
+            : string.Join(';', snapshot.Documents.Select(document =>
+                                                             $"{document.SourcePath}[scope={document.ScopeDirectory},bytes={document.ByteCount},sha256={document.ContentHash},bom={document.HasUtf8Bom}]")
+                                       .Concat(snapshot.Omissions.Select(omission =>
+                                                                             $"{omission.SourcePath}[scope={omission.ScopeDirectory},bytes={omission.ByteCount},omitted={omission.Reason},mtime={omission.LastWriteUtc:O}]")));
+
         private static bool SnapshotUnchanged(
             ProjectInstructionSnapshot? previous, ProjectInstructionSnapshot snapshot) =>
-            previous is not null                               &&
-            previous.Revision             == snapshot.Revision &&
+            previous is not null &&
+            previous.Revision == snapshot.Revision &&
             previous.DiscoveryFingerprint == snapshot.DiscoveryFingerprint;
 
         private InstructionBoundaryCheck CheckSnapshot(ProjectInstructionSnapshot snapshot)
@@ -878,10 +994,30 @@ public sealed partial class ChatSessionHost : IDisposable
             }
 
             host._context.ConfirmProjectInstructions();
+            await ProjectInstructionDiagnosticLog.EventAsync($"event=applied|{DiagnosticIdentity()}" +
+                                                             $"|action={record.Action}|reason={record.Reason}" +
+                                                             $"|previous_revision={record.PreviousRevision}|active_revision={record.Revision}",
+                                                             host._eventRedactor,
+                                                             record.Action == "rules-applied"
+                                                                 ? ProjectInstructionLogLevel.Information
+                                                                 : ProjectInstructionLogLevel.Debug)
+                                                 .ConfigureAwait(false);
+            if (record.Action == "rules-applied")
+            {
+                var notices = ProjectInstructionRenderer.BudgetNotices(record.Snapshot);
+                if (notices.Count > 0)
+                    await ProjectInstructionDiagnosticLog.EventAsync($"event=budget|{DiagnosticIdentity()}" +
+                                                                     $"|active_revision={record.Revision}" +
+                                                                     $"|adjustments={string.Join(';', notices)}",
+                                                                     host._eventRedactor,
+                                                                     ProjectInstructionLogLevel.Warning)
+                                                         .ConfigureAwait(false);
+            }
+
             if (record.Action == "rules-applied") host._permissions?.ClearTemporaryAllows();
 
             _toolRoundSnapshot = record.Snapshot;
-            _pendingRecord     = null;
+            _pendingRecord = null;
             // scopes-tracked 没有 effective rules 变化；只由统一 writer 发布 history item。
             return record.Action == "rules-applied" ? ChangedEvent(record) : null;
         }
@@ -913,17 +1049,17 @@ public sealed partial class ChatSessionHost : IDisposable
         : IHostEventSink
     {
         private long _sequence;
-        public  bool IncludeReasoningText => inner.IncludeReasoningText;
+        public bool IncludeReasoningText => inner.IncludeReasoningText;
 
         public async ValueTask PublishAsync(HostEvent @event, CancellationToken cancellationToken)
         {
             await inner.PublishAsync(@event with
-                                     {
-                                         Sequence = Interlocked.Increment(ref _sequence),
-                                         SessionId = sessionId,
-                                         TurnId = turnId,
-                                         RunId = runId
-                                     },
+            {
+                Sequence = Interlocked.Increment(ref _sequence),
+                SessionId = sessionId,
+                TurnId = turnId,
+                RunId = runId
+            },
                                      cancellationToken)
                        .ConfigureAwait(false);
         }
@@ -931,12 +1067,12 @@ public sealed partial class ChatSessionHost : IDisposable
         public ValueTask PublishHistoryItemAsync(SessionHistoryItem item, CancellationToken cancellationToken) =>
             inner.PublishAsync(new HostEvent
             {
-                Kind      = HostEventKind.HistoryItemCompleted,
-                Sequence  = Interlocked.Increment(ref _sequence),
+                Kind = HostEventKind.HistoryItemCompleted,
+                Sequence = Interlocked.Increment(ref _sequence),
                 SessionId = sessionId,
-                TurnId    = turnId,
-                RunId     = runId,
-                Payload   = item
+                TurnId = turnId,
+                RunId = runId,
+                Payload = item
             }, cancellationToken);
     }
 }
