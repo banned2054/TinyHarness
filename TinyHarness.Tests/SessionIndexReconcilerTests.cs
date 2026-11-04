@@ -284,6 +284,59 @@ public class SessionIndexReconcilerTests
     }
 
     /// <summary>
+    ///     <para>逐条提交回调按重建顺序携带新摘要；失败条目不回调。</para>
+    ///     <para>The per-commit callback receives each fresh summary in rebuild order; failed entries never call back.</para>
+    /// </summary>
+    [Test]
+    public async Task Reconcile_SummaryCallbackReceivesCommittedSummaries()
+    {
+        using var dir   = new TestTempDir();
+        var       index = new SessionIndexStore(dir.Root);
+        await index.InitializeAsync(CancellationToken.None);
+        var ids = await SeedSessionsAsync(dir.Root, "callback question", "second callback question");
+
+        var committed = new List<string>();
+        var report = await new SessionIndexReconciler(index)
+           .ReconcileAsync(new SessionIndexReconcileOptions
+            {
+                SummaryCommitted = (summary, _) =>
+                {
+                    committed.Add(summary.Id);
+                    return Task.CompletedTask;
+                }
+            }, CancellationToken.None);
+        Assert.That(report.Rebuilt, Is.EqualTo(2));
+        Assert.That(committed, Is.EquivalentTo(ids));
+    }
+
+    /// <summary>
+    ///     <para>回调抛出非取消异常按有界说明记录：本轮其余条目继续，条目仍健康提交。</para>
+    ///     <para>
+    ///         A non-cancellation callback exception becomes a bounded note: remaining entries continue and the entry
+    ///         still commits as healthy.
+    ///     </para>
+    /// </summary>
+    [Test]
+    public async Task Reconcile_CallbackFailureIsNotedAndRoundContinues()
+    {
+        using var dir   = new TestTempDir();
+        var       index = new SessionIndexStore(dir.Root);
+        await index.InitializeAsync(CancellationToken.None);
+        var ids = await SeedSessionsAsync(dir.Root, "callback failure question");
+
+        var report = await new SessionIndexReconciler(index)
+           .ReconcileAsync(new SessionIndexReconcileOptions
+            {
+                SummaryCommitted = (_, _) => throw new InvalidOperationException("callback boom")
+            }, CancellationToken.None);
+        Assert.That(report.Rebuilt, Is.EqualTo(1));
+        Assert.That(report.Notes, Has.Count.EqualTo(1));
+        Assert.That(report.Notes[0], Does.Contain("Summary callback").And.Contain("callback boom"));
+        var row = await index.GetRowAsync(ids[0], CancellationToken.None);
+        Assert.That(row!.State, Is.EqualTo(SessionIndexEntryState.Current));
+    }
+
+    /// <summary>
     ///     <para>用脚本模型逐会话提交回合并返回会话 ID；宿主释放即释放 writer。</para>
     ///     <para>
     ///         Commits turns per session through scripted models and returns the session ids; disposing each host

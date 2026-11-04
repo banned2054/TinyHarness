@@ -1,20 +1,20 @@
-using NUnit.Framework;
 using System.Runtime.CompilerServices;
 using System.Security.AccessControl;
 using System.Security.Principal;
+using System.Text.Json;
+using NUnit.Framework;
 using TinyHarness.Core.Exceptions;
-using TinyHarness.Core.Models.Agent;
 using TinyHarness.Core.Models.ChatCompletions;
 using TinyHarness.Core.Models.Configuration;
 using TinyHarness.Core.Models.Context;
 using TinyHarness.Core.Models.Persistence;
 using TinyHarness.Core.Models.Project;
+using TinyHarness.Core.Models.Session;
 using TinyHarness.Core.Services.ChatCompletions;
 using TinyHarness.Core.Services.ChatCompletions.Configuration;
 using TinyHarness.Core.Services.Context;
 using TinyHarness.Core.Services.Persistence;
 using TinyHarness.Core.Services.Runtime;
-using TinyHarness.Core.Models.Session;
 using TinyHarness.Desktop.Runtime;
 using TinyHarness.Desktop.ViewModels;
 
@@ -161,10 +161,119 @@ public sealed class DesktopStartupOrganizeTests
         await using var model = fixture.Window();
         await model.StartAsync();
         Assert.That(await File.ReadAllBytesAsync(damagedLog), Is.EqualTo(bytes), "损坏日志不得被改写。");
-        Assert.That(model.OrganizeNotice, Does.Contain("1 项失败"));
+        // 损坏日志由索引以失败条目呈现（窗口提示），不进入归属整理的待处理集合。
+        Assert.That(model.Notice, Does.Contain("部分历史无法读取"));
+        Assert.That(model.Sessions.Any(session => session.Id == damagedId), Is.False,
+                    "损坏日志不得伪装成可读会话行。");
+        var row = await new SessionIndexStore(fixture.Store).GetRowAsync(damagedId, CancellationToken.None);
+        Assert.That(row!.State, Is.EqualTo(SessionIndexEntryState.Failed));
         // 严格读取对损坏日志抛结构化异常（只有文件缺失才返回 null），不修复也不伪装成可读会话。
         await Assert.ThrowsAsync<SessionStoreException>(() => SessionStoreReader.ReadAsync(fixture.Store, damagedId,
                                                             CancellationToken.None));
+    }
+
+    /// <summary>
+    ///     <para>有效索引下启动按摘要呈现列表：预置的哨兵标题原样出现，未变日志不被正文扫描改写。</para>
+    ///     <para>
+    ///         Startup under a valid index renders rows from summaries: a preseeded sentinel title appears and
+    ///         unchanged logs are never body-scanned.
+    ///     </para>
+    /// </summary>
+    [Test]
+    public async Task StartupWithValidIndexRendersRowsFromSummaries()
+    {
+        var fixture = await Fixture.CreateAsync();
+        await CommitLegacySessionAsync(fixture.Store, fixture.First);
+        await CommitLegacySessionAsync(fixture.Store, fixture.Second);
+        var index = new SessionIndexStore(fixture.Store);
+        await new SessionIndexReconciler(index).ReconcileAsync(CancellationToken.None);
+        // 改写索引摘要标题并保持来源标记不变：启动必须零正文扫描地呈现索引摘要。
+        var rows = await index.ListRowsAsync(CancellationToken.None);
+        foreach (var row in rows)
+            await index.WriteSummaryAsync(row.Summary! with { Title = "sentinel-" + row.Id[..8] },
+                                          row.SourceLength, row.SourceModifiedUtc, CancellationToken.None);
+
+        await using var model = fixture.Window();
+        await model.StartAsync();
+        Assert.That(model.Sessions.Count(session => session.Id is not null),
+                    Is.EqualTo(2), "有效索引下启动必须按摘要呈现全部会话行。");
+        Assert.That(model.Sessions.Where(session => session.Id is not null)
+                         .All(session => session.Title.StartsWith("sentinel-")),
+                    Is.True, "列表标题必须来自索引摘要而非日志正文重扫。");
+        Assert.That(model.OrganizeNotice, Is.Empty);
+    }
+
+    /// <summary>
+    ///     <para>有效索引下启动只整理索引标记为待初始化的日志：已绑定日志字节不变，待处理日志完成绑定。</para>
+    ///     <para>
+    ///         Startup under a valid index organizes only the indexed pending logs: bound-log bytes stay unchanged
+    ///         while the pending log completes binding.
+    ///     </para>
+    /// </summary>
+    [Test]
+    public async Task StartupOrganizesOnlyIndexedPendingSessions()
+    {
+        var fixture   = await Fixture.CreateAsync();
+        var boundId   = await CommitLegacySessionAsync(fixture.Store, fixture.First);
+        var pendingId = await CommitLegacySessionAsync(fixture.Store, fixture.Second);
+        var index     = new SessionIndexStore(fixture.Store);
+        await new SessionIndexReconciler(index).ReconcileAsync(CancellationToken.None);
+
+        // 先把其中一个日志绑定到项目，再启动：定向整理不得触碰已绑定日志。
+        var projectId = Guid.NewGuid().ToString("N");
+        using (var writer =
+               await SessionStoreWriter.OpenExistingAsync(fixture.Store, boundId, null, CancellationToken.None))
+        {
+            await writer.AppendRecordsAsync(
+            [
+                new SessionLogRecord(string.Empty, "project-binding",
+                                     JsonSerializer.SerializeToElement(
+                                                                       new
+                                                                           SessionLogProjectBinding(SessionLogProjectBinding
+                                                                              .SchemaName, projectId),
+                                                                       SessionLogJsonContext.Default
+                                                                          .SessionLogProjectBinding))
+            ], CancellationToken.None);
+        }
+
+        await new SessionIndexReconciler(index).ReconcileAsync(CancellationToken.None);
+        var boundPath  = Path.Combine(fixture.Store, boundId + SessionStoreWriter.LogFileSuffix);
+        var boundBytes = await File.ReadAllBytesAsync(boundPath);
+
+        await using var model = fixture.Window();
+        await model.StartAsync();
+        Assert.That((await SessionStoreReader.ReadAsync(fixture.Store, pendingId, CancellationToken.None))!
+                   .ProjectId, Is.Not.Null, "待初始化日志必须被定向整理绑定。");
+        Assert.That(await File.ReadAllBytesAsync(boundPath), Is.EqualTo(boundBytes),
+                    "已绑定日志不得被再次整理追加。");
+        Assert.That(model.OrganizeNotice, Is.Empty);
+    }
+
+    /// <summary>
+    ///     <para>首次启动无索引：后台建库完成后索引文件存在，列表仍完整呈现。</para>
+    ///     <para>
+    ///         The first startup has no index: background reconciliation builds the database while the list still
+    ///         renders completely.
+    ///     </para>
+    /// </summary>
+    [Test]
+    public async Task FirstStartupBuildsIndexWhileRenderingFullList()
+    {
+        var fixture = await Fixture.CreateAsync();
+        for (var index = 0; index < 3; index++)
+            await CommitLegacySessionAsync(fixture.Store, fixture.First);
+        var indexPath = Path.Combine(fixture.Store, SessionIndexStore.DatabaseFileName);
+        Assert.That(File.Exists(indexPath), Is.False, "前置：首次启动前索引不存在。");
+
+        await using var model = fixture.Window();
+        await model.StartAsync();
+        Assert.That(model.Sessions.Count(session => session.Id is not null), Is.EqualTo(3),
+                    "索引缺失时降级摘要扫描必须呈现全部会话。");
+        Assert.That(File.Exists(indexPath), Is.True, "启动轮必须后台建立索引数据库。");
+        Assert.That((await SessionStoreReader.ListAsync(fixture.Store, CancellationToken.None))
+                   .All(entry => entry.Session!.ProjectId is not null), Is.True,
+                    "建库后定向整理必须完成归属绑定。");
+        Assert.That(model.OrganizeNotice, Is.Empty);
     }
 
     [Test]

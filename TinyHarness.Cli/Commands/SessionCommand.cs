@@ -34,16 +34,51 @@ internal static class SessionCommand
     };
 
     /// <summary>
-    ///     <para>列出持久会话；报告损坏条目后继续列举。</para>
-    ///     <para>Lists persisted sessions, reporting damaged entries without stopping the list.</para>
+    ///     <para>列出持久会话；索引可用时按摘要轻量列举，索引缺失或不可用时退回完整扫描，报告损坏条目后继续。</para>
+    ///     <para>
+    ///         Lists persisted sessions; summaries back the list while the index is available, and a full scan takes
+    ///         over when it is missing or unusable, reporting damaged entries without stopping.
+    ///     </para>
     /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         本命令只读：索引不可用时按完整扫描降级并保持既有输出与错误契约，不在列表路径创建或重建索引文件。
+    ///     </para>
+    ///     <para>
+    ///         The command stays read-only: an unusable index degrades to the full scan with the existing output and
+    ///         error contract, and the list path never creates or rebuilds index files.
+    ///     </para>
+    /// </remarks>
     private static async Task<int> ListAsync(CommandContext context, CancellationToken cancellationToken)
     {
-        var io       = context.Io;
-        var storeDir = await ResolveStoreDirectoryAsync(context, cancellationToken).ConfigureAwait(false);
+        var io         = context.Io;
+        var storeDir   = await ResolveStoreDirectoryAsync(context, cancellationToken).ConfigureAwait(false);
+        var projection = new SessionListProjection(storeDir);
         await io.WriteLineAsync($"Session store: {storeDir}", cancellationToken).ConfigureAwait(false);
-        var entries  = await SessionStoreReader.ListAsync(storeDir, cancellationToken).ConfigureAwait(false);
-        var projects = await ReadProjectsAsync(io, storeDir, cancellationToken).ConfigureAwait(false);
+        var projects     = await ReadProjectsAsync(io, storeDir, cancellationToken).ConfigureAwait(false);
+        var availability = await projection.GetAvailabilityAsync(cancellationToken).ConfigureAwait(false);
+        if (availability.Status == SessionIndexAvailabilityStatus.Available)
+        {
+            var summaries = await projection.ListSummariesAsync(new SessionSummaryQuery(), cancellationToken)
+                                            .ConfigureAwait(false);
+            var rows   = await projection.ListRowsAsync(cancellationToken).ConfigureAwait(false);
+            var failed = rows.Where(row => row.State == SessionIndexEntryState.Failed).ToArray();
+            if (summaries.Count == 0 && failed.Length == 0)
+                await io.WriteLineAsync("  (no stored sessions)", cancellationToken).ConfigureAwait(false);
+
+            foreach (var summary in summaries)
+                await io
+                     .WriteLineAsync($"  {summary.Id}  updated {summary.UpdatedUtc.LocalDateTime:yyyy-MM-dd HH:mm:ss}" +
+                                     $"  turns {summary.TurnCount}  {summary.WorkspaceRoot}"                           +
+                                     $"  project {TerminalDisplay.Format(SummaryProjectLabel(summary, projects))}",
+                                     cancellationToken).ConfigureAwait(false);
+            foreach (var row in failed)
+                await io.WriteLineAsync($"  {row.Id}  damaged: {row.Error}", cancellationToken)
+                        .ConfigureAwait(false);
+            return 0;
+        }
+
+        var entries = await SessionStoreReader.ListAsync(storeDir, cancellationToken).ConfigureAwait(false);
         if (entries.Count == 0)
             await io.WriteLineAsync("  (no stored sessions)", cancellationToken).ConfigureAwait(false);
 
@@ -117,6 +152,19 @@ internal static class SessionCommand
     private static string ProjectLabel(PersistedSession session, IReadOnlyList<Project> projects) =>
         session.ProjectAssignmentState == SessionProjectAssignmentState.NoProject ? "no project" :
         session.ProjectId is not { } id                                           ? "unbound (initialization pending)" :
+        projects.FirstOrDefault(project => project.Id == id) is { } project       ? $"{project.Name} <{id}>" :
+            $"missing project information <{id}>";
+
+    /// <summary>
+    ///     <para>按摘要格式化项目显示值；判定顺序与完整会话版本一致，保持列表输出契约。</para>
+    ///     <para>
+    ///         Formats the project display value from a summary; the decision order matches the full-session version
+    ///         to keep the list's output contract.
+    ///     </para>
+    /// </summary>
+    private static string SummaryProjectLabel(SessionSummary summary, IReadOnlyList<Project> projects) =>
+        summary.ProjectAssignmentState == SessionProjectAssignmentState.NoProject ? "no project" :
+        summary.ProjectId is not { } id                                           ? "unbound (initialization pending)" :
         projects.FirstOrDefault(project => project.Id == id) is { } project       ? $"{project.Name} <{id}>" :
             $"missing project information <{id}>";
 

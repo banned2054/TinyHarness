@@ -55,6 +55,41 @@ public sealed record SessionIndexReconcileReport(
     IReadOnlyList<string>    Notes);
 
 /// <summary>
+///     <para>一轮对账的可选项；全部为 null 时与无参重载行为一致。</para>
+///     <para>Optional knobs for one reconciliation round; all null matches the parameterless overload.</para>
+/// </summary>
+public sealed record SessionIndexReconcileOptions
+{
+    /// <summary>
+    ///     <para>默认选项实例：无回调。</para>
+    ///     <para>The default options instance without callbacks.</para>
+    /// </summary>
+    public static readonly SessionIndexReconcileOptions Default = new();
+
+    /// <summary>
+    ///     <para>
+    ///         每份日志重建并条件提交后立即以新摘要回调一次，供首次建库分批渐进上屏；失败条目不回调。
+    ///     </para>
+    ///     <para>
+    ///         Invoked with each freshly committed summary right after its conditional commit so first builds can
+    ///         surface rows progressively; failed entries never call back.
+    ///     </para>
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         回调在对账实例的串行门内执行，实现必须快速返回并自行调度耗时工作；非取消异常按有界说明记录，
+    ///         不中断本轮其余条目，取消原样传播。
+    ///     </para>
+    ///     <para>
+    ///         The callback runs inside the reconciler's serial gate, so implementations must return quickly and
+    ///         schedule heavy work themselves; non-cancellation exceptions become bounded notes without interrupting
+    ///         the remaining entries, while cancellation propagates unchanged.
+    ///     </para>
+    /// </remarks>
+    public Func<SessionSummary, CancellationToken, Task>? SummaryCommitted { get; init; }
+}
+
+/// <summary>
 ///     <para>
 ///         对单 store 的列表索引做一轮对账：未变日志零正文扫描，缺失或变化条目整份重建，
 ///         变短或疑似替换的来源先标记失败再重建，孤儿行移除，归档投影从权威来源同步。
@@ -119,12 +154,33 @@ public sealed class SessionIndexReconciler
     ///         conditional commits. Cancellation interrupts the round and propagates to the caller.
     ///     </para>
     /// </remarks>
-    public async Task<SessionIndexReconcileReport> ReconcileAsync(CancellationToken cancellationToken)
+    public Task<SessionIndexReconcileReport> ReconcileAsync(CancellationToken cancellationToken) =>
+        ReconcileAsync(SessionIndexReconcileOptions.Default, cancellationToken);
+
+    /// <summary>
+    ///     <para>
+    ///         按可选项执行一轮对账并返回计数报告；基础设施失败包装为 <see cref="SessionIndexException" />。
+    ///     </para>
+    ///     <para>
+    ///         Runs one reconciliation round with options and returns the count report; infrastructure failures
+    ///         surface as <see cref="SessionIndexException" />.
+    ///     </para>
+    /// </summary>
+    /// <remarks>
+    ///     <para>同实例并发调用串行执行；跨进程并发由索引的条件提交保证收敛。取消中断本轮并向上传播。</para>
+    ///     <para>
+    ///         Concurrent calls on one instance serialize; cross-process concurrency converges through the index's
+    ///         conditional commits. Cancellation interrupts the round and propagates to the caller.
+    ///     </para>
+    /// </remarks>
+    public async Task<SessionIndexReconcileReport> ReconcileAsync(
+        SessionIndexReconcileOptions options, CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(options);
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            return await ReconcileCoreAsync(cancellationToken).ConfigureAwait(false);
+            return await ReconcileCoreAsync(options, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException
                                       or PathTooLongException)
@@ -139,7 +195,8 @@ public sealed class SessionIndexReconciler
         }
     }
 
-    private async Task<SessionIndexReconcileReport> ReconcileCoreAsync(CancellationToken cancellationToken)
+    private async Task<SessionIndexReconcileReport> ReconcileCoreAsync(
+        SessionIndexReconcileOptions options, CancellationToken cancellationToken)
     {
         var notes        = new List<string>();
         var availability = await _indexStore.GetAvailabilityAsync(cancellationToken).ConfigureAwait(false);
@@ -242,6 +299,21 @@ public sealed class SessionIndexReconciler
                 await _indexStore.WriteSummaryAsync(build.Summary, build.SourceLength, build.SourceModifiedUtc,
                                                     cancellationToken).ConfigureAwait(false);
                 rebuilt++;
+                if (options.SummaryCommitted is { } committed)
+                    try
+                    {
+                        await committed(build.Summary, cancellationToken).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        throw;
+                    }
+                    catch (Exception ex)
+                    {
+                        // 回调失败只记说明，不吞取消，也不阻断本轮其余条目。
+                        if (notes.Count < MaxNotes)
+                            notes.Add($"Summary callback for session '{sessionId}' failed: {ex.Message}");
+                    }
             }
             catch (Exception ex) when (ex is SessionStoreException or IOException or UnauthorizedAccessException
                                           or NotSupportedException or PathTooLongException)

@@ -1,7 +1,9 @@
+using System.Collections.Concurrent;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
+using Avalonia.Threading;
 using TinyHarness.Core.Exceptions;
 using TinyHarness.Core.Models.Configuration;
 using TinyHarness.Core.Models.Persistence;
@@ -23,12 +25,14 @@ namespace TinyHarness.Desktop.ViewModels;
 /// </summary>
 public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
 {
-    private const           int                      OrganizeBatchSize = 100;
-    private static readonly SidebarCategoryViewModel PinnedCategory    = new("pinned", "置顶");
-    private static readonly SidebarCategoryViewModel ProjectsCategory  = new("projects", "项目");
-    private static readonly SidebarCategoryViewModel RecentCategory    = new("recent", "最近");
-    private static readonly SidebarCategoryViewModel SessionsCategory  = new("sessions", "会话");
-    private static readonly SidebarCategoryViewModel ArchivedCategory  = new("archived", "已归档");
+    private const           int                      OrganizeBatchSize      = 100;
+    private const           int                      ListRowBatchSize       = 200;
+    private const           int                      IndexRefreshIntervalMs = 15000;
+    private static readonly SidebarCategoryViewModel PinnedCategory         = new("pinned", "置顶");
+    private static readonly SidebarCategoryViewModel ProjectsCategory       = new("projects", "项目");
+    private static readonly SidebarCategoryViewModel RecentCategory         = new("recent", "最近");
+    private static readonly SidebarCategoryViewModel SessionsCategory       = new("sessions", "会话");
+    private static readonly SidebarCategoryViewModel ArchivedCategory       = new("archived", "已归档");
 
     private static readonly SidebarCategoryViewModel ArchivedEmptyCategory = new("archived-empty", "暂无已归档会话",
         false);
@@ -49,12 +53,14 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     private readonly Dictionary<string, SessionStoreArchives> _archiveStatesByStore =
         new(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
 
-    private readonly Func<Action, ValueTask>? _dispatch;
-    private readonly DesktopSessionFactory    _factory;
-    private readonly List<SessionViewModel>   _failedDrafts         = [];
-    private readonly CancellationTokenSource  _lifetime             = new();
-    private readonly DesktopSessionManager    _manager              = new();
-    private readonly SemaphoreSlim            _pinStateMutationGate = new(1, 1);
+    private readonly Func<Action, ValueTask>?        _dispatch;
+    private readonly DesktopSessionFactory           _factory;
+    private readonly List<SessionViewModel>          _failedDrafts         = [];
+    private readonly CancellationTokenSource         _lifetime             = new();
+    private readonly object                          _listProjectionGate   = new();
+    private readonly DesktopSessionManager           _manager              = new();
+    private readonly ConcurrentQueue<SessionSummary> _pendingSummaryRows   = new();
+    private readonly SemaphoreSlim                   _pinStateMutationGate = new(1, 1);
 
     private readonly HashSet<string> _pinStateUnavailableStores = new(
                                                                       OperatingSystem.IsWindows()
@@ -64,44 +70,49 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     private readonly Dictionary<string, SessionStorePins> _pinStatesByStore =
         new(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
 
-    private readonly HashSet<string>               _projectReloadRetried       = new(StringComparer.Ordinal);
-    private readonly SemaphoreSlim                 _refreshGate                = new(1, 1);
-    private readonly SemaphoreSlim                 _sidebarPreferencesLoadGate = new(1, 1);
-    private readonly string                        _sidebarPreferencesPath     = string.Empty;
-    private readonly SemaphoreSlim                 _sidebarPreferencesSaveGate = new(1, 1);
-    private          bool                          _closing;
-    private          string?                       _initializationCursor;
-    private          bool                          _loadingCatalog;
-    private          bool                          _loadingHistory;
-    private          int                           _migrationBusy;
-    private          SessionViewModel?             _newConversation;
-    private          string                        _notice = string.Empty;
-    private          TaskCompletionSource?         _organizeFinished;
-    private          int                           _organizeGeneration;
+    private readonly HashSet<string> _projectReloadRetried = new(StringComparer.Ordinal);
+    private readonly SemaphoreSlim _refreshGate = new(1, 1);
+    private readonly SemaphoreSlim _sidebarPreferencesLoadGate = new(1, 1);
+    private readonly string _sidebarPreferencesPath = string.Empty;
+    private readonly SemaphoreSlim _sidebarPreferencesSaveGate = new(1, 1);
+    private          bool _closing;
+    private          TaskCompletionSource? _indexRefreshFinished;
+    private          int _indexRefreshGeneration;
+    private          CancellationTokenSource? _indexRefreshSource;
+    private          string? _initializationCursor;
+    private          (SessionListProjection Projection, string Store)? _listProjection;
+    private          bool _loadingCatalog;
+    private          bool _loadingHistory;
+    private          int _migrationBusy;
+    private          SessionViewModel? _newConversation;
+    private          string _notice = string.Empty;
+    private          TaskCompletionSource? _organizeFinished;
+    private          int _organizeGeneration;
     private          IReadOnlyList<OrganizeIssue>? _organizeIssues;
-    private          string?                       _organizeIssuesStore;
-    private          string                        _organizeNotice = string.Empty;
-    private          CancellationTokenSource?      _organizeSource;
-    private          bool?                         _pendingProjectDeletionPromptPreference;
-    private          PermissionSettings            _permissionSettings = new();
-    private          int                           _projectDeletionDialogVersion;
-    private          string?                       _projectDeletionErrorText;
-    private          bool                          _projectDeletionOpen;
-    private          ProjectViewModel?             _projectDeletionTarget;
-    private          string                        _projectRenameDraft = string.Empty;
-    private          bool                          _projectRenameOpen;
-    private          IReadOnlyList<Project>        _projects = [];
-    private          int                           _renameDialogVersion;
-    private          ProjectViewModel?             _renameTarget;
-    private          bool                          _renamingProject;
-    private          SessionViewModel?             _selected;
-    private          bool                          _settingsOpen;
-    private          Task?                         _shutdown;
-    private          SidebarPreferences            _sidebarPreferences = new();
-    private          bool                          _sidebarPreferencesSaveAllowed;
-    private          bool                          _sidebarSettingsMenuOpen;
-    private          string?                       _storeDirectory;
-    private          int                           _storeRevision;
+    private          string? _organizeIssuesStore;
+    private          string _organizeNotice = string.Empty;
+    private          CancellationTokenSource? _organizeSource;
+    private          bool? _pendingProjectDeletionPromptPreference;
+    private          PermissionSettings _permissionSettings = new();
+    private          int _projectDeletionDialogVersion;
+    private          string? _projectDeletionErrorText;
+    private          bool _projectDeletionOpen;
+    private          ProjectViewModel? _projectDeletionTarget;
+    private          string _projectRenameDraft = string.Empty;
+    private          bool _projectRenameOpen;
+    private          IReadOnlyList<Project> _projects = [];
+    private          int _renameDialogVersion;
+    private          ProjectViewModel? _renameTarget;
+    private          bool _renamingProject;
+    private          SessionViewModel? _selected;
+    private          bool _settingsOpen;
+    private          Task? _shutdown;
+    private          SidebarPreferences _sidebarPreferences = new();
+    private          bool _sidebarPreferencesSaveAllowed;
+    private          bool _sidebarSettingsMenuOpen;
+    private          string? _storeDirectory;
+    private          int _storeRevision;
+    private          int _summaryRowPumpBusy;
 
     public MainWindowViewModel() : this(new DesktopSessionFactory(), UserConfigStore.DefaultFilePath())
     {
@@ -473,6 +484,16 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
             errors.Add(exception);
         }
 
+        try
+        {
+            _indexRefreshSource?.Cancel();
+            if (_indexRefreshFinished is { } refreshFinished) await refreshFinished.Task;
+        }
+        catch (Exception exception)
+        {
+            errors.Add(exception);
+        }
+
         // linked 取消源已随 lifetime 触发；显式取消覆盖未关联路径，随后等待迁移真正退出。
         try
         {
@@ -514,9 +535,9 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     }
 
     /// <summary>
-    ///     <para>只读加载项目、会话与历史，不触发迁移；生效 store 真正变化时取消旧整理并开始新一轮。</para>
+    ///     <para>只读加载项目与会话列表，不触发迁移；生效 store 真正变化时取消旧整理并开始新一轮。</para>
     ///     <para>
-    ///         Read-only load of projects, sessions and history that never organizes; a real store change cancels the
+    ///         Read-only load of projects and the session list that never organizes; a real store change cancels the
     ///         old round and starts a new one.
     ///     </para>
     /// </summary>
@@ -532,45 +553,8 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         try
         {
             (store, changed) = await PrepareAsync();
-            var entries = await SessionStoreReader.ListAsync(store, _lifetime.Token);
             if (_closing) return;
-            foreach (var entry in entries.OrderByDescending(entry => entry.Session?.LastActivityUtc))
-            {
-                if (entry.Session is not { } stored)
-                {
-                    Notice = $"部分历史无法读取：{entry.Error}";
-                    continue;
-                }
-
-                // 会话身份按 store 限定；已有行仅刷新归属与活动元数据，不重建实例、宿主、草稿和历史投影。
-                if (Sessions.FirstOrDefault(session => session.Id == entry.Id               &&
-                                                       session.StoreDirectory is { } source &&
-                                                       ProjectRoots.AreEqual(source, store)) is { } existing)
-                {
-                    existing.ApplyStoredMetadata(stored.ProjectId, stored.ProjectAssignmentState,
-                                                 stored.LastActivityUtc);
-                    existing.SetArchived(IsSessionArchived(existing));
-                    existing.ApplyStoredPermissionMode(stored.PermissionSelection?.Mode);
-                    continue;
-                }
-
-                var text  = stored.Turns.FirstOrDefault()?.UserInput;
-                var title = string.IsNullOrWhiteSpace(text) ? stored.Id[..8] : text.Split('\n')[0];
-                var row = new SessionViewModel(_manager, _factory, stored.WorkspaceRoot, stored.Id, store,
-                                               title[..Math.Min(title.Length, 48)], _dispatch, stored.ProjectId,
-                                               stored.LastActivityUtc, stored.ProjectAssignmentState)
-                {
-                    ModelOptions        = Models,
-                    ManageModelsCommand = OpenSettingsCommand,
-                    ProjectOptions      = Projects.Where(group => group.CanEdit).ToArray()
-                };
-                // 标签来自最后选择；历史页面不解析凭据，目标缺失也保留页面。
-                row.ApplyPermissionSettings(_permissionSettings);
-                row.ApplyStoredPermissionMode(stored.PermissionSelection?.Mode);
-                row.SetArchived(IsSessionArchived(row));
-                AddSession(row);
-            }
-
+            await LoadSessionRowsAsync(store);
             SelectedSession ??= ConversationDraft();
             await RebindUnboundDraftsAsync(store, draftTargets);
             RebuildProjects();
@@ -598,11 +582,14 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
     /// <summary>
     ///     <para>
-    ///         窗口显示后的启动序列：轻量准备不被历史扫描阻塞，后台自动整理一轮，结束后统一加载项目与历史。
+    ///         窗口显示后的启动序列：轻量准备不被历史扫描阻塞，列表先按索引摘要或降级扫描分批呈现，
+    ///         索引对账与归属整理随后后台完成；首屏等待链不再包含整理本体，返回前仅等待整轮收尾。
     ///     </para>
     ///     <para>
-    ///         Startup sequence after the window is shown: light preparation never waits for the scan, one background
-    ///         organize round runs, then projects and history load once.
+    ///         Startup sequence after the window is shown: light preparation never waits for the scan, the list first
+    ///         renders in batches from index summaries or the degraded scan, then reconciliation and organizing finish
+    ///         in the background; the first-screen wait no longer contains the organize round, and the method only
+    ///         awaits the round's completion before returning.
     ///     </para>
     /// </summary>
     public async Task StartAsync()
@@ -613,10 +600,10 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         {
             var (store, _) = await InitializeLightAsync();
             await StopOrganizeMigrationAsync();
-            // 未能启动整轮（迁移在途或无生效 store）时直接统一加载，保证历史仍然出现。
+            // 首屏先行：列表不等待整理本体；在途整轮已合并时列表同样已就绪，直接结束启动。
+            await InitializeAsync();
             var round = StartOrganizeRound(store);
-            if (round is null) await InitializeAsync();
-            else await round;
+            if (round is not null) await round;
         }
         catch (Exception exception)
         {
@@ -667,6 +654,521 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
             _refreshGate.Release();
         }
     }
+
+    /// <summary>
+    ///     <para>
+    ///         按 store 取共享列表投影；生效目录变化时在门内整体重建，并发调用不会读到半更新状态，
+    ///         投影本身不持有可变状态以外的锁。
+    ///     </para>
+    ///     <para>
+    ///         Returns the shared list projection for a store, rebuilt as a whole under a gate when the effective
+    ///         directory changes, so concurrent callers never observe a half-updated binding; the projection holds no
+    ///         mutable state beyond its own gate.
+    ///     </para>
+    /// </summary>
+    private SessionListProjection ProjectionFor(string storeDirectory)
+    {
+        lock (_listProjectionGate)
+        {
+            if (_listProjection is { } current && ProjectRoots.AreEqual(current.Store, storeDirectory))
+                return current.Projection;
+            var projection = new SessionListProjection(storeDirectory);
+            _listProjection = (projection, storeDirectory);
+            return projection;
+        }
+    }
+
+    /// <summary>
+    ///     <para>
+    ///         加载当前 store 的会话行：索引可用时查询摘要与失败行；索引缺失或不可用时降级为不落库的
+    ///         严格摘要扫描，保持列表轻量呈现且不阻塞首屏。
+    ///     </para>
+    ///     <para>
+    ///         Loads the session rows for the current store: summary and failed-row queries while the index is
+    ///         available; a degraded, non-persisted strict summary scan when it is missing or unusable, keeping the
+    ///         list lightweight and the first screen unblocked.
+    ///     </para>
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         调用方持有刷新门；本方法不触发迁移，也不改写索引与权威来源。Sqlite 的异步 API 仍是同步阻塞，
+    ///         索引查询与降级扫描放工作线程执行，仅结果应用回到调用方上下文。
+    ///     </para>
+    ///     <para>
+    ///         The caller holds the refresh gate; this never organizes and never rewrites the index or sources.
+    ///         Sqlite's async APIs still block synchronously, so index queries and the degraded scan run on a worker
+    ///         thread and only the result application returns to the caller's context.
+    ///     </para>
+    /// </remarks>
+    private async Task LoadSessionRowsAsync(string store)
+    {
+        var projection = ProjectionFor(store);
+        var (entries, degradedReason) = await Task.Run(() => LoadSessionEntriesAsync(projection), _lifetime.Token)
+                                                  .ConfigureAwait(true);
+        if (_closing) return;
+        if (degradedReason is not null)
+            Notice = $"会话索引不可用，已按摘要直接读取：{degradedReason}";
+        await ApplySessionSummariesAsync(store, entries).ConfigureAwait(true);
+    }
+
+    /// <summary>
+    ///     <para>在工作线程解析列表条目：按索引可用性走查询或降级摘要扫描，并带回不可用原因。</para>
+    ///     <para>
+    ///         Resolves list entries on a worker thread: index queries or the degraded scan by availability, carrying
+    ///         the unusable reason back to the caller.
+    ///     </para>
+    /// </summary>
+    private async Task<(IReadOnlyList<SessionListScanEntry> Entries, string? DegradedReason)>
+        LoadSessionEntriesAsync(SessionListProjection projection)
+    {
+        var availability = await projection.GetAvailabilityAsync(_lifetime.Token).ConfigureAwait(false);
+        switch (availability.Status)
+        {
+            case SessionIndexAvailabilityStatus.Available :
+                var summaries = await projection.ListSummariesAsync(new SessionSummaryQuery(), _lifetime.Token)
+                                                .ConfigureAwait(false);
+                var rows = await projection.ListRowsAsync(_lifetime.Token).ConfigureAwait(false);
+                var entries = summaries.Select(summary => new SessionListScanEntry(summary.Id, summary, null))
+                                       .Concat(rows.Where(row => row.State == SessionIndexEntryState.Failed)
+                                                   .Select(row => new SessionListScanEntry(row.Id, null, row.Error)))
+                                       .ToArray();
+                return (entries, null);
+            case SessionIndexAvailabilityStatus.Missing :
+            case SessionIndexAvailabilityStatus.NeedsSchema :
+                // 索引尚未建立：严格摘要扫描直接呈现，后台对账建库后自动切换查询路径。
+                // The index does not exist yet: render from the strict summary scan, and switch to queries once
+                // background reconciliation builds the database.
+                return (await projection.ScanSummariesAsync(_lifetime.Token).ConfigureAwait(false), null);
+            default :
+                // 索引不可用：降级摘要扫描保持列表可见，原因带回 UI 层呈现，不清空或降级索引文件。
+                return (await projection.ScanSummariesAsync(_lifetime.Token).ConfigureAwait(false),
+                        availability.Detail ?? availability.Status.ToString());
+        }
+    }
+
+    /// <summary>
+    ///     <para>
+    ///         把摘要条目应用到侧栏：已有行只刷新归属、活动与权限元数据；新行分批创建并让出调度，
+    ///         不因大量行重建实例、宿主、草稿和历史投影。
+    ///     </para>
+    ///     <para>
+    ///         Applies summary entries to the sidebar: existing rows refresh ownership, activity, and permission
+    ///         metadata only; new rows are created in yielding batches without rebuilding instances, hosts, drafts,
+    ///         or history projections.
+    ///     </para>
+    /// </summary>
+    private async Task ApplySessionSummariesAsync(string store, IReadOnlyList<SessionListScanEntry> entries)
+    {
+        var failures      = 0;
+        var batchPosition = 0;
+        foreach (var entry in entries)
+        {
+            if (_closing) return;
+            if (entry.Summary is not { } summary)
+            {
+                // 与旧列表契约一致：单项失败不阻止其余条目，原因进入窗口提示。
+                failures++;
+                Notice = failures == 1
+                    ? $"部分历史无法读取：{entry.Error}"
+                    : $"部分历史无法读取（{failures} 项）：{entry.Error}";
+                continue;
+            }
+
+            if (Sessions.FirstOrDefault(session => session.Id == summary.Id             &&
+                                                   session.StoreDirectory is { } source &&
+                                                   ProjectRoots.AreEqual(source, store)) is { } existing)
+                ApplySummaryMetadata(existing, summary);
+            else
+                AddSession(CreateSessionRow(store, summary));
+
+            batchPosition++;
+            if (batchPosition % ListRowBatchSize == 0) await Task.Yield();
+        }
+    }
+
+    /// <summary>
+    ///     <para>按摘要构造正式会话行：标题与权限标签来自摘要，归档与置顶随后按权威来源刷新。</para>
+    ///     <para>
+    ///         Builds a formal session row from the summary; the title and permission label come from the summary,
+    ///         and archive and pin states refresh from their authoritative stores afterwards.
+    ///     </para>
+    /// </summary>
+    private SessionViewModel CreateSessionRow(string store, SessionSummary summary)
+    {
+        var row = new SessionViewModel(_manager, _factory, summary.WorkspaceRoot, summary.Id, store,
+                                       summary.Title, _dispatch, summary.ProjectId, summary.LastActivityUtc,
+                                       summary.ProjectAssignmentState)
+        {
+            ModelOptions        = Models,
+            ManageModelsCommand = OpenSettingsCommand,
+            ProjectOptions      = Projects.Where(group => group.CanEdit).ToArray()
+        };
+        // 标签来自最后选择；历史页面不解析凭据，目标缺失也保留页面。
+        row.ApplyPermissionSettings(_permissionSettings);
+        row.ApplyStoredPermissionMode(summary.PermissionMode);
+        row.SetArchived(IsSessionArchived(row));
+        return row;
+    }
+
+    /// <summary>
+    ///     <para>把摘要元数据刷新到已有行；活动只前进不回退，不替换实例、宿主、草稿和历史投影。</para>
+    ///     <para>
+    ///         Refreshes an existing row from summary metadata; activity only moves forward, and instances, hosts,
+    ///         drafts, and history projections are never replaced.
+    ///     </para>
+    /// </summary>
+    private void ApplySummaryMetadata(SessionViewModel row, SessionSummary summary)
+    {
+        row.ApplyStoredMetadata(summary.ProjectId, summary.ProjectAssignmentState, summary.LastActivityUtc);
+        row.SetArchived(IsSessionArchived(row));
+        row.ApplyStoredPermissionMode(summary.PermissionMode);
+    }
+
+    /// <summary>
+    ///     <para>
+    ///         接收对账逐条提交的摘要并入队渐进上屏；回调内只入队，调度工作交给独立泵，
+    ///         不拖慢对账串行门内的扫描。
+    ///     </para>
+    ///     <para>
+    ///         Receives reconciliation-committed summaries for progressive rendering; the callback only enqueues and
+    ///         an independent pump schedules the work so the reconciler's serial gate never waits on UI work.
+    ///     </para>
+    /// </summary>
+    private void EnqueueSummaryRow(SessionSummary summary)
+    {
+        _pendingSummaryRows.Enqueue(summary);
+        if (Interlocked.CompareExchange(ref _summaryRowPumpBusy, 1, 0) != 0) return;
+        _ = PumpSummaryRowsAsync();
+    }
+
+    /// <summary>
+    ///     <para>
+    ///         排水渐进队列：每次取一批，在刷新门与 UI 调度保护下应用并在批尾统一重建项目分组，批间让出调度。
+    ///     </para>
+    ///     <para>
+    ///         Drains the progressive queue one batch at a time, applying entries under the refresh gate and UI
+    ///         dispatch with project groups rebuilt once per batch, yielding between batches.
+    ///     </para>
+    /// </summary>
+    private async Task PumpSummaryRowsAsync()
+    {
+        try
+        {
+            while (_pendingSummaryRows.TryDequeue(out var first))
+            {
+                // 一次取整批：批内共享一次刷新门与 UI 调度，避免逐行重建分组的 O(N²) 开销。
+                var batch = new List<SessionSummary>(ListRowBatchSize) { first };
+                while (batch.Count < ListRowBatchSize && _pendingSummaryRows.TryDequeue(out var next))
+                    batch.Add(next);
+                await ApplyCommittedSummaryBatchAsync(batch).ConfigureAwait(true);
+                await Task.Yield();
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // 关闭取消后队列残留由进程退出回收，不构成错误。
+        }
+        catch (Exception exception)
+        {
+            // 泵自身故障只记诊断：busy 已在 finally 复位，下一次入队会重启排水。
+            Trace.TraceError("Session summary row pump failed: {0}", exception.Message);
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _summaryRowPumpBusy, 0);
+        }
+
+        // 入队与排水并发交错时补一次排水，保证队尾不滞留。
+        if (!_pendingSummaryRows.IsEmpty &&
+            Interlocked.CompareExchange(ref _summaryRowPumpBusy, 1, 0) == 0)
+            _ = PumpSummaryRowsAsync();
+    }
+
+    /// <summary>
+    ///     <para>持刷新门与 UI 调度应用一批渐进摘要；项目分组在批尾统一重建一次。</para>
+    ///     <para>
+    ///         Applies one progressive-summary batch under the refresh gate and UI dispatch; project groups rebuild
+    ///         once at the batch tail.
+    ///     </para>
+    /// </summary>
+    private async Task ApplyCommittedSummaryBatchAsync(IReadOnlyList<SessionSummary> batch)
+    {
+        // 与统一加载互斥：共享刷新门避免并发改动会话集合。
+        await _refreshGate.WaitAsync(_lifetime.Token).ConfigureAwait(true);
+        try
+        {
+            if (_closing) return;
+            await InvokeOnUiAsync(() =>
+            {
+                if (_closing) return Task.CompletedTask;
+                foreach (var summary in batch) ApplyCommittedSummaryRow(summary);
+                // 批尾统一重建：统一加载进行中由其末尾重建，否则渐进行立即反映到项目分组。
+                if (!_loadingCatalog) RebuildProjects();
+                return Task.CompletedTask;
+            }).ConfigureAwait(true);
+        }
+        finally
+        {
+            _refreshGate.Release();
+        }
+    }
+
+    private void ApplyCommittedSummaryRow(SessionSummary summary)
+    {
+        if (_storeDirectory is not { } store) return;
+        if (Sessions.FirstOrDefault(session => session.Id == summary.Id             &&
+                                               session.StoreDirectory is { } source &&
+                                               ProjectRoots.AreEqual(source, store)) is { } existing)
+        {
+            ApplySummaryMetadata(existing, summary);
+            return;
+        }
+
+        AddSession(CreateSessionRow(store, summary));
+    }
+
+    /// <summary>
+    ///     <para>把操作调度到 UI 上下文启动执行；注入调度器缺失时回退 Avalonia UI 线程。</para>
+    ///     <para>
+    ///         Starts an operation on the UI context; falls back to the Avalonia UI thread when no dispatcher is
+    ///         injected.
+    ///     </para>
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         调度器只接受同步动作，操作按 fire-and-forget 启动，本方法不等待其完成；操作异常被观察并记录，
+    ///         不向调度器传播。依赖操作结果的调用方应自行等待。
+    ///     </para>
+    ///     <para>
+    ///         The dispatcher accepts synchronous actions only, so the operation starts fire-and-forget and this
+    ///         method never awaits its completion; operation faults are observed and logged instead of escaping into
+    ///         the dispatcher. Await results yourself when they matter.
+    ///     </para>
+    /// </remarks>
+    private async Task InvokeOnUiAsync(Func<Task> operation)
+    {
+        if (_dispatch is { } dispatch)
+        {
+            await dispatch(() => { _ = ObserveDispatchedAsync(operation()); }).ConfigureAwait(true);
+            return;
+        }
+
+        // DispatcherOperation 可等待但不支持 ConfigureAwait；排队后由 UI 线程执行。
+        await Dispatcher.UIThread.InvokeAsync(() => { _ = ObserveDispatchedAsync(operation()); });
+    }
+
+    /// <summary>
+    ///     <para>观察已调度操作的完成：取消静默，其余异常记诊断，不向调度器传播。</para>
+    ///     <para>
+    ///         Observes a dispatched operation to completion: cancellation stays silent and other faults are logged,
+    ///         never escaping into the dispatcher.
+    ///     </para>
+    /// </summary>
+    private static async Task ObserveDispatchedAsync(Task operation)
+    {
+        try
+        {
+            await operation.ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // 关闭取消由调用方生命周期处理，不构成调度错误。
+        }
+        catch (Exception exception)
+        {
+            Trace.TraceError("UI-dispatched operation failed: {0}", exception.Message);
+        }
+    }
+
+    /// <summary>
+    ///     <para>为归属整理执行一轮索引对账；失败给出可见原因并返回 false，回退整轮扫描。</para>
+    ///     <para>
+    ///         Runs one reconciliation round for organizing; failures surface with a visible reason and return false
+    ///         to fall back to the full organize scan.
+    ///     </para>
+    /// </summary>
+    private async Task<bool> ReconcileForOrganizeAsync(string store, int generation, CancellationToken token)
+    {
+        try
+        {
+            var report = await RunIndexReconcileAsync(store, token).ConfigureAwait(true);
+            return report.Availability.Status == SessionIndexAvailabilityStatus.Available;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception exception) when (exception is SessionIndexException or IOException
+                                           or UnauthorizedAccessException)
+        {
+            // 索引故障不阻断归属维护：回退整轮扫描，缺口由下一轮对账追平。
+            if (IsCurrentStore(store, generation))
+                OrganizeNotice = $"会话索引维护未完成，已回退完整整理：{_factory.Redact(exception.Message)}";
+            return false;
+        }
+    }
+
+    /// <summary>
+    ///     <para>
+    ///         对当前 store 执行一轮带渐进回调的索引对账；I/O 在工作线程执行，不依赖调用方上下文。
+    ///     </para>
+    ///     <para>
+    ///         Runs one index reconciliation round with the progressive callback for the given store; I/O stays on a
+    ///         worker thread regardless of the caller's context.
+    ///     </para>
+    /// </summary>
+    private Task<SessionIndexReconcileReport> RunIndexReconcileAsync(string store, CancellationToken token)
+    {
+        var projection = ProjectionFor(store);
+        // Sqlite 的异步 API 仍是同步阻塞：对账放工作线程，UI 调用链不承担索引与日志 I/O。
+        return Task.Run(() => projection.ReconcileAsync(
+                                                        new SessionIndexReconcileOptions
+                                                        {
+                                                            SummaryCommitted = (summary, _) =>
+                                                            {
+                                                                EnqueueSummaryRow(summary);
+                                                                return Task.CompletedTask;
+                                                            }
+                                                        }, token),
+                        token);
+    }
+
+    /// <summary>
+    ///     <para>
+    ///         从索引挑出确需归属整理的会话 ID；行读取失败时返回 null，调用方回退既有整轮扫描。
+    ///     </para>
+    ///     <para>
+    ///         Picks the session ids that still need organizing from the index; a row-read failure returns null and
+    ///         the caller falls back to the full organize scan.
+    ///     </para>
+    /// </summary>
+    private async Task<IReadOnlyList<string>?> CollectPendingSessionIdsAsync(
+        string store, CancellationToken token)
+    {
+        try
+        {
+            // 行读取含同步 Sqlite 查询：放工作线程，不依赖整理轮的执行上下文。
+            var rows = await Task.Run(() => ProjectionFor(store).ListRowsAsync(token), token).ConfigureAwait(true);
+            return rows.Where(row => row.State == SessionIndexEntryState.Current &&
+                                     row.Summary?.ProjectAssignmentState ==
+                                     SessionProjectAssignmentState.PendingInitialization)
+                       .Select(row => row.Id)
+                       .OrderBy(id => id, StringComparer.Ordinal)
+                       .ToArray();
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception exception) when (exception is SessionIndexException or IOException
+                                           or UnauthorizedAccessException)
+        {
+            Trace.TraceError("Session index pending collection for '{0}' failed: {1}", store, exception.Message);
+            return null;
+        }
+    }
+
+    /// <summary>
+    ///     <para>尽力把已提交来源事实追平到索引；失败只留诊断，不改变调用方结果。</para>
+    ///     <para>
+    ///         Best-effort catch-up of committed source facts into the index; failures stay diagnostic and never
+    ///         change the caller's outcome.
+    ///     </para>
+    /// </summary>
+    private async Task TryReconcileIndexAsync(string storeDirectory)
+    {
+        try
+        {
+            await RunIndexReconcileAsync(storeDirectory, _lifetime.Token).ConfigureAwait(true);
+        }
+        catch (OperationCanceledException)
+        {
+            // 关闭取消：已提交事实由下次启动的对账追平。
+        }
+        catch (Exception exception) when (exception is SessionIndexException or IOException
+                                           or UnauthorizedAccessException)
+        {
+            Trace.TraceError("Session index reconciliation for '{0}' failed: {1}", storeDirectory,
+                             exception.Message);
+        }
+    }
+
+    /// <summary>
+    ///     <para>启动索引刷新循环：周期对账加 data_version 提示，发现变化后重查列表；旧循环先停。</para>
+    ///     <para>
+    ///         Starts the index refresh loop: periodic reconciliation plus the data_version hint requeries the list on
+    ///         change; a previous loop stops first.
+    ///     </para>
+    /// </summary>
+    private void StartIndexRefreshLoop(string store)
+    {
+        _indexRefreshSource?.Cancel();
+        var source   = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
+        var finished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _indexRefreshSource   = source;
+        _indexRefreshFinished = finished;
+        _indexRefreshGeneration++;
+        _ = RunIndexRefreshLoopAsync(store, _indexRefreshGeneration, source, finished);
+    }
+
+    /// <summary>
+    ///     <para>
+    ///         刷新循环体：常驻监测连接读取 data_version，周期对账覆盖“来源已提交、索引未更新”窗口；
+    ///         发现变化后在 UI 上下文重查列表，索引失效即停循环，由手动刷新或新一轮重启。
+    ///     </para>
+    ///     <para>
+    ///         The loop body: a standing monitor connection reads data_version while periodic reconciliation covers
+    ///         the committed-source-but-unindexed window; changes requery the list on the UI context, and an unusable
+    ///         index stops the loop until manual refresh or a new round restarts it.
+    ///     </para>
+    /// </summary>
+    private async Task RunIndexRefreshLoopAsync(string store, int generation, CancellationTokenSource source,
+                                                TaskCompletionSource finished)
+    {
+        try
+        {
+            var             projection  = ProjectionFor(store);
+            await using var watcher     = await projection.OpenVersionWatcherAsync(source.Token).ConfigureAwait(false);
+            var             lastVersion = await watcher.ReadAsync(source.Token).ConfigureAwait(false);
+            while (!_closing && IsCurrentIndexRefresh(store, generation))
+            {
+                await Task.Delay(IndexRefreshIntervalMs, source.Token).ConfigureAwait(false);
+                var report = await projection.ReconcileAsync(SessionIndexReconcileOptions.Default, source.Token)
+                                             .ConfigureAwait(false);
+                var version = await watcher.ReadAsync(source.Token).ConfigureAwait(false);
+                var changed = version             != lastVersion || report.Rebuilt > 0 || report.Removed > 0 ||
+                              report.MarkedFailed > 0;
+                lastVersion = version;
+                if (!changed || _closing || !IsCurrentIndexRefresh(store, generation)) continue;
+                await InvokeOnUiAsync(InitializeAsync).ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // 关闭或 store 切换的取消不构成错误。
+        }
+        catch (Exception exception) when (exception is SessionIndexException or IOException
+                                           or UnauthorizedAccessException)
+        {
+            // 索引失效即停循环：避免每周期空转，手动刷新或下一轮启动会重启。
+            Trace.TraceError("Session index refresh loop for '{0}' stopped: {1}", store, exception.Message);
+        }
+        finally
+        {
+            if (ReferenceEquals(_indexRefreshSource, source))
+            {
+                _indexRefreshSource   = null;
+                _indexRefreshFinished = null;
+            }
+
+            finished.TrySetResult();
+        }
+    }
+
+    /// <summary>刷新循环迟到防护：结果只在代次仍是最新且 store 未变化时应用。</summary>
+    private bool IsCurrentIndexRefresh(string store, int generation) =>
+        generation == _indexRefreshGeneration && _storeDirectory is { } current &&
+        ProjectRoots.AreEqual(current, store);
 
     /// <summary>
     ///     <para>读取配置与模型目录、解析生效 store 并载入项目册；不读取日志正文。</para>
@@ -2499,6 +3001,9 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
             var result = await SessionProjectUnbinder.UnassignAsync(storeDirectory, project.Id, _lifetime.Token);
             ApplyProjectUnassignmentResult(storeDirectory, project.Id, result);
+            // 解绑写入未接索引更新器：有成功解绑时对账把已提交事实追平，失败不回滚删除。
+            if (result.Outcomes.Any(outcome => outcome.Status == SessionProjectUnassignmentStatus.Unassigned))
+                await TryReconcileIndexAsync(storeDirectory);
             if (SameSidebarStore(_storeDirectory, storeDirectory)) RebuildProjects();
             if (result.Cancelled && _lifetime.IsCancellationRequested)
                 throw new OperationCanceledException(_lifetime.Token);
@@ -2771,9 +3276,10 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     {
         if (!TryBeginMigration(out var source, out var finished)) return;
         SessionProjectInitializationResult result;
+        string                             directory;
         try
         {
-            var directory =
+            directory =
                 await ResolveProtectedDirectoryAsync(SelectedSession?.WorkspaceRoot ?? Environment.CurrentDirectory,
                                                      source.Token);
             if (!Directory.Exists(directory)) return;
@@ -2789,6 +3295,8 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
             EndMigration(source, finished);
         }
 
+        // 显式归属写入未接索引更新器：先对账把已提交事实追平，再按索引刷新列表。
+        await TryReconcileIndexAsync(directory);
         // 单批入口保留逐批全库刷新；整轮编排不使用该路径，避免每批重读整个 store。
         await InitializeAsync();
         Notice = $"项目初始化：{result.Outcomes.Count(item => item.Status == SessionProjectBindingStatus.Bound)} 已绑定，"   +
@@ -2862,12 +3370,15 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
     /// <summary>
     ///     <para>
-    ///         循环分批整理当前 store：每批复用 <see cref="SessionProjectInitializer" /> 及其返回游标，取消即停；
+    ///         一轮后台维护：先对账（有效索引下未变日志零正文扫描、首次建库渐进上屏），再定向整理索引标记的
+    ///         待初始化日志（索引不可用时回退整轮游标扫描），整理后再对账追平并启动刷新循环；
     ///         所有异常都在本任务内观察转换，调用方持有的返回值只用于等待结束。
     ///     </para>
     ///     <para>
-    ///         Organizes the store batch by batch through <see cref="SessionProjectInitializer" /> and its returned
-    ///         cursor, stopping on cancellation; every exception is observed and converted inside this task.
+    ///         One background maintenance round: reconcile first (zero body scans for unchanged logs under a valid
+    ///         index, progressive first builds), then organize only the indexed pending logs (falling back to the
+    ///         full cursor scan without an index), reconcile again to catch up, and start the refresh loop; every
+    ///         exception is observed and converted inside this task.
     ///     </para>
     /// </summary>
     private async Task RunOrganizeRoundAsync(CancellationTokenSource source, string store, int generation,
@@ -2889,36 +3400,77 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
                 if (IsCurrentStore(store, generation))
                     OrganizeNotice = "历史整理未完成：会话存储解析结果与生效目录不一致，本轮未写入。";
             }
-            // 空 store／缺失目录正常结束：不为扫描创建目录、项目、日志或锁文件。
+            // 空 store／缺失目录正常结束：不为扫描创建目录、项目、日志、锁文件或索引数据库。
             else if (Directory.Exists(store))
             {
-                var cursor = (string?)null;
-                while (!_closing)
+                // 先对账：有效索引下未变日志零正文扫描，首次建库在此完成并渐进上屏。
+                var indexReady = await ReconcileForOrganizeAsync(store, generation, source.Token)
+                   .ConfigureAwait(true);
+                var pending = indexReady
+                    ? await CollectPendingSessionIdsAsync(store, source.Token).ConfigureAwait(true)
+                    : null;
+                if (pending is not null)
                 {
-                    // 批内扫描与迁移放工作线程：Core 首个 await 前有同步枚举与排序，不占用 UI 线程。
-                    var result = await Task.Run(() => SessionProjectInitializer.InitializeAsync(
-                                                 store, cursor, OrganizeBatchSize,
-                                                 cancellationToken : source.Token), source.Token);
-                    // 迟到防护：store 已切换的批次不再推进共享游标。
-                    if (IsCurrentStore(store, generation))
-                        _initializationCursor = result.HasMore ? result.NextCursor : null;
-                    foreach (var outcome in result.Outcomes) merged[outcome.SessionId] = outcome;
-                    // 取消必须先于停滞防御判定：Core 取消且本批无事实时 NextCursor 保持原值，
-                    // 正常取消不是停滞也不产生诊断（成功静默，取消不是异常）。
-                    if (result.Cancelled) break;
-
-                    // 防御：仍有后续但游标未推进时终止，避免无限循环。
-                    if (result.HasMore && string.Equals(result.NextCursor, cursor, StringComparison.Ordinal))
+                    // 定向整理：只处理索引标记为待初始化的日志；批内扫描与归属追加放工作线程，
+                    // 不占用 UI 线程。占用与失败按既有事实合并，取消即停。
+                    foreach (var chunk in pending.Chunk(OrganizeBatchSize))
                     {
-                        if (IsCurrentStore(store, generation)) OrganizeNotice = "历史整理已停止：扫描游标未推进。";
-                        break;
+                        var result = await Task.Run(() => SessionProjectInitializer.InitializeSessionsAsync(
+                                                     store, chunk, null, source.Token),
+                                                    source.Token).ConfigureAwait(true);
+                        foreach (var outcome in result.Outcomes) merged[outcome.SessionId] = outcome;
+                        if (result.Cancelled) break;
                     }
+                }
+                else
+                {
+                    // 索引不可用时的整轮回退：逐批游标扫描全部日志，行为与旧路径一致。
+                    var cursor = (string?)null;
+                    while (!_closing)
+                    {
+                        var result = await Task.Run(() => SessionProjectInitializer.InitializeAsync(
+                                                     store, cursor, OrganizeBatchSize,
+                                                     cancellationToken : source.Token),
+                                                    source.Token).ConfigureAwait(true);
+                        // 迟到防护：store 已切换的批次不再推进共享游标。
+                        if (IsCurrentStore(store, generation))
+                            _initializationCursor = result.HasMore ? result.NextCursor : null;
+                        foreach (var outcome in result.Outcomes) merged[outcome.SessionId] = outcome;
+                        // 取消必须先于停滞防御判定：Core 取消且本批无事实时 NextCursor 保持原值，
+                        // 正常取消不是停滞也不产生诊断（成功静默，取消不是异常）。
+                        if (result.Cancelled) break;
 
-                    if (!result.HasMore) break;
-                    cursor = result.NextCursor;
+                        // 防御：仍有后续但游标未推进时终止，避免无限循环。
+                        if (result.HasMore && string.Equals(result.NextCursor, cursor, StringComparison.Ordinal))
+                        {
+                            if (IsCurrentStore(store, generation)) OrganizeNotice = "历史整理已停止：扫描游标未推进。";
+                            break;
+                        }
+
+                        if (!result.HasMore) break;
+                        cursor = result.NextCursor;
+                    }
                 }
 
                 if (IsCurrentStore(store, generation)) PublishOrganizeOutcome(merged.Values);
+                if (indexReady && IsCurrentStore(store, generation))
+                    try
+                    {
+                        // 归属追加与解绑经旧 writer 边界写入，未接索引更新器：整理后对账把已提交事实追平。
+                        await RunIndexReconcileAsync(store, source.Token).ConfigureAwait(true);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        throw;
+                    }
+                    catch (Exception exception) when (exception is SessionIndexException or IOException
+                                                       or UnauthorizedAccessException)
+                    {
+                        Trace.TraceError("Post-organize index reconciliation for '{0}' failed: {1}", store,
+                                         exception.Message);
+                    }
+
+                if (indexReady && !_closing && IsCurrentStore(store, generation)) StartIndexRefreshLoop(store);
             }
         }
         catch (OperationCanceledException)

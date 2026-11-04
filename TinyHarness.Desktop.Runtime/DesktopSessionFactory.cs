@@ -5,12 +5,11 @@ using TinyHarness.Core.Models.Agent;
 using TinyHarness.Core.Models.ChatCompletions;
 using TinyHarness.Core.Models.Configuration;
 using TinyHarness.Core.Models.Context;
+using TinyHarness.Core.Models.Permissions;
 using TinyHarness.Core.Models.Persistence;
 using TinyHarness.Core.Models.Project;
-using TinyHarness.Core.Models.Session;
-using TinyHarness.Core.Models.Tools;
-using TinyHarness.Core.Models.Permissions;
 using TinyHarness.Core.Models.Runtime;
+using TinyHarness.Core.Models.Session;
 using TinyHarness.Core.Services.ChatCompletions;
 using TinyHarness.Core.Services.ChatCompletions.Configuration;
 using TinyHarness.Core.Services.Context;
@@ -74,7 +73,11 @@ public sealed partial class DesktopSessionFactory
     private readonly Func<TinyHarnessConfig, string, IChatCompletionClient>?     _modelFactory;
     private readonly ConditionalWeakTable<ChatSessionHost, ResolvedNetworkRoute> _networkRoutes = new();
     private readonly ConcurrentDictionary<string, string>                        _secrets = new(StringComparer.Ordinal);
-    private readonly string?                                                     _userConfigPath;
+
+    private readonly ConcurrentDictionary<string, SessionIndexUpdater> _sessionIndexUpdaters =
+        new(StringComparer.Ordinal);
+
+    private readonly string? _userConfigPath;
 
     /// <summary>
     ///     <para>允许离线验收注入模型与凭据存储；生产默认使用 Core 的正式客户端和系统凭据。</para>
@@ -194,7 +197,7 @@ public sealed partial class DesktopSessionFactory
             }, () => grant.ValidatePreparationScope(access.Identity));
             repair = new DesktopWorkspaceCoordinator(access.Identity, services, state =>
                                                          events(new DesktopEvent("workspace-repair", null,
-                                                                         WorkspaceRepair : state)));
+                                                                    WorkspaceRepair : state)));
             backend = new DesktopWorkspaceBackend(backend, repair);
         }
 
@@ -241,7 +244,9 @@ public sealed partial class DesktopSessionFactory
         {
             if (request.SessionId is { } sessionId)
             {
-                writer = await SessionStoreWriter.OpenExistingAsync(directory, sessionId, secrets, cancellationToken)
+                writer = await SessionStoreWriter.OpenExistingAsync(directory, sessionId, secrets, cancellationToken,
+                                                                    SessionIndexUpdaterFor(directory)
+                                                                       .HandleBatchCommittedAsync)
                                                  .ConfigureAwait(false);
                 var snapshot = writer.LoadedSnapshot!;
                 var restored = SessionResume.Restore(snapshot, root, WorkspacePrompts.Current, options.Context);
@@ -342,7 +347,8 @@ public sealed partial class DesktopSessionFactory
                                               assignmentState);
                 var context = new ConversationContext(options.Context);
                 context.Append(ChatMessage.System(WorkspacePrompts.Current));
-                writer = new SessionStoreWriter(directory, session.Id, secrets);
+                writer = new SessionStoreWriter(directory, session.Id, secrets,
+                                                SessionIndexUpdaterFor(directory).HandleBatchCommittedAsync);
                 host = new ChatSessionHost(session, context, options, model, tools, WorkspacePrompts.Current,
                                            permissions, routedApprovals, sink, sessionWriter : writer,
                                            instructionLoader : instructions, initialInstructions : initial,
@@ -384,6 +390,21 @@ public sealed partial class DesktopSessionFactory
             throw;
         }
     }
+
+    /// <summary>
+    ///     <para>
+    ///         按已解析的会话存储目录取共享索引更新器：writer 每次可靠提交后增量推进列表索引，
+    ///         索引故障不改变提交结果，由后台对账追平。
+    ///     </para>
+    ///     <para>
+    ///         Returns the shared index updater for the resolved session-store directory: writers advance the list
+    ///         index incrementally after every durable commit, and index faults never change commit outcomes —
+    ///         background reconciliation catches up.
+    ///     </para>
+    /// </summary>
+    private SessionIndexUpdater SessionIndexUpdaterFor(string directory) =>
+        _sessionIndexUpdaters.GetOrAdd(directory,
+                                       static resolved => new SessionIndexUpdater(new SessionIndexStore(resolved)));
 
     private IChatCompletionClient CreateClient(TinyHarnessConfig config, UserProfile? profile,
                                                NetworkSettings?  networkSettings)
@@ -566,7 +587,7 @@ internal sealed class DesktopEventSink(
             HostEventKind.ModelRequestWaiting => new DesktopEvent("state", @event.RunId, "等待模型响应"),
             HostEventKind.ToolStarted         => new DesktopEvent("state", @event.RunId, "工具执行中"),
             HostEventKind.RunError when @event.Payload is string error => new DesktopEvent("error", @event.RunId,
-                     _diagnostics.Redact(error)),
+                _diagnostics.Redact(error)),
             HostEventKind.RunFinished => new DesktopEvent("state", @event.RunId, "正在保存"),
             _                         => null
         };

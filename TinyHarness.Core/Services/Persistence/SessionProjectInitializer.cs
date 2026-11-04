@@ -175,23 +175,80 @@ public static class SessionProjectInitializer
     public static Task<SessionProjectInitializationResult> InitializeAsync(
         string storeDirectory, string? afterSessionId = null, int? maxSessions = null, DateTimeOffset? utcNow = null,
         CancellationToken cancellationToken = default) =>
-        InitializeAsync(storeDirectory, afterSessionId, maxSessions, utcNow, null,
-                        cancellationToken);
+        InitializeAsync(storeDirectory, afterSessionId, maxSessions, utcNow, null, null, cancellationToken);
+
+    /// <summary>
+    ///     <para>
+    ///         只检查调用方给定的会话集合：跳过目录枚举与游标推进，按序对每个给定日志执行与
+    ///         <see cref="InitializeAsync" /> 完全相同的读取、分组与归属追加管线，供列表索引挑出确需整理的条目。
+    ///     </para>
+    ///     <para>
+    ///         Examines only the caller-supplied sessions: directory enumeration and cursor advancement are skipped,
+    ///         and every given log runs the exact read, grouping, and ownership-append pipeline of
+    ///         <see cref="InitializeAsync" />, letting the list index schedule just the entries that need organizing.
+    ///     </para>
+    /// </summary>
+    /// <param name="storeDirectory">
+    ///     <para>受保护会话存储目录。</para>
+    ///     <para>The protected session-store directory.</para>
+    /// </param>
+    /// <param name="sessionIds">
+    ///     <para>本次检查的会话 ID 集合；允许为空集合（返回空结果），ID 大小写不敏感。</para>
+    ///     <para>
+    ///         The session ids to examine; an empty set is allowed (an empty result), and ids are case-insensitive.
+    ///     </para>
+    /// </param>
+    /// <param name="utcNow">
+    ///     <para>创建项目时使用的时间；null 使用当前时间。</para>
+    ///     <para>The timestamp used when creating projects; null uses the current time.</para>
+    /// </param>
+    /// <returns>
+    ///     <para>逐会话事实、项目事实与取消标记；游标为 null，HasMore 仅在取消留下未处理项时为真。</para>
+    ///     <para>
+    ///         Per-session facts, project facts, and cancellation; the cursor is null and
+    ///         <see cref="SessionProjectInitializationResult.HasMore" /> is true only when cancellation left entries
+    ///         unprocessed.
+    ///     </para>
+    /// </returns>
+    /// <exception cref="ArgumentNullException">
+    ///     <para>会话 ID 集合为 null。</para>
+    ///     <para>The session-id collection is null.</para>
+    /// </exception>
+    /// <exception cref="ArgumentException">
+    ///     <para>集合中存在非法会话 ID。</para>
+    ///     <para>The collection contains an invalid session id.</para>
+    /// </exception>
+    public static Task<SessionProjectInitializationResult> InitializeSessionsAsync(
+        string            storeDirectory, IReadOnlyList<string> sessionIds, DateTimeOffset? utcNow = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(sessionIds);
+        foreach (var sessionId in sessionIds)
+            if (!SessionStorePaths.IsValidSessionId(sessionId))
+                throw new ArgumentException("A session id must contain exactly 32 hexadecimal characters.",
+                                            nameof(sessionIds));
+        return InitializeAsync(storeDirectory, null, null, utcNow, null,
+                               sessionIds.Distinct(StringComparer.Ordinal).ToArray(), cancellationToken);
+    }
 
     /// <summary>
     ///     <para>
     ///         带每次调用独立归属追加实现的初始化入口；<paramref name="ownershipAppend" /> 为 null 时使用默认
-    ///         project-binding 追加。仅供同程序集测试注入断点，不构成共享或公开的注入框架。
+    ///         project-binding 追加。<paramref name="restrictToIds" /> 非 null 时只检查给定集合，跳过目录枚举；
+    ///         仅供同程序集测试注入断点与定向整理，不构成共享或公开的注入框架。
     ///     </para>
     ///     <para>
     ///         Initialization entry with a per-call ownership-append implementation; a null
-    ///         <paramref name="ownershipAppend" /> uses the default project-binding append. It exists for same-assembly
-    ///         test breakpoints only and is neither shared state nor a public injection framework.
+    ///         <paramref name="ownershipAppend" /> uses the default project-binding append. A non-null
+    ///         <paramref name="restrictToIds" /> examines only the given set without directory enumeration. It exists
+    ///         for same-assembly test breakpoints and targeted organizing, and is neither shared state nor a public
+    ///         injection framework.
     ///     </para>
     /// </summary>
     internal static async Task<SessionProjectInitializationResult> InitializeAsync(
         string storeDirectory, string? afterSessionId, int? maxSessions, DateTimeOffset? utcNow,
         Func<string, SessionStoreWriter, string, CancellationToken, Task>? ownershipAppend,
+        IReadOnlyList<string>? restrictToIds,
         CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(storeDirectory);
@@ -207,19 +264,34 @@ public static class SessionProjectInitializer
             return new SessionProjectInitializationResult(true, afterSessionId, true, [], []);
 
         // 文件名枚举与排序是全量轻量操作（只取 ID 元数据）；有界的是逐日志正文读取。
+        // 定向模式跳过目录枚举：集合来自列表索引，逐日志仍走同一条严格读取管线。
+        // File-name enumeration and sorting are light whole-store operations (id metadata only); per-log body reads
+        // are the bounded part. Targeted mode skips enumeration: the set comes from the list index, while each log
+        // still runs the same strict read pipeline.
         List<string> orderedIds;
         try
         {
-            var ids = new List<string>();
-            foreach (var path in Directory.EnumerateFiles(storeDirectory, "*" + SessionStoreWriter.LogFileSuffix))
+            if (restrictToIds is not null)
             {
-                // 枚举阶段每个条目都响应取消。
-                cancellationToken.ThrowIfCancellationRequested();
-                ids.Add(Path.GetFileName(path)[..^SessionStoreWriter.LogFileSuffix.Length]);
+                orderedIds = restrictToIds.Select(id => id.ToLowerInvariant())
+                                          .Distinct(StringComparer.Ordinal)
+                                          .OrderBy(id => id, StringComparer.Ordinal)
+                                          .ToList();
             }
+            else
+            {
+                var ids = new List<string>();
+                foreach (var path in Directory.EnumerateFiles(storeDirectory,
+                                                              "*" + SessionStoreWriter.LogFileSuffix))
+                {
+                    // 枚举阶段每个条目都响应取消。
+                    cancellationToken.ThrowIfCancellationRequested();
+                    ids.Add(Path.GetFileName(path)[..^SessionStoreWriter.LogFileSuffix.Length]);
+                }
 
-            ids.Sort(StringComparer.Ordinal);
-            orderedIds = ids;
+                ids.Sort(StringComparer.Ordinal);
+                orderedIds = ids;
+            }
         }
         catch (OperationCanceledException)
         {
@@ -236,7 +308,7 @@ public static class SessionProjectInitializer
                                               string.CompareOrdinal(id, afterSessionId) > 0)
                                  .ToList();
         var examined        = maxSessions is { } limit ? eligible.Take(limit).ToList() : eligible;
-        var moreFilesRemain = examined.Count < eligible.Count;
+        var moreFilesRemain = restrictToIds is null && examined.Count < eligible.Count;
 
         try
         {
@@ -403,13 +475,15 @@ public static class SessionProjectInitializer
 
         // 游标只推进到“本轮已有事实的已处理连续 ID 前缀”：分组乱序处理不得越过无事实的空洞，
         // 直接取消且未完成（无结果）的会话不能被跨过；仍有未处理项时 HasMore 为真。
+        // 定向模式没有扫描游标：集合来自调用方，cursor 保持 null，HasMore 仅表达取消留下的未处理项。
         var factIds    = outcomes.Select(outcome => outcome.SessionId).ToHashSet(StringComparer.Ordinal);
         var nextCursor = afterSessionId;
-        foreach (var sessionId in examined)
-        {
-            if (!factIds.Contains(sessionId)) break;
-            nextCursor = sessionId;
-        }
+        if (restrictToIds is null)
+            foreach (var sessionId in examined)
+            {
+                if (!factIds.Contains(sessionId)) break;
+                nextCursor = sessionId;
+            }
 
         var hasUnprocessed = examined.Any(sessionId => !factIds.Contains(sessionId));
         return new SessionProjectInitializationResult(cancelled,

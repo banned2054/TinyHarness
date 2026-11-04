@@ -138,8 +138,10 @@ public class SessionProjectInitializerTests
         [
             new SessionLogRecord(string.Empty, "project-binding",
                                  JsonSerializer.SerializeToElement(
-                                     new SessionLogProjectBinding(SessionLogProjectBinding.SchemaName, projectId),
-                                     SessionLogJsonContext.Default.SessionLogProjectBinding))
+                                                                   new SessionLogProjectBinding(SessionLogProjectBinding
+                                                                      .SchemaName, projectId),
+                                                                   SessionLogJsonContext.Default
+                                                                      .SessionLogProjectBinding))
         ], token);
 
     [Test]
@@ -147,7 +149,7 @@ public class SessionProjectInitializerTests
     {
         using var store     = new TestTempDir();
         using var workspace = new TestTempDir();
-        var ids = new List<string>();
+        var       ids       = new List<string>();
         for (var i = 0; i < 3; i++) ids.Add(await CommitUnboundSessionAsync(store.Root, workspace.Root));
 
         var result = await SessionProjectInitializer.InitializeAsync(store.Root);
@@ -204,7 +206,8 @@ public class SessionProjectInitializerTests
         var second = await SessionProjectInitializer.InitializeAsync(store.Root);
 
         Assert.That(second.Cancelled, Is.False);
-        Assert.That(second.Outcomes.All(outcome => outcome.Status == SessionProjectBindingStatus.AlreadyBound), Is.True);
+        Assert.That(second.Outcomes.All(outcome => outcome.Status == SessionProjectBindingStatus.AlreadyBound),
+                    Is.True);
         Assert.That(second.Outcomes.Select(outcome => outcome.ProjectId).ToHashSet(),
                     Is.EquivalentTo(first.Outcomes.Select(outcome => outcome.ProjectId).ToHashSet()));
         var afterLogBytes = await ReadAllLogBytesAsync(store.Root);
@@ -220,13 +223,13 @@ public class SessionProjectInitializerTests
     {
         using var store     = new TestTempDir();
         using var workspace = new TestTempDir();
-        var sessionId = await CommitUnboundSessionAsync(store.Root, workspace.Root);
-        var first    = await SessionProjectInitializer.InitializeAsync(store.Root);
+        var       sessionId = await CommitUnboundSessionAsync(store.Root, workspace.Root);
+        var       first     = await SessionProjectInitializer.InitializeAsync(store.Root);
         var       boundId   = first.Outcomes.Single().ProjectId;
 
         File.Delete(ProjectStore.FilePath(store.Root));
 
-        var second = await SessionProjectInitializer.InitializeAsync(store.Root);
+        var second  = await SessionProjectInitializer.InitializeAsync(store.Root);
         var outcome = second.Outcomes.Single();
         Assert.That(outcome.Status, Is.EqualTo(SessionProjectBindingStatus.AlreadyBound));
         Assert.That(outcome.SessionId, Is.EqualTo(sessionId));
@@ -260,9 +263,9 @@ public class SessionProjectInitializerTests
     [Test]
     public async Task RelativeSavedRoot_FailsItsItem_OthersContinue()
     {
-        using var store     = new TestTempDir();
-        using var workspace = new TestTempDir();
-        var validId = await CommitUnboundSessionAsync(store.Root, workspace.Root);
+        using var store      = new TestTempDir();
+        using var workspace  = new TestTempDir();
+        var       validId    = await CommitUnboundSessionAsync(store.Root, workspace.Root);
         // 手工构造相对根日志：ChatSession 构造会规范化相对路径，无法经真实 writer 产生该形态。
         var       relativeId = OrderedId('b');
         await WriteHandCraftedIdentityBatchAsync(store.Root, relativeId, JsonValue.Create(DateTimeOffset.UtcNow),
@@ -287,7 +290,7 @@ public class SessionProjectInitializerTests
         var       invalidId = OrderedId('a');
         await WriteHandCraftedIdentityBatchAsync(store.Root, invalidId, JsonValue.Create(DateTimeOffset.UtcNow),
                                                  Path.Combine(workspace.Root, "bad\0root"));
-        var validId = await CommitUnboundSessionAsync(store.Root, workspace.Root, OrderedId('b'));
+        var validId     = await CommitUnboundSessionAsync(store.Root, workspace.Root, OrderedId('b'));
         var invalidPath = Path.Combine(store.Root, invalidId + SessionStoreWriter.LogFileSuffix);
         var original    = await File.ReadAllBytesAsync(invalidPath);
 
@@ -305,7 +308,7 @@ public class SessionProjectInitializerTests
     {
         using var store     = new TestTempDir();
         using var workspace = new TestTempDir();
-        var ids = new List<string>();
+        var       ids       = new List<string>();
         for (var i = 0; i < 3; i++) ids.Add(await CommitUnboundSessionAsync(store.Root, workspace.Root));
         var heldId = ids[1];
 
@@ -313,7 +316,7 @@ public class SessionProjectInitializerTests
                                                                            CancellationToken.None))
         {
             var result = await SessionProjectInitializer.InitializeAsync(store.Root);
-            var byId = result.Outcomes.ToDictionary(outcome => outcome.SessionId);
+            var byId   = result.Outcomes.ToDictionary(outcome => outcome.SessionId);
             Assert.That(byId[ids[0]].Status, Is.EqualTo(SessionProjectBindingStatus.Bound));
             Assert.That(byId[heldId].Status, Is.EqualTo(SessionProjectBindingStatus.Pending));
             TestAssert.Contains("another writer", byId[heldId].Detail!, StringComparison.Ordinal);
@@ -332,15 +335,15 @@ public class SessionProjectInitializerTests
     [Test]
     public async Task BoundedBatch_DoesNotReadLaterBrokenLog_AndCursorResumes()
     {
-        using var store     = new TestTempDir();
-        using var workspace = new TestTempDir();
-        var validId  = await CommitUnboundSessionAsync(store.Root, workspace.Root, OrderedId('a'));
+        using var store      = new TestTempDir();
+        using var workspace  = new TestTempDir();
+        var       validId    = await CommitUnboundSessionAsync(store.Root, workspace.Root, OrderedId('a'));
         var       brokenId   = await CommitUnboundSessionAsync(store.Root, workspace.Root, OrderedId('b'));
         var       brokenPath = Path.Combine(store.Root, brokenId + SessionStoreWriter.LogFileSuffix);
         await File.AppendAllTextAsync(brokenPath, "{\"format\": \"tinyharness");
         var bytesBefore = await ReadAllLogBytesAsync(store.Root);
 
-        var first = await SessionProjectInitializer.InitializeAsync(store.Root, afterSessionId: null, maxSessions: 1);
+        var first = await SessionProjectInitializer.InitializeAsync(store.Root, null, 1);
 
         // 第一批只检查了前一条日志：损坏日志不在结果中（未读取），也未被动过。
         Assert.That(first.Outcomes.Count, Is.EqualTo(1));
@@ -349,10 +352,10 @@ public class SessionProjectInitializerTests
         Assert.That(first.HasMore, Is.True);
         Assert.That(first.NextCursor, Is.EqualTo(validId));
         Assert.That((await ReadAllLogBytesAsync(store.Root))[Path.GetFileName(brokenPath)]
-                    .AsSpan().SequenceEqual(bytesBefore[Path.GetFileName(brokenPath)]), Is.True);
+                   .AsSpan().SequenceEqual(bytesBefore[Path.GetFileName(brokenPath)]), Is.True);
 
-        var second = await SessionProjectInitializer.InitializeAsync(store.Root, afterSessionId: first.NextCursor,
-                                                                     maxSessions: 1);
+        var second = await SessionProjectInitializer.InitializeAsync(store.Root, first.NextCursor,
+                                                                     1);
         var broken = second.Outcomes.Single();
         Assert.That(broken.SessionId, Is.EqualTo(brokenId));
         Assert.That(broken.Status, Is.EqualTo(SessionProjectBindingStatus.Failed));
@@ -360,7 +363,7 @@ public class SessionProjectInitializerTests
         Assert.That(second.NextCursor, Is.EqualTo(brokenId));
         // 损坏日志原字节不变。
         Assert.That((await ReadAllLogBytesAsync(store.Root))[Path.GetFileName(brokenPath)]
-                    .AsSpan().SequenceEqual(bytesBefore[Path.GetFileName(brokenPath)]), Is.True);
+                   .AsSpan().SequenceEqual(bytesBefore[Path.GetFileName(brokenPath)]), Is.True);
     }
 
     [Test]
@@ -368,15 +371,15 @@ public class SessionProjectInitializerTests
     {
         using var store     = new TestTempDir();
         using var workspace = new TestTempDir();
-        var idA = await CommitUnboundSessionAsync(store.Root, workspace.Root, OrderedId('a'));
-        var idB = await CommitUnboundSessionAsync(store.Root, workspace.Root, OrderedId('b'));
-        var idC = await CommitUnboundSessionAsync(store.Root, workspace.Root, OrderedId('c'));
+        var       idA       = await CommitUnboundSessionAsync(store.Root, workspace.Root, OrderedId('a'));
+        var       idB       = await CommitUnboundSessionAsync(store.Root, workspace.Root, OrderedId('b'));
+        var       idC       = await CommitUnboundSessionAsync(store.Root, workspace.Root, OrderedId('c'));
 
-        var first  = await SessionProjectInitializer.InitializeAsync(store.Root, maxSessions : 1);
-        var second = await SessionProjectInitializer.InitializeAsync(store.Root, afterSessionId: first.NextCursor,
-                                                                     maxSessions : 1);
-        var third = await SessionProjectInitializer.InitializeAsync(store.Root, afterSessionId: second.NextCursor,
-                                                                     maxSessions : 1);
+        var first = await SessionProjectInitializer.InitializeAsync(store.Root, maxSessions : 1);
+        var second = await SessionProjectInitializer.InitializeAsync(store.Root, first.NextCursor,
+                                                                     1);
+        var third = await SessionProjectInitializer.InitializeAsync(store.Root, second.NextCursor,
+                                                                    1);
 
         Assert.That(first.NextCursor, Is.EqualTo(idA));
         Assert.That(first.HasMore, Is.True);
@@ -399,22 +402,22 @@ public class SessionProjectInitializerTests
     {
         using var store     = new TestTempDir();
         using var workspace = new TestTempDir();
-        var idA = await CommitUnboundSessionAsync(store.Root, workspace.Root, OrderedId('a'));
-        var idB = await CommitUnboundSessionAsync(store.Root, workspace.Root, OrderedId('b'));
+        var       idA       = await CommitUnboundSessionAsync(store.Root, workspace.Root, OrderedId('a'));
+        var       idB       = await CommitUnboundSessionAsync(store.Root, workspace.Root, OrderedId('b'));
 
         SessionStoreWriter heldWriter;
         using (heldWriter = await SessionStoreWriter.OpenExistingAsync(store.Root, idA, null, CancellationToken.None))
         {
             // 批次一：A 被占用仅 Pending；批次二从 A 之后续扫，B 不被靠前的 Pending 饿死。
-            var batchOne = await SessionProjectInitializer.InitializeAsync(store.Root, maxSessions: 1);
+            var batchOne = await SessionProjectInitializer.InitializeAsync(store.Root, maxSessions : 1);
             var pending  = batchOne.Outcomes.Single();
             Assert.That(pending.SessionId, Is.EqualTo(idA));
             Assert.That(pending.Status, Is.EqualTo(SessionProjectBindingStatus.Pending));
             Assert.That(batchOne.HasMore, Is.True);
 
             var batchTwo = await SessionProjectInitializer.InitializeAsync(store.Root,
-                                                                           afterSessionId: batchOne.NextCursor,
-                                                                           maxSessions: 1);
+                                                                           batchOne.NextCursor,
+                                                                           1);
             var bound = batchTwo.Outcomes.Single();
             Assert.That(bound.SessionId, Is.EqualTo(idB));
             Assert.That(bound.Status, Is.EqualTo(SessionProjectBindingStatus.Bound));
@@ -432,17 +435,18 @@ public class SessionProjectInitializerTests
     {
         using var store     = new TestTempDir();
         using var workspace = new TestTempDir();
-        var idA = await CommitUnboundSessionAsync(store.Root, workspace.Root, OrderedId('a'));
-        var idB = await CommitUnboundSessionAsync(store.Root, workspace.Root, OrderedId('b'));
-        using var cts = new CancellationTokenSource();
+        var       idA       = await CommitUnboundSessionAsync(store.Root, workspace.Root, OrderedId('a'));
+        var       idB       = await CommitUnboundSessionAsync(store.Root, workspace.Root, OrderedId('b'));
+        using var cts       = new CancellationTokenSource();
         var result = await SessionProjectInitializer.InitializeAsync(store.Root, null, null, null,
                                                                      (sessionId, writer, projectId, token) =>
                                                                      {
                                                                          if (sessionId != idB)
-                                                                             return RealAppendAsync(writer, projectId, token);
+                                                                             return RealAppendAsync(writer, projectId,
+                                                                                 token);
                                                                          cts.Cancel();
                                                                          throw new OperationCanceledException(token);
-                                                                     }, cts.Token);
+                                                                     }, null, cts.Token);
 
         var byId = result.Outcomes.ToDictionary(outcome => outcome.SessionId);
         Assert.That(result.Cancelled, Is.True);
@@ -453,7 +457,7 @@ public class SessionProjectInitializerTests
         var restored = await SessionStoreReader.ReadAsync(store.Root, idB, CancellationToken.None);
         Assert.That(restored!.ProjectId, Is.Null);
 
-        var rerun = await SessionProjectInitializer.InitializeAsync(store.Root, afterSessionId: result.NextCursor);
+        var rerun = await SessionProjectInitializer.InitializeAsync(store.Root, result.NextCursor);
         Assert.That(rerun.Cancelled, Is.False);
         Assert.That(rerun.Outcomes.Single().SessionId, Is.EqualTo(idB));
         Assert.That(rerun.Outcomes.Single().Status, Is.EqualTo(SessionProjectBindingStatus.Bound));
@@ -466,10 +470,10 @@ public class SessionProjectInitializerTests
         using var store      = new TestTempDir();
         using var workspaceA = new TestTempDir();
         using var workspaceB = new TestTempDir();
-        var idA = await CommitUnboundSessionAsync(store.Root, workspaceA.Root, OrderedId('a'));
-        var idB = await CommitUnboundSessionAsync(store.Root, workspaceB.Root, OrderedId('b'));
-        var idC = await CommitUnboundSessionAsync(store.Root, workspaceA.Root, OrderedId('c'));
-        using var cts = new CancellationTokenSource();
+        var       idA        = await CommitUnboundSessionAsync(store.Root, workspaceA.Root, OrderedId('a'));
+        var       idB        = await CommitUnboundSessionAsync(store.Root, workspaceB.Root, OrderedId('b'));
+        var       idC        = await CommitUnboundSessionAsync(store.Root, workspaceA.Root, OrderedId('c'));
+        using var cts        = new CancellationTokenSource();
 
         async Task AppendAsync(string id, SessionStoreWriter writer, string projectId, CancellationToken token)
         {
@@ -478,7 +482,7 @@ public class SessionProjectInitializerTests
         }
 
         var result = await SessionProjectInitializer.InitializeAsync(store.Root, null, null, null, AppendAsync,
-                                                                     cts.Token);
+                                                                     null, cts.Token);
         Assert.That(result.Cancelled, Is.True);
         Assert.That(result.Outcomes.Select(outcome => outcome.SessionId), Is.EquivalentTo(new[] { idA, idC }));
         Assert.That(result.NextCursor, Is.EqualTo(idA));
@@ -500,7 +504,7 @@ public class SessionProjectInitializerTests
         var       id        = OrderedId('a');
         await CommitUnboundSessionAsync(storeA.Root, workspace.Root, id);
         await CommitUnboundSessionAsync(storeB.Root, workspace.Root, id);
-        using var cts = new CancellationTokenSource();
+        using var cts     = new CancellationTokenSource();
         var       entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var       release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -513,7 +517,7 @@ public class SessionProjectInitializerTests
         }
 
         var cancelledTask = SessionProjectInitializer.InitializeAsync(storeA.Root, null, null, null,
-                                                                       CancelAppendAsync, cts.Token);
+                                                                      CancelAppendAsync, null, cts.Token);
         try
         {
             await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
@@ -552,18 +556,20 @@ public class SessionProjectInitializerTests
     {
         using var store     = new TestTempDir();
         using var workspace = new TestTempDir();
-        var idA = await CommitUnboundSessionAsync(store.Root, workspace.Root, OrderedId('a'));
-        var idB = await CommitUnboundSessionAsync(store.Root, workspace.Root, OrderedId('b'));
-        var idC = await CommitUnboundSessionAsync(store.Root, workspace.Root, OrderedId('c'));
-        using var cts = new CancellationTokenSource();
+        var       idA       = await CommitUnboundSessionAsync(store.Root, workspace.Root, OrderedId('a'));
+        var       idB       = await CommitUnboundSessionAsync(store.Root, workspace.Root, OrderedId('b'));
+        var       idC       = await CommitUnboundSessionAsync(store.Root, workspace.Root, OrderedId('c'));
+        using var cts       = new CancellationTokenSource();
         var result = await SessionProjectInitializer.InitializeAsync(store.Root, null, null, null,
                                                                      (sessionId, writer, projectId, token) =>
                                                                      {
                                                                          if (sessionId != idB)
-                                                                             return RealAppendAsync(writer, projectId, token);
+                                                                             return RealAppendAsync(writer, projectId,
+                                                                                 token);
                                                                          cts.Cancel();
-                                                                         throw new SessionStoreException("injected uncertain append");
-                                                                     }, cts.Token);
+                                                                         throw new
+                                                                             SessionStoreException("injected uncertain append");
+                                                                     }, null, cts.Token);
 
         Assert.That(result.Cancelled, Is.True);
         var byId = result.Outcomes.ToDictionary(outcome => outcome.SessionId);
@@ -590,9 +596,10 @@ public class SessionProjectInitializerTests
         var result = await SessionProjectInitializer.InitializeAsync(store.Root, null, null, null,
                                                                      async (_, writer, projectId, token) =>
                                                                      {
-                                                                         await RealAppendAsync(writer, projectId, token);
+                                                                         await RealAppendAsync(writer, projectId,
+                                                                             token);
                                                                          cts.Cancel();
-                                                                     }, cts.Token);
+                                                                     }, null, cts.Token);
 
         Assert.That(result.Cancelled, Is.True);
         Assert.That(result.Outcomes.Single().Status, Is.EqualTo(SessionProjectBindingStatus.Bound));
@@ -604,7 +611,7 @@ public class SessionProjectInitializerTests
     {
         using var store     = new TestTempDir();
         using var workspace = new TestTempDir();
-        var ids = new List<string>();
+        var       ids       = new List<string>();
         for (var i = 0; i < 2; i++) ids.Add(await CommitUnboundSessionAsync(store.Root, workspace.Root));
 
         using var cts = new CancellationTokenSource();
@@ -632,7 +639,7 @@ public class SessionProjectInitializerTests
     {
         using var store     = new TestTempDir();
         using var workspace = new TestTempDir();
-        var validId = await CommitUnboundSessionAsync(store.Root, workspace.Root);
+        var       validId   = await CommitUnboundSessionAsync(store.Root, workspace.Root);
 
         // 截断：末尾半行。
         var truncatedId   = await CommitUnboundSessionAsync(store.Root, workspace.Root);
@@ -656,8 +663,8 @@ public class SessionProjectInitializerTests
         }
 
         var bytesBefore = await ReadAllLogBytesAsync(store.Root);
-        var result = await SessionProjectInitializer.InitializeAsync(store.Root);
-        var byId = result.Outcomes.ToDictionary(outcome => outcome.SessionId);
+        var result      = await SessionProjectInitializer.InitializeAsync(store.Root);
+        var byId        = result.Outcomes.ToDictionary(outcome => outcome.SessionId);
 
         Assert.That(byId[validId].Status, Is.EqualTo(SessionProjectBindingStatus.Bound));
         foreach (var brokenId in new[] { truncatedId, corruptId, oversizedId })
@@ -694,9 +701,111 @@ public class SessionProjectInitializerTests
         Assert.That(await File.ReadAllBytesAsync(catalogPath), Is.EqualTo(damaged));
         var sessionLog = Directory.GetFiles(store.Root, "*" + SessionStoreWriter.LogFileSuffix).Single();
         var restored = await SessionStoreReader.ReadAsync(store.Root,
-            Path.GetFileName(sessionLog)[..^SessionStoreWriter.LogFileSuffix.Length], CancellationToken.None);
+                                                          Path.GetFileName(sessionLog)[..^SessionStoreWriter
+                                                             .LogFileSuffix.Length], CancellationToken.None);
         TestAssert.NotNull(restored);
         Assert.That(restored!.ProjectId, Is.Null);
+    }
+
+    /// <summary>
+    ///     <para>定向初始化只处理给定集合：列出的未绑定日志被绑定，未列出的日志保持原状。</para>
+    ///     <para>
+    ///         Targeted initialization examines only the given set: listed unbound logs bind, unlisted logs stay
+    ///         untouched.
+    ///     </para>
+    /// </summary>
+    [Test]
+    public async Task InitializeSessions_BindsOnlyListedPendingLogs()
+    {
+        using var store       = new TestTempDir();
+        using var workspace   = new TestTempDir();
+        var       idA         = await CommitUnboundSessionAsync(store.Root, workspace.Root, OrderedId('a'));
+        var       idB         = await CommitUnboundSessionAsync(store.Root, workspace.Root, OrderedId('b'));
+        var       idC         = await CommitUnboundSessionAsync(store.Root, workspace.Root, OrderedId('c'));
+        var       bytesBefore = await ReadAllLogBytesAsync(store.Root);
+
+        var result = await SessionProjectInitializer.InitializeSessionsAsync(store.Root, [idA, idC],
+                                                                             cancellationToken :
+                                                                             CancellationToken.None);
+
+        var byId = result.Outcomes.ToDictionary(outcome => outcome.SessionId);
+        Assert.That(byId.Keys, Is.EquivalentTo(new[] { idA, idC }), "未列出的日志不得进入结果。");
+        Assert.That(byId[idA].Status, Is.EqualTo(SessionProjectBindingStatus.Bound));
+        Assert.That(byId[idC].Status, Is.EqualTo(SessionProjectBindingStatus.Bound));
+        Assert.That(result.NextCursor, Is.Null);
+        Assert.That(result.HasMore, Is.False);
+        Assert.That((await SessionStoreReader.ReadAsync(store.Root, idB, CancellationToken.None))!.ProjectId,
+                    Is.Null, "未列出的日志不得被绑定。");
+        Assert.That(await File.ReadAllBytesAsync(Path.Combine(store.Root,
+                                                              idB + SessionStoreWriter.LogFileSuffix)),
+                    Is.EqualTo(bytesBefore[idB + SessionStoreWriter.LogFileSuffix]),
+                    "未列出的日志字节不得改变。");
+        var catalog = await ProjectStore.LoadAsync(ProjectStore.FilePath(store.Root), CancellationToken.None);
+        Assert.That(catalog.Projects, Has.Count.EqualTo(1), "同目录候选必须复用同一项目。");
+    }
+
+    /// <summary>
+    ///     <para>定向初始化幂等：已绑定条目保持原值且不追加，显式无项目条目保持无项目。</para>
+    ///     <para>
+    ///         Targeted initialization is idempotent: already-bound entries keep their value without appends, and
+    ///         explicit no-project entries stay unbound.
+    ///     </para>
+    /// </summary>
+    [Test]
+    public async Task InitializeSessions_KeepsExistingBindingsAndNoProject()
+    {
+        using var store     = new TestTempDir();
+        using var workspace = new TestTempDir();
+        var       idA       = await CommitUnboundSessionAsync(store.Root, workspace.Root, OrderedId('a'));
+        var       idB       = await CommitUnboundSessionAsync(store.Root, workspace.Root, OrderedId('b'));
+        using (var writer =
+               await SessionStoreWriter.OpenExistingAsync(store.Root, idB, null, CancellationToken.None))
+        {
+            await writer.AppendRecordsAsync(
+            [
+                new SessionLogRecord(string.Empty, "project-assignment",
+                                     JsonSerializer.SerializeToElement(
+                                                                       new SessionLogProjectAssignment(
+                                                                        SessionLogProjectAssignment.SchemaName,
+                                                                        SessionLogProjectAssignment.NoProject),
+                                                                       SessionLogJsonContext.Default
+                                                                          .SessionLogProjectAssignment))
+            ], CancellationToken.None);
+        }
+
+        var first = await SessionProjectInitializer.InitializeSessionsAsync(store.Root, [idA, idB]);
+        Assert.That(first.Outcomes.Single(outcome => outcome.SessionId == idA).Status,
+                    Is.EqualTo(SessionProjectBindingStatus.Bound));
+        Assert.That(first.Outcomes.Single(outcome => outcome.SessionId == idB).Status,
+                    Is.EqualTo(SessionProjectBindingStatus.NoProject));
+
+        var bytesBefore = await ReadAllLogBytesAsync(store.Root);
+        var second      = await SessionProjectInitializer.InitializeSessionsAsync(store.Root, [idA, idB]);
+        Assert.That(second.Outcomes.Single(outcome => outcome.SessionId == idA).Status,
+                    Is.EqualTo(SessionProjectBindingStatus.AlreadyBound));
+        Assert.That(second.Outcomes.Single(outcome => outcome.SessionId == idB).Status,
+                    Is.EqualTo(SessionProjectBindingStatus.NoProject));
+        Assert.That(await ReadAllLogBytesAsync(store.Root), Is.EqualTo(bytesBefore),
+                    "重跑不得追加任何归属写入。");
+    }
+
+    /// <summary>
+    ///     <para>空集合返回空结果，非法会话 ID 直接拒绝。</para>
+    ///     <para>An empty set returns an empty result; an invalid session id is rejected outright.</para>
+    /// </summary>
+    [Test]
+    public async Task InitializeSessions_EmptySetIsNoOpAndInvalidIdThrows()
+    {
+        using var store = new TestTempDir();
+        var       empty = await SessionProjectInitializer.InitializeSessionsAsync(store.Root, []);
+        Assert.That(empty.Outcomes, Is.Empty);
+        Assert.That(empty.Cancelled, Is.False);
+        Assert.That(empty.HasMore, Is.False);
+
+        Assert.ThrowsAsync<ArgumentException>(() => SessionProjectInitializer.InitializeSessionsAsync(store.Root,
+                                                  ["not-a-session-id"]));
+        Assert.ThrowsAsync<ArgumentNullException>(() => SessionProjectInitializer.InitializeSessionsAsync(store.Root,
+                                                      null!));
     }
 
     [Test]
@@ -734,12 +843,12 @@ public class SessionProjectInitializerTests
     [Test]
     public async Task Initialization_PreservesPrefixHistoryAndActivityTimes()
     {
-        using var store     = new TestTempDir();
-        using var workspace = new TestTempDir();
-        var sessionId = await CommitUnboundSessionAsync(store.Root, workspace.Root);
+        using var store         = new TestTempDir();
+        using var workspace     = new TestTempDir();
+        var       sessionId     = await CommitUnboundSessionAsync(store.Root, workspace.Root);
         var       historyBefore = await ReadAllHistoryPagesAsync(store.Root, sessionId);
         Assert.That(historyBefore.Count, Is.EqualTo(2));
-        var path = Path.Combine(store.Root, sessionId + SessionStoreWriter.LogFileSuffix);
+        var path   = Path.Combine(store.Root, sessionId + SessionStoreWriter.LogFileSuffix);
         var prefix = await File.ReadAllBytesAsync(path);
         var before = await SessionStoreReader.ReadAsync(store.Root, sessionId, CancellationToken.None);
         TestAssert.NotNull(before);
@@ -769,7 +878,7 @@ public class SessionProjectInitializerTests
     {
         using var store     = new TestTempDir();
         using var workspace = new TestTempDir();
-        var sessionId = await CommitUnboundSessionAsync(store.Root, workspace.Root);
+        var       sessionId = await CommitUnboundSessionAsync(store.Root, workspace.Root);
 
         var opened = await SessionStoreWriter.TryOpenExistingAsync(store.Root, sessionId, null,
                                                                    CancellationToken.None);
