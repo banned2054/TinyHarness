@@ -913,10 +913,10 @@ internal static class Program
     }
 
     /// <summary>
-    ///     <para>使用脚本模型与临时工作区，离线检查读写工具闭环及审批流程。</para>
+    ///     <para>使用脚本模型与临时工作区，离线检查读写工具闭环、审批流程与会话索引读回。</para>
     ///     <para>
-    ///         Uses a scripted model and disposable workspace to exercise
-    ///         the read/write tool loop and approval flow offline.
+    ///         Uses a scripted model and disposable workspace to exercise the read/write tool loop,
+    ///         approval flow, and session-index read-back offline.
     ///     </para>
     /// </summary>
     private static async Task<int> RunSmokeAsync(string? configPath)
@@ -960,6 +960,9 @@ internal static class Program
         };
 
         var sessionDirectory = Path.Combine(Path.GetTempPath(), $"tinyharness-smoke-session-{Guid.NewGuid():N}");
+        // 与 run/chat 相同接入会话索引更新器；提交通知的失败会被 writer 静默吞掉（含缺 SQLite 原生库的
+        // DllNotFoundException），索引是否真正可用只能靠下方对索引行的读回验证暴露。
+        var sessionIndexUpdater = new SessionIndexUpdater(new SessionIndexStore(sessionDirectory));
         const string systemPrompt = WorkspacePrompts.Current;
         AgentResult result;
         string? persistenceWarning;
@@ -978,7 +981,8 @@ internal static class Program
                                               permissions,
                                               approver,
                                               sessionWriterFactory : sessionId =>
-                                                  new SessionStoreWriter(sessionDirectory, sessionId),
+                                                  new SessionStoreWriter(sessionDirectory, sessionId, null,
+                                                                         sessionIndexUpdater.HandleBatchCommittedAsync),
                                               instructionLoader : instructionLoader,
                                               initialInstructions : initialInstructions))
         {
@@ -1066,7 +1070,7 @@ internal static class Program
                                          "Smoke refreshed project rules: preserve confirmed file facts.\n", cts.Token)
                       .ConfigureAwait(false);
             using (var resumedWriter = await SessionStoreWriter.OpenExistingAsync(sessionDirectory, sessionId,
-                            null, cts.Token).ConfigureAwait(false))
+                            null, cts.Token, sessionIndexUpdater.HandleBatchCommittedAsync).ConfigureAwait(false))
             using (var refreshedHost = new ChatSessionHost(restoration.Session, restoration.Context, options,
                                                            new SmokeScriptClient([new SmokeStep()]), tools,
                                                            systemPrompt, permissions, approver,
@@ -1104,6 +1108,27 @@ internal static class Program
                                       or InvalidOperationException)
         {
             await Console.Error.WriteLineAsync($"  session log verification failed: {ex.Message}");
+            TryDeleteSmokeDirectory(sessionDirectory);
+            return 1;
+        }
+
+        // 索引行读回是发布产物的硬门槛：原生库缺失或 schema 建库失败时，writer 只会静默记录，
+        // 这里必须把缺口转成 smoke 失败，而不是留给列表投影降级成全量扫描。
+        // 原生加载失败可能以任意异常类型出现（如包裹 DllNotFoundException 的 TypeInitializationException），
+        // 除取消外一律按 smoke 失败处理。
+        try
+        {
+            var indexRow = await new SessionIndexStore(sessionDirectory).GetRowAsync(sessionId, cts.Token)
+                                 .ConfigureAwait(false);
+            if (indexRow is null          ||
+                indexRow.Summary is null  ||
+                !string.Equals(indexRow.Id, sessionId, StringComparison.OrdinalIgnoreCase))
+                throw new SessionStoreException("Smoke session was not reflected in the SQLite index.");
+            await Console.Out.WriteLineAsync("  session index: verified SQLite summary row for the smoke session");
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            await Console.Error.WriteLineAsync($"  session index verification failed: {ex.Message}");
             TryDeleteSmokeDirectory(sessionDirectory);
             return 1;
         }

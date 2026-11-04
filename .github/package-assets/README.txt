@@ -2,8 +2,9 @@ TinyHarness.NET CLI - prototype preview / 原型预览版
 
 English
 -------
-This Windows x64 package contains TinyHarness.exe (NativeAOT) and three Windows
-sandbox components built from https://github.com/banned2054/codex, a fork of
+This Windows x64 package contains TinyHarness.exe (NativeAOT), its native DLLs
+(including e_sqlite3.dll used by the session index), and three Windows sandbox
+components built from https://github.com/banned2054/codex, a fork of
 https://github.com/openai/codex. The .NET runtime and the full Codex CLI are not
 required to launch TinyHarness. Tools you ask it to run still need to be installed.
 TinyHarness.NET is licensed under Apache-2.0; see LICENSE. Third-party attribution
@@ -12,7 +13,7 @@ source commits, toolchains, and packaged file hashes. Verify the ZIP with SHA256
 
 Basic use
 1. Extract the whole directory to a stable location outside your target workspace
-   and any sandbox write roots. Keep sandbox/, LICENSE, NOTICE and
+   and any sandbox write roots. Keep all DLLs, sandbox/, LICENSE, NOTICE and
    THIRD-PARTY-LICENSES.txt beside TinyHarness.exe.
 2. Add the extracted directory to PATH, then open PowerShell in the target project.
    Keep CLI and Desktop in separate directories; only add the CLI directory to PATH.
@@ -66,14 +67,15 @@ Source and full documentation: https://github.com/banned2054/TinyHarness
 
 简体中文
 --------
-本包适用于 Windows x64，包含 NativeAOT 的 TinyHarness.exe，以及来自
-banned2054/codex fork 的三个沙箱组件；运行主程序不需要 .NET runtime 或完整
+本包适用于 Windows x64，包含 NativeAOT 的 TinyHarness.exe、随附原生 DLL
+（含会话索引用的 e_sqlite3.dll），以及来自 banned2054/codex fork 的三个沙箱
+组件；运行主程序不需要 .NET runtime 或完整
 Codex CLI。Agent 调用的开发工具仍需自行安装。项目采用 Apache-2.0，见 LICENSE；
 第三方归属和条款见 NOTICE 与 THIRD-PARTY-LICENSES.txt。构建来源与文件哈希在
 build-info.json，ZIP 校验文件为 SHA256SUMS.txt。
 
 首次使用
-1. 完整解压到目标工作区和沙箱写根之外的固定目录，保留 sandbox/ 及
+1. 完整解压到目标工作区和沙箱写根之外的固定目录，保留全部 DLL、sandbox/ 及
    LICENSE、NOTICE、THIRD-PARTY-LICENSES.txt。
 2. 把解压目录加入 PATH，再进入要处理的项目目录；也可保持项目为当前目录，
    使用 TinyHarness.exe 的绝对路径启动。命令写作 tinyharness，不带连字符。

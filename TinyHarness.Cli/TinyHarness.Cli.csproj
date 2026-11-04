@@ -9,10 +9,10 @@
 		<!-- LibraryImport 为经过身份验证的 UAC helper 通道生成本机 stub。 -->
 		<AllowUnsafeBlocks>true</AllowUnsafeBlocks>
 
-		<!-- NativeAOT 是必须持续满足的产品约束；以单个本机二进制发布。 -->
+		<!-- NativeAOT 是必须持续满足的产品约束；SQLite 原生库无法嵌入单文件，
+		     发布产物是原生入口加随附 DLL，分发需完整携带。 -->
 		<PublishAot>true</PublishAot>
 		<PublishTrimmed>true</PublishTrimmed>
-		<PublishSingleFile>true</PublishSingleFile>
 		<InvariantGlobalization>true</InvariantGlobalization>
 		<JsonSerializerIsReflectionEnabledByDefault>false</JsonSerializerIsReflectionEnabledByDefault>
 

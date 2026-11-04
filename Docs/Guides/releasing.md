@@ -23,7 +23,7 @@ TinyHarness 使用触发本轮的 commit。沙箱来源为 [`banned2054/codex`](
 3. 分别执行 CLI／Desktop 的 `win-x64` NativeAOT publish，输出到隔离的 `native/cli`、`native/desktop` 目录。
 4. 在 fork 的 `codex-rs` 内执行 `cargo build --locked --release --target x86_64-pc-windows-msvc -p codex-windows-sandbox --bins`。保留 fork 的 `.cargo/config.toml`，只编译沙箱 package 及其依赖，不编译完整 Codex CLI 或 service。
 5. 将同一批沙箱组件分别放入两端的 ZIP，检查两个原生 exe 的版本，分别记录端类型、构建来源与各文件 SHA-256，生成包含两个 ZIP 的统一校验清单。
-6. 分别核对 ZIP 校验和、解压并核对文件哈希；在两个源码 checkout 之外运行 CLI 原生 `--help`、脚本模型 `smoke`，以及 Desktop 的 `--offline-smoke`。桌面入口不初始化窗口；通过 `Start-Process -Wait` 等待 WinExe 并检查退出码。两端全部通过后才上传可发布 artifact。
+6. 分别核对 ZIP 校验和、解压并核对文件哈希；在两个源码 checkout 之外运行 CLI 原生 `--help`、脚本模型 `smoke`（含会话索引读回验证），以及 Desktop 的 `--offline-smoke`。桌面入口不初始化窗口；通过 `Start-Process -Wait` 等待 WinExe 并检查退出码。两端全部通过后才上传可发布 artifact。
 
 这里没有真实供应商调用、GUI 交互或 Windows 沙箱 provisioning／verify。编译与离线 smoke 成功不等于真实隔离、UAC、首次安装、窗口渲染或所有使用场景已验收。首次 GitHub runner 执行后仍需检查具体日志和产物。
 
@@ -36,7 +36,7 @@ Actions artifact 名为 `TinyHarness-<Version>-win-x64`，包含：
 - `SHA256SUMS.txt`：两个 ZIP 的 SHA-256，Release job 下载后再次逐项校验。
 - `RELEASE_NOTES.md`：版本、来源和验证范围，保留在 Actions artifact 中供参考，不覆盖用户填写的 Release 正文。
 
-两个 ZIP 都包含 `TinyHarness.exe`、`sandbox/` 下的 setup／runner／managed-deny-probe、各端的双语独立 `README.txt`、配置片段示例、`build-info.json`，以及根目录的三份许可材料：`LICENSE`（项目采用的 Apache-2.0 全文）、`NOTICE`（项目归属及继承的 Codex 声明）、`THIRD-PARTY-LICENSES.txt`（合并后的第三方版权、许可正文和特殊声明）。许可维护范围见[第三方声明说明](third-party-notices.md)。仅拷贝明确的主程序、许可／说明材料和沙箱组件；Desktop 另外按原相对路径复制其 publish 目录内的 DLL，并检查 `av_libglesv2.dll`、`libHarfBuzzSharp.dll`、`libonigwrap.dll`、`libSkiaSharp.dll` 均存在。不打包源树、用户配置、凭据、会话日志、PDB 或整个 Cargo target 目录。deny-probe 与 runner 同目录，以便用户另行选择 `sandbox verify`。
+两个 ZIP 都包含 `TinyHarness.exe`、publish 目录内的全部 DLL（按原相对路径复制；CLI 亦随 Microsoft.Data.Sqlite 携带 `e_sqlite3.dll`）、`sandbox/` 下的 setup／runner／managed-deny-probe、各端的双语独立 `README.txt`、配置片段示例、`build-info.json`，以及根目录的三份许可材料：`LICENSE`（项目采用的 Apache-2.0 全文）、`NOTICE`（项目归属及继承的 Codex 声明）、`THIRD-PARTY-LICENSES.txt`（合并后的第三方版权、许可正文和特殊声明）。许可维护范围见[第三方声明说明](third-party-notices.md)。两端同构打包，仅入口重命名与 README 不同：拷贝主程序、publish 目录 DLL、许可／说明材料和沙箱组件，并核对必需原生库存在——CLI 为 `e_sqlite3.dll`，Desktop 为 `av_libglesv2.dll`、`libHarfBuzzSharp.dll`、`libonigwrap.dll`、`libSkiaSharp.dll`。不打包源树、用户配置、凭据、会话日志、PDB 或整个 Cargo target 目录。deny-probe 与 runner 同目录，以便用户另行选择 `sandbox verify`。
 
 Desktop 保留内部程序集名 `TinyHarness.Desktop`，打包时只把 NativeAOT 入口文件复制为 `TinyHarness.exe`。两端的 ZIP 与顶层目录明确区分，必须分别解压，不可合并覆盖；只有 CLI 目录加入 `PATH`，Desktop 通过双击或指向完整路径的快捷方式启动。用户看到的应用名与终端命令均为 TinyHarness，不要求公开 `.Desktop` 后缀。
 
@@ -46,7 +46,7 @@ Desktop 保留内部程序集名 `TinyHarness.Desktop`，打包时只把 NativeA
 
 CLI 按包内说明与 [README 使用指南](../README.md#-使用说明) 配置；Desktop 完整解压后双击 `TinyHarness.exe`，在设置中配置供应商与模型，选择项目目录后开始对话。Desktop 的 DLL 必须保留在原相对位置。两端默认共享用户配置与会话存储。
 
-解压目录应位于工作区和全部沙箱写根之外。沙箱示例仅用于合并 `settings.windowsSandbox`，其中两个组件路径需替换成用户机器上的真实绝对路径；不能覆盖整份用户配置。Desktop 用户如需显式初始化或验收沙箱，另用 CLI 包执行相应命令。
+解压目录应位于工作区和全部沙箱写根之外。沙箱示例仅用于合并 `settings.windowsSandbox`，其中两个组件路径需替换成用户机器上的真实绝对路径；不能覆盖整份用户配置。Desktop 的 DLL 必须保留在原相对位置；CLI 的 DLL 同样必须与 `TinyHarness.exe` 同目录。Desktop 用户如需显式初始化或验收沙箱，另用 CLI 包执行相应命令。
 
 解压不启用沙箱，不自动初始化或修改机器。用户选择沙箱后自行核对 `sandbox status`、明确执行 `sandbox provision` 并确认 UAC。严格模式和 TCP 环回模式的选择及副作用见[沙箱管理](../Archive/windows-sandbox-management.md)。
 

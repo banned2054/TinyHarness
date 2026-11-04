@@ -168,24 +168,29 @@ jobs:
                     if (Test-Path -LiteralPath $packageRoot) { throw "Package staging directory already exists: $packageName" }
                     New-Item -ItemType Directory -Path "$packageRoot/sandbox" | Out-Null
                     if ($edition -eq 'CLI') {
-                      Copy-Item -LiteralPath "$env:RUNNER_TEMP/native/cli/TinyHarness.exe" -Destination $packageRoot
+                      $publishRoot = Join-Path $env:RUNNER_TEMP 'native/cli'
+                      $entryName = 'TinyHarness.exe'
+                      $requiredNative = @('e_sqlite3.dll')
                       $readme = '.github/package-assets/README.txt'
                     } else {
                       $publishRoot = Join-Path $env:RUNNER_TEMP 'native/desktop'
-                      # 仅重命名原生发布入口；内部程序集身份与测试引用保持一致。
-                      Copy-Item -LiteralPath "$publishRoot/TinyHarness.Desktop.exe" -Destination "$packageRoot/TinyHarness.exe"
-                      foreach ($file in Get-ChildItem -LiteralPath $publishRoot -Filter '*.dll' -File -Recurse) {
-                        $relative = [IO.Path]::GetRelativePath($publishRoot, $file.FullName)
-                        $destination = Join-Path $packageRoot $relative
-                        New-Item -ItemType Directory -Path (Split-Path -Parent $destination) -Force | Out-Null
-                        Copy-Item -LiteralPath $file.FullName -Destination $destination
-                      }
-                      foreach ($dependency in @('av_libglesv2.dll', 'libHarfBuzzSharp.dll', 'libonigwrap.dll', 'libSkiaSharp.dll')) {
-                        if (-not (Test-Path -LiteralPath "$packageRoot/$dependency" -PathType Leaf)) {
-                          throw "Desktop native dependency is missing: $dependency"
-                        }
-                      }
+                      $entryName = 'TinyHarness.Desktop.exe'
+                      $requiredNative = @('av_libglesv2.dll', 'libHarfBuzzSharp.dll', 'libonigwrap.dll', 'libSkiaSharp.dll')
                       $readme = '.github/package-assets/README-desktop.txt'
+                    }
+                    # 仅重命名 Desktop 原生发布入口；内部程序集身份与测试引用保持一致。
+                    Copy-Item -LiteralPath "$publishRoot/$entryName" -Destination "$packageRoot/TinyHarness.exe"
+                    # 两端同构：CLI 随 Microsoft.Data.Sqlite 携带 e_sqlite3.dll，publish 目录 DLL 按原相对路径随包。
+                    foreach ($file in Get-ChildItem -LiteralPath $publishRoot -Filter '*.dll' -File -Recurse) {
+                      $relative = [IO.Path]::GetRelativePath($publishRoot, $file.FullName)
+                      $destination = Join-Path $packageRoot $relative
+                      New-Item -ItemType Directory -Path (Split-Path -Parent $destination) -Force | Out-Null
+                      Copy-Item -LiteralPath $file.FullName -Destination $destination
+                    }
+                    foreach ($dependency in $requiredNative) {
+                      if (-not (Test-Path -LiteralPath "$packageRoot/$dependency" -PathType Leaf)) {
+                        throw "$edition native dependency is missing: $dependency"
+                      }
                     }
                     Copy-Item -LiteralPath $readme -Destination "$packageRoot/README.txt"
                     foreach ($component in @('codex-windows-sandbox-setup.exe', 'codex-command-runner.exe', 'codex-windows-managed-deny-probe.exe')) {
