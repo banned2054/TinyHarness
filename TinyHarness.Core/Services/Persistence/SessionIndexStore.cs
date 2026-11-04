@@ -357,6 +357,32 @@ public sealed class SessionIndexStore
 
     /// <summary>
     ///     <para>
+    ///         打开一条常驻监测连接，供跨进程前后比较 data_version 发现数据库已变化；调用方负责释放。
+    ///     </para>
+    ///     <para>
+    ///         Opens a standing monitor connection for cross-process data_version comparisons; the caller owns and
+    ///         releases it.
+    ///     </para>
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         data_version 只在同一连接上前后比较才有变化语义，且不是全局业务版本号：仅作为需要重新查询的提示，
+    ///         不用于排序、幂等判定或新旧比较。它发现不了“来源已提交、索引尚未更新”的窗口，须辅以对账。
+    ///     </para>
+    ///     <para>
+    ///         data_version comparison is only meaningful across successive reads on this one connection, and the
+    ///         value is a change hint, never a global business version: it does not order, deduplicate, or rank work.
+    ///         It cannot see a committed source awaiting its index update, so reconciliation must back it.
+    ///     </para>
+    /// </remarks>
+    public async Task<SessionIndexVersionWatcher> OpenVersionWatcherAsync(CancellationToken cancellationToken)
+    {
+        var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
+        return new SessionIndexVersionWatcher(connection, DatabasePath);
+    }
+
+    /// <summary>
+    ///     <para>
     ///         条件提交一条重建／扫描结果：健康条目只接受更新或相同的来源快照，不被更旧快照回退；
     ///         归档投影保持不变。
     ///     </para>
@@ -845,5 +871,65 @@ public sealed class SessionIndexStore
                                         nameof(summary));
         if (summary.IndexedBytes < 0)
             throw new ArgumentException("Indexed bytes must not be negative.", nameof(summary));
+    }
+}
+
+/// <summary>
+///     <para>
+///         索引数据库的常驻监测连接：在同一条连接上前后读取 data_version，发现其他连接的已提交变化后提示重查。
+///     </para>
+///     <para>
+///         A standing monitor connection for the index database: successive data_version reads on this one
+///         connection notice changes committed by other connections and hint at a due requery.
+///     </para>
+/// </summary>
+/// <remarks>
+///     <para>
+///         监测连接不执行业务读写；被监测连接自身的提交不改变其 data_version，其他连接（含本进程其他连接与
+///         跨进程 writer）的提交会反映进来。释放前连接保持打开，调用方以 using 或显式释放结束监测。
+///     </para>
+///     <para>
+///         The monitor never performs business reads or writes; commits on the monitor itself leave its
+///         data_version untouched, while other connections — including sibling in-process and cross-process
+///         writers — show up in it. The connection stays open until release, and callers end monitoring through
+///         using or explicit disposal.
+///     </para>
+/// </remarks>
+public sealed class SessionIndexVersionWatcher : IAsyncDisposable
+{
+    private readonly SqliteConnection _connection;
+    private readonly string           _databasePath;
+
+    internal SessionIndexVersionWatcher(SqliteConnection connection, string databasePath)
+    {
+        _connection   = connection;
+        _databasePath = databasePath;
+    }
+
+    /// <inheritdoc />
+    public async ValueTask DisposeAsync() => await _connection.DisposeAsync().ConfigureAwait(false);
+
+    /// <summary>
+    ///     <para>读取当前 data_version 提示值；与上次读取不同即提示数据库已变化。</para>
+    ///     <para>Reads the current data_version hint; a change from the previous read signals database changes.</para>
+    /// </summary>
+    public async Task<long> ReadAsync(CancellationToken cancellationToken)
+    {
+        // 监测连接长寿命：每次读取的命令就地释放，避免轮询积累未回收的原生语句。
+        // The monitor connection is long-lived: each read's command is disposed in place so polling does not
+        // accumulate unreclaimed native statements.
+        await using var command = _connection.CreateCommand();
+        command.CommandText = "PRAGMA data_version";
+        try
+        {
+            var result = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+            return Convert.ToInt64(result ?? 0L, CultureInfo.InvariantCulture);
+        }
+        catch (Exception ex) when (ex is SqliteException or IOException or UnauthorizedAccessException
+                                      or NotSupportedException or PathTooLongException)
+        {
+            throw new SessionIndexException(
+                                            $"Session index watcher for '{_databasePath}' failed: {ex.Message}", ex);
+        }
     }
 }

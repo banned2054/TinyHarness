@@ -345,7 +345,7 @@ public class SessionIndexStoreTests
                                      JsonSerializer.SerializeToElement(
                                                                        new
                                                                            SessionLogProjectBinding(SessionLogProjectBinding
-                                                                              .SchemaName, projectId),
+                                                                                       .SchemaName, projectId),
                                                                        SessionLogJsonContext.Default
                                                                           .SessionLogProjectBinding))
             ], CancellationToken.None);
@@ -428,7 +428,7 @@ public class SessionIndexStoreTests
 
         Assert.ThrowsAsync<SessionStoreException>(() =>
                                                       SessionSummaryBuilder.BuildAsync(store, sessionId,
-                                                          CancellationToken.None));
+                                                               CancellationToken.None));
     }
 
     /// <summary>
@@ -492,14 +492,14 @@ public class SessionIndexStoreTests
         await File.WriteAllTextAsync(store.DatabasePath, string.Empty, CancellationToken.None);
 
         Assert.ThrowsAsync<SessionIndexException>(() => store.ListSummariesAsync(new SessionSummaryQuery(),
-                                                      CancellationToken.None));
+                                                           CancellationToken.None));
         Assert.ThrowsAsync<SessionIndexException>(() => store.GetRowAsync(HexId('a'), CancellationToken.None));
         Assert.ThrowsAsync<SessionIndexException>(() => store.SetMetaAsync("key", "value", CancellationToken.None));
         Assert.ThrowsAsync<SessionIndexException>(() =>
                                                       store
                                                          .SyncArchiveProjectionAsync(new HashSet<string>(StringComparer
-                                                                 .Ordinal),
-                                                              CancellationToken.None));
+                                                                               .Ordinal),
+                                                                   CancellationToken.None));
     }
 
     /// <summary>
@@ -544,8 +544,8 @@ public class SessionIndexStoreTests
                                      JsonSerializer.SerializeToElement(
                                                                        new
                                                                            SessionLogProjectBinding(SessionLogProjectBinding
-                                                                                  .SchemaName,
-                                                                               "0123456789abcdef0123456789abcdef"),
+                                                                                       .SchemaName,
+                                                                                    "0123456789abcdef0123456789abcdef"),
                                                                        SessionLogJsonContext.Default
                                                                           .SessionLogProjectBinding))
             ]
@@ -561,6 +561,28 @@ public class SessionIndexStoreTests
         Assert.That(advanced.UpdatedUtc, Is.EqualTo(written));
 
         Assert.Throws<ArgumentException>(() => projection.SeedFromSummary(build.Summary with { Id = HexId('9') }));
+    }
+
+    /// <summary>
+    ///     <para>常驻监测连接在同连接前后读取中发现其他连接的提交并提示重查。</para>
+    ///     <para>
+    ///         A standing monitor connection notices other connections' commits across successive same-connection
+    ///         reads.
+    ///     </para>
+    /// </summary>
+    [Test]
+    public async Task VersionWatcher_DetectsWritesFromOtherConnections()
+    {
+        using var       dir     = new TestTempDir();
+        var             store   = await NewInitializedStoreAsync(dir.Root);
+        await using var watcher = await store.OpenVersionWatcherAsync(CancellationToken.None);
+        var             before  = await watcher.ReadAsync(CancellationToken.None);
+
+        await store.WriteSummaryAsync(Summary(HexId('a'), DateTimeOffset.UtcNow), 10, null,
+                                      CancellationToken.None);
+        var after = await watcher.ReadAsync(CancellationToken.None);
+        Assert.That(after, Is.Not.EqualTo(before), "其他连接的提交应改变监测连接的 data_version");
+        Assert.That(await watcher.ReadAsync(CancellationToken.None), Is.EqualTo(after), "无新提交时保持稳定");
     }
 
     private static string Id(int index) => index.ToString("x2").PadLeft(32, '0');

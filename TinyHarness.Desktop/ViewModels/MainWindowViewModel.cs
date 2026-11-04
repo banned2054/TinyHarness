@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using TinyHarness.Core.Exceptions;
@@ -1552,6 +1553,30 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
                                                                            storeDirectory, sessionId, isArchived,
                                                                            _lifetime.Token);
             SetStoreArchiveState(storeDirectory, archives);
+            // 权威归档状态已保存；索引投影尽力同步，失败不回滚归档保存，由后台对账从归档来源追平。
+            // The authoritative archive state is saved; the index projection syncs best-effort — a failure never
+            // rolls the save back, and background reconciliation catches up from the archive source.
+            try
+            {
+                var index        = new SessionIndexStore(storeDirectory);
+                // 索引缺失或不可用时不同步也不创建库文件：归档权威已保存，投影缺口留给后台对账追平。
+                // A missing or unusable index skips the sync without creating a database file: the authoritative
+                // archive state is saved, and background reconciliation closes the projection gap.
+                var availability = await index.GetAvailabilityAsync(_lifetime.Token).ConfigureAwait(false);
+                if (availability.Status == SessionIndexAvailabilityStatus.Available)
+                    await index.SyncArchiveProjectionAsync(
+                                                           new HashSet<string>(archives.ArchivedSessionIds,
+                                                                               StringComparer.Ordinal),
+                                                           _lifetime.Token)
+                               .ConfigureAwait(false);
+            }
+            catch (Exception indexException) when (indexException is SessionIndexException or IOException or
+                                                                     UnauthorizedAccessException)
+            {
+                Trace.TraceError("Session index archive projection for '{0}' failed to sync: {1}",
+                                 storeDirectory, indexException.Message);
+            }
+
             foreach (var row in Sessions.Where(row => row.Id == sessionId              &&
                                                       row.StoreDirectory is { } source &&
                                                       ProjectRoots.AreEqual(source, storeDirectory)))
