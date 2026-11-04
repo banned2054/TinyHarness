@@ -1,5 +1,6 @@
 <Solution>
   <Project Path="TinyHarness.Core/TinyHarness.Core.csproj" />
+  <Project Path="TinyHarness.IndexProbe/TinyHarness.IndexProbe.csproj" />
   <Project Path="TinyHarness.Cli/TinyHarness.Cli.csproj" />
   <Project Path="TinyHarness.Tests/TinyHarness.Tests.csproj" />
   <Project Path="TinyHarness.Desktop.Runtime/TinyHarness.Desktop.Runtime.csproj" />

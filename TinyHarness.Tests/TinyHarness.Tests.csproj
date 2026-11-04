@@ -19,6 +19,7 @@
 	<ItemGroup>
 		<ProjectReference Include="..\TinyHarness.Core\TinyHarness.Core.csproj" />
 		<ProjectReference Include="..\TinyHarness.Cli\TinyHarness.Cli.csproj" />
+		<ProjectReference Include="..\TinyHarness.IndexProbe\TinyHarness.IndexProbe.csproj" />
 	</ItemGroup>
 
 </Project>

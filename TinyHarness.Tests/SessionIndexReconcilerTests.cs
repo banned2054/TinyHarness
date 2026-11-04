@@ -101,15 +101,11 @@ public class SessionIndexReconcilerTests
         using (var writer =
                await SessionStoreWriter.OpenExistingAsync(dir.Root, ids[0], null, CancellationToken.None))
         {
-            await writer.AppendRecordsAsync(
-            [
+            await writer.AppendRecordsAsync([
                 new SessionLogRecord(string.Empty, "project-binding",
-                                     JsonSerializer.SerializeToElement(
-                                                                       new
-                                                                           SessionLogProjectBinding(SessionLogProjectBinding
-                                                                                       .SchemaName, projectId),
-                                                                       SessionLogJsonContext.Default
-                                                                          .SessionLogProjectBinding))
+                                     JsonSerializer.SerializeToElement(new SessionLogProjectBinding(
+                                         SessionLogProjectBinding.SchemaName, projectId),
+                                         SessionLogJsonContext.Default.SessionLogProjectBinding))
             ], CancellationToken.None);
         }
 
@@ -205,21 +201,15 @@ public class SessionIndexReconcilerTests
         var before = await index.GetRowAsync(ids[0], CancellationToken.None);
 
         // 追加归属批次使来源标记过期，迫使对账读取正文；再独占日志模拟外部占用。
-        // Appending an ownership batch stales the source markers and forces a body read; the exclusive handle
-        // then simulates an external occupant.
         var projectId = "0123456789abcdef0123456789abcdef";
         using (var writer =
                await SessionStoreWriter.OpenExistingAsync(dir.Root, ids[0], null, CancellationToken.None))
         {
-            await writer.AppendRecordsAsync(
-            [
+            await writer.AppendRecordsAsync([
                 new SessionLogRecord(string.Empty, "project-binding",
-                                     JsonSerializer.SerializeToElement(
-                                                                       new
-                                                                           SessionLogProjectBinding(SessionLogProjectBinding
-                                                                                       .SchemaName, projectId),
-                                                                       SessionLogJsonContext.Default
-                                                                          .SessionLogProjectBinding))
+                                     JsonSerializer.SerializeToElement(new SessionLogProjectBinding(
+                                         SessionLogProjectBinding.SchemaName, projectId),
+                                         SessionLogJsonContext.Default.SessionLogProjectBinding))
             ], CancellationToken.None);
         }
 
@@ -335,6 +325,109 @@ public class SessionIndexReconcilerTests
         var row = await index.GetRowAsync(ids[0], CancellationToken.None);
         Assert.That(row!.State, Is.EqualTo(SessionIndexEntryState.Current));
     }
+
+    /// <summary>
+    ///     <para>首次建库中途取消：已完成条目保留为健康摘要，权威日志字节不变，续作一轮收敛全部条目。</para>
+    ///     <para>
+    ///         Cancelling a first build midway keeps finished entries as healthy summaries and authoritative log
+    ///         bytes unchanged; one resumed round converges every entry.
+    ///     </para>
+    /// </summary>
+    [Test]
+    public async Task Reconcile_CancelledMidBuild_RetainsCommittedEntriesAndResumes()
+    {
+        using var dir   = new TestTempDir();
+        var       index = new SessionIndexStore(dir.Root);
+        await index.InitializeAsync(CancellationToken.None);
+        var ids = await SeedSessionsAsync(dir.Root, "cancel question 0", "cancel question 1",
+                                          "cancel question 2", "cancel question 3");
+        var bytesBefore = LogBytes(dir.Root);
+
+        using var cts            = new CancellationTokenSource();
+        var       firstCommitted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Assert.That(async () => await new SessionIndexReconciler(index)
+                       .ReconcileAsync(new SessionIndexReconcileOptions
+                        {
+                            SummaryCommitted = (_, _) =>
+                            {
+                                firstCommitted.TrySetResult();
+                                cts.Cancel();
+                                return Task.CompletedTask;
+                            }
+                        }, cts.Token),
+                    Throws.TypeOf<OperationCanceledException>());
+        Assert.That(firstCommitted.Task.IsCompleted, Is.True, "取消前至少完成一个条目提交。");
+        var retained = (await index.ListSummariesAsync(new SessionSummaryQuery(), CancellationToken.None)).Count;
+        Assert.That(retained, Is.GreaterThanOrEqualTo(1), "已完成条目在取消后保留。");
+        Assert.That(LogBytes(dir.Root), Is.EqualTo(bytesBefore), "建索引不得改动权威日志字节。");
+
+        var report = await new SessionIndexReconciler(index).ReconcileAsync(CancellationToken.None);
+        Assert.That(report.Rebuilt, Is.EqualTo(ids.Count - retained), "续作只重建未完成条目。");
+        Assert.That(report.Unchanged, Is.EqualTo(retained));
+        Assert.That((await index.ListSummariesAsync(new SessionSummaryQuery(), CancellationToken.None)).Count,
+                    Is.EqualTo(ids.Count));
+    }
+
+    /// <summary>
+    ///     <para>归档状态文件损坏时对账保留既有归档投影并给出说明，不把来源当作未归档覆盖。</para>
+    ///     <para>
+    ///         With a damaged archive-state file, reconciliation keeps the existing archived projection and adds a
+    ///         note, never overwriting it as unarchived.
+    ///     </para>
+    /// </summary>
+    [Test]
+    public async Task Reconcile_DamagedArchiveSource_KeepsProjectionAndReportsSkippedSync()
+    {
+        using var dir   = new TestTempDir();
+        var       index = new SessionIndexStore(dir.Root);
+        await index.InitializeAsync(CancellationToken.None);
+        var ids = await SeedSessionsAsync(dir.Root, "archive question", "growth question");
+        await SessionStoreArchiveStore.SetArchivedAsync(dir.Root, ids[0], true, CancellationToken.None);
+        var healthy = await new SessionIndexReconciler(index).ReconcileAsync(CancellationToken.None);
+        Assert.That(healthy.ArchiveSynced, Is.True);
+        Assert.That((await index.GetRowAsync(ids[0], CancellationToken.None))!.Archived, Is.True);
+
+        // 归档来源损坏与日志刷新并存：本轮既重建增长条目，也跳过归档同步。
+        await File.WriteAllTextAsync(SessionStoreArchiveStore.FilePath(dir.Root), "{ damaged", CancellationToken.None);
+        using (var writer =
+               await SessionStoreWriter.OpenExistingAsync(dir.Root, ids[1], null, CancellationToken.None))
+        {
+            await writer.AppendRecordsAsync([ProjectBindingRecord()], CancellationToken.None);
+        }
+
+        var report = await new SessionIndexReconciler(index).ReconcileAsync(CancellationToken.None);
+        Assert.That(report.Rebuilt, Is.EqualTo(1), "仅追加的日志重建。");
+        Assert.That(report.Unchanged, Is.EqualTo(1));
+        Assert.That(report.ArchiveSynced, Is.False);
+        Assert.That(report.Notes, Has.Some.Contains("Archive projection left unchanged"));
+        Assert.That((await index.GetRowAsync(ids[0], CancellationToken.None))!.Archived, Is.True,
+                    "归档来源不可读时既有投影不得被覆盖。");
+        var defaultView = await index.ListSummariesAsync(new SessionSummaryQuery { Limit = 10, Archived = false },
+                                                         CancellationToken.None);
+        Assert.That(defaultView.Select(summary => summary.Id), Does.Not.Contain(ids[0]),
+                    "归档条目不得在投影保留期间回到默认视图。");
+    }
+
+    /// <summary>
+    ///     <para>构造一条项目绑定记录，供追加测试模拟改变来源字节的合法写入。</para>
+    ///     <para>
+    ///         Builds one project-binding record for append tests that legally change the source bytes.
+    ///     </para>
+    /// </summary>
+    private static SessionLogRecord ProjectBindingRecord() =>
+        new(string.Empty, "project-binding",
+            JsonSerializer.SerializeToElement(new SessionLogProjectBinding(
+                SessionLogProjectBinding.SchemaName, "0123456789abcdef0123456789abcdef"),
+                SessionLogJsonContext.Default.SessionLogProjectBinding));
+
+    /// <summary>
+    ///     <para>统计 store 内全部会话日志字节数，用于断言对账不改动权威日志。</para>
+    ///     <para>Sums every session-log byte count in the store, asserting reconciliation never rewrites them.</para>
+    /// </summary>
+    private static long LogBytes(string store) =>
+        Directory.EnumerateFiles(store, "*" + SessionStoreWriter.LogFileSuffix)
+                 .Where(File.Exists)
+                 .Sum(path => new FileInfo(path).Length);
 
     /// <summary>
     ///     <para>用脚本模型逐会话提交回合并返回会话 ID；宿主释放即释放 writer。</para>

@@ -198,8 +198,9 @@ public sealed class SessionIndexStore
         await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
         var existingVersion = await ReadSchemaVersionAsync(connection, cancellationToken).ConfigureAwait(false);
         if (existingVersion > CurrentSchemaVersion)
-            throw new SessionIndexException(
-                                            $"Session index '{DatabasePath}' uses schema version {existingVersion}, newer than supported version {CurrentSchemaVersion}; it must not be downgraded.");
+            throw new SessionIndexException($"Session index '{DatabasePath}' uses schema version " +
+                                            $"{existingVersion}, newer than supported version " +
+                                            $"{CurrentSchemaVersion}; it must not be downgraded.");
 
         await ExecuteCoreAsync(async () =>
         {
@@ -264,8 +265,7 @@ public sealed class SessionIndexStore
         if (query.Limit < 1)
             throw new ArgumentOutOfRangeException(nameof(query), "The summary query limit must be positive.");
         await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
-        var sql = new StringBuilder(
-                                    """
+        var sql = new StringBuilder("""
                                     SELECT id, workspace_root, project_id, assignment_state, title, created_utc, updated_utc,
                                            last_activity_utc, turn_count, permission_mode, commit_sequence, indexed_bytes
                                     FROM session_summary WHERE entry_state = $current
@@ -470,8 +470,6 @@ public sealed class SessionIndexStore
             var             setKnown    = connection.CreateCommand();
             setKnown.Transaction = transaction;
             // 失败条目不参与归档刷新：保留既有投影（占位行为 NULL 未知），不以本轮结果覆盖不可验证行。
-            // Failed entries skip the archive refresh: their existing projection (NULL for placeholders) is kept
-            // rather than overwritten by this round's value on unverifiable rows.
             setKnown.CommandText = """
             UPDATE session_summary SET archived =
                 CASE WHEN id IN (SELECT value FROM json_each($ids)) THEN 1 ELSE 0 END
@@ -608,8 +606,6 @@ public sealed class SessionIndexStore
     {
         await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
         // 条件更新：健康条目只接受更新快照；非健康条目（待建立、过期、失败）接受任何重建结果。
-        // Conditional update: a healthy entry accepts only fresher snapshots; non-healthy entries accept any rebuild
-        // result.
         var condition = requireProgress
             ? """
             WHERE excluded.commit_sequence > session_summary.commit_sequence
@@ -662,8 +658,6 @@ public sealed class SessionIndexStore
     {
         await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
         // 失败标记保留既有摘要列；无行时以会话 ID 建占位行，摘要列用哨兵值，消费方按 entry_state 判读。
-        // A failure marker keeps existing summary columns; without a row it inserts a placeholder keyed by the id,
-        // with sentinel summary values interpreted through entry_state.
         var             command    = connection.CreateCommand();
         command.CommandText = """
         INSERT INTO session_summary (
@@ -691,10 +685,13 @@ public sealed class SessionIndexStore
         SessionStorePaths.EnsureStoreLeaf(StoreDirectory, DatabasePath);
         var builder = new SqliteConnectionStringBuilder
         {
-            DataSource = DatabasePath,
-            Mode       = SqliteOpenMode.ReadWriteCreate,
-            Cache      = SqliteCacheMode.Shared,
-            Pooling    = false
+            DataSource     = DatabasePath,
+            Mode           = SqliteOpenMode.ReadWriteCreate,
+            Cache          = SqliteCacheMode.Shared,
+            Pooling        = false,
+            // provider 会在命令超时内反复重试 SQLITE_BUSY，默认 30 秒；与 busy_timeout 对齐为 3 秒，
+            // 锁等待才真正有界，业务提交也不因他人持锁被拖长。
+            DefaultTimeout = BusyTimeoutMs / 1000
         };
         var connection = new SqliteConnection(builder.ToString());
         try
@@ -745,7 +742,6 @@ public sealed class SessionIndexStore
         catch (SqliteException ex) when (ex.SqliteErrorCode == 1)
         {
             // SQLITE_ERROR（错误码 1）覆盖 "no such table"：文件存在但尚未初始化。
-            // SQLITE_ERROR (result code 1) covers "no such table": the file exists but was never initialized.
             return null;
         }
         catch (SqliteException ex)
@@ -802,8 +798,6 @@ public sealed class SessionIndexStore
     {
         var state      = (SessionIndexEntryState)reader.GetInt64(14);
         // 占位失败行的 commit_sequence 为 0 哨兵；健康摘要的序号恒不小于 1（ValidateSummary），据此判读。
-        // Placeholder failure rows carry the zero commit-sequence sentinel; healthy summaries always reference at
-        // least sequence 1 (ValidateSummary), which distinguishes them here.
         var hasSummary = reader.GetInt64(10) > 0;
         return new SessionIndexRow
         {
@@ -916,8 +910,6 @@ public sealed class SessionIndexVersionWatcher : IAsyncDisposable
     public async Task<long> ReadAsync(CancellationToken cancellationToken)
     {
         // 监测连接长寿命：每次读取的命令就地释放，避免轮询积累未回收的原生语句。
-        // The monitor connection is long-lived: each read's command is disposed in place so polling does not
-        // accumulate unreclaimed native statements.
         await using var command = _connection.CreateCommand();
         command.CommandText = "PRAGMA data_version";
         try
@@ -928,8 +920,7 @@ public sealed class SessionIndexVersionWatcher : IAsyncDisposable
         catch (Exception ex) when (ex is SqliteException or IOException or UnauthorizedAccessException
                                       or NotSupportedException or PathTooLongException)
         {
-            throw new SessionIndexException(
-                                            $"Session index watcher for '{_databasePath}' failed: {ex.Message}", ex);
+            throw new SessionIndexException($"Session index watcher for '{_databasePath}' failed: {ex.Message}", ex);
         }
     }
 }

@@ -1,3 +1,4 @@
+using System.Text.Json;
 using TinyHarness.Core.Models.Agent;
 using TinyHarness.Core.Models.Configuration;
 using TinyHarness.Core.Models.Persistence;
@@ -48,8 +49,7 @@ public class SessionListProjectionTests
         Assert.That((await projection.GetAvailabilityAsync(CancellationToken.None)).Status,
                     Is.EqualTo(SessionIndexAvailabilityStatus.Available));
 
-        var summaries = await projection.ListSummariesAsync(
-                                                            new SessionSummaryQuery { Limit = 2 },
+        var summaries = await projection.ListSummariesAsync(new SessionSummaryQuery { Limit = 2 },
                                                             CancellationToken.None);
         Assert.That(summaries.Select(summary => summary.Id), Is.EquivalentTo(ids));
         Assert.That(summaries.Select(summary => summary.LastActivityUtc),
@@ -116,6 +116,66 @@ public class SessionListProjectionTests
         Assert.That(rows.Single(row => row.Id == damagedId).State, Is.EqualTo(SessionIndexEntryState.Failed));
         Assert.That(summaries.Select(summary => summary.Id),
                     Is.EquivalentTo([host.Session.Id]), "失败条目不得出现在健康摘要中。");
+    }
+
+    /// <summary>
+    ///     <para>
+    ///         增长的归档日志被独占占用时默认列表仍完整呈现：有效索引下不读取日志正文，
+    ///         释放后对账仅重建该归档条目。
+    ///     </para>
+    ///     <para>
+    ///         With the grown archived log exclusively occupied, the default view still renders in full: a valid
+    ///         index means no body reads, and releasing it lets reconciliation rebuild just that archived entry.
+    ///     </para>
+    /// </summary>
+    [Test]
+    public async Task ListSummaries_ValidIndexWithOccupiedArchivedLog_RendersWithoutBodyReads()
+    {
+        using var dir        = new TestTempDir();
+        var       projection = new SessionListProjection(dir.Root);
+        var       ids        = new List<string>();
+        foreach (var question in new[] { "archived question", "default question 1", "default question 2" })
+        {
+            var client = new FakeChatClient();
+            client.Enqueue(FakeChatClient.Text($"answer to {question}"));
+            using var host = NewHost(dir.Root, client);
+            await host.SubmitTurnAsync(question, CancellationToken.None);
+            ids.Add(host.Session.Id);
+        }
+
+        await SessionStoreArchiveStore.SetArchivedAsync(dir.Root, ids[0], true, CancellationToken.None);
+        await projection.ReconcileAsync(SessionIndexReconcileOptions.Default, CancellationToken.None);
+
+        // 模拟长归档会话增长，随后独占占用正文：默认列表若读正文必然失败。
+        using (var writer =
+               await SessionStoreWriter.OpenExistingAsync(dir.Root, ids[0], null, CancellationToken.None))
+        {
+            await writer.AppendRecordsAsync([
+                new SessionLogRecord(string.Empty, "project-binding",
+                                     JsonSerializer.SerializeToElement(new SessionLogProjectBinding(
+                                         SessionLogProjectBinding.SchemaName, "0123456789abcdef0123456789abcdef"),
+                                         SessionLogJsonContext.Default.SessionLogProjectBinding))
+            ], CancellationToken.None);
+        }
+
+        using var occupied = new FileStream(Path.Combine(dir.Root, ids[0] + SessionStoreWriter.LogFileSuffix),
+                                            FileMode.Open, FileAccess.Read, FileShare.None);
+
+        var rows = await projection.ListRowsAsync(CancellationToken.None);
+        Assert.That(rows, Has.Count.EqualTo(3));
+        Assert.That(rows.All(row => row.State == SessionIndexEntryState.Current), Is.True);
+        var summaries = await projection.ListSummariesAsync(new SessionSummaryQuery { Limit = 10, Archived = false },
+                                                            CancellationToken.None);
+        Assert.That(summaries.Select(summary => summary.Id), Is.EquivalentTo(new[] { ids[1], ids[2] }),
+                    "默认视图不含归档条目，且占用期间只能依赖索引摘要。");
+
+        occupied.Dispose();
+        var report = await projection.ReconcileAsync(SessionIndexReconcileOptions.Default, CancellationToken.None);
+        Assert.That(report.Rebuilt, Is.EqualTo(1), "仅增长的归档条目重建。");
+        Assert.That(report.Unchanged, Is.EqualTo(2), "其余条目零正文扫描。");
+        var afterRebuild = await projection.ListSummariesAsync(new SessionSummaryQuery { Limit = 10, Archived = false },
+                                                               CancellationToken.None);
+        Assert.That(afterRebuild.Select(summary => summary.Id), Is.EquivalentTo(new[] { ids[1], ids[2] }));
     }
 
     private static ChatSessionHost NewHost(string store, FakeChatClient client) =>
