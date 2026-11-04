@@ -15,6 +15,7 @@
 | [任务控制与预算](task-control-design.md) | 运行控制、工作项、预算与日志扩展 |
 | [Windows 沙箱管理](windows-sandbox-management.md) | 命令、目录授权、网络模式与验收工具范围 |
 | [Windows 沙箱接入说明](windows-sandbox-integration-guide.md) | 组件职责和执行边界；原始版本化方案另见下节 |
+| [Session 列表加载与 SQLite 索引](session-list-index-design.md) | 列表索引设计契约、验收矩阵证据、测量记录与未验证范围 |
 
 这些文档的实现已完成，因此移出顶层；归档不表示其约束失效。当前源码与活动计划优先用于判断后续变化，历史测试数字不代表当前验证。
 
@@ -38,6 +39,7 @@
 | [上下文压缩验收](context-compaction-history.md) | 替换后的回归、规模、原生产物与真实样本 | [压缩契约](context-compaction-design.md) |
 | [任务控制与运行预算](task-control-history.md) | 原切片顺序与 M15 工程结果 | [控制与预算契约](task-control-design.md) |
 | [M16 交付证据核查](m16-verification.md) | 已收口阶段的核查矩阵、工程与模型样本 | [历史总计划](../../PAST_PLAN.md#m12-m17) |
+| [Session 列表索引验收](session-list-index-design.md) | 阶段 E 综合验收：矩阵证据、基准对比、NativeAOT 与隔离 smoke、验收发现 | [设计契约](session-list-index-design.md#2-设计契约仍然有效) |
 | [Windows 沙箱验收](windows-sandbox-verification.md) | M11、目录授权、PriceLab 和 TCP／UDP／DNS 专项 | [沙箱管理与验证边界](windows-sandbox-management.md) |
 
 ## 开发接力与历史计划
