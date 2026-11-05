@@ -21,6 +21,7 @@ public sealed class ProjectViewModel : ObservableObject
     private bool   _expanded = true;
     private bool   _isActionsMenuOpen;
     private bool   _isPinned;
+    private bool?  _lastNotifiedCurrent;
 
     public ProjectViewModel(string                       key, Project? project, string name, string root,
                             Func<ProjectViewModel, Task> create,
@@ -173,11 +174,17 @@ public sealed class ProjectViewModel : ObservableObject
     }
 
     /// <summary>
-    ///     <para>选中变化或成员列表重建后统一刷新 IsCurrent 通知；高亮本身按成员实时求值。</para>
-    ///     <para>Refreshes the IsCurrent notification after selection or membership changes; the highlight is evaluated live.</para>
+    ///     <para>选中变化或成员列表重建后统一刷新 IsCurrent 通知；通知值未变化时去重静默，高亮本身仍按成员实时求值。</para>
+    ///     <para>
+    ///         Refreshes the IsCurrent notification after selection or membership changes; unchanged values are
+    ///         deduplicated silently while the highlight itself keeps being evaluated live from members.
+    ///     </para>
     /// </summary>
     public void NotifyCurrentChanged()
     {
+        var current = IsCurrent;
+        if (_lastNotifiedCurrent == current) return;
+        _lastNotifiedCurrent = current;
         OnPropertyChanged(nameof(IsCurrent));
     }
 

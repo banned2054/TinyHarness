@@ -54,6 +54,10 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     private readonly Dictionary<string, SessionStoreArchives> _archiveStatesByStore =
         new(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
 
+    // 置顶/归档 ID 的按 store 懒构建查询缓存：快照写入点整体 Clear，下一次查询按当前快照重建。
+    private readonly Dictionary<string, HashSet<string>> _archivedSessionIdsByStore =
+        new(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
+
     private readonly ProjectCatalogMonitor _catalogMonitor = new();
 
     private readonly Func<Action, ValueTask>?        _dispatch;
@@ -73,35 +77,42 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     private readonly Dictionary<string, SessionStorePins> _pinStatesByStore =
         new(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
 
-    private readonly HashSet<string> _projectReloadRetried = new(StringComparer.Ordinal);
-    private readonly SemaphoreSlim _refreshGate = new(1, 1);
-    private readonly SemaphoreSlim _sidebarPreferencesLoadGate = new(1, 1);
-    private readonly string _sidebarPreferencesPath = string.Empty;
+    private readonly Dictionary<string, HashSet<string>> _pinnedSessionIdsByStore =
+        new(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
+
+    private readonly HashSet<string> _projectReloadRetried       = new(StringComparer.Ordinal);
+    private readonly SemaphoreSlim   _refreshGate                = new(1, 1);
+    private readonly SemaphoreSlim   _sidebarPreferencesLoadGate = new(1, 1);
+    private readonly string          _sidebarPreferencesPath     = string.Empty;
+
     private readonly SemaphoreSlim _sidebarPreferencesSaveGate = new(1, 1);
-    private          bool _closing;
-    private          TaskCompletionSource? _indexRefreshFinished;
-    private          int _indexRefreshGeneration;
-    private          CancellationTokenSource? _indexRefreshSource;
-    private          string? _initializationCursor;
-    private          (SessionListProjection Projection, string Store)? _listProjection;
-    private          bool _loadingCatalog;
-    private          bool _loadingHistory;
-    private          int _migrationBusy;
-    private          SessionViewModel? _newConversation;
-    private          string _notice = string.Empty;
-    private          TaskCompletionSource? _organizeFinished;
-    private          int _organizeGeneration;
-    private          IReadOnlyList<OrganizeIssue>? _organizeIssues;
-    private          string? _organizeIssuesStore;
-    private          string _organizeNotice = string.Empty;
-    private          CancellationTokenSource? _organizeSource;
-    private          bool? _pendingProjectDeletionPromptPreference;
-    private          PermissionSettings _permissionSettings = new();
-    private          int _projectDeletionDialogVersion;
-    private          string? _projectDeletionErrorText;
-    private          bool _projectDeletionOpen;
-    private          ProjectViewModel? _projectDeletionTarget;
-    private          string _projectRenameDraft = string.Empty;
+
+    // 上次下发的项目菜单数组：内容逐引用相同时复用实例，让 SessionViewModel.ProjectOptions 的引用相等短路跳过整条菜单重建链。
+    private IReadOnlyList<ProjectViewModel>?                  _cachedProjectOptions;
+    private bool                                              _closing;
+    private TaskCompletionSource?                             _indexRefreshFinished;
+    private int                                               _indexRefreshGeneration;
+    private CancellationTokenSource?                          _indexRefreshSource;
+    private string?                                           _initializationCursor;
+    private (SessionListProjection Projection, string Store)? _listProjection;
+    private bool                                              _loadingCatalog;
+    private bool                                              _loadingHistory;
+    private int                                               _migrationBusy;
+    private SessionViewModel?                                 _newConversation;
+    private string                                            _notice = string.Empty;
+    private TaskCompletionSource?                             _organizeFinished;
+    private int                                               _organizeGeneration;
+    private IReadOnlyList<OrganizeIssue>?                     _organizeIssues;
+    private string?                                           _organizeIssuesStore;
+    private string                                            _organizeNotice = string.Empty;
+    private CancellationTokenSource?                          _organizeSource;
+    private bool?                                             _pendingProjectDeletionPromptPreference;
+    private PermissionSettings                                _permissionSettings = new();
+    private int                                               _projectDeletionDialogVersion;
+    private string?                                           _projectDeletionErrorText;
+    private bool                                              _projectDeletionOpen;
+    private ProjectViewModel?                                 _projectDeletionTarget;
+    private string                                            _projectRenameDraft = string.Empty;
 
     private bool _projectRenameOpen;
 
@@ -441,12 +452,14 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         set
         {
             if (ReferenceEquals(_selected, value)) return;
-            if (_selected is { } previous) previous.IsSelected = false;
+            var previous                                            = _selected;
+            if (previous is { } previousRow) previousRow.IsSelected = false;
             if (!SetProperty(ref _selected, value) || value is null) return;
             value.IsSelected = true;
             OnPropertyChanged(nameof(IsNewConversationSelected));
             OnPropertyChanged(nameof(HasFailedDraft));
-            RebuildSidebarRows();
+            // 赋值路径全部非 null（构造、??=、显式草稿、行选择）；null 赋值已在上一行提前返回，不会到达本通知。
+            NotifySelectionHighlight(previous, value);
             _ = LoadSelectedHistoryAsync(value);
         }
     }
@@ -624,6 +637,80 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
     /// <summary>
     ///     <para>
+    ///         索引刷新循环发现变化后的轻量应用路径：持刷新门重读当前 store 的置顶、归档与会话行，
+    ///         随后重建项目分组；生效 store 已切换时不做轻量应用，释放门后回退完整初始化，
+    ///         保持 store 切换的取消与重启语义。
+    ///     </para>
+    ///     <para>
+    ///         The lightweight apply path when the index refresh loop detects a change: re-reads the current
+    ///         store's pin, archive and session rows under the refresh gate, then rebuilds project groups; when
+    ///         the effective store has switched, it skips the lightweight apply, releases the gate, and falls back
+    ///         to full initialization to preserve store-switch cancellation and restart semantics.
+    ///     </para>
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         绝不持刷新门调用 <see cref="InitializeAsync" />：后者等待同一把门，持门调用会互等死锁。
+    ///         门内的置顶与归档准备包含多次 await；OpenProjectAsync 与 InitializeProjectsAsync 不持刷新门，
+    ///         可能在此期间切换生效 store，应用前因此复检一次，不一致时同样释放门后回退完整初始化。
+    ///     </para>
+    ///     <para>
+    ///         Never call <see cref="InitializeAsync" /> while holding the refresh gate: it waits on the same gate
+    ///         and holding it here would deadlock. Pin and archive preparation inside the gate awaits multiple times;
+    ///         OpenProjectAsync and InitializeProjectsAsync do not take the refresh gate and may switch the effective
+    ///         store meanwhile, so the store is re-checked before applying, falling back to full initialization after
+    ///         releasing the gate on mismatch.
+    ///     </para>
+    /// </remarks>
+    internal async Task RefreshSessionListAsync(string store)
+    {
+        if (_closing) return;
+        await _refreshGate.WaitAsync(_lifetime.Token);
+        if (_storeDirectory is not { } current || !ProjectRoots.AreEqual(current, store))
+        {
+            // store 已切换：轻量路径只服务当前 store，释放门后走完整初始化恢复切换语义。
+            _refreshGate.Release();
+            await InitializeAsync();
+            return;
+        }
+
+        // 置顶与归档每轮照常重读：外部进程对状态文件的修改保持可见，与完整初始化的有意决策一致。
+        _loadingCatalog = true;
+        var storeChanged = false;
+        try
+        {
+            await PreparePinStateAsync(store, _lifetime.Token);
+            await PrepareArchiveStateAsync(store, _lifetime.Token);
+            if (_closing) return;
+            if (_storeDirectory is not { } currentStore || !ProjectRoots.AreEqual(currentStore, store))
+            {
+                // 第二道复检：上述 await 期间生效 store 可能已被不持刷新门的调用切换，避免旧 store 行被应用。
+                // 与入口校验同样回退完整初始化，但不能持门调用，置标记后在 finally 释放门之后执行。
+                storeChanged = true;
+                return;
+            }
+
+            await LoadSessionRowsAsync(store);
+            RebuildProjects();
+        }
+        catch (Exception exception)
+        {
+            Notice          =   exception.Message;
+            SelectedSession ??= ConversationDraft();
+        }
+        finally
+        {
+            _loadingCatalog = false;
+            _refreshGate.Release();
+            // 与完整初始化相同的补查：加载期间首发建立的项目可能不在本轮目录册快照内。
+            ReloadCatalogForUnknownProjectsAfterLoad();
+        }
+
+        if (storeChanged) await InitializeAsync();
+    }
+
+    /// <summary>
+    ///     <para>
     ///         窗口显示后的启动序列：轻量准备不被历史扫描阻塞，列表先按索引摘要或降级扫描分批呈现，
     ///         索引对账与归属整理随后后台完成；首屏等待链不再包含整理本体，返回前仅等待整轮收尾。
     ///     </para>
@@ -789,6 +876,24 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     }
 
     /// <summary>
+    ///     <para>按 store 一次建立会话行索引：ID 到行的 Ordinal 映射，替代条目循环中的逐行线性扫描。</para>
+    ///     <para>
+    ///         Builds one session-row index for a store: an Ordinal id-to-row map replacing the per-entry linear
+    ///         scan of the session collection.
+    ///     </para>
+    /// </summary>
+    private Dictionary<string, SessionViewModel> BuildSessionIndexForStore(string store)
+    {
+        var rowsById = new Dictionary<string, SessionViewModel>(StringComparer.Ordinal);
+        foreach (var session in Sessions)
+            if (session.Id is { } id                 &&
+                session.StoreDirectory is { } source &&
+                ProjectRoots.AreEqual(source, store))
+                rowsById.TryAdd(id, session);
+        return rowsById;
+    }
+
+    /// <summary>
     ///     <para>
     ///         把摘要条目应用到侧栏：已有行只刷新归属、活动与权限元数据；新行分批创建并让出调度，
     ///         不因大量行重建实例、宿主、草稿和历史投影。
@@ -803,6 +908,8 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     {
         var failures      = 0;
         var batchPosition = 0;
+        // 条目 ID 来自索引或逐文件扫描，批内唯一：一次建索引后按 ID 命中，消除 O(N²) 扫描。
+        var rowsById      = BuildSessionIndexForStore(store);
         foreach (var entry in entries)
         {
             if (_closing) return;
@@ -816,12 +923,8 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
                 continue;
             }
 
-            if (Sessions.FirstOrDefault(session => session.Id == summary.Id             &&
-                                                   session.StoreDirectory is { } source &&
-                                                   ProjectRoots.AreEqual(source, store)) is { } existing)
-                ApplySummaryMetadata(existing, summary);
-            else
-                AddSession(CreateSessionRow(store, summary));
+            if (rowsById.TryGetValue(summary.Id, out var existing)) ApplySummaryMetadata(existing, summary);
+            else AddSession(CreateSessionRow(store, summary));
 
             batchPosition++;
             if (batchPosition % ListRowBatchSize == 0) await Task.Yield();
@@ -843,7 +946,8 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         {
             ModelOptions        = Models,
             ManageModelsCommand = OpenSettingsCommand,
-            ProjectOptions      = Projects.Where(group => group.CanEdit).ToArray()
+            // 缓存为空时与原实现同样得到当前可选项目数组；加载尾部的 RebuildProjects 会统一刷新到正式实例。
+            ProjectOptions      = _cachedProjectOptions ?? Projects.Where(group => group.CanEdit).ToArray()
         };
         // 标签来自最后选择；历史页面不解析凭据，目标缺失也保留页面。
         row.ApplyPermissionSettings(_permissionSettings);
@@ -943,7 +1047,13 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
             await InvokeOnUiAsync(() =>
             {
                 if (_closing) return Task.CompletedTask;
-                foreach (var summary in batch) ApplyCommittedSummaryRow(summary);
+                // 整批共用一次按当前 store 建立的行索引；_storeDirectory 在同步循环内不会变化。
+                if (_storeDirectory is { } store)
+                {
+                    var rowsByStore = BuildSessionIndexForStore(store);
+                    foreach (var summary in batch) ApplyCommittedSummaryRow(summary, rowsByStore);
+                }
+
                 // 批尾统一重建：统一加载进行中由其末尾重建，否则渐进行立即反映到项目分组。
                 if (!_loadingCatalog) RebuildProjects();
                 return Task.CompletedTask;
@@ -955,18 +1065,19 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         }
     }
 
-    private void ApplyCommittedSummaryRow(SessionSummary summary)
+    private void ApplyCommittedSummaryRow(SessionSummary summary, Dictionary<string, SessionViewModel> rowsByStore)
     {
         if (_storeDirectory is not { } store) return;
-        if (Sessions.FirstOrDefault(session => session.Id == summary.Id             &&
-                                               session.StoreDirectory is { } source &&
-                                               ProjectRoots.AreEqual(source, store)) is { } existing)
+        if (rowsByStore.TryGetValue(summary.Id, out var existing))
         {
             ApplySummaryMetadata(existing, summary);
             return;
         }
 
-        AddSession(CreateSessionRow(store, summary));
+        var row = CreateSessionRow(store, summary);
+        AddSession(row);
+        // 批内新增行登记进索引：同批重复摘要仍命中既有行刷新，保持与逐行扫描一致的语义。
+        rowsByStore[summary.Id] = row;
     }
 
     /// <summary>
@@ -1156,12 +1267,14 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     /// <summary>
     ///     <para>
     ///         刷新循环体：常驻监测连接读取 data_version，周期对账覆盖“来源已提交、索引未更新”窗口；
-    ///         发现变化后在 UI 上下文重查列表，索引失效即停循环，由手动刷新或新一轮重启。
+    ///         发现变化后在 UI 上下文走轻量路径重读当前 store 的列表（store 已切换时回退完整初始化），
+    ///         索引失效即停循环，由手动刷新或新一轮重启。
     ///     </para>
     ///     <para>
     ///         The loop body: a standing monitor connection reads data_version while periodic reconciliation covers
-    ///         the committed-source-but-unindexed window; changes requery the list on the UI context, and an unusable
-    ///         index stops the loop until manual refresh or a new round restarts it.
+    ///         the committed-source-but-unindexed window; changes apply the lightweight list refresh for the
+    ///         current store on the UI context (falling back to full initialization when the store has switched),
+    ///         and an unusable index stops the loop until manual refresh or a new round restarts it.
     ///     </para>
     /// </summary>
     private async Task RunIndexRefreshLoopAsync(string store, int generation, CancellationTokenSource source,
@@ -1181,8 +1294,9 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
                 var changed = version             != lastVersion || report.Rebuilt > 0 || report.Removed > 0 ||
                               report.MarkedFailed > 0;
                 lastVersion = version;
+                // 变化只在 UI 上下文做轻量应用：不重读配置与目录册，重读仅限置顶、归档与会话行。
                 if (!changed || _closing || !IsCurrentIndexRefresh(store, generation)) continue;
-                await InvokeOnUiAsync(InitializeAsync).ConfigureAwait(false);
+                await InvokeOnUiAsync(() => RefreshSessionListAsync(store)).ConfigureAwait(false);
             }
         }
         catch (OperationCanceledException)
@@ -1541,6 +1655,9 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         }
         finally
         {
+            // 成功写入与失败移除都可能改快照：在 finally 整体失效两个 ID 集合缓存，未变化的轮次重建结果不变。
+            _pinnedSessionIdsByStore.Clear();
+            _archivedSessionIdsByStore.Clear();
             _pinStateMutationGate.Release();
         }
     }
@@ -1579,6 +1696,9 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         }
         finally
         {
+            // 成功写入与失败移除都可能改快照：在 finally 整体失效两个 ID 集合缓存，未变化的轮次重建结果不变。
+            _pinnedSessionIdsByStore.Clear();
+            _archivedSessionIdsByStore.Clear();
             _pinStateMutationGate.Release();
         }
     }
@@ -1687,7 +1807,8 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         {
             ModelOptions        = Models,
             ManageModelsCommand = OpenSettingsCommand,
-            ProjectOptions      = Projects.Where(group => group.CanEdit).ToArray()
+            // 与 CreateSessionRow 同一纪律：优先复用缓存分发实例；空缓存等价于原来的空数组，RebuildProjects 尾部统一兜底。
+            ProjectOptions      = _cachedProjectOptions ?? Projects.Where(group => group.CanEdit).ToArray()
         };
         session.SelectProjectCommand = new RelayCommand<ProjectViewModel?>(
                                                                            group => _ =
@@ -2417,6 +2538,9 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         var storeKey = PinStoreKey(storeDirectory);
         _pinStatesByStore[storeKey] = pins;
         _pinStateUnavailableStores.Remove(storeKey);
+        // 快照已变：整体失效两个 ID 集合缓存，懒重建成本可忽略。
+        _pinnedSessionIdsByStore.Clear();
+        _archivedSessionIdsByStore.Clear();
     }
 
     private SessionStorePins PinsForStore(string? storeDirectory)
@@ -2430,6 +2554,9 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         var storeKey = PinStoreKey(storeDirectory);
         _archiveStatesByStore[storeKey] = archives;
         _archiveStateUnavailableStores.Remove(storeKey);
+        // 快照已变：整体失效两个 ID 集合缓存，懒重建成本可忽略。
+        _pinnedSessionIdsByStore.Clear();
+        _archivedSessionIdsByStore.Clear();
     }
 
     private SessionStoreArchives ArchivesForStore(string? storeDirectory)
@@ -2439,10 +2566,42 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
                SessionStoreArchives.Empty();
     }
 
+    /// <summary>
+    ///     <para>按 store 懒构建已归档会话 ID 集合；快照写入点整体失效后由下一次查询重建。</para>
+    ///     <para>
+    ///         Lazily builds a store's archived-session id set; snapshot writes invalidate it wholesale and the
+    ///         next query rebuilds it.
+    ///     </para>
+    /// </summary>
+    private HashSet<string> ArchivedSessionIdsForStore(string storeDirectory)
+    {
+        var storeKey = PinStoreKey(storeDirectory);
+        if (_archivedSessionIdsByStore.TryGetValue(storeKey, out var archivedIds)) return archivedIds;
+        var ids = ArchivesForStore(storeDirectory).ArchivedSessionIds.ToHashSet(StringComparer.Ordinal);
+        _archivedSessionIdsByStore[storeKey] = ids;
+        return ids;
+    }
+
+    /// <summary>
+    ///     <para>按 store 懒构建置顶会话 ID 集合；快照写入点整体失效后由下一次查询重建。</para>
+    ///     <para>
+    ///         Lazily builds a store's pinned-session id set; snapshot writes invalidate it wholesale and the
+    ///         next query rebuilds it.
+    ///     </para>
+    /// </summary>
+    private HashSet<string> PinnedSessionIdsForStore(string storeDirectory)
+    {
+        var storeKey = PinStoreKey(storeDirectory);
+        if (_pinnedSessionIdsByStore.TryGetValue(storeKey, out var pinnedIds)) return pinnedIds;
+        var ids = PinsForStore(storeDirectory).PinnedSessionIds.ToHashSet(StringComparer.Ordinal);
+        _pinnedSessionIdsByStore[storeKey] = ids;
+        return ids;
+    }
+
     private bool IsSessionArchived(SessionViewModel session)
     {
         if (session.Id is not { } id || session.StoreDirectory is not { } store) return false;
-        return ArchivesForStore(store).ArchivedSessionIds.Contains(id, StringComparer.Ordinal);
+        return ArchivedSessionIdsForStore(store).Contains(id);
     }
 
     private static string PinStoreKey(string storeDirectory) =>
@@ -2636,6 +2795,9 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
             return group;
         }
 
+        // 一次建立项目 ID 索引：分组注册与会话归属查找共用，会话循环不再逐会话线性扫描目录册。
+        var projectsById = new Dictionary<string, Project>(StringComparer.Ordinal);
+        foreach (var project in _projects) projectsById.TryAdd(project.Id, project);
         foreach (var project in _projects)
             Group(project.Id, project, project.Name, project.PrimaryRoot, storeDirectory : _storeDirectory);
 
@@ -2647,10 +2809,10 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
             var sameStore = sessionStore is null ||
                             (_storeDirectory is { } activeStoreDirectory &&
                              ProjectRoots.AreEqual(sessionStore, activeStoreDirectory));
-            var isNoProject = session.ProjectAssignmentState == SessionProjectAssignmentState.NoProject;
-            var project = sameStore && !isNoProject
-                ? _projects.FirstOrDefault(project => project.Id == session.ProjectId)
-                : null;
+            var      isNoProject = session.ProjectAssignmentState == SessionProjectAssignmentState.NoProject;
+            Project? project     = null;
+            if (sameStore && !isNoProject && session.ProjectId is { } boundProjectId)
+                project = projectsById.GetValueOrDefault(boundProjectId);
             // 未归属的存储行构造即带 store，且根目录固定后不可再清空（见 SessionViewModel.WorkspaceRoot 守卫）；
             // 分组键纳入 store，两个 store 的同一执行目录不得并成一组，整理明细才能按 store 精确定位。
             string key;
@@ -2737,7 +2899,15 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
                                                                            !group.IsNoProjectGroup))
                                            .Concat(activityOrder.Where(group => group.IsNoProjectGroup)))
             Projects.Add(group);
-        var projectOptions = Projects.Where(group => group.CanEdit).ToArray();
+        IReadOnlyList<ProjectViewModel> projectOptions = Projects.Where(group => group.CanEdit).ToArray();
+        if (_cachedProjectOptions is { } cached  &&
+            cached.Count == projectOptions.Count &&
+            cached.SequenceEqual(projectOptions))
+            // 内容逐引用相同：复用缓存实例，SessionViewModel.ProjectOptions 的引用相等短路使菜单不再逐页重建。
+            projectOptions = cached;
+        else
+            _cachedProjectOptions = projectOptions;
+
         foreach (var page in TargetLabelPages().Distinct()) page.ProjectOptions = projectOptions;
         RebuildSidebarRows();
         NotifyChangedWorkspaceTargetLabels(labels);
@@ -2934,6 +3104,29 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     }
 
     /// <summary>
+    ///     <para>
+    ///         选中变化只向新旧选中所在分组发出 IsCurrent 通知，不重建侧栏行：SidebarRows 的行序列不读取
+    ///         选中状态，行高亮由行模板的 IsSelected 绑定驱动、组头高亮由 IsCurrent 驱动；整表重建在
+    ///         选中变化时本就产生零集合通知，只余 O(N log N) 重排与无条件分组通知。
+    ///     </para>
+    ///     <para>
+    ///         A selection change only raises IsCurrent on the groups holding the old or new selection instead of
+    ///         rebuilding sidebar rows: the row sequence never reads selection state, row highlights come from the
+    ///         template's IsSelected binding, and header highlights from IsCurrent; a full rebuild already produces
+    ///         zero collection notifications for a selection change, leaving only an O(N log N) reorder and
+    ///         unconditional group notifications.
+    ///     </para>
+    /// </summary>
+    private void NotifySelectionHighlight(SessionViewModel? previous, SessionViewModel selected)
+    {
+        // 让位语义：旧选中所在分组失去高亮，新选中所在分组取得高亮，其余分组的通知可以完全省略。
+        foreach (var group in Projects)
+            if ((previous is { } previousRow && group.Sessions.Contains(previousRow)) ||
+                group.Sessions.Contains(selected))
+                group.NotifyCurrentChanged();
+    }
+
+    /// <summary>
     ///     <para>按视图模式生成侧栏分类；项目模式下无项目会话直接列在底部“最近”分类。</para>
     ///     <para>
     ///         Builds sidebar categories for the active view; unpinned no-project sessions appear directly under a bottom
@@ -3057,7 +3250,7 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     private bool IsSessionPinned(SessionViewModel session)
     {
         if (session.Id is not { } id || session.StoreDirectory is not { } store) return false;
-        return PinsForStore(store).PinnedSessionIds.Contains(id, StringComparer.Ordinal);
+        return PinnedSessionIdsForStore(store).Contains(id);
     }
 
     /// <summary>
@@ -3402,6 +3595,9 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         }
         finally
         {
+            // 置顶快照已直写：整体失效两个 ID 集合缓存，保持与 SetStorePinState 相同的失效纪律。
+            _pinnedSessionIdsByStore.Clear();
+            _archivedSessionIdsByStore.Clear();
             _pinStateMutationGate.Release();
         }
 

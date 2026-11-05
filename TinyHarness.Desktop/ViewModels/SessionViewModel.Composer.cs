@@ -542,6 +542,8 @@ public sealed partial class SessionViewModel
 
     private void SetPermissionMode(SessionPermissionMode mode, bool userSelected)
     {
+        // 同值静默：每轮刷新都会重放保存模式，无变化且非显式重选时不发通知；显式同值重选仍通知（评审既定语义）。
+        var changed = PermissionMode != mode;
         PermissionMode = mode;
         if (userSelected)
         {
@@ -549,6 +551,7 @@ public sealed partial class SessionViewModel
             HasUserPreselection = true;
         }
 
+        if (!changed && !userSelected) return;
         OnPropertyChanged(nameof(PermissionPickerLabel));
         OnPropertyChanged(nameof(PermissionMode));
     }
