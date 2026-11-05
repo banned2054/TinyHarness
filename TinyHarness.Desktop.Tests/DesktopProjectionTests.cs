@@ -168,6 +168,7 @@ public sealed class DesktopProjectionTests
         page.Draft = "first run";
         await page.SendAsync();
         await finalEntered.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        await page.FlushStreamingAsync();
         var firstGroup = page.Items.OfType<ProcessGroupItemViewModel>().Single();
         Assert.That(firstGroup.HasRunModelLabel, Is.True);
         Assert.That(firstGroup.IsExpanded && firstGroup.IsRunning, Is.True);
@@ -345,6 +346,7 @@ public sealed class DesktopProjectionTests
         page.Draft = "request";
         await page.SendAsync();
         await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await page.FlushStreamingAsync();
         var group  = page.Items.OfType<ProcessGroupItemViewModel>().Single();
         var stream = group.Items.OfType<MessageItemViewModel>().Single();
         Assert.That(group.IsExpanded && group.IsRunning && stream.IsStreaming, Is.True);
@@ -416,6 +418,7 @@ public sealed class DesktopProjectionTests
         page.Draft = "question";
         await page.SendAsync();
         await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await page.FlushStreamingAsync();
         var process = page.Items.OfType<ProcessGroupItemViewModel>().Single();
         Assert.That(process.IsExpanded && process.IsRunning, Is.True);
         window.NewSessionCommand.Execute(null);

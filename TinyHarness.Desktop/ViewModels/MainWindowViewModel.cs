@@ -573,6 +573,17 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
             errors.Add(exception);
         }
 
+        try
+        {
+            // 宿主结束后仍等页面冲刷尾部，不能让定时 UI 更新越过窗口消息循环的退出。
+            await Task.WhenAll(Sessions.Concat(_failedDrafts).Append(_newConversation)
+                                       .OfType<SessionViewModel>().Distinct().Select(page => page.Completion));
+        }
+        catch (Exception exception)
+        {
+            errors.Add(exception);
+        }
+
         if (errors.Count > 0) throw new AggregateException("关闭清理发生错误。", errors);
     }
 

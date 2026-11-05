@@ -1,5 +1,6 @@
 using Avalonia.Media;
 using LiveMarkdown.Avalonia;
+using System.Text;
 using TinyHarness.Desktop.Models;
 using TinyHarness.Desktop.Utils;
 
@@ -7,24 +8,28 @@ namespace TinyHarness.Desktop.ViewModels;
 
 public sealed class MessageItemViewModel : ConversationItemViewModel
 {
-    /// <summary>思考摘要的截断长度（对齐参考实现的收起形态：首行 + 省略号）。</summary>
-    private const int ReasoningSummaryLimit = 80;
+    private readonly ReasoningSummaryBuilder _reasoningSummary = new();
 
-    private string _content;
-    private bool   _isInterrupted;
-    private bool   _isReasoningExpanded;
-    private bool   _isReasoningProjected;
-    private bool   _isStreaming;
+    private string?        _content;
+    private StringBuilder? _contentBuffer;
+    private bool           _isInterrupted;
+    private bool           _isReasoningExpanded;
+    private bool           _isReasoningProjected;
+    private bool           _isStreaming;
 
     private MessageItemViewModel? _processReasoningProjection;
     private string?               _reasoning;
+    private StringBuilder?        _reasoningBuffer;
 
     public MessageItemViewModel(ConversationMessage message) : base(message.Seq)
     {
-        Id                     = message.Id;
-        Role                   = message.Role;
-        _content               = message.Content;
-        _reasoning             = message.Reasoning;
+        Id         = message.Id;
+        Role       = message.Role;
+        _content   = message.Content;
+        _reasoning = message.Reasoning;
+        _reasoningSummary.Append(message.Reasoning ?? string.Empty);
+        HasReasoning           = !string.IsNullOrWhiteSpace(message.Reasoning);
+        HasProcessBody         = !string.IsNullOrWhiteSpace(message.Content);
         _isInterrupted         = message.IsInterrupted;
         CreatedAtText          = message.CreatedAt.ToLocalTime().ToString("HH:mm");
         MarkdownBuilder        = new ObservableStringBuilder(message.Content);
@@ -49,6 +54,9 @@ public sealed class MessageItemViewModel : ConversationItemViewModel
         Role                   = source.Role;
         _content               = string.Empty;
         _reasoning             = source._reasoning;
+        _reasoningBuffer       = source._reasoningBuffer;
+        HasReasoning           = source.HasReasoning;
+        _reasoningSummary      = source._reasoningSummary;
         _isReasoningExpanded   = source.IsReasoningExpanded;
         CreatedAtText          = source.CreatedAtText;
         MarkdownBuilder        = new ObservableStringBuilder(string.Empty);
@@ -67,22 +75,15 @@ public sealed class MessageItemViewModel : ConversationItemViewModel
     ///         streaming.
     ///     </para>
     /// </summary>
-    public string? Reasoning
-    {
-        get => _reasoning;
-        private set
-        {
-            if (!SetProperty(ref _reasoning, value))
-                return;
+    public string? Reasoning => _reasoning ??= _reasoningBuffer?.ToString();
 
-            OnPropertyChanged(nameof(HasReasoning));
-            OnPropertyChanged(nameof(HasVisibleReasoning));
-            OnPropertyChanged(nameof(ReasoningSummary));
-            if (_processReasoningProjection is { } projection) projection.Reasoning = value;
-        }
-    }
+    public bool HasReasoning { get; private set; }
 
-    public bool HasReasoning => !string.IsNullOrWhiteSpace(Reasoning);
+    /// <summary>
+    ///     <para>仅展开时提供正文快照；折叠行不因流式增量反复生成完整字符串。</para>
+    ///     <para>Provides a body snapshot only when expanded, avoiding full-string copies for collapsed streaming rows.</para>
+    /// </summary>
+    public string? ReasoningDisplayText => IsReasoningExpanded ? Reasoning : null;
 
     /// <summary>
     ///     已收束轮次的最终回复把 reasoning 投影进过程组后置位；
@@ -109,23 +110,14 @@ public sealed class MessageItemViewModel : ConversationItemViewModel
     public bool IsReasoningExpanded
     {
         get => _isReasoningExpanded;
-        private set => SetProperty(ref _isReasoningExpanded, value);
+        private set
+        {
+            if (SetProperty(ref _isReasoningExpanded, value)) OnPropertyChanged(nameof(ReasoningDisplayText));
+        }
     }
 
     /// <summary>思考行收起时的首行摘要；去掉 Markdown 强调标记并截断。</summary>
-    public string? ReasoningSummary
-    {
-        get
-        {
-            if (!HasReasoning) return null;
-
-            var text      = Reasoning!.Replace("**", string.Empty, StringComparison.Ordinal);
-            var firstLine = text.Split('\n', 2)[0].Trim();
-            return firstLine.Length <= ReasoningSummaryLimit
-                ? firstLine
-                : $"{firstLine[..ReasoningSummaryLimit]}…";
-        }
-    }
+    public string? ReasoningSummary => HasReasoning ? _reasoningSummary.Text : null;
 
     /// <summary>这条消息是被取消的部分回复（或流式尝试被放弃且无正式消息）。</summary>
     public bool IsInterrupted
@@ -137,22 +129,17 @@ public sealed class MessageItemViewModel : ConversationItemViewModel
         }
     }
 
-    public string Content
-    {
-        get => _content;
-        private set
-        {
-            if (!SetProperty(ref _content, value)) return;
-            OnPropertyChanged(nameof(HasResponseMetadata));
-            OnPropertyChanged(nameof(HasProcessBody));
-        }
-    }
+    public string Content => _content ??= _contentBuffer?.ToString() ?? string.Empty;
+
+    public bool    HasContent        => (_contentBuffer?.Length ?? _content?.Length ?? 0) > 0;
+    public string? UserDisplayText   => IsUserMessage ? Content : null;
+    public string? SystemDisplayText => IsSystemMessage ? Content : null;
 
     /// <summary>
     ///     <para>正文非空时作为相邻思考与工具段之间的独立边界。</para>
     ///     <para>Indicates whether a non-empty body separates adjacent reasoning and tool segments.</para>
     /// </summary>
-    public bool HasProcessBody => !string.IsNullOrWhiteSpace(Content);
+    public bool HasProcessBody { get; private set; }
 
     /// <summary>
     ///     <para>仅组外、正文非空的助手消息显示时间；过程条目与思考行不显示。</para>
@@ -162,7 +149,7 @@ public sealed class MessageItemViewModel : ConversationItemViewModel
     ///     </para>
     /// </summary>
     public bool HasResponseMetadata =>
-        IsAssistantMessage && !IsInProcessGroup && !string.IsNullOrWhiteSpace(Content);
+        IsAssistantMessage && !IsInProcessGroup && HasProcessBody;
 
     public string CreatedAtText { get; }
 
@@ -252,7 +239,22 @@ public sealed class MessageItemViewModel : ConversationItemViewModel
     public void AppendText(string text)
     {
         if (text.Length <= 0) return;
-        Content += text;
+        var hadContent = HasContent;
+        _contentBuffer ??= new StringBuilder(_content);
+        _contentBuffer.Append(text);
+        _content = null;
+        var bodyChanged = !HasProcessBody && !string.IsNullOrWhiteSpace(text);
+        HasProcessBody |= bodyChanged;
+        OnPropertyChanged(nameof(Content));
+        if (!hadContent) OnPropertyChanged(nameof(HasContent));
+        if (IsUserMessage) OnPropertyChanged(nameof(UserDisplayText));
+        if (IsSystemMessage) OnPropertyChanged(nameof(SystemDisplayText));
+        if (bodyChanged)
+        {
+            OnPropertyChanged(nameof(HasResponseMetadata));
+            OnPropertyChanged(nameof(HasProcessBody));
+        }
+
         MarkdownBuilder.Append(text);
     }
 
@@ -266,7 +268,32 @@ public sealed class MessageItemViewModel : ConversationItemViewModel
     public void AppendReasoning(string text)
     {
         if (text.Length <= 0) return;
-        Reasoning += text;
+        _reasoningBuffer ??= new StringBuilder(_reasoning);
+        _reasoningBuffer.Append(text);
+        var previousSummary = ReasoningSummary;
+        _reasoningSummary.Append(text);
+        InvalidateReasoning(text, previousSummary);
+        if (_processReasoningProjection is { } projection)
+        {
+            projection._reasoningBuffer = _reasoningBuffer;
+            projection.InvalidateReasoning(text, previousSummary);
+        }
+    }
+
+    private void InvalidateReasoning(string text, string? previousSummary)
+    {
+        _reasoning = null;
+        var reasoningChanged = !HasReasoning && !string.IsNullOrWhiteSpace(text);
+        HasReasoning |= reasoningChanged;
+        OnPropertyChanged(nameof(Reasoning));
+        if (reasoningChanged)
+        {
+            OnPropertyChanged(nameof(HasReasoning));
+            OnPropertyChanged(nameof(HasVisibleReasoning));
+        }
+
+        if (previousSummary != ReasoningSummary) OnPropertyChanged(nameof(ReasoningSummary));
+        if (IsReasoningExpanded) OnPropertyChanged(nameof(ReasoningDisplayText));
     }
 
     /// <summary>流式尝试被放弃（取消/失败）且不会有正式消息：保留已生成内容并标注中断。</summary>

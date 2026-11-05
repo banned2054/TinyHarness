@@ -15,7 +15,7 @@
     <Grid>
         <StackPanel Classes="user-message" IsVisible="{Binding IsUserMessage}">
             <Border Classes="message-bubble user-bubble">
-                <SelectableTextBlock Text="{Binding Content}" TextWrapping="Wrap" LineHeight="22"
+                <SelectableTextBlock Text="{Binding UserDisplayText}" TextWrapping="Wrap" LineHeight="22"
                                      Foreground="{DynamicResource OnAccentBrush}" />
             </Border>
             <StackPanel Classes="user-message-meta" Orientation="Horizontal" Spacing="4">
@@ -74,13 +74,13 @@
                                                        VerticalScrollBarVisibility="Auto"
                                                        Margin="22,4,0,4"
                                                        IsVisible="{Binding IsReasoningExpanded}">
-                    <TextBlock Text="{Binding Reasoning}" Classes="reason-body" />
+                    <TextBlock Text="{Binding ReasoningDisplayText}" Classes="reason-body" />
                 </conversation:BottomFollowScrollViewer>
             </StackPanel>
             <!-- 正文块：上下呼吸位由本块 Margin 提供；按 Markdown 渲染，
                  流式增量经 MarkdownBuilder 增量更新。底部元信息行挂本块悬停淡入。 -->
             <StackPanel Classes="assistant-body" Margin="0,10,0,16" Spacing="7"
-                        IsVisible="{Binding Content, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                        IsVisible="{Binding HasContent}">
                 <md:MarkdownRenderer MarkdownBuilder="{Binding MarkdownBuilder}" />
                 <!-- 底部元信息行：复制按钮居左、时间随行；过程组内的中间条目不显示
                      （HasResponseMetadata）。复制取整轮可见正文，见 TurnCopyText。 -->
@@ -99,7 +99,7 @@
         </StackPanel>
         <Border Classes="message-bubble system-bubble"
                 IsVisible="{Binding IsSystemMessage}">
-            <TextBlock Text="{Binding Content}" Classes="caption" TextWrapping="Wrap" />
+            <TextBlock Text="{Binding SystemDisplayText}" Classes="caption" TextWrapping="Wrap" />
         </Border>
     </Grid>
 </UserControl>

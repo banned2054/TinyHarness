@@ -23,7 +23,8 @@ public sealed partial class SessionViewModel : ObservableObject
     private readonly DesktopSessionManager                         _manager;
     private readonly Dictionary<string, ProcessGroupItemViewModel> _processGroups = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string>                    _runLabels     = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, ToolActivityItemViewModel> _tools         = new(StringComparer.Ordinal);
+    private readonly StreamingEventBatcher                         _streamingEvents;
+    private readonly Dictionary<string, ToolActivityItemViewModel> _tools = new(StringComparer.Ordinal);
     private          string?                                       _activeRunId;
     private          DesktopApproval?                              _approval;
     private          bool                                          _archiveMutationPending;
@@ -83,9 +84,14 @@ public sealed partial class SessionViewModel : ObservableObject
         string?                       projectId, DateTimeOffset? lastActivityUtc,
         SessionProjectAssignmentState projectAssignmentState)
     {
-        _manager               = manager;
-        _factory               = factory;
-        _dispatch              = dispatch ?? (async action => await Dispatcher.UIThread.InvokeAsync(action));
+        _manager = manager;
+        _factory = factory;
+        _dispatch = dispatch ?? (async action =>
+            await Dispatcher.UIThread.InvokeAsync(action, DispatcherPriority.Background));
+        _streamingEvents = new StreamingEventBatcher(updates => _dispatch(() =>
+        {
+            foreach (var update in updates) ApplyEvent(update);
+        }));
         _workspaceRoot         = workspaceRoot;
         Id                     = id;
         StoreDirectory         = storeDirectory;
@@ -655,7 +661,16 @@ public sealed partial class SessionViewModel : ObservableObject
     {
         try
         {
-            var run = await execution;
+            SessionRun run;
+            try
+            {
+                run = await execution;
+            }
+            finally
+            {
+                await _streamingEvents.FlushAsync();
+            }
+
             _runError = run.Result?.Error is { } error ? _factory.Redact(error) : null;
             DesktopLifecycleDiagnostics.Record("turn-completed-" + run.Result?.Status);
             RecordActivity();
@@ -672,6 +687,7 @@ public sealed partial class SessionViewModel : ObservableObject
         }
         finally
         {
+            _streamingEvents.ResetAfterCompletion();
             if (!IsSelected) HasUnreadCompletion = true;
             StopStream();
             if (_activeRunId is { } runId && _processGroups.TryGetValue(runId, out var group)) group.Complete();
@@ -695,16 +711,21 @@ public sealed partial class SessionViewModel : ObservableObject
         OnPropertyChanged(nameof(LastActivityUtc));
     }
 
-    private ValueTask OnEventAsync(DesktopEvent update) => _dispatch(() => ApplyEvent(update));
+    internal Task FlushStreamingAsync() => _streamingEvents.FlushAsync();
 
-    private ValueTask OnApprovalAsync(DesktopApproval? approval) =>
-        _dispatch(() =>
+    private ValueTask OnEventAsync(DesktopEvent update) => _streamingEvents.PublishAsync(update);
+
+    private async ValueTask OnApprovalAsync(DesktopApproval? approval)
+    {
+        await _streamingEvents.FlushAsync().ConfigureAwait(false);
+        await _dispatch(() =>
         {
             _approval = approval;
             OnPropertyChanged(nameof(HasApproval));
             OnPropertyChanged(nameof(ApprovalText));
             if (approval is not null) Status = "等待审批";
-        });
+        }).ConfigureAwait(false);
+    }
 
     private void ApplyEvent(DesktopEvent update)
     {
