@@ -28,6 +28,7 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     private const           int                      OrganizeBatchSize      = 100;
     private const           int                      ListRowBatchSize       = 200;
     private const           int                      IndexRefreshIntervalMs = 15000;
+    private const           int                      ProjectSyncIntervalMs  = IndexRefreshIntervalMs;
     private static readonly SidebarCategoryViewModel PinnedCategory         = new("pinned", "置顶");
     private static readonly SidebarCategoryViewModel ProjectsCategory       = new("projects", "项目");
     private static readonly SidebarCategoryViewModel RecentCategory         = new("recent", "最近");
@@ -52,6 +53,8 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
     private readonly Dictionary<string, SessionStoreArchives> _archiveStatesByStore =
         new(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
+
+    private readonly ProjectCatalogMonitor _catalogMonitor = new();
 
     private readonly Func<Action, ValueTask>?        _dispatch;
     private readonly DesktopSessionFactory           _factory;
@@ -99,20 +102,27 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     private          bool _projectDeletionOpen;
     private          ProjectViewModel? _projectDeletionTarget;
     private          string _projectRenameDraft = string.Empty;
-    private          bool _projectRenameOpen;
-    private          IReadOnlyList<Project> _projects = [];
-    private          int _renameDialogVersion;
-    private          ProjectViewModel? _renameTarget;
-    private          bool _renamingProject;
-    private          SessionViewModel? _selected;
-    private          bool _settingsOpen;
-    private          Task? _shutdown;
-    private          SidebarPreferences _sidebarPreferences = new();
-    private          bool _sidebarPreferencesSaveAllowed;
-    private          bool _sidebarSettingsMenuOpen;
-    private          string? _storeDirectory;
-    private          int _storeRevision;
-    private          int _summaryRowPumpBusy;
+
+    private bool _projectRenameOpen;
+
+    // 退避计数跨线程访问：同步循环线程写、UI 线程复位，按 int/bool 写原子性容忍最坏丢失一次计数，不引入同步原语。
+    private int                      _projectSyncConsecutiveFailures;
+    private bool                     _projectSyncFailureNoticed;
+    private TaskCompletionSource?    _projectSyncFinished;
+    private CancellationTokenSource? _projectSyncSource;
+    private IReadOnlyList<Project>   _projects = [];
+    private int                      _renameDialogVersion;
+    private ProjectViewModel?        _renameTarget;
+    private bool                     _renamingProject;
+    private SessionViewModel?        _selected;
+    private bool                     _settingsOpen;
+    private Task?                    _shutdown;
+    private SidebarPreferences       _sidebarPreferences = new();
+    private bool                     _sidebarPreferencesSaveAllowed;
+    private bool                     _sidebarSettingsMenuOpen;
+    private string?                  _storeDirectory;
+    private int                      _storeRevision;
+    private int                      _summaryRowPumpBusy;
 
     public MainWindowViewModel() : this(new DesktopSessionFactory(), UserConfigStore.DefaultFilePath())
     {
@@ -448,6 +458,15 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     internal Func<string, CancellationToken, Task<string>>? ResolveDirectoryOverride { get; set; }
 
     /// <summary>
+    ///     <para>目录册同步循环的完成观察缝；未启动时为 null，供测试等待循环退出。</para>
+    ///     <para>
+    ///         Observation seam for the catalog sync loop's completion; null when never started, letting tests
+    ///         await loop exit.
+    ///     </para>
+    /// </summary>
+    internal Task? ProjectSyncLoopCompletion => _projectSyncFinished?.Task;
+
+    /// <summary>
     ///     <para>
     ///         停止接收新操作；先取消并等待在途整理整轮退出（不只等某一批），再等待所有会话取消、清理及保存。
     ///     </para>
@@ -488,6 +507,16 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         {
             _indexRefreshSource?.Cancel();
             if (_indexRefreshFinished is { } refreshFinished) await refreshFinished.Task;
+        }
+        catch (Exception exception)
+        {
+            errors.Add(exception);
+        }
+
+        try
+        {
+            _projectSyncSource?.Cancel();
+            if (_projectSyncFinished is { } syncFinished) await syncFinished.Task;
         }
         catch (Exception exception)
         {
@@ -541,6 +570,16 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     ///         old round and starts a new one.
     ///     </para>
     /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         成功与失败路径都在末尾确保项目目录册跨进程同步循环在运行，目录册损坏时监听仍然建立，
+    ///         修复后的内容恢复能被发现。
+    ///     </para>
+    ///     <para>
+    ///         Both success and failure paths ensure the cross-process catalog sync loop is running at the end, so
+    ///         monitoring survives a damaged catalog and a recovered file is still discovered.
+    ///     </para>
+    /// </remarks>
     public async Task InitializeAsync()
     {
         if (_closing) return;
@@ -578,6 +617,9 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
             await StopOrganizeMigrationAsync();
             _ = StartOrganizeRound(store);
         }
+
+        // 成功与失败路径都到达：目录册损坏时同步循环仍建立，修复后的内容恢复能被发现。
+        StartProjectCatalogSyncLoop();
     }
 
     /// <summary>
@@ -1171,9 +1213,230 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         ProjectRoots.AreEqual(current, store);
 
     /// <summary>
+    ///     <para>启动项目目录册跨进程同步循环：常驻单例、幂等启动，随窗口关闭或生命周期取消。</para>
+    ///     <para>
+    ///         Starts the cross-process project-catalog sync loop: a single resident loop that is idempotent to
+    ///         start and cancels with window shutdown or the lifetime.
+    ///     </para>
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         循环与 store 解耦：store 切换不重启循环，每轮检查都读取当前生效 store；基线一致性由切换路径上
+    ///         的显式 <see cref="ProjectCatalogMonitor.Reset" /> 保证。
+    ///     </para>
+    ///     <para>
+    ///         The loop decouples from the store: a switch never restarts it and every round reads the effective
+    ///         store; baseline consistency is guaranteed by explicit <see cref="ProjectCatalogMonitor.Reset" />
+    ///         on switch paths.
+    ///     </para>
+    /// </remarks>
+    internal void StartProjectCatalogSyncLoop()
+    {
+        if (_closing || _storeDirectory is null || _projectSyncSource is not null) return;
+        var source   = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
+        var finished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _projectSyncSource   = source;
+        _projectSyncFinished = finished;
+        _                    = RunProjectCatalogSyncLoopAsync(source, finished);
+    }
+
+    /// <summary>
+    ///     <para>
+    ///         同步循环体：周期检查目录册，连续失败按 1/2/4/8 倍退避；意外异常不退出循环（独立故障边界），
+    ///         关闭或生命周期取消时静默退出。
+    ///     </para>
+    ///     <para>
+    ///         The loop body: periodic catalog checks with 1/2/4/8 backoff on consecutive failures; unexpected
+    ///         faults never exit the loop (an independent failure boundary), while shutdown or lifetime
+    ///         cancellation exits silently.
+    ///     </para>
+    /// </summary>
+    private async Task RunProjectCatalogSyncLoopAsync(CancellationTokenSource source,
+                                                      TaskCompletionSource    finished)
+    {
+        try
+        {
+            while (!_closing)
+            {
+                // 连续失败按 1/2/4/8 倍退避，损坏或权限问题不再高频空转；恢复后计数在应用时归零。
+                var delayMs = ProjectSyncIntervalMs * Math.Min(1 << Math.Min(_projectSyncConsecutiveFailures, 3), 8);
+                await Task.Delay(delayMs, source.Token).ConfigureAwait(false);
+                try
+                {
+                    await CheckProjectCatalogAsync(source.Token).ConfigureAwait(false);
+                }
+                catch (Exception exception) when (exception is not OperationCanceledException)
+                {
+                    // 意外异常与目录册失败同样退避重试，循环不退出，保持独立故障边界。
+                    Trace.TraceError("Project catalog sync check failed: {0}", exception.Message);
+                    OnProjectSyncCheckFailed();
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // 关闭或生命周期取消不构成错误。
+        }
+        finally
+        {
+            if (ReferenceEquals(_projectSyncSource, source))
+            {
+                _projectSyncSource   = null;
+                _projectSyncFinished = null;
+            }
+
+            finished.TrySetResult();
+        }
+    }
+
+    /// <summary>
+    ///     <para>
+    ///         执行一次目录册变化检查并按结果分派：未变直接返回（此前报过失败则复位失败状态），失败计入退避，
+    ///         已加载则调度到 UI 线程应用。
+    ///     </para>
+    ///     <para>
+    ///         Runs one catalog change check and dispatches by outcome: unchanged returns directly (resetting the
+    ///         failure state when a failure was noticed before), failure counts toward backoff, and a loaded
+    ///         catalog is dispatched to the UI thread for applying.
+    ///     </para>
+    /// </summary>
+    /// <remarks>
+    ///     <para>同步循环与测试共用本方法；取消以 <see cref="OperationCanceledException" /> 原样传播。</para>
+    ///     <para>Shared by the sync loop and tests; cancellation propagates as <see cref="OperationCanceledException" />.</para>
+    /// </remarks>
+    internal async Task CheckProjectCatalogAsync(CancellationToken cancellationToken)
+    {
+        var store = _storeDirectory;
+        if (store is null) return;
+        var result = await _catalogMonitor.CheckAsync(store, cancellationToken).ConfigureAwait(false);
+        switch (result.Status)
+        {
+            case ProjectCatalogCheckStatus.Unchanged :
+                // stat 瞬时失败后文件恢复原值时故障已不成立：复位退避与提示标志，避免失败提示永驻、退避保持峰值。
+                if (_projectSyncFailureNoticed) ResetProjectSyncFailureState();
+                return;
+            case ProjectCatalogCheckStatus.Failed :
+                // Failed 不改基线：下一轮 stat 仍与基线不同，检查自然重试。
+                OnProjectSyncCheckFailed();
+                return;
+            case ProjectCatalogCheckStatus.Loaded :
+                await InvokeOnUiAsync(() =>
+                {
+                    ApplyProjectCatalogSync(store, result);
+                    return Task.CompletedTask;
+                }).ConfigureAwait(false);
+                return;
+        }
+    }
+
+    /// <summary>
+    ///     <para>
+    ///         在 UI 线程应用一次已加载的目录册：内容与内存一致时只确认基线，否则替换项目列表并重建分组。
+    ///     </para>
+    ///     <para>
+    ///         Applies one loaded catalog on the UI thread: content matching memory only confirms the baseline,
+    ///         otherwise the project list is replaced and the groups rebuild.
+    ///     </para>
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         关闭或 store 已切换的迟到结果，以及统一加载或项目删除进行中的结果，直接丢弃且不确认基线，
+    ///         由下一轮检查收敛。
+    ///     </para>
+    ///     <para>
+    ///         Late results after shutdown or a store switch, and results arriving while unified loading or
+    ///         project deletion runs, are discarded without confirming the baseline; the next check converges.
+    ///     </para>
+    /// </remarks>
+    private void ApplyProjectCatalogSync(string store, ProjectCatalogCheckResult result)
+    {
+        // 迟到防护：store 已切换或正在关闭时，旧轮结果直接丢弃，不确认基线。
+        if (_closing        || !SameSidebarStore(store, _storeDirectory)) return;
+        // 让位防护：统一加载或项目删除进行中不抢占；不确认基线，下一轮检查重试收敛。
+        if (_loadingCatalog || IsProjectDeletionRunning) return;
+        // 文件可读即视为恢复：即使本轮内容未应用，退避与失败提示也归位。
+        ResetProjectSyncFailureState();
+        var catalog   = result.Catalog!;
+        var projects  = catalog.Projects;
+        var unchanged = projects.Count == _projects.Count;
+        for (var i = 0; unchanged && i < projects.Count; i++)
+            unchanged = projects[i] is { } project && project.ContentEquals(_projects[i]);
+        if (unchanged)
+        {
+            // 内容未变（本地手改回写、元数据抖动、重复事件）：只确认基线，不重建侧栏。
+            _catalogMonitor.Confirm(result.FileState);
+            return;
+        }
+
+        _projects = catalog.Projects;
+        _catalogMonitor.Confirm(result.FileState);
+        RebuildProjects();
+    }
+
+    /// <summary>
+    ///     <para>复位目录册同步失败状态：退避计数清零，下次失败重新提示；不清空共享的 Notice 文本。</para>
+    ///     <para>
+    ///         Resets the catalog-sync failure state: the backoff counter clears and the next failure notifies
+    ///         again; the shared Notice text is never cleared here.
+    ///     </para>
+    /// </summary>
+    /// <remarks>
+    ///     <para>Notice 是共享单字符串，主动清空会覆盖其他流程的提示，复位只涉及标志与计数。</para>
+    ///     <para>
+    ///         Notice is one shared string and clearing it would overwrite other flows' messages, so only the
+    ///         flag and counter reset.
+    ///     </para>
+    /// </remarks>
+    private void ResetProjectSyncFailureState()
+    {
+        _projectSyncConsecutiveFailures = 0;
+        _projectSyncFailureNoticed      = false;
+    }
+
+    /// <summary>
+    ///     <para>记录一次同步检查失败：累计退避计数，并去重地把失败提示写入 Notice。</para>
+    ///     <para>
+    ///         Records one failed sync check: accumulates the backoff count and writes a deduplicated failure
+    ///         notice.
+    ///     </para>
+    /// </summary>
+    /// <remarks>
+    ///     <para>可能在 UI 线程外调用；提示经 UI 调度设置，持续故障不随每个周期重复提示。</para>
+    ///     <para>
+    ///         May be called off the UI thread; the notice is set through UI dispatch, and a persistent fault is
+    ///         not re-reported every cycle.
+    ///     </para>
+    /// </remarks>
+    private void OnProjectSyncCheckFailed()
+    {
+        // 失败计数驱动同步循环的退避节奏；上限与倍增封顶一致，计数不无限增长。
+        _projectSyncConsecutiveFailures = Math.Min(_projectSyncConsecutiveFailures + 1, 4);
+        if (_projectSyncFailureNoticed) return;
+        // 同一持续故障只提示一次；Notice 涉及 PropertyChanged，须在 UI 线程设置。
+        _projectSyncFailureNoticed = true;
+        _ = InvokeOnUiAsync(() =>
+        {
+            Notice = "项目目录自动同步失败，将继续自动重试。";
+            return Task.CompletedTask;
+        });
+    }
+
+    /// <summary>
     ///     <para>读取配置与模型目录、解析生效 store 并载入项目册；不读取日志正文。</para>
     ///     <para>Loads config, models, the effective store and the catalog; log bodies are never read here.</para>
     /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         同 store 的项目册读取失败保留最后一次成功加载的快照，不清空侧栏；本轮已切换 store 时旧快照
+    ///         属于上一 store，仍清空侧栏。目录册缺失等合法空态仍按 LoadAsync 返回值正常应用。
+    ///     </para>
+    ///     <para>
+    ///         A failed catalog read within the same store keeps the last successfully loaded snapshot instead of
+    ///         clearing the sidebar; when the store actually switched this round, the old snapshot belongs to the
+    ///         previous store and the sidebar still clears. Legal empty states such as a missing catalog still
+    ///         apply through the LoadAsync result.
+    ///     </para>
+    /// </remarks>
     private async Task<(string Store, bool StoreChanged)> PrepareAsync()
     {
         var revision = _storeRevision;
@@ -1195,9 +1458,12 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
             _initializationCursor = null;
         if (changed)
         {
-            // 切换 store：取消在途迁移（调用方锁外等待退出），并清空上一 store 的整理展示残留。
+            // 切换 store：取消在途迁移（调用方锁外等待退出），清空上一 store 的整理展示残留并作废目录册同步基线。
             _organizeSource?.Cancel();
             ResetOrganizeDisplay();
+            _catalogMonitor.Reset();
+            // 上一 store 的失败提示随切换作废：新 store 的首个故障须重新提示。
+            ResetProjectSyncFailureState();
         }
 
         if (_storeDirectory is null || !ProjectRoots.AreEqual(_storeDirectory, directory)) _storeRevision++;
@@ -1212,9 +1478,12 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         catch (Exception exception) when (exception is ProjectStoreException or IOException
                                            or UnauthorizedAccessException)
         {
+            // 同 store 瞬时读取失败保留最后成功快照；本轮已切换 store 时旧快照属于上一 store，仍清空避免跨 store 展示。
             if (revision != _storeRevision) return (_storeDirectory!, false);
-            _projects = [];
-            Notice    = $"项目信息无法读取：{exception.Message}";
+            if (changed) _projects = [];
+            Notice                     = $"项目信息无法读取：{exception.Message}";
+            // 具体原因已提示：置位同步失败标志，同一持续故障不被循环改写成泛化的同步失败提示。
+            _projectSyncFailureNoticed = true;
         }
 
         await PreparePinStateAsync(directory, _lifetime.Token);
@@ -2795,6 +3064,13 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     ///     <para>显式打开目录并保存项目；只创建或切换草稿，不建立会话日志。</para>
     ///     <para>Explicitly opens a directory and saves its project, creating or moving a draft without a session log.</para>
     /// </summary>
+    /// <remarks>
+    ///     <para>store 切换时作废目录册同步基线；末尾确保跨进程目录册同步循环在运行。</para>
+    ///     <para>
+    ///         A store switch invalidates the catalog-sync baseline; the end of the method ensures the
+    ///         cross-process catalog sync loop is running.
+    ///     </para>
+    /// </remarks>
     public async Task OpenProjectAsync(string root)
     {
         if (_closing || IsProjectDeletionRunning) return;
@@ -2822,6 +3098,9 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
                 _organizeSource?.Cancel();
                 _initializationCursor = null;
                 ResetOrganizeDisplay();
+                _catalogMonitor.Reset();
+                // 上一 store 的失败提示随切换作废：新 store 的首个故障须重新提示。
+                ResetProjectSyncFailureState();
             }
 
             if (_storeDirectory is null || !ProjectRoots.AreEqual(_storeDirectory, directory)) _storeRevision++;
@@ -2843,6 +3122,9 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
                 await RebindUnboundDraftsAsync(directory, draftTargets);
                 if (IsApplicableStore(directory, storeRevision)) _ = StartOrganizeRound(directory);
             }
+
+            // 不经 InitializeAsync 的 store 重绑路径也确保目录册同步在运行；循环幂等。
+            StartProjectCatalogSyncLoop();
         }
         finally
         {
@@ -3285,6 +3567,13 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
             if (!Directory.Exists(directory)) return;
             if (_storeDirectory is null || !ProjectRoots.AreEqual(_storeDirectory, directory))
                 _initializationCursor = null;
+            // 目录册基线与同步失败提示随生效 store 变化作废，与 PrepareAsync/OpenProjectAsync 的切换写点一致。
+            if (_storeDirectory is not null && !ProjectRoots.AreEqual(_storeDirectory, directory))
+            {
+                _catalogMonitor.Reset();
+                ResetProjectSyncFailureState();
+            }
+
             _storeDirectory = directory;
             result = await SessionProjectInitializer.InitializeAsync(directory, _initializationCursor, 100,
                                                                      cancellationToken : source.Token);

@@ -1,8 +1,8 @@
 # 项目实体、会话归属与多目录扩展
 
-更新日期：2026-11-02。
+更新日期：2026-11-05。
 
-**状态：项目实体、会话归属、Desktop／CLI 接入、明确无项目会话、会话归档与项目删除已接入；阶段四综合验收待完成。** 本文记录独立 Project、会话归属、Desktop／CLI 接入和后续多目录执行的方案；已完成部分与验证见[实施状态](#15-实施状态)。CLI／Desktop 新建持久化会话保存项目归属，恢复旧日志在原 writer 内补齐；列表与历史只读，旧日志归属由 Desktop 在启动、生效 store 变化与“刷新历史”时自动分批整理，CLI 保留 `session initialize-projects` 显式命令。明确无项目的新会话使用单独日志记录，项目视图以底部“最近”分类直接列出无项目会话，空白会话的项目选择器支持搜索与创建项目；归档状态保存在 session store 的独立元数据中，不改写对话日志。删除项目会将其会话归属追加为无项目状态，保留会话历史与工作目录。
+**状态：项目实体、会话归属、Desktop／CLI 接入、明确无项目会话、会话归档与项目删除已接入；Project 目录册跨进程自动同步已接入（见 §16）；阶段四综合验收待完成。** 本文记录独立 Project、会话归属、Desktop／CLI 接入和后续多目录执行的方案；已完成部分与验证见[实施状态](#15-实施状态)。CLI／Desktop 新建持久化会话保存项目归属，恢复旧日志在原 writer 内补齐；列表与历史只读，旧日志归属由 Desktop 在启动、生效 store 变化与“刷新历史”时自动分批整理，CLI 保留 `session initialize-projects` 显式命令。明确无项目的新会话使用单独日志记录，项目视图以底部“最近”分类直接列出无项目会话，空白会话的项目选择器支持搜索与创建项目；归档状态保存在 session store 的独立元数据中，不改写对话日志。删除项目会将其会话归属追加为无项目状态，保留会话历史与工作目录。
 
 入口见 [PLAN.md](../PLAN.md)。既有契约见[会话持久化](Archive/session-persistence-design.md)、[项目规则](Archive/project-instructions-design.md)、[桌面 GUI 迁移](desktop-migration-plan.md)和[Windows 沙箱管理](Archive/windows-sandbox-management.md)。操作授权以用户当前要求和 [AGENTS.md](../AGENTS.md) 为准，保存计划不构成代码实施、实际数据接入、Git 或发布授权。
 
@@ -559,3 +559,35 @@ SessionWorkspace
 - 所有关联日志完成解绑后，清除对应 session store 的项目置顶状态，以及 Desktop 偏好里的手动顺序、折叠状态和遗留置顶引用，最后从目录册移除项目。中断、占用或无法读取的日志保留删除标记并可重试；source 生成 reader、scanner 和 writer 均校验解除归属只能匹配当前项目且只能转为无项目。删除项目期间禁止新建会话和改名。
 - 通用设置增加默认开启的「项目删除提示」，保存在 `desktop-sidebar.json`；关闭时直接执行删除，确认面板左缘与窗口内容左缘对齐，并垂直居中于目标项目行。
 - 已验证：`dotnet build TinyHarness.Desktop/TinyHarness.Desktop.csproj -c Debug --no-restore` 成功，0 警告／错误；Release `win-x64` NativeAOT publish 成功，产物在 `artifacts/project-deletion-20261102/desktop-aot-final/`；`git diff --check` 通过。未运行测试、产物 smoke 或真实 GUI 交互。
+
+2026-11-05 接入 Project 目录册跨进程自动同步（设计见 §16）：
+
+- Core 新增 [ProjectCatalogMonitor](../TinyHarness.Core/Services/Persistence/ProjectCatalogMonitor.cs)（文件元数据基线 + `LoadAsync` 三态检查 + 调用方显式确认基线），`Project`／`ProjectCatalog` 新增 `ContentEquals` 内容语义比较；不改目录册 schema、锁协议与 `ProjectStore` 公开契约，无新增依赖。
+- Desktop 新增 15 秒周期独立同步循环：stat 变化才加载目录册，与内存已应用列表逐项目比较，相等仅确认基线（覆盖本地改名／删除手改内存、同内容重写与重复事件），不等才替换 `_projects` 并 `RebuildProjects()`；实例复用、展开态、选中与草稿保持沿用既有逻辑，整理轮／删除流程进行中让位并下轮收敛。失败保留同 store 最后成功快照、有界退避（×1/×2/×4/×8）、通知去重、循环不因目录册或索引故障退出；store 切换作废基线并以 store 比对丢弃迟到结果。`PrepareAsync` 读取失败不再清空 `_projects`（store 真实变化时仍清空，避免旧 store 项目冒充新 store 目录册）；关闭时取消并等待同步循环退出。
+- 测试：Core 新增 19 项（Monitor 语义、恢复、取消、并发、平台守卫、`ContentEquals` 全字段）；Desktop 新增 23 项（外部创建／改名／删除、双实例同 store、内容未变不重建、损坏／缺失／共享冲突恢复、同长度改写、连续更新收敛、刷新／删除／整理交错、启动幂等、关闭退出、store 切换迟到丢弃、读取失败保留快照红绿）；[IndexProbe](../TinyHarness.IndexProbe/Program.cs) 新增 `catalog-create`／`catalog-rename` 模式并配 2 项真实子进程测试。
+- 独立 Review（并发／持久化／安全，UI／生命周期／回归各一）均无必须修复项；建议项已落实：`InitializeProjectsAsync` 补基线作废、Unchanged 复位失败状态、store 切换失败清空旧快照、移除双重脱敏、Desktop.Tests 补 IndexProbe 引用。本地改名与在途应用的交错回闪、stat 法修改时间精度边界记录为已知限制（§16.2）。
+- 已验证（Windows x64）：`TinyHarness.Tests` 1599 通过／4 跳过；`TinyHarness.Desktop.Tests` 299 通过；CLI 与 Desktop Release `win-x64` NativeAOT publish 0 compiler／trimming／AOT 警告，产物位于 `artifacts/project-sync-20261105/`，仓库外运行 CLI `smoke`（17 steps、16 tool executions）与 Desktop `--offline-smoke`（parallel=2、switched=A/B/A/B、refreshed=true、resumedTurns=4、disposedClients=6）均通过；IndexProbe AOT 产物 `catalog-create`／`catalog-rename` 手工验证通过。
+- 范围外记录：`DesktopStartupOrganizeTests.ExceptionRoundAfterStoreSwitchDoesNotMarkOldStoreUnboundGroups` 枚举 `Projects` 无快照复制，存在与本轮无关的偶发"Collection was modified"竞态（单独重跑通过）。
+- 未验证：真实 GUI 交互、Linux／macOS、断电与设备故障、真实用户数据。
+
+## 16. Project 目录册跨进程自动同步
+
+Desktop 侧栏项目分组来自当前 session store 的 `projects.json`；此前跨进程发现依赖手动刷新。本节记录已实施方案，与 §7 的保存／并发契约衔接。
+
+### 16.1 方案与理由
+
+采用轻量周期检测而非 FileSystemWatcher：Session 索引同步已是 15 秒周期节奏，目录册操作低频，跨进程感知延迟与既有会话同步一致；Watcher 的事件丢失、缓冲区溢出、替换窗口瞬时状态、store 切换后的旧事件与跨平台差异会引入与其收益不成比例的生命周期复杂度。目录册写入全部经 ProjectStore 锁内整体替换，任何一次保存都会推进文件修改时间，"存在性 + 长度 + LastWriteTimeUtc"足以作为快速变化线索；可疑时经 `ProjectStore.LoadAsync` 读取并与内存已应用列表逐项目比较，只有真实内容变化才触发 UI 重建。
+
+- `ProjectCatalogMonitor` 封装 stat 基线与三态检查（Unchanged／Loaded／Failed）；基线确认由调用方显式 `Confirm`，应用被跳过时不得吞掉变化；`Reset` 在 store 切换时作废基线。检查先 stat 后 load：加载期间的新写入会使下轮 stat 偏离基线而再次检查，最终一致。
+- Desktop 单例循环与 store 解耦，每 tick 读取当前生效 store；独立于 SQLite Session 索引的故障边界——索引失效停循环不影响项目同步，目录册失败也不退出循环。
+- 全部同步路径只读：缺失目录册只读打开既有锁且绝不创建文件；应用仅内存替换与分组重建，不改写目录册或会话日志，不触发整理轮与 Session 重载。
+
+### 16.2 已知限制
+
+- 同长度且处于修改时间精度窗口内的外部改写可能漏检，直到下次写入（NTFS 主平台不可达；FAT／部分网络盘 1–2 秒粒度存在理论窗口；保留 mtime 的备份还原工具同理）。该方案不声称严格无遗漏。
+- 本地改名与在途检查交错时，UI 可能回闪旧名称最长一个周期，下一轮检查收敛（≤15 秒）。
+- 跨进程感知延迟为一个周期（退避时最长 2 分钟），不追求即时性；`ProjectCatalogMonitor.CheckAsync` 的 Unchanged 结果依赖元数据比较，不提供内容级保证。
+
+### 16.3 验证边界
+
+已验证范围见 §15 2026-11-05 条目；真实 GUI、Linux／macOS、断电与设备故障、真实用户数据未验证，不因离线测试与产物 smoke 推定已完成。

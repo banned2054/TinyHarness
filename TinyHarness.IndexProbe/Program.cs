@@ -31,7 +31,9 @@ namespace TinyHarness.IndexProbe;
 ///         <c>write-summary &lt;store&gt; &lt;sessionId&gt; &lt;sequence&gt; &lt;bytes&gt; &lt;title&gt;</c>
 ///         条件提交一条更新并打印是否应用；
 ///         <c>hold-lock &lt;store&gt; &lt;ms&gt;</c> 独占锁住索引数据库指定时长；
-///         <c>corrupt-index &lt;store&gt;</c> 把索引数据库文件覆写为垃圾字节。
+///         <c>corrupt-index &lt;store&gt;</c> 把索引数据库文件覆写为垃圾字节；
+///         <c>catalog-create &lt;store&gt; &lt;workspaceRoot&gt;</c> 经 ProjectStore 创建或复用项目并打印项目 ID 与修订号；
+///         <c>catalog-rename &lt;store&gt; &lt;projectId&gt; &lt;newName&gt;</c> 读取目录册当前修订号后改名并打印新修订号。
 ///     </para>
 ///     <para>
 ///         Mode contract (single-line output, exit code 0 on success):
@@ -43,7 +45,11 @@ namespace TinyHarness.IndexProbe;
 ///         <c>write-summary &lt;store&gt; &lt;sessionId&gt; &lt;sequence&gt; &lt;bytes&gt; &lt;title&gt;</c>
 ///         conditionally commits one update and prints whether it applied;
 ///         <c>hold-lock &lt;store&gt; &lt;ms&gt;</c> holds an exclusive lock on the index database for the given
-///         duration; <c>corrupt-index &lt;store&gt;</c> overwrites the index database file with garbage bytes.
+///         duration; <c>corrupt-index &lt;store&gt;</c> overwrites the index database file with garbage bytes;
+///         <c>catalog-create &lt;store&gt; &lt;workspaceRoot&gt;</c> creates or reuses a project through ProjectStore and
+///         prints the project ID and revision;
+///         <c>catalog-rename &lt;store&gt; &lt;projectId&gt; &lt;newName&gt;</c> renames after reading the catalog's
+///         current revision and prints the new revision.
 ///     </para>
 /// </remarks>
 internal static class Program
@@ -71,10 +77,11 @@ internal static class Program
             // 各模式参数个数固定；缺失时报用法错误而非 IndexOutOfRangeException。未知模式仍由下方分发报错。
             var requiredArgCount = args[0] switch
             {
-                "create-log" or "append-log" or "hold-lock" => 3,
-                "write-summary"                             => 6,
-                "reconcile" or "list" or "corrupt-index"    => 2,
-                _                                           => 1
+                "create-log" or "append-log" or "hold-lock" or "catalog-create" => 3,
+                "write-summary"                                                 => 6,
+                "reconcile" or "list" or "corrupt-index"                        => 2,
+                "catalog-rename"                                                => 4,
+                _                                                               => 1
             };
             if (args.Length < requiredArgCount)
                 throw new ArgumentException($"Mode '{args[0]}' requires {requiredArgCount} arguments.");
@@ -86,9 +93,11 @@ internal static class Program
                 "list"       => await ListAsync(args[1]),
                 "write-summary" => await WriteSummaryAsync(args[1], args[2], args[3], args[4],
                                                            string.Join(' ', args.Skip(5))),
-                "hold-lock"     => await HoldLockAsync(args[1], ParsePositive(args, 2, "milliseconds")),
-                "corrupt-index" => CorruptIndex(args[1]),
-                _               => throw new ArgumentException($"Unknown probe mode '{args[0]}'.")
+                "hold-lock"      => await HoldLockAsync(args[1], ParsePositive(args, 2, "milliseconds")),
+                "corrupt-index"  => CorruptIndex(args[1]),
+                "catalog-create" => await CatalogCreateAsync(args[1], args[2]),
+                "catalog-rename" => await CatalogRenameAsync(args[1], args[2], string.Join(' ', args.Skip(3))),
+                _                => throw new ArgumentException($"Unknown probe mode '{args[0]}'.")
             };
         }
         catch (Exception ex)
@@ -159,7 +168,7 @@ internal static class Program
         var report = await projection.ReconcileAsync(SessionIndexReconcileOptions.Default,
                                                      CancellationToken.None).ConfigureAwait(false);
         Console.Out.WriteLine($"availability={report.Availability.Status} sources={report.SourceCount} " +
-                              $"rebuilt={report.Rebuilt} removed={report.Removed} " +
+                              $"rebuilt={report.Rebuilt} removed={report.Removed} "                      +
                               $"markedFailed={report.MarkedFailed} archiveSynced={report.ArchiveSynced}");
         return 0;
     }
@@ -178,8 +187,9 @@ internal static class Program
         {
             rows = (await projection.ListRowsAsync(CancellationToken.None).ConfigureAwait(false)).Count;
             defaultSummaries = (await projection
-                .ListSummariesAsync(new SessionSummaryQuery { Archived = false }, CancellationToken.None)
-                .ConfigureAwait(false)).Count;
+                                     .ListSummariesAsync(new SessionSummaryQuery { Archived = false },
+                                                         CancellationToken.None)
+                                     .ConfigureAwait(false)).Count;
         }
 
         Console.Out.WriteLine($"availability={availability.Status} "                         +
@@ -273,11 +283,48 @@ internal static class Program
         return 0;
     }
 
+    /// <summary>
+    ///     <para>经 ProjectStore 公开 API 为给定执行目录创建或复用项目，只写调用方给定的目录册。</para>
+    ///     <para>
+    ///         Creates or reuses the project for the given execution root through the public ProjectStore API,
+    ///         writing only the caller-supplied catalog.
+    ///     </para>
+    /// </summary>
+    private static async Task<int> CatalogCreateAsync(string store, string workspaceRoot)
+    {
+        var project = await ProjectStore
+                           .GetOrCreateAsync(ProjectStore.FilePath(store), workspaceRoot, null, CancellationToken.None)
+                           .ConfigureAwait(false);
+        Console.Out.WriteLine($"created={project.Id} revision={project.Revision}");
+        return 0;
+    }
+
+    /// <summary>
+    ///     <para>按当前目录册修订号改名项目；项目不存在或目录册损坏时以非零退出码失败。</para>
+    ///     <para>
+    ///         Renames a project against the catalog's current revision; a missing project or a damaged catalog
+    ///         fails with a non-zero exit code.
+    ///     </para>
+    /// </summary>
+    private static async Task<int> CatalogRenameAsync(string store, string projectId, string newName)
+    {
+        var catalogPath = ProjectStore.FilePath(store);
+        var catalog     = await ProjectStore.LoadAsync(catalogPath, CancellationToken.None).ConfigureAwait(false);
+        var project = catalog.Projects.FirstOrDefault(item => item.Id == projectId) ??
+                      throw new
+                          ArgumentException($"Project '{projectId}' was not found in the catalog '{catalogPath}'.");
+        var renamed = await ProjectStore.RenameAsync(catalogPath, projectId, newName, project.Revision, null,
+                                                     CancellationToken.None).ConfigureAwait(false);
+        Console.Out.WriteLine($"renamed={renamed.Id} revision={renamed.Revision}");
+        return 0;
+    }
+
     private static SessionLogRecord AssignmentRecord() =>
         new(string.Empty, "project-assignment",
             JsonSerializer.SerializeToElement(new SessionLogProjectAssignment(
-                SessionLogProjectAssignment.SchemaName, SessionLogProjectAssignment.NoProject),
-                SessionLogJsonContext.Default.SessionLogProjectAssignment));
+                                                                              SessionLogProjectAssignment.SchemaName,
+                                                                              SessionLogProjectAssignment.NoProject),
+                                              SessionLogJsonContext.Default.SessionLogProjectAssignment));
 
     private static string RandomSessionId() =>
         Convert.ToHexString(RandomNumberGenerator.GetBytes(16)).ToLowerInvariant();
