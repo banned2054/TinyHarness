@@ -20,7 +20,14 @@ public sealed class PermissionShellTool(ITool restricted, ITool host, Func<Sessi
             {
                 ["type"] = "string", ["enum"] = new JsonArray("workspace", "host"),
                 ["description"] =
-                    "Defaults to workspace. Use host to request execution outside the configured sandbox; requires approval except in Full Access."
+                    "Defaults to 'workspace', which runs inside the configured sandbox when one is enabled. " +
+                    "'host' runs the command directly as the TinyHarness process with no OS sandbox isolation; " +
+                    "it is not an administrator elevation and grants nothing beyond the host process's own permissions. " +
+                    "In every mode except Full Access a host call requires approval, " +
+                    "and in AI review modes it is approved only when it matches the user's explicit authorization. " +
+                    "Use 'host' only to rerun a specific command that failed at a sandbox boundary " +
+                    "(for example writing to a protected path such as .git), " +
+                    "after confirming earlier steps left no uncertain side effects; never use it to bypass a refusal."
             };
             return restricted.Definition with { Parameters = schema };
         }
