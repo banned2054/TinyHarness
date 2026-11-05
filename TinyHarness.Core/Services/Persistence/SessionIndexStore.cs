@@ -199,7 +199,7 @@ public sealed class SessionIndexStore
         var existingVersion = await ReadSchemaVersionAsync(connection, cancellationToken).ConfigureAwait(false);
         if (existingVersion > CurrentSchemaVersion)
             throw new SessionIndexException($"Session index '{DatabasePath}' uses schema version " +
-                                            $"{existingVersion}, newer than supported version " +
+                                            $"{existingVersion}, newer than supported version "    +
                                             $"{CurrentSchemaVersion}; it must not be downgraded.");
 
         await ExecuteCoreAsync(async () =>
@@ -457,6 +457,19 @@ public sealed class SessionIndexStore
     ///         not created.
     ///     </para>
     /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         健康行的归档值已与目标集合一致时不重写该行：无变化同步不产生任何行写入，
+    ///         监测连接读到的 data_version 保持不变；archived 为 NULL 的行视为与目标不同，
+    ///         仍按本轮目标写入 0 或 1；失败行与缺失行保持原状。
+    ///     </para>
+    ///     <para>
+    ///         A healthy row whose archived value already matches the target set is not rewritten: a sync with no
+    ///         changes produces no row writes and leaves the data_version read by monitor connections unchanged;
+    ///         rows with a NULL archived value count as differing from the target and are still written to 0 or 1,
+    ///         while failed and missing rows stay untouched.
+    ///     </para>
+    /// </remarks>
     public async Task SyncArchiveProjectionAsync(
         IReadOnlySet<string> archivedSessionIds, CancellationToken cancellationToken)
     {
@@ -466,15 +479,32 @@ public sealed class SessionIndexStore
 
         await ExecuteCoreAsync(async () =>
         {
+            var targetCase = "CASE WHEN id IN (SELECT value FROM json_each($ids)) THEN 1 ELSE 0 END";
+            // 失败条目不参与归档刷新：保留既有投影（占位行为 NULL 未知），不以本轮结果覆盖不可验证行。
+            // 同值守卫跳过归档值已与目标一致的行；NULL 行必须用 IS NOT 判定：
+            // NULL != 目标求值为未知，会把 NULL 行永久留在未初始化状态。
+            // 共享缓存下空写事务也会推进 data_version，故先以只读 EXISTS 探测，确认存在差异行才进入写事务。
+            var probe      = connection.CreateCommand();
+            probe.CommandText = $"""
+                SELECT EXISTS (
+                    SELECT 1 FROM session_summary
+                    WHERE entry_state != $failed
+                      AND archived IS NOT ({targetCase})
+                )
+                """;
+            probe.Parameters.AddWithValue("$ids", SerializeIdSet(archivedSessionIds));
+            probe.Parameters.AddWithValue("$failed", (long)SessionIndexEntryState.Failed);
+            if (Convert.ToInt64(await probe.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false)) == 0)
+                return;
+
             await using var transaction = await BeginWriteAsync(connection, cancellationToken).ConfigureAwait(false);
             var             setKnown    = connection.CreateCommand();
             setKnown.Transaction = transaction;
-            // 失败条目不参与归档刷新：保留既有投影（占位行为 NULL 未知），不以本轮结果覆盖不可验证行。
-            setKnown.CommandText = """
-            UPDATE session_summary SET archived =
-                CASE WHEN id IN (SELECT value FROM json_each($ids)) THEN 1 ELSE 0 END
-            WHERE entry_state != $failed
-            """;
+            setKnown.CommandText = $"""
+                UPDATE session_summary SET archived = {targetCase}
+                WHERE entry_state != $failed
+                  AND archived IS NOT ({targetCase})
+                """;
             setKnown.Parameters.AddWithValue("$ids", SerializeIdSet(archivedSessionIds));
             setKnown.Parameters.AddWithValue("$failed", (long)SessionIndexEntryState.Failed);
             await setKnown.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
