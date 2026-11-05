@@ -224,4 +224,71 @@ public sealed record Project
         if (Revision < 1)
             throw new ProjectStoreException($"Project field 'revision' in '{filePath}' must be a positive revision.");
     }
+
+    /// <summary>
+    ///     <para>
+    ///         按持久化语义比较两个项目的内容是否一致：ID、名称、主目录、修订号、删除标记、
+    ///         创建与更新时间及目录列表全部相等才视为相同。
+    ///     </para>
+    ///     <para>
+    ///         Compares two projects for content equality under persistence semantics: identical ID, name,
+    ///         primary root, revision, deleting marker, created and updated times, and root list.
+    ///     </para>
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         这是面向变更检测（“磁盘目录册 vs 内存已应用列表”）的内容语义比较，不替代 record
+    ///         引用相等；名称与 ID 按序数比较，主目录与目录路径按 <see cref="ProjectRoots" /> 的
+    ///         平台路径规则比较，目录列表按位置逐项比较，顺序是语义的一部分。
+    ///     </para>
+    ///     <para>
+    ///         This is a content-semantic comparison for change detection (on-disk catalog versus the
+    ///         in-memory applied list) and never replaces record reference equality. Name and ID compare
+    ///         ordinally, the primary root and root paths follow the platform path rules of
+    ///         <see cref="ProjectRoots" />, and the root list compares positionally, order being part of
+    ///         the meaning.
+    ///     </para>
+    /// </remarks>
+    /// <param name="other">
+    ///     <para>比较目标；null 不与任何项目内容相等。</para>
+    ///     <para>The comparison target; null is never content-equal to any project.</para>
+    /// </param>
+    /// <returns>
+    ///     <para>全部持久化语义字段一致时为 true。</para>
+    ///     <para>True when every persisted-semantic field matches.</para>
+    /// </returns>
+    public bool ContentEquals(Project? other)
+    {
+        if (other is null) return false;
+        if (ReferenceEquals(this, other)) return true;
+
+        return string.Equals(Id, other.Id, StringComparison.Ordinal)     &&
+               string.Equals(Name, other.Name, StringComparison.Ordinal) &&
+               ProjectRoots.AreEqual(PrimaryRoot, other.PrimaryRoot)     &&
+               Revision   == other.Revision                              &&
+               IsDeleting == other.IsDeleting                            &&
+               CreatedUtc == other.CreatedUtc                            &&
+               UpdatedUtc == other.UpdatedUtc                            &&
+               RootsContentEqual(Roots, other.Roots);
+    }
+
+    /// <summary>
+    ///     <para>逐位置比较两个目录列表：长度相等且每个位置的路径按平台规则等价。</para>
+    ///     <para>
+    ///         Compares two root lists positionally: equal length and per-position path equivalence under
+    ///         platform rules.
+    ///     </para>
+    /// </summary>
+    private static bool RootsContentEqual(IReadOnlyList<ProjectRoot>? left, IReadOnlyList<ProjectRoot>? right)
+    {
+        if (left is null || right is null) return left is null && right is null;
+        if (left.Count != right.Count) return false;
+
+        for (var i = 0; i < left.Count; i++)
+            if (left[i] is not { } current || right[i] is not { } other ||
+                !ProjectRoots.AreEqual(current.Path, other.Path))
+                return false;
+
+        return true;
+    }
 }

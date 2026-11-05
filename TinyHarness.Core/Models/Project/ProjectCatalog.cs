@@ -111,4 +111,53 @@ public sealed record ProjectCatalog
                         ProjectStoreException($"Project catalog '{filePath}' maps root '{project.Roots[0].Path}' to both project '{Projects[j].Id}' and '{project.Id}'; resolve the ambiguity manually.");
         }
     }
+
+    /// <summary>
+    ///     <para>
+    ///         按持久化语义比较两个目录册的内容是否一致：修订号相等且项目列表逐位置相等才视为相同，
+    ///         schema 不参与比较。
+    ///     </para>
+    ///     <para>
+    ///         Compares two catalogs for content equality under persistence semantics: equal revision and a
+    ///         positionally equal project list; the schema does not participate.
+    ///     </para>
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         这是面向变更检测（“磁盘目录册 vs 内存已应用列表”）的内容语义比较，不替代 record
+    ///         引用相等；schema 不参与是因为 <see cref="ProjectStore.LoadAsync" /> 的严格校验已保证
+    ///         读到的 schema 合法，比较只关心内容。项目列表按位置逐项比较，顺序是语义的一部分。
+    ///     </para>
+    ///     <para>
+    ///         This is a content-semantic comparison for change detection (on-disk catalog versus the
+    ///         in-memory applied list) and never replaces record reference equality. The schema is excluded
+    ///         because the strict validation of <see cref="ProjectStore.LoadAsync" /> already guarantees a
+    ///         legal schema on load, so the comparison cares about content only. The project list compares
+    ///         positionally, order being part of the meaning.
+    ///     </para>
+    /// </remarks>
+    /// <param name="other">
+    ///     <para>比较目标；null 不与任何目录册内容相等。</para>
+    ///     <para>The comparison target; null is never content-equal to any catalog.</para>
+    /// </param>
+    /// <returns>
+    ///     <para>修订号与全部项目内容一致时为 true。</para>
+    ///     <para>True when the revision and every project's content match.</para>
+    /// </returns>
+    public bool ContentEquals(ProjectCatalog? other)
+    {
+        if (other is null) return false;
+        if (ReferenceEquals(this, other)) return true;
+        if (Revision != other.Revision ||
+            Projects is null           ||
+            other.Projects is null     ||
+            Projects.Count != other.Projects.Count)
+            return false;
+
+        for (var i = 0; i < Projects.Count; i++)
+            if (Projects[i] is not { } project || !project.ContentEquals(other.Projects[i]))
+                return false;
+
+        return true;
+    }
 }
