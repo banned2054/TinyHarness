@@ -7,8 +7,8 @@
              Focusable="True">
     <!-- 应用内居中设置面板（覆盖层，非 Popup）：透明遮罩点击关闭 + 居中 800×700 面板
          （小窗经 code-behind 钳制 MaxWidth/MaxHeight = 宿主 - 48）。左导航 188px 固定分区
-         （通用/模型/网络/权限），右内容列 header（标题 + 关闭）与滚动内容区。Esc 关闭、打开即聚焦
-         面板根，均由 code-behind 承担；关闭请求经 VM 事件交宿主收起面板。 -->
+         （通用/模型/网络/Windows 沙箱/权限），右内容列 header（标题 + 关闭）与滚动内容区。Esc 关闭、
+         打开即聚焦面板根，均由 code-behind 承担；关闭请求经 VM 事件交宿主收起面板。 -->
     <Grid>
         <Border Classes="settings-mask" PointerPressed="OnMaskPointerPressed" />
 
@@ -156,6 +156,7 @@
                                     <!-- 模型分区：供应商行列表与添加/编辑卡。 -->
                                     <views:CatalogSettingsView DataContext="{Binding Catalog}" Margin="0,10,0,0" />
                                     <views:NetworkSettingsView DataContext="{Binding Network}" Margin="0,10,0,0" />
+                                    <views:WindowsSandboxSettingsView DataContext="{Binding WindowsSandbox}" />
                                     <views:PermissionSettingsView DataContext="{Binding Permissions}" />
                                 </StackPanel>
                             </Panel>

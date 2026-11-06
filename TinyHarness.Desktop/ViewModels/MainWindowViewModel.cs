@@ -150,7 +150,8 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         Network                 = new NetworkSettingsViewModel(UserConfigPath, InitializeAsync);
         Settings = new SettingsPanelViewModel(new GeneralSettingsSectionViewModel(UserConfigPath), Catalog,
                                               new PermissionSettingsViewModel(UserConfigPath, InitializeAsync),
-                                              Network);
+                                              Network,
+                                              new WindowsSandboxSettingsViewModel(UserConfigPath, InitializeAsync));
         Settings.General.ProjectDeletionPromptChanged += OnProjectDeletionPromptChanged;
         Settings.CloseRequested += (_, _) => SettingsOpen = false;
         NewSessionCommand = new RelayCommand(NewConversation);
