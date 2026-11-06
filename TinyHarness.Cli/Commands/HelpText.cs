@@ -1,3 +1,5 @@
+using TinyHarness.Core.Services.Runtime.WindowsSandbox;
+
 namespace TinyHarness.Cli.Commands;
 
 /// <summary>
@@ -246,11 +248,20 @@ internal static class HelpText
         This uses the network and may incur charges; it never runs tools.
         """;
 
-    public const string Sandbox = """
+    /// <summary>
+    ///     <para>
+    ///         sandbox 帮助文本；探测端点引用验收限额常量，保证描述与实际目标不漂移。
+    ///     </para>
+    ///     <para>
+    ///         The sandbox help text; the probe endpoint references the acceptance
+    ///         limits constant so the description cannot drift from the actual target.
+    ///     </para>
+    /// </summary>
+    public static string Sandbox => $"""
         Usage:
           tinyharness sandbox status
           tinyharness sandbox provision [--yes]
-          tinyharness sandbox verify [--yes] [--case <name>[,<name>...]] [--workspace <path>]
+          tinyharness sandbox verify [--yes] [--network <restricted|enabled>] [--case <name>[,<name>...]] [--workspace <path>]
 
         Management entry for the Windows tool-process sandbox (trusted user settings,
         settings.windowsSandbox in the user config). None of the subcommands sends
@@ -305,6 +316,21 @@ internal static class HelpText
         show a firewall prompt and user choices may persist rules. Do not open
         public-network access for the test. DNS coverage is direct port reachability,
         not system-resolver/service-proxy behavior or complete leak prevention.
+
+        --network selects the acceptance network mode; the default restricted keeps
+        the fixed 17-case matrix unchanged. enabled runs a compact online case set
+        (identity, proxy environment, external request through the configured proxy,
+        host-loopback reachability of the proxy endpoint, and the security
+        invariants metadata-protected, write-denied-outside-roots,
+        credentials-dir-unreadable, deny-probe). Every command runs under the
+        online account and the external request only targets the acceptance
+        limits' lightweight read-only endpoint ({WindowsSandboxAcceptanceLimits.Default.OnlineExternalProbeUrl}) through
+        the configured proxy; --case filters case names and never widens that
+        target. The standing online policy and TCP loopback are mutually
+        exclusive, so an enabled run requires settings.windowsSandbox.allowTcpLoopback
+        to be false. Under restricted, env-proxy-echo and network-external stay
+        available as opt-in negative controls asserting the proxy keys are absent
+        and an external request fails.
         (An internal verify-worker subcommand exists for the host-abandonment case;
         it is not part of the public interface.)
         """;

@@ -629,19 +629,35 @@ internal static class CommandLine
     }
 
     /// <summary>
-    ///     <para>解析 sandbox verify：[--yes] [--case &lt;name&gt;[,&lt;name&gt;...]] [--workspace &lt;path&gt;]。</para>
-    ///     <para>Parses sandbox verify: [--yes] [--case &lt;name&gt;[,&lt;name&gt;...]] [--workspace &lt;path&gt;].</para>
+    ///     <para>解析 sandbox verify：[--yes] [--network &lt;restricted|enabled&gt;] [--case &lt;name&gt;[,&lt;name&gt;...]] [--workspace &lt;path&gt;]。</para>
+    ///     <para>
+    ///         Parses sandbox verify: [--yes] [--network &lt;restricted|enabled&gt;]
+    ///         [--case &lt;name&gt;[,&lt;name&gt;...]] [--workspace &lt;path&gt;].
+    ///     </para>
     /// </summary>
     private static CliOptions ParseSandboxVerifyArgs(string[] args, string usage)
     {
         var           assumeYes  = false;
         string?       workspace  = null;
+        string?       network    = null;
         List<string>? caseFilter = null;
         for (var i = 1; i < args.Length; i++)
         {
             if (string.Equals(args[i], "--yes", StringComparison.Ordinal))
             {
                 assumeYes = true;
+                continue;
+            }
+
+            if (string.Equals(args[i], "--network", StringComparison.Ordinal))
+            {
+                if (i + 1 >= args.Length)
+                    throw new CliUsageException("The --network option requires restricted or enabled.", usage);
+
+                network = args[++i].ToLowerInvariant();
+                if (network is not ("restricted" or "enabled"))
+                    throw new CliUsageException("The --network option accepts only restricted or enabled.", usage);
+
                 continue;
             }
 
@@ -676,6 +692,7 @@ internal static class CommandLine
             Subcommand      = "verify",
             AssumeYes       = assumeYes,
             CaseFilter      = caseFilter,
+            VerifyNetwork   = network,
             VerifyWorkspace = workspace
         };
     }
@@ -683,18 +700,22 @@ internal static class CommandLine
     /// <summary>
     ///     <para>
     ///         解析隐藏的 sandbox verify-worker：--marker &lt;path&gt; --hold-seconds &lt;n&gt; --workspace &lt;path&gt;
-    ///         全部必填（由父 verify 进程构造，不面向用户）。
+    ///         全部必填，另有可选 --network &lt;restricted|enabled&gt; 携带父 verify 进程解析出的验收网络
+    ///         模式（由父 verify 进程构造，不面向用户）。
     ///     </para>
     ///     <para>
     ///         Parses the hidden sandbox verify-worker: --marker &lt;path&gt;
-    ///         --hold-seconds &lt;n&gt; --workspace &lt;path&gt;, all required (constructed by
-    ///         the parent verify process, not user facing).
+    ///         --hold-seconds &lt;n&gt; --workspace &lt;path&gt;, all required, plus an optional
+    ///         --network &lt;restricted|enabled&gt; carrying the acceptance network mode
+    ///         resolved by the parent verify process (constructed by the parent,
+    ///         not user facing).
     ///     </para>
     /// </summary>
     private static CliOptions ParseSandboxVerifyWorkerArgs(string[] args, string usage)
     {
         string? marker    = null;
         string? workspace = null;
+        string? network   = null;
         int?    hold      = null;
         for (var i = 1; i < args.Length; i++)
         {
@@ -720,6 +741,18 @@ internal static class CommandLine
                 continue;
             }
 
+            if (string.Equals(args[i], "--network", StringComparison.Ordinal))
+            {
+                if (i + 1 >= args.Length)
+                    throw new CliUsageException("The --network option requires restricted or enabled.", usage);
+
+                network = args[++i].ToLowerInvariant();
+                if (network is not ("restricted" or "enabled"))
+                    throw new CliUsageException("The --network option accepts only restricted or enabled.", usage);
+
+                continue;
+            }
+
             if (!string.Equals(args[i], "--workspace", StringComparison.Ordinal))
                 throw new CliUsageException($"Unknown argument '{args[i]}' for sandbox verify-worker.", usage);
             if (i + 1 >= args.Length)
@@ -741,6 +774,7 @@ internal static class CommandLine
             Subcommand        = "verify-worker",
             VerifyMarkerPath  = marker,
             VerifyHoldSeconds = hold,
+            VerifyNetwork     = network,
             VerifyWorkspace   = workspace
         };
     }

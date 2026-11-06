@@ -695,8 +695,11 @@ internal static class Program
                                                      StringComparer.Ordinal);
         var settings    = userConfig.Settings?.WindowsSandbox;
         var accessState = new WorkspaceAccessState(WorkspaceDirectoryIdentity.Capture(config.WorkspaceRoot));
+        // 常设网络信任只来自可信用户设置：Enabled 档不再逐次审批联网申请。
         var permissions = new PermissionEngine(config.WorkspaceRoot, config.CommandRules,
-                                               workspaceReadOnly : () => accessState.IsReadOnly);
+                                               workspaceReadOnly : () => accessState.IsReadOnly,
+                                               sandboxNetworkStandingEnabled : settings?.NetworkPolicy ==
+                                                   SandboxNetworkPolicy.Enabled);
         var trustPath = Path.Combine(Path.GetDirectoryName(UserConfigStore.DefaultFilePath())!, "workspace-trust.json");
         IReadOnlyList<string> writeRoots = [config.WorkspaceRoot, .. settings?.AdditionalWriteRoots ?? []];
         var protectedPaths = new List<string> { trustPath, UserConfigStore.DefaultFilePath() };
@@ -721,7 +724,8 @@ internal static class Program
                                                         sandbox =
                                                             SandboxCliComposition.TryCompose(settings,
                                                                      config.WorkspaceRoot, knownSecrets,
-                                                                     sessionStoreDirectory);
+                                                                     sessionStoreDirectory,
+                                                                     userConfig.Settings?.Network);
                                                         var policy = sandbox?.ExecutionPolicy ??
                                                                      ProcessExecutionPolicy.Host();
                                                         return
@@ -908,8 +912,11 @@ internal static class Program
         TinyHarnessConfig config, IReadOnlyDictionary<string, string> knownSecrets, CancellationToken cancellationToken,
         string?           sessionStoreDirectory = null)
     {
-        var settings = await SandboxCliComposition.LoadSettingsAsync(cancellationToken).ConfigureAwait(false);
-        return SandboxCliComposition.TryCompose(settings, config.WorkspaceRoot, knownSecrets, sessionStoreDirectory);
+        var userConfig = await UserConfigStore.LoadAsync(UserConfigStore.DefaultFilePath(), cancellationToken)
+                                              .ConfigureAwait(false);
+        return SandboxCliComposition.TryCompose(userConfig.Settings?.WindowsSandbox, config.WorkspaceRoot,
+                                                knownSecrets, sessionStoreDirectory,
+                                                userConfig.Settings?.Network);
     }
 
     /// <summary>
@@ -1263,8 +1270,11 @@ internal static class SandboxCliComposition
     }
 
     /// <summary>
-    ///     <para>显式启用时校验存储边界并组合沙箱；失败不回退宿主执行。</para>
-    ///     <para>Validates storage boundaries and composes an explicitly enabled sandbox without host fallback on failure.</para>
+    ///     <para>显式启用时校验存储边界并组合沙箱；失败不回退宿主执行。networkSettings 传入组合器供沙箱代理解析。</para>
+    ///     <para>
+    ///         Validates storage boundaries and composes an explicitly enabled sandbox without host fallback on
+    ///         failure; networkSettings feeds the composer for sandbox proxy resolution.
+    ///     </para>
     /// </summary>
     /// <returns>
     ///     <para>启用时返回沙箱执行要素；未启用时返回 null。</para>
@@ -1284,11 +1294,13 @@ internal static class SandboxCliComposition
         WindowsSandboxSettings?             settings,
         string                              workspaceRoot,
         IReadOnlyDictionary<string, string> knownSecrets,
-        string?                             sessionStoreDirectory = null)
+        string?                             sessionStoreDirectory = null,
+        NetworkSettings?                    networkSettings       = null)
     {
         if (settings is not { Enabled: true }) return null;
 
-        if (sessionStoreDirectory is null) return WindowsSandboxComposer.Compose(settings, workspaceRoot, knownSecrets);
+        if (sessionStoreDirectory is null)
+            return WindowsSandboxComposer.Compose(settings, workspaceRoot, knownSecrets, networkSettings);
         var fullStoreDirectory = Path.GetFullPath(sessionStoreDirectory);
         var offendingRoot = settings.AdditionalWriteRoots?
                                     .Select(Path.GetFullPath)
@@ -1301,7 +1313,7 @@ internal static class SandboxCliComposition
                                           "Move it outside the workspace and every additional write root "             +
                                           "(settings.sessionStoreDirectory) before enabling the Windows sandbox.");
 
-        return WindowsSandboxComposer.Compose(settings, workspaceRoot, knownSecrets);
+        return WindowsSandboxComposer.Compose(settings, workspaceRoot, knownSecrets, networkSettings);
     }
 
     /// <summary>

@@ -60,12 +60,17 @@ internal static class SandboxVerifyCommand
             return 1;
         }
 
-        var configPath = context.ResolveUserConfigPath();
-        var userConfig = await UserConfigStore.LoadAsync(configPath, cancellationToken).ConfigureAwait(false);
-        var settings   = userConfig.Settings?.WindowsSandbox;
+        var configPath      = context.ResolveUserConfigPath();
+        var userConfig      = await UserConfigStore.LoadAsync(configPath, cancellationToken).ConfigureAwait(false);
+        var settings        = userConfig.Settings?.WindowsSandbox;
+        var networkSettings = userConfig.Settings?.Network;
+        // --network 决定验收的网络模式与用例集；restricted（默认）保持原有 17 用例行为零变化。
+        var networkPolicy = ResolveNetworkPolicy(options.VerifyNetwork);
 
         await io.WriteLineAsync("TinyHarness sandbox verify", cancellationToken).ConfigureAwait(false);
         await io.WriteLineAsync($"  config   : {configPath}", cancellationToken).ConfigureAwait(false);
+        await io.WriteLineAsync($"  network  : {NetworkDisplay(networkPolicy)}", cancellationToken)
+                .ConfigureAwait(false);
 
         if (settings is null || IsBlankSettings(settings))
         {
@@ -117,22 +122,22 @@ internal static class SandboxVerifyCommand
             return 1;
         }
 
-        var caseFilter = options.CaseFilter is { Count: > 0 } ? options.CaseFilter : null;
-        var unknownCases = (caseFilter ?? WindowsSandboxAcceptanceRunner.CaseNames)
-                          .Where(name =>
-                                     !WindowsSandboxAcceptanceRunner.CaseNames.Contains(name, StringComparer.Ordinal))
-                          .ToArray();
+        var caseFilter    = options.CaseFilter is { Count: > 0 } ? options.CaseFilter : null;
+        var supportedCases = WindowsSandboxAcceptanceRunner.SupportedCaseNames(networkPolicy);
+        var unknownCases  = (caseFilter ?? supportedCases)
+                           .Where(name => !supportedCases.Contains(name, StringComparer.Ordinal))
+                           .ToArray();
         if (unknownCases.Length > 0)
         {
             await io
                  .WriteLineAsync($"  [fail] 未知验收用例名: {string.Join(", ", unknownCases)}；有效名称: " +
-                                 string.Join(", ", WindowsSandboxAcceptanceRunner.CaseNames),
+                                 string.Join(", ", supportedCases),
                                  cancellationToken)
                  .ConfigureAwait(false);
             return 1;
         }
 
-        var caseCount     = (caseFilter ?? WindowsSandboxAcceptanceRunner.CaseNames).Count;
+        var caseCount     = (caseFilter ?? WindowsSandboxAcceptanceRunner.DefaultCaseNames(networkPolicy)).Count;
         var workspaceRoot = ResolveWorkspace(options.VerifyWorkspace);
 
         // knownSecrets 的解析与 run 完全一致，使验收环境匹配生产组合语义。
@@ -142,10 +147,14 @@ internal static class SandboxVerifyCommand
         var knownSecrets = ResolveKnownSecrets(context, resolution, cancellationToken);
 
         // 验收不写持久会话日志；共享组合路径在确认门之前校验组件与验收工作区。
+        // networkSettings 与生产 run 同源传入（同一用户配置读取）：Named 代理等沙箱代理解析
+        // 与生产一致，绝不因验收路径缺配置而误判"代理不存在"；restricted 且未配置代理时解析
+        // 结果为空，政策身份与历史基线一致。
         WindowsSandboxExecution preview;
         try
         {
-            preview = SandboxCliComposition.TryCompose(settings, workspaceRoot, knownSecrets)
+            preview = SandboxCliComposition.TryCompose(WithNetworkPolicy(settings, networkPolicy), workspaceRoot,
+                                                       knownSecrets, null, networkSettings)
                    ?? throw new InvalidOperationException("settings.windowsSandbox.enabled is required for verify.");
         }
         catch (Exception ex) when (ex is InvalidOperationException or ArgumentException)
@@ -154,7 +163,9 @@ internal static class SandboxVerifyCommand
             return 1;
         }
 
-        await PrintOverviewAsync(io, preview, components, caseCount, workspaceRoot, cancellationToken)
+        await PrintOverviewAsync(io, preview, components, caseCount, workspaceRoot, networkPolicy,
+                                 NamedProxyHostPort(networkSettings, settings.Proxy),
+                                 WindowsSandboxAcceptanceLimits.Default.OnlineExternalProbeUrl, cancellationToken)
            .ConfigureAwait(false);
 
         if (!options.AssumeYes)
@@ -177,15 +188,23 @@ internal static class SandboxVerifyCommand
         }
 
         var factory = backendFactory ?? ((kind, extraEnvironment) =>
-            ComposeCase(settings, kind, extraEnvironment, workspaceRoot, knownSecrets));
+            ComposeCase(settings, kind, extraEnvironment, workspaceRoot, knownSecrets, networkPolicy,
+                        networkSettings));
         var spawner = workerSpawner ?? ((markerPath, holdSeconds) =>
-            StartWorkerProcess(markerPath, holdSeconds, workspaceRoot));
+            StartWorkerProcess(markerPath, holdSeconds, workspaceRoot, networkPolicy));
+        var onlineProxyHostPort = NamedProxyHostPort(networkSettings, settings.Proxy);
         var runner = new WindowsSandboxAcceptanceRunner(factory, workspaceRoot, spawner,
                                                         limits : new WindowsSandboxAcceptanceLimits
                                                         {
                                                             NetworkTargetObserver = (message, token) =>
-                                                                io.WriteLineAsync($"  network: {message}", token)
-                                                        });
+                                                                io.WriteLineAsync($"  network: {message}", token),
+                                                            OnlineProxyHostPort    = onlineProxyHostPort,
+                                                            HostLoopbackProbeTarget =
+                                                                IsLoopbackHostPort(onlineProxyHostPort)
+                                                                    ? onlineProxyHostPort
+                                                                    : null
+                                                        },
+                                                        networkPolicy : networkPolicy);
 
         WindowsSandboxAcceptanceReport report;
         try
@@ -205,7 +224,7 @@ internal static class SandboxVerifyCommand
     ///     <para>
     ///         隐藏子命令 `sandbox verify-worker`：组合沙箱并启动长 sleeper，就绪后写 marker 并保持 holdSeconds 秒，供父进程 Kill 以检验遗弃回收。marker 只在
     ///         runner 启动稳定后写出；写出前的任何失败都不写 marker（父进程按 marker 超时记 FAIL）。marker 路径必须位于 --workspace 的 artifacts 目录内，并由父进程在 spawn
-    ///         前清理——本命令不删除任何传入路径。绝不提权、绝不 provisioning。
+    ///         前清理——本命令不删除任何传入路径。--network 携带父进程解析出的验收网络模式，组合与父进程同源（同 networkSettings）；缺省时按常设设置同路。绝不提权、绝不 provisioning。
     ///     </para>
     ///     <para>
     ///         The hidden `sandbox verify-worker` subcommand: composes the sandbox,
@@ -216,6 +235,9 @@ internal static class SandboxVerifyCommand
     ///         parent records a marker timeout as FAIL). The marker path must stay
     ///         inside --workspace's artifacts directory and is cleared by the parent
     ///         before spawning — this command never deletes a caller-supplied path.
+    ///         --network carries the acceptance network mode resolved by the parent,
+    ///         and composition shares the parent's source of networkSettings; when
+    ///         absent (manual invocation) it follows the standing setting.
     ///         It never elevates and never provisions.
     ///     </para>
     /// </summary>
@@ -247,6 +269,14 @@ internal static class SandboxVerifyCommand
             return 1;
         }
 
+        // 与父进程 verify 同源组合：--network 显式携带父进程解析出的验收网络模式（缺省仅出现在
+        // 手工调用，按常设设置同路），networkSettings 从同一用户配置读取——Named 代理等沙箱代理
+        // 解析与父进程和生产 run 完全一致，绝不因 worker 组合缺配置而误判"代理不存在"。
+        var networkSettings = userConfig.Settings?.Network;
+        var networkPolicy   = options.VerifyNetwork is null
+            ? settings.NetworkPolicy
+            : ResolveNetworkPolicy(options.VerifyNetwork);
+
         try
         {
             var systemRoot = Environment.GetEnvironmentVariable("SystemRoot");
@@ -261,10 +291,11 @@ internal static class SandboxVerifyCommand
                 return 1;
             }
 
-            // 组合方式与父进程 verify 一致，不检查未使用的旧快照目录。
+            // 组合方式与父进程 verify 一致：同一验收网络模式与同源 networkSettings，不检查未使用的旧快照目录。
             var resolution   = await ConfigResolver.ResolveAsync(null, cancellationToken).ConfigureAwait(false);
             var knownSecrets = ResolveKnownSecrets(context, resolution, cancellationToken);
-            var execution    = SandboxCliComposition.TryCompose(settings, workspaceRoot, knownSecrets);
+            var execution    = SandboxCliComposition.TryCompose(WithNetworkPolicy(settings, networkPolicy),
+                                                                workspaceRoot, knownSecrets, null, networkSettings);
             if (execution is null)
             {
                 await context.Io.WriteErrorLineAsync("sandbox verify-worker: 沙箱未启用；退出。", cancellationToken)
@@ -348,7 +379,7 @@ internal static class SandboxVerifyCommand
     /// <summary>
     ///     <para>
     ///         按策略种类与用例附加环境克隆可信设置并组合：探针变量并入 extraEnvironment，与 run 走同一条清理环境组合路径（allowlist + TEMP/TMP 重定向 + secret 移除），绝不旁路拼
-    ///         spawn env。
+    ///         spawn env。networkSettings 与生产 run 同源无条件传入，代理解析与生产一致。
     ///     </para>
     ///     <para>
     ///         Clones the trusted settings per policy kind plus case-scoped extra
@@ -356,20 +387,92 @@ internal static class SandboxVerifyCommand
     ///         extraEnvironment, going through the same cleaned-environment
     ///         composition path as run (allowlist + TEMP/TMP redirect + secret
     ///         removal); the spawn env is never hand-built around it.
+    ///         networkSettings is always passed from the same source as the
+    ///         production run, keeping proxy resolution identical.
     ///     </para>
     /// </summary>
-    private static WindowsSandboxExecution ComposeCase(
+    /// <summary>
+    ///     <para>解析 --network 的取值；解析器已把取值收敛为 restricted|enabled，缺省与 restricted 同路。</para>
+    ///     <para>
+    ///         Resolves the --network value; the parser already narrows it to
+    ///         restricted|enabled, and the default shares the restricted path.
+    ///     </para>
+    /// </summary>
+    private static SandboxNetworkPolicy ResolveNetworkPolicy(string? requested) =>
+        requested == "enabled" ? SandboxNetworkPolicy.Enabled : SandboxNetworkPolicy.Restricted;
+
+    private static string NetworkDisplay(SandboxNetworkPolicy networkPolicy) => networkPolicy switch
+    {
+        SandboxNetworkPolicy.Enabled    => "enabled（常设在线：全部命令以在线账户运行并注入代理环境；" +
+                                           "外网探测仅限轻量只读端点）",
+        SandboxNetworkPolicy.Restricted => "restricted（离线账户，外部网络阻断；默认行为与历史基线一致）",
+        _                               => networkPolicy.ToString()
+    };
+
+    /// <summary>
+    ///     <para>把验收网络模式应用到可信设置：--network 对验收运行是权威值，覆盖常设设置。</para>
+    ///     <para>
+    ///         Applies the acceptance network mode to the trusted settings; --network
+    ///         is authoritative for the acceptance run and overrides the standing
+    ///         setting.
+    ///     </para>
+    /// </summary>
+    private static WindowsSandboxSettings WithNetworkPolicy(WindowsSandboxSettings settings,
+                                                            SandboxNetworkPolicy    networkPolicy) =>
+        settings.NetworkPolicy == networkPolicy ? settings : settings with { NetworkPolicy = networkPolicy };
+
+    /// <summary>
+    ///     <para>
+    ///         Named 代理模式的 host:port（仅用于显示与在线断言，绝不携带 scheme 或凭据）；
+    ///         其他代理模式返回 null，在线断言退化为结构检查。
+    ///     </para>
+    ///     <para>
+    ///         The named-mode proxy host:port (display and online assertions only,
+    ///         never a scheme or credentials); other proxy modes return null and the
+    ///         online assertions degrade to structural checks.
+    ///     </para>
+    /// </summary>
+    private static string? NamedProxyHostPort(NetworkSettings? networkSettings, SandboxProxyPolicy proxy)
+    {
+        if (proxy.Mode != SandboxProxyMode.Named) return null;
+
+        return networkSettings?.Proxies
+                              .FirstOrDefault(candidate => string.Equals(candidate.Name, proxy.ProxyName,
+                                                                          StringComparison.OrdinalIgnoreCase))
+                   is { } proxyDefinition
+            ? $"{proxyDefinition.Host}:{proxyDefinition.Port}"
+            : null;
+    }
+
+    /// <summary>host:port 是否指向环回地址；只有环回端点才能作为宿主环回探测目标。Whether host:port points at a loopback address; only loopback endpoints qualify as host-loopback probe targets.</summary>
+    private static bool IsLoopbackHostPort(string? hostPort)
+    {
+        if (string.IsNullOrWhiteSpace(hostPort)) return false;
+
+        var separator = hostPort.LastIndexOf(':');
+        var host      = separator > 0 ? hostPort[..separator].Trim('[', ']') : hostPort;
+        return host == "127.0.0.1" || host == "::1" || host.Equals("localhost", StringComparison.OrdinalIgnoreCase);
+    }
+
+    internal static WindowsSandboxExecution ComposeCase(
         WindowsSandboxSettings               settings,
         SandboxPolicyKind                    policyKind,
         IReadOnlyDictionary<string, string>? extraEnvironment,
         string                               workspaceRoot,
-        IReadOnlyDictionary<string, string>  knownSecrets)
+        IReadOnlyDictionary<string, string>  knownSecrets,
+        SandboxNetworkPolicy                 networkPolicy,
+        NetworkSettings?                     networkSettings)
     {
         var merged = extraEnvironment is null
             ? settings.ExtraEnvironment
             : MergeEnvironment(settings.ExtraEnvironment, extraEnvironment);
-        var caseSettings = settings with { Policy = policyKind, ExtraEnvironment = merged };
-        return WindowsSandboxComposer.Compose(caseSettings, workspaceRoot, knownSecrets);
+        var caseSettings = settings with
+        {
+            Policy           = policyKind,
+            ExtraEnvironment = merged,
+            NetworkPolicy    = networkPolicy
+        };
+        return WindowsSandboxComposer.Compose(caseSettings, workspaceRoot, knownSecrets, networkSettings);
     }
 
     private static IReadOnlyDictionary<string, string> MergeEnvironment(
@@ -390,7 +493,7 @@ internal static class SandboxVerifyCommand
         : Path.GetFullPath(requested);
 
     private static ISandboxVerifyWorkerProcess StartWorkerProcess(
-        string markerPath, int holdSeconds, string workspaceRoot)
+        string markerPath, int holdSeconds, string workspaceRoot, SandboxNetworkPolicy networkPolicy)
     {
         var executable = Environment.ProcessPath
                       ?? throw new InvalidOperationException("Cannot determine the current process executable.");
@@ -406,7 +509,8 @@ internal static class SandboxVerifyCommand
         foreach (var argument in new[]
                  {
                      "sandbox", "verify-worker", "--marker", markerPath, "--hold-seconds", holdSeconds.ToString(),
-                     "--workspace", workspaceRoot
+                     "--workspace", workspaceRoot,
+                     "--network", networkPolicy == SandboxNetworkPolicy.Enabled ? "enabled" : "restricted"
                  })
             startInfo.ArgumentList.Add(argument);
 
@@ -417,7 +521,9 @@ internal static class SandboxVerifyCommand
 
     private static async Task PrintOverviewAsync(ICliConsole io, WindowsSandboxExecution preview,
                                                  WindowsSandboxComponents components, int caseCount,
-                                                 string workspaceRoot, CancellationToken cancellationToken)
+                                                 string workspaceRoot, SandboxNetworkPolicy networkPolicy,
+                                                 string? onlineProxyHostPort, string probeUrl,
+                                                 CancellationToken cancellationToken)
     {
         await io.WriteLineAsync($"  setup    : {components.SetupExecutablePath}", cancellationToken)
                 .ConfigureAwait(false);
@@ -435,10 +541,16 @@ internal static class SandboxVerifyCommand
              .WriteLineAsync($"  versions : 本 build 期望 setup v{components.RequiredSetupVersion} / ipc v{WindowsSandboxComponents.IpcVersion}",
                              cancellationToken)
              .ConfigureAwait(false);
-        await io
-             .WriteLineAsync($"  account  : {components.OfflineUsername}（外部网络阻断，TCP 环回{(components.AllowTcpLoopback ? "允许" : "阻断")}）",
-                             cancellationToken)
-             .ConfigureAwait(false);
+        if (networkPolicy == SandboxNetworkPolicy.Enabled)
+            await io
+                 .WriteLineAsync($"  account  : {components.OnlineUsername}（常设在线；代理 host:port: {onlineProxyHostPort ?? "<未提供>"}）",
+                                 cancellationToken)
+                 .ConfigureAwait(false);
+        else
+            await io
+                 .WriteLineAsync($"  account  : {components.OfflineUsername}（外部网络阻断，TCP 环回{(components.AllowTcpLoopback ? "允许" : "阻断")}）",
+                                 cancellationToken)
+                 .ConfigureAwait(false);
         await io.WriteLineAsync($"  workspace: {workspaceRoot}（host 侧布置 fixture，产物保留）", cancellationToken)
                 .ConfigureAwait(false);
         await io.WriteLineAsync("  policies : read-only 与 workspace-write 两种都会被执行", cancellationToken)
@@ -452,6 +564,23 @@ internal static class SandboxVerifyCommand
                              "这是真实系统测试，应在获得授权、可接受该测试的环境执行。",
                              cancellationToken)
              .ConfigureAwait(false);
+        if (networkPolicy == SandboxNetworkPolicy.Enabled)
+        {
+            await io
+                 .WriteLineAsync($"  enabled 模式：不建立任何监听；外网探测仅一次轻量只读请求（目标 {probeUrl}）并经配置代理发出" +
+                                 "（代理地址仅以 host:port 记录），失败会如实记录为 FAIL，不做重试或放宽。", cancellationToken)
+                 .ConfigureAwait(false);
+            await io
+                 .WriteLineAsync($"  宿主环回探测目标: {onlineProxyHostPort ?? "<未提供，环回用例记 INDETERMINATE>"}（NO_PROXY 恒排除环回，该请求为直连）。",
+                                 cancellationToken)
+                 .ConfigureAwait(false);
+            await io
+                 .WriteLineAsync("  安全不变量（元数据保护、写根之外拒绝写、凭据目录不可读、deny-probe）在在线账户下仍必须成立。",
+                                 cancellationToken)
+                 .ConfigureAwait(false);
+            return;
+        }
+
         await io.WriteLineAsync("  网络监听范围：仅 127.0.0.1、::1 和枚举的一个本机非环回 IPv4；TCP/UDP 随机独占端口，" +
                                 "DNS 端口检查仅在 127.0.0.1 / ::1 独占绑定 TCP/UDP 53、853，已占用则未验证。", cancellationToken)
                 .ConfigureAwait(false);

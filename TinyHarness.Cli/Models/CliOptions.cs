@@ -82,6 +82,16 @@ internal sealed record CliOptions
     /// <summary>sandbox verify --workspace 的验收工作区路径。The acceptance workspace path of sandbox verify --workspace.</summary>
     public string? VerifyWorkspace { get; init; }
 
+    /// <summary>
+    ///     sandbox verify --network 的网络模式（restricted|enabled；缺省 restricted）；隐藏的
+    ///     verify-worker 亦经该字段接收父进程解析出的同一验收网络模式（缺省按常设设置同路）。
+    ///     The network mode of sandbox verify --network (restricted|enabled; defaults
+    ///     to restricted); the hidden verify-worker receives the same acceptance
+    ///     network mode resolved by the parent through this field (defaulting to the
+    ///     standing setting when absent).
+    /// </summary>
+    public string? VerifyNetwork { get; init; }
+
     /// <summary>sandbox verify-worker --marker 的 marker 文件路径。The marker file path of sandbox verify-worker --marker.</summary>
     public string? VerifyMarkerPath { get; init; }
 
