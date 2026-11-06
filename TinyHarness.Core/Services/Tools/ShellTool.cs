@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using TinyHarness.Core.Models.ChatCompletions;
 using TinyHarness.Core.Models.ProjectInstructions;
@@ -25,6 +26,15 @@ public sealed class ShellTool : ITool
     private const int MaximumArgumentLength            = 32 * 1024;
     private const int MaximumCommandLength             = 32 * 1024;
     private const int DefaultOutputCharactersPerStream = 16 * 1024;
+
+    /// <summary>
+    ///     <para>网络申请在摘要前添加的准确标记；宿主路径用它剔除无意义的标记。</para>
+    ///     <para>
+    ///         The accurate summary marker prepended for network requests; the host path strips it
+    ///         because the parameter carries no meaning there.
+    ///     </para>
+    /// </summary>
+    internal const string NetworkSummaryPrefix = "[联网] ";
 
     private static readonly JsonObject Schema = new()
     {
@@ -74,6 +84,15 @@ public sealed class ShellTool : ITool
                 ["minimum"]     = 1,
                 ["maximum"]     = MaximumTimeoutSeconds,
                 ["description"] = "Optional execution timeout in seconds."
+            },
+            ["networkAccess"] = new JsonObject
+            {
+                ["type"]        = "string",
+                ["enum"]        = new JsonArray("default", "enabled"),
+                ["description"] =
+                    "Requests network access for this invocation inside the configured sandbox " +
+                    "(full network, including host-local proxies). Defaults to 'default', " +
+                    "which keeps the sandbox network restricted and requires per-call approval."
             }
         },
         ["oneOf"] = new JsonArray
@@ -150,6 +169,10 @@ public sealed class ShellTool : ITool
         var workingDirectory    = _workspace.ResolveInside(rawWorkingDirectory, "workingDirectory");
         var timeoutSeconds      = JsonArgs.OptionalInt(args, "timeoutSeconds") ?? _defaultTimeoutSeconds;
         ValidateTimeout(timeoutSeconds, "timeoutSeconds");
+        var networkAccess = ResolveNetworkAccess(args).ToLowerInvariant();
+        if (networkAccess is not ("default" or "enabled"))
+            throw new InvalidDataException("Tool argument 'networkAccess' must be 'default' or 'enabled'.");
+        var requiresNetwork = networkAccess == "enabled";
 
         var command = mode switch
         {
@@ -183,8 +206,10 @@ public sealed class ShellTool : ITool
         // so an approval can never be reused to switch hosts or widen the
         // sandbox policy; denies keep the bare command identity and survive
         // backend changes (see ToolPreparation.SessionGrantConstraint).
+        // 网络申请追加进授权约束：网络状态不同的同一命令不能复用既有批准。
         var grantConstraint = _executionPolicy is { } policy
-            ? commandIdentity + "\nexecution-policy: " + policy.PolicyIdentity
+            ? commandIdentity + "\nexecution-policy: " + policy.PolicyIdentity +
+              (requiresNetwork ? "\nnetwork-access: enabled" : string.Empty)
             : null;
         var displayCommand = mode == "direct"
             ? FormatCommand(command.Executable, command.Arguments)
@@ -192,6 +217,8 @@ public sealed class ShellTool : ITool
         var summary =
             $"shell: {displayCommand} (cwd: {_workspace.ToDisplay(workingDirectory)}, timeout: {timeoutSeconds}s)";
         if (_executionPolicy is { } executionPolicy) summary += $" [{executionPolicy.DisplayName}]";
+        // 网络申请在前缀准确标记，模型与审批者都能看到这不是默认网络状态。
+        if (requiresNetwork) summary = NetworkSummaryPrefix + summary;
 
         return new ToolPreparation
         {
@@ -204,6 +231,7 @@ public sealed class ShellTool : ITool
             SessionConstraint      = commandIdentity,
             SessionGrantConstraint = grantConstraint,
             ExecutionPolicy        = _executionPolicy?.PolicyIdentity,
+            RequiresNetworkAccess  = requiresNetwork,
             TargetPaths            = [workingDirectory],
             InstructionScopes = workspaceExecutable
                 ?
@@ -218,6 +246,10 @@ public sealed class ShellTool : ITool
                                                          mode == "shell" && command.Shell == "cmd"
                                                              ? command.CommandText
                                                              : null)
+            {
+                // 经对象初始化器赋值：兼容位置参数默认值与 init 属性两种契约形态。
+                NetworkAccessEnabled = requiresNetwork
+            }
         };
     }
 
@@ -286,6 +318,37 @@ public sealed class ShellTool : ITool
             StdoutArtifactPath = stdout.ArtifactPath,
             StderrArtifactPath = stderr.ArtifactPath
         };
+    }
+
+    /// <summary>
+    ///     <para>
+    ///         严格读取 networkAccess：字符串值原样返回（交由调用方校验取值）；缺失或显式 null 视为
+    ///         未提供并回退 'default'；其他类型（布尔、数字、对象、数组）抛 InvalidDataException，
+    ///         文案列出合法取值。
+    ///     </para>
+    ///     <para>
+    ///         Reads networkAccess strictly: string values return verbatim (the caller
+    ///         validates the allowed values); a missing or explicit null node counts as
+    ///         not provided and falls back to 'default'; any other type (Boolean,
+    ///         number, object, array) throws InvalidDataException with a message
+    ///         listing the legal values.
+    ///     </para>
+    /// </summary>
+    private static string ResolveNetworkAccess(JsonObject args)
+    {
+        var node = args["networkAccess"];
+        if (node is JsonValue value)
+        {
+            if (value.TryGetValue<string>(out var raw)) return raw;
+            // 显式 null 与缺失同义：视为未提供。
+            if (value.GetValueKind() == JsonValueKind.Null) return "default";
+        }
+        else if (node is null)
+        {
+            return "default";
+        }
+
+        throw new InvalidDataException("Tool argument 'networkAccess' must be a string, either 'default' or 'enabled'.");
     }
 
     /// <summary>

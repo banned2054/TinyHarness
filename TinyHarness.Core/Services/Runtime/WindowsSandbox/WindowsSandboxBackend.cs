@@ -56,13 +56,21 @@ public sealed record WindowsSandboxBackendLimits
 /// </summary>
 /// <remarks>
 ///     <para>
-///         启动前检查状态、刷新 ACL、加载凭据与 capability SID，并创建私有桌面。
+///         启动前检查状态（生效在线时另查在线账户就绪）、刷新 ACL、加载凭据与 capability SID，
+///         并创建私有桌面；spawn 网络与代理环境按生效网络填写，账户按生效网络选择。
+///         生效在线时以 LOGON_WITH_PROFILE 加载在线账户 profile，使登录会话具备 schannel
+///         客户端凭据；offline 不加载 profile。
 ///         退出码仅来自 exit 帧，超时标志独立保留；缺失终态不补造退出码。
 ///         运行期协议失败或回收无法确认时保留执行不确定性，停止后续工具。
 ///     </para>
 ///     <para>
-///         Before launch, checks readiness, refreshes ACLs, loads credentials and capability SIDs,
-///         and creates a private desktop. Exit codes come only from exit frames;
+///         Before launch, checks readiness (plus online-account readiness whenever the
+///         effective network is online), refreshes ACLs, loads credentials and capability SIDs,
+///         and creates a private desktop; the spawn network and proxy environment follow the
+///         effective network, which also selects the launch account. While online, the launch
+///         loads the online account profile via LOGON_WITH_PROFILE so the logon session gains
+///         schannel client credentials; offline launches load no profile.
+///         Exit codes come only from exit frames;
 ///         timeout flags remain independent and missing verdicts never fabricate exit codes.
 ///         Runtime protocol failures or unconfirmed reclamation preserve execution uncertainty and stop subsequent tools.
 ///     </para>
@@ -80,6 +88,8 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
     private readonly IReadOnlyDictionary<string, string> _knownSecrets;
     private readonly WindowsSandboxBackendLimits         _limits;
     private readonly SandboxIsolationPolicy              _policy;
+    private readonly IReadOnlyDictionary<string, string> _proxyEnvironment;
+    private readonly bool                                _standingNetworkAccessEnabled;
     private readonly ISandboxRunnerLauncher              _runnerLauncher;
     private readonly ISandboxSetupInvoker                _setupInvoker;
     private readonly WindowsSandboxStateInspector        _stateInspector;
@@ -99,7 +109,9 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
         ISandboxRunnerLauncher?                             runnerLauncher        = null,
         WindowsSandboxBackendLimits?                        limits                = null,
         Action<SecurityIdentifier>?                         allowNullDeviceAccess = null,
-        Func<SandboxSetupPayload, CancellationToken, Task>? validateWriteAcls     = null)
+        Func<SandboxSetupPayload, CancellationToken, Task>? validateWriteAcls     = null,
+        bool                                                standingNetworkAccessEnabled = false,
+        IReadOnlyDictionary<string, string>?                proxyEnvironment      = null)
     {
         if (!OperatingSystem.IsWindows())
             throw new PlatformNotSupportedException("The Windows sandbox backend is available on Windows only.");
@@ -111,6 +123,8 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
         // 与策略临时根共用可信配置构建的冻结环境，避免 ACL 与实际进程环境漂移。
         _targetEnvironment     = targetEnvironment;
         _knownSecrets          = knownSecrets ?? new Dictionary<string, string>(StringComparer.Ordinal);
+        _standingNetworkAccessEnabled = standingNetworkAccessEnabled;
+        _proxyEnvironment      = proxyEnvironment ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         _stateInspector        = new WindowsSandboxStateInspector(components);
         _setupInvoker          = setupInvoker ?? new ProcessSandboxSetupInvoker(components, limits?.RefreshTimeout);
         _credentialSource      = credentialSource ?? new SandboxCredentialReader(components);
@@ -134,25 +148,52 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
         ArgumentNullException.ThrowIfNull(stderrCapture);
         cancellationToken.ThrowIfCancellationRequested();
 
+        // 生效网络 = 常设在线策略（构造传入或冻结策略携带）或该命令的逐次审批授予；
+        // 都不满足时保持离线，绝不降级或回退宿主。
+        var networkAccessEnabled = (_standingNetworkAccessEnabled || _policy.NetworkEnabled) ||
+                                   execution.NetworkAccessEnabled;
+
+        // TCP 环回模式使用独立账户对（TcpOff/TcpOn）与独立 home，其凭据文件的 online 条目不具备
+        // 外联能力；生效在线（无论来自常设策略还是逐次授予）都会以在线账户启动并呈现误导性网络
+        // 身份。与组合器的常设互斥守卫语义一致，对逐次授予路径同样 fail closed。这是启动期校验，
+        // 与同函数其他启动期拒绝一致抛 ProcessExecutionStartException。
+        // The TCP loopback mode runs on a separate TcpOff/TcpOn account pair whose credentials
+        // carry no egress capability; any effective-online state (standing or per-command grant)
+        // would launch under the online account with a misleading network identity. Matching the
+        // composer's standing mutual-exclusion guard, per-command grants fail closed here too.
+        // This is a pre-launch validation and throws ProcessExecutionStartException like the
+        // other pre-launch refusals in this method.
+        if (_components.AllowTcpLoopback && networkAccessEnabled)
+            throw new ProcessExecutionStartException("The TCP loopback mode and online network access are mutually exclusive: " +
+                                                     "tcp-loopback runs on a separate TcpOff/TcpOn account pair with a separate home whose " +
+                                                     "credentials file online entry carries no egress capability, and per-command online grants " +
+                                                     "are not supported in this mode; disable settings.windowsSandbox.allowTcpLoopback or run without the network request.",
+                                                     new InvalidOperationException("TCP loopback mode forbids effective online network access."));
+
         if (!Workspace.IsInside(_policy.WorkspaceRoot, execution.WorkingDirectory))
             throw new
                 ProcessExecutionStartException($"The command working directory '{execution.WorkingDirectory}' is outside the sandbox workspace root '{_policy.WorkspaceRoot}'.",
                                                new
                                                    InvalidOperationException("Working directory escaped the frozen sandbox policy workspace root."));
 
-        await PreflightAsync(execution, cancellationToken).ConfigureAwait(false);
+        await PreflightAsync(execution, networkAccessEnabled, cancellationToken).ConfigureAwait(false);
 
-        var       account        = await LoadAccount(cancellationToken).ConfigureAwait(false);
+        var       account        = await LoadAccount(networkAccessEnabled, cancellationToken).ConfigureAwait(false);
         var       capabilitySids = await ResolveCapabilitySids(execution, cancellationToken).ConfigureAwait(false);
         using var desktop        = CreateDesktop(account);
 
-        var                     request = BuildSpawnRequest(execution, capabilitySids, desktop.Name);
+        var                     request = BuildSpawnRequest(execution, capabilitySids, desktop.Name,
+                                                            networkAccessEnabled);
         SandboxRunnerConnection connection;
         try
         {
+            // 生效在线时加载在线账户 profile：登录会话借此获得 schannel 客户端凭据
+            // （否则沙箱内 TLS 全部 SEC_E_NO_CREDENTIALS）；账户 profile 目录成为该
+            // 独立账户的可写面属有意权衡。offline 保持不加载。
             connection = await _runnerLauncher
                               .LaunchAsync(new RunnerLaunchRequest(_components.RunnerExecutablePath, account,
-                                                                   execution.WorkingDirectory), cancellationToken)
+                                                                   execution.WorkingDirectory, networkAccessEnabled),
+                                           cancellationToken)
                               .ConfigureAwait(false);
         }
         catch (OperationCanceledException)
@@ -234,8 +275,12 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
         }
     }
 
-    private async Task PreflightAsync(PreparedProcessExecution execution, CancellationToken cancellationToken)
+    private async Task PreflightAsync(
+        PreparedProcessExecution execution, bool networkAccessEnabled, CancellationToken cancellationToken)
     {
+        SandboxDiagnosticLog.Event("preflight",
+                                   $"network={(networkAccessEnabled ? "enabled" : "restricted")} " +
+                                   $"proxyVariables={(networkAccessEnabled ? _proxyEnvironment.Count : 0)}");
         var status = await _stateInspector.InspectAsync(cancellationToken).ConfigureAwait(false);
         if (!status.Ready)
         {
@@ -244,6 +289,22 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
                                                      string.Join("; ", status.Problems),
                                                      new
                                                          InvalidOperationException("Sandbox readiness check failed; failing closed without fallback."));
+        }
+
+        if (networkAccessEnabled)
+        {
+            var onlineStatus = await _stateInspector.InspectOnlineAccountAsync(cancellationToken)
+                                                    .ConfigureAwait(false);
+            if (!onlineStatus.Ready)
+            {
+                SandboxDiagnosticLog.Event("readiness",
+                                           $"online-blocked problems=[{string.Join(" | ", onlineStatus.Problems)}]");
+                throw new
+                    ProcessExecutionStartException("The Windows sandbox online account is not ready; refusing network-enabled execution: " +
+                                                   string.Join("; ", onlineStatus.Problems),
+                                                   new
+                                                       InvalidOperationException("Online sandbox readiness check failed; failing closed without fallback."));
+            }
         }
 
         var payload = _policy.CreateSetupPayload(_components, execution.WorkingDirectory, Environment.UserName, true);
@@ -287,11 +348,14 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
         }
     }
 
-    private async Task<WindowsSandboxAccount> LoadAccount(CancellationToken cancellationToken)
+    private async Task<WindowsSandboxAccount> LoadAccount(bool networkAccessEnabled, CancellationToken cancellationToken)
     {
         try
         {
-            return await _credentialSource.LoadOfflineAccount(cancellationToken).ConfigureAwait(false);
+            // 生效在线时必须以在线账户启动 runner；任何失败都 fail closed，不降级离线账户。
+            return await (networkAccessEnabled
+                              ? _credentialSource.LoadOnlineAccount(cancellationToken)
+                              : _credentialSource.LoadOfflineAccount(cancellationToken)).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -344,7 +408,8 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
     }
 
     private RunnerSpawnRequest BuildSpawnRequest(
-        PreparedProcessExecution execution, IReadOnlyList<string> capabilitySids, string desktopName)
+        PreparedProcessExecution execution, IReadOnlyList<string> capabilitySids, string desktopName,
+        bool                     networkAccessEnabled)
     {
         var timeoutMilliseconds = (ulong)execution.TimeoutSeconds * 1000;
         if (timeoutMilliseconds > MaximumRunnerTimeoutMilliseconds)
@@ -354,8 +419,13 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
         {
             Command                    = [execution.Executable, .. execution.Arguments],
             WorkingDirectory           = execution.WorkingDirectory,
-            Environment                = BuildSpawnEnvironment(),
-            PermissionProfile          = _policy.SpawnProfile,
+            Environment                = BuildSpawnEnvironment(networkAccessEnabled),
+            PermissionProfile          = _policy.SpawnProfile with
+            {
+                Network = SandboxNetworkPolicyParser.ToProfileValue(networkAccessEnabled
+                                                                        ? SandboxNetworkPolicy.Enabled
+                                                                        : SandboxNetworkPolicy.Restricted)
+            },
             WorkspaceRoots             = [_policy.WorkspaceRoot],
             SandboxDirectory           = _components.SandboxDirectory,
             RealSandboxHome            = _components.SandboxHome,
@@ -369,10 +439,19 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
     }
 
     /// <summary>
-    ///     <para>从冻结目标环境构造 spawn 字典，并移除已知秘密对应的环境变量。</para>
     ///     <para>
-    ///         Builds the spawn dictionary from the frozen target environment
-    ///         and removes environment variables associated with known secrets.
+    ///         从冻结目标环境构造 spawn 字典；仅生效在线时合并代理环境，并最后移除已知秘密对应的
+    ///         环境变量。"受限执行的 env 无代理键"指默认派生路径——代理键只在生效在线时由后端注入；
+    ///         可信显式 extraEnvironment 是优先级更高的显式覆盖，可为受限子进程携带代理键（不推荐）。
+    ///     </para>
+    ///     <para>
+    ///         Builds the spawn dictionary from the frozen target environment; the
+    ///         proxy environment merges only while the effective network is online,
+    ///         and known-secret keys are removed last. "A restricted execution env
+    ///         never carries proxy keys" describes the default derived path — the
+    ///         backend injects proxy keys only while online; the trusted explicit
+    ///         extraEnvironment is a higher-priority explicit override and may carry
+    ///         proxy keys for restricted child processes (not recommended).
     ///     </para>
     /// </summary>
     /// <remarks>
@@ -385,9 +464,13 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
     ///         Removing secret keys again guards against key reuse and does not replace earlier cleanup.
     ///     </para>
     /// </remarks>
-    private Dictionary<string, string> BuildSpawnEnvironment()
+    private Dictionary<string, string> BuildSpawnEnvironment(bool networkAccessEnabled)
     {
         var environment = new Dictionary<string, string>(_targetEnvironment, StringComparer.OrdinalIgnoreCase);
+        if (networkAccessEnabled)
+            foreach (var (name, value) in _proxyEnvironment)
+                environment[name] = value;
+
         foreach (var secret in _knownSecrets) environment.Remove(secret.Key);
 
         return environment;

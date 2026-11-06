@@ -50,7 +50,8 @@ public sealed class DesktopAutoApprovalProvider(
                     ["targets"] = new JsonArray(preparation.TargetPaths
                                                            .Select(path => (JsonNode?)JsonValue.Create(path))
                                                            .ToArray()),
-                    ["executionPolicy"] = preparation.ExecutionPolicy
+                    ["executionPolicy"]     = preparation.ExecutionPolicy,
+                    ["requiresNetworkAccess"] = preparation.RequiresNetworkAccess
                 }.ToJsonString();
                 if (payload.Length > 48_000) throw new InvalidDataException("审批输入过长，请人工确认。");
                 var request = new ChatCompletionRequest
@@ -77,6 +78,12 @@ public sealed class DesktopAutoApprovalProvider(
                                            用户只要求检查、比较或查资料时，优先考虑最窄的只读查询；不得仅因操作需要联网或使用 Shell 而拒绝。
                                            查询授权不自动包含下载、安装、恢复依赖、修改文件或配置、执行远程脚本等额外副作用；
                                            只有这些操作本身是用户目标合理必需且范围相称时才可批准。
+
+                                           summary 以 [联网] 前缀标记或 requiresNetworkAccess 为 true 时，该调用申请在沙箱内启用网络：
+                                           这是沙箱内的全网访问（可能经用户配置的本地代理，如 127.0.0.1:7890），
+                                           不是仅限 NuGet、某个域名或某种协议的窄授权。
+                                           描述与理由不得弱化“全网访问”的范围；只有当前任务明确需要联网时才批准本次申请。
+                                           用户只给出窄授权（例如仅允许访问 NuGet）时，按窄授权从严判断，不得扩张为全网访问。
 
                                            实现与提交是不同授权：普通实现授权只覆盖编写与修改文件，不包含提交、推送、发布、部署或读取凭据。
                                            用户明确提出提交（commit），或目标本身必须以提交收尾时，可批准完成该提交必需且范围相称的 git add 与 git commit。

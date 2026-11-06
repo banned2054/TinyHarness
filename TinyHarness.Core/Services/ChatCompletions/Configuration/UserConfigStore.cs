@@ -411,6 +411,10 @@ public static class UserConfigStore
                 if (sandbox.Policy != SandboxPolicyKind.WorkspaceWrite)
                     sandboxNode["policy"] =
                         sandbox.Policy == SandboxPolicyKind.ReadOnly ? "read-only" : "workspace-write";
+                if (sandbox.NetworkPolicy != SandboxNetworkPolicy.Restricted)
+                    sandboxNode["networkPolicy"] = WriteSandboxNetworkPolicy(sandbox.NetworkPolicy);
+                if (sandbox.Proxy is { } proxy && proxy.Mode != SandboxProxyMode.FollowAppDefault)
+                    sandboxNode["proxy"] = WriteSandboxProxyPolicy(proxy);
                 if (!string.IsNullOrWhiteSpace(sandbox.SandboxTempRoot))
                     sandboxNode["sandboxTempRoot"] = sandbox.SandboxTempRoot;
                 if (sandbox.AdditionalWriteRoots is { Count: > 0 } writeRoots)
@@ -419,6 +423,14 @@ public static class UserConfigStore
                     foreach (var writeRoot in writeRoots)
                         rootsArray.Add((JsonNode?)JsonValue.Create(writeRoot));
                     sandboxNode["additionalWriteRoots"] = rootsArray;
+                }
+
+                if (sandbox.AdditionalReadRoots is { Count: > 0 } readRoots)
+                {
+                    var readRootsArray = new JsonArray();
+                    foreach (var readRoot in readRoots)
+                        readRootsArray.Add((JsonNode?)JsonValue.Create(readRoot));
+                    sandboxNode["additionalReadRoots"] = readRootsArray;
                 }
 
                 if (sandbox.ExtraEnvironment is { Count: > 0 } environment)
@@ -781,13 +793,15 @@ public static class UserConfigStore
 
     /// <summary>
     ///     <para>
-    ///         绑定可信的 settings.windowsSandbox；字段缺失沿用保守默认（enabled=false、workspace-write）。
-    ///         绑定只做结构校验（类型与枚举值），路径与组件存在性由组合器 fail-closed 校验。
+    ///         绑定可信的 settings.windowsSandbox；字段缺失沿用保守默认（enabled=false、workspace-write、
+    ///         网络受限、跟随软件默认代理）。绑定只做结构校验（类型与枚举值），
+    ///         路径与组件存在性由组合器 fail-closed 校验。
     ///     </para>
     ///     <para>
     ///         Binds the trusted settings.windowsSandbox; missing fields keep the conservative defaults
-    ///         (enabled=false, workspace-write). Binding checks structure only (types and enum values); paths and
-    ///         component existence are validated fail-closed by the composer.
+    ///         (enabled=false, workspace-write, restricted network, app-default proxy). Binding checks
+    ///         structure only (types and enum values); paths and component existence are validated
+    ///         fail-closed by the composer.
     ///     </para>
     /// </summary>
     private static WindowsSandboxSettings? BindWindowsSandbox(JsonObject settingsNode, string filePath)
@@ -814,6 +828,8 @@ public static class UserConfigStore
             additionalRoots = roots;
         }
 
+        var additionalReadRoots = BindAdditionalReadRoots(sandboxNode, filePath);
+
         IReadOnlyDictionary<string, string>? extraEnvironment = null;
         if (sandboxNode["extraEnvironment"] is null)
             return new WindowsSandboxSettings
@@ -825,8 +841,11 @@ public static class UserConfigStore
                 RunnerExecutablePath = ReadString(sandboxNode, "runnerExecutablePath", filePath) ?? string.Empty,
                 SandboxHome          = ReadString(sandboxNode, "sandboxHome", filePath)          ?? string.Empty,
                 Policy               = ReadSandboxPolicyKind(sandboxNode, filePath),
+                NetworkPolicy        = ReadSandboxNetworkPolicy(sandboxNode, filePath),
+                Proxy                = ReadSandboxProxyPolicy(sandboxNode, filePath),
                 SandboxTempRoot      = ReadString(sandboxNode, "sandboxTempRoot", filePath),
                 AdditionalWriteRoots = additionalRoots,
+                AdditionalReadRoots  = additionalReadRoots,
                 ExtraEnvironment     = extraEnvironment
             };
 
@@ -859,10 +878,117 @@ public static class UserConfigStore
             RunnerExecutablePath = ReadString(sandboxNode, "runnerExecutablePath", filePath) ?? string.Empty,
             SandboxHome          = ReadString(sandboxNode, "sandboxHome", filePath)          ?? string.Empty,
             Policy               = ReadSandboxPolicyKind(sandboxNode, filePath),
+            NetworkPolicy        = ReadSandboxNetworkPolicy(sandboxNode, filePath),
+            Proxy                = ReadSandboxProxyPolicy(sandboxNode, filePath),
             SandboxTempRoot      = ReadString(sandboxNode, "sandboxTempRoot", filePath),
             AdditionalWriteRoots = additionalRoots,
+            AdditionalReadRoots  = additionalReadRoots,
             ExtraEnvironment     = extraEnvironment
         };
+    }
+
+    /// <summary>
+    ///     <para>绑定可选的 additionalReadRoots；缺省为空列表，字符串之外的元素报出字段路径。</para>
+    ///     <para>
+    ///         Binds the optional additionalReadRoots; absent keeps an empty list, and non-string
+    ///         elements fail with the field path.
+    ///     </para>
+    /// </summary>
+    private static IReadOnlyList<string> BindAdditionalReadRoots(JsonObject sandboxNode, string filePath)
+    {
+        if (sandboxNode["additionalReadRoots"] is null) return [];
+        if (sandboxNode["additionalReadRoots"] is not JsonArray rootsArray)
+            throw new
+                InvalidDataException($"User config field 'settings.windowsSandbox.additionalReadRoots' in '{filePath}' must be an array.");
+
+        var roots = new List<string>();
+        foreach (var node in rootsArray)
+        {
+            if (node is not JsonValue value || value.GetValueKind() is not JsonValueKind.String)
+                throw new
+                    InvalidDataException($"User config field 'settings.windowsSandbox.additionalReadRoots' in '{filePath}' must contain strings only.");
+
+            roots.Add(value.GetValue<string>());
+        }
+
+        return roots;
+    }
+
+    /// <summary>
+    ///     <para>读取可选的沙箱网络策略；缺失沿用 Restricted（默认逐次审批），非法值列出可接受取值。</para>
+    ///     <para>
+    ///         Reads the optional sandbox network policy; absent keeps Restricted (per-call approval),
+    ///         an invalid value lists the accepted choices.
+    ///     </para>
+    /// </summary>
+    private static SandboxNetworkPolicy ReadSandboxNetworkPolicy(JsonObject sandboxNode, string filePath)
+    {
+        var value = ReadString(sandboxNode, "networkPolicy", filePath);
+        return value switch
+        {
+            null         => SandboxNetworkPolicy.Restricted,
+            "restricted" => SandboxNetworkPolicy.Restricted,
+            "enabled"    => SandboxNetworkPolicy.Enabled,
+            _ => throw new
+                InvalidDataException($"User config field 'settings.windowsSandbox.networkPolicy' in '{filePath}' has an invalid value '{value}'; " +
+                                     "expected 'restricted' or 'enabled'.")
+        };
+    }
+
+    /// <summary>
+    ///     <para>
+    ///         读取可选的沙箱代理策略；缺失或 mode 缺失沿用 FollowAppDefault，named 必须携带 proxyName。
+    ///     </para>
+    ///     <para>
+    ///         Reads the optional sandbox proxy policy; absent node or mode keeps FollowAppDefault,
+    ///         and named requires a proxyName.
+    ///     </para>
+    /// </summary>
+    private static SandboxProxyPolicy ReadSandboxProxyPolicy(JsonObject sandboxNode, string filePath)
+    {
+        if (sandboxNode["proxy"] is null) return new SandboxProxyPolicy();
+        if (sandboxNode["proxy"] is not JsonObject proxyNode)
+            throw new InvalidDataException($"User config field 'settings.windowsSandbox.proxy' in '{filePath}' must be an object.");
+
+        var modeValue = ReadString(proxyNode, "mode", filePath);
+        var mode = modeValue switch
+        {
+            null                 => SandboxProxyMode.FollowAppDefault,
+            "follow-app-default" => SandboxProxyMode.FollowAppDefault,
+            "system"             => SandboxProxyMode.System,
+            "direct"             => SandboxProxyMode.Direct,
+            "named"              => SandboxProxyMode.Named,
+            _ => throw new
+                InvalidDataException($"User config field 'settings.windowsSandbox.proxy.mode' in '{filePath}' has an invalid value '{modeValue}'; " +
+                                     "expected 'follow-app-default', 'system', 'direct', or 'named'.")
+        };
+        var proxyName = ReadString(proxyNode, "proxyName", filePath);
+        if (mode == SandboxProxyMode.Named && string.IsNullOrWhiteSpace(proxyName))
+            throw new
+                InvalidDataException($"User config field 'settings.windowsSandbox.proxy.proxyName' in '{filePath}' is required when mode is 'named'.");
+
+        return new SandboxProxyPolicy { Mode = mode, ProxyName = proxyName };
+    }
+
+    /// <summary>把沙箱网络策略写成规范字符串。Writes the sandbox network policy as its canonical string.</summary>
+    private static string WriteSandboxNetworkPolicy(SandboxNetworkPolicy policy) => policy switch
+    {
+        SandboxNetworkPolicy.Enabled => "enabled",
+        _                            => "restricted"
+    };
+
+    /// <summary>把沙箱代理策略写成规范 JSON；凭据引用不写入，只保留名称。Writes the sandbox proxy policy as canonical JSON without credential references, keeping only the name.</summary>
+    private static JsonObject WriteSandboxProxyPolicy(SandboxProxyPolicy proxy)
+    {
+        var node = new JsonObject { ["mode"] = proxy.Mode switch
+        {
+            SandboxProxyMode.System => "system",
+            SandboxProxyMode.Direct => "direct",
+            SandboxProxyMode.Named  => "named",
+            _                       => "follow-app-default"
+        } };
+        if (!string.IsNullOrWhiteSpace(proxy.ProxyName)) node["proxyName"] = proxy.ProxyName;
+        return node;
     }
 
     /// <summary>

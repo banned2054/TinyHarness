@@ -9,6 +9,7 @@ using TinyHarness.Core.Models.Permissions;
 using TinyHarness.Core.Models.Persistence;
 using TinyHarness.Core.Models.Project;
 using TinyHarness.Core.Models.Runtime;
+using TinyHarness.Core.Models.Runtime.WindowsSandbox;
 using TinyHarness.Core.Models.Session;
 using TinyHarness.Core.Services.ChatCompletions;
 using TinyHarness.Core.Services.ChatCompletions.Configuration;
@@ -166,14 +167,18 @@ public sealed partial class DesktopSessionFactory
             // 会话存储不能落入任一可信写根；此处不进行 provisioning 或机器权限变更。
             foreach (var writeRoot in settings.AdditionalWriteRoots)
                 SessionStorePaths.EnsureOutsideWorkspace(directory, writeRoot, "settings.sessionStoreDirectory");
-            sandbox = WindowsSandboxComposer.Compose(settings, root, secrets);
+            sandbox = WindowsSandboxComposer.Compose(settings, root, secrets, user.Settings?.Network);
         }
 
         SandboxDiagnosticLog.Event("session",
                                    $"workspace='{root}' identity='{access.Identity.FileIdentity}' requestedMode={request.PermissionMode} " +
                                    $"sandbox={(sandbox is null ? "disabled" : "enabled")} store='{directory}' user='{Environment.UserName}'");
 
-        var permissions = new PermissionEngine(root, config.CommandRules, workspaceReadOnly : () => access.IsReadOnly);
+        // 常设网络信任只来自可信用户设置：Enabled 档不再逐次审批联网申请。
+        var permissions = new PermissionEngine(root, config.CommandRules,
+                                               workspaceReadOnly : () => access.IsReadOnly,
+                                               sandboxNetworkStandingEnabled : user.Settings?.WindowsSandbox
+                                                  ?.NetworkPolicy == SandboxNetworkPolicy.Enabled);
         DesktopWorkspaceCoordinator? repair = null;
         var backend = sandbox?.Backend ?? new HostProcessBackend(secrets);
         if (sandbox is not null && user.Settings?.WindowsSandbox is { } sandboxSettings)

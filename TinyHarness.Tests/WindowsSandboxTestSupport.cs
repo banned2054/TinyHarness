@@ -323,6 +323,9 @@ internal sealed class FakeCredentialSource(string username) : ISandboxCredential
     public Task<WindowsSandboxAccount> LoadOfflineAccount(CancellationToken cancellationToken = default) =>
         Task.FromResult(Account);
 
+    public Task<WindowsSandboxAccount> LoadOnlineAccount(CancellationToken cancellationToken = default) =>
+        Task.FromResult(Account);
+
     private static WindowsSandboxAccount CreateAccount(string accountUsername)
     {
         if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException();

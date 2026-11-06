@@ -45,6 +45,8 @@ public static class SandboxTargetEnvironment
                                         nameof(tempRoot));
 
         var environment = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        // 白名单刻意不包含 HTTP_PROXY 等宿主代理变量：受限子进程环境天然无代理键；
+        // 在线执行的代理环境由后端按生效网络单独注入。
         foreach (var name in HostAllowList)
         {
             var value                                           = Environment.GetEnvironmentVariable(name);

@@ -10,10 +10,22 @@ namespace TinyHarness.Core.Models.Runtime;
 ///     backend consume the same instance; raw model arguments are never
 ///     re-interpreted at execution time.
 /// </summary>
+/// <remarks>
+///     <para>
+///         NetworkAccessEnabled 表达该命令获得的逐次在线审批；常设网络策略由执行后端自带，
+///         两者任一为真即按在线执行。
+///     </para>
+///     <para>
+///         NetworkAccessEnabled carries the per-command online grant; the standing
+///         network policy lives with the execution backend, and either one being true
+///         selects online execution.
+///     </para>
+/// </remarks>
 public sealed record PreparedProcessExecution(
     string                Executable,
     IReadOnlyList<string> Arguments,
     string                WorkingDirectory,
     int                   TimeoutSeconds,
     bool                  WorkspaceExecutable,
-    string?               RawCmdCommand);
+    string?               RawCmdCommand,
+    bool                  NetworkAccessEnabled = false);

@@ -35,6 +35,28 @@ public sealed record SandboxIsolationPolicy
     public required SandboxPermissionProfile SpawnProfile { get; init; }
 
     /// <summary>
+    ///     <para>常设网络策略为 enabled；spawn profile 的 network 与之一致，逐次审批由后端按执行计划覆盖。</para>
+    ///     <para>
+    ///         The standing network policy is enabled; the spawn profile's network matches it, while
+    ///         per-command grants are applied by the backend from the execution plan.
+    ///     </para>
+    /// </summary>
+    public bool NetworkEnabled { get; init; }
+
+    /// <summary>
+    ///     <para>
+    ///         有效只读根（绝对路径，已规范化）：可信设置声明的额外只读根，进入 setup 的 read_roots，
+    ///         由沙箱账户组以 OS 级 RX ACL 访问。
+    ///     </para>
+    ///     <para>
+    ///         The effective read roots (absolute, normalized): additional read-only
+    ///         roots declared by trusted settings, fed into setup read_roots and
+    ///         exposed to the sandbox account group through OS-level RX ACLs.
+    ///     </para>
+    /// </summary>
+    public required IReadOnlyList<string> EffectiveReadRoots { get; init; }
+
+    /// <summary>
     ///     <para>
     ///         有效写入根（绝对路径，含临时写根）；ReadOnly 策略为空。用于 capability SID 选择与
     ///         setup 的 write_roots。
@@ -64,13 +86,13 @@ public sealed record SandboxIsolationPolicy
 
     /// <summary>
     ///     <para>
-    ///         构造每命令 refresh payload：read_roots 覆盖工作区与命令 cwd；write_roots 为有效写入根；
-    ///         deny-write 保护元数据目录；proxy 端口留空（固定断网）。
+    ///         构造每命令 refresh payload：read_roots 覆盖工作区、命令 cwd、临时根与有效只读根；
+    ///         write_roots 为有效写入根；deny-write 保护元数据目录；proxy 端口留空。
     ///     </para>
     ///     <para>
-    ///         Builds the per-command refresh payload: read_roots cover the workspace and the command cwd;
-    ///         write_roots are the effective write roots; deny-write protects metadata directories;
-    ///         proxy ports stay empty (fixed offline policy).
+    ///         Builds the per-command refresh payload: read_roots cover the workspace, the command cwd,
+    ///         the temp roots, and the effective read roots; write_roots are the effective write roots;
+    ///         deny-write protects metadata directories; proxy ports stay empty.
     ///     </para>
     /// </summary>
     public SandboxSetupPayload CreateSetupPayload(
@@ -80,6 +102,7 @@ public sealed record SandboxIsolationPolicy
             throw new InvalidOperationException("Sandbox component and policy TCP-loopback modes must match.");
         var readRoots = new List<string> { WorkspaceRoot, commandWorkingDirectory };
         readRoots.AddRange(TempWriteRoots);
+        readRoots.AddRange(EffectiveReadRoots);
         return new SandboxSetupPayload
         {
             AllowTcpLoopback        = AllowTcpLoopback,

@@ -17,6 +17,15 @@ namespace TinyHarness.Core.Services.Runtime.WindowsSandbox;
 public interface ISandboxCredentialSource
 {
     Task<WindowsSandboxAccount> LoadOfflineAccount(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    ///     <para>解出在线沙箱账户凭据；校验、DPAPI 与 SID 语义与离线账户对称。</para>
+    ///     <para>
+    ///         Resolves the online sandbox account credentials; validation, DPAPI, and
+    ///         SID semantics mirror the offline account.
+    ///     </para>
+    /// </summary>
+    Task<WindowsSandboxAccount> LoadOnlineAccount(CancellationToken cancellationToken = default);
 }
 
 /// <summary>
@@ -26,7 +35,23 @@ public interface ISandboxCredentialSource
 /// </summary>
 public sealed class SandboxCredentialReader(WindowsSandboxComponents components) : ISandboxCredentialSource
 {
-    public async Task<WindowsSandboxAccount> LoadOfflineAccount(CancellationToken cancellationToken = default)
+    public Task<WindowsSandboxAccount> LoadOfflineAccount(CancellationToken cancellationToken = default) =>
+        LoadAccountAsync(users => users.Offline, components.OfflineUsername, "offline", cancellationToken);
+
+    public Task<WindowsSandboxAccount> LoadOnlineAccount(CancellationToken cancellationToken = default) =>
+        LoadAccountAsync(users => users.Online, components.OnlineUsername, "online", cancellationToken);
+
+    /// <summary>
+    ///     <para>读取凭据文件并解出指定条目：版本、条目完整性、外来账户名拒绝与 DPAPI 解密共用一套实现。</para>
+    ///     <para>
+    ///         Reads the credentials file and resolves one entry: version, entry
+    ///         completeness, foreign-account-name refusal, and DPAPI decryption share
+    ///         one implementation.
+    ///     </para>
+    /// </summary>
+    private async Task<WindowsSandboxAccount> LoadAccountAsync(
+        Func<SandboxUsersFile, SandboxUserCredential?> entrySelector, string expectedUsername, string accountKind,
+        CancellationToken cancellationToken)
     {
         if (!OperatingSystem.IsWindows())
             throw new
@@ -52,34 +77,34 @@ public sealed class SandboxCredentialReader(WindowsSandboxComponents components)
             throw new
                 InvalidOperationException($"Sandbox account credentials version {users.Version} does not match the required {SandboxUsersFile.RequiredVersion}.");
 
-        var offline = users.Offline ??
-                      throw new
-                          InvalidOperationException($"Sandbox account credentials at {components.UsersFilePath} contain a null offline account entry.");
-        if (string.IsNullOrEmpty(offline.Username) || string.IsNullOrEmpty(offline.ProtectedPassword))
-            throw new InvalidOperationException("Sandbox account credentials are missing the offline account entry.");
+        var entry = entrySelector(users) ??
+                    throw new
+                        InvalidOperationException($"Sandbox account credentials at {components.UsersFilePath} contain a null {accountKind} account entry.");
+        if (string.IsNullOrEmpty(entry.Username) || string.IsNullOrEmpty(entry.ProtectedPassword))
+            throw new InvalidOperationException($"Sandbox account credentials are missing the {accountKind} account entry.");
 
         // Refuse foreign-namespace credentials before touching DPAPI: a legacy
         // Codex home must be re-provisioned, never reused across installs.
-        if (!string.Equals(offline.Username, components.OfflineUsername, StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException(WindowsSandboxComponents.IsLegacyCodexAccountName(offline.Username)
-                                                    ? $"Sandbox account credentials at {components.UsersFilePath} name the legacy Codex account '{offline.Username}'; refusing to reuse Codex-release credentials. Provision an independent TinyHarness sandbox home with this fork's setup executable."
-                                                    : $"Sandbox account credentials at {components.UsersFilePath} name account '{offline.Username}', which does not match this build's offline account '{components.OfflineUsername}'.");
+        if (!string.Equals(entry.Username, expectedUsername, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException(WindowsSandboxComponents.IsLegacyCodexAccountName(entry.Username)
+                                                    ? $"Sandbox account credentials at {components.UsersFilePath} name the legacy Codex account '{entry.Username}'; refusing to reuse Codex-release credentials. Provision an independent TinyHarness sandbox home with this fork's setup executable."
+                                                    : $"Sandbox account credentials at {components.UsersFilePath} name account '{entry.Username}', which does not match this build's {accountKind} account '{expectedUsername}'.");
 
         string password;
         try
         {
-            var blob      = Convert.FromBase64String(offline.ProtectedPassword);
+            var blob      = Convert.FromBase64String(entry.ProtectedPassword);
             var decrypted = ProtectedData.Unprotect(blob, null, DataProtectionScope.LocalMachine);
             password = Encoding.UTF8.GetString(decrypted);
         }
         catch (Exception ex) when (ex is FormatException or CryptographicException or ArgumentException)
         {
-            throw new InvalidOperationException($"Failed to decrypt the offline sandbox account password: {ex.Message}",
+            throw new InvalidOperationException($"Failed to decrypt the {accountKind} sandbox account password: {ex.Message}",
                                                 ex);
         }
 
-        var accountSid = TranslateAccountSid(offline.Username);
-        return new WindowsSandboxAccount(offline.Username, password, accountSid);
+        var accountSid = TranslateAccountSid(entry.Username);
+        return new WindowsSandboxAccount(entry.Username, password, accountSid);
     }
 
     private static SecurityIdentifier TranslateAccountSid(string username)

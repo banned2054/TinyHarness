@@ -29,28 +29,52 @@ public sealed class PermissionShellTool(ITool restricted, ITool host, Func<Sessi
                     "(for example writing to a protected path such as .git), " +
                     "after confirming earlier steps left no uncertain side effects; never use it to bypass a refusal."
             };
+            // 沙箱网络申请：全网访问而非窄授权；host 作用域无沙箱隔离，参数被忽略。
+            schema["properties"]!["networkAccess"] = new JsonObject
+            {
+                ["type"]        = "string",
+                ["enum"]        = new JsonArray("default", "enabled"),
+                ["description"] =
+                    "Requests network access for this invocation inside the workspace sandbox " +
+                    "(full network access, including host-local proxies such as a loopback proxy " +
+                    "the user configured). Defaults to 'default', which keeps the sandbox network restricted. " +
+                    "Only meaningful for the 'workspace' scope; 'host' ignores it because host execution " +
+                    "has no sandbox isolation. Each enabled request requires its own approval " +
+                    "unless the user granted standing network trust."
+            };
             return restricted.Definition with { Parameters = schema };
         }
     }
 
     /// <summary>
-    ///     <para>把后端选择与完整命令一起绑定到不可变计划。</para>
-    ///     <para>Binds backend selection and the complete command to an immutable plan.</para>
+    ///     <para>把后端选择与完整命令一起绑定到不可变计划；host 路径不携带网络申请。</para>
+    ///     <para>
+    ///         Binds backend selection and the complete command to an immutable plan;
+    ///         the host path never carries a network request.
+    ///     </para>
     /// </summary>
     public ToolPreparation Prepare(ChatToolCall call)
     {
         var args  = ToolArgs.ParseObject(call);
         var scope = args["executionScope"]?.GetValue<string>() ?? "workspace";
         if (scope is not ("workspace" or "host")) throw new InvalidDataException("Unknown shell execution scope.");
-        var tool = mode() == SessionPermissionMode.FullAccess || scope == "host" ? host : restricted;
-        var plan = tool.Prepare(call);
+        // FullAccess 与 scope=host 都走宿主工具：宿主执行没有沙箱，网络参数不产生任何语义。
+        var isHost   = mode() == SessionPermissionMode.FullAccess || scope == "host";
+        var tool     = isHost ? host : restricted;
+        var plan     = tool.Prepare(call);
+        var summary  = isHost && plan.RequiresNetworkAccess
+            ? plan.Summary.Replace(ShellTool.NetworkSummaryPrefix, string.Empty, StringComparison.Ordinal)
+            : plan.Summary;
         return new ToolPreparation
         {
             ToolName          = plan.ToolName, CallId = plan.CallId, Arguments = plan.Arguments,
-            Capability        = plan.Capability, Summary = plan.Summary, RiskLevel = plan.RiskLevel,
+            Capability        = plan.Capability, Summary = summary, RiskLevel = plan.RiskLevel,
             TargetPaths       = plan.TargetPaths, InstructionScopes = plan.InstructionScopes,
             SessionConstraint = plan.SessionConstraint, SessionGrantConstraint = plan.SessionGrantConstraint,
-            ExecutionPolicy   = plan.ExecutionPolicy, ExecutionPlan = new Plan(this, tool, plan)
+            ExecutionPolicy   = plan.ExecutionPolicy,
+            // workspace 路径透传内层网络申请；host 路径恒 false，不受网络参数影响。
+            RequiresNetworkAccess = isHost ? false : plan.RequiresNetworkAccess,
+            ExecutionPlan         = new Plan(this, tool, plan)
         };
     }
 

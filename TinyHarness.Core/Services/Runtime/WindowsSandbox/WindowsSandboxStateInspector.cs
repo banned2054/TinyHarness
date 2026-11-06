@@ -1,3 +1,4 @@
+using System.Security.Principal;
 using System.Text.Json;
 using TinyHarness.Core.Models.Runtime.WindowsSandbox;
 
@@ -7,15 +8,17 @@ namespace TinyHarness.Core.Services.Runtime.WindowsSandbox;
 ///     <para>
 ///         沙箱就绪状态检查：setup/runner 组件存在、setup marker 完成且版本一致、marker 与凭据文件
 ///         的账户名与本 build 期望一致（仍为旧 Codex 用户名时明确拒绝复用）、cap_sid 可解析、凭据文件
-///         可解析。聚合全部问题返回，不做任何修复；执行路径据此 fail closed。
+///         可解析；另有在线账户就绪变体供生效在线执行的前置检查使用。聚合全部问题返回，不做任何
+///         修复；执行路径据此 fail closed。
 ///     </para>
 ///     <para>
 ///         Sandbox readiness check: setup/runner components exist, the setup marker
 ///         is complete with a matching version, the marker's and credentials' account
 ///         names match this build's expectations (legacy Codex usernames are
-///         explicitly refused), cap_sid parses, and the credentials file parses. All
-///         problems are aggregated; nothing is repaired, and the execution path fails
-///         closed on the result.
+///         explicitly refused), cap_sid parses, and the credentials file parses; an
+///         online-account readiness variant feeds the preflight of network-enabled
+///         execution. All problems are aggregated; nothing is repaired, and the
+///         execution path fails closed on the result.
 ///     </para>
 /// </summary>
 public sealed class WindowsSandboxStateInspector(WindowsSandboxComponents components)
@@ -37,6 +40,103 @@ public sealed class WindowsSandboxStateInspector(WindowsSandboxComponents compon
         return problems.Count == 0
             ? WindowsSandboxStatus.Ok()
             : WindowsSandboxStatus.Blocked(problems);
+    }
+
+    /// <summary>
+    ///     <para>
+    ///         在线账户就绪检查：setup marker 完成且版本/环回模式/两个账户名一致，凭据文件 online
+    ///         条目存在且账户名匹配，在线账户 SID 可在本机映射。供生效在线执行的前置检查调用；
+    ///         不改变 <see cref="InspectAsync" /> 的离线就绪语义。
+    ///     </para>
+    ///     <para>
+    ///         Online-account readiness check: the setup marker is complete with
+    ///         matching version, loopback mode, and both account names, the credentials
+    ///         file carries a complete online entry with a matching account name, and
+    ///         the online account's SID maps on this machine. It feeds the preflight of
+    ///         network-enabled execution and never changes the offline readiness
+    ///         semantics of <see cref="InspectAsync" />.
+    ///     </para>
+    /// </summary>
+    public async Task<WindowsSandboxStatus> InspectOnlineAccountAsync(CancellationToken cancellationToken = default)
+    {
+        var problems = new List<string>();
+        await InspectMarkerAsync(problems, cancellationToken).ConfigureAwait(false);
+        await InspectOnlineUsersFileAsync(problems, cancellationToken).ConfigureAwait(false);
+        InspectOnlineAccountSid(problems);
+        return problems.Count == 0
+            ? WindowsSandboxStatus.Ok()
+            : WindowsSandboxStatus.Blocked(problems);
+    }
+
+    /// <summary>
+    ///     <para>校验凭据文件的 online 条目：条目完整、密码 blob 存在且账户名与本 build 期望一致。</para>
+    ///     <para>
+    ///         Validates the credentials file's online entry: entry completeness, a
+    ///         present password blob, and an account name matching this build's
+    ///         expectation.
+    ///     </para>
+    /// </summary>
+    private async Task InspectOnlineUsersFileAsync(List<string> problems, CancellationToken cancellationToken)
+    {
+        if (!File.Exists(Components.UsersFilePath))
+        {
+            problems.Add($"Sandbox account credentials not found: {Components.UsersFilePath}");
+            return;
+        }
+
+        try
+        {
+            var content = await File.ReadAllTextAsync(Components.UsersFilePath, cancellationToken)
+                                    .ConfigureAwait(false);
+            var users = JsonSerializer.Deserialize(content, WindowsSandboxJsonContext.Default.SandboxUsersFile);
+            if (users?.Version != SandboxUsersFile.RequiredVersion)
+            {
+                problems.Add($"Sandbox account credentials version {users?.Version.ToString() ?? "unknown"} " +
+                             $"does not match the required {SandboxUsersFile.RequiredVersion}.");
+                return;
+            }
+
+            var online = users?.Online;
+            if (online is null || string.IsNullOrEmpty(online.Username) || string.IsNullOrEmpty(online.ProtectedPassword))
+            {
+                problems.Add("Sandbox account credentials are missing the online account entry.");
+                return;
+            }
+
+            InspectAccountName(problems, "Sandbox account credentials online username", online.Username,
+                               Components.OnlineUsername);
+        }
+        catch (JsonException ex)
+        {
+            problems.Add($"Sandbox account credentials are not valid JSON: {ex.Message}");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            problems.Add($"Sandbox account credentials could not be read at {Components.UsersFilePath}: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    ///     <para>确认在线沙箱账户可在本机映射为 SID；账户缺失或映射失败按未就绪报告，不抛出。</para>
+    ///     <para>
+    ///         Confirms the online sandbox account maps to a local SID; a missing
+    ///         account or failed mapping is reported as unreadiness instead of throwing.
+    ///     </para>
+    /// </summary>
+    private void InspectOnlineAccountSid(List<string> problems)
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        try
+        {
+            _ = new NTAccount(Environment.MachineName, Components.OnlineUsername)
+               .Translate(typeof(SecurityIdentifier));
+        }
+        catch (Exception ex) when (ex is IdentityNotMappedException or SystemException)
+        {
+            problems.Add($"The online sandbox account '{Components.OnlineUsername}' does not map to a local SID; " +
+                         $"the account may not exist yet: {ex.Message}");
+        }
     }
 
     private async Task InspectMarkerAsync(List<string> problems, CancellationToken cancellationToken)

@@ -492,11 +492,15 @@ public sealed class SandboxManagementTests
         Assert.That(plan.Payload.OfflineUsername, Is.EqualTo(WindowsSandboxComponents.DefaultOfflineUsername));
         Assert.That(plan.Payload.OnlineUsername, Is.EqualTo(WindowsSandboxComponents.DefaultOnlineUsername));
 
-        // 与 composer/policy 相同的推导：workspace-write 授予工作区加沙箱临时根；读根覆盖
-        // 工作区与临时根；元数据子目录保持 deny-write 保护。
+        // 与 composer/policy 相同的推导：workspace-write 授予工作区、沙箱临时根与派生的
+        // NuGet 缓存/工具根；读根覆盖工作区与临时根；元数据子目录保持 deny-write 保护。
         var expectedTemp = Path.Combine(home.Components.SandboxHome, "tmp");
         Assert.That(plan.Payload.ReadRoots, Is.EqualTo([workspace.Root, expectedTemp]));
-        Assert.That(plan.Payload.WriteRoots, Is.EqualTo([workspace.Root, expectedTemp]));
+        Assert.That(plan.Payload.WriteRoots,
+                    Is.EqualTo([workspace.Root,
+                                expectedTemp,
+                                Path.Combine(home.Components.SandboxHome, "nuget-cache"),
+                                Path.Combine(home.Components.SandboxHome, "tools")]));
         Assert.That(plan.Payload.DenyWritePaths, Is.Empty,
                     "Missing metadata paths must not be materialized by the setup helper.");
 

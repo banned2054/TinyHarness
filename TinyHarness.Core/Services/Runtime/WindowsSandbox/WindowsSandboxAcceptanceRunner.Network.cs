@@ -10,6 +10,247 @@ namespace TinyHarness.Core.Services.Runtime.WindowsSandbox;
 
 public sealed partial class WindowsSandboxAcceptanceRunner
 {
+    /// <summary>组合器约定的 NO_PROXY 常量值（环回目标恒不走代理）。The composer's constant NO_PROXY value (loopback targets never proxy).</summary>
+    private const string ExpectedNoProxyValue = "localhost,127.0.0.1,::1";
+
+    /// <summary>代理环境反显与受限负向对照涉及的键。The keys involved in the proxy echo and its restricted negative control.</summary>
+    private static readonly IReadOnlyList<string> ProxyEnvironmentKeys =
+        ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"];
+
+    /// <summary>
+    ///     <para>
+    ///         代理环境反显：在线模式断言代理键随组合注入（HTTP/HTTPS 同值并命中命名代理 host:port、
+    ///         NO_PROXY 精确、ALL_PROXY 不出现）；受限模式断言全部代理键缺席。显示值只到 host:port。
+    ///     </para>
+    ///     <para>
+    ///         The proxy environment echo: online mode asserts the proxy keys are
+    ///         injected by the composition (HTTP/HTTPS equal and matching the named
+    ///         proxy host:port, NO_PROXY exact, ALL_PROXY absent); restricted mode
+    ///         asserts every proxy key is absent. Displayed values carry host:port only.
+    ///     </para>
+    /// </summary>
+    private async Task<SandboxAcceptanceCaseResult> EnvProxyEchoAsync(CancellationToken cancellationToken)
+    {
+        var definition = Definition("env-proxy-echo");
+        var stopwatch  = Stopwatch.StartNew();
+        // 前缀用 HTTP（不带下划线）：HTTP_ 只匹配 HTTP_PROXY，会漏掉 HTTPS_PROXY；
+        // ALL_PROXY 与 NO_PROXY 单独列出，避免空格并入变量名；末尾 rem 抹掉
+        // “变量未定义”时 set 的 errorlevel 1，使退出码只反映反显本身是否完成。
+        var run = await ExecuteOnceAsync(SandboxPolicyKind.WorkspaceWrite, null,
+                                         CmdPlan("set HTTP&set ALL_PROXY&set NO_PROXY&rem", ExitProbeTimeoutSeconds),
+                                         "env-proxy-echo", cancellationToken).ConfigureAwait(false);
+
+        var detail = $"期望 NO_PROXY={ExpectedNoProxyValue}；代理地址仅以 host:port 记录。";
+        if (run.Exception is not null || run.Result is not { ExitCode: 0, TimedOut: false } ||
+            run.Stdout is not { Truncated: false })
+            return Result(definition, SandboxAcceptanceVerdict.Fail, Describe(run, FirstLine(run.Stderr?.Content)),
+                          $"环境反显未完成，无法判定代理环境注入。{detail}", stopwatch);
+
+        var variables = ParseEnvironmentEcho(run.Stdout.Content);
+        var online    = _networkPolicy == SandboxNetworkPolicy.Enabled;
+        var httpProxy = variables.TryGetValue("HTTP_PROXY", out var httpValue) && httpValue.Length > 0;
+        var httpsProxy = variables.TryGetValue("HTTPS_PROXY", out var httpsValue) && httpsValue.Length > 0;
+        var allProxy   = variables.ContainsKey("ALL_PROXY");
+        var noProxy    = variables.TryGetValue("NO_PROXY", out var noProxyValue);
+        var hostPort   = _limits.OnlineProxyHostPort;
+
+        var verdicts = new List<string>();
+        if (online)
+        {
+            var sameValue = httpProxy && httpsProxy &&
+                            string.Equals(httpValue, httpsValue, StringComparison.Ordinal);
+            var hostPortMatched = string.IsNullOrWhiteSpace(hostPort) ||
+                                  (httpValue?.Contains(hostPort, StringComparison.Ordinal) ?? false) &&
+                                  (httpsValue?.Contains(hostPort, StringComparison.Ordinal) ?? false);
+            if (!httpProxy)  verdicts.Add("HTTP_PROXY 缺失或为空");
+            if (!httpsProxy) verdicts.Add("HTTPS_PROXY 缺失或为空");
+            if (httpProxy    && httpsProxy && !sameValue) verdicts.Add("HTTP_PROXY 与 HTTPS_PROXY 取值不一致");
+            if (sameValue    && !hostPortMatched) verdicts.Add($"代理地址未命中命名代理 {hostPort}");
+            if (!noProxy     || noProxyValue != ExpectedNoProxyValue)
+                verdicts.Add($"NO_PROXY 缺失或不等于 {ExpectedNoProxyValue}");
+            if (allProxy) verdicts.Add("ALL_PROXY 不应出现（http/https 代理只注入 HTTP/HTTPS_PROXY）");
+
+            var passed = verdicts.Count == 0;
+            return Result(definition, passed ? SandboxAcceptanceVerdict.Pass : SandboxAcceptanceVerdict.Fail,
+                          DescribeProxyEcho(variables, hostPort),
+                          $"{(passed ? "代理环境按在线组合注入。" : "代理环境注入不符。")}{detail}",
+                          stopwatch);
+        }
+
+        foreach (var key in ProxyEnvironmentKeys)
+            if (variables.ContainsKey(key))
+                verdicts.Add($"{key} 不应出现在受限目标环境");
+
+        var restrictedClean = verdicts.Count == 0;
+        return Result(definition, restrictedClean ? SandboxAcceptanceVerdict.Pass : SandboxAcceptanceVerdict.Fail,
+                      DescribeProxyEcho(variables, hostPort),
+                      $"{(restrictedClean ? "受限目标环境无代理键。" : "受限目标环境出现了代理键。")}{detail}",
+                      stopwatch);
+    }
+
+    /// <summary>
+    ///     <para>
+    ///         经配置代理的轻量只读外网请求：在线模式要求 2xx；受限模式要求失败（非零退出或无
+    ///         HTTP 状态码）作为阻断证据。目标仅限
+    ///         <see cref="WindowsSandboxAcceptanceLimits.OnlineExternalProbeUrl" />，失败时如实记录
+    ///         stderr 关键行，不重试、不放宽。
+    ///     </para>
+    ///     <para>
+    ///         A lightweight read-only external request through the configured proxy:
+    ///         online mode requires a 2xx; restricted mode requires a failure (non-zero
+    ///         exit or no HTTP status) as blocking evidence. The target stays the
+    ///         <see cref="WindowsSandboxAcceptanceLimits.OnlineExternalProbeUrl" />; a
+    ///         failure records the stderr key lines verbatim, without retries or
+    ///         relaxed criteria.
+    ///     </para>
+    /// </summary>
+    private async Task<SandboxAcceptanceCaseResult> NetworkExternalAsync(CancellationToken cancellationToken)
+    {
+        var definition = Definition("network-external");
+        var stopwatch  = Stopwatch.StartNew();
+        if (SystemTool("curl.exe") is not { } curl)
+            return Result(definition, SandboxAcceptanceVerdict.Indeterminate, null,
+                          "host 缺少 curl.exe（System32），无法执行外网连通探测。", stopwatch);
+
+        var url  = _limits.OnlineExternalProbeUrl;
+        var run  = await ExecuteOnceAsync(SandboxPolicyKind.WorkspaceWrite, null,
+                                          new PreparedProcessExecution(curl,
+                                                                       ["-s", "-m", "20", "-o", "NUL", "-w",
+                                                                        "%{http_code}", url],
+                                                                       _workspaceRoot, 40, false, null),
+                                          "network-external", cancellationToken).ConfigureAwait(false);
+        var code     = TryParseHttpCode(run.Stdout?.Content);
+        var reached  = run.Exception is null && run.Result is { ExitCode: 0, TimedOut: false } &&
+                       code is >= 200 and <= 299;
+        var online   = _networkPolicy == SandboxNetworkPolicy.Enabled;
+        var passed   = online ? reached : !reached;
+        var verdict  = passed ? SandboxAcceptanceVerdict.Pass : SandboxAcceptanceVerdict.Fail;
+        var reason   = online
+            ? (reached
+                ? "外网请求经代理返回 2xx。"
+                : $"外网请求未返回 2xx（http_code={CodeDisplay(code)}）；代理或上游不可用时如实 FAIL。")
+            : (reached
+                ? "受限模式下外网请求竟返回 2xx，网络阻断失效。"
+                : "受限模式下外网请求未成功（阻断语义成立）。");
+        return Result(definition, verdict, Describe(run, $"http_code={CodeDisplay(code)}"),
+                      $"{reason} {FirstLine(run.Stderr?.Content)}；外网目标仅限轻量只读端点。".TrimEnd(),
+                      stopwatch)
+           with
+           {
+               NetworkChecks =
+               [
+                   new SandboxNetworkCheck
+                   {
+                       Target = url, ExpectedAllowed = online, Verdict = verdict,
+                       Reason = reason, ExitCode = run.Result?.ExitCode, OuterTimedOut = run.Result?.TimedOut ?? false
+                   }
+               ]
+           };
+    }
+
+    /// <summary>
+    ///     <para>
+    ///         Online 账户对宿主环回服务（在线代理端点）的 TCP 连通：NO_PROXY 排除环回使 curl 直连，
+    ///         任何 HTTP 状态码（100-599）都判定连通；连接拒绝或超时记 FAIL 并如实呈现环回阻断语义。
+    ///         仅在 enabled 矩阵出现。
+    ///     </para>
+    ///     <para>
+    ///         The online account's TCP reachability of the host loopback service (the
+    ///         online proxy endpoint): NO_PROXY excludes loopback so curl connects
+    ///         directly; any HTTP status (100-599) proves reachability, while a
+    ///         refusal or timeout records FAIL with the loopback-block semantics
+    ///         verbatim. Appears only in the enabled matrix.
+    ///     </para>
+    /// </summary>
+    private async Task<SandboxAcceptanceCaseResult> NetworkLoopbackHostAsync(CancellationToken cancellationToken)
+    {
+        var definition = Definition("network-loopback-host");
+        var stopwatch  = Stopwatch.StartNew();
+        var target     = _limits.HostLoopbackProbeTarget;
+        if (string.IsNullOrWhiteSpace(target))
+            return Result(definition, SandboxAcceptanceVerdict.Indeterminate, null,
+                          "未提供宿主环回探测目标（在线代理端点非环回或未配置）；本用例不适用，未验证。", stopwatch);
+
+        if (SystemTool("curl.exe") is not { } curl)
+            return Result(definition, SandboxAcceptanceVerdict.Indeterminate, null,
+                          "host 缺少 curl.exe（System32），无法执行宿主环回探测。", stopwatch);
+
+        var run = await ExecuteOnceAsync(SandboxPolicyKind.WorkspaceWrite, null,
+                                         new PreparedProcessExecution(curl,
+                                                                      ["-s", "-m", "10", "-o", "NUL", "-w",
+                                                                       "%{http_code}", $"http://{target}"],
+                                                                      _workspaceRoot, 30, false, null),
+                                         "network-loopback-host", cancellationToken).ConfigureAwait(false);
+        var code    = TryParseHttpCode(run.Stdout?.Content);
+        var reached = run.Exception is null && run.Result is { ExitCode: 0, TimedOut: false } &&
+                      code is >= 100 and <= 599;
+        var verdict = reached ? SandboxAcceptanceVerdict.Pass : SandboxAcceptanceVerdict.Fail;
+        var reason  = reached
+            ? $"Online 账户可直连宿主环回 {target}（HTTP {CodeDisplay(code)}；环回放行语义成立）。"
+            : $"Online 账户无法直连宿主环回 {target}（exit={run.Result?.ExitCode?.ToString() ?? "无"}，" +
+              $"http_code={CodeDisplay(code)}）；按环回阻断/端口不可达语义如实记 FAIL，此结果本身即为环回行为的观测。";
+        return Result(definition, verdict, Describe(run, $"http_code={CodeDisplay(code)}"),
+                      $"{reason} NO_PROXY 恒排除环回，本请求为直连而非代理转发；仅记录 host:port。",
+                      stopwatch)
+           with
+           {
+               NetworkChecks =
+               [
+                   new SandboxNetworkCheck
+                   {
+                       Target = $"tcp [127.0.0.1] {target}", ExpectedAllowed = true, Verdict = verdict,
+                       Reason = reason, ExitCode = run.Result?.ExitCode, OuterTimedOut = run.Result?.TimedOut ?? false
+                   }
+               ]
+           };
+    }
+
+    /// <summary>解析 `set` 反显输出为键值表（大小写不敏感，后值覆盖）。Parses `set` echo output into a dictionary (case-insensitive, last value wins).</summary>
+    private static Dictionary<string, string> ParseEnvironmentEcho(string content)
+    {
+        var variables = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var line in content.Split('\n'))
+        {
+            var entry = line.TrimEnd('\r');
+            var separator = entry.IndexOf('=');
+            if (separator <= 0) continue;
+
+            variables[entry[..separator]] = entry[(separator + 1)..];
+        }
+
+        return variables;
+    }
+
+    /// <summary>
+    ///     <para>代理环境摘要：值脱敏到 host:port 或存在性标记；NO_PROXY 为常量可原样显示。</para>
+    ///     <para>
+    ///         The proxy environment summary: values redact to host:port or presence
+    ///         markers; the constant NO_PROXY may display verbatim.
+    ///     </para>
+    /// </summary>
+    private static string DescribeProxyEcho(Dictionary<string, string> variables, string? hostPort)
+    {
+        var parts = ProxyEnvironmentKeys.Select(key =>
+        {
+            if (!variables.TryGetValue(key, out var value)) return $"{key}=<absent>";
+
+            return key == "NO_PROXY"       ? $"{key}={value}"
+                 : string.IsNullOrWhiteSpace(hostPort) ? $"{key}=<set>"
+                 : value.Contains(hostPort, StringComparison.Ordinal) ? $"{key}=<set:{hostPort}>"
+                 : $"{key}=<set:mismatch>";
+        });
+        return string.Join("; ", parts);
+    }
+
+    /// <summary>curl -w %{http_code} 输出的三位状态码解析；其余形态返回 null。Parses the 3-digit status from curl -w %{http_code}; anything else is null.</summary>
+    private static int? TryParseHttpCode(string? content)
+    {
+        var trimmed = content?.Trim();
+        return trimmed is { Length: 3 } && int.TryParse(trimmed, out var code) ? code : null;
+    }
+
+    private static string CodeDisplay(int? code) => code?.ToString() ?? "无";
+
     private async Task<SandboxAcceptanceCaseResult> NetworkAsync(string name, CancellationToken cancellationToken)
     {
         var stopwatch       = Stopwatch.StartNew();

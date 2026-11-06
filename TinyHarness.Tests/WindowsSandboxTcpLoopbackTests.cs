@@ -1,7 +1,9 @@
 using System.Text.Json;
 using TinyHarness.Core.Models.Configuration;
+using TinyHarness.Core.Models.Runtime;
 using TinyHarness.Core.Models.Runtime.WindowsSandbox;
 using TinyHarness.Core.Services.ChatCompletions.Configuration;
+using TinyHarness.Core.Services.Runtime;
 using TinyHarness.Core.Services.Runtime.WindowsSandbox;
 
 namespace TinyHarness.Tests;
@@ -198,6 +200,81 @@ public class WindowsSandboxTcpLoopbackTests
         Assert.That(plan.Payload.OnlineUsername, Is.EqualTo("TinyHarnessTcpOn"));
         Assert.That(Directory.Exists(home), Is.False);
     }
+
+    [Test]
+    public async Task Backend_TcpLoopbackWithOnlineGrant_FailsClosedBeforeAnyLaunch()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        using var home       = new SandboxTestHome();
+        var       components = home.Components with { AllowTcpLoopback = true };
+        // 环回 home 需要 v6 marker 与 TcpOff/TcpOn 账户对才满足就绪检查（离线腿依赖）。
+        await WriteMarkerAsync(components, 6, true);
+        await WriteUsersAsync(components);
+        var environment = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["TEMP"] = home.Components.SandboxHome
+        };
+        var policy = SandboxPolicyResolver.Resolve(SandboxPolicyKind.WorkspaceWrite,
+                                                   home.Components.SandboxHome, environment,
+                                                   allowTcpLoopback : true);
+        var launcher = new FakeSandboxRunnerLauncher
+        {
+            RunnerBody = (_, _, _) => throw new InvalidOperationException("The guard must fail closed before launch.")
+        };
+        var backend = new WindowsSandboxBackend(components, policy, environment, null, new FakeSetupInvoker(),
+                                                new FakeCredentialSource(), desktopFactory : new FakeDesktopFactory(),
+                                                runnerLauncher : launcher, limits : BackendTestLimits(),
+                                                allowNullDeviceAccess : _ => { },
+                                                validateWriteAcls : (_, _) => Task.CompletedTask);
+        var plan = new PreparedProcessExecution("cmd.exe", ["/c", "whoami"], home.Components.SandboxHome, 30, false, null)
+        {
+            NetworkAccessEnabled = true
+        };
+
+        // 逐次在线授予在 TCP 环回模式下与组合器的常设互斥守卫同语义：在预检、refresh 与
+        // 启动之前 fail closed，绝不以在线账户身份启动 runner 或创建桌面。拒绝按启动期校验
+        // 抛 ProcessExecutionStartException（InvalidOperationException 的子类）。
+        await TestAssert.ThrowsAsync<ProcessExecutionStartException>(() => backend.ExecuteAsync(
+            plan, new RecordingOutputCapture(), new RecordingOutputCapture(), CancellationToken.None));
+
+        Assert.That(launcher.LastRequest, Is.Null);
+
+        // 未申请网络的同一命令不受影响：凭据源、桌面与 runner 均为 fake，整条链路离线完成。
+        var offlinePlan = plan with { NetworkAccessEnabled = false };
+        var backendOffline = new WindowsSandboxBackend(components, policy, environment, null, new FakeSetupInvoker(),
+                                                       new FakeCredentialSource(),
+                                                       desktopFactory : new FakeDesktopFactory(),
+                                                       runnerLauncher : new FakeSandboxRunnerLauncher
+                                                       {
+                                                           RunnerBody = FakeRunnerBody
+                                                       },
+                                                       limits : BackendTestLimits(),
+                                                       allowNullDeviceAccess : _ => { },
+                                                       validateWriteAcls : (_, _) => Task.CompletedTask);
+        var result = await backendOffline.ExecuteAsync(offlinePlan, new RecordingOutputCapture(),
+                                                       new RecordingOutputCapture(), CancellationToken.None);
+        Assert.That(result.ExitCode, Is.EqualTo(0));
+    }
+
+    private static async Task FakeRunnerBody(Stream downstream, Stream upstream, CancellationToken end)
+    {
+        await RunnerFrameCodec.ReadFrameAsync(downstream, end);
+        await RunnerFrameCodec.WriteFrameAsync(upstream, "spawn_ready",
+                                               new RunnerSpawnReady { ProcessId = 7 }, end);
+        await RunnerFrameCodec.WriteFrameAsync(upstream, "exit",
+                                               new RunnerExitPayload { ExitCode = 0, TimedOut = false }, end);
+    }
+
+    private static WindowsSandboxBackendLimits BackendTestLimits() => new()
+    {
+        RefreshTimeout          = TimeSpan.FromSeconds(5),
+        SpawnReadyTimeout       = TimeSpan.FromSeconds(3),
+        CommunicationGrace      = TimeSpan.FromMilliseconds(300),
+        TerminationDrainTimeout = TimeSpan.FromMilliseconds(500),
+        RunnerExitTimeout       = TimeSpan.FromMilliseconds(500),
+        TerminationKillGrace    = TimeSpan.FromSeconds(1),
+        TerminateWriteTimeout   = TimeSpan.FromSeconds(1)
+    };
 
     private static WindowsSandboxComponents Components(string home, bool mode) => new()
     {

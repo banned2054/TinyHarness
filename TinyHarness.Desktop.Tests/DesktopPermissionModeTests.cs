@@ -302,7 +302,8 @@ public sealed class DesktopPermissionModeTests
         var payload = PayloadOf(reviewRequests[0]);
         Assert.That(payload.Select(property => property.Key).OrderBy(key => key).ToArray(), Is.EqualTo(new[]
         {
-            "arguments", "capability", "executionPolicy", "summary", "targets", "tool", "userInstructions"
+            "arguments", "capability", "executionPolicy", "requiresNetworkAccess", "summary", "targets", "tool",
+            "userInstructions"
         }));
         Assert.That(payload["tool"]!.GetValue<string>(), Is.EqualTo("shell"));
         // Desktop 链路的 GuardedTool 在后端身份后追加 workspace-access 行，断言按 backend 身份前缀匹配。

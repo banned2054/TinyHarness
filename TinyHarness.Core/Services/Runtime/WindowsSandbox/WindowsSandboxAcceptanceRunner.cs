@@ -125,6 +125,50 @@ public sealed record WindowsSandboxAcceptanceLimits
 
     /// <summary>
     ///     <para>
+    ///         在线用例期望随组合注入的代理 host:port（仅 host:port，绝不带 scheme、userinfo 或完整
+    ///         URL）；null 或空白时 env-proxy-echo 只做结构断言（键存在、HTTP 与 HTTPS 同值、NO_PROXY 精确）。
+    ///     </para>
+    ///     <para>
+    ///         The proxy host:port the online cases expect the composition to inject
+    ///         (host:port only, never a scheme, userinfo, or full URL); null or blank
+    ///         makes env-proxy-echo assert structure only (keys present, HTTP and
+    ///         HTTPS equal, NO_PROXY exact).
+    ///     </para>
+    /// </summary>
+    public string? OnlineProxyHostPort { get; init; }
+
+    /// <summary>
+    ///     <para>
+    ///         network-loopback-host 探测的宿主环回服务 host:port（如在线命名代理端点）；null 或空白
+    ///         时该用例记 INDETERMINATE（目标不适用），绝不改用非环回目标。
+    ///     </para>
+    ///     <para>
+    ///         The host loopback service host:port probed by network-loopback-host
+    ///         (for example the online named proxy endpoint); null or blank marks the
+    ///         case INDETERMINATE (target not applicable) and a non-loopback target is
+    ///         never substituted.
+    ///     </para>
+    /// </summary>
+    public string? HostLoopbackProbeTarget { get; init; }
+
+    /// <summary>
+    ///     <para>
+    ///         network-external 的轻量只读探测 URL；缺省使用不依赖 TLS 的 http://example.com/——
+    ///         沙箱账户的 schannel 客户端凭据在无用户 profile 时不可用（SEC_E_NO_CREDENTIALS），
+    ///         https 目标在该环境下必然失败。换成更重的目标不被允许。
+    ///     </para>
+    ///     <para>
+    ///         The lightweight read-only probe URL for network-external; the default
+    ///         http://example.com/ avoids a TLS dependency — the sandbox account's
+    ///         schannel client credentials are unavailable without a user profile
+    ///         (SEC_E_NO_CREDENTIALS), so https targets fail in that environment.
+    ///         Heavier targets are not allowed.
+    ///     </para>
+    /// </summary>
+    public string OnlineExternalProbeUrl { get; init; } = "http://example.com/";
+
+    /// <summary>
+    ///     <para>
     ///         回收/遗弃扫描覆盖的镜像名（不含 .exe）；测试可替换以模拟残留。sleeper 用 powershell
     ///         （Start-Sleep 不依赖网络；waitfor 走 SMB mailslot，会被断网过滤秒退，不是有效 sleeper）。
     ///     </para>
@@ -203,6 +247,7 @@ public sealed partial class WindowsSandboxAcceptanceRunner
     private readonly WindowsSandboxBackendFactory         _backendFactory;
     private readonly Func<string, IProcessOutputCapture>? _captureFactory;
     private readonly WindowsSandboxAcceptanceLimits       _limits;
+    private readonly SandboxNetworkPolicy                 _networkPolicy;
     private readonly SandboxVerifyWorkerSpawner?          _workerSpawner;
 
     private readonly string       _workspaceRoot;
@@ -217,7 +262,9 @@ public sealed partial class WindowsSandboxAcceptanceRunner
                                           string                               workspaceRoot,
                                           SandboxVerifyWorkerSpawner?          workerSpawner  = null,
                                           Func<string, IProcessOutputCapture>? captureFactory = null,
-                                          WindowsSandboxAcceptanceLimits?      limits         = null)
+                                          WindowsSandboxAcceptanceLimits?      limits         = null,
+                                          SandboxNetworkPolicy                 networkPolicy  =
+                                              SandboxNetworkPolicy.Restricted)
     {
         ArgumentNullException.ThrowIfNull(backendFactory);
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
@@ -231,6 +278,7 @@ public sealed partial class WindowsSandboxAcceptanceRunner
         _workerSpawner  = workerSpawner;
         _captureFactory = captureFactory;
         _limits         = limits ?? WindowsSandboxAcceptanceLimits.Default;
+        _networkPolicy  = networkPolicy;
     }
 
     /// <summary>
@@ -248,13 +296,53 @@ public sealed partial class WindowsSandboxAcceptanceRunner
 
     /// <summary>
     ///     <para>
-    ///         执行选定的用例并写报告。caseFilter 为 null 或空时执行全矩阵；未知名称抛
+    ///         network=enabled（常设在线）模式的精简用例集：身份、代理环境、经代理外网请求、宿主环回
+    ///         连通与四项安全不变量。全部命令以在线账户运行。
+    ///     </para>
+    ///     <para>
+    ///         The compact case set of the standing-online (network=enabled) mode:
+    ///         identity, proxy environment, an external request through the configured
+    ///         proxy, host-loopback reachability, and the four security invariants.
+    ///         Every command runs under the online account.
+    ///     </para>
+    /// </summary>
+    public static IReadOnlyList<string> EnabledCaseNames =>
+    [
+        "identity-whoami", "env-proxy-echo", "network-external", "network-loopback-host",
+        "metadata-protected", "write-denied-outside-roots", "credentials-dir-unreadable", "deny-probe"
+    ];
+
+    /// <summary>
+    ///     <para>当前模式接受的全部用例名：restricted 在固定矩阵外接受两个显式负向对照用例。</para>
+    ///     <para>
+    ///         All case names the current mode accepts; restricted additionally takes
+    ///         two explicit negative-control cases beyond the fixed matrix.
+    ///     </para>
+    /// </summary>
+    public static IReadOnlyList<string> SupportedCaseNames(SandboxNetworkPolicy networkPolicy) =>
+        networkPolicy == SandboxNetworkPolicy.Enabled
+            ? EnabledCaseNames
+            : [.. CaseNames, "env-proxy-echo", "network-external"];
+
+    /// <summary>
+    ///     <para>caseFilter 为空时按模式执行的全集：restricted 恒为 17 个固定用例（默认行为零变化）。</para>
+    ///     <para>
+    ///         The full set per mode when caseFilter is empty: restricted stays the
+    ///         fixed 17 cases (default behavior unchanged).
+    ///     </para>
+    /// </summary>
+    public static IReadOnlyList<string> DefaultCaseNames(SandboxNetworkPolicy networkPolicy) =>
+        networkPolicy == SandboxNetworkPolicy.Enabled ? EnabledCaseNames : CaseNames;
+
+    /// <summary>
+    ///     <para>
+    ///         执行选定的用例并写报告。caseFilter 为 null 或空时按网络模式执行全集；未知名称抛
     ///         ArgumentException。调用方取消以 OperationCanceledException 向上传播；总期限到期不抛出，
     ///         改为把剩余用例记 SKIPPED、被中断的用例记 FAIL。
     ///     </para>
     ///     <para>
     ///         Runs the selected cases and writes the report. A null or empty
-    ///         caseFilter runs the full matrix; unknown names throw
+    ///         caseFilter runs the mode's full set; unknown names throw
     ///         ArgumentException. Caller cancellation propagates as
     ///         OperationCanceledException; the overall deadline never throws — the
     ///         remaining cases become SKIPPED and the interrupted one FAIL.
@@ -316,6 +404,13 @@ public sealed partial class WindowsSandboxAcceptanceRunner
 
         var limitations = new List<string>(BaseLimitations);
         if (snapshot.MarkerError is { } markerError) limitations.Add($"setup marker 版本无法读取：{markerError}");
+        if (_networkPolicy == SandboxNetworkPolicy.Enabled)
+            limitations.Add("本报告为 network=enabled（常设在线）用例集：全部命令以在线账户运行，代理环境随组合注入" +
+                            "（记录仅到 host:port）；外网探测仅限轻量只读目标，其结果依赖代理与上游可用性；" +
+                            "安全不变量用例与 restricted 共享判定框架，不代表 external 网络的完整泄漏防护。");
+        limitations.Add("外网探测的 https 目标依赖沙箱账户的 schannel 客户端凭据；沙箱会话不加载账户用户 profile 时" +
+                        "AcquireCredentialsHandle 报 SEC_E_NO_CREDENTIALS，TLS 在该环境必然失败——探测缺省使用 " +
+                        "http://example.com/ 以隔离该环境因素，https 可用性须另行验证。");
 
         var report = new WindowsSandboxAcceptanceReport
         {
@@ -338,7 +433,53 @@ public sealed partial class WindowsSandboxAcceptanceRunner
         };
     }
 
+    /// <summary>
+    ///     <para>
+    ///         按网络模式构建用例矩阵：restricted 保持原有 17 个固定用例并追加两个显式负向对照
+    ///         （未被 --case 选择时绝不执行，默认行为零变化）；enabled 使用精简在线用例集。
+    ///     </para>
+    ///     <para>
+    ///         Builds the case matrix per network mode: restricted keeps the original
+    ///         fixed 17 cases and appends two explicit negative controls (never run
+    ///         unless selected by --case, so default behavior is unchanged); enabled
+    ///         uses the compact online case set.
+    ///     </para>
+    /// </summary>
     private List<AcceptanceCaseDefinition> BuildCaseDefinitions() =>
+        _networkPolicy == SandboxNetworkPolicy.Enabled ? BuildEnabledCaseDefinitions() : BuildRestrictedCaseDefinitions();
+
+    private List<AcceptanceCaseDefinition> BuildEnabledCaseDefinitions() =>
+    [
+        new("identity-whoami", SandboxPolicyKind.ReadOnly, "whoami 输出包含所选 online 沙箱账户名（network=enabled）",
+            "whoami.exe", IdentityWhoamiAsync),
+        new("env-proxy-echo", SandboxPolicyKind.WorkspaceWrite,
+            "代理环境随在线组合注入：HTTP_PROXY/HTTPS_PROXY 存在且同值（命中命名代理 host:port），" +
+            "NO_PROXY 恒为 localhost,127.0.0.1,::1，ALL_PROXY 不出现",
+            "cmd set HTTP_ / ALL_PROXY / NO_PROXY", EnvProxyEchoAsync),
+        new("network-external", SandboxPolicyKind.WorkspaceWrite,
+            "经配置代理的轻量只读外网请求返回 2xx（缺省 http://example.com/，不依赖 TLS）；代理或上游不可用时如实 FAIL",
+            "curl -w %{http_code} <轻量外网 URL>", NetworkExternalAsync),
+        new("network-loopback-host", SandboxPolicyKind.WorkspaceWrite,
+            "Online 账户对宿主环回服务（在线代理端点）的 TCP 连通：任何 HTTP 状态码均判定连通；" +
+            "连接拒绝或超时记 FAIL 并如实呈现环回阻断语义",
+            "curl http://<宿主环回 host:port>", NetworkLoopbackHostAsync),
+        new("metadata-protected", SandboxPolicyKind.WorkspaceWrite,
+            "workspace-write 策略下向 <ws>\\.git\\ 写入被拒绝（元数据只读保护）",
+            "cmd /c copy NUL <ws>\\.git\\",
+            MetadataProtectedAsync),
+        new("write-denied-outside-roots", SandboxPolicyKind.WorkspaceWrite,
+            "向所有写根之外写入被拒绝（非零退出且文件未创建）", "cmd /c copy NUL <写根之外>",
+            WriteDeniedOutsideRootsAsync),
+        new("credentials-dir-unreadable", SandboxPolicyKind.WorkspaceWrite,
+            "在线账户读取 <home>\\.sandbox-secrets 被拒绝（凭据目录不可读，目录列表不出现 sandbox_users）",
+            "cmd /c dir <home>\\.sandbox-secrets", CredentialsDirUnreadableAsync),
+        new("deny-probe", SandboxPolicyKind.WorkspaceWrite,
+            "deny-probe 经完整链路执行并退出 0（deny-read ACL 生效）",
+            "codex-windows-managed-deny-probe.exe",
+            DenyProbeAsync)
+    ];
+
+    private List<AcceptanceCaseDefinition> BuildRestrictedCaseDefinitions() =>
     [
         new("identity-whoami", SandboxPolicyKind.ReadOnly, "whoami 输出包含所选 offline 沙箱账户名",
             "whoami.exe", IdentityWhoamiAsync),
@@ -393,7 +534,15 @@ public sealed partial class WindowsSandboxAcceptanceRunner
             "cmd /c type large-output.txt", LargeOutputAsync),
         new("host-exit-reclaim", SandboxPolicyKind.WorkspaceWrite,
             "宿主（verify-worker）被 Kill 后有界窗口内无 runner/目标镜像幸存",
-            "sandbox verify-worker + Process.Kill", HostExitReclaimAsync)
+            "sandbox verify-worker + Process.Kill", HostExitReclaimAsync),
+        // 显式负向对照：仅在 --network restricted --case 选中时执行，断言受限组合不注入代理键。
+        new("env-proxy-echo", SandboxPolicyKind.WorkspaceWrite,
+            "受限组合不注入代理环境：HTTP_PROXY/HTTPS_PROXY/ALL_PROXY/NO_PROXY 均不出现",
+            "cmd set HTTP_ / ALL_PROXY / NO_PROXY", EnvProxyEchoAsync),
+        // 显式负向对照：受限模式下外网轻量请求必须失败（阻断证据；raw TCP 由 network-denied 覆盖）。
+        new("network-external", SandboxPolicyKind.WorkspaceWrite,
+            "受限模式下轻量外网请求不得成功：非零退出或无 HTTP 状态码",
+            "curl -w %{http_code} <轻量外网 URL>", NetworkExternalAsync)
     ];
 
     private async Task<SandboxAcceptanceCaseResult> IdentityWhoamiAsync(CancellationToken cancellationToken)
@@ -404,7 +553,9 @@ public sealed partial class WindowsSandboxAcceptanceRunner
             return Result(definition, SandboxAcceptanceVerdict.Indeterminate, null,
                           "host 缺少 whoami.exe（System32），无法执行身份对照。", stopwatch);
 
-        var account = _snapshotExecution!.Components.OfflineUsername;
+        var account = _networkPolicy == SandboxNetworkPolicy.Enabled
+            ? _snapshotExecution!.Components.OnlineUsername
+            : _snapshotExecution!.Components.OfflineUsername;
         var run = await ExecuteOnceAsync(SandboxPolicyKind.ReadOnly, null,
                                          new PreparedProcessExecution(whoami, [], _workspaceRoot,
                                                                       IdentityTimeoutSeconds, false, null),
@@ -841,6 +992,65 @@ public sealed partial class WindowsSandboxAcceptanceRunner
 
     /// <summary>
     ///     <para>
+    ///         凭据目录不可读：沙箱账户（含在线账户）对 &lt;home&gt;\.sandbox-secrets 没有任何 ACL 授权，
+    ///         dir 必须以非零退出失败，且绝不能出现 sandbox_users 目录项。判定前先对验收工作区根做
+    ///         dir 正对照（该账户必然可读）：正对照失败说明是 shell/执行环境异常而非 ACL 拒绝，
+    ///         防止 provision 回归时负向结果空洞通过。访问拒绝文本仅作参考证据——
+    ///         cmd 的本地化输出经 runner 的 UTF-8 解码会出现乱码，跨代码页不可靠，不作为判定依据。
+    ///     </para>
+    ///     <para>
+    ///         Unreadable credentials directory: sandbox accounts (including the
+    ///         online account) hold no ACL grant on &lt;home&gt;\.sandbox-secrets, so dir
+    ///         must fail with a non-zero exit and never a sandbox_users listing. Before
+    ///         judging, dir runs a positive control on the acceptance workspace root
+    ///         (necessarily readable for that account); a failed control means a
+    ///         shell/execution-environment fault rather than an ACL denial, so a
+    ///         provisioning regression cannot pass the case hollowly. The
+    ///         access-denied text stays informational only — cmd's localized output
+    ///         is mojibake after the runner's UTF-8 decoding and is unreliable across
+    ///         code pages, so it never decides the verdict.
+    ///     </para>
+    /// </summary>
+    private async Task<SandboxAcceptanceCaseResult> CredentialsDirUnreadableAsync(CancellationToken cancellationToken)
+    {
+        var definition  = Definition("credentials-dir-unreadable");
+        var stopwatch   = Stopwatch.StartNew();
+        var secretsPath = Path.Combine(_snapshotExecution!.Components.SandboxHome, ".sandbox-secrets");
+
+        // 正对照：对必然可读的验收工作区根执行同一形态的 dir，失败即执行环境异常（记 FAIL），
+        // 不得把这种失败误读成凭据目录的 ACL 拒绝。
+        // Positive control: run the same dir shape against the necessarily readable
+        // acceptance workspace root; a failure is an execution-environment fault
+        // (recorded FAIL) and must never be misread as the credentials ACL denial.
+        var control = await ExecuteOnceAsync(SandboxPolicyKind.WorkspaceWrite, null,
+                                             CmdPlan($"dir {CmdSafePath(_workspaceRoot)}", WriteProbeTimeoutSeconds),
+                                             "credentials-dir-readable-control", cancellationToken).ConfigureAwait(false);
+        if (control.Exception is not null || control.Result is not { ExitCode: 0, TimedOut: false })
+            return Result(definition, SandboxAcceptanceVerdict.Fail,
+                          Describe(control, FirstLine(control.Stderr?.Content)),
+                          $"可读路径正对照失败（期望 exit 0）：失败源于 shell/执行环境而非 ACL 拒绝，目标: {_workspaceRoot}。",
+                          stopwatch);
+
+        var run = await ExecuteOnceAsync(SandboxPolicyKind.WorkspaceWrite, null,
+                                         CmdPlan($"dir {CmdSafePath(secretsPath)}", WriteProbeTimeoutSeconds),
+                                         "credentials-dir-unreadable", cancellationToken).ConfigureAwait(false);
+
+        var output      = (run.Stdout?.Content ?? string.Empty) + "\n" + (run.Stderr?.Content ?? string.Empty);
+        var deniedText  = output.Contains("denied", StringComparison.OrdinalIgnoreCase) ||
+                          output.Contains("拒绝访问", StringComparison.Ordinal);
+        var listedUsers = output.Contains("sandbox_users", StringComparison.OrdinalIgnoreCase);
+        var actual      = Describe(run, $"访问拒绝文本可见: {deniedText}；凭据目录项泄露: {listedUsers}");
+        // 拒绝判定 = 非零退出且没有任何凭据目录项泄露；列出 sandbox_users 即隔离失效。
+        var passed = run.Exception is null                                           &&
+                     run.Result is { ExitCode: not null and not 0, TimedOut: false } &&
+                     !listedUsers;
+        return Result(definition, passed ? SandboxAcceptanceVerdict.Pass : SandboxAcceptanceVerdict.Fail, actual,
+                      $"期望目标: {secretsPath}；判定以非零退出加零泄露为准，拒绝文本受代码页影响仅供参考。" +
+                      "凭据文件内容与口令绝不进入报告。", stopwatch);
+    }
+
+    /// <summary>
+    ///     <para>
     ///         长 sleeper 计划：powershell Start-Sleep。与 waitfor 不同，它不依赖网络（waitfor 走
     ///         SMB mailslot，会被断网过滤秒退），是沙箱内可长期运行的有效 sleeper。
     ///     </para>
@@ -1037,14 +1247,15 @@ public sealed partial class WindowsSandboxAcceptanceRunner
         return index < 0 ? text.TrimEnd('\r') : text[..index].TrimEnd('\r');
     }
 
-    private static IReadOnlyList<string> ValidateCaseFilter(IReadOnlyList<string>? caseFilter)
+    private IReadOnlyList<string> ValidateCaseFilter(IReadOnlyList<string>? caseFilter)
     {
-        if (caseFilter is not { Count: > 0 }) return CaseNames;
+        if (caseFilter is not { Count: > 0 }) return DefaultCaseNames(_networkPolicy);
 
-        var unknown = caseFilter.Where(name => !CaseNames.Contains(name, StringComparer.Ordinal)).ToArray();
+        var supported = SupportedCaseNames(_networkPolicy);
+        var unknown   = caseFilter.Where(name => !supported.Contains(name, StringComparer.Ordinal)).ToArray();
         if (unknown.Length > 0)
             throw new ArgumentException(
-                                        $"未知的验收用例名: {string.Join(", ", unknown)}。有效名称: {string.Join(", ", CaseNames)}。");
+                                        $"未知的验收用例名: {string.Join(", ", unknown)}。有效名称: {string.Join(", ", supported)}。");
 
         return caseFilter.Distinct(StringComparer.Ordinal).ToArray();
     }

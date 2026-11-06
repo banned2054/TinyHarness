@@ -211,6 +211,20 @@ public sealed class ToolPreparation
     public string? ExecutionPolicy { get; init; }
 
     /// <summary>
+    ///     <para>
+    ///         本次调用申请在沙箱内启用网络（全网访问，含宿主本地代理）；缺省 false 不改变网络限制。
+    ///         权限引擎据此决定是否逐次审批，不表示已获得联网授权。
+    ///     </para>
+    ///     <para>
+    ///         Whether this invocation requests network access inside the sandbox (full
+    ///         network, including host-local proxies); default false keeps the sandbox
+    ///         restricted. The permission engine uses it to decide per-call approval;
+    ///         it never denotes granted network access by itself.
+    ///     </para>
+    /// </summary>
+    public bool RequiresNetworkAccess { get; init; }
+
+    /// <summary>
     ///     <para>本次调用将访问的规范化绝对路径；权限规则以此匹配范围，Agent Loop 与 CLI 用于展示。</para>
     ///     <para>
     ///         Normalized absolute resource paths this invocation will access. The
@@ -273,6 +287,7 @@ public sealed class ToolPreparation
             SessionConstraint      = SessionConstraint,
             SessionGrantConstraint = SessionGrantConstraint,
             ExecutionPolicy        = ExecutionPolicy,
+            RequiresNetworkAccess  = RequiresNetworkAccess,
             TargetPaths            = _targetPaths,
             InstructionScopes      = _instructionScopes,
             ExecutionPlan          = ExecutionPlan,

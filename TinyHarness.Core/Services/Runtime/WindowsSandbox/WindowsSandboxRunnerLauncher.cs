@@ -24,14 +24,37 @@ public interface ISandboxRunnerLauncher
 }
 
 /// <summary>
-///     runner 启动请求：runner 路径、沙箱账户（含明文密码，仅用于本次登录）与命令工作目录。
-///     The runner launch request: runner path, the sandbox account (its plaintext
-///     password used only for this logon), and the command working directory.
+///     <para>
+///         runner 启动请求：runner 路径、沙箱账户（含明文密码，仅用于本次登录）、命令工作目录，
+///         以及是否以 LOGON_WITH_PROFILE 加载账户 profile。
+///     </para>
+///     <para>
+///         The runner launch request: runner path, the sandbox account (its plaintext
+///         password used only for this logon), the command working directory, and
+///         whether the account profile is loaded via LOGON_WITH_PROFILE.
+///     </para>
 /// </summary>
+/// <remarks>
+///     <para>
+///         LoadUserProfile 仅应在生效在线时为 true：profile 加载使 LSASS 登录会话具备
+///         schannel 客户端凭据，缺失时沙箱内 TLS 全部以 SEC_E_NO_CREDENTIALS 失败；
+///         账户 profile 目录（C:\Users\&lt;account&gt;）随之成为该独立账户的可写面，属有意
+///         为之的安全权衡，仅 online 路径启用；offline 保持不加载，不扩大可写面。
+///     </para>
+///     <para>
+///         LoadUserProfile should be true only while the effective network is online:
+///         loading the profile gives the LSASS logon session schannel client credentials —
+///         without it every TLS handshake in the sandbox fails with SEC_E_NO_CREDENTIALS.
+///         The account profile directory (C:\Users\&lt;account&gt;) thereby becomes writable
+///         surface for that standalone account, a deliberate security tradeoff enabled only
+///         on the online path; offline keeps profile loading off, leaving that surface closed.
+///     </para>
+/// </remarks>
 public sealed record RunnerLaunchRequest(
     string                RunnerExecutablePath,
     WindowsSandboxAccount Account,
-    string                WorkingDirectory);
+    string                WorkingDirectory,
+    bool                  LoadUserProfile = false);
 
 /// <summary>
 ///     一条 runner 命令连接：Downstream 为父→runner（spawn/terminate），Upstream 为
@@ -76,6 +99,7 @@ public sealed partial class WindowsSandboxRunnerLauncher(TimeSpan? connectTimeou
 {
     private const uint CreateNoWindow              = 0x0800_0000;
     private const uint CreateUnicodeEnvironment    = 0x0000_0400;
+    private const uint LogonWithProfile            = 0x0000_0001; // LOGON_WITH_PROFILE
     private const uint StartfForceOffFeedback      = 0x0000_0020;
     private const uint ErrorModeFailCriticalErrors = 0x0000_0001;
     private const uint ErrorModeNoGpFaultErrorBox  = 0x0000_0002;
@@ -172,10 +196,12 @@ public sealed partial class WindowsSandboxRunnerLauncher(TimeSpan? connectTimeou
             };
             var processInfo = default(ProcessInformation);
             var password    = request.Account.Password;
+            // LOGON_WITH_PROFILE 仅在请求加载 profile 时传入：登录会话须加载账户 profile
+            // 才具备 schannel 客户端凭据；offline 路径保持不加载。
             var created = CreateProcessWithLogonW(request.Account.Username,
                                                   ".",
                                                   password,
-                                                  0, // LOGON_WITH_PROFILE off: legacy runtime, no profile load
+                                                  request.LoadUserProfile ? LogonWithProfile : 0,
                                                   null,
                                                   commandLine,
                                                   CreateNoWindow | CreateUnicodeEnvironment,

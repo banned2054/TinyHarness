@@ -20,14 +20,16 @@ namespace TinyHarness.Core.Services.Permissions;
 /// <remarks>
 ///     <para>
 ///         优先级为只读 worker 与未信任工作区的硬限制、工作区边界、显式拒绝、NeedsInspection 阻断、
-///         一次性授权、能力与范围授权、配置命令规则、默认策略；未知能力默认询问。
+///         完全开放放行、一次性与运行期授权、常设信任未开启时的网络申请、模式自动放行、
+///         配置命令规则、默认策略；未知能力默认询问。
 ///         这是应用层策略，不是 OS 沙箱；运行时另行强制文件系统边界。
 ///         Session 命名保留兼容用语，宿主须把临时授权状态限制为本次运行，不跨未来回合复活。
 ///     </para>
 ///     <para>
 ///         Priority is read-only worker and untrusted-workspace restrictions, workspace boundaries, explicit
-///         denies, NeedsInspection blocking, one-shot grants, capability-and-scope grants, configured command
-///         rules and default policy; unknown capabilities default to Ask.
+///         denies, NeedsInspection blocking, full-access allowance, one-shot and run-scoped grants,
+///         network requests while standing trust is off, mode auto-allows, configured command rules
+///         and default policy; unknown capabilities default to Ask.
 ///         This is application policy, not an OS sandbox; the runtime enforces filesystem boundaries separately.
 ///         Session naming is retained for compatibility; the host must limit temporary grant state
 ///         to the current run rather than revive it across future turns.
@@ -48,6 +50,7 @@ public sealed class PermissionEngine
     private readonly IReadOnlyList<ConfiguredCommandRule> _commandRules;
 
     private readonly bool                 _denyNonReadOnlyCapabilities;
+    private readonly bool                 _networkStandingEnabled;
     private readonly HashSet<string>      _oneShotApprovals = new(StringComparer.Ordinal);
     private readonly List<PermissionRule> _sessionDenies    = [];
     private readonly List<PermissionRule> _sessionGrants    = [];
@@ -70,9 +73,21 @@ public sealed class PermissionEngine
     ///         grant and command rule.
     ///     </para>
     /// </param>
+    /// <param name="sandboxNetworkStandingEnabled">
+    ///     <para>
+    ///         沙箱常设网络信任（可信用户设置的 Enabled 档）。缺省 false：每个网络申请都逐次审批；
+    ///         true 时网络申请走各模式既有路由，不再单独询问。
+    ///     </para>
+    ///     <para>
+    ///         Standing sandbox network trust from the trusted user settings (Enabled).
+    ///         Default false: every network request is approved per call; true lets network
+    ///         requests follow each mode's existing routing without a separate ask.
+    ///     </para>
+    /// </param>
     public PermissionEngine(string      workspaceRoot, IEnumerable<CommandRule>? commandRules = null,
                             bool        denyNonReadOnlyCapabilities = false,
-                            Func<bool>? workspaceReadOnly           = null)
+                            Func<bool>? workspaceReadOnly           = null,
+                            bool        sandboxNetworkStandingEnabled = false)
     {
         if (string.IsNullOrWhiteSpace(workspaceRoot))
             throw new ArgumentException("A workspace root is required.", nameof(workspaceRoot));
@@ -82,6 +97,7 @@ public sealed class PermissionEngine
                                             .ToArray();
         _denyNonReadOnlyCapabilities = denyNonReadOnlyCapabilities;
         _workspaceReadOnly           = workspaceReadOnly;
+        _networkStandingEnabled      = sandboxNetworkStandingEnabled;
     }
 
     /// <summary>
@@ -148,6 +164,10 @@ public sealed class PermissionEngine
         if (Mode is { } mode)
         {
             if (mode == SessionPermissionMode.FullAccess) return PermissionDecision.Allow;
+            // 常设信任未开启时网络申请逐次审批：只读或项目内写入的自动放行不得静默携带联网。
+            // host 工具路径恒无此申请；FullAccess 走宿主工具，先于本规则放行。
+            if (preparation.RequiresNetworkAccess && !_networkStandingEnabled)
+                return PermissionDecision.Ask;
             if (mode is SessionPermissionMode.ConfirmEveryAction or SessionPermissionMode.ReviewEveryAction)
                 return PermissionDecision.Ask;
             if (preparation.TargetPaths.Any(target => !Workspace.IsInside(_workspaceRoot, target)))
@@ -167,6 +187,11 @@ public sealed class PermissionEngine
         if (_oneShotApprovals.Contains(Fingerprint(preparation)) ||
             _sessionGrants.Any(rule => rule.Matches(preparation)))
             return PermissionDecision.Allow;
+
+        // 传统宿主的网络申请在显式授权之后仍逐次审批，不借用命令规则或默认策略；
+        // 授权约束绑定 network-access 行，跨网络状态不复用。
+        if (preparation.RequiresNetworkAccess && !_networkStandingEnabled)
+            return PermissionDecision.Ask;
 
         // 命令免审批必须精确匹配模式与规范化 cwd；direct 逐参数匹配，shell 精确匹配完整命令。
         if (string.Equals(preparation.Capability, "process.execute", StringComparison.Ordinal) &&

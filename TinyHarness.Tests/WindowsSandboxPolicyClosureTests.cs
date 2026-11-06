@@ -323,7 +323,12 @@ public class WindowsSandboxPolicyClosureTests
         Assert.That(Directory.Exists(expectedTemp), Is.True);
         Assert.That(composed.TargetEnvironment["TEMP"], Is.EqualTo(expectedTemp));
         Assert.That(composed.Policy.TempWriteRoots, Is.EqualTo([expectedTemp]));
-        Assert.That(composed.Policy.EffectiveWriteRoots, Is.EqualTo([workspace.Root, expectedTemp]));
+        // 派生的 NuGet 缓存根与工具根进入有效写根。
+        Assert.That(composed.Policy.EffectiveWriteRoots,
+                    Is.EqualTo([workspace.Root,
+                                expectedTemp,
+                                Path.Combine(home.Root, "nuget-cache"),
+                                Path.Combine(home.Root, "tools")]));
         foreach (var name in new[] { "USERPROFILE", "HOME", "DOTNET_CLI_HOME", "APPDATA", "LOCALAPPDATA" })
         {
             Assert.That(Workspace.IsInside(expectedTemp, composed.TargetEnvironment[name]), Is.True);
@@ -487,9 +492,10 @@ public class WindowsSandboxPolicyClosureTests
             AdditionalWriteRoots = [home.Root]
         };
 
-        // 把沙箱 home 声明为附加写根会使所有可信路径可被篡改；错误信息必须点名命中的写根。
+        // 把沙箱 home 声明为附加写根：写根覆盖 home 的凭据目录，Planner 的写根凭据重叠校验
+        // 先于组合器拒绝；错误信息必须点名命中的写根。
         var error =
-            TestAssert.Throws<InvalidOperationException>(() => WindowsSandboxComposer.Compose(settings, workspace.Root));
+            TestAssert.Throws<ArgumentException>(() => WindowsSandboxComposer.Compose(settings, workspace.Root));
         TestAssert.Contains(home.Root, error.Message, StringComparison.Ordinal);
     }
 
