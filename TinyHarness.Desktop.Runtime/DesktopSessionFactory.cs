@@ -304,7 +304,8 @@ public sealed partial class DesktopSessionFactory
                     try
                     {
                         model = CreateClient(ConfigFor(config, resolved.Profile, resolved.Model),
-                                             resolved.Profile, user.Settings?.Network);
+                                             resolved.Profile, user.Settings?.Network,
+                                             user.Settings?.ModelTimeouts);
                     }
                     catch (Exception ex) when (ex is ConfigException or InvalidOperationException)
                     {
@@ -321,7 +322,8 @@ public sealed partial class DesktopSessionFactory
                                            }, model, tools, WorkspacePrompts.Current, permissions, routedApprovals,
                                            sink,
                                            sessionWriter : writer, needsInspection : restored.NeedsInspection,
-                                           instructionLoader : instructions, knownSecrets : secrets);
+                                           instructionLoader : instructions, knownSecrets : secrets,
+                                           modelTimeouts : user.Settings?.ModelTimeouts);
                 // 目标缺失或显式重选时保持未绑定，历史仍可浏览；缺失由选择器状态提示，不向对话追加错误。
                 if (!request.Reselect && target is not null)
                 {
@@ -334,7 +336,7 @@ public sealed partial class DesktopSessionFactory
                             await ChangeAsync(host, target.Value.Profile, target.Value.Model,
                                               CurrentEffort(savedEffort, target.Value.Model),
                                               host.Session.ModelSelection!.Revision, cancellationToken, model,
-                                              user.Settings?.Network)
+                                              user.Settings?.Network, user.Settings?.ModelTimeouts)
                                .ConfigureAwait(false);
                         }
                         catch (Exception ex) when (ex is ConfigException or InvalidOperationException)
@@ -350,7 +352,7 @@ public sealed partial class DesktopSessionFactory
                 config = SelectConfig(config, user, request);
                 var profileName = request.ProfileName ?? resolution?.ProfileName;
                 var profile     = user.Profiles.SingleOrDefault(item => item.Name == profileName);
-                model = CreateClient(config, profile, user.Settings?.Network);
+                model = CreateClient(config, profile, user.Settings?.Network, user.Settings?.ModelTimeouts);
                 options = options with
                 {
                     Model = config.Model,
@@ -394,12 +396,14 @@ public sealed partial class DesktopSessionFactory
                 host = new ChatSessionHost(session, context, options, model, tools, WorkspacePrompts.Current,
                                            permissions, routedApprovals, sink, sessionWriter : writer,
                                            instructionLoader : instructions, initialInstructions : initial,
-                                           knownSecrets : secrets, credentialRoute : credentialRoute);
+                                           knownSecrets : secrets, credentialRoute : credentialRoute,
+                                           modelTimeouts : user.Settings?.ModelTimeouts);
                 await host.ChangeModelAsync(new SessionModelBinding(identity, model!, options.Context,
                                                                     options.ReasoningEffort,
                                                                     credentialRoute, profile?.Name,
                                                                     selected?.ReasoningEfforts, false,
-                                                                    NetworkRouteResolver.BindingIdentity(networkRoute)),
+                                                                    NetworkRouteResolver.BindingIdentity(networkRoute),
+                                                                    user.Settings?.ModelTimeouts),
                                             cancellationToken).ConfigureAwait(false);
                 _networkRoutes.Add(host, networkRoute);
             }
@@ -476,7 +480,8 @@ public sealed partial class DesktopSessionFactory
                                        static resolved => new SessionIndexUpdater(new SessionIndexStore(resolved)));
 
     private IChatCompletionClient CreateClient(TinyHarnessConfig config, UserProfile? profile,
-                                               NetworkSettings?  networkSettings)
+                                               NetworkSettings?  networkSettings,
+                                               ModelTimeouts?    modelTimeouts = null)
     {
         var key = ApiKeyReader.Read(config.ApiKeyEnvironmentVariable, config.ApiKeyCredentialTarget, _credentials,
                                     profile?.Name)
@@ -485,7 +490,8 @@ public sealed partial class DesktopSessionFactory
         if (config.ApiKeyEnvironmentVariable.Length > 0) _secrets[config.ApiKeyEnvironmentVariable] = key;
         return _modelFactory is null
             ? ModelClientFactory.Create(config.Model, config.Endpoint, key, config.ChatApi,
-                                        networkSettings, profile?.Network, _credentials)
+                                        networkSettings, profile?.Network, _credentials,
+                                        modelTimeouts ?? ModelTimeouts.Default)
             : _modelFactory(config, key);
     }
 
@@ -512,13 +518,14 @@ public sealed partial class DesktopSessionFactory
         var model = profile.Models.SingleOrDefault(item => item.Id == modelId) ??
                     throw new InvalidOperationException("模型已不存在。");
         return await ChangeAsync(host, profile, model, effort, revision, token,
-                                 networkSettings : user.Settings?.Network).ConfigureAwait(false);
+                                 networkSettings : user.Settings?.Network,
+                                 modelTimeouts : user.Settings?.ModelTimeouts).ConfigureAwait(false);
     }
 
     private async Task<SessionModelSelection> ChangeAsync(
         ChatSessionHost  host,     UserProfile       profile, UserProfileModel model, ModelReasoningEffort? effort,
         long             revision, CancellationToken token,   IChatCompletionClient? preparedClient = null,
-        NetworkSettings? networkSettings = null)
+        NetworkSettings? networkSettings = null, ModelTimeouts? modelTimeouts = null)
     {
         if (effort is { } level && model.ReasoningEfforts?.Contains(level) != true)
             throw new InvalidOperationException("模型未声明该强度。");
@@ -530,6 +537,8 @@ public sealed partial class DesktopSessionFactory
         {
             ContextWindowTokens = model.ContextWindowTokens
         };
+        // 本次组合实际采用的超时策略：与当前绑定不同时禁止快速复用，必须构造携带新策略的客户端。
+        var effectiveTimeouts = modelTimeouts ?? ModelTimeouts.Default;
         if (host.HasModelBinding &&
             current.Revision        == revision &&
             current.Model.ModelId   == model.Id &&
@@ -538,17 +547,18 @@ public sealed partial class DesktopSessionFactory
             current.CredentialRoute == Route(profile) &&
             current.ProfileHint     == profile.Name &&
             current.Context         == context &&
+            host.EffectiveModelTimeouts == effectiveTimeouts &&
             (current.ReasoningCapabilities ?? []).SequenceEqual(model.ReasoningEfforts ?? []) &&
             _networkRoutes.TryGetValue(host, out var previousRoute) && previousRoute == networkRoute)
             return await host.ChangeReasoningEffortAsync(effort, token, model.ReasoningEfforts,
                                                          revision).ConfigureAwait(false);
         var client = preparedClient ??
                      CreateClient(ConfigFor(new TinyHarnessConfig { WorkspaceRoot = host.Session.WorkspaceRoot },
-                                            profile, model), profile, networkSettings);
+                                            profile, model), profile, networkSettings, modelTimeouts);
         var candidate = new SessionModelBinding(new SessionModelIdentity(model.Id, profile.Endpoint, profile.ChatApi),
                                                 client,
                                                 context, effort, Route(profile), profile.Name, model.ReasoningEfforts,
-                                                preparedClient is null, networkRouteIdentity);
+                                                preparedClient is null, networkRouteIdentity, effectiveTimeouts);
         try
         {
             var selection = await host.ChangeModelAsync(candidate, token, revision).ConfigureAwait(false);
@@ -582,7 +592,8 @@ public sealed partial class DesktopSessionFactory
         var target = FindTarget(user, current, current.Model) ??
                      throw new InvalidOperationException("当前供应商或模型已不存在，请重新选择模型后发送。");
         await ChangeAsync(host, target.Profile, target.Model, CurrentEffort(current.ReasoningEffort, target.Model),
-                          current.Revision, token, networkSettings : user.Settings?.Network).ConfigureAwait(false);
+                          current.Revision, token, networkSettings : user.Settings?.Network,
+                          modelTimeouts : user.Settings?.ModelTimeouts).ConfigureAwait(false);
     }
 
     private static void EnsurePermissionConfigConfirmed(UserConfig user)

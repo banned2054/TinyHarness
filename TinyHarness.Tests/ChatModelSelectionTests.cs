@@ -1,3 +1,5 @@
+using System.Runtime.CompilerServices;
+using Microsoft.Extensions.AI;
 using TinyHarness.Cli.Services;
 using TinyHarness.Core.Models.Agent;
 using TinyHarness.Core.Models.ChatCompletions;
@@ -7,6 +9,8 @@ using TinyHarness.Core.Services.ChatCompletions;
 using TinyHarness.Core.Services.ChatCompletions.Configuration;
 using TinyHarness.Core.Services.Session;
 using TinyHarness.Core.Services.Tools;
+using MicrosoftChatMessage = Microsoft.Extensions.AI.ChatMessage;
+using TextContent = Microsoft.Extensions.AI.TextContent;
 
 namespace TinyHarness.Tests;
 
@@ -474,6 +478,109 @@ public class ChatModelSelectionTests
         Assert.That(output.ToString(), Does.Contain("network    : applied 代理 本地代理"));
     }
 
+    /// <summary>
+    ///     <para>
+    ///         绑定标签 = 客户端实际策略的回归：工厂闭包在目录加载后、应用前读到漂移后的"当前"
+    ///         策略并构造带新策略的真实 MicrosoftAiChatClient，宿主必须替换客户端（同模型也不
+    ///         再按 no-op 复用），双向（默认 ↔ 30s）生效；新实例实际接管后续请求，旧实例恰好
+    ///         释放一次；策略未漂移时同模型重选保持 no-op，冗余候选被宿主释放一次。
+    ///     </para>
+    ///     <para>
+    ///         Regression for "binding tag = the client's actual policy": the factory closure reads the
+    ///         drifted "current" policy after the catalog loads but before the apply and builds a real
+    ///         MicrosoftAiChatClient carrying it, so the host must replace the client (never a same-model
+    ///         no-op reuse) in both directions (default ↔ 30s); the new instance actually takes over
+    ///         later requests and the old one is released exactly once; with no drift a same-model
+    ///         reselection stays a no-op and the redundant candidate is released once by the host.
+    ///     </para>
+    /// </summary>
+    [Test]
+    public async Task ReselectingSameModelAdoptsRebuiltClientWhenItsTimeoutPolicyDrifts()
+    {
+        var catalog = Catalog();
+        var built   = new List<BuiltClient>();
+        var output  = new StringWriter();
+        // 工厂读"当前"策略；漂移在目录加载后、客户端构造前生效，模拟配置文件在菜单等待期间的同步点。
+        var currentPolicy  = ModelTimeouts.Default;
+        var pendingDrifts  = new Queue<ModelTimeouts>();
+        var selection = new ChatModelSelection(new StringReader(string.Empty), output,
+                                               _ =>
+                                               {
+                                                   if (pendingDrifts.Count > 0) currentPolicy = pendingDrifts.Dequeue();
+                                                   return Task.FromResult(catalog);
+                                               },
+                                               (_, _, _) =>
+                                               {
+                                                   var client = NewPolicyClient(currentPolicy);
+                                                   built.Add(client);
+                                                   return Task.FromResult<IChatCompletionClient>(client.Wrapper);
+                                               });
+        using var host = NewHost();
+
+        await selection.HandleAsync(host, "/models use big --provider work", false, TestToken());
+        var initial = host.Session.ModelSelection!;
+        Assert.Multiple(() =>
+        {
+            Assert.That(built, Has.Count.EqualTo(1));
+            Assert.That(host.EffectiveModelTimeouts, Is.EqualTo(ModelTimeouts.Default));
+            Assert.That(initial.Revision, Is.EqualTo(2));
+        });
+
+        // 漂移方向一（默认 → 30s）：同模型重选必须采纳携带新策略的重建客户端，而不是按 no-op 丢弃。
+        pendingDrifts.Enqueue(new ModelTimeouts { ResponseTimeoutSeconds = 30 });
+        await selection.HandleAsync(host, "/models use big --provider work", false, TestToken());
+        var widened = host.Session.ModelSelection!;
+        Assert.Multiple(() =>
+        {
+            Assert.That(built, Has.Count.EqualTo(2));
+            Assert.That(widened.Revision, Is.EqualTo(initial.Revision + 1));
+            Assert.That(widened.ContinuationEpoch, Is.EqualTo(initial.ContinuationEpoch));
+            Assert.That(widened.MessageBoundary, Is.EqualTo(initial.MessageBoundary));
+            Assert.That(host.EffectiveModelTimeouts, Is.EqualTo(new ModelTimeouts { ResponseTimeoutSeconds = 30 }));
+            Assert.That(host.EffectiveModelTimeouts, Is.EqualTo(built[1].Wrapper.EffectiveTimeouts));
+            Assert.That(built[0].Probe.Count, Is.EqualTo(1), "策略漂移后旧客户端应随绑定替换恰好释放一次");
+            Assert.That(built[1].Probe.Count, Is.EqualTo(0));
+        });
+
+        // 新实例在绑定中：宿主发送的真实请求落在重建客户端上，被替换实例不再收到请求。
+        await host.SubmitTurnAsync("probe after widening", TestToken());
+        Assert.Multiple(() =>
+        {
+            Assert.That(built[1].Inner.Requests, Is.EqualTo(1));
+            Assert.That(built[0].Inner.Requests, Is.Zero);
+        });
+
+        // 漂移方向二（30s → 默认）：旧期限不得继续生效，同样必须替换。
+        pendingDrifts.Enqueue(ModelTimeouts.Default);
+        await selection.HandleAsync(host, "/models use big --provider work", false, TestToken());
+        var reverted = host.Session.ModelSelection!;
+        Assert.Multiple(() =>
+        {
+            Assert.That(built, Has.Count.EqualTo(3));
+            Assert.That(reverted.Revision, Is.EqualTo(widened.Revision + 1));
+            Assert.That(host.EffectiveModelTimeouts, Is.EqualTo(ModelTimeouts.Default));
+            Assert.That(built[1].Probe.Count, Is.EqualTo(1), "反向漂移后上一实例也应恰好释放一次");
+            Assert.That(built[2].Probe.Count, Is.EqualTo(0));
+        });
+
+        await host.SubmitTurnAsync("probe after reverting", TestToken());
+        Assert.That(built[2].Inner.Requests, Is.EqualTo(1));
+
+        // 策略未漂移：同模型重选保持 no-op 复用——CLI 仍构造候选客户端，宿主释放冗余实例一次，
+        // 不产生修订，后续请求仍落在在用实例上。
+        await selection.HandleAsync(host, "/models use big --provider work", false, TestToken());
+        await host.SubmitTurnAsync("probe after noop", TestToken());
+        Assert.Multiple(() =>
+        {
+            Assert.That(built, Has.Count.EqualTo(4));
+            Assert.That(host.Session.ModelSelection!.Revision, Is.EqualTo(reverted.Revision));
+            Assert.That(host.EffectiveModelTimeouts, Is.EqualTo(ModelTimeouts.Default));
+            Assert.That(built[3].Probe.Count, Is.EqualTo(1), "no-op 候选的冗余客户端由宿主释放一次");
+            Assert.That(built[3].Inner.Requests, Is.Zero);
+            Assert.That(built[2].Inner.Requests, Is.EqualTo(2), "在用客户端应继续承载请求");
+        });
+    }
+
     [Test]
     public void CredentialRoute_DescribeChangesOnlyWithProfileOrCredentialReferences()
     {
@@ -504,5 +611,56 @@ public class ChatModelSelectionTests
         Assert.That(created, Is.EqualTo([("work", "flash")]));
         Assert.That(host.Session.ModelSelection!.Model.ModelId, Is.EqualTo("flash"));
         Assert.That(host.Session.Turns, Is.Empty);
+    }
+
+    // ---- 真实客户端载体（绑定标签 = EffectiveTimeouts 契约） -----------------------------
+
+    /// <summary>记录一次工厂构造：包装客户端、脚本化底层与释放探针，供替换与 no-op 断言使用。</summary>
+    private sealed record BuiltClient(MicrosoftAiChatClient Wrapper, ScriptedSdkClient Inner, DisposeProbe Probe);
+
+    /// <summary>经 internal 接缝以显式策略构造真实 MicrosoftAiChatClient，ownedResource 注入释放探针。</summary>
+    private static BuiltClient NewPolicyClient(ModelTimeouts timeouts)
+    {
+        var inner = new ScriptedSdkClient();
+        var probe = new DisposeProbe();
+        return new BuiltClient(new MicrosoftAiChatClient(inner, ChatApiKind.ChatCompletions, probe, null,
+                                                         timeouts, null), inner, probe);
+    }
+
+    /// <summary>释放探针：计数 ownedResource 的释放次数，验证"恰好释放一次"。</summary>
+    private sealed class DisposeProbe : IDisposable
+    {
+        public int Count { get; private set; }
+
+        public void Dispose() => Count++;
+    }
+
+    /// <summary>脚本化 M.E.AI 底层客户端：每次流请求立即产出一段文本与 stop 收尾，并统计请求数。</summary>
+    private sealed class ScriptedSdkClient : IChatClient
+    {
+        public int Requests { get; private set; }
+
+        public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
+            IEnumerable<MicrosoftChatMessage> messages, ChatOptions? options,
+            [EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            Requests++;
+            await Task.Yield();
+            yield return new ChatResponseUpdate(null, new List<AIContent> { new TextContent("scripted answer") });
+            yield return new ChatResponseUpdate(null, new List<AIContent>())
+            {
+                FinishReason = ChatFinishReason.Stop
+            };
+        }
+
+        public Task<ChatResponse> GetResponseAsync(
+            IEnumerable<MicrosoftChatMessage> messages, ChatOptions? options, CancellationToken cancellationToken) =>
+            throw new NotSupportedException("This fake only supports streaming.");
+
+        public object? GetService(Type serviceType, object? serviceKey = null) => null;
+
+        public void Dispose()
+        {
+        }
     }
 }

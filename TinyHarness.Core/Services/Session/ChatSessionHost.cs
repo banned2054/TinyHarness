@@ -105,12 +105,14 @@ public sealed partial class ChatSessionHost : IDisposable
                            ProjectInstructionSnapshot? initialInstructions = null,
                            IReadOnlyDictionary<string, string>? knownSecrets = null,
                            string? credentialRoute = null,
-                           bool ownsModelClient = true)
+                           bool ownsModelClient = true,
+                           ModelTimeouts? modelTimeouts = null)
         : this(new ChatSession(NewId(), workspaceRoot, model), ContextFor(options), options,
                // 新会话必须携带可执行客户端；仅恢复接管允许未绑定等待显式重选目标。
                modelClient ?? throw new ArgumentNullException(nameof(modelClient)), tools,
                systemPrompt, permissions, approver, events, recorderFactory, sessionWriterFactory, null,
-               instructionLoader, initialInstructions, knownSecrets, credentialRoute, ownsModelClient)
+               instructionLoader, initialInstructions, knownSecrets, credentialRoute, ownsModelClient,
+               modelTimeouts)
     {
     }
 
@@ -146,6 +148,16 @@ public sealed partial class ChatSessionHost : IDisposable
     ///         re-selection — sending stays prohibited until a candidate binding is applied through
     ///         <c>ChangeModelAsync</c>. On failure the client stays with the caller.
     ///     </para>
+    ///     <para>
+    ///         <paramref name="modelTimeouts" /> 是组合层构造 <paramref name="modelClient" /> 时实际采用的超时策略，
+    ///         仅记录进运行时绑定供策略变化判定；null 沿用 <see cref="ModelTimeouts.Default" />，不进入持久化选择。
+    ///     </para>
+    ///     <para>
+    ///         <paramref name="modelTimeouts" /> is the timeout policy the composition actually adopted when building
+    ///         <paramref name="modelClient" />; it is recorded only on the runtime binding for policy-change
+    ///         detection, and null selects <see cref="ModelTimeouts.Default" /> without entering the persisted
+    ///         selection.
+    ///     </para>
     /// </remarks>
     public ChatSessionHost(ChatSession session,
                            ConversationContext context,
@@ -163,10 +175,12 @@ public sealed partial class ChatSessionHost : IDisposable
                            ProjectInstructionSnapshot? initialInstructions = null,
                            IReadOnlyDictionary<string, string>? knownSecrets = null,
                            string? credentialRoute = null,
-                           bool ownsModelClient = true)
+                           bool ownsModelClient = true,
+                           ModelTimeouts? modelTimeouts = null)
         : this(session, context, options, modelClient, tools, systemPrompt, permissions, approver, events,
                recorderFactory, sessionWriter is null ? null : _ => sessionWriter, needsInspection,
-               instructionLoader, initialInstructions, knownSecrets, credentialRoute, ownsModelClient)
+               instructionLoader, initialInstructions, knownSecrets, credentialRoute, ownsModelClient,
+               modelTimeouts)
     {
     }
 
@@ -193,7 +207,8 @@ public sealed partial class ChatSessionHost : IDisposable
                             ProjectInstructionSnapshot? initialInstructions,
                             IReadOnlyDictionary<string, string>? knownSecrets,
                             string? credentialRoute,
-                            bool ownsModelClient)
+                            bool ownsModelClient,
+                            ModelTimeouts? modelTimeouts)
     {
         ArgumentNullException.ThrowIfNull(session);
         ArgumentNullException.ThrowIfNull(context);
@@ -275,7 +290,8 @@ public sealed partial class ChatSessionHost : IDisposable
                                                session.ModelSelection.ProfileHint,
                                                session.ModelSelection.ReasoningCapabilities,
                                                ownsModelClient,
-                                               session.ModelSelection.NetworkRouteIdentity);
+                                               session.ModelSelection.NetworkRouteIdentity,
+                                               modelTimeouts);
         _sessionWriter = sessionWriterFactory?.Invoke(session.Id);
     }
 
@@ -299,6 +315,20 @@ public sealed partial class ChatSessionHost : IDisposable
     ///     </para>
     /// </summary>
     public bool HasModelBinding => Volatile.Read(ref _binding) is not null;
+
+    /// <summary>
+    ///     <para>
+    ///         当前绑定客户端实际采用的超时策略；未绑定时返回默认值。组合层据此在复用前判断
+    ///         超时策略是否变化，变化时必须构造新客户端而不是复用。
+    ///     </para>
+    ///     <para>
+    ///         The timeout policy the current binding's client actually uses; the default is returned while unbound.
+    ///         The composition checks it before reuse: a changed policy requires building a new client instead of
+    ///         reusing the old one.
+    ///     </para>
+    /// </summary>
+    public ModelTimeouts EffectiveModelTimeouts =>
+        Volatile.Read(ref _binding)?.EffectiveTimeouts ?? ModelTimeouts.Default;
 
     /// <summary>
     ///     <para>

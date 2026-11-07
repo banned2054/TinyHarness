@@ -236,7 +236,9 @@ internal static class Program
                                              instructionLoader : instructionLoader,
                                              initialInstructions : initialInstructions,
                                              knownSecrets : composition.KnownSecrets,
-                                             credentialRoute : composition.CredentialRoute);
+                                             credentialRoute : composition.CredentialRoute,
+                                             modelTimeouts : (composition.Model as MicrosoftAiChatClient)
+                                                ?.EffectiveTimeouts);
         activeHost = host;
 
         await host.ChangeApprovalModeAsync(composition.DefaultApprovalMode, cts.Token).ConfigureAwait(false);
@@ -430,7 +432,9 @@ internal static class Program
                                                   initialInstructions : instructions,
                                                   knownSecrets : composition.KnownSecrets,
                                                   credentialRoute : selectedRoute,
-                                                  ownsModelClient : draft is not null);
+                                                  ownsModelClient : draft is not null,
+                                                  modelTimeouts : (selectedClient as MicrosoftAiChatClient)
+                                                                     ?.EffectiveTimeouts);
                 await createdHost.ChangeModelAsync(new SessionModelBinding(selectedIdentity, selectedClient!,
                                                                            selectedOptions.Context,
                                                                            selectedOptions.ReasoningEffort,
@@ -439,7 +443,9 @@ internal static class Program
                                                                            draft?.Model.ReasoningEfforts ??
                                                                            initialModel?.ReasoningEfforts, false,
                                                                            (selectedClient as MicrosoftAiChatClient)
-                                                                         ?.NetworkRouteIdentity),
+                                                                         ?.NetworkRouteIdentity,
+                                                                           (selectedClient as MicrosoftAiChatClient)
+                                                                         ?.EffectiveTimeouts),
                                                    token).ConfigureAwait(false);
                 await createdHost.ChangeApprovalModeAsync(composition.DefaultApprovalMode, token)
                                  .ConfigureAwait(false);
@@ -538,7 +544,9 @@ internal static class Program
                                            needsInspection : restored.NeedsInspection,
                                            instructionLoader : instructionLoader,
                                            knownSecrets : composition.KnownSecrets,
-                                           ownsModelClient : !ReferenceEquals(target.Client, composition.Model));
+                                           ownsModelClient : !ReferenceEquals(target.Client, composition.Model),
+                                           modelTimeouts : (target.Client as MicrosoftAiChatClient)
+                                                              ?.EffectiveTimeouts);
 
                 // 恢复不经过会话内切换入口：把本次实际使用的客户端路由交给 Core 核对；
                 // 不一致时按选择事务采纳当前路由并开启新 epoch，隔离旧路由产生的 opaque 推理。
@@ -557,7 +565,9 @@ internal static class Program
                                                                         target.CurrentCapabilities,
                                                                         false,
                                                                         (target.Client as MicrosoftAiChatClient)
-                                                                      ?.NetworkRouteIdentity),
+                                                                      ?.NetworkRouteIdentity,
+                                                                        (target.Client as MicrosoftAiChatClient)
+                                                                      ?.EffectiveTimeouts),
                                                 token, current.Revision).ConfigureAwait(false);
                     await Console.Out.WriteLineAsync(
                                                      $"  window    : the model's current context window ({refreshed.ContextWindowTokens:N0} tokens) " +
@@ -645,7 +655,8 @@ internal static class Program
             var user = await UserConfigStore.LoadAsync(UserConfigStore.DefaultFilePath(), token)
                                             .ConfigureAwait(false);
             return ModelClientFactory.Create(modelId, profile.Endpoint, apiKey, profile.ChatApi,
-                                             user.Settings?.Network, profile.Network, credentials);
+                                             user.Settings?.Network, profile.Network, credentials,
+                                             user.Settings?.ModelTimeouts ?? ModelTimeouts.Default);
         }
 
         console.ModelSelection = draftSelector =
@@ -858,7 +869,8 @@ internal static class Program
 
         return (ModelClientFactory.Create(selected.Model.Id, selected.Profile.Endpoint, apiKey,
                                           selected.Profile.ChatApi, user.Settings?.Network,
-                                          selected.Profile.Network, credentials), selected.Model.Id);
+                                          selected.Profile.Network, credentials,
+                                          user.Settings?.ModelTimeouts ?? ModelTimeouts.Default), selected.Model.Id);
     }
 
     /// <summary>
@@ -1027,7 +1039,8 @@ internal static class Program
             ? null
             : ModelClientFactory.Create(config.Model, config.Endpoint, apiKey, config.ChatApi,
                                         userConfig.Settings?.Network, networkProfile?.Network,
-                                        new WindowsCredentialStore());
+                                        new WindowsCredentialStore(),
+                                        userConfig.Settings?.ModelTimeouts ?? ModelTimeouts.Default);
         var workspace = new Workspace(config.WorkspaceRoot);
         var tools = BuildTools(workspace, config, apiKey, executionPolicy, sandbox?.Backend, knownSecrets, access,
                                resourcePolicy, grants);
@@ -1060,8 +1073,8 @@ internal static class Program
                                                                    config.ApiKeyEnvironmentVariable,
                                                                    config.ApiKeyCredentialTarget),
                                     knownSecrets, sandbox, settings, protectedPaths, executionPolicy, model, tools,
-                                    permissions, defaultApprovalMode, options, sessionStoreDirectory, access,
-                                    sessionIndexUpdater);
+                                    permissions, defaultApprovalMode, options,
+                                    sessionStoreDirectory, access, sessionIndexUpdater);
     }
 
     /// <summary>
@@ -1111,7 +1124,8 @@ internal static class Program
                                                          .ConfigureAwait(false);
         var model = ModelClientFactory.Create(hostConfig.Model, hostConfig.Endpoint,
                                               hostConfig.ApiKey, hostConfig.ChatApi,
-                                              hostConfig.Network, hostConfig.ProviderNetwork, credentials);
+                                              hostConfig.Network, hostConfig.ProviderNetwork, credentials,
+                                              hostConfig.ModelTimeouts);
         using var ownedModel = model as IDisposable;
         var       runner     = new WorkerRunner(model, hostConfig.WorkspaceRoot, hostConfig.ExecutionOptions);
 

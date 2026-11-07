@@ -37,14 +37,17 @@ public sealed partial class ChatSessionHost
     ///     <para>
     ///         候选携带可信配置派生的事实：目标身份、上下文、强度、凭据路由、profile 提示与强度能力快照；
     ///         选择记录据此固化前一修订、选择时间与策略版本。no-op 比较覆盖影响请求和历史解释的全部策略信息，
-    ///         不因等价新客户端实例产生修订；冗余候选客户端由宿主释放一次。
+    ///         并额外比较运行时绑定的有效超时策略（不属于持久化选择）；超时策略变化按真实切换采纳新客户端，
+    ///         不重置推理连续性。冗余候选客户端由宿主释放一次。
     ///     </para>
     ///     <para>
     ///         Candidates carry facts derived from trusted configuration: target identity, context, effort, credential
     ///         route, profile hint, and the effort capability snapshot; the selection record materializes the previous
     ///         revision, selection time, and policy versions from it. The no-op comparison covers every policy input
-    ///         that affects requests or history interpretation and never creates a revision merely because an
-    ///         equivalent client instance was rebuilt; the redundant candidate client is released once by the host.
+    ///         that affects requests or history interpretation and additionally compares the runtime binding's
+    ///         effective timeout policy (not part of the persisted selection); a timeout-policy change adopts the new
+    ///         client as a real switch without resetting reasoning continuity. The redundant candidate client is
+    ///         released once by the host.
     ///     </para>
     ///     <para>
     ///         持久化会话在上下文为空时首次提交选择，会先确立与系统提示一致的 system 消息再一并提交，
@@ -110,11 +113,14 @@ public sealed partial class ChatSessionHost
             selection.Validate();
 
             // 无变化短路只对已可靠保存且已按 /2 契约记录的选择生效；仅内存种子、未持久化或旧 /1 记录
-            // 仍须通过一次提交固化，等价新客户端实例不构成修订。冗余候选的客户端归宿主释放一次。
+            // 仍须通过一次提交固化，等价新客户端实例不构成修订。超时策略是运行时绑定事实：策略变化时
+            // 按真实切换采纳新客户端并释放旧绑定，不重置推理连续性。冗余候选的客户端归宿主释放一次。
             var selectionDurable = _sessionWriter is null ||
                                    _sessionWriter.PersistedModelSelectionCount >= Session.ModelSelections.Count;
-            if (Volatile.Read(ref _binding) is not null && selectionDurable && !newEpoch &&
-                PolicyEquals(current, selection))
+            var boundBinding     = Volatile.Read(ref _binding);
+            if (boundBinding is not null && selectionDurable && !newEpoch &&
+                PolicyEquals(current, selection) &&
+                boundBinding.EffectiveTimeouts == candidate.EffectiveTimeouts)
             {
                 ReleaseCandidateAfterNoOp(candidate);
                 return current;
@@ -189,7 +195,7 @@ public sealed partial class ChatSessionHost
                                                         reasoningEffort, current.CredentialRoute, current.ProfileHint,
                                                         declaredCapabilities ?? current.ReasoningCapabilities,
                                                         false,
-                                                        current.NetworkRouteIdentity),
+                                                        current.NetworkRouteIdentity, binding.EffectiveTimeouts),
                                 cancellationToken,
                                 expectedRevision ?? current.Revision);
     }
@@ -233,7 +239,7 @@ public sealed partial class ChatSessionHost
                                                         current.ReasoningEffort, credentialRoute, current.ProfileHint,
                                                         current.ReasoningCapabilities,
                                                         false,
-                                                        current.NetworkRouteIdentity),
+                                                        current.NetworkRouteIdentity, binding.EffectiveTimeouts),
                                 cancellationToken,
                                 current.Revision);
     }
@@ -255,7 +261,7 @@ public sealed partial class ChatSessionHost
                                                         current.ReasoningEffort, current.CredentialRoute,
                                                         current.ProfileHint, current.ReasoningCapabilities,
                                                         false,
-                                                        networkRouteIdentity),
+                                                        networkRouteIdentity, binding.EffectiveTimeouts),
                                 cancellationToken,
                                 current.Revision);
     }

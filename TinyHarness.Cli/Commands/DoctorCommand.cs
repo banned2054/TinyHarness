@@ -142,6 +142,7 @@ internal static class DoctorCommand
         {
             var connectOk = await ConnectAsync(context, config, endpointValid, key,
                                                userConfig.Settings?.Network, networkProfile?.Network,
+                                               userConfig.Settings?.ModelTimeouts ?? ModelTimeouts.Default,
                                                cancellationToken)
                .ConfigureAwait(false);
             if (!connectOk) failures++;
@@ -164,7 +165,8 @@ internal static class DoctorCommand
     /// </summary>
     private static async Task<bool> ConnectAsync(
         CommandContext   context,         TinyHarnessConfig config,          bool endpointValid, ApiKeyStatus key,
-        NetworkSettings? networkSettings, NetworkRoute?     providerNetwork, CancellationToken cancellationToken)
+        NetworkSettings? networkSettings, NetworkRoute?     providerNetwork, ModelTimeouts       modelTimeouts,
+        CancellationToken cancellationToken)
     {
         var io = context.Io;
         await io.WriteLineAsync(string.Empty, cancellationToken).ConfigureAwait(false);
@@ -210,7 +212,8 @@ internal static class DoctorCommand
         try
         {
             var client = ModelClientFactory.Create(config.Model, config.Endpoint, apiKey, config.ChatApi,
-                                                   networkSettings, providerNetwork, context.Credentials);
+                                                   networkSettings, providerNetwork, context.Credentials,
+                                                   modelTimeouts);
             using var ownedClient = client as IDisposable;
             var request = new ChatCompletionRequest
             {

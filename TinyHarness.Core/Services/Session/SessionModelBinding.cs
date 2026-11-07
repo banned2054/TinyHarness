@@ -44,11 +44,22 @@ public sealed class SessionModelBinding : IDisposable
     ///         responsibility.
     ///     </para>
     /// </summary>
+    /// <param name="effectiveTimeouts">
+    ///     <para>
+    ///         组合层构造该客户端时实际采用的超时策略；null 沿用 <see cref="ModelTimeouts.Default" />。
+    ///         宿主据此识别策略变化并替换客户端，不进入持久化选择。
+    ///     </para>
+    ///     <para>
+    ///         The timeout policy the composition actually adopted when building this client; null selects
+    ///         <see cref="ModelTimeouts.Default" />. The host uses it to detect policy changes and replace clients;
+    ///         it never enters the persisted selection.
+    ///     </para>
+    /// </param>
     public SessionModelBinding(
         SessionModelIdentity model, IChatCompletionClient client, ContextOptions? context,
         ModelReasoningEffort? reasoningEffort, string? credentialRoute = null, string? profileHint = null,
         IReadOnlyList<ModelReasoningEffort>? reasoningCapabilities = null, bool ownsClient = true,
-        string? networkRouteIdentity = null)
+        string? networkRouteIdentity = null, ModelTimeouts? effectiveTimeouts = null)
     {
         ArgumentNullException.ThrowIfNull(model);
         ArgumentNullException.ThrowIfNull(client);
@@ -69,6 +80,7 @@ public sealed class SessionModelBinding : IDisposable
         ProfileHint           = profileHint;
         ReasoningCapabilities = reasoningCapabilities?.ToArray();
         NetworkRouteIdentity  = networkRouteIdentity;
+        EffectiveTimeouts     = effectiveTimeouts ?? ModelTimeouts.Default;
         OwnsClient            = ownsClient;
     }
 
@@ -80,6 +92,19 @@ public sealed class SessionModelBinding : IDisposable
     public string?                              ProfileHint           { get; }
     public IReadOnlyList<ModelReasoningEffort>? ReasoningCapabilities { get; }
     public string?                              NetworkRouteIdentity  { get; }
+
+    /// <summary>
+    ///     <para>
+    ///         本绑定的客户端实际采用的超时策略；组合层已按该策略构造客户端，策略变化意味着
+    ///         必须替换客户端，不属于持久化选择的比较范围。
+    ///     </para>
+    ///     <para>
+    ///         The timeout policy this binding's client actually uses; the composition built the client with it,
+    ///         a policy change means the client must be replaced, and it stays outside the persisted-selection
+    ///         comparison.
+    ///     </para>
+    /// </summary>
+    public ModelTimeouts EffectiveTimeouts { get; }
 
     /// <summary>是否已结束生命周期；释放幂等，重复释放不再次触碰客户端。Whether the binding is spent; disposal is idempotent.</summary>
     public bool IsReleased => Volatile.Read(ref _released) != 0;

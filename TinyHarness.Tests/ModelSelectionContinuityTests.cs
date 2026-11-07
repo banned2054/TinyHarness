@@ -1,5 +1,7 @@
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Microsoft.Extensions.AI;
 using TinyHarness.Core.Models.Agent;
 using TinyHarness.Core.Models.ChatCompletions;
 using TinyHarness.Core.Models.Configuration;
@@ -8,6 +10,9 @@ using TinyHarness.Core.Services.ChatCompletions;
 using TinyHarness.Core.Services.Persistence;
 using TinyHarness.Core.Services.Session;
 using TinyHarness.Core.Services.Tools;
+using MicrosoftChatMessage = Microsoft.Extensions.AI.ChatMessage;
+using ChatRole = TinyHarness.Core.Models.ChatCompletions.ChatRole;
+using TextContent = Microsoft.Extensions.AI.TextContent;
 
 namespace TinyHarness.Tests;
 
@@ -134,6 +139,93 @@ public class ModelSelectionContinuityTests
         Assert.That(selection.ReasoningStartMessageIndex, Is.EqualTo(0));
         var sent = client.RequestLog[1].Messages.Single(message => message.Role == ChatRole.Assistant);
         Assert.That(TestAssert.Single(sent.Reasoning!).ProtectedData, Is.EqualTo("opaque-one"));
+    }
+
+    [Test]
+    public async Task ChangeModel_TimeoutPolicyChangeAdoptsNewClientAndKeepsContinuity()
+    {
+        using var store     = new TestTempDir();
+        var       first     = new FakeChatClient();
+        first.Enqueue(FakeChatClient.Text("answer one"));
+        var second = new FakeChatClient();
+        second.Enqueue(FakeChatClient.Text("answer two"));
+        var redundant = new FakeChatClient();
+        var fourth    = new FakeChatClient();
+        fourth.Enqueue(FakeChatClient.Text("answer four"));
+        using var host = NewHost(store, first, "work|env:WORK_KEY");
+
+        await host.SubmitTurnAsync("first question", CancellationToken.None);
+        var materialized = await host.ChangeModelAsync(
+            new SessionModelBinding(Identity, second, Options().Context, null, "work|env:WORK_KEY"),
+            CancellationToken.None);
+        await host.SubmitTurnAsync("second question", CancellationToken.None);
+
+        // 相同策略（含默认超时）的等价候选仍按 no-op 丢弃：不产生修订，冗余客户端从未被使用。
+        var noop = await host.ChangeModelAsync(
+            new SessionModelBinding(Identity, redundant, Options().Context, null, "work|env:WORK_KEY"),
+            CancellationToken.None);
+        // 超时策略变化必须真实替换客户端，但不重置推理连续性。
+        var switched = await host.ChangeModelAsync(
+            new SessionModelBinding(Identity, fourth, Options().Context, null, "work|env:WORK_KEY",
+                                    effectiveTimeouts : new ModelTimeouts { ResponseTimeoutSeconds = 30 }),
+            CancellationToken.None);
+        var run = await host.SubmitTurnAsync("third question", CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(run.Result!.Status, Is.EqualTo(AgentStatus.Completed), run.Result.Error);
+            Assert.That(ReferenceEquals(noop, materialized), Is.True, "相同策略重复选择应返回当前选择（no-op）");
+            Assert.That(redundant.RequestLog, Is.Empty);
+            Assert.That(switched.Revision, Is.EqualTo(materialized.Revision + 1));
+            Assert.That(switched.ContinuationEpoch, Is.EqualTo(materialized.ContinuationEpoch));
+            Assert.That(switched.ReasoningStartMessageIndex, Is.EqualTo(materialized.ReasoningStartMessageIndex));
+            Assert.That(host.EffectiveModelTimeouts.ResponseTimeoutSeconds, Is.EqualTo(30));
+            Assert.That(fourth.RequestLog, Has.Count.EqualTo(1), "超时策略变化后新客户端应接管后续请求");
+        });
+    }
+
+    /// <summary>
+    ///     <para>
+    ///         run 入口的初始快照契约（组合缝）：宿主以带非默认超时策略的真实 MicrosoftAiChatClient
+    ///         构造并传入 <c>modelTimeouts:</c> 时，EffectiveModelTimeouts 与初始绑定标签必须等于
+    ///         该客户端实际策略，首个请求落在该客户端上。组合层（Program 的 run 入口）传参本身
+    ///         由独立审查覆盖，此处固化 ChatSessionHost 构造契约。
+    ///     </para>
+    ///     <para>
+    ///         The run entry's initial snapshot contract (composition seam): when the host is constructed
+    ///         with a real MicrosoftAiChatClient carrying non-default timeouts plus the
+    ///         <c>modelTimeouts:</c> argument, EffectiveModelTimeouts and the initial binding tag must equal
+    ///         the client's actual policy, and the first request lands on that client. The composition's own
+    ///         argument passing (Program's run entry) is covered by separate review; this pins the
+    ///         ChatSessionHost construction contract.
+    ///     </para>
+    /// </summary>
+    [Test]
+    public async Task Constructor_SnapshotsClientTimeoutPolicyAsInitialBinding()
+    {
+        using var store = new TestTempDir();
+        var timeouts = new ModelTimeouts
+        {
+            StreamIdleTimeoutSeconds = 42, ResponseTimeoutSeconds = 17, ApprovalTimeoutSeconds = 61
+        };
+        var inner = new ScriptedSdkClient();
+        using var client = new MicrosoftAiChatClient(inner, ChatApiKind.ChatCompletions, null, null,
+                                                     timeouts, null);
+        using var host = new ChatSessionHost(WorkspaceRoot, Identity, Options(), client, new ToolRegistry([]),
+                                             SystemPrompt,
+                                             sessionWriterFactory : id => new SessionStoreWriter(store.Root, id),
+                                             credentialRoute : "work|env:WORK_KEY",
+                                             modelTimeouts : client.EffectiveTimeouts);
+
+        Assert.That(host.EffectiveModelTimeouts, Is.EqualTo(timeouts));
+        var run = await host.SubmitTurnAsync("first question", CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(run.Result!.Status, Is.EqualTo(AgentStatus.Completed), run.Result.Error);
+            Assert.That(inner.Requests, Is.EqualTo(1));
+            Assert.That(host.EffectiveModelTimeouts, Is.EqualTo(timeouts));
+        });
     }
 
     [Test]
@@ -358,5 +450,34 @@ public class ModelSelectionContinuityTests
         Assert.That(selection.Revision, Is.EqualTo(1));
         Assert.That(selection.ContinuationEpoch, Is.EqualTo(0));
         Assert.That(host.Session.ModelSelections.Count, Is.EqualTo(1));
+    }
+
+    /// <summary>脚本化 M.E.AI 底层客户端：每次流请求立即产出一段文本与 stop 收尾，并统计请求数。</summary>
+    private sealed class ScriptedSdkClient : IChatClient
+    {
+        public int Requests { get; private set; }
+
+        public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
+            IEnumerable<MicrosoftChatMessage> messages, ChatOptions? options,
+            [EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            Requests++;
+            await Task.Yield();
+            yield return new ChatResponseUpdate(null, new List<AIContent> { new TextContent("scripted answer") });
+            yield return new ChatResponseUpdate(null, new List<AIContent>())
+            {
+                FinishReason = ChatFinishReason.Stop
+            };
+        }
+
+        public Task<ChatResponse> GetResponseAsync(
+            IEnumerable<MicrosoftChatMessage> messages, ChatOptions? options, CancellationToken cancellationToken) =>
+            throw new NotSupportedException("This fake only supports streaming.");
+
+        public object? GetService(Type serviceType, object? serviceKey = null) => null;
+
+        public void Dispose()
+        {
+        }
     }
 }

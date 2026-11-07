@@ -152,7 +152,9 @@ internal sealed class ChatModelSelection
         var candidate = new SessionModelBinding(current.Model, client, current.Context, current.ReasoningEffort,
                                                 current.CredentialRoute, provider.Name,
                                                 current.ReasoningCapabilities,
-                                                networkRouteIdentity : expectedNetworkIdentity);
+                                                networkRouteIdentity : expectedNetworkIdentity,
+                                                effectiveTimeouts :
+                                                (client as MicrosoftAiChatClient)?.EffectiveTimeouts);
         try
         {
             await host.ChangeModelAsync(candidate, token, current.Revision).ConfigureAwait(false);
@@ -341,7 +343,8 @@ internal sealed class ChatModelSelection
             return;
         }
 
-        var targets = ResolveTargets(await _catalogLoader(cancellationToken).ConfigureAwait(false),
+        var catalog = await _catalogLoader(cancellationToken).ConfigureAwait(false);
+        var targets = ResolveTargets(catalog,
                                      current.Model.ModelId, null,
                                      profile => string.Equals(current.Model.Endpoint, profile.Endpoint,
                                                               StringComparison.Ordinal)  &&
@@ -512,15 +515,19 @@ internal sealed class ChatModelSelection
     }
 
     /// <summary>
-    ///     <para>构造候选绑定并经宿主原子保存；打印最终模型与强度。失败时候选仍归本层，释放一次。</para>
+    ///     <para>构造候选绑定并经宿主原子保存；打印最终模型与强度。失败时候选仍归本层，释放一次。
+    ///     候选记录该客户端实例实际采用的超时策略（组合层构造客户端时生效的策略），
+    ///     宿主据此识别策略变化并替换客户端。</para>
     ///     <para>
     ///         Builds the candidate binding and saves it atomically through the host, then prints the final model and
-    ///         effort. On failure the candidate stays here and is released once.
+    ///         effort. On failure the candidate stays here and is released once. The candidate records the timeout
+    ///         policy actually adopted by the client instance itself (the policy in effect when the composition layer
+    ///         built the client), letting the host detect policy changes and replace clients.
     ///     </para>
     /// </summary>
     private async Task ApplyAsync(
-        ChatSessionHost?      host,   UserProfile       profile, UserProfileModel model,
-        ModelReasoningEffort? effort, CancellationToken cancellationToken)
+        ChatSessionHost?      host,   UserProfile       profile, UserProfileModel model, ModelReasoningEffort? effort,
+        CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(profile.Endpoint))
         {
@@ -551,7 +558,9 @@ internal sealed class ChatModelSelection
                                                                          profile.ApiKeyCredentialTarget),
                                                 profile.Name, model.ReasoningEfforts,
                                                 networkRouteIdentity :
-                                                (client as MicrosoftAiChatClient)?.NetworkRouteIdentity);
+                                                (client as MicrosoftAiChatClient)?.NetworkRouteIdentity,
+                                                effectiveTimeouts :
+                                                (client as MicrosoftAiChatClient)?.EffectiveTimeouts);
         SessionModelSelection selection;
         try
         {
