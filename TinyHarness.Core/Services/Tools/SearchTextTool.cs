@@ -30,7 +30,9 @@ namespace TinyHarness.Core.Services.Tools;
 ///         skips excluded paths by count without ever revealing their names or content.
 ///     </para>
 /// </summary>
-public sealed class SearchTextTool(Workspace workspace, WorkerReadPolicy? workerPolicy = null) : ITool
+public sealed class SearchTextTool(Workspace             workspace,
+                                   WorkerReadPolicy?     workerPolicy   = null,
+                                   ResourceAccessPolicy? resourcePolicy = null) : ITool
 {
     private const int DefaultMaxResults = 100;
 
@@ -186,6 +188,8 @@ public sealed class SearchTextTool(Workspace workspace, WorkerReadPolicy? worker
 
         var absolute = workspace.ResolveInside(rawPath, "path");
         workerPolicy?.EnsureLexicalAccessAllowed(absolute);
+        // 统一资源分类：权限系统保护路径在此硬拒；其余类别只作为注记进入准备计划。
+        var classification = resourcePolicy?.Evaluate(absolute, "path");
         args["path"] = absolute; // Normalized plan value; Execute never re-resolves raw input.
         return new ToolPreparation
         {
@@ -193,6 +197,7 @@ public sealed class SearchTextTool(Workspace workspace, WorkerReadPolicy? worker
             CallId = call.Id,
             Arguments = args,
             Capability = "filesystem.search",
+            ResourceClassification = classification,
             Summary = mode == "regex"
                 ? $"search_text \"{pattern}\" (regex) in {workspace.ToDisplay(absolute)}"
                 : $"search_text \"{pattern}\" in {workspace.ToDisplay(absolute)}",
@@ -284,6 +289,7 @@ public sealed class SearchTextTool(Workspace workspace, WorkerReadPolicy? worker
         var skippedBinary    = 0;
         var skippedEscaping  = 0;
         var skippedExcluded  = 0;
+        var skippedProtected = 0;
         var stoppedAtCap     = false;
         var regexTimedOut    = false;
         var outputTruncated  = false;
@@ -306,7 +312,7 @@ public sealed class SearchTextTool(Workspace workspace, WorkerReadPolicy? worker
 
             var display = workspace.ToDisplay(file);
             var scan = await ScanFileAsync(file, pattern, regex, comparison, maxResults - matchTotal, workspace,
-                                           workerPolicy, cancellationToken).ConfigureAwait(false);
+                                           workerPolicy, resourcePolicy, cancellationToken).ConfigureAwait(false);
             switch (scan.SkipReason)
             {
                 case ScanSkipReason.Binary:
@@ -317,6 +323,9 @@ public sealed class SearchTextTool(Workspace workspace, WorkerReadPolicy? worker
                     continue;
                 case ScanSkipReason.Excluded:
                     skippedExcluded++;
+                    continue;
+                case ScanSkipReason.PermissionProtected:
+                    skippedProtected++;
                     continue;
             }
 
@@ -358,6 +367,8 @@ public sealed class SearchTextTool(Workspace workspace, WorkerReadPolicy? worker
 
         if (skippedLarge > 0) details.Add($"skipped {skippedLarge} large file(s)");
 
+        if (skippedProtected > 0)
+            details.Add($"skipped {skippedProtected} file(s) resolving into permission-system protected paths");
 
         if (walkLimited) details.Add($"only the first {MaxFilesScanned} files scanned");
 
@@ -406,16 +417,18 @@ public sealed class SearchTextTool(Workspace workspace, WorkerReadPolicy? worker
     }
 
     /// <summary>
-    ///     逐行扫描一个文件；文件像二进制或链接目标越界时返回跳过状态，
+    ///     逐行扫描一个文件；文件像二进制、链接目标越界或最终落点进入权限系统保护路径时返回跳过状态，
     ///     否则返回匹配行号与原文、截断状态与正则超时状态。
     ///     Scans one file line by line. Returns a skip outcome when the file looks
-    ///     binary or when its link's final target escapes the workspace; otherwise the matched
+    ///     binary, when its link's final target escapes the workspace, or when it
+    ///     resolves into a permission-system protected path; otherwise the matched
     ///     line numbers with their raw text, whether the scan stopped mid-file at the
     ///     match cap, and whether the regex timed out.
     /// </summary>
     private async Task<FileScan> ScanFileAsync(string file, string pattern, Regex? regex, StringComparison comparison,
                                                int maxMatches, Workspace workspace,
                                                WorkerReadPolicy? workerPolicy,
+                                               ResourceAccessPolicy? resourcePolicy,
                                                CancellationToken cancellationToken)
     {
         // A file found by the walk can itself be a symlink/junction whose final
@@ -431,6 +444,21 @@ public sealed class SearchTextTool(Workspace workspace, WorkerReadPolicy? worker
         {
             return FileScan.OutsideWorkspace;
         }
+
+        // 权限系统保护路径（Prepare 与 Execute 之间新增的链接改向也在防护范围内）：
+        // 命中按跳过计数，异常消息含保护路径名，绝不进入输出。
+        // Permission-system protected paths (including link redirection created
+        // between Prepare and Execute): a hit is skipped and counted; the exception
+        // message carries the protected path, so it never reaches the output.
+        if (resourcePolicy is not null)
+            try
+            {
+                resourcePolicy.EnsureNotPermissionProtected(file, "File");
+            }
+            catch (InvalidDataException)
+            {
+                return FileScan.PermissionProtected;
+            }
 
         // 策略的最终复核：链接链解析后的目标仍须落在 worker 读取范围内（focus/敏感排除）；
         // 不合格按跳过计数，绝不读取内容、不暴露路径名。
@@ -699,6 +727,9 @@ public sealed class SearchTextTool(Workspace workspace, WorkerReadPolicy? worker
         public static FileScan OutsideWorkspace { get; } = new([], [], false, false, ScanSkipReason.OutsideWorkspace);
 
         public static FileScan Excluded { get; } = new([], [], false, false, ScanSkipReason.Excluded);
+
+        public static FileScan PermissionProtected { get; } =
+            new([], [], false, false, ScanSkipReason.PermissionProtected);
     }
 
     private enum ScanSkipReason
@@ -719,7 +750,13 @@ public sealed class SearchTextTool(Workspace workspace, WorkerReadPolicy? worker
         ///     文件被 worker 读取策略排除（focus 范围外或敏感路径）。
         ///     The file is excluded by the worker read policy (outside focus or a sensitive path).
         /// </summary>
-        Excluded
+        Excluded,
+
+        /// <summary>
+        ///     文件最终落点进入权限系统保护路径；按跳过计数，绝不读取或显示。
+        ///     The file resolves into a permission-system protected path; skipped and counted, never read or shown.
+        /// </summary>
+        PermissionProtected
     }
 
     /// <summary>

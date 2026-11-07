@@ -32,7 +32,9 @@ public sealed class WorkspaceAccessState(WorkspaceDirectoryIdentity identity)
     /// </summary>
     public ITool Guard(Func<ITool> source) => new GuardedTool(this, source);
 
-    private sealed class GuardedTool(WorkspaceAccessState state, Func<ITool> source) : ITool
+    // internal：派发前复核（FrozenCapabilityScopeReader）需穿透守卫包装读取冻结的进程计划；
+    // 仅可见性放宽，无行为变化。
+    internal sealed class GuardedTool(WorkspaceAccessState state, Func<ITool> source) : ITool
     {
         public ToolDefinition Definition => source().Definition;
 
@@ -54,6 +56,9 @@ public sealed class WorkspaceAccessState(WorkspaceDirectoryIdentity identity)
                 ExecutionPolicy        = policy,
                 TargetPaths            = plan.TargetPaths,
                 InstructionScopes      = plan.InstructionScopes,
+                // 机械传播内层计划已声明的事实字段；此处不做任何授权判断。
+                RequestedBackend       = plan.RequestedBackend,
+                ResourceClassification = plan.ResourceClassification,
                 ExecutionPlan          = new GuardedPlan(this, tool, plan, state.Revision)
             };
         }
@@ -74,6 +79,7 @@ public sealed class WorkspaceAccessState(WorkspaceDirectoryIdentity identity)
             return plan.Tool.ExecuteAsync(inner, cancellationToken);
         }
 
-        private sealed record GuardedPlan(GuardedTool Owner, ITool Tool, ToolPreparation Preparation, long Revision);
+        // internal：派发前复核（FrozenCapabilityScopeReader）需穿透包装读取冻结的进程计划。
+        internal sealed record GuardedPlan(GuardedTool Owner, ITool Tool, ToolPreparation Preparation, long Revision);
     }
 }

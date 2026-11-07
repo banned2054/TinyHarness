@@ -1,5 +1,7 @@
 using System.Text.Json.Nodes;
 using TinyHarness.Core.Models.ProjectInstructions;
+using TinyHarness.Core.Models.Runtime;
+using TinyHarness.Core.Services.Runtime;
 using TinyHarness.Core.Services.Tools;
 
 namespace TinyHarness.Core.Models.Tools;
@@ -225,6 +227,35 @@ public sealed class ToolPreparation
     public bool RequiresNetworkAccess { get; init; }
 
     /// <summary>
+    ///     <para>
+    ///         模型在参数中显式申请的执行后端：Host 表示显式申请宿主执行（Level 3 意图表达），
+    ///         null 表示默认路由（沙箱可用时为 WindowsSandbox）。它只是意图，实际执行以后端
+    ///         冻结计划与授权凭据为准。
+    ///     </para>
+    ///     <para>
+    ///         The execution backend explicitly requested through tool arguments: Host is an
+    ///         explicit host-execution request (a Level 3 intent expression); null means default
+    ///         routing (WindowsSandbox when the sandbox is available). This is intent only —
+    ///         actual execution follows the frozen plan and the authorization credential.
+    ///     </para>
+    /// </summary>
+    public ProcessExecutionBackendKind? RequestedBackend { get; init; }
+
+    /// <summary>
+    ///     <para>
+    ///         Prepare 期的统一资源分类注记（多目标取最严格类别，敏感标记任一命中即 true）。
+    ///         只描述事实，不授予也不否决权限；授权侧消费，未分类时为 null。
+    ///     </para>
+    ///     <para>
+    ///         The unified resource classification annotation from Prepare (strictest class
+    ///         across targets; the sensitive flag matches when any target does). It states
+    ///         facts only — it grants or vetoes nothing; the authorization side consumes it,
+    ///         and it is null when no classification ran.
+    ///     </para>
+    /// </summary>
+    internal ResourceClassification? ResourceClassification { get; init; }
+
+    /// <summary>
     ///     <para>本次调用将访问的规范化绝对路径；权限规则以此匹配范围，Agent Loop 与 CLI 用于展示。</para>
     ///     <para>
     ///         Normalized absolute resource paths this invocation will access. The
@@ -288,9 +319,11 @@ public sealed class ToolPreparation
             SessionGrantConstraint = SessionGrantConstraint,
             ExecutionPolicy        = ExecutionPolicy,
             RequiresNetworkAccess  = RequiresNetworkAccess,
+            RequestedBackend       = RequestedBackend,
             TargetPaths            = _targetPaths,
             InstructionScopes      = _instructionScopes,
             ExecutionPlan          = ExecutionPlan,
+            ResourceClassification = ResourceClassification,
             Coverage               = coverage
         };
     }

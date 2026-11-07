@@ -20,8 +20,14 @@ namespace TinyHarness.Core.Services.Tools;
 ///         that plan and never re-parses or re-resolves raw model input. All targets are matched in
 ///         memory before the first write, so a failed hunk leaves every file untouched.
 ///     </para>
+///     <para>
+///         The optional <see cref="ResourceAccessPolicy" /> classifies every target under the
+///         unified resource policy: a patch touching a permission-system protected path is
+///         rejected in Prepare and re-checked over final landings in Execute; the strictest
+///         remaining class across targets flows into the preparation as an annotation only.
+///     </para>
 /// </summary>
-public sealed class ApplyPatchTool(Workspace workspace) : ITool
+public sealed class ApplyPatchTool(Workspace workspace, ResourceAccessPolicy? resourcePolicy = null) : ITool
 {
     private const int MaxPatchChars = 256 * 1024;
     private const int MaxFiles      = 64;
@@ -90,6 +96,7 @@ public sealed class ApplyPatchTool(Workspace workspace) : ITool
         var plan    = new JsonArray();
         var targets = new List<string>();
         var seen    = new HashSet<string>(PathComparer);
+        ResourceClassification? classification = null;
         foreach (var file in parsed)
         {
             var absolute = workspace.ResolveInside(file.Path, "patch path");
@@ -97,6 +104,16 @@ public sealed class ApplyPatchTool(Workspace workspace) : ITool
                 throw new
                     InvalidDataException($"apply_patch: '{workspace.ToDisplay(absolute)}' is targeted more than once by this patch; " +
                                          "merge the hunks for one file into a single '--- a/... +++ b/...' section.");
+
+            // 统一资源分类：任一目标命中权限系统保护路径即整份补丁拒绝；
+            // 其余类别取最严格聚合注记，授权判定交给权限引擎。
+            var targetClassification = resourcePolicy?.Evaluate(absolute, "patch path");
+            if (targetClassification is { } evaluated)
+                classification = classification is { } aggregate
+                    ? new ResourceClassification(ResourceClassification.Strictest(aggregate.Class,
+                                               evaluated.Class),
+                                                 aggregate.KnownSensitive || evaluated.KnownSensitive)
+                    : evaluated;
 
             targets.Add(absolute);
 
@@ -126,13 +143,14 @@ public sealed class ApplyPatchTool(Workspace workspace) : ITool
         var display = targets.Select(workspace.ToDisplay).ToList();
         return new ToolPreparation
         {
-            ToolName          = Definition.Name,
-            CallId            = call.Id,
-            Arguments         = args,
-            Capability        = "filesystem.write",
-            Summary           = $"apply_patch: modify {display.Count} file(s): {string.Join(", ", display)}",
-            TargetPaths       = targets,
-            InstructionScopes = targets.Select(path => new InstructionScope(path, InstructionScopeKind.File)).ToArray()
+            ToolName               = Definition.Name,
+            CallId                 = call.Id,
+            Arguments              = args,
+            Capability             = "filesystem.write",
+            Summary                = $"apply_patch: modify {display.Count} file(s): {string.Join(", ", display)}",
+            TargetPaths            = targets,
+            ResourceClassification = classification,
+            InstructionScopes      = targets.Select(path => new InstructionScope(path, InstructionScopeKind.File)).ToArray()
         };
     }
 
@@ -186,9 +204,13 @@ public sealed class ApplyPatchTool(Workspace workspace) : ITool
                     // （链接解析会抛出），改经最近存在的祖先目录校验。
                     case true :
                         workspace.EnsureFinalTargetInside(absolute, false, "File");
+                        // 统一资源策略的执行期复核：Prepare 与 Execute 之间新增的链接改向
+                        // 不得落入权限系统保护路径。
+                        resourcePolicy?.EnsureNotPermissionProtected(absolute, "File");
                         break;
                     default :
                         EnsureNewFileInside(workspace, absolute);
+                        resourcePolicy?.EnsureNotPermissionProtected(absolute, "File");
                         break;
                 }
 
@@ -224,12 +246,14 @@ public sealed class ApplyPatchTool(Workspace workspace) : ITool
                 if (isNew)
                 {
                     EnsureNewFileInside(workspace, path);
+                    resourcePolicy?.EnsureNotPermissionProtected(path, "File");
                     var parent = Path.GetDirectoryName(path);
                     if (!string.IsNullOrEmpty(parent)) Directory.CreateDirectory(parent);
                 }
                 else
                 {
                     workspace.EnsureFinalTargetInside(path, false, "File");
+                    resourcePolicy?.EnsureNotPermissionProtected(path, "File");
                 }
 
                 var file   = plan[index];

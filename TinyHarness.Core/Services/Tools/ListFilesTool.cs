@@ -15,9 +15,14 @@ namespace TinyHarness.Core.Services.Tools;
 ///     build/version-control directories (see <see cref="DirectoryWalker" />). The
 ///     optional <see cref="WorkerReadPolicy" />, injected only by the WorkerRunner,
 ///     rejects out-of-scope explicit paths in Prepare and filters enumeration results
-///     without descending into excluded directories.
+///     without descending into excluded directories. The optional
+///     <see cref="ResourceAccessPolicy" /> classifies the target under the unified
+///     resource policy: permission-system protected paths are rejected in Prepare and
+///     re-checked over the final landing in Execute; other classes become annotations.
 /// </summary>
-public sealed class ListFilesTool(Workspace workspace, WorkerReadPolicy? workerPolicy = null) : ITool
+public sealed class ListFilesTool(Workspace             workspace,
+                                  WorkerReadPolicy?     workerPolicy   = null,
+                                  ResourceAccessPolicy? resourcePolicy = null) : ITool
 {
     private const int MaxEntries = 500;
 
@@ -73,6 +78,8 @@ public sealed class ListFilesTool(Workspace workspace, WorkerReadPolicy? workerP
 
         var absolute = workspace.ResolveInside(rawPath, "path");
         workerPolicy?.EnsureLexicalAccessAllowed(absolute);
+        // 统一资源分类：权限系统保护路径在此硬拒；其余类别只作为注记进入准备计划。
+        var classification = resourcePolicy?.Evaluate(absolute, "path");
         args["path"] = absolute; // Normalized plan value; Execute never re-resolves raw input.
         return new ToolPreparation
         {
@@ -83,8 +90,9 @@ public sealed class ListFilesTool(Workspace workspace, WorkerReadPolicy? workerP
             Summary = $"list_files {workspace.ToDisplay(absolute)}" + (recursive
                 ? maxDepth is null ? " (recursive)" : $" (recursive, depth {maxDepth})"
                 : string.Empty),
-            TargetPaths = [absolute],
-            InstructionScopes =
+            TargetPaths            = [absolute],
+            ResourceClassification = classification,
+            InstructionScopes      =
             [
                 new InstructionScope(absolute, InstructionScopeKind.Directory)
             ]
@@ -106,6 +114,8 @@ public sealed class ListFilesTool(Workspace workspace, WorkerReadPolicy? workerP
             });
 
         workspace.EnsureFinalTargetInside(absolute, true, "Directory");
+        // 统一资源策略的执行期复核：Prepare 与 Execute 之间新增的链接改向不得落入权限系统保护路径。
+        resourcePolicy?.EnsureNotPermissionProtected(absolute, "Directory");
         // 工作区链接边界之外的第二层：显式列举的目录经链接解析后的落点也必须落在
         // worker 读取范围内，否则 junction 可能把 focus 外目录的内容列出来。
         // A second layer beyond the workspace link boundary: the resolved landing of an explicitly

@@ -353,6 +353,42 @@ public class SearchTextContractTests
         Assert.That(result.Content, Does.Contain("(no matches for 'zzz')"));
     }
 
+    // ---- 权限约束与不泄露 --------------------------------------------------
+
+    [Test]
+    public async Task PermissionSystemProtectedExplicitPath_IsRejectedInPrepare()
+    {
+        using var dir = new TestTempDir();
+        var tool = new SearchTextTool(dir.Workspace,
+                                      resourcePolicy : new ResourceAccessPolicy(dir.Root,
+                                          permissionSystemRoots : [Path.Combine(dir.Root, "vault")]));
+        dir.WriteFile("vault/secret.txt", "top-secret\n");
+
+        var ex = Assert.Throws<InvalidDataException>(
+            () => Prepare(tool, """{"pattern":"top-secret","path":"vault"}"""));
+        Assert.That(ex!.Message, Does.Contain("permission system"));
+    }
+
+    [Test]
+    public async Task FileResolvingIntoProtectedPath_IsSkippedCountedAndNeverNamed()
+    {
+        using var dir = new TestTempDir();
+        dir.WriteFile("normal.txt", "needle in normal file\n");
+        dir.WriteFile("vault/config.json", "needle inside vault\n");
+        var tool = new SearchTextTool(dir.Workspace,
+                                      resourcePolicy : new ResourceAccessPolicy(dir.Root,
+                                          permissionSystemRoots : [Path.Combine(dir.Root, "vault")]));
+
+        var result = await RunAsync(tool, """{"pattern":"needle"}""");
+
+        Assert.That(result.Succeeded, Is.True);
+        Assert.That(result.Content, Does.Contain("normal.txt:1"));
+        Assert.That(result.Content, Does.Not.Contain("vault"));
+        Assert.That(result.Content, Does.Not.Contain("config.json"));
+        Assert.That(result.Content, Does.Not.Contain("needle inside vault"));
+        Assert.That(result.Content, Does.Contain("skipped 1 file(s) resolving into permission-system protected paths"));
+    }
+
     [Test]
     public async Task RegexCompilationAndExecute_AgreeOnTimeoutBudget()
     {

@@ -20,9 +20,14 @@ namespace TinyHarness.Core.Services.Tools;
 ///     dumped. The optional <see cref="WorkerReadPolicy" />, injected only by the
 ///     WorkerRunner, rejects out-of-scope or sensitive explicit paths — in Prepare
 ///     lexically and in Execute again over the resolved link chain — so excluded
-///     content is never returned.
+///     content is never returned. The optional <see cref="ResourceAccessPolicy" />
+///     classifies the target under the unified resource policy: permission-system
+///     protected paths are rejected in Prepare and re-checked over the final landing
+///     in Execute; other classes flow into the preparation as annotations only.
 /// </summary>
-public sealed class ReadFileTool(Workspace workspace, WorkerReadPolicy? workerPolicy = null) : ITool
+public sealed class ReadFileTool(Workspace              workspace,
+                                 WorkerReadPolicy?      workerPolicy   = null,
+                                 ResourceAccessPolicy?  resourcePolicy = null) : ITool
 {
     /// <summary>
     ///     单次调用的硬行数上限，也是省略 limit 时的默认值；Prepare 会拒绝更大值。
@@ -121,6 +126,8 @@ public sealed class ReadFileTool(Workspace workspace, WorkerReadPolicy? workerPo
 
         var absolute = workspace.ResolveInside(rawPath, "path");
         workerPolicy?.EnsureLexicalAccessAllowed(absolute);
+        // 统一资源分类：权限系统保护路径在此硬拒；其余类别只作为注记进入准备计划。
+        var classification = resourcePolicy?.Evaluate(absolute, "path");
         args["path"] = absolute; // Normalized plan value; Execute never re-resolves raw input.
         return new ToolPreparation
         {
@@ -131,8 +138,9 @@ public sealed class ReadFileTool(Workspace workspace, WorkerReadPolicy? workerPo
             Summary = $"read_file {workspace.ToDisplay(absolute)}"           +
                       (offset > 1 ? $" (from line {offset})" : string.Empty) +
                       (limit is not null ? $" (up to {limit} lines)" : string.Empty),
-            TargetPaths       = [absolute],
-            InstructionScopes = [new InstructionScope(absolute, InstructionScopeKind.File)]
+            TargetPaths            = [absolute],
+            ResourceClassification = classification,
+            InstructionScopes      = [new InstructionScope(absolute, InstructionScopeKind.File)]
         };
     }
 
@@ -161,6 +169,8 @@ public sealed class ReadFileTool(Workspace workspace, WorkerReadPolicy? workerPo
             };
 
         workspace.EnsureFinalTargetInside(absolute, false, "File");
+        // 统一资源策略的执行期复核：Prepare 与 Execute 之间新增的链接改向不得落入权限系统保护路径。
+        resourcePolicy?.EnsureNotPermissionProtected(absolute, "File");
         // 工作区链接边界之外的第二层：最终解析目标还必须落在 worker 读取范围内。
         // A second layer beyond the workspace link boundary: the resolved final target must also be
         // inside the worker read scope.
