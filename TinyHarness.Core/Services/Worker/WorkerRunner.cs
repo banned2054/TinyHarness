@@ -265,7 +265,9 @@ public sealed class WorkerRunner
         // 它的可信配置边界在构造参数里（PLAN §22）。
         // The worker never reads the target project's tinyharness.json or its commandRules; its
         // trusted configuration boundary lives in the constructor parameters (PLAN §22).
-        var permissions = new PermissionEngine(WorkspaceRoot, denyNonReadOnlyCapabilities : true);
+        // worker 无审批通道：只读能力按工作区基线放行，非只读能力由硬限制拒绝。
+        var permissions = new PermissionEngine(WorkspaceRoot, denyNonReadOnlyCapabilities : true,
+                                               resourcePolicy : new WorkerResourcePolicy(WorkspaceRoot));
 
         return new AgentLoop(model, tools,
                              new AgentOptions
@@ -598,12 +600,31 @@ public sealed class WorkerRunner
     ///     any invocation the permission engine unexpectedly routes to Ask is denied and reported back
     ///     to the model as a tool result.
     /// </summary>
+    /// <summary>
+    ///     <para>
+    ///         worker 的资源分类策略：工作区内为基线（只读工具 Level1 放行），工作区外为越界；
+    ///         非只读能力由引擎硬限制拒绝，分类不产生额外授权。
+    ///     </para>
+    ///     <para>
+    ///         The worker's resource policy: inside the workspace is baseline (read-only tools run at Level1) and
+    ///         outside is OutsideWorkspace; non-read-only capabilities are hard-denied by the engine, so
+    ///         classification grants nothing extra.
+    ///     </para>
+    /// </summary>
+    private sealed class WorkerResourcePolicy(string workspaceRoot) : IResourceAccessPolicy
+    {
+        public ResourceClassification? Classify(string capability, string targetPath) =>
+            Workspace.IsInside(workspaceRoot, targetPath)
+                ? new ResourceClassification(ResourceClass.BaselineWorkspace, false)
+                : new ResourceClassification(ResourceClass.OutsideWorkspace, false);
+    }
+
     private sealed class DenyingApprovalProvider : IApprovalProvider
     {
         public static readonly DenyingApprovalProvider Instance = new();
 
-        public Task<ApprovalAction> PromptAsync(ToolPreparation preparation, CancellationToken cancellationToken) =>
-            Task.FromResult(ApprovalAction.Deny);
+        public Task<ApprovalResolution> PromptAsync(ApprovalRequest request, CancellationToken cancellationToken) =>
+            Task.FromResult(ApprovalResolution.Denied("The worker has no approval channel."));
     }
 
     /// <summary>

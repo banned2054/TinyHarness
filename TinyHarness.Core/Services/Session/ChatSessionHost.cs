@@ -2,6 +2,7 @@ using System.Diagnostics;
 using TinyHarness.Core.Models.Agent;
 using TinyHarness.Core.Models.ChatCompletions;
 using TinyHarness.Core.Models.Persistence;
+using TinyHarness.Core.Models.Permissions;
 using TinyHarness.Core.Models.ProjectInstructions;
 using TinyHarness.Core.Models.Session;
 using TinyHarness.Core.Models.Tools;
@@ -72,6 +73,20 @@ public sealed partial class ChatSessionHost : IDisposable
     ///     </para>
     /// </summary>
     private string? _inspectionNote;
+
+    /// <summary>
+    ///     <para>
+    ///         迁移待确认期间的固定门禁理由：所有模型工具能力一律拒绝（含只读，无例外），
+    ///         模型可见；工具保持注册，确认后由宿主解除。
+    ///     </para>
+    ///     <para>
+    ///         The fixed gate reason while migration is pending: every model tool capability is denied
+    ///         (read-only included, no exceptions), visible to the model; tools stay registered and the
+    ///         host lifts the gate on confirmation.
+    ///     </para>
+    /// </summary>
+    internal const string PermissionMigrationBlockNote =
+        "permission migration pending; confirm to enable tool execution";
 
     private AgentOptions _options;
 
@@ -459,7 +474,8 @@ public sealed partial class ChatSessionHost : IDisposable
                 DisplayWarning = _activeRecorder?.DisplayWarning;
                 _activeRecorder = null;
                 _activeControl = null;
-                _permissions?.ClearTemporaryAllows();
+                // 运行终态：Turn 授权到期，Session 授权与拒绝记忆跨回合保留。
+                _permissions?.ExpireTurnGrants();
                 Interlocked.Exchange(ref _activeRuns, 0);
             }
         }
@@ -667,14 +683,31 @@ public sealed partial class ChatSessionHost : IDisposable
                                                          events is null ? null : events.PublishHistoryItemAsync);
         _activeRecorder = recorder;
         var permissions = _permissions;
-        if (Session.PermissionSelection is { } permission)
+        if (Session.PermissionMigrationPending)
         {
+            // 迁移待确认（D9，严格口径）：确认前所有模型工具能力一律拒绝（含只读，无例外），
+            // 保守人工审批运行；门禁经工具门在工具边界生效，工具保持注册，
+            // ConfirmPermissionMigrationAsync 解除。
             permissions ??= new PermissionEngine(Session.WorkspaceRoot);
-            permissions.SetMode(permission.Mode);
+            permissions.SetApprovalMode(SessionApprovalMode.HumanApproval);
+        }
+        else if (Session.PermissionSelectionV2 is { } selectionV2)
+        {
+            // /2 审批模式选择由持久化侧恢复后直接驱动引擎；/1 仅在迁移确认后经映射使用。
+            permissions ??= new PermissionEngine(Session.WorkspaceRoot);
+            permissions.SetApprovalMode(selectionV2.ApprovalMode);
+        }
+        else if (Session.PermissionSelection is { } permission)
+        {
+            // 未迁移的 /1 七模式选择保守映射为人工审批；迁移确认后由 /2 链接管。
+            permissions ??= new PermissionEngine(Session.WorkspaceRoot);
+            permissions.SetApprovalMode(LegacyPermissionSelectionMapper.FromLegacyName(permission.ModeName)
+                                        ?? SessionApprovalMode.HumanApproval);
         }
 
         if (InspectionPending)
         {
+            // 检查阻断优先于迁移阻断：两者共用引擎的非只读阻断槽位。
             permissions ??= new PermissionEngine(Session.WorkspaceRoot);
             permissions.SetNonReadOnlyBlock(_inspectionNote);
         }
@@ -692,11 +725,43 @@ public sealed partial class ChatSessionHost : IDisposable
                                                                   status, evidence, token))
             ])
             : _tools;
+        if (Session.PermissionMigrationPending)
+        {
+            // 门禁在工具边界生效：注册保持（模型视图可见并可经其定义调用），但每次调用都在准备期
+            // 以固定理由拒绝，绝不执行；解除后按原样组合，无需重建注册。
+            tools = new ToolRegistry(tools.Values.Select(tool => new MigrationPendingToolGate(tool)));
+        }
+
         return new AgentLoop(_binding!.Client, tools, _options, permissions, _approver, recorder, events, _context,
                              _sessionWriter is null
                                  ? null
                                  : (records, token) => CheckpointExecutionAsync(run, records, token),
                              instructions, _activeControl);
+    }
+
+    /// <summary>
+    ///     <para>
+    ///         迁移待确认门禁的工具门：注册与定义保持原样（模型视图不变），但任何调用都在准备期以
+    ///         固定理由拒绝，绝不进入执行；确认迁移后宿主不再包装，工具按原样组合。
+    ///     </para>
+    ///     <para>
+    ///         The tool gate of the pending-migration state: registration and definitions stay verbatim
+    ///         (the model view is unchanged) while every invocation is rejected at preparation with the fixed
+    ///         reason and never executes; after confirmation the host composes the unwrapped tools.
+    ///     </para>
+    /// </summary>
+    private sealed class MigrationPendingToolGate(ITool inner) : ITool
+    {
+        public ToolDefinition Definition => inner.Definition;
+
+        public ToolPreparation Prepare(ChatToolCall call)
+        {
+            // 准备期即拒绝：不进入授权与执行，拒绝理由对模型可见（D9 严格口径，无只读例外）。
+            throw new InvalidDataException(PermissionMigrationBlockNote);
+        }
+
+        public Task<ToolResult> ExecuteAsync(ToolPreparation preparation, CancellationToken cancellationToken) =>
+            throw new InvalidOperationException(PermissionMigrationBlockNote);
     }
 
     private IReadOnlyList<ProjectInstructionRecord> RetainedInstructionRecords(int boundary)
@@ -1014,7 +1079,7 @@ public sealed partial class ChatSessionHost : IDisposable
                                                          .ConfigureAwait(false);
             }
 
-            if (record.Action == "rules-applied") host._permissions?.ClearTemporaryAllows();
+            if (record.Action == "rules-applied") host._permissions?.RevokeGrants();
 
             _toolRoundSnapshot = record.Snapshot;
             _pendingRecord = null;

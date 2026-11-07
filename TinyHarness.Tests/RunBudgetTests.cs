@@ -129,12 +129,12 @@ public class RunBudgetTests
     public async Task DeniedCalls_DoNotConsumeToolExecutions()
     {
         var model = new FakeChatClient();
-        var tool  = new ProbeTool("filesystem.write");
+        var tool  = new ProbeTool("filesystem.write", outsideTarget : true);
         model.Enqueue(FakeChatClient.ToolCalls("probe", 3, "denied"));
         model.Enqueue(FakeChatClient.Text("denied"));
         var result = await new AgentLoop(model, new ToolRegistry([tool]),
                                          Options(new RunBudgetLimits { MaxToolExecutions = 1 }),
-                                         new PermissionEngine(Path.GetTempPath()), new DenyApprover())
+                                         new PermissionEngine(Path.GetTempPath(), resourcePolicy : new TestResourcePolicy(Path.GetTempPath())), new DenyApprover())
            .RunAsync("sys", "go", default);
         Assert.That(result.Status, Is.EqualTo(AgentStatus.Completed));
         Assert.That(result.Budget!.ToolExecutions, Is.Zero);
@@ -235,14 +235,14 @@ public class RunBudgetTests
     {
         var scripted = new FakeChatClient();
         scripted.Enqueue(FakeChatClient.ToolCall("probe", "{}"));
-        var tool    = new ProbeTool("filesystem.write", stage == "tool");
+        var tool    = new ProbeTool("filesystem.write", stage == "tool", outsideTarget : true);
         var options = Options(new RunBudgetLimits { MaxWallClockSeconds = 1 });
         using var host = new ChatSessionHost(Path.GetTempPath(),
                                              new SessionModelIdentity("test", "https://example.invalid",
                                                                       ChatApiKind.ChatCompletions), options,
                                              stage == "model" ? new WaitingModel() : scripted, new ToolRegistry([tool]),
                                              "sys",
-                                             new PermissionEngine(Path.GetTempPath()),
+                                             new PermissionEngine(Path.GetTempPath(), resourcePolicy : new TestResourcePolicy(Path.GetTempPath())),
                                              new WaitingApprover(stage == "approval"));
         var result = (await host.SubmitTurnAsync("go", default).WaitAsync(TimeSpan.FromSeconds(10))).Result!;
         Assert.That(result.Status, Is.EqualTo(AgentStatus.BudgetLimitReached));
@@ -366,7 +366,8 @@ public class RunBudgetTests
         await TestAssert.ThrowsAsync<InvalidDataException>(async () => await UserConfigStore.LoadAsync(path, default));
     }
 
-    private sealed class ProbeTool(string capability = "filesystem.read", bool wait = false) : ITool
+    private sealed class ProbeTool(string capability = "filesystem.read", bool wait = false,
+                                    bool outsideTarget = false) : ITool
     {
         internal int Executions { get; private set; }
 
@@ -376,7 +377,10 @@ public class RunBudgetTests
         public ToolPreparation Prepare(ChatToolCall call) => new()
         {
             CallId  = call.Id, ToolName    = Definition.Name, Arguments = new JsonObject(), Capability = capability,
-            Summary = "probe", TargetPaths = [Path.GetTempPath()]
+            Summary = "probe",
+            TargetPaths = outsideTarget
+                ? [Path.Combine(Path.GetTempPath(), "..", "tinyharness-outside")]
+                : [Path.GetTempPath()]
         };
 
         public async Task<ToolResult> ExecuteAsync(ToolPreparation preparation, CancellationToken cancellationToken)
@@ -389,16 +393,16 @@ public class RunBudgetTests
 
     private sealed class DenyApprover : IApprovalProvider
     {
-        public Task<ApprovalAction> PromptAsync(ToolPreparation preparation, CancellationToken cancellationToken) =>
-            Task.FromResult(ApprovalAction.Deny);
+        public Task<ApprovalResolution> PromptAsync(ApprovalRequest request, CancellationToken cancellationToken) =>
+            Task.FromResult(ApprovalResolution.Denied("denied by test"));
     }
 
     private sealed class WaitingApprover(bool wait) : IApprovalProvider
     {
-        public async Task<ApprovalAction> PromptAsync(ToolPreparation preparation, CancellationToken cancellationToken)
+        public async Task<ApprovalResolution> PromptAsync(ApprovalRequest request, CancellationToken cancellationToken)
         {
             if (wait) await Task.Delay(Timeout.Infinite, cancellationToken);
-            return ApprovalAction.AllowOnce;
+            return ApprovalResolution.Granted(GrantScope.SingleOperation);
         }
     }
 

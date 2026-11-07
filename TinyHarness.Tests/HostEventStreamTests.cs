@@ -119,24 +119,20 @@ public class HostEventStreamTests
     [Test]
     public async Task InteractiveToolCall_PublishesPreparedRequestedResolvedStartedFinishedInOrder()
     {
-        using var dir = new TestTempDir();
-        dir.WriteFile("f.txt", "old\n");
-        var client = new FakeChatClient();
-        client.Enqueue(FakeChatClient.ToolCall("apply_patch",
-                                               new JsonObject
-                                               {
-                                                   ["patch"] = "--- a/f.txt\n+++ b/f.txt\n@@ -1 +1 @@\n" +
-                                                               "-old\n+new\n"
-                                               }.ToJsonString(),
+        using var dir     = new TestTempDir();
+        var       outside = Path.Combine(Path.GetDirectoryName(dir.Root)!, "outside.txt");
+        var       client  = new FakeChatClient();
+        client.Enqueue(FakeChatClient.ToolCall("write_outside",
+                                               new JsonObject { ["target"] = outside }.ToJsonString(),
                                                "p1"));
         client.Enqueue(FakeChatClient.Text("patched"));
         var approver = new ScriptedApprover();
-        approver.Enqueue(ApprovalAction.AllowOnce);
+        approver.Enqueue(ApprovalResolution.Granted(GrantScope.SingleOperation));
         var sink = new TestHostEventSink();
         var loop = new AgentLoop(client,
-                                 new ToolRegistry([new ApplyPatchTool(dir.Workspace)]),
+                                 new ToolRegistry([new HostEventStreamWriteTool()]),
                                  Options(),
-                                 new PermissionEngine(dir.Root),
+                                 new PermissionEngine(dir.Root, resourcePolicy : new TestResourcePolicy(dir.Root)),
                                  approver,
                                  events : sink);
 
@@ -163,21 +159,21 @@ public class HostEventStreamTests
         ]));
 
         var requested =
-            TestAssert.TypeOf<ToolPreparation>(sink.Events.Single(e => e.Kind == HostEventKind.ApprovalRequested)
+            TestAssert.TypeOf<ApprovalRequest>(sink.Events.Single(e => e.Kind == HostEventKind.ApprovalRequested)
                                                    .Payload);
-        Assert.That(requested.ToolName, Is.EqualTo("apply_patch"));
+        Assert.That(requested.Preparation.ToolName, Is.EqualTo("write_outside"));
 
         var resolution =
             TestAssert.TypeOf<ApprovalResolution>(sink.Events.Single(e => e.Kind == HostEventKind.ApprovalResolved)
                                                       .Payload);
-        Assert.That(resolution.Decision, Is.EqualTo(PermissionDecision.Ask));
-        Assert.That(resolution.Action, Is.EqualTo(ApprovalAction.AllowOnce));
-        Assert.That(resolution.Outcome, Is.EqualTo("allow once"));
+        Assert.That(resolution.Kind, Is.EqualTo(ApprovalResolutionKind.Granted));
+        Assert.That(resolution.Scope, Is.EqualTo(GrantScope.SingleOperation));
+        Assert.That(resolution.Reason, Is.Null);
 
         var outcome =
             TestAssert.TypeOf<ToolExecutionOutcome>(sink.Events.Single(e => e.Kind == HostEventKind.ToolFinished)
                                                         .Payload);
-        Assert.That(outcome.Preparation.ToolName, Is.EqualTo("apply_patch"));
+        Assert.That(outcome.Preparation.ToolName, Is.EqualTo("write_outside"));
         Assert.That(outcome.Result.Succeeded, Is.True);
     }
 
@@ -193,7 +189,7 @@ public class HostEventStreamTests
         var loop = new AgentLoop(client,
                                  new ToolRegistry([new ReadFileTool(dir.Workspace)]),
                                  Options(),
-                                 new PermissionEngine(dir.Root),
+                                 new PermissionEngine(dir.Root, resourcePolicy : new TestResourcePolicy(dir.Root)),
                                  null,
                                  events : sink);
 
@@ -203,44 +199,66 @@ public class HostEventStreamTests
         TestAssert.DoesNotContainAny(@event => @event.Kind == HostEventKind.ApprovalRequested, sink.Events);
         var resolution = TestAssert.TypeOf<ApprovalResolution>(sink.Events.Single(@event =>
             @event.Kind == HostEventKind.ApprovalResolved).Payload);
-        Assert.That(resolution.Decision, Is.EqualTo(PermissionDecision.Allow));
-        Assert.That(resolution.Action, Is.Null);
-        Assert.That(resolution.Outcome, Is.EqualTo("allow"));
+        Assert.That(resolution.Kind, Is.EqualTo(ApprovalResolutionKind.Granted));
+        Assert.That(resolution.Scope, Is.Null);
+        Assert.That(resolution.Reason, Is.Null);
     }
 
     [Test]
     public async Task DeniedApproval_PublishesResolutionWithoutToolLifecycle()
     {
-        using var dir = new TestTempDir();
-        dir.WriteFile("f.txt", "old\n");
-        var client = new FakeChatClient();
-        client.Enqueue(FakeChatClient.ToolCall("apply_patch",
-                                               new JsonObject
-                                               {
-                                                   ["patch"] = "--- a/f.txt\n+++ b/f.txt\n@@ -1 +1 @@\n" +
-                                                               "-old\n+new\n"
-                                               }.ToJsonString()));
+        using var dir     = new TestTempDir();
+        var       outside = Path.Combine(Path.GetDirectoryName(dir.Root)!, "outside.txt");
+        var       client  = new FakeChatClient();
+        client.Enqueue(FakeChatClient.ToolCall("write_outside",
+                                               new JsonObject { ["target"] = outside }.ToJsonString()));
         client.Enqueue(FakeChatClient.Text("understood"));
         var approver = new ScriptedApprover();
-        approver.Enqueue(ApprovalAction.Deny);
+        approver.Enqueue(ApprovalResolution.Denied("denied by test"));
         var sink = new TestHostEventSink();
         var loop = new AgentLoop(client,
-                                 new ToolRegistry([new ApplyPatchTool(dir.Workspace)]),
+                                 new ToolRegistry([new HostEventStreamWriteTool()]),
                                  Options(),
-                                 new PermissionEngine(dir.Root),
+                                 new PermissionEngine(dir.Root, resourcePolicy : new TestResourcePolicy(dir.Root)),
                                  approver,
                                  events : sink);
 
-        var result = await loop.RunAsync("sys", "patch", CancellationToken.None);
+        var result = await loop.RunAsync("sys", "write", CancellationToken.None);
 
         Assert.That(result.ToolExecutions, Is.EqualTo(0));
         var resolution = TestAssert.TypeOf<ApprovalResolution>(sink.Events.Single(@event =>
             @event.Kind == HostEventKind.ApprovalResolved).Payload);
-        Assert.That(resolution.Decision, Is.EqualTo(PermissionDecision.Ask));
-        Assert.That(resolution.Action, Is.EqualTo(ApprovalAction.Deny));
-        Assert.That(resolution.Outcome, Does.StartWith("Permission denied by user:"));
+        Assert.That(resolution.Kind, Is.EqualTo(ApprovalResolutionKind.Denied));
+        Assert.That(resolution.Scope, Is.Null);
+        Assert.That(resolution.Reason, Is.EqualTo("denied by test"));
         TestAssert.DoesNotContainAny(@event => @event.Kind is HostEventKind.ToolStarted or HostEventKind.ToolFinished,
                                      sink.Events);
+    }
+
+    /// <summary>Level2 写工具：目标在工作区外，触发审批流程。</summary>
+    private sealed class HostEventStreamWriteTool : ITool
+    {
+        public ToolDefinition Definition { get; } = new()
+        {
+            Name = "write_outside", Description = "test", Parameters = new JsonObject { ["type"] = "object" }
+        };
+
+        public ToolPreparation Prepare(ChatToolCall call)
+        {
+            var target = JsonNode.Parse(call.ArgumentsJson)!["target"]!.GetValue<string>();
+            return new ToolPreparation
+            {
+                ToolName    = Definition.Name,
+                CallId      = call.Id,
+                Arguments   = new JsonObject { ["target"] = target },
+                Capability  = "filesystem.write",
+                Summary     = $"write {target}",
+                TargetPaths = [target]
+            };
+        }
+
+        public Task<ToolResult> ExecuteAsync(ToolPreparation preparation, CancellationToken cancellationToken) =>
+            Task.FromResult(new ToolResult { Succeeded = true, Content = "written" });
     }
 
     [Test]
@@ -435,12 +453,12 @@ public class HostEventStreamTests
 
     private sealed class ScriptedApprover : IApprovalProvider
     {
-        private readonly Queue<ApprovalAction> _actions = new();
+        private readonly Queue<ApprovalResolution> _actions = new();
 
-        public Task<ApprovalAction> PromptAsync(ToolPreparation preparation, CancellationToken cancellationToken) =>
+        public Task<ApprovalResolution> PromptAsync(ApprovalRequest request, CancellationToken cancellationToken) =>
             Task.FromResult(_actions.Dequeue());
 
-        public void Enqueue(ApprovalAction action)
+        public void Enqueue(ApprovalResolution action)
         {
             _actions.Enqueue(action);
         }

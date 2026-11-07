@@ -243,19 +243,18 @@ public class ConsoleHostEventSinkTests
                                 {
                                     Kind     = HostEventKind.ApprovalResolved,
                                     Sequence = 1,
-                                    Payload  = new ApprovalResolution(PermissionDecision.Allow, null, "allow")
+                                    Payload  = new ApprovalResolution(ApprovalResolutionKind.Granted, null, null)
                                 },
                                 CancellationToken.None);
         await sink.PublishAsync(new HostEvent
                                 {
                                     Kind     = HostEventKind.ApprovalResolved,
                                     Sequence = 2,
-                                    Payload = new ApprovalResolution(PermissionDecision.Ask, ApprovalAction.AllowOnce,
-                                                                     "allow once")
+                                    Payload = ApprovalResolution.Granted(GrantScope.SingleOperation)
                                 },
                                 CancellationToken.None);
 
-        Assert.That(output.ToString(), Is.EqualTo("approval: allow once\n"));
+        Assert.That(output.ToString(), Is.EqualTo("approval: granted (SingleOperation)\n"));
     }
 
     [Test]

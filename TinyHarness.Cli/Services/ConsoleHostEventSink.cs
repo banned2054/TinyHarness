@@ -139,9 +139,16 @@ internal sealed partial class ConsoleHostEventSink(
                 await CloseOpenLineAsync(cancellationToken).ConfigureAwait(false);
                 break;
 
-            case HostEventKind.ApprovalResolved when @event.Payload is
-                ApprovalResolution { Decision: PermissionDecision.Ask } resolution :
-                await WriteLineAsync($"approval: {resolution.Outcome}", cancellationToken).ConfigureAwait(false);
+            case HostEventKind.ApprovalResolved when @event.Payload is ApprovalResolution resolution :
+                // 规则自动放行（无授权范围）保持安静；交互批准与一切拒绝/不可用如实打印。
+                if (resolution.Kind == ApprovalResolutionKind.Granted && resolution.Scope is null) break;
+                await WriteLineAsync(
+                    resolution.Kind switch
+                    {
+                        ApprovalResolutionKind.Granted => $"approval: granted ({resolution.Scope})",
+                        ApprovalResolutionKind.Denied  => $"approval: denied ({resolution.Reason})",
+                        _                              => $"approval: unavailable ({resolution.Reason})"
+                    }, cancellationToken).ConfigureAwait(false);
                 break;
 
             case HostEventKind.CompactionApplied when @event.Payload is ContextChange change :

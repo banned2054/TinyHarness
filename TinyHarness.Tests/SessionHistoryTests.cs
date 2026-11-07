@@ -309,7 +309,7 @@ public sealed class SessionHistoryTests
                     Is.EqualTo(ToolCallExecutionState.KnownNotStarted));
         Assert.That(tool.ExecuteCount, Is.Zero);
         Assert.That(item.State, Is.EqualTo(nameof(ToolCallExecutionState.KnownNotStarted)));
-        Assert.That(item.Approval, Does.Contain("Permission denied by user"));
+        Assert.That(item.Approval, Does.Contain("Permission denied by the approver"));
         Assert.That(item.Succeeded, Is.Null);
         Assert.That(item.ExitCode, Is.Null);
     }
@@ -532,14 +532,14 @@ public sealed class SessionHistoryTests
 
     private sealed class DenyHistoryApprover : IApprovalProvider
     {
-        public Task<ApprovalAction> PromptAsync(ToolPreparation preparation, CancellationToken cancellationToken) =>
-            Task.FromResult(ApprovalAction.Deny);
+        public Task<ApprovalResolution> PromptAsync(ApprovalRequest request, CancellationToken cancellationToken) =>
+            Task.FromResult(ApprovalResolution.Denied("denied by test"));
     }
 
     private sealed class AllowHistoryApprover : IApprovalProvider
     {
-        public Task<ApprovalAction> PromptAsync(ToolPreparation preparation, CancellationToken cancellationToken) =>
-            Task.FromResult(ApprovalAction.AllowOnce);
+        public Task<ApprovalResolution> PromptAsync(ApprovalRequest request, CancellationToken cancellationToken) =>
+            Task.FromResult(ApprovalResolution.Granted(GrantScope.SingleOperation));
     }
 
     private sealed class HistoryCollectingSink : IHostEventSink

@@ -474,8 +474,8 @@ public class AgentLoopTests
         client.Enqueue(FakeChatClient.Text("done"));
         using var dir      = new TestTempDir();
         var       tool     = new FakeTool("t");
-        var       engine   = new PermissionEngine(dir.Root);
-        var       approver = new ScriptedApprover(ApprovalAction.AllowOnce, ApprovalAction.Deny);
+        var       engine   = new PermissionEngine(dir.Root, resourcePolicy : new TestResourcePolicy(dir.Root));
+        var       approver = new ScriptedApprover(ApprovalResolution.Granted(GrantScope.SingleOperation), ApprovalResolution.Denied("denied by test"));
         var       loop     = new AgentLoop(client, new ToolRegistry([tool]), Options(), engine, approver);
 
         var result = await loop.RunAsync("sys", "go", CancellationToken.None);
@@ -485,12 +485,12 @@ public class AgentLoopTests
 
         var approved = result.ToolCalls[0];
         Assert.That(approved.State, Is.EqualTo(ToolCallExecutionState.ConfirmedResult));
-        Assert.That(approved.Approval, Is.EqualTo("allow once"));
+        Assert.That(approved.Approval, Is.EqualTo("allow (single operation)"));
         Assert.That(approved.SideEffects, Is.True);
 
         var denied = result.ToolCalls[1];
         Assert.That(denied.State, Is.EqualTo(ToolCallExecutionState.KnownNotStarted));
-        TestAssert.Contains("Permission denied by user", denied.Approval, StringComparison.Ordinal);
+        TestAssert.Contains("Permission denied by the approver", denied.Approval, StringComparison.Ordinal);
         Assert.That(tool.ExecuteCount, Is.EqualTo(1));
     }
 
@@ -550,12 +550,12 @@ public class AgentLoopTests
     ///     <para>按序返回预置审批选择；耗尽后拒绝。</para>
     ///     <para>Returns preset approval choices in order; denies once they are exhausted.</para>
     /// </summary>
-    private sealed class ScriptedApprover(params ApprovalAction[] actions) : IApprovalProvider
+    private sealed class ScriptedApprover(params ApprovalResolution[] actions) : IApprovalProvider
     {
         private int _next;
 
-        public Task<ApprovalAction> PromptAsync(ToolPreparation preparation, CancellationToken cancellationToken) =>
-            Task.FromResult(_next < actions.Length ? actions[_next++] : ApprovalAction.Deny);
+        public Task<ApprovalResolution> PromptAsync(ApprovalRequest request, CancellationToken cancellationToken) =>
+            Task.FromResult(_next < actions.Length ? actions[_next++] : ApprovalResolution.Denied("denied by test"));
     }
 
     /// <summary>

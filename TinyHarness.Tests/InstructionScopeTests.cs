@@ -233,21 +233,54 @@ public class InstructionScopeTests
     {
         using var dir = new TestTempDir();
         dir.WriteFile("AGENTS.md", "INITIAL_RULE");
-        dir.WriteFile("file.txt", "old\n");
-        var patch = new JsonObject { ["patch"] = "--- a/file.txt\n+++ b/file.txt\n@@ -1 +1 @@\n-old\n+new\n" }
-           .ToJsonString();
+        // Level2 流程：目标指向工作区外，使审批真实发生（基线内写入已自动放行）。
+        var outsideFile = Path.Combine(Path.GetDirectoryName(dir.Root)!, "approval-rule-outside.txt");
+        File.WriteAllText(outsideFile, "old\n");
         var client = new FakeChatClient();
-        client.Enqueue(FakeChatClient.ToolCalls("apply_patch", 2, "old", patch));
+        client.Enqueue(FakeChatClient.ToolCalls("write_outside", 2, "old",
+                                                new JsonObject { ["target"] = outsideFile }.ToJsonString()));
         client.Enqueue(FakeChatClient.Text("reconsidered"));
         var approver = new ChangeRuleApprover(() => dir.WriteFile("AGENTS.md", "UPDATED_RULE"));
         var loader = new ProjectInstructionLoader(dir.Workspace);
-        using var host = Host(dir, client, [new ApplyPatchTool(dir.Workspace)], loader, approver);
+        using var host = Host(dir, client, [new OutsideWriteTool()], loader, approver);
         var run = await host.SubmitTurnAsync("change file", CancellationToken.None);
-        Assert.That(run.Result!.Status, Is.EqualTo(AgentStatus.Completed));
-        Assert.That(run.Result.ToolExecutions, Is.Zero);
-        Assert.That(approver.Prompts, Is.EqualTo(1));
-        Assert.That(await File.ReadAllTextAsync(Path.Combine(dir.Root, "file.txt")), Is.EqualTo("old\n"));
-        Assert.That(client.RequestLog[1].Messages[1].Content, Does.Contain("UPDATED_RULE"));
+        Assert.Multiple(() =>
+        {
+            Assert.That(run.Result!.Status, Is.EqualTo(AgentStatus.Completed));
+            Assert.That(run.Result.ToolExecutions, Is.Zero);
+            Assert.That(approver.Prompts, Is.EqualTo(1));
+            Assert.That(File.ReadAllText(outsideFile), Is.EqualTo("old\n"));
+            Assert.That(client.RequestLog[1].Messages[1].Content, Does.Contain("UPDATED_RULE"));
+        });
+    }
+
+    /// <summary>
+    ///     <para>Level2 写工具：能力为 filesystem.write，目标取自参数 target，可指向工作区外。</para>
+    ///     <para>A Level2 write tool: capability filesystem.write with the target argument, which may sit outside.</para>
+    /// </summary>
+    private sealed class OutsideWriteTool : ITool
+    {
+        public ToolDefinition Definition { get; } = new()
+        {
+            Name = "write_outside", Description = "test", Parameters = new JsonObject { ["type"] = "object" }
+        };
+
+        public ToolPreparation Prepare(ChatToolCall call)
+        {
+            var target = JsonNode.Parse(call.ArgumentsJson)!["target"]!.GetValue<string>();
+            return new ToolPreparation
+            {
+                ToolName    = Definition.Name,
+                CallId      = call.Id,
+                Arguments   = new JsonObject { ["target"] = target },
+                Capability  = "filesystem.write",
+                Summary     = $"write {target}",
+                TargetPaths = [target]
+            };
+        }
+
+        public Task<ToolResult> ExecuteAsync(ToolPreparation preparation, CancellationToken cancellationToken) =>
+            Task.FromResult(new ToolResult { Succeeded = true, Content = "written" });
     }
 
     [Test]
@@ -282,7 +315,7 @@ public class InstructionScopeTests
                                         ProjectInstructionLoader loader, IApprovalProvider? approver = null) =>
         new(dir.Root, new SessionModelIdentity("test-model", "https://example.invalid/v1", ChatApiKind.ChatCompletions),
             new AgentOptions { Model = "test-model", MaxAgentSteps = 10, DefaultToolTimeoutSeconds = 30 },
-            client, new ToolRegistry(tools), "system", new PermissionEngine(dir.Root), approver,
+            client, new ToolRegistry(tools), "system", new PermissionEngine(dir.Root, resourcePolicy : new TestResourcePolicy(dir.Root)), approver,
             instructionLoader: loader);
 
     private static IReadOnlyList<ChatStreamEvent>
@@ -300,10 +333,10 @@ public class InstructionScopeTests
     {
         public int Prompts { get; private set; }
 
-        public Task<ApprovalAction> PromptAsync(ToolPreparation preparation, CancellationToken cancellationToken)
+        public Task<ApprovalResolution> PromptAsync(ApprovalRequest request, CancellationToken cancellationToken)
         {
             if (++Prompts == 1) change?.Invoke();
-            return Task.FromResult(ApprovalAction.AllowSession);
+            return Task.FromResult(ApprovalResolution.Granted(GrantScope.Turn));
         }
     }
 }

@@ -22,17 +22,17 @@ internal sealed class WorkspaceAccessCoordinator
         PolicyIdentity = "workspace-read-only;process-disabled"
     };
 
-    private readonly Func<Task<(ShellTool Tool, ProcessExecutionPolicy Policy)>> _activate;
+    private readonly Func<GrantRegistry, Task<(ShellTool Tool, ProcessExecutionPolicy Policy)>> _activate;
 
     private readonly ShellTool           _disabledShell;
     private readonly IWorkspaceAclGrant  _grant;
     private readonly TextReader          _input;
     private readonly bool                _interactive;
     private readonly TextWriter          _output;
-    private readonly PermissionEngine    _permissions;
     private readonly bool                _requiresAcl;
     private readonly WorkspaceTrustStore _store;
     private          bool                _grantUncertain;
+    private          PermissionEngine    _permissions;
 
     /// <summary>
     ///     <para>组合宿主输入和可替换授权器；构造时不读取信任文件或启动沙箱。</para>
@@ -41,11 +41,12 @@ internal sealed class WorkspaceAccessCoordinator
     ///         construction.
     ///     </para>
     /// </summary>
-    public WorkspaceAccessCoordinator(WorkspaceAccessState state, WorkspaceTrustStore store,
-                                      PermissionEngine permissions, TextReader input, TextWriter output,
-                                      bool interactive,
-                                      bool requiresAcl, IWorkspaceAclGrant grant,
-                                      Func<Task<(ShellTool Tool, ProcessExecutionPolicy Policy)>> activate)
+    public WorkspaceAccessCoordinator(WorkspaceAccessState state,       WorkspaceTrustStore store,
+                                      PermissionEngine     permissions, TextReader          input, TextWriter output,
+                                      bool                 interactive,
+                                      bool                 requiresAcl, IWorkspaceAclGrant grant,
+                                      Func<GrantRegistry, Task<(ShellTool Tool, ProcessExecutionPolicy Policy)>>
+                                          activate)
     {
         State        = state;
         _store       = store;
@@ -64,6 +65,35 @@ internal sealed class WorkspaceAccessCoordinator
     public WorkspaceAccessState   State  { get; }
     public ShellTool              Shell  { get; private set; }
     public ProcessExecutionPolicy Policy { get; private set; } = ReadOnlyPolicy;
+
+    /// <summary>
+    ///     <para>在单会话 CLI 边界切换当前权限引擎；激活 Shell 与该引擎使用同一 GrantRegistry。</para>
+    ///     <para>Binds the active session's permission engine; the activated Shell shares its GrantRegistry.</para>
+    /// </summary>
+    public async Task BindSessionAsync(PermissionEngine permissions, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(permissions);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (State.IsReadOnly)
+        {
+            _permissions.RevokeGrants();
+            _permissions = permissions;
+            Shell        = _disabledShell;
+            Policy       = ReadOnlyPolicy;
+            return;
+        }
+
+        // 候选激活失败或取消时保留旧宿主的引擎、Shell 与授权配对。
+        State.Identity.EnsureUnchanged();
+        var execution = await _activate(permissions.Grants).ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
+        State.Identity.EnsureUnchanged();
+        _permissions.RevokeGrants();
+        _permissions = permissions;
+        Shell        = execution.Tool;
+        Policy       = execution.Policy;
+        State.SetReadOnly(false);
+    }
 
     /// <summary>
     ///     <para>读取已有决定，首次交互询问；非交互未知目录只读且不保存默认决定。</para>
@@ -132,7 +162,7 @@ internal sealed class WorkspaceAccessCoordinator
         State.SetReadOnly(true);
         Shell  = _disabledShell;
         Policy = ReadOnlyPolicy;
-        _permissions.ClearTemporaryAllows();
+        _permissions.RevokeGrants();
         if (persist) await _store.SaveAsync(State.Identity, trusted, cancellationToken).ConfigureAwait(false);
         if (!trusted)
         {
@@ -183,7 +213,7 @@ internal sealed class WorkspaceAccessCoordinator
             }
 
             cancellationToken.ThrowIfCancellationRequested();
-            var execution = await _activate().ConfigureAwait(false);
+            var execution = await _activate(_permissions.Grants).ConfigureAwait(false);
             State.Identity.EnsureUnchanged();
             Shell  = execution.Tool;
             Policy = execution.Policy;

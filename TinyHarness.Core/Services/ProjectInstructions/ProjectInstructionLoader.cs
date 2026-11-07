@@ -73,6 +73,9 @@ public sealed class ProjectInstructionLoader(Workspace workspace)
             if (!Enum.IsDefined(scope.Kind) || scope.MaxDepth < 0 ||
                 scope.MaxEntries is < 1 or > ProjectInstructionLimits.MaxDiscoveryEntries)
                 throw new InvalidDataException("Invalid project instruction access scope or traversal budget.");
+            if (Path.IsPathRooted(scope.Path) &&
+                !Workspace.IsInside(workspace.Root, Path.GetFullPath(scope.Path)))
+                continue;
             var target = workspace.ResolveInside(scope.Path, "instruction scope");
             var directory = scope.Kind == InstructionScopeKind.File ? Path.GetDirectoryName(target)! : target;
             var attributes = scope.Kind != InstructionScopeKind.File ? Attributes(target) : null;

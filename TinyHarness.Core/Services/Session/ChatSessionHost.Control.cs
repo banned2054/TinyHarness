@@ -107,7 +107,8 @@ public sealed partial class ChatSessionHost
         }
 
         Session.RecordAmendment(applied);
-        _permissions?.ClearTemporaryAllows();
+        // 用户补充生效：撤销全部活动授权；显式拒绝与中断检查保留。
+        _permissions?.RevokeGrants();
     }
 
     private ConversationContext CompleteContextSnapshot()

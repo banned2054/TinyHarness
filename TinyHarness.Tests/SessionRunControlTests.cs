@@ -28,7 +28,7 @@ public class SessionRunControlTests
                                         string? directory = null, IApprovalProvider? approver = null,
                                         IReadOnlyDictionary<string, string>? secrets = null) =>
         new(Path.GetTempPath(), Identity, Options, model, new ToolRegistry(tool is null ? [] : [tool]), "sys",
-            approver is null ? null : new PermissionEngine(Path.GetTempPath()), approver, sink,
+            approver is null ? null : new PermissionEngine(Path.GetTempPath(), resourcePolicy : new TestResourcePolicy(Path.GetTempPath())), approver, sink,
             sessionWriterFactory : directory is null ? null : id => new SessionStoreWriter(directory, id, secrets),
             knownSecrets : secrets);
 
@@ -279,11 +279,11 @@ public class SessionRunControlTests
     {
         internal TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public async Task<ApprovalAction> PromptAsync(ToolPreparation preparation, CancellationToken cancellationToken)
+        public async Task<ApprovalResolution> PromptAsync(ApprovalRequest request, CancellationToken cancellationToken)
         {
             Entered.TrySetResult();
             await Task.Delay(Timeout.Infinite, cancellationToken);
-            return ApprovalAction.Deny;
+            return ApprovalResolution.Denied("denied by test");
         }
     }
 
@@ -291,10 +291,10 @@ public class SessionRunControlTests
     {
         internal int Calls { get; private set; }
 
-        public Task<ApprovalAction> PromptAsync(ToolPreparation preparation, CancellationToken cancellationToken)
+        public Task<ApprovalResolution> PromptAsync(ApprovalRequest request, CancellationToken cancellationToken)
         {
             Calls++;
-            return Task.FromResult(ApprovalAction.AllowSession);
+            return Task.FromResult(ApprovalResolution.Granted(GrantScope.Turn));
         }
     }
 }

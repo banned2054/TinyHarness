@@ -5,10 +5,14 @@ using TinyHarness.Core.Services.Permissions;
 namespace TinyHarness.Cli.Services;
 
 /// <summary>
-///     <para>展示副作用范围与原始补丁预览，并读取本次运行范围的审批；命令摘要仍隐藏已知密钥。</para>
 ///     <para>
-///         Shows side-effect scopes and original patch previews for run-scoped approval; command summaries still hide
-///         known keys.
+///         展示副作用范围、执行分类与原始补丁预览，并读取本次运行的审批结论；命令摘要仍隐藏已知密钥。
+///         非交互输入不是拒绝：返回 Unavailable，明确表示操作未执行。
+///     </para>
+///     <para>
+///         Shows the side-effect scope, execution level and original patch preview, then reads one run-scoped
+///         resolution; command summaries still hide known keys. Non-interactive input is not a denial — it
+///         returns Unavailable, stating plainly that nothing executed.
 ///     </para>
 /// </summary>
 internal sealed class ConsoleApprovalProvider(
@@ -19,62 +23,98 @@ internal sealed class ConsoleApprovalProvider(
     private readonly DisplaySecretRedactor _redactor = new(knownSecrets);
 
     /// <summary>
-    ///     创建使用标准输入输出的交互式审批器。
-    ///     Creates an interactive approval provider backed by standard input and output.
+    ///     <para>创建使用标准输入输出的交互式审批器。</para>
+    ///     <para>Creates an interactive approval provider backed by standard input and output.</para>
     /// </summary>
     public ConsoleApprovalProvider() : this(Console.In, Console.Out)
     {
     }
 
     /// <summary>
-    ///     显示副作用摘要、规范化目标和补丁预览，再将输入映射为单次允许、会话允许或拒绝。
-    ///     Shows the side-effect summary, normalized targets, and patch preview, then maps input to an approval action.
+    ///     <para>
+    ///         显示执行分类、副作用摘要、规范化目标、补丁预览与可授权范围，再把输入映射为审批结论。
+    ///         输入重定向（非交互）时返回 Unavailable；无法识别的输入按拒绝处理。
+    ///     </para>
+    ///     <para>
+    ///         Shows the execution level, side-effect summary, normalized targets, patch preview and grantable
+    ///         scopes, then maps the input to a resolution. Redirected (non-interactive) input returns
+    ///         Unavailable; unrecognized input is treated as a denial.
+    ///     </para>
     /// </summary>
-    public async Task<ApprovalAction> PromptAsync(ToolPreparation preparation, CancellationToken cancellationToken)
+    public async Task<ApprovalResolution> PromptAsync(ApprovalRequest request, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        await output.WriteLineAsync();
-        await output.WriteLineAsync("! Agent requests a side effect:");
+        var preparation = request.Preparation;
+        await output.WriteLineAsync().ConfigureAwait(false);
+        await output.WriteLineAsync("! Agent requests a side effect:").ConfigureAwait(false);
+        await output.WriteLineAsync($"  level: {DescribeLevel(request.Level)}").ConfigureAwait(false);
         if (preparation.RiskLevel == ToolRiskLevel.Elevated)
-            await
-                output.WriteLineAsync("  RISK: elevated — shell syntax can chain commands, redirect output, and expand variables.");
+            await output
+                 .WriteLineAsync("  RISK: elevated — shell syntax can chain commands, redirect output, and expand variables.")
+                 .ConfigureAwait(false);
 
         var commandRedactor = preparation.Capability == "process.execute" ? _redactor : null;
-        await output.WriteLineAsync($"  {TerminalDisplay.Format(preparation.Summary, commandRedactor)}");
+        await output.WriteLineAsync($"  {TerminalDisplay.Format(preparation.Summary, commandRedactor)}")
+                    .ConfigureAwait(false);
         foreach (var target in preparation.TargetPaths)
-            await output.WriteLineAsync($"  target: {TerminalDisplay.Format(target)}");
+            await output.WriteLineAsync($"  target: {TerminalDisplay.Format(target)}").ConfigureAwait(false);
 
         if (preparation.ToolName == "apply_patch")
         {
             var patch = preparation.Arguments["patch"]?.GetValue<string>()
                      ?? throw new InvalidDataException("Cannot approve apply_patch without a patch preview.");
-            await output.WriteLineAsync("  Proposed diff (control characters are escaped):");
-            await output.WriteLineAsync(TerminalDisplay.Format(patch));
+            await output.WriteLineAsync("  Proposed diff (control characters are escaped):").ConfigureAwait(false);
+            await output.WriteLineAsync(TerminalDisplay.Format(patch)).ConfigureAwait(false);
         }
 
-        var runConstraint = preparation.SessionConstraint is null
-            ? "."
-            : preparation.Arguments["mode"]?.GetValue<string>() == "shell"
-                ? " and this exact shell type, command text, and working directory."
-                : " and this exact executable/argument shape.";
-        await
-            output.WriteLineAsync($"  Run approval ('s') grants '{TerminalDisplay.Format(preparation.Capability, _redactor)}' for the target paths above" +
-                                  runConstraint);
-        await
-            output.WriteLineAsync("  It lasts for the remainder of this run only; future runs and a saved session do not inherit it.");
-        await
-            output.WriteLineAsync("  The legacy '[s]ession' input keeps the same run-scoped meaning.");
-        await
-            output.WriteLineAsync("  Directory scopes include descendants; later changes in this scope may run without asking.");
-        await output.WriteAsync("  [a]llow once / [s]ession / [d]eny: ");
-        await output.FlushAsync(cancellationToken);
-        var line = await input.ReadLineAsync(cancellationToken);
+        if (preparation.RequiresNetworkAccess)
+            await output
+                 .WriteLineAsync("  NETWORK: full network access inside the sandbox (possibly through your local proxy); not a domain-level narrow grant.")
+                 .ConfigureAwait(false);
+        if (request.ReviewerNote is { } note)
+            await output.WriteLineAsync($"  reviewer: {TerminalDisplay.Format(note)}").ConfigureAwait(false);
 
-        return line?.Trim().ToLowerInvariant() switch
-        {
-            "a" or "allow" or "once" or "allow once" or "y" or "yes" => ApprovalAction.AllowOnce,
-            "s" or "session" or "allow session"                      => ApprovalAction.AllowSession,
-            _                                                        => ApprovalAction.Deny
-        };
+        var scopes = request.AllowedScopes;
+        await output.WriteLineAsync(ScopeHelp(scopes)).ConfigureAwait(false);
+        await output.WriteLineAsync("  Turn/session approvals last for the remainder of this run/session only;")
+                    .ConfigureAwait(false);
+        await output.WriteLineAsync("  they never survive a restart and are not saved as reusable authority.")
+                    .ConfigureAwait(false);
+        await output.WriteAsync("  choice: ").ConfigureAwait(false);
+        await output.FlushAsync(cancellationToken).ConfigureAwait(false);
+        var line = await input.ReadLineAsync(cancellationToken).ConfigureAwait(false);
+        if (line is null)
+            return ApprovalResolution.Unavailable("No interactive input available; the operation was not executed.");
+
+        var choice = line.Trim().ToLowerInvariant();
+        if (choice is "t" or "turn" && scopes.Contains(GrantScope.Turn))
+            return ApprovalResolution.Granted(GrantScope.Turn);
+        if (choice is "s" or "session" && scopes.Contains(GrantScope.Session))
+            return ApprovalResolution.Granted(GrantScope.Session);
+        if (choice is "a" or "allow" or "once" or "allow once" or "y" or "yes")
+            return ApprovalResolution.Granted(GrantScope.SingleOperation);
+        if (choice is "d" or "deny" or "n" or "no")
+            return ApprovalResolution.Denied("Denied by the user.");
+
+        // 无法识别的输入按拒绝处理：宁可不执行。
+        return ApprovalResolution.Denied($"Unrecognized approval input '{choice}'; treated as a denial.");
+    }
+
+    /// <summary>把执行分类转成面向终端的说明。</summary>
+    private static string DescribeLevel(PermissionLevel level) => level switch
+    {
+        PermissionLevel.Level1 => "1 (sandbox baseline)",
+        PermissionLevel.Level2 => "2 (sandbox add-on: outside paths, metadata writes or network)",
+        PermissionLevel.Level3 => "3 (host execution, no OS isolation, single operation only)",
+        _                      => "unclassified (fail-closed approval)"
+    };
+
+    /// <summary>按可授权范围生成输入说明。</summary>
+    private static string ScopeHelp(IReadOnlyList<GrantScope> scopes)
+    {
+        var parts = new List<string> { "[a]llow once" };
+        if (scopes.Contains(GrantScope.Turn)) parts.Add("[t]urn (this run)");
+        if (scopes.Contains(GrantScope.Session)) parts.Add("[s]ession (this running instance, explicit opt-in)");
+        return "  " + string.Join(" / ", parts) + " / [d]eny.";
     }
 }

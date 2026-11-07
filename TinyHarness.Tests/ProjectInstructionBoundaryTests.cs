@@ -40,8 +40,10 @@ public class ProjectInstructionBoundaryTests
                                                                .Updated, null, "revision-3", null)
                                                         ]);
         var approver = new ScriptedApprover();
-        approver.Enqueue(ApprovalAction.AllowOnce);
-        var loop = new AgentLoop(client, new ToolRegistry([tool]), Options(), new PermissionEngine("."),
+        approver.Enqueue(ApprovalResolution.Granted(GrantScope.SingleOperation));
+        var loop = new AgentLoop(client, new ToolRegistry([tool]), Options(),
+                                 new PermissionEngine(".", resourcePolicy :
+                                                      new TestResourcePolicy(Path.GetFullPath("."))),
                                  approver, null, null, null, null, boundary);
 
         var result = await loop.RunAsync("sys", "inspect nested scope", CancellationToken.None);
@@ -132,20 +134,20 @@ public class ProjectInstructionBoundaryTests
             Capability = "filesystem.write",
             Summary    = "write"
         };
-        var engine = new PermissionEngine(".");
-        engine.GrantOnce(preparation);
-        Assert.That(engine.Decide(preparation), Is.EqualTo(PermissionDecision.Allow));
-        engine.ClearTemporaryAllows();
-        Assert.That(engine.Decide(preparation), Is.EqualTo(PermissionDecision.Ask));
+        var engine = new PermissionEngine(".", resourcePolicy : new TestResourcePolicy(Path.GetFullPath(".")));
+        engine.Grants.Add(GrantScope.SingleOperation, preparation);
+        Assert.That(engine.Evaluate(preparation).Decision, Is.EqualTo(PermissionDecision.Allow));
+        engine.RevokeGrants();
+        Assert.That(engine.Evaluate(preparation).Decision, Is.EqualTo(PermissionDecision.Ask));
 
-        engine.GrantSession(preparation);
-        Assert.That(engine.Decide(preparation), Is.EqualTo(PermissionDecision.Allow));
-        engine.DenySession(preparation);
+        engine.Grants.Add(GrantScope.Turn, preparation);
+        Assert.That(engine.Evaluate(preparation).Decision, Is.EqualTo(PermissionDecision.Allow));
+        engine.RecordDenial(preparation);
         engine.SetNonReadOnlyBlock("inspection pending");
 
-        engine.ClearTemporaryAllows();
+        engine.RevokeGrants();
 
-        Assert.That(engine.Decide(preparation), Is.EqualTo(PermissionDecision.Deny));
+        Assert.That(engine.Evaluate(preparation).Decision, Is.EqualTo(PermissionDecision.Deny));
         Assert.That(engine.NonReadOnlyBlockReason, Is.EqualTo("inspection pending"));
     }
 
@@ -186,19 +188,25 @@ public class ProjectInstructionBoundaryTests
         using var workspace = new TestTempDir();
         using var store     = new TestTempDir();
         workspace.WriteFile("AGENTS.md", "ROOT_RULE");
-        Directory.CreateDirectory(Path.Combine(workspace.Root, "nested"));
+        // Level2 写目标：受保护元数据（.git/nested）内的写入需要审批，同时保持指令作用域在工作区内。
+        var nested = Directory.CreateDirectory(Path.Combine(workspace.Root, ".git", "nested"));
+
         var loader  = new ProjectInstructionLoader(workspace.Workspace);
         var initial = await loader.LoadAsync(null, [], CancellationToken.None);
         var client  = new FakeChatClient();
         client.Enqueue(FakeChatClient.ToolCall("scoped", "{}"));
         client.Enqueue(FakeChatClient.ToolCall("scoped", "{}", "call_2"));
         client.Enqueue(FakeChatClient.Text("done"));
-        var tool     = new ScopedInstructionTool(Path.Combine(workspace.Root, "nested"), "filesystem.write");
+        var tool     = new ScopedInstructionTool(nested.FullName, "filesystem.write");
         var approver = new ScriptedApprover();
-        approver.Enqueue(ApprovalAction.AllowSession);
+        approver.Enqueue(ApprovalResolution.Granted(GrantScope.Turn));
         var events = new TestHostEventSink();
         using var host = new ChatSessionHost(workspace.Root, Model, Options(), client, new ToolRegistry([tool]),
-                                             "sys", new PermissionEngine(workspace.Root), approver, events,
+                                             "sys",
+                                             new PermissionEngine(workspace.Root,
+                                                                  resourcePolicy :
+                                                                  new TestResourcePolicy(workspace.Root)), approver,
+                                             events,
                                              sessionWriterFactory : sessionId =>
                                                  new SessionStoreWriter(store.Root, sessionId),
                                              instructionLoader : loader, initialInstructions : initial);
@@ -276,16 +284,16 @@ public class ProjectInstructionBoundaryTests
 
     private sealed class ScriptedApprover : IApprovalProvider
     {
-        private readonly Queue<ApprovalAction> _actions = new();
-        public           int                   Prompts { get; private set; }
+        private readonly Queue<ApprovalResolution> _actions = new();
+        public           int                       Prompts { get; private set; }
 
-        public Task<ApprovalAction> PromptAsync(ToolPreparation preparation, CancellationToken cancellationToken)
+        public Task<ApprovalResolution> PromptAsync(ApprovalRequest request, CancellationToken cancellationToken)
         {
             Prompts++;
             return Task.FromResult(_actions.Dequeue());
         }
 
-        public void Enqueue(ApprovalAction action) => _actions.Enqueue(action);
+        public void Enqueue(ApprovalResolution action) => _actions.Enqueue(action);
     }
 
     private sealed class ScopedInstructionTool(string scopeDirectory, string capability = "filesystem.read") : ITool
@@ -306,6 +314,7 @@ public class ProjectInstructionBoundaryTests
             Arguments         = [],
             Capability        = capability,
             Summary           = "scoped tool",
+            TargetPaths       = [scopeDirectory],
             InstructionScopes = [new InstructionScope(scopeDirectory, InstructionScopeKind.Directory)]
         };
 

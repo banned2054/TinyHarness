@@ -421,9 +421,9 @@ public class SessionNavigationTests
     {
         internal TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public async Task<ApprovalAction> PromptAsync(ToolPreparation preparation, CancellationToken cancellationToken)
+        public async Task<ApprovalResolution> PromptAsync(ApprovalRequest request, CancellationToken cancellationToken)
         {
-            var pending = inner.PromptAsync(preparation, cancellationToken);
+            var pending = inner.PromptAsync(request, cancellationToken);
             Entered.TrySetResult();
             return await pending;
         }
@@ -549,6 +549,6 @@ public class SessionNavigationTests
         private ChatSessionHost Host(ChatSession session, ConversationContext context, ISessionStoreWriter writer) =>
             new(session, context,
                 new AgentOptions { Model = session.Model.ModelId, MaxAgentSteps = 8, DefaultToolTimeoutSeconds = 30 },
-                Model ?? Client, Tools, "sys", new PermissionEngine(Workspace.Root), Approver, sessionWriter : writer);
+                Model ?? Client, Tools, "sys", new PermissionEngine(Workspace.Root, resourcePolicy : new TestResourcePolicy(Workspace.Root)), Approver, sessionWriter : writer);
     }
 }
