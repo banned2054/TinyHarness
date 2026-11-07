@@ -62,14 +62,15 @@ public class WindowsSandboxPolicyClosureTests
         using var dir       = new TestTempDir();
         var       hostTool  = new ShellTool(dir.Workspace);
         var       sandboxed = new ShellTool(dir.Workspace, executionPolicy : SandboxExecutionPolicy());
-        var       engine    = new PermissionEngine(dir.Root);
+        var       engine    = new PermissionEngine(dir.Root, resourcePolicy : new TestResourcePolicy(dir.Root));
         var       call      = ShellCall("dotnet", "test");
 
-        engine.GrantSession(hostTool.Prepare(call));
-        Assert.That(engine.Decide(sandboxed.Prepare(call)), Is.EqualTo(PermissionDecision.Ask));
+        engine.Grants.Add(GrantScope.Turn, hostTool.Prepare(call));
+        Assert.That(engine.Grants.Peek(sandboxed.Prepare(call)), Is.Null);
 
-        engine.GrantOnce(hostTool.Prepare(call));
-        Assert.That(engine.Decide(sandboxed.Prepare(call)), Is.EqualTo(PermissionDecision.Ask));
+        engine.Grants.Add(GrantScope.SingleOperation, hostTool.Prepare(call));
+        Assert.That(engine.Grants.Peek(sandboxed.Prepare(call)), Is.Null);
+        Assert.That(engine.Evaluate(sandboxed.Prepare(call)).Level, Is.EqualTo(PermissionLevel.Level1));
     }
 
     [Test]
@@ -78,11 +79,11 @@ public class WindowsSandboxPolicyClosureTests
         using var dir       = new TestTempDir();
         var       hostTool  = new ShellTool(dir.Workspace);
         var       sandboxed = new ShellTool(dir.Workspace, executionPolicy : SandboxExecutionPolicy());
-        var       engine    = new PermissionEngine(dir.Root);
+        var       engine    = new PermissionEngine(dir.Root, resourcePolicy : new TestResourcePolicy(dir.Root));
         var       call      = ShellCall("dotnet", "test");
 
-        engine.DenySession(hostTool.Prepare(call));
-        Assert.That(engine.Decide(sandboxed.Prepare(call)), Is.EqualTo(PermissionDecision.Deny));
+        engine.RecordDenial(hostTool.Prepare(call));
+        Assert.That(engine.Evaluate(sandboxed.Prepare(call)).Decision, Is.EqualTo(PermissionDecision.Deny));
     }
 
     [Test]
@@ -90,18 +91,20 @@ public class WindowsSandboxPolicyClosureTests
     {
         using var dir    = new TestTempDir();
         var       tool   = new ShellTool(dir.Workspace, executionPolicy : SandboxExecutionPolicy());
-        var       engine = new PermissionEngine(dir.Root);
+        var       engine = new PermissionEngine(dir.Root, resourcePolicy : new TestResourcePolicy(dir.Root));
         var       call   = ShellCall("dotnet", "test");
 
-        engine.GrantSession(tool.Prepare(call));
-        Assert.That(engine.Decide(tool.Prepare(call)), Is.EqualTo(PermissionDecision.Allow));
+        engine.Grants.Add(GrantScope.Turn, tool.Prepare(call));
+        Assert.That(engine.Grants.Peek(tool.Prepare(call)), Is.Not.Null);
+        Assert.That(engine.Evaluate(tool.Prepare(call)).Decision, Is.EqualTo(PermissionDecision.Allow));
 
         // 不同的沙箱策略身份（如新增写根）不得继承既有授权。
-        engine.GrantSession(tool.Prepare(call));
+        engine.Grants.Add(GrantScope.Turn, tool.Prepare(call));
         var widened = new ShellTool(dir.Workspace,
                                     executionPolicy :
                                     SandboxExecutionPolicy("backend=windows-sandbox\npolicyVersion=1\nkind=workspace-write\nextra-root"));
-        Assert.That(engine.Decide(widened.Prepare(call)), Is.EqualTo(PermissionDecision.Ask));
+        Assert.That(engine.Grants.Peek(widened.Prepare(call)), Is.Null);
+        Assert.That(engine.Evaluate(widened.Prepare(call)).Level, Is.EqualTo(PermissionLevel.Level1));
     }
 
     // ---- Prepare 展示与冻结 ----
@@ -158,7 +161,7 @@ public class WindowsSandboxPolicyClosureTests
         client.Enqueue(FakeChatClient.Text("version checked"));
 
         var approver = new RecordingApprover();
-        approver.Enqueue(ApprovalAction.AllowOnce);
+        approver.Enqueue(ApprovalResolution.Granted(GrantScope.SingleOperation));
         var tools = new ToolRegistry([
             new ShellTool(dir.Workspace, 30,
                           processBackend : backend, executionPolicy : policy)
@@ -170,15 +173,15 @@ public class WindowsSandboxPolicyClosureTests
                                      MaxAgentSteps             = 5,
                                      DefaultToolTimeoutSeconds = 30
                                  },
-                                 new PermissionEngine(dir.Root), approver, recorder);
+                                 new PermissionEngine(dir.Root, resourcePolicy : new TestResourcePolicy(dir.Root)),
+                                 approver, recorder);
 
         var result = await loop.RunAsync("sys", "check the version", CancellationToken.None);
 
         Assert.That(result.Status, Is.EqualTo(AgentStatus.Completed));
-        Assert.That(approver.Prompts, Is.EqualTo(1));
-        // 审批提示必须展示命令将运行的真实隔离环境。
-        TestAssert.Contains("windows-sandbox", approver.SeenSummaries.Single(), StringComparison.Ordinal);
-        // 批准的计划与执行的计划完全一致。
+        // 沙箱 Shell 属 Level1 基线，自动放行，不再逐次审批。
+        Assert.That(approver.Prompts, Is.EqualTo(0));
+        // 执行的计划与审计中的计划完全一致。
         TestAssert.NotNull(backend.ReceivedExecution);
         Assert.That(backend.ReceivedExecution!.Executable, Is.EqualTo("dotnet"));
         Assert.That(backend.ReceivedExecution.WorkingDirectory, Is.EqualTo(dir.Root));
@@ -186,8 +189,8 @@ public class WindowsSandboxPolicyClosureTests
         TestAssert.Contains("backend=windows-sandbox", TestAssert.Single(recorder.PreparedPolicies),
                             StringComparison.Ordinal);
         var permission = TestAssert.Single(recorder.PermissionRecords);
-        Assert.That(permission.Decision, Is.EqualTo(PermissionDecision.Ask));
-        Assert.That(permission.Outcome, Is.EqualTo("allow once"));
+        Assert.That(permission.Decision, Is.EqualTo(PermissionDecision.Allow));
+        Assert.That(permission.Outcome, Is.EqualTo("allow"));
         TestAssert.Contains("backend=windows-sandbox", permission.ExecutionPolicy, StringComparison.Ordinal);
         var toolResult = TestAssert.Single(recorder.ResultRecords);
         Assert.That(toolResult.Succeeded, Is.True);
@@ -286,7 +289,7 @@ public class WindowsSandboxPolicyClosureTests
 
         Assert.That(policy.EffectiveWriteRoots, Is.EqualTo([extra.Root]));
         Assert.That(policy.SpawnProfile.FileSystem.Entries.Where(entry => entry.Access == "write").Select(entry =>
-            entry.Path.ExplicitPath).ToList(), Is.EqualTo([extra.Root]));
+                        entry.Path.ExplicitPath).ToList(), Is.EqualTo([extra.Root]));
     }
 
     [Test]
@@ -294,8 +297,10 @@ public class WindowsSandboxPolicyClosureTests
     {
         using var dir = new TestTempDir();
         TestAssert.Throws<ArgumentException>(() =>
-            SandboxPolicyResolver.Resolve(SandboxPolicyKind.WorkspaceWrite, dir.Root,
-                                          new Dictionary<string, string>(), ["relative-root"]));
+                                                 SandboxPolicyResolver.Resolve(SandboxPolicyKind.WorkspaceWrite,
+                                                                               dir.Root,
+                                                                               new Dictionary<string, string>(),
+                                                                               ["relative-root"]));
     }
 
     // ---- 组合器：fail closed、身份稳定 ----
@@ -325,10 +330,12 @@ public class WindowsSandboxPolicyClosureTests
         Assert.That(composed.Policy.TempWriteRoots, Is.EqualTo([expectedTemp]));
         // 派生的 NuGet 缓存根与工具根进入有效写根。
         Assert.That(composed.Policy.EffectiveWriteRoots,
-                    Is.EqualTo([workspace.Root,
-                                expectedTemp,
-                                Path.Combine(home.Root, "nuget-cache"),
-                                Path.Combine(home.Root, "tools")]));
+                    Is.EqualTo([
+                        workspace.Root,
+                        expectedTemp,
+                        Path.Combine(home.Root, "nuget-cache"),
+                        Path.Combine(home.Root, "tools")
+                    ]));
         foreach (var name in new[] { "USERPROFILE", "HOME", "DOTNET_CLI_HOME", "APPDATA", "LOCALAPPDATA" })
         {
             Assert.That(Workspace.IsInside(expectedTemp, composed.TargetEnvironment[name]), Is.True);
@@ -396,7 +403,8 @@ public class WindowsSandboxPolicyClosureTests
         };
 
         var error =
-            TestAssert.Throws<InvalidOperationException>(() => WindowsSandboxComposer.Compose(settings, workspace.Root));
+            TestAssert.Throws<InvalidOperationException>(() => WindowsSandboxComposer
+                                                            .Compose(settings, workspace.Root));
         TestAssert.Contains("refusing to fall back", error.Message, StringComparison.Ordinal);
     }
 
@@ -452,7 +460,8 @@ public class WindowsSandboxPolicyClosureTests
         };
 
         var error =
-            TestAssert.Throws<InvalidOperationException>(() => WindowsSandboxComposer.Compose(settings, workspace.Root));
+            TestAssert.Throws<InvalidOperationException>(() => WindowsSandboxComposer
+                                                            .Compose(settings, workspace.Root));
         TestAssert.Contains("sandbox home", error.Message, StringComparison.Ordinal);
     }
 
@@ -472,7 +481,8 @@ public class WindowsSandboxPolicyClosureTests
         };
 
         var error =
-            TestAssert.Throws<InvalidOperationException>(() => WindowsSandboxComposer.Compose(settings, workspace.Root));
+            TestAssert.Throws<InvalidOperationException>(() => WindowsSandboxComposer
+                                                            .Compose(settings, workspace.Root));
         TestAssert.Contains("setup executable", error.Message, StringComparison.Ordinal);
     }
 
@@ -551,7 +561,8 @@ public class WindowsSandboxPolicyClosureTests
         await File.WriteAllTextAsync(invalid,
                                      """{"settings":{"windowsSandbox":{"enabled":true,"policy":"unrestricted"}}}""");
         await TestAssert.ThrowsAsync<InvalidDataException>(() =>
-            UserConfigStore.LoadAsync(invalid, CancellationToken.None));
+                                                               UserConfigStore.LoadAsync(invalid,
+                                                                   CancellationToken.None));
     }
 
     private sealed class PolicyCaptureRecorder : IRunRecorder
@@ -603,22 +614,22 @@ public class WindowsSandboxPolicyClosureTests
     /// </summary>
     private sealed class RecordingApprover : IApprovalProvider
     {
-        private readonly Queue<ApprovalAction> _actions = new();
+        private readonly Queue<ApprovalResolution> _actions = new();
 
         public int Prompts { get; private set; }
 
         public List<string> SeenSummaries { get; } = [];
 
-        public Task<ApprovalAction> PromptAsync(ToolPreparation preparation, CancellationToken cancellationToken)
+        public Task<ApprovalResolution> PromptAsync(ApprovalRequest request, CancellationToken cancellationToken)
         {
             Prompts++;
-            SeenSummaries.Add(preparation.Summary);
+            SeenSummaries.Add(request.Preparation.Summary);
             if (_actions.Count == 0) throw new InvalidOperationException("No scripted approval action left.");
 
             return Task.FromResult(_actions.Dequeue());
         }
 
-        public void Enqueue(ApprovalAction action)
+        public void Enqueue(ApprovalResolution action)
         {
             _actions.Enqueue(action);
         }

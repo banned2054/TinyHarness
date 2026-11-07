@@ -1,15 +1,25 @@
 using System.Text.Json.Nodes;
 using TinyHarness.Core.Models.ChatCompletions;
-using TinyHarness.Core.Models.Permissions;
+using TinyHarness.Core.Models.Runtime;
 using TinyHarness.Core.Models.Tools;
 
 namespace TinyHarness.Core.Services.Tools;
 
 /// <summary>
-///     <para>在准备时冻结受限或宿主 Shell；审批后不能通过参数切换执行后端。</para>
-///     <para>Freezes a restricted or host shell during preparation so arguments cannot switch backends after approval.</para>
+///     <para>
+///         在准备时按 executionScope 冻结沙箱或宿主 Shell：缺省与 "workspace" 走沙箱，
+///         "host" 是显式的 Level 3 宿主执行申请。审批后不能通过参数切换执行后端；
+///         权限模式不参与路由，审批由权限引擎与授权凭据决定。
+///     </para>
+///     <para>
+///         Freezes a sandbox or host shell during preparation by executionScope alone: the
+///         default and "workspace" route to the sandbox, and "host" is an explicit Level 3
+///         host-execution request. Arguments cannot switch backends after approval; the
+///         permission mode never participates in routing, and approval belongs to the
+///         permission engine and its authorization credentials.
+///     </para>
 /// </summary>
-public sealed class PermissionShellTool(ITool restricted, ITool host, Func<SessionPermissionMode?> mode) : ITool
+public sealed class PermissionShellTool(ITool restricted, ITool host) : ITool
 {
     public ToolDefinition Definition
     {
@@ -20,11 +30,12 @@ public sealed class PermissionShellTool(ITool restricted, ITool host, Func<Sessi
             {
                 ["type"] = "string", ["enum"] = new JsonArray("workspace", "host"),
                 ["description"] =
-                    "Defaults to 'workspace', which runs inside the configured sandbox when one is enabled. " +
-                    "'host' runs the command directly as the TinyHarness process with no OS sandbox isolation; " +
-                    "it is not an administrator elevation and grants nothing beyond the host process's own permissions. " +
-                    "In every mode except Full Access a host call requires approval, " +
-                    "and in AI review modes it is approved only when it matches the user's explicit authorization. " +
+                    "Defaults to 'workspace', which runs inside the configured Windows sandbox; " +
+                    "when the sandbox is unavailable the whole command fails instead of falling back to the host. " +
+                    "'host' is an explicit Level 3 request to run the command directly as the TinyHarness process " +
+                    "with no OS sandbox isolation; it is not an administrator elevation and grants nothing beyond " +
+                    "the host process's own permissions, and it always requires a single-operation approval " +
+                    "bound to this exact call. " +
                     "Use 'host' only to rerun a specific command that failed at a sandbox boundary " +
                     "(for example writing to a protected path such as .git), " +
                     "after confirming earlier steps left no uncertain side effects; never use it to bypass a refusal."
@@ -47,10 +58,15 @@ public sealed class PermissionShellTool(ITool restricted, ITool host, Func<Sessi
     }
 
     /// <summary>
-    ///     <para>把后端选择与完整命令一起绑定到不可变计划；host 路径不携带网络申请。</para>
     ///     <para>
-    ///         Binds backend selection and the complete command to an immutable plan;
-    ///         the host path never carries a network request.
+    ///         把后端选择与完整命令一起绑定到不可变计划：workspace 路由必须携带冻结策略身份，
+    ///         缺失即明确失败（沙箱不可用不回退宿主）；host 路由标记显式后端申请。host 路径不携带网络申请。
+    ///     </para>
+    ///     <para>
+    ///         Binds backend selection and the complete command to an immutable plan: the workspace
+    ///         route must carry a frozen policy identity and fails explicitly without one (no host
+    ///         fallback when the sandbox is unavailable); the host route marks the explicit backend
+    ///         request. The host path never carries a network request.
     ///     </para>
     /// </summary>
     public ToolPreparation Prepare(ChatToolCall call)
@@ -58,23 +74,37 @@ public sealed class PermissionShellTool(ITool restricted, ITool host, Func<Sessi
         var args  = ToolArgs.ParseObject(call);
         var scope = args["executionScope"]?.GetValue<string>() ?? "workspace";
         if (scope is not ("workspace" or "host")) throw new InvalidDataException("Unknown shell execution scope.");
-        // FullAccess 与 scope=host 都走宿主工具：宿主执行没有沙箱，网络参数不产生任何语义。
-        var isHost   = mode() == SessionPermissionMode.FullAccess || scope == "host";
-        var tool     = isHost ? host : restricted;
-        var plan     = tool.Prepare(call);
-        var summary  = isHost && plan.RequiresNetworkAccess
+        // 路由只由 executionScope 决定：权限模式不参与，宿主执行是显式 Level 3 申请。
+        var isHost = scope == "host";
+        var tool   = isHost ? host : restricted;
+        var plan   = tool.Prepare(call);
+        // workspace 路由的身份存在性结构校验：沙箱未组合时组合点提供无身份形态，这里明确失败；
+        // 沙箱可用性判定属于权限引擎的组合期布尔，本检查不重复实现可用性判断。
+        if (!isHost && string.IsNullOrWhiteSpace(plan.ExecutionPolicy))
+            throw new
+                InvalidDataException("The workspace shell has no frozen execution policy; the Windows sandbox " +
+                                     "backend is not available and host fallback is refused.");
+        var summary = isHost && plan.RequiresNetworkAccess
             ? plan.Summary.Replace(ShellTool.NetworkSummaryPrefix, string.Empty, StringComparison.Ordinal)
             : plan.Summary;
         return new ToolPreparation
         {
-            ToolName          = plan.ToolName, CallId = plan.CallId, Arguments = plan.Arguments,
-            Capability        = plan.Capability, Summary = summary, RiskLevel = plan.RiskLevel,
-            TargetPaths       = plan.TargetPaths, InstructionScopes = plan.InstructionScopes,
-            SessionConstraint = plan.SessionConstraint, SessionGrantConstraint = plan.SessionGrantConstraint,
-            ExecutionPolicy   = plan.ExecutionPolicy,
-            // workspace 路径透传内层网络申请；host 路径恒 false，不受网络参数影响。
-            RequiresNetworkAccess = isHost ? false : plan.RequiresNetworkAccess,
-            ExecutionPlan         = new Plan(this, tool, plan)
+            ToolName               = plan.ToolName,
+            CallId                 = plan.CallId,
+            Arguments              = plan.Arguments,
+            Capability             = plan.Capability,
+            Summary                = summary,
+            RiskLevel              = plan.RiskLevel,
+            TargetPaths            = plan.TargetPaths,
+            InstructionScopes      = plan.InstructionScopes,
+            SessionConstraint      = plan.SessionConstraint,
+            SessionGrantConstraint = plan.SessionGrantConstraint,
+            ExecutionPolicy        = plan.ExecutionPolicy,
+            // workspace 路由透传内层网络申请；host 路由恒 false，不受网络参数影响。
+            RequiresNetworkAccess  = isHost ? false : plan.RequiresNetworkAccess,
+            // host 是显式 Level 3 后端申请；缺省 null 表示默认沙箱路由。
+            RequestedBackend       = isHost ? ProcessExecutionBackendKind.Host : null,
+            ExecutionPlan          = new Plan(this, tool, plan)
         };
     }
 
@@ -91,5 +121,6 @@ public sealed class PermissionShellTool(ITool restricted, ITool host, Func<Sessi
                                           : plan.Preparation, cancellationToken);
     }
 
-    private sealed record Plan(PermissionShellTool Owner, ITool Tool, ToolPreparation Preparation);
+    // internal：派发前复核（FrozenCapabilityScopeReader）需穿透包装读取冻结的进程计划。
+    internal sealed record Plan(PermissionShellTool Owner, ITool Tool, ToolPreparation Preparation);
 }

@@ -60,8 +60,26 @@ public class PermissionShellToolTests
                                  artifactRoot : Path.Combine(dir.Root, "output", "host"),
                                  processBackend : hostBackend,
                                  executionPolicy : ProcessExecutionPolicy.Host());
-        return (new PermissionShellTool(restricted, host, () => SessionPermissionMode.ReadOnly), hostBackend,
-                restrictedBackend);
+        return (new PermissionShellTool(restricted, host), hostBackend, restrictedBackend);
+    }
+
+    /// <summary>
+    ///     <para>
+    ///         构造无冻结策略身份的受限 Shell（沙箱未组合形态），验证 workspace 路由明确失败。
+    ///     </para>
+    ///     <para>
+    ///         Builds the restricted shell without a frozen policy identity (the sandbox-not-composed
+    ///         shape) to verify the workspace route fails explicitly.
+    ///     </para>
+    /// </summary>
+    private static PermissionShellTool ToolWithoutSandboxIdentity(TestTempDir dir)
+    {
+        var host = new ShellTool(dir.Workspace, 30,
+                                 artifactRoot : Path.Combine(dir.Root, "output", "host"),
+                                 executionPolicy : ProcessExecutionPolicy.Host());
+        var restricted = new ShellTool(dir.Workspace, 30,
+                                       artifactRoot : Path.Combine(dir.Root, "output", "restricted"));
+        return new PermissionShellTool(restricted, host);
     }
 
     private static ChatToolCall ShellCall(string command, string? executionScope, string id) =>
@@ -93,7 +111,26 @@ public class PermissionShellToolTests
 
         Assert.That(host.ExecutionPolicy, Is.EqualTo("backend=host"));
         Assert.That(workspace.ExecutionPolicy, Is.EqualTo(RestrictedPolicyIdentity));
+        // 路由只由 executionScope 决定：显式 host 申请标记 RequestedBackend，缺省保持 null。
+        Assert.That(host.RequestedBackend, Is.EqualTo(ProcessExecutionBackendKind.Host));
+        Assert.That(workspace.RequestedBackend, Is.Null);
         TestAssert.Throws<InvalidDataException>(() => tool.Prepare(ShellCall("echo one", "system", "x1")));
+    }
+
+    [Test]
+    public void Prepare_WorkspaceRouteWithoutFrozenPolicyIdentity_FailsExplicitlyWithoutHostFallback()
+    {
+        using var dir  = new TestTempDir();
+        var       tool = ToolWithoutSandboxIdentity(dir);
+
+        // 沙箱未组合：workspace 路由无冻结策略身份即失败，绝不静默回退宿主；host 路由不受影响。
+        var ex = TestAssert.Throws<InvalidDataException>(() =>
+                                                             tool.Prepare(ShellCall("echo one", null, "w1")));
+        Assert.That(ex.Message, Does.Contain("no frozen execution policy"));
+
+        var host = tool.Prepare(ShellCall("echo one", "host", "h1"));
+        Assert.That(host.ExecutionPolicy, Is.EqualTo("backend=host"));
+        Assert.That(host.RequestedBackend, Is.EqualTo(ProcessExecutionBackendKind.Host));
     }
 
     [Test]
@@ -124,19 +161,17 @@ public class PermissionShellToolTests
     {
         using var dir = new TestTempDir();
         var (tool, _, _) = Tools(dir);
-        var engine = new PermissionEngine(dir.Root);
+        var engine = new PermissionEngine(dir.Root, resourcePolicy : new TestResourcePolicy(dir.Root));
 
-        engine.GrantSession(tool.Prepare(ShellCall("dotnet test", "host", "g1")));
+        var host      = tool.Prepare(ShellCall("dotnet test", "host", "g1"));
+        var workspace = tool.Prepare(ShellCall("dotnet test", null, "g2"));
+        engine.Grants.Add(GrantScope.SingleOperation, host);
 
-        Assert.That(engine.Decide(tool.Prepare(ShellCall("dotnet test", "host", "g2"))),
-                    Is.EqualTo(PermissionDecision.Allow));
-        Assert.That(engine.Decide(tool.Prepare(ShellCall("dotnet test", null, "g3"))),
-                    Is.EqualTo(PermissionDecision.Ask));
-
-        engine.GrantOnce(tool.Prepare(ShellCall("dotnet test", "host", "o1")));
-
-        Assert.That(engine.Decide(tool.Prepare(ShellCall("dotnet test", null, "o2"))),
-                    Is.EqualTo(PermissionDecision.Ask));
+        Assert.That(engine.Evaluate(host).Decision, Is.EqualTo(PermissionDecision.Allow));
+        Assert.That(engine.Grants.Peek(workspace), Is.Null);
+        Assert.That(engine.Evaluate(workspace).Level, Is.EqualTo(PermissionLevel.Level1));
+        Assert.That(engine.ConsumeGrant(host), Is.Not.Null);
+        Assert.That(engine.Evaluate(host).Decision, Is.EqualTo(PermissionDecision.Ask));
     }
 
     [Test]
@@ -151,22 +186,28 @@ public class PermissionShellToolTests
         client.Enqueue(FakeChatClient.Text("done"));
 
         var approver = new ScriptedApprover();
-        approver.Enqueue(ApprovalAction.AllowOnce);
-        approver.Enqueue(ApprovalAction.AllowOnce);
+        approver.Enqueue(ApprovalResolution.Granted(GrantScope.SingleOperation));
+        approver.Enqueue(ApprovalResolution.Granted(GrantScope.SingleOperation));
 
         var loop = new AgentLoop(client, new ToolRegistry([tool]), Options(),
-                                 new PermissionEngine(dir.Root), approver);
+                                 new PermissionEngine(dir.Root, resourcePolicy : new TestResourcePolicy(dir.Root)),
+                                 approver);
 
         var result = await loop.RunAsync("sys", "run host command twice", CancellationToken.None);
 
         Assert.That(result.Status, Is.EqualTo(AgentStatus.Completed));
         Assert.That(approver.Prompts, Is.EqualTo(2));
         Assert.That(result.ToolExecutions, Is.EqualTo(2));
-        Assert.That(approver.SeenPreparations, Has.Count.EqualTo(2));
-        Assert.That(approver.SeenPreparations.All(preparation =>
-                                                      preparation.Summary.Contains("host execution (no OS isolation)")),
+        Assert.That(approver.SeenRequests, Has.Count.EqualTo(2));
+        Assert.That(approver.SeenRequests.All(request =>
+                                                  request.Preparation.Summary
+                                                         .Contains("host execution (no OS isolation)")),
                     Is.True);
-        Assert.That(approver.SeenPreparations.All(preparation => preparation.ExecutionPolicy == "backend=host"),
+        Assert.That(approver.SeenRequests.All(request => request.Preparation.ExecutionPolicy == "backend=host"),
+                    Is.True);
+        // 显式 host 申请必须以 RequestedBackend=Host 到达审批人与引擎（Level 3 判定依据）。
+        Assert.That(approver.SeenRequests.All(request => request.Preparation.RequestedBackend ==
+                                                         ProcessExecutionBackendKind.Host),
                     Is.True);
 
         var execution = TestAssert.NotNull(hostBackend.ReceivedExecution);
@@ -176,28 +217,42 @@ public class PermissionShellToolTests
         Assert.That(restrictedBackend.ReceivedExecution, Is.Null);
     }
 
+    [TestCase(GrantScope.Turn)]
+    [TestCase(GrantScope.Session)]
+    public void HostScopeRejectsReusableGrants(GrantScope scope)
+    {
+        using var dir = new TestTempDir();
+        var (tool, _, _) = Tools(dir);
+        var engine = new PermissionEngine(dir.Root, resourcePolicy : new TestResourcePolicy(dir.Root));
+        var plan   = tool.Prepare(ShellCall("dotnet test", "host", "host"));
+        engine.Grants.Add(scope, plan);
+
+        Assert.That(engine.Evaluate(plan).Decision, Is.EqualTo(PermissionDecision.Ask));
+        Assert.That(engine.ConsumeGrant(plan), Is.Null);
+    }
+
     /// <summary>
-    ///     <para>按队列顺序返回审批动作，记录每次看到的准备计划。</para>
-    ///     <para>Returns scripted approval actions in order and records each observed preparation.</para>
+    ///     <para>按队列顺序返回审批结论，记录每次看到的审批请求。</para>
+    ///     <para>Returns scripted approval resolutions in order and records each observed request.</para>
     /// </summary>
     private sealed class ScriptedApprover : IApprovalProvider
     {
-        private readonly Queue<ApprovalAction> _actions = new();
+        private readonly Queue<ApprovalResolution> _actions = new();
 
         public int Prompts { get; private set; }
 
-        public List<ToolPreparation> SeenPreparations { get; } = [];
+        public List<ApprovalRequest> SeenRequests { get; } = [];
 
-        public Task<ApprovalAction> PromptAsync(ToolPreparation preparation, CancellationToken cancellationToken)
+        public Task<ApprovalResolution> PromptAsync(ApprovalRequest request, CancellationToken cancellationToken)
         {
             Prompts++;
-            SeenPreparations.Add(preparation);
+            SeenRequests.Add(request);
             return _actions.Count == 0
                 ? throw new InvalidOperationException("No scripted approval action left.")
                 : Task.FromResult(_actions.Dequeue());
         }
 
-        public void Enqueue(ApprovalAction action)
+        public void Enqueue(ApprovalResolution action)
         {
             _actions.Enqueue(action);
         }

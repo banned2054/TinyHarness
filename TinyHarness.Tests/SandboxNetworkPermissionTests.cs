@@ -32,54 +32,48 @@ public class SandboxNetworkPermissionTests
 
     // ---- 常设信任未开启：网络申请逐次审批 ----
 
-    [TestCase(SessionPermissionMode.ConfirmEveryAction, PermissionDecision.Ask)]
-    [TestCase(SessionPermissionMode.ReadOnly, PermissionDecision.Ask)]
-    [TestCase(SessionPermissionMode.ProjectWrite, PermissionDecision.Ask)]
-    [TestCase(SessionPermissionMode.FullAccess, PermissionDecision.Allow)]
-    [TestCase(SessionPermissionMode.ReviewEveryAction, PermissionDecision.Ask)]
-    [TestCase(SessionPermissionMode.ReadOnlyAutoReview, PermissionDecision.Ask)]
-    [TestCase(SessionPermissionMode.ProjectWriteAutoReview, PermissionDecision.Ask)]
-    public void NetworkRequiringCall_MatrixFollowsPresetWithStandingTrustOff(
-        SessionPermissionMode mode, PermissionDecision expected)
+    [TestCase(false)]
+    [TestCase(true)]
+    public void NetworkRequiringCall_AlwaysAsksWithStandingTrustOff(bool requiresNetwork)
     {
         using var root   = new TestTempDir();
-        var       engine = new PermissionEngine(root.Root);
-        engine.SetMode(mode);
+        var       engine = new PermissionEngine(root.Root, resourcePolicy : new TestResourcePolicy(root.Root));
+        engine.SetApprovalMode(SessionApprovalMode.AIAutoReview);
 
-        // 只读与项目内写入的自动放行不得静默携带联网；FullAccess 走宿主工具，先于本规则放行。
-        Assert.That(engine.Decide(Preparation(root, "filesystem.read", requiresNetwork : true)),
-                    Is.EqualTo(expected), mode.ToString());
-        Assert.That(engine.Decide(Preparation(root, "filesystem.write", requiresNetwork : true)),
-                    Is.EqualTo(expected), mode.ToString());
+        // 网络申请独立于文件分类：Level1 基线（读写）也逐次审批；审批模式不改变决定。
+        Assert.Multiple(() =>
+        {
+            Assert.That(engine.Evaluate(Preparation(root, "filesystem.read", requiresNetwork)).Decision,
+                        Is.EqualTo(requiresNetwork ? PermissionDecision.Ask : PermissionDecision.Allow));
+            Assert.That(engine.Evaluate(Preparation(root, "filesystem.write", requiresNetwork)).Decision,
+                        Is.EqualTo(requiresNetwork ? PermissionDecision.Ask : PermissionDecision.Allow));
+        });
+
+        // 宿主申请始终 Level3 审批（沙箱可用时），联网维度不改变宿主单次审批语义。
+        var host = engine.Evaluate(Preparation(root, "process.execute",
+                                               requestedBackend : ProcessExecutionBackendKind.Host,
+                                               requiresNetwork : requiresNetwork));
+        Assert.Multiple(() =>
+        {
+            Assert.That(host.Decision, Is.EqualTo(PermissionDecision.Ask));
+            Assert.That(host.Level, Is.EqualTo(PermissionLevel.Level3));
+        });
     }
 
-    [Test]
-    public void FullAccess_HostToolPathWithoutNetworkRequest_IsUnaffected()
+    // ---- 常设信任开启：网络申请随文件分类路由 ----
+
+    [TestCase("filesystem.read", PermissionDecision.Allow)]
+    [TestCase("filesystem.write", PermissionDecision.Allow)]
+    public void StandingEnabled_NetworkedBaselineRequests_FollowFileClassification(string capability,
+        PermissionDecision                                                                expected)
     {
-        using var root   = new TestTempDir();
-        var       engine = new PermissionEngine(root.Root);
-        engine.SetMode(SessionPermissionMode.FullAccess);
+        using var root = new TestTempDir();
+        var engine = new PermissionEngine(root.Root, sandboxNetworkStandingEnabled : true,
+                                          resourcePolicy : new TestResourcePolicy(root.Root));
+        engine.SetApprovalMode(SessionApprovalMode.AIAutoReview);
 
-        Assert.That(engine.Decide(Preparation(root, "filesystem.write", requiresNetwork : false)),
-                    Is.EqualTo(PermissionDecision.Allow));
-    }
-
-    // ---- 常设信任开启：回到各模式既有路由 ----
-
-    [TestCase(SessionPermissionMode.ReadOnly, PermissionDecision.Ask)]
-    [TestCase(SessionPermissionMode.ProjectWrite, PermissionDecision.Allow)]
-    [TestCase(SessionPermissionMode.FullAccess, PermissionDecision.Allow)]
-    public void StandingEnabled_NetworkRequestsFollowPresetRouting(SessionPermissionMode mode,
-                                                                   PermissionDecision    writeExpected)
-    {
-        using var root   = new TestTempDir();
-        var       engine = new PermissionEngine(root.Root, sandboxNetworkStandingEnabled : true);
-        engine.SetMode(mode);
-
-        Assert.That(engine.Decide(Preparation(root, "filesystem.write", requiresNetwork : true)),
-                    Is.EqualTo(writeExpected), mode.ToString());
-        Assert.That(engine.Decide(Preparation(root, "filesystem.read", requiresNetwork : true)),
-                    Is.EqualTo(PermissionDecision.Allow));
+        Assert.That(engine.Evaluate(Preparation(root, capability, true)).Decision,
+                    Is.EqualTo(expected), capability);
     }
 
     // ---- 硬保护优先于网络询问 ----
@@ -88,19 +82,19 @@ public class SandboxNetworkPermissionTests
     public void WorkerProtectionAndHardDeny_BeatNetworkRequirement()
     {
         using var root = new TestTempDir();
-        var worker = new PermissionEngine(root.Root, denyNonReadOnlyCapabilities : true,
+        var worker = new PermissionEngine(root.Root, true,
                                           sandboxNetworkStandingEnabled : true);
-        Assert.That(worker.Decide(Preparation(root, "filesystem.write", requiresNetwork : true)),
+        Assert.That(worker.Evaluate(Preparation(root, "filesystem.write", true)).Decision,
                     Is.EqualTo(PermissionDecision.Deny));
 
-        var engine = new PermissionEngine(root.Root, sandboxNetworkStandingEnabled : true);
+        var engine = new PermissionEngine(root.Root, resourcePolicy : new TestResourcePolicy(root.Root));
         engine.SetNonReadOnlyBlock("unknown effects");
-        Assert.That(engine.Decide(Preparation(root, "filesystem.write", requiresNetwork : true)),
+        Assert.That(engine.Evaluate(Preparation(root, "filesystem.write", true)).Decision,
                     Is.EqualTo(PermissionDecision.Deny));
 
         engine.SetNonReadOnlyBlock(null);
-        engine.DenySession(Preparation(root, "filesystem.write", requiresNetwork : true));
-        Assert.That(engine.Decide(Preparation(root, "filesystem.write", requiresNetwork : true)),
+        engine.RecordDenial(Preparation(root, "filesystem.write", true));
+        Assert.That(engine.Evaluate(Preparation(root, "filesystem.write", true)).Decision,
                     Is.EqualTo(PermissionDecision.Deny));
     }
 
@@ -110,16 +104,16 @@ public class SandboxNetworkPermissionTests
     public void AllowOnce_NetworkApprovalIsConsumedExactlyOnce()
     {
         using var root   = new TestTempDir();
-        var       engine = new PermissionEngine(root.Root);
-        var       call   = Preparation(root, "process.execute", requiresNetwork : true,
-                                       grantConstraint : PolicyGrantConstraint(requiresNetwork : true));
+        var       engine = new PermissionEngine(root.Root, resourcePolicy : new TestResourcePolicy(root.Root));
+        var call = Preparation(root, "process.execute", true,
+                               PolicyGrantConstraint(true));
 
-        engine.GrantOnce(call);
-        Assert.That(engine.Decide(call), Is.EqualTo(PermissionDecision.Allow));
-        Assert.That(engine.TryConsumeOnce(call), Is.True);
+        engine.Grants.Add(GrantScope.SingleOperation, call);
+        Assert.That(engine.Evaluate(call).Decision, Is.EqualTo(PermissionDecision.Allow));
+        Assert.That(engine.ConsumeGrant(call), Is.Not.Null);
         // 消耗后网络申请回到逐次审批，不因指纹相同而重新放行。
-        Assert.That(engine.Decide(call), Is.EqualTo(PermissionDecision.Ask));
-        Assert.That(engine.TryConsumeOnce(call), Is.False);
+        Assert.That(engine.Evaluate(call).Decision, Is.EqualTo(PermissionDecision.Ask));
+        Assert.That(engine.ConsumeGrant(call), Is.Null);
     }
 
     // ---- 授权约束绑定网络行 ----
@@ -127,23 +121,25 @@ public class SandboxNetworkPermissionTests
     [Test]
     public void SessionGrant_CannotCrossBetweenNetworkStates()
     {
-        using var root       = new TestTempDir();
-        var networkedRequest = Preparation(root, "process.execute", requiresNetwork : true,
-                                           grantConstraint : PolicyGrantConstraint(requiresNetwork : true));
-        var plainRequest = Preparation(root, "process.execute", requiresNetwork : false,
-                                       grantConstraint : PolicyGrantConstraint(requiresNetwork : false));
+        using var root = new TestTempDir();
+        var networkedRequest = Preparation(root, "process.execute", true,
+                                           PolicyGrantConstraint(true));
+        var plainRequest = Preparation(root, "process.execute", false,
+                                       PolicyGrantConstraint(false));
 
         // 授权按约束行精确匹配：网络行的批准不覆盖无网络的同命令。
-        var engine = new PermissionEngine(root.Root);
-        engine.GrantSession(networkedRequest);
-        Assert.That(engine.Decide(networkedRequest), Is.EqualTo(PermissionDecision.Allow));
-        Assert.That(engine.Decide(plainRequest), Is.EqualTo(PermissionDecision.Ask));
+        var engine = new PermissionEngine(root.Root, resourcePolicy : new TestResourcePolicy(root.Root));
+        engine.Grants.Add(GrantScope.Turn, networkedRequest);
+        Assert.That(engine.Evaluate(networkedRequest).Decision, Is.EqualTo(PermissionDecision.Allow));
+        Assert.That(engine.Grants.Peek(plainRequest), Is.Null);
+        Assert.That(engine.Evaluate(plainRequest).Decision, Is.EqualTo(PermissionDecision.Allow),
+                    "无网络的沙箱调用由基线允许，不依赖联网授权。");
 
         // 反向亦然：无网络授权不得授权需要网络的同一命令。
-        var fresh = new PermissionEngine(root.Root);
-        fresh.GrantSession(plainRequest);
-        Assert.That(fresh.Decide(plainRequest), Is.EqualTo(PermissionDecision.Allow));
-        Assert.That(fresh.Decide(networkedRequest), Is.EqualTo(PermissionDecision.Ask));
+        var fresh = new PermissionEngine(root.Root, resourcePolicy : new TestResourcePolicy(root.Root));
+        fresh.Grants.Add(GrantScope.Turn, plainRequest);
+        Assert.That(fresh.Evaluate(plainRequest).Decision, Is.EqualTo(PermissionDecision.Allow));
+        Assert.That(fresh.Evaluate(networkedRequest).Decision, Is.EqualTo(PermissionDecision.Ask));
     }
 
     // ---- 用户拒绝不执行；逐次批准单次消耗 ----
@@ -166,7 +162,7 @@ public class SandboxNetworkPermissionTests
         client.Enqueue(FakeChatClient.Text("acknowledged"));
 
         var approver = new ScriptedApprover();
-        approver.Enqueue(ApprovalAction.Deny);
+        approver.Enqueue(ApprovalResolution.Denied("denied by test"));
         var tools = new ToolRegistry([
             new ShellTool(dir.Workspace, 30, processBackend : backend, executionPolicy : policy)
         ]);
@@ -176,7 +172,8 @@ public class SandboxNetworkPermissionTests
                                      MaxAgentSteps             = 5,
                                      DefaultToolTimeoutSeconds = 30
                                  },
-                                 new PermissionEngine(dir.Root), approver);
+                                 new PermissionEngine(dir.Root, resourcePolicy : new TestResourcePolicy(dir.Root)),
+                                 approver);
 
         var result = await loop.RunAsync("sys", "check version online", CancellationToken.None);
 
@@ -193,15 +190,15 @@ public class SandboxNetworkPermissionTests
         var       policy  = SandboxExecutionPolicy();
         var       backend = new FakeProcessExecutionBackend { ExitCode = 0, StdoutChunks = ["ok"] };
         var       client  = new FakeChatClient();
-        var       call    = ShellToolCallJson(enabled : true);
+        var       call    = ShellToolCallJson(true);
         // 两个连续的联网工具调用：各自 finish 为 tool_calls，随后文本收尾。
         client.Enqueue(FakeChatClient.ToolCall("shell", call));
         client.Enqueue(FakeChatClient.ToolCall("shell", call));
         client.Enqueue(FakeChatClient.Text("both done"));
 
         var approver = new ScriptedApprover();
-        approver.Enqueue(ApprovalAction.AllowOnce);
-        approver.Enqueue(ApprovalAction.AllowOnce);
+        approver.Enqueue(ApprovalResolution.Granted(GrantScope.SingleOperation));
+        approver.Enqueue(ApprovalResolution.Granted(GrantScope.SingleOperation));
         var tools = new ToolRegistry([
             new ShellTool(dir.Workspace, 30, processBackend : backend, executionPolicy : policy)
         ]);
@@ -211,7 +208,8 @@ public class SandboxNetworkPermissionTests
                                      MaxAgentSteps             = 6,
                                      DefaultToolTimeoutSeconds = 30
                                  },
-                                 new PermissionEngine(dir.Root), approver);
+                                 new PermissionEngine(dir.Root, resourcePolicy : new TestResourcePolicy(dir.Root)),
+                                 approver);
 
         var result = await loop.RunAsync("sys", "check version twice", CancellationToken.None);
 
@@ -226,10 +224,10 @@ public class SandboxNetworkPermissionTests
     [Test]
     public void ShellTool_NetworkAccessEnabled_BindsFlagSummaryAndGrantConstraint()
     {
-        using var dir = new TestTempDir();
-        var tool = new ShellTool(dir.Workspace, executionPolicy : SandboxExecutionPolicy());
+        using var dir  = new TestTempDir();
+        var       tool = new ShellTool(dir.Workspace, executionPolicy : SandboxExecutionPolicy());
 
-        var preparation = tool.Prepare(ShellToolCall(enabled : true));
+        var preparation = tool.Prepare(ShellToolCall(true));
 
         Assert.That(preparation.RequiresNetworkAccess, Is.True);
         var plan = TestAssert.TypeOf<PreparedProcessExecution>(preparation.ExecutionPlan);
@@ -243,10 +241,10 @@ public class SandboxNetworkPermissionTests
     [Test]
     public void ShellTool_DefaultNetworkAccess_KeepsLegacyShape()
     {
-        using var dir = new TestTempDir();
-        var tool = new ShellTool(dir.Workspace, executionPolicy : SandboxExecutionPolicy());
+        using var dir  = new TestTempDir();
+        var       tool = new ShellTool(dir.Workspace, executionPolicy : SandboxExecutionPolicy());
 
-        var preparation = tool.Prepare(ShellToolCall(enabled : false));
+        var preparation = tool.Prepare(ShellToolCall(false));
 
         Assert.That(preparation.RequiresNetworkAccess, Is.False);
         var plan = TestAssert.TypeOf<PreparedProcessExecution>(preparation.ExecutionPlan);
@@ -259,8 +257,8 @@ public class SandboxNetworkPermissionTests
     [Test]
     public void ShellTool_RejectsUnknownNetworkAccessValue()
     {
-        using var dir = new TestTempDir();
-        var tool = new ShellTool(dir.Workspace, executionPolicy : SandboxExecutionPolicy());
+        using var dir  = new TestTempDir();
+        var       tool = new ShellTool(dir.Workspace, executionPolicy : SandboxExecutionPolicy());
         var call = new ChatToolCall("call_1", "shell",
                                     new JsonObject
                                     {
@@ -279,8 +277,8 @@ public class SandboxNetworkPermissionTests
     [TestCase("{\"nested\":true}")]
     public void ShellTool_NetworkAccessNonStringValue_IsRejectedWithLegalValues(string json)
     {
-        using var dir = new TestTempDir();
-        var tool = new ShellTool(dir.Workspace, executionPolicy : SandboxExecutionPolicy());
+        using var dir  = new TestTempDir();
+        var       tool = new ShellTool(dir.Workspace, executionPolicy : SandboxExecutionPolicy());
         var call = new ChatToolCall("call_1", "shell",
                                     new JsonObject
                                     {
@@ -298,8 +296,8 @@ public class SandboxNetworkPermissionTests
     [Test]
     public void ShellTool_ExplicitNullNetworkAccess_IsTreatedAsNotProvided()
     {
-        using var dir = new TestTempDir();
-        var tool = new ShellTool(dir.Workspace, executionPolicy : SandboxExecutionPolicy());
+        using var dir  = new TestTempDir();
+        var       tool = new ShellTool(dir.Workspace, executionPolicy : SandboxExecutionPolicy());
         var args = new JsonObject
         {
             ["mode"]          = "direct",
@@ -318,10 +316,10 @@ public class SandboxNetworkPermissionTests
     [Test]
     public void FrozenPlan_NetworkFlagSurvivesArgumentTampering()
     {
-        using var dir = new TestTempDir();
-        var tool = new ShellTool(dir.Workspace, executionPolicy : SandboxExecutionPolicy());
+        using var dir  = new TestTempDir();
+        var       tool = new ShellTool(dir.Workspace, executionPolicy : SandboxExecutionPolicy());
 
-        var preparation = tool.Prepare(ShellToolCall(enabled : true));
+        var preparation = tool.Prepare(ShellToolCall(true));
         Assert.That(((PreparedProcessExecution)preparation.ExecutionPlan!).NetworkAccessEnabled, Is.True);
 
         // 审批后改写参数副本不得改写冻结计划或准备计划声明的网络需求。
@@ -349,7 +347,8 @@ public class SandboxNetworkPermissionTests
         (requiresNetwork ? NetworkConstraintSuffix : string.Empty);
 
     private static ToolPreparation Preparation(TestTempDir root, string capability, bool requiresNetwork,
-                                               string? grantConstraint = null) => new()
+                                               string? grantConstraint = null,
+                                               ProcessExecutionBackendKind? requestedBackend = null) => new()
     {
         ToolName               = "shell",
         CallId                 = "call_1",
@@ -357,6 +356,7 @@ public class SandboxNetworkPermissionTests
         Capability             = capability,
         Summary                = "networked command",
         RequiresNetworkAccess  = requiresNetwork,
+        RequestedBackend       = requestedBackend,
         SessionConstraint      = "cmd-identity",
         SessionGrantConstraint = grantConstraint,
         TargetPaths            = [root.Root]
@@ -383,11 +383,11 @@ public class SandboxNetworkPermissionTests
     /// </summary>
     private sealed class ScriptedApprover : IApprovalProvider
     {
-        private readonly Queue<ApprovalAction> _actions = new();
+        private readonly Queue<ApprovalResolution> _actions = new();
 
         public int Prompts { get; private set; }
 
-        public Task<ApprovalAction> PromptAsync(ToolPreparation preparation, CancellationToken cancellationToken)
+        public Task<ApprovalResolution> PromptAsync(ApprovalRequest request, CancellationToken cancellationToken)
         {
             Prompts++;
             if (_actions.Count == 0) throw new InvalidOperationException("No scripted approval action left.");
@@ -395,6 +395,6 @@ public class SandboxNetworkPermissionTests
             return Task.FromResult(_actions.Dequeue());
         }
 
-        public void Enqueue(ApprovalAction action) => _actions.Enqueue(action);
+        public void Enqueue(ApprovalResolution action) => _actions.Enqueue(action);
     }
 }

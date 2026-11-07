@@ -33,21 +33,24 @@ public class WorkspaceAccessTests
     [TestCase("future.unknown")]
     public async Task ReadOnly_RejectsGrantsAndDirectExecution_ThenInvalidatesOldPlans(string capability)
     {
-        using var dir         = new TestTempDir();
-        var       state       = new WorkspaceAccessState(WorkspaceDirectoryIdentity.Capture(dir.Root));
-        var       inner       = new CountingTool(capability, dir.Root);
-        var       tool        = state.Guard(() => inner);
-        var       plan        = tool.Prepare(new ChatToolCall("id", "probe", "{}"));
-        var       permissions = new PermissionEngine(dir.Root, workspaceReadOnly : () => state.IsReadOnly);
-        permissions.GrantOnce(plan);
-        permissions.GrantSession(plan);
-        Assert.That(permissions.Decide(plan), Is.EqualTo(PermissionDecision.Deny));
+        using var dir   = new TestTempDir();
+        var       state = new WorkspaceAccessState(WorkspaceDirectoryIdentity.Capture(dir.Root));
+        var       inner = new CountingTool(capability, dir.Root);
+        var       tool  = state.Guard(() => inner);
+        var       plan  = tool.Prepare(new ChatToolCall("id", "probe", "{}"));
+        var permissions = new PermissionEngine(dir.Root, workspaceReadOnly : () => state.IsReadOnly,
+                                               resourcePolicy : new TestResourcePolicy(dir.Root));
+        permissions.Grants.Add(GrantScope.SingleOperation, plan);
+        permissions.Grants.Add(GrantScope.Turn, plan);
+        Assert.That(permissions.Evaluate(plan).Decision, Is.EqualTo(PermissionDecision.Deny));
         await Assert.ThrowsAsync<InvalidOperationException>(() => tool.ExecuteAsync(plan, CancellationToken.None));
         Assert.That(inner.Executions, Is.Zero);
         state.SetReadOnly(false);
         await Assert.ThrowsAsync<InvalidOperationException>(() => tool.ExecuteAsync(plan, CancellationToken.None));
         var fresh = tool.Prepare(new ChatToolCall("id2", "probe", "{}"));
-        Assert.That(permissions.Decide(fresh), Is.EqualTo(PermissionDecision.Ask));
+        Assert.That(permissions.Grants.Peek(fresh), Is.Null);
+        Assert.That(permissions.Evaluate(fresh).Decision,
+                    Is.EqualTo(capability == "future.unknown" ? PermissionDecision.Ask : PermissionDecision.Allow));
         Assert.That((await tool.ExecuteAsync(fresh, CancellationToken.None)).Succeeded, Is.True);
     }
 
@@ -58,10 +61,9 @@ public class WorkspaceAccessTests
         var       shell = new ShellTool(dir.Workspace);
         var plan = shell.Prepare(new ChatToolCall("id", "shell",
                                                   "{\"mode\":\"direct\",\"executable\":\"dotnet\",\"arguments\":[\"test\"]}"));
-        var permissions =
-            new PermissionEngine(dir.Root, [new CommandRule { Executable = "dotnet", Arguments = ["test"] }],
-                                 workspaceReadOnly : () => true);
-        Assert.That(permissions.Decide(plan), Is.EqualTo(PermissionDecision.Deny));
+        // 只读工作区硬限制独立于命令规则（引擎不再消费 commandRules）。
+        var permissions = new PermissionEngine(dir.Root, workspaceReadOnly : () => true);
+        Assert.That(permissions.Evaluate(plan).Decision, Is.EqualTo(PermissionDecision.Deny));
     }
 
     [Test]
@@ -120,6 +122,22 @@ public class WorkspaceAccessTests
     }
 
     [Test]
+    public async Task BindSessionAsync_ActivatesShellWithTheBoundPermissionRegistry()
+    {
+        using var fixture = new Fixture(true, string.Empty);
+        fixture.State.SetReadOnly(false);
+        var sessionPermissions = new PermissionEngine(
+                                                      fixture.Workspace.Root,
+                                                      workspaceReadOnly : () => fixture.State.IsReadOnly,
+                                                      resourcePolicy : new TestResourcePolicy(fixture.Workspace.Root));
+
+        await fixture.Coordinator.BindSessionAsync(sessionPermissions, CancellationToken.None);
+
+        Assert.That(fixture.ActivatedGrants, Is.SameAs(sessionPermissions.Grants));
+        Assert.That(fixture.ActivatedGrants, Is.Not.SameAs(fixture.Permissions.Grants));
+    }
+
+    [Test]
     public async Task TrustConfirmation_PersistsButRechecksReadiness()
     {
         using var fixture = new Fixture(true, "t\n");
@@ -160,10 +178,10 @@ public class WorkspaceAccessTests
         Assert.That(fixture.State.IsReadOnly, Is.False);
         var guarded = fixture.State.Guard(() => new CountingTool("filesystem.write", fixture.Workspace.Root));
         var plan    = guarded.Prepare(new ChatToolCall("id", "probe", "{}"));
-        fixture.Permissions.GrantOnce(plan);
+        fixture.Permissions.Grants.Add(GrantScope.SingleOperation, plan);
         await fixture.Coordinator.ChangeAsync(CancellationToken.None);
         Assert.That(fixture.State.IsReadOnly, Is.True);
-        Assert.That(fixture.Permissions.Decide(plan), Is.EqualTo(PermissionDecision.Deny));
+        Assert.That(fixture.Permissions.Evaluate(plan).Decision, Is.EqualTo(PermissionDecision.Deny));
         await Assert.ThrowsAsync<InvalidOperationException>(() => guarded.ExecuteAsync(plan, CancellationToken.None));
     }
 
@@ -202,7 +220,7 @@ public class WorkspaceAccessTests
         Assert.That(loaded.Directory, Is.EqualTo(identity));
         Assert.That(loaded.CallerSid, Is.EqualTo(request.CallerSid));
         Assert.Throws<InvalidDataException>(() => ProcessWorkspaceAclGrant.ValidateProtectedPaths(identity,
-                                                     loaded.ProtectedPaths));
+                                                loaded.ProtectedPaths));
     }
 
     [Test]
@@ -230,10 +248,11 @@ public class WorkspaceAccessTests
         dir.WriteFile("AGENTS.md", "Keep unrelated files unchanged.");
         var state = new WorkspaceAccessState(WorkspaceDirectoryIdentity.Capture(dir.Root));
         state.SetReadOnly(!trusted);
-        var permissions = new PermissionEngine(dir.Root, workspaceReadOnly : () => state.IsReadOnly);
-        var read        = new ReadFileTool(dir.Workspace);
-        var patch       = new ApplyPatchTool(dir.Workspace);
-        var model       = new FakeChatClient();
+        var permissions = new PermissionEngine(dir.Root, workspaceReadOnly : () => state.IsReadOnly,
+                                               resourcePolicy : new TestResourcePolicy(dir.Root));
+        var read  = new ReadFileTool(dir.Workspace);
+        var patch = new ApplyPatchTool(dir.Workspace);
+        var model = new FakeChatClient();
         model.Enqueue(FakeChatClient.ToolCall("read_file", "{\"path\":\"input.txt\"}"));
         model.Enqueue(FakeChatClient.ToolCall("apply_patch", new JsonObject
         {
@@ -255,7 +274,8 @@ public class WorkspaceAccessTests
         var run = await host.SubmitTurnAsync("Read and update the file.", CancellationToken.None);
         Assert.That(run.Result!.Status, Is.EqualTo(AgentStatus.Completed));
         Assert.That(await File.ReadAllTextAsync(file), Is.EqualTo(trusted ? "new\n" : "old\n"));
-        Assert.That(approver.Calls, Is.EqualTo(trusted ? 1 : 0));
+        // 可信工作区的基线写入已自动放行；不可信工作区由硬限制拒绝，两者都不再询问。
+        Assert.That(approver.Calls, Is.EqualTo(0));
         Assert.That(run.Result.ToolExecutions, Is.EqualTo(trusted ? 2 : 1));
     }
 
@@ -291,13 +311,13 @@ public class WorkspaceAccessTests
                                                           CancellationToken.None), Is.EqualTo(response));
         using var oversized = new MemoryStream([255, 255, 255, 127]);
         await Assert.ThrowsAsync<InvalidDataException>(() => WorkspaceGrantChannel.ReadAsync(oversized,
-                                                                WorkspaceAclJsonContext.Default.WorkspaceAclResponse,
-                                                                CancellationToken.None));
+                                                           WorkspaceAclJsonContext.Default.WorkspaceAclResponse,
+                                                           CancellationToken.None));
         using var truncated = new MemoryStream("d\0\0\0{"u8.ToArray()
                                               );
         await Assert.ThrowsAsync<EndOfStreamException>(() => WorkspaceGrantChannel.ReadAsync(truncated,
-                                                                WorkspaceAclJsonContext.Default.WorkspaceAclResponse,
-                                                                CancellationToken.None));
+                                                           WorkspaceAclJsonContext.Default.WorkspaceAclResponse,
+                                                           CancellationToken.None));
         Assert.That(WorkspaceGrantChannel.IsValidName("other-pipe"), Is.False);
         Assert.That(WorkspaceGrantChannel.IsValidName("tinyharness-workspace-acl-" + Guid.NewGuid().ToString("N")),
                     Is.True);
@@ -307,10 +327,10 @@ public class WorkspaceAccessTests
     {
         public int Calls;
 
-        public Task<ApprovalAction> PromptAsync(ToolPreparation preparation, CancellationToken cancellationToken)
+        public Task<ApprovalResolution> PromptAsync(ApprovalRequest request, CancellationToken cancellationToken)
         {
             Calls++;
-            return Task.FromResult(ApprovalAction.AllowOnce);
+            return Task.FromResult(ApprovalResolution.Granted(GrantScope.SingleOperation));
         }
     }
 
@@ -344,20 +364,25 @@ public class WorkspaceAccessTests
 
         public Fixture(bool interactive, string input)
         {
-            Input       = new StringReader(input);
-            State       = new WorkspaceAccessState(WorkspaceDirectoryIdentity.Capture(Workspace.Root));
-            Permissions = new PermissionEngine(Workspace.Root, workspaceReadOnly : () => State.IsReadOnly);
+            Input = new StringReader(input);
+            State = new WorkspaceAccessState(WorkspaceDirectoryIdentity.Capture(Workspace.Root));
+            Permissions = new PermissionEngine(Workspace.Root, workspaceReadOnly : () => State.IsReadOnly,
+                                               resourcePolicy : new TestResourcePolicy(Workspace.Root));
             Coordinator = new WorkspaceAccessCoordinator(State, new WorkspaceTrustStore(TrustPath, [Workspace.Root]),
-                                                         Permissions, Input, Output, interactive, true, Grant, () =>
+                                                         Permissions, Input, Output, interactive, true, Grant,
+                                                         grants =>
                                                          {
                                                              Activations++;
+                                                             ActivatedGrants = grants;
                                                              if (FailActivation)
                                                                  throw new
                                                                      InvalidOperationException("fake activation failure");
                                                              return Task.FromResult((new ShellTool(Workspace.Workspace),
-                                                                          ProcessExecutionPolicy.Host()));
+                                                                 ProcessExecutionPolicy.Host()));
                                                          });
         }
+
+        public GrantRegistry? ActivatedGrants { get; private set; }
 
         public WorkspaceAccessState       State       { get; }
         public PermissionEngine           Permissions { get; }

@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json.Nodes;
 using TinyHarness.Core.Models.Configuration;
 using TinyHarness.Core.Models.Permissions;
+using TinyHarness.Core.Models.Runtime;
 using TinyHarness.Core.Models.Tools;
 using TinyHarness.Core.Services.Runtime;
 
@@ -10,343 +11,370 @@ namespace TinyHarness.Core.Services.Permissions;
 
 /// <summary>
 ///     <para>
-///         对不可变准备计划应用硬边界、临时授权与配置策略，给出 Allow、Ask 或 Deny。
+///         对不可变准备计划应用固定决策链：硬限制、会话拒绝记忆、资源分类、基线放行、活动授权与审批路由，
+///         给出 Allow、Ask 或 Deny，并携带执行分类与缺失能力等审核维度。
 ///     </para>
 ///     <para>
-///         Applies hard boundaries, temporary grants and configured policy to immutable prepared plans,
-///         returning Allow, Ask or Deny.
+///         Applies the fixed decision chain — hard limits, session denial memory, resource classification,
+///         baseline allowance, active grants and approval routing — to immutable prepared plans, returning
+///         Allow, Ask or Deny with the execution level and missing capabilities as review dimensions.
 ///     </para>
 /// </summary>
 /// <remarks>
 ///     <para>
-///         优先级为只读 worker 与未信任工作区的硬限制、工作区边界、显式拒绝、NeedsInspection 阻断、
-///         完全开放放行、一次性与运行期授权、常设信任未开启时的网络申请、模式自动放行、
-///         配置命令规则、默认策略；未知能力默认询问。
+///         求值顺序固定：worker 与未信任工作区硬限制、NeedsInspection 阻断、系统保护资源、拒绝记忆、
+///         资源分类（沙箱不可用拒绝、宿主申请 Level3、网络申请 Level2、文件越界与受保护元数据写入
+///         Level2）、基线 Level1 放行、活动授权、审批。分类与级别是审核维度，不是授权来源；
+///         授权只来自 Level1 基线或 <see cref="GrantRegistry" /> 中的活动 Grant。
 ///         这是应用层策略，不是 OS 沙箱；运行时另行强制文件系统边界。
-///         Session 命名保留兼容用语，宿主须把临时授权状态限制为本次运行，不跨未来回合复活。
 ///     </para>
 ///     <para>
-///         Priority is read-only worker and untrusted-workspace restrictions, workspace boundaries, explicit
-///         denies, NeedsInspection blocking, full-access allowance, one-shot and run-scoped grants,
-///         network requests while standing trust is off, mode auto-allows, configured command rules
-///         and default policy; unknown capabilities default to Ask.
-///         This is application policy, not an OS sandbox; the runtime enforces filesystem boundaries separately.
-///         Session naming is retained for compatibility; the host must limit temporary grant state
-///         to the current run rather than revive it across future turns.
+///         The evaluation order is fixed: worker and untrusted-workspace hard limits, NeedsInspection blocking,
+///         system-protected resources, denial memory, resource classification (sandbox-unavailable denial, host
+///         request Level3, network request Level2, outside-workspace and protected-metadata writes Level2),
+///         baseline Level1 allowance, active grants, approval. Levels are review dimensions, never sources of
+///         authority; authorization comes only from the Level1 baseline or an active Grant in the
+///         <see cref="GrantRegistry" />. This is application policy, not an OS sandbox; the runtime enforces
+///         filesystem boundaries separately.
 ///     </para>
 /// </remarks>
 public sealed class PermissionEngine
 {
-    private static readonly IReadOnlyDictionary<string, PermissionDecision> DefaultInsidePolicy =
-        new Dictionary<string, PermissionDecision>(StringComparer.Ordinal)
+    private const string AdditionalPathWrite = "additional-path-write";
+    private const string AdditionalPathRead  = "additional-path-read";
+    private const string MetadataWrite       = "metadata-write";
+
+    private static readonly IReadOnlySet<string> KnownCapabilities =
+        new HashSet<string>(StringComparer.Ordinal)
         {
-            ["filesystem.list"]   = PermissionDecision.Allow,
-            ["filesystem.search"] = PermissionDecision.Allow,
-            ["filesystem.read"]   = PermissionDecision.Allow,
-            ["session.work"]      = PermissionDecision.Allow,
-            ["filesystem.write"]  = PermissionDecision.Ask
+            "filesystem.list", "filesystem.search", "filesystem.read", "filesystem.write",
+            "process.execute", "session.work"
         };
 
-    private readonly IReadOnlyList<ConfiguredCommandRule> _commandRules;
+    private static readonly IReadOnlyList<string> HostExecutionMissing = ["host-execution"];
+    private static readonly IReadOnlyList<string> NetworkAccessMissing = ["network-access"];
+    private readonly        TimeProvider          _clock;
+    private readonly        HashSet<string>       _deniedFingerprints = new(StringComparer.Ordinal);
+    private readonly        List<PermissionRule>  _deniedRules        = [];
 
-    private readonly bool                 _denyNonReadOnlyCapabilities;
-    private readonly bool                 _networkStandingEnabled;
-    private readonly HashSet<string>      _oneShotApprovals = new(StringComparer.Ordinal);
-    private readonly List<PermissionRule> _sessionDenies    = [];
-    private readonly List<PermissionRule> _sessionGrants    = [];
-    private readonly Func<bool>?          _workspaceReadOnly;
-    private readonly string               _workspaceRoot;
-
+    private readonly bool                                           _denyNonReadOnlyCapabilities;
+    private readonly Func<ToolPreparation, FrozenCapabilityScope?>? _frozenScopeReader;
+    private readonly bool                                           _networkStandingEnabled;
+    private readonly IResourceAccessPolicy                          _resourcePolicy;
+    private readonly bool                                           _sandboxExecutionAvailable;
+    private readonly Func<bool>?                                    _workspaceReadOnly;
+    private readonly string                                         _workspaceRoot;
+    private          long                                           _authorizationRevision;
 
     /// <summary>
     ///     <para>
-    ///         为指定工作区建立独立权限状态。
+    ///         为指定工作区建立独立权限状态；授权登记表缺省内部新建，也可注入共享实例。
     ///     </para>
     ///     <para>
-    ///         Creates isolated permission state for the specified workspace.
+    ///         Creates isolated permission state for the workspace; the grant registry defaults to a private
+    ///         instance and can be shared by injection.
     ///     </para>
     /// </summary>
     /// <param name="workspaceReadOnly">
-    ///     <para>返回 true 时非只读能力一律硬拒绝，优先于所有授权与命令规则。</para>
-    ///     <para>
-    ///         When it returns true, non-read-only capabilities are hard-denied ahead of every
-    ///         grant and command rule.
-    ///     </para>
+    ///     <para>返回 true 时非只读能力一律硬拒绝，优先于所有授权。</para>
+    ///     <para>When true, non-read-only capabilities are hard-denied ahead of every grant.</para>
     /// </param>
     /// <param name="sandboxNetworkStandingEnabled">
     ///     <para>
     ///         沙箱常设网络信任（可信用户设置的 Enabled 档）。缺省 false：每个网络申请都逐次审批；
-    ///         true 时网络申请走各模式既有路由，不再单独询问。
+    ///         true 时网络申请不再单独强制审批，随调用的文件分类路由。
     ///     </para>
     ///     <para>
-    ///         Standing sandbox network trust from the trusted user settings (Enabled).
-    ///         Default false: every network request is approved per call; true lets network
-    ///         requests follow each mode's existing routing without a separate ask.
+    ///         Standing sandbox network trust (the trusted settings' Enabled tier). Default false: every network
+    ///         request is approved per call; true stops network requests from forcing their own approval.
     ///     </para>
     /// </param>
-    public PermissionEngine(string      workspaceRoot, IEnumerable<CommandRule>? commandRules = null,
-                            bool        denyNonReadOnlyCapabilities = false,
-                            Func<bool>? workspaceReadOnly           = null,
-                            bool        sandboxNetworkStandingEnabled = false)
+    /// <param name="sandboxExecutionAvailable">
+    ///     <para>
+    ///         沙箱是否可用（组合期由执行侧暴露）。false 时所有 process.execute 一律拒绝（含宿主申请），
+    ///         文件工具不受影响；fail closed，绝不回退宿主执行。
+    ///     </para>
+    ///     <para>
+    ///         Whether the sandbox is available (exposed by composition). False denies every process.execute,
+    ///         including host requests, while file tools keep working; fail closed, never falling back to host.
+    ///     </para>
+    /// </param>
+    /// <param name="resourcePolicy">
+    ///     <para>
+    ///         执行侧注入的六值资源分类策略（<see cref="IResourceAccessPolicy" />）；缺省 null 时
+    ///         所有目标按未分类 fail-closed 处理（一律审批）。
+    ///     </para>
+    ///     <para>
+    ///         The six-value resource-classification policy injected by the execution side
+    ///         (<see cref="IResourceAccessPolicy" />); when null every target fails closed to approval
+    ///         as unclassified.
+    ///     </para>
+    /// </param>
+    public PermissionEngine(string                                         workspaceRoot,
+                            bool                                           denyNonReadOnlyCapabilities   = false,
+                            Func<bool>?                                    workspaceReadOnly             = null,
+                            bool                                           sandboxNetworkStandingEnabled = false,
+                            bool                                           sandboxExecutionAvailable     = true,
+                            IResourceAccessPolicy?                         resourcePolicy                = null,
+                            GrantRegistry?                                 grantRegistry                 = null,
+                            TimeProvider?                                  clock                         = null,
+                            Func<ToolPreparation, FrozenCapabilityScope?>? frozenScopeReader             = null)
     {
         if (string.IsNullOrWhiteSpace(workspaceRoot))
             throw new ArgumentException("A workspace root is required.", nameof(workspaceRoot));
 
-        _workspaceRoot = Path.GetFullPath(workspaceRoot);
-        _commandRules = (commandRules ?? []).Select(rule => ConfiguredCommandRule.Create(rule, _workspaceRoot))
-                                            .ToArray();
+        _workspaceRoot               = Path.GetFullPath(workspaceRoot);
         _denyNonReadOnlyCapabilities = denyNonReadOnlyCapabilities;
         _workspaceReadOnly           = workspaceReadOnly;
         _networkStandingEnabled      = sandboxNetworkStandingEnabled;
+        _sandboxExecutionAvailable   = sandboxExecutionAvailable;
+        _resourcePolicy              = resourcePolicy ?? FailClosedResourcePolicy.Instance;
+        Grants                       = grantRegistry  ?? new GrantRegistry(clock);
+        _clock                       = clock          ?? TimeProvider.System;
+        _frozenScopeReader           = frozenScopeReader;
     }
+
+    internal long AuthorizationRevision => Interlocked.Read(ref _authorizationRevision);
+
+    /// <summary>
+    ///     <para>本引擎使用的授权登记表；宿主通过它撤销授权并读取授权事件。</para>
+    ///     <para>The grant registry used by this engine; hosts revoke grants and read grant events through it.</para>
+    /// </summary>
+    public GrantRegistry Grants { get; }
 
     /// <summary>
     ///     <para>
-    ///         当前 NeedsInspection 非只读阻断原因；未阻断时为 null。
+    ///         当前 NeedsInspection 非只读阻断原因；未阻断时为 null。仅由宿主依据中断事实设置，
+    ///         并在用户确认检查后清除；模型输出不能建立或解除阻断。
     ///     </para>
     ///     <para>
-    ///         The current NeedsInspection reason for blocking non-read-only capabilities; null when unblocked.
+    ///         The current NeedsInspection reason blocking non-read-only capabilities; null when unblocked.
+    ///         Only the host sets it from interruption facts and clears it after user inspection; model output
+    ///         can neither create nor remove the block.
     ///     </para>
     /// </summary>
-    /// <remarks>
-    ///     <para>
-    ///         仅由宿主依据中断事实设置，并在用户确认检查后清除；模型输出不能建立或解除阻断。
-    ///     </para>
-    ///     <para>
-    ///         Only the host sets it from interruption facts and clears it after user inspection confirmation;
-    ///         model output cannot create or remove the block.
-    ///     </para>
-    /// </remarks>
     public string? NonReadOnlyBlockReason { get; private set; }
 
     /// <summary>
-    ///     <para>当前显式预设；null 保留 CLI 与旧宿主的命令规则策略。</para>
-    ///     <para>The explicit preset; null retains command-rule policy for CLI and legacy hosts.</para>
+    ///     <para>当前审批模式；缺省人工审批。切换模式撤销全部活动授权，拒绝记忆保留。</para>
+    ///     <para>
+    ///         The current approval mode; human approval by default. Switching modes revokes every active grant
+    ///         while denial memory persists.
+    ///     </para>
     /// </summary>
-    public SessionPermissionMode? Mode { get; private set; }
+    public SessionApprovalMode ApprovalMode => SelectedApprovalMode ?? SessionApprovalMode.HumanApproval;
 
     /// <summary>
-    ///     <para>在宿主空闲边界切换预设并撤销临时允许；硬拒绝仍然有效。</para>
-    ///     <para>Changes the preset at the host's idle boundary and revokes temporary allows, retaining hard denials.</para>
+    ///     <para>
+    ///         宿主显式选择的审批模式；null 表示尚未有任何选择（传统宿主或未迁移会话），
+    ///         此时按人工审批执行且不向模型注入审批说明。
+    ///     </para>
+    ///     <para>
+    ///         The approval mode explicitly selected by the host; null means no selection yet (legacy hosts or
+    ///         unmigrated sessions), which runs as human approval without injecting the approval notice.
+    ///     </para>
     /// </summary>
-    public void SetMode(SessionPermissionMode mode)
+    public SessionApprovalMode? SelectedApprovalMode { get; private set; }
+
+    /// <summary>
+    ///     <para>在宿主空闲边界切换审批模式并撤销全部活动授权；硬限制与拒绝记忆仍然有效。</para>
+    ///     <para>
+    ///         Switches the approval mode at the host's idle boundary and revokes every active grant; hard
+    ///         limits and denial memory persist.
+    ///     </para>
+    /// </summary>
+    public void SetApprovalMode(SessionApprovalMode mode)
     {
         if (!Enum.IsDefined(mode)) throw new ArgumentOutOfRangeException(nameof(mode));
-        ClearTemporaryAllows();
-        Mode = mode;
+        if (SelectedApprovalMode == mode) return;
+        RevokeGrants();
+        SelectedApprovalMode = mode;
     }
 
     /// <summary>
     ///     <para>
-    ///         只读地计算当前调用的权限结论；重复调用不会消费一次性授权或改变会话状态。
+    ///         只读地计算当前调用的权限结论；重复调用不消费授权、不改变会话状态。
+    ///         授权阶段的消费走 <see cref="ConsumeGrant" />。
     ///     </para>
     ///     <para>
-    ///         Decides how to treat a prepared invocation without mutating state. Safe to
-    ///         call repeatedly; the loop may re-run a decision after each state change.
+    ///         Read-only verdict for the invocation: repeated calls consume nothing and mutate nothing.
+    ///         Authorization-time consumption goes through <see cref="ConsumeGrant" />.
     ///     </para>
     /// </summary>
-    public PermissionDecision Decide(ToolPreparation preparation)
+    public PermissionEvaluation Evaluate(ToolPreparation preparation)
     {
-        // worker 和未信任工作区的限制优先于 grant、命令规则及中断检查确认。
+        // 硬限制：worker 与未信任工作区优先于一切授权。
         if ((_denyNonReadOnlyCapabilities || _workspaceReadOnly?.Invoke() == true) &&
             !ToolCapabilities.IsReadOnly(preparation.Capability))
-            return PermissionDecision.Deny;
+            return PermissionEvaluation.Deny("Non-read-only capabilities are hard-denied for this workspace.");
 
-        // 未选择预设的传统宿主仍维持硬工作区边界；新预设在下方决定越界审批。
-        if (Mode is null && preparation.TargetPaths.Any(target => !Workspace.IsInside(_workspaceRoot, target)))
-            return PermissionDecision.Deny;
+        // NeedsInspection：仅由宿主在用户确认检查后解除，任何授权不得绕过。
+        if (NonReadOnlyBlock(preparation) is { } block)
+            return PermissionEvaluation.Deny($"Blocked pending inspection of an interrupted run ({block}).");
 
-        if (_sessionDenies.Any(rule => rule.Matches(preparation, true))) return PermissionDecision.Deny;
+        // 拒绝记忆：人审或 AI 拒绝过的同一操作不再弹卡、不再询问。
+        if (IsDenied(preparation))
+            return PermissionEvaluation.Deny($"Previously denied by the approver: {preparation.Summary}");
 
-        // NeedsInspection 优先于所有授权与命令规则；仅由宿主在用户确认检查后解除。
-        if (NonReadOnlyBlock(preparation) is not null) return PermissionDecision.Deny;
+        var classification = Classify(preparation);
+        if (classification.Denied is { } denied) return denied;
+        if (classification.Level == PermissionLevel.Level1)
+            return PermissionEvaluation.Allow(PermissionLevel.Level1, "Sandbox baseline operation.");
 
-        if (Mode is { } mode)
+        // Level2/Level3 先尝试活动授权，再进入审批。
+        if (Grants.Peek(preparation, _clock.GetUtcNow()) is { } grant)
+            return PermissionEvaluation.Allow(classification.Level,
+                                              $"Authorized by grant {grant.GrantId} ({grant.Scope}).");
+
+        return PermissionEvaluation.Ask(classification.Level,
+                                        classification.AskReason ??
+                                        "Approval required for this operation.",
+                                        classification.Missing);
+    }
+
+    /// <summary>
+    ///     <para>
+    ///         授权阶段的授权复用：原子匹配活动授权；SingleOperation 授权在匹配的同一锁内消费，
+    ///         Turn 与 Session 授权原样返回。无匹配返回 null。
+    ///     </para>
+    ///     <para>
+    ///         Grant reuse at authorization time: matches an active grant atomically; a SingleOperation grant
+    ///         is consumed under the same lock that matched it, and Turn or Session grants are returned for
+    ///         reuse. Returns null without a match.
+    ///     </para>
+    /// </summary>
+    public Grant? ConsumeGrant(ToolPreparation preparation) => Grants.Consume(preparation, _clock.GetUtcNow());
+
+    /// <summary>
+    ///     <para>
+    ///         复核硬限制、拒绝记忆、资源分类与当前活动授权；
+    ///         任一失效即拒绝执行，调用方不得自动重放。
+    ///     </para>
+    ///     <para>
+    ///         Rechecks hard limits, denial memory, resource classification and active grants;
+    ///         any lapse denies execution without an automatic replay.
+    ///     </para>
+    /// </summary>
+    public PermissionEvaluation Revalidate(ToolPreparation           preparation,
+                                           ActiveCapabilitySnapshot? currentSnapshot = null) =>
+        RevalidateCore(preparation, currentSnapshot, null);
+
+    /// <summary>
+    ///     <para>消费一次派发凭据并复核其计划、授权修订及活动授权。</para>
+    ///     <para>Consumes one dispatch credential and rechecks its plan, authorization revision and active grant.</para>
+    /// </summary>
+    internal PermissionEvaluation RevalidateForDispatch(
+        ToolPreparation preparation, ActiveCapabilitySnapshot? currentSnapshot, DispatchAuthorization? authorization)
+    {
+        if (authorization is null || !authorization.TryUse(this, preparation, AuthorizationRevision))
+            return PermissionEvaluation.Deny("Authorization invalidated before dispatch; re-issue the call.");
+        return RevalidateCore(preparation, currentSnapshot, authorization);
+    }
+
+    /// <summary>
+    ///     <para>为已完成审批的冻结计划建立仅可派发一次的内部凭据。</para>
+    ///     <para>Creates an internal, single-dispatch credential for an approved frozen plan.</para>
+    /// </summary>
+    internal DispatchAuthorization CreateDispatchAuthorization(
+        ToolPreparation preparation, long revision, string? grantId = null, bool singleOperationApproved = false,
+        DateTimeOffset? expiresUtc = null) =>
+        new(this, preparation, revision, grantId, singleOperationApproved, expiresUtc);
+
+    /// <summary>
+    ///     <para>复核共同的安全限制、冻结范围以及基线或显式授权。</para>
+    ///     <para>Rechecks shared safety restrictions, frozen scope, and baseline or explicit authority.</para>
+    /// </summary>
+    private PermissionEvaluation RevalidateCore(
+        ToolPreparation preparation, ActiveCapabilitySnapshot? currentSnapshot, DispatchAuthorization? authorization)
+    {
+        // 授权后仍可能变化的安全状态：worker/只读工作区、NeedsInspection 与拒绝记忆。
+        if ((_denyNonReadOnlyCapabilities || _workspaceReadOnly?.Invoke() == true) &&
+            !ToolCapabilities.IsReadOnly(preparation.Capability))
+            return PermissionEvaluation.Deny("Non-read-only capabilities are hard-denied for this workspace.");
+        if (NonReadOnlyBlock(preparation) is { } block)
+            return PermissionEvaluation.Deny($"Blocked pending inspection of an interrupted run ({block}).");
+        if (IsDenied(preparation))
+            return PermissionEvaluation.Deny($"Previously denied by the approver: {preparation.Summary}");
+
+        var classification = Classify(preparation);
+        if (classification.Denied is { } denied) return denied;
+
+        // 授权凭据复核：匹配中的活动授权即存活（约束含策略身份与工作区修订，失效即不再匹配）。
+        var grant = Grants.Peek(preparation, _clock.GetUtcNow());
+
+        // 新增和撤销能力都使旧计划失效，防止冻结计划继续携带已经撤销的权限。
+        if (currentSnapshot is { } current)
         {
-            if (mode == SessionPermissionMode.FullAccess) return PermissionDecision.Allow;
-            // 常设信任未开启时网络申请逐次审批：只读或项目内写入的自动放行不得静默携带联网。
-            // host 工具路径恒无此申请；FullAccess 走宿主工具，先于本规则放行。
-            if (preparation.RequiresNetworkAccess && !_networkStandingEnabled)
-                return PermissionDecision.Ask;
-            if (mode is SessionPermissionMode.ConfirmEveryAction or SessionPermissionMode.ReviewEveryAction)
-                return PermissionDecision.Ask;
-            if (preparation.TargetPaths.Any(target => !Workspace.IsInside(_workspaceRoot, target)))
-                return PermissionDecision.Ask;
-            if (ToolCapabilities.IsReadOnly(preparation.Capability)) return PermissionDecision.Allow;
-            if (preparation.TargetPaths.Any(target =>
-                                                new[] { ".git", ".agents", ".codex", ".aws" }.Any(name =>
-                                                             Workspace.IsInside(Path.Combine(_workspaceRoot, name),
-                                                                                    target))))
-                return PermissionDecision.Ask;
-            return preparation.Capability == "filesystem.write" &&
-                   mode is SessionPermissionMode.ProjectWrite or SessionPermissionMode.ProjectWriteAutoReview
-                ? PermissionDecision.Allow
-                : PermissionDecision.Ask;
+            var frozen = _frozenScopeReader?.Invoke(preparation);
+            if (frozen is null                                                       ||
+                !IsSubset(current.AdditionalReadRoots, frozen.AdditionalReadRoots)   ||
+                !IsSubset(current.AdditionalWriteRoots, frozen.AdditionalWriteRoots) ||
+                !IsSubset(current.MetadataWritePaths, frozen.MetadataWritePaths)     ||
+                !IsSubset(frozen.AdditionalReadRoots, current.AdditionalReadRoots)   ||
+                !IsSubset(frozen.AdditionalWriteRoots, current.AdditionalWriteRoots) ||
+                !IsSubset(frozen.MetadataWritePaths, current.MetadataWritePaths))
+                return PermissionEvaluation.Deny(
+                                                 "Authorization invalidated: capability scope changed; re-issue the call.",
+                                                 classification.Level);
         }
 
-        if (_oneShotApprovals.Contains(Fingerprint(preparation)) ||
-            _sessionGrants.Any(rule => rule.Matches(preparation)))
-            return PermissionDecision.Allow;
+        if (authorization?.GrantId is { } expectedGrantId && grant?.GrantId != expectedGrantId)
+            return PermissionEvaluation.Deny("Authorization revoked or expired before dispatch.", classification.Level);
+        if (classification.Level != PermissionLevel.Level1 &&
+            grant is null                                  && authorization?.SingleOperationApproved != true)
+            return PermissionEvaluation.Deny("No valid authorization remains for this operation.",
+                                             classification.Level);
 
-        // 传统宿主的网络申请在显式授权之后仍逐次审批，不借用命令规则或默认策略；
-        // 授权约束绑定 network-access 行，跨网络状态不复用。
-        if (preparation.RequiresNetworkAccess && !_networkStandingEnabled)
-            return PermissionDecision.Ask;
-
-        // 命令免审批必须精确匹配模式与规范化 cwd；direct 逐参数匹配，shell 精确匹配完整命令。
-        if (string.Equals(preparation.Capability, "process.execute", StringComparison.Ordinal) &&
-            _commandRules.Any(rule => rule.Matches(preparation)))
-            return PermissionDecision.Allow;
-
-        return DefaultInsidePolicy.GetValueOrDefault(preparation.Capability, PermissionDecision.Ask);
+        return PermissionEvaluation.Allow(classification.Level,
+                                          grant is { } active
+                                              ? $"Revalidated against grant {active.GrantId}."
+                                              : "Revalidated before dispatch.");
     }
 
     /// <summary>
-    ///     <para>
-    ///         记录绑定完整调用指纹的一次性预授权。
-    ///     </para>
-    ///     <para>
-    ///         Records a one-shot preauthorization bound to the complete invocation fingerprint.
-    ///     </para>
+    ///     <para>判断候选路径是否逐项包含在冻结范围内（序数比较，空集恒为子集）。</para>
+    ///     <para>Whether every candidate path is contained in the frozen scope (ordinal; empty is always a subset).</para>
     /// </summary>
-    /// <remarks>
-    ///     <para>
-    ///         仅供先授权、后 Decide 的调用使用；在授权阶段用 TryConsumeOnce 预留消费，
-    ///         不得等到执行后才消费，否则同轮相同调用可重复获批。
-    ///         当前调用的交互批准无需存入引擎，避免误批后续调用。
-    ///     </para>
-    ///     <para>
-    ///         Use only when authorization precedes Decide; reserve it with TryConsumeOnce during authorization,
-    ///         not after execution, so identical calls in one round cannot reuse the grant.
-    ///         Do not store an interactive approval for the current call, which could approve a later call accidentally.
-    ///     </para>
-    /// </remarks>
-    public void GrantOnce(ToolPreparation preparation)
+    private static bool IsSubset(IReadOnlyList<string> candidates, IReadOnlyList<string> frozen)
     {
-        _oneShotApprovals.Add(Fingerprint(preparation));
+        foreach (var candidate in candidates)
+            if (!frozen.Contains(candidate, StringComparer.Ordinal))
+                return false;
+        return true;
     }
 
     /// <summary>
     ///     <para>
-    ///         消费完全匹配的一次性预授权并返回是否成功；不存在时不改变状态。
+    ///         记录一次审批拒绝：绑定完整调用指纹与命令身份，使同一操作不再弹卡或询问。
+    ///         指纹覆盖参数，命令约束跨执行后端有效；跨工具的语义等价不做声称。
     ///     </para>
     ///     <para>
-    ///         Consumes a matching one-shot preauthorization, returning whether it was spent;
-    ///         does not change state if absent.
+    ///         Records one approval denial: bound to the full invocation fingerprint and the command identity so
+    ///         the same operation never prompts again. The fingerprint covers arguments; the command constraint
+    ///         survives backend switches; no cross-tool equivalence is claimed.
     ///     </para>
     /// </summary>
-    /// <remarks>
-    ///     <para>
-    ///         Agent Loop 在授权阶段消费，使一次批准只覆盖一次尝试；未用一次性授权批准时为无操作。
-    ///     </para>
-    ///     <para>
-    ///         Agent Loop consumes it during authorization so one approval covers one attempt;
-    ///         this is a no-op for approvals made without a one-shot grant.
-    ///     </para>
-    /// </remarks>
-    public bool TryConsumeOnce(ToolPreparation preparation) => _oneShotApprovals.Remove(Fingerprint(preparation));
-
-    /// <summary>
-    ///     <para>
-    ///         记录绑定能力、资源范围与执行策略身份的临时允许规则。
-    ///     </para>
-    ///     <para>
-    ///         Records a temporary allow rule bound to capability, resource scope and execution-policy identity.
-    ///     </para>
-    /// </summary>
-    /// <remarks>
-    ///     <para>
-    ///         SessionGrantConstraint 绑定命令及策略；授权不能跨后端、隔离策略或环境复用。
-    ///         宿主限定状态为本次运行，Session 命名不表示长期会话授权。
-    ///     </para>
-    ///     <para>
-    ///         SessionGrantConstraint binds command and policy; grants cannot cross backends, isolation policies
-    ///         or environments. The host limits state to the current run; Session naming does not grant future turns.
-    ///     </para>
-    /// </remarks>
-    public void GrantSession(ToolPreparation preparation)
+    public void RecordDenial(ToolPreparation preparation)
     {
-        _sessionGrants.Add(ToRule(preparation, false));
+        _deniedFingerprints.Add(Fingerprint(preparation));
+        _deniedRules.Add(new PermissionRule(preparation.Capability, preparation.TargetPaths.ToArray(),
+                                            preparation.SessionConstraint));
     }
 
     /// <summary>
-    ///     <para>
-    ///         记录绑定能力、资源范围与命令身份的显式拒绝规则。
-    ///     </para>
-    ///     <para>
-    ///         Records an explicit deny rule bound to capability, resource scope and command identity.
-    ///     </para>
-    /// </summary>
-    /// <remarks>
-    ///     <para>
-    ///         拒绝不绑定执行策略，避免切换后端使其失效。
-    ///     </para>
-    ///     <para>
-    ///         Denials do not bind execution policy, so switching backends cannot invalidate them.
-    ///     </para>
-    /// </remarks>
-    public void DenySession(ToolPreparation preparation)
-    {
-        _sessionDenies.Add(ToRule(preparation, true));
-    }
-
-    /// <summary>
-    ///     <para>
-    ///         清理本次运行内的临时允许状态；保留显式拒绝和 NeedsInspection 阻断。
-    ///     </para>
-    ///     <para>
-    ///         Clears temporary allow state for the current run while retaining explicit denials
-    ///         and the NeedsInspection block.
-    ///     </para>
-    /// </summary>
-    /// <remarks>
-    ///     <para>
-    ///         用于项目指令版本变化等使旧计划失效的安全边界。一次性预授权和运行期 allow 一并失效；
-    ///         deny 与阻断不因规则刷新被移除，后续计划必须重新授权。
-    ///     </para>
-    ///     <para>
-    ///         Used at safety boundaries such as a project-instruction revision invalidating an old plan.
-    ///         One-shot and run-scoped allows both lapse; denials and blocking survive, and later plans
-    ///         must be authorized again.
-    ///     </para>
-    /// </remarks>
-    public void ClearTemporaryAllows()
-    {
-        _oneShotApprovals.Clear();
-        _sessionGrants.Clear();
-    }
-
-    /// <summary>
-    ///     <para>
-    ///         设置或清除非只读阻断，任何授权或命令规则均不得绕过。
-    ///     </para>
-    ///     <para>
-    ///         Sets or clears non-read-only blocking, which no grant or command rule may bypass.
-    ///     </para>
+    ///     <para>设置或清除非只读阻断，任何授权或命令规则均不得绕过。</para>
+    ///     <para>Sets or clears non-read-only blocking, which no grant or command rule may bypass.</para>
     /// </summary>
     /// <param name="reason">
-    ///     <para>
-    ///         null 或空白表示清除；宿主仅在用户明确确认检查后清除。
-    ///         非空时写入、进程执行及未知能力均拒绝。
-    ///     </para>
-    ///     <para>
-    ///         Null or whitespace clears the block; the host clears it only after explicit user inspection confirmation.
-    ///         A nonempty reason blocks writes, process execution and unknown capabilities.
-    ///     </para>
+    ///     <para>null 或空白表示清除；宿主仅在用户明确确认检查后清除。</para>
+    ///     <para>Null or whitespace clears; the host clears only after explicit user inspection confirmation.</para>
     /// </param>
     public void SetNonReadOnlyBlock(string? reason) =>
         NonReadOnlyBlockReason = string.IsNullOrWhiteSpace(reason) ? null : reason;
 
     /// <summary>
-    ///     <para>
-    ///         返回本次调用被 NeedsInspection 阻断的原因；未被阻断时为 null。主循环用它把阻断
-    ///         原因带回给模型，而不是让它猜测拒绝理由。
-    ///     </para>
-    ///     <para>
-    ///         Returns the NeedsInspection-block reason applying to this invocation, or
-    ///         null when it is not blocked. The agent loop uses it to carry the reason
-    ///         back to the model instead of leaving it guessing.
-    ///     </para>
+    ///     <para>返回本次调用被 NeedsInspection 阻断的原因；未被阻断时为 null。</para>
+    ///     <para>The NeedsInspection reason applying to this invocation, or null when unblocked.</para>
     /// </summary>
     public string? NonReadOnlyBlock(ToolPreparation preparation) =>
         NonReadOnlyBlockReason is null || ToolCapabilities.IsReadOnly(preparation.Capability)
@@ -354,201 +382,190 @@ public sealed class PermissionEngine
             : NonReadOnlyBlockReason;
 
     /// <summary>
-    ///     <para>
-    ///         从不可变准备计划提取能力和规范化目标，生成会话规则；允许规则绑定授权约束，
-    ///         拒绝规则绑定命令约束。
-    ///     </para>
-    ///     <para>
-    ///         Creates a session rule from a prepared plan's capability and normalized
-    ///         targets; grants bind the grant constraint, denies the command constraint.
-    ///     </para>
+    ///     <para>撤销全部活动授权；拒绝记忆与 NeedsInspection 阻断保留。</para>
+    ///     <para>Revokes every active grant; denial memory and the NeedsInspection block persist.</para>
     /// </summary>
-    private static PermissionRule ToRule(ToolPreparation preparation, bool deny) =>
-        new(preparation.Capability, preparation.TargetPaths.ToArray(),
-            deny ? preparation.SessionConstraint : GrantConstraint(preparation));
+    public void RevokeGrants()
+    {
+        Interlocked.Increment(ref _authorizationRevision);
+        Grants.RevokeAll();
+    }
 
     /// <summary>
+    ///     <para>把全部活动 Turn 授权标记为到期（运行终态调用）；Session 授权与拒绝记忆保留。</para>
     ///     <para>
-    ///         会话授权与一次性授权使用的约束：优先执行策略绑定的授权约束，缺省回落到命令约束。
-    ///     </para>
-    ///     <para>
-    ///         The constraint used by session grants and one-shot approvals: the
-    ///         policy-bound grant constraint when present, otherwise the command constraint.
+    ///         Marks every active Turn grant expired (called at run end); Session grants and denial memory
+    ///         persist.
     ///     </para>
     /// </summary>
-    private static string? GrantConstraint(ToolPreparation preparation) =>
-        preparation.SessionGrantConstraint ?? preparation.SessionConstraint;
+    public void ExpireTurnGrants() => Grants.ExpireTurnGrants();
 
     /// <summary>
+    ///     <para>判断调用是否命中拒绝记忆：指纹精确命中或拒绝规则按命令身份与范围命中。</para>
     ///     <para>
-    ///         对完整准备调用生成稳定 SHA-256 指纹，限制一次性授权精确匹配。
-    ///     </para>
-    ///     <para>
-    ///         Generates a stable SHA-256 fingerprint of the complete prepared invocation
-    ///         for exact one-shot approval matching.
+    ///         Whether the invocation hits denial memory: an exact fingerprint hit or a denial rule matched by
+    ///         command identity and scope.
     ///     </para>
     /// </summary>
-    /// <remarks>
-    ///     <para>
-    ///         指纹包含工具名、能力、排序目标路径、授权约束与规范化参数；后端或策略变化不得命中旧授权。
-    ///     </para>
-    ///     <para>
-    ///         Includes tool name, capability, sorted target paths, grant constraint and normalized arguments;
-    ///         backend or policy changes must not match old approvals.
-    ///     </para>
-    /// </remarks>
+    private bool IsDenied(ToolPreparation preparation) =>
+        _deniedFingerprints.Contains(Fingerprint(preparation)) ||
+        _deniedRules.Any(rule => rule.Matches(preparation, true));
+
+    /// <summary>分类一次冻结调用：拒绝结论、执行级别、缺失能力与审批原因。</summary>
+    private (PermissionEvaluation? Denied, PermissionLevel Level, string? AskReason,
+        IReadOnlyList<string> Missing) Classify(ToolPreparation preparation)
+    {
+        if (preparation.Capability == "process.execute")
+        {
+            // 沙箱不可用即整条命令拒绝，宿主申请同样拒绝，绝不回退宿主执行；不可用不是缺失能力，不入 Missing。
+            if (!_sandboxExecutionAvailable)
+                return (PermissionEvaluation.Deny("Sandbox unavailable; process execution is fail-closed."),
+                        PermissionLevel.None, null, Array.Empty<string>());
+
+            // Host 判定只看冻结计划上的显式后端申请；执行策略串仅作身份与授权绑定。
+            if (preparation.RequestedBackend == ProcessExecutionBackendKind.Host)
+                return (null, PermissionLevel.Level3,
+                        "Host execution has no OS isolation; approve this single operation to run it.",
+                        HostExecutionMissing);
+
+            if (preparation.RequiresNetworkAccess && !_networkStandingEnabled)
+                return (null, PermissionLevel.Level2,
+                        "The command requests sandbox network access (full network through the user's proxy); " +
+                        "approve this operation to run it.",
+                        NetworkAccessMissing);
+
+            return (null, PermissionLevel.Level1, null, Array.Empty<string>());
+        }
+
+        // 未知能力 fail closed：一律审批，不按文件路径分类放行。
+        if (!KnownCapabilities.Contains(preparation.Capability))
+            return (null, PermissionLevel.None,
+                    $"Unknown capability '{preparation.Capability}'; approval is required.",
+                    [preparation.Capability]);
+
+        // 非只读能力未声明任何目标：无法验证范围，fail closed 一律审批。
+        if (preparation.TargetPaths.Count == 0 && !ToolCapabilities.IsReadOnly(preparation.Capability))
+            return (null, PermissionLevel.None,
+                    "The invocation declares no resource targets; approval is required.",
+                    [preparation.Capability]);
+
+        var level     = PermissionLevel.Level1;
+        var missing   = new List<string>();
+        var askReason = (string?)null;
+        var readClass = ToolCapabilities.IsReadOnly(preparation.Capability);
+        foreach (var target in preparation.TargetPaths)
+        {
+            // 未分类（策略未注入或返回 null）按需审批 fail-closed。
+            var classification = _resourcePolicy.Classify(preparation.Capability, target);
+            if (classification is null)
+            {
+                level     = PermissionLevel.None;
+                askReason = "The invocation targets an unclassified resource; approval is required.";
+                continue;
+            }
+
+            switch (classification.Class)
+            {
+                // 系统保护路径一律硬拒；执行侧 Prepare 已先行硬拒，这里兜底。
+                case ResourceClass.PermissionSystemProtected :
+                    return (PermissionEvaluation.Deny(
+                                                      $"The invocation touches a permission-system-protected resource: {target}"),
+                            PermissionLevel.None, null, Array.Empty<string>());
+                case ResourceClass.OutsideWorkspace :
+                    level = PermissionLevel.Level2;
+                    // 契约 D2：读与写分开申请与展示，审批文本不得把读显示为写。
+                    askReason = readClass
+                        ? "The invocation reads outside the workspace; approval is required."
+                        : "The invocation writes outside the workspace; approval is required.";
+                    missing.Add(readClass ? AdditionalPathRead : AdditionalPathWrite);
+                    break;
+                case ResourceClass.ProtectedMetadata :
+                    // 元数据读取（如 git status 的 .git 访问）属基线只读；写入升为 Level2。
+                    if (!readClass)
+                    {
+                        level     = PermissionLevel.Level2;
+                        askReason = "The invocation writes protected metadata; approval is required.";
+                        missing.Add(MetadataWrite);
+                    }
+
+                    break;
+                case ResourceClass.AdditionalReadRoot when !readClass :
+                    // 附加只读根不接纳写入；写入按附加能力审批。
+                    level     = PermissionLevel.Level2;
+                    askReason = "The invocation writes an additional read root; approval is required.";
+                    missing.Add(AdditionalPathWrite);
+                    break;
+                case ResourceClass.BaselineWorkspace :
+                case ResourceClass.AdditionalReadRoot :
+                case ResourceClass.AdditionalWriteRoot :
+                default :
+                    break;
+            }
+
+            if (classification.KnownSensitive && askReason is not null)
+                askReason += " (known sensitive location)";
+        }
+
+        if (preparation.RequiresNetworkAccess && !_networkStandingEnabled)
+        {
+            level = PermissionLevel.Level2;
+            missing.Add("network-access");
+            askReason = "The invocation requests sandbox network access; approval is required.";
+        }
+
+        return (null, level, askReason, missing.Distinct(StringComparer.Ordinal).ToArray());
+    }
+
+    /// <summary>
+    ///     <para>对完整准备调用生成稳定 SHA-256 指纹，供拒绝记忆精确匹配。</para>
+    ///     <para>Generates a stable SHA-256 fingerprint of the complete invocation for exact denial matching.</para>
+    /// </summary>
     private static string Fingerprint(ToolPreparation preparation)
     {
         var canonical =
             preparation.ToolName                                                               + '\n' +
             preparation.Capability                                                             + '\n' +
             string.Join('\n', preparation.TargetPaths.OrderBy(x => x, StringComparer.Ordinal)) + '\n' +
-            GrantConstraint(preparation)                                                       + '\n' +
+            (preparation.SessionGrantConstraint ?? preparation.SessionConstraint)              + '\n' +
             preparation.Arguments.ToJsonString();
 
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical)));
     }
 
     /// <summary>
+    ///     <para>绑定当前引擎、冻结计划及授权修订的一次性派发凭据。</para>
+    ///     <para>A single-dispatch credential bound to one engine, frozen plan and authorization revision.</para>
+    /// </summary>
+    internal sealed class DispatchAuthorization(
+        PermissionEngine engine,
+        ToolPreparation  preparation,
+        long             revision,
+        string?          grantId,
+        bool             singleOperationApproved,
+        DateTimeOffset?  expiresUtc)
+    {
+        private  int     _used;
+        internal string? GrantId                 { get; } = grantId;
+        internal bool    SingleOperationApproved { get; } = singleOperationApproved;
+
+        internal bool TryUse(PermissionEngine currentEngine, ToolPreparation currentPreparation,
+                             long currentRevision) =>
+            ReferenceEquals(engine, currentEngine) && ReferenceEquals(preparation, currentPreparation) &&
+            revision == currentRevision && (expiresUtc is null || expiresUtc > engine._clock.GetUtcNow()) &&
+            Interlocked.Exchange(ref _used, 1) == 0;
+    }
+
+    /// <summary>
+    ///     <para>未注入分类策略时的 fail-closed 空实现：所有目标一律视为未分类，走审批。</para>
     ///     <para>
-    ///         已规范化的命令允许规则，区分 direct 参数模式与 shell 精确命令。
-    ///     </para>
-    ///     <para>
-    ///         A normalized command allow rule distinguishing direct argument patterns from exact shell commands.
+    ///         The fail-closed stand-in used without an injected policy: every target counts as unclassified and
+    ///         requires approval.
     ///     </para>
     /// </summary>
-    /// <remarks>
-    ///     <para>
-    ///         direct 仅在单个参数内支持 * 与 ?；shell 精确匹配 flavor、完整命令与 cwd，不接受通配符。
-    ///     </para>
-    ///     <para>
-    ///         Direct mode supports * and ? only within individual arguments; shell mode matches flavor,
-    ///         full command and cwd exactly, without wildcards.
-    ///     </para>
-    /// </remarks>
-    private sealed record ConfiguredCommandRule(
-        string                Mode,
-        string                Executable,
-        IReadOnlyList<string> ArgumentPatterns,
-        string                Shell,
-        string                Command,
-        string                WorkingDirectory)
+    private sealed class FailClosedResourcePolicy : IResourceAccessPolicy
     {
-        private static readonly StringComparison ExecutableComparison =
-            OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        public static readonly FailClosedResourcePolicy Instance = new();
 
-        public static ConfiguredCommandRule Create(CommandRule rule, string workspaceRoot)
-        {
-            ArgumentNullException.ThrowIfNull(rule);
-            if (rule.Mode is not "direct" and not "shell")
-                throw new InvalidDataException("Command rule mode must be 'direct' or 'shell'.");
-
-            switch (rule.Mode)
-            {
-                case "direct" when string.IsNullOrWhiteSpace(rule.Executable) :
-                    throw new InvalidDataException("A direct command rule executable must be a non-empty string.");
-                case "direct" when !string.IsNullOrEmpty(rule.Shell) || !string.IsNullOrEmpty(rule.Command) :
-                    throw new InvalidDataException("A direct command rule cannot contain shell or command fields.");
-                case "shell" when
-                    string.IsNullOrWhiteSpace(rule.Shell) || string.IsNullOrWhiteSpace(rule.Command) :
-                    throw new InvalidDataException("A shell command rule requires a shell flavor and exact command.");
-                case "shell" when !string.IsNullOrEmpty(rule.Executable) || rule.Arguments.Count != 0 :
-                    throw new
-                        InvalidDataException("A shell command rule cannot contain executable or arguments fields.");
-            }
-
-            var workspace = new Workspace(workspaceRoot);
-            var directory =
-                workspace.ResolveInside(string.IsNullOrWhiteSpace(rule.WorkingDirectory) ? "." : rule.WorkingDirectory,
-                                        "commandRules.workingDirectory");
-            var executable = rule.Mode == "direct"
-                ? NormalizeExecutable(rule.Executable.Trim(), directory, workspace)
-                : string.Empty;
-            return new ConfiguredCommandRule(rule.Mode, executable, rule.Arguments.ToArray(), rule.Shell,
-                                             rule.Command, directory);
-        }
-
-        public bool Matches(ToolPreparation preparation)
-        {
-            var args       = preparation.Arguments;
-            var mode       = args["mode"]?.GetValue<string>() ?? "direct";
-            var executable = args["executable"]?.GetValue<string>();
-            var directory  = args["workingDirectory"]?.GetValue<string>();
-            var arguments  = args["arguments"] as JsonArray;
-            if (!string.Equals(Mode, mode, StringComparison.Ordinal) ||
-                directory is null                                    ||
-                !string.Equals(WorkingDirectory, directory, ExecutableComparison))
-                return false;
-
-            if (Mode == "shell")
-            {
-                var shell   = args["shell"]?.GetValue<string>();
-                var command = args["command"]?.GetValue<string>();
-                return string.Equals(Shell, shell, StringComparison.Ordinal) &&
-                       string.Equals(Command, command, StringComparison.Ordinal);
-            }
-
-            if (executable is null                                           ||
-                arguments is null                                            ||
-                !string.Equals(Executable, executable, ExecutableComparison) ||
-                arguments.Count != ArgumentPatterns.Count)
-                return false;
-
-            for (var i = 0; i < arguments.Count; i++)
-            {
-                var argument = arguments[i]?.GetValue<string>();
-                if (argument is null || !WildcardMatch(ArgumentPatterns[i], argument)) return false;
-            }
-
-            return true;
-        }
-
-        private static string NormalizeExecutable(string executable, string workingDirectory, Workspace workspace)
-        {
-            var pathLike = Path.IsPathRooted(executable) || executable.Contains(Path.DirectorySeparatorChar) ||
-                           executable.Contains(Path.AltDirectorySeparatorChar);
-            if (!pathLike) return executable;
-
-            var full = Path.GetFullPath(Path.IsPathRooted(executable)
-                                            ? executable
-                                            : Path.Combine(workingDirectory, executable));
-            if (!Path.IsPathRooted(executable) && !Workspace.IsInside(workspace.Root, full))
-                throw new InvalidDataException("A command rule's relative executable escapes the workspace root.");
-
-            return full;
-        }
-
-        private static bool WildcardMatch(string pattern, string value)
-        {
-            var patternIndex = 0;
-            var valueIndex   = 0;
-            var starIndex    = -1;
-            var starValue    = -1;
-            while (valueIndex < value.Length)
-                if (patternIndex < pattern.Length &&
-                    (pattern[patternIndex] == '?' || pattern[patternIndex] == value[valueIndex]))
-                {
-                    patternIndex++;
-                    valueIndex++;
-                }
-                else if (patternIndex < pattern.Length && pattern[patternIndex] == '*')
-                {
-                    starIndex = patternIndex++;
-                    starValue = valueIndex;
-                }
-                else if (starIndex >= 0)
-                {
-                    patternIndex = starIndex + 1;
-                    valueIndex   = ++starValue;
-                }
-                else
-                {
-                    return false;
-                }
-
-            while (patternIndex < pattern.Length && pattern[patternIndex] == '*') patternIndex++;
-
-            return patternIndex == pattern.Length;
-        }
+        public ResourceClassification? Classify(string capability, string targetPath) => null;
     }
 }
