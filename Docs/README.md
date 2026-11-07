@@ -171,13 +171,15 @@ tinyharness chat
 
 首次交互启动时会询问工作区信任。只读工作区允许列举、搜索和读取；补丁与进程需要先信任工作区，再经过正常审批。非交互启动且没有已保存信任时保持只读。信任不等于自动批准命令，Windows 目录授权还可能单独触发 UAC。
 
-工具审批时，`a` 单次允许，`s` 允许本次运行内匹配的请求，`d` 拒绝。运行期批准不会恢复到后续回合，批准前请核对具体动作。
+工具审批时，`a` 单次允许，`t` 允许本次运行内匹配的请求，`s` 显式允许当前会话实例内匹配的请求，`d` 拒绝。以提示列出的可用范围为准；Host 仅支持单次批准，所有 Grant 均不跨重启恢复。批准前请核对具体动作。
 
 Desktop 的项目登记、权限模式和工具审批不等于 Windows 沙箱目录权限已就绪。若命令因目录权限准备失败而未启动，可在会话空闲后使用「查看详情」或「修复沙箱目录权限…」；先确认精确工作区及继承传播范围，普通权限不足时再单独确认 UAC，无需启动 CLI `/trust`。修复不会接管所有者、重置整棵树的 ACL 或重新配置机器沙箱；完成后仍须复查，不会自动重放失败命令。授权结果未知时需检查权限并重启应用，不能立即重试授权。
 
-### Desktop 权限模式
+### Desktop 权限与审批
 
-设置中的“权限与审批”页列出七种模式，可选择 Composer 中显示哪些模式、新会话默认模式，以及跟随当前模型或指定独立 AI 审批模型。只读模式允许批准具体写入或 Shell；空闲会话可直接切换并保存模式，重启恢复原选择，临时批准不恢复。运行中须先停止并等待收尾。详见[权限模式说明](Guides/permission-modes.md)。
+审批模式只有人工审批（缺省）与 AI 审核。沙箱基线允许工作区读写与沙箱内 Shell；附加路径、受保护元数据写入与联网申请需要匹配的 Grant，Host 只接受显式单次批准。Grant 可到期或撤销，不跨重启恢复。“权限与审批”设置页配置新会话默认值与独立 AI 审核模型；CLI `/approval human|ai` 在空闲时可靠保存当前会话的审批模式。
+
+旧配置和旧会话分别确认迁移。Desktop 在权限设置中提供配置迁移按钮，在受影响会话中显示迁移通知；CLI 交互式 chat 提示确认，重定向输入不能确认，run 遇到旧配置待确认时明确退出。普通设置保存和模式切换不会解除迁移门禁。详见[权限与审批说明](Guides/permission-modes.md)及[实施与验证记录](permission-architecture-plan.md)。
 
 ### 思考展示与基础控制
 
@@ -201,6 +203,7 @@ tinyharness run --reasoning status -- "解释这个项目"
 | `/resume` | 继续已暂停的运行 |
 | `/cancel` | 取消当前运行并等待清理 |
 | `/work` | 查看工作项陈述与未生效补充数量 |
+| `/approval human\|ai` | 空闲时保存当前会话的审批模式 |
 | `Ctrl+C` | 取消活动回合；空闲输入时退出会话 |
 
 这些只是有限控制，还没有通用命令系统；审批回复使用独立提示。空闲输入时可用 `/trust` 管理工作区信任。取消或重启后，已保存但未生效的补充不会自动重放。
@@ -269,7 +272,7 @@ MCP worker 使用用户配置，将获准读取的工作区内容发送给模型
 | --- | --- |
 | 顶层活动计划 | [供应商、模型管理与会话内选择](session-model-switching-design.md)、[桌面 GUI 迁移](desktop-migration-plan.md)、[项目实体、会话归属与多目录扩展](project-session-plan.md)；具体设计、实施与验证状态由各计划维护 |
 | [Archive](Archive/README.md) | 已完成的设计、实现边界、历史讨论、接力与验收；归档不取消仍有效的技术约束 |
-| Guides | [打包与发布](Guides/releasing.md)、[许可证与第三方声明维护](Guides/third-party-notices.md)等持续使用的维护说明 |
+| Guides | [权限与审批](Guides/permission-modes.md)、[打包与发布](Guides/releasing.md)、[许可证与第三方声明维护](Guides/third-party-notices.md)等持续使用的维护说明 |
 | [Templates](Templates/README.md) | 可复制的跨项目代码风格母版 |
 
 [PLAN.md](../PLAN.md) 维护活动计划入口；[PAST_PLAN.md](../PAST_PLAN.md) 保留历史总计划；[AGENTS.md](../AGENTS.md) 规定仓库工作方式。项目采用 [Apache-2.0](../LICENSE)，[NOTICE](../NOTICE) 与[第三方许可](../THIRD-PARTY-LICENSES.txt)保留归属和条款。

@@ -174,13 +174,15 @@ In a selected conversation, each submitted line starts a turn. You can discuss a
 
 Interactive startup asks about trust for a new workspace. Read-only workspaces allow list/search/read tools; patches and processes require workspace trust and then the normal permission flow. Noninteractive workspaces without saved trust stay read-only. Trust does not automatically approve commands; Windows directory authorization may separately require UAC.
 
-At an approval prompt, `a` allows once, `s` allows matching requests for the current run, and `d` denies. Run-scoped approvals are not restored in later turns. Review the proposed action before approving it.
+At an approval prompt, `a` allows once, `t` allows matching requests for the current run, `s` explicitly allows them for the current session instance, and `d` denies. Only the scopes listed by the prompt are available; host execution accepts single-operation approval only. Grants never survive a restart. Review the proposed action before approving it.
 
 In Desktop, registering a project, selecting a permission mode, and approving a tool do not establish Windows sandbox directory readiness. If directory preparation blocks a command before launch, the idle session offers details and an explicit sandbox-directory repair action. Confirm the exact workspace and inheritance-propagation scope first; a separate UAC confirmation is requested only when normal privilege is insufficient. There is no need to launch CLI `/trust`. Repair does not take ownership, reset the whole tree's ACLs, or reprovision the machine sandbox. It must pass a final check and never replays the failed command. An unknown authorization result blocks immediate retries and requires inspection and an application restart.
 
-### Desktop permission modes
+### Desktop permissions and approvals
 
-Settings → Permissions and approvals lists seven presets. Choose which appear in the composer, a default for new sessions, and either the current session model or a separate AI reviewer. Read-only permits approval of individual writes and shell calls. Idle sessions can change and durably save their mode; resume restores the selection without restoring temporary grants. Stop active work and await cleanup before switching. See the [permission guide](Docs/Guides/permission-modes.md).
+There are two approval modes: human approval (the default) and AI review. The sandbox baseline allows workspace reads and writes plus sandboxed shell. Additional paths, protected-metadata writes and networking requests require a matching grant; host execution requires explicit single-operation approval. Grants expire or can be revoked, and never survive a restart. Settings → Permissions and approvals configures new-session defaults and the independent AI reviewer. CLI `/approval human|ai` saves a selected session's mode while idle.
+
+Legacy settings and saved sessions require separate migration confirmations. Desktop provides an explicit configuration-migration button in permission settings and a notification in each affected session. Interactive CLI chat prompts for confirmation; redirected input cannot confirm, and `run` refuses pending legacy settings. Ordinary settings saves and approval-mode switches do not clear the migration gate. See the [permission guide](Docs/Guides/permission-modes.md) and [implementation and validation record](Docs/permission-architecture-plan.md).
 
 ### Reasoning and basic controls
 
@@ -202,6 +204,7 @@ During an active `chat` run, ordinary text is queued as an amendment for a safe 
 | `/resume` | Continue a paused run |
 | `/cancel` | Cancel the active run and wait for cleanup |
 | `/work` | Show work-item claims and unapplied amendment counts |
+| `/approval human\|ai` | Save the selected session's approval mode while idle |
 | `Ctrl+C` | Cancel the active turn; at the idle prompt, exit the session |
 
 These are limited controls, not a general command system. Approval replies use their own prompt. `/trust` is available at the idle input prompt. Saved amendments that were not applied are not replayed automatically after cancellation or restart.
