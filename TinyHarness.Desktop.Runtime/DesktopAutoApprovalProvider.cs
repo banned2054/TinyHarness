@@ -16,15 +16,33 @@ namespace TinyHarness.Desktop.Runtime;
 ///         human; only an escalation does; technical failures return Unavailable.
 ///     </para>
 /// </summary>
+/// <param name="approvalTimeoutProvider">
+///     <para>
+///         审批期限来源：每次审核开始时解析一次并冻结于该次审核，不再是构造期冻结值；
+///         null 时由审核员沿用内置默认值。
+///     </para>
+///     <para>
+///         The approval deadline source: resolved once when each review starts and frozen for that review
+///         instead of a construction-time value; null keeps the reviewer's built-in default.
+///     </para>
+/// </param>
+/// <param name="timeProvider">
+///     <para>时间源；主要供测试注入可控时钟，null 使用系统时间。</para>
+///     <para>The time source, mainly for tests to inject a controlled clock; null uses the system time.</para>
+/// </param>
 public sealed class DesktopAutoApprovalProvider(
     DesktopApprovalProvider                                                     human,
     Func<SessionApprovalMode>                                                   mode,
     Func<CancellationToken, Task<(IChatCompletionClient Client, string Model)>> createReviewer,
     Func<ApprovalContext>                                                       context,
-    Func<string, ValueTask>                                                     status) : IApprovalProvider
+    Func<string, ValueTask>                                                     status,
+    Func<TimeSpan>?                                                             approvalTimeoutProvider = null,
+    TimeProvider?                                                               timeProvider            = null) : IApprovalProvider
 {
     private readonly AiRoutedApprovalProvider routed =
-        new(human, new DesktopAiReviewer(createReviewer, status), mode, context);
+        new(human,
+            new DesktopAiReviewer(createReviewer, status, approvalTimeoutProvider, timeProvider),
+            mode, context);
 
     /// <inheritdoc />
     public Task<ApprovalResolution> PromptAsync(ApprovalRequest request, CancellationToken cancellationToken) =>
@@ -36,9 +54,11 @@ public sealed class DesktopAutoApprovalProvider(
     /// </summary>
     private sealed class DesktopAiReviewer(
         Func<CancellationToken, Task<(IChatCompletionClient Client, string Model)>> createReviewer,
-        Func<string, ValueTask>                                                     status) : IAiReviewer
+        Func<string, ValueTask>                                                     status,
+        Func<TimeSpan>?                                                             approvalTimeoutProvider,
+        TimeProvider?                                                               timeProvider) : IAiReviewer
     {
-        private readonly AiReviewer _inner = new(createReviewer);
+        private readonly AiReviewer _inner = new(createReviewer, approvalTimeoutProvider, timeProvider);
 
         public async Task<AiReviewOutcome> ReviewAsync(ApprovalRequest      request,
                                                        ApprovalContext      context,

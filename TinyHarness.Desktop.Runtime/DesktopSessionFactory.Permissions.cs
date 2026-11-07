@@ -35,7 +35,8 @@ public sealed partial class DesktopSessionFactory
             throw new InvalidOperationException("审批供应商或模型已不存在，请在权限设置中重新选择。");
         var config = ConfigFor(new TinyHarnessConfig { WorkspaceRoot = host.Session.WorkspaceRoot },
                                selected.Profile, selected.Model);
-        return (CreateClient(config, selected.Profile, user.Settings?.Network), selected.Model.Id);
+        return (CreateClient(config, selected.Profile, user.Settings?.Network, user.Settings?.ModelTimeouts),
+                selected.Model.Id);
     }
 
     /// <summary>

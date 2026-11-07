@@ -19,10 +19,32 @@ internal static class CliApprovalRouting
     ///         demand.
     ///     </para>
     /// </summary>
+    /// <param name="createReviewer">
+    ///     <para>按需创建审核客户端与模型标识的工厂。</para>
+    ///     <para>The factory creating a reviewer client and model id on demand.</para>
+    /// </param>
+    /// <param name="approvalTimeoutProvider">
+    ///     <para>
+    ///         审批期限来源：每次审核开始时解析一次并冻结于该次审核；null 时按宿主当前
+    ///         EffectiveModelTimeouts 解析，宿主未就绪由审核员入口归类为审核不可用。
+    ///     </para>
+    ///     <para>
+    ///         The approval deadline source: resolved once when each review starts and frozen for that review;
+    ///         null resolves it from the host's current EffectiveModelTimeouts, and an unready host is
+    ///         classified as review-unavailable at the reviewer's entry point.
+    ///     </para>
+    /// </param>
     internal static IApprovalProvider Create(
         IApprovalProvider human, Func<ChatSessionHost> host, PermissionEngine permissions,
-        Func<CancellationToken, Task<(IChatCompletionClient Client, string Model)>> createReviewer) =>
-        new AiRoutedApprovalProvider(human, new AiReviewer(createReviewer), () => permissions.ApprovalMode,
+        Func<CancellationToken, Task<(IChatCompletionClient Client, string Model)>> createReviewer,
+        Func<TimeSpan>? approvalTimeoutProvider = null) =>
+        new AiRoutedApprovalProvider(human,
+                                     new AiReviewer(createReviewer,
+                                                    approvalTimeoutProvider ??
+                                                    (() => TimeSpan.FromSeconds(host()
+                                                                                .EffectiveModelTimeouts
+                                                                                .ApprovalTimeoutSeconds))),
+                                     () => permissions.ApprovalMode,
                                      () => BuildContext(host(), permissions));
 
     /// <summary>

@@ -34,13 +34,55 @@ namespace TinyHarness.Core.Services.Permissions;
 ///         48000 characters is ReviewUnavailable. A client is created and disposed per review; verdicts are
 ///         never cached, so the same input can be retried.
 ///     </para>
+///     <para>
+///         每次审核受审批独立总期限约束：期限在每次审核开始时从 provider 解析一次并在该次审核内
+///         冻结，期间配置变化不影响已开始的审核，组合层负责把当前已生效策略接成 provider。期限覆盖
+///         建客户端、模型流与解析全程，到期转为 Timeout 失败（不执行、不转人工、不写拒绝记忆，
+///         可手动重试）；到期判定不依赖底层抛出取消异常，所有成功接受边界显式检查期限。调用方取消
+///         （含审批作废）原样向上传播，不落入任何失败分类。
+///     </para>
+///     <para>
+///         Each review is bounded by an independent approval deadline: the deadline is resolved once from the
+///         provider when the review starts and frozen for that review, so configuration changes during a
+///         review never affect one already in progress; the composition layer wires the currently effective
+///         policy as the provider. The deadline spans client creation, the model stream and parsing, and
+///         expiry becomes a Timeout failure (no execution, no human fallback, no denial memory, an explicit
+///         retry is allowed). Expiry detection never relies on the underlying layer throwing cancellation —
+///         every success-acceptance boundary checks the deadline explicitly. Caller cancellation (including
+///         approval obsoletion) propagates verbatim and never enters a failure category.
+///     </para>
 /// </remarks>
+/// <param name="approvalTimeoutProvider">
+///     <para>
+///         审批期限来源：每次审核开始时调用一次以解析期限并冻结于该次审核；
+///         未提供或解析出非正数时回落内置默认值。
+///     </para>
+///     <para>
+///         The approval deadline source: invoked once when each review starts to resolve and freeze the
+///         deadline for that review; a missing provider or a non-positive value falls back to the built-in
+///         default.
+///     </para>
+/// </param>
 public sealed class AiReviewer(
-    Func<CancellationToken, Task<(IChatCompletionClient Client, string Model)>> createReviewer) : IAiReviewer
+    Func<CancellationToken, Task<(IChatCompletionClient Client, string Model)>> createReviewer,
+    Func<TimeSpan>? approvalTimeoutProvider                                     = null,
+    TimeProvider? timeProvider                                                  = null) : IAiReviewer
 {
     private const int MaxInputCharacters  = 48_000;
     private const int MaxOutputCharacters = 4_096;
     private const int MaxReasonCharacters = 2_000;
+
+    private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
+
+    /// <summary>
+    ///     <para>内置默认审批期限；provider 缺失或解析出非正数时回落使用，保证审批链路永不无限等待。</para>
+    ///     <para>
+    ///         The built-in default approval deadline; used as the fallback when the provider is missing or
+    ///         resolves a non-positive value, so approval never waits indefinitely.
+    ///     </para>
+    /// </summary>
+    private static TimeSpan DefaultApprovalTimeout =>
+        TimeSpan.FromSeconds(ModelTimeouts.Default.ApprovalTimeoutSeconds);
 
     /// <inheritdoc />
     public async Task<AiReviewOutcome> ReviewAsync(ApprovalRequest      request,
@@ -50,11 +92,36 @@ public sealed class AiReviewer(
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(context);
 
+        // 审批总期限在审核开始解析一次并冻结于本次审核：非正数回落内置默认值，保证审批链路永不无限等待。
+        TimeSpan approvalTimeout;
+        try
+        {
+            approvalTimeout = approvalTimeoutProvider?.Invoke() ?? DefaultApprovalTimeout;
+            if (approvalTimeout <= TimeSpan.Zero) approvalTimeout = DefaultApprovalTimeout;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            // 解析阶段尚未创建客户端，无资源需清理；解析失败按审核不可用返回。
+            return AiReviewOutcome.FromFailure(
+                new AiReviewFailure(AiReviewFailureKind.ReviewUnavailable,
+                                    "The approval deadline could not be resolved: " + exception.Message));
+        }
+
+        // 审批独立总期限覆盖建客户端、模型流与解析全程；到期转为 Timeout 失败，调用方取消仍原样传播。
+        using var deadline      = new CancellationTokenSource(approvalTimeout, _timeProvider);
+        using var approvalToken = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, deadline.Token);
+
         IChatCompletionClient client;
         string model;
         try
         {
-            (client, model) = await CreateReviewerAsync(cancellationToken).ConfigureAwait(false);
+            (client, model) = await CreateReviewerAsync(cancellationToken, approvalToken.Token, deadline,
+                                                        approvalTimeout)
+                             .ConfigureAwait(false);
         }
         catch (AiReviewFailureException exception)
         {
@@ -63,14 +130,22 @@ public sealed class AiReviewer(
 
         try
         {
+            // 客户端创建返回也可能已跨过期限：成功使用前先过守卫。
+            ThrowIfApprovalExpired(cancellationToken, deadline, approvalTimeout);
+
             var payload = BuildPayload(request, context);
             if (payload.Length > MaxInputCharacters)
                 return AiReviewOutcome.FromFailure(
                     new AiReviewFailure(AiReviewFailureKind.ReviewUnavailable,
                                         "The approval input is too large for the reviewer."));
 
-            var output = await RequestReviewAsync(client, model, payload, cancellationToken).ConfigureAwait(false);
-            return ParseOutcome(output);
+            var output = await RequestReviewAsync(client, model, payload, cancellationToken, approvalToken.Token,
+                                                  deadline, approvalTimeout)
+                        .ConfigureAwait(false);
+            var outcome = ParseOutcome(output);
+            // 解析为同步计算，接受结论前再过一次守卫，覆盖解析期间到期的窗口。
+            ThrowIfApprovalExpired(cancellationToken, deadline, approvalTimeout);
+            return outcome;
         }
         catch (AiReviewFailureException exception)
         {
@@ -84,23 +159,29 @@ public sealed class AiReviewer(
 
     /// <summary>
     ///     <para>
-    ///         创建审核客户端；模型或供应商缺失等失败映射为 ReviewUnavailable，调用方取消原样传播。
+    ///         创建审核客户端；模型或供应商缺失等失败映射为 ReviewUnavailable，调用方取消原样传播，
+    ///         审批总期限到期映射为 Timeout。
     ///     </para>
     ///     <para>
-    ///         Creates the reviewer client; missing reviewer models or providers map to ReviewUnavailable while
-    ///         caller cancellation propagates.
+    ///         Creates the reviewer client; missing reviewer models or providers map to ReviewUnavailable, caller
+    ///         cancellation propagates, and approval-deadline expiry maps to Timeout.
     ///     </para>
     /// </summary>
     private async Task<(IChatCompletionClient Client, string Model)> CreateReviewerAsync(
-        CancellationToken cancellationToken)
+        CancellationToken callerToken, CancellationToken approvalToken, CancellationTokenSource deadline,
+        TimeSpan approvalTimeout)
     {
         try
         {
-            return await createReviewer(cancellationToken).ConfigureAwait(false);
+            return await createReviewer(approvalToken).ConfigureAwait(false);
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException) when (callerToken.IsCancellationRequested)
         {
             throw;
+        }
+        catch (OperationCanceledException exception) when (deadline.IsCancellationRequested)
+        {
+            throw DeadlineFailure(approvalTimeout, exception);
         }
         catch (Exception exception)
         {
@@ -115,15 +196,64 @@ public sealed class AiReviewer(
     ///     <para>Wraps a failure into an exception carrying <see cref="AiReviewFailure" /> for unified conversion.</para>
     /// </summary>
     private static AiReviewFailureException FailureException(AiReviewFailureKind kind, string detail,
-                                                                     Exception? inner = null) =>
+                                                             Exception? inner = null) =>
         new(new AiReviewFailure(kind, detail), inner);
+
+    /// <summary>
+    ///     <para>
+    ///         把审批总期限到期包装成 Timeout 失败；仅当调用方未取消而审批 CTS 到期时进入本分类，
+    ///         由既有失败链转换为 Unavailable，不执行、不转人工、不写拒绝记忆。
+    ///     </para>
+    ///     <para>
+    ///         Wraps approval-deadline expiry into a Timeout failure; reached only when the approval CTS expired
+    ///         without caller cancellation, and the existing failure chain turns it into Unavailable without
+    ///         execution, human fallback, or denial memory.
+    ///     </para>
+    /// </summary>
+    private static AiReviewFailureException DeadlineFailure(TimeSpan                       approvalTimeout,
+                                                            OperationCanceledException exception) =>
+        FailureException(AiReviewFailureKind.Timeout,
+                         $"The AI review exceeded the approval deadline of {(int)approvalTimeout.TotalSeconds} seconds.",
+                         exception);
+
+    /// <summary>
+    ///     <para>
+    ///         成功接受路径的统一守卫：调用方取消优先原样传播，审批期限已到期则转 Timeout。
+    ///         到期判定不依赖底层抛出取消异常——底层正常收尾但已跨过期限的迟到结果不得被接受。
+    ///     </para>
+    ///     <para>
+    ///         The unified guard before accepting a result on success paths: caller cancellation propagates
+    ///         verbatim with priority, then an expired approval deadline becomes Timeout. Expiry detection never
+    ///         relies on the underlying layer throwing cancellation; a late result that finishes normally after
+    ///         the deadline must not be accepted.
+    ///     </para>
+    /// </summary>
+    private static void ThrowIfApprovalExpired(CancellationToken          callerToken,
+                                               CancellationTokenSource deadline, TimeSpan approvalTimeout)
+    {
+        callerToken.ThrowIfCancellationRequested();
+        if (deadline.IsCancellationRequested)
+            throw DeadlineFailure(approvalTimeout, new OperationCanceledException(deadline.Token));
+    }
 
     /// <summary>
     ///     <para>发送审核请求并收集文本输出；流的各类异常在此统一映射为技术失败。</para>
     ///     <para>Sends the review request and collects the text; stream faults map to technical failures here.</para>
     /// </summary>
-    private static async Task<string> RequestReviewAsync(IChatCompletionClient client, string model,
-                                                         string payload, CancellationToken cancellationToken)
+    /// <remarks>
+    ///     <para>
+    ///         流请求使用审批令牌；取消分类以调用方令牌为准——调用方取消原样传播，
+    ///         审批总期限到期转 Timeout，其余取消转 Cancelled。
+    ///     </para>
+    ///     <para>
+    ///         The stream uses the approval token; cancellation is classified by the caller token — caller
+    ///         cancellation propagates verbatim, approval-deadline expiry becomes Timeout, and other
+    ///         cancellations become Cancelled.
+    ///     </para>
+    /// </remarks>
+    private static async Task<string> RequestReviewAsync(
+        IChatCompletionClient client, string model, string payload, CancellationToken callerToken,
+        CancellationToken     approvalToken, CancellationTokenSource deadline, TimeSpan approvalTimeout)
     {
         try
         {
@@ -138,8 +268,8 @@ public sealed class AiReviewer(
                                                                     ChatMessage.User(payload)
                                                                 ]
                                                             },
-                                                            cancellationToken)
-                                             .WithCancellation(cancellationToken))
+                                                            approvalToken)
+                                             .WithCancellation(approvalToken))
             {
                 if (item.Kind == ChatStreamEventKind.ToolCallDelta)
                     throw FailureException(AiReviewFailureKind.InvalidResponse,
@@ -157,20 +287,25 @@ public sealed class AiReviewer(
                 }
             }
 
-            cancellationToken.ThrowIfCancellationRequested();
+            // 流正常结束不豁免期限：接受迟到结果前按调用方取消与审批期限显式把关。
+            ThrowIfApprovalExpired(callerToken, deadline, approvalTimeout);
             if (!ended)
                 throw FailureException(AiReviewFailureKind.InvalidResponse,
                                                "The review response never completed.");
 
             return output.ToString();
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException) when (callerToken.IsCancellationRequested)
         {
             throw;
         }
         catch (TimeoutException exception)
         {
             throw FailureException(AiReviewFailureKind.Timeout, exception.Message, exception);
+        }
+        catch (OperationCanceledException exception) when (deadline.IsCancellationRequested)
+        {
+            throw DeadlineFailure(approvalTimeout, exception);
         }
         catch (OperationCanceledException exception)
         {

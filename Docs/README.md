@@ -119,6 +119,8 @@ $env:TINYHARNESS_API_KEY = Read-Host "API key" -MaskInput
 
 配置查找顺序为：显式 `--config <文件>`、用户配置、内置默认值；这些文件不会隐式合并，工作目录中的 `tinyharness.json` 不会被自动读取——打开某个项目目录不会接管应用配置。**仓库自带的 `tinyharness.json` 是使用占位 endpoint 的 smoke 示例，只通过显式 `--config` 使用**（例如离线 `smoke` 命令）。实际任务使用 `init` 创建的 profile；仅在需要不同配置时显式指定。
 
+可信用户设置 `settings.modelTimeouts` 控制模型请求超时策略；只有用户配置可以设置它，显式 `--config` 文件与项目配置不接受该节。三个字段均以秒计：`streamIdleTimeoutSeconds` 默认 `300`，是模型流的空闲期限；`responseTimeoutSeconds` 默认 `0`（关闭），是单次响应的总期限；`approvalTimeoutSeconds` 默认 `300`，必须为正，约束单次 AI 审核的总期限。前两个字段允许 `0` 表示关闭对应期限；负数、非正的 `approvalTimeoutSeconds` 或超出计时器范围的值（上限 4,294,966 秒）会让配置加载或保存失败，并给出 `settings.modelTimeouts` 字段路径。流空闲按 M.E.AI SDK update 级观察：工具参数增量在 SDK 内部聚合，可能整段不产出可见 update，等待首个可见 update 的时间也计入空闲；`responseTimeoutSeconds` 默认关闭，需显式设置才会限制总时长。`streamIdleTimeoutSeconds` 设为 `0` 只关闭应用层 update 空闲保护，底层 SDK 仍保留每次网络操作 300 秒的保护，并非完全无限等待。
+
 ### 网络设置
 
 Desktop「设置 → 网络」可选择全局默认的系统代理、直连或已保存代理，并添加、编辑、删除和测试 HTTP、HTTPS、SOCKS5 代理。用户名和密码只存入受支持平台的系统凭据存储；普通用户配置只保留凭据目标引用。CLI、Desktop、MCP worker、`doctor --connect` 和在线模型发现共享同一套网络路由。
@@ -246,6 +248,8 @@ Desktop 模型菜单支持空闲时切换已有会话的模型与已声明强度
 新密钥写入独立凭据目标；保存失败保留原引用，并报告可能残留的新条目。
 
 `maxAgentSteps` 默认 `0`，表示不限普通步数。可信用户 `settings.runBudget` 默认每次运行最多 128 次逻辑模型请求（含压缩）和 256 次工具执行。累计 token 和总时长默认只统计、不设限（`maxTotalTokens`／`maxWallClockSeconds` 为 `0`），正数可启用相应上限；单工具超时与取消仍有效。详细契约见[运行预算](Archive/task-control-design.md)。
+
+`settings.modelTimeouts` 为每次模型请求提供超时策略，对 chat、run、MCP worker、`doctor --connect` 与 AI 审核的审批调用统一生效：`streamIdleTimeoutSeconds` 默认 `300` 秒（`0` 关闭应用层保护，底层仍保留每次网络操作 300 秒保护）观察流空闲，`responseTimeoutSeconds` 默认 `0`（关闭）限制单次响应总时长，`approvalTimeoutSeconds` 默认 `300` 秒约束单次 AI 审核；审批到期按超时失败处理，不执行、不转人工、不写拒绝记忆。该节仅来自可信用户配置，字段语义与报错行为见[配置模型](#配置模型)。修改本节后，同模型刷新与重新选择都会按新策略构造并替换客户端，不重置推理连续性。
 
 项目规则按显式工具目标的祖先链加载。列目录和递归搜索不激活后代 `AGENTS.md`；读取、修改或明确搜索具体文件时，仍先检查目标祖先规则。新操作范围替换旧的活动范围；没有新范围时刷新当前集合。单文件及一次候选累计读取均限制为 1 MiB，优先保留较具体的来源，超限来源记录省略原因。模型投影包含包围文本与提示，同时不超过 32 KiB 和估算 8,000 token；先省略宽泛正文，再截断保留的具体正文。完整读取的来源仍以原文和原始哈希保存到会话日志，裁剪提示也进入历史展示；预算裁剪不导致运行失败。文件数或探测目录数超限仍可能要求缩小路径／拆分调用；编码、访问权限、链接和一致性错误仍停止运行。已有 renderer `/1` 快照原样恢复，下一回合刷新为 `/2`；旧二进制不能续聊 `/2` 快照。
 

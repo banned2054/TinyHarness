@@ -6,7 +6,26 @@ All notable changes to TinyHarness.NET are documented here, with matching Simpli
 
 ## 📘 Versions / 版本
 
+- [🚧 Unreleased / 未发布](#unreleased)
 - [🚀 Release v0.0.1 — Initial Prototype / 首个原型](#release-v001)
+
+<a id="unreleased"></a>
+
+## 🚧 Unreleased / 未发布
+
+### 简体中文
+
+#### ✨ 新增
+
+- 可信用户设置 `settings.modelTimeouts`：`streamIdleTimeoutSeconds`（默认 300 秒，`0` 关闭应用层空闲保护，底层 SDK 仍保留每次网络操作 300 秒保护）为模型流提供空闲期限，`responseTimeoutSeconds`（默认 0，关闭）限制单次响应总时长，`approvalTimeoutSeconds`（默认 300 秒，必须为正）约束单次 AI 审核；策略对 CLI、Desktop、MCP worker、`doctor --connect` 与审批调用的模型客户端统一生效，负数或超出计时器范围的值在配置加载或保存时报错。修改该节后，同模型刷新与重新选择按新策略替换客户端，不重置推理连续性，也不扩大持久化选择记录；CLI `/models` 显式应用与发送前核对按客户端实际采用的超时策略标注候选，不按可能过期的目录快照。
+- AI 审核增加独立审批总期限：到期按超时失败处理，操作不执行、不转人工、不写拒绝记忆，可手动重试；期限判定覆盖建客户端、模型流与解析全程并在所有成功接受边界显式检查，底层正常收尾而期限已到的迟到结果按 Timeout 拒绝；期限在每次审核开始时按当前生效策略解析一次并在该次审核内冻结，审核进行中修改配置不影响已开始的审核；用户取消与审批作废仍按原语义向上传播。
+
+### English
+
+#### ✨ Added
+
+- Trusted user setting `settings.modelTimeouts`: `streamIdleTimeoutSeconds` (default 300 s; `0` disables the app-layer idle guard while the SDK keeps its 300-second per-network-operation protection) bounds idle gaps in the model stream, `responseTimeoutSeconds` (default 0, disabled) bounds one response end-to-end, and `approvalTimeoutSeconds` (default 300 s, must be positive) bounds one AI review; the policy applies uniformly to the model clients of CLI, Desktop, the MCP worker, `doctor --connect`, and approval calls, and negative or out-of-range values fail config loading or saving with the field path. After changing this section, same-model refreshes and reselections replace the client under the new policy without resetting reasoning continuity or extending the persisted selection record. CLI `/models` explicit application and the pre-send check annotate candidates by the timeout policy the client actually uses, not by a possibly stale catalog snapshot.
+- AI review gains an independent approval deadline: expiry is handled as a timeout failure — the operation stays unexecuted, never reaches a human, records no denial memory, and can be retried manually. Detection spans client creation, the model stream and parsing, with explicit checks at every success-acceptance boundary, so a late result that finishes normally after expiry is rejected as Timeout. The deadline is resolved once from the currently effective policy when each review starts and frozen for that review; configuration changes during a review do not affect one already in progress. User cancellation and approval obsoletion keep their existing propagation semantics.
 
 <a id="release-v001"></a>
 

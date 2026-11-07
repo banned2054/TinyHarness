@@ -244,7 +244,10 @@ public sealed partial class DesktopSessionFactory
         var routedApprovals = new DesktopAutoApprovalProvider(approvals, () => permissions.ApprovalMode,
                                                               token => CreateReviewerAsync(permissionHost!, token),
                                                               () => ReviewContext(permissionHost!, permissions),
-                                                              text => events(new DesktopEvent("state", null, text)));
+                                                              text => events(new DesktopEvent("state", null, text)),
+                                                              () => TimeSpan.FromSeconds(permissionHost!
+                                                                                                        .EffectiveModelTimeouts
+                                                                                                        .ApprovalTimeoutSeconds));
         // 沙箱未组合时 restricted Shell 不携带冻结策略身份：PermissionShellTool 的 workspace
         // 路由将明确失败，不回退宿主；沙箱可用性 Deny 由权限引擎的组合期布尔表达。
         // grant 上下文随组合冻结；活动快照源与引擎共享同一 GrantRegistry。
