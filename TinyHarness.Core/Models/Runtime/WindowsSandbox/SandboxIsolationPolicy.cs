@@ -96,13 +96,47 @@ public sealed record SandboxIsolationPolicy
     ///     </para>
     /// </summary>
     public SandboxSetupPayload CreateSetupPayload(
-        WindowsSandboxComponents components, string commandWorkingDirectory, string realUser, bool refreshOnly)
+        WindowsSandboxComponents components, string commandWorkingDirectory, string realUser, bool refreshOnly) =>
+        CreateSetupPayload(components, commandWorkingDirectory, realUser, refreshOnly, null);
+
+    /// <summary>
+    ///     <para>
+    ///         构造每命令 refresh payload，并把已通过校验的 grant 范围并入：grant 只读根与写根分别
+    ///         追加进 read_roots/write_roots；grant 元数据写路径从 deny-write 集合移除。空范围与
+    ///         无 grant 的 payload 完全一致。合并前假设调用方已通过组合器的 ResolveGrantScope
+    ///         完成 fail-closed 校验；本方法只做确定性合并。
+    ///     </para>
+    ///     <para>
+    ///         Builds the per-command refresh payload and merges a validated grant scope: grant read
+    ///         and write roots are appended to read_roots/write_roots; grant metadata write paths are
+    ///         removed from the deny-write set. An empty scope yields exactly the grant-free payload.
+    ///         The caller is expected to have run the composer's fail-closed ResolveGrantScope
+    ///         validation; this method only performs the deterministic merge.
+    ///     </para>
+    /// </summary>
+    public SandboxSetupPayload CreateSetupPayload(
+        WindowsSandboxComponents components, string commandWorkingDirectory, string realUser, bool refreshOnly,
+        SandboxGrantScope? grantScope)
     {
         if (components.AllowTcpLoopback != AllowTcpLoopback)
             throw new InvalidOperationException("Sandbox component and policy TCP-loopback modes must match.");
         var readRoots = new List<string> { WorkspaceRoot, commandWorkingDirectory };
         readRoots.AddRange(TempWriteRoots);
         readRoots.AddRange(EffectiveReadRoots);
+        var writeRoots = new List<string>(EffectiveWriteRoots);
+        if (grantScope is { } grant)
+        {
+            readRoots.AddRange(grant.ReadRoots);
+            writeRoots.AddRange(grant.WriteRoots);
+        }
+
+        // deny 收缩只针对 grant 明确允许的元数据目录；其余 deny 项不受 grant 影响。
+        var denyWritePaths = Deduplicate(DenyWritePaths.Where(path => File.Exists(path) || Directory.Exists(path)));
+        if (grantScope is { } scope && scope.MetadataWritePaths.Count > 0)
+            denyWritePaths = denyWritePaths
+                             .Where(path => !scope.MetadataWritePaths.Contains(path, StringComparer.OrdinalIgnoreCase))
+                             .ToList();
+
         return new SandboxSetupPayload
         {
             AllowTcpLoopback        = AllowTcpLoopback,
@@ -111,9 +145,9 @@ public sealed record SandboxIsolationPolicy
             SandboxHome             = components.SandboxHome,
             CommandWorkingDirectory = commandWorkingDirectory,
             ReadRoots               = Deduplicate(readRoots),
-            WriteRoots              = Deduplicate(EffectiveWriteRoots),
+            WriteRoots              = Deduplicate(writeRoots),
             // 内置元数据保护遵守 skip-if-missing，避免 helper 创建占位目录。
-            DenyWritePaths = Deduplicate(DenyWritePaths.Where(path => File.Exists(path) || Directory.Exists(path))),
+            DenyWritePaths = denyWritePaths,
             RealUser       = realUser,
             RefreshOnly    = refreshOnly
         };

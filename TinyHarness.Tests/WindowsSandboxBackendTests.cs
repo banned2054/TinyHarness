@@ -807,4 +807,91 @@ public class WindowsSandboxBackendTests
             });
         Assert.That(exception.Message, Does.Contain("spawn_ready"));
     }
+
+    [Test]
+    public async Task Execute_FrozenGrantScope_MergesPayloadAndResolvesGrantSid()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        var spawnSeen =
+            new TaskCompletionSource<RunnerSpawnRequest>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var (backend, setup, _, _, home) =
+            CreateBackend(async (downstream, upstream, end) =>
+                          {
+                              var frame = await RunnerFrameCodec.ReadFrameAsync(downstream, end);
+                              spawnSeen.TrySetResult(RunnerFrameCodec.ParsePayload<RunnerSpawnRequest>(frame!));
+                              await RunnerFrameCodec.WriteFrameAsync(upstream, "spawn_ready",
+                                                                     new RunnerSpawnReady { ProcessId = 21 }, end);
+                              await RunnerFrameCodec.WriteFrameAsync(upstream, "exit",
+                                                                     new RunnerExitPayload
+                                                                     {
+                                                                         ExitCode = 0,
+                                                                         TimedOut = false
+                                                                     },
+                                                                     end);
+                          });
+        using var homeScope = home;
+
+        // grant 写根位于 home 之内（合法：凭据目录之外），基线 writeRoots 不含它。
+        var grantRoot = Directory.CreateDirectory(Path.Combine(home.Components.SandboxHome,
+                                                               "grant-root")).FullName;
+        var policy = SandboxPolicyResolver.Resolve(SandboxPolicyKind.WorkspaceWrite,
+                                                   home.Components.SandboxHome,
+                                                   new Dictionary<string, string>
+                                                   {
+                                                       ["TEMP"] = home.Components.SandboxHome
+                                                   });
+        var scope = WindowsSandboxComposer.ResolveGrantScope(policy, home.Components,
+                                                             null, [grantRoot], null);
+        Assert.That(scope.WriteRoots, Does.Contain(grantRoot));
+
+        var grantedPlan = Plan(home.Components.SandboxHome) with { GrantScope = scope };
+        var result = await backend.ExecuteAsync(grantedPlan, new RecordingOutputCapture(),
+                                                new RecordingOutputCapture(), CancellationToken.None);
+        Assert.That(result.ExitCode, Is.EqualTo(0));
+
+        // payload 合并：refresh 的 write_roots 必须含 grant 根（deny 基线不变）。
+        var refresh = TestAssert.Single(setup.RefreshPayloads);
+        Assert.That(refresh.WriteRoots, Does.Contain(grantRoot));
+        Assert.That(refresh.WriteRoots, Does.Contain(home.Components.SandboxHome));
+
+        // capability SID：grant 根获得独立 SID（基线 + grant 根各一个）。
+        var request = await spawnSeen.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        Assert.That(request.CapabilitySids, Has.Count.EqualTo(2));
+    }
+
+    [Test]
+    public async Task Execute_EmptyGrantScope_KeepsBaselinePayloadAndSids()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        var spawnSeen =
+            new TaskCompletionSource<RunnerSpawnRequest>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var (backend, setup, _, _, home) =
+            CreateBackend(async (downstream, upstream, end) =>
+                          {
+                              var frame = await RunnerFrameCodec.ReadFrameAsync(downstream, end);
+                              spawnSeen.TrySetResult(RunnerFrameCodec.ParsePayload<RunnerSpawnRequest>(frame!));
+                              await RunnerFrameCodec.WriteFrameAsync(upstream, "spawn_ready",
+                                                                     new RunnerSpawnReady { ProcessId = 22 }, end);
+                              await RunnerFrameCodec.WriteFrameAsync(upstream, "exit",
+                                                                     new RunnerExitPayload
+                                                                     {
+                                                                         ExitCode = 0,
+                                                                         TimedOut = false
+                                                                     },
+                                                                     end);
+                          });
+        using var homeScope = home;
+
+        // 空 GrantScope（null）与基线执行完全一致：payload 无 grant 根、SID 只含基线根。
+        var result = await backend.ExecuteAsync(Plan(home.Components.SandboxHome), new RecordingOutputCapture(),
+                                                new RecordingOutputCapture(), CancellationToken.None);
+        Assert.That(result.ExitCode, Is.EqualTo(0));
+
+        var refresh = TestAssert.Single(setup.RefreshPayloads);
+        Assert.That(refresh.WriteRoots, Does.Not.Contain(Path.Combine(home.Components.SandboxHome, "grant-root")));
+        var request = await spawnSeen.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        Assert.That(request.CapabilitySids, Has.Count.EqualTo(1));
+    }
 }

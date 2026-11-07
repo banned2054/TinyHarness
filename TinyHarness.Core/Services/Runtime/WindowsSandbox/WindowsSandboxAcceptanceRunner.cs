@@ -313,16 +313,38 @@ public sealed partial class WindowsSandboxAcceptanceRunner
     ];
 
     /// <summary>
-    ///     <para>当前模式接受的全部用例名：restricted 在固定矩阵外接受两个显式负向对照用例。</para>
+    ///     <para>
+    ///         grant 能力扩展的显式选择用例：默认矩阵绝不执行，仅在 --case 选中时运行。
+    ///         正/负对照验证 grant 根 ACL 生效与撤销，metadata 写 grant 验证 deny 收缩，
+    ///         身份用例离线断言 grant 段与撤销回落。helper 对"payload 之外 ACE 的收敛行为"
+    ///         属真实 OS 观察项：若 refresh 不回收已授 ACE，撤销负对照将如实 FAIL。
+    ///     </para>
+    ///     <para>
+    ///         Explicit opt-in cases for the grant capability extension: never run by the
+    ///         default matrix, only via --case. Positive/negative pairs validate grant-root
+    ///         ACL effect and revocation, the metadata write grant validates deny
+    ///         reduction, and the identity case offline-asserts the grant section and its
+    ///         revocation fall-back. The helper's convergence behavior for ACEs outside
+    ///         the payload is a real-OS observation: if a refresh does not reclaim granted
+    ///         ACEs, the revocation negative control honestly FAILs.
+    ///     </para>
+    /// </summary>
+    public static IReadOnlyList<string> GrantCaseNames =>
+        ["grant-write-positive", "grant-revoked-write-denied", "metadata-write-grant-allowed",
+         "grant-identity-changes"];
+
+    /// <summary>
+    ///     <para>当前模式接受的全部用例名：restricted 在固定矩阵外接受两个显式负向对照与四个 grant 用例。</para>
     ///     <para>
     ///         All case names the current mode accepts; restricted additionally takes
-    ///         two explicit negative-control cases beyond the fixed matrix.
+    ///         two explicit negative-control cases and the four grant cases beyond the
+    ///         fixed matrix.
     ///     </para>
     /// </summary>
     public static IReadOnlyList<string> SupportedCaseNames(SandboxNetworkPolicy networkPolicy) =>
         networkPolicy == SandboxNetworkPolicy.Enabled
             ? EnabledCaseNames
-            : [.. CaseNames, "env-proxy-echo", "network-external"];
+            : [.. CaseNames, "env-proxy-echo", "network-external", .. GrantCaseNames];
 
     /// <summary>
     ///     <para>caseFilter 为空时按模式执行的全集：restricted 恒为 17 个固定用例（默认行为零变化）。</para>
@@ -542,7 +564,22 @@ public sealed partial class WindowsSandboxAcceptanceRunner
         // 显式负向对照：受限模式下外网轻量请求必须失败（阻断证据；raw TCP 由 network-denied 覆盖）。
         new("network-external", SandboxPolicyKind.WorkspaceWrite,
             "受限模式下轻量外网请求不得成功：非零退出或无 HTTP 状态码",
-            "curl -w %{http_code} <轻量外网 URL>", NetworkExternalAsync)
+            "curl -w %{http_code} <轻量外网 URL>", NetworkExternalAsync),
+        // grant 能力扩展用例：仅 --case 选中时执行；正/负对照与撤销语义见 GrantCaseNames 文档。
+        new("grant-write-positive", SandboxPolicyKind.WorkspaceWrite,
+            "grant 写根在默认组合下写入失败（负对照），显式 grant refresh 后写入成功（正对照）",
+            "grant refresh + cmd /c copy NUL <grant 根>", GrantWritePositiveAsync),
+        new("grant-revoked-write-denied", SandboxPolicyKind.WorkspaceWrite,
+            "grant refresh 后写入成功，撤销（空范围 refresh）后写入必须再次失败；" +
+            "helper 不回收已授 ACE 时如实 FAIL",
+            "grant refresh → 写 → 撤销 refresh → 写", GrantRevokedWriteDeniedAsync),
+        new("metadata-write-grant-allowed", SandboxPolicyKind.WorkspaceWrite,
+            "默认 deny 下 .git 写入失败（前置对照），metadata 写 grant refresh 后 .git 写入成功",
+            "metadata grant refresh + cmd /c copy NUL <ws>\\.git\\", MetadataWriteGrantAllowedAsync),
+        new("grant-identity-changes", SandboxPolicyKind.WorkspaceWrite,
+            "离线断言：grant 段随根集合变化、同 grant 稳定、空范围等于基线身份（不启动沙箱命令）",
+            "BuildGrantPolicyIdentity 对照",
+            async cancellationToken => GrantIdentityChanges(cancellationToken))
     ];
 
     private async Task<SandboxAcceptanceCaseResult> IdentityWhoamiAsync(CancellationToken cancellationToken)
@@ -989,6 +1026,201 @@ public sealed partial class WindowsSandboxAcceptanceRunner
         return Result(definition, denied ? SandboxAcceptanceVerdict.Pass : SandboxAcceptanceVerdict.Fail, actual, null,
                       stopwatch);
     }
+
+    /// <summary>
+    ///     <para>
+    ///         grant 写根正对照：默认组合（无 grant）下写 grant 根必须失败，携带冻结 GrantScope
+    ///         的计划写入成功。两段断言任一不符即 FAIL。
+    ///     </para>
+    ///     <para>
+    ///         The grant write-root positive control: without a grant the write must fail, and a
+    ///         plan carrying the frozen GrantScope must succeed. Either mismatch fails.
+    ///     </para>
+    /// </summary>
+    private async Task<SandboxAcceptanceCaseResult> GrantWritePositiveAsync(CancellationToken cancellationToken)
+    {
+        var definition = Definition("grant-write-positive");
+        var stopwatch  = Stopwatch.StartNew();
+        var grantRoot  = EnsureGrantRoot();
+        var target     = Path.Combine(grantRoot, "grant-write-probe.txt");
+        var plan       = CmdPlan($"copy /y NUL {CmdSafePath(target)}", WriteProbeTimeoutSeconds);
+
+        var denied = await ExecuteOnceAsync(SandboxPolicyKind.WorkspaceWrite, null, plan, definition.Name,
+                                            cancellationToken).ConfigureAwait(false);
+        var deniedAsExpected = denied.Exception is null                                           &&
+                               denied.Result is { ExitCode: not null and not 0, TimedOut: false } &&
+                               !File.Exists(target);
+        if (!deniedAsExpected)
+            return Result(definition, SandboxAcceptanceVerdict.Fail,
+                          Describe(denied, $"负对照失败：grant 根默认状态写入未被拒绝 (exists={File.Exists(target)})"),
+                          "负对照未按预期拒绝通常是机器历史状态（沙箱组对该路径已有显式 ACE），见 phase2 报告的环境坑记录。",
+                          stopwatch);
+
+        // 正对照走生产冻结路径：GrantScope 随计划冻结，backend 的每命令 preflight 以带 grant
+        // 的 payload refresh 并为 grant 根解析 capability SID，执行期不查询实时源。
+        var grantedPlan = plan with { GrantScope = GrantScope(writeRoots : [grantRoot]) };
+        var allowed = await ExecuteOnceAsync(SandboxPolicyKind.WorkspaceWrite, null, grantedPlan, definition.Name,
+                                             cancellationToken).ConfigureAwait(false);
+        var exists = File.Exists(target);
+        var passed = allowed.Exception is null &&
+                     allowed.Result is { ExitCode: 0, TimedOut: false } && exists;
+        return Result(definition, passed ? SandboxAcceptanceVerdict.Pass : SandboxAcceptanceVerdict.Fail,
+                      Describe(allowed, $"冻结 grant 计划目标文件已创建: {exists}"),
+                      passed ? null : "冻结路径失败：检查 grant 根的 refresh payload 合并、capability SID 表与 helper 对新写根的授 ACE 行为。",
+                      stopwatch);
+    }
+
+    /// <summary>
+    ///     <para>
+    ///         grant 撤销负对照：携带冻结 grant 的计划写入成功（前置正对照），空 GrantScope 计划
+    ///         （撤销）写入必须再次失败；helper 若不回收 payload 之外的 ACE，本用例如实 FAIL。
+    ///     </para>
+    ///     <para>
+    ///         The grant revocation negative control: a plan with the frozen grant succeeds (a required
+    ///         positive control), and a plan with an empty GrantScope (revocation) must fail again. A
+    ///         helper that does not reclaim ACEs outside the payload makes this case honestly FAIL.
+    ///     </para>
+    /// </summary>
+    private async Task<SandboxAcceptanceCaseResult> GrantRevokedWriteDeniedAsync(CancellationToken cancellationToken)
+    {
+        var definition = Definition("grant-revoked-write-denied");
+        var stopwatch  = Stopwatch.StartNew();
+        var grantRoot  = EnsureGrantRoot();
+        var target     = Path.Combine(grantRoot, "grant-revocation-probe.txt");
+        var plan       = CmdPlan($"copy /y NUL {CmdSafePath(target)}", WriteProbeTimeoutSeconds);
+
+        var grantedPlan = plan with { GrantScope = GrantScope(writeRoots : [grantRoot]) };
+        var allowed = await ExecuteOnceAsync(SandboxPolicyKind.WorkspaceWrite, null, grantedPlan, definition.Name,
+                                             cancellationToken).ConfigureAwait(false);
+        if (allowed.Exception is not null || allowed.Result is not { ExitCode: 0, TimedOut: false } ||
+            !File.Exists(target))
+            return Result(definition, SandboxAcceptanceVerdict.Fail,
+                          Describe(allowed, $"前置正对照失败：冻结 grant 计划写入未成功 (exists={File.Exists(target)})"),
+                          null, stopwatch);
+
+        File.Delete(target);
+        var revoked = await ExecuteOnceAsync(SandboxPolicyKind.WorkspaceWrite, null, plan, definition.Name,
+                                             cancellationToken).ConfigureAwait(false);
+        var deniedAsExpected = revoked.Exception is null &&
+                               revoked.Result is { ExitCode: not null and not 0, TimedOut: false } &&
+                               !File.Exists(target);
+        return Result(definition, deniedAsExpected ? SandboxAcceptanceVerdict.Pass : SandboxAcceptanceVerdict.Fail,
+                      Describe(revoked, $"撤销后目标文件已创建: {File.Exists(target)}"),
+                      "撤销后仍可写入说明 helper 的 refresh-only 不回收 payload 之外的已授 ACE；结果如实呈现，不掩盖。",
+                      stopwatch);
+    }
+
+    /// <summary>
+    ///     <para>
+    ///         元数据写 grant 正对照：默认 deny 下 .git 写入失败（前置对照），携带 metadata 写
+    ///         GrantScope 的计划（deny 收缩随 preflight payload 重建）后 .git 写入成功。
+    ///     </para>
+    ///     <para>
+    ///         The metadata write-grant positive control: under the default deny the .git write
+    ///         fails (a required control), and a plan carrying the metadata write GrantScope (deny
+    ///         reduction rebuilt by the preflight payload) succeeds.
+    ///     </para>
+    /// </summary>
+    private async Task<SandboxAcceptanceCaseResult> MetadataWriteGrantAllowedAsync(
+        CancellationToken cancellationToken)
+    {
+        var definition   = Definition("metadata-write-grant-allowed");
+        var stopwatch    = Stopwatch.StartNew();
+        var gitDirectory = Path.Combine(_workspaceRoot, ".git");
+        Directory.CreateDirectory(gitDirectory);
+        var target = Path.Combine(gitDirectory, "metadata-grant-probe.txt");
+        var plan   = CmdPlan($"copy /y NUL {CmdSafePath(target)}", WriteProbeTimeoutSeconds);
+
+        var denied = await ExecuteOnceAsync(SandboxPolicyKind.WorkspaceWrite, null, plan, definition.Name,
+                                            cancellationToken).ConfigureAwait(false);
+        var deniedAsExpected = denied.Exception is null &&
+                               denied.Result is { ExitCode: not null and not 0, TimedOut: false } &&
+                               !File.Exists(target);
+        if (!deniedAsExpected)
+            return Result(definition, SandboxAcceptanceVerdict.Fail,
+                          Describe(denied, $"前置对照失败：.git 默认写入未被拒绝 (exists={File.Exists(target)})"),
+                          "与 metadata-protected 用例共享同一保护面；前置失败说明 deny ACL 或 provisioning 异常。",
+                          stopwatch);
+
+        var grantedPlan = plan with
+        {
+            GrantScope = GrantScope(metadataWritePaths : [Path.Combine(_workspaceRoot, ".git")])
+        };
+        var allowed = await ExecuteOnceAsync(SandboxPolicyKind.WorkspaceWrite, null, grantedPlan, definition.Name,
+                                             cancellationToken).ConfigureAwait(false);
+        var exists = File.Exists(target);
+        var passed = allowed.Exception is null &&
+                     allowed.Result is { ExitCode: 0, TimedOut: false } && exists;
+        return Result(definition, passed ? SandboxAcceptanceVerdict.Pass : SandboxAcceptanceVerdict.Fail,
+                      Describe(allowed, $"metadata grant 后目标文件已创建: {exists}"),
+                      passed ? null : "失败说明 helper 对 deny_write_paths 收缩的重建语义与预期不符——如实呈现待观察。",
+                      stopwatch);
+    }
+
+    private async Task<SandboxAcceptanceCaseResult> GrantIdentityChangesAsync(CancellationToken cancellationToken) =>
+        await Task.Run(() => GrantIdentityChanges(cancellationToken), cancellationToken).ConfigureAwait(false);
+
+    /// <summary>
+    ///     <para>
+    ///         grant 策略身份离线断言：不同 grant 根产生不同身份、同一 grant 身份稳定、
+    ///         grant 段只含规范化根、空范围（撤销）等于基线身份。不启动沙箱命令。
+    ///     </para>
+    ///     <para>
+    ///         Offline assertions on the grant policy identity: distinct grant roots produce
+    ///         distinct identities, the same grant is stable, the section carries only
+    ///         normalized roots, and the empty scope (revocation) equals the baseline
+    ///         identity. No sandbox command is started.
+    ///     </para>
+    /// </summary>
+    private SandboxAcceptanceCaseResult GrantIdentityChanges(CancellationToken cancellationToken)
+    {
+        var definition = Definition("grant-identity-changes");
+        var stopwatch  = Stopwatch.StartNew();
+        var execution  = _snapshotExecution!;
+        var grantRootA = EnsureGrantRoot("verify-grant-a");
+        var grantRootB = EnsureGrantRoot("verify-grant-b");
+        var scopeA = WindowsSandboxComposer.ResolveGrantScope(execution.Policy, execution.Components,
+                                                              [grantRootA], null, null);
+        var scopeB = WindowsSandboxComposer.ResolveGrantScope(execution.Policy, execution.Components,
+                                                              [grantRootB], null, null);
+
+        var emptyEnvironment = new Dictionary<string, string>();
+        var baseline         = WindowsSandboxComposer.BuildPolicyIdentity(execution.Policy, emptyEnvironment,
+                                                                         emptyEnvironment);
+        var empty     = WindowsSandboxComposer.BuildGrantPolicyIdentity(baseline, SandboxGrantScope.Empty);
+        var identityA = WindowsSandboxComposer.BuildGrantPolicyIdentity(baseline, scopeA);
+        var identityB = WindowsSandboxComposer.BuildGrantPolicyIdentity(baseline, scopeB);
+        var againA    = WindowsSandboxComposer.BuildGrantPolicyIdentity(baseline, scopeA);
+
+        var problems = new List<string>();
+        if (!string.Equals(baseline, empty, StringComparison.Ordinal))
+            problems.Add("空范围身份与基线不一致（撤销未回落）");
+        if (string.Equals(identityA, identityB, StringComparison.Ordinal))
+            problems.Add("不同 grant 根产生相同身份");
+        if (!string.Equals(identityA, againA, StringComparison.Ordinal)) problems.Add("同一 grant 身份不稳定");
+        if (!identityA.Contains("grantReadRoots=", StringComparison.Ordinal))
+            problems.Add("身份串缺少 grant 段");
+        if (baseline.Contains("grantReadRoots=", StringComparison.Ordinal))
+            problems.Add("基线身份不应携带 grant 段");
+
+        return Result(definition,
+                      problems.Count == 0 ? SandboxAcceptanceVerdict.Pass : SandboxAcceptanceVerdict.Fail,
+                      $"baseline==empty: {string.Equals(baseline, empty, StringComparison.Ordinal)}; " +
+                      $"A==B: {string.Equals(identityA, identityB, StringComparison.Ordinal)}; " +
+                      $"A stable: {string.Equals(identityA, againA, StringComparison.Ordinal)}",
+                      problems.Count == 0 ? null : string.Join("；", problems), stopwatch);
+    }
+
+    /// <summary>在验收工作区旁创建 grant 根目录（沙箱组尚无 ACE 的宿主路径）。 Creates a grant root beside the acceptance workspace.</summary>
+    private string EnsureGrantRoot(string name = "verify-grant-root") =>
+        Directory.CreateDirectory(Path.Combine(Path.GetDirectoryName(_workspaceRoot)!, name)).FullName;
+
+    /// <summary>包装 ResolveGrantScope 的可选参数调用，保持用例 body 简洁。 Wraps ResolveGrantScope with optional lists.</summary>
+    private SandboxGrantScope GrantScope(IReadOnlyList<string>? readRoots = null,
+                                         IReadOnlyList<string>? writeRoots = null,
+                                         IReadOnlyList<string>? metadataWritePaths = null) =>
+        WindowsSandboxComposer.ResolveGrantScope(_snapshotExecution!.Policy, _snapshotExecution.Components,
+                                                 readRoots, writeRoots, metadataWritePaths);
 
     /// <summary>
     ///     <para>

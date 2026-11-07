@@ -36,7 +36,25 @@ public sealed class SandboxCapabilitySidStore(WindowsSandboxComponents component
     ///     must equal the refresh payload's command_cwd.
     /// </summary>
     public async Task<IReadOnlyList<string>> ResolveForPolicy(
-        SandboxIsolationPolicy policy, string commandWorkingDirectory, CancellationToken cancellationToken = default)
+        SandboxIsolationPolicy policy, string commandWorkingDirectory, CancellationToken cancellationToken = default) =>
+        await ResolveForPolicy(policy, null, commandWorkingDirectory, cancellationToken).ConfigureAwait(false);
+
+    /// <summary>
+    ///     <para>
+    ///         重载：把 grant 冻结写根并入 capability SID 解析。grant 写根的 SID 分配与 setup helper
+    ///         对同一 payload.write_roots 的目录授 ACE 共享同一张表（先 refresh 后解析即取到同根 SID），
+    ///         顺序契约与基线写根一致：本方法必须在对应 refresh 之后调用。
+    ///     </para>
+    ///     <para>
+    ///         Overload: merges frozen grant write roots into the capability-SID resolution. Grant write
+    ///         roots share one SID table with the setup helper's directory ACEs for the same
+    ///         payload.write_roots (refresh first, then resolve — the same root SID is returned), matching
+    ///         the baseline write-root ordering contract.
+    ///     </para>
+    /// </summary>
+    public async Task<IReadOnlyList<string>> ResolveForPolicy(
+        SandboxIsolationPolicy policy, IReadOnlyList<string>? grantWriteRoots, string commandWorkingDirectory,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(policy);
         ArgumentException.ThrowIfNullOrWhiteSpace(commandWorkingDirectory);
@@ -50,7 +68,12 @@ public sealed class SandboxCapabilitySidStore(WindowsSandboxComponents component
 
         var commandCwdKey = CanonicalRootKey(commandWorkingDirectory);
         var resolved      = new List<string>();
-        foreach (var writeRoot in policy.EffectiveWriteRoots)
+        var writeRoots    = grantWriteRoots is { Count: > 0 }
+            ? policy.EffectiveWriteRoots.Concat(grantWriteRoots)
+                                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                                        .ToList()
+            : policy.EffectiveWriteRoots;
+        foreach (var writeRoot in writeRoots)
         {
             var key = CanonicalRootKey(writeRoot);
             // cap.rs workspace_write_cap_sid_for_root: root == cwd → the

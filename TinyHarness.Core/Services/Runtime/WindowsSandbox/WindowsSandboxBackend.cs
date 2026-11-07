@@ -307,7 +307,10 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
             }
         }
 
-        var payload = _policy.CreateSetupPayload(_components, execution.WorkingDirectory, Environment.UserName, true);
+        // 每命令 refresh 的 payload 按计划内冻结的 grant 范围合并：活动快照在 Prepare 已冻结，
+        // 执行期不再查询任何实时源（R-identity：授权与执行之间无竞态）。
+        var payload = _policy.CreateSetupPayload(_components, execution.WorkingDirectory, Environment.UserName, true,
+                                                 execution.GrantScope);
 #if DEBUG
         // run id 经 AsyncLocal 流入本轮 helper/validate/acl 诊断事件；不新增参数，也不改变执行语义。
         SandboxDiagnosticLog.BeginRun(Guid.NewGuid().ToString("N")[..8]);
@@ -378,8 +381,11 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
         {
             // cwd 必须与 refresh 的 command_cwd 一致，使 spawn token 的工作区 SID 匹配目录 ACE。
             // 此约束与 Rust 的 workspace_write_cap_sid_for_root 保持一致。
+            // grant 冻结写根一并并入 SID 解析：refresh payload 已含相同根（先 refresh 后解析，
+            // 与基线写根共享 helper 写入的同一张 SID 表）。
             var capabilitySids = await _capabilitySidStore
-                                      .ResolveForPolicy(_policy, execution.WorkingDirectory, cancellationToken)
+                                      .ResolveForPolicy(_policy, execution.GrantScope?.WriteRoots,
+                                                        execution.WorkingDirectory, cancellationToken)
                                       .ConfigureAwait(false);
             // 使用首个 capability SID 维持库的 NUL 访问契约；runner 还会为子进程设置。
             _allowNullDeviceAccess(new SecurityIdentifier(capabilitySids[0]));

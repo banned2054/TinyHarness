@@ -36,7 +36,14 @@ public static class WindowsSandboxComposer
     ///         environment, network, or metadata protection changes so old identities expire.
     ///     </para>
     /// </summary>
-    internal const int PolicyIdentityVersion = 5;
+    /// <remarks>
+    ///     <para>v6 引入 grant 段：活动授权根进入身份串，旧（v5）身份随之失效，属预期语义成本。</para>
+    ///     <para>
+    ///         v6 introduces the grant section: active grant roots enter the identity, which by
+    ///         design expires all v5 identities.
+    ///     </para>
+    /// </remarks>
+    internal const int PolicyIdentityVersion = 6;
 
     /// <summary>
     ///     <para>校验设置并组合执行要素。</para>
@@ -180,22 +187,28 @@ public static class WindowsSandboxComposer
     /// <summary>
     ///     <para>
     ///         绑定后端、策略语义版本、组件协议版本、有效读写范围、deny、常设网络、临时根、元数据保护、
-    ///         目标环境与代理环境哈希的规范化身份串。
+    ///         目标环境与代理环境哈希的规范化身份串（基线形态，不含 grant 段）。
     ///     </para>
     ///     <para>
-    ///         The normalized identity binding the backend, policy semantics version, component protocol
-    ///         versions, effective read/write scopes, deny paths, standing network, temp roots, metadata
-    ///         protection, and the target and proxy environment hashes.
+    ///         The normalized baseline identity binding the backend, policy semantics version, component
+    ///         protocol versions, effective read/write scopes, deny paths, standing network, temp roots,
+    ///         metadata protection, and the target and proxy environment hashes (no grant section).
     ///     </para>
     /// </summary>
     /// <remarks>
-    ///     <para>同一配置稳定；任何一项变化都会使旧会话授权不再匹配。代理环境只以哈希进入身份串。</para>
+    ///     <para>
+    ///         同一配置稳定；任何一项变化都会使旧会话授权不再匹配。代理环境只以哈希进入身份串。
+    ///         grant 段由 <see cref="AppendGrantSection" /> 统一追加，基线串保持无 grant 形态。
+    ///         internal 供测试构造基线对照身份。
+    ///     </para>
     ///     <para>
     ///         Stable for identical configuration; any change makes old session grants stop matching.
-    ///         The proxy environment enters the identity as a hash only.
+    ///         The proxy environment enters the identity as a hash only. The grant section is appended
+    ///         exclusively by <see cref="AppendGrantSection" />, so the baseline stays grant-free.
+    ///         internal for baseline-identity tests.
     ///     </para>
     /// </remarks>
-    private static string BuildPolicyIdentity(
+    internal static string BuildPolicyIdentity(
         SandboxIsolationPolicy                 policy,
         IReadOnlyDictionary<string, string>    targetEnvironment,
         IReadOnlyDictionary<string, string>    proxyEnvironment)
@@ -238,6 +251,164 @@ public static class WindowsSandboxComposer
                                                .OrderBy(key => key, StringComparer.Ordinal)))
                  .Append('\n');
     }
+
+    /// <summary>
+    ///     <para>
+    ///         校验并规范化 grant 根范围：全部根必须为绝对路径；任一根与沙箱凭据目录重叠即拒绝
+    ///         （词法加最终路径比对，与可信附加根同一套校验）；写根与元数据写路径不得覆盖沙箱组件、
+    ///         home、凭据目录或 users 文件；元数据写路径只允许指向内置受保护元数据子目录。
+    ///         任何违规都 fail closed，绝不静默丢弃部分根。
+    ///     </para>
+    ///     <para>
+    ///         Validates and normalizes a grant-root scope: every root must be an absolute path; any
+    ///         root overlapping the sandbox credentials directory is refused (lexical plus final-path
+    ///         comparison, the same validation trusted additional roots go through); write roots and
+    ///         metadata write paths must not cover sandbox components, the home, the credentials
+    ///         directory, or the users file; metadata write paths may only address the built-in
+    ///         protected metadata subdirectories. Every violation fails closed; roots are never
+    ///         silently dropped.
+    ///     </para>
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         grant 根落进工作区内部时按无害超集接受（工作区本身已是基线范围），不额外拒绝；
+    ///         空输入返回 <see cref="SandboxGrantScope.Empty" />。
+    ///     </para>
+    ///     <para>
+    ///         A grant root inside the workspace is accepted as a harmless superset (the workspace is
+    ///         already the baseline scope) and is not refused; empty input yields
+    ///         <see cref="SandboxGrantScope.Empty" />.
+    ///     </para>
+    /// </remarks>
+    internal static SandboxGrantScope ResolveGrantScope(
+        SandboxIsolationPolicy    policy,
+        WindowsSandboxComponents  components,
+        IReadOnlyList<string>?    grantReadRoots,
+        IReadOnlyList<string>?    grantWriteRoots,
+        IReadOnlyList<string>?    grantMetadataWritePaths)
+    {
+        var readRoots       = NormalizeGrantRoots(grantReadRoots, "grant read root");
+        var writeRoots      = NormalizeGrantRoots(grantWriteRoots, "grant write root");
+        var metadataWrites  = NormalizeGrantRoots(grantMetadataWritePaths, "grant metadata write path");
+        if (readRoots.Count == 0 && writeRoots.Count == 0 && metadataWrites.Count == 0)
+            return SandboxGrantScope.Empty;
+
+        // 凭据保护：读/写/元数据写任一根与凭据目录重叠都拒绝，防止 grant 把 DPAPI 凭据暴露给沙箱组。
+        foreach (var root in readRoots.Concat(writeRoots).Concat(metadataWrites))
+            if (SandboxPolicyResolver.TouchesSandboxCredentials(root, components.SandboxHome))
+                throw new
+                    InvalidOperationException($"The {GrantRootLabel(root, readRoots, writeRoots, metadataWrites)} '{root}' overlaps the sandbox " +
+                                              $"credentials directory of '{components.SandboxHome}'; refusing the grant scope without falling back.");
+
+        // 可信组件保护：写根与元数据写路径不得覆盖组件、home、凭据目录或 users 文件，
+        // 否则沙箱内命令可以篡改执行基础设施。读根不在此列：沙箱组本就需要读取并执行组件。
+        var protectedPaths = new List<string>
+        {
+            components.SetupExecutablePath, components.RunnerExecutablePath, components.SandboxHome,
+            Path.Combine(components.SandboxHome, ".sandbox-secrets"),
+            Path.Combine(components.SandboxHome, ".sandbox-secrets", "sandbox_users.json")
+        };
+        foreach (var root in writeRoots.Concat(metadataWrites))
+            foreach (var trustedPath in protectedPaths)
+                if (Workspace.IsInside(root, trustedPath))
+                    throw new
+                        InvalidOperationException($"The {GrantRootLabel(root, readRoots, writeRoots, metadataWrites)} '{root}' covers the trusted " +
+                                                  $"sandbox path '{trustedPath}'; sandboxed commands could tamper with it, refusing the grant scope.");
+
+        // 元数据写白名单：只允许移除内置受保护元数据子目录的 deny 项，其他 deny 路径不可经 grant 收缩。
+        var metadataAllowed = SandboxIsolationPolicy.ProtectedMetadataSubpaths
+                                   .Select(subpath => Path.Combine(policy.WorkspaceRoot, subpath))
+                                   .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var path in metadataWrites)
+            if (!metadataAllowed.Contains(path))
+                throw new
+                    InvalidOperationException($"The grant metadata write path '{path}' is not a protected metadata directory of " +
+                                              $"'{policy.WorkspaceRoot}'; only the built-in metadata subdirectories " +
+                                              $"({string.Join(", ", SandboxIsolationPolicy.ProtectedMetadataSubpaths)}) may be granted for writes.");
+
+        return new SandboxGrantScope
+        {
+            ReadRoots         = readRoots,
+            WriteRoots        = writeRoots,
+            MetadataWritePaths = metadataWrites
+        };
+    }
+
+    /// <summary>
+    ///     <para>
+    ///         把 grant 段追加到基线策略身份：空范围原样返回基线（撤销即回基线身份），非空范围
+    ///         追加 grantReadRoots/grantWriteRoots/grantMetadataWrite 三行（规范化根、排序稳定）。
+    ///         身份串格式单点维护，供 ShellTool 的冻结身份与测试构造共用。
+    ///     </para>
+    ///     <para>
+    ///         Appends the grant section to a baseline policy identity: an empty scope returns the
+    ///         baseline unchanged (revocation returns to the baseline identity), and a nonempty scope
+    ///         appends the grantReadRoots/grantWriteRoots/grantMetadataWrite lines (normalized roots,
+    ///         stable ordering). The identity format lives in one place, shared by the ShellTool's
+    ///         frozen identity and test construction.
+    ///     </para>
+    /// </summary>
+    internal static string AppendGrantSection(string baselineIdentity, SandboxGrantScope scope)
+    {
+        ArgumentNullException.ThrowIfNull(baselineIdentity);
+        ArgumentNullException.ThrowIfNull(scope);
+        if (scope.IsEmpty) return baselineIdentity;
+
+        var canonical = new StringBuilder(baselineIdentity);
+        AppendRoots(canonical, "grantReadRoots", scope.ReadRoots);
+        AppendRoots(canonical, "grantWriteRoots", scope.WriteRoots);
+        AppendRoots(canonical, "grantMetadataWrite", scope.MetadataWritePaths);
+        return canonical.ToString();
+    }
+
+    /// <summary>
+    ///     <para>以基线身份加 grant 范围构造冻结审批身份；grant 撤销后回落基线身份。</para>
+    ///     <para>
+    ///         Builds the frozen approval identity from a baseline identity plus a grant scope;
+    ///         revoking the grant returns to the baseline identity.
+    ///     </para>
+    /// </summary>
+    internal static string BuildGrantPolicyIdentity(string baselineIdentity, SandboxGrantScope grantScope) =>
+        AppendGrantSection(baselineIdentity, grantScope);
+
+    /// <summary>
+    ///     <para>规范化 grant 根列表：绝对化、去重（大小写不敏感）、保持顺序；相对路径即拒绝。</para>
+    ///     <para>
+    ///         Normalizes a grant-root list: absolutized, deduplicated case-insensitively,
+    ///         order-preserving; relative paths are refused.
+    ///     </para>
+    /// </summary>
+    private static IReadOnlyList<string> NormalizeGrantRoots(IReadOnlyList<string>? roots, string label)
+    {
+        if (roots is null || roots.Count == 0) return [];
+
+        var seen    = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var results = new List<string>();
+        foreach (var root in roots)
+        {
+            if (string.IsNullOrWhiteSpace(root))
+                throw new InvalidOperationException($"A {label} must not be null or whitespace.");
+
+            if (!Path.IsPathFullyQualified(root))
+                throw new InvalidOperationException($"A {label} must be a fully qualified absolute path: '{root}'.");
+
+            var full = Path.GetFullPath(root);
+            if (seen.Add(full)) results.Add(full);
+        }
+
+        return results;
+    }
+
+    /// <summary>
+    ///     <para>为错误消息标注违规根的角色，便于审批与诊断定位 grant 来源。</para>
+    ///     <para>Labels the offending root's role for approval and diagnostic messages.</para>
+    /// </summary>
+    private static string GrantRootLabel(
+        string root, IReadOnlyList<string> readRoots, IReadOnlyList<string> writeRoots,
+        IReadOnlyList<string> metadataWrites) =>
+        metadataWrites.Contains(root, StringComparer.OrdinalIgnoreCase) ? "grant metadata write path"
+        : writeRoots.Contains(root, StringComparer.OrdinalIgnoreCase)   ? "grant write root"
+        : "grant read root";
 
     /// <summary>
     ///     <para>目标环境的稳定哈希：键排序（大小写不敏感）后的 name=value 行整体 SHA-256。</para>

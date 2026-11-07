@@ -4,8 +4,11 @@ using System.Text.Json.Nodes;
 using TinyHarness.Core.Models.ChatCompletions;
 using TinyHarness.Core.Models.ProjectInstructions;
 using TinyHarness.Core.Models.Runtime;
+using TinyHarness.Core.Models.Runtime.WindowsSandbox;
 using TinyHarness.Core.Models.Tools;
+using TinyHarness.Core.Services.Permissions;
 using TinyHarness.Core.Services.Runtime;
+using TinyHarness.Core.Services.Runtime.WindowsSandbox;
 
 namespace TinyHarness.Core.Services.Tools;
 
@@ -111,9 +114,11 @@ public sealed class ShellTool : ITool
     };
 
     private readonly string                                                          _artifactRoot;
+    private readonly IActiveCapabilitySource?                                        _activeCapabilities;
     private readonly Func<string, int, IReadOnlyList<string>, IProcessOutputCapture> _captureFactory;
     private readonly int                                                             _defaultTimeoutSeconds;
     private readonly ProcessExecutionPolicy?                                         _executionPolicy;
+    private readonly SandboxGrantContext?                                            _grantContext;
     private readonly IReadOnlyDictionary<string, string>                             _knownSecrets;
     private readonly int                                                             _outputCharacterLimit;
     private readonly IProcessExecutionBackend                                        _processBackend;
@@ -125,7 +130,9 @@ public sealed class ShellTool : ITool
                      string?                              artifactRoot         = null,
                      int                                  outputCharacterLimit = DefaultOutputCharactersPerStream,
                      IProcessExecutionBackend?            processBackend       = null,
-                     ProcessExecutionPolicy?              executionPolicy      = null)
+                     ProcessExecutionPolicy?              executionPolicy      = null,
+                     IActiveCapabilitySource?             activeCapabilities   = null,
+                     SandboxGrantContext?                 grantContext         = null)
     {
         _workspace             = workspace;
         _defaultTimeoutSeconds = defaultTimeoutSeconds ?? DefaultTimeoutSeconds;
@@ -140,16 +147,20 @@ public sealed class ShellTool : ITool
         _captureFactory       = static (path, limit, secrets) => new ProcessOutputCapture(path, limit, secrets);
         _processBackend       = processBackend ?? new HostProcessBackend(_knownSecrets);
         _executionPolicy      = executionPolicy;
+        _activeCapabilities   = activeCapabilities;
+        _grantContext         = grantContext;
     }
 
-    internal ShellTool(Workspace workspace,
+    internal ShellTool(Workspace                            workspace,
                        Func<string, int, IReadOnlyList<string>, IProcessOutputCapture> captureFactory,
                        int? defaultTimeoutSeconds = null, string? artifactRoot = null,
                        int outputCharacterLimit = DefaultOutputCharactersPerStream,
                        IProcessExecutionBackend? processBackend = null,
-                       ProcessExecutionPolicy? executionPolicy = null)
+                       ProcessExecutionPolicy? executionPolicy = null,
+                       IActiveCapabilitySource? activeCapabilities = null,
+                       SandboxGrantContext? grantContext = null)
         : this(workspace, defaultTimeoutSeconds, null, artifactRoot, outputCharacterLimit, processBackend,
-               executionPolicy) =>
+               executionPolicy, activeCapabilities, grantContext) =>
         _captureFactory = captureFactory ?? throw new ArgumentNullException(nameof(captureFactory));
 
     public ToolDefinition Definition { get; } = new()
@@ -207,8 +218,32 @@ public sealed class ShellTool : ITool
         // sandbox policy; denies keep the bare command identity and survive
         // backend changes (see ToolPreparation.SessionGrantConstraint).
         // 网络申请追加进授权约束：网络状态不同的同一命令不能复用既有批准。
+        // R-identity：活动 grant 快照在 Prepare 冻结——解析为 grant 范围并追加进策略身份，
+        // 执行期（backend）只消费计划内冻结值，不再查询任何实时源。
+        var grantScope    = SandboxGrantScope.Empty;
+        var policyIdentity = _executionPolicy?.PolicyIdentity;
+        if (_activeCapabilities is { } source)
+        {
+            if (_grantContext is not { } context)
+                throw new
+                    InvalidOperationException("An active capability source requires the sandbox grant context; compose them together.");
+
+            if (_executionPolicy is not { } frozenPolicy ||
+                frozenPolicy.Backend != ProcessExecutionBackendKind.WindowsSandbox)
+                throw new
+                    InvalidOperationException("An active capability source requires a Windows sandbox execution policy.");
+
+            var snapshot = source.Snapshot();
+            grantScope = WindowsSandboxComposer.ResolveGrantScope(context.Policy, context.Components,
+                                                                  snapshot.AdditionalReadRoots,
+                                                                  snapshot.AdditionalWriteRoots,
+                                                                  snapshot.MetadataWritePaths);
+            if (!grantScope.IsEmpty && policyIdentity is not null)
+                policyIdentity = WindowsSandboxComposer.AppendGrantSection(policyIdentity, grantScope);
+        }
+
         var grantConstraint = _executionPolicy is { } policy
-            ? commandIdentity + "\nexecution-policy: " + policy.PolicyIdentity +
+            ? commandIdentity + "\nexecution-policy: " + policyIdentity +
               (requiresNetwork ? "\nnetwork-access: enabled" : string.Empty)
             : null;
         var displayCommand = mode == "direct"
@@ -230,7 +265,7 @@ public sealed class ShellTool : ITool
             RiskLevel              = mode == "shell" ? ToolRiskLevel.Elevated : ToolRiskLevel.Standard,
             SessionConstraint      = commandIdentity,
             SessionGrantConstraint = grantConstraint,
-            ExecutionPolicy        = _executionPolicy?.PolicyIdentity,
+            ExecutionPolicy        = policyIdentity,
             RequiresNetworkAccess  = requiresNetwork,
             TargetPaths            = [workingDirectory],
             InstructionScopes = workspaceExecutable
@@ -248,7 +283,10 @@ public sealed class ShellTool : ITool
                                                              : null)
             {
                 // 经对象初始化器赋值：兼容位置参数默认值与 init 属性两种契约形态。
-                NetworkAccessEnabled = requiresNetwork
+                NetworkAccessEnabled = requiresNetwork,
+                // R-identity：接入快照源的计划恒存冻结范围（Empty=冻结时无活动 grant）；
+                // 未接入快照源的计划不携带该字段，派发复核对二者区别对待。
+                GrantScope = _activeCapabilities is null ? null : grantScope
             }
         };
     }

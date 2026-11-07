@@ -79,8 +79,8 @@ public class WindowsSandboxNetworkTests
                                                       workspace.Root);
         var identity = composed.ExecutionPolicy.PolicyIdentity;
         TestAssert.Contains("network=enabled", identity, StringComparison.Ordinal);
-        Assert.That(WindowsSandboxComposer.PolicyIdentityVersion, Is.EqualTo(5));
-        TestAssert.Contains("policyVersion=5", identity, StringComparison.Ordinal);
+        Assert.That(WindowsSandboxComposer.PolicyIdentityVersion, Is.EqualTo(6));
+        TestAssert.Contains("policyVersion=6", identity, StringComparison.Ordinal);
         Assert.That(composed.ExecutionPolicy.DisplayName, Does.Contain("enabled"));
     }
 

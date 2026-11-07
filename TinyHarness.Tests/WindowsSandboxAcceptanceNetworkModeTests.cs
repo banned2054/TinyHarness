@@ -88,9 +88,9 @@ public sealed class WindowsSandboxAcceptanceNetworkModeTests
         Assert.That(WindowsSandboxAcceptanceRunner.DefaultCaseNames(SandboxNetworkPolicy.Restricted),
                     Is.EqualTo(WindowsSandboxAcceptanceRunner.CaseNames));
         Assert.That(WindowsSandboxAcceptanceRunner.DefaultCaseNames(SandboxNetworkPolicy.Restricted), Has.Count.EqualTo(17));
-        // restricted 只在显式 --case 下接受两个负向对照；enabled 全集为 8 个精简在线用例。
+        // restricted 只在显式 --case 下接受两个负向对照与四个 grant 用例；enabled 全集为 8 个精简在线用例。
         Assert.That(WindowsSandboxAcceptanceRunner.SupportedCaseNames(SandboxNetworkPolicy.Restricted),
-                    Has.Count.EqualTo(19));
+                    Has.Count.EqualTo(23));
         Assert.That(WindowsSandboxAcceptanceRunner.DefaultCaseNames(SandboxNetworkPolicy.Enabled),
                     Is.EqualTo(WindowsSandboxAcceptanceRunner.EnabledCaseNames));
         Assert.That(WindowsSandboxAcceptanceRunner.EnabledCaseNames, Has.Count.EqualTo(8));

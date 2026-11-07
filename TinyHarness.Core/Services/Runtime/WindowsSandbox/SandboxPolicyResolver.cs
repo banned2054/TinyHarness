@@ -228,6 +228,7 @@ public static class SandboxPolicyResolver
     ///         包含或相等都算重叠，覆盖 home 本身的根必然覆盖凭据目录。词法比较之外，Windows 上
     ///         还把两侧解析为文件系统最终落点（展开 8.3 短名与 junction/symlink）再次比对——
     ///         任一形态重叠都拒绝；路径不存在或解析失败时回落词法路径继续校验，绝不跳过。
+    ///         可信附加根解析与 grant 根校验（<see cref="WindowsSandboxComposer.ResolveGrantScope" />）共用。
     ///     </para>
     ///     <para>
     ///         Tests whether a trusted root (write or read) overlaps the credentials
@@ -240,7 +241,7 @@ public static class SandboxPolicyResolver
     ///         falls back to the lexical path and keeps validating, never skipping.
     ///     </para>
     /// </summary>
-    private static bool TouchesSandboxCredentials(string trustedRoot, string sandboxHome)
+    internal static bool TouchesSandboxCredentials(string trustedRoot, string sandboxHome)
     {
         var credentialsDirectory = Path.Combine(sandboxHome, ".sandbox-secrets");
         // 词法比对：声明形态之间的包含或相等即重叠。
