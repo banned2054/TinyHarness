@@ -1,6 +1,7 @@
 using System.Text;
 using TinyHarness.Core.Exceptions;
 using TinyHarness.Core.Models.Agent;
+using TinyHarness.Core.Models.Permissions;
 using TinyHarness.Core.Models.Session;
 using TinyHarness.Core.Services.Persistence;
 using TinyHarness.Core.Services.Session;
@@ -40,6 +41,7 @@ internal sealed class ChatSessionConsole : IDisposable
     private readonly ChatCancellation                                        _cancellation;
     private readonly Func<CancellationToken, Task<ChatSessionHost>>?         _hostFactory;
     private readonly TextReader                                              _input;
+    private readonly bool                                                    _interactive;
     private readonly TextWriter                                              _output;
     private readonly DisplaySecretRedactor                                   _redactor;
     private readonly Func<string, CancellationToken, Task<ChatSessionHost>>? _resumeFactory;
@@ -71,6 +73,7 @@ internal sealed class ChatSessionConsole : IDisposable
         _output       = output;
         _cancellation = cancellation;
         _redactor     = new DisplaySecretRedactor(knownSecrets);
+        _interactive  = true;
     }
 
     /// <summary>
@@ -84,7 +87,8 @@ internal sealed class ChatSessionConsole : IDisposable
                               TextWriter output, ChatCancellation cancellation,
                               IReadOnlyDictionary<string, string>? knownSecrets = null,
                               Func<string, CancellationToken, Task<ChatSessionHost>>? resumeFactory = null,
-                              string? sessionStoreDirectory = null, ChatSessionHost? initialHost = null)
+                              string? sessionStoreDirectory = null, ChatSessionHost? initialHost = null,
+                              bool interactive = true)
     {
         ArgumentNullException.ThrowIfNull(hostFactory);
         ArgumentNullException.ThrowIfNull(input);
@@ -97,6 +101,7 @@ internal sealed class ChatSessionConsole : IDisposable
         _redactor              = new DisplaySecretRedactor(knownSecrets);
         _resumeFactory         = resumeFactory;
         _sessionStoreDirectory = sessionStoreDirectory;
+        _interactive           = interactive;
         Host                   = initialHost;
     }
 
@@ -124,6 +129,15 @@ internal sealed class ChatSessionConsole : IDisposable
     ///     <para>Handles workspace trust only at an idle host boundary without creating a model turn.</para>
     /// </summary>
     internal Func<CancellationToken, Task>? WorkspaceTrustHandler { get; set; }
+
+    /// <summary>
+    ///     <para>输出当前可信配置的迁移目标摘要；缺失或失败时保持会话迁移门禁。</para>
+    ///     <para>
+    ///         Writes the migration target from current trusted config; a missing or failed summary keeps the session gate
+    ///         closed.
+    ///     </para>
+    /// </summary>
+    internal Func<CancellationToken, Task>? PermissionMigrationSummaryWriter { get; set; }
 
     /// <summary>
     ///     <para>释放由工厂入口接管的当前宿主。</para>
@@ -185,6 +199,9 @@ internal sealed class ChatSessionConsole : IDisposable
             await
                 _output.WriteLineAsync("Models: /models to switch model or reasoning effort when idle; /models list anytime.");
 
+        await _output.WriteLineAsync("Approval mode: /approval human|ai (idle only; saved per session).");
+        await PromptPermissionMigrationIfNeededAsync(cancellationToken);
+
         await PromptInspectionIfNeededAsync(cancellationToken);
 
         while (!_cancellation.IsSessionCancelled)
@@ -225,6 +242,12 @@ internal sealed class ChatSessionConsole : IDisposable
             if (ChatModelSelection.IsModelsCommand(userInput))
             {
                 await HandleModelsCommandAsync(userInput, false, cancellationToken);
+                continue;
+            }
+
+            if (IsApprovalCommand(userInput))
+            {
+                await HandleApprovalCommandAsync(userInput, false, cancellationToken);
                 continue;
             }
 
@@ -379,6 +402,12 @@ internal sealed class ChatSessionConsole : IDisposable
             return;
         }
 
+        if (IsApprovalCommand(text))
+        {
+            await HandleApprovalCommandAsync(text, true, _cancellation.SessionToken).ConfigureAwait(false);
+            return;
+        }
+
         if (Volatile.Read(ref _pendingSessionCommand) is not null)
         {
             await _output.WriteLineAsync("Session change pending; wait for the next input prompt.");
@@ -424,6 +453,139 @@ internal sealed class ChatSessionConsole : IDisposable
     private static bool IsSessionCommand(string input) =>
         input.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() is "/new" or "/sessions"
          or "/switch";
+
+    private static bool IsApprovalCommand(string input) =>
+        string.Equals(input.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault(),
+                      "/approval", StringComparison.OrdinalIgnoreCase);
+
+    private async Task HandleApprovalCommandAsync(
+        string input, bool duringRun, CancellationToken cancellationToken)
+    {
+        if (duringRun)
+        {
+            await _output.WriteLineAsync("Approval mode can only change while the session is idle.");
+            return;
+        }
+
+        if (Host is null)
+        {
+            await _output.WriteLineAsync("Create or resume a session before selecting its approval mode.");
+            return;
+        }
+
+        var parts = input.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length == 1)
+        {
+            var current = CurrentApprovalMode(Host.Session);
+            await _output.WriteLineAsync($"Approval mode: {ApprovalModeLabel(current)}. Use /approval human|ai.");
+            return;
+        }
+
+        if (parts.Length != 2 || parts[1] is not ("human" or "ai"))
+        {
+            await _output.WriteLineAsync("Usage: /approval human|ai");
+            return;
+        }
+
+        if (Host.Session.PermissionMigrationPending)
+        {
+            await
+                _output.WriteLineAsync("Confirm this session's permission migration first; /approval cannot bypass that gate.");
+            return;
+        }
+
+        var mode = parts[1] == "ai" ? SessionApprovalMode.AIAutoReview : SessionApprovalMode.HumanApproval;
+        try
+        {
+            await Host.ChangeApprovalModeAsync(mode, cancellationToken).ConfigureAwait(false);
+            await _output.WriteLineAsync($"Approval mode saved: {ApprovalModeLabel(mode)}.");
+        }
+        catch (Exception ex) when (ex is SessionStoreException or InvalidOperationException or IOException
+                                      or InvalidDataException
+                                      or UnauthorizedAccessException)
+        {
+            await _output.WriteLineAsync(TerminalDisplay.Format($"Approval mode was not changed: {ex.Message}",
+                                                                _redactor));
+        }
+    }
+
+    private async Task PromptPermissionMigrationIfNeededAsync(CancellationToken cancellationToken)
+    {
+        if (Host?.Session.PermissionMigrationPending != true) return;
+
+        var session = Host.Session;
+        var mappedMode = session.PermissionSelection is { } legacy
+            ? LegacyPermissionSelectionMapper.FromLegacyName(legacy.ModeName) ?? SessionApprovalMode.HumanApproval
+            : SessionApprovalMode.HumanApproval;
+        await _output.WriteLineAsync("This saved session needs permission migration confirmation.");
+        await
+            _output.WriteLineAsync($"  legacy mode: {session.PermissionSelection?.ModeName ?? "(no saved selection)"} -> " +
+                                   ApprovalModeLabel(mappedMode) + " (migration mapping only)");
+        await
+            _output.WriteLineAsync("  new baseline: workspace read/write and sandbox Shell; add-on capabilities require approval");
+        await _output.WriteLineAsync("  removed: FullAccess; old grants and commandRules do not become permissions");
+        if (PermissionMigrationSummaryWriter is null)
+        {
+            await
+                _output.WriteLineAsync("Current sandbox/network settings could not be summarized; migration remains blocked.");
+            return;
+        }
+
+        try
+        {
+            await PermissionMigrationSummaryWriter(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException
+                                      or InvalidOperationException)
+        {
+            await _output.WriteLineAsync(TerminalDisplay.Format(
+                                                                $"Current sandbox/network settings could not be summarized; migration remains blocked: {ex.Message}",
+                                                                _redactor));
+            return;
+        }
+
+        if (!_interactive)
+        {
+            await _output.WriteLineAsync("Non-interactive input cannot confirm migration; model tools remain blocked.");
+            return;
+        }
+
+        await _output.WriteAsync("Confirm this session's permission migration? [y/N] ");
+        await _output.FlushAsync(cancellationToken).ConfigureAwait(false);
+        var answer = (await _input.ReadLineAsync(_cancellation.SessionToken).ConfigureAwait(false))?.Trim();
+        if (answer is not ("y" or "Y" or "yes" or "YES"))
+        {
+            await _output.WriteLineAsync("Session migration was not confirmed; model tools remain blocked.");
+            return;
+        }
+
+        try
+        {
+            await Host.ConfirmPermissionMigrationAsync(mappedMode, cancellationToken).ConfigureAwait(false);
+            await _output.WriteLineAsync($"Session permission migration saved: {ApprovalModeLabel(mappedMode)}.");
+        }
+        catch (Exception ex) when (ex is SessionStoreException or InvalidOperationException or IOException
+                                      or InvalidDataException
+                                      or UnauthorizedAccessException)
+        {
+            await _output.WriteLineAsync(TerminalDisplay.Format(
+                                                                $"Session migration was not saved; model tools remain blocked: {ex.Message}",
+                                                                _redactor));
+        }
+    }
+
+    private static SessionApprovalMode CurrentApprovalMode(ChatSession session) =>
+        session.PermissionSelectionV2?.ApprovalMode ??
+        (session.PermissionSelection is { } legacy
+            ? LegacyPermissionSelectionMapper.FromLegacyName(legacy.ModeName) ?? SessionApprovalMode.HumanApproval
+            : SessionApprovalMode.HumanApproval);
+
+    private static string ApprovalModeLabel(SessionApprovalMode mode) => mode switch
+    {
+        SessionApprovalMode.HumanApproval => "human approval",
+        SessionApprovalMode.AIAutoReview  => "AI review",
+        _                                 => mode.ToString()
+    };
 
     /// <summary>
     ///     <para>处理 /models 命令；无会话或处理器未接线时明确提示，异常经脱敏报告且不影响会话。</para>
@@ -555,6 +717,7 @@ internal sealed class ChatSessionConsole : IDisposable
             _promptedInspectionRunId = null;
             await _output.WriteLineAsync($"session    : {next.Session.Id} ({next.Session.Turns.Count} turns)");
             await WriteUnappliedAmendmentsAsync();
+            await PromptPermissionMigrationIfNeededAsync(cancellationToken);
             await PromptInspectionIfNeededAsync(cancellationToken);
         }
         catch (OperationCanceledException) when (_cancellation.IsSessionCancelled ||

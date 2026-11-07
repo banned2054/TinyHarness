@@ -26,7 +26,7 @@ public sealed class DesktopPermissionModeTests
     {
         var fixture = await Fixture.CreateAsync();
         var pending = new TaskCompletionSource<DesktopApproval>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var model   = new ScriptModel([Patch("one.txt"), null, Patch("two.txt"), null]);
+        var model   = new ScriptModel([Patch(".git/one.txt"), null, Patch(".git/two.txt"), null]);
         var factory = new DesktopSessionFactory((_, _) => model, new Credentials(), fixture.Config);
         await using var session = await factory.OpenAsync(new DesktopSessionRequest(fixture.Root),
                                                           _ => ValueTask.CompletedTask,
@@ -37,32 +37,34 @@ public sealed class DesktopPermissionModeTests
                                                           }, default);
         var first   = session.SubmitAsync("创建 one.txt");
         var request = await pending.Task.WaitAsync(Limit);
-        Assert.That(File.Exists(Path.Combine(fixture.Root, "one.txt")), Is.False);
-        session.Approvals.Respond(request.Id, ApprovalAction.AllowOnce);
+        Assert.That(File.Exists(Path.Combine(fixture.Root, ".git", "one.txt")), Is.False);
+        session.Approvals.Respond(request.Id, ApprovalResolution.Granted(GrantScope.SingleOperation));
         await first.WaitAsync(Limit);
-        Assert.That(await File.ReadAllTextAsync(Path.Combine(fixture.Root, "one.txt")), Does.Contain("ok"));
+        Assert.That(await File.ReadAllTextAsync(Path.Combine(fixture.Root, ".git", "one.txt")), Does.Contain("ok"));
         pending = new TaskCompletionSource<DesktopApproval>(TaskCreationOptions.RunContinuationsAsynchronously);
         var second = session.SubmitAsync("创建 two.txt");
         request = await pending.Task.WaitAsync(Limit);
         Assert.That(request.Id, Is.Not.Empty);
-        session.Approvals.Respond(request.Id, ApprovalAction.Deny);
+        session.Approvals.Respond(request.Id, ApprovalResolution.Denied("denied by test"));
         await second.WaitAsync(Limit);
-        Assert.That(File.Exists(Path.Combine(fixture.Root, "two.txt")), Is.False);
-        Assert.That(session.Host.Session.PermissionSelection!.Mode, Is.EqualTo(SessionPermissionMode.ReadOnly));
+        Assert.That(File.Exists(Path.Combine(fixture.Root, ".git", "two.txt")), Is.False);
+        // /2 审批模式链：只读七模式经迁移映射为人工审批。
+        Assert.That(session.Host.Session.PermissionSelectionV2!.ApprovalMode,
+                    Is.EqualTo(SessionApprovalMode.HumanApproval));
     }
 
     [Test]
     public async Task ProjectExternalWriteAsksAndApprovedInvocationCanExecute()
     {
         var fixture = await Fixture.CreateAsync();
-        var outside = Path.Combine(Path.GetDirectoryName(fixture.Root)!, "outside.txt");
+        var outside = Path.Combine(fixture.Root, ".git", "metadata-probe.txt");
         var call    = Patch(outside.Replace('\\', '/'));
         var factory =
             new DesktopSessionFactory((_, _) => new ScriptModel([call, null]), new Credentials(), fixture.Config);
         DesktopSession? session = null;
         var             asked   = 0;
         session = await factory.OpenAsync(new DesktopSessionRequest(fixture.Root)
-                                              { PermissionMode = SessionPermissionMode.ProjectWrite },
+                                              { PermissionMode = SessionApprovalMode.HumanApproval },
                                           _ => ValueTask.CompletedTask, approval =>
                                           {
                                               if (approval is not null)
@@ -70,7 +72,9 @@ public sealed class DesktopPermissionModeTests
                                                   asked++;
                                                   Assert.That(approval.TargetPaths, Does.Contain(outside));
                                                   Assert.That(File.Exists(outside), Is.False);
-                                                  session!.Approvals.Respond(approval.Id, ApprovalAction.AllowOnce);
+                                                  session!.Approvals.Respond(approval.Id,
+                                                                             ApprovalResolution
+                                                                                .Granted(GrantScope.SingleOperation));
                                               }
 
                                               return ValueTask.CompletedTask;
@@ -95,22 +99,27 @@ public sealed class DesktopPermissionModeTests
                                                            default))
         {
             id = session.Id;
-            await session.ChangePermissionModeAsync(SessionPermissionMode.ProjectWriteAutoReview);
-            await session.ChangePermissionModeAsync(SessionPermissionMode.FullAccess);
+            await session.ChangeApprovalModeAsync(SessionApprovalMode.AIAutoReview);
+            await session.ChangeApprovalModeAsync(SessionApprovalMode.HumanApproval);
             Assert.That(session.Host.Session.Turns, Is.Empty);
         }
 
         await using var restored = await factory.OpenAsync(new DesktopSessionRequest(fixture.Root, SessionId : id)
                                                            {
-                                                               PermissionMode = SessionPermissionMode.ConfirmEveryAction
+                                                               PermissionMode = SessionApprovalMode.HumanApproval
                                                            },
                                                            _ => ValueTask.CompletedTask, _ => ValueTask.CompletedTask,
                                                            default);
-        Assert.That(restored.Host.Session.PermissionSelection!.Mode, Is.EqualTo(SessionPermissionMode.FullAccess));
-        Assert.That(restored.Host.Session.PermissionSelection.Revision, Is.EqualTo(3));
-        await restored.ChangePermissionModeAsync(SessionPermissionMode.ReadOnly);
+        // /2 审批模式链：FullAccess 经迁移映射为人工审批，修订连续。
+        Assert.Multiple(() =>
+        {
+            Assert.That(restored.Host.Session.PermissionSelectionV2!.ApprovalMode,
+                        Is.EqualTo(SessionApprovalMode.HumanApproval));
+            Assert.That(restored.Host.Session.PermissionSelectionV2.Revision, Is.EqualTo(3));
+        });
+        await restored.ChangeApprovalModeAsync(SessionApprovalMode.HumanApproval);
         var snapshot = await SessionStoreReader.ReadAsync(fixture.Store, id, default);
-        Assert.That(snapshot!.PermissionSelection!.Mode, Is.EqualTo(SessionPermissionMode.ReadOnly));
+        Assert.That(snapshot!.PermissionSelectionV2!.ApprovalMode, Is.EqualTo(SessionApprovalMode.HumanApproval));
     }
 
     [Test]
@@ -118,7 +127,7 @@ public sealed class DesktopPermissionModeTests
     {
         var fixture = await Fixture.CreateAsync();
         var pending = new TaskCompletionSource<DesktopApproval>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var factory = new DesktopSessionFactory((_, _) => new ScriptModel([Patch("cancelled.txt"), null]),
+        var factory = new DesktopSessionFactory((_, _) => new ScriptModel([Patch(".git/cancelled.txt"), null]),
                                                 new Credentials(), fixture.Config);
         await using var session = await factory.OpenAsync(new DesktopSessionRequest(fixture.Root),
                                                           _ => ValueTask.CompletedTask,
@@ -129,52 +138,66 @@ public sealed class DesktopPermissionModeTests
                                                           }, default);
         var run     = session.SubmitAsync("创建 cancelled.txt");
         var request = await pending.Task.WaitAsync(Limit);
-        Assert.Throws<InvalidOperationException>(() => session.ChangePermissionModeAsync(SessionPermissionMode
-                                                    .FullAccess));
+        Assert.Throws<InvalidOperationException>(() =>
+                                                     session.ChangeApprovalModeAsync(SessionApprovalMode
+                                                        .HumanApproval));
         session.Cancel();
         await run.WaitAsync(Limit);
-        await session.ChangePermissionModeAsync(SessionPermissionMode.ProjectWrite);
-        Assert.That(session.Approvals.Respond(request.Id, ApprovalAction.AllowOnce), Is.False);
-        Assert.That(File.Exists(Path.Combine(fixture.Root, "cancelled.txt")), Is.False);
+        await session.ChangeApprovalModeAsync(SessionApprovalMode.HumanApproval);
+        Assert.That(session.Approvals.Respond(request.Id, ApprovalResolution.Granted(GrantScope.SingleOperation)),
+                    Is.False);
+        Assert.That(File.Exists(Path.Combine(fixture.Root, ".git", "cancelled.txt")), Is.False);
     }
 
-    [TestCase("{\"decision\":\"allow\",\"reason\":\"required edit\"}", false)]
-    [TestCase("{\"decision\":\"deny\",\"reason\":\"outside task\"}", true)]
-    [TestCase("not json", true)]
-    [TestCase("{\"decision\":\"allow\",\"decision\":\"deny\",\"reason\":\"duplicate\"}", true)]
-    public async Task AiReviewIsIsolatedAndInvalidOrDeniedResultsFallBackToHuman(string output, bool fallback)
+    [TestCase("{\"decision\":\"allow\",\"riskLevel\":\"medium\",\"userAuthorization\":\"high\",\"reason\":\"required edit\"}",
+              "granted")]
+    [TestCase("{\"decision\":\"deny\",\"riskLevel\":\"medium\",\"userAuthorization\":\"low\",\"reason\":\"outside task\"}",
+              "denied")]
+    [TestCase("not json", "unavailable")]
+    [TestCase("{\"decision\":\"allow\",\"decision\":\"deny\",\"reason\":\"duplicate\"}", "unavailable")]
+    public async Task AiReviewDecisions_MapToResolutions_WithoutHumanFallback(string output, string expected)
     {
         var                      reviewer   = new ReviewModel(output);
         DesktopApprovalProvider? human      = null;
         var                      humanCalls = 0;
         human = new DesktopApprovalProvider(approval =>
         {
-            if (approval is not null)
-            {
-                humanCalls++;
-                Assert.That(approval.ReviewNote, Does.Contain("操作尚未执行"));
-                human!.Respond(approval.Id, ApprovalAction.Deny);
-            }
-
+            if (approval is not null) humanCalls++;
             return ValueTask.CompletedTask;
         }, text => text);
-        var provider = new DesktopAutoApprovalProvider(human, () => SessionPermissionMode.ReadOnlyAutoReview,
+        var provider = new DesktopAutoApprovalProvider(human, () => SessionApprovalMode.AIAutoReview,
                                                        _ =>
                                                            Task.FromResult<(IChatCompletionClient, string)>((reviewer,
                                                                "reviewer")),
-                                                       () => ["实现指定修改"], _ => ValueTask.CompletedTask);
-        var result = await provider.PromptAsync(new ToolPreparation
+                                                       () => new ApprovalContext(
+                                                       [
+                                                           new ApprovalContextItem(ApprovalInputSource.UserUtterance,
+                                                               "turn-1", "实现指定修改")
+                                                       ]),
+                                                       _ => ValueTask.CompletedTask);
+        var request = new ApprovalRequest(new ToolPreparation
         {
             ToolName  = "test", CallId = "test", Capability = "filesystem.write", Summary = "specific edit",
             Arguments = new JsonObject(), TargetPaths = []
-        }, default).WaitAsync(Limit);
-        Assert.That(result, Is.EqualTo(fallback ? ApprovalAction.Deny : ApprovalAction.AllowOnce));
-        Assert.That(humanCalls, Is.EqualTo(fallback ? 1 : 0));
-        Assert.That(reviewer.Request!.Tools, Is.Null);
-        Assert.That(reviewer.Request.Messages, Has.Count.EqualTo(2));
-        Assert.That(JsonNode.Parse(reviewer.Request.Messages[1].Content)!["userInstructions"]![0]!.GetValue<string>(),
-                    Is.EqualTo("实现指定修改"));
-        Assert.That(reviewer.Disposed, Is.True);
+        }, PermissionLevel.Level2, [GrantScope.SingleOperation], null, null);
+        var result = await provider.PromptAsync(request, default).WaitAsync(Limit);
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Kind.ToString().ToLowerInvariant(), Is.EqualTo(expected));
+            if (expected == "denied")
+            {
+                Assert.That(result.Reason, Does.Contain("AI 审核拒绝"));
+                Assert.That(result.Reason, Does.Contain("outside task"));
+            }
+
+            // 拒绝与技术失败都不转人工。
+            Assert.That(humanCalls, Is.EqualTo(0));
+            Assert.That(reviewer.Request!.Tools, Is.Null);
+            Assert.That(reviewer.Request.Messages, Has.Count.EqualTo(2));
+            Assert.That(JsonNode.Parse(reviewer.Request.Messages[1].Content)!["context"]![0]!["text"]!
+                                .GetValue<string>(), Is.EqualTo("实现指定修改"));
+            Assert.That(reviewer.Disposed, Is.True);
+        });
     }
 
     [Test]
@@ -186,7 +209,7 @@ public sealed class DesktopPermissionModeTests
                                        [new ReviewReply(ReviewJson("deny", "需要人工确认宿主执行"))]);
         var factory = new DesktopSessionFactory((_, _) => new ReviewScriptModel(
                                                                                 [
-                                                                                    HostShellCall("echo ai-deny-host"),
+                                                                                    Patch(".git/ai-deny.txt"),
                                                                                     null
                                                                                 ],
                                                                                 reviews, requests),
@@ -194,38 +217,40 @@ public sealed class DesktopPermissionModeTests
         var             approvals = new List<DesktopApproval>();
         DesktopSession? session   = null;
         session = await factory.OpenAsync(new DesktopSessionRequest(fixture.Root)
-                                              { PermissionMode = SessionPermissionMode.ProjectWriteAutoReview },
+                                              { PermissionMode = SessionApprovalMode.AIAutoReview },
                                           _ => ValueTask.CompletedTask, approval =>
                                           {
                                               if (approval is not null)
                                               {
                                                   approvals.Add(approval);
-                                                  session!.Approvals.Respond(approval.Id, ApprovalAction.Deny);
+                                                  session!.Approvals.Respond(approval.Id,
+                                                                             ApprovalResolution
+                                                                                .Denied("denied by test"));
                                               }
 
                                               return ValueTask.CompletedTask;
                                           }, default);
         await using (session)
         {
-            var run = await session.SubmitAsync("执行 echo ai-deny-host").WaitAsync(Limit);
+            var run = await session.SubmitAsync("write ai deny probe").WaitAsync(Limit);
             Assert.That(run.Result!.Error, Is.Null);
             Assert.That(run.Result.Status, Is.EqualTo(AgentStatus.Completed));
         }
 
-        Assert.That(approvals, Has.Count.EqualTo(1));
-        Assert.That(approvals[0].ReviewNote, Does.Contain("AI 拒绝"));
-        Assert.That(approvals[0].ReviewNote, Does.Contain("操作尚未执行"));
+        // AI 拒绝不转人工：没有人审卡，拒绝原因直接回传模型，命令保持未执行。
+        Assert.That(approvals, Is.Empty);
         Assert.That(requests.Count(item => item.Request.Tools is null), Is.EqualTo(1));
         var toolMessages = await ToolMessagesAsync(fixture, session.Id);
         Assert.That(toolMessages.Any(message => message.Contains("Exit code:")), Is.False);
-        Assert.That(toolMessages.Any(message => message.Contains("Permission denied by user")), Is.True);
+        Assert.That(toolMessages.Any(message =>
+                                         message.Contains("Permission denied by the approver") &&
+                                         message.Contains("需要人工确认宿主执行")), Is.True);
     }
 
-    [TestCase(ReviewFailure.Timeout, "AI 审批超时。")]
-    [TestCase(ReviewFailure.ToolCallOutput, "AI 审批失败")]
-    [TestCase(ReviewFailure.OversizedOutput, "AI 审批失败")]
-    public async Task AiReviewFailureModesFallBackToHumanWithoutExecuting(ReviewFailure failure,
-                                                                          string        expectedNote)
+    [TestCase(ReviewFailure.ToolCallOutput, "invalidresponse")]
+    [TestCase(ReviewFailure.OversizedOutput, "invalidresponse")]
+    public async Task AiReviewFailureModes_StayUnavailable_WithoutHumanFallback(ReviewFailure failure,
+        string                                                                                expectedKind)
     {
         var fixture  = await ReviewerFixtureAsync();
         var requests = new List<(ReviewScriptModel Client, ChatCompletionRequest Request)>();
@@ -238,7 +263,7 @@ public sealed class DesktopPermissionModeTests
         var reviews = new ReviewCursor([reply]);
         var factory = new DesktopSessionFactory((_, _) => new ReviewScriptModel(
                                                                                 [
-                                                                                    HostShellCall("echo ai-fallback-host"),
+                                                                                    Patch(".git/ai-fallback.txt"),
                                                                                     null
                                                                                 ],
                                                                                 reviews, requests),
@@ -246,32 +271,34 @@ public sealed class DesktopPermissionModeTests
         var             approvals = new List<DesktopApproval>();
         DesktopSession? session   = null;
         session = await factory.OpenAsync(new DesktopSessionRequest(fixture.Root)
-                                              { PermissionMode = SessionPermissionMode.ProjectWriteAutoReview },
+                                              { PermissionMode = SessionApprovalMode.AIAutoReview },
                                           _ => ValueTask.CompletedTask, approval =>
                                           {
                                               if (approval is not null)
                                               {
                                                   approvals.Add(approval);
-                                                  session!.Approvals.Respond(approval.Id, ApprovalAction.Deny);
+                                                  session!.Approvals.Respond(approval.Id,
+                                                                             ApprovalResolution
+                                                                                .Denied("denied by test"));
                                               }
 
                                               return ValueTask.CompletedTask;
                                           }, default);
         await using (session)
         {
-            var run = await session.SubmitAsync("执行 echo ai-fallback-host").WaitAsync(Limit);
+            var run = await session.SubmitAsync("write ai fallback probe").WaitAsync(Limit);
             Assert.That(run.Result!.Error, Is.Null);
             Assert.That(run.Result.Status, Is.EqualTo(AgentStatus.Completed));
         }
 
-        // 每种失败都转人工裁决，而不是自动放行。
-        Assert.That(approvals, Has.Count.EqualTo(1));
-        Assert.That(approvals[0].ReviewNote, Does.Contain(expectedNote));
-        Assert.That(approvals[0].ReviewNote, Does.Contain("操作尚未执行"));
+        // 技术失败保持未执行：不转人工、不写拒绝记忆，原因如实回传模型。
+        Assert.That(approvals, Is.Empty);
         Assert.That(requests.Count(item => item.Request.Tools is null), Is.EqualTo(1));
         var toolMessages = await ToolMessagesAsync(fixture, session.Id);
         Assert.That(toolMessages.Any(message => message.Contains("Exit code:")), Is.False);
-        Assert.That(toolMessages.Any(message => message.Contains("Permission denied by user")), Is.True);
+        Assert.That(toolMessages.Any(message =>
+                                         message.Contains("Approval unavailable") &&
+                                         message.Contains(expectedKind)), Is.True);
     }
 
     [Test]
@@ -279,21 +306,21 @@ public sealed class DesktopPermissionModeTests
     {
         var fixture  = await ReviewerFixtureAsync();
         var requests = new List<(ReviewScriptModel Client, ChatCompletionRequest Request)>();
-        var reviews  = new ReviewCursor([]);
+        var reviews  = new ReviewCursor([new ReviewReply(ReviewJson("allow", "与任务相称"))]);
         var factory = new DesktopSessionFactory((_, _) => new ReviewScriptModel(
                                                                                 [
-                                                                                    HostShellCall("echo payload-probe"),
+                                                                                    Patch(".git/payload-probe.txt"),
                                                                                     null
                                                                                 ],
                                                                                 reviews, requests),
                                                 new Credentials(), fixture.Config);
         DesktopSession? session = null;
         session = await factory.OpenAsync(new DesktopSessionRequest(fixture.Root)
-                                              { PermissionMode = SessionPermissionMode.ProjectWriteAutoReview },
+                                              { PermissionMode = SessionApprovalMode.AIAutoReview },
                                           _ => ValueTask.CompletedTask, _ => ValueTask.CompletedTask, default);
         await using (session)
         {
-            var run = await session.SubmitAsync("执行 echo payload-probe").WaitAsync(Limit);
+            var run = await session.SubmitAsync("write payload probe").WaitAsync(Limit);
             Assert.That(run.Result!.Error, Is.Null);
         }
 
@@ -302,18 +329,24 @@ public sealed class DesktopPermissionModeTests
         var payload = PayloadOf(reviewRequests[0]);
         Assert.That(payload.Select(property => property.Key).OrderBy(key => key).ToArray(), Is.EqualTo(new[]
         {
-            "arguments", "capability", "executionPolicy", "requiresNetworkAccess", "summary", "targets", "tool",
-            "userInstructions"
+            "context", "pendingOperation", "toolEvidence"
         }));
-        Assert.That(payload["tool"]!.GetValue<string>(), Is.EqualTo("shell"));
-        // Desktop 链路的 GuardedTool 在后端身份后追加 workspace-access 行，断言按 backend 身份前缀匹配。
-        Assert.That(payload["executionPolicy"]!.GetValue<string>(), Does.StartWith("backend=host"));
+        var pending = payload["pendingOperation"]!.AsObject();
+        Assert.That(pending.Select(property => property.Key).OrderBy(key => key).ToArray(), Is.EqualTo(new[]
+        {
+            "allowedScopes", "arguments", "capability", "executionPolicy", "level", "requiresNetworkAccess",
+            "summary", "targets", "tool"
+        }));
+        Assert.That(pending["tool"]!.GetValue<string>(), Is.EqualTo("apply_patch"));
+        Assert.That(pending["level"]!.GetValue<string>(), Is.EqualTo("Level2"));
+        // Desktop 链路的 GuardedTool 在策略身份中追加 workspace-access 行。
+        Assert.That(pending["executionPolicy"]!.GetValue<string>(), Does.Contain("workspace-access="));
         var instructions = InstructionsOf(reviewRequests[0]);
-        Assert.That(instructions, Is.EqualTo(new[] { "执行 echo payload-probe" }));
+        Assert.That(instructions, Is.EqualTo(new[] { "write payload probe" }));
         // 正常少量回合不追加窗口说明。
         Assert.That(instructions, Has.None.StartsWith("〔窗口说明〕"));
         var toolMessages = await ToolMessagesAsync(fixture, session.Id);
-        Assert.That(toolMessages.Any(message => message.Contains("Exit code: 0")), Is.True);
+        Assert.That(toolMessages.Any(message => message.Contains("Applied patch to")), Is.True);
     }
 
     [Test]
@@ -326,16 +359,16 @@ public sealed class DesktopPermissionModeTests
         var          reviews         = new ReviewCursor([]);
         var factory = new DesktopSessionFactory((_, _) => new ReviewScriptModel(
                                                                                 [
-                                                                                    HostShellCall($"echo {inductiveOutput}"),
+                                                                                    Patch(".git/inductive-probe.txt"),
                                                                                     null, null,
-                                                                                    HostShellCall("echo second-probe"),
+                                                                                    Patch(".git/second-probe.txt"),
                                                                                     null
                                                                                 ],
                                                                                 reviews, requests, idleAssistant),
                                                 new Credentials(), fixture.Config);
         DesktopSession? session = null;
         session = await factory.OpenAsync(new DesktopSessionRequest(fixture.Root)
-                                              { PermissionMode = SessionPermissionMode.ProjectWriteAutoReview },
+                                              { PermissionMode = SessionApprovalMode.AIAutoReview },
                                           _ => ValueTask.CompletedTask, _ => ValueTask.CompletedTask, default);
         await using (session)
         {
@@ -351,11 +384,12 @@ public sealed class DesktopPermissionModeTests
         Assert.That(instructions, Is.EqualTo(new[] { "请执行探测命令", "总结当前状态", "执行第二个命令" }));
         Assert.That(instructions, Has.None.Contains(inductiveOutput));
         Assert.That(instructions, Has.None.Contains(idleAssistant));
-        // 前置证据：诱导语句确实进入了工具输出，空闲文本确实进入了助手消息。
+        // 前置证据：探测工具确实产生了工具输出（含探针路径），空闲文本确实进入了助手消息；
+        // 审核窗口断言已证明这些内容不进入授权上下文。
         var snapshot = await SessionStoreReader.ReadAsync(fixture.Store, session.Id, default);
         var messages = snapshot!.Conversation!.Messages;
-        Assert.That(messages.Any(message => message.Role == "Tool" && message.Content.Contains(inductiveOutput)),
-                    Is.True);
+        Assert.That(messages.Any(message => message.Role == "Tool" &&
+                                            message.Content.Contains("Applied patch to")), Is.True);
         Assert.That(messages.Any(message => message.Role == "Assistant" && message.Content.Contains(idleAssistant)),
                     Is.True);
     }
@@ -373,7 +407,7 @@ public sealed class DesktopPermissionModeTests
         var factory = new DesktopSessionFactory((_, _) => new ReviewScriptModel(
                                                                                 [
                                                                                     null,
-                                                                                    HostShellCall("echo revocation-probe"),
+                                                                                    Patch(".git/revocation-probe.txt"),
                                                                                     null
                                                                                 ],
                                                                                 reviews, requests),
@@ -381,13 +415,15 @@ public sealed class DesktopPermissionModeTests
         var             approvals = new List<DesktopApproval>();
         DesktopSession? session   = null;
         session = await factory.OpenAsync(new DesktopSessionRequest(fixture.Root)
-                                              { PermissionMode = SessionPermissionMode.ProjectWriteAutoReview },
+                                              { PermissionMode = SessionApprovalMode.AIAutoReview },
                                           _ => ValueTask.CompletedTask, approval =>
                                           {
                                               if (approval is not null)
                                               {
                                                   approvals.Add(approval);
-                                                  session!.Approvals.Respond(approval.Id, ApprovalAction.Deny);
+                                                  session!.Approvals.Respond(approval.Id,
+                                                                             ApprovalResolution
+                                                                                .Denied("denied by test"));
                                               }
 
                                               return ValueTask.CompletedTask;
@@ -402,8 +438,11 @@ public sealed class DesktopPermissionModeTests
         var reviewRequests = ReviewRequestsOf(requests);
         Assert.That(reviewRequests, Has.Length.EqualTo(1));
         Assert.That(InstructionsOf(reviewRequests[0]), Is.EqualTo(new[] { firstTurn, secondTurn }));
-        Assert.That(approvals, Has.Count.EqualTo(1));
-        Assert.That(approvals[0].ReviewNote, Does.Contain("AI 拒绝"));
+        // AI 拒绝不转人工，撤销语境下的拒绝原因直接回传。
+        Assert.That(approvals, Is.Empty);
+        var toolMessages = await ToolMessagesAsync(fixture, session.Id);
+        Assert.That(toolMessages.Any(message =>
+                                         message.Contains("AI 审核拒绝：授权已被撤销")), Is.True);
     }
 
     [Test]
@@ -419,9 +458,9 @@ public sealed class DesktopPermissionModeTests
         ]);
         var factory = new DesktopSessionFactory((_, _) => new ReviewScriptModel(
                                                                                 [
-                                                                                    HostShellCall("echo first-approved"),
+                                                                                    Patch(".git/first-approved.txt"),
                                                                                     null,
-                                                                                    HostShellCall("echo second-reviewed"),
+                                                                                    Patch(".git/second-reviewed.txt"),
                                                                                     null
                                                                                 ],
                                                                                 reviews, requests),
@@ -429,13 +468,15 @@ public sealed class DesktopPermissionModeTests
         var             approvals = new List<DesktopApproval>();
         DesktopSession? session   = null;
         session = await factory.OpenAsync(new DesktopSessionRequest(fixture.Root)
-                                              { PermissionMode = SessionPermissionMode.ProjectWriteAutoReview },
+                                              { PermissionMode = SessionApprovalMode.AIAutoReview },
                                           _ => ValueTask.CompletedTask, approval =>
                                           {
                                               if (approval is not null)
                                               {
                                                   approvals.Add(approval);
-                                                  session!.Approvals.Respond(approval.Id, ApprovalAction.Deny);
+                                                  session!.Approvals.Respond(approval.Id,
+                                                                             ApprovalResolution
+                                                                                .Denied("denied by test"));
                                               }
 
                                               return ValueTask.CompletedTask;
@@ -450,14 +491,16 @@ public sealed class DesktopPermissionModeTests
 
         var reviewRequests = ReviewRequestsOf(requests);
         Assert.That(reviewRequests, Has.Length.EqualTo(2));
-        Assert.That(approvals, Has.Count.EqualTo(1));
-        Assert.That(approvals[0].ReviewNote, Does.Contain("AI 拒绝"));
-        Assert.That(approvals[0].ReviewNote, Does.Contain("操作尚未执行"));
-        var snapshot     = await SessionStoreReader.ReadAsync(fixture.Store, session.Id, default);
-        var toolMessages = snapshot!.Conversation!.Messages.Where(message => message.Role == "Tool").ToArray();
-        Assert.That(toolMessages.Count(message => message.Content.Contains("Exit code:")), Is.EqualTo(1));
-        Assert.That(toolMessages.Any(message => message.Content.Contains("first-approved")), Is.True);
-        Assert.That(toolMessages.Any(message => message.Content.Contains("Permission denied by user")), Is.True);
+        // AI 拒绝不再转人工：没有人审卡。
+        Assert.That(approvals, Is.Empty);
+        var snapshot = await SessionStoreReader.ReadAsync(fixture.Store, session.Id, default);
+        var toolMessages = snapshot!.Conversation!.Messages.Where(message => message.Role == "Tool")
+                                    .Select(message => message.Content).ToArray();
+        Assert.That(toolMessages.Count(message => message.Contains("Applied patch to")), Is.EqualTo(1));
+        Assert.That(toolMessages.Any(message => message.Contains("first-approved")), Is.True);
+        Assert.That(toolMessages.Any(message =>
+                                         message.Contains("Permission denied by the approver") &&
+                                         message.Contains("缺少对应授权")), Is.True);
     }
 
     [Test]
@@ -468,18 +511,18 @@ public sealed class DesktopPermissionModeTests
         var reviews  = new ReviewCursor([]);
         var factory = new DesktopSessionFactory((_, _) => new ReviewScriptModel(
                                                                                 [
-                                                                                    HostShellCall("echo anchor-probe"),
+                                                                                    Patch(".git/anchor-probe.txt"),
                                                                                     null
                                                                                 ],
                                                                                 reviews, requests),
                                                 new Credentials(), fixture.Config);
         DesktopSession? session = null;
         session = await factory.OpenAsync(new DesktopSessionRequest(fixture.Root)
-                                              { PermissionMode = SessionPermissionMode.ProjectWriteAutoReview },
+                                              { PermissionMode = SessionApprovalMode.AIAutoReview },
                                           _ => ValueTask.CompletedTask, _ => ValueTask.CompletedTask, default);
         await using (session)
         {
-            var run = await session.SubmitAsync("执行 echo anchor-probe").WaitAsync(Limit);
+            var run = await session.SubmitAsync("write anchor probe").WaitAsync(Limit);
             Assert.That(run.Result!.Error, Is.Null);
         }
 
@@ -491,10 +534,10 @@ public sealed class DesktopPermissionModeTests
         Assert.That(prompt, Does.Contain("普通实现授权只覆盖编写与修改文件"));
         Assert.That(prompt, Does.Contain("只有用户明确要求推送"));
         Assert.That(prompt, Does.Contain("用户明确禁止提交或推送"));
-        Assert.That(prompt, Does.Contain("不得仅因 backend=host"));
-        Assert.That(prompt, Does.Contain("审批只针对当前这一个已冻结的具体调用"));
-        Assert.That(prompt, Does.Contain("〔窗口说明〕"));
-        Assert.That(prompt, Does.Contain("用户后续撤销和收窄优先于较早授权"));
+        Assert.That(prompt, Does.Contain("不得仅因 level3 自动拒绝"));
+        Assert.That(prompt, Does.Contain("审批只针对 pendingOperation 这一个已冻结的具体调用"));
+        Assert.That(prompt, Does.Contain("source=systemNotice"));
+        Assert.That(prompt, Does.Contain("撤销与收窄优先于较早授权"));
     }
 
     [Test]
@@ -503,28 +546,31 @@ public sealed class DesktopPermissionModeTests
         var fixture = await Fixture.CreateAsync();
         var editor  = new PermissionSettingsViewModel(fixture.Config);
         await editor.LoadAsync();
-        Assert.That(editor.Modes, Has.Count.EqualTo(7));
-        foreach (var row in editor.Modes) row.ShowInComposer = false;
-        editor.DefaultMode     = editor.Modes.Single(row => row.Mode == SessionPermissionMode.ProjectWrite);
+        // 双审批模式菜单。
+        Assert.That(editor.Modes, Has.Count.EqualTo(2));
+        editor.DefaultMode     = editor.Modes.Single(row => row.Mode == SessionApprovalMode.HumanApproval);
         editor.UseCurrentModel = false;
         editor.ReviewerModel   = editor.Models.Single();
         await editor.SaveAsync();
         var saved = (await UserConfigStore.LoadAsync(fixture.Config, default)).Settings!.Permissions!;
-        Assert.That(saved.DefaultMode, Is.EqualTo(SessionPermissionMode.ProjectWrite));
-        Assert.That(saved.ComposerModes, Is.EqualTo(new[] { SessionPermissionMode.ProjectWrite }));
-        Assert.That(saved.UseCurrentModel, Is.False);
+        Assert.Multiple(() =>
+        {
+            Assert.That(saved.DefaultApprovalMode, Is.EqualTo(SessionApprovalMode.HumanApproval));
+            Assert.That(saved.LegacyDefaultMode, Is.Null, "保存当前形状即确认迁移，旧字段从此消失。");
+            Assert.That(saved.UseCurrentModel, Is.False);
+        });
         await using var manager = new DesktopSessionManager();
         var             draft   = new SessionViewModel(manager, new DesktopSessionFactory(), fixture.Root);
         draft.ApplyPermissionSettings(saved);
-        Assert.That(draft.PermissionMode, Is.EqualTo(SessionPermissionMode.ProjectWrite));
-        await draft.SelectPermissionModeAsync(SessionPermissionMode.ReadOnly);
+        Assert.That(draft.PermissionMode, Is.EqualTo(SessionApprovalMode.HumanApproval));
+        await draft.SelectPermissionModeAsync(SessionApprovalMode.AIAutoReview);
         draft.ApplyPermissionSettings(saved);
-        Assert.That(draft.PermissionMode, Is.EqualTo(SessionPermissionMode.ReadOnly));
-        Assert.That(draft.PermissionOptions, Has.Count.EqualTo(1));
+        Assert.That(draft.PermissionMode, Is.EqualTo(SessionApprovalMode.AIAutoReview));
+        Assert.That(draft.PermissionOptions, Has.Count.EqualTo(2));
         var history = new SessionViewModel(manager, new DesktopSessionFactory(), fixture.Root, new string('a', 32));
-        history.ApplyStoredPermissionMode(SessionPermissionMode.FullAccess);
+        history.ApplyStoredPermissionMode("FullAccess");
         history.ApplyPermissionSettings(saved);
-        Assert.That(history.PermissionMode, Is.EqualTo(SessionPermissionMode.FullAccess));
+        Assert.That(history.PermissionMode, Is.EqualTo(SessionApprovalMode.HumanApproval));
     }
 
     private static ChatToolCall Patch(string path) => new(Guid.NewGuid().ToString("N"), "apply_patch",
@@ -534,11 +580,9 @@ public sealed class DesktopPermissionModeTests
                                                                   $"--- /dev/null\n+++ {path}\n@@ -0,0 +1 @@\n+ok\n"
                                                           }.ToJsonString());
 
-    [TestCase(SessionPermissionMode.ConfirmEveryAction, 1)]
-    [TestCase(SessionPermissionMode.ReadOnly, 1)]
-    [TestCase(SessionPermissionMode.ProjectWrite, 1)]
-    [TestCase(SessionPermissionMode.FullAccess, 0)]
-    public async Task ShellActuallyExecutesOnlyAfterRequiredApproval(SessionPermissionMode mode, int expectedApprovals)
+    [TestCase(SessionApprovalMode.HumanApproval)]
+    [TestCase(SessionApprovalMode.AIAutoReview)]
+    public async Task ShellIsDeniedWhenSandboxUnavailable_FailClosed(SessionApprovalMode mode)
     {
         var fixture = await Fixture.CreateAsync();
         var call = new ChatToolCall("shell-call", "shell", new JsonObject
@@ -553,23 +597,22 @@ public sealed class DesktopPermissionModeTests
         session = await factory.OpenAsync(new DesktopSessionRequest(fixture.Root) { PermissionMode = mode },
                                           _ => ValueTask.CompletedTask, approval =>
                                           {
-                                              if (approval is not null)
-                                              {
-                                                  approvals++;
-                                                  Assert.That(approval.ExecutionPolicy, Does.Contain("backend=host"));
-                                                  session!.Approvals.Respond(approval.Id, ApprovalAction.AllowOnce);
-                                              }
-
+                                              if (approval is not null) approvals++;
                                               return ValueTask.CompletedTask;
                                           }, default);
         await using (session)
         {
-            await session.SubmitAsync("执行 echo permission-shell").WaitAsync(Limit);
-            Assert.That(approvals, Is.EqualTo(expectedApprovals));
+            // 沙箱未配置：进程执行 fail-closed 一律拒绝（含宿主申请），不弹审批、不执行、不回退宿主。
+            var run = await session.SubmitAsync("执行 echo permission-shell").WaitAsync(Limit);
+            Assert.Multiple(() =>
+            {
+                Assert.That(run.Result!.Status, Is.EqualTo(AgentStatus.Completed));
+                Assert.That(approvals, Is.Zero);
+                Assert.That(run.Result.ToolExecutions, Is.Zero);
+            });
             var snapshot = await SessionStoreReader.ReadAsync(fixture.Store, session.Id, default);
             Assert.That(snapshot!.Conversation!.Messages.Where(message => message.Role == "Tool")
-                                 .Any(message => message.Content.Contains("permission-shell") &&
-                                                 message.Content.Contains("Exit code: 0")), Is.True);
+                                 .Any(message => message.Content.Contains("Sandbox unavailable")), Is.True);
         }
     }
 
@@ -606,7 +649,7 @@ public sealed class DesktopPermissionModeTests
         var humanCalls = 0;
         await using var session = await factory.OpenAsync(new DesktopSessionRequest(fixture.Root)
                                                           {
-                                                              PermissionMode = SessionPermissionMode.ReadOnlyAutoReview
+                                                              PermissionMode = SessionApprovalMode.AIAutoReview
                                                           }, _ => ValueTask.CompletedTask,
                                                           approval =>
                                                           {
@@ -624,7 +667,7 @@ public sealed class DesktopPermissionModeTests
         Assert.That(review.Client.Disposed, Is.True);
         Assert.That(worker.Client.Disposed, Is.False);
         Assert.That(humanCalls, Is.Zero);
-        Assert.That(File.Exists(Path.Combine(fixture.Root, "approved.txt")), Is.True);
+        Assert.That(File.Exists(Path.Combine(fixture.Root, ".git", "approved.txt")), Is.True);
     }
 
     [Test]
@@ -659,14 +702,15 @@ public sealed class DesktopPermissionModeTests
             {
                 yield return new ChatStreamEvent
                 {
-                    Kind         = ChatStreamEventKind.ContentDelta,
-                    ContentDelta = """{"decision":"allow","reason":"required edit"}"""
+                    Kind = ChatStreamEventKind.ContentDelta,
+                    ContentDelta =
+                        """{"decision":"allow","riskLevel":"medium","userAuthorization":"high","reason":"required edit"}"""
                 };
             }
             else if (!_sent)
             {
                 _sent = true;
-                var call = Patch("approved.txt");
+                var call = Patch(".git/approved.txt");
                 yield return new ChatStreamEvent
                 {
                     Kind                   = ChatStreamEventKind.ToolCallDelta, ToolCallIndex = 0,
@@ -720,7 +764,8 @@ public sealed class DesktopPermissionModeTests
     /// </summary>
     private sealed class ReviewCursor(IReadOnlyList<ReviewReply> replies)
     {
-        private const string AllowJson = """{"decision":"allow","reason":"required edit"}""";
+        private const string AllowJson =
+            """{"decision":"allow","riskLevel":"medium","userAuthorization":"high","reason":"required edit"}""";
 
         private int _index;
 
@@ -843,7 +888,10 @@ public sealed class DesktopPermissionModeTests
                                                                      }.ToJsonString());
 
     private static string ReviewJson(string decision, string reason) =>
-        new JsonObject { ["decision"] = decision, ["reason"] = reason }.ToJsonString();
+        new JsonObject
+        {
+            ["decision"] = decision, ["riskLevel"] = "medium", ["userAuthorization"] = "unknown", ["reason"] = reason
+        }.ToJsonString();
 
     private static async Task<IReadOnlyList<string>> ToolMessagesAsync(Fixture fixture, string sessionId)
     {
@@ -860,7 +908,13 @@ public sealed class DesktopPermissionModeTests
         JsonNode.Parse(request.Messages[1].Content)!.AsObject();
 
     private static IReadOnlyList<string> InstructionsOf(ChatCompletionRequest request) =>
-        PayloadOf(request)["userInstructions"]!.AsArray().Select(node => node!.GetValue<string>()).ToArray();
+        PayloadOf(request)["context"]!.AsArray()
+                                      .Where(node => node!["source"]!.GetValue<string>() == "userUtterance")
+                                      .Select(node => node!["text"]!.GetValue<string>()).ToArray();
+
+    private static IReadOnlyList<string> ContextSources(ChatCompletionRequest request) =>
+        PayloadOf(request)["context"]!.AsArray()
+                                      .Select(node => node!["source"]!.GetValue<string>()).ToArray();
 
     private sealed record Fixture(string Root, string Store, string Config)
     {

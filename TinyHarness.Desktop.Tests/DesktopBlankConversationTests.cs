@@ -75,7 +75,7 @@ public sealed class DesktopBlankConversationTests
         await blank.SelectModelAsync(new ModelChoice("offline", "offline",
                                                      Efforts : [ModelReasoningEffort.Low, ModelReasoningEffort.High]),
                                      ModelReasoningEffort.High);
-        await blank.SelectPermissionModeAsync(SessionPermissionMode.ProjectWrite);
+        await blank.SelectPermissionModeAsync(SessionApprovalMode.HumanApproval);
 
         var history = model.Sessions.Single(session => session.Id == id);
         model.SelectSessionCommand.Execute(history);
@@ -84,7 +84,7 @@ public sealed class DesktopBlankConversationTests
         Assert.That(model.SelectedSession, Is.SameAs(blank), "返回新对话必须回到同一份空白页。");
         Assert.That(blank.Draft, Is.EqualTo("keep my input"));
         Assert.That(blank.CurrentEffortText, Is.EqualTo("high"));
-        Assert.That(blank.PermissionMode, Is.EqualTo(SessionPermissionMode.ProjectWrite));
+        Assert.That(blank.PermissionMode, Is.EqualTo(SessionApprovalMode.HumanApproval));
 
         // 项目「+」更改空白页目标并保留文字；新空白页的 root 不继承刚浏览的历史目录。
         await model.OpenProjectAsync(fixture.Second);
@@ -623,7 +623,7 @@ public sealed class DesktopBlankConversationTests
     }
 
     [Test]
-    public async Task ExplicitReadOnlyMenuSelectionProtectsAnOtherwisePristineNextDraft()
+    public async Task ExplicitHumanApprovalSelectionProtectsAnOtherwisePristineNextDraft()
     {
         var fixture   = await Fixture.CreateAsync();
         var historyId = await CommitLegacySessionAsync(fixture.Store, fixture.First);
@@ -641,29 +641,29 @@ public sealed class DesktopBlankConversationTests
         var history = model.Sessions.Single(page => page.Id == historyId);
         await model.OpenProjectAsync(fixture.First);
         var failed = model.SelectedSession!;
-        await failed.SelectPermissionModeAsync(SessionPermissionMode.ProjectWrite);
+        await failed.SelectPermissionModeAsync(SessionApprovalMode.HumanApproval);
         failed.Draft = "flight fails with write permission";
         var sending = failed.SendAsync();
         await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
 
         model.NewSessionCommand.Execute(null);
         var next = model.SelectedSession!;
-        Assert.That(next.PermissionMode, Is.EqualTo(SessionPermissionMode.ReadOnly));
+        Assert.That(next.PermissionMode, Is.EqualTo(SessionApprovalMode.HumanApproval));
         next.TogglePermissionMenuCommand.Execute(null);
-        next.PermissionOptions.Single(option => option.Label == "只读，可申请").SelectCommand.Execute(null);
+        next.PermissionOptions.Single(option => option.Label == "人工审批").SelectCommand.Execute(null);
         model.SelectedSession = history;
         release.TrySetResult();
         await Assert.ThrowsAsync<InvalidOperationException>(async () =>
                                                                 await sending.WaitAsync(TimeSpan.FromSeconds(10)));
 
         model.NewSessionCommand.Execute(null);
-        Assert.That(model.SelectedSession, Is.SameAs(next), "显式重选默认只读也必须保留下一份页面。");
-        Assert.That(next.PermissionMode, Is.EqualTo(SessionPermissionMode.ReadOnly));
+        Assert.That(model.SelectedSession, Is.SameAs(next), "显式重选默认审批模式也必须保留下一份页面。");
+        Assert.That(next.PermissionMode, Is.EqualTo(SessionApprovalMode.HumanApproval));
         Assert.That(next.HasUserPreselection, Is.True);
         Assert.That(model.HasFailedDraft, Is.True);
         model.ReturnToFailedDraftCommand.Execute(null);
         Assert.That(model.SelectedSession, Is.SameAs(failed));
-        Assert.That(failed.PermissionMode, Is.EqualTo(SessionPermissionMode.ProjectWrite));
+        Assert.That(failed.PermissionMode, Is.EqualTo(SessionApprovalMode.HumanApproval));
         Assert.That(failed.Draft, Is.EqualTo("flight fails with write permission"));
     }
 
@@ -755,7 +755,7 @@ public sealed class DesktopBlankConversationTests
         model.ReturnToFailedDraftCommand.Execute(null);
         var visited1 = model.SelectedSession!;
         visited1.Draft += " edited";
-        await visited1.SelectPermissionModeAsync(SessionPermissionMode.ProjectWrite);
+        await visited1.SelectPermissionModeAsync(SessionApprovalMode.HumanApproval);
         model.ReturnToFailedDraftCommand.Execute(null);
         var visited2 = model.SelectedSession!;
         Assert.That(new[] { visited1, visited2 }, Is.EquivalentTo(new[] { first, second }),
@@ -764,7 +764,7 @@ public sealed class DesktopBlankConversationTests
         model.ReturnToFailedDraftCommand.Execute(null);
         Assert.That(model.SelectedSession, Is.SameAs(visited1), "恢复后的草稿继续轮转可达。");
         Assert.That(visited1.Draft, Does.EndWith(" edited"));
-        Assert.That(visited1.PermissionMode, Is.EqualTo(SessionPermissionMode.ProjectWrite), "恢复后修改的预选不被其他草稿覆盖。");
+        Assert.That(visited1.PermissionMode, Is.EqualTo(SessionApprovalMode.HumanApproval), "恢复后修改的预选不被其他草稿覆盖。");
         model.NewSessionCommand.Execute(null);
         Assert.That(model.SelectedSession, Is.SameAs(next));
         Assert.That(next.Draft, Is.EqualTo("typed on next"), "恢复入口不得覆盖当前空白页输入。");

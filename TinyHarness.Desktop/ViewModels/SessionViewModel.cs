@@ -6,6 +6,7 @@ using TinyHarness.Core.Models.Permissions;
 using TinyHarness.Core.Models.Persistence;
 using TinyHarness.Core.Models.Session;
 using TinyHarness.Core.Services.Persistence;
+using TinyHarness.Core.Services.Permissions;
 using TinyHarness.Desktop.Models;
 using TinyHarness.Desktop.Runtime;
 
@@ -47,13 +48,17 @@ public sealed partial class SessionViewModel : ObservableObject
     private          bool                                          _opening;
     private          CancellationTokenSource?                      _openingCancellation;
     private          bool                                          _permissionExplicit;
-    private          PermissionSettings                            _permissionSettings = new();
+    private          string                                        _permissionMigrationError = string.Empty;
+    private          bool                                          _permissionMigrationPending;
+    private          string                                        _permissionMigrationSummary = string.Empty;
+    private          PermissionSettings                            _permissionSettings         = new();
     private          string?                                       _runError;
     private          bool                                          _running;
     private          DesktopSession?                               _runtime;
     private          SessionModelSelection?                        _savedSelection;
     private          bool                                          _selected;
     private          string                                        _status = string.Empty;
+    private          string?                                       _storedPermissionLabel;
     private          MessageItemViewModel?                         _stream;
     private          long?                                         _submittedDraftRevision;
     private          string                                        _title;
@@ -106,9 +111,21 @@ public sealed partial class SessionViewModel : ObservableObject
         {
             if (_runtime?.Host.RequestPause() == true) Status = "已请求暂停";
         });
-        ResumeCommand    = new RelayCommand(() => _runtime?.Host.ResumeRun());
-        AllowOnceCommand = new RelayCommand(() => Respond(ApprovalAction.AllowOnce));
-        DenyCommand      = new RelayCommand(() => Respond(ApprovalAction.Deny));
+        ResumeCommand = new RelayCommand(() => _runtime?.Host.ResumeRun());
+        AllowOnceCommand =
+            new RelayCommand<string>(id => Respond(id, ApprovalResolution.Granted(GrantScope.SingleOperation)),
+                                     id => IsAllowedScope(id, GrantScope.SingleOperation));
+        AllowTurnCommand = new RelayCommand<string>(id => Respond(id, ApprovalResolution.Granted(GrantScope.Turn)),
+                                                    id => IsAllowedScope(id, GrantScope.Turn));
+        AllowSessionCommand = new RelayCommand<string>(
+                                                       id => Respond(id, ApprovalResolution
+                                                                        .Granted(GrantScope.Session)),
+                                                       id => IsAllowedScope(id, GrantScope.Session));
+        DenyCommand = new RelayCommand<string>(id => Respond(id, ApprovalResolution.Denied("Denied by the user.")),
+                                               IsCurrentApproval);
+        ConfirmPermissionMigrationCommand = new AsyncCommand(ConfirmPermissionMigrationAsync,
+                                                             exception => PermissionMigrationError =
+                                                                 _factory.Redact(exception.Message));
         AcknowledgeInspectionCommand = new AsyncCommand(async () =>
         {
             if (_runtime is null || IsRunning) return;
@@ -228,9 +245,12 @@ public sealed partial class SessionViewModel : ObservableObject
     public RelayCommand                                    CancelCommand { get; }
     public RelayCommand                                    PauseCommand { get; }
     public RelayCommand                                    ResumeCommand { get; }
-    public RelayCommand                                    AllowOnceCommand { get; }
-    public RelayCommand                                    DenyCommand { get; }
+    public RelayCommand<string>                            AllowOnceCommand { get; }
+    public RelayCommand<string>                            AllowTurnCommand { get; }
+    public RelayCommand<string>                            AllowSessionCommand { get; }
+    public RelayCommand<string>                            DenyCommand { get; }
     public AsyncCommand                                    AcknowledgeInspectionCommand { get; }
+    public AsyncCommand                                    ConfirmPermissionMigrationCommand { get; }
 
     public string Title
     {
@@ -323,6 +343,7 @@ public sealed partial class SessionViewModel : ObservableObject
             if (!SetProperty(ref _running, value)) return;
             OnPropertyChanged(nameof(CanReorder));
             OnPropertyChanged(nameof(CanChangeModel));
+            OnPropertyChanged(nameof(CanConfirmPermissionMigration));
             OnPropertyChanged(nameof(PermissionChangeHint));
             OnPropertyChanged(nameof(ComposerSendHint));
             OnPropertyChanged(nameof(CanRepairWorkspace));
@@ -335,10 +356,35 @@ public sealed partial class SessionViewModel : ObservableObject
 
     public bool HasMoreHistory    => _historyCursor is not null;
     public bool InspectionPending => _runtime?.Host.InspectionPending == true;
-    public bool HasApproval       => _approval is not null;
 
+    public bool PermissionMigrationPending => _runtime?.Host.Session.PermissionMigrationPending == true ||
+                                              (_runtime is null && _permissionMigrationPending);
+
+    public string PermissionMigrationError
+    {
+        get => _permissionMigrationError;
+        private set => SetProperty(ref _permissionMigrationError, value);
+    }
+
+    public string PermissionMigrationSummary
+    {
+        get => _permissionMigrationSummary;
+        private set => SetProperty(ref _permissionMigrationSummary, value);
+    }
+
+    public bool HasApproval => _approval is not null;
+
+    public bool CanAllowTurn => _approval is { Level: not PermissionLevel.Level3 } approval &&
+                                approval.AllowedScopes.Contains(GrantScope.Turn);
+
+    public bool CanAllowSession => _approval is { Level: not PermissionLevel.Level3 } approval &&
+                                   approval.AllowedScopes.Contains(GrantScope.Session);
+
+    public string? ApprovalId => _approval?.Id;
+
+    // 审批卡文本：Level 是展示/审计分类（D2），如实呈现执行等级；不构成授权来源。
     public string ApprovalText => _approval is { } approval
-        ? $"{approval.ReviewNote}\n{approval.ToolName}\n{approval.Summary}\n{approval.Arguments}\n{string.Join('\n', approval.TargetPaths)}\n{approval.ExecutionPolicy}"
+        ? $"{approval.ReviewerNote}\n[{approval.Level}] {BackendIdentity(approval.Level)}\n{approval.ToolName}\n{approval.Summary}\n{approval.Arguments}\n{string.Join('\n', approval.TargetPaths)}\n{approval.ExecutionPolicy}"
         : string.Empty;
 
     /// <summary>
@@ -467,7 +513,36 @@ public sealed partial class SessionViewModel : ObservableObject
             if (stored is not null)
             {
                 _savedSelection = stored.ModelSelection;
-                if (stored.PermissionSelection is { } permission) SetPermissionMode(permission.Mode, false);
+                _permissionMigrationPending = stored.PermissionMigration is null &&
+                                              PermissionSelectionMigration
+                                                 .Evaluate(stored.PermissionSelection is not null,
+                                                           stored.PermissionSelectionV2 is not null,
+                                                           stored.Turns.Any(turn => turn.Runs.Count > 0)) ==
+                                              PermissionSelectionMigrationStatus.MigrationPending;
+                OnPropertyChanged(nameof(PermissionMigrationPending));
+                if (_permissionMigrationPending && PermissionMigrationSummary.Length == 0)
+                    try
+                    {
+                        var config = await _factory.LoadUserConfigAsync(CancellationToken.None);
+                        PermissionMigrationSummary = PermissionSettingsViewModel.BuildMigrationSummary(config);
+                    }
+                    catch (Exception exception)
+                    {
+                        PermissionMigrationError = _factory.Redact(exception.Message);
+                    }
+
+                if (stored.PermissionSelectionV2 is { } selectionV2)
+                {
+                    SetPermissionMode(selectionV2.ApprovalMode, false);
+                }
+                else if (stored.PermissionSelection is { } legacy)
+                {
+                    SetPermissionMode(LegacyPermissionSelectionMapper.FromLegacyName(legacy.ModeName)
+                                   ?? SessionApprovalMode.HumanApproval, false);
+                    _storedPermissionLabel = LegacyPermissionSelectionMapper.LegacyLabel(legacy.ModeName) ?? "旧版模式";
+                    OnPropertyChanged(nameof(PermissionPickerLabel));
+                }
+
                 _historicalIdentity = stored.Model;
                 _runError = _factory.Redact(stored.Turns.LastOrDefault()?.Runs.LastOrDefault()?.Error ?? string.Empty);
                 foreach (var run in stored.Turns.SelectMany(turn => turn.Runs))
@@ -722,6 +797,9 @@ public sealed partial class SessionViewModel : ObservableObject
         {
             _approval = approval;
             OnPropertyChanged(nameof(HasApproval));
+            OnPropertyChanged(nameof(CanAllowTurn));
+            OnPropertyChanged(nameof(CanAllowSession));
+            OnPropertyChanged(nameof(ApprovalId));
             OnPropertyChanged(nameof(ApprovalText));
             if (approval is not null) Status = "等待审批";
         }).ConfigureAwait(false);
@@ -927,9 +1005,93 @@ public sealed partial class SessionViewModel : ObservableObject
         return group;
     }
 
-    private void Respond(ApprovalAction action)
+    private void Respond(string? id, ApprovalResolution resolution)
     {
-        if (_approval is { } approval) _runtime?.Approvals.Respond(approval.Id, action);
+        if (id is null || _approval is not { } approval || approval.Id != id) return;
+        if (resolution.Kind == ApprovalResolutionKind.Granted &&
+            (resolution.Scope is not { } scope || !approval.AllowedScopes.Contains(scope) ||
+             (approval.Level == PermissionLevel.Level3 && scope != GrantScope.SingleOperation))) return;
+        _runtime?.Approvals.Respond(id, resolution);
+    }
+
+    private bool IsCurrentApproval(string? id) => id is not null && _approval?.Id == id;
+
+    private bool IsAllowedScope(string? id, GrantScope scope) => IsCurrentApproval(id) &&
+                                                                 _approval!.AllowedScopes.Contains(scope) &&
+                                                                 (_approval.Level != PermissionLevel.Level3 ||
+                                                                  scope           == GrantScope.SingleOperation);
+
+    private static string BackendIdentity(PermissionLevel level) => level switch
+    {
+        PermissionLevel.Level1 or PermissionLevel.Level2 => "执行后端：WindowsSandbox",
+        PermissionLevel.Level3                           => "执行后端：HostProcess（无 OS 隔离，仅单次）",
+        _                                                => "执行后端：未知（拒绝）"
+    };
+
+    private async Task ConfirmPermissionMigrationAsync()
+    {
+        if (IsRunning || _opening || _changing)
+            throw new InvalidOperationException("请先停止当前运行或切换，再确认权限迁移。");
+        _changing = true;
+        OnPropertyChanged(nameof(CanChangeModel));
+        OnPropertyChanged(nameof(CanConfirmPermissionMigration));
+        PermissionMigrationError = string.Empty;
+        var displayedSummary = PermissionMigrationSummary;
+        try
+        {
+            if (Id is null) throw new InvalidOperationException("当前没有待迁移的历史会话。");
+            if (_runtime is null)
+            {
+                _opening             = true;
+                _openingCancellation = new CancellationTokenSource();
+                OnPropertyChanged(nameof(CanConfigure));
+                OnPropertyChanged(nameof(CanChooseWorkspace));
+                try
+                {
+                    await EnsureHistoryLoadedAsync();
+                    while (HasMoreHistory) await LoadHistoryAsync();
+                    await OpenRuntimeAsync(true);
+                }
+                finally
+                {
+                    _opening = false;
+                    _openingCancellation?.Dispose();
+                    _openingCancellation = null;
+                    OnPropertyChanged(nameof(CanConfigure));
+                    OnPropertyChanged(nameof(CanChooseWorkspace));
+                }
+            }
+
+            UserConfig config;
+            try
+            {
+                config = await _factory.LoadUserConfigAsync(CancellationToken.None);
+            }
+            catch
+            {
+                ApplyPermissionMigrationSummary(string.Empty);
+                throw;
+            }
+
+            var currentSummary = PermissionSettingsViewModel.BuildMigrationSummary(config);
+            ApplyPermissionMigrationSummary(currentSummary);
+            if (config.Settings?.Permissions?.PendingMigration == true)
+                throw new InvalidOperationException("请先在设置中确认权限配置迁移，再确认旧会话迁移。");
+            if (!string.Equals(displayedSummary, currentSummary, StringComparison.Ordinal))
+                throw new InvalidOperationException("可信权限配置说明已更新，请检查当前说明后再次确认。");
+            var mode = await _runtime!.ConfirmPermissionMigrationAsync(PermissionMode, CancellationToken.None);
+            SetPermissionMode(mode, false);
+            _permissionMigrationPending = false;
+            OnPropertyChanged(nameof(PermissionMigrationPending));
+            Status = "会话权限迁移已确认";
+            UpdateNotices();
+        }
+        finally
+        {
+            _changing = false;
+            OnPropertyChanged(nameof(CanChangeModel));
+            OnPropertyChanged(nameof(CanConfirmPermissionMigration));
+        }
     }
 
     private void UpdateNotices()
@@ -941,11 +1103,15 @@ public sealed partial class SessionViewModel : ObservableObject
             host.PersistenceWarning is { } warning ? $"本次未可靠保存：{warning}" : null,
             _runError,
             host.DisplayWarning, host.InspectionPendingNote, _cancellationError,
+            host.Session.PermissionMigrationPending
+                ? "旧会话权限迁移待确认；确认前模型工具全部阻断，请先检查下方迁移提示。"
+                : null,
             host.Session.Amendments.Any(item => item.CanonicalMessageIndex is null)
                 ? "有已保存但未生效的补充；重启不会自动发送。"
                 : null
         }.Where(value => !string.IsNullOrEmpty(value)));
         OnPropertyChanged(nameof(InspectionPending));
+        OnPropertyChanged(nameof(PermissionMigrationPending));
     }
 
     public void ShowError(Exception exception)

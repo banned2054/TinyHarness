@@ -62,9 +62,18 @@
                                             <TextBlock Text="{Binding ApprovalText}" Classes="tool-mono" />
                                         </ScrollViewer>
                                         <WrapPanel Orientation="Horizontal">
-                                            <Button Content="仅允许一次" Command="{Binding AllowOnceCommand}"
+                                            <Button Content="本次操作允许" Command="{Binding AllowOnceCommand}"
+                                                    CommandParameter="{Binding ApprovalId}"
                                                     Margin="0,0,8,0" />
-                                            <Button Content="拒绝" Command="{Binding DenyCommand}" />
+                                            <Button Content="本次运行允许" Command="{Binding AllowTurnCommand}"
+                                                    CommandParameter="{Binding ApprovalId}"
+                                                    IsVisible="{Binding CanAllowTurn}" Margin="0,0,8,0" />
+                                            <Button Content="本实例会话允许（仅当前运行实例）"
+                                                    Command="{Binding AllowSessionCommand}"
+                                                    CommandParameter="{Binding ApprovalId}"
+                                                    IsVisible="{Binding CanAllowSession}" Margin="0,0,8,0" />
+                                            <Button Content="拒绝" Command="{Binding DenyCommand}"
+                                                    CommandParameter="{Binding ApprovalId}" />
                                         </WrapPanel>
                                     </StackPanel>
                                 </Border>
@@ -109,6 +118,21 @@
                                         </StackPanel>
                                     </Border>
                                 </StackPanel>
+                                <Border IsVisible="{Binding PermissionMigrationPending}" Classes="settings-row"
+                                        Padding="12">
+                                    <StackPanel Spacing="8">
+                                        <TextBlock Text="旧会话权限迁移待确认" FontWeight="SemiBold" />
+                                        <TextBlock Text="此会话在旧权限格式下创建。确认前模型工具全部阻断；请检查权限模式后确认迁移。"
+                                                   TextWrapping="Wrap" />
+                                        <TextBlock Text="{Binding PermissionMigrationSummary}" TextWrapping="Wrap"
+                                                   FontSize="12" />
+                                        <TextBlock Text="{Binding PermissionMigrationError}" TextWrapping="Wrap" />
+                                        <Button Content="确认迁移并解除阻断"
+                                                Command="{Binding ConfirmPermissionMigrationCommand}"
+                                                IsEnabled="{Binding CanConfirmPermissionMigration}"
+                                                HorizontalAlignment="Left" />
+                                    </StackPanel>
+                                </Border>
                                 <Button Content="我已检查中断产生的变更，解除检查阻断" IsVisible="{Binding InspectionPending}"
                                         IsEnabled="{Binding !IsRunning}"
                                         Command="{Binding AcknowledgeInspectionCommand}" />

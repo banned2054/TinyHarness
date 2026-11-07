@@ -47,15 +47,15 @@ public sealed record DesktopEvent(
 ///     </para>
 /// </summary>
 public sealed record DesktopSessionRequest(
-    string                 WorkspaceRoot,
-    SessionPermissionMode? PermissionMode  = null,
-    string?                SessionId       = null,
-    string?                ProfileName     = null,
-    string?                ModelId         = null,
-    bool                   ShowReasoning   = false,
-    ModelReasoningEffort?  Effort          = null,
-    bool                   EffortSpecified = false,
-    bool                   Reselect        = false)
+    string                WorkspaceRoot,
+    SessionApprovalMode?  PermissionMode  = null,
+    string?               SessionId       = null,
+    string?               ProfileName     = null,
+    string?               ModelId         = null,
+    bool                  ShowReasoning   = false,
+    ModelReasoningEffort? Effort          = null,
+    bool                  EffortSpecified = false,
+    bool                  Reselect        = false)
 {
     public string? ProjectId      { get; init; }
     public string? StoreDirectory { get; init; }
@@ -113,6 +113,16 @@ public sealed partial class DesktopSessionFactory
         ConfigResolver.ResolveAsync(null, cancellationToken, _userConfigPath);
 
     /// <summary>
+    ///     <para>只读加载可信用户配置供迁移说明使用；不读取凭据、不创建宿主或模型客户端。</para>
+    ///     <para>
+    ///         Loads trusted user configuration for migration notices without reading credentials or creating hosts or model
+    ///         clients.
+    ///     </para>
+    /// </summary>
+    public Task<UserConfig> LoadUserConfigAsync(CancellationToken cancellationToken) =>
+        UserConfigStore.LoadAsync(_userConfigPath ?? UserConfigStore.DefaultFilePath(), cancellationToken);
+
+    /// <summary>
     ///     <para>读取可信设置，建立新会话或严格恢复；失败释放所有已打开的资源，不发送模型请求。</para>
     ///     <para>
     ///         Reads trusted settings and creates or strictly resumes a session; failures release resources without model
@@ -135,17 +145,19 @@ public sealed partial class DesktopSessionFactory
         if (!Directory.Exists(root)) throw new DirectoryNotFoundException(root);
         var userPath = _userConfigPath ?? UserConfigStore.DefaultFilePath();
         var user     = await UserConfigStore.LoadAsync(userPath, cancellationToken).ConfigureAwait(false);
+        EnsurePermissionConfigConfirmed(user);
         // 恢复和显式选择不依赖全局默认目标可用；配置一律来自可信用户设置，不读取工作目录的 tinyharness.json。
         var resolution = request.SessionId is null && request.ProfileName is null
             ? await ConfigResolver.ResolveAsync(null, cancellationToken, userPath).ConfigureAwait(false)
             : null;
         var config = (resolution?.Config ?? new TinyHarnessConfig
             {
-                MaxAgentSteps             = user.Settings?.MaxAgentSteps ?? 0,
-                ReservedOutputTokens      = user.Settings?.ReservedOutputTokens ?? 8000,
-                CompactionThreshold       = user.Settings?.CompactionThreshold ?? 0,
-                DefaultToolTimeoutSeconds = user.Settings?.DefaultToolTimeoutSeconds ?? 120,
-                CommandRules              = user.Settings?.CommandRules ?? new TinyHarnessConfig().CommandRules
+                MaxAgentSteps        = user.Settings?.MaxAgentSteps        ?? 0,
+                ReservedOutputTokens = user.Settings?.ReservedOutputTokens ?? 8000,
+                CompactionThreshold  = user.Settings?.CompactionThreshold  ?? 0,
+                DefaultToolTimeoutSeconds =
+                    user.Settings is { } userSettings ? userSettings.DefaultToolTimeoutSeconds : 120,
+                CommandRules = user.Settings?.CommandRules ?? new TinyHarnessConfig().CommandRules
             }) with
             {
                 WorkspaceRoot = root
@@ -174,13 +186,34 @@ public sealed partial class DesktopSessionFactory
                                    $"workspace='{root}' identity='{access.Identity.FileIdentity}' requestedMode={request.PermissionMode} " +
                                    $"sandbox={(sandbox is null ? "disabled" : "enabled")} store='{directory}' user='{Environment.UserName}'");
 
+        // 活动授权登记表：引擎与 Shell 工具共享同一实例，派发复核与快照聚合看到同一状态。
+        var grants                = new GrantRegistry();
+        // 文件工具与 Shell 的统一资源访问策略：权限系统保护路径（用户配置、会话存储与
+        // 沙箱组件）与可信附加根集中分类；沙箱未启用时组件路径自然缺席。
+        var permissionSystemRoots = new List<string> { userPath, directory };
+        if (sandbox is not null)
+        {
+            permissionSystemRoots.Add(sandbox.Components.SetupExecutablePath);
+            permissionSystemRoots.Add(sandbox.Components.RunnerExecutablePath);
+            permissionSystemRoots.Add(sandbox.Components.SandboxHome);
+        }
+
+        var resourcePolicy = new ResourceAccessPolicy(root,
+                                                      user.Settings?.WindowsSandbox?.AdditionalReadRoots,
+                                                      user.Settings?.WindowsSandbox?.AdditionalWriteRoots,
+                                                      permissionSystemRoots : permissionSystemRoots);
         // 常设网络信任只来自可信用户设置：Enabled 档不再逐次审批联网申请。
-        var permissions = new PermissionEngine(root, config.CommandRules,
+        // sandboxExecutionAvailable 由组合结果决定：沙箱未组合即 Deny 进程执行，不回退宿主。
+        var permissions = new PermissionEngine(root,
                                                workspaceReadOnly : () => access.IsReadOnly,
                                                sandboxNetworkStandingEnabled : user.Settings?.WindowsSandbox
-                                                  ?.NetworkPolicy == SandboxNetworkPolicy.Enabled);
-        DesktopWorkspaceCoordinator? repair = null;
-        var backend = sandbox?.Backend ?? new HostProcessBackend(secrets);
+                                                 ?.NetworkPolicy == SandboxNetworkPolicy.Enabled,
+                                               sandboxExecutionAvailable : sandbox is not null,
+                                               resourcePolicy : resourcePolicy,
+                                               grantRegistry : grants,
+                                               frozenScopeReader : FrozenCapabilityScopeReader.FromPreparation);
+        DesktopWorkspaceCoordinator? repair  = null;
+        var                          backend = sandbox?.Backend ?? new HostProcessBackend(secrets);
         if (sandbox is not null && user.Settings?.WindowsSandbox is { } sandboxSettings)
         {
             var grant = new ProcessWorkspaceAclGrant(
@@ -208,21 +241,25 @@ public sealed partial class DesktopSessionFactory
 
         var              workspace      = new Workspace(root, true);
         ChatSessionHost? permissionHost = null;
-        var routedApprovals = new DesktopAutoApprovalProvider(approvals, () => permissions.Mode,
+        var routedApprovals = new DesktopAutoApprovalProvider(approvals, () => permissions.ApprovalMode,
                                                               token => CreateReviewerAsync(permissionHost!, token),
-                                                              () => ReviewInstructions(permissionHost!),
+                                                              () => ReviewContext(permissionHost!, permissions),
                                                               text => events(new DesktopEvent("state", null, text)));
-        var restrictedShell = new ShellTool(workspace, config.DefaultToolTimeoutSeconds, secrets,
-                                            processBackend : backend,
-                                            executionPolicy : sandbox?.ExecutionPolicy ??
-                                                              ProcessExecutionPolicy.Host());
+        // 沙箱未组合时 restricted Shell 不携带冻结策略身份：PermissionShellTool 的 workspace
+        // 路由将明确失败，不回退宿主；沙箱可用性 Deny 由权限引擎的组合期布尔表达。
+        // grant 上下文随组合冻结；活动快照源与引擎共享同一 GrantRegistry。
+        var restrictedShell = CreateWorkspaceShellTool(workspace, config.DefaultToolTimeoutSeconds, backend,
+                                                       sandbox, grants);
         var hostShell = new ShellTool(workspace, config.DefaultToolTimeoutSeconds, secrets,
                                       executionPolicy : ProcessExecutionPolicy.Host());
         ITool[] toolSet =
         [
-            new ListFilesTool(workspace), new SearchTextTool(workspace), new ReadFileTool(workspace),
-            new ApplyPatchTool(workspace),
-            new PermissionShellTool(restrictedShell, hostShell, () => permissions.Mode)
+            new ListFilesTool(workspace, resourcePolicy : resourcePolicy),
+            new SearchTextTool(workspace, resourcePolicy : resourcePolicy),
+            new ReadFileTool(workspace, resourcePolicy : resourcePolicy),
+            new ApplyPatchTool(workspace, resourcePolicy),
+            // 路由只按 executionScope：host 是显式 Level 3 申请，权限模式不再参与工具路由。
+            new PermissionShellTool(restrictedShell, hostShell)
         ];
         var tools = new ToolRegistry(toolSet.Select(tool => access.Guard(() => tool)));
         var options = new AgentOptions
@@ -368,12 +405,18 @@ public sealed partial class DesktopSessionFactory
             }
 
             permissionHost = host;
-            var mode = host.Session.PermissionSelection?.Mode ??
-                       (request.SessionId is not null
-                           ? SessionPermissionMode.ReadOnly
-                           : request.PermissionMode ??
-                             user.Settings?.Permissions?.DefaultMode ?? SessionPermissionMode.ReadOnly);
-            await host.ChangePermissionModeAsync(mode, cancellationToken).ConfigureAwait(false);
+            if (!host.Session.PermissionMigrationPending   &&
+                host.Session.PermissionSelectionV2 is null && host.Session.PermissionSelection is null)
+            {
+                // 全新会话：按请求或可信默认写入首条 /2 审批模式选择。已恢复的 /2 与迁移待确认
+                // 的 /1 会话不在打开时写入——前者沿用已恢复模式（引擎在组合期按其运行），
+                // 后者由迁移确认流程落笔。
+                var requested = request.PermissionMode ??
+                                user.Settings?.Permissions?.DefaultApprovalMode ??
+                                SessionApprovalMode.HumanApproval;
+                await host.ChangeApprovalModeAsync(requested, cancellationToken).ConfigureAwait(false);
+            }
+
             return new DesktopSession(host, approvals,
                                       (profile, modelId, effort, revision, token) =>
                                           ChangeAsync(host, profile, modelId, effort, revision, token),
@@ -394,6 +437,27 @@ public sealed partial class DesktopSessionFactory
 
             throw;
         }
+    }
+
+    /// <summary>
+    ///     <para>按生产组合结果构建工作区 Shell；活动能力快照与沙箱身份上下文必须成对注入。</para>
+    ///     <para>
+    ///         Builds the workspace Shell from production composition, injecting the active-capability snapshot and sandbox
+    ///         identity context together.
+    ///     </para>
+    /// </summary>
+    internal ShellTool CreateWorkspaceShellTool(Workspace                workspace, int? timeoutSeconds,
+                                                IProcessExecutionBackend backend,
+                                                WindowsSandboxExecution? sandbox, GrantRegistry grants)
+    {
+        var grantContext = sandbox is null ? null : new SandboxGrantContext(sandbox.Policy, sandbox.Components);
+        return new ShellTool(workspace, timeoutSeconds, _secrets,
+                             processBackend : backend,
+                             executionPolicy : sandbox?.ExecutionPolicy,
+                             // 快照源仅在沙箱组合成功时接入：无身份形态下 source 会触发
+                             // fail-closed 组合错误，而这里语义是"沙箱不可用"而非组合错误。
+                             activeCapabilities : sandbox is null ? null : grants,
+                             grantContext : grantContext);
     }
 
     /// <summary>
@@ -508,9 +572,10 @@ public sealed partial class DesktopSessionFactory
     /// </summary>
     private async Task RefreshCurrentAsync(ChatSessionHost host, CancellationToken token)
     {
-        var current = host.Session.ModelSelection!;
         var user = await UserConfigStore.LoadAsync(_userConfigPath ?? UserConfigStore.DefaultFilePath(), token)
                                         .ConfigureAwait(false);
+        EnsurePermissionConfigConfirmed(user);
+        var current = host.Session.ModelSelection!;
         // 无目录归属的项目配置仍沿用原路径，不擅自绑定目录中的同名模型。
         if (current.CredentialRoute is null) return;
         if (current.ProfileHint is null && current.CredentialRoute.StartsWith('|')) return;
@@ -518,6 +583,12 @@ public sealed partial class DesktopSessionFactory
                      throw new InvalidOperationException("当前供应商或模型已不存在，请重新选择模型后发送。");
         await ChangeAsync(host, target.Profile, target.Model, CurrentEffort(current.ReasoningEffort, target.Model),
                           current.Revision, token, networkSettings : user.Settings?.Network).ConfigureAwait(false);
+    }
+
+    private static void EnsurePermissionConfigConfirmed(UserConfig user)
+    {
+        if (user.Settings?.Permissions?.PendingMigration == true)
+            throw new InvalidOperationException("旧权限配置尚未确认迁移，请先在设置中确认权限配置迁移。");
     }
 
     private static ModelReasoningEffort? CurrentEffort(ModelReasoningEffort? saved, UserProfileModel model) =>

@@ -165,6 +165,7 @@ internal sealed class ChatInputRouter(TextReader inner) : TextReader
 
     private static bool IsApprovalReply(string line) => line.Trim().ToLowerInvariant() is
         "a" or "allow" or "once" or "allow once" or "y" or "yes" or
+        "t" or "turn" or
         "s" or "session" or "allow session" or "d" or "deny" or "n" or "no";
 
     protected override void Dispose(bool disposing)

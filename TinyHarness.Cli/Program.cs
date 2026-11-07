@@ -11,6 +11,7 @@ using TinyHarness.Core.Models.ChatCompletions;
 using TinyHarness.Core.Models.Configuration;
 using TinyHarness.Core.Models.Context;
 using TinyHarness.Core.Models.Persistence;
+using TinyHarness.Core.Models.Permissions;
 using TinyHarness.Core.Models.Runtime;
 using TinyHarness.Core.Models.Runtime.WindowsSandbox;
 using TinyHarness.Core.Models.Session;
@@ -174,18 +175,41 @@ internal static class Program
     /// </remarks>
     private static async Task<int> RunAsync(string prompt, string? configPath, ReasoningDisplayMode reasoningDisplay)
     {
-        using var cts = new CancellationTokenSource();
+        using var cts                = new CancellationTokenSource();
         using var cancelRegistration = new ConsoleCancellation(cts);
-        var       reader = new ExclusiveInputReader(Console.In);
-        var       composition = await ComposeAgentAsync(configPath, cts.Token, true, reader).ConfigureAwait(false);
+        var       reader             = new ExclusiveInputReader(Console.In);
+        var migrationConfig = await UserConfigStore.LoadAsync(UserConfigStore.DefaultFilePath(), cts.Token)
+                                                   .ConfigureAwait(false);
+        if (migrationConfig.Settings?.Permissions is { PendingMigration: true })
+        {
+            await WritePermissionMigrationSummaryAsync(migrationConfig, Console.Error,
+                                                       "Legacy permission configuration requires confirmation.", true)
+               .ConfigureAwait(false);
+            await Console.Error.WriteLineAsync(
+                                               "Configuration migration is pending. Run 'tinyharness chat' with interactive input to review and confirm it.");
+            return 1;
+        }
+
+        var composition = await ComposeAgentAsync(configPath, cts.Token, true, reader).ConfigureAwait(false);
         await using var events =
             new ConsoleHostEventSink(composition.KnownSecrets, reasoningDisplay : reasoningDisplay);
 
         await WriteHeaderAsync("TinyHarness run", composition).ConfigureAwait(false);
 
         // 审批通过单一读取器接收，避免多个循环争抢 stdin。
-        IApprovalProvider approver = new ConsoleApprovalProvider(reader, Console.Out, composition.KnownSecrets);
-        var instructionLoader = new ProjectInstructionLoader(new Workspace(composition.Config.WorkspaceRoot));
+        ChatSessionHost? activeHost = null;
+        var approver = CliApprovalRouting.Create(
+                                                 new ConsoleApprovalProvider(reader, Console.Out,
+                                                                             composition.KnownSecrets),
+                                                 () => activeHost ??
+                                                       throw new
+                                                           InvalidOperationException("The session host is not ready."),
+                                                 composition.Permissions,
+                                                 token => CreateReviewerAsync(activeHost ??
+                                                                              throw new
+                                                                                  InvalidOperationException("The session host is not ready."),
+                                                                              composition.KnownSecrets, token));
+        var instructionLoader   = new ProjectInstructionLoader(new Workspace(composition.Config.WorkspaceRoot));
         var initialInstructions = await instructionLoader.LoadAsync(null, [], cts.Token).ConfigureAwait(false);
 
         var project = await SessionProjectBinding.GetProjectAsync(composition.SessionStoreDirectory!,
@@ -205,14 +229,17 @@ internal static class Program
                                              approver,
                                              events,
                                              sessionWriter : new SessionStoreWriter(composition.SessionStoreDirectory!,
-                                                      session.Id, composition.KnownSecrets,
-                                                      composition.SessionIndexUpdater is { } runUpdater
-                                                          ? runUpdater.HandleBatchCommittedAsync
-                                                          : null),
+                                                 session.Id, composition.KnownSecrets,
+                                                 composition.SessionIndexUpdater is { } runUpdater
+                                                     ? runUpdater.HandleBatchCommittedAsync
+                                                     : null),
                                              instructionLoader : instructionLoader,
                                              initialInstructions : initialInstructions,
                                              knownSecrets : composition.KnownSecrets,
                                              credentialRoute : composition.CredentialRoute);
+        activeHost = host;
+
+        await host.ChangeApprovalModeAsync(composition.DefaultApprovalMode, cts.Token).ConfigureAwait(false);
 
         var run      = await host.SubmitTurnAsync(prompt, cts.Token).ConfigureAwait(false);
         var result   = run.Result!;
@@ -289,6 +316,12 @@ internal static class Program
         using var consoleInput = new ChatConsoleInputReader(Console.In, cancellation,
                                                             OperatingSystem.IsWindows() && !Console.IsInputRedirected);
         using var reader = new ChatInputRouter(new ExclusiveInputReader(consoleInput));
+        var migrationBaseline = await UserConfigStore.LoadAsync(UserConfigStore.DefaultFilePath(),
+                                                                cancellation.SessionToken).ConfigureAwait(false);
+        if (!await ConfirmConfigurationMigrationAsync(migrationBaseline, reader, cancellation.SessionToken)
+               .ConfigureAwait(false))
+            return 1;
+
         var composition = await ComposeAgentAsync(configPath, cancellation.SessionToken, true, reader,
                                                   true)
            .ConfigureAwait(false);
@@ -301,9 +334,6 @@ internal static class Program
 
         var instructionLoader = new ProjectInstructionLoader(new Workspace(config.WorkspaceRoot));
         var identity          = new SessionModelIdentity(config.Model, config.Endpoint, config.ChatApi);
-
-        PermissionEngine NewPermissions() => new(config.WorkspaceRoot, config.CommandRules,
-                                                 workspaceReadOnly : () => composition.Access.State.IsReadOnly);
 
         ChatModelSelection? draftSelector = null;
 
@@ -372,6 +402,19 @@ internal static class Program
                                            ? creationUpdater.HandleBatchCommittedAsync
                                            : null);
             ChatSessionHost? createdHost = null;
+            var              newStack    = CreateChatExecutionStack(composition);
+            var newApprover = CliApprovalRouting.Create(
+                                                        new ConsoleApprovalProvider(reader, Console.Out,
+                                                            composition.KnownSecrets),
+                                                        () => createdHost ??
+                                                              throw new
+                                                                  InvalidOperationException("The session host is not ready."),
+                                                        newStack.Permissions,
+                                                        token => CreateReviewerAsync(
+                                                         createdHost ??
+                                                         throw new
+                                                             InvalidOperationException("The session host is not ready."),
+                                                         composition.KnownSecrets, token));
             try
             {
                 if (draft is not null)
@@ -380,10 +423,9 @@ internal static class Program
                 // 首次普通输入才执行本工厂：/new 只进入未发送空白态，不创建会话或写入端；
                 // 项目规则仍由首回合边界可靠提交。
                 // 启动客户端归组合根按进程生命周期持有（后续宿主共用），宿主以借用方式绑定。
-                createdHost = new ChatSessionHost(session, context, selectedOptions, selectedClient!, composition.Tools,
-                                                  WorkspacePrompts.Current, NewPermissions(),
-                                                  new ConsoleApprovalProvider(reader, Console.Out,
-                                                                              composition.KnownSecrets),
+                createdHost = new ChatSessionHost(session, context, selectedOptions, selectedClient!, newStack.Tools,
+                                                  WorkspacePrompts.Current, newStack.Permissions,
+                                                  newApprover,
                                                   events, sessionWriter : writer, instructionLoader : instructionLoader,
                                                   initialInstructions : instructions,
                                                   knownSecrets : composition.KnownSecrets,
@@ -399,6 +441,9 @@ internal static class Program
                                                                            (selectedClient as MicrosoftAiChatClient)
                                                                          ?.NetworkRouteIdentity),
                                                    token).ConfigureAwait(false);
+                await createdHost.ChangeApprovalModeAsync(composition.DefaultApprovalMode, token)
+                                 .ConfigureAwait(false);
+                await composition.Access.BindSessionAsync(newStack.Permissions, token).ConfigureAwait(false);
                 return createdHost;
             }
             catch
@@ -437,6 +482,19 @@ internal static class Program
                                                      composition.Options.Context);
                 await SessionProjectBinding.BindRestoredAsync(composition.SessionStoreDirectory!, restored.Session,
                                                               writer, token).ConfigureAwait(false);
+                var resumeStack = CreateChatExecutionStack(composition);
+                var resumeApprover = CliApprovalRouting.Create(
+                                                               new ConsoleApprovalProvider(reader, Console.Out,
+                                                                   composition.KnownSecrets),
+                                                               () => host ??
+                                                                     throw new
+                                                                         InvalidOperationException("The session host is not ready."),
+                                                               resumeStack.Permissions,
+                                                               approvalToken => CreateReviewerAsync(
+                                                                host ??
+                                                                throw new
+                                                                    InvalidOperationException("The session host is not ready."),
+                                                                composition.KnownSecrets, approvalToken));
 
                 // 再解析可执行目标：默认最后已提交选择；失效、歧义或能力不再支持时不悄悄改用全局默认。
                 var outcome =
@@ -456,10 +514,9 @@ internal static class Program
                 {
                     // 目标不可解析：以未绑定宿主接管已恢复历史与写入端，等待用户显式选择后再发送。
                     host = new ChatSessionHost(restored.Session, restored.Context, composition.Options,
-                                               null, composition.Tools, WorkspacePrompts.Current,
-                                               NewPermissions(),
-                                               new ConsoleApprovalProvider(reader, Console.Out,
-                                                                           composition.KnownSecrets),
+                                               null, resumeStack.Tools, WorkspacePrompts.Current,
+                                               resumeStack.Permissions,
+                                               resumeApprover,
                                                events, sessionWriter : writer,
                                                needsInspection : restored.NeedsInspection,
                                                instructionLoader : instructionLoader,
@@ -468,14 +525,15 @@ internal static class Program
                     await Console.Out.WriteLineAsync(
                                                      "  model     : the session history stays resumable; select a model with " +
                                                      "'/models use <model-id> [--provider <profile>] [--effort <id>]' before sending.");
+                    await composition.Access.BindSessionAsync(resumeStack.Permissions, token).ConfigureAwait(false);
                     return host;
                 }
 
                 resolved = target;
                 // 启动客户端归组合根进程生命周期持有（借用）；目录解析构造的新客户端随宿主转交释放。
                 host = new ChatSessionHost(restored.Session, restored.Context, target.Options, target.Client,
-                                           composition.Tools, WorkspacePrompts.Current, NewPermissions(),
-                                           new ConsoleApprovalProvider(reader, Console.Out, composition.KnownSecrets),
+                                           resumeStack.Tools, WorkspacePrompts.Current, resumeStack.Permissions,
+                                           resumeApprover,
                                            events, sessionWriter : writer,
                                            needsInspection : restored.NeedsInspection,
                                            instructionLoader : instructionLoader,
@@ -539,6 +597,7 @@ internal static class Program
                     await Console.Out.WriteLineAsync("  route     : the credential route changed since this session " +
                                                      "was saved; the previous route's reasoning stays isolated from " +
                                                      "new requests");
+                await composition.Access.BindSessionAsync(resumeStack.Permissions, token).ConfigureAwait(false);
                 return host;
             }
             catch
@@ -565,7 +624,8 @@ internal static class Program
                                                    resumeSessionId is null
                                                        ? null
                                                        : await ResumeHostAsync(resumeSessionId,
-                                                                               cancellation.SessionToken));
+                                                                               cancellation.SessionToken),
+                                                   !Console.IsInputRedirected);
 
         // 普通正文保留原文；所有诊断与审计出口共享本次进程使用过的密钥集合。
 
@@ -603,6 +663,16 @@ internal static class Program
                                        "without harness encryption, so pasted secrets may be stored. Keep the session store private.");
 
         console.WorkspaceTrustHandler = composition.Access.ChangeAsync;
+        console.PermissionMigrationSummaryWriter = async token =>
+        {
+            var currentConfig = await UserConfigStore.LoadAsync(UserConfigStore.DefaultFilePath(), token)
+                                                     .ConfigureAwait(false);
+            await WritePermissionMigrationSummaryAsync(
+                                                       currentConfig, Console.Out,
+                                                       "Current trusted sandbox/network settings (preserved independently):",
+                                                       false)
+               .ConfigureAwait(false);
+        };
         var exit         = await console.RunAsync().ConfigureAwait(false);
         var attachedHost = console.Host;
 
@@ -615,6 +685,180 @@ internal static class Program
             await Console.Out.WriteLineAsync($"display    : {displayWarning}");
 
         return exit;
+    }
+
+    /// <summary>
+    ///     <para>确认旧用户权限配置迁移；仅在成功写入新形状后返回继续启动。</para>
+    ///     <para>Confirms legacy user-permission migration and continues startup only after the new shape is saved.</para>
+    /// </summary>
+    private static async Task<bool> ConfirmConfigurationMigrationAsync(
+        UserConfig baseline, TextReader input, CancellationToken cancellationToken)
+    {
+        if (baseline.Settings?.Permissions is not { PendingMigration: true }) return true;
+        if (Console.IsInputRedirected)
+        {
+            await Console.Error.WriteLineAsync(
+                                               "Permission configuration migration is pending; redirected input cannot confirm it. No settings were changed.");
+            return false;
+        }
+
+        await WritePermissionMigrationSummaryAsync(baseline, Console.Out,
+                                                   "Legacy permission configuration requires confirmation.", true)
+           .ConfigureAwait(false);
+        await Console.Out.WriteAsync("Rewrite the legacy permission settings and continue? [y/N] ");
+        await Console.Out.FlushAsync(cancellationToken).ConfigureAwait(false);
+        var answer = (await input.ReadLineAsync(cancellationToken).ConfigureAwait(false))?.Trim();
+        if (answer is not ("y" or "Y" or "yes" or "YES"))
+        {
+            await Console.Out.WriteLineAsync("Configuration migration was not confirmed; no settings were changed.");
+            return false;
+        }
+
+        var permissions = baseline.Settings.Permissions;
+        var candidate = baseline with
+        {
+            Settings = baseline.Settings with
+            {
+                Permissions = permissions with
+                {
+                    LegacyDefaultMode = null,
+                    LegacyComposerModes = null,
+                    PendingMigration = false
+                }
+            }
+        };
+        var path = UserConfigStore.DefaultFilePath();
+        await UserConfigStore.SaveAsync(path, candidate, baseline, cancellationToken).ConfigureAwait(false);
+        await Console.Out.WriteLineAsync("Legacy permission settings migrated successfully.").ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>
+    ///     <para>展示旧权限迁移结果与保持独立的可信沙箱和网络设置，不输出代理地址或凭据。</para>
+    ///     <para>
+    ///         Shows the permission migration result and independent trusted sandbox/network settings without proxy
+    ///         addresses or credentials.
+    ///     </para>
+    /// </summary>
+    internal static async Task WritePermissionMigrationSummaryAsync(
+        UserConfig user, TextWriter output, string heading, bool showLegacyMode)
+    {
+        var oldMode = user.Settings?.Permissions?.LegacyDefaultMode ?? "unknown";
+        var mappedMode = user.Settings?.Permissions?.DefaultApprovalMode.ToString() ??
+                         SessionApprovalMode.HumanApproval.ToString();
+        await output.WriteLineAsync(heading);
+        if (showLegacyMode)
+            await output.WriteLineAsync($"  old default mode: {oldMode} -> {mappedMode} (migration mapping only)");
+        await
+            output.WriteLineAsync("  new baseline    : workspace read/write and sandbox Shell; add-on capabilities require approval");
+        await
+            output.WriteLineAsync("  removed         : FullAccess; old grants and commandRules do not become permissions");
+
+        var sandbox       = user.Settings?.WindowsSandbox;
+        var networkPolicy = sandbox?.NetworkPolicy ?? SandboxNetworkPolicy.Restricted;
+        var standingAccess = networkPolicy == SandboxNetworkPolicy.Enabled
+            ? "all sandbox commands retain standing full network access"
+            : "external sandbox networking remains restricted; per-operation approval may grant it";
+        await output.WriteLineAsync($"  networkPolicy   : {networkPolicy} — {standingAccess}");
+        await output.WriteLineAsync("  additional read roots : " + FormatPaths(sandbox?.AdditionalReadRoots));
+        await output.WriteLineAsync("  additional write roots: " + FormatPaths(sandbox?.AdditionalWriteRoots));
+
+        var proxy = sandbox?.Proxy;
+        var proxyDescription = proxy is null
+            ? "FollowAppDefault"
+            : proxy.Mode == SandboxProxyMode.Named
+                ? $"{proxy.Mode} ({TerminalDisplay.Format(proxy.ProxyName ?? "unnamed")})"
+                : proxy.Mode.ToString();
+        await output.WriteLineAsync($"  sandbox proxy   : {proxyDescription} — retained independently");
+        var network = user.Settings?.Network;
+        if (network is not null)
+        {
+            var route = network.DefaultRoute;
+            await output.WriteLineAsync($"  app network route: {route.Mode}" +
+                                        (route.ProxyId is { Length: > 0 } proxyId
+                                            ? $" (proxy id {TerminalDisplay.Format(proxyId)})"
+                                            : string.Empty) + "; retained independently");
+            var proxyNames = network.Proxies.Select(item => TerminalDisplay.Format(item.Name)).ToArray();
+            await
+                output.WriteLineAsync($"  app proxy entries: {(proxyNames.Length == 0 ? "(none)" : string.Join(", ", proxyNames))} — retained");
+        }
+
+        await
+            output.WriteLineAsync("  only settings.permissions will be rewritten; all other user settings are preserved.");
+
+        static string FormatPaths(IReadOnlyList<string>? paths) =>
+            paths is { Count: > 0 } ? string.Join(", ", paths.Select(path => TerminalDisplay.Format(path))) : "(none)";
+    }
+
+    /// <summary>
+    ///     <para>按可信配置解析 AI 审核模型；缺失或歧义时失败关闭，且不输出凭据。</para>
+    ///     <para>
+    ///         Resolves the AI reviewer from trusted configuration; missing or ambiguous targets fail closed without
+    ///         exposing credentials.
+    ///     </para>
+    /// </summary>
+    private static async Task<(IChatCompletionClient Client, string Model)> CreateReviewerAsync(
+        ChatSessionHost host, IReadOnlyDictionary<string, string> knownSecrets, CancellationToken cancellationToken)
+    {
+        var path     = UserConfigStore.DefaultFilePath();
+        var user     = await UserConfigStore.LoadAsync(path, cancellationToken).ConfigureAwait(false);
+        var settings = user.Settings?.Permissions ?? new PermissionSettings();
+        settings.Validate();
+
+        (UserProfile Profile, UserProfileModel Model)? target;
+        if (settings.UseCurrentModel)
+        {
+            var saved       = host.Session.ModelSelection;
+            var profileName = saved?.ProfileHint;
+            if (profileName is null && saved?.CredentialRoute is { } route)
+            {
+                var separator                  = route.IndexOf('|');
+                if (separator > 0) profileName = route[..separator];
+            }
+
+            if (profileName is not null)
+            {
+                var profile = user.Profiles.SingleOrDefault(item => item.Name == profileName);
+                var model   = profile?.Models.SingleOrDefault(item => item.Id == host.Session.Model.ModelId);
+                target = profile is not null && model is not null ? (profile, model) : null;
+            }
+            else
+            {
+                var matches = user.Profiles
+                                  .SelectMany(profile =>
+                                                  profile.Models.Select(model => (Profile : profile, Model : model)))
+                                  .Where(item => item.Model.Id         == host.Session.Model.ModelId  &&
+                                                 item.Profile.Endpoint == host.Session.Model.Endpoint &&
+                                                 item.Profile.ChatApi  == host.Session.Model.ChatApi)
+                                  .ToArray();
+                target = matches.Length == 1 ? matches[0] : null;
+            }
+        }
+        else
+        {
+            var profile = user.Profiles.SingleOrDefault(item => item.Name == settings.ReviewerProfile);
+            var model   = profile?.Models.SingleOrDefault(item => item.Id == settings.ReviewerModel);
+            target = profile is not null && model is not null ? (profile, model) : null;
+        }
+
+        if (target is not { } selected)
+            throw new InvalidOperationException("The configured AI reviewer provider/model is missing or ambiguous.");
+
+        var credentials = new WindowsCredentialStore();
+        var apiKey = StartupModelCredentials.Resolve(selected.Profile.ApiKeyEnvironmentVariable,
+                                                     selected.Profile.ApiKeyCredentialTarget,
+                                                     selected.Profile.Name, credentials, false)
+                  ?? throw new ConfigException("The configured AI reviewer has no API key.");
+        if (knownSecrets is ConcurrentDictionary<string, string> secrets)
+        {
+            secrets[Guid.NewGuid().ToString("N")] = apiKey;
+            if (!string.IsNullOrWhiteSpace(selected.Profile.ApiKeyEnvironmentVariable))
+                secrets[selected.Profile.ApiKeyEnvironmentVariable] = apiKey;
+        }
+
+        return (ModelClientFactory.Create(selected.Model.Id, selected.Profile.Endpoint, apiKey,
+                                          selected.Profile.ChatApi, user.Settings?.Network,
+                                          selected.Profile.Network, credentials), selected.Model.Id);
     }
 
     /// <summary>
@@ -679,6 +923,8 @@ internal static class Program
         // 续聊存储仅取可信用户设置，不接受项目配置；保护校验失败即拒绝启动，不降级目录。
         var userConfig = await UserConfigStore.LoadAsync(UserConfigStore.DefaultFilePath(), cancellationToken)
                                               .ConfigureAwait(false);
+        var defaultApprovalMode = userConfig.Settings?.Permissions?.DefaultApprovalMode ??
+                                  SessionApprovalMode.HumanApproval;
         var networkProfile = resolution.ProfileName is null
             ? null
             : userConfig.Profiles.SingleOrDefault(profile => profile.Name == resolution.ProfileName)
@@ -693,13 +939,8 @@ internal static class Program
         var knownSecrets =
             new ConcurrentDictionary<string, string>(SandboxCliComposition.KnownSecrets(config, apiKey),
                                                      StringComparer.Ordinal);
-        var settings    = userConfig.Settings?.WindowsSandbox;
+        var settings = userConfig.Settings?.WindowsSandbox;
         var accessState = new WorkspaceAccessState(WorkspaceDirectoryIdentity.Capture(config.WorkspaceRoot));
-        // 常设网络信任只来自可信用户设置：Enabled 档不再逐次审批联网申请。
-        var permissions = new PermissionEngine(config.WorkspaceRoot, config.CommandRules,
-                                               workspaceReadOnly : () => accessState.IsReadOnly,
-                                               sandboxNetworkStandingEnabled : settings?.NetworkPolicy ==
-                                                   SandboxNetworkPolicy.Enabled);
         var trustPath = Path.Combine(Path.GetDirectoryName(UserConfigStore.DefaultFilePath())!, "workspace-trust.json");
         IReadOnlyList<string> writeRoots = [config.WorkspaceRoot, .. settings?.AdditionalWriteRoots ?? []];
         var protectedPaths = new List<string> { trustPath, UserConfigStore.DefaultFilePath() };
@@ -712,6 +953,26 @@ internal static class Program
                                                                            settings.AllowTcpLoopback));
         }
 
+        // 文件工具与 Shell 的统一资源访问策略：权限系统保护路径与可信附加根集中分类；
+        // 分类结果只作为注记进入准备计划，授权判定仍属于权限引擎。
+        var resourcePolicy = new ResourceAccessPolicy(config.WorkspaceRoot,
+                                                      settings?.AdditionalReadRoots,
+                                                      settings?.AdditionalWriteRoots,
+                                                      permissionSystemRoots : protectedPaths);
+
+        // 活动授权登记表：引擎与 Shell 工具共享同一实例，派发复核与快照聚合看到同一状态。
+        // sandboxExecutionAvailable 由组合结果决定：沙箱未组合即 Deny 进程执行，不回退宿主。
+        var grants = new GrantRegistry();
+        // 常设网络信任只来自可信用户设置：Enabled 档不再逐次审批联网申请。
+        var permissions = new PermissionEngine(config.WorkspaceRoot,
+                                               workspaceReadOnly : () => accessState.IsReadOnly,
+                                               sandboxNetworkStandingEnabled : settings?.NetworkPolicy ==
+                                                                               SandboxNetworkPolicy.Enabled,
+                                               sandboxExecutionAvailable : false,
+                                               resourcePolicy : resourcePolicy,
+                                               grantRegistry : grants,
+                                               frozenScopeReader : FrozenCapabilityScopeReader.FromPreparation);
+
         WindowsSandboxExecution? sandbox = null;
         var access = new WorkspaceAccessCoordinator(accessState, new WorkspaceTrustStore(trustPath, writeRoots),
                                                     permissions, input ?? new ExclusiveInputReader(Console.In),
@@ -719,28 +980,46 @@ internal static class Program
                                                     OperatingSystem.IsWindows() && settings is
                                                         { Enabled: true, Policy: SandboxPolicyKind.WorkspaceWrite },
                                                     new ProcessWorkspaceAclGrant(protectedPaths, writeRoots, settings),
-                                                    () =>
+                                                    activeGrants =>
                                                     {
                                                         sandbox =
                                                             SandboxCliComposition.TryCompose(settings,
-                                                                     config.WorkspaceRoot, knownSecrets,
-                                                                     sessionStoreDirectory,
-                                                                     userConfig.Settings?.Network);
+                                                                config.WorkspaceRoot, knownSecrets,
+                                                                sessionStoreDirectory,
+                                                                userConfig.Settings?.Network);
                                                         var policy = sandbox?.ExecutionPolicy ??
                                                                      ProcessExecutionPolicy.Host();
+                                                        var grantContext = sandbox is { } activeSandbox
+                                                            ? new SandboxGrantContext(activeSandbox.Policy,
+                                                                activeSandbox.Components)
+                                                            : null;
                                                         return
                                                             Task.FromResult((new ShellTool(new Workspace(config
-                                                                                                  .WorkspaceRoot),
-                                                                                      config.DefaultToolTimeoutSeconds,
-                                                                                      knownSecrets,
-                                                                                      processBackend :
-                                                                                      sandbox?.Backend ??
-                                                                                      new
-                                                                                          HostProcessBackend(knownSecrets),
-                                                                                      executionPolicy : policy),
+                                                                                    .WorkspaceRoot),
+                                                                                 config.DefaultToolTimeoutSeconds,
+                                                                                 knownSecrets,
+                                                                                 processBackend :
+                                                                                 sandbox?.Backend ??
+                                                                                 new
+                                                                                     HostProcessBackend(knownSecrets),
+                                                                                 executionPolicy : policy,
+                                                                                 activeCapabilities :
+                                                                                 sandbox is null
+                                                                                     ? null
+                                                                                     : activeGrants,
+                                                                                 grantContext : grantContext),
                                                                              policy));
                                                     });
         await access.InitializeAsync(cancellationToken).ConfigureAwait(false);
+        permissions = new PermissionEngine(config.WorkspaceRoot,
+                                           workspaceReadOnly : () => accessState.IsReadOnly,
+                                           sandboxNetworkStandingEnabled : settings?.NetworkPolicy ==
+                                                                           SandboxNetworkPolicy.Enabled,
+                                           sandboxExecutionAvailable : sandbox is not null,
+                                           resourcePolicy : resourcePolicy,
+                                           grantRegistry : grants,
+                                           frozenScopeReader : FrozenCapabilityScopeReader.FromPreparation);
+        await access.BindSessionAsync(permissions, cancellationToken).ConfigureAwait(false);
         var executionPolicy = access.Policy;
 
         // 降级组合（恢复入口且凭据缺失）没有客户端与路由；其余执行栈照常组装。
@@ -750,7 +1029,8 @@ internal static class Program
                                         userConfig.Settings?.Network, networkProfile?.Network,
                                         new WindowsCredentialStore());
         var workspace = new Workspace(config.WorkspaceRoot);
-        var tools     = BuildTools(workspace, config, apiKey, executionPolicy, sandbox?.Backend, knownSecrets, access);
+        var tools = BuildTools(workspace, config, apiKey, executionPolicy, sandbox?.Backend, knownSecrets, access,
+                               resourcePolicy, grants);
         var options = new AgentOptions
         {
             Model                     = config.Model,
@@ -779,8 +1059,9 @@ internal static class Program
                                         : CredentialRoute.Describe(resolution.ProfileName,
                                                                    config.ApiKeyEnvironmentVariable,
                                                                    config.ApiKeyCredentialTarget),
-                                    knownSecrets, sandbox, executionPolicy, model, tools,
-                                    permissions, options, sessionStoreDirectory, access, sessionIndexUpdater);
+                                    knownSecrets, sandbox, settings, protectedPaths, executionPolicy, model, tools,
+                                    permissions, defaultApprovalMode, options, sessionStoreDirectory, access,
+                                    sessionIndexUpdater);
     }
 
     /// <summary>
@@ -869,22 +1150,62 @@ internal static class Program
                                            ProcessExecutionPolicy? executionPolicy = null,
                                            IProcessExecutionBackend? processBackend = null,
                                            IReadOnlyDictionary<string, string>? knownSecrets = null,
-                                           WorkspaceAccessCoordinator? access = null)
+                                           WorkspaceAccessCoordinator? access = null,
+                                           ResourceAccessPolicy? resourcePolicy = null,
+                                           IActiveCapabilitySource? activeCapabilities = null)
     {
         var secrets = knownSecrets ?? SandboxCliComposition.KnownSecrets(config, apiKey);
         ITool[] tools =
         [
-            new ListFilesTool(workspace), new SearchTextTool(workspace), new ReadFileTool(workspace),
-            new ApplyPatchTool(workspace),
+            new ListFilesTool(workspace, resourcePolicy : resourcePolicy),
+            new SearchTextTool(workspace, resourcePolicy : resourcePolicy),
+            new ReadFileTool(workspace, resourcePolicy : resourcePolicy),
+            new ApplyPatchTool(workspace, resourcePolicy),
             new ShellTool(workspace, config.DefaultToolTimeoutSeconds, secrets,
                           processBackend : processBackend ?? new HostProcessBackend(secrets),
-                          executionPolicy : executionPolicy)
+                          executionPolicy : executionPolicy,
+                          // 快照源仅在沙箱身份就绪时接入：host/无身份形态下 source 会触发
+                          // fail-closed 组合错误，而这里语义是"沙箱不可用"而非组合错误。
+                          activeCapabilities :
+                          executionPolicy?.Backend == ProcessExecutionBackendKind.WindowsSandbox
+                              ? activeCapabilities
+                              : null)
         ];
         return new ToolRegistry(access is null
                                     ? tools
                                     : tools.Select(tool => access.State.Guard(() => tool.Definition.Name == "shell"
                                                                                   ? access.Shell
                                                                                   : tool)));
+    }
+
+    /// <summary>
+    ///     <para>为单个 chat 宿主构造隔离的授权登记表、资源策略与工具集合。</para>
+    ///     <para>Builds an isolated grant registry, resource policy, and tool set for one chat host.</para>
+    /// </summary>
+    internal static ChatExecutionStack CreateChatExecutionStack(AgentComposition composition)
+    {
+        var grants   = new GrantRegistry();
+        var settings = composition.SandboxSettings;
+        var resourcePolicy = new ResourceAccessPolicy(composition.Config.WorkspaceRoot,
+                                                      settings?.AdditionalReadRoots,
+                                                      settings?.AdditionalWriteRoots,
+                                                      permissionSystemRoots : composition.ProtectedPaths);
+        var permissions = new PermissionEngine(composition.Config.WorkspaceRoot,
+                                               workspaceReadOnly : () => composition.Access.State.IsReadOnly,
+                                               sandboxNetworkStandingEnabled : settings?.NetworkPolicy ==
+                                                                               SandboxNetworkPolicy.Enabled,
+                                               sandboxExecutionAvailable : composition.Sandbox is not null,
+                                               resourcePolicy : resourcePolicy,
+                                               grantRegistry : grants,
+                                               frozenScopeReader : FrozenCapabilityScopeReader.FromPreparation);
+        var tools = BuildTools(new Workspace(composition.Config.WorkspaceRoot), composition.Config,
+                               knownSecrets : composition.KnownSecrets,
+                               executionPolicy : composition.ExecutionPolicy,
+                               processBackend : composition.Sandbox?.Backend,
+                               access : composition.Access,
+                               resourcePolicy : resourcePolicy,
+                               activeCapabilities : grants);
+        return new ChatExecutionStack(permissions, tools, grants, resourcePolicy);
     }
 
     /// <summary>
@@ -946,13 +1267,22 @@ internal static class Program
         using var fixture = await SmokeWorkspace.CreateAsync(cts.Token).ConfigureAwait(false);
         await Console.Out.WriteLineAsync($"  fixtureWs    : {fixture.Root}");
 
-        var plan        = SmokeScript.Build(ProcessProbeCommand(), fixture.Root);
-        var script      = new SmokeScriptClient(plan.Steps);
-        var workspace   = new Workspace(fixture.Root);
-        var tools       = BuildTools(workspace, config);
-        // 冒烟使用默认策略，确保副作用审批不受用户现行规则影响。
-        var permissions = new PermissionEngine(fixture.Root);
-        var approver    = new SmokeApprover();
+        var plan           = SmokeScript.Build(ProcessProbeCommand(), fixture.Root);
+        var script         = new SmokeScriptClient(plan.Steps);
+        var workspace      = new Workspace(fixture.Root);
+        var resourcePolicy = new ResourceAccessPolicy(fixture.Root);
+        var tools = new ToolRegistry(BuildTools(workspace, config, resourcePolicy : resourcePolicy).Values
+                                        .Select(tool => tool is ShellTool shell
+                                                    ? new PermissionShellTool(shell,
+                                                                              new ShellTool(workspace,
+                                                                                  config.DefaultToolTimeoutSeconds,
+                                                                                  executionPolicy :
+                                                                                  ProcessExecutionPolicy.Host()))
+                                                    : tool));
+        // 固定脚本显式申请 Host，覆盖单次审批；这是离线测试组合，不证明机器沙箱可用。
+        var permissions = new PermissionEngine(fixture.Root, sandboxExecutionAvailable : true,
+                                               resourcePolicy : resourcePolicy);
+        var approver = new SmokeApprover();
         var options = new AgentOptions
         {
             Model                     = config.Model,
@@ -1077,7 +1407,7 @@ internal static class Program
                                          "Smoke refreshed project rules: preserve confirmed file facts.\n", cts.Token)
                       .ConfigureAwait(false);
             using (var resumedWriter = await SessionStoreWriter.OpenExistingAsync(sessionDirectory, sessionId,
-                            null, cts.Token, sessionIndexUpdater.HandleBatchCommittedAsync).ConfigureAwait(false))
+                       null, cts.Token, sessionIndexUpdater.HandleBatchCommittedAsync).ConfigureAwait(false))
             using (var refreshedHost = new ChatSessionHost(restoration.Session, restoration.Context, options,
                                                            new SmokeScriptClient([new SmokeStep()]), tools,
                                                            systemPrompt, permissions, approver,
@@ -1126,9 +1456,9 @@ internal static class Program
         try
         {
             var indexRow = await new SessionIndexStore(sessionDirectory).GetRowAsync(sessionId, cts.Token)
-                                 .ConfigureAwait(false);
-            if (indexRow is null          ||
-                indexRow.Summary is null  ||
+                                                                        .ConfigureAwait(false);
+            if (indexRow is null         ||
+                indexRow.Summary is null ||
                 !string.Equals(indexRow.Id, sessionId, StringComparison.OrdinalIgnoreCase))
                 throw new SessionStoreException("Smoke session was not reflected in the SQLite index.");
             await Console.Out.WriteLineAsync("  session index: verified SQLite summary row for the smoke session");
@@ -1143,6 +1473,10 @@ internal static class Program
         // 脚本客户端拒绝工具闭环或内容不匹配；还需核对工具与审批次数，防止跳过补丁或进程执行。
         var passed = result.ToolExecutions == plan.ExpectedToolExecutions &&
                      approver.Prompts      == plan.ExpectedApprovalPrompts;
+        if (!passed)
+            await Console.Error.WriteLineAsync(
+                                               $"Smoke expected {plan.ExpectedToolExecutions} tool executions and {plan.ExpectedApprovalPrompts} approvals; " +
+                                               $"observed {result.ToolExecutions} executions and {approver.Prompts} approvals.");
         if (passed)
         {
             await M15OfflineSmoke.RunAsync(fixture.Root, sessionDirectory,
@@ -1205,20 +1539,29 @@ internal static class Program
     ///     <para>chat 携带受保护会话存储目录；未启用持久化时该目录为 null。</para>
     ///     <para>Chat carries the protected session-store directory; it is null when persistence is disabled.</para>
     /// </remarks>
-    private sealed record AgentComposition(
+    internal sealed record AgentComposition(
         ConfigResolution                    Resolution,
         TinyHarnessConfig                   Config,
         string?                             CredentialRoute,
         IReadOnlyDictionary<string, string> KnownSecrets,
         WindowsSandboxExecution?            Sandbox,
+        WindowsSandboxSettings?             SandboxSettings,
+        IReadOnlyList<string>               ProtectedPaths,
         ProcessExecutionPolicy              ExecutionPolicy,
         IChatCompletionClient?              Model,
         ToolRegistry                        Tools,
         PermissionEngine                    Permissions,
+        SessionApprovalMode                 DefaultApprovalMode,
         AgentOptions                        Options,
         string?                             SessionStoreDirectory,
         WorkspaceAccessCoordinator          Access,
         SessionIndexUpdater?                SessionIndexUpdater);
+
+    internal sealed record ChatExecutionStack(
+        PermissionEngine     Permissions,
+        ToolRegistry         Tools,
+        GrantRegistry        Grants,
+        ResourceAccessPolicy ResourcePolicy);
 
     /// <summary>
     ///     <para>将 Ctrl+C 转换为任务取消；释放时移除全局事件处理器。</para>

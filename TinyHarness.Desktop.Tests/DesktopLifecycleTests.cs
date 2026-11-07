@@ -204,16 +204,16 @@ public sealed class DesktopLifecycleTests
             return ValueTask.CompletedTask;
         }, value => value);
         using var cancellation = new CancellationTokenSource();
-        var       first        = provider.PromptAsync(Preparation(), cancellation.Token);
+        var       first        = provider.PromptAsync(Request(), cancellation.Token);
         var       expiredId    = pending!.Id;
         cancellation.Cancel();
         await Assert.ThatAsync(async () => await first, Throws.InstanceOf<OperationCanceledException>());
         Assert.That(pending, Is.Null);
-        var second = provider.PromptAsync(Preparation(), CancellationToken.None);
-        Assert.That(provider.Respond(expiredId, ApprovalAction.AllowOnce), Is.False);
+        var second = provider.PromptAsync(Request(), CancellationToken.None);
+        Assert.That(provider.Respond(expiredId, AllowOnce), Is.False);
         Assert.That(second.IsCompleted, Is.False);
-        Assert.That(provider.Respond(pending!.Id, ApprovalAction.Deny), Is.True);
-        Assert.That(await second, Is.EqualTo(ApprovalAction.Deny));
+        Assert.That(provider.Respond(pending!.Id, Denied), Is.True);
+        Assert.That(await second, Is.EqualTo(Denied));
     }
 
     [Test]
@@ -232,14 +232,14 @@ public sealed class DesktopLifecycleTests
             return ValueTask.CompletedTask;
         }, value => value);
         using var cancellation = new CancellationTokenSource();
-        var       firstWait    = first.PromptAsync(Preparation(), cancellation.Token);
-        var       secondWait   = second.PromptAsync(Preparation(), CancellationToken.None);
+        var       firstWait    = first.PromptAsync(Request(), cancellation.Token);
+        var       secondWait   = second.PromptAsync(Request(), CancellationToken.None);
         cancellation.Cancel();
         await Assert.ThatAsync(async () => await firstWait, Throws.InstanceOf<OperationCanceledException>());
         Assert.That(left, Is.Null);
         Assert.That(right, Is.Not.Null);
-        second.Respond(right!.Id, ApprovalAction.AllowOnce);
-        Assert.That(await secondWait, Is.EqualTo(ApprovalAction.AllowOnce));
+        second.Respond(right!.Id, AllowOnce);
+        Assert.That(await secondWait, Is.EqualTo(AllowOnce));
     }
 
     [Test]
@@ -363,6 +363,16 @@ public sealed class DesktopLifecycleTests
         Summary    = "offline approval",
         Arguments  = new JsonObject()
     };
+
+    /// <summary>把准备计划包装成 Level2 审批请求。</summary>
+    private static ApprovalRequest Request() =>
+        new(Preparation(), PermissionLevel.Level2, [GrantScope.SingleOperation], null, null);
+
+    /// <summary>测试用批准与拒绝结论。</summary>
+    private static readonly ApprovalResolution AllowOnce = ApprovalResolution.Granted(GrantScope.SingleOperation);
+
+    /// <summary>测试用拒绝结论。</summary>
+    private static readonly ApprovalResolution Denied = ApprovalResolution.Denied("denied by test");
 
     private sealed class WaitingModel(
         TaskCompletionSource  entered,

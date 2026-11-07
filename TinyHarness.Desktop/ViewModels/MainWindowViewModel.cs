@@ -108,6 +108,7 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     private CancellationTokenSource?                          _organizeSource;
     private bool?                                             _pendingProjectDeletionPromptPreference;
     private PermissionSettings                                _permissionSettings = new();
+    private string                                            _permissionMigrationSummary = string.Empty;
     private int                                               _projectDeletionDialogVersion;
     private string?                                           _projectDeletionErrorText;
     private bool                                              _projectDeletionOpen;
@@ -876,9 +877,10 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
                 return (entries, null);
             case SessionIndexAvailabilityStatus.Missing :
             case SessionIndexAvailabilityStatus.NeedsSchema :
-                // 索引尚未建立：严格摘要扫描直接呈现，后台对账建库后自动切换查询路径。
-                // The index does not exist yet: render from the strict summary scan, and switch to queries once
-                // background reconciliation builds the database.
+            case SessionIndexAvailabilityStatus.NeedsRebuild :
+                // 索引尚未建立或为旧版本：严格摘要扫描直接呈现，后台对账建库或重建后自动切换查询路径。
+                // The index does not exist yet or is an older version: render from the strict summary scan, and
+                // switch to queries once background reconciliation builds or rebuilds the database.
                 return (await projection.ScanSummariesAsync(_lifetime.Token).ConfigureAwait(false), null);
             default :
                 // 索引不可用：降级摘要扫描保持列表可见，原因带回 UI 层呈现，不清空或降级索引文件。
@@ -963,7 +965,9 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         };
         // 标签来自最后选择；历史页面不解析凭据，目标缺失也保留页面。
         row.ApplyPermissionSettings(_permissionSettings);
-        row.ApplyStoredPermissionMode(summary.PermissionMode);
+        row.ApplyStoredPermissionMigration(summary.PermissionModeName, summary.TurnCount,
+                                           _permissionMigrationSummary);
+        row.ApplyStoredPermissionMode(summary.PermissionModeName);
         row.SetArchived(IsSessionArchived(row));
         return row;
     }
@@ -979,7 +983,9 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     {
         row.ApplyStoredMetadata(summary.ProjectId, summary.ProjectAssignmentState, summary.LastActivityUtc);
         row.SetArchived(IsSessionArchived(row));
-        row.ApplyStoredPermissionMode(summary.PermissionMode);
+        row.ApplyStoredPermissionMigration(summary.PermissionModeName, summary.TurnCount,
+                                           _permissionMigrationSummary);
+        row.ApplyStoredPermissionMode(summary.PermissionModeName);
     }
 
     /// <summary>
@@ -1568,9 +1574,13 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         var revision = _storeRevision;
         var user     = await UserConfigStore.LoadAsync(UserConfigPath, _lifetime.Token);
         _permissionSettings = user.Settings?.Permissions ?? new PermissionSettings();
+        _permissionMigrationSummary = PermissionSettingsViewModel.BuildMigrationSummary(user);
         foreach (var page in Sessions.Concat(_failedDrafts).Append(_newConversation).Where(page => page is not null)
                                      .Distinct())
+        {
             page!.ApplyPermissionSettings(_permissionSettings);
+            page.ApplyPermissionMigrationSummary(_permissionMigrationSummary);
+        }
         if (revision != _storeRevision && _storeDirectory is { } current) return (current, false);
         Models.Clear();
         foreach (var profile in user.Profiles)

@@ -30,7 +30,10 @@ public class ChatInputRouterTests
                                              new AgentOptions
                                                  { Model = "test", MaxAgentSteps = 5, DefaultToolTimeoutSeconds = 30 },
                                              model,
-                                             new ToolRegistry([tool]), "sys", new PermissionEngine(Path.GetTempPath()),
+                                             new ToolRegistry([tool]), "sys",
+                                             new PermissionEngine(Path.GetTempPath(),
+                                                                  resourcePolicy :
+                                                                  new TestResourcePolicy(Path.GetTempPath())),
                                              new ConsoleApprovalProvider(router, writer), events);
         using var console = new ChatSessionConsole(host, router, writer, cancellation);
         var       running = console.RunAsync();
@@ -48,8 +51,10 @@ public class ChatInputRouterTests
         Assert.That(output.ToString(), Does.Contain("saved and queued").And.Contain("turn 1 finished: completed"));
     }
 
-    [Test]
-    public async Task RoutesControlsAndNaturalAmendmentsSeparatelyFromApprovalReplies()
+    [TestCase("a")]
+    [TestCase("t")]
+    [TestCase("turn")]
+    public async Task RoutesControlsAndNaturalAmendmentsSeparatelyFromApprovalReplies(string reply)
     {
         using var source  = new QueuedReader();
         using var router  = new ChatInputRouter(source);
@@ -68,8 +73,9 @@ public class ChatInputRouterTests
         Assert.That(await routed.Reader.ReadAsync(), Is.EqualTo("/pause"));
         Assert.That(await routed.Reader.ReadAsync(), Is.EqualTo("preserve the public API"));
         Assert.That(approval.IsCompleted, Is.False);
-        await source.Lines.Writer.WriteAsync("a");
-        Assert.That(await approval, Is.EqualTo("a"));
+        await source.Lines.Writer.WriteAsync(reply);
+        Assert.That(await approval.WaitAsync(TimeSpan.FromSeconds(5)), Is.EqualTo(reply));
+        Assert.That(routed.Reader.TryRead(out _), Is.False);
         Assert.That(source.MaximumReaders, Is.EqualTo(1));
     }
 

@@ -581,7 +581,7 @@ public sealed class DesktopProjectionTests
         staleModel.SelectCommand.Execute(null);
         stalePermission.SelectCommand.Execute(null);
         Assert.That(page.SelectedModel, Is.Null);
-        Assert.That(page.PermissionMode, Is.EqualTo(SessionPermissionMode.ReadOnly));
+        Assert.That(page.PermissionMode, Is.EqualTo(SessionApprovalMode.HumanApproval));
         Assert.Throws<InvalidOperationException>(() => page.WorkspaceRoot = fixture.Second);
         finish.SetResult();
         await page.Completion.WaitAsync(TimeSpan.FromSeconds(10));
@@ -590,7 +590,7 @@ public sealed class DesktopProjectionTests
     }
 
     [Test]
-    public async Task ComposerMenusPreselectModelsAndExposeSevenPermissionModes()
+    public async Task ComposerMenusPreselectModelsAndExposeTwoApprovalModes()
     {
         await using var manager = new DesktopSessionManager();
         var             choice  = new ModelChoice("provider", "model");
@@ -605,9 +605,9 @@ public sealed class DesktopProjectionTests
         Assert.That(page.ModelGroups[0].Options[0].Label, Is.EqualTo("model"));
         Assert.That(page.IsModelMenuOpen, Is.False);
         page.IsPermissionMenuOpen = true;
-        page.PermissionOptions.Single(option => option.Label == "项目内读写").SelectCommand.Execute(null);
-        Assert.That(page.PermissionMode, Is.EqualTo(SessionPermissionMode.ProjectWrite));
-        Assert.That(page.PermissionPickerLabel, Is.EqualTo("项目内读写"));
+        page.PermissionOptions.Single(option => option.Label == "AI 审核").SelectCommand.Execute(null);
+        Assert.That(page.PermissionMode, Is.EqualTo(SessionApprovalMode.AIAutoReview));
+        Assert.That(page.PermissionPickerLabel, Is.EqualTo("AI 审核"));
         foreach (var option in page.EffortOptions)
         {
             Assert.That(option.SelectCommand.CanExecute(null), Is.False);
@@ -616,7 +616,7 @@ public sealed class DesktopProjectionTests
 
         Assert.That(page.CurrentEffortText, Is.Empty);
         page.IsPermissionMenuOpen = true;
-        Assert.That(page.PermissionOptions, Has.Count.EqualTo(7));
+        Assert.That(page.PermissionOptions, Has.Count.EqualTo(2));
         Assert.That(page.PermissionOptions.All(option => option.SelectCommand.CanExecute(null)), Is.True);
     }
 

@@ -1,8 +1,11 @@
 using System.Text.Json.Nodes;
+using TinyHarness.Cli;
 using TinyHarness.Cli.Services;
 using TinyHarness.Core.Models.Agent;
 using TinyHarness.Core.Models.ChatCompletions;
 using TinyHarness.Core.Models.Configuration;
+using TinyHarness.Core.Models.Permissions;
+using TinyHarness.Core.Models.Runtime.WindowsSandbox;
 using TinyHarness.Core.Models.Session;
 using TinyHarness.Core.Models.Tools;
 using TinyHarness.Core.Services.ChatCompletions;
@@ -109,19 +112,156 @@ public class ChatSessionConsoleTests
             Assert.That(draft.Profile.Name, Is.EqualTo("work"));
             Assert.That(draft.Model.Id, Is.EqualTo("draft"));
             return Task.FromResult(new ChatSessionHost(
-                Path.Combine(Path.GetTempPath(), "tinyharness-chat-console-tests"),
-                new SessionModelIdentity(draft.Model.Id, draft.Profile.Endpoint, ChatApiKind.ChatCompletions),
-                new AgentOptions { Model = draft.Model.Id, MaxAgentSteps = 8, DefaultToolTimeoutSeconds = 30 },
-                client, new ToolRegistry([]), SystemPrompt));
+                                                       Path.Combine(Path.GetTempPath(),
+                                                                    "tinyharness-chat-console-tests"),
+                                                       new SessionModelIdentity(draft.Model.Id, draft.Profile.Endpoint,
+                                                                                    ChatApiKind.ChatCompletions),
+                                                       new AgentOptions
+                                                       {
+                                                           Model = draft.Model.Id, MaxAgentSteps = 8,
+                                                           DefaultToolTimeoutSeconds = 30
+                                                       },
+                                                       client, new ToolRegistry([]), SystemPrompt));
         }, input, output, cancellation);
         console.ModelSelection = selection =
             new ChatModelSelection(input, output, _ => Task.FromResult(catalog),
                                    (_, _, _) => throw new AssertionException(
-                                       "Draft application must not resolve credentials before a session exists."));
+                                                                             "Draft application must not resolve credentials before a session exists."));
         Assert.That(await console.RunAsync(TestToken()), Is.Zero);
         Assert.That(console.Session.Model.ModelId, Is.EqualTo("draft"));
         Assert.That(client.Requests, Is.EqualTo(1));
         Assert.That(output.ToString(), Does.Contain("Draft model: work / draft").And.Contain("No session created"));
+    }
+
+    [Test]
+    public async Task ApprovalCommand_ChangesAndReportsThePersistedSessionModeOnlyWhileIdle()
+    {
+        var client = new FakeChatClient();
+        client.Enqueue(FakeChatClient.Text("done"));
+        var       host         = NewHost(client);
+        using var cancellation = new ChatCancellation(false);
+        var       output       = new StringWriter();
+        using var console = new ChatSessionConsole(host,
+                                                   new
+                                                       StringReader("/approval ai\n/approval\n/approval human\nfinish\n"),
+                                                   output, cancellation);
+
+        Assert.That(await console.RunAsync(TestToken()), Is.Zero);
+
+        Assert.That(host.Session.PermissionSelectionV2?.ApprovalMode,
+                    Is.EqualTo(SessionApprovalMode.HumanApproval));
+        Assert.That(output.ToString(), Does.Contain("Approval mode saved: AI review")
+                                           .And.Contain("Approval mode: AI review")
+                                           .And.Contain("Approval mode saved: human approval"));
+    }
+
+    [Test]
+    public async Task ApprovalCommand_DoesNotChangeModeDuringActiveRun()
+    {
+        var       client       = new GateChatClient();
+        var       host         = NewHost(client);
+        using var cancellation = new ChatCancellation(false);
+        using var input        = new ScriptedInput("start");
+        using var router       = new ChatInputRouter(new ExclusiveInputReader(input));
+        var       output       = new StringWriter();
+        using var console      = new ChatSessionConsole(host, router, output, cancellation);
+        var       running      = console.RunAsync(TestToken());
+        await client.WaitStartedAsync(TestToken());
+        input.Enqueue("/approval ai");
+        await WaitForOutputAsync(output, "Approval mode can only change while the session is idle.");
+        input.Complete();
+        client.Open();
+
+        Assert.That(await running, Is.Zero);
+
+        Assert.That(host.Session.PermissionSelectionV2, Is.Null);
+        Assert.That(output.ToString(), Does.Contain("Approval mode can only change while the session is idle."));
+        Assert.That(host.Session.Amendments, Is.Empty);
+    }
+
+    private static async Task WaitForOutputAsync(StringWriter output, string expected)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        while (!output.ToString().Contains(expected, StringComparison.Ordinal))
+            await Task.Delay(10, timeout.Token);
+    }
+
+    [Test]
+    public async Task PermissionMigrationDecline_UsesConfigSummaryAndKeepsTheGateClosed()
+    {
+        var host = NewHost(new FakeChatClient());
+        host.Session.PermissionSelection = new LegacyPermissionSelection
+            { Revision = 1, ModeName = "ReadOnlyAutoReview" };
+        host.Session.PermissionMigrationPending = true;
+        using var cancellation = new ChatCancellation(false);
+        var       output       = new StringWriter();
+        using var console      = new ChatSessionConsole(host, new StringReader("n\n"), output, cancellation);
+        var       summaryCalls = 0;
+        console.PermissionMigrationSummaryWriter = async _ =>
+        {
+            summaryCalls++;
+            await output.WriteLineAsync("networkPolicy: Enabled (standing full network access)");
+        };
+
+        Assert.That(await console.RunAsync(TestToken()), Is.Zero);
+
+        Assert.That(summaryCalls, Is.EqualTo(1));
+        Assert.That(host.Session.PermissionMigrationPending, Is.True);
+        Assert.That(output.ToString(), Does.Contain("AI review (migration mapping only)")
+                                           .And.Contain("networkPolicy: Enabled")
+                                           .And.Contain("model tools remain blocked"));
+    }
+
+    [Test]
+    public async Task PermissionMigrationNonInteractive_DoesNotPromptOrClearTheGate()
+    {
+        var host = NewHost(new FakeChatClient());
+        host.Session.PermissionMigrationPending = true;
+        using var cancellation = new ChatCancellation(false);
+        var       output       = new StringWriter();
+        using var console = new ChatSessionConsole(_ => Task.FromResult(host), new StringReader("y\n"), output,
+                                                   cancellation, initialHost : host, interactive : false);
+        var summaryCalls = 0;
+        console.PermissionMigrationSummaryWriter = _ =>
+        {
+            summaryCalls++;
+            return Task.CompletedTask;
+        };
+
+        Assert.That(await console.RunAsync(TestToken()), Is.Zero);
+
+        Assert.That(summaryCalls, Is.EqualTo(1));
+        Assert.That(host.Session.PermissionMigrationPending, Is.True);
+        Assert.That(output.ToString(), Does.Contain("Non-interactive input cannot confirm migration")
+                                           .And.Not.Contain("Confirm this session's permission migration?"));
+    }
+
+    [Test]
+    public async Task PermissionMigrationSummary_ShowsEffectiveSandboxSettingsWithoutSecrets()
+    {
+        var user = new UserConfig
+        {
+            Settings = new UserConfigSettings
+            {
+                WindowsSandbox = new WindowsSandboxSettings
+                {
+                    NetworkPolicy        = SandboxNetworkPolicy.Enabled,
+                    AdditionalReadRoots  = ["C:\\trusted-read"],
+                    AdditionalWriteRoots = ["C:\\trusted-write"],
+                    Proxy                = new SandboxProxyPolicy { Mode = SandboxProxyMode.Named, ProxyName = "local" }
+                }
+            }
+        };
+        var output = new StringWriter();
+
+        await Program.WritePermissionMigrationSummaryAsync(user, output, "Current sandbox/network settings:", false);
+
+        Assert.That(output.ToString(), Does
+                                      .Contain("networkPolicy   : Enabled — all sandbox commands retain standing full network access")
+                                      .And.Contain("C:\\trusted-read")
+                                      .And.Contain("C:\\trusted-write")
+                                      .And.Contain("Named (local)")
+                                      .And.Contain("retained independently"));
     }
 
     [TestCase("")]
@@ -273,7 +413,9 @@ public class ChatSessionConsoleTests
         var reader = new ExclusiveInputReader(scripted);
         var host = NewHost(client, new ToolRegistry([tool]),
                            new PermissionEngine(Path.Combine(Path.GetTempPath(),
-                                                             "tinyharness-chat-console-tests")),
+                                                             "tinyharness-chat-console-tests"),
+                                                resourcePolicy : new TestResourcePolicy(Path.Combine(
+                                                 Path.GetTempPath(), "tinyharness-chat-console-tests"))),
                            new ConsoleApprovalProvider(reader, output),
                            new ConsoleHostEventSink(null, output));
         using var cancellation = new ChatCancellation(false);
@@ -308,7 +450,7 @@ public class ChatSessionConsoleTests
         var fourth = client.RequestLog[3].Messages;
         var denial = fourth.Last(m => m.Role == ChatRole.Tool);
         Assert.That(denial.ToolCallId, Is.EqualTo("call_fix"));
-        Assert.That(denial.Content, Does.Contain("Permission denied by user"));
+        Assert.That(denial.Content, Does.Contain("Permission denied by the approver"));
         Assert.That(output.ToString(), Does.Contain("turn 3 finished: completed"));
 
         // 审批提示不应造成流式回答重复。

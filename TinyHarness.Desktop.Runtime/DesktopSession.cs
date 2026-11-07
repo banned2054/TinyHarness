@@ -63,11 +63,11 @@ public sealed class DesktopSession(
     }
 
     /// <summary>
-    ///     <para>在与发送、关闭共用的操作槽内可靠切换模式；活动运行必须先停止。</para>
-    ///     <para>Durably switches mode in the shared send/close operation slot; active runs must stop first.</para>
+    ///     <para>在与发送、关闭共用的操作槽内可靠切换审批模式；活动运行必须先停止。</para>
+    ///     <para>Switches the approval mode durably in the shared send/close operation slot; active runs must stop first.</para>
     /// </summary>
-    public Task<SessionPermissionSelection> ChangePermissionModeAsync(SessionPermissionMode mode,
-                                                                      CancellationToken     cancellationToken = default)
+    public Task<SessionApprovalMode> ChangeApprovalModeAsync(SessionApprovalMode mode,
+                                                             CancellationToken   cancellationToken = default)
     {
         lock (_sync)
         {
@@ -77,7 +77,29 @@ public sealed class DesktopSession(
             var task = Task.Run(async () =>
             {
                 using var linked = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token, cancellationToken);
-                return await Host.ChangePermissionModeAsync(mode, linked.Token).ConfigureAwait(false);
+                return await Host.ChangeApprovalModeAsync(mode, linked.Token).ConfigureAwait(false);
+            });
+            _change = task;
+            return task;
+        }
+    }
+
+    /// <summary>
+    ///     <para>在会话操作槽内确认权限迁移；运行、其他变更和关闭期间拒绝操作。</para>
+    ///     <para>Confirms permission migration in the session operation slot; rejects while running, changing, or closing.</para>
+    /// </summary>
+    public Task<SessionApprovalMode> ConfirmPermissionMigrationAsync(
+        SessionApprovalMode mode, CancellationToken cancellationToken = default)
+    {
+        lock (_sync)
+        {
+            ObjectDisposedException.ThrowIf(_closing, this);
+            if (_run is { IsCompleted: false } || _change is { IsCompleted: false })
+                throw new InvalidOperationException("请先停止当前运行，再确认权限迁移。");
+            var task = Task.Run(async () =>
+            {
+                using var linked = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token, cancellationToken);
+                return await Host.ConfirmPermissionMigrationAsync(mode, linked.Token).ConfigureAwait(false);
             });
             _change = task;
             return task;

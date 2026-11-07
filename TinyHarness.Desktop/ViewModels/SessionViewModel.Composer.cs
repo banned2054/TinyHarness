@@ -33,8 +33,13 @@ public sealed partial class SessionViewModel
     public ObservableCollection<ComposerMenuOption> VisibleProjectMenuOptions { get; } = [];
     public IReadOnlyList<ComposerMenuOption>        EffortOptions { get; private set; } = [];
     public bool                                     CanChangeModel => !IsRunning && !_opening && !_changing;
-    public bool                                     CanSelectModel => CanChangeModel;
-    public RelayCommand?                            ManageModelsCommand { get; init; }
+
+    public bool CanConfirmPermissionMigration => PermissionMigrationPending &&
+                                                 !IsRunning                 && !_opening &&
+                                                 !_changing;
+
+    public bool          CanSelectModel      => CanChangeModel;
+    public RelayCommand? ManageModelsCommand { get; init; }
 
     public string ModelPickerLabel => CurrentEffortText.Length == 0
         ? CurrentModelLabel
@@ -71,9 +76,9 @@ public sealed partial class SessionViewModel
                                  ? _defaultModel?.DefaultEffort
                                  : _effort ?? SelectedModel.DefaultEffort);
 
-    public string                ChangeModelHint       => CanChangeModel ? "选择将可靠保存到本会话" : "当前运行结束后可切换";
-    public string                PermissionPickerLabel => PermissionMode.Label();
-    public SessionPermissionMode PermissionMode        { get; private set; } = SessionPermissionMode.ReadOnly;
+    public string              ChangeModelHint       => CanChangeModel ? "选择将可靠保存到本会话" : "当前运行结束后可切换";
+    public string              PermissionPickerLabel => _storedPermissionLabel ?? PermissionMode.Label();
+    public SessionApprovalMode PermissionMode        { get; private set; } = SessionApprovalMode.HumanApproval;
 
     public string PermissionChangeHint => CanChangeModel
         ? "选择将保存到本会话；默认与菜单显示可在设置中调整。"
@@ -435,7 +440,22 @@ public sealed partial class SessionViewModel
         StoreDirectory         = Path.GetDirectoryName(_runtime.Host.PersistencePath);
         ProjectId              = _runtime.Host.Session.ProjectId;
         ProjectAssignmentState = _runtime.Host.Session.ProjectAssignmentState;
-        if (_runtime.Host.Session.PermissionSelection is { } permission) SetPermissionMode(permission.Mode, false);
+        if (_runtime.Host.Session.PermissionSelectionV2 is { } selectionV2)
+        {
+            SetPermissionMode(selectionV2.ApprovalMode, false);
+        }
+        else if (_runtime.Host.Session.PermissionSelection is { } legacy)
+        {
+            SetPermissionMode(LegacyPermissionSelectionMapper.FromLegacyName(legacy.ModeName)
+                           ?? SessionApprovalMode.HumanApproval, false);
+            _storedPermissionLabel = LegacyPermissionSelectionMapper.LegacyLabel(legacy.ModeName) ?? "旧版模式";
+            OnPropertyChanged(nameof(PermissionPickerLabel));
+        }
+
+        _permissionMigrationPending = _runtime.Host.Session.PermissionMigrationPending;
+        _permissionMigrationError   = string.Empty;
+        OnPropertyChanged(nameof(PermissionMigrationPending));
+        OnPropertyChanged(nameof(PermissionMigrationError));
         OnPropertyChanged(nameof(ProjectId));
         RefreshProjectMenuSelection();
         OnPropertyChanged(nameof(HasSelectedProject));
@@ -461,7 +481,8 @@ public sealed partial class SessionViewModel
     private void RebuildPermissionMenu()
     {
         PermissionOptions.Clear();
-        foreach (var mode in _permissionSettings.ComposerModes)
+        // 双审批模式菜单（人工审批 / AI 审核）。
+        foreach (var mode in SessionApprovalModes.All)
             PermissionOptions.Add(new ComposerMenuOption(mode.Label(), () => _ = ApplyPermissionSelectionAsync(mode),
                                                          () => CanChangeModel)
             {
@@ -526,7 +547,12 @@ public sealed partial class SessionViewModel
     {
         settings.Validate();
         _permissionSettings = settings;
-        if (Id is null && !_permissionExplicit && _runtime is null) SetPermissionMode(settings.DefaultMode, false);
+        if (Id is null && !_permissionExplicit && _runtime is null)
+            SetPermissionMode(
+                              settings.PendingMigration
+                                  ? LegacyPermissionSelectionMapper.FromLegacyName(settings.LegacyDefaultMode)
+                                 ?? SessionApprovalMode.HumanApproval
+                                  : settings.DefaultApprovalMode, false);
         RebuildPermissionMenu();
     }
 
@@ -534,17 +560,64 @@ public sealed partial class SessionViewModel
     ///     <para>历史列表只投影已保存模式，不打开宿主或授予执行权限。</para>
     ///     <para>Projects a saved mode in history without opening a host or granting execution.</para>
     /// </summary>
-    public void ApplyStoredPermissionMode(SessionPermissionMode? mode)
+    public void ApplyStoredPermissionMode(string? legacyModeName)
     {
-        if (_runtime is null && Id is not null && !_changing)
-            SetPermissionMode(mode ?? SessionPermissionMode.ReadOnly, false);
+        if (_runtime is null && Id is not null && !_changing && legacyModeName is not null)
+        {
+            if (Enum.TryParse<SessionApprovalMode>(legacyModeName, out var approvalMode) &&
+                Enum.IsDefined(approvalMode) && approvalMode.ToString() == legacyModeName)
+            {
+                SetPermissionMode(approvalMode, false);
+                return;
+            }
+
+            var mapped = LegacyPermissionSelectionMapper.FromLegacyName(legacyModeName);
+            if (mapped is { } mode) SetPermissionMode(mode, false);
+            _storedPermissionLabel = LegacyPermissionSelectionMapper.LegacyLabel(legacyModeName) ?? "旧版模式";
+            OnPropertyChanged(nameof(PermissionPickerLabel));
+        }
     }
 
-    private void SetPermissionMode(SessionPermissionMode mode, bool userSelected)
+    /// <summary>
+    ///     <para>从侧栏摘要推导历史会话迁移提示；宿主恢复后以持久化恢复判定为准。</para>
+    ///     <para>
+    ///         Projects the historical migration notice from sidebar metadata; persisted recovery is authoritative once the
+    ///         host opens.
+    ///     </para>
+    /// </summary>
+    public void ApplyStoredPermissionMigration(string? permissionModeName, int turnCount, string summary)
+    {
+        var hasCurrentMode = Enum.TryParse<SessionApprovalMode>(permissionModeName, out var mode) &&
+                             Enum.IsDefined(mode) && mode.ToString() == permissionModeName;
+        if (_runtime is null)
+        {
+            _permissionMigrationPending = !hasCurrentMode &&
+                                          (permissionModeName is not null || turnCount > 0);
+            OnPropertyChanged(nameof(PermissionMigrationPending));
+        }
+
+        ApplyPermissionMigrationSummary(summary);
+    }
+
+    /// <summary>
+    ///     <para>更新本会话迁移确认所需的可信沙箱配置摘要，不读取代理地址或凭据。</para>
+    ///     <para>
+    ///         Updates the trusted sandbox summary for this session's migration prompt without reading proxy addresses or
+    ///         credentials.
+    ///     </para>
+    /// </summary>
+    public void ApplyPermissionMigrationSummary(string summary)
+    {
+        PermissionMigrationSummary = summary;
+        OnPropertyChanged(nameof(CanConfirmPermissionMigration));
+    }
+
+    private void SetPermissionMode(SessionApprovalMode mode, bool userSelected)
     {
         // 同值静默：每轮刷新都会重放保存模式，无变化且非显式重选时不发通知；显式同值重选仍通知（评审既定语义）。
         var changed = PermissionMode != mode;
-        PermissionMode = mode;
+        PermissionMode         = mode;
+        _storedPermissionLabel = null;
         if (userSelected)
         {
             _permissionExplicit = true;
@@ -556,7 +629,7 @@ public sealed partial class SessionViewModel
         OnPropertyChanged(nameof(PermissionMode));
     }
 
-    private async Task ApplyPermissionSelectionAsync(SessionPermissionMode mode)
+    private async Task ApplyPermissionSelectionAsync(SessionApprovalMode mode)
     {
         try
         {
@@ -575,7 +648,7 @@ public sealed partial class SessionViewModel
     ///         conversation on failure.
     ///     </para>
     /// </summary>
-    public async Task SelectPermissionModeAsync(SessionPermissionMode mode)
+    public async Task SelectPermissionModeAsync(SessionApprovalMode mode)
     {
         if (!Enum.IsDefined(mode)) throw new ArgumentOutOfRangeException(nameof(mode));
         if (!CanChangeModel) throw new InvalidOperationException("请先停止当前运行，再切换权限。");
@@ -595,8 +668,8 @@ public sealed partial class SessionViewModel
             await EnsureHistoryLoadedAsync();
             while (HasMoreHistory) await LoadHistoryAsync();
             if (_runtime is null) await OpenRuntimeAsync(false);
-            var selection = await _runtime!.ChangePermissionModeAsync(mode);
-            SetPermissionMode(selection.Mode, true);
+            var applied = await _runtime!.ChangeApprovalModeAsync(mode);
+            SetPermissionMode(applied, true);
             Status = "权限模式已保存并生效";
             CloseComposerMenus();
         }
