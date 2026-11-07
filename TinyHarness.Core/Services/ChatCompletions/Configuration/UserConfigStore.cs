@@ -5,6 +5,7 @@ using TinyHarness.Core.Models.ChatCompletions;
 using TinyHarness.Core.Models.Configuration;
 using TinyHarness.Core.Models.Runtime.WindowsSandbox;
 using TinyHarness.Core.Models.Permissions;
+using TinyHarness.Core.Services.ChatCompletions;
 
 namespace TinyHarness.Core.Services.ChatCompletions.Configuration;
 
@@ -430,6 +431,13 @@ public static class UserConfigStore
                     JsonSerializer.SerializeToNode(budget, RunBudgetJsonContext.Default.RunBudgetLimits);
             }
 
+            if (settings.ModelTimeouts is { } modelTimeouts)
+            {
+                modelTimeouts.Validate();
+                settingsNode["modelTimeouts"] =
+                    JsonSerializer.SerializeToNode(modelTimeouts, ModelTimeoutsJsonContext.Default.ModelTimeouts);
+            }
+
             if (settings.MaxAgentSteps is { } maxAgentSteps) settingsNode["maxAgentSteps"] = maxAgentSteps;
 
             if (settings.ReservedOutputTokens is { } reservedOutputTokens)
@@ -744,6 +752,7 @@ public static class UserConfigStore
         {
             Permissions   = BindPermissions(settingsNode),
             RunBudget     = BindRunBudget(settingsNode, filePath),
+            ModelTimeouts = BindModelTimeouts(settingsNode, filePath),
             MaxAgentSteps = ReadNonNegativeInt(settingsNode, "maxAgentSteps", filePath, "settings.maxAgentSteps"),
             ReservedOutputTokens =
                 ReadNonNegativeInt(settingsNode, "reservedOutputTokens", filePath, "settings.reservedOutputTokens"),
@@ -870,6 +879,42 @@ public static class UserConfigStore
         {
             throw new
                 InvalidDataException($"User config field 'settings.runBudget' in '{filePath}' is invalid: {ex.Message}",
+                                     ex);
+        }
+    }
+
+    /// <summary>
+    ///     <para>
+    ///         严格绑定可信模型请求超时策略；拒绝未知字段、错误类型和非法期限，
+    ///         节缺失返回 null 沿用内置默认值。
+    ///     </para>
+    ///     <para>
+    ///         Strictly binds the trusted model-request timeout policy, rejecting unknown fields, wrong types and
+    ///         invalid deadlines; a missing section returns null and keeps the built-in defaults.
+    ///     </para>
+    /// </summary>
+    private static ModelTimeouts? BindModelTimeouts(JsonObject settings, string filePath)
+    {
+        if (!settings.TryGetPropertyValue("modelTimeouts", out var node)) return null;
+        try
+        {
+            if (node is not JsonObject supplied) throw new JsonException("modelTimeouts must be an object");
+
+            // source generation 会将缺省 init 属性赋为类型零值，先补齐宿主默认值。
+            var complete =
+                JsonSerializer.SerializeToNode(ModelTimeouts.Default, ModelTimeoutsJsonContext.Default.ModelTimeouts)!
+                              .AsObject();
+            foreach (var (name, value) in supplied) complete[name] = value?.DeepClone();
+
+            var timeouts = complete.Deserialize(ModelTimeoutsJsonContext.Default.ModelTimeouts)
+                          ?? throw new JsonException("modelTimeouts must be an object");
+            timeouts.Validate();
+            return timeouts;
+        }
+        catch (Exception ex) when (ex is JsonException or ArgumentOutOfRangeException)
+        {
+            throw new
+                InvalidDataException($"User config field 'settings.modelTimeouts' in '{filePath}' is invalid: {ex.Message}",
                                      ex);
         }
     }

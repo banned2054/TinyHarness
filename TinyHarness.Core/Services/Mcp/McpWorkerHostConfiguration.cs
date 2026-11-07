@@ -1,6 +1,7 @@
 using TinyHarness.Core.Exceptions;
 using TinyHarness.Core.Models.Configuration;
 using TinyHarness.Core.Models.Worker;
+using TinyHarness.Core.Services.ChatCompletions;
 using TinyHarness.Core.Services.ChatCompletions.Configuration;
 using TinyHarness.Core.Services.Runtime;
 
@@ -22,7 +23,7 @@ public sealed class McpWorkerHostConfiguration
     private McpWorkerHostConfiguration(string model, string endpoint, ChatApiKind chatApi, string endpointType,
                                        string apiKey, string workspaceRoot, string userConfigPath,
                                        WorkerExecutionOptions executionOptions, NetworkSettings? network,
-                                       NetworkRoute? providerNetwork)
+                                       NetworkRoute? providerNetwork, ModelTimeouts modelTimeouts)
     {
         Model            = model;
         Endpoint         = endpoint;
@@ -34,6 +35,7 @@ public sealed class McpWorkerHostConfiguration
         ExecutionOptions = executionOptions;
         Network          = network;
         ProviderNetwork  = providerNetwork;
+        ModelTimeouts    = modelTimeouts;
     }
 
     public string Model { get; }
@@ -75,6 +77,15 @@ public sealed class McpWorkerHostConfiguration
     ///     <para>The default provider's nullable network override.</para>
     /// </summary>
     public NetworkRoute? ProviderNetwork { get; }
+
+    /// <summary>
+    ///     <para>启动时固定的可信模型请求超时策略；缺省沿用内置默认值。</para>
+    ///     <para>
+    ///         The trusted model-request timeout policy fixed at startup; absent settings keep the built-in
+    ///         defaults.
+    ///     </para>
+    /// </summary>
+    public ModelTimeouts ModelTimeouts { get; }
 
     /// <summary>
     ///     <para>
@@ -194,7 +205,8 @@ public sealed class McpWorkerHostConfiguration
 
         return new McpWorkerHostConfiguration(profile.DefaultModel, profile.Endpoint, profile.ChatApi,
                                               endpointUri.Scheme.ToUpperInvariant(), apiKey, workspaceRoot, configPath,
-                                              options, userConfig.Settings?.Network, profile.Network);
+                                              options, userConfig.Settings?.Network, profile.Network,
+                                              userConfig.Settings?.ModelTimeouts ?? ModelTimeouts.Default);
     }
 
     private static int Value(int? configured, int defaultValue, int maximum, string field)

@@ -51,6 +51,10 @@ public sealed class MicrosoftAiChatClient : IChatCompletionClient, IDisposable
 
     private readonly IDisposable? _ownedResource;
 
+    private readonly ModelTimeouts _timeouts;
+
+    private readonly TimeProvider _timeProvider;
+
     /// <summary>
     ///     <para>
     ///         包装一个已配置好的 M.E.AI 客户端；本实例负责其释放。<paramref name="api" /> 决定协议感知
@@ -64,12 +68,33 @@ public sealed class MicrosoftAiChatClient : IChatCompletionClient, IDisposable
     /// </summary>
     public MicrosoftAiChatClient(IChatClient  inner,                ChatApiKind api = ChatApiKind.ChatCompletions,
                                  IDisposable? ownedResource = null, string?     networkRouteIdentity = null)
+        : this(inner, api, ownedResource, networkRouteIdentity, null, null)
+    {
+    }
+
+    /// <summary>
+    ///     <para>
+    ///         内部接缝：显式注入超时配置与计时器，使测试能用小期限和手动时钟验证到期行为；
+    ///         空引用沿用公共构造的缺省值。参数不带默认值，避免与公共构造形成重载二义。
+    ///     </para>
+    ///     <para>
+    ///         Internal seam injecting explicit timeout settings and a clock so tests can exercise
+    ///         deadline behavior with small limits and a manual clock; null falls back to the public
+    ///         constructor defaults. The parameters carry no defaults, preventing overload ambiguity
+    ///         with the public constructor.
+    ///     </para>
+    /// </summary>
+    internal MicrosoftAiChatClient(IChatClient     inner,             ChatApiKind   api,
+                                   IDisposable?    ownedResource,     string?       networkRouteIdentity,
+                                   ModelTimeouts?  timeouts,          TimeProvider? timeProvider)
     {
         ArgumentNullException.ThrowIfNull(inner);
         _inner               = inner;
         _api                 = api;
         _ownedResource       = ownedResource;
         NetworkRouteIdentity = networkRouteIdentity;
+        _timeouts            = timeouts ?? ModelTimeouts.Default;
+        _timeProvider        = timeProvider ?? TimeProvider.System;
     }
 
     /// <summary>
@@ -79,6 +104,18 @@ public sealed class MicrosoftAiChatClient : IChatCompletionClient, IDisposable
     public string? NetworkRouteIdentity { get; }
 
     /// <summary>
+    ///     <para>
+    ///         创建本客户端时实际采用的超时策略；组合层据此把同一事实记录进绑定，
+    ///         供宿主识别超时策略变化并替换客户端。
+    ///     </para>
+    ///     <para>
+    ///         The timeout policy actually adopted when this client was created; the composition records the same
+    ///         fact on its binding so the host can detect timeout-policy changes and replace clients.
+    ///     </para>
+    /// </summary>
+    public ModelTimeouts EffectiveTimeouts => _timeouts;
+
+    /// <summary>
     ///     <para>将内部请求转换为 M.E.AI 输入，并把 M.E.AI 的文本与工具调用增量映射为项目流事件。</para>
     ///     <para>
     ///         Converts the internal request to M.E.AI input and maps M.E.AI text/tool
@@ -86,10 +123,16 @@ public sealed class MicrosoftAiChatClient : IChatCompletionClient, IDisposable
     ///     </para>
     /// </summary>
     /// <remarks>
-    ///     <para>单次流式响应受共享模型请求期限限制；调用方取消仍传播为取消。</para>
     ///     <para>
-    ///         Each streaming response uses the shared model-request deadline; caller cancellation still propagates as
-    ///         cancellation.
+    ///         空闲保护衡量相邻两次模型 update 到达的最大间隔，覆盖包括首次等待在内的每次流推进；
+    ///         响应总期限仅在配置为正数时启用，覆盖整个调用，含增量到达后调用方的处理时间。
+    ///         调用方取消仍传播为取消。
+    ///     </para>
+    ///     <para>
+    ///         The idle guard bounds the maximum gap between consecutive model updates and covers
+    ///         every stream wait, the first one included; the end-to-end response deadline is enabled
+    ///         only for a positive setting and spans the whole call, including caller processing after
+    ///         each update. Caller cancellation still propagates as cancellation.
     ///     </para>
     /// </remarks>
     public async IAsyncEnumerable<ChatStreamEvent> CompleteAsync(
@@ -97,8 +140,23 @@ public sealed class MicrosoftAiChatClient : IChatCompletionClient, IDisposable
     {
         if (request is null) throw new ArgumentNullException(nameof(request));
 
-        using var requestTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        requestTimeout.CancelAfter(ModelClientFactory.ModelRequestTimeout);
+        // 响应总期限仅在配置为正数时启用；关闭时不得创建任何到期源。
+        // The response deadline is enabled only for a positive setting; no due-time source is
+        // created while disabled.
+        using var responseTimeout = _timeouts.ResponseTimeoutSeconds > 0
+            ? new CancellationTokenSource(TimeSpan.FromSeconds(_timeouts.ResponseTimeoutSeconds), _timeProvider)
+            : null;
+
+        // 流中止源挂接调用方与响应期限；空闲计时只在每次等待期间武装、等待结束立即解除，
+        // 因此不覆盖调用方处理时间，也不把上一次的计时带入下一次等待。
+        // The stream abort links the caller and the response deadline; idle timing is armed only
+        // during each wait and disarmed as soon as it ends, so it never covers caller processing
+        // time and never carries a previous timer into the next wait.
+        using var streamAbort = responseTimeout is not null
+            ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, responseTimeout.Token)
+            : CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var enumerationToken = streamAbort.Token;
+
         var messages = ToMicrosoftMessages(request);
         var options  = ToChatOptions(request);
 
@@ -130,14 +188,15 @@ public sealed class MicrosoftAiChatClient : IChatCompletionClient, IDisposable
         ChatFinishReason? finishReason      = null;
         var               started           = false;
 
-        await using var updates = _inner.GetStreamingResponseAsync(messages, options, requestTimeout.Token)
-                                        .GetAsyncEnumerator(requestTimeout.Token);
+        await using var updates = _inner.GetStreamingResponseAsync(messages, options, enumerationToken)
+                                        .GetAsyncEnumerator(enumerationToken);
         while (true)
         {
-            ThrowIfRequestTimedOut(requestTimeout, cancellationToken);
-            if (!await MoveNextWithTimeoutAsync(updates, requestTimeout, cancellationToken).ConfigureAwait(false))
+            ThrowIfResponseTimedOut(cancellationToken, responseTimeout);
+            if (!await MoveNextGuardedAsync(updates, streamAbort, cancellationToken, responseTimeout)
+                            .ConfigureAwait(false))
                 break;
-            ThrowIfRequestTimedOut(requestTimeout, cancellationToken);
+            ThrowIfResponseTimedOut(cancellationToken, responseTimeout);
             var update = updates.Current;
 
             if (!started)
@@ -236,7 +295,7 @@ public sealed class MicrosoftAiChatClient : IChatCompletionClient, IDisposable
                 }
         }
 
-        ThrowIfRequestTimedOut(requestTimeout, cancellationToken);
+        ThrowIfResponseTimedOut(cancellationToken, responseTimeout);
 
         // 枚举结束不证明响应完整；保留缺失的结束原因，由循环在执行工具前统一拒绝。
         yield return new ChatStreamEvent
@@ -274,38 +333,63 @@ public sealed class MicrosoftAiChatClient : IChatCompletionClient, IDisposable
     }
 
     /// <summary>
-    ///     <para>读取下一条模型增量；非调用方取消的取消结果统一转换为超时错误。</para>
-    ///     <para>Reads the next model update and converts cancellation not requested by the caller into a timeout error.</para>
+    ///     <para>
+    ///         读取下一条模型增量：空闲计时在每次等待前武装、等待结束立即解除；非调用方取消按
+    ///         响应总期限、空闲窗口、透传底层的优先级转换为超时错误。
+    ///     </para>
+    ///     <para>
+    ///         Reads the next model update with the idle timer armed before each wait and disarmed
+    ///         as soon as it ends; cancellation not requested by the caller becomes a timeout error
+    ///         classified by the response deadline, the idle window, then passthrough of the original
+    ///         message.
+    ///     </para>
     /// </summary>
-    private static async ValueTask<bool> MoveNextWithTimeoutAsync(
-        IAsyncEnumerator<ChatResponseUpdate> updates, CancellationTokenSource requestTimeout,
-        CancellationToken                    callerCancellationToken)
+    private async ValueTask<bool> MoveNextGuardedAsync(
+        IAsyncEnumerator<ChatResponseUpdate> updates, CancellationTokenSource streamAbort,
+        CancellationToken                    callerCancellationToken, CancellationTokenSource?  responseTimeout)
     {
+        var responseWindow = TimeSpan.FromSeconds(_timeouts.ResponseTimeoutSeconds);
+        var idleWindow     = TimeSpan.FromSeconds(_timeouts.StreamIdleTimeoutSeconds);
         try
         {
+            // 空闲保护以单次等待为界：成功返回即视为进展，计时在 finally 解除。
+            // Idle protection is bounded by a single wait; a successful return counts as progress,
+            // and the timer is disarmed in finally.
+            if (_timeouts.StreamIdleTimeoutSeconds > 0) streamAbort.CancelAfter(idleWindow);
             return await updates.MoveNextAsync().ConfigureAwait(false);
         }
         catch (OperationCanceledException exception) when (!callerCancellationToken.IsCancellationRequested)
         {
-            var message = requestTimeout.IsCancellationRequested
-                ? $"The model response exceeded the configured timeout of {ModelClientFactory.ModelRequestTimeout}."
-                : exception.Message;
-            throw new TimeoutException(message, exception);
+            if (responseTimeout?.IsCancellationRequested == true)
+                throw new TimeoutException(ResponseTimeoutMessage(responseWindow));
+
+            if (streamAbort.IsCancellationRequested)
+                throw new TimeoutException(
+                    $"The model stream was idle for more than {idleWindow}; no SDK updates were received.");
+
+            throw new TimeoutException(exception.Message, exception);
+        }
+        finally
+        {
+            if (_timeouts.StreamIdleTimeoutSeconds > 0) streamAbort.CancelAfter(-1);
         }
     }
 
     /// <summary>
-    ///     <para>在流读取前后检查调用方取消和单次模型请求期限。</para>
-    ///     <para>Checks caller cancellation and the per-request deadline before and after reading the stream.</para>
+    ///     <para>在流读取前后检查调用方取消和响应总期限。</para>
+    ///     <para>Checks caller cancellation and the response deadline before and after each stream wait.</para>
     /// </summary>
-    private static void ThrowIfRequestTimedOut(
-        CancellationTokenSource requestTimeout, CancellationToken callerCancellationToken)
+    private void ThrowIfResponseTimedOut(
+        CancellationToken callerCancellationToken, CancellationTokenSource? responseTimeout)
     {
+        var responseWindow = TimeSpan.FromSeconds(_timeouts.ResponseTimeoutSeconds);
         callerCancellationToken.ThrowIfCancellationRequested();
-        if (requestTimeout.IsCancellationRequested)
-            throw new
-                TimeoutException($"The model response exceeded the configured timeout of {ModelClientFactory.ModelRequestTimeout}.");
+        if (responseTimeout?.IsCancellationRequested == true)
+            throw new TimeoutException(ResponseTimeoutMessage(responseWindow));
     }
+
+    private static string ResponseTimeoutMessage(TimeSpan configured) =>
+        $"The model response exceeded the configured response timeout of {configured}.";
 
     /// <summary>
     ///     <para>从 Responses 原始事件恢复文本消息边界；完成事件携带权威正文和阶段，不重发正文增量。</para>

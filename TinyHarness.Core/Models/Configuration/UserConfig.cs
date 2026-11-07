@@ -1,5 +1,6 @@
 using TinyHarness.Core.Models.Agent;
 using TinyHarness.Core.Models.ChatCompletions;
+using TinyHarness.Core.Services.ChatCompletions;
 
 namespace TinyHarness.Core.Models.Configuration;
 
@@ -132,6 +133,19 @@ public sealed record UserConfigSettings
     ///     <para>Trusted run budget; project configuration cannot override it.</para>
     /// </summary>
     public RunBudgetLimits? RunBudget { get; init; }
+
+    /// <summary>
+    ///     <para>
+    ///         可信模型请求超时策略；仅存放在用户配置中，模型请求与项目配置不能修改它。
+    ///         缺省（null）沿用 <see cref="ModelTimeouts.Default" /> 的内置默认值。
+    ///     </para>
+    ///     <para>
+    ///         Trusted model-request timeout policy; stored only in user config, and model requests or project
+    ///         configuration cannot change it. Absent (null) keeps the built-in defaults of
+    ///         <see cref="ModelTimeouts.Default" />.
+    ///     </para>
+    /// </summary>
+    public ModelTimeouts? ModelTimeouts { get; init; }
 
     public int? MaxAgentSteps { get; init; }
 
