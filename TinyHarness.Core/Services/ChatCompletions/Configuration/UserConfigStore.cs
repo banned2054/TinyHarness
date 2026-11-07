@@ -48,37 +48,110 @@ public static class UserConfigStore
     private static readonly JsonSerializerOptions SerializedJsonOptions = new() { WriteIndented = true };
 
     /// <summary>
-    ///     <para>严格绑定用户权限设置；未知枚举不得回退成开放模式。</para>
-    ///     <para>Strictly binds user permission settings; unknown enums never fall back to open access.</para>
+    ///     <para>
+    ///         严格绑定用户权限设置并识别形状：旧 defaultMode/composerModes 进入迁移待确认态，
+    ///         新旧字段混用一律拒绝；未知枚举不得回退成更宽松的授权。
+    ///     </para>
+    ///     <para>
+    ///         Strictly binds user permission settings and detects the shape: legacy defaultMode/composerModes
+    ///         become pending-migration, mixing both shapes is always rejected, and unknown enums never fall back
+    ///         to a looser authorization.
+    ///     </para>
     /// </summary>
     private static PermissionSettings? BindPermissions(JsonObject settings)
     {
         if (!settings.TryGetPropertyValue("permissions", out var node)) return null;
         if (node is not JsonObject value) throw new InvalidDataException("settings.permissions must be an object.");
 
-        static SessionPermissionMode Parse(JsonNode? item)
+        var hasLegacy = value.ContainsKey("defaultMode") || value.ContainsKey("composerModes");
+        if (hasLegacy && value.ContainsKey("defaultApprovalMode"))
+            throw new InvalidDataException("settings.permissions cannot mix legacy (defaultMode/composerModes) " +
+                                           "and current (defaultApprovalMode) fields.");
+
+        return hasLegacy ? BindLegacyPermissions(value) : BindCurrentPermissions(value);
+    }
+
+    /// <summary>
+    ///     <para>
+    ///         按旧形状绑定权限设置：严格解析旧枚举并映射为审批模式；整体置迁移待确认态，其余配置不受影响。
+    ///     </para>
+    ///     <para>
+    ///         Binds permission settings in the legacy shape: the legacy enums parse strictly and map to an
+    ///         approval mode; the whole block becomes pending-migration while every other config field stays usable.
+    ///     </para>
+    /// </summary>
+    private static PermissionSettings BindLegacyPermissions(JsonObject value)
+    {
+        // 旧形状仅按已知旧模式名做最小解析（迁移判定与过渡展示），不做授权解释。
+        static string Parse(JsonNode? item)
         {
             var text = item?.GetValue<string>();
-            if (text is null          || !Enum.TryParse<SessionPermissionMode>(text, out var mode) ||
-                !Enum.IsDefined(mode) || mode.ToString() != text)
+            if (text is null || !LegacyPermissionSelection.KnownLegacyModeNames.Contains(text, StringComparer.Ordinal))
                 throw new InvalidDataException("Unknown permission mode.");
-            return mode;
+            return text;
         }
 
-        var modes = value["composerModes"] is null    ? SessionPermissionModes.All :
-            value["composerModes"] is JsonArray array ? array.Select(Parse).ToArray() :
-                                                        throw new
-                                                            InvalidDataException("permissions.composerModes must be an array.");
+        var modes = value["composerModes"] is null
+            ? LegacyPermissionSelection.KnownLegacyModeNames
+            : value["composerModes"] is JsonArray array
+                ? array.Select(Parse).ToArray()
+                : throw new InvalidDataException("permissions.composerModes must be an array.");
+        var legacyDefault = value["defaultMode"] is null
+            ? "ReadOnly"
+            : Parse(value["defaultMode"]);
         var result = new PermissionSettings
         {
-            DefaultMode = value["defaultMode"] is null ? SessionPermissionMode.ReadOnly : Parse(value["defaultMode"]),
-            ComposerModes = modes,
-            UseCurrentModel = value["useCurrentModel"]?.GetValue<bool>() ?? true,
-            ReviewerProfile = value["reviewerProfile"]?.GetValue<string>(),
-            ReviewerModel = value["reviewerModel"]?.GetValue<string>()
+            LegacyDefaultMode   = legacyDefault,
+            LegacyComposerModes = modes,
+            DefaultApprovalMode = LegacyPermissionSelectionMapper.FromLegacyName(legacyDefault) ??
+                                  throw new InvalidDataException("Unknown legacy permission mode."),
+            UseCurrentModel  = value["useCurrentModel"]?.GetValue<bool>() ?? true,
+            ReviewerProfile  = value["reviewerProfile"]?.GetValue<string>(),
+            ReviewerModel    = value["reviewerModel"]?.GetValue<string>(),
+            PendingMigration = true
         };
         result.Validate();
         return result;
+    }
+
+    /// <summary>
+    ///     <para>
+    ///         按当前形状绑定权限设置：defaultApprovalMode 严格解析（缺省人工审批），旧字段一律缺席。
+    ///     </para>
+    ///     <para>
+    ///         Binds permission settings in the current shape: defaultApprovalMode parses strictly (defaulting to
+    ///         human approval) and no legacy field is present.
+    ///     </para>
+    /// </summary>
+    private static PermissionSettings BindCurrentPermissions(JsonObject value)
+    {
+        var result = new PermissionSettings
+        {
+            DefaultApprovalMode = value["defaultApprovalMode"] is null
+                ? SessionApprovalMode.HumanApproval
+                : ParseApprovalMode(value["defaultApprovalMode"]),
+            UseCurrentModel = value["useCurrentModel"]?.GetValue<bool>() ?? true,
+            ReviewerProfile = value["reviewerProfile"]?.GetValue<string>(),
+            ReviewerModel   = value["reviewerModel"]?.GetValue<string>()
+        };
+        result.Validate();
+        return result;
+    }
+
+    /// <summary>
+    ///     <para>严格解析审批模式：未知取值或大小写变体一律拒绝，不回落到更宽松的授权。</para>
+    ///     <para>
+    ///         Parses an approval mode strictly: unknown values and case variants are rejected and never fall
+    ///         back to a looser authorization.
+    ///     </para>
+    /// </summary>
+    private static SessionApprovalMode ParseApprovalMode(JsonNode? item)
+    {
+        var text = item?.GetValue<string>();
+        if (text is null          || !Enum.TryParse<SessionApprovalMode>(text, out var mode) ||
+            !Enum.IsDefined(mode) || mode.ToString() != text)
+            throw new InvalidDataException("Unknown permission approval mode.");
+        return mode;
     }
 
     /// <summary>
@@ -327,17 +400,27 @@ public static class UserConfigStore
             if (settings.Permissions is { } permissions)
             {
                 permissions.Validate();
-                settingsNode["permissions"] = new JsonObject
-                {
-                    ["defaultMode"] = permissions.DefaultMode.ToString(),
-                    ["composerModes"] = new JsonArray(permissions.ComposerModes
-                                                                 .Select(mode =>
-                                                                             (JsonNode?)JsonValue
-                                                                                .Create(mode.ToString())).ToArray()),
-                    ["useCurrentModel"] = permissions.UseCurrentModel,
-                    ["reviewerProfile"] = permissions.ReviewerProfile,
-                    ["reviewerModel"]   = permissions.ReviewerModel
-                };
+                // 形状随实例走：携带旧形状字段时原样保留（迁移未被确认不静默改写）；
+                // 确认迁移后的新形状只写出当前字段，旧字段从此消失。
+                settingsNode["permissions"] = permissions.LegacyDefaultMode is { } legacyDefault
+                    ? new JsonObject
+                    {
+                        ["defaultMode"] = legacyDefault,
+                        ["composerModes"] = new JsonArray(permissions.LegacyComposerModes!
+                                                                     .Select(mode =>
+                                                                                 (JsonNode?)JsonValue.Create(mode))
+                                                                     .ToArray()),
+                        ["useCurrentModel"] = permissions.UseCurrentModel,
+                        ["reviewerProfile"] = permissions.ReviewerProfile,
+                        ["reviewerModel"]   = permissions.ReviewerModel
+                    }
+                    : new JsonObject
+                    {
+                        ["defaultApprovalMode"] = permissions.DefaultApprovalMode.ToString(),
+                        ["useCurrentModel"]     = permissions.UseCurrentModel,
+                        ["reviewerProfile"]     = permissions.ReviewerProfile,
+                        ["reviewerModel"]       = permissions.ReviewerModel
+                    };
             }
 
             if (settings.RunBudget is { } budget)
@@ -573,15 +656,15 @@ public static class UserConfigStore
                                 InvalidDataException($"User config field 'profiles[{i}].models[{m}].defaultReasoningEffort' in '{filePath}' must be one of the model's declared reasoningEfforts.");
                         models[m] = new UserProfileModel
                         {
-                            Id                     = id,
-                            DisplayName            = displayName,
-                            ContextWindowTokens    = contextWindow,
-                            SupportsImageInput     = ReadBool(modelNode, "supportsImageInput", filePath,
-                                                              $"profiles[{i}].models[{m}].supportsImageInput") ?? false,
-                            SupportsVideoInput     = ReadBool(modelNode, "supportsVideoInput", filePath,
-                                                              $"profiles[{i}].models[{m}].supportsVideoInput") ?? false,
-                            SupportsPdfInput       = ReadBool(modelNode, "supportsPdfInput", filePath,
-                                                              $"profiles[{i}].models[{m}].supportsPdfInput") ?? false,
+                            Id                  = id,
+                            DisplayName         = displayName,
+                            ContextWindowTokens = contextWindow,
+                            SupportsImageInput = ReadBool(modelNode, "supportsImageInput", filePath,
+                                                          $"profiles[{i}].models[{m}].supportsImageInput") ?? false,
+                            SupportsVideoInput = ReadBool(modelNode, "supportsVideoInput", filePath,
+                                                          $"profiles[{i}].models[{m}].supportsVideoInput") ?? false,
+                            SupportsPdfInput = ReadBool(modelNode, "supportsPdfInput", filePath,
+                                                        $"profiles[{i}].models[{m}].supportsPdfInput") ?? false,
                             ReasoningEfforts       = reasoningEfforts,
                             DefaultReasoningEffort = defaultEffort
                         };
@@ -948,7 +1031,8 @@ public static class UserConfigStore
     {
         if (sandboxNode["proxy"] is null) return new SandboxProxyPolicy();
         if (sandboxNode["proxy"] is not JsonObject proxyNode)
-            throw new InvalidDataException($"User config field 'settings.windowsSandbox.proxy' in '{filePath}' must be an object.");
+            throw new
+                InvalidDataException($"User config field 'settings.windowsSandbox.proxy' in '{filePath}' must be an object.");
 
         var modeValue = ReadString(proxyNode, "mode", filePath);
         var mode = modeValue switch
@@ -977,16 +1061,22 @@ public static class UserConfigStore
         _                            => "restricted"
     };
 
-    /// <summary>把沙箱代理策略写成规范 JSON；凭据引用不写入，只保留名称。Writes the sandbox proxy policy as canonical JSON without credential references, keeping only the name.</summary>
+    /// <summary>
+    ///     把沙箱代理策略写成规范 JSON；凭据引用不写入，只保留名称。Writes the sandbox proxy policy as canonical JSON without credential
+    ///     references, keeping only the name.
+    /// </summary>
     private static JsonObject WriteSandboxProxyPolicy(SandboxProxyPolicy proxy)
     {
-        var node = new JsonObject { ["mode"] = proxy.Mode switch
+        var node = new JsonObject
         {
-            SandboxProxyMode.System => "system",
-            SandboxProxyMode.Direct => "direct",
-            SandboxProxyMode.Named  => "named",
-            _                       => "follow-app-default"
-        } };
+            ["mode"] = proxy.Mode switch
+            {
+                SandboxProxyMode.System => "system",
+                SandboxProxyMode.Direct => "direct",
+                SandboxProxyMode.Named  => "named",
+                _                       => "follow-app-default"
+            }
+        };
         if (!string.IsNullOrWhiteSpace(proxy.ProxyName)) node["proxyName"] = proxy.ProxyName;
         return node;
     }

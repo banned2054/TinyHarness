@@ -87,7 +87,45 @@ public sealed partial class ChatSession
     ///     <para>最近一次可靠提交的权限模式；不是单次或运行期批准。</para>
     ///     <para>The last durably committed permission mode, distinct from one-shot or run-scoped approvals.</para>
     /// </summary>
-    public SessionPermissionSelection? PermissionSelection { get; internal set; }
+    public LegacyPermissionSelection? PermissionSelection { get; internal set; }
+
+    /// <summary>
+    ///     <para>
+    ///         最近一次可靠提交的 /2 审批模式选择；与 /1 选择共存时以迁移记录判定生效链。
+    ///         只记录审批人路由，不构成任何可执行授权。
+    ///     </para>
+    ///     <para>
+    ///         The last durably committed /2 approval-mode selection; when a /1 selection coexists, the migration
+    ///         record decides the effective chain. It records approver routing only and carries no executable
+    ///         authority.
+    ///     </para>
+    /// </summary>
+    public SessionPermissionSelectionV2? PermissionSelectionV2 { get; internal set; }
+
+    /// <summary>
+    ///     <para>
+    ///         旧模式迁移完成记录；存在即表示 /1 选择已经迁移流程确认，不再触发迁移待确认态。
+    ///     </para>
+    ///     <para>
+    ///         The completed legacy-mode migration record; its presence means the /1 selection went through the
+    ///         migration flow and no longer triggers the pending-migration state.
+    ///     </para>
+    /// </summary>
+    public PermissionMigrationRecord? PermissionMigration { get; internal set; }
+
+    /// <summary>
+    ///     <para>
+    ///         恢复判定为迁移待确认（未迁移的 /1 选择，或无 /2 选择但有历史运行）；确认前禁止模型工具
+    ///         执行，由宿主在运行组合时消费，<see cref="Services.Session.ChatSessionHost.ConfirmPermissionMigrationAsync" />
+    ///         可靠提交后解除。
+    ///     </para>
+    ///     <para>
+    ///         The recovery verdict is migration-pending (an unmigrated /1 selection, or no /2 selection with
+    ///         historical runs); model tool execution stays blocked until confirmation. The host consumes it
+    ///         when composing runs, and a reliable confirmation commit clears it.
+    ///     </para>
+    /// </summary>
+    public bool PermissionMigrationPending { get; internal set; }
 
     /// <summary>
     ///     <para>会话固定的工作区根绝对路径。</para>

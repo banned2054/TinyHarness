@@ -321,7 +321,7 @@ public class ChatSessionTests
         var       approver = new GateApprover();
         using var cts      = new CancellationTokenSource();
         using var ws       = new TestTempDir();
-        var       engine   = new PermissionEngine(ws.Root);
+        var       engine   = new PermissionEngine(ws.Root, resourcePolicy : new TestResourcePolicy(ws.Root));
         var host = new ChatSessionHost(ws.Root,
                                        new SessionModelIdentity("test-model", "https://example.invalid/v1",
                                                                 ChatApiKind.ChatCompletions),
@@ -361,7 +361,7 @@ public class ChatSessionTests
         client.Enqueue(FakeChatClient.ToolCall("slow", "{}"));
         var       tool   = new GateTool();
         using var cts    = new CancellationTokenSource();
-        var       engine = new PermissionEngine(ws.Root);
+        var       engine = new PermissionEngine(ws.Root, resourcePolicy : new TestResourcePolicy(ws.Root));
         var host = new ChatSessionHost(ws.Root,
                                        new SessionModelIdentity("test-model", "https://example.invalid/v1",
                                                                 ChatApiKind.ChatCompletions),
@@ -370,7 +370,7 @@ public class ChatSessionTests
                                        new ToolRegistry([tool]),
                                        SystemPrompt,
                                        engine,
-                                       new InlineApprover(ApprovalAction.AllowOnce),
+                                       new InlineApprover(ApprovalResolution.Granted(GrantScope.SingleOperation)),
                                        sessionWriterFactory : id => new SessionStoreWriter(dir.Root, id));
 
         var first = host.SubmitTurnAsync("go", cts.Token);
@@ -552,11 +552,11 @@ public class ChatSessionTests
     {
         private readonly TaskCompletionSource _started = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public async Task<ApprovalAction> PromptAsync(ToolPreparation preparation, CancellationToken cancellationToken)
+        public async Task<ApprovalResolution> PromptAsync(ApprovalRequest request, CancellationToken cancellationToken)
         {
             _started.TrySetResult();
             await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken).ConfigureAwait(false);
-            return ApprovalAction.Deny;
+            return ApprovalResolution.Denied("denied by test");
         }
 
         public Task WaitStartedAsync(CancellationToken cancellationToken) => _started.Task.WaitAsync(cancellationToken);
@@ -566,9 +566,9 @@ public class ChatSessionTests
     ///     <para>每次审批均返回同一预置选择。</para>
     ///     <para>Returns the same preset choice for every approval prompt.</para>
     /// </summary>
-    private sealed class InlineApprover(ApprovalAction action) : IApprovalProvider
+    private sealed class InlineApprover(ApprovalResolution action) : IApprovalProvider
     {
-        public Task<ApprovalAction> PromptAsync(ToolPreparation preparation, CancellationToken cancellationToken) =>
+        public Task<ApprovalResolution> PromptAsync(ApprovalRequest request, CancellationToken cancellationToken) =>
             Task.FromResult(action);
     }
 

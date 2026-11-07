@@ -119,6 +119,11 @@ public sealed class SessionIndexUpdater
             case SessionIndexAvailabilityStatus.NeedsSchema :
                 await _indexStore.InitializeAsync(cancellationToken).ConfigureAwait(false);
                 return true;
+            case SessionIndexAvailabilityStatus.NeedsRebuild :
+                // 旧版本索引按契约整库重建：索引只是可重建投影，重建只清空索引自身并重写 schema，
+                // 随后本批次与后台对账从日志重新派生内容。
+                await _indexStore.RebuildSchemaAsync(cancellationToken).ConfigureAwait(false);
+                return true;
             case SessionIndexAvailabilityStatus.Unsupported :
             case SessionIndexAvailabilityStatus.Damaged :
                 // 版本不受支持或损坏需人工介入；停用避免每次提交空转，修复与重建入口在对账与显式重建。

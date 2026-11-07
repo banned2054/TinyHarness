@@ -7,6 +7,8 @@ using TinyHarness.Core.Models.Configuration;
 using TinyHarness.Core.Models.Persistence;
 using TinyHarness.Core.Models.Session;
 using TinyHarness.Core.Models.Tools;
+using TinyHarness.Core.Models.Permissions;
+using TinyHarness.Core.Services.Permissions;
 using TinyHarness.Core.Services.Persistence;
 using TinyHarness.Core.Services.Session;
 using TinyHarness.Core.Services.Tools;
@@ -188,8 +190,12 @@ public sealed class SessionJournalFaultTests
         var secondTool = BlockingTool("slow-two", out var secondStarted);
         using (var resumedHost = new ChatSessionHost(firstRestoration.Session, firstRestoration.Context, Options,
                                                      secondClient, new ToolRegistry([secondTool]), SystemPrompt,
+                                                     approver : new GrantOnceApprover(),
                                                      sessionWriter : resumedWriter))
         {
+            // 旧会话恢复即迁移待确认（D9）：先确认迁移解除非只读阻断，再进入检查确认场景。
+            await resumedHost.ConfirmPermissionMigrationAsync(SessionApprovalMode.HumanApproval);
+            Assert.That(resumedHost.Session.PermissionMigrationPending, Is.False);
             await CancelDuringToolAsync(resumedHost, secondStarted);
             Assert.That(resumedHost.InspectionPending, Is.True);
         }
@@ -556,6 +562,14 @@ public sealed class SessionJournalFaultTests
                 return new ToolResult { Succeeded = true, Content = "unreachable" };
             }
         };
+    }
+
+    /// <summary>始终授予单次授权的审批器；供恢复宿主的 Ask 路径使用。</summary>
+    private sealed class GrantOnceApprover : IApprovalProvider
+    {
+        public Task<ApprovalResolution> PromptAsync(ApprovalRequest request,
+                                                    CancellationToken cancellationToken) =>
+            Task.FromResult(ApprovalResolution.Granted(GrantScope.SingleOperation));
     }
 
     private static async Task CancelDuringToolAsync(ChatSessionHost host, TaskCompletionSource started)

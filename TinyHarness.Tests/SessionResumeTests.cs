@@ -304,7 +304,7 @@ public class SessionResumeTests
                     Capability  = "filesystem.write",
                     SideEffects = sideEffects,
                     Summary     = "write src/a.cs",
-                    Approval    = "allow once",
+                    Approval    = "allow (single operation)",
                     State       = nameof(ToolCallExecutionState.UnknownResult)
                 }
             ]
@@ -325,7 +325,7 @@ public class SessionResumeTests
         var rebuilt = TestAssert.Single(pending.Session.Turns[0].Runs[0].Result!.ToolCalls!);
         Assert.That(rebuilt.State, Is.EqualTo(ToolCallExecutionState.UnknownResult));
         Assert.That(rebuilt.Capability, Is.EqualTo("filesystem.write"));
-        Assert.That(rebuilt.Approval, Is.EqualTo("allow once"));
+        Assert.That(rebuilt.Approval, Is.EqualTo("allow (single operation)"));
 
         // 明确确认覆盖已有中断，不重复触发阻断。
         var acknowledged = SessionResume.Restore(Snapshot(RunWithRecords(true), DateTimeOffset.UtcNow),

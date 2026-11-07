@@ -124,7 +124,7 @@ public static class SessionSummaryBuilder
         private SessionProjectAssignmentState _assignmentState = SessionProjectAssignmentState.PendingInitialization;
         private DateTimeOffset _createdUtc;
         private DateTimeOffset _lastActivityUtc;
-        private SessionPermissionMode? _permissionMode;
+        private string? _permissionModeName;
         private string? _projectId;
         private string? _title;
         private int _turnCount;
@@ -175,7 +175,7 @@ public static class SessionSummaryBuilder
             _workspaceRoot   = summary.WorkspaceRoot;
             _projectId       = summary.ProjectId;
             _assignmentState = summary.ProjectAssignmentState;
-            _permissionMode  = summary.PermissionMode;
+            _permissionModeName = summary.PermissionModeName;
             _title           = summary.TurnCount > 0 ? summary.Title : summary.Id[..8];
             _turnCount       = summary.TurnCount;
             _createdUtc      = summary.CreatedUtc;
@@ -220,11 +220,11 @@ public static class SessionSummaryBuilder
                         break;
                     case "permission-selection" :
                         var selection =
-                            record.Payload.Deserialize(SessionLogJsonContext.Default.SessionPermissionSelection)
+                            record.Payload.Deserialize(PermissionPersistenceJsonContext.Default.LegacyPermissionSelection)
                          ?? throw new SessionStoreException(
                                                             $"Session '{_sessionId}' has an empty permission-selection payload.");
                         selection.Validate();
-                        _permissionMode = selection.Mode;
+                        _permissionModeName = selection.ModeName;
                         break;
                     case "project-binding" :
                         _projectId       = SessionLogProjectBinding.Parse(record.Payload);
@@ -265,7 +265,7 @@ public static class SessionSummaryBuilder
                 UpdatedUtc             = _updatedUtc,
                 LastActivityUtc        = _lastActivityUtc,
                 TurnCount              = _turnCount,
-                PermissionMode         = _permissionMode,
+                PermissionModeName     = _permissionModeName,
                 CommitSequence         = commitSequence,
                 IndexedBytes           = indexedBytes
             };

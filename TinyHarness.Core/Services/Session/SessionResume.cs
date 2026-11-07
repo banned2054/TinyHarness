@@ -5,6 +5,7 @@ using TinyHarness.Core.Models.Context;
 using TinyHarness.Core.Models.Persistence;
 using TinyHarness.Core.Models.Session;
 using TinyHarness.Core.Services.Agent;
+using TinyHarness.Core.Services.Permissions;
 using TinyHarness.Core.Services.Context;
 
 namespace TinyHarness.Core.Services.Session;
@@ -28,7 +29,8 @@ public sealed record SessionRestoration(
     ChatSession         Session,
     ConversationContext Context,
     string?             NeedsInspection = null,
-    bool                RewoundTail     = false);
+    bool                RewoundTail     = false,
+    bool                PermissionMigrationPending = false);
 
 /// <summary>
 ///     <para>校验会话日志投影并重建可续聊的会话与上下文，不解析凭据、调用模型、启动工具或读写文件。</para>
@@ -219,7 +221,16 @@ public static class SessionResume
         var session = RebuildSession(snapshot);
         session.PendingInspectionReason = needsInspection;
         if (needsInspection is not null) session.InspectionAcknowledgedUtc = null;
-        return new SessionRestoration(session, context, needsInspection, rewoundTail);
+        // 恢复判定（D9）：未迁移的 /1 选择，或既无 /2 选择又有历史运行 → 迁移待确认；
+        // 迁移记录存在即视为已完成迁移。确认前由宿主禁止模型工具执行。
+        session.PermissionMigrationPending = PermissionSelectionMigration.Evaluate(
+                                                                        hasLegacySelection: snapshot.PermissionSelection is not null &&
+                                                                                            snapshot.PermissionMigration is null,
+                                                                        hasSelection:        snapshot.PermissionSelectionV2 is not null,
+                                                                        hasHistoryRuns:      snapshot.Turns.Count > 0)
+            == PermissionSelectionMigrationStatus.MigrationPending;
+        return new SessionRestoration(session, context, needsInspection, rewoundTail,
+                                      session.PermissionMigrationPending);
     }
 
     /// <summary>
@@ -338,6 +349,11 @@ public static class SessionResume
         };
         snapshot.PermissionSelection?.Validate();
         session.PermissionSelection = snapshot.PermissionSelection;
+        // /2 审批模式选择与迁移记录是恢复判定的输入；只恢复审批人路由事实，不恢复任何执行授权。
+        snapshot.PermissionSelectionV2?.Validate();
+        snapshot.PermissionMigration?.Validate();
+        session.PermissionSelectionV2 = snapshot.PermissionSelectionV2;
+        session.PermissionMigration   = snapshot.PermissionMigration;
         foreach (var selection in snapshot.ModelSelections) session.RecordModelSelection(selection);
         foreach (var turn in snapshot.Turns)
         {

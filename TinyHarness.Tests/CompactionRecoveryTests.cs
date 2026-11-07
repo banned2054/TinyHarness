@@ -82,7 +82,19 @@ public sealed class CompactionRecoveryTests
         var next = await resumed.SubmitTurnAsync("Continue discussing.", CancellationToken.None);
         Assert.That(next.Result!.Status, Is.EqualTo(AgentStatus.Completed), next.Result.Error);
         Assert.That(tool.ExecuteCount, Is.EqualTo(3));
-        Assert.That(continued.RequestLog.Single().Messages.Take(savedView.Length), Is.EqualTo(savedView));
+        // 恢复的会话处于迁移待确认（无选择 + 有历史），宿主按 D9 注入审批模式系统事实；
+        // 除该注入消息外，请求视图必须与固化视图完全一致（不回放历史工具）。
+        var continuedMessages = continued.RequestLog.Single().Messages.ToArray();
+        Assert.Multiple(() =>
+        {
+            // 请求 = 固化视图 + 注入的审批模式系统事实 + 本轮新用户输入。
+            Assert.That(continuedMessages.Length, Is.EqualTo(savedView.Length + 2));
+            Assert.That(continuedMessages[0], Is.EqualTo(savedView[0]));
+            Assert.That(continuedMessages[1].Role, Is.EqualTo(ChatRole.System));
+            Assert.That(continuedMessages[1].Content, Does.Contain("当前审批模式"));
+            Assert.That(continuedMessages.Skip(2).Take(savedView.Length - 1).ToArray(),
+                        Is.EqualTo(savedView.Skip(1).ToArray()));
+        });
         Assert.That(restored.Context.State.Summary, Does.Contain("No modification"));
     }
 

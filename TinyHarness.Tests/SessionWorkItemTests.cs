@@ -6,6 +6,7 @@ using TinyHarness.Core.Models.ChatCompletions;
 using TinyHarness.Core.Models.Configuration;
 using TinyHarness.Core.Models.Context;
 using TinyHarness.Core.Models.Session;
+using TinyHarness.Core.Models.Permissions;
 using TinyHarness.Core.Services.Persistence;
 using TinyHarness.Core.Services.ChatCompletions;
 using TinyHarness.Core.Services.Session;
@@ -117,6 +118,8 @@ public class SessionWorkItemTests
         restoredModel.Enqueue(FakeChatClient.Text("historical claim"));
         using var resumed = new ChatSessionHost(restored.Session, restored.Context, Options, restoredModel,
                                                 new ToolRegistry([]), "sys", sessionWriter : writer);
+        // 旧会话恢复即迁移待确认（D9 严格口径）：确认迁移解除工具门禁后再验证工作项恢复链路。
+        await resumed.ConfirmPermissionMigrationAsync(SessionApprovalMode.HumanApproval, default);
         var result = (await resumed.SubmitTurnAsync("what remains?", default)).Result!;
         Assert.That(result.Status, Is.EqualTo(AgentStatus.Completed), result.Error);
         var output = restoredModel.RequestLog[1].Messages.Last(message => message.Role == ChatRole.Tool).Content;

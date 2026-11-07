@@ -83,7 +83,7 @@ public sealed record SessionSummary
     ///     <para>日志中最近一次权限模式选择；旧日志未记录时为 null。</para>
     ///     <para>The latest journaled permission mode; null for legacy logs without a selection.</para>
     /// </summary>
-    public SessionPermissionMode? PermissionMode { get; init; }
+    public string? PermissionModeName { get; init; }
 
     /// <summary>
     ///     <para>已索引的最后完整有效批次序号；半行不算完成。</para>

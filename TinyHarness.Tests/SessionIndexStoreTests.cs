@@ -9,6 +9,7 @@ using TinyHarness.Core.Services.Context;
 using TinyHarness.Core.Services.Persistence;
 using TinyHarness.Core.Services.Session;
 using TinyHarness.Core.Services.Tools;
+using System.Globalization;
 
 namespace TinyHarness.Tests;
 
@@ -250,7 +251,8 @@ public class SessionIndexStoreTests
         await store.WriteSummaryAsync(Summary(id, DateTimeOffset.UtcNow), 10, null, CancellationToken.None);
         await store.ClearAsync(CancellationToken.None);
         Assert.That(await store.CountSummariesAsync(CancellationToken.None), Is.EqualTo(0));
-        Assert.That(await store.GetMetaAsync("schema_version", CancellationToken.None), Is.EqualTo("1"));
+        Assert.That(await store.GetMetaAsync("schema_version", CancellationToken.None),
+                   Is.EqualTo(SessionIndexStore.CurrentSchemaVersion.ToString(CultureInfo.InvariantCulture)));
         Assert.That(await store.GetMetaAsync("build_state", CancellationToken.None), Is.Null);
     }
 
@@ -310,7 +312,7 @@ public class SessionIndexStoreTests
         Assert.That(summary.UpdatedUtc, Is.EqualTo(stored.UpdatedUtc));
         Assert.That(summary.LastActivityUtc, Is.EqualTo(stored.LastActivityUtc));
         Assert.That(summary.TurnCount, Is.EqualTo(stored.Turns.Count));
-        Assert.That(summary.PermissionMode, Is.EqualTo(stored.PermissionSelection?.Mode));
+        Assert.That(summary.PermissionModeName, Is.EqualTo(stored.PermissionSelection?.ModeName));
         Assert.That(summary.CommitSequence, Is.EqualTo(stored.CommitSequence));
         Assert.That(summary.IndexedBytes, Is.EqualTo(logLength));
         Assert.That(build.SourceLength, Is.EqualTo(logLength));

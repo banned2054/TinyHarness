@@ -8,14 +8,18 @@ using TinyHarness.Core.Models.Persistence;
 namespace TinyHarness.Core.Services.Persistence;
 
 /// <summary>
-///     <para>索引可用性：可用、尚无 schema、缺失、版本不受支持、损坏或其他失败。</para>
-///     <para>Index availability: available, schema missing, absent, unsupported version, damaged, or other failure.</para>
+///     <para>索引可用性：可用、尚无 schema、缺失、旧版本待重建、版本不受支持、损坏或其他失败。</para>
+///     <para>
+///         Index availability: available, schema missing, absent, older version awaiting rebuild, unsupported
+///         version, damaged, or other failure.
+///     </para>
 /// </summary>
 public enum SessionIndexAvailabilityStatus
 {
     Available,
     NeedsSchema,
     Missing,
+    NeedsRebuild,
     Unsupported,
     Damaged,
     Failed
@@ -90,10 +94,18 @@ public sealed class SessionIndexStore
     public const string DatabaseFileName = "session-index.db";
 
     /// <summary>
-    ///     <para>当前实现支持的 schema 版本。</para>
-    ///     <para>The schema version supported by this implementation.</para>
+    ///     <para>
+    ///         当前实现支持的 schema 版本。版本 2 起摘要的 permission_mode 列容忍旧七模式字符串，
+    ///         且摘要语义随权限架构重构更新：更早版本的索引整库重建后由对账从日志重新派生。
+    ///     </para>
+    ///     <para>
+    ///         The schema version supported by this implementation. Since version 2 the summary's
+    ///         permission_mode column tolerates legacy seven-preset strings and summary semantics follow the
+    ///         permission-architecture rework: older indexes are rebuilt wholesale and re-derived from the logs
+    ///         by reconciliation.
+    ///     </para>
     /// </summary>
-    public const int CurrentSchemaVersion = 1;
+    public const int CurrentSchemaVersion = 2;
 
     private const int BusyTimeoutMs = 3000;
 
@@ -164,7 +176,10 @@ public sealed class SessionIndexStore
                 : version.Value > CurrentSchemaVersion
                     ? new SessionIndexAvailability(SessionIndexAvailabilityStatus.Unsupported,
                                                    $"Index schema version {version.Value} is newer than supported version {CurrentSchemaVersion}.")
-                    : SessionIndexAvailability.Ok;
+                    : version.Value < CurrentSchemaVersion
+                        ? new SessionIndexAvailability(SessionIndexAvailabilityStatus.NeedsRebuild,
+                                                       $"Index schema version {version.Value} is older than supported version {CurrentSchemaVersion}; rebuild it from the session logs.")
+                        : SessionIndexAvailability.Ok;
         }
         catch (SessionIndexException ex) when (ex.InnerException is IOException or UnauthorizedAccessException
                                                 or NotSupportedException or PathTooLongException)
@@ -242,6 +257,47 @@ public sealed class SessionIndexStore
             await create.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         }).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    ///     <para>
+    ///         重建旧版本索引：清空摘要与元数据表并按当前版本重写 schema；索引只是可重建投影，
+    ///         重建不触碰会话 JSONL，内容随后由对账从日志重新派生。更高版本仍拒绝，绝不清空降级。
+    ///     </para>
+    ///     <para>
+    ///         Rebuilds an older-version index: clears the summary and meta tables and rewrites the schema at the
+    ///         current version. The index is only a rebuildable projection — rebuilding never touches the session
+    ///         JSONL, and reconciliation re-derives the content from the logs afterwards. A newer version is still
+    ///         refused and never cleared or downgraded.
+    ///     </para>
+    /// </summary>
+    /// <exception cref="SessionIndexException">
+    ///     <para>数据库损坏、版本不受支持或存储失败。</para>
+    ///     <para>The database is damaged, its version is unsupported, or storage failed.</para>
+    /// </exception>
+    public async Task RebuildSchemaAsync(CancellationToken cancellationToken)
+    {
+        await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
+        var existingVersion = await ReadSchemaVersionAsync(connection, cancellationToken).ConfigureAwait(false);
+        if (existingVersion > CurrentSchemaVersion)
+            throw new SessionIndexException($"Session index '{DatabasePath}' uses schema version " +
+                                            $"{existingVersion}, newer than supported version "    +
+                                            $"{CurrentSchemaVersion}; it must not be downgraded.");
+
+        await ExecuteCoreAsync(async () =>
+        {
+            await using var transaction = await BeginWriteAsync(connection, cancellationToken).ConfigureAwait(false);
+            var             drop        = connection.CreateCommand();
+            drop.Transaction = transaction;
+            drop.CommandText = """
+            DROP TABLE IF EXISTS session_summary;
+            DROP TABLE IF EXISTS index_meta;
+            """;
+            await drop.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        }).ConfigureAwait(false);
+
+        await InitializeAsync(cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -798,7 +854,7 @@ public sealed class SessionIndexStore
         parameters.AddWithValue("$updated", summary.UpdatedUtc.ToUnixTimeMilliseconds());
         parameters.AddWithValue("$activity", summary.LastActivityUtc.ToUnixTimeMilliseconds());
         parameters.AddWithValue("$turns", summary.TurnCount);
-        parameters.AddWithValue("$permission", summary.PermissionMode is { } mode ? mode.ToString() : DBNull.Value);
+        parameters.AddWithValue("$permission", summary.PermissionModeName ?? (object?)DBNull.Value);
         parameters.AddWithValue("$sequence", summary.CommitSequence);
         parameters.AddWithValue("$bytes", summary.IndexedBytes);
         parameters.AddWithValue("$source_length", sourceLength);
@@ -819,10 +875,26 @@ public sealed class SessionIndexStore
         UpdatedUtc             = DateTimeOffset.FromUnixTimeMilliseconds(reader.GetInt64(6)),
         LastActivityUtc        = DateTimeOffset.FromUnixTimeMilliseconds(reader.GetInt64(7)),
         TurnCount              = reader.GetInt32(8),
-        PermissionMode         = reader.IsDBNull(9) ? null : Enum.Parse<SessionPermissionMode>(reader.GetString(9)),
+        PermissionModeName     = ReadLegacyPermissionMode(reader.IsDBNull(9) ? null : reader.GetString(9)),
         CommitSequence         = reader.GetInt64(10),
         IndexedBytes           = reader.GetInt64(11)
     };
+
+    /// <summary>
+    ///     <para>
+    ///         容忍解析 permission_mode 列：旧七模式字符串照常返回供展示层映射；未知或损坏值回落为 null，
+    ///         绝不因历史字符串抛异常。
+    ///     </para>
+    ///     <para>
+    ///         Tolerantly parses the permission_mode column: legacy seven-preset strings return as-is for
+    ///         display-layer mapping; unknown or damaged values fall back to null instead of throwing on
+    ///         historical strings.
+    ///     </para>
+    /// </summary>
+    private static string? ReadLegacyPermissionMode(string? value) =>
+        value is not null && LegacyPermissionSelection.KnownLegacyModeNames.Contains(value, StringComparer.Ordinal)
+            ? value
+            : null;
 
     private static SessionIndexRow ReadRow(SqliteDataReader reader)
     {

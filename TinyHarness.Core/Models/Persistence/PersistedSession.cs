@@ -48,7 +48,31 @@ public sealed record PersistedSession
     ///     <para>日志中的最近权限模式选择；旧日志未记录时为 null，不恢复临时批准。</para>
     ///     <para>The latest journaled permission mode; null for legacy logs and never a restored temporary approval.</para>
     /// </summary>
-    public SessionPermissionSelection? PermissionSelection { get; init; }
+    public LegacyPermissionSelection? PermissionSelection { get; init; }
+
+    /// <summary>
+    ///     <para>
+    ///         日志中的最近 /2 审批模式选择；与 /1 选择共存时以迁移记录判定生效链。只记录审批人路由，
+    ///         不恢复任何可执行授权。
+    ///     </para>
+    ///     <para>
+    ///         The latest /2 approval-mode selection in the log; when a /1 selection coexists, the migration
+    ///         record decides the effective chain. It records approver routing only and restores no executable
+    ///         authority.
+    ///     </para>
+    /// </summary>
+    public SessionPermissionSelectionV2? PermissionSelectionV2 { get; init; }
+
+    /// <summary>
+    ///     <para>
+    ///         日志中的旧模式迁移完成记录；存在即表示 /1 选择已经迁移流程确认，不再触发迁移待确认态。
+    ///     </para>
+    ///     <para>
+    ///         The log's completed legacy-mode migration record; its presence means the /1 selection went
+    ///         through the migration flow and no longer triggers the pending-migration state.
+    ///     </para>
+    /// </summary>
+    public PermissionMigrationRecord? PermissionMigration { get; init; }
 
     public string Id { get; init; } = string.Empty;
 

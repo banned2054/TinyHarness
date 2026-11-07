@@ -936,8 +936,20 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
         switch (record.Kind)
         {
             case "permission-selection" :
-                (record.Payload.Deserialize(SessionLogJsonContext.Default.SessionPermissionSelection)
-              ?? throw new InvalidDataException("Missing permission selection.")).Validate();
+                // /1 与 /2 共用 kind；按 payload 的 schema 字段分发，未知协议一律拒绝。
+                // /1 旧记录走迁移流程，不在运行时直接生效。
+                var permissionSchema = ReadSchemaName(record.Payload);
+                if (permissionSchema == SessionPermissionSelectionV2.CurrentSchema)
+                    (record.Payload.Deserialize(PermissionPersistenceJsonContext.Default
+                                                    .SessionPermissionSelectionV2)
+                  ?? throw new InvalidDataException("Missing permission selection.")).Validate();
+                else
+                    (record.Payload.Deserialize(PermissionPersistenceJsonContext.Default.LegacyPermissionSelection)
+                  ?? throw new InvalidDataException("Missing permission selection.")).Validate();
+                break;
+            case "permission-migration" :
+                (record.Payload.Deserialize(PermissionPersistenceJsonContext.Default.PermissionMigrationRecord)
+              ?? throw new InvalidDataException("Missing permission migration record.")).Validate();
                 break;
             case "model-selection" :
                 (record.Payload.Deserialize(SessionLogJsonContext.Default.SessionModelSelection)
@@ -954,6 +966,20 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
             default : throw new SessionStoreException($"Unknown control record kind '{record.Kind}'.");
         }
     }
+
+    /// <summary>
+    ///     <para>读取控制记录 payload 的 schema 名称；缺失或非字符串返回 null，由分发端按未知协议拒绝。</para>
+    ///     <para>
+    ///         Reads a control-record payload's schema name; missing or non-string values return null for the
+    ///         dispatcher to reject as an unknown schema.
+    ///     </para>
+    /// </summary>
+    internal static string? ReadSchemaName(System.Text.Json.JsonElement payload) =>
+        payload.ValueKind == System.Text.Json.JsonValueKind.Object &&
+        payload.TryGetProperty("schema", out var schema) &&
+        schema.ValueKind == System.Text.Json.JsonValueKind.String
+            ? schema.GetString()
+            : null;
 
     private async Task WriteBatchAsync(SessionLogBatch batch, byte[] bytes, CancellationToken cancellationToken)
     {
@@ -1090,13 +1116,27 @@ public static class SessionStoreReader
         private (string Id, long Sequence, string TurnId, string RunId, string Revision, int DocumentCount)?
             _expectedInstructionHistory;
 
-        private SessionLogIdentity?           _identity;
-        private DateTimeOffset                _lastActivityUtc;
-        private SessionPermissionSelection?   _permissionSelection;
-        private SessionProjectAssignmentState _projectAssignmentState;
-        private string?                       _projectId;
-        private SessionLogSessionState?       _state;
-        private DateTimeOffset                _updatedUtc;
+        private SessionLogIdentity?              _identity;
+        private DateTimeOffset                   _lastActivityUtc;
+        private LegacyPermissionSelection?       _permissionSelection;
+        private SessionPermissionSelectionV2?    _permissionSelectionV2;
+        private PermissionMigrationRecord?       _permissionMigration;
+        private SessionProjectAssignmentState    _projectAssignmentState;
+        private string?                          _projectId;
+        private SessionLogSessionState?          _state;
+        private DateTimeOffset                   _updatedUtc;
+
+        /// <summary>
+        ///     <para>
+        ///         /1 与 /2 选择共享的连续修订链尾；两种 kind 混用同一条链，迁移记录不占用修订。
+        ///     </para>
+        ///     <para>
+        ///         The contiguous revision-chain tail shared by /1 and /2 selections; migration records occupy
+        ///         no revision on it.
+        ///     </para>
+        /// </summary>
+        private long LatestPermissionRevision() =>
+            Math.Max(_permissionSelection?.Revision ?? 0, _permissionSelectionV2?.Revision ?? 0);
 
         public void Apply(SessionLogBatch batch)
         {
@@ -1148,13 +1188,42 @@ public static class SessionStoreReader
                                        { Id = turn.Id, UserInput = turn.UserInput, CreatedUtc = turn.CreatedUtc });
                         break;
                     case "permission-selection" :
-                        var permission = Read<SessionPermissionSelection>(record.Payload,
-                                                                          SessionLogJsonContext.Default
-                                                                             .SessionPermissionSelection);
+                        // /1 与 /2 共用 kind 且共享一条连续修订链；迁移记录不占用链上修订。
+                        if (SessionStoreWriter.ReadSchemaName(record.Payload) ==
+                            SessionPermissionSelectionV2.CurrentSchema)
+                        {
+                            var selectionV2 = Read<SessionPermissionSelectionV2>(
+                                record.Payload,
+                                PermissionPersistenceJsonContext.Default.SessionPermissionSelectionV2);
+                            selectionV2.Validate();
+                            if (selectionV2.Revision != LatestPermissionRevision() + 1)
+                                throw new SessionStoreException("Permission selection revisions must be contiguous.");
+                            _permissionSelectionV2 = selectionV2;
+                            break;
+                        }
+
+                        var permission = Read<LegacyPermissionSelection>(record.Payload,
+                                                                         PermissionPersistenceJsonContext
+                                                                            .Default.LegacyPermissionSelection);
                         permission.Validate();
-                        if (permission.Revision != (_permissionSelection?.Revision ?? 0) + 1)
+                        if (permission.Revision != LatestPermissionRevision() + 1)
                             throw new SessionStoreException("Permission selection revisions must be contiguous.");
                         _permissionSelection = permission;
+                        break;
+                    case "permission-migration" :
+                        // 迁移记录与其伴随的 /2 选择共享同一修订号，先后顺序不固定：允许等于当前链尾
+                        // 或链尾 +1，其余一律拒绝；每个会话至多一条迁移记录。
+                        var migration = Read<PermissionMigrationRecord>(
+                            record.Payload, PermissionPersistenceJsonContext.Default.PermissionMigrationRecord);
+                        migration.Validate();
+                        if (_permissionMigration is not null)
+                            throw new
+                                SessionStoreException($"Session '{sessionId}' repeats its permission migration record.");
+                        var latestRevision = LatestPermissionRevision();
+                        if (migration.Revision != latestRevision && migration.Revision != latestRevision + 1)
+                            throw new
+                                SessionStoreException("A permission migration record must share its companion selection's revision.");
+                        _permissionMigration = migration;
                         break;
                     case "model-selection" :
                         var selection =
@@ -1405,6 +1474,8 @@ public static class SessionStoreReader
                 Model                   = _identity.Model,
                 ModelSelections         = _modelSelections.ToArray(),
                 PermissionSelection     = _permissionSelection,
+                PermissionSelectionV2   = _permissionSelectionV2,
+                PermissionMigration     = _permissionMigration,
                 CreatedUtc              = _identity.CreatedUtc,
                 UpdatedUtc              = _updatedUtc,
                 LastActivityUtc         = _lastActivityUtc,
@@ -1854,7 +1925,7 @@ public static class SessionStoreReader
 [JsonSerializable(typeof(PersistedReasoning))]
 [JsonSerializable(typeof(SessionModelIdentity))]
 [JsonSerializable(typeof(SessionModelSelection))]
-[JsonSerializable(typeof(SessionPermissionSelection))]
+[JsonSerializable(typeof(LegacyPermissionSelection))]
 [JsonSerializable(typeof(ChatApiKind))]
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase,
                              UseStringEnumConverter = true,

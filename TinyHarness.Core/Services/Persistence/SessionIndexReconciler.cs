@@ -202,13 +202,18 @@ public sealed class SessionIndexReconciler
         var availability = await _indexStore.GetAvailabilityAsync(cancellationToken).ConfigureAwait(false);
         if (availability.Status is not (SessionIndexAvailabilityStatus.Available
                                      or SessionIndexAvailabilityStatus.Missing
-                                     or SessionIndexAvailabilityStatus.NeedsSchema))
+                                     or SessionIndexAvailabilityStatus.NeedsSchema
+                                     or SessionIndexAvailabilityStatus.NeedsRebuild))
             return new SessionIndexReconcileReport(availability, 0, 0, 0, 0, 0, false, notes);
 
         if (availability.Status is not SessionIndexAvailabilityStatus.Available)
             try
             {
-                await _indexStore.InitializeAsync(cancellationToken).ConfigureAwait(false);
+                // 旧版本索引整库重建（只清空索引自身，不改写日志），其余缺失情况按 schema 初始化。
+                if (availability.Status is SessionIndexAvailabilityStatus.NeedsRebuild)
+                    await _indexStore.RebuildSchemaAsync(cancellationToken).ConfigureAwait(false);
+                else
+                    await _indexStore.InitializeAsync(cancellationToken).ConfigureAwait(false);
                 availability = SessionIndexAvailability.Ok;
             }
             catch (SessionIndexException ex)

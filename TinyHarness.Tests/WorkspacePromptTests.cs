@@ -38,7 +38,7 @@ public class WorkspacePromptTests
         client.Enqueue(FakeChatClient.ToolCall("read_file", """{"path":"sample.txt"}"""));
         client.Enqueue(FakeChatClient.Text("scripted assessment"));
         var tools = new ToolRegistry([new ReadFileTool(workspace.Workspace)]);
-        var loop  = new AgentLoop(client, tools, Options(), new PermissionEngine(workspace.Root), null);
+        var loop  = new AgentLoop(client, tools, Options(), new PermissionEngine(workspace.Root, resourcePolicy : new TestResourcePolicy(workspace.Root)), null);
 
         var result = await loop.RunAsync(WorkspacePrompts.Current, "只分析这个文件，不修改。", CancellationToken.None);
 
@@ -74,7 +74,7 @@ public class WorkspacePromptTests
                {
                    var initial = await loader.LoadAsync(null, [], token);
                    return new ChatSessionHost(workspace.Root, Identity, Options(), client, tools, prompt,
-                                              new PermissionEngine(workspace.Root),
+                                              new PermissionEngine(workspace.Root, resourcePolicy : new TestResourcePolicy(workspace.Root)),
                                               sessionWriterFactory : id => new SessionStoreWriter(store.Root, id),
                                               instructionLoader : loader, initialInstructions : initial);
                }, new StringReader("只分析，不修改。\n继续讨论。\n"), new StringWriter(), cancellation))
@@ -101,7 +101,7 @@ public class WorkspacePromptTests
         var resumedClient = new FakeChatClient();
         resumedClient.Enqueue(FakeChatClient.Text("scripted resumed answer"));
         using var host = new ChatSessionHost(restored.Session, restored.Context, Options(), resumedClient, tools,
-                                             prompt, new PermissionEngine(workspace.Root), sessionWriter : writer,
+                                             prompt, new PermissionEngine(workspace.Root, resourcePolicy : new TestResourcePolicy(workspace.Root)), sessionWriter : writer,
                                              instructionLoader : loader);
 
         var run = await host.SubmitTurnAsync("上次读到了什么？", CancellationToken.None);
@@ -197,6 +197,14 @@ public class WorkspacePromptTests
     {
         Assert.That(request.Messages[0].Content, Is.EqualTo(expected));
         Assert.That(request.Messages[0].Role, Is.EqualTo(ChatRole.System));
-        Assert.That(request.Messages.Count(message => message.Role == ChatRole.System), Is.EqualTo(1));
+        // 恢复后的请求可能额外携带宿主注入的"当前审批模式"系统事实（迁移待确认等），除此之外
+        // 当前提示词保持唯一系统消息且项目规则不重复。
+        Assert.That(request.Messages.Count(message => message.Role == ChatRole.System &&
+                                                     message.Content.Contains("当前审批模式")),
+                    Is.LessThanOrEqualTo(1));
+        Assert.That(request.Messages.Count(message => message.Role == ChatRole.System),
+                    Is.EqualTo(1 + request.Messages.Count(message =>
+                                        message.Role == ChatRole.System &&
+                                        message.Content.Contains("当前审批模式"))));
     }
 }

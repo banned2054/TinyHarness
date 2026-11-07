@@ -139,11 +139,11 @@ public class ChatSessionPersistenceTests
     {
         using var dir    = new TestTempDir();
         var       client = new FakeChatClient();
-        client.Enqueue(FakeChatClient.ToolCall("write_test", "{\"path\":\"file.txt\"}"));
+        client.Enqueue(FakeChatClient.ToolCall("write_test", "{\"path\":\"../outside.txt\"}"));
         client.Enqueue(FakeChatClient.Text("permission denied"));
-        var tool = new AuditTestTool(dir.Root, "filesystem.write");
+        var tool = new AuditTestTool(dir.Root, "filesystem.write", outside : true);
         var host = NewHost(client, id => new SessionStoreWriter(dir.Root, id),
-                           tools : new ToolRegistry([tool]), permissions : new PermissionEngine(dir.Root),
+                           tools : new ToolRegistry([tool]), permissions : new PermissionEngine(dir.Root, resourcePolicy : new TestResourcePolicy(dir.Root)),
                            approver : new DenyApprover());
 
         var run       = await host.SubmitTurnAsync("try write", CancellationToken.None);
@@ -157,7 +157,7 @@ public class ChatSessionPersistenceTests
         Assert.That(run.Result!.Status, Is.EqualTo(AgentStatus.Completed));
         Assert.That(tool.ExecuteCount, Is.Zero);
         Assert.That(denied.State, Is.EqualTo(nameof(ToolCallExecutionState.KnownNotStarted)));
-        Assert.That(denied.Approval, Does.Contain("Permission denied by user"));
+        Assert.That(denied.Approval, Does.Contain("Permission denied by the approver"));
         Assert.That(denied.Succeeded, Is.Null);
         Assert.That(denied.ExitCode, Is.Null);
     }
@@ -171,7 +171,8 @@ public class ChatSessionPersistenceTests
         client.Enqueue(FakeChatClient.Text("done"));
         var tool = new AuditTestTool(dir.Root, "filesystem.read");
         var host = NewHost(client, id => new SessionStoreWriter(dir.Root, id),
-                           tools : new ToolRegistry([tool]), permissions : new PermissionEngine(dir.Root));
+                           tools : new ToolRegistry([tool]), permissions : new PermissionEngine(dir.Root, resourcePolicy : new TestResourcePolicy(dir.Root)),
+                           approver : new DenyApprover());
 
         var run       = await host.SubmitTurnAsync("run read", CancellationToken.None);
         var sessionId = host.Session.Id;
@@ -420,6 +421,10 @@ public class ChatSessionPersistenceTests
                                                     new ToolRegistry([nextWrite]), SystemPrompt,
                                                     needsInspection : restored.NeedsInspection);
             Assert.That(resumed.InspectionPending, Is.True);
+            // 旧会话（无审批模式选择且有历史运行）恢复即迁移待确认（D9）：确认前禁止模型工具执行；
+            // 确认迁移后由既有 NeedsInspection 检查阻断接管非只读拒绝。
+            await resumed.ConfirmPermissionMigrationAsync(SessionApprovalMode.HumanApproval);
+            Assert.That(resumed.Session.PermissionMigrationPending, Is.False);
             var blocked = await resumed.SubmitTurnAsync("continue after crash", CancellationToken.None);
             Assert.That(blocked.Result!.Status, Is.EqualTo(AgentStatus.Completed));
             Assert.That(nextWrite.ExecuteCount, Is.EqualTo(0));
@@ -507,11 +512,11 @@ public class ChatSessionPersistenceTests
 
     private sealed class DenyApprover : IApprovalProvider
     {
-        public Task<ApprovalAction> PromptAsync(ToolPreparation preparation, CancellationToken cancellationToken) =>
-            Task.FromResult(ApprovalAction.Deny);
+        public Task<ApprovalResolution> PromptAsync(ApprovalRequest request, CancellationToken cancellationToken) =>
+            Task.FromResult(ApprovalResolution.Denied("denied by test"));
     }
 
-    private sealed class AuditTestTool(string workspaceRoot, string capability) : ITool
+    private sealed class AuditTestTool(string workspaceRoot, string capability, bool outside = false) : ITool
     {
         public int ExecuteCount { get; private set; }
 
@@ -529,7 +534,9 @@ public class ChatSessionPersistenceTests
             Arguments       = new JsonObject(),
             Capability      = capability,
             Summary         = "test operation",
-            TargetPaths     = [Path.Combine(workspaceRoot, "file.txt")],
+            TargetPaths     = outside
+                ? [Path.Combine(Path.GetDirectoryName(workspaceRoot)!, "outside.txt")]
+                : [Path.Combine(workspaceRoot, "file.txt")],
             ExecutionPolicy = "backend=test"
         };
 

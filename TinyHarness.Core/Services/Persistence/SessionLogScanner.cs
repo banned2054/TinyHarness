@@ -378,6 +378,7 @@ internal static class SessionLogScanner
                             SessionStoreException($"Session log '{path}' contains an invalid project-instructions record.");
                     break;
                 case "permission-selection" :
+                case "permission-migration" :
                 case "run-amendment" :
                 case "work-item" :
                     SessionStoreWriter.ValidateControlRecord(record with { Id = string.Empty });
