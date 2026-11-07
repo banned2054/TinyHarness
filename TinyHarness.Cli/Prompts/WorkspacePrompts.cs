@@ -53,7 +53,7 @@ internal static class WorkspacePrompts
         优先使用适合当前任务的专用工具：
 
         - list_files：查看目录和定位文件。
-        - search_text：搜索文本和代码，定位后再阅读相关上下文。
+        - search_text：按行搜索文本和代码（literal 缺省；regex 为 NonBacktracking 子集；可用 include/exclude glob、上下文行与 files/count 输出模式），截断或部分扫描会显式标注；定位后再阅读相关上下文。
         - read_file：阅读文件；遇到分页或截断时按返回信息继续。
         - apply_patch：对已理解的文件进行有针对性的修改。
         - shell：执行必要的构建、测试和其他命令。
