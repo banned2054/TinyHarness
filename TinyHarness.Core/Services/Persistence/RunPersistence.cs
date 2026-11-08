@@ -61,6 +61,20 @@ public interface IRunRecorder
     Task RecordAssistantAsync(ChatMessage assistantMessage, CancellationToken cancellationToken) =>
         Task.CompletedTask;
 
+    /// <summary>
+    ///     <para>
+    ///         把授权事件与可信授权变更作为必需控制记录落盘；宿主在权限链路边界 drain 后调用，
+    ///         无持久化的 recorder 缺省不执行操作。
+    ///     </para>
+    ///     <para>
+    ///         Persists grant events and trusted authorization changes as required control records; hosts drain
+    ///         at permission-chain boundaries and call this, and recorders without persistence default to a no-op.
+    ///     </para>
+    /// </summary>
+    Task RecordGrantEventsAsync(IReadOnlyList<PermissionGrantEventRecord> events,
+                                CancellationToken                         cancellationToken) =>
+        Task.CompletedTask;
+
     Task CompleteAsync(AgentResult       result, IReadOnlyList<ChatMessage> messages,
                        CancellationToken cancellationToken);
 }

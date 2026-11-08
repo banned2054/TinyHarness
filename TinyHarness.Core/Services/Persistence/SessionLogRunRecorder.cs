@@ -394,6 +394,40 @@ public sealed class SessionLogRunRecorder : IRunRecorder
     }
 
     /// <summary>
+    ///     <para>
+    ///         把授权事件与可信授权变更作为 permission-grant-event/1 必需控制记录追加；目标与原因
+    ///         按会话日志脱敏边界处理后落盘，提交成功才算记录（writer 失败向上传播）。
+    ///     </para>
+    ///     <para>
+    ///         Appends grant events and trusted authorization changes as required permission-grant-event/1 control
+    ///         records; targets and reasons are redacted under the session-log boundary, and a reliable commit is
+    ///         the record (writer failures propagate).
+    ///     </para>
+    /// </summary>
+    public async Task RecordGrantEventsAsync(IReadOnlyList<PermissionGrantEventRecord> events,
+                                             CancellationToken                         cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(events);
+        if (events.Count == 0) return;
+
+        var records = new List<SessionLogRecord>(events.Count);
+        foreach (var grantEvent in events)
+        {
+            var redacted = grantEvent with
+            {
+                Targets = grantEvent.Targets.Select(_redactor.Redact).ToArray(),
+                Reason = _redactor.RedactNullable(grantEvent.Reason)
+            };
+            records.Add(new SessionLogRecord(string.Empty, "permission-grant-event",
+                                             JsonSerializer.SerializeToElement(redacted,
+                                                                               PermissionPersistenceJsonContext.Default
+                                                                                  .PermissionGrantEventRecord)));
+        }
+
+        await AppendBatchAsync(records, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
     ///     <para>按到达顺序拼接助手的可读推理文本；不展示 opaque 载荷。</para>
     ///     <para>Joins readable assistant reasoning in arrival order without exposing opaque payloads.</para>
     /// </summary>

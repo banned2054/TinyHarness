@@ -379,6 +379,7 @@ internal static class SessionLogScanner
                     break;
                 case "permission-selection" :
                 case "permission-migration" :
+                case "permission-grant-event" :
                 case "run-amendment" :
                 case "work-item" :
                     SessionStoreWriter.ValidateControlRecord(record with { Id = string.Empty });

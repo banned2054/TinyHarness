@@ -290,7 +290,7 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
                                                   ex);
                     }
                 }
-                else if (record.Kind is "run-amendment" or "work-item")
+                else if (record.Kind is "run-amendment" or "work-item" or "permission-grant-event")
                 {
                     ValidateControlRecord(record);
                     normalized[i] = record with { Id = recordId };
@@ -457,8 +457,8 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
             void Add<T>(string kind, T payload) =>
                 records.Add(new SessionLogRecord(RecordId(SessionId, nextSequence, records.Count), kind,
                                                  JsonSerializer.SerializeToElement(payload,
-                                                          (JsonTypeInfo<T>)SessionLogJsonContext.Default
-                                                             .GetTypeInfo(typeof(T))!)));
+                                                     (JsonTypeInfo<T>)SessionLogJsonContext.Default
+                                                        .GetTypeInfo(typeof(T))!)));
 
             var persistedTurnCount    = _persistedTurnCount;
             var trackedTurnId         = _trackedTurnId;
@@ -572,7 +572,7 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
                 };
                 records.Add(new SessionLogRecord(item.Id, "history",
                                                  JsonSerializer.SerializeToElement(item,
-                                                          SessionHistoryJsonContext.Default.SessionHistoryItem)));
+                                                     SessionHistoryJsonContext.Default.SessionHistoryItem)));
                 (committedHistoryItems ??= []).Add(item);
             }
 
@@ -841,8 +841,8 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
             return SessionWriterOpenResult.FromFailure(ex is SessionStoreException storeFailure
                                                            ? storeFailure
                                                            : new SessionStoreException(
-                                                                $"Cannot open session '{sessionId}' for ownership initialization: {ex.Message}",
-                                                                ex));
+                                                            $"Cannot open session '{sessionId}' for ownership initialization: {ex.Message}",
+                                                            ex));
         }
         finally
         {
@@ -941,7 +941,7 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
                 var permissionSchema = ReadSchemaName(record.Payload);
                 if (permissionSchema == SessionPermissionSelectionV2.CurrentSchema)
                     (record.Payload.Deserialize(PermissionPersistenceJsonContext.Default
-                                                    .SessionPermissionSelectionV2)
+                                                   .SessionPermissionSelectionV2)
                   ?? throw new InvalidDataException("Missing permission selection.")).Validate();
                 else
                     (record.Payload.Deserialize(PermissionPersistenceJsonContext.Default.LegacyPermissionSelection)
@@ -950,6 +950,11 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
             case "permission-migration" :
                 (record.Payload.Deserialize(PermissionPersistenceJsonContext.Default.PermissionMigrationRecord)
               ?? throw new InvalidDataException("Missing permission migration record.")).Validate();
+                break;
+            case "permission-grant-event" :
+                // 授权事件为必需记录：旧程序按未知 kind 拒读（符合必需记录哲学）；恢复不重建可执行授权。
+                (record.Payload.Deserialize(PermissionPersistenceJsonContext.Default.PermissionGrantEventRecord)
+              ?? throw new InvalidDataException("Missing permission grant event record.")).Validate();
                 break;
             case "model-selection" :
                 (record.Payload.Deserialize(SessionLogJsonContext.Default.SessionModelSelection)
@@ -974,10 +979,10 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
     ///         dispatcher to reject as an unknown schema.
     ///     </para>
     /// </summary>
-    internal static string? ReadSchemaName(System.Text.Json.JsonElement payload) =>
-        payload.ValueKind == System.Text.Json.JsonValueKind.Object &&
+    internal static string? ReadSchemaName(JsonElement payload) =>
+        payload.ValueKind == JsonValueKind.Object        &&
         payload.TryGetProperty("schema", out var schema) &&
-        schema.ValueKind == System.Text.Json.JsonValueKind.String
+        schema.ValueKind == JsonValueKind.String
             ? schema.GetString()
             : null;
 
@@ -1116,15 +1121,15 @@ public static class SessionStoreReader
         private (string Id, long Sequence, string TurnId, string RunId, string Revision, int DocumentCount)?
             _expectedInstructionHistory;
 
-        private SessionLogIdentity?              _identity;
-        private DateTimeOffset                   _lastActivityUtc;
-        private LegacyPermissionSelection?       _permissionSelection;
-        private SessionPermissionSelectionV2?    _permissionSelectionV2;
-        private PermissionMigrationRecord?       _permissionMigration;
-        private SessionProjectAssignmentState    _projectAssignmentState;
-        private string?                          _projectId;
-        private SessionLogSessionState?          _state;
-        private DateTimeOffset                   _updatedUtc;
+        private SessionLogIdentity?           _identity;
+        private DateTimeOffset                _lastActivityUtc;
+        private PermissionMigrationRecord?    _permissionMigration;
+        private LegacyPermissionSelection?    _permissionSelection;
+        private SessionPermissionSelectionV2? _permissionSelectionV2;
+        private SessionProjectAssignmentState _projectAssignmentState;
+        private string?                       _projectId;
+        private SessionLogSessionState?       _state;
+        private DateTimeOffset                _updatedUtc;
 
         /// <summary>
         ///     <para>
@@ -1193,8 +1198,8 @@ public static class SessionStoreReader
                             SessionPermissionSelectionV2.CurrentSchema)
                         {
                             var selectionV2 = Read<SessionPermissionSelectionV2>(
-                                record.Payload,
-                                PermissionPersistenceJsonContext.Default.SessionPermissionSelectionV2);
+                             record.Payload,
+                             PermissionPersistenceJsonContext.Default.SessionPermissionSelectionV2);
                             selectionV2.Validate();
                             if (selectionV2.Revision != LatestPermissionRevision() + 1)
                                 throw new SessionStoreException("Permission selection revisions must be contiguous.");
@@ -1214,7 +1219,9 @@ public static class SessionStoreReader
                         // 迁移记录与其伴随的 /2 选择共享同一修订号，先后顺序不固定：允许等于当前链尾
                         // 或链尾 +1，其余一律拒绝；每个会话至多一条迁移记录。
                         var migration = Read<PermissionMigrationRecord>(
-                            record.Payload, PermissionPersistenceJsonContext.Default.PermissionMigrationRecord);
+                                                                        record.Payload,
+                                                                        PermissionPersistenceJsonContext.Default
+                                                                           .PermissionMigrationRecord);
                         migration.Validate();
                         if (_permissionMigration is not null)
                             throw new
@@ -1224,6 +1231,12 @@ public static class SessionStoreReader
                             throw new
                                 SessionStoreException("A permission migration record must share its companion selection's revision.");
                         _permissionMigration = migration;
+                        break;
+                    case "permission-grant-event" :
+                        // 授权事件是追加型审计事实：严格校验但不重建会话状态（恢复不重建可执行授权）。
+                        Read<PermissionGrantEventRecord>(record.Payload,
+                                                         PermissionPersistenceJsonContext.Default
+                                                            .PermissionGrantEventRecord).Validate();
                         break;
                     case "model-selection" :
                         var selection =
