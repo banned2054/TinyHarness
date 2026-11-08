@@ -71,6 +71,10 @@ internal sealed class ConsoleApprovalProvider(
             await output
                  .WriteLineAsync("  NETWORK: full network access inside the sandbox (possibly through your local proxy); not a domain-level narrow grant.")
                  .ConfigureAwait(false);
+        // 展示事实行与 CLI/桌面两端一致：后端与隔离声明、文件与网络权限、有效期、活动授权摘要。
+        foreach (var displayNote in request.DisplayNotes ?? [])
+            await output.WriteLineAsync($"  fact: {TerminalDisplay.Format(_redactor.Redact(displayNote))}")
+                        .ConfigureAwait(false);
         if (request.ReviewerNote is { } note)
             await output.WriteLineAsync($"  reviewer: {TerminalDisplay.Format(note)}").ConfigureAwait(false);
 

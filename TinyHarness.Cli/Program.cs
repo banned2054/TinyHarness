@@ -190,6 +190,9 @@ internal static class Program
             return 1;
         }
 
+        // 常设信任未确认不阻断 run：联网与附加写根写按逐次审批运行，提示确认入口。
+        await WriteStandingTrustNoticeAsync(migrationConfig, Console.Error).ConfigureAwait(false);
+
         var composition = await ComposeAgentAsync(configPath, cts.Token, true, reader).ConfigureAwait(false);
         await using var events =
             new ConsoleHostEventSink(composition.KnownSecrets, reasoningDisplay : reasoningDisplay);
@@ -238,7 +241,8 @@ internal static class Program
                                              knownSecrets : composition.KnownSecrets,
                                              credentialRoute : composition.CredentialRoute,
                                              modelTimeouts : (composition.Model as MicrosoftAiChatClient)
-                                                ?.EffectiveTimeouts);
+                                           ?.EffectiveTimeouts,
+                                             compositionGuard : composition.CompositionGuard);
         activeHost = host;
 
         await host.ChangeApprovalModeAsync(composition.DefaultApprovalMode, cts.Token).ConfigureAwait(false);
@@ -322,6 +326,8 @@ internal static class Program
                                                                 cancellation.SessionToken).ConfigureAwait(false);
         if (!await ConfirmConfigurationMigrationAsync(migrationBaseline, reader, cancellation.SessionToken)
                .ConfigureAwait(false))
+            return 1;
+        if (!await ConfirmStandingTrustMigrationAsync(reader, cancellation.SessionToken).ConfigureAwait(false))
             return 1;
 
         var composition = await ComposeAgentAsync(configPath, cancellation.SessionToken, true, reader,
@@ -434,7 +440,8 @@ internal static class Program
                                                   credentialRoute : selectedRoute,
                                                   ownsModelClient : draft is not null,
                                                   modelTimeouts : (selectedClient as MicrosoftAiChatClient)
-                                                                     ?.EffectiveTimeouts);
+                                                ?.EffectiveTimeouts,
+                                                  compositionGuard : composition.CompositionGuard);
                 await createdHost.ChangeModelAsync(new SessionModelBinding(selectedIdentity, selectedClient!,
                                                                            selectedOptions.Context,
                                                                            selectedOptions.ReasoningEffort,
@@ -526,7 +533,8 @@ internal static class Program
                                                events, sessionWriter : writer,
                                                needsInspection : restored.NeedsInspection,
                                                instructionLoader : instructionLoader,
-                                               knownSecrets : composition.KnownSecrets);
+                                               knownSecrets : composition.KnownSecrets,
+                                               compositionGuard : composition.CompositionGuard);
                     await Console.Out.WriteLineAsync("  model     : " + outcome.ReselectionReason);
                     await Console.Out.WriteLineAsync(
                                                      "  model     : the session history stays resumable; select a model with " +
@@ -546,7 +554,8 @@ internal static class Program
                                            knownSecrets : composition.KnownSecrets,
                                            ownsModelClient : !ReferenceEquals(target.Client, composition.Model),
                                            modelTimeouts : (target.Client as MicrosoftAiChatClient)
-                                                              ?.EffectiveTimeouts);
+                                         ?.EffectiveTimeouts,
+                                           compositionGuard : composition.CompositionGuard);
 
                 // 恢复不经过会话内切换入口：把本次实际使用的客户端路由交给 Core 核对；
                 // 不一致时按选择事务采纳当前路由并开启新 epoch，隔离旧路由产生的 opaque 推理。
@@ -742,6 +751,116 @@ internal static class Program
         await UserConfigStore.SaveAsync(path, candidate, baseline, cancellationToken).ConfigureAwait(false);
         await Console.Out.WriteLineAsync("Legacy permission settings migrated successfully.").ConfigureAwait(false);
         return true;
+    }
+
+    /// <summary>
+    ///     <para>
+    ///         确认常设信任迁移：交互展示授权范围与有效期，y 落盘确认记录后继续启动；
+    ///         非交互或拒绝即阻断启动，不改任何设置。
+    ///     </para>
+    ///     <para>
+    ///         Confirms the standing-trust migration: interactive input shows the authorized scope and validity,
+    ///         and 'y' persists the confirmation record before startup continues; non-interactive input or a
+    ///         decline blocks startup without changing any settings.
+    ///     </para>
+    /// </summary>
+    private static async Task<bool> ConfirmStandingTrustMigrationAsync(TextReader        input,
+                                                                       CancellationToken cancellationToken)
+    {
+        var baseline = await UserConfigStore.LoadAsync(UserConfigStore.DefaultFilePath(), cancellationToken)
+                                            .ConfigureAwait(false);
+        var sandbox = baseline.Settings?.WindowsSandbox;
+        if (!StandingTrustEvaluation.HasStandingExpansion(sandbox)) return true;
+        if (StandingTrustEvaluation.Evaluate(sandbox, baseline.Settings?.Permissions) ==
+            StandingTrustState.Confirmed)
+            return true;
+
+        if (Console.IsInputRedirected)
+        {
+            await Console.Error.WriteLineAsync(
+                                               "Standing sandbox trust (networkPolicy=enabled and/or additional write roots) requires explicit confirmation; " +
+                                               "redirected input cannot confirm it. Startup is blocked; no settings were changed. " +
+                                               "Run 'tinyharness chat' with interactive input to review and confirm it.");
+            return false;
+        }
+
+        await WriteStandingTrustSummaryAsync(baseline, Console.Out).ConfigureAwait(false);
+        await Console.Out
+                     .WriteAsync("Confirm these standing settings as persistent authorization and continue? [y/N] ");
+        await Console.Out.FlushAsync(cancellationToken).ConfigureAwait(false);
+        var answer = (await input.ReadLineAsync(cancellationToken).ConfigureAwait(false))?.Trim();
+        if (answer is not ("y" or "Y" or "yes" or "YES"))
+        {
+            await Console.Out.WriteLineAsync(
+                                             "Standing-trust confirmation was not given; no settings were changed and startup is blocked. " +
+                                             "Re-run 'tinyharness chat' to confirm, or 'tinyharness run' for per-call approvals.");
+            return false;
+        }
+
+        var permissions = (baseline.Settings?.Permissions ?? new PermissionSettings()) with
+        {
+            StandingTrustConfirmation = new StandingTrustConfirmation(DateTimeOffset.UtcNow,
+                                                                      StandingTrustEvaluation.ScopeRevision(sandbox!))
+        };
+        var candidate = baseline with
+        {
+            Settings = (baseline.Settings ?? new UserConfigSettings()) with { Permissions = permissions }
+        };
+        await UserConfigStore.SaveAsync(UserConfigStore.DefaultFilePath(), candidate, baseline, cancellationToken)
+                             .ConfigureAwait(false);
+        await Console.Out.WriteLineAsync("Standing trust confirmed; the settings now run as explicit persistent " +
+                                         "authorization until revoked.")
+                     .ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>
+    ///     <para>展示常设信任的授权范围、敏感位置提示、有效期与当前状态；不输出代理地址或凭据。</para>
+    ///     <para>
+    ///         Shows the standing-trust scope, the sensitive-location hint, the validity, and the current state;
+    ///         proxy addresses and credentials are never printed.
+    ///     </para>
+    /// </summary>
+    private static async Task WriteStandingTrustSummaryAsync(UserConfig user, TextWriter output)
+    {
+        var sandbox = user.Settings?.WindowsSandbox ?? new WindowsSandboxSettings();
+        await output.WriteLineAsync("Standing sandbox trust requires explicit confirmation.");
+        await output.WriteLineAsync(
+                                    "  scope    : networkPolicy=enabled — full sandbox network: through the configured proxy when one is set " +
+                                    "(a broken proxy fails fast without direct fallback); direct full network when no proxy is configured");
+        await output.WriteLineAsync("  write roots: " + FormatPaths(sandbox.AdditionalWriteRoots));
+        // 附加读根随确认注入 OS 读面（profile 外真实可读），确认展示如实列出（M2）。
+        await output.WriteLineAsync("  read roots : " + FormatPaths(sandbox.AdditionalReadRoots) +
+                                    " — injected with the confirmed authorization (outside-profile roots become OS-readable)");
+        await output.WriteLineAsync(
+                                    "  note     : persistent roots may contain sensitive locations; until confirmation, " +
+                                    "networking and additional-write-root writes follow per-call approval");
+        await output.WriteLineAsync("  validity : persistent until revoked (clearing the settings revokes it)");
+        await output.WriteLineAsync("  state    : awaiting confirmation");
+
+        static string FormatPaths(IReadOnlyList<string> paths) =>
+            paths is { Count: > 0 } ? string.Join(", ", paths) : "(none)";
+    }
+
+    /// <summary>
+    ///     <para>非交互 run 入口的常设信任提示：未确认时联网与附加写根写按逐次审批运行。</para>
+    ///     <para>
+    ///         The non-interactive run notice for standing trust: until confirmation, networking and
+    ///         additional-write-root writes follow per-call approval.
+    ///     </para>
+    /// </summary>
+    private static async Task WriteStandingTrustNoticeAsync(UserConfig user, TextWriter output)
+    {
+        var sandbox = user.Settings?.WindowsSandbox;
+        if (!StandingTrustEvaluation.HasStandingExpansion(sandbox)) return;
+        if (StandingTrustEvaluation.Evaluate(sandbox, user.Settings?.Permissions) ==
+            StandingTrustState.Confirmed)
+            return;
+
+        await output.WriteLineAsync(
+                                    "note       : standing sandbox trust (networkPolicy=enabled and/or additional write roots) is not confirmed yet; " +
+                                    "networking and additional-write-root writes follow per-call approval. " +
+                                    "Run 'tinyharness chat' with interactive input to review and confirm it.");
     }
 
     /// <summary>
@@ -952,35 +1071,63 @@ internal static class Program
             new ConcurrentDictionary<string, string>(SandboxCliComposition.KnownSecrets(config, apiKey),
                                                      StringComparer.Ordinal);
         var settings = userConfig.Settings?.WindowsSandbox;
+        var userConfigPath = UserConfigStore.DefaultFilePath();
+        // 常设信任三态只来自可信用户设置与显式确认记录；未确认时组合与引擎都按逐次审批消费。
+        var standingTrust = StandingTrustEvaluation.Evaluate(settings, userConfig.Settings?.Permissions);
+        // 组合实际消费的设置决定常设网络是否启用：与传给沙箱组合器的 EffectiveSandboxSettings
+        // 同源同值；常设网络 restricted 时网络申请走逐次审批，写根确认不得复用为网络免审批。
+        var compositionSettings = StandingTrustEvaluation.EffectiveSandboxSettings(settings, standingTrust);
+        var standingNetworkEnabled = compositionSettings?.NetworkPolicy == SandboxNetworkPolicy.Enabled;
         var accessState = new WorkspaceAccessState(WorkspaceDirectoryIdentity.Capture(config.WorkspaceRoot));
-        var trustPath = Path.Combine(Path.GetDirectoryName(UserConfigStore.DefaultFilePath())!, "workspace-trust.json");
+        var trustPath = Path.Combine(Path.GetDirectoryName(userConfigPath)!, "workspace-trust.json");
         IReadOnlyList<string> writeRoots = [config.WorkspaceRoot, .. settings?.AdditionalWriteRoots ?? []];
-        var protectedPaths = new List<string> { trustPath, UserConfigStore.DefaultFilePath() };
-        if (sessionStoreDirectory is not null) protectedPaths.Add(sessionStoreDirectory);
+        // C1 权限系统实例（实际路径）：组合期写根重叠校验与 grant 校验共用，底层不重新猜默认路径。
+        var permissionSystemPaths = new List<string> { trustPath, userConfigPath };
+        if (sessionStoreDirectory is not null) permissionSystemPaths.Add(sessionStoreDirectory);
+        // OS ACL 保护集保持整 home 不收缩（与组合期完整性保护同层）；应用层 C1 分类集把 home
+        // 收缩为敏感子路径（凭据目录、deny 簿记、授权映射与执行组件目录），默认 tmp/tools/
+        // nuget-cache 运行时根物理位于 home 下，不得被 C1 遮蔽。
+        var protectedPaths        = new List<string>(permissionSystemPaths);
+        var permissionSystemRoots = new List<string>(permissionSystemPaths);
         if (settings is { Enabled: true })
         {
+            var sandboxHome = WindowsSandboxComponents.ResolveSandboxHome(settings.SandboxHome,
+                                                                          settings.AllowTcpLoopback);
+            var components = new WindowsSandboxComponents
+            {
+                SetupExecutablePath  = settings.SetupExecutablePath,
+                RunnerExecutablePath = settings.RunnerExecutablePath,
+                SandboxHome          = sandboxHome,
+                AllowTcpLoopback     = settings.AllowTcpLoopback
+            };
             protectedPaths.Add(settings.SetupExecutablePath);
             protectedPaths.Add(settings.RunnerExecutablePath);
-            protectedPaths.Add(WindowsSandboxComponents.ResolveSandboxHome(settings.SandboxHome,
-                                                                           settings.AllowTcpLoopback));
+            protectedPaths.Add(sandboxHome);
+            permissionSystemRoots.Add(settings.SetupExecutablePath);
+            permissionSystemRoots.Add(settings.RunnerExecutablePath);
+            permissionSystemRoots.AddRange(components.ProtectedHomeSubpaths);
         }
 
         // 文件工具与 Shell 的统一资源访问策略：权限系统保护路径与可信附加根集中分类；
         // 分类结果只作为注记进入准备计划，授权判定仍属于权限引擎。
+        // 派生运行时写根待沙箱实际组合后注入（M3）：此处不预注入，未组合（未信任/组合失败）
+        // 时 harness 基础设施目录分类回落 OutsideWorkspace → L2 Ask，fail 方向不变；
+        // 组合前分类集保持整 home（与 OS ACL 层一致），组合后按细化集重建。
         var resourcePolicy = new ResourceAccessPolicy(config.WorkspaceRoot,
                                                       settings?.AdditionalReadRoots,
                                                       settings?.AdditionalWriteRoots,
-                                                      permissionSystemRoots : protectedPaths);
+                                                      permissionSystemRoots : protectedPaths,
+                                                      standingTrust : standingTrust);
 
         // 活动授权登记表：引擎与 Shell 工具共享同一实例，派发复核与快照聚合看到同一状态。
         // sandboxExecutionAvailable 由组合结果决定：沙箱未组合即 Deny 进程执行，不回退宿主。
         var grants = new GrantRegistry();
-        // 常设网络信任只来自可信用户设置：Enabled 档不再逐次审批联网申请。
+        // 常设信任只来自可信用户设置与显式确认记录：Confirmed 之外联网与附加写根写一律逐次审批。
         var permissions = new PermissionEngine(config.WorkspaceRoot,
                                                workspaceReadOnly : () => accessState.IsReadOnly,
-                                               sandboxNetworkStandingEnabled : settings?.NetworkPolicy ==
-                                                                               SandboxNetworkPolicy.Enabled,
+                                               standingTrust : standingTrust,
                                                sandboxExecutionAvailable : false,
+                                               standingNetworkEnabled : standingNetworkEnabled,
                                                resourcePolicy : resourcePolicy,
                                                grantRegistry : grants,
                                                frozenScopeReader : FrozenCapabilityScopeReader.FromPreparation);
@@ -994,40 +1141,87 @@ internal static class Program
                                                     new ProcessWorkspaceAclGrant(protectedPaths, writeRoots, settings),
                                                     activeGrants =>
                                                     {
+                                                        // 组合门禁：基线读保护计划与沙箱同点组合（信任激活
+                                                        // 之后）。trust.json 由信任激活先行创建，此时
+                                                        // pairing fail-closed 校验的 C1 宿主密钥路径必然
+                                                        // 存在；未信任工作区不进入本回调，组合保持为空
+                                                        // （process.execute 走沙箱不可用 fail-closed）。
+                                                        var baselineReadProtection =
+                                                            WindowsSandboxComposer.PlanBaselineReadProtection(
+                                                             [trustPath, UserConfigStore.DefaultFilePath()],
+                                                             sessionStoreDirectory,
+                                                             settings);
                                                         sandbox =
                                                             SandboxCliComposition.TryCompose(settings,
                                                                 config.WorkspaceRoot, knownSecrets,
                                                                 sessionStoreDirectory,
-                                                                userConfig.Settings?.Network);
+                                                                userConfig.Settings?.Network,
+                                                                baselineReadProtection,
+                                                                standingTrust,
+                                                                permissionSystemPaths);
                                                         var policy = sandbox?.ExecutionPolicy ??
                                                                      ProcessExecutionPolicy.Host();
-                                                        var grantContext = sandbox is { } activeSandbox
-                                                            ? new SandboxGrantContext(activeSandbox.Policy,
-                                                                activeSandbox.Components)
-                                                            : null;
-                                                        return
-                                                            Task.FromResult((new ShellTool(new Workspace(config
-                                                                                    .WorkspaceRoot),
-                                                                                 config.DefaultToolTimeoutSeconds,
-                                                                                 knownSecrets,
-                                                                                 processBackend :
-                                                                                 sandbox?.Backend ??
-                                                                                 new
-                                                                                     HostProcessBackend(knownSecrets),
-                                                                                 executionPolicy : policy,
-                                                                                 activeCapabilities :
-                                                                                 sandbox is null
-                                                                                     ? null
-                                                                                     : activeGrants,
-                                                                                 grantContext : grantContext),
-                                                                             policy));
+                                                        // 与 BuildTools 的 shell 槽位同构：沙箱已组合时注册
+                                                        // PermissionShellTool（workspace 路由沙箱、host 显
+                                                        // 式 L3），未组合回退裸 ShellTool 形态。
+                                                        ITool workspaceShell;
+                                                        if (sandbox is { } composed)
+                                                        {
+                                                            var restricted =
+                                                                new ShellTool(new Workspace(config.WorkspaceRoot, true),
+                                                                              config.DefaultToolTimeoutSeconds,
+                                                                              knownSecrets,
+                                                                              processBackend : composed.Backend,
+                                                                              executionPolicy :
+                                                                              composed.ExecutionPolicy,
+                                                                              activeCapabilities : activeGrants,
+                                                                              grantContext :
+                                                                              new SandboxGrantContext(
+                                                                               composed.Policy,
+                                                                               composed.Components,
+                                                                               permissionSystemPaths));
+                                                            var hostShell =
+                                                                new ShellTool(new Workspace(config.WorkspaceRoot, true),
+                                                                              config.DefaultToolTimeoutSeconds,
+                                                                              knownSecrets,
+                                                                              executionPolicy :
+                                                                              ProcessExecutionPolicy.Host());
+                                                            workspaceShell =
+                                                                new PermissionShellTool(restricted, hostShell);
+                                                        }
+                                                        else
+                                                        {
+                                                            workspaceShell =
+                                                                new ShellTool(new Workspace(config.WorkspaceRoot, true),
+                                                                              config.DefaultToolTimeoutSeconds,
+                                                                              knownSecrets,
+                                                                              processBackend :
+                                                                              new HostProcessBackend(knownSecrets),
+                                                                              executionPolicy : policy);
+                                                        }
+
+                                                        return Task.FromResult((workspaceShell, policy));
                                                     });
         await access.InitializeAsync(cancellationToken).ConfigureAwait(false);
+        // M3：派生运行时写根仅在沙箱实际组合后注入资源策略（与 DesktopSessionFactory 同构），
+        // 消除 OS 基线可写与应用层审批的错位；未组合（未信任/组合失败）时 harness 目录分类
+        // 回落 OutsideWorkspace → L2 Ask，fail 方向不变。InitializeAsync 的信任激活已完成
+        // 沙箱组合，此处按组合结果重建策略供引擎与工具集合共用；应用层 C1 分类集以细化后的
+        // home 敏感子路径为准，运行时根不再被整 home 遮蔽。
+        if (sandbox is not null && settings is { } composedSettings)
+            resourcePolicy = new ResourceAccessPolicy(config.WorkspaceRoot,
+                                                      composedSettings.AdditionalReadRoots,
+                                                      composedSettings.AdditionalWriteRoots,
+                                                      permissionSystemRoots : permissionSystemRoots,
+                                                      sandboxRuntimeRoots :
+                                                      WindowsSandboxComposer.DeriveRuntimeWriteRoots(
+                                                       composedSettings),
+                                                      standingTrust : standingTrust);
         permissions = new PermissionEngine(config.WorkspaceRoot,
                                            workspaceReadOnly : () => accessState.IsReadOnly,
-                                           sandboxNetworkStandingEnabled : settings?.NetworkPolicy ==
-                                                                           SandboxNetworkPolicy.Enabled,
+                                           standingTrust : standingTrust,
                                            sandboxExecutionAvailable : sandbox is not null,
+                                           standingNetworkEnabled : standingNetworkEnabled,
                                            resourcePolicy : resourcePolicy,
                                            grantRegistry : grants,
                                            frozenScopeReader : FrozenCapabilityScopeReader.FromPreparation);
@@ -1041,9 +1235,17 @@ internal static class Program
                                         userConfig.Settings?.Network, networkProfile?.Network,
                                         new WindowsCredentialStore(),
                                         userConfig.Settings?.ModelTimeouts ?? ModelTimeouts.Default);
-        var workspace = new Workspace(config.WorkspaceRoot);
+        // 与 Desktop 同构：文件工具与 shell 槽位共用允许外部路径的 workspace。allowExternalPaths
+        // 只放开 Prepare 期的词法越界拒绝，让越界读/敏感读/越界写到达权限引擎的 L1 广泛读基线
+        // 与 L2 审批；实际授权仍由引擎与沙箱 OS 边界决定，不扩大 shell 工作目录以外的边界。
+        // Same shape as Desktop: the file tools and the shell slot share an external-path-enabled
+        // workspace. allowExternalPaths only removes Prepare's lexical escape refusal so
+        // out-of-workspace reads, sensitive reads, and out-of-workspace writes reach the engine's
+        // L1 broad-read baseline and L2 approval; authorization still belongs to the engine and
+        // the sandbox OS boundary, and no boundary beyond that is widened.
+        var workspace = new Workspace(config.WorkspaceRoot, true);
         var tools = BuildTools(workspace, config, apiKey, executionPolicy, sandbox?.Backend, knownSecrets, access,
-                               resourcePolicy, grants);
+                               resourcePolicy, grants, sandbox);
         var options = new AgentOptions
         {
             Model                     = config.Model,
@@ -1066,15 +1268,36 @@ internal static class Program
             ? null
             : new SessionIndexUpdater(new SessionIndexStore(sessionStoreDirectory));
 
+        // 组合授权指纹守卫：捕获组合实际消费的可信用户配置指纹，并注入同一函数的取值器——run 与
+        // chat 的宿主在每次发送/派发前重读该配置重算，失配或取值失败即撤销授权并闩死会话。
+        // 权限、常设信任与沙箱边界始终来自该可信配置，项目配置不参与指纹。
+        IReadOnlyList<string> baselineProtectedPaths = [trustPath, userConfigPath];
+        var compositionGuard = new PermissionCompositionGuard(
+                                                              PermissionCompositionFingerprint.Compute(settings,
+                                                                  userConfig.Settings?.Permissions,
+                                                                  userConfig.Settings?.Network,
+                                                                  config.WorkspaceRoot,
+                                                                  sandbox is not null, baselineProtectedPaths,
+                                                                  sessionStoreDirectory is null
+                                                                      ? null
+                                                                      : userConfig.Settings
+                                                                        ?.SessionStoreDirectory),
+                                                              PermissionCompositionFingerprint
+                                                                 .CreateEvaluator(userConfigPath, config.WorkspaceRoot,
+                                                                      sandbox is not null, baselineProtectedPaths,
+                                                                      sessionStoreDirectory is not null));
+
         return new AgentComposition(resolution, config,
                                     apiKey is null
                                         ? null
                                         : CredentialRoute.Describe(resolution.ProfileName,
                                                                    config.ApiKeyEnvironmentVariable,
                                                                    config.ApiKeyCredentialTarget),
-                                    knownSecrets, sandbox, settings, protectedPaths, executionPolicy, model, tools,
+                                    knownSecrets, sandbox, settings, permissionSystemPaths, permissionSystemRoots,
+                                    standingNetworkEnabled, executionPolicy, model, tools,
                                     permissions, defaultApprovalMode, options,
-                                    sessionStoreDirectory, access, sessionIndexUpdater);
+                                    sessionStoreDirectory, access, sessionIndexUpdater, standingTrust,
+                                    compositionGuard);
     }
 
     /// <summary>
@@ -1103,6 +1326,10 @@ internal static class Program
         await Console.Out.WriteLineAsync(composition.Sandbox is null
                                              ? $"  sandbox   : {composition.ExecutionPolicy.DisplayName}"
                                              : $"  sandbox   : {composition.ExecutionPolicy.DisplayName}; home: {composition.Sandbox.Components.SandboxHome}");
+        if (composition.Sandbox is null && composition.SandboxSettings is { Enabled: true })
+            await Console.Out.WriteLineAsync(
+                                             "  note      : the sandbox is enabled in settings but was not composed (workspace not trusted or composition failed); " +
+                                             "the shell runs as the bare host form, process execution is denied fail-closed, and no host fallback is implied.");
         await
             Console.Out.WriteLineAsync("  tools     : list_files, search_text, read_file, apply_patch, shell, work_items");
     }
@@ -1160,36 +1387,62 @@ internal static class Program
     ///     <para>把完整的只读与写入工具集合绑定到同一个工作区。</para>
     ///     <para>Binds the complete read/write tool set to one workspace.</para>
     /// </summary>
+    /// <param name="sandbox">
+    ///     <para>
+    ///         已组合的沙箱执行要素；非空时 shell 槽位按 Desktop 组装形态注册
+    ///         <see cref="PermissionShellTool" />（workspace 路由沙箱、host 路由显式 L3），
+    ///         null 时回退裸 ShellTool 形态并由入口如实提示。
+    ///     </para>
+    ///     <para>
+    ///         The composed sandbox execution; when present the shell slot registers a
+    ///         <see cref="PermissionShellTool" /> in the Desktop assembly shape (workspace routes to the
+    ///         sandbox, host is the explicit L3 request), and when absent it falls back to the bare ShellTool
+    ///         form with an honest entry-point notice.
+    ///     </para>
+    /// </param>
     private static ToolRegistry BuildTools(Workspace workspace, TinyHarnessConfig config, string? apiKey = null,
                                            ProcessExecutionPolicy? executionPolicy = null,
                                            IProcessExecutionBackend? processBackend = null,
                                            IReadOnlyDictionary<string, string>? knownSecrets = null,
                                            WorkspaceAccessCoordinator? access = null,
                                            ResourceAccessPolicy? resourcePolicy = null,
-                                           IActiveCapabilitySource? activeCapabilities = null)
+                                           IActiveCapabilitySource? activeCapabilities = null,
+                                           WindowsSandboxExecution? sandbox = null,
+                                           IReadOnlyList<string>? permissionSystemPaths = null)
     {
         var secrets = knownSecrets ?? SandboxCliComposition.KnownSecrets(config, apiKey);
+        // 沙箱已组合：shell 槽位与 Desktop 同构（workspace 沙箱路由 + host 显式 L3 申请）；
+        // 未组合：裸 ShellTool 形态，进程执行由引擎的沙箱不可用 fail-closed 拒绝，不回退宿主。
+        ITool shell = sandbox is { } composed
+            ? new PermissionShellTool(
+                                      new ShellTool(workspace, config.DefaultToolTimeoutSeconds, secrets,
+                                                    processBackend : composed.Backend,
+                                                    executionPolicy : composed.ExecutionPolicy,
+                                                    activeCapabilities : activeCapabilities,
+                                                    grantContext : new SandboxGrantContext(composed.Policy,
+                                                        composed.Components, permissionSystemPaths)),
+                                      new ShellTool(workspace, config.DefaultToolTimeoutSeconds, secrets,
+                                                    executionPolicy : ProcessExecutionPolicy.Host()))
+            : new ShellTool(workspace, config.DefaultToolTimeoutSeconds, secrets,
+                            processBackend : processBackend ?? new HostProcessBackend(secrets),
+                            executionPolicy : executionPolicy,
+                            // 快照源仅在沙箱身份就绪时接入：host/无身份形态下 source 会触发
+                            // fail-closed 组合错误，而这里语义是"沙箱不可用"而非组合错误。
+                            activeCapabilities :
+                            executionPolicy?.Backend == ProcessExecutionBackendKind.WindowsSandbox
+                                ? activeCapabilities
+                                : null);
         ITool[] tools =
         [
             new ListFilesTool(workspace, resourcePolicy : resourcePolicy),
             new SearchTextTool(workspace, resourcePolicy : resourcePolicy),
             new ReadFileTool(workspace, resourcePolicy : resourcePolicy),
             new ApplyPatchTool(workspace, resourcePolicy),
-            new ShellTool(workspace, config.DefaultToolTimeoutSeconds, secrets,
-                          processBackend : processBackend ?? new HostProcessBackend(secrets),
-                          executionPolicy : executionPolicy,
-                          // 快照源仅在沙箱身份就绪时接入：host/无身份形态下 source 会触发
-                          // fail-closed 组合错误，而这里语义是"沙箱不可用"而非组合错误。
-                          activeCapabilities :
-                          executionPolicy?.Backend == ProcessExecutionBackendKind.WindowsSandbox
-                              ? activeCapabilities
-                              : null)
+            shell
         ];
         return new ToolRegistry(access is null
                                     ? tools
-                                    : tools.Select(tool => access.State.Guard(() => tool.Definition.Name == "shell"
-                                                                                  ? access.Shell
-                                                                                  : tool)));
+                                    : tools.Select(tool => access.State.Guard(() => tool)));
     }
 
     /// <summary>
@@ -1200,25 +1453,40 @@ internal static class Program
     {
         var grants   = new GrantRegistry();
         var settings = composition.SandboxSettings;
+        // 派生运行时写根仅在沙箱已组合时回注，消除 OS 基线可写与应用层审批的错位；
+        // 应用层 C1 分类集取细化后的 home 敏感子路径（PermissionSystemRoots），运行时根不被遮蔽。
         var resourcePolicy = new ResourceAccessPolicy(composition.Config.WorkspaceRoot,
                                                       settings?.AdditionalReadRoots,
                                                       settings?.AdditionalWriteRoots,
-                                                      permissionSystemRoots : composition.ProtectedPaths);
+                                                      permissionSystemRoots : composition.PermissionSystemRoots,
+                                                      sandboxRuntimeRoots : composition.Sandbox is not null
+                                                          ? WindowsSandboxComposer.DeriveRuntimeWriteRoots(settings)
+                                                          : null,
+                                                      standingTrust : composition.StandingTrust);
+        // 常设网络免审批只对应"常设网络已启用 + Confirmed"；restricted 时网络申请恒逐次审批。
         var permissions = new PermissionEngine(composition.Config.WorkspaceRoot,
                                                workspaceReadOnly : () => composition.Access.State.IsReadOnly,
-                                               sandboxNetworkStandingEnabled : settings?.NetworkPolicy ==
-                                                                               SandboxNetworkPolicy.Enabled,
+                                               standingTrust : composition.StandingTrust,
                                                sandboxExecutionAvailable : composition.Sandbox is not null,
+                                               standingNetworkEnabled : composition.StandingNetworkEnabled,
                                                resourcePolicy : resourcePolicy,
                                                grantRegistry : grants,
                                                frozenScopeReader : FrozenCapabilityScopeReader.FromPreparation);
-        var tools = BuildTools(new Workspace(composition.Config.WorkspaceRoot), composition.Config,
+        // 与 Desktop 同构（DesktopSessionFactory 同一形态）：外部路径在 Prepare 放开词法拒绝，
+        // 越界读/敏感读/越界写到达引擎的 L1 基线与 L2 审批，授权仍由引擎与沙箱 OS 边界决定。
+        // Same shape as Desktop (DesktopSessionFactory): external paths remove Prepare's lexical
+        // refusal so out-of-workspace reads, sensitive reads, and writes reach the engine's L1
+        // baseline and L2 approval; authorization still belongs to the engine and the sandbox OS
+        // boundary.
+        var tools = BuildTools(new Workspace(composition.Config.WorkspaceRoot, true), composition.Config,
                                knownSecrets : composition.KnownSecrets,
                                executionPolicy : composition.ExecutionPolicy,
                                processBackend : composition.Sandbox?.Backend,
                                access : composition.Access,
                                resourcePolicy : resourcePolicy,
-                               activeCapabilities : grants);
+                               activeCapabilities : grants,
+                               sandbox : composition.Sandbox,
+                               permissionSystemPaths : composition.PermissionSystemPaths);
         return new ChatExecutionStack(permissions, tools, grants, resourcePolicy);
     }
 
@@ -1249,9 +1517,11 @@ internal static class Program
     {
         var userConfig = await UserConfigStore.LoadAsync(UserConfigStore.DefaultFilePath(), cancellationToken)
                                               .ConfigureAwait(false);
+        var standingTrust = StandingTrustEvaluation.Evaluate(userConfig.Settings?.WindowsSandbox,
+                                                             userConfig.Settings?.Permissions);
         return SandboxCliComposition.TryCompose(userConfig.Settings?.WindowsSandbox, config.WorkspaceRoot,
                                                 knownSecrets, sessionStoreDirectory,
-                                                userConfig.Settings?.Network);
+                                                userConfig.Settings?.Network, null, standingTrust);
     }
 
     /// <summary>
@@ -1285,6 +1555,10 @@ internal static class Program
         var script         = new SmokeScriptClient(plan.Steps);
         var workspace      = new Workspace(fixture.Root);
         var resourcePolicy = new ResourceAccessPolicy(fixture.Root);
+        // 离线 smoke 与生产的显式差异（B7 声明）：shell 槽位同样注册 PermissionShellTool
+        // （与生产同构的 workspace/host 路由形态），但 restricted 是脚本后端的裸 ShellTool、
+        // 引擎按 sandboxExecutionAvailable:true 组合——smoke 不证明机器沙箱可用，也不携带
+        // 沙箱 grant 上下文；生产路径的 restricted 由真实沙箱组合要素构建。
         var tools = new ToolRegistry(BuildTools(workspace, config, resourcePolicy : resourcePolicy).Values
                                         .Select(tool => tool is ShellTool shell
                                                     ? new PermissionShellTool(shell,
@@ -1552,6 +1826,16 @@ internal static class Program
     /// <remarks>
     ///     <para>chat 携带受保护会话存储目录；未启用持久化时该目录为 null。</para>
     ///     <para>Chat carries the protected session-store directory; it is null when persistence is disabled.</para>
+    ///     <para>
+    ///         PermissionSystemPaths 是 C1 实例路径（组合期写根与 grant 校验用）；PermissionSystemRoots
+    ///         是应用层分类集（home 已收缩为敏感子路径，运行时根不被遮蔽）；两者语义不同不得混用。
+    ///     </para>
+    ///     <para>
+    ///         PermissionSystemPaths are the C1 instance paths (for composition-time write-root and grant
+    ///         validation); PermissionSystemRoots is the application-layer classification set (the home
+    ///         refined to its sensitive subpaths so runtime roots stay reachable); the two semantics must
+    ///         never be mixed.
+    ///     </para>
     /// </remarks>
     internal sealed record AgentComposition(
         ConfigResolution                    Resolution,
@@ -1560,7 +1844,9 @@ internal static class Program
         IReadOnlyDictionary<string, string> KnownSecrets,
         WindowsSandboxExecution?            Sandbox,
         WindowsSandboxSettings?             SandboxSettings,
-        IReadOnlyList<string>               ProtectedPaths,
+        IReadOnlyList<string>               PermissionSystemPaths,
+        IReadOnlyList<string>               PermissionSystemRoots,
+        bool                                StandingNetworkEnabled,
         ProcessExecutionPolicy              ExecutionPolicy,
         IChatCompletionClient?              Model,
         ToolRegistry                        Tools,
@@ -1569,7 +1855,9 @@ internal static class Program
         AgentOptions                        Options,
         string?                             SessionStoreDirectory,
         WorkspaceAccessCoordinator          Access,
-        SessionIndexUpdater?                SessionIndexUpdater);
+        SessionIndexUpdater?                SessionIndexUpdater,
+        StandingTrustState                  StandingTrust    = StandingTrustState.None,
+        PermissionCompositionGuard?         CompositionGuard = null);
 
     internal sealed record ChatExecutionStack(
         PermissionEngine     Permissions,
@@ -1651,13 +1939,21 @@ internal static class SandboxCliComposition
         WindowsSandboxSettings?             settings,
         string                              workspaceRoot,
         IReadOnlyDictionary<string, string> knownSecrets,
-        string?                             sessionStoreDirectory = null,
-        NetworkSettings?                    networkSettings       = null)
+        string?                             sessionStoreDirectory  = null,
+        NetworkSettings?                    networkSettings        = null,
+        SandboxBaselineReadProtection?      baselineReadProtection = null,
+        StandingTrustState                  standingTrust          = StandingTrustState.None,
+        IReadOnlyList<string>?              permissionSystemPaths  = null)
     {
         if (settings is not { Enabled: true }) return null;
 
+        // 存储保护校验按用户配置的原始写根集合执行：未确认的常设写根虽不进 OS 基线，
+        // 仍可经 grant 通道临时生效，不得吞掉受保护会话存储。
+        var compositionSettings = StandingTrustEvaluation.EffectiveSandboxSettings(settings, standingTrust) ??
+                                  settings;
         if (sessionStoreDirectory is null)
-            return WindowsSandboxComposer.Compose(settings, workspaceRoot, knownSecrets, networkSettings);
+            return WindowsSandboxComposer.Compose(compositionSettings, workspaceRoot, knownSecrets, networkSettings,
+                                                  baselineReadProtection, permissionSystemPaths);
         var fullStoreDirectory = Path.GetFullPath(sessionStoreDirectory);
         var offendingRoot = settings.AdditionalWriteRoots?
                                     .Select(Path.GetFullPath)
@@ -1670,7 +1966,8 @@ internal static class SandboxCliComposition
                                           "Move it outside the workspace and every additional write root "             +
                                           "(settings.sessionStoreDirectory) before enabling the Windows sandbox.");
 
-        return WindowsSandboxComposer.Compose(settings, workspaceRoot, knownSecrets, networkSettings);
+        return WindowsSandboxComposer.Compose(compositionSettings, workspaceRoot, knownSecrets, networkSettings,
+                                              baselineReadProtection, permissionSystemPaths);
     }
 
     /// <summary>

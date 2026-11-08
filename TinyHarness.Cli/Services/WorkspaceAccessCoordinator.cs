@@ -22,7 +22,7 @@ internal sealed class WorkspaceAccessCoordinator
         PolicyIdentity = "workspace-read-only;process-disabled"
     };
 
-    private readonly Func<GrantRegistry, Task<(ShellTool Tool, ProcessExecutionPolicy Policy)>> _activate;
+    private readonly Func<GrantRegistry, Task<(ITool Tool, ProcessExecutionPolicy Policy)>> _activate;
 
     private readonly ShellTool           _disabledShell;
     private readonly IWorkspaceAclGrant  _grant;
@@ -45,7 +45,7 @@ internal sealed class WorkspaceAccessCoordinator
                                       PermissionEngine     permissions, TextReader          input, TextWriter output,
                                       bool                 interactive,
                                       bool                 requiresAcl, IWorkspaceAclGrant grant,
-                                      Func<GrantRegistry, Task<(ShellTool Tool, ProcessExecutionPolicy Policy)>>
+                                      Func<GrantRegistry, Task<(ITool Tool, ProcessExecutionPolicy Policy)>>
                                           activate)
     {
         State        = state;
@@ -63,7 +63,7 @@ internal sealed class WorkspaceAccessCoordinator
     }
 
     public WorkspaceAccessState   State  { get; }
-    public ShellTool              Shell  { get; private set; }
+    public ITool                  Shell  { get; private set; }
     public ProcessExecutionPolicy Policy { get; private set; } = ReadOnlyPolicy;
 
     /// <summary>
@@ -113,8 +113,10 @@ internal sealed class WorkspaceAccessCoordinator
                 return;
             }
 
-            await
-                _output.WriteLineAsync("Unknown workspace: read-only. Open an interactive chat and use /trust to authorize it.");
+            // 未信任工作区的入口提示走 stderr：run 保持可用（模型与只读文件工具），进程执行
+            // 因沙箱未组合被引擎 fail-closed 拒绝，不回退宿主。
+            await Console.Error.WriteLineAsync(
+                                               "Unknown workspace: read-only. Open an interactive chat and use /trust to authorize it.");
             return;
         }
 

@@ -42,8 +42,8 @@ internal static class CliApprovalRouting
                                      new AiReviewer(createReviewer,
                                                     approvalTimeoutProvider ??
                                                     (() => TimeSpan.FromSeconds(host()
-                                                                                .EffectiveModelTimeouts
-                                                                                .ApprovalTimeoutSeconds))),
+                                                                                       .EffectiveModelTimeouts
+                                                                                       .ApprovalTimeoutSeconds))),
                                      () => permissions.ApprovalMode,
                                      () => BuildContext(host(), permissions));
 
@@ -73,7 +73,7 @@ internal static class CliApprovalRouting
         foreach (var grant in permissions.Grants.SnapshotGrants())
             entries.Add(new ApprovalContextEntry(grant.CreatedUtc, ApprovalInputSource.GrantHistory,
                                                  grant.GrantId,
-                                                 $"grant {grant.Scope} {grant.Capability} state={grant.State}"));
+                                                 GrantHistoryEntry.Describe(grant)));
 
         return ApprovalContextBuilder.Build(entries);
     }

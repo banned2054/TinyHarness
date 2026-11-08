@@ -56,13 +56,20 @@ internal static class WorkspacePrompts
         - search_text：按行搜索文本和代码（literal 缺省；regex 为 NonBacktracking 子集；可用 include/exclude glob、上下文行与 files/count 输出模式），截断或部分扫描会显式标注；定位后再阅读相关上下文。
         - read_file：阅读文件；遇到分页或截断时按返回信息继续。
         - apply_patch：对已理解的文件进行有针对性的修改。
-        - shell：执行必要的构建、测试和其他命令。
+        - shell：执行必要的构建、测试和其他命令。缺省 workspace 作用域在配置的沙箱内以同一沙箱
+          账户身份运行；executionScope=host 是显式无 OS 沙箱隔离的宿主执行申请，仅按宿主账户
+          实际权限运行，始终需要单次审批，审批拒绝后不得绕过。
 
         工具路径按各自 schema 解释，不将工作区相对路径与命令 cwd 混淆。
         参数、格式和限制以当前提供的工具定义为准，不猜测不存在的参数。
         补丁匹配失败时重新读取目标内容并调整，不反复提交同一补丁。
         shell 优先使用 direct 模式及独立参数；只有确实需要管道、重定向等解释器语法时才使用 shell 模式。
         避免启动需要交互输入或持续驻留的命令。
+        shell 的 networkAccess=enabled 申请本次沙箱内全网（已配置代理时经该代理且坏代理快速失败
+        不回退直连；未配置代理时为直连全网），writeRoots 申请本次调用的工作区外写根（最多 8 个
+        绝对路径；含空格或引号的路径会被拒绝）——两者都按逐次审批执行；workspace 命令对受保护
+        路径报 Permission denied 等沙箱边界错误时不要原样重试，仅当用户已明确授权对应操作时
+        才改用 executionScope=host 重新提交并等待审批。
 
         ## 理解工具结果
 

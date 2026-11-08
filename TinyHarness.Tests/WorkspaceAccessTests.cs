@@ -377,8 +377,9 @@ public class WorkspaceAccessTests
                                                              if (FailActivation)
                                                                  throw new
                                                                      InvalidOperationException("fake activation failure");
-                                                             return Task.FromResult((new ShellTool(Workspace.Workspace),
-                                                                 ProcessExecutionPolicy.Host()));
+                                                             return Task.FromResult((new ShellTool(Workspace.Workspace)
+                                                                        as ITool,
+                                                                    ProcessExecutionPolicy.Host()));
                                                          });
         }
 
