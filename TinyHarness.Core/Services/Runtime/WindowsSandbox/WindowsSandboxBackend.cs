@@ -89,9 +89,9 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
     private readonly WindowsSandboxBackendLimits         _limits;
     private readonly SandboxIsolationPolicy              _policy;
     private readonly IReadOnlyDictionary<string, string> _proxyEnvironment;
-    private readonly bool                                _standingNetworkAccessEnabled;
     private readonly ISandboxRunnerLauncher              _runnerLauncher;
     private readonly ISandboxSetupInvoker                _setupInvoker;
+    private readonly bool                                _standingNetworkAccessEnabled;
     private readonly WindowsSandboxStateInspector        _stateInspector;
     private readonly IReadOnlyDictionary<string, string> _targetEnvironment;
 
@@ -101,40 +101,40 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
         WindowsSandboxComponents                            components,
         SandboxIsolationPolicy                              policy,
         IReadOnlyDictionary<string, string>                 targetEnvironment,
-        IReadOnlyDictionary<string, string>?                knownSecrets          = null,
-        ISandboxSetupInvoker?                               setupInvoker          = null,
-        ISandboxCredentialSource?                           credentialSource      = null,
-        SandboxCapabilitySidStore?                          capabilitySidStore    = null,
-        ISandboxDesktopFactory?                             desktopFactory        = null,
-        ISandboxRunnerLauncher?                             runnerLauncher        = null,
-        WindowsSandboxBackendLimits?                        limits                = null,
-        Action<SecurityIdentifier>?                         allowNullDeviceAccess = null,
-        Func<SandboxSetupPayload, CancellationToken, Task>? validateWriteAcls     = null,
+        IReadOnlyDictionary<string, string>?                knownSecrets                 = null,
+        ISandboxSetupInvoker?                               setupInvoker                 = null,
+        ISandboxCredentialSource?                           credentialSource             = null,
+        SandboxCapabilitySidStore?                          capabilitySidStore           = null,
+        ISandboxDesktopFactory?                             desktopFactory               = null,
+        ISandboxRunnerLauncher?                             runnerLauncher               = null,
+        WindowsSandboxBackendLimits?                        limits                       = null,
+        Action<SecurityIdentifier>?                         allowNullDeviceAccess        = null,
+        Func<SandboxSetupPayload, CancellationToken, Task>? validateWriteAcls            = null,
         bool                                                standingNetworkAccessEnabled = false,
-        IReadOnlyDictionary<string, string>?                proxyEnvironment      = null)
+        IReadOnlyDictionary<string, string>?                proxyEnvironment             = null)
     {
         if (!OperatingSystem.IsWindows())
             throw new PlatformNotSupportedException("The Windows sandbox backend is available on Windows only.");
 
         ArgumentNullException.ThrowIfNull(targetEnvironment);
 
-        _components            = components;
-        _policy                = policy;
+        _components = components;
+        _policy = policy;
         // 与策略临时根共用可信配置构建的冻结环境，避免 ACL 与实际进程环境漂移。
-        _targetEnvironment     = targetEnvironment;
-        _knownSecrets          = knownSecrets ?? new Dictionary<string, string>(StringComparer.Ordinal);
+        _targetEnvironment = targetEnvironment;
+        _knownSecrets = knownSecrets ?? new Dictionary<string, string>(StringComparer.Ordinal);
         _standingNetworkAccessEnabled = standingNetworkAccessEnabled;
-        _proxyEnvironment      = proxyEnvironment ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        _stateInspector        = new WindowsSandboxStateInspector(components);
-        _setupInvoker          = setupInvoker ?? new ProcessSandboxSetupInvoker(components, limits?.RefreshTimeout);
-        _credentialSource      = credentialSource ?? new SandboxCredentialReader(components);
-        _capabilitySidStore    = capabilitySidStore ?? new SandboxCapabilitySidStore(components);
-        _desktopFactory        = desktopFactory ?? new WindowsSandboxDesktopFactory();
-        _runnerLauncher        = runnerLauncher ?? new WindowsSandboxRunnerLauncher();
-        _limits                = limits ?? WindowsSandboxBackendLimits.Default;
+        _proxyEnvironment = proxyEnvironment ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        _stateInspector = new WindowsSandboxStateInspector(components);
+        _setupInvoker = setupInvoker ?? new ProcessSandboxSetupInvoker(components, limits?.RefreshTimeout);
+        _credentialSource = credentialSource ?? new SandboxCredentialReader(components);
+        _capabilitySidStore = capabilitySidStore ?? new SandboxCapabilitySidStore(components);
+        _desktopFactory = desktopFactory ?? new WindowsSandboxDesktopFactory();
+        _runnerLauncher = runnerLauncher ?? new WindowsSandboxRunnerLauncher();
+        _limits = limits ?? WindowsSandboxBackendLimits.Default;
         // NUL 设备 ACE 是机器级共享状态；默认测试注入空操作，避免修改宿主 ACL。
         _allowNullDeviceAccess = allowNullDeviceAccess ?? SandboxNullDeviceAcl.AllowCapabilitySid;
-        _validateWriteAcls     = validateWriteAcls ?? WorkspaceAclInheritance.ValidateAsync;
+        _validateWriteAcls = validateWriteAcls ?? WorkspaceAclInheritance.ValidateAsync;
     }
 
     public async Task<ProcessExecutionResult> ExecuteAsync(
@@ -150,7 +150,7 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
 
         // 生效网络 = 常设在线策略（构造传入或冻结策略携带）或该命令的逐次审批授予；
         // 都不满足时保持离线，绝不降级或回退宿主。
-        var networkAccessEnabled = (_standingNetworkAccessEnabled || _policy.NetworkEnabled) ||
+        var networkAccessEnabled = _standingNetworkAccessEnabled || _policy.NetworkEnabled ||
                                    execution.NetworkAccessEnabled;
 
         // TCP 环回模式使用独立账户对（TcpOff/TcpOn）与独立 home，其凭据文件的 online 条目不具备
@@ -164,11 +164,13 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
         // This is a pre-launch validation and throws ProcessExecutionStartException like the
         // other pre-launch refusals in this method.
         if (_components.AllowTcpLoopback && networkAccessEnabled)
-            throw new ProcessExecutionStartException("The TCP loopback mode and online network access are mutually exclusive: " +
-                                                     "tcp-loopback runs on a separate TcpOff/TcpOn account pair with a separate home whose " +
-                                                     "credentials file online entry carries no egress capability, and per-command online grants " +
-                                                     "are not supported in this mode; disable settings.windowsSandbox.allowTcpLoopback or run without the network request.",
-                                                     new InvalidOperationException("TCP loopback mode forbids effective online network access."));
+            throw new
+                ProcessExecutionStartException("The TCP loopback mode and online network access are mutually exclusive: " +
+                                               "tcp-loopback runs on a separate TcpOff/TcpOn account pair with a separate home whose " +
+                                               "credentials file online entry carries no egress capability, and per-command online grants " +
+                                               "are not supported in this mode; disable settings.windowsSandbox.allowTcpLoopback or run without the network request.",
+                                               new
+                                                   InvalidOperationException("TCP loopback mode forbids effective online network access."));
 
         if (!Workspace.IsInside(_policy.WorkspaceRoot, execution.WorkingDirectory))
             throw new
@@ -178,12 +180,30 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
 
         await PreflightAsync(execution, networkAccessEnabled, cancellationToken).ConfigureAwait(false);
 
-        var       account        = await LoadAccount(networkAccessEnabled, cancellationToken).ConfigureAwait(false);
+        // 账户三态选择与 payload 构造共用同一份授权分流纯函数：获批读执行必须以专用授权账户
+        // 启动 runner——其 token 的授权组 deny 面是“全量 deny − 获批路径”，获批读才真实可达；
+        // 普通沙箱账户的全量 deny 会压制获批读，绝不回退。离线/在线语义映射到授权账户对
+        // （AuthOff 携带离线防火墙面、AuthOn 仅在生效在线时使用），读授权不顺带开放网络。
+        // 管道 ACL 与私有桌面按返回账户的 SID 构造，授权账户自动获得同等隔离形态。
+        // The three-way account selection shares the same authorization-split pure function as
+        // payload construction: an approved-read execution must launch the runner under the
+        // dedicated authorization account — whose token's authorization-group deny face is
+        // "full deny minus the approved paths", the only face under which the approved read is
+        // actually reachable; the ordinary sandbox account's full deny would suppress it, so
+        // there is no fallback. The offline/online semantics map onto the authorization pair
+        // (AuthOff carries the offline firewall face, AuthOn is used only while effectively
+        // online), so an approved read never opens the network along the way. The pipe ACL and
+        // the private desktop are built from the returned account's SID, giving the authorization
+        // account the same isolation shape automatically.
+        var authorizedReads = SandboxAuthorizedReads.Split(_policy.DenyReadPaths,
+                                                           execution.GrantScope?.ReadRoots ?? []);
+        var account = await LoadAccount(networkAccessEnabled, authorizedReads.HasAuthorizedReads,
+                                        cancellationToken).ConfigureAwait(false);
         var       capabilitySids = await ResolveCapabilitySids(execution, cancellationToken).ConfigureAwait(false);
         using var desktop        = CreateDesktop(account);
 
-        var                     request = BuildSpawnRequest(execution, capabilitySids, desktop.Name,
-                                                            networkAccessEnabled);
+        var request = BuildSpawnRequest(execution, capabilitySids, desktop.Name,
+                                        networkAccessEnabled);
         SandboxRunnerConnection connection;
         try
         {
@@ -211,7 +231,7 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
         {
             if (!await TrySendFrameAsync(connection, writerGate,
                                          stream => RunnerFrameCodec.WriteFrameAsync(stream, "spawn_request", request,
-                                                  CancellationToken.None),
+                                             CancellationToken.None),
                                          cancellationToken).ConfigureAwait(false))
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -351,14 +371,27 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
         }
     }
 
-    private async Task<WindowsSandboxAccount> LoadAccount(bool networkAccessEnabled, CancellationToken cancellationToken)
+    private async Task<WindowsSandboxAccount> LoadAccount(bool              networkAccessEnabled, bool authorizedReads,
+                                                          CancellationToken cancellationToken)
     {
         try
         {
             // 生效在线时必须以在线账户启动 runner；任何失败都 fail closed，不降级离线账户。
-            return await (networkAccessEnabled
-                              ? _credentialSource.LoadOnlineAccount(cancellationToken)
-                              : _credentialSource.LoadOfflineAccount(cancellationToken)).ConfigureAwait(false);
+            // 获批读执行切换到专用授权账户（离线↔AuthOff、在线↔AuthOn），凭据缺失或代际不足
+            // 在凭据读取处明确失败，绝不回退普通沙箱账户。
+            // While effectively online the runner must launch under the online account; every
+            // failure fails closed without demoting to offline. An approved-read execution
+            // switches to the dedicated authorization accounts (offline↔AuthOff, online↔AuthOn);
+            // missing credentials or an insufficient generation fail explicitly at credential
+            // loading and never fall back to the ordinary sandbox accounts.
+            return await (authorizedReads
+                    ? networkAccessEnabled
+                        ? _credentialSource.LoadAuthorizedOnlineAccount(cancellationToken)
+                        : _credentialSource.LoadAuthorizedOfflineAccount(cancellationToken)
+                    : networkAccessEnabled
+                        ? _credentialSource.LoadOnlineAccount(cancellationToken)
+                        : _credentialSource.LoadOfflineAccount(cancellationToken))
+               .ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -423,10 +456,10 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
 
         return new RunnerSpawnRequest
         {
-            Command                    = [execution.Executable, .. execution.Arguments],
-            WorkingDirectory           = execution.WorkingDirectory,
-            Environment                = BuildSpawnEnvironment(networkAccessEnabled),
-            PermissionProfile          = _policy.SpawnProfile with
+            Command          = [execution.Executable, .. execution.Arguments],
+            WorkingDirectory = execution.WorkingDirectory,
+            Environment      = BuildSpawnEnvironment(networkAccessEnabled),
+            PermissionProfile = _policy.SpawnProfile with
             {
                 Network = SandboxNetworkPolicyParser.ToProfileValue(networkAccessEnabled
                                                                         ? SandboxNetworkPolicy.Enabled
@@ -728,7 +761,7 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
         using var writeCancellation = new CancellationTokenSource(_limits.TerminateWriteTimeout);
         return TrySendFrameAsync(connection, writerGate,
                                  stream => RunnerFrameCodec.WriteControlFrameAsync(stream, "terminate",
-                                          writeCancellation.Token),
+                                     writeCancellation.Token),
                                  CancellationToken.None);
     }
 

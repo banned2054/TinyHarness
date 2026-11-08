@@ -12,16 +12,17 @@ namespace TinyHarness.Tests;
 
 /// <summary>
 ///     <para>
-///         网络权限决策：沙箱工具申请联网时，常设信任未开启则一律逐次审批（硬拒绝、NeedsInspection
-///         与 worker 保护仍优先，授权不得绕过该询问）；常设信任开启后回到各模式既有路由；
-///         网络状态经授权约束行绑定，不得跨网络状态复用；用户拒绝与冻结执行计划的边界单独固化。
+///         网络权限决策：沙箱工具申请联网时，常设信任未显式确认（None/Unconfirmed）则一律逐次审批
+///         （硬拒绝、NeedsInspection 与 worker 保护仍优先，授权不得绕过该询问）；常设信任显式确认后
+///         回到各模式既有路由；网络状态经授权约束行绑定，不得跨网络状态复用；用户拒绝与冻结执行计划
+///         的边界单独固化。
 ///     </para>
 ///     <para>
 ///         Network permission decisions: a sandboxed tool requesting network access
-///         is always approved per call while standing trust is off (hard denials,
-///         NeedsInspection, and worker protection still take precedence, and grants
-///         cannot bypass the ask); with standing trust on, each mode's existing
-///         routing applies; network state binds through the grant-constraint line
+///         is always approved per call while standing trust is not explicitly confirmed
+///         (None/Unconfirmed; hard denials, NeedsInspection, and worker protection still take
+///         precedence, and grants cannot bypass the ask); with confirmed standing trust, each
+///         mode's existing routing applies; network state binds through the grant-constraint line
 ///         and never crosses between network states; user denial and the frozen
 ///         plan boundaries are pinned separately.
 ///     </para>
@@ -60,7 +61,7 @@ public class SandboxNetworkPermissionTests
         });
     }
 
-    // ---- 常设信任开启：网络申请随文件分类路由 ----
+    // ---- 常设信任已确认：网络申请随文件分类路由 ----
 
     [TestCase("filesystem.read", PermissionDecision.Allow)]
     [TestCase("filesystem.write", PermissionDecision.Allow)]
@@ -68,7 +69,9 @@ public class SandboxNetworkPermissionTests
         PermissionDecision                                                                expected)
     {
         using var root = new TestTempDir();
-        var engine = new PermissionEngine(root.Root, sandboxNetworkStandingEnabled : true,
+        // 旧 sandboxNetworkStandingEnabled 直通已移除；免审批仅对应"常设网络已启用 + Confirmed"态。
+        var engine = new PermissionEngine(root.Root, standingTrust : StandingTrustState.Confirmed,
+                                          standingNetworkEnabled : true,
                                           resourcePolicy : new TestResourcePolicy(root.Root));
         engine.SetApprovalMode(SessionApprovalMode.AIAutoReview);
 
@@ -82,8 +85,10 @@ public class SandboxNetworkPermissionTests
     public void WorkerProtectionAndHardDeny_BeatNetworkRequirement()
     {
         using var root = new TestTempDir();
+        // 语义前提：常设网络已启用且 Confirmed，硬限制仍优先于一切网络免审批。
         var worker = new PermissionEngine(root.Root, true,
-                                          sandboxNetworkStandingEnabled : true);
+                                          standingTrust : StandingTrustState.Confirmed,
+                                          standingNetworkEnabled : true);
         Assert.That(worker.Evaluate(Preparation(root, "filesystem.write", true)).Decision,
                     Is.EqualTo(PermissionDecision.Deny));
 

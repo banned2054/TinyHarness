@@ -24,7 +24,10 @@ public static class SandboxPolicyResolver
     ///         env 是将冻结给目标命令的环境（从中取 TEMP/TMP）；additionalWriteRoots 是可信设置声明的
     ///         额外写根（绝对路径；read-only 策略下这是声明必要临时写根的唯一机制）；network 是常设
     ///         网络策略；additionalReadRoots 是可信只读根；sandboxHome 用于写根、只读根与临时写根
-    ///         对凭据目录的重叠校验——生产路径始终提供，缺省时跳过该校验。
+    ///         对凭据目录的重叠校验——生产路径始终提供，缺省时跳过该校验。baselineReadRoots 与
+    ///         baselineDenyReadPaths 是基线广泛读根与 deny-read 保护集（GAP-1）：不做对凭据目录的
+    ///         附加根校验（凭据目录由 provisioning 永久 DENY 且 deny 集配对保护），形态校验由组合器
+    ///         fail-closed 把守。
     ///     </para>
     ///     <para>
     ///         Resolves a policy. workspaceRoot must be a fully qualified absolute
@@ -36,7 +39,12 @@ public static class SandboxPolicyResolver
     ///         policy; additionalReadRoots are trusted read-only roots; sandboxHome
     ///         feeds the write-, read-, and temp-root overlap validation against the
     ///         credentials directory (the production path always supplies it; when
-    ///         absent the overlap check is skipped).
+    ///         absent the overlap check is skipped). baselineReadRoots and
+    ///         baselineDenyReadPaths are the baseline broad-read root and the deny-read
+    ///         protection set (GAP-1): they skip the additional-root credentials-overlap
+    ///         validation (the credentials directory is permanently denied by provisioning
+    ///         and paired through the deny set), while their shape stays guarded fail-closed
+    ///         by the composer.
     ///     </para>
     /// </summary>
     public static SandboxIsolationPolicy Resolve(SandboxPolicyKind                   kind,
@@ -44,10 +52,12 @@ public static class SandboxPolicyResolver
                                                  IReadOnlyDictionary<string, string> targetEnvironment,
                                                  IReadOnlyList<string>?              additionalWriteRoots = null,
                                                  bool                                allowTcpLoopback     = false,
-                                                 SandboxNetworkPolicy                network              =
+                                                 SandboxNetworkPolicy network =
                                                      SandboxNetworkPolicy.Restricted,
-                                                 IReadOnlyList<string>?              additionalReadRoots  = null,
-                                                 string?                             sandboxHome          = null)
+                                                 IReadOnlyList<string>? additionalReadRoots   = null,
+                                                 string?                sandboxHome           = null,
+                                                 IReadOnlyList<string>? baselineReadRoots     = null,
+                                                 IReadOnlyList<string>? baselineDenyReadPaths = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
         ArgumentNullException.ThrowIfNull(targetEnvironment);
@@ -57,9 +67,11 @@ public static class SandboxPolicyResolver
                 ArgumentException($"The workspace root must be a fully qualified absolute path: '{workspaceRoot}'.",
                                   nameof(workspaceRoot));
 
-        var extraRoots   = NormalizeAdditionalWriteRoots(additionalWriteRoots, workspaceRoot, sandboxHome);
-        var readRoots    = NormalizeAdditionalReadRoots(additionalReadRoots, workspaceRoot, sandboxHome);
-        var tempRoots    = ResolveTempRoots(targetEnvironment);
+        var extraRoots     = NormalizeAdditionalWriteRoots(additionalWriteRoots, workspaceRoot, sandboxHome);
+        var readRoots      = NormalizeAdditionalReadRoots(additionalReadRoots, workspaceRoot, sandboxHome);
+        var baselineReads  = NormalizeBaselineRoots(baselineReadRoots);
+        var baselineDenies = NormalizeBaselineRoots(baselineDenyReadPaths);
+        var tempRoots      = ResolveTempRoots(targetEnvironment);
         RequireTempRootsOutsideCredentials(tempRoots, sandboxHome, nameof(targetEnvironment));
         var profileValue = SandboxNetworkPolicyParser.ToProfileValue(network);
         return kind switch
@@ -80,7 +92,9 @@ public static class SandboxPolicyResolver
                             .. extraRoots.Select(root =>
                                                      SandboxFileSystemEntry.Write(SandboxPolicyPath.Directory(root))),
                             .. readRoots.Select(root =>
-                                                    SandboxFileSystemEntry.Read(SandboxPolicyPath.Directory(root)))
+                                                    SandboxFileSystemEntry.Read(SandboxPolicyPath.Directory(root))),
+                            .. baselineReads.Select(root =>
+                                                        SandboxFileSystemEntry.Read(SandboxPolicyPath.Directory(root)))
                         ]
                     },
                     Network = profileValue
@@ -88,6 +102,8 @@ public static class SandboxPolicyResolver
                 NetworkEnabled      = network == SandboxNetworkPolicy.Enabled,
                 EffectiveWriteRoots = extraRoots,
                 EffectiveReadRoots  = readRoots,
+                BaselineReadRoots   = baselineReads,
+                DenyReadPaths       = baselineDenies,
                 DenyWritePaths      = [],
                 TempWriteRoots      = tempRoots
             },
@@ -106,14 +122,18 @@ public static class SandboxPolicyResolver
                             .. extraRoots.Select(root =>
                                                      SandboxFileSystemEntry.Write(SandboxPolicyPath.Directory(root))),
                             .. readRoots.Select(root =>
-                                                    SandboxFileSystemEntry.Read(SandboxPolicyPath.Directory(root)))
+                                                    SandboxFileSystemEntry.Read(SandboxPolicyPath.Directory(root))),
+                            .. baselineReads.Select(root =>
+                                                        SandboxFileSystemEntry.Read(SandboxPolicyPath.Directory(root)))
                         ]
                     },
                     Network = profileValue
                 },
-                NetworkEnabled = network == SandboxNetworkPolicy.Enabled,
+                NetworkEnabled      = network == SandboxNetworkPolicy.Enabled,
                 EffectiveWriteRoots = SandboxIsolationPolicy.Deduplicate([workspaceRoot, .. tempRoots, .. extraRoots]),
                 EffectiveReadRoots  = readRoots,
+                BaselineReadRoots   = baselineReads,
+                DenyReadPaths       = baselineDenies,
                 DenyWritePaths = SandboxIsolationPolicy.ProtectedMetadataSubpaths
                                                        .Select(subpath => Path.Combine(workspaceRoot, subpath))
                                                        .ToArray(),
@@ -224,6 +244,37 @@ public static class SandboxPolicyResolver
 
     /// <summary>
     ///     <para>
+    ///         规范化基线广泛读根/deny-read 保护集（GAP-1）：绝对化、去空白、去重（大小写不敏感）、
+    ///         保持顺序。形态校验（绝对、非盘根、配对）由组合器 fail-closed 把守，这里只做规范化；
+    ///         与用户附加根不同，本集不做对凭据目录的重叠校验。
+    ///     </para>
+    ///     <para>
+    ///         Normalizes the baseline broad-read root / deny-read protection set (GAP-1):
+    ///         absolutized, trimmed, deduplicated case-insensitively, order-preserving. Shape
+    ///         validation (absolute, no filesystem roots, pairing) stays guarded fail-closed by the
+    ///         composer; this only normalizes. Unlike user-declared additional roots, this set skips
+    ///         the credentials-overlap validation.
+    ///     </para>
+    /// </summary>
+    private static IReadOnlyList<string> NormalizeBaselineRoots(IReadOnlyList<string>? roots)
+    {
+        if (roots is null || roots.Count == 0) return [];
+
+        var seen    = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var results = new List<string>();
+        foreach (var root in roots)
+        {
+            if (string.IsNullOrWhiteSpace(root)) continue;
+
+            var full = Path.GetFullPath(root);
+            if (seen.Add(full)) results.Add(full);
+        }
+
+        return results;
+    }
+
+    /// <summary>
+    ///     <para>
     ///         判断可信根（写根或只读根）与凭据目录（home\.sandbox-secrets）是否重叠：任一方向
     ///         包含或相等都算重叠，覆盖 home 本身的根必然覆盖凭据目录。词法比较之外，Windows 上
     ///         还把两侧解析为文件系统最终落点（展开 8.3 短名与 junction/symlink）再次比对——
@@ -258,9 +309,9 @@ public static class SandboxPolicyResolver
             (null, null)            => false,
             ({ } root, null)        => Overlaps(root, credentialsDirectory),
             (null, { } credentials) => Overlaps(trustedRoot, credentials),
-            ({ } root, { } credentials) => Overlaps(root, credentials)                        ||
-                                            Overlaps(root, credentialsDirectory)              ||
-                                            Overlaps(trustedRoot, credentials)
+            ({ } root, { } credentials) => Overlaps(root, credentials)          ||
+                                           Overlaps(root, credentialsDirectory) ||
+                                           Overlaps(trustedRoot, credentials)
         };
     }
 

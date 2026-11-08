@@ -27,18 +27,24 @@ internal static class WindowsSandboxPolicyPlanner
     /// <summary>
     ///     <para>
     ///         校验可信设置并推导策略要素。路径缺失/非绝对、额外写根或只读根非法、NUGET_PACKAGES
-    ///         覆盖非绝对时抛带上下文的异常；workspaceRoot 必须是完全限定的绝对路径。不触碰文件系统。
+    ///         覆盖非绝对时抛带上下文的异常；workspaceRoot 必须是完全限定的绝对路径。
+    ///         baselineReadProtection 携带基线广泛读根与 deny-read 保护集（GAP-1），形态已由
+    ///         组合器校验。不触碰文件系统。
     ///     </para>
     ///     <para>
     ///         Validates the trusted settings and derives the policy pieces. Missing
     ///         or non-absolute paths, invalid additional write or read roots, and a
     ///         non-absolute NUGET_PACKAGES override throw contextual exceptions;
-    ///         workspaceRoot must be a fully qualified absolute path. The file system
-    ///         is never touched.
+    ///         workspaceRoot must be a fully qualified absolute path. baselineReadProtection
+    ///         carries the baseline broad-read root and the deny-read protection set (GAP-1),
+    ///         whose shape the composer has already validated. The file system is never touched.
     ///     </para>
     /// </summary>
     internal static PolicyPlan Plan(
-        WindowsSandboxSettings settings, string workspaceRoot, IReadOnlyDictionary<string, string>? knownSecrets = null)
+        WindowsSandboxSettings               settings,
+        string                               workspaceRoot,
+        IReadOnlyDictionary<string, string>? knownSecrets           = null,
+        SandboxBaselineReadProtection?       baselineReadProtection = null)
     {
         ArgumentNullException.ThrowIfNull(settings);
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
@@ -50,18 +56,13 @@ internal static class WindowsSandboxPolicyPlanner
         var runnerPath  = RequireAbsoluteSetting(settings.RunnerExecutablePath, "runnerExecutablePath");
         // 空白 home 解析为独立的固定默认 home；显式值必须保持绝对（fail closed）。
         var sandboxHome = WindowsSandboxComponents.ResolveSandboxHome(settings.SandboxHome, settings.AllowTcpLoopback);
-        var tempRoot = string.IsNullOrWhiteSpace(settings.SandboxTempRoot)
-            ? Path.Combine(sandboxHome, "tmp")
-            : RequireAbsoluteSetting(settings.SandboxTempRoot, "sandboxTempRoot");
-
-        // NuGet 缓存根与工具根是派生的基础设施写根，先于用户声明根进入 resolver；
-        // 派生根与用户声明根一起接受凭据目录重叠校验，不绕过规范化。
-        var nugetCacheRoot = ResolveNuGetCacheRoot(settings, sandboxHome);
-        var toolsRoot      = Path.Combine(sandboxHome, "tools");
+        var (nugetCacheRoot, toolsRoot, tempRoot) = DeriveInfrastructureRoots(settings, sandboxHome);
         var extraRoots = SandboxPolicyResolver.NormalizeAdditionalWriteRoots(
-            [nugetCacheRoot, toolsRoot, .. settings.AdditionalWriteRoots], workspaceRoot, sandboxHome);
+        [
+            nugetCacheRoot, toolsRoot, .. settings.AdditionalWriteRoots
+        ], workspaceRoot, sandboxHome);
 
-        var gitEnvironment    = BuildGitEnvironment(settings.ExtraEnvironment, workspaceRoot, nugetCacheRoot);
+        var gitEnvironment = BuildGitEnvironment(settings.ExtraEnvironment, workspaceRoot, nugetCacheRoot);
         var targetEnvironment = WithToolsPath(SandboxTargetEnvironment.Build(tempRoot, gitEnvironment, knownSecrets),
                                               toolsRoot);
         var policy = SandboxPolicyResolver.Resolve(settings.Policy, workspaceRoot, targetEnvironment,
@@ -69,7 +70,9 @@ internal static class WindowsSandboxPolicyPlanner
                                                    settings.AllowTcpLoopback,
                                                    settings.NetworkPolicy,
                                                    settings.AdditionalReadRoots,
-                                                   sandboxHome);
+                                                   sandboxHome,
+                                                   baselineReadProtection?.ReadRoots,
+                                                   baselineReadProtection?.DenyReadPaths);
         return new PolicyPlan
         {
             SetupExecutablePath  = setupPath,
@@ -82,6 +85,66 @@ internal static class WindowsSandboxPolicyPlanner
             TargetEnvironment    = targetEnvironment,
             Policy               = policy
         };
+    }
+
+    /// <summary>
+    ///     <para>
+    ///         派生沙箱基础设施写根：NuGet 缓存根（可信 NUGET_PACKAGES 覆盖或 home 派生）、
+    ///         工具根（home\tools）与临时写根（可信设置或 home\tmp）。派生根先于用户声明根进入
+    ///         resolver，与用户声明根一起接受凭据目录重叠校验，不绕过规范化。
+    ///     </para>
+    ///     <para>
+    ///         Derives the sandbox infrastructure write roots: the NuGet cache root (a trusted
+    ///         NUGET_PACKAGES override or derived from the home), the tools root (home\tools),
+    ///         and the temp write root (a trusted setting or home\tmp). Derived roots enter the
+    ///         resolver ahead of user-declared roots and go through the same credentials-overlap
+    ///         validation, bypassing no normalization.
+    ///     </para>
+    /// </summary>
+    /// <remarks>
+    ///     <para>纯推导，无副作用；组合器与管理入口共用，防止派生语义漂移。</para>
+    ///     <para>
+    ///         Pure derivation without side effects; shared by the composer and the provisioning
+    ///         entry so the derivation can never drift.
+    ///     </para>
+    /// </remarks>
+    internal static (string NuGetCacheRoot, string ToolsRoot, string TempRoot) DeriveInfrastructureRoots(
+        WindowsSandboxSettings settings, string sandboxHome)
+    {
+        var tempRoot = string.IsNullOrWhiteSpace(settings.SandboxTempRoot)
+            ? Path.Combine(sandboxHome, "tmp")
+            : RequireAbsoluteSetting(settings.SandboxTempRoot, "sandboxTempRoot");
+        var nugetCacheRoot = ResolveNuGetCacheRoot(settings, sandboxHome);
+        var toolsRoot      = Path.Combine(sandboxHome, "tools");
+        return (nugetCacheRoot, toolsRoot, tempRoot);
+    }
+
+    /// <summary>
+    ///     <para>
+    ///         解析用户显式配置的运行时根（temp 根与 NuGet 缓存根）：只有可信设置实际声明的条目
+    ///         进入结果，默认派生根（home\tmp、home\nuget-cache）不在此列。识别逻辑与
+    ///         <see cref="DeriveInfrastructureRoots" /> 同源，供组合器对用户配置根做组合期重叠校验。
+    ///     </para>
+    ///     <para>
+    ///         Resolves the user-configured runtime roots (the temp root and the NuGet cache root): only
+    ///         entries actually declared by trusted settings enter the result; the derived defaults
+    ///         (home\tmp, home\nuget-cache) never do. The detection shares one source with
+    ///         <see cref="DeriveInfrastructureRoots" /> so the composer can run its composition-time
+    ///         overlap validation on user-configured roots only.
+    ///     </para>
+    /// </summary>
+    internal static IReadOnlyList<string> ConfiguredInfrastructureRoots(WindowsSandboxSettings settings)
+    {
+        var roots = new List<string>();
+        if (!string.IsNullOrWhiteSpace(settings.SandboxTempRoot)) roots.Add(settings.SandboxTempRoot.Trim());
+
+        if (settings.ExtraEnvironment is not null)
+            foreach (var (name, value) in settings.ExtraEnvironment)
+                if (name.Trim().Equals("NUGET_PACKAGES", StringComparison.OrdinalIgnoreCase) &&
+                    !string.IsNullOrWhiteSpace(value))
+                    roots.Add(value.Trim());
+
+        return roots;
     }
 
     /// <summary>

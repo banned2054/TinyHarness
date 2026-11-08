@@ -89,10 +89,11 @@ public sealed class WindowsSandboxStateInspector(WindowsSandboxComponents compon
             var content = await File.ReadAllTextAsync(Components.UsersFilePath, cancellationToken)
                                     .ConfigureAwait(false);
             var users = JsonSerializer.Deserialize(content, WindowsSandboxJsonContext.Default.SandboxUsersFile);
-            if (users?.Version != SandboxUsersFile.RequiredVersion)
+            if (users is null || !SandboxUsersFile.IsAcceptableDeploymentVersion(users.Version))
             {
                 problems.Add($"Sandbox account credentials version {users?.Version.ToString() ?? "unknown"} " +
-                             $"does not match the required {SandboxUsersFile.RequiredVersion}.");
+                             $"does not match the required {SandboxUsersFile.RequiredVersion} (or the authorized generation " +
+                             $"{WindowsSandboxComponents.AuthorizedSetupVersion}).");
                 return;
             }
 
@@ -158,8 +159,11 @@ public sealed class WindowsSandboxStateInspector(WindowsSandboxComponents compon
 
             var content = await File.ReadAllTextAsync(Components.MarkerPath, cancellationToken).ConfigureAwait(false);
             var marker  = JsonSerializer.Deserialize(content, WindowsSandboxJsonContext.Default.SandboxSetupMarker);
-            if (marker?.Version != Components.RequiredSetupVersion)
-                problems.Add($"Sandbox setup marker version {marker?.Version.ToString() ?? "unknown"} does not match the required {Components.RequiredSetupVersion}.");
+            // v7 授权代 provisioning 重写 marker 版本：部署代接受旧代与本模式要求的版本及授权代。
+            if (marker is null ||
+                (marker.Version != Components.RequiredSetupVersion &&
+                 marker.Version != WindowsSandboxComponents.AuthorizedSetupVersion))
+                problems.Add($"Sandbox setup marker version {marker?.Version.ToString() ?? "unknown"} does not match the required {Components.RequiredSetupVersion} (or the authorized generation {WindowsSandboxComponents.AuthorizedSetupVersion}).");
             if (marker is not null && marker.AllowTcpLoopback != Components.AllowTcpLoopback)
                 problems.Add("Sandbox setup marker TCP-loopback mode does not match the trusted settings; use a separate sandbox home.");
 
@@ -218,10 +222,11 @@ public sealed class WindowsSandboxStateInspector(WindowsSandboxComponents compon
             var content = await File.ReadAllTextAsync(Components.UsersFilePath, cancellationToken)
                                     .ConfigureAwait(false);
             var users = JsonSerializer.Deserialize(content, WindowsSandboxJsonContext.Default.SandboxUsersFile);
-            if (users?.Version != SandboxUsersFile.RequiredVersion)
+            if (users is null || !SandboxUsersFile.IsAcceptableDeploymentVersion(users.Version))
             {
                 problems.Add($"Sandbox account credentials version {users?.Version.ToString() ?? "unknown"} " +
-                             $"does not match the required {SandboxUsersFile.RequiredVersion}.");
+                             $"does not match the required {SandboxUsersFile.RequiredVersion} (or the authorized generation " +
+                             $"{WindowsSandboxComponents.AuthorizedSetupVersion}).");
                 return;
             }
 

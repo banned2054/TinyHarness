@@ -98,6 +98,35 @@ public class SandboxGrantScopeTests
     }
 
     [Test]
+    public void ResolveGrantScope_RejectsWriteRootOverlappingAPermissionSystemPath()
+    {
+        using var dir   = Fixtures();
+        using var store = new TestTempDir();
+        var userConfig = dir.WriteFile("config/user-config.json", "{}");
+        var trustFile  = dir.WriteFile("config/workspace-trust.json", "{}");
+        var permissionSystemPaths = new[] { userConfig, trustFile, store.Root };
+
+        // 覆盖方向：grant 写根覆盖用户配置/信任文件所在目录 → fail closed。
+        var covering = Assert.Throws<InvalidOperationException>(() =>
+            WindowsSandboxComposer.ResolveGrantScope(Policy(dir), Components(dir), null,
+                                                     [Path.Combine(dir.Root, "config")], null,
+                                                     permissionSystemPaths));
+        Assert.That(covering!.Message, Does.Contain("permission-system protected path"));
+
+        // 落入方向：grant 写根落在会话存储目录内部同样拒绝。
+        var inside = Assert.Throws<InvalidOperationException>(() =>
+            WindowsSandboxComposer.ResolveGrantScope(Policy(dir), Components(dir), null,
+                                                     [Path.Combine(store.Root, "sessions")], null,
+                                                     permissionSystemPaths));
+        Assert.That(inside!.Message, Does.Contain("permission-system protected path"));
+
+        // 对照：未携带 C1 实例路径时同一写根不触发该保护（组合点没有实例的既有语义不变）。
+        var scope = WindowsSandboxComposer.ResolveGrantScope(Policy(dir), Components(dir), null,
+                                                             [Path.Combine(dir.Root, "config")], null);
+        Assert.That(scope.WriteRoots, Is.EqualTo([Path.GetFullPath(Path.Combine(dir.Root, "config"))]));
+    }
+
+    [Test]
     public void ResolveGrantScope_RejectsMetadataWriteOutsideWhitelist()
     {
         using var dir = Fixtures();

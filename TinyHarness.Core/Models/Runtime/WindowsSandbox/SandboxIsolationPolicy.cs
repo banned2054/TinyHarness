@@ -58,6 +58,36 @@ public sealed record SandboxIsolationPolicy
 
     /// <summary>
     ///     <para>
+    ///         基线广泛读根（绝对路径）：沙箱启用组合时随基线下发的 OS 读根（用户 profile 根），
+    ///         走既有 read_roots 组 RX 通道，非 grant、非可信设置；凭据等保护路径由
+    ///         <see cref="DenyReadPaths" /> 配对排除。
+    ///     </para>
+    ///     <para>
+    ///         The baseline broad-read root (absolute): the OS read root shipped with the baseline
+    ///         when the sandbox composes (the user profile root), through the existing read_roots
+    ///         group-RX channel — neither a grant nor a trusted setting; protected paths such as
+    ///         credentials are excluded by the paired <see cref="DenyReadPaths" />.
+    ///     </para>
+    /// </summary>
+    public IReadOnlyList<string> BaselineReadRoots { get; init; } = [];
+
+    /// <summary>
+    ///     <para>
+    ///         基线 deny-read 保护集（绝对路径）：C1 宿主密钥路径与 C2 已知敏感目录，经 setup
+    ///         payload 的 deny_read_paths 在每命令 refresh 前同步施加，集合收缩时由 deny-read
+    ///         簿记回收（与 deny-write 的不回收语义不同）。
+    ///     </para>
+    ///     <para>
+    ///         The baseline deny-read protection set (absolute): C1 host secret paths and C2 known
+    ///         sensitive directories, applied synchronously before every command refresh through the
+    ///         setup payload's deny_read_paths and reclaimed by the deny-read bookkeeping when the
+    ///         set shrinks (unlike deny-write, which is never reclaimed).
+    ///     </para>
+    /// </summary>
+    public IReadOnlyList<string> DenyReadPaths { get; init; } = [];
+
+    /// <summary>
+    ///     <para>
     ///         有效写入根（绝对路径，含临时写根）；ReadOnly 策略为空。用于 capability SID 选择与
     ///         setup 的 write_roots。
     ///     </para>
@@ -86,13 +116,17 @@ public sealed record SandboxIsolationPolicy
 
     /// <summary>
     ///     <para>
-    ///         构造每命令 refresh payload：read_roots 覆盖工作区、命令 cwd、临时根与有效只读根；
-    ///         write_roots 为有效写入根；deny-write 保护元数据目录；proxy 端口留空。
+    ///         构造每命令 refresh payload：read_roots 覆盖工作区、命令 cwd、临时根、有效只读根与
+    ///         基线广泛读根；write_roots 为有效写入根；deny-write 保护元数据目录；deny-read 按
+    ///         保护集下发（缺失路径由 helper 物化为目录，组合侧已保证 C1 存在）；proxy 端口留空。
     ///     </para>
     ///     <para>
     ///         Builds the per-command refresh payload: read_roots cover the workspace, the command cwd,
-    ///         the temp roots, and the effective read roots; write_roots are the effective write roots;
-    ///         deny-write protects metadata directories; proxy ports stay empty.
+    ///         the temp roots, the effective read roots, and the baseline broad-read root;
+    ///         write_roots are the effective write roots; deny-write protects metadata directories;
+    ///         deny-read ships the protection set as-is (the helper materializes missing paths as
+    ///         directories, and composition already ensured the C1 entries exist); proxy ports stay
+    ///         empty.
     ///     </para>
     /// </summary>
     public SandboxSetupPayload CreateSetupPayload(
@@ -101,41 +135,50 @@ public sealed record SandboxIsolationPolicy
 
     /// <summary>
     ///     <para>
-    ///         构造每命令 refresh payload，并把已通过校验的 grant 范围并入：grant 只读根与写根分别
-    ///         追加进 read_roots/write_roots；grant 元数据写路径从 deny-write 集合移除。空范围与
-    ///         无 grant 的 payload 完全一致。合并前假设调用方已通过组合器的 ResolveGrantScope
-    ///         完成 fail-closed 校验；本方法只做确定性合并。
+    ///         构造每命令 refresh payload，并把已通过校验的 grant 范围并入：grant 只读根按 deny-read
+    ///         集分流——与 deny 集冲突（等于或落入 deny 条目）的获批路径进入 authorized_read_paths
+    ///         （payload 版本随之升为 v7，走专用授权主体通道），其余与写根分别追加进
+    ///         read_roots/write_roots；grant 元数据写路径从 deny-write 集合移除。deny_read_paths
+    ///         集合保持冻结不动。空范围与无 grant 的 payload 完全一致。合并前假设调用方已通过组合器
+    ///         的 ResolveGrantScope 完成 fail-closed 校验；本方法只做确定性合并。
     ///     </para>
     ///     <para>
     ///         Builds the per-command refresh payload and merges a validated grant scope: grant read
-    ///         and write roots are appended to read_roots/write_roots; grant metadata write paths are
-    ///         removed from the deny-write set. An empty scope yields exactly the grant-free payload.
-    ///         The caller is expected to have run the composer's fail-closed ResolveGrantScope
-    ///         validation; this method only performs the deterministic merge.
+    ///         roots split against the deny-read set — approved paths conflicting with the deny set
+    ///         (equal to or inside a deny entry) go to authorized_read_paths (the payload version moves
+    ///         to v7 through the dedicated authorization subject), while the rest and the write roots
+    ///         are appended to read_roots/write_roots; grant metadata write paths are removed from the
+    ///         deny-write set. The deny_read_paths set stays frozen. An empty scope yields exactly the
+    ///         grant-free payload. The caller is expected to have run the composer's fail-closed
+    ///         ResolveGrantScope validation; this method only performs the deterministic merge.
     ///     </para>
     /// </summary>
     public SandboxSetupPayload CreateSetupPayload(
         WindowsSandboxComponents components, string commandWorkingDirectory, string realUser, bool refreshOnly,
-        SandboxGrantScope? grantScope)
+        SandboxGrantScope?       grantScope)
     {
         if (components.AllowTcpLoopback != AllowTcpLoopback)
             throw new InvalidOperationException("Sandbox component and policy TCP-loopback modes must match.");
         var readRoots = new List<string> { WorkspaceRoot, commandWorkingDirectory };
         readRoots.AddRange(TempWriteRoots);
         readRoots.AddRange(EffectiveReadRoots);
+        readRoots.AddRange(BaselineReadRoots);
         var writeRoots = new List<string>(EffectiveWriteRoots);
+        IReadOnlyList<string>? authorizedReadPaths = null;
         if (grantScope is { } grant)
         {
-            readRoots.AddRange(grant.ReadRoots);
+            var split = SandboxAuthorizedReads.Split(DenyReadPaths, grant.ReadRoots);
+            readRoots.AddRange(split.GroupReadRoots);
             writeRoots.AddRange(grant.WriteRoots);
+            if (split.HasAuthorizedReads) authorizedReadPaths = Deduplicate(split.AuthorizedReadRoots);
         }
 
         // deny 收缩只针对 grant 明确允许的元数据目录；其余 deny 项不受 grant 影响。
         var denyWritePaths = Deduplicate(DenyWritePaths.Where(path => File.Exists(path) || Directory.Exists(path)));
         if (grantScope is { } scope && scope.MetadataWritePaths.Count > 0)
             denyWritePaths = denyWritePaths
-                             .Where(path => !scope.MetadataWritePaths.Contains(path, StringComparer.OrdinalIgnoreCase))
-                             .ToList();
+                            .Where(path => !scope.MetadataWritePaths.Contains(path, StringComparer.OrdinalIgnoreCase))
+                            .ToList();
 
         return new SandboxSetupPayload
         {
@@ -146,10 +189,13 @@ public sealed record SandboxIsolationPolicy
             CommandWorkingDirectory = commandWorkingDirectory,
             ReadRoots               = Deduplicate(readRoots),
             WriteRoots              = Deduplicate(writeRoots),
-            // 内置元数据保护遵守 skip-if-missing，避免 helper 创建占位目录。
-            DenyWritePaths = denyWritePaths,
-            RealUser       = realUser,
-            RefreshOnly    = refreshOnly
+            // deny-read 保护集原样下发（缺失路径由 helper 物化）；deny-write 元数据保护
+            // 遵守 skip-if-missing，避免 helper 创建占位目录。
+            DenyReadPaths           = Deduplicate(DenyReadPaths),
+            DenyWritePaths          = denyWritePaths,
+            AuthorizedReadPaths     = authorizedReadPaths,
+            RealUser                = realUser,
+            RefreshOnly             = refreshOnly
         };
     }
 

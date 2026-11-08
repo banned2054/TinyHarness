@@ -27,6 +27,8 @@ namespace TinyHarness.Tests;
 /// </summary>
 public class WindowsSandboxNetworkTests
 {
+    private const string LocalNoProxy = "localhost,127.0.0.1,::1";
+
     private static readonly WindowsSandboxBackendLimits TestLimits = new()
     {
         RefreshTimeout          = TimeSpan.FromSeconds(5),
@@ -38,8 +40,6 @@ public class WindowsSandboxNetworkTests
         TerminateWriteTimeout   = TimeSpan.FromSeconds(1)
     };
 
-    private const string LocalNoProxy = "localhost,127.0.0.1,::1";
-
     [Test]
     public async Task StandingEnabled_LaunchesOnlineAccountWithEnabledProfileAndBoundIdentity()
     {
@@ -49,7 +49,7 @@ public class WindowsSandboxNetworkTests
         var credentials = new RecordingCredentialSource();
         var (backend, _, desktops, launcher, home) = CreateBackend(SpawnCapturingRunner(spawnSeen),
                                                                    SandboxNetworkPolicy.Enabled,
-                                                                   credentials : credentials);
+                                                                   credentials);
         using var homeScope = home;
 
         var result = await backend.ExecuteAsync(PlainPlan(home.Components.SandboxHome),
@@ -79,8 +79,9 @@ public class WindowsSandboxNetworkTests
                                                       workspace.Root);
         var identity = composed.ExecutionPolicy.PolicyIdentity;
         TestAssert.Contains("network=enabled", identity, StringComparison.Ordinal);
-        Assert.That(WindowsSandboxComposer.PolicyIdentityVersion, Is.EqualTo(6));
-        TestAssert.Contains("policyVersion=6", identity, StringComparison.Ordinal);
+        // v8 引入授权读段（C2 获批读授权通道），旧 v7 身份随之失效（预期语义成本）。
+        Assert.That(WindowsSandboxComposer.PolicyIdentityVersion, Is.EqualTo(8));
+        TestAssert.Contains("policyVersion=8", identity, StringComparison.Ordinal);
         Assert.That(composed.ExecutionPolicy.DisplayName, Does.Contain("enabled"));
     }
 
@@ -93,7 +94,7 @@ public class WindowsSandboxNetworkTests
         var credentials = new RecordingCredentialSource();
         var (backend, _, _, launcher, home) = CreateBackend(SpawnCapturingRunner(spawnSeen),
                                                             SandboxNetworkPolicy.Restricted,
-                                                            credentials : credentials);
+                                                            credentials);
         using var homeScope = home;
 
         // 常设信任受限但单次执行计划显式要求网络：本次执行按在线处理，身份串仍保持 restricted。
@@ -109,7 +110,7 @@ public class WindowsSandboxNetworkTests
         Assert.That(launcher.LastRequest.LoadUserProfile, Is.True);
 
         using var workspace = new TestTempDir();
-        var composed = WindowsSandboxComposer.Compose(TrustedSettings(home.Components), workspace.Root);
+        var       composed  = WindowsSandboxComposer.Compose(TrustedSettings(home.Components), workspace.Root);
         TestAssert.Contains("network=restricted", composed.ExecutionPolicy.PolicyIdentity, StringComparison.Ordinal);
         TestAssert.DoesNotContain("network=enabled", composed.ExecutionPolicy.PolicyIdentity, StringComparison.Ordinal);
     }
@@ -123,7 +124,7 @@ public class WindowsSandboxNetworkTests
         var credentials = new RecordingCredentialSource();
         var (backend, _, _, launcher, home) = CreateBackend(SpawnCapturingRunner(spawnSeen),
                                                             SandboxNetworkPolicy.Restricted,
-                                                            credentials : credentials);
+                                                            credentials);
         using var homeScope = home;
 
         var result = await backend.ExecuteAsync(PlainPlan(home.Components.SandboxHome),
@@ -143,7 +144,7 @@ public class WindowsSandboxNetworkTests
 
         // 默认组合（无代理配置）不得在身份串中携带代理环境哈希。
         using var workspace = new TestTempDir();
-        var composed = WindowsSandboxComposer.Compose(TrustedSettings(home.Components), workspace.Root);
+        var       composed  = WindowsSandboxComposer.Compose(TrustedSettings(home.Components), workspace.Root);
         TestAssert.Contains("network=restricted", composed.ExecutionPolicy.PolicyIdentity, StringComparison.Ordinal);
         TestAssert.DoesNotContain("proxyEnvironment=", composed.ExecutionPolicy.PolicyIdentity,
                                   StringComparison.Ordinal);
@@ -165,8 +166,8 @@ public class WindowsSandboxNetworkTests
         var credentials = new RecordingCredentialSource();
         var (backend, _, _, _, home) = CreateBackend(SpawnCapturingRunner(spawnSeen),
                                                      SandboxNetworkPolicy.Enabled,
-                                                     credentials : credentials,
-                                                     proxyEnvironment : proxyEnvironment);
+                                                     credentials,
+                                                     proxyEnvironment);
         using var homeScope = home;
 
         await backend.ExecuteAsync(PlainPlan(home.Components.SandboxHome), new RecordingOutputCapture(),
@@ -189,7 +190,7 @@ public class WindowsSandboxNetworkTests
         var settings = TrustedSettingsFor(home) with
         {
             NetworkPolicy = SandboxNetworkPolicy.Enabled,
-            Proxy         = new SandboxProxyPolicy { Mode = SandboxProxyMode.Named, ProxyName = "corp-proxy" }
+            Proxy = new SandboxProxyPolicy { Mode = SandboxProxyMode.Named, ProxyName = "corp-proxy" }
         };
         var appNetwork = new NetworkSettings
         {
@@ -225,12 +226,14 @@ public class WindowsSandboxNetworkTests
                 new InvalidOperationException("Sandbox account credentials contain a null online account entry.")
         };
         var (backend, _, desktops, launcher, home) = CreateBackend(NormalRunner, SandboxNetworkPolicy.Enabled,
-                                                                   credentials : credentials);
+                                                                   credentials);
         using var homeScope = home;
 
         await TestAssert.ThrowsAsync<ProcessExecutionStartException>(() => backend.ExecuteAsync(
-            PlainPlan(home.Components.SandboxHome), new RecordingOutputCapture(), new RecordingOutputCapture(),
-            CancellationToken.None));
+                                                                      PlainPlan(home.Components.SandboxHome),
+                                                                      new RecordingOutputCapture(),
+                                                                      new RecordingOutputCapture(),
+                                                                      CancellationToken.None));
 
         // fail closed：不启动 runner、不创建桌面、绝不降级到离线账户。
         Assert.That(launcher.LastRequest, Is.Null);
@@ -246,11 +249,152 @@ public class WindowsSandboxNetworkTests
 
         using var home      = new TestTempDir();
         using var workspace = new TestTempDir();
-        var settings = TrustedSettingsFor(home);
+        var       settings  = TrustedSettingsFor(home);
 
         // 读根包含或等于 sandbox home 会暴露其中的 DPAPI 凭据；必须拒绝且不回退宿主执行。
         Assert.Throws<ArgumentException>(() => WindowsSandboxComposer.Compose(
-            settings with { AdditionalReadRoots = [home.Root] }, workspace.Root));
+                                                                              settings with
+                                                                              {
+                                                                                  AdditionalReadRoots = [home.Root]
+                                                                              }, workspace.Root));
+    }
+
+    [Test]
+    public async Task ApprovedReadExecutions_LaunchDedicatedAuthorizationOfflineAccount()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        var       spawnSeen   = SpawnSeen();
+        var       credentials = new RecordingCredentialSource();
+        using var approved    = new TestTempDir();
+        var (backend, _, _, launcher, home) = CreateBackend(SpawnCapturingRunner(spawnSeen),
+                                                            SandboxNetworkPolicy.Restricted,
+                                                            credentials,
+                                                            policyOverride : policy => policy with
+                                                            {
+                                                                DenyReadPaths = [approved.Root]
+                                                            });
+        using var homeScope = home;
+
+        // 获批读执行必须以专用授权账户启动：其授权组 deny 面 = 全量 deny − 获批路径；
+        // 普通沙箱账户的全量 deny 会压制获批读，绝不回退。
+        await backend.ExecuteAsync(AuthorizedPlan(home.Components.SandboxHome, approved.Root),
+                                   new RecordingOutputCapture(), new RecordingOutputCapture(),
+                                   CancellationToken.None);
+
+        var request = await spawnSeen.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        Assert.That(launcher.LastRequest, Is.Not.Null);
+        Assert.That(launcher.LastRequest!.Account.Username, Is.EqualTo("TinyHarnessAuthOff"));
+        // 读授权不顺带开放网络：离线授权账户保持不加载 profile。
+        Assert.That(launcher.LastRequest.LoadUserProfile, Is.False);
+        Assert.That(request.PermissionProfile.Network, Is.EqualTo("restricted"));
+        Assert.That(credentials.Calls, Does.Contain("authorized-offline"));
+        Assert.That(credentials.Calls, Does.Not.Contain("offline"));
+        Assert.That(credentials.Calls, Does.Not.Contain("online"));
+    }
+
+    [Test]
+    public async Task ApprovedReadExecutions_WhileEffectivelyOnline_LaunchDedicatedAuthorizationOnlineAccount()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        var       spawnSeen   = SpawnSeen();
+        var       credentials = new RecordingCredentialSource();
+        using var approved    = new TestTempDir();
+        var (backend, _, _, launcher, home) = CreateBackend(SpawnCapturingRunner(spawnSeen),
+                                                            SandboxNetworkPolicy.Enabled,
+                                                            credentials,
+                                                            policyOverride : policy => policy with
+                                                            {
+                                                                DenyReadPaths = [approved.Root]
+                                                            });
+        using var homeScope = home;
+
+        await backend.ExecuteAsync(AuthorizedPlan(home.Components.SandboxHome, approved.Root),
+                                   new RecordingOutputCapture(), new RecordingOutputCapture(),
+                                   CancellationToken.None);
+
+        var request = await spawnSeen.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        Assert.That(launcher.LastRequest, Is.Not.Null);
+        Assert.That(launcher.LastRequest!.Account.Username, Is.EqualTo("TinyHarnessAuthOn"));
+        // 生效在线的授权执行加载授权在线账户 profile（schannel 客户端凭据语义与普通在线一致）。
+        Assert.That(launcher.LastRequest.LoadUserProfile, Is.True);
+        Assert.That(request.PermissionProfile.Network, Is.EqualTo("enabled"));
+        Assert.That(credentials.Calls, Does.Contain("authorized-online"));
+        Assert.That(credentials.Calls, Does.Not.Contain("online"));
+    }
+
+    [Test]
+    public async Task ApprovedReadExecutions_MissingAuthorizationCredentials_FailClosedWithoutLaunch()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        var credentials = new RecordingCredentialSource
+        {
+            ThrowOnLoadAuthorized =
+                new InvalidOperationException("Sandbox account credentials version 5 does not carry the " +
+                                              "authorized generation 7.")
+        };
+        using var approved = new TestTempDir();
+        var (backend, _, desktops, launcher, home) = CreateBackend(NormalRunner,
+                                                                   SandboxNetworkPolicy.Restricted,
+                                                                   credentials,
+                                                                   policyOverride : policy => policy with
+                                                                   {
+                                                                       DenyReadPaths = [approved.Root]
+                                                                   });
+        using var homeScope = home;
+
+        await TestAssert.ThrowsAsync<ProcessExecutionStartException>(() => backend.ExecuteAsync(
+                                                                      AuthorizedPlan(home.Components.SandboxHome,
+                                                                          approved.Root),
+                                                                      new RecordingOutputCapture(),
+                                                                      new RecordingOutputCapture(),
+                                                                      CancellationToken.None));
+
+        // fail closed：不启动 runner、不创建桌面、绝不回退普通沙箱账户。
+        Assert.That(launcher.LastRequest, Is.Null);
+        Assert.That(desktops.GrantedSids, Is.Empty);
+        Assert.That(credentials.Calls, Does.Not.Contain("offline"));
+        Assert.That(credentials.Calls, Does.Not.Contain("online"));
+        await Task.CompletedTask;
+    }
+
+    [Test]
+    public async Task OrdinaryExecutions_WithAuthorizationCapabilityPresent_NeverSelectAuthorizationAccounts()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        var       spawnSeen   = SpawnSeen();
+        var       credentials = new RecordingCredentialSource();
+        using var approved    = new TestTempDir();
+        var (backend, _, _, launcher, home) = CreateBackend(SpawnCapturingRunner(spawnSeen),
+                                                            SandboxNetworkPolicy.Restricted,
+                                                            credentials,
+                                                            policyOverride : policy => policy with
+                                                            {
+                                                                DenyReadPaths = [approved.Root]
+                                                            });
+        using var homeScope = home;
+
+        // 普通 grant（只含写根）不触发授权账户：专用账户只在获批读执行上接管。
+        var plan = PlainPlan(home.Components.SandboxHome) with
+        {
+            GrantScope = new SandboxGrantScope
+            {
+                ReadRoots = [], WriteRoots = [approved.Root], MetadataWritePaths = []
+            }
+        };
+        await backend.ExecuteAsync(plan, new RecordingOutputCapture(), new RecordingOutputCapture(),
+                                   CancellationToken.None);
+
+        var request = await spawnSeen.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        Assert.That(launcher.LastRequest, Is.Not.Null);
+        Assert.That(launcher.LastRequest!.Account.Username, Is.EqualTo("TinyHarnessOffline"));
+        Assert.That(credentials.Calls, Does.Contain("offline"));
+        Assert.That(credentials.Calls, Does.Not.Contain("authorized-offline"));
+        Assert.That(credentials.Calls, Does.Not.Contain("authorized-online"));
+        await Task.CompletedTask;
     }
 
     // ---- 工具与 fake ----
@@ -260,6 +404,20 @@ public class WindowsSandboxNetworkTests
 
     private static PreparedProcessExecution PlainPlan(string workingDirectory) =>
         new("cmd.exe", ["/c", "whoami"], workingDirectory, 30, false, null);
+
+    /// <summary>
+    ///     构造携带获批只读根的执行计划：ReadRoots 命中策略 deny 集时走授权通道。
+    ///     Builds a plan carrying an approved read root; a ReadRoots entry hitting the
+    ///     policy's deny set routes the execution onto the authorization channel.
+    /// </summary>
+    private static PreparedProcessExecution AuthorizedPlan(string workingDirectory, string approvedReadRoot) =>
+        PlainPlan(workingDirectory) with
+        {
+            GrantScope = new SandboxGrantScope
+            {
+                ReadRoots = [approvedReadRoot], WriteRoots = [], MetadataWritePaths = []
+            }
+        };
 
     /// <summary>
     ///     构造组件齐全的可信设置：setup/runner 为占位文件，Compose 的存在性校验可通过。
@@ -291,12 +449,13 @@ public class WindowsSandboxNetworkTests
     /// </summary>
     private static (WindowsSandboxBackend Backend, FakeSetupInvoker Setup, FakeDesktopFactory Desktops,
         FakeSandboxRunnerLauncher Launcher, SandboxTestHome Home) CreateBackend(
-        Func<Stream, Stream, CancellationToken, Task> runnerBody,
-        SandboxNetworkPolicy                           network,
-        RecordingCredentialSource?                     credentials      = null,
-        IReadOnlyDictionary<string, string>?           proxyEnvironment = null)
+            Func<Stream, Stream, CancellationToken, Task>         runnerBody,
+            SandboxNetworkPolicy                                  network,
+            RecordingCredentialSource?                            credentials      = null,
+            IReadOnlyDictionary<string, string>?                  proxyEnvironment = null,
+            Func<SandboxIsolationPolicy, SandboxIsolationPolicy>? policyOverride   = null)
     {
-        var home        = new SandboxTestHome();
+        var home = new SandboxTestHome();
         var environment = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
             ["TEMP"] = home.Components.SandboxHome
@@ -304,18 +463,20 @@ public class WindowsSandboxNetworkTests
         var policy = SandboxPolicyResolver.Resolve(SandboxPolicyKind.WorkspaceWrite,
                                                    home.Components.SandboxHome, environment,
                                                    network : network);
-        var standingEnabled = network == SandboxNetworkPolicy.Enabled;
-        var setup    = new FakeSetupInvoker();
-        var desktops = new FakeDesktopFactory();
-        var launcher = new FakeSandboxRunnerLauncher { RunnerBody = runnerBody };
-        var backend  = new WindowsSandboxBackend(home.Components, policy, environment, null,
-                                                 setup,
-                                                 credentials ?? new RecordingCredentialSource(),
-                                                 desktopFactory : desktops, runnerLauncher : launcher,
-                                                 limits : TestLimits, allowNullDeviceAccess : _ => { },
-                                                 validateWriteAcls : (_, _) => Task.CompletedTask,
-                                                 standingNetworkAccessEnabled : standingEnabled,
-                                                 proxyEnvironment : proxyEnvironment);
+        // 测试注入的策略改写（如 deny 集构造授权分流）在解析后立即生效。
+        if (policyOverride is not null) policy = policyOverride(policy);
+        var standingEnabled                    = network == SandboxNetworkPolicy.Enabled;
+        var setup                              = new FakeSetupInvoker();
+        var desktops                           = new FakeDesktopFactory();
+        var launcher                           = new FakeSandboxRunnerLauncher { RunnerBody = runnerBody };
+        var backend = new WindowsSandboxBackend(home.Components, policy, environment, null,
+                                                setup,
+                                                credentials ?? new RecordingCredentialSource(),
+                                                desktopFactory : desktops, runnerLauncher : launcher,
+                                                limits : TestLimits, allowNullDeviceAccess : _ => { },
+                                                validateWriteAcls : (_, _) => Task.CompletedTask,
+                                                standingNetworkAccessEnabled : standingEnabled,
+                                                proxyEnvironment : proxyEnvironment);
         return (backend, setup, desktops, launcher, home);
     }
 
@@ -349,6 +510,8 @@ public class WindowsSandboxNetworkTests
     {
         public Exception? ThrowOnLoadOnline { get; init; }
 
+        public Exception? ThrowOnLoadAuthorized { get; init; }
+
         public List<string> Calls { get; } = [];
 
         public Task<WindowsSandboxAccount> LoadOfflineAccount(CancellationToken cancellationToken = default)
@@ -365,10 +528,27 @@ public class WindowsSandboxNetworkTests
                 : Task.FromResult(Account("TinyHarnessOnline"));
         }
 
+        public Task<WindowsSandboxAccount> LoadAuthorizedOfflineAccount(CancellationToken cancellationToken = default)
+        {
+            Calls.Add("authorized-offline");
+            return ThrowOnLoadAuthorized is not null
+                ? Task.FromException<WindowsSandboxAccount>(ThrowOnLoadAuthorized)
+                : Task.FromResult(Account("TinyHarnessAuthOff"));
+        }
+
+        public Task<WindowsSandboxAccount> LoadAuthorizedOnlineAccount(CancellationToken cancellationToken = default)
+        {
+            Calls.Add("authorized-online");
+            return ThrowOnLoadAuthorized is not null
+                ? Task.FromException<WindowsSandboxAccount>(ThrowOnLoadAuthorized)
+                : Task.FromResult(Account("TinyHarnessAuthOn"));
+        }
+
         private static WindowsSandboxAccount Account(string username)
         {
             if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException();
-            return new(username, "test-password", new SecurityIdentifier("S-1-5-21-100-200-300-404"));
+            return new WindowsSandboxAccount(username, "test-password",
+                                             new SecurityIdentifier("S-1-5-21-100-200-300-404"));
         }
     }
 }
