@@ -28,6 +28,7 @@ public sealed class ShellTool : ITool
     private const int MaximumArguments                 = 256;
     private const int MaximumArgumentLength            = 32 * 1024;
     private const int MaximumCommandLength             = 32 * 1024;
+    private const int MaximumWriteRoots                = 8;
     private const int DefaultOutputCharactersPerStream = 16 * 1024;
 
     /// <summary>
@@ -90,12 +91,23 @@ public sealed class ShellTool : ITool
             },
             ["networkAccess"] = new JsonObject
             {
-                ["type"]        = "string",
-                ["enum"]        = new JsonArray("default", "enabled"),
+                ["type"] = "string",
+                ["enum"] = new JsonArray("default", "enabled"),
                 ["description"] =
                     "Requests network access for this invocation inside the configured sandbox " +
-                    "(full network, including host-local proxies). Defaults to 'default', " +
+                    "(full network, including host-local proxies). Defaults to 'default', "      +
                     "which keeps the sandbox network restricted and requires per-call approval."
+            },
+            ["writeRoots"] = new JsonObject
+            {
+                ["type"]     = "array",
+                ["items"]    = new JsonObject { ["type"] = "string" },
+                ["maxItems"] = MaximumWriteRoots,
+                ["description"] =
+                    "Optional absolute directory roots outside the workspace this single invocation needs "   +
+                    "to write (at most 8). Each request requires per-call approval at level 2 and the roots " +
+                    "are frozen into the approved grant; omit the parameter to stay inside the workspace "    +
+                    "baseline. Paths containing spaces or quotes are refused."
             }
         },
         ["oneOf"] = new JsonArray
@@ -113,8 +125,9 @@ public sealed class ShellTool : ITool
         }
     };
 
+    private readonly IActiveCapabilitySource? _activeCapabilities;
+
     private readonly string                                                          _artifactRoot;
-    private readonly IActiveCapabilitySource?                                        _activeCapabilities;
     private readonly Func<string, int, IReadOnlyList<string>, IProcessOutputCapture> _captureFactory;
     private readonly int                                                             _defaultTimeoutSeconds;
     private readonly ProcessExecutionPolicy?                                         _executionPolicy;
@@ -151,7 +164,7 @@ public sealed class ShellTool : ITool
         _grantContext         = grantContext;
     }
 
-    internal ShellTool(Workspace                            workspace,
+    internal ShellTool(Workspace workspace,
                        Func<string, int, IReadOnlyList<string>, IProcessOutputCapture> captureFactory,
                        int? defaultTimeoutSeconds = null, string? artifactRoot = null,
                        int outputCharacterLimit = DefaultOutputCharactersPerStream,
@@ -183,7 +196,17 @@ public sealed class ShellTool : ITool
         var networkAccess = ResolveNetworkAccess(args).ToLowerInvariant();
         if (networkAccess is not ("default" or "enabled"))
             throw new InvalidDataException("Tool argument 'networkAccess' must be 'default' or 'enabled'.");
-        var requiresNetwork = networkAccess == "enabled";
+        var requiresNetwork     = networkAccess == "enabled";
+        var requestedWriteRoots = ResolveWriteRoots(args);
+        if (requestedWriteRoots.Count > 0 &&
+            !(_executionPolicy is { } writeRootsPolicy                               &&
+              writeRootsPolicy.Backend == ProcessExecutionBackendKind.WindowsSandbox &&
+              _activeCapabilities is not null                                        &&
+              _grantContext is not null))
+            throw new
+                InvalidDataException("Tool argument 'writeRoots' requests sandbox write roots, but this shell "  +
+                                     "does not run inside the Windows sandbox; omit the request or compose the " +
+                                     "shell with the sandbox execution stack.");
 
         var command = mode switch
         {
@@ -203,8 +226,15 @@ public sealed class ShellTool : ITool
         var workspaceExecutable =
             IsPathLike(command.Executable) && Workspace.IsInside(_workspace.Root, command.Executable);
         args["_workspaceExecutable"] = workspaceExecutable;
+        if (requestedWriteRoots.Count > 0)
+        {
+            // 写回校验后的规范化根：拒绝记忆指纹与审计读到的是 Prepare 认可的形态。
+            var normalizedRoots = new JsonArray();
+            foreach (var root in requestedWriteRoots) normalizedRoots.Add((JsonNode?)JsonValue.Create(root));
+            args["writeRoots"] = normalizedRoots;
+        }
 
-        var commandIdentity = new JsonObject
+        var identity = new JsonObject
         {
             ["mode"]             = mode,
             ["executable"]       = command.Executable,
@@ -212,7 +242,12 @@ public sealed class ShellTool : ITool
             ["shell"]            = command.Shell,
             ["command"]          = command.CommandText,
             ["workingDirectory"] = mode == "shell" ? workingDirectory : null
-        }.ToJsonString();
+        };
+        // 写根申请进入命令身份：同一命令不同写根互不共享约束；缺省时不写入，身份串与历史逐字节一致。
+        if (requestedWriteRoots.Count > 0)
+            identity["writeRoots"] = new JsonArray(requestedWriteRoots
+                                                  .Select(root => (JsonNode?)JsonValue.Create(root)).ToArray());
+        var commandIdentity = identity.ToJsonString();
         // Grants bind the command identity plus the execution policy identity,
         // so an approval can never be reused to switch hosts or widen the
         // sandbox policy; denies keep the bare command identity and survive
@@ -220,8 +255,8 @@ public sealed class ShellTool : ITool
         // 网络申请追加进授权约束：网络状态不同的同一命令不能复用既有批准。
         // R-identity：活动 grant 快照在 Prepare 冻结——解析为 grant 范围并追加进策略身份，
         // 执行期（backend）只消费计划内冻结值，不再查询任何实时源。
-        var grantScope    = SandboxGrantScope.Empty;
-        var policyIdentity = _executionPolicy?.PolicyIdentity;
+        var grantScope      = SandboxGrantScope.Empty;
+        var policyIdentity  = _executionPolicy?.PolicyIdentity;
         if (_activeCapabilities is { } source)
         {
             if (_grantContext is not { } context)
@@ -233,13 +268,30 @@ public sealed class ShellTool : ITool
                 throw new
                     InvalidOperationException("An active capability source requires a Windows sandbox execution policy.");
 
-            var snapshot = source.Snapshot();
+            var snapshot         = source.Snapshot();
+            // 本次调用显式申请的写根并入 grant 范围：校验（凭据/组件/home/C1 实例重叠与盘根拒绝）
+            // 与活动授权同一入口，批准后与既有快照机制共用一条生效通道。
+            var mergedWriteRoots = snapshot.AdditionalWriteRoots.Concat(requestedWriteRoots).ToArray();
             grantScope = WindowsSandboxComposer.ResolveGrantScope(context.Policy, context.Components,
                                                                   snapshot.AdditionalReadRoots,
-                                                                  snapshot.AdditionalWriteRoots,
-                                                                  snapshot.MetadataWritePaths);
+                                                                  mergedWriteRoots,
+                                                                  snapshot.MetadataWritePaths,
+                                                                  context.PermissionSystemPaths);
             if (!grantScope.IsEmpty && policyIdentity is not null)
                 policyIdentity = WindowsSandboxComposer.AppendGrantSection(policyIdentity, grantScope);
+            // C2 获批读授权通道：与基线 deny-read 集冲突的获批根分流为 authorized 集，进入策略身份
+            // 使授权执行身份与普通执行必不相同；C1 保护路径双向重叠在构造处恒拒，错误可见。
+            if (grantScope.ReadRoots.Count > 0)
+            {
+                var authorizedReads = SandboxAuthorizedReads.Split(context.Policy.DenyReadPaths,
+                                                                   grantScope.ReadRoots);
+                WindowsSandboxComposer.RefusePermissionSystemOverlappingAuthorizedReads(
+                    authorizedReads.AuthorizedReadRoots, context.PermissionSystemPaths);
+                if (authorizedReads.HasAuthorizedReads && policyIdentity is not null)
+                    policyIdentity = WindowsSandboxComposer.AppendAuthorizedReadSection(policyIdentity,
+                                                                                        authorizedReads
+                                                                                           .AuthorizedReadRoots);
+            }
         }
 
         var grantConstraint = _executionPolicy is { } policy
@@ -253,7 +305,10 @@ public sealed class ShellTool : ITool
             $"shell: {displayCommand} (cwd: {_workspace.ToDisplay(workingDirectory)}, timeout: {timeoutSeconds}s)";
         if (_executionPolicy is { } executionPolicy) summary += $" [{executionPolicy.DisplayName}]";
         // 网络申请在前缀准确标记，模型与审批者都能看到这不是默认网络状态。
-        if (requiresNetwork) summary = NetworkSummaryPrefix + summary;
+        if (requiresNetwork) summary                         =  NetworkSummaryPrefix + summary;
+        // 写根申请在摘要如实列出，审批者不经展开参数即可看到申请的写范围。
+        if (requestedWriteRoots.Count > 0)
+            summary += $" (write roots: {string.Join("; ", requestedWriteRoots)})";
 
         return new ToolPreparation
         {
@@ -267,7 +322,10 @@ public sealed class ShellTool : ITool
             SessionGrantConstraint = grantConstraint,
             ExecutionPolicy        = policyIdentity,
             RequiresNetworkAccess  = requiresNetwork,
-            TargetPaths            = [workingDirectory],
+            RequestedWriteRoots    = requestedWriteRoots,
+            TargetPaths = requestedWriteRoots.Count > 0
+                ? requestedWriteRoots
+                : [workingDirectory],
             InstructionScopes = workspaceExecutable
                 ?
                 [
@@ -286,7 +344,7 @@ public sealed class ShellTool : ITool
                 NetworkAccessEnabled = requiresNetwork,
                 // R-identity：接入快照源的计划恒存冻结范围（Empty=冻结时无活动 grant）；
                 // 未接入快照源的计划不携带该字段，派发复核对二者区别对待。
-                GrantScope = _activeCapabilities is null ? null : grantScope
+                GrantScope           = _activeCapabilities is null ? null : grantScope
             }
         };
     }
@@ -312,12 +370,12 @@ public sealed class ShellTool : ITool
 
         cancellationToken.ThrowIfCancellationRequested();
         Directory.CreateDirectory(_artifactRoot);
-        var runId      = $"{DateTimeOffset.UtcNow:yyyyMMddTHHmmssfff}-{Guid.NewGuid():N}";
-        var stdoutPath = Path.Combine(_artifactRoot, runId + ".stdout.txt");
-        var stderrPath = Path.Combine(_artifactRoot, runId + ".stderr.txt");
+        var                    runId         = $"{DateTimeOffset.UtcNow:yyyyMMddTHHmmssfff}-{Guid.NewGuid():N}";
+        var                    stdoutPath    = Path.Combine(_artifactRoot, runId + ".stdout.txt");
+        var                    stderrPath    = Path.Combine(_artifactRoot, runId + ".stderr.txt");
         // 本地工具结果也是后续模型上下文，保留原文；凭据环境隔离仍由执行后端负责。
-        var stdoutCapture = _captureFactory(stdoutPath, _outputCharacterLimit, []);
-        var stderrCapture = _captureFactory(stderrPath, _outputCharacterLimit, []);
+        var                    stdoutCapture = _captureFactory(stdoutPath, _outputCharacterLimit, []);
+        var                    stderrCapture = _captureFactory(stderrPath, _outputCharacterLimit, []);
         ProcessExecutionResult execution;
         try
         {
@@ -386,7 +444,65 @@ public sealed class ShellTool : ITool
             return "default";
         }
 
-        throw new InvalidDataException("Tool argument 'networkAccess' must be a string, either 'default' or 'enabled'.");
+        throw
+            new InvalidDataException("Tool argument 'networkAccess' must be a string, either 'default' or 'enabled'.");
+    }
+
+    /// <summary>
+    ///     <para>
+    ///         严格校验并规范化 writeRoots：绝对路径、控制字符拒绝、含空格或引号的路径按 CmdSafePath
+    ///         纪律明确拒绝（B3e 实测：经 argv 序列化后会产生宿主同形的路径畸变，不静默放行），
+    ///         文件系统根（盘根）拒绝，数量上限 <see cref="MaximumWriteRoots" />，大小写不敏感去重保序。
+    ///     </para>
+    ///     <para>
+    ///         Strictly validates and normalizes writeRoots: absolute paths, control characters refused,
+    ///         paths containing spaces or quotes rejected explicitly under the CmdSafePath discipline
+    ///         (B3e measured: argv serialization distorts them the same way on the host, never silently
+    ///         accepted), file-system roots (drive roots) refused, at most <see cref="MaximumWriteRoots" />
+    ///         entries, deduplicated case-insensitively while preserving order.
+    ///     </para>
+    /// </summary>
+    private static IReadOnlyList<string> ResolveWriteRoots(JsonObject args)
+    {
+        var raw = JsonArgs.OptionalStringArray(args, "writeRoots", MaximumWriteRoots);
+        if (raw.Count == 0) return [];
+
+        var seen    = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var results = new List<string>();
+        for (var i = 0; i < raw.Count; i++)
+        {
+            var candidate = raw[i];
+            ValidateText(candidate, $"writeRoots[{i}]");
+            // CmdSafePath 纪律：含空格或引号的路径经 argv 引号转义会产生宿主同形畸变，明确拒绝。
+            if (candidate.Any(char.IsWhiteSpace) || candidate.Contains('"'))
+                throw new
+                    InvalidDataException($"Tool argument 'writeRoots[{i}]' must not contain spaces or quotes; " +
+                                         "such paths distort through command-line quoting: "                    +
+                                         $"'{candidate}'.");
+            if (!Path.IsPathFullyQualified(candidate))
+                throw new
+                    InvalidDataException($"Tool argument 'writeRoots[{i}]' must be a fully qualified absolute path: '{candidate}'.");
+
+            string full;
+            try
+            {
+                full = Path.GetFullPath(candidate);
+            }
+            catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+            {
+                throw new InvalidDataException($"Tool argument 'writeRoots[{i}]' is not a valid path: '{candidate}'.",
+                                               ex);
+            }
+
+            // 盘根/文件系统根不做写根：根级写范围等于全盘授权，一律拒绝。
+            if (string.Equals(Path.GetPathRoot(full), full, StringComparison.OrdinalIgnoreCase))
+                throw new
+                    InvalidDataException($"Tool argument 'writeRoots[{i}]' must not be a file-system root: '{full}'.");
+
+            if (seen.Add(full)) results.Add(full);
+        }
+
+        return results;
     }
 
     /// <summary>

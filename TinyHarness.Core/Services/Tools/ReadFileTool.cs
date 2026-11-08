@@ -25,9 +25,10 @@ namespace TinyHarness.Core.Services.Tools;
 ///     protected paths are rejected in Prepare and re-checked over the final landing
 ///     in Execute; other classes flow into the preparation as annotations only.
 /// </summary>
-public sealed class ReadFileTool(Workspace              workspace,
-                                 WorkerReadPolicy?      workerPolicy   = null,
-                                 ResourceAccessPolicy?  resourcePolicy = null) : ITool
+public sealed class ReadFileTool(
+    Workspace             workspace,
+    WorkerReadPolicy?     workerPolicy   = null,
+    ResourceAccessPolicy? resourcePolicy = null) : ITool
 {
     /// <summary>
     ///     单次调用的硬行数上限，也是省略 limit 时的默认值；Prepare 会拒绝更大值。
@@ -131,10 +132,11 @@ public sealed class ReadFileTool(Workspace              workspace,
         args["path"] = absolute; // Normalized plan value; Execute never re-resolves raw input.
         return new ToolPreparation
         {
-            ToolName   = Definition.Name,
-            CallId     = call.Id,
-            Arguments  = args,
-            Capability = "filesystem.read",
+            ToolName        = Definition.Name,
+            CallId          = call.Id,
+            Arguments       = args,
+            Capability      = "filesystem.read",
+            ExecutionPolicy = WorkspaceFileToolPolicy.Identity(workspace.Root),
             Summary = $"read_file {workspace.ToDisplay(absolute)}"           +
                       (offset > 1 ? $" (from line {offset})" : string.Empty) +
                       (limit is not null ? $" (up to {limit} lines)" : string.Empty),
@@ -171,6 +173,23 @@ public sealed class ReadFileTool(Workspace              workspace,
         workspace.EnsureFinalTargetInside(absolute, false, "File");
         // 统一资源策略的执行期复核：Prepare 与 Execute 之间新增的链接改向不得落入权限系统保护路径。
         resourcePolicy?.EnsureNotPermissionProtected(absolute, "File");
+        // C2 执行期复核：最终落点命中已知敏感名单而本次准备档不是敏感档（审批从未覆盖敏感范围）
+        // 时拒绝——Prepare 与 Execute 之间的链接改向不得把未获批的敏感读取带入执行。准备档即
+        // 敏感档（显式目标走了 L2 审批）时本判定不收缩已批准范围。
+        // The C2 execute-time re-check: when the final landing hits the known sensitive list while
+        // the prepared strictest class is not the sensitive one (the approval never covered a
+        // sensitive scope), the read is refused — a link redirection created between Prepare and
+        // Execute must not smuggle an unapproved sensitive read into execution. When the prepared
+        // class is the sensitive one (an explicit target that went through L2 approval), this
+        // verdict never narrows the approved scope.
+        if (resourcePolicy is not null &&
+            resourcePolicy.RequiresApprovalForRecursiveRead(absolute, preparation.ResourceClassification))
+            return new ToolResult
+            {
+                Succeeded = false,
+                Content = $"{workspace.ToDisplay(absolute)} resolves into a sensitive location that was not " +
+                          "approved for this read; access is refused."
+            };
         // 工作区链接边界之外的第二层：最终解析目标还必须落在 worker 读取范围内。
         // A second layer beyond the workspace link boundary: the resolved final target must also be
         // inside the worker read scope.

@@ -41,9 +41,11 @@ public static class SensitivePathClassifier
     ///     <para>Known credential and local config file names (exact segment match).</para>
     /// </summary>
     public static readonly IReadOnlyCollection<string> KnownSensitiveFileNames =
-        [".env", "credentials", "credentials.json", ".git-credentials", ".netrc", ".npmrc", ".htpasswd",
-         "secrets.json", "secrets.yaml", "secrets.yml", "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519",
-         "tinyharness.json"];
+    [
+        ".env", "credentials", "credentials.json", ".git-credentials", ".netrc", ".npmrc", ".htpasswd",
+        "secrets.json", "secrets.yaml", "secrets.yml", "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519",
+        "tinyharness.json"
+    ];
 
     /// <summary>
     ///     <para>私钥/证书类扩展名。</para>
@@ -54,13 +56,20 @@ public static class SensitivePathClassifier
 
     /// <summary>
     ///     <para>
-    ///         判断路径是否命中已知敏感名单：目录段、文件名或扩展名任一匹配即为 true。
-    ///         匹配大小写不敏感；仅做词法段匹配，不解析链接、不做 I/O。
+    ///         判断路径是否命中已知敏感名单：目录段（含最后一段，覆盖以敏感目录本身结尾的路径）、
+    ///         文件名或扩展名任一匹配即为 true。匹配大小写不敏感；仅做词法段匹配，不解析链接、
+    ///         不做 I/O。最后一段同时参与目录段与文件名判定：以 <c>.ssh</c> 等敏感目录结尾的
+    ///         读取目标按敏感处理（fail-safe），词法上无法区分其是否为目录。
     ///     </para>
     ///     <para>
-    ///         Returns whether the path hits the known sensitive list: a directory segment,
-    ///         file name, or extension match is sufficient. Matching is case-insensitive and
-    ///         purely lexical — no link resolution and no I/O.
+    ///         Returns whether the path hits the known sensitive list: a directory segment
+    ///         (including the last one, covering paths that end at a sensitive directory
+    ///         itself), file name, or extension match is sufficient. Matching is
+    ///         case-insensitive and purely lexical — no link resolution and no I/O. The
+    ///         final segment participates in both the directory and file-name checks: a
+    ///         read target ending at <c>.ssh</c> or a peer sensitive directory is treated
+    ///         as sensitive (fail-safe), since lexical segments cannot tell directories
+    ///         from files.
     ///     </para>
     /// </summary>
     public static bool IsKnownSensitivePath(string path)
@@ -72,7 +81,7 @@ public static class SensitivePathClassifier
                                      StringSplitOptions.RemoveEmptyEntries);
         if (segments.Length == 0) return false;
 
-        for (var index = 0; index < segments.Length - 1; index++)
+        for (var index = 0; index < segments.Length; index++)
             if (KnownSensitiveDirectoryNames.Contains(segments[index], StringComparer.OrdinalIgnoreCase))
                 return true;
 

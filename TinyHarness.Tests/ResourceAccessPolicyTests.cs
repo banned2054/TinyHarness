@@ -139,6 +139,73 @@ public class ResourceAccessPolicyTests
         Assert.That(classification.KnownSensitive, Is.True);
     }
 
+    [Test]
+    public void Classify_OutsideSensitiveHit_PromotesToSensitiveLocation()
+    {
+        using var workspaceDir = new TestTempDir();
+        using var outsideDir   = new TestTempDir();
+        var policy = new ResourceAccessPolicy(workspaceDir.Root);
+        var target = Path.Combine(outsideDir.Root, ".ssh", "id_rsa");
+
+        // 三级契约 C2 档：越界位置命中已知敏感名单即升为读保护敏感档。
+        var classification = policy.Classify(target);
+        Assert.Multiple(() =>
+        {
+            Assert.That(classification.Class, Is.EqualTo(ResourceClass.SensitiveLocation));
+            Assert.That(classification.KnownSensitive, Is.True);
+        });
+    }
+
+    [Test]
+    public void Classify_OutsideSensitiveHit_ByFileNameAndExtension()
+    {
+        using var workspaceDir = new TestTempDir();
+        using var outsideDir   = new TestTempDir();
+        var policy = new ResourceAccessPolicy(workspaceDir.Root);
+
+        var byFileName    = policy.Classify(Path.Combine(outsideDir.Root, "credentials.json"));
+        var byExtension   = policy.Classify(Path.Combine(outsideDir.Root, "certs", "server.pem"));
+        Assert.Multiple(() =>
+        {
+            Assert.That(byFileName.Class, Is.EqualTo(ResourceClass.SensitiveLocation));
+            Assert.That(byExtension.Class, Is.EqualTo(ResourceClass.SensitiveLocation));
+        });
+    }
+
+    [Test]
+    public void Classify_OutsideNonSensitiveDotDirectory_StaysOutsideWorkspace()
+    {
+        using var workspaceDir = new TestTempDir();
+        using var outsideDir   = new TestTempDir();
+        var policy = new ResourceAccessPolicy(workspaceDir.Root);
+        var target = Path.Combine(outsideDir.Root, ".cache", "x.bin");
+
+        // 防过度归档负例：点目录本身不是敏感信号，普通越界仍为基线广泛读档。
+        var classification = policy.Classify(target);
+        Assert.Multiple(() =>
+        {
+            Assert.That(classification.Class, Is.EqualTo(ResourceClass.OutsideWorkspace));
+            Assert.That(classification.KnownSensitive, Is.False);
+        });
+    }
+
+    [Test]
+    public void Classify_SandboxRuntimeRoot_Class()
+    {
+        using var workspaceDir  = new TestTempDir();
+        using var runtimeDir    = new TestTempDir();
+        var       runtimeFile   = runtimeDir.WriteFile("packages/x.dll", "bin");
+        var policy = new ResourceAccessPolicy(workspaceDir.Root, sandboxRuntimeRoots : [runtimeDir.Root]);
+
+        // 派生运行时写根：沙箱 OS 侧基线可写的基础设施，分类单列、注记不受敏感名单影响外溢。
+        var classification = policy.Classify(runtimeFile);
+        Assert.Multiple(() =>
+        {
+            Assert.That(classification.Class, Is.EqualTo(ResourceClass.SandboxRuntimeRoot));
+            Assert.That(classification.KnownSensitive, Is.False);
+        });
+    }
+
     // ---------------------------------------------------------------- 链接改向
 
     [Test]

@@ -147,6 +147,7 @@ public sealed class ApplyPatchTool(Workspace workspace, ResourceAccessPolicy? re
             CallId                 = call.Id,
             Arguments              = args,
             Capability             = "filesystem.write",
+            ExecutionPolicy        = WorkspaceFileToolPolicy.Identity(workspace.Root),
             Summary                = $"apply_patch: modify {display.Count} file(s): {string.Join(", ", display)}",
             TargetPaths            = targets,
             ResourceClassification = classification,

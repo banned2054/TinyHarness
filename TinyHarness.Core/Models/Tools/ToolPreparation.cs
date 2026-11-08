@@ -228,6 +228,20 @@ public sealed class ToolPreparation
 
     /// <summary>
     ///     <para>
+    ///         模型在单次调用中显式申请的工作区外写根（已校验规范化的绝对路径）；空即不申请，行为与
+    ///         历史完全一致。权限引擎据此按 Level 2 逐次审批；批准后根随既有快照与策略身份机制生效。
+    ///     </para>
+    ///     <para>
+    ///         The out-of-workspace write roots the model explicitly requests for this single invocation
+    ///         (validated, normalized absolute paths); empty means no request and historical behavior is
+    ///         unchanged. The permission engine approves them per call at Level 2; once approved the roots
+    ///         take effect through the existing snapshot and policy-identity mechanism.
+    ///     </para>
+    /// </summary>
+    public IReadOnlyList<string> RequestedWriteRoots { get; init; } = [];
+
+    /// <summary>
+    ///     <para>
     ///         模型在参数中显式申请的执行后端：Host 表示显式申请宿主执行（Level 3 意图表达），
     ///         null 表示默认路由（沙箱可用时为 WindowsSandbox）。它只是意图，实际执行以后端
     ///         冻结计划与授权凭据为准。
@@ -320,6 +334,7 @@ public sealed class ToolPreparation
             ExecutionPolicy        = ExecutionPolicy,
             RequiresNetworkAccess  = RequiresNetworkAccess,
             RequestedBackend       = RequestedBackend,
+            RequestedWriteRoots    = RequestedWriteRoots,
             TargetPaths            = _targetPaths,
             InstructionScopes      = _instructionScopes,
             ExecutionPlan          = ExecutionPlan,

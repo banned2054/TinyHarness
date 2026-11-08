@@ -296,6 +296,8 @@ public class ProjectInstructionBoundaryTests
         public void Enqueue(ApprovalResolution action) => _actions.Enqueue(action);
     }
 
+    // B6R 后所有工具 preparation 恒携带策略身份（与生产文件工具同一身份源），否则批准授权的
+    // grant-event 审计会因缺 policyIdentityRevision 拒落盘。
     private sealed class ScopedInstructionTool(string scopeDirectory, string capability = "filesystem.read") : ITool
     {
         public int ExecuteCount { get; private set; }
@@ -313,6 +315,7 @@ public class ProjectInstructionBoundaryTests
             CallId            = call.Id,
             Arguments         = [],
             Capability        = capability,
+            ExecutionPolicy   = WorkspaceFileToolPolicy.Identity(scopeDirectory),
             Summary           = "scoped tool",
             TargetPaths       = [scopeDirectory],
             InstructionScopes = [new InstructionScope(scopeDirectory, InstructionScopeKind.Directory)]

@@ -30,9 +30,10 @@ namespace TinyHarness.Core.Services.Tools;
 ///         skips excluded paths by count without ever revealing their names or content.
 ///     </para>
 /// </summary>
-public sealed class SearchTextTool(Workspace             workspace,
-                                   WorkerReadPolicy?     workerPolicy   = null,
-                                   ResourceAccessPolicy? resourcePolicy = null) : ITool
+public sealed class SearchTextTool(
+    Workspace             workspace,
+    WorkerReadPolicy?     workerPolicy   = null,
+    ResourceAccessPolicy? resourcePolicy = null) : ITool
 {
     private const int DefaultMaxResults = 100;
 
@@ -81,38 +82,38 @@ public sealed class SearchTextTool(Workspace             workspace,
                 ["type"] = "string",
                 ["enum"] = new JsonArray("literal", "regex"),
                 ["description"] =
-                    "Match mode. \"literal\" (default) does a case-insensitive substring match per line; " +
+                    "Match mode. \"literal\" (default) does a case-insensitive substring match per line; "       +
                     "\"regex\" compiles the pattern with the .NET NonBacktracking engine and matches each line " +
-                    "separately (no cross-line matches, no replacement). NonBacktracking does not support " +
+                    "separately (no cross-line matches, no replacement). NonBacktracking does not support "      +
                     "lookaround, backreferences, or conditionals; unsupported syntax fails the call instead of " +
                     "falling back to another engine."
             },
             ["caseSensitive"] = new JsonObject
             {
-                ["type"]        = "boolean",
+                ["type"] = "boolean",
                 ["description"] =
                     "Case-sensitive match (default false). Also controls regex IgnoreCase and glob case sensitivity."
             },
             ["maxResults"] = new JsonObject
             {
-                ["type"]        = "integer",
+                ["type"] = "integer",
                 ["description"] =
                     "Maximum matches to scan before stopping early (default 100, max 500). It caps matches, " +
                     "not files; stopping early is reported as partial."
             },
             ["include"] = new JsonObject
             {
-                ["type"]        = "array",
-                ["items"]       = new JsonObject { ["type"] = "string" },
+                ["type"]  = "array",
+                ["items"] = new JsonObject { ["type"] = "string" },
                 ["description"] =
                     "Include glob(s) (*, **, ?, [...]) matched against workspace-relative paths. They only filter " +
-                    "the already authorized scan set and never widen access; a file matches when any pattern " +
+                    "the already authorized scan set and never widen access; a file matches when any pattern "      +
                     "matches. An empty array means no filtering."
             },
             ["exclude"] = new JsonObject
             {
-                ["type"]        = "array",
-                ["items"]       = new JsonObject { ["type"] = "string" },
+                ["type"]  = "array",
+                ["items"] = new JsonObject { ["type"] = "string" },
                 ["description"] =
                     "Exclude glob(s) with the same semantics as include; a matching file is skipped. Exclude wins " +
                     "over include."
@@ -133,7 +134,7 @@ public sealed class SearchTextTool(Workspace             workspace,
                 ["enum"] = new JsonArray("content", "files", "count"),
                 ["description"] =
                     "\"content\" (default) prints match lines with optional context blocks; \"files\" prints the " +
-                    "path of every file with at least one match; \"count\" prints \"path: matches\" per file. " +
+                    "path of every file with at least one match; \"count\" prints \"path: matches\" per file. "    +
                     "All modes remain subject to read permissions; excluded files never appear."
             }
         },
@@ -145,7 +146,7 @@ public sealed class SearchTextTool(Workspace             workspace,
         Name = "search_text",
         Description = "Searches workspace text files per line for a literal substring or a NonBacktracking regex. " +
                       "Reports \"path:line: text\" matches, file lists, or per-file counts; include/exclude globs " +
-                      "narrow the authorized scan set only; truncation, timeouts, and partial counts are always " +
+                      "narrow the authorized scan set only; truncation, timeouts, and partial counts are always "   +
                       "marked explicitly.",
         Parameters = Schema
     };
@@ -193,10 +194,11 @@ public sealed class SearchTextTool(Workspace             workspace,
         args["path"] = absolute; // Normalized plan value; Execute never re-resolves raw input.
         return new ToolPreparation
         {
-            ToolName = Definition.Name,
-            CallId = call.Id,
-            Arguments = args,
-            Capability = "filesystem.search",
+            ToolName               = Definition.Name,
+            CallId                 = call.Id,
+            Arguments              = args,
+            Capability             = "filesystem.search",
+            ExecutionPolicy        = WorkspaceFileToolPolicy.Identity(workspace.Root),
             ResourceClassification = classification,
             Summary = mode == "regex"
                 ? $"search_text \"{pattern}\" (regex) in {workspace.ToDisplay(absolute)}"
@@ -226,29 +228,30 @@ public sealed class SearchTextTool(Workspace             workspace,
         var maxResults    = JsonArgs.OptionalInt(args, "maxResults") ?? DefaultMaxResults;
         var contextBefore = ReadContextLines(args, "contextBefore");
         var contextAfter  = ReadContextLines(args, "contextAfter");
-        var include       = CompileGlobs(JsonArgs.OptionalStringArray(args, "include", MaxIncludeExcludePatterns),
-                                         "include", caseSensitive);
-        var exclude       = CompileGlobs(JsonArgs.OptionalStringArray(args, "exclude", MaxIncludeExcludePatterns),
-                                         "exclude", caseSensitive);
-        var comparison    = caseSensitive ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
-        var regex         = mode == "regex" ? CompileRegex(pattern, caseSensitive) : null;
-        var useContext    = outputMode == "content" && (contextBefore > 0 || contextAfter > 0);
+        var include = CompileGlobs(JsonArgs.OptionalStringArray(args, "include", MaxIncludeExcludePatterns),
+                                   "include", caseSensitive);
+        var exclude = CompileGlobs(JsonArgs.OptionalStringArray(args, "exclude", MaxIncludeExcludePatterns),
+                                   "exclude", caseSensitive);
+        var comparison = caseSensitive ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
+        var regex      = mode       == "regex" ? CompileRegex(pattern, caseSensitive) : null;
+        var useContext = outputMode == "content" && (contextBefore > 0 || contextAfter > 0);
 
         if (!File.Exists(absolute) && !Directory.Exists(absolute))
             return new ToolResult
             {
                 Succeeded = false,
-                Content = $"Path not found: {workspace.ToDisplay(absolute)}"
+                Content   = $"Path not found: {workspace.ToDisplay(absolute)}"
             };
 
         workspace.EnsureFinalTargetInside(absolute, Directory.Exists(absolute), "Path");
         // 搜索只激活显式目标的祖先规则，不把候选文件的后代规则预加载到模型。
         preparation.Coverage?.EnsureCoveredDirectory(File.Exists(absolute)
-                                                     ? Path.GetDirectoryName(absolute)!
-                                                     : absolute);
+                                                         ? Path.GetDirectoryName(absolute)!
+                                                         : absolute);
 
-        var files = new List<string>();
-        var walkLimited = false;
+        var files            = new List<string>();
+        var walkLimited      = false;
+        var sensitiveSkipped = 0;
         if (File.Exists(absolute))
         {
             files.Add(absolute);
@@ -256,12 +259,32 @@ public sealed class SearchTextTool(Workspace             workspace,
         else
         {
             // 枚举结果按策略逐项过滤；被排除目录不下降，因此不会进入扫描列表。
+            // 敏感后代不因普通父目录的基线广泛读而进入扫描集：本次准备档不是敏感档时，
+            // 遍历发现的敏感命中在入口即排除（不下降、不计数名字），读取须经 L2 审批。
             // Enumeration results are filtered by the policy; excluded directories are never
-            // descended into, so they never reach the scan list.
-            var walk = DirectoryWalker.CollectFiles(absolute, MaxFilesScanned, cancellationToken,
-                                                    workerPolicy is null
-                                                        ? null
-                                                        : child => !workerPolicy.IsEntryAllowed(child));
+            // descended into, so they never reach the scan list. Sensitive descendants do not
+            // enter the scan set through a normal parent's baseline broad read: while the
+            // prepared strictest class is not the sensitive one, sensitive hits found by the
+            // walk are excluded at the entry (never descended, never named); reading them
+            // requires L2 approval.
+            Func<string, bool>? excludeEntry = null;
+            if (workerPolicy is not null || resourcePolicy is not null)
+                excludeEntry = child =>
+                {
+                    if (workerPolicy is not null && !workerPolicy.IsEntryAllowed(child)) return true;
+
+                    if (resourcePolicy is not null &&
+                        resourcePolicy.RequiresApprovalForRecursiveRead(child,
+                                                                        preparation.ResourceClassification))
+                    {
+                        sensitiveSkipped++;
+                        return true;
+                    }
+
+                    return false;
+                };
+
+            var walk = DirectoryWalker.CollectFiles(absolute, MaxFilesScanned, cancellationToken, excludeEntry);
             files.AddRange(walk.Entries);
             walkLimited = walk.Truncated;
         }
@@ -269,7 +292,7 @@ public sealed class SearchTextTool(Workspace             workspace,
         // include/exclude 只过滤已授权扫描集的相对路径，不产生任何新的访问范围。
         // Include/exclude filters operate on workspace-relative paths of the authorized scan
         // set only; they never create new access.
-        var scanned        = files;
+        var scanned         = files;
         var skippedFiltered = 0;
         if (include.Count > 0 || exclude.Count > 0)
         {
@@ -281,8 +304,8 @@ public sealed class SearchTextTool(Workspace             workspace,
                     skippedFiltered++;
         }
 
-        var output          = new StringBuilder();
-        var matchTotal      = 0;
+        var output           = new StringBuilder();
+        var matchTotal       = 0;
         var filesWithMatches = 0;
         var filesScanned     = 0;
         var skippedLarge     = 0;
@@ -312,20 +335,24 @@ public sealed class SearchTextTool(Workspace             workspace,
 
             var display = workspace.ToDisplay(file);
             var scan = await ScanFileAsync(file, pattern, regex, comparison, maxResults - matchTotal, workspace,
-                                           workerPolicy, resourcePolicy, cancellationToken).ConfigureAwait(false);
+                                           workerPolicy, resourcePolicy, preparation.ResourceClassification,
+                                           cancellationToken).ConfigureAwait(false);
             switch (scan.SkipReason)
             {
-                case ScanSkipReason.Binary:
+                case ScanSkipReason.Binary :
                     skippedBinary++;
                     continue;
-                case ScanSkipReason.OutsideWorkspace:
+                case ScanSkipReason.OutsideWorkspace :
                     skippedEscaping++;
                     continue;
-                case ScanSkipReason.Excluded:
+                case ScanSkipReason.Excluded :
                     skippedExcluded++;
                     continue;
-                case ScanSkipReason.PermissionProtected:
+                case ScanSkipReason.PermissionProtected :
                     skippedProtected++;
+                    continue;
+                case ScanSkipReason.ApprovalRequired :
+                    sensitiveSkipped++;
                     continue;
             }
 
@@ -333,14 +360,15 @@ public sealed class SearchTextTool(Workspace             workspace,
             if (scan.TimedOut) regexTimedOut = true;
             if (scan.MatchLines.Count > 0)
             {
-                matchTotal      += scan.MatchLines.Count;
+                matchTotal += scan.MatchLines.Count;
                 filesWithMatches++;
                 var appended = outputMode switch
                 {
                     "files" => AppendWithinBudget(output, $"{display}\n"),
                     "count" => AppendWithinBudget(output, $"{display}: {scan.MatchLines.Count}\n"),
                     _ when useContext => await AppendContextBlocksAsync(output, file, display, scan.MatchLines,
-                                             contextBefore, contextAfter, cancellationToken).ConfigureAwait(false),
+                                                                        contextBefore, contextAfter, cancellationToken)
+                       .ConfigureAwait(false),
                     _ => AppendPlainMatches(output, display, scan.MatchLines, scan.MatchTexts)
                 };
                 if (!appended)
@@ -370,6 +398,10 @@ public sealed class SearchTextTool(Workspace             workspace,
         if (skippedProtected > 0)
             details.Add($"skipped {skippedProtected} file(s) resolving into permission-system protected paths");
 
+        if (sensitiveSkipped > 0)
+            details.Add($"skipped {sensitiveSkipped} path(s) inside sensitive locations that were not approved " +
+                        "for this search");
+
         if (walkLimited) details.Add($"only the first {MaxFilesScanned} files scanned");
 
         if (regexTimedOut) details.Add("regex match timeout; results are partial");
@@ -380,9 +412,9 @@ public sealed class SearchTextTool(Workspace             workspace,
         if (stoppedAtCap && outputMode != "content")
             details.Add($"stopped after {matchTotal} matches; results are partial");
 
-        var note = details.Count == 0 ? string.Empty : "; " + string.Join("; ", details);
+        var note         = details.Count == 0 ? string.Empty : "; " + string.Join("; ", details);
         var stoppedEarly = walkLimited || regexTimedOut || outputTruncated || stoppedAtCap;
-        var hasRows = output.Length > 0;
+        var hasRows      = output.Length > 0;
 
         var content = new StringBuilder();
         content.Append(output);
@@ -390,8 +422,8 @@ public sealed class SearchTextTool(Workspace             workspace,
         {
             // 提前停止时绝不给出权威的"无匹配"；必须连同部分扫描事实一起说明。
             content.Append(stoppedEarly
-                ? $"(no matches within scanned limits; results are partial{note})"
-                : $"(no matches for '{pattern}'{note})");
+                               ? $"(no matches within scanned limits; results are partial{note})"
+                               : $"(no matches for '{pattern}'{note})");
         }
         else if (outputMode == "content")
         {
@@ -417,11 +449,12 @@ public sealed class SearchTextTool(Workspace             workspace,
     }
 
     /// <summary>
-    ///     逐行扫描一个文件；文件像二进制、链接目标越界或最终落点进入权限系统保护路径时返回跳过状态，
-    ///     否则返回匹配行号与原文、截断状态与正则超时状态。
+    ///     逐行扫描一个文件；文件像二进制、链接目标越界、最终落点进入权限系统保护路径，
+    ///     或命中未获批敏感位置时返回跳过状态，否则返回匹配行号与原文、截断状态与正则超时状态。
     ///     Scans one file line by line. Returns a skip outcome when the file looks
-    ///     binary, when its link's final target escapes the workspace, or when it
-    ///     resolves into a permission-system protected path; otherwise the matched
+    ///     binary, when its link's final target escapes the workspace, when it
+    ///     resolves into a permission-system protected path, or when it hits a
+    ///     sensitive location this invocation never had approved; otherwise the matched
     ///     line numbers with their raw text, whether the scan stopped mid-file at the
     ///     match cap, and whether the regex timed out.
     /// </summary>
@@ -429,6 +462,7 @@ public sealed class SearchTextTool(Workspace             workspace,
                                                int maxMatches, Workspace workspace,
                                                WorkerReadPolicy? workerPolicy,
                                                ResourceAccessPolicy? resourcePolicy,
+                                               ResourceClassification? preparationClassification,
                                                CancellationToken cancellationToken)
     {
         // A file found by the walk can itself be a symlink/junction whose final
@@ -460,6 +494,15 @@ public sealed class SearchTextTool(Workspace             workspace,
                 return FileScan.PermissionProtected;
             }
 
+        // 执行期敏感复核（遍历排除之外的第二层）：遍历与扫描之间新增的敏感命中或链接改向
+        // 不落入未获批扫描；内容绝不读取、路径名绝不出现。
+        // The execute-time sensitive re-check (a second layer beyond the walk filter): sensitive
+        // hits or link redirections created between the walk and the scan never enter an
+        // unapproved scan; the content is never read and the path is never shown.
+        if (resourcePolicy is not null &&
+            resourcePolicy.RequiresApprovalForRecursiveRead(file, preparationClassification))
+            return FileScan.ApprovalRequired;
+
         // 策略的最终复核：链接链解析后的目标仍须落在 worker 读取范围内（focus/敏感排除）；
         // 不合格按跳过计数，绝不读取内容、不暴露路径名。
         // The policy's final re-check: the resolved link-chain target must also be inside the worker
@@ -489,16 +532,17 @@ public sealed class SearchTextTool(Workspace             workspace,
         using var reader = new StreamReader(stream, Encoding.UTF8, true,
                                             64 * 1024, false);
 
-        var matchLines = new List<int>(Math.Min(maxMatches, 64));
-        var matchTexts = new List<string>(Math.Min(maxMatches, 64));
-        var lineNumber = 0;
-        var timedOut   = false;
+        var     matchLines = new List<int>(Math.Min(maxMatches, 64));
+        var     matchTexts = new List<string>(Math.Min(maxMatches, 64));
+        var     lineNumber = 0;
+        var     timedOut   = false;
         string? line;
         while (matchLines.Count < maxMatches &&
                (line = await reader.ReadLineAsync(cancellationToken).ConfigureAwait(false)) is not null)
         {
             lineNumber++;
-            var isMatch = regex is { } compiled ? TryMatch(compiled, line, ref timedOut)
+            var isMatch = regex is { } compiled
+                ? TryMatch(compiled, line, ref timedOut)
                 : line.Contains(pattern, comparison);
             if (!isMatch) continue;
 
@@ -552,12 +596,12 @@ public sealed class SearchTextTool(Workspace             workspace,
     ///     Appends match lines in the established format; returns false as a whole
     ///     once any line would exceed the budget.
     /// </summary>
-    private static bool AppendPlainMatches(StringBuilder output, string display, IReadOnlyList<int> matchLines,
+    private static bool AppendPlainMatches(StringBuilder         output, string display, IReadOnlyList<int> matchLines,
                                            IReadOnlyList<string> matchTexts)
     {
         for (var i = 0; i < matchLines.Count; i++)
         {
-            var text = matchTexts[i];
+            var text  = matchTexts[i];
             var shown = text.Length <= MaxLineDisplayChars ? text : text[..MaxLineDisplayChars] + "...";
             if (!AppendWithinBudget(output, $"{display}:{matchLines[i]}: {shown}\n")) return false;
         }
@@ -580,7 +624,7 @@ public sealed class SearchTextTool(Workspace             workspace,
                                                  FileOptions.Asynchronous))
         {
             using var reader = new StreamReader(stream, Encoding.UTF8, true, 64 * 1024, false);
-            string? line;
+            string?   line;
             while ((line = await reader.ReadLineAsync(cancellationToken).ConfigureAwait(false)) is not null)
                 lines.Add(line);
         }
@@ -591,8 +635,8 @@ public sealed class SearchTextTool(Workspace             workspace,
         {
             // 匹配行号是 1 基；窗口计算统一转 0 基下标。
             var matchIndex = match - 1;
-            var start = Math.Max(0, matchIndex - contextBefore);
-            var end   = Math.Min(lastIndex, matchIndex + contextAfter);
+            var start      = Math.Max(0, matchIndex         - contextBefore);
+            var end        = Math.Min(lastIndex, matchIndex + contextAfter);
             if (blocks.Count > 0 && start <= blocks[^1].End + 1)
             {
                 if (end > blocks[^1].End) blocks[^1] = (blocks[^1].Start, end);
@@ -642,7 +686,7 @@ public sealed class SearchTextTool(Workspace             workspace,
     ///     unterminated '[' is treated as a literal.
     /// </summary>
     private static IReadOnlyList<GlobMatcher> CompileGlobs(IReadOnlyList<string> patterns, string key,
-                                                           bool caseSensitive)
+                                                           bool                  caseSensitive)
     {
         var result = new List<GlobMatcher>(patterns.Count);
         foreach (var pattern in patterns)
@@ -663,7 +707,7 @@ public sealed class SearchTextTool(Workspace             workspace,
     /// </summary>
     private static Regex CompileRegex(string pattern, bool caseSensitive)
     {
-        var options = RegexOptions.NonBacktracking | RegexOptions.CultureInvariant;
+        var options                 = RegexOptions.NonBacktracking | RegexOptions.CultureInvariant;
         if (!caseSensitive) options |= RegexOptions.IgnoreCase;
 
         try
@@ -673,13 +717,13 @@ public sealed class SearchTextTool(Workspace             workspace,
         catch (RegexParseException ex)
         {
             throw new InvalidDataException(
-                $"Tool argument 'pattern' is not supported by the NonBacktracking regex engine: {ex.Message}");
+                                           $"Tool argument 'pattern' is not supported by the NonBacktracking regex engine: {ex.Message}");
         }
         catch (NotSupportedException ex)
         {
             // 环视、反向引用等语法由符号引擎在构造期以 NotSupportedException 拒绝；报错后不换引擎。
             throw new InvalidDataException(
-                $"Tool argument 'pattern' is not supported by the NonBacktracking regex engine: {ex.Message}");
+                                           $"Tool argument 'pattern' is not supported by the NonBacktracking regex engine: {ex.Message}");
         }
         catch (ArgumentException ex)
         {
@@ -719,8 +763,12 @@ public sealed class SearchTextTool(Workspace             workspace,
     }
 
     /// <summary>单文件扫描结果：匹配行号与原文、截断状态、超时状态与跳过原因。</summary>
-    private sealed record FileScan(List<int> MatchLines, List<string> MatchTexts, bool StoppedMidFile, bool TimedOut,
-                                   ScanSkipReason? SkipReason)
+    private sealed record FileScan(
+        List<int>       MatchLines,
+        List<string>    MatchTexts,
+        bool            StoppedMidFile,
+        bool            TimedOut,
+        ScanSkipReason? SkipReason)
     {
         public static FileScan Binary { get; } = new([], [], false, false, ScanSkipReason.Binary);
 
@@ -730,6 +778,9 @@ public sealed class SearchTextTool(Workspace             workspace,
 
         public static FileScan PermissionProtected { get; } =
             new([], [], false, false, ScanSkipReason.PermissionProtected);
+
+        public static FileScan ApprovalRequired { get; } =
+            new([], [], false, false, ScanSkipReason.ApprovalRequired);
     }
 
     private enum ScanSkipReason
@@ -756,7 +807,14 @@ public sealed class SearchTextTool(Workspace             workspace,
         ///     文件最终落点进入权限系统保护路径；按跳过计数，绝不读取或显示。
         ///     The file resolves into a permission-system protected path; skipped and counted, never read or shown.
         /// </summary>
-        PermissionProtected
+        PermissionProtected,
+
+        /// <summary>
+        ///     文件命中未获批的已知敏感位置；按跳过计数，绝不读取或显示。
+        ///     The file hits a known sensitive location this invocation never had approved;
+        ///     skipped and counted, never read or shown.
+        /// </summary>
+        ApprovalRequired
     }
 
     /// <summary>
@@ -820,8 +878,8 @@ public sealed class SearchTextTool(Workspace             workspace,
                     var any = false;
                     for (var j = 0; j <= vlen; j++)
                     {
-                        any |= dp[j];
-                        next[j] = any;
+                        any     |= dp[j];
+                        next[j] =  any;
                     }
                 }
                 else if (c == '?')
@@ -845,8 +903,8 @@ public sealed class SearchTextTool(Workspace             workspace,
                     for (var j = 0; j < vlen; j++)
                         next[j + 1] = dp[j] && ClassMatches(value[j], negated, singles, ranges);
 
-                    i    = end + 1;
-                    dp   = next;
+                    i  = end + 1;
+                    dp = next;
                     continue;
                 }
                 else
@@ -875,7 +933,7 @@ public sealed class SearchTextTool(Workspace             workspace,
             singles = [];
             ranges  = [];
             end     = start;
-            var i   = start + 1;
+            var i = start + 1;
             if (i < segment.Length && segment[i] is '!' or '^')
             {
                 negated = true;

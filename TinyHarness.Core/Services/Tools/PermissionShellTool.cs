@@ -30,28 +30,40 @@ public sealed class PermissionShellTool(ITool restricted, ITool host) : ITool
             {
                 ["type"] = "string", ["enum"] = new JsonArray("workspace", "host"),
                 ["description"] =
-                    "Defaults to 'workspace', which runs inside the configured Windows sandbox; " +
+                    "Defaults to 'workspace', which runs inside the configured Windows sandbox; "                   +
                     "when the sandbox is unavailable the whole command fails instead of falling back to the host. " +
                     "'host' is an explicit Level 3 request to run the command directly as the TinyHarness process " +
                     "with no OS sandbox isolation; it is not an administrator elevation and grants nothing beyond " +
-                    "the host process's own permissions, and it always requires a single-operation approval " +
-                    "bound to this exact call. " +
-                    "Use 'host' only to rerun a specific command that failed at a sandbox boundary " +
-                    "(for example writing to a protected path such as .git), " +
+                    "the host process's own permissions, and it always requires a single-operation approval "       +
+                    "bound to this exact call. "                                                                    +
+                    "Use 'host' only to rerun a specific command that failed at a sandbox boundary "                +
+                    "(for example writing to a protected path such as .git), "                                      +
                     "after confirming earlier steps left no uncertain side effects; never use it to bypass a refusal."
             };
             // 沙箱网络申请：全网访问而非窄授权；host 作用域无沙箱隔离，参数被忽略。
             schema["properties"]!["networkAccess"] = new JsonObject
             {
-                ["type"]        = "string",
-                ["enum"]        = new JsonArray("default", "enabled"),
+                ["type"] = "string",
+                ["enum"] = new JsonArray("default", "enabled"),
                 ["description"] =
-                    "Requests network access for this invocation inside the workspace sandbox " +
-                    "(full network access, including host-local proxies such as a loopback proxy " +
+                    "Requests network access for this invocation inside the workspace sandbox "                 +
+                    "(full network access, including host-local proxies such as a loopback proxy "              +
                     "the user configured). Defaults to 'default', which keeps the sandbox network restricted. " +
-                    "Only meaningful for the 'workspace' scope; 'host' ignores it because host execution " +
-                    "has no sandbox isolation. Each enabled request requires its own approval " +
+                    "Only meaningful for the 'workspace' scope; 'host' ignores it because host execution "      +
+                    "has no sandbox isolation. Each enabled request requires its own approval "                 +
                     "unless the user granted standing network trust."
+            };
+            // 沙箱写根申请：单次调用的工作区外写范围；host 作用域无沙箱边界，参数同样被忽略。
+            schema["properties"]!["writeRoots"] = new JsonObject
+            {
+                ["type"]  = "array",
+                ["items"] = new JsonObject { ["type"] = "string" },
+                ["description"] =
+                    "Optional absolute directory roots outside the workspace this single workspace-sandbox "     +
+                    "invocation needs to write (at most 8). Each request requires per-call approval at level 2 " +
+                    "and the approved roots are frozen into the grant for this exact command. "                  +
+                    "Only meaningful for the 'workspace' scope; 'host' ignores it because host execution "       +
+                    "has no sandbox write-root boundary. Paths containing spaces or quotes are refused."
             };
             return restricted.Definition with { Parameters = schema };
         }
@@ -100,8 +112,9 @@ public sealed class PermissionShellTool(ITool restricted, ITool host) : ITool
             SessionConstraint      = plan.SessionConstraint,
             SessionGrantConstraint = plan.SessionGrantConstraint,
             ExecutionPolicy        = plan.ExecutionPolicy,
-            // workspace 路由透传内层网络申请；host 路由恒 false，不受网络参数影响。
+            // workspace 路由透传内层网络申请与写根申请；host 路由两者皆不带（无沙箱边界，参数无意义）。
             RequiresNetworkAccess  = isHost ? false : plan.RequiresNetworkAccess,
+            RequestedWriteRoots    = isHost ? [] : plan.RequestedWriteRoots,
             // host 是显式 Level 3 后端申请；缺省 null 表示默认沙箱路由。
             RequestedBackend       = isHost ? ProcessExecutionBackendKind.Host : null,
             ExecutionPlan          = new Plan(this, tool, plan)

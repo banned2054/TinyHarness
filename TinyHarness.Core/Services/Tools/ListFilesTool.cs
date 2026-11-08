@@ -20,9 +20,10 @@ namespace TinyHarness.Core.Services.Tools;
 ///     resource policy: permission-system protected paths are rejected in Prepare and
 ///     re-checked over the final landing in Execute; other classes become annotations.
 /// </summary>
-public sealed class ListFilesTool(Workspace             workspace,
-                                  WorkerReadPolicy?     workerPolicy   = null,
-                                  ResourceAccessPolicy? resourcePolicy = null) : ITool
+public sealed class ListFilesTool(
+    Workspace             workspace,
+    WorkerReadPolicy?     workerPolicy   = null,
+    ResourceAccessPolicy? resourcePolicy = null) : ITool
 {
     private const int MaxEntries = 500;
 
@@ -83,16 +84,17 @@ public sealed class ListFilesTool(Workspace             workspace,
         args["path"] = absolute; // Normalized plan value; Execute never re-resolves raw input.
         return new ToolPreparation
         {
-            ToolName   = Definition.Name,
-            CallId     = call.Id,
-            Arguments  = args,
-            Capability = "filesystem.list",
+            ToolName        = Definition.Name,
+            CallId          = call.Id,
+            Arguments       = args,
+            Capability      = "filesystem.list",
+            ExecutionPolicy = WorkspaceFileToolPolicy.Identity(workspace.Root),
             Summary = $"list_files {workspace.ToDisplay(absolute)}" + (recursive
                 ? maxDepth is null ? " (recursive)" : $" (recursive, depth {maxDepth})"
                 : string.Empty),
             TargetPaths            = [absolute],
             ResourceClassification = classification,
-            InstructionScopes      =
+            InstructionScopes =
             [
                 new InstructionScope(absolute, InstructionScopeKind.Directory)
             ]
@@ -127,11 +129,31 @@ public sealed class ListFilesTool(Workspace             workspace,
         var maxDepth  = JsonArgs.OptionalInt(preparation.Arguments, "maxDepth");
 
         // 枚举结果按策略逐项过滤；被排除目录不下降，因此不会出现在结果里。
-        // Enumeration results are filtered by the policy; excluded directories are never descended into.
+        // 敏感后代不因普通父目录的基线广泛读而出现在列举结果：本次准备档不是敏感档时，
+        // 遍历发现的敏感命中按计数排除（不下降、不显示名字），访问须经 L2 审批。
+        // Enumeration results are filtered by the policy; excluded directories are never
+        // descended into. Sensitive descendants never surface through a normal parent's
+        // baseline broad read: while the prepared strictest class is not the sensitive one,
+        // sensitive hits found by the walk are excluded with a count only (never descended,
+        // never named); accessing them requires L2 approval.
+        var                 sensitiveSkipped = 0;
+        Func<string, bool>? excludeEntry     = null;
+        if (workerPolicy is not null || resourcePolicy is not null)
+            excludeEntry = child =>
+            {
+                if (workerPolicy is not null && !workerPolicy.IsEntryAllowed(child)) return true;
+
+                if (resourcePolicy is not null &&
+                    resourcePolicy.RequiresApprovalForRecursiveRead(child, preparation.ResourceClassification))
+                {
+                    sensitiveSkipped++;
+                    return true;
+                }
+
+                return false;
+            };
         var result = DirectoryWalker.CollectEntries(absolute, recursive, maxDepth, MaxEntries, cancellationToken,
-                                                    workerPolicy is null
-                                                        ? null
-                                                        : child => !workerPolicy.IsEntryAllowed(child));
+                                                    excludeEntry);
         if (result.Entries.Count == 0)
             return Task.FromResult(new ToolResult
             {
@@ -147,6 +169,10 @@ public sealed class ListFilesTool(Workspace             workspace,
         }
 
         if (result.Truncated) lines.Add($"... (only the first {MaxEntries} entries are shown)");
+
+        if (sensitiveSkipped > 0)
+            lines.Add($"... (skipped {sensitiveSkipped} path(s) inside sensitive locations that were not approved " +
+                      "for this listing)");
 
         return Task.FromResult(new ToolResult { Succeeded = true, Content = string.Join('\n', lines) });
     }
