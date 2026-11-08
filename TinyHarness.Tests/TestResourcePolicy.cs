@@ -27,4 +27,7 @@ internal sealed class TestResourcePolicy(string workspaceRoot) : IResourceAccess
             ? new ResourceClassification(ResourceClass.ProtectedMetadata, false)
             : new ResourceClassification(ResourceClass.BaselineWorkspace, false);
     }
+
+    // 测试策略不携带权限系统保护根：如实返回不重叠，由分类侧的六值矩阵兜底。
+    public bool OverlapsPermissionSystemRoots(string path) => false;
 }
