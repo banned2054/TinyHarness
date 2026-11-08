@@ -59,6 +59,19 @@ public sealed record PermissionSettings
 
     /// <summary>
     ///     <para>
+    ///         常设信任的显式确认记录；null 表示用户尚未确认（检测到常设设置即迁移待确认态，
+    ///         联网与附加写根写一律逐次审批）。范围修订与记录不一致时同样视为未确认。
+    ///     </para>
+    ///     <para>
+    ///         The explicit standing-trust confirmation record; null means the user has not confirmed yet
+    ///         (detected standing settings keep networking and additional-root writes on per-call approval).
+    ///         A scope revision that no longer matches the record counts as unconfirmed as well.
+    ///     </para>
+    /// </summary>
+    public StandingTrustConfirmation? StandingTrustConfirmation { get; init; }
+
+    /// <summary>
+    ///     <para>
     ///         校验两种形状：当前形状要求已定义的审批模式；旧形状沿用"菜单互异且含默认值"规则；
     ///         指定审批模型时必须同时提供供应商和模型。
     ///     </para>
@@ -87,5 +100,28 @@ public sealed record PermissionSettings
         if (!UseCurrentModel &&
             (string.IsNullOrWhiteSpace(ReviewerProfile) || string.IsNullOrWhiteSpace(ReviewerModel)))
             throw new InvalidDataException("Select a provider and model for AI approval.");
+
+        if (StandingTrustConfirmation is { } confirmation)
+        {
+            if (confirmation.ConfirmedUtc == default)
+                throw new InvalidDataException("A standing-trust confirmation must carry its confirmation time.");
+            if (string.IsNullOrWhiteSpace(confirmation.ScopeRevision))
+                throw new
+                    InvalidDataException("A standing-trust confirmation must carry the confirmed scope revision.");
+        }
     }
 }
+
+/// <summary>
+///     <para>
+///         常设信任的显式确认记录：确认时间与确认时的范围修订（网络策略与附加读写根的稳定指纹）。
+///         设置范围变化会使记录与当前范围修订不一致，回到未确认态等待重新确认。
+///     </para>
+///     <para>
+///         The explicit standing-trust confirmation record: the confirmation time and the scope revision at
+///         confirmation time (a stable fingerprint of the network policy and additional read/write roots). A
+///         settings change makes the record diverge from the current scope revision, returning to the
+///         unconfirmed state until re-confirmed.
+///     </para>
+/// </summary>
+public sealed record StandingTrustConfirmation(DateTimeOffset ConfirmedUtc, string ScopeRevision);

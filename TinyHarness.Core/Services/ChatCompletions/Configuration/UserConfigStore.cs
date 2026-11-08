@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using TinyHarness.Core.Models.Agent;
@@ -59,7 +60,7 @@ public static class UserConfigStore
     ///         to a looser authorization.
     ///     </para>
     /// </summary>
-    private static PermissionSettings? BindPermissions(JsonObject settings)
+    private static PermissionSettings? BindPermissions(JsonObject settings, string filePath)
     {
         if (!settings.TryGetPropertyValue("permissions", out var node)) return null;
         if (node is not JsonObject value) throw new InvalidDataException("settings.permissions must be an object.");
@@ -69,7 +70,7 @@ public static class UserConfigStore
             throw new InvalidDataException("settings.permissions cannot mix legacy (defaultMode/composerModes) " +
                                            "and current (defaultApprovalMode) fields.");
 
-        return hasLegacy ? BindLegacyPermissions(value) : BindCurrentPermissions(value);
+        return hasLegacy ? BindLegacyPermissions(value, filePath) : BindCurrentPermissions(value, filePath);
     }
 
     /// <summary>
@@ -81,7 +82,7 @@ public static class UserConfigStore
     ///         approval mode; the whole block becomes pending-migration while every other config field stays usable.
     ///     </para>
     /// </summary>
-    private static PermissionSettings BindLegacyPermissions(JsonObject value)
+    private static PermissionSettings BindLegacyPermissions(JsonObject value, string filePath)
     {
         // 旧形状仅按已知旧模式名做最小解析（迁移判定与过渡展示），不做授权解释。
         static string Parse(JsonNode? item)
@@ -109,7 +110,8 @@ public static class UserConfigStore
             UseCurrentModel  = value["useCurrentModel"]?.GetValue<bool>() ?? true,
             ReviewerProfile  = value["reviewerProfile"]?.GetValue<string>(),
             ReviewerModel    = value["reviewerModel"]?.GetValue<string>(),
-            PendingMigration = true
+            PendingMigration = true,
+            StandingTrustConfirmation = BindStandingTrustConfirmation(value, filePath)
         };
         result.Validate();
         return result;
@@ -124,7 +126,7 @@ public static class UserConfigStore
     ///         human approval) and no legacy field is present.
     ///     </para>
     /// </summary>
-    private static PermissionSettings BindCurrentPermissions(JsonObject value)
+    private static PermissionSettings BindCurrentPermissions(JsonObject value, string filePath)
     {
         var result = new PermissionSettings
         {
@@ -133,10 +135,43 @@ public static class UserConfigStore
                 : ParseApprovalMode(value["defaultApprovalMode"]),
             UseCurrentModel = value["useCurrentModel"]?.GetValue<bool>() ?? true,
             ReviewerProfile = value["reviewerProfile"]?.GetValue<string>(),
-            ReviewerModel   = value["reviewerModel"]?.GetValue<string>()
+            ReviewerModel   = value["reviewerModel"]?.GetValue<string>(),
+            StandingTrustConfirmation = BindStandingTrustConfirmation(value, filePath)
         };
         result.Validate();
         return result;
+    }
+
+    /// <summary>
+    ///     <para>
+    ///         绑定可选的常设信任确认记录：缺省保持 null（检测到常设扩大设置即未确认态）；
+    ///         时间必须是 RFC 3339 往返格式，修订必须非空。
+    ///     </para>
+    ///     <para>
+    ///         Binds the optional standing-trust confirmation record: absent stays null (detected standing
+    ///         expansion then counts as unconfirmed); the time must be an RFC 3339 round-trip value and the
+    ///         revision must be non-empty.
+    ///     </para>
+    /// </summary>
+    private static StandingTrustConfirmation? BindStandingTrustConfirmation(JsonObject value, string filePath)
+    {
+        if (value["standingTrust"] is null) return null;
+        if (value["standingTrust"] is not JsonObject node)
+            throw new
+                InvalidDataException($"User config field 'settings.permissions.standingTrust' in '{filePath}' must be an object.");
+
+        var confirmedText = ReadString(node, "confirmedUtc", filePath)
+                         ?? throw new
+                                InvalidDataException($"User config field 'settings.permissions.standingTrust.confirmedUtc' in '{filePath}' is required.");
+        if (!DateTimeOffset.TryParse(confirmedText, CultureInfo.InvariantCulture,
+                                     DateTimeStyles.RoundtripKind, out var confirmedUtc))
+            throw new
+                InvalidDataException($"User config field 'settings.permissions.standingTrust.confirmedUtc' in '{filePath}' must be an RFC 3339 timestamp.");
+
+        var scopeRevision = ReadString(node, "scopeRevision", filePath)
+                         ?? throw new
+                                InvalidDataException($"User config field 'settings.permissions.standingTrust.scopeRevision' in '{filePath}' is required.");
+        return new StandingTrustConfirmation(confirmedUtc, scopeRevision);
     }
 
     /// <summary>
@@ -403,7 +438,7 @@ public static class UserConfigStore
                 permissions.Validate();
                 // 形状随实例走：携带旧形状字段时原样保留（迁移未被确认不静默改写）；
                 // 确认迁移后的新形状只写出当前字段，旧字段从此消失。
-                settingsNode["permissions"] = permissions.LegacyDefaultMode is { } legacyDefault
+                var permissionsNode = permissions.LegacyDefaultMode is { } legacyDefault
                     ? new JsonObject
                     {
                         ["defaultMode"] = legacyDefault,
@@ -422,6 +457,14 @@ public static class UserConfigStore
                         ["reviewerProfile"]     = permissions.ReviewerProfile,
                         ["reviewerModel"]       = permissions.ReviewerModel
                     };
+                // 常设信任确认记录与形状正交：仅显式确认写入，普通保存原样保留。
+                if (permissions.StandingTrustConfirmation is { } standingTrust)
+                    permissionsNode["standingTrust"] = new JsonObject
+                    {
+                        ["confirmedUtc"] = standingTrust.ConfirmedUtc.ToString("O", CultureInfo.InvariantCulture),
+                        ["scopeRevision"] = standingTrust.ScopeRevision
+                    };
+                settingsNode["permissions"] = permissionsNode;
             }
 
             if (settings.RunBudget is { } budget)
@@ -750,7 +793,7 @@ public static class UserConfigStore
 
         settings = new UserConfigSettings
         {
-            Permissions   = BindPermissions(settingsNode),
+            Permissions   = BindPermissions(settingsNode, filePath),
             RunBudget     = BindRunBudget(settingsNode, filePath),
             ModelTimeouts = BindModelTimeouts(settingsNode, filePath),
             MaxAgentSteps = ReadNonNegativeInt(settingsNode, "maxAgentSteps", filePath, "settings.maxAgentSteps"),
