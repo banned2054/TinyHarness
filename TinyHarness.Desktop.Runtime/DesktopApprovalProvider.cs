@@ -13,16 +13,17 @@ namespace TinyHarness.Desktop.Runtime;
 ///     </para>
 /// </summary>
 public sealed record DesktopApproval(
-    string                   Id,
-    string                   ToolName,
-    string                   Summary,
-    string                   Arguments,
-    IReadOnlyList<string>    TargetPaths,
-    string?                  ExecutionPolicy,
-    PermissionLevel          Level,
+    string                    Id,
+    string                    ToolName,
+    string                    Summary,
+    string                    Arguments,
+    IReadOnlyList<string>     TargetPaths,
+    string?                   ExecutionPolicy,
+    PermissionLevel           Level,
     IReadOnlyList<GrantScope> AllowedScopes,
-    string?                  ReviewerNote = null,
-    AiReviewResult?          Review       = null);
+    string?                   ReviewerNote = null,
+    AiReviewResult?           Review       = null,
+    IReadOnlyList<string>?    DisplayNotes = null);
 
 /// <summary>
 ///     <para>将 Core 审批等待交给桌面；取消或过期的裁决不能批准下一次调用。</para>
@@ -32,7 +33,7 @@ public sealed class DesktopApprovalProvider(
     Func<DesktopApproval?, ValueTask> changed,
     Func<string, string>              redact) : IApprovalProvider
 {
-    private readonly object _sync = new();
+    private readonly object                                                                          _sync = new();
     private          (DesktopApproval Request, TaskCompletionSource<ApprovalResolution> Completion)? _pending;
 
     /// <summary>
@@ -44,17 +45,19 @@ public sealed class DesktopApprovalProvider(
         ArgumentNullException.ThrowIfNull(request);
         cancellationToken.ThrowIfCancellationRequested();
         var pending = new DesktopApproval(
-            Guid.NewGuid().ToString("N"),
-            redact(request.Preparation.ToolName),
-            redact(request.Preparation.Summary),
-            redact(request.Preparation.Arguments.ToJsonString()),
-            request.Preparation.TargetPaths.Select(redact).ToArray(),
-            request.Preparation.ExecutionPolicy is { } policy ? redact(policy) : null,
-            request.Level,
-            request.AllowedScopes,
-            request.ReviewerNote is { } note ? redact(note) : null,
-            request.Review);
-        var completion = new TaskCompletionSource<ApprovalResolution>(TaskCreationOptions.RunContinuationsAsynchronously);
+                                          Guid.NewGuid().ToString("N"),
+                                          redact(request.Preparation.ToolName),
+                                          redact(request.Preparation.Summary),
+                                          redact(request.Preparation.Arguments.ToJsonString()),
+                                          request.Preparation.TargetPaths.Select(redact).ToArray(),
+                                          request.Preparation.ExecutionPolicy is { } policy ? redact(policy) : null,
+                                          request.Level,
+                                          request.AllowedScopes,
+                                          request.ReviewerNote is { } note ? redact(note) : null,
+                                          request.Review,
+                                          request.DisplayNotes?.Select(redact).ToArray());
+        var completion =
+            new TaskCompletionSource<ApprovalResolution>(TaskCreationOptions.RunContinuationsAsynchronously);
         lock (_sync)
         {
             if (_pending is not null)
@@ -67,10 +70,13 @@ public sealed class DesktopApprovalProvider(
 
     /// <summary>
     ///     <para>等待裁决并在结束后撤销等待；取消使请求失效，不产生默认允许。</para>
-    ///     <para>Awaits the decision and withdraws the wait afterwards; cancellation voids the request without a default allow.</para>
+    ///     <para>
+    ///         Awaits the decision and withdraws the wait afterwards; cancellation voids the request without a default
+    ///         allow.
+    ///     </para>
     /// </summary>
     private async Task<ApprovalResolution> AwaitAsync(
-        DesktopApproval pending, TaskCompletionSource<ApprovalResolution> completion,
+        DesktopApproval   pending, TaskCompletionSource<ApprovalResolution> completion,
         CancellationToken cancellationToken)
     {
         try

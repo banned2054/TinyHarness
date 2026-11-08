@@ -617,6 +617,9 @@ public sealed class WorkerRunner
             Workspace.IsInside(workspaceRoot, targetPath)
                 ? new ResourceClassification(ResourceClass.BaselineWorkspace, false)
                 : new ResourceClassification(ResourceClass.OutsideWorkspace, false);
+
+        // worker 策略不携带权限系统保护根：如实返回不重叠，worker 本就硬拒全部非只读能力。
+        public bool OverlapsPermissionSystemRoots(string path) => false;
     }
 
     private sealed class DenyingApprovalProvider : IApprovalProvider

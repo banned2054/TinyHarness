@@ -146,6 +146,13 @@ public sealed partial class DesktopSessionFactory
         var userPath = _userConfigPath ?? UserConfigStore.DefaultFilePath();
         var user     = await UserConfigStore.LoadAsync(userPath, cancellationToken).ConfigureAwait(false);
         EnsurePermissionConfigConfirmed(user);
+        // 常设信任三态只来自可信用户设置与显式确认记录；未确认时组合与引擎都按逐次审批消费。
+        var sandboxSettings = user.Settings?.WindowsSandbox;
+        var standingTrust   = StandingTrustEvaluation.Evaluate(sandboxSettings, user.Settings?.Permissions);
+        // 组合实际消费的设置决定常设网络是否启用：与传给沙箱组合器的 EffectiveSandboxSettings
+        // 同源同值；常设网络 restricted 时网络申请走逐次审批，写根确认不得复用为网络免审批。
+        var compositionSettings   = StandingTrustEvaluation.EffectiveSandboxSettings(sandboxSettings, standingTrust);
+        var standingNetworkEnabled = compositionSettings?.NetworkPolicy == SandboxNetworkPolicy.Enabled;
         // 恢复和显式选择不依赖全局默认目标可用；配置一律来自可信用户设置，不读取工作目录的 tinyharness.json。
         var resolution = request.SessionId is null && request.ProfileName is null
             ? await ConfigResolver.ResolveAsync(null, cancellationToken, userPath).ConfigureAwait(false)
@@ -174,12 +181,32 @@ public sealed partial class DesktopSessionFactory
         // 用户模式由权限引擎审批；硬只读仍专用于未信任工作区和 worker。
         access.SetReadOnly(false);
         WindowsSandboxExecution? sandbox = null;
-        if (user.Settings?.WindowsSandbox is { Enabled: true } settings)
+        // 共享的 CLI workspace-trust.json（B7 两端超集）：OS deny 仅在文件已存在时配对
+        // （helper 会把缺失条目物化为目录，绝不能让信任文件被物化）；应用层保护按路径形态恒生效。
+        var trustPath = Path.Combine(Path.GetDirectoryName(userPath)!, "workspace-trust.json");
+        // C1 权限系统实例（实际路径）：组合期写根重叠校验与 grant 校验共用，底层不重新猜默认路径。
+        var permissionSystemPaths = new List<string> { userPath, trustPath, directory };
+        // 基线广泛读保护的 C1 宿主密钥路径：组合与授权指纹共用同一列表，守卫重算同一 deny 集。
+        var baselineProtectedPaths = new List<string> { userPath };
+        if (sandboxSettings is { Enabled: true } settings)
         {
             // 会话存储不能落入任一可信写根；此处不进行 provisioning 或机器权限变更。
             foreach (var writeRoot in settings.AdditionalWriteRoots)
                 SessionStorePaths.EnsureOutsideWorkspace(directory, writeRoot, "settings.sessionStoreDirectory");
-            sandbox = WindowsSandboxComposer.Compose(settings, root, secrets, user.Settings?.Network);
+            // 基线广泛读保护（GAP-1 冻结参数）：OS 读根=用户 profile 根；deny=C1（用户配置文件、
+            // 共享的 workspace-trust.json 与受保护会话存储目录）+ C2 已知敏感目录。两端保护根集合
+            // 取超集（B7）。profile 不可用时返回 null，沙箱读边界如实降级为工作区+可信根。
+            // 组件/home/凭据目录不进 deny 集：凭据目录由 provisioning 对沙箱组永久 DENY，
+            // 组件需被沙箱读取执行。
+            if (File.Exists(trustPath)) baselineProtectedPaths.Add(trustPath);
+            var baselineReadProtection =
+                WindowsSandboxComposer.PlanBaselineReadProtection(baselineProtectedPaths, directory, settings);
+            // 常设信任门控：仅 Confirmed 组合常设网络与附加读写根；未确认按 restricted 基线，
+            // 写根仅经 grant 通道生效。存储保护检查仍按用户配置的原始写根集合执行；
+            // C1 实例路径随组合传入，写根与其双向重叠在组合期 fail-closed。
+            sandbox = WindowsSandboxComposer.Compose(compositionSettings ?? settings, root, secrets,
+                                                     user.Settings?.Network, baselineReadProtection,
+                                                     permissionSystemPaths);
         }
 
         SandboxDiagnosticLog.Event("session",
@@ -188,33 +215,55 @@ public sealed partial class DesktopSessionFactory
 
         // 活动授权登记表：引擎与 Shell 工具共享同一实例，派发复核与快照聚合看到同一状态。
         var grants                = new GrantRegistry();
-        // 文件工具与 Shell 的统一资源访问策略：权限系统保护路径（用户配置、会话存储与
-        // 沙箱组件）与可信附加根集中分类；沙箱未启用时组件路径自然缺席。
-        var permissionSystemRoots = new List<string> { userPath, directory };
+        // 文件工具与 Shell 的统一资源访问策略：权限系统保护路径（用户配置、共享 trust.json、
+        // 会话存储与沙箱组件）与可信附加根集中分类；保护根集合与 CLI 取超集（B7），
+        // trust.json 尚未由 CLI 创建时按路径形态保护（将来落盘即受保护）。
+        // 沙箱 home 收缩为敏感子路径（凭据目录、deny 簿记、授权映射与执行组件目录）：默认
+        // tmp/tools/nuget-cache 运行时根物理位于 home 下，整 home 入 C1 会把运行时根恒判保护类；
+        // 组合期完整性保护仍以整 home 为准（另一层，不受此影响）。
+        var permissionSystemRoots = new List<string> { userPath, trustPath, directory };
         if (sandbox is not null)
         {
             permissionSystemRoots.Add(sandbox.Components.SetupExecutablePath);
             permissionSystemRoots.Add(sandbox.Components.RunnerExecutablePath);
-            permissionSystemRoots.Add(sandbox.Components.SandboxHome);
+            permissionSystemRoots.AddRange(sandbox.Components.ProtectedHomeSubpaths);
         }
 
+        // 派生运行时写根仅在沙箱已组合时回注，消除 OS 基线可写与应用层审批的错位。
         var resourcePolicy = new ResourceAccessPolicy(root,
                                                       user.Settings?.WindowsSandbox?.AdditionalReadRoots,
                                                       user.Settings?.WindowsSandbox?.AdditionalWriteRoots,
-                                                      permissionSystemRoots : permissionSystemRoots);
-        // 常设网络信任只来自可信用户设置：Enabled 档不再逐次审批联网申请。
+                                                      permissionSystemRoots : permissionSystemRoots,
+                                                      sandboxRuntimeRoots : sandbox is not null
+                                                          ? WindowsSandboxComposer.DeriveRuntimeWriteRoots(
+                                                               user.Settings?.WindowsSandbox)
+                                                          : null,
+                                                      standingTrust : standingTrust);
+        // 组合授权指纹守卫：捕获组合实际消费的可信配置指纹，并注入同一函数的取值器——
+        // 每次发送/派发前重读该配置重算，失配或取值失败即撤销授权并闩死会话（快照失效机制，
+        // 独立于审批模式切换与 NeedsInspection）。
+        var compositionGuard = new PermissionCompositionGuard(
+            PermissionCompositionFingerprint.Compute(sandboxSettings, user.Settings?.Permissions,
+                                                     user.Settings?.Network, root, sandbox is not null,
+                                                     baselineProtectedPaths,
+                                                     user.Settings?.SessionStoreDirectory),
+            PermissionCompositionFingerprint.CreateEvaluator(userPath, root, sandbox is not null,
+                                                             baselineProtectedPaths,
+                                                             trackSessionStoreDirectory : true));
+        // 常设信任只来自可信用户设置与显式确认记录：Confirmed 之外联网与附加写根写一律逐次审批；
+        // 常设网络 restricted 时网络申请恒逐次审批，写根确认不复用为网络免审批。
         // sandboxExecutionAvailable 由组合结果决定：沙箱未组合即 Deny 进程执行，不回退宿主。
         var permissions = new PermissionEngine(root,
                                                workspaceReadOnly : () => access.IsReadOnly,
-                                               sandboxNetworkStandingEnabled : user.Settings?.WindowsSandbox
-                                                 ?.NetworkPolicy == SandboxNetworkPolicy.Enabled,
+                                               standingTrust : standingTrust,
                                                sandboxExecutionAvailable : sandbox is not null,
+                                               standingNetworkEnabled : standingNetworkEnabled,
                                                resourcePolicy : resourcePolicy,
                                                grantRegistry : grants,
                                                frozenScopeReader : FrozenCapabilityScopeReader.FromPreparation);
         DesktopWorkspaceCoordinator? repair  = null;
         var                          backend = sandbox?.Backend ?? new HostProcessBackend(secrets);
-        if (sandbox is not null && user.Settings?.WindowsSandbox is { } sandboxSettings)
+        if (sandbox is not null && user.Settings?.WindowsSandbox is { } aclSandboxSettings)
         {
             var grant = new ProcessWorkspaceAclGrant(
                                                      [
@@ -222,7 +271,8 @@ public sealed partial class DesktopSessionFactory
                                                          sandbox.Components.RunnerExecutablePath,
                                                          sandbox.Components.SandboxHome
                                                      ],
-                                                     [root, .. sandboxSettings.AdditionalWriteRoots], sandboxSettings);
+                                                     [root, .. aclSandboxSettings.AdditionalWriteRoots],
+                                                     aclSandboxSettings);
             var services = new DesktopWorkspaceRepairServices(async token =>
             {
                 if (!await grant.CanChangePermissionsAsync(access.Identity, token).ConfigureAwait(false)) return false;
@@ -235,7 +285,7 @@ public sealed partial class DesktopSessionFactory
             }, () => grant.ValidatePreparationScope(access.Identity));
             repair = new DesktopWorkspaceCoordinator(access.Identity, services, state =>
                                                          events(new DesktopEvent("workspace-repair", null,
-                                                                    WorkspaceRepair : state)));
+                                                                         WorkspaceRepair : state)));
             backend = new DesktopWorkspaceBackend(backend, repair);
         }
 
@@ -246,13 +296,14 @@ public sealed partial class DesktopSessionFactory
                                                               () => ReviewContext(permissionHost!, permissions),
                                                               text => events(new DesktopEvent("state", null, text)),
                                                               () => TimeSpan.FromSeconds(permissionHost!
-                                                                                                        .EffectiveModelTimeouts
-                                                                                                        .ApprovalTimeoutSeconds));
+                                                                          .EffectiveModelTimeouts
+                                                                          .ApprovalTimeoutSeconds));
         // 沙箱未组合时 restricted Shell 不携带冻结策略身份：PermissionShellTool 的 workspace
         // 路由将明确失败，不回退宿主；沙箱可用性 Deny 由权限引擎的组合期布尔表达。
-        // grant 上下文随组合冻结；活动快照源与引擎共享同一 GrantRegistry。
+        // grant 上下文随组合冻结（含 C1 实例路径，grant 写根与之重叠在 Prepare 期 fail-closed）；
+        // 活动快照源与引擎共享同一 GrantRegistry。
         var restrictedShell = CreateWorkspaceShellTool(workspace, config.DefaultToolTimeoutSeconds, backend,
-                                                       sandbox, grants);
+                                                       sandbox, grants, permissionSystemPaths);
         var hostShell = new ShellTool(workspace, config.DefaultToolTimeoutSeconds, secrets,
                                       executionPolicy : ProcessExecutionPolicy.Host());
         ITool[] toolSet =
@@ -326,7 +377,8 @@ public sealed partial class DesktopSessionFactory
                                            sink,
                                            sessionWriter : writer, needsInspection : restored.NeedsInspection,
                                            instructionLoader : instructions, knownSecrets : secrets,
-                                           modelTimeouts : user.Settings?.ModelTimeouts);
+                                           modelTimeouts : user.Settings?.ModelTimeouts,
+                                           compositionGuard : compositionGuard);
                 // 目标缺失或显式重选时保持未绑定，历史仍可浏览；缺失由选择器状态提示，不向对话追加错误。
                 if (!request.Reselect && target is not null)
                 {
@@ -400,7 +452,8 @@ public sealed partial class DesktopSessionFactory
                                            permissions, routedApprovals, sink, sessionWriter : writer,
                                            instructionLoader : instructions, initialInstructions : initial,
                                            knownSecrets : secrets, credentialRoute : credentialRoute,
-                                           modelTimeouts : user.Settings?.ModelTimeouts);
+                                           modelTimeouts : user.Settings?.ModelTimeouts,
+                                           compositionGuard : compositionGuard);
                 await host.ChangeModelAsync(new SessionModelBinding(identity, model!, options.Context,
                                                                     options.ReasoningEffort,
                                                                     credentialRoute, profile?.Name,
@@ -447,17 +500,31 @@ public sealed partial class DesktopSessionFactory
     }
 
     /// <summary>
-    ///     <para>按生产组合结果构建工作区 Shell；活动能力快照与沙箱身份上下文必须成对注入。</para>
+    ///     <para>按生产组合结果构建工作区 Shell；活动能力快照、沙箱身份上下文与 C1 实例路径成对注入。</para>
     ///     <para>
-    ///         Builds the workspace Shell from production composition, injecting the active-capability snapshot and sandbox
-    ///         identity context together.
+    ///         Builds the workspace Shell from production composition, injecting the active-capability
+    ///         snapshot, the sandbox identity context, and the C1 instance paths together.
     ///     </para>
     /// </summary>
+    /// <param name="permissionSystemPaths">
+    ///     <para>
+    ///         C1 权限系统实例路径（用户配置、共享信任文件与会话存储目录）；grant 写根与之双向重叠
+    ///         在 Prepare 期 fail-closed。
+    ///     </para>
+    ///     <para>
+    ///         The C1 permission-system instance paths (the user config, the shared trust file, and the
+    ///         session-store directory); a grant write root overlapping one bidirectionally fails closed
+    ///         at Prepare.
+    ///     </para>
+    /// </param>
     internal ShellTool CreateWorkspaceShellTool(Workspace                workspace, int? timeoutSeconds,
                                                 IProcessExecutionBackend backend,
-                                                WindowsSandboxExecution? sandbox, GrantRegistry grants)
+                                                WindowsSandboxExecution? sandbox, GrantRegistry grants,
+                                                IReadOnlyList<string>    permissionSystemPaths)
     {
-        var grantContext = sandbox is null ? null : new SandboxGrantContext(sandbox.Policy, sandbox.Components);
+        var grantContext = sandbox is null
+            ? null
+            : new SandboxGrantContext(sandbox.Policy, sandbox.Components, permissionSystemPaths);
         return new ShellTool(workspace, timeoutSeconds, _secrets,
                              processBackend : backend,
                              executionPolicy : sandbox?.ExecutionPolicy,
@@ -526,8 +593,8 @@ public sealed partial class DesktopSessionFactory
     }
 
     private async Task<SessionModelSelection> ChangeAsync(
-        ChatSessionHost  host,     UserProfile       profile, UserProfileModel model, ModelReasoningEffort? effort,
-        long             revision, CancellationToken token,   IChatCompletionClient? preparedClient = null,
+        ChatSessionHost  host, UserProfile profile, UserProfileModel model, ModelReasoningEffort? effort,
+        long             revision, CancellationToken token, IChatCompletionClient? preparedClient = null,
         NetworkSettings? networkSettings = null, ModelTimeouts? modelTimeouts = null)
     {
         if (effort is { } level && model.ReasoningEfforts?.Contains(level) != true)
@@ -543,13 +610,13 @@ public sealed partial class DesktopSessionFactory
         // 本次组合实际采用的超时策略：与当前绑定不同时禁止快速复用，必须构造携带新策略的客户端。
         var effectiveTimeouts = modelTimeouts ?? ModelTimeouts.Default;
         if (host.HasModelBinding &&
-            current.Revision        == revision &&
-            current.Model.ModelId   == model.Id &&
-            current.Model.Endpoint  == profile.Endpoint &&
-            current.Model.ChatApi   == profile.ChatApi &&
-            current.CredentialRoute == Route(profile) &&
-            current.ProfileHint     == profile.Name &&
-            current.Context         == context &&
+            current.Revision            == revision &&
+            current.Model.ModelId       == model.Id &&
+            current.Model.Endpoint      == profile.Endpoint &&
+            current.Model.ChatApi       == profile.ChatApi &&
+            current.CredentialRoute     == Route(profile) &&
+            current.ProfileHint         == profile.Name &&
+            current.Context             == context &&
             host.EffectiveModelTimeouts == effectiveTimeouts &&
             (current.ReasoningCapabilities ?? []).SequenceEqual(model.ReasoningEfforts ?? []) &&
             _networkRoutes.TryGetValue(host, out var previousRoute) && previousRoute == networkRoute)
@@ -677,7 +744,7 @@ internal sealed class DesktopEventSink(
             HostEventKind.ModelRequestWaiting => new DesktopEvent("state", @event.RunId, "等待模型响应"),
             HostEventKind.ToolStarted         => new DesktopEvent("state", @event.RunId, "工具执行中"),
             HostEventKind.RunError when @event.Payload is string error => new DesktopEvent("error", @event.RunId,
-                _diagnostics.Redact(error)),
+                     _diagnostics.Redact(error)),
             HostEventKind.RunFinished => new DesktopEvent("state", @event.RunId, "正在保存"),
             _                         => null
         };

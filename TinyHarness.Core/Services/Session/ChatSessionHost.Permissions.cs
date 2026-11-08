@@ -9,6 +9,53 @@ namespace TinyHarness.Core.Services.Session;
 public sealed partial class ChatSessionHost
 {
     /// <summary>
+    ///     <para>
+    ///         组合授权指纹守卫的共用检查点（发送入口与每次工具派发前）：已闩死立即返回提示不再重算；
+    ///         否则取当前指纹，取值失败（异常或 null）或与组合期基线不一致时，撤销全部活动授权
+    ///         （递增授权修订，使已签发的一次性派发凭据失效）并置会话失效闩。未注入守卫时不检查。
+    ///     </para>
+    ///     <para>
+    ///         The shared guard checkpoint (send entry and before every tool dispatch): a latched session
+    ///         returns the notice immediately without recomputation; otherwise the current fingerprint is
+    ///         taken, and a failed evaluation (exception or null) or divergence from the composition
+    ///         baseline revokes every active grant (bumping the authorization revision so issued
+    ///         single-dispatch credentials expire) and latches the session invalid. No check without an
+    ///         injected guard.
+    ///     </para>
+    /// </summary>
+    /// <returns>
+    ///     <para>阻断提示；null 表示无需阻断。</para>
+    ///     <para>The blocking notice, or null when dispatch may proceed.</para>
+    /// </returns>
+    private string? CheckCompositionGuard()
+    {
+        if (_compositionGuard is null) return null;
+        if (Volatile.Read(ref _compositionInvalidated) != 0) return CompositionInvalidatedNotice;
+
+        string? current;
+        try
+        {
+            current = _compositionGuard.CurrentFingerprint();
+        }
+        catch (Exception)
+        {
+            // 取值器读取、解析或校验失败一律按失配处理，绝不放行旧快照。
+            current = null;
+        }
+
+        if (current is null ||
+            !string.Equals(current, _compositionGuard.CompositionFingerprint, StringComparison.Ordinal))
+        {
+            // 可信授权配置漂移：撤销 Grant 与一次性派发凭据；已启动进程沿用既有取消与回收机制。
+            _permissions?.RevokeGrants();
+            Volatile.Write(ref _compositionInvalidated, 1);
+            return CompositionInvalidatedNotice;
+        }
+
+        return null;
+    }
+
+    /// <summary>
     ///     <para>空闲时可靠保存审批模式选择（/2），再切换执行策略；不发送模型请求。</para>
     ///     <para>
     ///         Durably saves an idle session's approval-mode selection (/2) and then switches the execution
@@ -53,8 +100,8 @@ public sealed partial class ChatSessionHost
                 if (_context.Messages.Count == 0) _context.Append(ChatMessage.System(_systemPrompt));
                 var record = new SessionLogRecord(string.Empty, "permission-selection",
                                                   JsonSerializer.SerializeToElement(selection,
-                                                           PermissionPersistenceJsonContext.Default
-                                                              .SessionPermissionSelectionV2));
+                                                      PermissionPersistenceJsonContext.Default
+                                                         .SessionPermissionSelectionV2));
                 await _sessionWriter.CommitControlAsync(Session, _context, [record], cancellationToken)
                                     .ConfigureAwait(false);
             }
@@ -62,6 +109,7 @@ public sealed partial class ChatSessionHost
             // 提交成功才镜像到会话状态：后续运行由 ComposeRunLoop 从会话事实重新应用审批模式。
             Session.PermissionSelectionV2 = selection;
             _permissions?.SetApprovalMode(mode);
+            await DrainIdleGrantEventsAsync(cancellationToken).ConfigureAwait(false);
             return mode;
         }
         finally
@@ -139,6 +187,17 @@ public sealed partial class ChatSessionHost
             Session.PermissionSelectionV2      = selection;
             Session.PermissionMigration        = migration;
             _permissions?.SetApprovalMode(mode);
+            // 可信授权变更：迁移确认整段解除拒绝记忆，authorization-changed 事件随授权审计落盘。
+            if (_permissions?.ReleaseAllDenials() > 0)
+                await AppendGrantEventsToLogAsync(
+                                                  [
+                                                      GrantEventAudit
+                                                         .AuthorizationChanged("permission migration confirmed",
+                                                                               DateTimeOffset.UtcNow,
+                                                                               RedactForGrantEvent)
+                                                  ],
+                                                  cancellationToken).ConfigureAwait(false);
+            await DrainIdleGrantEventsAsync(cancellationToken).ConfigureAwait(false);
             return mode;
         }
         finally
@@ -146,4 +205,64 @@ public sealed partial class ChatSessionHost
             Interlocked.Exchange(ref _activeRuns, 0);
         }
     }
+
+    /// <summary>
+    ///     <para>
+    ///         运行终态 drain：把本轮求值、消费与 Turn 到期的授权事件经活动 recorder 落盘。
+    ///         无 recorder 或无事件时不执行操作；调用方负责把失败转为运行警告。
+    ///     </para>
+    ///     <para>
+    ///         The run-end drain: this run's evaluation, consumption, and turn-expiry grant events are persisted
+    ///         through the active recorder. No-ops without a recorder or events; the caller turns failures into a
+    ///         run warning.
+    ///     </para>
+    /// </summary>
+    private async Task DrainRunGrantEventsAsync(CancellationToken cancellationToken)
+    {
+        var events = _permissions?.Grants.DrainEvents();
+        if (events is not { Count: > 0 } || _activeRecorder is null) return;
+        await _activeRecorder.RecordGrantEventsAsync(
+                                                     events.Select(grantEvent =>
+                                                                       GrantEventAudit.FromEvent(grantEvent,
+                                                                           static path => path)).ToArray(),
+                                                     cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    ///     <para>
+    ///         空闲边界 drain：模式切换等宿主操作产生的撤销与到期事件直接写入会话日志；
+    ///         无 writer 或无事件时不执行操作。
+    ///     </para>
+    ///     <para>
+    ///         The idle-boundary drain: revocations and expiries from host operations such as mode switches are
+    ///         written straight to the session log. No-ops without a writer or events.
+    ///     </para>
+    /// </summary>
+    private async Task DrainIdleGrantEventsAsync(CancellationToken cancellationToken)
+    {
+        var events = _permissions?.Grants.DrainEvents();
+        if (events is not { Count: > 0 }) return;
+        await AppendGrantEventsToLogAsync(
+                                          events.Select(grantEvent =>
+                                                            GrantEventAudit.FromEvent(grantEvent, RedactForGrantEvent))
+                                                .ToArray(),
+                                          cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>把授权事件记录按 permission-grant-event/1 控制记录批量追加；无 writer 时忽略。</summary>
+    private async Task AppendGrantEventsToLogAsync(IReadOnlyList<PermissionGrantEventRecord> records,
+                                                   CancellationToken                         cancellationToken)
+    {
+        if (_sessionWriter is null || records.Count == 0) return;
+        var journal = records.Select(grantEvent => new SessionLogRecord(string.Empty, "permission-grant-event",
+                                                                        JsonSerializer.SerializeToElement(grantEvent,
+                                                                            PermissionPersistenceJsonContext
+                                                                               .Default
+                                                                               .PermissionGrantEventRecord)))
+                             .ToArray();
+        await _sessionWriter.AppendRecordsAsync(journal, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>会话日志脱敏边界：宿主持有的已知密钥参与授权事件目标与原因脱敏。</summary>
+    private string RedactForGrantEvent(string value) => _eventRedactor?.Redact(value) ?? value;
 }

@@ -49,31 +49,6 @@ namespace TinyHarness.Core.Services.Session;
 /// </remarks>
 public sealed partial class ChatSessionHost : IDisposable
 {
-    private readonly IApprovalProvider? _approver;
-    private readonly ConversationContext _context;
-    private readonly SecretRedactor? _eventRedactor;
-    private readonly IHostEventSink? _events;
-    private readonly ProjectInstructionSnapshot? _initialInstructions;
-    private readonly ProjectInstructionLoader? _instructionLoader;
-    private readonly PermissionEngine? _permissions;
-    private readonly Func<string, IRunRecorder>? _recorderFactory;
-    private readonly ISessionStoreWriter? _sessionWriter;
-    private readonly string _systemPrompt;
-    private readonly ToolRegistry _tools;
-    private IRunRecorder? _activeRecorder;
-
-    private int _activeRuns;
-    private SessionModelBinding? _binding;
-
-    /// <summary>
-    ///     <para>当前 NeedsInspection 阻断原因；null 表示未阻断，仅用户检查确认可清除。</para>
-    ///     <para>
-    ///         The current NeedsInspection reason; null while unblocked, cleared only by user
-    ///         inspection and acknowledgement.
-    ///     </para>
-    /// </summary>
-    private string? _inspectionNote;
-
     /// <summary>
     ///     <para>
     ///         迁移待确认期间的固定门禁理由：所有模型工具能力一律拒绝（含只读，无例外），
@@ -88,31 +63,81 @@ public sealed partial class ChatSessionHost : IDisposable
     internal const string PermissionMigrationBlockNote =
         "permission migration pending; confirm to enable tool execution";
 
+    /// <summary>
+    ///     <para>
+    ///         组合授权指纹失配的端到端提示：撤销授权并闩死会话后，发送与工具派发均以此文案阻断。
+    ///     </para>
+    ///     <para>
+    ///         The end-to-end notice for a composition-fingerprint mismatch: after revoking grants and
+    ///         latching the session, sends and tool dispatches are blocked with this text.
+    ///     </para>
+    /// </summary>
+    internal const string CompositionInvalidatedNotice =
+        "常设授权配置已变更，本次会话的授权快照已失效，请重新打开会话后继续";
+
+    private readonly IApprovalProvider?               _approver;
+    private readonly PermissionCompositionGuard?      _compositionGuard;
+    private readonly ConversationContext              _context;
+    private readonly SecretRedactor?                  _eventRedactor;
+    private readonly IHostEventSink?                  _events;
+    private readonly ProjectInstructionSnapshot?      _initialInstructions;
+    private readonly ProjectInstructionLoader?        _instructionLoader;
+    private readonly PermissionEngine?                _permissions;
+    private readonly Func<string, IRunRecorder>?      _recorderFactory;
+    private readonly ISessionStoreWriter?             _sessionWriter;
+    private readonly string                           _systemPrompt;
+    private readonly ToolRegistry                     _tools;
+    private          IRunRecorder?                    _activeRecorder;
+
+    private int                  _activeRuns;
+    private SessionModelBinding? _binding;
+
+    /// <summary>
+    ///     <para>
+    ///         组合授权失效闩：置位后发送与工具派发立即阻断，不再逐项重算指纹；仅随会话生命周期存在。
+    ///     </para>
+    ///     <para>
+    ///         The composition-invalidation latch: once set, sends and tool dispatches are blocked
+    ///         immediately without per-call recomputation; it lives only for the session's lifetime.
+    ///     </para>
+    /// </summary>
+    private int _compositionInvalidated;
+
+    /// <summary>
+    ///     <para>当前 NeedsInspection 阻断原因；null 表示未阻断，仅用户检查确认可清除。</para>
+    ///     <para>
+    ///         The current NeedsInspection reason; null while unblocked, cleared only by user
+    ///         inspection and acknowledgement.
+    ///     </para>
+    /// </summary>
+    private string? _inspectionNote;
+
     private AgentOptions _options;
 
-    public ChatSessionHost(string workspaceRoot,
-                           SessionModelIdentity model,
-                           AgentOptions options,
-                           IChatCompletionClient modelClient,
-                           ToolRegistry tools,
-                           string systemPrompt,
-                           PermissionEngine? permissions = null,
-                           IApprovalProvider? approver = null,
-                           IHostEventSink? events = null,
-                           Func<string, IRunRecorder>? recorderFactory = null,
-                           Func<string, ISessionStoreWriter>? sessionWriterFactory = null,
-                           ProjectInstructionLoader? instructionLoader = null,
-                           ProjectInstructionSnapshot? initialInstructions = null,
-                           IReadOnlyDictionary<string, string>? knownSecrets = null,
-                           string? credentialRoute = null,
-                           bool ownsModelClient = true,
-                           ModelTimeouts? modelTimeouts = null)
+    public ChatSessionHost(string                               workspaceRoot,
+                           SessionModelIdentity                 model,
+                           AgentOptions                         options,
+                           IChatCompletionClient                modelClient,
+                           ToolRegistry                         tools,
+                           string                               systemPrompt,
+                           PermissionEngine?                    permissions          = null,
+                           IApprovalProvider?                   approver             = null,
+                           IHostEventSink?                      events               = null,
+                           Func<string, IRunRecorder>?          recorderFactory      = null,
+                           Func<string, ISessionStoreWriter>?   sessionWriterFactory = null,
+                           ProjectInstructionLoader?            instructionLoader    = null,
+                           ProjectInstructionSnapshot?          initialInstructions  = null,
+                           IReadOnlyDictionary<string, string>? knownSecrets         = null,
+                           string?                              credentialRoute      = null,
+                           bool                                 ownsModelClient      = true,
+                           ModelTimeouts?                       modelTimeouts        = null,
+                           PermissionCompositionGuard?          compositionGuard    = null)
         : this(new ChatSession(NewId(), workspaceRoot, model), ContextFor(options), options,
                // 新会话必须携带可执行客户端；仅恢复接管允许未绑定等待显式重选目标。
                modelClient ?? throw new ArgumentNullException(nameof(modelClient)), tools,
                systemPrompt, permissions, approver, events, recorderFactory, sessionWriterFactory, null,
                instructionLoader, initialInstructions, knownSecrets, credentialRoute, ownsModelClient,
-               modelTimeouts)
+               modelTimeouts, compositionGuard)
     {
     }
 
@@ -159,28 +184,29 @@ public sealed partial class ChatSessionHost : IDisposable
     ///         selection.
     ///     </para>
     /// </remarks>
-    public ChatSessionHost(ChatSession session,
-                           ConversationContext context,
-                           AgentOptions options,
-                           IChatCompletionClient? modelClient,
-                           ToolRegistry tools,
-                           string systemPrompt,
-                           PermissionEngine? permissions = null,
-                           IApprovalProvider? approver = null,
-                           IHostEventSink? events = null,
-                           Func<string, IRunRecorder>? recorderFactory = null,
-                           ISessionStoreWriter? sessionWriter = null,
-                           string? needsInspection = null,
-                           ProjectInstructionLoader? instructionLoader = null,
-                           ProjectInstructionSnapshot? initialInstructions = null,
-                           IReadOnlyDictionary<string, string>? knownSecrets = null,
-                           string? credentialRoute = null,
-                           bool ownsModelClient = true,
-                           ModelTimeouts? modelTimeouts = null)
+    public ChatSessionHost(ChatSession                          session,
+                           ConversationContext                  context,
+                           AgentOptions                         options,
+                           IChatCompletionClient?               modelClient,
+                           ToolRegistry                         tools,
+                           string                               systemPrompt,
+                           PermissionEngine?                    permissions         = null,
+                           IApprovalProvider?                   approver            = null,
+                           IHostEventSink?                      events              = null,
+                           Func<string, IRunRecorder>?          recorderFactory     = null,
+                           ISessionStoreWriter?                 sessionWriter       = null,
+                           string?                              needsInspection     = null,
+                           ProjectInstructionLoader?            instructionLoader   = null,
+                           ProjectInstructionSnapshot?          initialInstructions = null,
+                           IReadOnlyDictionary<string, string>? knownSecrets        = null,
+                           string?                              credentialRoute     = null,
+                           bool                                 ownsModelClient     = true,
+                           ModelTimeouts?                       modelTimeouts       = null,
+                           PermissionCompositionGuard?          compositionGuard   = null)
         : this(session, context, options, modelClient, tools, systemPrompt, permissions, approver, events,
                recorderFactory, sessionWriter is null ? null : _ => sessionWriter, needsInspection,
                instructionLoader, initialInstructions, knownSecrets, credentialRoute, ownsModelClient,
-               modelTimeouts)
+               modelTimeouts, compositionGuard)
     {
     }
 
@@ -191,24 +217,25 @@ public sealed partial class ChatSessionHost : IDisposable
     ///         and opens or takes over the writer last; any failure rejects startup.
     ///     </para>
     /// </summary>
-    private ChatSessionHost(ChatSession session,
-                            ConversationContext context,
-                            AgentOptions options,
-                            IChatCompletionClient? modelClient,
-                            ToolRegistry tools,
-                            string systemPrompt,
-                            PermissionEngine? permissions,
-                            IApprovalProvider? approver,
-                            IHostEventSink? events,
-                            Func<string, IRunRecorder>? recorderFactory,
-                            Func<string, ISessionStoreWriter>? sessionWriterFactory,
-                            string? needsInspection,
-                            ProjectInstructionLoader? instructionLoader,
-                            ProjectInstructionSnapshot? initialInstructions,
+    private ChatSessionHost(ChatSession                          session,
+                            ConversationContext                  context,
+                            AgentOptions                         options,
+                            IChatCompletionClient?               modelClient,
+                            ToolRegistry                         tools,
+                            string                               systemPrompt,
+                            PermissionEngine?                    permissions,
+                            IApprovalProvider?                   approver,
+                            IHostEventSink?                      events,
+                            Func<string, IRunRecorder>?          recorderFactory,
+                            Func<string, ISessionStoreWriter>?   sessionWriterFactory,
+                            string?                              needsInspection,
+                            ProjectInstructionLoader?            instructionLoader,
+                            ProjectInstructionSnapshot?          initialInstructions,
                             IReadOnlyDictionary<string, string>? knownSecrets,
-                            string? credentialRoute,
-                            bool ownsModelClient,
-                            ModelTimeouts? modelTimeouts)
+                            string?                              credentialRoute,
+                            bool                                 ownsModelClient,
+                            ModelTimeouts?                       modelTimeouts,
+                            PermissionCompositionGuard?          compositionGuard)
     {
         ArgumentNullException.ThrowIfNull(session);
         ArgumentNullException.ThrowIfNull(context);
@@ -235,23 +262,24 @@ public sealed partial class ChatSessionHost : IDisposable
                                       "a resumed session requires identical instructions.", nameof(context));
         }
 
-        Session = session;
-        _options = options;
-        _tools = tools;
-        _systemPrompt = systemPrompt;
-        _permissions = permissions;
-        _approver = approver;
-        _events = events;
-        _recorderFactory = recorderFactory;
-        _context = context;
-        _instructionLoader = instructionLoader;
+        Session              = session;
+        _options             = options;
+        _tools               = tools;
+        _systemPrompt        = systemPrompt;
+        _permissions         = permissions;
+        _compositionGuard    = compositionGuard;
+        _approver            = approver;
+        _events              = events;
+        _recorderFactory     = recorderFactory;
+        _context             = context;
+        _instructionLoader   = instructionLoader;
         _initialInstructions = initialInstructions;
-        _eventRedactor = knownSecrets is null ? null : new SecretRedactor(knownSecrets);
+        _eventRedactor       = knownSecrets is null ? null : new SecretRedactor(knownSecrets);
         // 新中断会清空旧确认；保留的确认时间表示该中断已由用户检查。
         var pending = session.PendingInspectionReason ?? needsInspection;
         if (pending is not null && session.InspectionAcknowledgedUtc is null)
         {
-            _inspectionNote = pending;
+            _inspectionNote                 = pending;
             session.PendingInspectionReason = pending;
             _permissions?.SetNonReadOnlyBlock(pending);
         }
@@ -259,21 +287,21 @@ public sealed partial class ChatSessionHost : IDisposable
         if (session.ModelSelection is null)
             session.RecordModelSelection(new SessionModelSelection
             {
-                Revision = 1,
-                PreviousRevision = 0,
-                SelectedUtc = DateTimeOffset.UtcNow,
-                Model = session.Model,
-                ProfileHint = null,
-                CredentialRoute = credentialRoute,
-                Context = options.Context,
-                ReasoningEffort = options.ReasoningEffort,
-                ReasoningCapabilities = null,
+                Revision                = 1,
+                PreviousRevision        = 0,
+                SelectedUtc             = DateTimeOffset.UtcNow,
+                Model                   = session.Model,
+                ProfileHint             = null,
+                CredentialRoute         = credentialRoute,
+                Context                 = options.Context,
+                ReasoningEffort         = options.ReasoningEffort,
+                ReasoningCapabilities   = null,
                 ReasoningMappingVersion = ReasoningEffortMappings.CurrentVersion,
-                ProjectionVersion = SessionModelSelection.CurrentProjectionVersion,
-                MessageBoundary = 0
+                ProjectionVersion       = SessionModelSelection.CurrentProjectionVersion,
+                MessageBoundary         = 0
             });
         else if (modelClient is not null &&
-                 (session.ModelSelection.Context != options.Context ||
+                 (session.ModelSelection.Context         != options.Context ||
                   session.ModelSelection.ReasoningEffort != options.ReasoningEffort))
             throw new
                 ArgumentException("Options must match the restored model selection; change it explicitly after restoring.",
@@ -438,6 +466,9 @@ public sealed partial class ChatSessionHost : IDisposable
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(userInput);
         EnsureModelOperationsAllowed();
+        // 组合授权守卫（发送入口检查点）：失配即撤销授权并闩死会话，本次发送在创建任何回合记录前被阻断。
+        if (CheckCompositionGuard() is { } guardNotice)
+            throw new InvalidOperationException(guardNotice);
         if (Interlocked.CompareExchange(ref _activeRuns, 1, 0) != 0)
             throw new
                 InvalidOperationException("This session already has an active run; a session processes one run at a time (PLAN §5). " +
@@ -453,7 +484,7 @@ public sealed partial class ChatSessionHost : IDisposable
         DisplayWarning = null;
 
         var turn = new SessionTurn(NewId(), userInput);
-        var run = new SessionRun(NewId(), Session.Id, turn.Id, modelSelection: Session.ModelSelection);
+        var run  = new SessionRun(NewId(), Session.Id, turn.Id, modelSelection : Session.ModelSelection);
         Session.AddTurn(turn);
         turn.AddRun(run);
         using var control = CreateRunControl(run, cancellationToken);
@@ -462,7 +493,7 @@ public sealed partial class ChatSessionHost : IDisposable
         {
             if (_sessionWriter is not null)
                 await _sessionWriter.CommitAsync(Session, _context, cancellationToken).ConfigureAwait(false);
-            var loop = ComposeRunLoop(run);
+            var loop   = ComposeRunLoop(run);
             var result = await loop.RunTurnAsync(_systemPrompt, userInput, control.Token).ConfigureAwait(false);
             if (!string.IsNullOrWhiteSpace(result.PersistenceWarning))
                 PersistenceWarning = result.PersistenceWarning;
@@ -474,8 +505,8 @@ public sealed partial class ChatSessionHost : IDisposable
             // 循环之外的调用方取消也须留下终态；其他取消异常交由失败分支保留原因。
             run.Finish(new AgentResult
             {
-                Status = AgentStatus.Cancelled,
-                Error = "Run cancelled",
+                Status    = AgentStatus.Cancelled,
+                Error     = "Run cancelled",
                 ToolCalls = run.ExecutionRecords
             });
             return run;
@@ -484,8 +515,8 @@ public sealed partial class ChatSessionHost : IDisposable
         {
             run.Finish(new AgentResult
             {
-                Status = AgentStatus.Failed,
-                Error = ex.Message,
+                Status    = AgentStatus.Failed,
+                Error     = ex.Message,
                 ToolCalls = run.ExecutionRecords
             });
             return run;
@@ -502,10 +533,21 @@ public sealed partial class ChatSessionHost : IDisposable
             finally
             {
                 DisplayWarning = _activeRecorder?.DisplayWarning;
-                _activeRecorder = null;
-                _activeControl = null;
-                // 运行终态：Turn 授权到期，Session 授权与拒绝记忆跨回合保留。
+                // 运行终态：Turn 授权到期，Session 授权与拒绝记忆跨回合保留；到期事件在 recorder
+                // 释放前落盘，审计失败不吞掉也不阻断运行收尾（警告如实展示）。
                 _permissions?.ExpireTurnGrants();
+                try
+                {
+                    await DrainRunGrantEventsAsync(CancellationToken.None).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    DisplayWarning = (DisplayWarning is { } warning ? warning + " " : string.Empty) +
+                                     "Grant-event audit is incomplete: "                            + ex.Message;
+                }
+
+                _activeRecorder = null;
+                _activeControl  = null;
                 Interlocked.Exchange(ref _activeRuns, 0);
             }
         }
@@ -544,13 +586,13 @@ public sealed partial class ChatSessionHost : IDisposable
         try
         {
             var previousAcknowledgement = Session.InspectionAcknowledgedUtc;
-            var previousReason = Session.PendingInspectionReason;
+            var previousReason          = Session.PendingInspectionReason;
             Session.InspectionAcknowledgedUtc = DateTimeOffset.UtcNow;
-            Session.PendingInspectionReason = null;
+            Session.PendingInspectionReason   = null;
             if (!await CommitSnapshotAsync().ConfigureAwait(false))
             {
                 Session.InspectionAcknowledgedUtc = previousAcknowledgement;
-                Session.PendingInspectionReason = previousReason;
+                Session.PendingInspectionReason   = previousReason;
                 throw new
                     InvalidOperationException("Inspection acknowledgement was not reliably saved; non-read-only actions remain blocked.");
             }
@@ -572,7 +614,7 @@ public sealed partial class ChatSessionHost : IDisposable
         // 副作用前必须可靠保存执行意图；只截取完整协议边界，不为活动运行补造终态。
         var safeContext = CompleteContextSnapshot();
         run.RecordExecutionIntent(records);
-        var previousReason = Session.PendingInspectionReason;
+        var previousReason          = Session.PendingInspectionReason;
         var previousAcknowledgement = Session.InspectionAcknowledgedUtc;
         try
         {
@@ -591,7 +633,7 @@ public sealed partial class ChatSessionHost : IDisposable
         }
         finally
         {
-            Session.PendingInspectionReason = previousReason;
+            Session.PendingInspectionReason   = previousReason;
             Session.InspectionAcknowledgedUtc = previousAcknowledgement;
         }
     }
@@ -637,7 +679,7 @@ public sealed partial class ChatSessionHost : IDisposable
                                         .ToArray();
             if (unknownSideEffects is { Length: > 0 })
                 LatchNeedsInspection($"run '{run.Id}' ({status}) left side-effect tools with unknown results: " +
-                                     string.Join("; ", unknownSideEffects) +
+                                     string.Join("; ", unknownSideEffects)                                      +
                                      ". The workspace may carry their effects; inspect it before allowing more side effects.");
             else if (incompleteTail && run.Result?.ToolCalls is not { Count: > 0 })
                 // 缺少执行记录，无法证明副作用未发生。
@@ -660,8 +702,8 @@ public sealed partial class ChatSessionHost : IDisposable
     /// </summary>
     private void LatchNeedsInspection(string reason)
     {
-        _inspectionNote = reason;
-        Session.PendingInspectionReason = reason;
+        _inspectionNote                   = reason;
+        Session.PendingInspectionReason   = reason;
         Session.InspectionAcknowledgedUtc = null;
         _permissions?.SetNonReadOnlyBlock(reason);
     }
@@ -732,7 +774,7 @@ public sealed partial class ChatSessionHost : IDisposable
             // 未迁移的 /1 七模式选择保守映射为人工审批；迁移确认后由 /2 链接管。
             permissions ??= new PermissionEngine(Session.WorkspaceRoot);
             permissions.SetApprovalMode(LegacyPermissionSelectionMapper.FromLegacyName(permission.ModeName)
-                                        ?? SessionApprovalMode.HumanApproval);
+                                     ?? SessionApprovalMode.HumanApproval);
         }
 
         if (InspectionPending)
@@ -752,46 +794,19 @@ public sealed partial class ChatSessionHost : IDisposable
                                                           WorkEvidenceCandidates,
                                                           (id, title, status, evidence, token) =>
                                                               UpdateWorkItemAsync(run, id, title,
-                                                                  status, evidence, token))
+                                                                       status, evidence, token))
             ])
             : _tools;
         if (Session.PermissionMigrationPending)
-        {
             // 门禁在工具边界生效：注册保持（模型视图可见并可经其定义调用），但每次调用都在准备期
             // 以固定理由拒绝，绝不执行；解除后按原样组合，无需重建注册。
             tools = new ToolRegistry(tools.Values.Select(tool => new MigrationPendingToolGate(tool)));
-        }
 
         return new AgentLoop(_binding!.Client, tools, _options, permissions, _approver, recorder, events, _context,
                              _sessionWriter is null
                                  ? null
                                  : (records, token) => CheckpointExecutionAsync(run, records, token),
-                             instructions, _activeControl);
-    }
-
-    /// <summary>
-    ///     <para>
-    ///         迁移待确认门禁的工具门：注册与定义保持原样（模型视图不变），但任何调用都在准备期以
-    ///         固定理由拒绝，绝不进入执行；确认迁移后宿主不再包装，工具按原样组合。
-    ///     </para>
-    ///     <para>
-    ///         The tool gate of the pending-migration state: registration and definitions stay verbatim
-    ///         (the model view is unchanged) while every invocation is rejected at preparation with the fixed
-    ///         reason and never executes; after confirmation the host composes the unwrapped tools.
-    ///     </para>
-    /// </summary>
-    private sealed class MigrationPendingToolGate(ITool inner) : ITool
-    {
-        public ToolDefinition Definition => inner.Definition;
-
-        public ToolPreparation Prepare(ChatToolCall call)
-        {
-            // 准备期即拒绝：不进入授权与执行，拒绝理由对模型可见（D9 严格口径，无只读例外）。
-            throw new InvalidDataException(PermissionMigrationBlockNote);
-        }
-
-        public Task<ToolResult> ExecuteAsync(ToolPreparation preparation, CancellationToken cancellationToken) =>
-            throw new InvalidOperationException(PermissionMigrationBlockNote);
+                             instructions, _activeControl, CheckCompositionGuard);
     }
 
     private IReadOnlyList<ProjectInstructionRecord> RetainedInstructionRecords(int boundary)
@@ -810,6 +825,29 @@ public sealed partial class ChatSessionHost : IDisposable
 
     /// <summary>
     ///     <para>
+    ///         迁移待确认门禁的工具门：注册与定义保持原样（模型视图不变），但任何调用都在准备期以
+    ///         固定理由拒绝，绝不进入执行；确认迁移后宿主不再包装，工具按原样组合。
+    ///     </para>
+    ///     <para>
+    ///         The tool gate of the pending-migration state: registration and definitions stay verbatim
+    ///         (the model view is unchanged) while every invocation is rejected at preparation with the fixed
+    ///         reason and never executes; after confirmation the host composes the unwrapped tools.
+    ///     </para>
+    /// </summary>
+    private sealed class MigrationPendingToolGate(ITool inner) : ITool
+    {
+        public ToolDefinition Definition => inner.Definition;
+
+        public ToolPreparation Prepare(ChatToolCall call) => throw
+            // 准备期即拒绝：不进入授权与执行，拒绝理由对模型可见（D9 严格口径，无只读例外）。
+            new InvalidDataException(PermissionMigrationBlockNote);
+
+        public Task<ToolResult> ExecuteAsync(ToolPreparation preparation, CancellationToken cancellationToken) =>
+            throw new InvalidOperationException(PermissionMigrationBlockNote);
+    }
+
+    /// <summary>
+    ///     <para>
     ///         把宿主的项目指令加载、可靠提交、权限失效和元数据事件适配为 Agent Loop 的窄边界。
     ///     </para>
     ///     <para>
@@ -818,11 +856,11 @@ public sealed partial class ChatSessionHost : IDisposable
     ///     </para>
     /// </summary>
     private sealed class ProjectInstructionBoundary(
-        ChatSessionHost host,
-        SessionRun run,
+        ChatSessionHost          host,
+        SessionRun               run,
         ProjectInstructionLoader loader) : IAgentInstructionBoundary
     {
-        private ProjectInstructionRecord? _pendingRecord;
+        private ProjectInstructionRecord?   _pendingRecord;
         private ProjectInstructionSnapshot? _toolRoundSnapshot;
 
         public async Task PrepareUserContextAsync(CancellationToken cancellationToken)
@@ -923,9 +961,9 @@ public sealed partial class ChatSessionHost : IDisposable
                     ProjectInstructionLogLevel.Error,
                 "narrow-scope" or nameof(AgentStatus.StepLimitReached) or nameof(AgentStatus.BudgetLimitReached) =>
                     ProjectInstructionLogLevel.Warning,
-                "retry" => ProjectInstructionLogLevel.Information,
+                "retry"                        => ProjectInstructionLogLevel.Information,
                 _ when phase == "run-finished" => ProjectInstructionLogLevel.Information,
-                _ => ProjectInstructionLogLevel.Debug
+                _                              => ProjectInstructionLogLevel.Debug
             };
 #if !DEBUG
             if (level == ProjectInstructionLogLevel.Debug) return Task.CompletedTask;
@@ -978,7 +1016,7 @@ public sealed partial class ChatSessionHost : IDisposable
 
         private string DescribeScopes(IReadOnlyList<ToolPreparation> preparations) =>
             string.Join(";", preparations.SelectMany(preparation => preparation.InstructionScopes.Select(scope =>
-                                                         $"{preparation.CallId}@{preparation.ToolName}:{scope.Kind}:{(Path.IsPathRooted(scope.Path) ? Path.GetRelativePath(host.Session.WorkspaceRoot, scope.Path) : scope.Path)}")));
+                                                                  $"{preparation.CallId}@{preparation.ToolName}:{scope.Kind}:{(Path.IsPathRooted(scope.Path) ? Path.GetRelativePath(host.Session.WorkspaceRoot, scope.Path) : scope.Path)}")));
 
         /// <summary>
         ///     <para>仅在 Debug 保留范围和来源状态差异；不推断省略来源的磁盘正文。</para>
@@ -986,7 +1024,7 @@ public sealed partial class ChatSessionHost : IDisposable
         ///         Records scope and source-state differences only in Debug, without inferring omitted source contents.
         ///     </para>
         /// </summary>
-        private Task LogSnapshotAsync(string phase, ProjectInstructionSnapshot? previous,
+        private Task LogSnapshotAsync(string                     phase,    ProjectInstructionSnapshot?    previous,
                                       ProjectInstructionSnapshot snapshot, IReadOnlyList<ToolPreparation> preparations)
         {
 #if DEBUG
@@ -997,7 +1035,7 @@ public sealed partial class ChatSessionHost : IDisposable
                                                                   : StringComparer.Ordinal);
             var changed = snapshot.Documents.Where(document => oldSources is not null &&
                                                                oldSources.TryGetValue(document.SourcePath,
-                                                                   out var old) &&
+                                                                        out var old) &&
                                                                !string.Equals(old.ContentHash, document.ContentHash,
                                                                               StringComparison.OrdinalIgnoreCase))
                                   .Select(document => document.SourcePath);
@@ -1017,11 +1055,11 @@ public sealed partial class ChatSessionHost : IDisposable
 #endif
         }
 
-        private Task LogFailureAsync(string phase, string status, Exception exception,
+        private Task LogFailureAsync(string                         phase, string status, Exception exception,
                                      IReadOnlyList<ToolPreparation> preparations) =>
-            ProjectInstructionDiagnosticLog.EventAsync($"event=check|{DiagnosticIdentity()}|phase={phase}" +
+            ProjectInstructionDiagnosticLog.EventAsync($"event=check|{DiagnosticIdentity()}|phase={phase}"       +
                                                        $"|status={status}|error_type={exception.GetType().Name}" +
-                                                       $"|requested_scopes={DescribeScopes(preparations)}" +
+                                                       $"|requested_scopes={DescribeScopes(preparations)}"       +
                                                        $"|active_revision={host._context.ProjectInstructions?.Revision}",
                                                        host._eventRedactor, ProjectInstructionLogLevel.Error);
 
@@ -1034,8 +1072,8 @@ public sealed partial class ChatSessionHost : IDisposable
 
         private static bool SnapshotUnchanged(
             ProjectInstructionSnapshot? previous, ProjectInstructionSnapshot snapshot) =>
-            previous is not null &&
-            previous.Revision == snapshot.Revision &&
+            previous is not null                               &&
+            previous.Revision             == snapshot.Revision &&
             previous.DiscoveryFingerprint == snapshot.DiscoveryFingerprint;
 
         private InstructionBoundaryCheck CheckSnapshot(ProjectInstructionSnapshot snapshot)
@@ -1089,7 +1127,7 @@ public sealed partial class ChatSessionHost : IDisposable
             }
 
             host._context.ConfirmProjectInstructions();
-            await ProjectInstructionDiagnosticLog.EventAsync($"event=applied|{DiagnosticIdentity()}" +
+            await ProjectInstructionDiagnosticLog.EventAsync($"event=applied|{DiagnosticIdentity()}"           +
                                                              $"|action={record.Action}|reason={record.Reason}" +
                                                              $"|previous_revision={record.PreviousRevision}|active_revision={record.Revision}",
                                                              host._eventRedactor,
@@ -1102,7 +1140,7 @@ public sealed partial class ChatSessionHost : IDisposable
                 var notices = ProjectInstructionRenderer.BudgetNotices(record.Snapshot);
                 if (notices.Count > 0)
                     await ProjectInstructionDiagnosticLog.EventAsync($"event=budget|{DiagnosticIdentity()}" +
-                                                                     $"|active_revision={record.Revision}" +
+                                                                     $"|active_revision={record.Revision}"  +
                                                                      $"|adjustments={string.Join(';', notices)}",
                                                                      host._eventRedactor,
                                                                      ProjectInstructionLogLevel.Warning)
@@ -1112,7 +1150,7 @@ public sealed partial class ChatSessionHost : IDisposable
             if (record.Action == "rules-applied") host._permissions?.RevokeGrants();
 
             _toolRoundSnapshot = record.Snapshot;
-            _pendingRecord = null;
+            _pendingRecord     = null;
             // scopes-tracked 没有 effective rules 变化；只由统一 writer 发布 history item。
             return record.Action == "rules-applied" ? ChangedEvent(record) : null;
         }
@@ -1144,17 +1182,17 @@ public sealed partial class ChatSessionHost : IDisposable
         : IHostEventSink
     {
         private long _sequence;
-        public bool IncludeReasoningText => inner.IncludeReasoningText;
+        public  bool IncludeReasoningText => inner.IncludeReasoningText;
 
         public async ValueTask PublishAsync(HostEvent @event, CancellationToken cancellationToken)
         {
             await inner.PublishAsync(@event with
-            {
-                Sequence = Interlocked.Increment(ref _sequence),
-                SessionId = sessionId,
-                TurnId = turnId,
-                RunId = runId
-            },
+                                     {
+                                         Sequence = Interlocked.Increment(ref _sequence),
+                                         SessionId = sessionId,
+                                         TurnId = turnId,
+                                         RunId = runId
+                                     },
                                      cancellationToken)
                        .ConfigureAwait(false);
         }
@@ -1162,12 +1200,12 @@ public sealed partial class ChatSessionHost : IDisposable
         public ValueTask PublishHistoryItemAsync(SessionHistoryItem item, CancellationToken cancellationToken) =>
             inner.PublishAsync(new HostEvent
             {
-                Kind = HostEventKind.HistoryItemCompleted,
-                Sequence = Interlocked.Increment(ref _sequence),
+                Kind      = HostEventKind.HistoryItemCompleted,
+                Sequence  = Interlocked.Increment(ref _sequence),
                 SessionId = sessionId,
-                TurnId = turnId,
-                RunId = runId,
-                Payload = item
+                TurnId    = turnId,
+                RunId     = runId,
+                Payload   = item
             }, cancellationToken);
     }
 }

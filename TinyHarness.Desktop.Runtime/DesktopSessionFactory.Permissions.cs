@@ -55,18 +55,18 @@ public sealed partial class DesktopSessionFactory
     private static ApprovalContext ReviewContext(ChatSessionHost host, PermissionEngine? permissions)
     {
         var entries = new List<ApprovalContextEntry>();
-        var turns = host.Session.Turns.ToArray();
+        var turns   = host.Session.Turns.ToArray();
         for (var i = 0; i < turns.Length; i++)
             entries.Add(new ApprovalContextEntry(turns[i].CreatedUtc, ApprovalInputSource.UserUtterance,
                                                  $"turn-{i + 1}", turns[i].UserInput));
         foreach (var amendment in host.Session.Amendments.Where(amendment =>
-                                                                   amendment.CanonicalMessageIndex is not null))
+                                                                    amendment.CanonicalMessageIndex is not null))
             entries.Add(new ApprovalContextEntry(amendment.CreatedUtc, ApprovalInputSource.EffectiveAmendment,
                                                  $"amendment-{amendment.Id}", amendment.Text));
         foreach (var grant in permissions?.Grants.SnapshotGrants() ?? new List<Grant>())
             entries.Add(new ApprovalContextEntry(grant.CreatedUtc, ApprovalInputSource.GrantHistory,
                                                  grant.GrantId,
-                                                 $"grant {grant.Scope} {grant.Capability} state={grant.State}"));
+                                                 GrantHistoryEntry.Describe(grant)));
         return ApprovalContextBuilder.Build(entries);
     }
 }

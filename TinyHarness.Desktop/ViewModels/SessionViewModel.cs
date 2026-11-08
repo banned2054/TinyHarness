@@ -383,8 +383,12 @@ public sealed partial class SessionViewModel : ObservableObject
     public string? ApprovalId => _approval?.Id;
 
     // 审批卡文本：Level 是展示/审计分类（D2），如实呈现执行等级；不构成授权来源。
+    // 展示事实行（隔离声明、文件与网络权限、有效期、活动授权摘要）与 CLI 审批器同源一致。
     public string ApprovalText => _approval is { } approval
-        ? $"{approval.ReviewerNote}\n[{approval.Level}] {BackendIdentity(approval.Level)}\n{approval.ToolName}\n{approval.Summary}\n{approval.Arguments}\n{string.Join('\n', approval.TargetPaths)}\n{approval.ExecutionPolicy}"
+        ? $"{approval.ReviewerNote}\n[{approval.Level}] {BackendIdentity(approval.Level)}\n{approval.ToolName}\n{approval.Summary}\n{approval.Arguments}\n{string.Join('\n', approval.TargetPaths)}\n{approval.ExecutionPolicy}" +
+          (approval.DisplayNotes is { } notes && notes.Count > 0
+              ? "\n" + string.Join('\n', notes)
+              : string.Empty)
         : string.Empty;
 
     /// <summary>
