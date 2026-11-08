@@ -53,6 +53,21 @@
                         HorizontalAlignment="Left" />
             </StackPanel>
         </Border>
+        <Border IsVisible="{Binding StandingTrustVisible}" Classes="settings-row" Padding="12">
+            <StackPanel Spacing="8">
+                <TextBlock Text="常设授权（沙箱网络与附加写根）" FontWeight="SemiBold" />
+                <TextBlock Text="{Binding StandingTrustSummary}" TextWrapping="Wrap" FontSize="12"
+                           Foreground="{DynamicResource PopupMutedForegroundBrush}" />
+                <TextBlock Text="{Binding StandingTrustError}" IsVisible="{Binding StandingTrustVisible}"
+                           TextWrapping="Wrap" />
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <Button Content="确认常设授权" Command="{Binding ConfirmStandingTrustCommand}"
+                            IsVisible="{Binding StandingTrustPending}" HorizontalAlignment="Left" />
+                    <Button Content="撤销常设授权" Command="{Binding RevokeStandingTrustCommand}"
+                            IsVisible="{Binding StandingTrustActive}" HorizontalAlignment="Left" />
+                </StackPanel>
+            </StackPanel>
+        </Border>
         <TextBlock Text="{Binding Notice}" TextWrapping="Wrap" FontSize="12" />
         <Button Content="保存权限设置" Command="{Binding SaveCommand}" Classes="settings-secondary"
                 HorizontalAlignment="Left" />

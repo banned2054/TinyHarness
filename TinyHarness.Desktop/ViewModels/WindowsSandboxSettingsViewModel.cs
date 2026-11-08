@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using TinyHarness.Core.Models.Configuration;
 using TinyHarness.Core.Models.Runtime.WindowsSandbox;
 using TinyHarness.Core.Services.ChatCompletions.Configuration;
+using TinyHarness.Core.Services.Permissions;
 
 namespace TinyHarness.Desktop.ViewModels;
 
@@ -171,22 +172,35 @@ public sealed class WindowsSandboxSettingsViewModel : SettingsSectionViewModel
         if (SelectedProxyMode.Mode == SandboxProxyMode.Named && _proxyName is null)
             throw new InvalidOperationException("请先在网络设置中保存代理，再选择指定代理。");
         var saved = _baseline.Settings?.WindowsSandbox ?? new WindowsSandboxSettings();
+        var sandbox = saved with
+        {
+            Enabled              = Enabled,
+            AllowTcpLoopback     = AllowTcpLoopback,
+            NetworkPolicy        = SelectedNetworkPolicy.Policy,
+            Proxy = SelectedProxyMode.Mode == SandboxProxyMode.Named
+                ? new SandboxProxyPolicy { Mode = SandboxProxyMode.Named, ProxyName = _proxyName }
+                : new SandboxProxyPolicy { Mode = SelectedProxyMode.Mode },
+            AdditionalReadRoots  = readRoots,
+            AdditionalWriteRoots = writeRoots,
+            ExtraEnvironment     = environment
+        };
+        // 清除扩大设置（回 restricted/写根清空）自然解除常设授权门禁：确认记录随保存一并删除。
+        // 原配置没有 permissions 节时保持缺席，不新增默认块。
+        var permissions = _baseline.Settings?.Permissions is { } existingPermissions
+            ? existingPermissions with
+            {
+                StandingTrustConfirmation =
+                    StandingTrustEvaluation.HasStandingExpansion(sandbox)
+                        ? existingPermissions.StandingTrustConfirmation
+                        : null
+            }
+            : null;
         var candidate = _baseline with
         {
             Settings = (_baseline.Settings ?? new UserConfigSettings()) with
             {
-                WindowsSandbox = saved with
-                {
-                    Enabled              = Enabled,
-                    AllowTcpLoopback     = AllowTcpLoopback,
-                    NetworkPolicy        = SelectedNetworkPolicy.Policy,
-                    Proxy = SelectedProxyMode.Mode == SandboxProxyMode.Named
-                        ? new SandboxProxyPolicy { Mode = SandboxProxyMode.Named, ProxyName = _proxyName }
-                        : new SandboxProxyPolicy { Mode = SelectedProxyMode.Mode },
-                    AdditionalReadRoots  = readRoots,
-                    AdditionalWriteRoots = writeRoots,
-                    ExtraEnvironment     = environment
-                }
+                WindowsSandbox = sandbox,
+                Permissions    = permissions
             }
         };
         await UserConfigStore.SaveAsync(_path, candidate, _baseline, CancellationToken.None);
