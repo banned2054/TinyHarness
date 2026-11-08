@@ -58,6 +58,8 @@ public sealed class WorkspaceAccessState(WorkspaceDirectoryIdentity identity)
                 InstructionScopes      = plan.InstructionScopes,
                 // 机械传播内层计划已声明的事实字段；此处不做任何授权判断。
                 RequestedBackend       = plan.RequestedBackend,
+                RequestedWriteRoots    = plan.RequestedWriteRoots,
+                RequiresNetworkAccess  = plan.RequiresNetworkAccess,
                 ResourceClassification = plan.ResourceClassification,
                 ExecutionPlan          = new GuardedPlan(this, tool, plan, state.Revision)
             };

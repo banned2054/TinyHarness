@@ -5,6 +5,7 @@ using TinyHarness.Core.Models.Permissions;
 using TinyHarness.Core.Models.Tools;
 using TinyHarness.Core.Services.Agent;
 using TinyHarness.Core.Services.Permissions;
+using TinyHarness.Core.Services.Runtime;
 using TinyHarness.Core.Services.Tools;
 
 namespace TinyHarness.Tests;
@@ -47,6 +48,71 @@ public class AgentLoopPermissionTests
             Assert.That(result.Status, Is.EqualTo(AgentStatus.Completed));
             Assert.That(approver.Prompts, Is.EqualTo(0));
             Assert.That(content, Is.EqualTo("line1\nline2-fixed\nline3-fixed\n"));
+        });
+    }
+
+    [Test]
+    public async Task OrdinaryOutsideRead_ExecutesWithoutPrompt_UnderBroadReadBaseline()
+    {
+        using var dir     = new TestTempDir();
+        using var outside = new TestTempDir();
+        var       target  = outside.WriteFile("notes.txt", "plain outside content");
+
+        var client = new FakeChatClient();
+        client.Enqueue(FakeChatClient.ToolCall("read_file",
+                                               new JsonObject { ["path"] = target }.ToJsonString(), "p1"));
+        client.Enqueue(FakeChatClient.Text("done reading"));
+
+        var approver  = new ScriptedApprover();
+        var workspace = new Workspace(dir.Root, allowExternalPaths : true);
+        var tool      = new ReadFileTool(workspace, resourcePolicy : new ResourceAccessPolicy(dir.Root));
+        var loop = new AgentLoop(client, new ToolRegistry([tool]), Options(),
+                                 new PermissionEngine(dir.Root, resourcePolicy : new ResourceAccessPolicy(dir.Root)),
+                                 approver);
+
+        var result = await loop.RunAsync("sys", "read outside", CancellationToken.None);
+
+        // 三级契约：工作区外普通读取属 L1 广泛读基线，走真实主循环零审批执行。
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Status, Is.EqualTo(AgentStatus.Completed));
+            Assert.That(approver.Prompts, Is.EqualTo(0));
+            TestAssert.ContainsAll(m => m.Role == ChatRole.Tool &&
+                                        m.Content.Contains("plain outside content"), loop.History);
+        });
+    }
+
+    [Test]
+    public async Task SensitiveOutsideRead_Prompts_AndDenialNeverExecutes()
+    {
+        using var dir     = new TestTempDir();
+        using var outside = new TestTempDir();
+        var       target  = outside.WriteFile(Path.Combine(".ssh", "id_rsa"), "SECRET KEY MATERIAL");
+
+        var client = new FakeChatClient();
+        client.Enqueue(FakeChatClient.ToolCall("read_file",
+                                               new JsonObject { ["path"] = target }.ToJsonString(), "p1"));
+        client.Enqueue(FakeChatClient.Text("understood, not reading it"));
+
+        var approver  = new ScriptedApprover();
+        approver.Enqueue(ApprovalResolution.Denied("sensitive location"));
+        var workspace = new Workspace(dir.Root, allowExternalPaths : true);
+        var tool      = new ReadFileTool(workspace, resourcePolicy : new ResourceAccessPolicy(dir.Root));
+        var loop = new AgentLoop(client, new ToolRegistry([tool]), Options(),
+                                 new PermissionEngine(dir.Root, resourcePolicy : new ResourceAccessPolicy(dir.Root)),
+                                 approver);
+
+        var result = await loop.RunAsync("sys", "read sensitive", CancellationToken.None);
+
+        // C2 读保护档：越界敏感读取仍逐次审批；拒绝后内容绝不进入工具结果。
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Status, Is.EqualTo(AgentStatus.Completed));
+            Assert.That(approver.Prompts, Is.EqualTo(1));
+            Assert.That(loop.History.Any(m => m.Role == ChatRole.Tool &&
+                                              m.Content.Contains("SECRET KEY MATERIAL")), Is.False);
+            TestAssert.ContainsAll(m => m.Role == ChatRole.Tool &&
+                                        m.Content.Contains("Permission denied by the approver"), loop.History);
         });
     }
 

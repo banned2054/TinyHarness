@@ -96,6 +96,18 @@ public sealed partial class AgentLoop
 
     /// <summary>
     ///     <para>
+    ///         宿主注入的组合授权守卫检查点：返回阻断提示时本次派发不启动；null 由宿主自行处理
+    ///         （未注入守卫或指纹一致）。
+    ///     </para>
+    ///     <para>
+    ///         The host-injected composition guard checkpoint: a returned notice keeps this dispatch from
+    ///         starting; null means no injected guard or a matching fingerprint.
+    ///     </para>
+    /// </summary>
+    private readonly Func<string?>? _compositionGuardCheck;
+
+    /// <summary>
+    ///     <para>
     ///         本次运行的工具执行意图与确认记录，供宿主进行中断结算。
     ///     </para>
     ///     <para>
@@ -161,23 +173,25 @@ public sealed partial class AgentLoop
                        PermissionEngine? permissions, IApprovalProvider? approver, IRunRecorder? recorder,
                        IHostEventSink? events, ConversationContext? context,
                        Func<IReadOnlyList<ToolCallRecord>, CancellationToken, Task>? executionCheckpoint,
-                       IAgentInstructionBoundary? instructionBoundary, SessionRunControl? control = null)
+                       IAgentInstructionBoundary? instructionBoundary, SessionRunControl? control = null,
+                       Func<string?>?             compositionGuardCheck = null)
     {
         ArgumentNullException.ThrowIfNull(model);
         ArgumentNullException.ThrowIfNull(tools);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentOutOfRangeException.ThrowIfNegative(options.MaxAgentSteps);
-        _model               = model;
-        _tools               = tools;
-        _options             = options;
-        _permissions         = permissions;
-        _approver            = approver;
-        _recorder            = recorder;
-        _events              = events;
-        _context             = context ?? new ConversationContext(options.Context);
-        _executionCheckpoint = executionCheckpoint;
-        _instructionBoundary = instructionBoundary;
-        _control             = control;
+        _model                 = model;
+        _tools                 = tools;
+        _options               = options;
+        _permissions           = permissions;
+        _approver              = approver;
+        _recorder              = recorder;
+        _events                = events;
+        _context               = context ?? new ConversationContext(options.Context);
+        _executionCheckpoint   = executionCheckpoint;
+        _instructionBoundary   = instructionBoundary;
+        _control               = control;
+        _compositionGuardCheck = compositionGuardCheck;
     }
 
     /// <summary>
@@ -540,6 +554,9 @@ public sealed partial class AgentLoop
                     break;
                 }
 
+                // 每轮工具循环边界 drain：授权求值、消费与批准产生的授权事件即时落盘，不跨轮积压。
+                await DrainGrantEventsToRecorderAsync(cancellationToken).ConfigureAwait(false);
+
                 await WaitForControlAsync(cancellationToken).ConfigureAwait(false);
                 if (_control?.HasAmendments == true)
                 {
@@ -675,6 +692,26 @@ public sealed partial class AgentLoop
                         _context.Append(ChatMessage.Tool(item.RoundCall.Call.FunctionName, item.RoundCall.Call.Id,
                                                          item.Authorization.Reason));
                         continue;
+                    }
+
+                    // 组合授权守卫（每次派发前检查点）：失配或已闩死时本次及剩余调用不启动，
+                    // 运行以失败终态收束并附中文提示；不自动重放、不自动重组合运行栈。
+                    if (_compositionGuardCheck?.Invoke() is { } guardReason)
+                    {
+                        var deferredCalls = authorized.Skip(dispatchIndex)
+                                                      .Select(candidate => candidate.RoundCall)
+                                                      .ToArray();
+                        AppendDeferredToolResults(deferredCalls, guardReason);
+                        await RecordNotStartedCallsAsync(roundRecords, deferredCalls, cancellationToken)
+                           .ConfigureAwait(false);
+                        return await FinishAsync(new AgentResult
+                        {
+                            Status         = AgentStatus.Failed,
+                            Error          = guardReason,
+                            Steps          = steps,
+                            ToolExecutions = toolExecutions,
+                            Compactions    = compactions
+                        }).ConfigureAwait(false);
                     }
 
                     cancellationToken.ThrowIfCancellationRequested();

@@ -203,15 +203,14 @@ public class PermissionEngineTests
             Assert.That(outside.MissingCapabilities, Does.Contain("additional-path-write"));
         });
 
-        // 契约 D2：工作区外读取按 additional-path-read 单独申请，不与写混用。
+        // 三级契约：工作区外普通读取属 L1 广泛读基线，自动放行；写方向仍按 additional-path-write 审批。
         var outsideRead = engine.Evaluate(Prep("filesystem.read",
                                                [Path.Combine(Path.GetDirectoryName(dir.Root)!, "elsewhere.cs")]));
         Assert.Multiple(() =>
         {
-            Assert.That(outsideRead.Decision, Is.EqualTo(PermissionDecision.Ask));
-            Assert.That(outsideRead.Level, Is.EqualTo(PermissionLevel.Level2));
-            Assert.That(outsideRead.MissingCapabilities, Does.Contain("additional-path-read"));
-            Assert.That(outsideRead.Reason, Does.Contain("reads outside"));
+            Assert.That(outsideRead.Decision, Is.EqualTo(PermissionDecision.Allow));
+            Assert.That(outsideRead.Level, Is.EqualTo(PermissionLevel.Level1));
+            Assert.That(outsideRead.MissingCapabilities, Is.Empty);
         });
 
         var metadata = engine.Evaluate(Prep("filesystem.write",
@@ -223,7 +222,9 @@ public class PermissionEngineTests
     public void StandingNetworkTrust_LetsNetworkedCommandsFollowTheirFileClassification()
     {
         using var dir = new TestTempDir();
-        var engine = new PermissionEngine(dir.Root, sandboxNetworkStandingEnabled : true,
+        // 免审批仅对应"常设网络已启用 + Confirmed"；历史 sandboxNetworkStandingEnabled 直通已移除。
+        var engine = new PermissionEngine(dir.Root, standingTrust : StandingTrustState.Confirmed,
+                                          standingNetworkEnabled : true,
                                           resourcePolicy : new TestResourcePolicy(dir.Root));
 
         var inside = engine.Evaluate(ShellPrep(dir.Root, requiresNetwork : true));
@@ -233,7 +234,7 @@ public class PermissionEngineTests
             Assert.That(inside.Level, Is.EqualTo(PermissionLevel.Level1));
         });
 
-        // 常设信任下网络申请不再单独强制审批；沙箱 Shell 一律按 Level1 路由（冻结决策链）。
+        // 已确认的常设信任下网络申请不再单独强制审批；沙箱 Shell 一律按 Level1 路由（冻结决策链）。
         var outside = engine.Evaluate(ShellPrep(Path.Combine(Path.GetDirectoryName(dir.Root)!, "work"),
                                                 requiresNetwork : true));
         Assert.Multiple(() =>
@@ -590,6 +591,10 @@ public class PermissionEngineTests
                                              Workspace.IsInside(workspaceRoot, targetPath)
                                                  ? ResourceClass.BaselineWorkspace
                                                  : ResourceClass.OutsideWorkspace, false);
+
+        // 与分类同语义：目标落入保护路径或覆盖保护路径都算重叠。
+        public bool OverlapsPermissionSystemRoots(string path) =>
+            Workspace.IsInside(protectedPath, path) || Workspace.IsInside(path, protectedPath);
     }
 
     private sealed class FakeClock(DateTimeOffset start) : TimeProvider

@@ -23,16 +23,22 @@ namespace TinyHarness.Core.Services.Permissions;
 /// <remarks>
 ///     <para>
 ///         求值顺序固定：worker 与未信任工作区硬限制、NeedsInspection 阻断、系统保护资源、拒绝记忆、
-///         资源分类（沙箱不可用拒绝、宿主申请 Level3、网络申请 Level2、文件越界与受保护元数据写入
-///         Level2）、基线 Level1 放行、活动授权、审批。分类与级别是审核维度，不是授权来源；
-///         授权只来自 Level1 基线或 <see cref="GrantRegistry" /> 中的活动 Grant。
-///         这是应用层策略，不是 OS 沙箱；运行时另行强制文件系统边界。
+///         资源分类（沙箱不可用拒绝、宿主申请 Level3、网络申请 Level2——仅"常设网络已启用且常设信任
+///         Confirmed"时随显式持久授权放行、shell 写根申请先做 C1 双向重叠硬拒再按 Level2 逐次审批、
+///         已知敏感位置读写与越界写、未确认附加写根写入、受保护元数据写入 Level2，其余文件读写属
+///         基线 Level1）、基线放行、活动授权、审批。分类与级别是审核维度，不是授权来源；授权只来自
+///         Level1 基线或 <see cref="GrantRegistry" /> 中的活动 Grant。这是应用层策略，不是 OS 沙箱；
+///         运行时另行强制文件系统边界。
 ///     </para>
 ///     <para>
 ///         The evaluation order is fixed: worker and untrusted-workspace hard limits, NeedsInspection blocking,
 ///         system-protected resources, denial memory, resource classification (sandbox-unavailable denial, host
-///         request Level3, network request Level2, outside-workspace and protected-metadata writes Level2),
-///         baseline Level1 allowance, active grants, approval. Levels are review dimensions, never sources of
+///         request Level3, network request Level2 — released with the explicit persistent authorization only
+///         when the standing network is enabled and standing trust is Confirmed, shell write-root requests
+///         hard-denied on C1 bidirectional overlap first and otherwise Level2 per call, known-sensitive reads
+///         and writes, outside-workspace writes, unconfirmed additional-write-root writes, and
+///         protected-metadata writes at Level2; every other file read or write at the Level1 baseline),
+///         baseline allowance, active grants, approval. Levels are review dimensions, never sources of
 ///         authority; authorization comes only from the Level1 baseline or an active Grant in the
 ///         <see cref="GrantRegistry" />. This is application policy, not an OS sandbox; the runtime enforces
 ///         filesystem boundaries separately.
@@ -59,9 +65,10 @@ public sealed class PermissionEngine
 
     private readonly bool                                           _denyNonReadOnlyCapabilities;
     private readonly Func<ToolPreparation, FrozenCapabilityScope?>? _frozenScopeReader;
-    private readonly bool                                           _networkStandingEnabled;
     private readonly IResourceAccessPolicy                          _resourcePolicy;
     private readonly bool                                           _sandboxExecutionAvailable;
+    private readonly bool                                           _standingNetworkEnabled;
+    private readonly StandingTrustState                             _standingTrust;
     private readonly Func<bool>?                                    _workspaceReadOnly;
     private readonly string                                         _workspaceRoot;
     private          long                                           _authorizationRevision;
@@ -79,14 +86,22 @@ public sealed class PermissionEngine
     ///     <para>返回 true 时非只读能力一律硬拒绝，优先于所有授权。</para>
     ///     <para>When true, non-read-only capabilities are hard-denied ahead of every grant.</para>
     /// </param>
-    /// <param name="sandboxNetworkStandingEnabled">
+    /// <param name="standingTrust">
     ///     <para>
-    ///         沙箱常设网络信任（可信用户设置的 Enabled 档）。缺省 false：每个网络申请都逐次审批；
-    ///         true 时网络申请不再单独强制审批，随调用的文件分类路由。
+    ///         持久信任三态（组合期由可信设置与显式确认记录评估）。缺省
+    ///         <see cref="StandingTrustState.None" />：<see cref="StandingTrustState.None" /> 与
+    ///         <see cref="StandingTrustState.Unconfirmed" /> 下联网申请一律逐次审批，附加写根写入
+    ///         由资源分类降档逐次审批；仅 <see cref="StandingTrustState.Confirmed" /> 把
+    ///         networkPolicy=enabled 与附加写根作为显式持久授权消费。
     ///     </para>
     ///     <para>
-    ///         Standing sandbox network trust (the trusted settings' Enabled tier). Default false: every network
-    ///         request is approved per call; true stops network requests from forcing their own approval.
+    ///         The three-state standing trust (evaluated at composition from the trusted settings and the
+    ///         explicit confirmation record). The default <see cref="StandingTrustState.None" />: under both
+    ///         <see cref="StandingTrustState.None" /> and <see cref="StandingTrustState.Unconfirmed" /> every
+    ///         network request is approved per call and additional write-root writes are demoted to per-call
+    ///         approval by the resource classification; only <see cref="StandingTrustState.Confirmed" />
+    ///         consumes networkPolicy=enabled and the additional write roots as explicit persistent
+    ///         authorization.
     ///     </para>
     /// </param>
     /// <param name="sandboxExecutionAvailable">
@@ -99,26 +114,41 @@ public sealed class PermissionEngine
     ///         including host requests, while file tools keep working; fail closed, never falling back to host.
     ///     </para>
     /// </param>
+    /// <param name="standingNetworkEnabled">
+    ///     <para>
+    ///         组合实际消费的常设网络是否启用（与传给沙箱组合器的 EffectiveSandboxSettings 同源同值：
+    ///         其 NetworkPolicy 为 enabled）。false 时网络申请一律逐次审批，写根确认状态不得复用为
+    ///         网络免审批；true 时仅 <see cref="StandingTrustState.Confirmed" /> 免审批。
+    ///     </para>
+    ///     <para>
+    ///         Whether the standing network is enabled in the settings the composition actually consumes
+    ///         (same source and value as the EffectiveSandboxSettings handed to the sandbox composer: its
+    ///         NetworkPolicy is enabled). When false, every network request follows per-call approval and
+    ///         the write-root confirmation state is never reused as a network exemption; when true, only
+    ///         <see cref="StandingTrustState.Confirmed" /> exempts the approval.
+    ///     </para>
+    /// </param>
     /// <param name="resourcePolicy">
     ///     <para>
-    ///         执行侧注入的六值资源分类策略（<see cref="IResourceAccessPolicy" />）；缺省 null 时
+    ///         执行侧注入的资源分类策略（<see cref="IResourceAccessPolicy" />）；缺省 null 时
     ///         所有目标按未分类 fail-closed 处理（一律审批）。
     ///     </para>
     ///     <para>
-    ///         The six-value resource-classification policy injected by the execution side
+    ///         The resource-classification policy injected by the execution side
     ///         (<see cref="IResourceAccessPolicy" />); when null every target fails closed to approval
     ///         as unclassified.
     ///     </para>
     /// </param>
     public PermissionEngine(string                                         workspaceRoot,
-                            bool                                           denyNonReadOnlyCapabilities   = false,
-                            Func<bool>?                                    workspaceReadOnly             = null,
-                            bool                                           sandboxNetworkStandingEnabled = false,
-                            bool                                           sandboxExecutionAvailable     = true,
-                            IResourceAccessPolicy?                         resourcePolicy                = null,
-                            GrantRegistry?                                 grantRegistry                 = null,
-                            TimeProvider?                                  clock                         = null,
-                            Func<ToolPreparation, FrozenCapabilityScope?>? frozenScopeReader             = null)
+                            bool                                           denyNonReadOnlyCapabilities = false,
+                            Func<bool>?                                    workspaceReadOnly = null,
+                            StandingTrustState                             standingTrust = StandingTrustState.None,
+                            bool                                           sandboxExecutionAvailable = true,
+                            bool                                           standingNetworkEnabled = false,
+                            IResourceAccessPolicy?                         resourcePolicy = null,
+                            GrantRegistry?                                 grantRegistry = null,
+                            TimeProvider?                                  clock = null,
+                            Func<ToolPreparation, FrozenCapabilityScope?>? frozenScopeReader = null)
     {
         if (string.IsNullOrWhiteSpace(workspaceRoot))
             throw new ArgumentException("A workspace root is required.", nameof(workspaceRoot));
@@ -126,8 +156,9 @@ public sealed class PermissionEngine
         _workspaceRoot               = Path.GetFullPath(workspaceRoot);
         _denyNonReadOnlyCapabilities = denyNonReadOnlyCapabilities;
         _workspaceReadOnly           = workspaceReadOnly;
-        _networkStandingEnabled      = sandboxNetworkStandingEnabled;
+        _standingTrust               = standingTrust;
         _sandboxExecutionAvailable   = sandboxExecutionAvailable;
+        _standingNetworkEnabled      = standingNetworkEnabled;
         _resourcePolicy              = resourcePolicy ?? FailClosedResourcePolicy.Instance;
         Grants                       = grantRegistry  ?? new GrantRegistry(clock);
         _clock                       = clock          ?? TimeProvider.System;
@@ -303,15 +334,20 @@ public sealed class PermissionEngine
         var grant = Grants.Peek(preparation, _clock.GetUtcNow());
 
         // 新增和撤销能力都使旧计划失效，防止冻结计划继续携带已经撤销的权限。
+        // 单次调用显式申请的写根由本次批准（单次批准或绑定 GrantId 的 Turn 授权）背书，
+        // 不参与快照存活子集复核；grant 来源的根仍要求双向一致（撤销或收缩即失效）。
         if (currentSnapshot is { } current)
         {
-            var frozen = _frozenScopeReader?.Invoke(preparation);
-            if (frozen is null                                                       ||
-                !IsSubset(current.AdditionalReadRoots, frozen.AdditionalReadRoots)   ||
-                !IsSubset(current.AdditionalWriteRoots, frozen.AdditionalWriteRoots) ||
-                !IsSubset(current.MetadataWritePaths, frozen.MetadataWritePaths)     ||
-                !IsSubset(frozen.AdditionalReadRoots, current.AdditionalReadRoots)   ||
-                !IsSubset(frozen.AdditionalWriteRoots, current.AdditionalWriteRoots) ||
+            var frozen               = _frozenScopeReader?.Invoke(preparation);
+            var standaloneWriteRoots = preparation.RequestedWriteRoots;
+            var currentWrites        = ExceptRoots(current.AdditionalWriteRoots, standaloneWriteRoots);
+            var frozenWrites         = ExceptRoots(frozen?.AdditionalWriteRoots ?? [], standaloneWriteRoots);
+            if (frozen is null                                                     ||
+                !IsSubset(current.AdditionalReadRoots, frozen.AdditionalReadRoots) ||
+                !IsSubset(currentWrites, frozenWrites)                             ||
+                !IsSubset(current.MetadataWritePaths, frozen.MetadataWritePaths)   ||
+                !IsSubset(frozen.AdditionalReadRoots, current.AdditionalReadRoots) ||
+                !IsSubset(frozenWrites, currentWrites)                             ||
                 !IsSubset(frozen.MetadataWritePaths, current.MetadataWritePaths))
                 return PermissionEvaluation.Deny(
                                                  "Authorization invalidated: capability scope changed; re-issue the call.",
@@ -344,6 +380,21 @@ public sealed class PermissionEngine
     }
 
     /// <summary>
+    ///     <para>从根列表剔除单次调用自带的写根（序数比较），供快照存活复核只覆盖 grant 来源的根。</para>
+    ///     <para>
+    ///         Removes the invocation's own requested write roots from a root list (ordinal), so the snapshot
+    ///         liveness check covers only grant-sourced roots.
+    ///     </para>
+    /// </summary>
+    private static IReadOnlyList<string> ExceptRoots(IReadOnlyList<string> roots, IReadOnlyList<string> excluded)
+    {
+        if (excluded.Count == 0) return roots;
+        if (roots.Count    == 0) return roots;
+
+        return roots.Where(root => !excluded.Contains(root, StringComparer.Ordinal)).ToArray();
+    }
+
+    /// <summary>
     ///     <para>
     ///         记录一次审批拒绝：绑定完整调用指纹与命令身份，使同一操作不再弹卡或询问。
     ///         指纹覆盖参数，命令约束跨执行后端有效；跨工具的语义等价不做声称。
@@ -359,6 +410,54 @@ public sealed class PermissionEngine
         _deniedFingerprints.Add(Fingerprint(preparation));
         _deniedRules.Add(new PermissionRule(preparation.Capability, preparation.TargetPaths.ToArray(),
                                             preparation.SessionConstraint));
+    }
+
+    /// <summary>
+    ///     <para>
+    ///         可信授权变更点调用：用户批准同一绑定操作后精确解除其拒绝记忆（指纹与命令身份规则
+    ///         各自移除）。任意新消息不得走此通道；宿主在解除发生时写入 authorization-changed 审计。
+    ///     </para>
+    ///     <para>
+    ///         Called at trusted authorization changes: after the user approves the same bound operation, its
+    ///         denial memory is released precisely (fingerprint and command-identity rule removed separately).
+    ///         Any new message can never take this path; the host writes the authorization-changed audit when a
+    ///         release happens.
+    ///     </para>
+    /// </summary>
+    /// <returns>
+    ///     <para>是否解除了至少一条拒绝记忆。Whether at least one denial memory entry was released.</para>
+    /// </returns>
+    public bool ReleaseDenialForApproval(ToolPreparation preparation)
+    {
+        ArgumentNullException.ThrowIfNull(preparation);
+        var fingerprint = Fingerprint(preparation);
+        var released    = _deniedFingerprints.Remove(fingerprint);
+        // 命令身份规则与指纹一并解除：同一冻结操作的规则匹配等价于指纹命中。
+        released |= _deniedRules.RemoveAll(rule => rule.Matches(preparation, true)) > 0;
+        return released;
+    }
+
+    /// <summary>
+    ///     <para>
+    ///         可信授权变更点调用（策略身份修订变更、迁移确认等整段授权语义变化）：全量解除拒绝记忆。
+    ///         活动授权的撤销语义由 <see cref="RevokeGrants" /> 承担；宿主负责 authorization-changed 审计。
+    ///     </para>
+    ///     <para>
+    ///         Called at trusted authorization changes (a policy-identity revision change or migration
+    ///         confirmation — a wholesale change of authorization semantics): releases every denial memory.
+    ///         Revoking active grants stays with <see cref="RevokeGrants" />; the host owns the
+    ///         authorization-changed audit.
+    ///     </para>
+    /// </summary>
+    /// <returns>
+    ///     <para>解除的拒绝记忆条数。The number of released denial-memory entries.</para>
+    /// </returns>
+    public int ReleaseAllDenials()
+    {
+        var released = _deniedFingerprints.Count + _deniedRules.Count;
+        _deniedFingerprints.Clear();
+        _deniedRules.Clear();
+        return released;
     }
 
     /// <summary>
@@ -428,11 +527,62 @@ public sealed class PermissionEngine
                         "Host execution has no OS isolation; approve this single operation to run it.",
                         HostExecutionMissing);
 
-            if (preparation.RequiresNetworkAccess && !_networkStandingEnabled)
-                return (null, PermissionLevel.Level2,
-                        "The command requests sandbox network access (full network through the user's proxy); " +
-                        "approve this operation to run it.",
-                        NetworkAccessMissing);
+            // 写根申请与网络申请都可能把命令升到 Level2；逐项累积缺失能力与文案后一次返回。
+            var processLevel   = PermissionLevel.Level1;
+            var processMissing = new List<string>();
+            var processReasons = new List<string>(2);
+
+            // shell 写根申请：模型显式申请的工作区外写范围恒按 Level 2 逐次审批（常设信任确认
+            // 只覆盖可信设置中的持久根，不覆盖单次调用申请）；C1 权限系统保护路径不可经批准开放。
+            var requestedRoots = preparation.RequestedWriteRoots;
+            if (requestedRoots.Count > 0)
+            {
+                var sensitiveRoots = new List<string>();
+                foreach (var root in requestedRoots)
+                {
+                    // C1 双向重叠：申请根落入权限系统保护路径或覆盖任一保护根都硬拒——
+                    // 单向分类会让保护对象的父目录申请根进入审批并经批准进入真实写范围。
+                    if (_resourcePolicy.OverlapsPermissionSystemRoots(root))
+                        return (PermissionEvaluation.Deny(
+                                                          "The requested write root '"                            + root +
+                                                          "' falls inside or covers permission-system-protected " +
+                                                          "resources; it cannot be authorized."),
+                                PermissionLevel.None, null, Array.Empty<string>());
+
+                    var rootClass = _resourcePolicy.Classify("filesystem.write", root);
+                    if (rootClass is { Class: ResourceClass.PermissionSystemProtected })
+                        return (PermissionEvaluation.Deny(
+                                                          "The requested write root '"                         + root +
+                                                          "' touches a permission-system-protected resource; " +
+                                                          "it cannot be authorized."),
+                                PermissionLevel.None, null, Array.Empty<string>());
+                    if (rootClass?.KnownSensitive == true) sensitiveRoots.Add(root);
+                }
+
+                processLevel = PermissionLevel.Level2;
+                processMissing.Add(AdditionalPathWrite);
+                processReasons.Add("The command requests write access outside the workspace ("                +
+                                   string.Join("; ", requestedRoots)                                          +
+                                   "); approve this operation to run it"                                      +
+                                   (sensitiveRoots.Count > 0 ? " (known sensitive location)" : string.Empty)  +
+                                   ". Approval defaults to this single operation; a turn grant stays inside " +
+                                   "this run only.");
+            }
+
+            // 常设网络免审批与写根确认独立判定：仅"常设网络已启用 + Confirmed"免审批；常设网络
+            // 未启用（restricted）时即便写根已确认也逐次审批，文案如实说明 restricted，不复用
+            // 未确认措辞。None 与 Unconfirmed 均逐次审批，Unconfirmed 的审批文案如实注明。
+            if (preparation.RequiresNetworkAccess &&
+                (!_standingNetworkEnabled || _standingTrust is not StandingTrustState.Confirmed))
+            {
+                processLevel = PermissionLevel.Level2;
+                processMissing.Add(NetworkAccessMissing[0]);
+                processReasons.Add(BuildNetworkAskReason(commandForm : true));
+            }
+
+            if (processLevel != PermissionLevel.Level1)
+                return (null, processLevel, string.Join(" ", processReasons),
+                        processMissing.Distinct(StringComparer.Ordinal).ToArray());
 
             return (null, PermissionLevel.Level1, null, Array.Empty<string>());
         }
@@ -471,9 +621,17 @@ public sealed class PermissionEngine
                     return (PermissionEvaluation.Deny(
                                                       $"The invocation touches a permission-system-protected resource: {target}"),
                             PermissionLevel.None, null, Array.Empty<string>());
-                case ResourceClass.OutsideWorkspace :
+                case ResourceClass.OutsideWorkspace when !readClass :
+                    // 普通越界读取属 L1 广泛读基线（不因越界升层）；只有越界写入需要附加写能力审批。
+                    // 读与写分开申请与展示，审批文本不得把读显示为写。
+                    level     = PermissionLevel.Level2;
+                    askReason = "The invocation writes outside the workspace; approval is required.";
+                    missing.Add(AdditionalPathWrite);
+                    break;
+                case ResourceClass.SensitiveLocation :
+                    // C2 读保护档：已知敏感位置的读与写在广泛读基线下仍按 Level2 逐次审批；
+                    // 能力沿用附加读/写，敏感来源由 KnownSensitive 注记在审批文本如实标注。
                     level = PermissionLevel.Level2;
-                    // 契约 D2：读与写分开申请与展示，审批文本不得把读显示为写。
                     askReason = readClass
                         ? "The invocation reads outside the workspace; approval is required."
                         : "The invocation writes outside the workspace; approval is required.";
@@ -495,9 +653,18 @@ public sealed class PermissionEngine
                     askReason = "The invocation writes an additional read root; approval is required.";
                     missing.Add(AdditionalPathWrite);
                     break;
+                case ResourceClass.UnconfirmedWriteRoot :
+                    // 常设信任未确认：附加写根不在 OS 基线内，写入逐次审批并经 grant 通道临时生效；
+                    // 文案注明未确认状态，读方向不受影响（分类层已按读维持基线档）。
+                    level = PermissionLevel.Level2;
+                    askReason = "Standing trust is unconfirmed; this additional-write-root write requires " +
+                                "per-call approval.";
+                    missing.Add(AdditionalPathWrite);
+                    break;
                 case ResourceClass.BaselineWorkspace :
                 case ResourceClass.AdditionalReadRoot :
                 case ResourceClass.AdditionalWriteRoot :
+                case ResourceClass.SandboxRuntimeRoot :
                 default :
                     break;
             }
@@ -506,15 +673,52 @@ public sealed class PermissionEngine
                 askReason += " (known sensitive location)";
         }
 
-        if (preparation.RequiresNetworkAccess && !_networkStandingEnabled)
+        // 常设网络免审批与写根确认独立判定：仅"常设网络已启用 + Confirmed"免审批；常设网络
+        // 未启用（restricted）时即便写根已确认也逐次审批，文案如实说明 restricted，不复用
+        // 未确认措辞。None 与 Unconfirmed 均逐次审批，Unconfirmed 的审批文案如实注明。
+        if (preparation.RequiresNetworkAccess &&
+            (!_standingNetworkEnabled || _standingTrust is not StandingTrustState.Confirmed))
         {
-            level = PermissionLevel.Level2;
+            level     = PermissionLevel.Level2;
             missing.Add("network-access");
-            askReason = "The invocation requests sandbox network access; approval is required.";
+            askReason = BuildNetworkAskReason(commandForm : false);
         }
 
         return (null, level, askReason, missing.Distinct(StringComparer.Ordinal).ToArray());
     }
+
+    /// <summary>
+    ///     <para>
+    ///         构造网络申请的审批文案：常设网络未启用（restricted）时如实说明逐次审批来自受限
+    ///         策略本身，不复用"常设信任未确认"措辞；已启用且 Unconfirmed 时注明未确认状态，
+    ///         其余为普通逐次审批文案。
+    ///     </para>
+    ///     <para>
+    ///         Builds the approval reason for a network request: with the standing network not enabled
+    ///         (restricted) the text states honestly that per-call approval follows the restricted policy
+    ///         itself and never reuses the "standing trust is unconfirmed" wording; when enabled and
+    ///         Unconfirmed the text notes the unconfirmed state, and everything else keeps the plain
+    ///         per-call approval text.
+    ///     </para>
+    /// </summary>
+    private string BuildNetworkAskReason(bool commandForm) =>
+        !_standingNetworkEnabled
+            ? commandForm
+                ? "The command requests sandbox network access, but standing network access is not "   +
+                  "enabled (networkPolicy=restricted); this call follows per-call approval."
+                : "The invocation requests sandbox network access, but standing network access is not " +
+                  "enabled (networkPolicy=restricted); this call follows per-call approval."
+            : _standingTrust == StandingTrustState.Unconfirmed
+                ? commandForm
+                    ? "The command requests sandbox network access (full network through the " +
+                      "user's proxy); standing trust is unconfirmed, so this call follows "    +
+                      "per-call approval."
+                    : "The invocation requests sandbox network access; standing trust is unconfirmed, " +
+                      "so this call follows per-call approval."
+                : commandForm
+                    ? "The command requests sandbox network access (full network through the " +
+                      "user's proxy); approve this operation to run it."
+                    : "The invocation requests sandbox network access; approval is required.";
 
     /// <summary>
     ///     <para>对完整准备调用生成稳定 SHA-256 指纹，供拒绝记忆精确匹配。</para>
@@ -567,5 +771,8 @@ public sealed class PermissionEngine
         public static readonly FailClosedResourcePolicy Instance = new();
 
         public ResourceClassification? Classify(string capability, string targetPath) => null;
+
+        // 无保护根信息时不声称重叠：申请根按普通越界档走 Level2 逐次审批（与未分类方向一致）。
+        public bool OverlapsPermissionSystemRoots(string path) => false;
     }
 }

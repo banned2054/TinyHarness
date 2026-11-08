@@ -1,8 +1,10 @@
 using TinyHarness.Core.Models.Agent;
 using TinyHarness.Core.Models.ChatCompletions;
 using TinyHarness.Core.Models.Permissions;
+using TinyHarness.Core.Models.Persistence;
 using TinyHarness.Core.Models.Session;
 using TinyHarness.Core.Models.Tools;
+using TinyHarness.Core.Services.Persistence;
 using TinyHarness.Core.Services.Permissions;
 
 namespace TinyHarness.Core.Services.Agent;
@@ -98,8 +100,13 @@ public sealed partial class AgentLoop
                 var approvalProvider = _approver ??
                                        throw new
                                            InvalidOperationException("An approval provider is required when the permission engine returns Ask.");
+                var allowedScopes = GrantScopeOptions.AllowedForPreparation(evaluation.Level, preparation);
                 var request = new ApprovalRequest(preparation, evaluation.Level,
-                                                  GrantScopeOptions.AllowedForLevel(evaluation.Level), null, null);
+                                                  allowedScopes, null, null,
+                                                  ApprovalDisplay.DescribeLines(preparation, evaluation.Level,
+                                                                                    allowedScopes,
+                                                                                    _permissions.Grants
+                                                                                       .SnapshotGrants()));
                 await PublishEventAsync(HostEventKind.ApprovalRequested, request, cancellationToken)
                    .ConfigureAwait(false);
                 var amendmentToken = _control?.AmendmentToken ?? CancellationToken.None;
@@ -163,6 +170,17 @@ public sealed partial class AgentLoop
                         var dispatch =
                             _permissions.CreateDispatchAuthorization(preparation, revision, grantId,
                                                                      scope == GrantScope.SingleOperation);
+                        // 可信授权变更：批准同一绑定操作即精确解除其拒绝记忆，并写入 authorization-changed 审计。
+                        if (_permissions.ReleaseDenialForApproval(preparation) && _recorder is { } recorder)
+                            await recorder.RecordGrantEventsAsync(
+                                                                  [
+                                                                      GrantEventAudit.AuthorizationChanged(
+                                                                       "approval granted for the same bound operation",
+                                                                       DateTimeOffset.UtcNow,
+                                                                       static reason => reason)
+                                                                  ],
+                                                                  cancellationToken).ConfigureAwait(false);
+
                         records[preparation.CallId].Approval = approval;
                         await RecordPermissionAsync(preparation, evaluation, approval, cancellationToken)
                            .ConfigureAwait(false);
@@ -191,6 +209,28 @@ public sealed partial class AgentLoop
                 }
             }
         }
+    }
+
+    /// <summary>
+    ///     <para>
+    ///         权限链路边界 drain：把授权求值、消费与批准产生的授权事件作为必需控制记录落盘。
+    ///         无持久化 recorder 或无事件时不执行操作；writer 失败向上传播（不静默丢事件）。
+    ///     </para>
+    ///     <para>
+    ///         The permission-chain boundary drain: grant events from evaluation, consumption and approval are
+    ///         persisted as required control records. No-ops without a persistence recorder or without events;
+    ///         writer failures propagate (events are never dropped silently).
+    ///     </para>
+    /// </summary>
+    internal async Task DrainGrantEventsToRecorderAsync(CancellationToken cancellationToken)
+    {
+        var events = _permissions?.Grants.DrainEvents();
+        if (events is not { Count: > 0 } || _recorder is null) return;
+        await _recorder.RecordGrantEventsAsync(
+                                               events.Select(grantEvent =>
+                                                                 GrantEventAudit.FromEvent(grantEvent,
+                                                                     static path => path)).ToArray(),
+                                               cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>

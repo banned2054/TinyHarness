@@ -1,3 +1,5 @@
+using TinyHarness.Core.Models.Tools;
+
 namespace TinyHarness.Core.Models.Permissions;
 
 /// <summary>
@@ -54,4 +56,27 @@ public static class GrantScopeOptions
         PermissionLevel.Level3 => [GrantScope.SingleOperation],
         _                      => [GrantScope.SingleOperation, GrantScope.Turn, GrantScope.Session]
     };
+
+    /// <summary>
+    ///     <para>
+    ///         按冻结计划推导审批卡可提供的授权范围：携带 shell 写根申请的调用把写范围冻结进
+    ///         授权与 OS 生效面，Session 范围会使模型在会话内以同一授权反复申请新命令写根——
+    ///         因此只允许单次（缺省）与 Turn；其余计划沿用 <see cref="AllowedForLevel" />。
+    ///     </para>
+    ///     <para>
+    ///         Derives the grant-scope options from the frozen plan: a call carrying shell write roots freezes
+    ///         the write scope into both the grant and the OS effective surface, and a Session scope would let
+    ///         the model re-request new command write roots under one approval for the whole session — so only
+    ///         single-operation (the default) and Turn are allowed; every other plan keeps
+    ///         <see cref="AllowedForLevel" />.
+    ///     </para>
+    /// </summary>
+    public static IReadOnlyList<GrantScope> AllowedForPreparation(PermissionLevel level, ToolPreparation preparation)
+    {
+        ArgumentNullException.ThrowIfNull(preparation);
+        if (preparation.RequestedWriteRoots.Count == 0) return AllowedForLevel(level);
+        if (level is PermissionLevel.Level1 or PermissionLevel.Level3) return [GrantScope.SingleOperation];
+
+        return [GrantScope.SingleOperation, GrantScope.Turn];
+    }
 }
