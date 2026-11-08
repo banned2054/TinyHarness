@@ -1,8 +1,122 @@
 # 权限架构重构任务记录
 
-状态：现有工作区的可提交性修复与验证收口；完整计划及真实环境验收未完成。最新记录见第 11 节；
-第 5–9 节保留原批次记录，不作为本轮验证结果。本文档是权限架构重构任务的主记录与契约源；
+状态：三级执行体系实施进行中；当前产品契约为 2026-11-08 冻结契约（见第 0 节），旧章节中被
+替代的条款已在原处标注。既有权限重构改动已全部提交（master @ 31ce3d8）；冻结契约的
+B1-B8 实施、本轮六项评审修复与 C2 获批读通道（应用侧+fork 分支）在工作区待提交，
+尚未执行 Git 写操作；C2 通道未部署本机（能力门 fail-closed），真实环境综合验收未完成。
+本文档是权限架构重构任务的主记录与契约源；
 状态区分"已验证（真实环境）/ 离线验证 / 未验证 / 推断"。
+
+## 0. 当前产品契约（2026-11-08 冻结）
+
+本节为 2026-11-08 冻结的三级执行体系契约的忠实转录，是当前权威产品契约；与本文件旧章节
+冲突时以本节为准。冻结基线：master @ 31ce3d8，工作区干净。
+
+### 0.1 三级资源与执行矩阵（最终语义）
+
+| 维度 | L1 沙箱基线（默认，自动执行） | L2 沙箱扩展（获批） | L3 宿主（获批） |
+|---|---|---|---|
+| 执行后端 | WindowsSandbox，同一沙箱账户身份 | WindowsSandbox，同一沙箱账户身份 | HostProcess 宿主身份 |
+| 普通文件读 | 广泛可读（不限于工作区）：文件工具应用层不限；沙箱进程 OS 层读边界=用户 profile 根（GAP-1 冻结参数，非 profile 位置 OS 层不读） | 不变（读已广泛） | 按宿主账户权限 |
+| 普通文件写 | 工作区内可写 | 获批写入根范围内可写（见 GAP-2） | 按宿主账户权限 |
+| 危险资源 | C1 硬拒；C2 读拒；C3 仅禁写 | C1 仍硬拒（不可授权）；C2/C3 可开放 | 无 OS 沙箱隔离，路径检查为应用层可信边界 |
+| 网络 | 阻断 | 沙箱内全网：已配置代理时经该代理且坏代理快速失败不回退直连（实测 exit 7），未配置代理时为直连全网；须逐次或显式持久授权 | 按宿主账户网络权限 |
+| 审批 | 无 | Human→用户；AI→Reviewer 三决策 | 同左，仅单次授权 |
+| 隔离声明 | — | 审批展示"同一沙箱身份、非管理员" | 审批展示"无 OS 沙箱隔离、按宿主账户实际权限、无 UAC" |
+
+- 每次新操作默认按 L1 判断（引擎已无状态逐调用分类，保持）。
+- L2/L3 默认 SingleOperation；Turn/Session 须审批卡显式选择；不得自动创建；不跨重启恢复；撤销不回滚。
+- 执行完成不得把会话默认层永久改成 L2/L3（现状已满足，加测试固化）。
+- 一次请求可直接申请 L2（networkAccess=enabled、越界写请求）或 L3（executionScope=host）；无自动升层；结果未知不重放。
+- 批准后不得替换命令/工作目录/后端/扩大资源范围（冻结计划+Revalidate 骨架不变）。
+
+### 0.2 两种审批模式与结果矩阵（与执行层级正交，零改动复用 AiRoutedApprovalProvider/AiReviewer）
+
+| 输入 | HumanApproval | AIAutoReview |
+|---|---|---|
+| L1 | 自动执行 | 自动执行 |
+| L2/L3 | 用户批/拒 | Allow→批准冻结请求（可直接批 L2/L3）；Deny→未执行、不弹人工卡、不换后端重放；EscalateToUser→同一冻结请求交用户（只换审批人不换层级）；超时/不可用/非法→未执行、不自动转人工、不写业务拒绝记忆；取消按取消传播 |
+
+- 超时契约保持：每审核开始解析一次独立总期限并冻结；迟到 Allow 不执行；用户取消不伪装成超时/拒绝。
+- 读取授权与外发授权分别判断（能力轴已分，保持）。
+
+### 0.3 危险资源保护分类（三类，写入计划并如实展示）
+
+- **C1 不可授权保护**（读+写均硬拒，不可经任何批准开放）：沙箱账户凭据、执行组件、授权/可信配置、用户配置、会话存储（PermissionSystemProtected 现集合）。作为"广泛读写"的明确例外在审批文案与文档展示。
+- OS 读保护例外的真实构成（基线广泛读根=用户 profile 根下的三层如实展示）：① **payload deny_read 集**——C1 宿主密钥路径（trust.json/用户配置/会话存储）、沙箱 home 的 cap_sid 授权映射表（与 SID 表存储同一解析来源 `<home>\cap_sid`）、`.codex` 授权内容（上游 Codex CLI home：auth.json、cap_sid、归档与备份等，整目录 deny；沙箱链路只使用独立命名空间 home，对其无读/执行依赖）及 C2 目录段，随每命令 refresh 同步施加、集合收缩可回收；② **provisioning 既有锁**——`.sandbox-secrets` 由 provisioning 对沙箱组永久 DENY，不进可回收的 deny 簿记（避免集合收缩时被 revoke 撤锁）；③ **执行组件 exe 不做 OS 读拒**——沙箱执行链路需要读取组件，其保护为写完整性（组合 fail-closed + provisioning 写锁）；此为必须显式写明的隐藏例外消解。deny 集为组合期快照：会话内新建的敏感目录不在 OS deny 语义内，文件工具仍由应用层分类器保护；缺失条目由 helper 物化为空目录（无上游 Codex 的机器会留下带组 deny ACE 的空 `.codex`，已知行为）。
+- **C2 读保护敏感资源**（L1 禁读，获批 L2 可开放；写同样 L2）：KnownSensitive 命中且非 C1/元数据的越界位置（SensitivePathClassifier 具体名单：.ssh/.aws/.docker/.gnupg/.kube/.sandbox-secrets 等目录段、.env/credentials/id_rsa 等精确文件名、.pem/.key 等扩展名）。新增 ResourceClass 档（如 SensitiveLocation），替换现状"越界读一律 L2"。名单式、不宣称识别所有秘密。OS 读保护精度（2026-11-08 修复轮更新，取代 M4 旧口径）：deny_read 集仍只含目录段级条目，但**基线 deny 集来自组合期的有界敏感名扫描**——枚举读根（用户 profile），把已存在的嵌套敏感目录段与文件名/扩展名级命中一并并入 deny 集（分类器末段盲点已修：以敏感目录本身结尾的路径按敏感判定），沙箱 home 子树与已有 deny 祖先覆盖的命中跳过，重解析点只词法判定不下降，不可读子树跳过（名单如实"不声称完整"）。枚举预算耗尽即组合失败（fail-closed）。**快照边界如实声明**：扫描是组合期快照，会话中途新建的敏感路径要等下次组合进入 OS deny，期间仅应用层文件工具保护；指纹取值器显式传空扫描（快照是文件系统成分而非配置成分，逐次重扫会因文件增删制造失配误撤销授权；快照漂移由策略身份的 denyReadPaths 段在授权复核层表达）。
+- C2 不升档的两个边界（契约行为）：附加读/写根内命中敏感名不升档（用户显式信任面；常设信任迁移确认时展示"持久根可能包含敏感位置"）；工作区内敏感文件维持基线+注记，不自动识别工作区内的秘密。
+- **C3 仅禁写元数据**（读=L1 基线，写=获批 L2）：.git/.agents/.codex/.aws 四目录（ProtectedMetadata，保持）。
+- 不得把所有点目录或含 secret 字样的文件粗暴归类；分类名单≠完整秘密识别，文档说明覆盖范围。
+- C1 在 OS 组合器/解析器的 fail-closed 校验保持；deny ACE 白名单参数化仅限支持 C2 的 OS 读保护（见 GAP-1）。
+
+### 0.4 授权默认范围、失效与持久信任迁移
+
+- Grant 模型、三档 Scope、失效矩阵（参数/目录/环境/后端/策略/工作区修订任一变化）沿用 D3，不变。
+- **常设设置迁移（新）**：`settings.windowsSandbox.networkPolicy=enabled` 与 `AdditionalWriteRoots` 现状静默扩大 L1，违约。改为：
+  1) 引擎不再把常设 networkPolicy=enabled 当作免审批通道（`_networkStandingEnabled` 直通移除）；未确认迁移前，联网/越界写一律逐次 L2 审批。
+  2) 配置层检测到常设网络信任或非空附加写根 → 显式迁移待确认态（复刻 permission-migration 修订链模式）：确认界面如实展示授权范围（网络表述与 0.1"网络"行一致；写根列表，并提示持久根可能包含敏感位置）、有效期（持久至撤销）、当前状态；确认后这些设置作为**显式持久授权**运行（引擎按已授权持久信任消费，审批展示与设置页可见、可撤销=清除设置）。
+  3) 普通保存设置不解禁；迁移失败保持原数据与阻断。附加读根不触发确认门禁（应用层文件工具读在广泛读基线下不变），但随 Confirmed 注入沙箱并在 OS 层真实扩大读面（profile 外的根可读）——确认展示如实列出读根列表（2026-11-08 B7R-M2 修正；早期"无效果遗留字段"表述作废）。
+  4) 派生运行时写根（nuget-cache/tools/tempRoot）注入 ResourceAccessPolicy 为新档 SandboxRuntimeRoot → L1 自动（消除 OS/应用层错位），文档如实说明。
+
+### 0.5 授权治理补齐（阶段 E）
+
+- Grant 生命周期审计：消费 GrantRegistry.DrainEvents（现无消费者），持久化新必需记录 `permission-grant-event/1`（Granted/Consumed/Revoked/Expired/Invalidated + Scope/Capability/Targets 摘要/Reason/Utc；沿用既有脱敏边界）。旧程序拒读符合仓库必需记录哲学。**审计面等价关系（2026-11-08 收口）**：审批卡 SingleOperation 批准不建立登记表 Grant，其审计面=`tool.permission` 记录（outcome 含 grant 提及/单次批准）；`permission-grant-event/1`=登记表 Grant 的生命周期（Granted/Consumed/Revoked/Expired/Invalidated）与可信授权变更（authorization-changed），二者互补、不重复。运行终态 drain 失败以 DisplayWarning 如实呈现（不阻断收尾、不静默吞掉）。
+- Reviewer 授权上下文：GrantHistory 条目补 targets 摘要、constraint、ExpiresUtc、策略修订（预算内截断）。
+- 拒绝记忆解除：新增显式 API，仅可信授权变更触发（用户批准同一绑定操作、显式撤销/重授、策略身份修订变更、迁移确认）；任意新消息不清空。"重试已拒绝操作"显式入口列延期（粘滞拒绝语义下批准触发解除通常休眠，迁移确认为当下实际生效解除点）。
+- 审批展示补齐：申请层级+真实后端；L2"同一沙箱身份、非管理员"与 L3"无 OS 沙箱隔离、按宿主账户实际权限、无 UAC"声明；具体操作+工作目录；实际文件权限（L1 广泛读基线说明、本次批准写根、元数据写）与网络权限（无/全网经代理）；有效期（Scope+ExpiresUtc）；已有活动 Session/Turn Grant 的范围与状态；AI 转人工原因。CLI 与 Desktop 一致（展示事实行由 ApprovalDisplay 单一来源生成；文件工具档如实展示宿主进程内执行、应用层可信边界）。
+
+### 0.6 两端一致（阶段 D）
+
+- CLI run/chat 生产路径注册 PermissionShellTool（沙箱可用时），L3 在 CLI 可达；离线 smoke 组装与生产对齐或显式声明差异；两份 WorkspacePrompts 同步。
+- 统一两端保护根集合（Desktop 补 trust.json 保护，取超集）。
+- 旧配置/历史会话恢复迁移语义沿用 D9；新常设信任迁移叠加其上（普通保存不解禁、失败保持阻断、不批量重写历史日志、不恢复历史可执行 Grant）。
+
+### 0.7 延期与阻塞（如实记录，不得静默收窄目标）
+
+- **GAP-1 OS 层广泛读与读保护（调查完成，已裁决放行实施）**：只读调查核实外部 helper（fork `banned2054/codex`，pinned `1b647eac`）已具备所需能力，无需修改外部 fork。证据：setup payload `deny_read_paths` 字段被 serde 反序列化并在每命令 refresh 通道同步消费（`setup_provisioning.rs:956-964` 调用 `sync_persistent_deny_read_acls`）；deny-read ACE 按 SID 簿记（`deny_read_acl_state.json`），先应用新集合再撤销 stale 条目，可回收；`read_roots` 经后台 helper 给沙箱用户组授 RX ACL。helper 语义已按 pinned ref 复核：缺失路径物化为目录、拒绝文件系统根、单次失败回滚本轮新增 ACE。冻结参数：基线广泛读根=用户 profile 根（走既有 read_roots 组 RX 通道，沙箱启用时随基线组合，非 grant）；本轮不引入盘根级 read root，非 profile 位置 OS 层不读（文档如实说明；文件工具应用层仍不限工作区广泛读）。deny_read_paths 接线：C1 具体保护路径（用户配置目录/会话存储/trust.json/沙箱 home 与组件/凭据目录，按两端各自保护根集合）+ C2 具体已知敏感目录（分类器目录段命中，遵循 helper 物化或跳过语义）；文件名/扩展名级 C2 无法 OS 化，该维度仅应用层覆盖，文档如实声明。组合校验：read root 与 C1/C2 重叠时必须配对 deny 条目；deny 应用失败 fail-closed（Rust 侧已 error，已核实）；deny 集不得含盘根。
+  - 注记 a（引号参数宿主同形畸变，B3e 实测）：含空格/引号的路径作为 argv 元素时，runner 的 Rust-std 风格引号转义（内层引号→`\"`，`winutil.rs:76-121`）+ cmd `/s` 剥外层引号 + CRT 把 `\"` 解析为字面引号三层叠加，产生 `C:\C:\` 类畸变路径与 INVALID_NAME/PATH_NOT_FOUND；**宿主同形命令行同败**（B3e hostctl.cmd 对照），属 cmd/argv 固有语义而非沙箱隔离缺口。验收纪律=CmdSafePath（WindowsSandboxAcceptanceRunner.cs:1320 既有防御：验收路径禁止空格/引号、裸嵌入 commandText）。
+  - 注记 b（deny-read 回收范围）：簿记按 codex_home 分立（`<home>\.sandbox\deny_read_acl_state.json`），回收仅覆盖**同一 codex_home 簿记内**的条目；跨 home（如 TCP 环回变体 home）运行或簿记外来源（手动/中断遗留）的物理 ACE 不被回收——保护性物理残留，已实测（C3-P2c：空 deny payload 清簿记、物理 ACE 残留）。同管道重加同条目幂等（`deny_ace_already_present` 不重复施加、路径仍入簿记），无冲突。
+  - 端到端归档：RS-02a（沙箱内读宿主创建文件）已由 B3e 达成——`type`/`findstr`/`dir` 裸绝对路径 exit=0（含内容匹配与目录列表），负例 `type <profile>\.codex\auth.json` exit=1 拒绝访问；正式复测归档=C3-P2d。
+- **G1 已知限制（真实 OS 表征）**：① setup helper 日志句柄独占（并发读取诊断日志受阻）；② 陈旧 `setup_error.json` 易误导诊断（历史失败报告与新结果并存时以新写入为准判读）；③ 大目录树的继承 ACE 传播可超过 10 分钟（icacls 递归传播耗时，验收等待需留界）。④ deny-read 簿记漂移：空 deny payload 的运行（如 verify）会清空簿记而物理 ACE 残留（见 GAP-1 注记 b）；重加幂等；方向=保护性残留。
+- **GAP-2 L2 全范围广泛写（真实 OS 实测修正）**：广泛写与 C1 保护在现 fail-closed 组合校验下互斥（WindowsSandboxComposer.cs:296-316；deny ACE 仅 4 元数据子路径且不可参数化）。实测修正：grant 写 ACE **不存在收敛**——撤销与无 grant 的 refresh 均不回收已落盘写 ACE，残留无限期（此前"写根 ACE 有收敛行为"的记录不成立）；残留对无对应 capability SID 的 token 惰性，隔离由 token 侧维持（实测 2/2 拒绝）。本轮交付相应为：获批写入根机制（含 Shell 写根请求参数，已交付：shell 的可选 `writeRoots` 参数按 Level 2 逐次审批、只允许单次与 Turn 授权、根经 ResolveGrantScope 同一 fail-closed 校验面并入 grant 范围与策略身份）+ 回 L1 隔离的 token+快照级验证；OS 残留如实披露。验收第 15 条按此执行：token+快照级断言 + OS 残留披露，不以 OS ACE 剥离为验收条件。全范围无预声明写=延期，阻塞=外部 helper 无写 ACE 撤销语义（单独立项）。
+- **GAP-3** deny ACE 回收（元数据 grant 可用性）——既有外部限制，保持记录。
+- **GAP-4** 沙箱 TLS SEC_E_NO_CREDENTIALS——保持记录。
+- **GAP-5** 真实模型 Reviewer 效果验收——未获准真实模型调用，保留未验证。
+- **GAP-6** GUI 真机交互验证——仅离线 smoke。
+
+### 0.8 验收标准（任务书第八节 20 条按交付范围适配，C 据此设计）
+
+1. 两审批模式 L1 均不请求额外批准；
+2. L1 普通越界读成功（应用层；OS 层按 GAP-1 结论）；
+3. L1 工作区普通写成功；
+4. L1 越界写/C1/C2 读/网络按契约阻断（C2 读阻断=L2 语义）；
+5. L2 未获批不执行；
+6. L2 获批后写批准根+联网成功且仍为沙箱身份（全范围广泛写按 GAP-2 如实标注）；
+7. L3 未获批不执行、获批仅绑定调用；
+8. AI 三决策严格分离；
+9. Deny 不弹人工卡、技术失败不转人工；
+10. 升级不改层级/计划；
+11. 单次批准原子消费；
+12. 参数/目录/策略/授权修订变化失效旧计划；
+13. 取消后旧审批 ID 不可复用；
+14. A 会话授权不扩 B 会话；
+15. 回 L1 不携带 L2 能力（token+快照级断言；OS grant 写 ACE 残留按 GAP-2 实测如实披露，不作为验收条件）；
+16. 子进程取消/回收、不确定即阻断重放；
+17. 旧配置/恢复/迁移失败/重启不恢复执行授权（含常设信任迁移门禁）；
+18. CLI 正常入口与 Desktop 一致（真实 run/chat 入口，非特制 smoke）；
+19. 文件工具与 Shell 资源语义一致；
+20. 超时策略与既有迁移/搜索不回归。
+
+验证分类报告：静态检查/离线 fake/真实 Windows 沙箱（专用测试目录）/GUI/真实模型（未授权，保留未验证）。
+遗留验证（2026-11-08 收口）：#14"A 会话授权不扩 B 会话"的**真并发双进程探针**列遗留——当前覆盖为
+实现静态保证（GrantRegistry 按会话实例隔离）+ 单进程多宿主测试；跨进程并发探针未执行，不声称已验。
+实现层已知限制（Low，2026-11-08 D 复查记录、按"记录不修"处理）：① writeRoots 申请含工作区内根时
+仍触发 L2 逐次审批（文案"outside the workspace"对该根不准确，fail 方向安全）；② Reviewer 授权上下文
+的 targets 摘要未经脱敏直出（审批展示面走 redact，两侧不对称；targets 属授权上下文本就进入该面）；
+③ 运行终态 drain 以 CancellationToken.None 在 finally 内等待，writer 卡死时无超时（取消路径收尾可被
+延迟，审计可靠性优先的取舍）；④ ScopeRevision 归一化对相对路径依赖进程 CWD（设置加载端其他面有
+绝对校验；漂移方向 fail-closed=Unconfirmed）。
 
 ## 1. 背景与目标
 
@@ -44,6 +158,12 @@ Level3 = Host 单次显式申请（绑定完整调用，仅 SingleOperation）�
 Level 是展示/审计分类，非授权来源。沙箱未配置/不可用 → `process.execute` 一律 Deny（fail closed），
 Host 申请同样拒绝；文件工具仍可用。
 
+> **取代说明（2026-11-08 契约）**：本节三级定义已被第 0.1 节"三级资源与执行矩阵"替代。
+> L1 普通文件改为广泛可读（不限于工作区；危险资源按第 0.3 节三类保护）；L2 语义为获批后的
+> 沙箱扩展档，全范围广泛写受 GAP-2 外部限制，本轮交付获批写入根机制；工作区外普通读取不再
+> 仅因越界归入 L2。"Level 是展示/审计分类，非授权来源"与沙箱不可用 fail-closed 拒绝（含 Host
+> 申请、文件工具仍可用）的约定继续有效。
+
 ### D3 Grant
 
 `Grant { GrantId, Scope, Capability, Constraint, Targets, PolicyIdentity, CreatedUtc, ExpiresUtc, State }`；
@@ -80,11 +200,22 @@ Level2 通道 = grant 驱动沙箱 ACL 扩展，grant 根并入 PolicyIdentity�
 Level1 Allow → Grant 匹配 → Ask 按 ApprovalMode 路由。未知能力 Ask fail-closed。
 执行入口 Revalidate 复核。
 
+> **取代说明（2026-11-08 契约）**：`OutsideWorkspace` 的读取分类已被第 0.1/0.3 节替代——
+> 非保护、非敏感的工作区外普通读取归入 L1 广泛可读基线（OS 层读边界按 GAP-1 结论处理）；
+> 已知敏感位置新增 C2 读保护档，L1 禁读、获批 L2 开放；派生运行时写根回注为新档，
+> L1 自动（第 0.4 节）。固定决策链、Grant 匹配、Ask 路由与执行入口 Revalidate 复核骨架不变。
+
 ### D6 网络真实边界
 
 仅 enabled = 沙箱内全网（经用户代理）唯一可执行档；窄域名授权未实现
 （Codex proxy-enforced/restricting SID 未启用），不添加假接口；
 审批与文档如实写明全网范围；现有 `networkPolicy`/`proxy`/附加读写根设置原样保留为独立维度。
+
+> **取代说明（2026-11-08 契约）**：常设 `settings.windowsSandbox.networkPolicy=enabled` 与
+> `AdditionalWriteRoots` 的静默消费方式已被第 0.4 节替代——引擎不再把常设网络信任当作免审批
+> 通道；配置层检测到常设网络信任或非空附加写根即进入显式迁移待确认态，确认后作为显式持久授权
+> 运行，普通保存设置不解禁。`enabled` 逐次申请按审批路由、全网（经用户代理）范围表述与
+> 窄授权未实现的约定不变。
 
 ### D7 文件工具 = 可信宿主代理
 
@@ -253,6 +384,9 @@ NativeAOT publish 未在本批执行（后续综合验收切片覆盖）。
 
 ## 9. 验收矩阵
 
+> **取代说明（2026-11-08 契约）**：本节为 2026-11-07 旧契约（D1–D10）的验收矩阵，仅作历史与
+> 待复跑跟踪，不作为当前权威；当前权威验收标准见第 0.8 节，行项映射由测试设计承接。
+
 按主 Agent 校准后的任务书第十五节 51 场景排列（五组）；列"状态"区分
 已验证（离线）／部分验证／待办／待复跑（重构前真实 OS 验收通过，重构后需重新执行）。
 
@@ -334,13 +468,14 @@ NativeAOT publish 未在本批执行（后续综合验收切片覆盖）。
 
 ## 10. 提交拆分与本轮修复（2026-11-07）
 
-本节为当前复核结果；以上批次状态保留为历史实施记录，不代表整项功能已经验收。
+本节为 2026-11-07 的复核结果；以上批次状态保留为历史实施记录，不代表整项功能已经验收。
 
 ### 已提交的独立部分
 
 - `e0d4eb5`：记录权限架构契约与实施进度。
 - `bcf6265`：独立搜索增强，包含搜索契约测试与 CLI/Desktop 提示词；不含新资源策略接线。
-- 其余权限、执行、迁移及产品适配继续留在工作区，本轮没有提交这一部分。
+- 其余权限、执行、迁移及产品适配当时继续留在工作区，本轮未提交；该批改动后续已全部提交
+  （截至 master @ 31ce3d8，工作区干净）。
 
 ### 本轮修复
 
@@ -389,6 +524,10 @@ Desktop smoke 不初始化窗口，不能替代真实 GUI 验收。具体日志�
 
 ## 11. 当前工作区可提交性收口（2026-11-07）
 
+> **状态更新（2026-11-08）**：本节所述工作区改动后续已全部提交（master @ 31ce3d8，工作区干净）；
+> 本节保留为当时记录，其中"未执行 Git 写操作、暂存区为空"等为当时工作区快照表述。
+> 未验证事项照实保留。
+
 本轮最终范围为修复现有工作区并完成必要本地验证，不继续按长计划补齐功能或综合验收。
 先前已写入工作区的迁移通知、CLI `/approval`、历史标签和审批范围接线保留；
 其存在不代表 Phase 5 或整项权限架构已经验收完成。第 5–10 节保留当时记录。
@@ -414,7 +553,7 @@ Desktop smoke 不初始化窗口，不能替代真实 GUI 验收。具体日志�
 | 迁移门禁与 CLI 审核针对性回归 | 17/17 通过，包含待迁移模式切换拒绝、持久化读回和取消传播 |
 | CLI/Desktop win-x64 NativeAOT | 最终源码两端 publish 成功，未见 AOT/trimming warning |
 | 最终原生产物离线 smoke | 源码目录外执行 CLI `--help`、完整 `smoke` 与 Desktop `--offline-smoke`，均 exit 0 |
-| Diff 与暂存区 | `git diff --check` 通过，未执行 Git 写操作，暂存区为空 |
+| Diff 与暂存区 | `git diff --check` 通过；当时未执行 Git 写操作、暂存区为空（该批内容后续已提交，master @ 31ce3d8） |
 
 测试计数按 TRX 的发现与执行数记录。CLI smoke 验证 16 次工具执行与明确审批的脚本闭环；
 Desktop smoke 验证并行会话、切换、恢复和释放，不初始化窗口。
@@ -427,3 +566,88 @@ Desktop smoke 验证并行会话、切换、恢复和释放，不初始化窗口
 回收仍未完成。沙箱可用性是组合时快照；初始组合失败后在同一入口通过 `/trust` 修复，
 不保证旧引擎同步启用进程执行，失败方向为拒绝。这些边界不能被离线 smoke 替代。
 验证日志与 TRX 保存在本地 `.tmp/permission-finish-20261107/`，不纳入提交。
+
+## 12. 六项评审修复与 C2 获批读通道（2026-11-08，工作区待提交）
+
+本节记录冻结契约 B1-B8 实施之后的评审修复批次与 C2 获批读授权通道；全部改动在工作区待提交，
+尚未执行 Git 写操作。
+
+### 12.1 六项评审修复（已实施，定向+离线测试通过）
+
+1. **常设网络免审批双条件**：网络免审批要求"常设网络策略 enabled 且常设信任 Confirmed"
+   同时成立；`restricted` 下仅写根确认不再免网络审批（此前写根确认状态被网络免审批复用）。
+   PermissionEngine 新增 standingNetworkEnabled 独立门。
+2. **C1 保护双向重叠**：申请根**覆盖** C1 保护对象（用户配置/信任文件/会话存储的父目录等）
+   一并硬拒，不再只查申请根自身；检查覆盖四个写根来源（per-call 申请、常设附加写根、
+   活动 Grant、用户配置的运行时根），全部按组合实例实际路径比对。
+3. **撤销常设授权的会话失效（组合指纹守卫）**：发送入口与每次工具派发前核对组合时指纹与
+   当前可信配置（CLI 与 Desktop 两端均重读可信配置；读取/解析失败同样失效）；失配即
+   `PermissionEngine.RevokeGrants()`（递增授权修订+撤销 Grant+一次性派发凭据失效）+
+   会话失效闩+提示重新打开会话；已启动进程沿用现有取消回收，不自动重组合。指纹覆盖所有
+   决定授权与执行边界的配置，不含模型/UI 等无关项。
+4. **permissionSystemRoots 细化**：整沙箱 home 收缩为四个敏感子路径（`.sandbox-secrets`/
+   `.sandbox`/`cap_sid`/`.sandbox-bin`，取自 components 实际属性）；默认 tmp/tools/nuget-cache
+   运行时根恢复 SandboxRuntimeRoot 分类与 L1 免审批；OS ACL 与组合期完整性校验仍保整 home，
+   两层集合分离。
+5. **真实沙箱测试门禁**：`CliProductionEntryRealSandboxTests` 改环境变量门禁
+   （`TINYHARNESS_REAL_SANDBOX_TESTS`）；探针根必须显式指定（`TINYHARNESS_REAL_SANDBOX_PROBE`，
+   无默认值——%TEMP% 有历史 ACL 污染记录）；负向隔离探针先验探针根 ACL 前提
+   （不满足=Inconclusive，不计通过）；代理参数化（`TINYHARNESS_REAL_SANDBOX_PROXY`，
+   默认 `http://127.0.0.1:7890`）。默认 `dotnet test` 不触机器沙箱、固定用户目录与外网。
+6. **C2 获批读授权通道**：见 12.2。
+
+### 12.2 C2 获批读授权通道（协议 v7）
+
+**动机与主体**：沙箱组 DENY 与 read 授权同主体冲突且显式 DENY 压过 ALLOW，获批 C2 读不能经
+既有组通道放行。引入不在 deny 组内的专用授权主体（fork 侧新账户对 TinyHarnessAuthOff/On
+与组 TinyHarnessAuthUsers，仅授权执行时使用）。
+
+**协议 v7 语义**：payload 新增 `authorized_read_paths`（空=普通执行；普通执行仍 version 5
+行为零变化）；helper（fork 分支 `tinyharness/c2-authorized-read`，基于 pinned `1b647eac`）
+接受 5/6/7。获批 C2 读路径不再并入 read_roots 组通道（语义收敛到授权通道）。
+
+**helper 侧 C1 可信名单**：授权执行前 helper 从 `<home>\.sandbox-secrets\protected_paths.json`
+（应用写入；沙箱组对该文件永久 DENY，不可篡改）读取保护清单；缺失/解析失败/与授权读双向
+重叠（规范化+最终落点比对）即拒绝执行——不信任 payload 自报名单。
+
+**应用侧三道门**：
+
+- 能力门：`sandbox_users.json` 版本 ≥7 才放行授权执行；helper 能力未声明即拒绝。
+- 禁用门：恢复失败或进程回收状态未知→禁用授权主体并持久化，后续授权执行入口阻断，
+  仅成功恢复清除。
+- 串行门：跨进程 Global 互斥；窗口=施加授权→执行→确认目标及子进程回收→恢复 refresh→
+  释放；恢复=空授权 v7 payload 撤销全部授权 RX。
+
+**应用侧 C1 断言**：authorized 集与组合期 C1 实例双向重叠即拒绝。
+
+**身份隔离**：授权执行的 policy identity 含授权集；审批复用键不与普通执行混用。
+
+**部署与回退方案草稿（未执行）**：替换 helper+runner 二进制 → Full provisioning → 应用
+能力门放行；回退=换回 v5 二进制；残留清理=uninstall 路径。
+
+**部署状态（如实）**：fork 改动在本地分支完成构建与单元测试（5 个失败均为环境项：符号链接
+权限/本机无 pinned runner/锁级联），未部署本机——本机 helper 仍为 pinned v5、生产 home
+marker 仍 v5；当前未部署状态下授权执行在能力门被拒绝（fail-closed，普通沙箱行为不变）。
+真机端到端验收未做。已知机器残留：fork 测试套件的 elevated 测试在本机自动创建了授权
+账户对/组/5 条防火墙规则（惰性状态，不影响生产 v5 工作流），待部署决策时复用或清理。
+
+**2026-11-08 修复轮补记（工作区待提交）**：① 授权执行账户已接启动链——后端按同一份
+deny/获批分流纯函数为获批读执行选择专用授权账户对（离线↔TinyHarnessAuthOff、生效在线↔
+TinyHarnessAuthOn），凭据读取器要求 v7 代与专用条目（缺失/降代明确失败，绝不回退普通沙箱
+账户；普通执行绝不使用授权账户）；管道 ACL 与私有桌面按返回账户 SID 构造，授权离线账户
+携带 fork 侧离线防火墙规则面，读授权不随带开放网络。此前 Rust `authorized_sandbox_creds`
+与授权账户对无任何真实调用方、C# 凭据模型缺 authorized 记录——已修。② fork 恢复顺序
+回归修复：grants 重排到 deny 重同步**之前**（revoke_ace 按 SID 无差别删除显式 ACE，旧顺序
+会在撤销陈旧授权时连带删掉刚恢复的 deny 且报告成功）；撤销失败向上传播且簿记保留（下次
+同步重试，revoke 幂等），授权授予的回滚失败并入错误上下文。应用侧恢复失败→禁用门的既有
+链路不变，现在能收到真实失败。
+
+### 12.3 验证口径与未完成事项（如实）
+
+- 已验证：应用侧定向+离线测试集全绿、六项目构建 0 错误；fork 侧=cargo build+单元测试通过
+  （5 个失败均为环境项）。全量套件由主会话执行中，结果见验证记录，本文不代记。
+- 未验证：全量套件、NativeAOT publish、原生产物 smoke、真实沙箱、GUI。
+- 真实环境综合验收与 #14 真并发双进程探针保持未完成；本轮为二者准备了环境门禁+显式探针根+
+  ACL 前提的载体（12.1 第 5 项），执行待部署后真机验收。
+- L2 全范围广泛写延期缺口不变（GAP-2）：本轮获批写根机制不改变该延期状态，验收仍按 0.8
+  第 6/15 条口径执行，不将获批写根表述为全范围广泛写。

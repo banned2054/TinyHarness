@@ -17,15 +17,51 @@ All notable changes to TinyHarness.NET are documented here, with matching Simpli
 
 #### ✨ 新增
 
-- 可信用户设置 `settings.modelTimeouts`：`streamIdleTimeoutSeconds`（默认 300 秒，`0` 关闭应用层空闲保护，底层 SDK 仍保留每次网络操作 300 秒保护）为模型流提供空闲期限，`responseTimeoutSeconds`（默认 0，关闭）限制单次响应总时长，`approvalTimeoutSeconds`（默认 300 秒，必须为正）约束单次 AI 审核；策略对 CLI、Desktop、MCP worker、`doctor --connect` 与审批调用的模型客户端统一生效，负数或超出计时器范围的值在配置加载或保存时报错。修改该节后，同模型刷新与重新选择按新策略替换客户端，不重置推理连续性，也不扩大持久化选择记录；CLI `/models` 显式应用与发送前核对按客户端实际采用的超时策略标注候选，不按可能过期的目录快照。
-- AI 审核增加独立审批总期限：到期按超时失败处理，操作不执行、不转人工、不写拒绝记忆，可手动重试；期限判定覆盖建客户端、模型流与解析全程并在所有成功接受边界显式检查，底层正常收尾而期限已到的迟到结果按 Timeout 拒绝；期限在每次审核开始时按当前生效策略解析一次并在该次审核内冻结，审核进行中修改配置不影响已开始的审核；用户取消与审批作废仍按原语义向上传播。
+- 三级执行体系（Windows 沙箱基线 / 沙箱扩展 / 显式宿主执行）：普通读取不限工作区、工作区写入与沙箱 Shell 自动执行；越界写入、已知敏感位置（读与写都 L2）、受保护元数据写入、联网申请与 shell 写根申请按 Level 2 逐次审批；`executionScope=host` 为显式单次批准的宿主执行，CLI 生产路径与 Desktop 注册同一 Shell 路由形态。
+- 常设信任显式迁移：`networkPolicy=enabled` 与附加写根不再静默扩大授权；检测到即进入未确认态（联网与附加写根写逐次审批、OS 基线不注入），经 CLI chat 启动确认或 Desktop 设置页常设授权区块确认后作为显式持久授权运行，撤销入口随时可用；确认展示如实列出网络范围、附加读/写根与敏感位置提示。
+- OS 层基线广泛读与读保护：沙箱进程 OS 读边界=用户 profile 根；C1 宿主密钥路径（trust.json/用户配置/会话存储/trust 存储）、`.codex` 授权内容、`cap_sid` 与 C2 敏感目录段经 deny-read 集随每命令同步施加、可回收（deny 集=目录段；文件级敏感由应用层保护）。
+- shell 写根申请参数 `writeRoots`（≤8 个绝对路径，空格/引号/盘根拒绝）：批准后写根冻结进授权与策略身份并经 grant 通道在沙箱内生效；仅允许单次与 Turn 授权。
+- 授权治理：授权生命周期与可信授权变更以必需记录 `permission-grant-event/1` 写入会话日志（旧程序拒读）；Reviewer 授权上下文补目标摘要、约束、有效期与策略修订；审批展示事实行（后端与隔离声明、文件与网络权限、有效期、活动授权摘要）在 CLI 与 Desktop 同源一致；拒绝记忆仅在可信授权变更点解除。
+- 未信任工作区入口恢复：`run` 在未信任工作区保持可用（模型与只读文件工具可用、进程执行 fail-closed 拒绝），stderr 给出 /trust 指引；沙箱组合的基线读保护 pairing 校验不变。
+- C2 获批读授权通道（沙箱 payload 协议 v7）：获批的敏感位置读取由不在 deny 组内的专用授权主体在单次执行窗口内完成（`authorized_read_paths` 载荷；不含授权读即普通执行，普通执行行为与旧版完全一致），获批读路径不再并入 read_roots 组通道；执行窗口跨进程串行，授权执行身份与普通执行隔离。三道前置门：helper 能力未声明 v7 即拒绝；恢复失败或进程回收状态未知即禁用授权主体并持久化；helper 侧以沙箱组不可篡改的保护清单核对 C1 保护面（缺失/解析失败/与授权读重叠即拒绝）。授权执行需沙箱组件声明 v7 能力，未声明的环境下入口拒绝（fail-closed），普通沙箱行为不变。
+
+#### 🛠 修复
+
+- 文件工具 grant 缺策略身份导致授权事件记录被拒的断路（文件工具计划现携带稳定策略身份）。
+- CLI 守卫包装丢失网络申请标志导致的审批旁路（守卫路径网络申请恢复逐次审批）。
+- 常设网络免审批收紧为双条件：需常设网络策略 `enabled` 且常设信任已确认同时成立；`restricted` 下仅确认附加写根不再连带免网络审批（PermissionEngine 新增 standingNetworkEnabled 独立门）。
+- C1 保护覆盖双向重叠：申请根覆盖 C1 保护对象（如用户配置、信任文件、会话存储的父目录）同样硬拒；检查覆盖全部四个写根来源（单次申请、常设附加写根、活动 Grant、用户配置运行时根），按组合实例实际路径比对。
+- 撤销常设授权即失效会话：发送入口与每次工具派发前核对组合指纹与当前可信配置（CLI 与 Desktop 同机制、两端重读配置，读取/解析失败同样失效）；失配即撤销全部授权并失效会话，提示重新打开；已启动命令沿用既有取消回收，不自动重组。
+- 权限系统保护根细化：整沙箱 home 收缩为四个敏感子路径（`.sandbox-secrets`、`.sandbox`、`cap_sid`、`.sandbox-bin`）；默认 tmp/tools/nuget-cache 运行时根恢复运行时根分类与 L1 自动执行；OS ACL 与组合完整性校验仍覆盖整 home。
+
+#### 🧪 测试
+
+- 真实沙箱验收测试改为环境变量门禁：默认 `dotnet test` 不触机器沙箱、固定用户目录与外网；探针根必须经 `TINYHARNESS_REAL_SANDBOX_PROBE` 显式指定（无默认值，避免 %TEMP% 历史 ACL 污染），负向隔离探针先验探针根 ACL 前提（不满足记为 Inconclusive 不计通过），代理经 `TINYHARNESS_REAL_SANDBOX_PROXY` 参数化。
 
 ### English
 
 #### ✨ Added
 
-- Trusted user setting `settings.modelTimeouts`: `streamIdleTimeoutSeconds` (default 300 s; `0` disables the app-layer idle guard while the SDK keeps its 300-second per-network-operation protection) bounds idle gaps in the model stream, `responseTimeoutSeconds` (default 0, disabled) bounds one response end-to-end, and `approvalTimeoutSeconds` (default 300 s, must be positive) bounds one AI review; the policy applies uniformly to the model clients of CLI, Desktop, the MCP worker, `doctor --connect`, and approval calls, and negative or out-of-range values fail config loading or saving with the field path. After changing this section, same-model refreshes and reselections replace the client under the new policy without resetting reasoning continuity or extending the persisted selection record. CLI `/models` explicit application and the pre-send check annotate candidates by the timeout policy the client actually uses, not by a possibly stale catalog snapshot.
-- AI review gains an independent approval deadline: expiry is handled as a timeout failure — the operation stays unexecuted, never reaches a human, records no denial memory, and can be retried manually. Detection spans client creation, the model stream and parsing, with explicit checks at every success-acceptance boundary, so a late result that finishes normally after expiry is rejected as Timeout. The deadline is resolved once from the currently effective policy when each review starts and frozen for that review; configuration changes during a review do not affect one already in progress. User cancellation and approval obsoletion keep their existing propagation semantics.
+- Three-level execution (Windows sandbox baseline / sandbox extension / explicit host execution): ordinary reads beyond the workspace, workspace writes, and the sandboxed shell run automatically; writes outside the workspace, known sensitive locations (reads and writes at L2), protected-metadata writes, networking requests, and shell write-root requests ask per call at Level 2; `executionScope=host` is explicit single-approval host execution, with CLI production registering the same shell routing shape as Desktop.
+- Explicit standing-trust migration: `networkPolicy=enabled` and additional write roots no longer expand authority silently; detection enters an unconfirmed state (per-call approvals for networking and write-root writes, OS baseline not injected) until confirmed via the CLI chat startup prompt or the Desktop standing-authorization block, after which they run as explicit persistent authorization with a revoke entry. The confirmation display lists the network scope, additional read/write roots, and the sensitive-location hint.
+- OS-level broad read baseline and read protection: the sandbox process OS read boundary is the user profile root; C1 host secret paths (trust.json/user config/session store/trust store), `.codex` authorization content, `cap_sid`, and C2 sensitive directory segments ship in a deny-read set applied per command and reclaimable (the deny set is directory segments; file-level sensitive names stay protected by the application layer).
+- The shell write-root request parameter `writeRoots` (≤8 absolute paths; spaces, quotes, and drive roots refused): approved roots freeze into the grant and policy identity and take effect inside the sandbox through the grant channel; only single-operation and turn grants are offered.
+- Authorization governance: grant lifecycles and trusted authorization changes persist as required `permission-grant-event/1` session-log records (older programs refuse them); the reviewer context gains target summaries, constraint, expiry, and policy revision; approval prompts render fact lines (backend and isolation declaration, file and network permissions, validity, active grant summary) from one shared source across CLI and Desktop; denial memory clears only at trusted authorization changes.
+- Untrusted-workspace entry restored: `run` stays usable without trust (model and read-only file tools work; process execution fails closed) with a stderr `/trust` hint; the composed sandbox keeps its baseline read-protection pairing checks unchanged.
+- The approved C2 read authorization channel (sandbox payload protocol v7): approved sensitive-location reads run inside the sandbox under a dedicated authorization subject outside the deny group within a single execution window (`authorized_read_paths`; a payload without authorized reads is ordinary execution with unchanged v5 behavior), and approved read paths no longer merge into the read_roots group channel; the execution window is cross-process serialized, and the authorized execution identity is isolated from ordinary execution. Three gates: the entry is refused when the helper does not declare v7 capability; the authorization subject is persistently disabled after a failed restore or unknown reclamation; and the helper verifies the C1 protected surface from the tamper-resistant protected-paths list before executing (refusing on absence, parse failure, or overlap with the authorized reads). Authorized execution requires sandboxing components that declare v7 capability; environments without it refuse the entry (fail-closed) with ordinary sandbox execution unchanged.
+
+#### 🛠 Fixed
+
+- The file-tool grant audit breakage where grants without a policy identity failed grant-event validation (file-tool plans now carry a stable policy identity).
+- The CLI guard wrapper dropping the network-request flag, which bypassed approval on guarded paths (guarded network requests ask for approval again).
+- Standing network exemption is tightened to two conditions: an `enabled` standing network policy and confirmed standing trust must both hold; confirming only additional write roots under `restricted` no longer exempts networking from approval (an independent standing-network gate in the permission engine).
+- C1 protection now covers bidirectional overlap: a request root that covers a C1 protected object (such as a parent directory of the user config, trust files, or the session store) is hard-refused as well; the check spans all four write-root sources (per-call requests, standing additional write roots, active grants, and user-configured runtime roots) against the composed instance's actual paths.
+- Revoking standing authorization now invalidates the session: the send entry and every tool dispatch re-verify the composition fingerprint against the current trusted configuration (CLI and Desktop share the mechanism and both re-read configuration; read or parse failures invalidate too); on mismatch all grants are revoked and the session is invalidated with a prompt to reopen it. Started commands keep the existing cancellation reclamation without automatic recomposition.
+- The permission-system root set is narrowed from the whole sandbox home to four sensitive subpaths (`.sandbox-secrets`, `.sandbox`, `cap_sid`, `.sandbox-bin`); the default tmp/tools/nuget-cache runtime roots regain their runtime-root classification and L1 automatic execution, while OS ACLs and composition integrity checks still cover the whole home.
+
+#### 🧪 Tests
+
+- Real-sandbox acceptance tests are now environment-gated: default `dotnet test` no longer touches the machine sandbox, fixed user directories, or the network; the probe root must be set explicitly via `TINYHARNESS_REAL_SANDBOX_PROBE` (no default, avoiding %TEMP%'s historical ACL pollution), the negative isolation probe first verifies the probe root's ACL precondition (unmet = Inconclusive, not counted as passing), and the proxy is parameterized via `TINYHARNESS_REAL_SANDBOX_PROXY`.
 
 <a id="release-v001"></a>
 
