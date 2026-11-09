@@ -281,7 +281,7 @@ public class SessionNavigationTests
         using var router       = new ChatInputRouter(input);
         using var cancellation = new ChatCancellation(false);
         var       output       = new StringWriter();
-        var       approver     = new SignaledApprover(new ConsoleApprovalProvider(router, output));
+        var       approver     = new SignaledApprover(new ConsoleApprovalProvider(router, output, interactive : true));
         fixture.Approver = approver;
         using var console = fixture.Console(router, output, cancellation);
         input.Lines.Writer.TryWrite("change it");

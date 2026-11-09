@@ -20,7 +20,8 @@ public class ConsoleApprovalProviderTests
         var request = new ApprovalRequest(preparation, PermissionLevel.Level2,
                                           [GrantScope.SingleOperation, GrantScope.Turn, GrantScope.Session],
                                           null, null);
-        return await new ConsoleApprovalProvider(input, output).PromptAsync(request, CancellationToken.None);
+        return await new ConsoleApprovalProvider(input, output, interactive : true)
+                    .PromptAsync(request, CancellationToken.None);
     }
 
     [TestCase("a", "allow")]
@@ -100,7 +101,7 @@ public class ConsoleApprovalProviderTests
         var request = new ApprovalRequest(preparation, PermissionLevel.Level2,
                                           [GrantScope.SingleOperation], null, null);
 
-        var result = await new ConsoleApprovalProvider(new EofReader(), output)
+        var result = await new ConsoleApprovalProvider(new EofReader(), output, interactive : true)
             .PromptAsync(request, CancellationToken.None);
 
         Assert.Multiple(() =>
@@ -108,6 +109,48 @@ public class ConsoleApprovalProviderTests
             Assert.That(result.Kind, Is.EqualTo(ApprovalResolutionKind.Unavailable));
             Assert.That(result.Reason, Does.Contain("not executed"));
         });
+    }
+
+    [TestCase("a")]
+    [TestCase("t")]
+    [TestCase("s")]
+    [TestCase("yes")]
+    public async Task Prompt_NonInteractiveInputContainingAnApprovalWord_NeverGrants(string answer)
+    {
+        using var dir   = new TestTempDir();
+        var       patch = "--- a/file.txt\n+++ b/file.txt\n@@ -1 +1 @@\n-old\n+new\n";
+        var       preparation = PatchPreparation(dir, patch);
+        using var output = new StringWriter();
+        var request = new ApprovalRequest(preparation, PermissionLevel.Level2,
+                                          [GrantScope.SingleOperation, GrantScope.Turn, GrantScope.Session],
+                                          null, null);
+
+        var result = await new ConsoleApprovalProvider(new StringReader(answer), output)
+            .PromptAsync(request, CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Kind, Is.EqualTo(ApprovalResolutionKind.Unavailable),
+                        "Redirected input is not a human approval channel.");
+            Assert.That(result.Reason, Does.Contain("not executed"));
+        });
+    }
+
+    [Test]
+    public async Task Prompt_NonInteractiveInput_DoesNotReadTheReader()
+    {
+        using var dir   = new TestTempDir();
+        var       patch = "--- a/file.txt\n+++ b/file.txt\n@@ -1 +1 @@\n-old\n+new\n";
+        var       preparation = PatchPreparation(dir, patch);
+        using var output = new StringWriter();
+        var request = new ApprovalRequest(preparation, PermissionLevel.Level2,
+                                          [GrantScope.SingleOperation], null, null);
+        var reader = new InspectingReader("a", () => Assert.Fail("Non-interactive approval must not read input."));
+
+        var result = await new ConsoleApprovalProvider(reader, output, interactive : false)
+            .PromptAsync(request, CancellationToken.None);
+
+        Assert.That(result.Kind, Is.EqualTo(ApprovalResolutionKind.Unavailable));
     }
 
     [Test]
@@ -120,7 +163,7 @@ public class ConsoleApprovalProviderTests
         var request = new ApprovalRequest(preparation, PermissionLevel.Level2,
                                           [GrantScope.SingleOperation], "AI 无法判断授权范围", null);
 
-        await new ConsoleApprovalProvider(new StringReader("d"), output)
+        await new ConsoleApprovalProvider(new StringReader("d"), output, interactive : true)
             .PromptAsync(request, CancellationToken.None);
 
         Assert.That(output.ToString(), Does.Contain("AI 无法判断授权范围"));

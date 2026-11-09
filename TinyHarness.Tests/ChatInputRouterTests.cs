@@ -34,7 +34,7 @@ public class ChatInputRouterTests
                                              new PermissionEngine(Path.GetTempPath(),
                                                                   resourcePolicy :
                                                                   new TestResourcePolicy(Path.GetTempPath())),
-                                             new ConsoleApprovalProvider(router, writer), events);
+                                             new ConsoleApprovalProvider(router, writer, interactive : true), events);
         using var console = new ChatSessionConsole(host, router, writer, cancellation);
         var       running = console.RunAsync();
         await source.Lines.Writer.WriteAsync("initial request");

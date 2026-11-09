@@ -416,7 +416,7 @@ public class ChatSessionConsoleTests
                                                              "tinyharness-chat-console-tests"),
                                                 resourcePolicy : new TestResourcePolicy(Path.Combine(
                                                  Path.GetTempPath(), "tinyharness-chat-console-tests"))),
-                           new ConsoleApprovalProvider(reader, output),
+                           new ConsoleApprovalProvider(reader, output, interactive : true),
                            new ConsoleHostEventSink(null, output));
         using var cancellation = new ChatCancellation(false);
         var       console      = new ChatSessionConsole(host, reader, output, cancellation);

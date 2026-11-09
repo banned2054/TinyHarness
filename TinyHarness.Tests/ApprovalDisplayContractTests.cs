@@ -202,7 +202,7 @@ public class ApprovalDisplayContractTests
                                           [GrantScope.SingleOperation, GrantScope.Turn], null, null, notes);
         using var output = new StringWriter();
 
-        var resolution = await new ConsoleApprovalProvider(new StringReader("d"), output)
+        var resolution = await new ConsoleApprovalProvider(new StringReader("d"), output, interactive : true)
                              .PromptAsync(request, CancellationToken.None);
 
         Assert.Multiple(() =>
@@ -226,7 +226,7 @@ public class ApprovalDisplayContractTests
                                       [GrantScope.SingleOperation, GrantScope.Turn], null, null);
         using var output = new StringWriter();
 
-        await new ConsoleApprovalProvider(new StringReader("d"), output)
+        await new ConsoleApprovalProvider(new StringReader("d"), output, interactive : true)
             .PromptAsync(request, CancellationToken.None);
 
         Assert.That(output.ToString(), Does.Not.Contain("  fact: "));

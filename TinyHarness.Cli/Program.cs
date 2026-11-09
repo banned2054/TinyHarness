@@ -203,7 +203,8 @@ internal static class Program
         ChatSessionHost? activeHost = null;
         var approver = CliApprovalRouting.Create(
                                                  new ConsoleApprovalProvider(reader, Console.Out,
-                                                                             composition.KnownSecrets),
+                                                                             composition.KnownSecrets,
+                                                                             !Console.IsInputRedirected),
                                                  () => activeHost ??
                                                        throw new
                                                            InvalidOperationException("The session host is not ready."),
@@ -413,7 +414,8 @@ internal static class Program
             var              newStack    = CreateChatExecutionStack(composition);
             var newApprover = CliApprovalRouting.Create(
                                                         new ConsoleApprovalProvider(reader, Console.Out,
-                                                            composition.KnownSecrets),
+                                                                                    composition.KnownSecrets,
+                                                                                    !Console.IsInputRedirected),
                                                         () => createdHost ??
                                                               throw new
                                                                   InvalidOperationException("The session host is not ready."),
@@ -498,7 +500,8 @@ internal static class Program
                 var resumeStack = CreateChatExecutionStack(composition);
                 var resumeApprover = CliApprovalRouting.Create(
                                                                new ConsoleApprovalProvider(reader, Console.Out,
-                                                                   composition.KnownSecrets),
+                                                                                           composition.KnownSecrets,
+                                                                                           !Console.IsInputRedirected),
                                                                () => host ??
                                                                      throw new
                                                                          InvalidOperationException("The session host is not ready."),
