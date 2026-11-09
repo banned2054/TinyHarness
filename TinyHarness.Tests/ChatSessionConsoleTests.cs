@@ -592,6 +592,42 @@ public class ChatSessionConsoleTests
     }
 
     [Test]
+    public async Task RunAsync_NonInteractiveInputCannotConfirmInspection()
+    {
+        var client = new FakeChatClient();
+        client.Enqueue(FakeChatClient.Text("ok"));
+        var session = new ChatSession(Guid.NewGuid().ToString("N"), Path.GetTempPath(),
+                                      new SessionModelIdentity("test-model", "https://example.invalid/v1",
+                                                               ChatApiKind.ChatCompletions))
+            { PendingInspectionReason = "old interrupted operation" };
+        using var host = new ChatSessionHost(session, new ConversationContext(),
+                                             new AgentOptions
+                                             {
+                                                 Model                     = "test-model",
+                                                 MaxAgentSteps             = 8,
+                                                 DefaultToolTimeoutSeconds = 30
+                                             }, client, new ToolRegistry([]), SystemPrompt);
+        var input = new ScriptedInput("yes");
+        input.Complete();
+        var       output       = new StringWriter();
+        using var cancellation = new ChatCancellation(false);
+        using var console = new ChatSessionConsole(_ => Task.FromResult(host), input, output, cancellation,
+                                                   initialHost : host, interactive : false);
+
+        var exit = await console.RunAsync(TestToken());
+
+        Assert.That(exit, Is.EqualTo(0));
+        Assert.Multiple(() =>
+        {
+            Assert.That(host.InspectionPending, Is.True,
+                        "Non-interactive input must not acknowledge the inspection block.");
+            Assert.That(output.ToString(), Does.Contain("Non-interactive input cannot confirm inspection"));
+            Assert.That(host.Session.Turns.Select(turn => turn.UserInput).ToArray(), Is.EqualTo(["yes"]),
+                        "The piped line is a normal turn input, not an inspection confirmation.");
+        });
+    }
+
+    [Test]
     public async Task RunAsync_RestoredKeepBlockedPromptsOnceAndDoesNotConsumeFollowUp()
     {
         var client = new FakeChatClient();

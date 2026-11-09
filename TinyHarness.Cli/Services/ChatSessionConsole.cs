@@ -28,12 +28,14 @@ namespace TinyHarness.Cli.Services;
 ///         活动回合取消、提交被拒绝或回合失败均不结束会话；EOF 或空闲 Ctrl+C 结束会话。
 ///         宿主负责终态回合保存，本循环报告不可靠保存。
 ///         未知副作用在检查确认前保持阻断，只读分析仍可继续；每次中断仅提示一次。
+///         非交互输入不能确认检查，阻断保持且管道内容不被当作确认。
 ///     </para>
 ///     <para>
 ///         Active-turn cancellation, rejected submissions, and failed turns leave the session usable;
 ///         EOF or idle Ctrl+C ends it. The host saves terminal turns, and this loop reports unreliable saves.
 ///         Unknown side effects remain blocked until inspection is confirmed, while read-only analysis stays available;
-///         each interruption prompts once.
+///         each interruption prompts once. Non-interactive input cannot confirm inspection: the block stays and
+///         piped input is never consumed as confirmation.
 ///     </para>
 /// </remarks>
 internal sealed class ChatSessionConsole : IDisposable
@@ -761,6 +763,13 @@ internal sealed class ChatSessionConsole : IDisposable
 
         _promptedInspectionNote  = note;
         _promptedInspectionRunId = runId;
+        if (!_interactive)
+        {
+            await _output.WriteLineAsync("Non-interactive input cannot confirm inspection; side effects stay blocked.")
+                        .ConfigureAwait(false);
+            return;
+        }
+
         if (!await InspectionPrompt.ConfirmAsync(Host, _input, _output, _redactor, _cancellation.SessionToken)) return;
 
         await Host.AcknowledgeInspectionAsync(cancellationToken);
