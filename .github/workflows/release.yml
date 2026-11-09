@@ -14,7 +14,7 @@ concurrency:
 
 env:
     CODEX_REPOSITORY: banned2054/codex
-    CODEX_REF: 1b647eac0adc5f31140340ffcc5d49b19a235fad
+    CODEX_REF: 1266c81f6efa769103075018a24a5cd3d306f265
     DOTNET_NOLOGO: "true"
     DOTNET_CLI_TELEMETRY_OPTOUT: "true"
 
@@ -175,7 +175,7 @@ jobs:
                     } else {
                       $publishRoot = Join-Path $env:RUNNER_TEMP 'native/desktop'
                       $entryName = 'TinyHarness.Desktop.exe'
-                      $requiredNative = @('av_libglesv2.dll', 'libHarfBuzzSharp.dll', 'libonigwrap.dll', 'libSkiaSharp.dll')
+                      $requiredNative = @('e_sqlite3.dll', 'av_libglesv2.dll', 'libHarfBuzzSharp.dll', 'libonigwrap.dll', 'libSkiaSharp.dll')
                       $readme = '.github/package-assets/README-desktop.txt'
                     }
                     # 仅重命名 Desktop 原生发布入口；内部程序集身份与测试引用保持一致。

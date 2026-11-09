@@ -12,7 +12,7 @@
 
 ## 构建来源与验证
 
-TinyHarness 使用触发本轮的 commit。沙箱来源为 [`banned2054/codex`](https://github.com/banned2054/codex)，当前固定 SHA 为 `1b647eac0adc5f31140340ffcc5d49b19a235fad`；更新组件时显式修改 YAML 中的 `CODEX_REF` 并重新核对兼容性，不追踪浮动 `main`。
+TinyHarness 使用触发本轮的 commit。沙箱来源为 [`banned2054/codex`](https://github.com/banned2054/codex)，当前固定 SHA 为 `1266c81f6efa769103075018a24a5cd3d306f265`；更新组件时显式修改 YAML 中的 `CODEX_REF` 并重新核对兼容性，不追踪浮动 `main`。
 
 构建 job 使用 `windows-2025`，只给 `contents: read`；Actions 使用 YAML 中声明的官方主版本标签，沙箱源码仍固定到完整 commit。通过 setup-dotnet 选择 .NET 10，并在 CI checkout 内临时创建 `global.json` 固定本次实际安装的 SDK，不写回仓库。Rust 工具链读取固定 fork 的 `rust-toolchain.toml`。
 
@@ -36,7 +36,7 @@ Actions artifact 名为 `TinyHarness-<Version>-win-x64`，包含：
 - `SHA256SUMS.txt`：两个 ZIP 的 SHA-256，Release job 下载后再次逐项校验。
 - `RELEASE_NOTES.md`：版本、来源和验证范围，保留在 Actions artifact 中供参考，不覆盖用户填写的 Release 正文。
 
-两个 ZIP 都包含 `TinyHarness.exe`、publish 目录内的全部 DLL（按原相对路径复制；CLI 亦随 Microsoft.Data.Sqlite 携带 `e_sqlite3.dll`）、`sandbox/` 下的 setup／runner／managed-deny-probe、各端的双语独立 `README.txt`、配置片段示例、`build-info.json`，以及根目录的三份许可材料：`LICENSE`（项目采用的 Apache-2.0 全文）、`NOTICE`（项目归属及继承的 Codex 声明）、`THIRD-PARTY-LICENSES.txt`（合并后的第三方版权、许可正文和特殊声明）。许可维护范围见[第三方声明说明](third-party-notices.md)。两端同构打包，仅入口重命名与 README 不同：拷贝主程序、publish 目录 DLL、许可／说明材料和沙箱组件，并核对必需原生库存在——CLI 为 `e_sqlite3.dll`，Desktop 为 `av_libglesv2.dll`、`libHarfBuzzSharp.dll`、`libonigwrap.dll`、`libSkiaSharp.dll`。不打包源树、用户配置、凭据、会话日志、PDB 或整个 Cargo target 目录。deny-probe 与 runner 同目录，以便用户另行选择 `sandbox verify`。
+两个 ZIP 都包含 `TinyHarness.exe`、publish 目录内的全部 DLL（按原相对路径复制；CLI 亦随 Microsoft.Data.Sqlite 携带 `e_sqlite3.dll`）、`sandbox/` 下的 setup／runner／managed-deny-probe、各端的双语独立 `README.txt`、配置片段示例、`build-info.json`，以及根目录的三份许可材料：`LICENSE`（项目采用的 Apache-2.0 全文）、`NOTICE`（项目归属及继承的 Codex 声明）、`THIRD-PARTY-LICENSES.txt`（合并后的第三方版权、许可正文和特殊声明）。许可维护范围见[第三方声明说明](third-party-notices.md)。两端同构打包，仅入口重命名与 README 不同：拷贝主程序、publish 目录 DLL、许可／说明材料和沙箱组件，并核对必需原生库存在——CLI 为 `e_sqlite3.dll`，Desktop 为 `e_sqlite3.dll`、`av_libglesv2.dll`、`libHarfBuzzSharp.dll`、`libonigwrap.dll`、`libSkiaSharp.dll`。不打包源树、用户配置、凭据、会话日志、PDB 或整个 Cargo target 目录。deny-probe 与 runner 同目录，以便用户另行选择 `sandbox verify`。
 
 Desktop 保留内部程序集名 `TinyHarness.Desktop`，打包时只把 NativeAOT 入口文件复制为 `TinyHarness.exe`。两端的 ZIP 与顶层目录明确区分，必须分别解压，不可合并覆盖；只有 CLI 目录加入 `PATH`，Desktop 通过双击或指向完整路径的快捷方式启动。用户看到的应用名与终端命令均为 TinyHarness，不要求公开 `.Desktop` 后缀。
 
