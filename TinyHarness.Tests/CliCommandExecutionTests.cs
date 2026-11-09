@@ -339,6 +339,65 @@ public sealed class CliCommandExecutionTests
     }
 
     [Test]
+    public async Task Init_ChangedEndpointOriginWithSkip_DoesNotCarryOldCredentialReferences()
+    {
+        using var fixture = new CliFixture([
+            "work",
+            "y",
+            "https://new.example/v1",
+            "3",
+            string.Empty,
+            string.Empty
+        ]);
+        await UserConfigStore.SaveAsync(fixture.UserConfigPath, ProfileConfigWithCredentials(), CancellationToken.None);
+        fixture.Credentials.Save("old-target", "fake-old-secret");
+
+        var result = await InitCommand.ExecuteAsync(fixture.CreateContext(), CancellationToken.None);
+        var saved  = await UserConfigStore.LoadAsync(fixture.UserConfigPath, CancellationToken.None);
+
+        Assert.That(result, Is.EqualTo(0));
+        var profile = TestAssert.Single(saved.Profiles);
+        Assert.Multiple(() =>
+        {
+            Assert.That(profile.Endpoint, Is.EqualTo("https://new.example/v1"));
+            Assert.That(profile.ApiKeyEnvironmentVariable, Is.Empty,
+                        "A new endpoint origin must not inherit the old environment variable reference.");
+            Assert.That(profile.ApiKeyCredentialTarget, Is.Empty,
+                        "A new endpoint origin must not inherit the old credential-store reference.");
+            Assert.That(fixture.Credentials.Read("old-target"), Is.EqualTo("fake-old-secret"),
+                        "Skipping must not read or delete the old credential.");
+            Assert.That(fixture.Credentials.Saves, Is.EqualTo(1),
+                        "The fixture's seeded credential is the only save; init must not write a new credential.");
+        });
+    }
+
+    [Test]
+    public async Task Init_SameEndpointOriginWithSkip_KeepsCredentialReferences()
+    {
+        using var fixture = new CliFixture([
+            "work",
+            "y",
+            "https://api.example/v2",
+            "3",
+            string.Empty,
+            string.Empty
+        ]);
+        await UserConfigStore.SaveAsync(fixture.UserConfigPath, ProfileConfigWithCredentials(), CancellationToken.None);
+
+        var result = await InitCommand.ExecuteAsync(fixture.CreateContext(), CancellationToken.None);
+        var saved  = await UserConfigStore.LoadAsync(fixture.UserConfigPath, CancellationToken.None);
+
+        Assert.That(result, Is.EqualTo(0));
+        var profile = TestAssert.Single(saved.Profiles);
+        Assert.Multiple(() =>
+        {
+            Assert.That(profile.Endpoint, Is.EqualTo("https://api.example/v2"));
+            Assert.That(profile.ApiKeyEnvironmentVariable, Is.EqualTo("OLD_KEY"));
+            Assert.That(profile.ApiKeyCredentialTarget, Is.EqualTo("old-target"));
+        });
+    }
+
+    [Test]
     public async Task InitIncompleteFormDoesNotWriteCredential()
     {
         using var fixture = new CliFixture(["work", "https://api.example/v1", "2", "secret-before-eof"]);
@@ -360,6 +419,23 @@ public sealed class CliCommandExecutionTests
                 Endpoint     = "https://api.example/v1",
                 DefaultModel = "model-x",
                 Models       = [new UserProfileModel { Id = "model-x", ContextWindowTokens = 64000 }]
+            }
+        ]
+    };
+
+    private static UserConfig ProfileConfigWithCredentials() => new()
+    {
+        DefaultProfile = "work",
+        Profiles =
+        [
+            new UserProfile
+            {
+                Name                      = "work",
+                Endpoint                  = "https://api.example/v1",
+                ApiKeyEnvironmentVariable = "OLD_KEY",
+                ApiKeyCredentialTarget    = "old-target",
+                DefaultModel              = "model-x",
+                Models                    = [new UserProfileModel { Id = "model-x", ContextWindowTokens = 64000 }]
             }
         ]
     };

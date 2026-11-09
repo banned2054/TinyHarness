@@ -40,7 +40,8 @@ internal static class ProfileEditor
         var endpoint = await PromptEndpointAsync(io, existing?.Endpoint, cancellationToken).ConfigureAwait(false);
 
         var (envVariable, credentialTarget, secret) =
-            await PromptApiKeySourceAsync(context, profileName, existing, cancellationToken).ConfigureAwait(false);
+            await PromptApiKeySourceAsync(context, profileName, existing, endpoint, cancellationToken)
+               .ConfigureAwait(false);
 
         var modelId = await PromptModelIdAsync(io, existing?.DefaultModel, cancellationToken).ConfigureAwait(false);
         var contextWindow =
@@ -95,12 +96,19 @@ internal static class ProfileEditor
     }
 
     /// <summary>
-    ///     提示 API key 来源；三种方式：环境变量引用、系统凭据存储（支持时）、暂时跳过。
-    ///     Prompts for the API key source: an environment variable reference, the system credential store (when supported), or
-    ///     skip.
+    ///     <para>
+    ///         提示 API key 来源；三种方式：环境变量引用、系统凭据存储（支持时）、暂时跳过。
+    ///         跳过仅在 endpoint 源未变时保留旧引用，避免把旧服务器密钥发给新服务器。
+    ///     </para>
+    ///     <para>
+    ///         Prompts for the API key source: an environment variable reference, the system credential store
+    ///         (when supported), or skip. Skipping keeps the old references only when the endpoint origin is
+    ///         unchanged, preventing an old server's key from being sent to a new server.
+    ///     </para>
     /// </summary>
     private static async Task<(string EnvVariable, string CredentialTarget, string? Secret)> PromptApiKeySourceAsync(
-        CommandContext context, string profileName, UserProfile? existing, CancellationToken cancellationToken)
+        CommandContext context, string profileName, UserProfile? existing, string endpoint,
+        CancellationToken cancellationToken)
     {
         var io = context.Io;
         await io.WriteLineAsync(string.Empty, cancellationToken).ConfigureAwait(false);
@@ -139,8 +147,19 @@ internal static class ProfileEditor
             }
 
             if (choice == "3")
+            {
+                if (!HasSameOrigin(existing?.Endpoint, endpoint))
+                {
+                    await io
+                         .WriteLineAsync("  The endpoint origin changed; the existing API key reference was not reused. " +
+                                         "Configure it later with 'tinyharness auth set'.", cancellationToken)
+                         .ConfigureAwait(false);
+                    return (string.Empty, string.Empty, null);
+                }
+
                 return (existing?.ApiKeyEnvironmentVariable ?? string.Empty,
                         existing?.ApiKeyCredentialTarget    ?? string.Empty, null);
+            }
 
             await io.WriteLineAsync("  Answer with the option number.", cancellationToken).ConfigureAwait(false);
         }
@@ -188,6 +207,22 @@ internal static class ProfileEditor
 
             await io.WriteLineAsync("  The API key cannot be empty.", cancellationToken).ConfigureAwait(false);
         }
+    }
+
+    /// <summary>
+    ///     <para>判断两个 endpoint 是否共享 scheme、host 与 port；路径变化不影响凭据复用。</para>
+    ///     <para>
+    ///         Whether two endpoints share scheme, host and port; a path change does not affect credential reuse.
+    ///     </para>
+    /// </summary>
+    private static bool HasSameOrigin(string? existingEndpoint, string endpoint)
+    {
+        if (string.IsNullOrWhiteSpace(existingEndpoint)) return false;
+
+        return Uri.TryCreate(existingEndpoint, UriKind.Absolute, out var existingUri) &&
+               Uri.TryCreate(endpoint, UriKind.Absolute, out var endpointUri) &&
+               string.Equals(existingUri.GetLeftPart(UriPartial.Authority),
+                             endpointUri.GetLeftPart(UriPartial.Authority), StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>
