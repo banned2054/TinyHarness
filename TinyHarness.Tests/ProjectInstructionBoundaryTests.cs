@@ -310,6 +310,35 @@ public class ProjectInstructionBoundaryTests
         });
     }
 
+    [Test]
+    public async Task InstructionChangeDuringToolStartDecision_BlocksDispatchBeforeStart()
+    {
+        var client = new FakeChatClient();
+        client.Enqueue(FakeChatClient.ToolCall("fake", "{}", "decision_round"));
+        client.Enqueue(FakeChatClient.Text("done"));
+        var tool     = new FakeTool("fake");
+        var boundary = new ToolStartDecisionInstructionBoundary();
+        var loop = new AgentLoop(client, new ToolRegistry([tool]), Options(), null, null, null, null, null, null,
+                                 boundary);
+
+        var result = await loop.RunAsync("sys", "run", CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(boundary.ToolStartDecisions, Is.EqualTo(1));
+            Assert.That(result.Status, Is.EqualTo(AgentStatus.Failed));
+            Assert.That(result.Error, Does.Contain("revision-2"));
+            Assert.That(tool.ExecuteCount, Is.Zero,
+                        "The tool must not start after the decision callback changes the guard.");
+            Assert.That(result.ToolExecutions, Is.Zero);
+            Assert.That(result.ToolCalls!.Single().State, Is.EqualTo(ToolCallExecutionState.KnownNotStarted));
+            Assert.That(boundary.DispatchChecks, Is.EqualTo(2),
+                        "The final guard must observe a change made during the tool-start decision write.");
+            Assert.That(boundary.ApplyCalls, Is.Zero, "A blocked dispatch must not commit the stale round.");
+            Assert.That(result.Budget?.ToolExecutions, Is.Zero, "An unstarted call must not consume the tool budget.");
+        });
+    }
+
     private static AgentOptions Options() => new()
     {
         Model                     = "test-model",
@@ -396,6 +425,57 @@ public class ProjectInstructionBoundaryTests
         {
             ApplyCalls++;
             return Task.FromResult<ProjectInstructionsChanged?>(null);
+        }
+
+        private static InstructionBoundaryCheck Unchanged() =>
+            new(InstructionBoundaryStatus.Unchanged, null, null, null);
+    }
+
+    // 模拟生产 Debug 诊断写入：工具启动决定的异步等待期间发生组合身份漂移。
+    private sealed class ToolStartDecisionInstructionBoundary : IAgentInstructionBoundary
+    {
+        private bool _changed;
+
+        public int ApplyCalls         { get; private set; }
+        public int DispatchChecks     { get; private set; }
+        public int ToolStartDecisions { get; private set; }
+
+        public Task PrepareUserContextAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public Task<ProjectInstructionsChanged?> ConfirmInitialCommitAsync(CancellationToken cancellationToken) =>
+            Task.FromResult<ProjectInstructionsChanged?>(null);
+
+        public Task<ProjectInstructionsChanged?> RefreshBeforeModelRequestAsync(CancellationToken cancellationToken) =>
+            Task.FromResult<ProjectInstructionsChanged?>(null);
+
+        public Task<InstructionBoundaryCheck> CheckToolRoundAsync(
+            IReadOnlyList<ToolPreparation> preparations, CancellationToken cancellationToken) =>
+            Task.FromResult(Unchanged());
+
+        public Task<InstructionBoundaryCheck> RecheckBeforeDispatchAsync(
+            IReadOnlyList<ToolPreparation> preparations, CancellationToken cancellationToken)
+        {
+            DispatchChecks++;
+            return Task.FromResult(_changed
+                                       ? new InstructionBoundaryCheck(InstructionBoundaryStatus.Updated, null,
+                                                                      "revision-2", null)
+                                       : Unchanged());
+        }
+
+        public Task<ProjectInstructionsChanged?> ApplyToolRoundUpdateAsync(
+            IReadOnlyList<ToolCallRecord> records, CancellationToken cancellationToken)
+        {
+            ApplyCalls++;
+            return Task.FromResult<ProjectInstructionsChanged?>(null);
+        }
+
+        public async Task RecordDecisionAsync(
+            string phase, string decision, int? deferrals, int steps, int toolExecutions)
+        {
+            if (phase != "tool-start") return;
+            ToolStartDecisions++;
+            await Task.Yield();
+            _changed = true;
         }
 
         private static InstructionBoundaryCheck Unchanged() =>

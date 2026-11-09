@@ -757,8 +757,13 @@ public sealed partial class AgentLoop
                         throw;
                     }
 
-                    // 暂停、检查点与 ToolStarted 回调期间规则或组合身份可能已变化；
-                    // 启动前最后一次核对，失配时整轮未启动的调用保持已知未执行。
+                    // 暂停、检查点、ToolStarted 回调与启动诊断都可能异步让出；最后一次核对放在这些等待之后，
+                    // 使核对与真实启动之间只剩同步操作。失配时整轮未启动的调用保持已知未执行。
+                    if (_instructionBoundary is not null)
+                        await _instructionBoundary.RecordDecisionAsync("tool-start", "reset-deferrals",
+                                                                       instructionDeferralsSinceExecution, steps,
+                                                                       toolExecutions).ConfigureAwait(false);
+
                     var dispatchCalls = authorized.Skip(dispatchIndex)
                                                   .Select(candidate => candidate.RoundCall)
                                                   .ToArray();
@@ -821,10 +826,6 @@ public sealed partial class AgentLoop
                     }
 
                     // 首个真实启动构成新的安全推进边界；后续规则变化重新获得一次延期预算。
-                    if (_instructionBoundary is not null)
-                        await _instructionBoundary.RecordDecisionAsync("tool-start", "reset-deferrals",
-                                                                       instructionDeferralsSinceExecution, steps,
-                                                                       toolExecutions).ConfigureAwait(false);
                     instructionDeferralsSinceExecution = 0;
                     budget.ToolStarted();
                     toolExecutions++;
