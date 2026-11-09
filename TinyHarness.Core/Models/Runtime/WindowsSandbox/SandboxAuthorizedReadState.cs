@@ -19,6 +19,7 @@ namespace TinyHarness.Core.Models.Runtime.WindowsSandbox;
 public sealed record SandboxAuthorizedReadState
 {
     [JsonPropertyName("disabled")]
+    [JsonRequired]
     public bool Disabled { get; init; }
 
     /// <summary>禁用原因（回收未知或恢复失败的具体说明）。The disable reason (unknown reclamation or the concrete restore failure).</summary>

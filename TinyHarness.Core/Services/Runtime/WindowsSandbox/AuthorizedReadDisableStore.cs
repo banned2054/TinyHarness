@@ -34,14 +34,16 @@ public interface IAuthorizedReadDisableStore
 ///     <para>
 ///         <see cref="IAuthorizedReadDisableStore" /> 的文件实现：状态写入凭据目录下的
 ///         authorized_read_state.json（provisioning 对沙箱组永久 DENY，应用以真实用户写入）。
-///         文件缺失为未禁用；内容损坏按禁用处理（fail closed），恢复成功后删除文件即清除。
+///         文件缺失为未禁用；内容损坏或存在但未明确断言禁用时按禁用处理（fail closed），
+///         恢复成功后删除文件即清除。
 ///     </para>
 ///     <para>
 ///         The file-backed implementation of <see cref="IAuthorizedReadDisableStore" />: the state
 ///         lives in authorized_read_state.json under the credentials directory (permanently denied to
 ///         the sandbox group by provisioning, written by the app as the real user). A missing file
-///         means not disabled; corrupt content counts as disabled (fail closed), and a successful
-///         recovery deletes the file to clear the state.
+///         means not disabled; corrupt content, or an existing file that does not explicitly assert
+///         disabled, counts as disabled (fail closed), and a successful recovery deletes the file to
+///         clear the state.
 ///     </para>
 /// </summary>
 public sealed class AuthorizedReadDisableFile(WindowsSandboxComponents components) : IAuthorizedReadDisableStore
@@ -57,10 +59,13 @@ public sealed class AuthorizedReadDisableFile(WindowsSandboxComponents component
         try
         {
             var content = await File.ReadAllTextAsync(StatePath, cancellationToken).ConfigureAwait(false);
-            var state = JsonSerializer.Deserialize(content, WindowsSandboxJsonContext.Default.SandboxAuthorizedReadState);
-            return state is { Disabled: true }
-                ? (true, state.Reason ?? "the persisted disable state carries no reason")
-                : (false, null);
+            var state = JsonSerializer.Deserialize(content, WindowsSandboxJsonContext.Default.SandboxAuthorizedReadState) ??
+                        throw new JsonException("The persisted disable state is null.");
+            // 已存在的状态必须明确断言禁用；false 或 null 同样按损坏状态处理，读取不得解除阻断。
+            if (!state.Disabled)
+                throw new JsonException("The persisted disable state does not assert disabled=true.");
+
+            return (true, state.Reason ?? "the persisted disable state carries no reason");
         }
         catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
         {
