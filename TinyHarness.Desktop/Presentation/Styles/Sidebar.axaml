@@ -94,15 +94,16 @@
         <Setter Property="Background" Value="Transparent" />
     </Style>
     <Style Selector="TextBlock.sidebar-category-title">
-        <Setter Property="Margin" Value="8,12,8,3" />
+        <Setter Property="Margin" Value="0" />
+        <Setter Property="VerticalAlignment" Value="Center" />
         <Setter Property="FontSize" Value="11" />
         <Setter Property="FontWeight" Value="SemiBold" />
         <Setter Property="Foreground" Value="{DynamicResource TextMutedBrush}" />
     </Style>
     <Style Selector="Button.sidebar-category-toggle">
-        <Setter Property="MinHeight" Value="26" />
-        <Setter Property="Padding" Value="0" />
-        <Setter Property="Margin" Value="0" />
+        <Setter Property="MinHeight" Value="28" />
+        <Setter Property="Padding" Value="8,0" />
+        <Setter Property="Margin" Value="0,6,0,2" />
         <Setter Property="Background" Value="Transparent" />
         <Setter Property="BorderThickness" Value="0" />
         <Setter Property="HorizontalAlignment" Value="Stretch" />
@@ -355,7 +356,7 @@
         <Setter Property="Background" Value="{DynamicResource SessionSelectedBrush}" />
     </Style>
     <!-- 顶部「新建会话」按钮：形态对齐 DSH 侧栏 newSession——高 38、圆角 12、
-         内边距 16,8、圆形加号与文字间距 6、字号 14 中等字重。
+         内边距 16,8、气泡加号与文字间距 6、字号 14 中等字重。
          HorizontalAlignment 显式 Stretch（Fluent 12 下按钮默认不横向撑满），
          按钮占满侧栏内容区宽度，内容经 HorizontalContentAlignment 居中。
          Fluent 把状态底色画在模板 ContentPresenter 上，状态覆盖指向该部件。 -->
