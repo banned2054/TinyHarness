@@ -23,7 +23,7 @@ namespace TinyHarness.Desktop.ViewModels;
 ///         coordinator owns running resources.
 ///     </para>
 /// </summary>
-public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
+public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 {
     private const           int                      OrganizeBatchSize      = 100;
     private const           int                      ListRowBatchSize       = 200;
@@ -127,6 +127,7 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     private ProjectViewModel?        _renameTarget;
     private bool                     _renamingProject;
     private SessionViewModel?        _selected;
+    private long                    _selectionRevision;
     private bool                     _settingsOpen;
     private Task?                    _shutdown;
     private SidebarPreferences       _sidebarPreferences = new();
@@ -166,6 +167,9 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         ToggleSidebarCategoryCommand = new RelayCommand<SidebarCategoryViewModel>(ToggleSidebarCategory);
         ToggleSessionPinCommand = new RelayCommand<SessionViewModel>(ToggleSessionPin);
         ToggleSessionArchiveCommand = new RelayCommand<SessionViewModel>(ToggleSessionArchive);
+        OpenSessionDeletionCommand = new RelayCommand<SessionViewModel>(OpenSessionDeletion);
+        ConfirmSessionDeletionCommand = new RelayCommand(() => _ = ConfirmSessionDeletionAsync());
+        CancelSessionDeletionCommand  = new RelayCommand(CancelSessionDeletion);
         ToggleArchiveViewCommand = new RelayCommand(ToggleArchiveView);
         ToggleProjectCommand = new RelayCommand<ProjectViewModel>(ToggleProjectGroup);
         ShowMoreSessionsCommand = new RelayCommand<ProjectViewModel>(group =>
@@ -455,6 +459,7 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         {
             if (ReferenceEquals(_selected, value)) return;
             var previous                                            = _selected;
+            _selectionRevision++;
             if (previous is { } previousRow) previousRow.IsSelected = false;
             if (!SetProperty(ref _selected, value) || value is null) return;
             value.IsSelected = true;
@@ -2381,7 +2386,11 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
             return;
 
         if (!session.TryBeginArchiveMutation()) return;
-        _ = SetSessionArchivedAsync(session, store, root, id, !session.IsArchived);
+        var selectedAtRequest = SelectedSession;
+        var selectionRevision = _selectionRevision;
+        _ = SetSessionArchivedAsync(session, store, root, id, !session.IsArchived,
+                                    ReferenceEquals(selectedAtRequest, session), selectedAtRequest,
+                                    selectionRevision);
     }
 
     private void ToggleArchiveView()
@@ -2458,7 +2467,8 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     }
 
     private async Task SetSessionArchivedAsync(
-        SessionViewModel session, string storeDirectory, string workspaceRoot, string sessionId, bool isArchived)
+        SessionViewModel session, string storeDirectory, string workspaceRoot, string sessionId, bool isArchived,
+        bool wasSelected, SessionViewModel? selectedAtRequest, long selectionRevision)
     {
         var acquired = false;
         try
@@ -2498,11 +2508,20 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
                                  storeDirectory, indexException.Message);
             }
 
-            foreach (var row in Sessions.Where(row => row.Id == sessionId              &&
-                                                      row.StoreDirectory is { } source &&
-                                                      ProjectRoots.AreEqual(source, storeDirectory)))
-                row.SetArchived(isArchived);
-            RebuildProjects();
+            await InvokeOnUiAsync(() =>
+            {
+                foreach (var row in Sessions.Where(row => row.Id == sessionId              &&
+                                                          row.StoreDirectory is { } source &&
+                                                          ProjectRoots.AreEqual(source, storeDirectory)))
+                    row.SetArchived(isArchived);
+                RebuildProjects();
+
+                if (isArchived && wasSelected &&
+                    ReferenceEquals(SelectedSession, selectedAtRequest) &&
+                    _selectionRevision == selectionRevision)
+                    NewConversation();
+                return Task.CompletedTask;
+            });
         }
         catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
         {

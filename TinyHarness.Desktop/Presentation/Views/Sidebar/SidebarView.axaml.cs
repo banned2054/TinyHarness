@@ -159,6 +159,49 @@ public sealed partial class SidebarView : UserControl
     }
 
     /// <summary>
+    ///     <para>仅在归档视图中响应会话行右键，并将菜单左缘定位到指针横坐标。</para>
+    ///     <para>Opens the session menu only in archive view and aligns its left edge with the pointer's horizontal position.</para>
+    /// </summary>
+    private void OnSessionRowContextRequested(object? sender, ContextRequestedEventArgs e)
+    {
+        if (sender is not Button { DataContext: SessionViewModel { CanDeleteArchived: true } session } button ||
+            DataContext is not MainWindowViewModel { IsArchiveView: true } viewModel)
+            return;
+
+        if (e.TryGetPosition(button, out var pointerPosition))
+        {
+            session.ActionsMenuHorizontalOffset = pointerPosition.X;
+            session.ActionsMenuVerticalOffset   = pointerPosition.Y - button.Bounds.Height;
+        }
+        else
+        {
+            session.ActionsMenuHorizontalOffset = 0;
+            session.ActionsMenuVerticalOffset   = 4;
+        }
+
+        foreach (var row in viewModel.Sessions)
+            if (!ReferenceEquals(row, session))
+                row.IsActionsMenuOpen = false;
+
+        session.IsActionsMenuOpen = true;
+        e.Handled = true;
+    }
+
+    /// <summary>
+    ///     <para>关闭归档会话菜单并打开永久删除确认。</para>
+    ///     <para>Closes the archived-session menu and opens permanent-deletion confirmation.</para>
+    /// </summary>
+    private void OnSessionDeleteMenuClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not Control { DataContext: SessionViewModel session } ||
+            DataContext is not MainWindowViewModel viewModel)
+            return;
+
+        session.IsActionsMenuOpen = false;
+        viewModel.OpenSessionDeletionCommand.Execute(session);
+    }
+
+    /// <summary>
     ///     <para>同一时刻只展开一个项目菜单。</para>
     ///     <para>Keeps at most one project actions menu open at a time.</para>
     /// </summary>

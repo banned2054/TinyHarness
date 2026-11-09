@@ -383,11 +383,13 @@
                               DragDrop.AllowDrop="True"
                               DragDrop.DragOver="OnSessionRowDragOver"
                               DragDrop.Drop="OnSessionRowDrop">
-                            <Button Classes="session-row" Padding="20,0,4,0"
+                            <Button x:Name="SessionRowButton" Classes="session-row" Padding="20,0,4,0"
                                     Classes.current="{Binding IsSelected}"
+                                    Classes.menu-open="{Binding IsActionsMenuOpen}"
                                     HorizontalAlignment="Stretch"
                                     AutomationProperties.Name="{Binding Title}"
                                     Click="OnSessionRowClick"
+                                    ContextRequested="OnSessionRowContextRequested"
                                     PointerPressed="OnSessionRowPointerPressed"
                                     PointerMoved="OnSessionRowPointerMoved"
                                     PointerReleased="OnSessionRowPointerReleased">
@@ -481,6 +483,26 @@
                                       Data="{StaticResource Icon.PinOutlineRegular}"
                                       Stroke="{DynamicResource TextMutedBrush}" StrokeThickness="1.2" />
                             </Button>
+                            <Popup DataContext="{Binding}"
+                                   PlacementTarget="{Binding #SessionRowButton}"
+                                   Placement="BottomEdgeAlignedLeft"
+                                   HorizontalOffset="{Binding ActionsMenuHorizontalOffset}"
+                                   VerticalOffset="{Binding ActionsMenuVerticalOffset}"
+                                   IsOpen="{Binding IsActionsMenuOpen, Mode=TwoWay}"
+                                   IsLightDismissEnabled="True">
+                                <Border Classes="popup-surface" Width="184" Padding="4" CornerRadius="16">
+                                    <Button Classes="popup-item popup-item-danger" MinHeight="32" Padding="8,0"
+                                            Margin="0" AutomationProperties.Name="删除会话"
+                                            Click="OnSessionDeleteMenuClick">
+                                        <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8">
+                                            <Path Width="14" Height="14" VerticalAlignment="Center"
+                                                  Data="{StaticResource Icon.TrashOutlineRegular}"
+                                                  Stroke="{DynamicResource StatusErrorBrush}" StrokeThickness="1" />
+                                            <TextBlock Grid.Column="1" Text="删除会话" VerticalAlignment="Center" />
+                                        </Grid>
+                                    </Button>
+                                </Border>
+                            </Popup>
                         </Grid>
                     </DataTemplate>
                 </ListBox.DataTemplates>
@@ -643,6 +665,30 @@
                             <Button Classes="approval-allow" Content="{Binding ProjectDeletionButtonText}"
                                     Command="{Binding ConfirmProjectDeletionCommand}"
                                     IsEnabled="{Binding CanConfirmProjectDeletion}" />
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+            </Popup>
+
+            <Popup PlacementTarget="{Binding #Surface}" Placement="Center"
+                   IsOpen="{Binding IsSessionDeletionOpen, Mode=TwoWay}"
+                   IsLightDismissEnabled="False">
+                <Border Classes="popup-surface" Width="340" Padding="14,12">
+                    <StackPanel Spacing="10">
+                        <TextBlock Text="删除会话" FontSize="14" FontWeight="SemiBold"
+                                   Foreground="{DynamicResource PopupForegroundBrush}" />
+                        <TextBlock Text="{Binding SessionDeletionTargetName}"
+                                   FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                        <TextBlock Text="{Binding SessionDeletionPrompt}" TextWrapping="Wrap" />
+                        <TextBlock Classes="popup-error" Text="{Binding SessionDeletionErrorText}"
+                                   IsVisible="{Binding HasSessionDeletionError}" />
+                        <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right">
+                            <Button Classes="approval-reject" Content="取消"
+                                    Command="{Binding CancelSessionDeletionCommand}"
+                                    IsEnabled="{Binding !IsSessionDeletionRunning}" />
+                            <Button Classes="popup-danger-action" Content="永久删除"
+                                    Command="{Binding ConfirmSessionDeletionCommand}"
+                                    IsEnabled="{Binding CanConfirmSessionDeletion}" />
                         </StackPanel>
                     </StackPanel>
                 </Border>

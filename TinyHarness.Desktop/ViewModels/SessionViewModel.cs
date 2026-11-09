@@ -29,6 +29,7 @@ public sealed partial class SessionViewModel : ObservableObject
     private          string?                                       _activeRunId;
     private          DesktopApproval?                              _approval;
     private          bool                                          _archiveMutationPending;
+    private          bool                                          _deleteMutationPending;
     private          string?                                       _cancellationError;
     private          bool                                          _changing;
     private          Task?                                         _completion;
@@ -190,6 +191,7 @@ public sealed partial class SessionViewModel : ObservableObject
             if (!SetProperty(ref _isArchived, value)) return;
             OnPropertyChanged(nameof(CanReorder));
             OnPropertyChanged(nameof(ArchiveActionName));
+            OnPropertyChanged(nameof(CanDeleteArchived));
         }
     }
 
@@ -197,7 +199,7 @@ public sealed partial class SessionViewModel : ObservableObject
     ///     <para>该会话是否已建立且可由侧栏置顶。</para>
     ///     <para>Whether this session is established and can be pinned from the sidebar.</para>
     /// </summary>
-    public bool CanPin => Id is not null && StoreDirectory is not null;
+    public bool CanPin => Id is not null && StoreDirectory is not null && !_deleteMutationPending;
 
     /// <summary>
     ///     <para>空闲且未归档的正式会话可在所属侧栏分类中手动排序。</para>
@@ -205,7 +207,23 @@ public sealed partial class SessionViewModel : ObservableObject
     /// </summary>
     public bool CanReorder => CanPin && !IsRunning && !IsArchived;
 
-    public bool CanArchive => CanPin && !IsRunning && !_archiveMutationPending;
+    public bool CanArchive => CanPin && !IsRunning && !_archiveMutationPending && !_deleteMutationPending;
+
+    public bool CanDeleteArchived => CanPin && IsArchived && !IsRunning && !_opening && !_changing &&
+                                     !_archiveMutationPending && !_deleteMutationPending;
+
+    internal bool IsDeleteMutationPending => _deleteMutationPending;
+
+    public bool IsActionsMenuOpen
+    {
+        get => _isActionsMenuOpen;
+        set => SetProperty(ref _isActionsMenuOpen, value);
+    }
+
+    private bool _isActionsMenuOpen;
+
+    public double ActionsMenuHorizontalOffset { get; set; }
+    public double ActionsMenuVerticalOffset   { get; set; }
 
     /// <summary>
     ///     <para>会话置顶按钮当前执行的操作名称。</para>
@@ -326,7 +344,7 @@ public sealed partial class SessionViewModel : ObservableObject
         }
     }
 
-    public bool CanConfigure       => _runtime is null && !_opening && !_changing;
+    public bool CanConfigure       => _runtime is null && !_opening && !_changing && !_deleteMutationPending;
     public bool CanChooseWorkspace => Id is null       && CanConfigure;
 
     /// <summary>
@@ -348,6 +366,7 @@ public sealed partial class SessionViewModel : ObservableObject
             OnPropertyChanged(nameof(ComposerSendHint));
             OnPropertyChanged(nameof(CanRepairWorkspace));
             OnPropertyChanged(nameof(CanArchive));
+            OnPropertyChanged(nameof(CanDeleteArchived));
             OpenWorkspaceRepairCommand.RaiseCanExecuteChanged();
         }
     }
@@ -415,6 +434,7 @@ public sealed partial class SessionViewModel : ObservableObject
         if (!CanArchive) return false;
         _archiveMutationPending = true;
         OnPropertyChanged(nameof(CanArchive));
+        OnPropertyChanged(nameof(CanDeleteArchived));
         return true;
     }
 
@@ -427,6 +447,61 @@ public sealed partial class SessionViewModel : ObservableObject
         if (!_archiveMutationPending) return;
         _archiveMutationPending = false;
         OnPropertyChanged(nameof(CanArchive));
+        OnPropertyChanged(nameof(CanDeleteArchived));
+    }
+
+    /// <summary>
+    ///     <para>在无运行、打开、切换或归档写入时同步占用会话，阻止删除期间启动新的 runtime 操作。</para>
+    ///     <para>Synchronously reserves an idle session so no runtime operation can start during deletion.</para>
+    /// </summary>
+    internal bool TryBeginDeleteMutation()
+    {
+        if (!CanDeleteArchived) return false;
+        _deleteMutationPending = true;
+        IsActionsMenuOpen = false;
+        OnPropertyChanged(nameof(CanPin));
+        OnPropertyChanged(nameof(CanArchive));
+        OnPropertyChanged(nameof(CanDeleteArchived));
+        OnPropertyChanged(nameof(CanConfigure));
+        OnPropertyChanged(nameof(CanChangeModel));
+        return true;
+    }
+
+    /// <summary>
+    ///     <para>释放删除期间占用的会话状态。</para>
+    ///     <para>Releases the session reservation held during deletion.</para>
+    /// </summary>
+    internal void EndDeleteMutation()
+    {
+        if (!_deleteMutationPending) return;
+        _deleteMutationPending = false;
+        OnPropertyChanged(nameof(CanPin));
+        OnPropertyChanged(nameof(CanArchive));
+        OnPropertyChanged(nameof(CanDeleteArchived));
+        OnPropertyChanged(nameof(CanConfigure));
+        OnPropertyChanged(nameof(CanChangeModel));
+    }
+
+    /// <summary>
+    ///     <para>释放此会话的本地 runtime 与 writer；无论释放是否报告错误，都不保留已移出 manager 的对象引用。</para>
+    ///     <para>Releases this session's local runtime and writer without retaining a manager-removed runtime reference.</para>
+    /// </summary>
+    internal async Task ReleaseRuntimeForDeletionAsync()
+    {
+        if (_runtime is not { } runtime) return;
+        try
+        {
+            await _manager.RemoveAsync(runtime.Id);
+        }
+        finally
+        {
+            if (ReferenceEquals(_runtime, runtime)) _runtime = null;
+            OnPropertyChanged(nameof(CanConfigure));
+            OnPropertyChanged(nameof(CanChangeModel));
+            OnPropertyChanged(nameof(InspectionPending));
+            OnPropertyChanged(nameof(PermissionMigrationPending));
+            NotifyModelSelection();
+        }
     }
 
     /// <summary>
@@ -639,6 +714,7 @@ public sealed partial class SessionViewModel : ObservableObject
     /// </summary>
     public async Task SendAsync()
     {
+        if (_deleteMutationPending) throw new InvalidOperationException("正在删除会话，请稍后重试。");
         if (_changing) throw new InvalidOperationException("正在切换模型，请稍后发送。");
         if (_archiveMutationPending) throw new InvalidOperationException("正在保存会话归档状态，请稍后发送。");
         var text = Draft;
@@ -1033,10 +1109,11 @@ public sealed partial class SessionViewModel : ObservableObject
 
     private async Task ConfirmPermissionMigrationAsync()
     {
-        if (IsRunning || _opening || _changing)
+        if (IsRunning || _opening || _changing || _deleteMutationPending)
             throw new InvalidOperationException("请先停止当前运行或切换，再确认权限迁移。");
         _changing = true;
         OnPropertyChanged(nameof(CanChangeModel));
+        OnPropertyChanged(nameof(CanDeleteArchived));
         OnPropertyChanged(nameof(CanConfirmPermissionMigration));
         PermissionMigrationError = string.Empty;
         var displayedSummary = PermissionMigrationSummary;
@@ -1093,6 +1170,7 @@ public sealed partial class SessionViewModel : ObservableObject
         {
             _changing = false;
             OnPropertyChanged(nameof(CanChangeModel));
+            OnPropertyChanged(nameof(CanDeleteArchived));
             OnPropertyChanged(nameof(CanConfirmPermissionMigration));
         }
     }

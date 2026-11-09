@@ -50,6 +50,21 @@ public sealed class DesktopSessionManager : IAsyncDisposable
     }
 
     /// <summary>
+    ///     <para>移除并释放一个空闲会话宿主；操作期间不允许同一 ID 重新打开。</para>
+    ///     <para>Removes and releases an idle session host without allowing the same ID to reopen during the operation.</para>
+    /// </summary>
+    public async ValueTask RemoveAsync(string sessionId)
+    {
+        await _gate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            if (!_sessions.Remove(sessionId, out var session)) return;
+            await session.DisposeAsync().ConfigureAwait(false);
+        }
+        finally { _gate.Release(); }
+    }
+
+    /// <summary>
     /// <para>取消所有会话并等待每个宿主收尾；重复调用等待同一次关闭。</para>
     /// <para>Cancels every session and awaits all hosts; repeated calls await the same shutdown.</para>
     /// </summary>

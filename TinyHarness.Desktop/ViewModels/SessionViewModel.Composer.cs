@@ -32,7 +32,8 @@ public sealed partial class SessionViewModel
     public ObservableCollection<ComposerMenuOption> ProjectMenuOptions { get; } = [];
     public ObservableCollection<ComposerMenuOption> VisibleProjectMenuOptions { get; } = [];
     public IReadOnlyList<ComposerMenuOption>        EffortOptions { get; private set; } = [];
-    public bool                                     CanChangeModel => !IsRunning && !_opening && !_changing;
+    public bool                                     CanChangeModel => !IsRunning && !_opening && !_changing &&
+                                                                       !_deleteMutationPending;
 
     public bool CanConfirmPermissionMigration => PermissionMigrationPending &&
                                                  !IsRunning                 && !_opening &&
@@ -401,6 +402,7 @@ public sealed partial class SessionViewModel
         if (choice is null) throw new InvalidOperationException("请选择已配置的模型。");
         _changing = true;
         OnPropertyChanged(nameof(CanChangeModel));
+        OnPropertyChanged(nameof(CanDeleteArchived));
         Status = "正在切换模型";
         try
         {
@@ -420,6 +422,7 @@ public sealed partial class SessionViewModel
         {
             _changing = false;
             OnPropertyChanged(nameof(CanChangeModel));
+            OnPropertyChanged(nameof(CanDeleteArchived));
         }
     }
 
@@ -660,6 +663,7 @@ public sealed partial class SessionViewModel
 
         _changing = true;
         OnPropertyChanged(nameof(CanChangeModel));
+        OnPropertyChanged(nameof(CanDeleteArchived));
         OnPropertyChanged(nameof(PermissionChangeHint));
         try
         {
@@ -675,6 +679,7 @@ public sealed partial class SessionViewModel
         {
             _changing = false;
             OnPropertyChanged(nameof(CanChangeModel));
+            OnPropertyChanged(nameof(CanDeleteArchived));
             OnPropertyChanged(nameof(PermissionChangeHint));
             RebuildPermissionMenu();
         }
