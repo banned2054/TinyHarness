@@ -35,8 +35,7 @@ C2 读保护敏感档：已知敏感名单（.ssh/.aws/.docker/.gnupg/.kube/.san
 基线+注记，附加读/写根内命中不升档（用户显式信任面）。获批的 C2 读经专用授权通道在
 沙箱内执行，见下文「C2 获批读授权通道」一节。
 
-新基线意味着：**工作区内的读写、一切普通读取与沙箱内 Shell 默认自动执行**。这是迁移确认时
-会明确告知的基线变化；附加能力（越界写入、敏感位置、受保护元数据写入、联网、Host、
+新基线意味着：**工作区内的读写、一切普通读取与沙箱内 Shell 默认自动执行**。这是当前权限体系的基线；附加能力（越界写入、敏感位置、受保护元数据写入、联网、Host、
 写根申请）仍需逐次审批。受保护元数据写入的 grant 在新工作区的可用性取决于 deny ACE 历史
 （限制详情见[权限架构重构任务记录](../permission-architecture-plan.md)0.7 GAP-3）。
 
@@ -184,33 +183,22 @@ search_text 支持按行搜索（不做跨行正则与替换）：
 
 ## 旧模式迁移
 
-旧的七种模式（逐次确认、只读可申请、项目内读写、完全开放、逐项 AI 审核、只读 AI 审批、
-项目内读写 AI 审批）按映射仅供迁移与展示：三个 AI 审核预设 → `AIAutoReview`，
-其余（含完全开放）→ `HumanApproval`。
+旧的七种模式统一自动迁移为 `HumanApproval`（人工审批），包括三个旧 AI 审核预设。
+不再要求确认旧配置或旧会话迁移；已经采用当前格式的审批模式选择保持不变。
 
-- 用户配置检测到旧 `defaultMode`/`composerModes` 即置迁移待确认态，**不拒载其余配置**；
-  确认后改写为 `{defaultApprovalMode, useCurrentModel, reviewerProfile, reviewerModel}`。
-- 会话恢复时，含旧 selection 记录或无记录但有历史运行的会话进入 `MigrationPending`：
-  **确认前所有模型工具能力一律拒绝（含只读，无例外，固定理由
-  "permission migration pending; confirm to enable tool execution"）**；
-  工具保持注册，文本对话轮正常，确认后恢复。
-- 迁移确认必须如实展示：新基线允许工作区读写与沙箱 Shell；附加权限走两种审批；
-  FullAccess 已删除，不恢复自动宿主执行；旧临时授权与 commandRules 免审批规则
-  **不自动取得新权限**；旧常设网络策略与附加读写根平移并按常设信任三态展示。
-- `settings.commandRules` 保留解析但运行时不再消费——旧命令免审批规则不能成为隐蔽授权。
-- 迁移失败时保持阻断状态，可重试确认。
-
-配置与会话分别确认。Desktop 在设置 → 权限与审批中提供“确认迁移权限配置”；普通保存不会
-解除配置门禁。旧会话在会话页显示通知条，确认操作只打开并保存该会话，不发送模型请求。
-CLI 在交互式 `chat` 启动时提示配置迁移（以及检测到常设信任时的常设授权确认，同样 y/N、
-默认否），在恢复旧会话时另行提示会话迁移，均默认否；
-重定向输入不能代替用户确认。`run` 遇到未确认的旧配置会明确退出，保留原文件；
-常设信任未确认不阻断 `run`（联网与附加写根写按逐次审批），仅输出提示指向 chat 确认。
+- 用户配置加载旧 `defaultMode`/`composerModes` 时，严格校验后直接转为当前权限设置；
+  下次保存写入 `defaultApprovalMode`，其余配置与独立常设信任记录保留。
+- Desktop 打开、CLI 恢复旧会话时，自动原子保存迁移记录与人工审批选择，不发送模型请求，
+  不读取确认答案。交互式与重定向输入采用相同行为。
+- 写入失败时保持工具阻断并报告错误；再次打开或恢复时重试，不能绕过可靠保存。
+- 新基线允许工作区读写与沙箱 Shell；附加能力按人工审批处理。FullAccess 不恢复自动宿主执行，
+  旧临时授权与 `commandRules` 免审批规则不自动取得新权限。
+- 常设网络与附加写根仍按独立的常设信任确认处理；自动模式迁移不替代该确认。
 
 ## 会话内切换与恢复
 
 - CLI `/approval human|ai`：在空闲边界切换会话审批模式，与 Desktop 同机制，
-  经 selection 记录持久化；模式切换不能代替旧会话迁移确认。
+  经 selection 记录持久化；旧会话先自动迁移为人工审批，再允许显式切换。
 - 模式选择以必需记录写入会话 JSONL：新 schema `tinyharness.permission-selection/2`
   { Revision, ApprovalMode }；迁移完成写入 `permission-migration/1`
   { Revision, CompletedUtc, PreviousMode?, ApprovalMode, PolicyVersion }；授权事件写入

@@ -6,15 +6,8 @@ using TinyHarness.Core.Services.ChatCompletions.Configuration;
 namespace TinyHarness.Tests;
 
 /// <summary>
-///     <para>
-///         settings.permissions 新旧形状迁移测试（D9）：旧配置检测即置迁移待确认态且不拒载其余配置、
-///         旧模式到审批模式的映射、迁移确认后改写为当前形状、混合形状与未知取值拒绝。
-///     </para>
-///     <para>
-///         Migration tests for settings.permissions (D9): legacy configs load as pending-migration without
-///         rejecting other fields, the legacy-mode to approval-mode mapping, the post-confirmation rewrite to
-///         the current shape, and rejection of mixed shapes and unknown values.
-///     </para>
+///     <para>验证旧权限自动转为人工审批、当前形状保存与严格配置校验。</para>
+///     <para>Verifies automatic migration to human approval, current-shape persistence and strict validation.</para>
 /// </summary>
 public class PermissionSettingsMigrationTests
 {
@@ -33,7 +26,7 @@ public class PermissionSettingsMigrationTests
     private static async Task<string> ReadConfigAsync(string path) => await File.ReadAllTextAsync(path);
 
     [Test]
-    public async Task LegacyConfig_LoadsAsPendingMigrationWithoutRejectingOtherFields()
+    public async Task LegacyConfig_AutomaticallyMigratesWithoutRejectingOtherFields()
     {
         var dir  = NewConfigDir();
         var path = Path.Combine(dir, "user-config.json");
@@ -45,8 +38,8 @@ public class PermissionSettingsMigrationTests
             var config = await UserConfigStore.LoadAsync(path, CancellationToken.None);
 
             var permissions = config.Settings!.Permissions!;
-            Assert.That(permissions.PendingMigration, Is.True);
-            Assert.That(permissions.LegacyDefaultMode, Is.EqualTo("ProjectWrite"));
+            Assert.That(permissions.PendingMigration, Is.False);
+            Assert.That(permissions.LegacyDefaultMode, Is.Null);
             Assert.That(permissions.DefaultApprovalMode, Is.EqualTo(SessionApprovalMode.HumanApproval));
             Assert.That(config.Settings!.SessionDirectory, Is.EqualTo("logs"));
         }
@@ -58,7 +51,7 @@ public class PermissionSettingsMigrationTests
 
     [TestCase("""{"defaultMode":null}""")]
     [TestCase("""{"composerModes":null}""")]
-    public async Task NullLegacyField_LoadsAsPendingMigrationWithLegacyDefaults(string permissionsJson)
+    public async Task NullLegacyField_AutomaticallyMigratesWithLegacyDefaults(string permissionsJson)
     {
         var dir  = NewConfigDir();
         var path = Path.Combine(dir, "user-config.json");
@@ -67,9 +60,9 @@ public class PermissionSettingsMigrationTests
             await WriteRawAsync(path, "{\"settings\":{\"permissions\":" + permissionsJson + "}}");
 
             var permissions = (await UserConfigStore.LoadAsync(path, CancellationToken.None)).Settings!.Permissions!;
-            Assert.That(permissions.PendingMigration, Is.True);
-            Assert.That(permissions.LegacyDefaultMode, Is.EqualTo("ReadOnly"));
-            Assert.That(permissions.LegacyComposerModes, Is.EqualTo(LegacyPermissionSelection.KnownLegacyModeNames));
+            Assert.That(permissions.PendingMigration, Is.False);
+            Assert.That(permissions.LegacyDefaultMode, Is.Null);
+            Assert.That(permissions.LegacyComposerModes, Is.Null);
             Assert.That(permissions.DefaultApprovalMode, Is.EqualTo(SessionApprovalMode.HumanApproval));
         }
         finally
@@ -83,9 +76,9 @@ public class PermissionSettingsMigrationTests
     [TestCase("ReadOnly", SessionApprovalMode.HumanApproval)]
     [TestCase("ProjectWrite", SessionApprovalMode.HumanApproval)]
     [TestCase("FullAccess", SessionApprovalMode.HumanApproval)]
-    [TestCase("ReviewEveryAction", SessionApprovalMode.AIAutoReview)]
-    [TestCase("ReadOnlyAutoReview", SessionApprovalMode.AIAutoReview)]
-    [TestCase("ProjectWriteAutoReview", SessionApprovalMode.AIAutoReview)]
+    [TestCase("ReviewEveryAction", SessionApprovalMode.HumanApproval)]
+    [TestCase("ReadOnlyAutoReview", SessionApprovalMode.HumanApproval)]
+    [TestCase("ProjectWriteAutoReview", SessionApprovalMode.HumanApproval)]
     public async Task LegacyDefault_AllSevenModesMapExplicitly(string              legacyMode,
                                                                SessionApprovalMode expected)
     {
@@ -100,7 +93,7 @@ public class PermissionSettingsMigrationTests
             var config = await UserConfigStore.LoadAsync(path, CancellationToken.None);
 
             var permissions = config.Settings!.Permissions!;
-            Assert.That(permissions.PendingMigration, Is.True);
+            Assert.That(permissions.PendingMigration, Is.False);
             Assert.That(permissions.DefaultApprovalMode, Is.EqualTo(expected));
         }
         finally
@@ -110,7 +103,7 @@ public class PermissionSettingsMigrationTests
     }
 
     [Test]
-    public async Task LegacyDefault_MapsReviewPresetsToAIAutoReviewAndOthersToHuman()
+    public async Task LegacyDefault_UsesHumanApprovalForEveryPreset()
     {
         var dir  = NewConfigDir();
         var path = Path.Combine(dir, "user-config.json");
@@ -119,8 +112,8 @@ public class PermissionSettingsMigrationTests
             await WriteRawAsync(path,
                                 """{"settings":{"permissions":{"defaultMode":"ProjectWriteAutoReview","composerModes":["ProjectWriteAutoReview"]}}}""");
             var review = (await UserConfigStore.LoadAsync(path, CancellationToken.None)).Settings!.Permissions!;
-            Assert.That(review.DefaultApprovalMode, Is.EqualTo(SessionApprovalMode.AIAutoReview));
-            Assert.That(review.PendingMigration, Is.True);
+            Assert.That(review.DefaultApprovalMode, Is.EqualTo(SessionApprovalMode.HumanApproval));
+            Assert.That(review.PendingMigration, Is.False);
 
             await WriteRawAsync(path,
                                 """{"settings":{"permissions":{"defaultMode":"FullAccess","composerModes":["FullAccess"]}}}""");
@@ -134,7 +127,7 @@ public class PermissionSettingsMigrationTests
     }
 
     [Test]
-    public async Task SavingPendingMigration_PreservesLegacyShapeVerbatim()
+    public async Task SavingMigratedConfig_WritesCurrentShape()
     {
         var dir  = NewConfigDir();
         var path = Path.Combine(dir, "user-config.json");
@@ -148,12 +141,12 @@ public class PermissionSettingsMigrationTests
             var json = JsonNode.Parse(await ReadConfigAsync(path))!.AsObject();
 
             var permissions = json["settings"]!["permissions"]!.AsObject();
-            Assert.That(permissions.ContainsKey("defaultMode"), Is.True);
-            Assert.That(permissions.ContainsKey("composerModes"), Is.True);
-            Assert.That(permissions.ContainsKey("defaultApprovalMode"), Is.False);
+            Assert.That(permissions.ContainsKey("defaultMode"), Is.False);
+            Assert.That(permissions.ContainsKey("composerModes"), Is.False);
+            Assert.That(permissions.ContainsKey("defaultApprovalMode"), Is.True);
 
             var reloaded = await UserConfigStore.LoadAsync(path, CancellationToken.None);
-            Assert.That(reloaded.Settings!.Permissions!.PendingMigration, Is.True);
+            Assert.That(reloaded.Settings!.Permissions!.PendingMigration, Is.False);
         }
         finally
         {
@@ -162,7 +155,7 @@ public class PermissionSettingsMigrationTests
     }
 
     [Test]
-    public async Task ConfirmingMigration_RewritesToCurrentShapeAndReloadsClean()
+    public async Task AutomaticMigration_RewritesToCurrentShapeAndReloadsClean()
     {
         var dir  = NewConfigDir();
         var path = Path.Combine(dir, "user-config.json");
@@ -172,9 +165,9 @@ public class PermissionSettingsMigrationTests
                                 """{"settings":{"permissions":{"defaultMode":"ReadOnlyAutoReview","composerModes":["ReadOnlyAutoReview"]}}}""");
             var pending = await UserConfigStore.LoadAsync(path, CancellationToken.None);
             Assert.That(pending.Settings!.Permissions!.DefaultApprovalMode,
-                        Is.EqualTo(SessionApprovalMode.AIAutoReview));
+                        Is.EqualTo(SessionApprovalMode.HumanApproval));
 
-            // 迁移确认：新形状实例（不携带旧字段），保存后旧字段从文件中消失。
+            // 迁移后的当前形状保存时移除旧字段。
             var confirmed = new UserConfig
             {
                 Settings = new UserConfigSettings
@@ -190,7 +183,7 @@ public class PermissionSettingsMigrationTests
             var json = JsonNode.Parse(await ReadConfigAsync(path))!.AsObject();
 
             var permissions = json["settings"]!["permissions"]!.AsObject();
-            Assert.That(permissions["defaultApprovalMode"]!.GetValue<string>(), Is.EqualTo("AIAutoReview"));
+            Assert.That(permissions["defaultApprovalMode"]!.GetValue<string>(), Is.EqualTo("HumanApproval"));
             Assert.That(permissions.ContainsKey("defaultMode"), Is.False);
             Assert.That(permissions.ContainsKey("composerModes"), Is.False);
 
@@ -199,7 +192,7 @@ public class PermissionSettingsMigrationTests
             Assert.That(settings.PendingMigration, Is.False);
             Assert.That(settings.LegacyDefaultMode, Is.Null);
             Assert.That(settings.LegacyComposerModes, Is.Null);
-            Assert.That(settings.DefaultApprovalMode, Is.EqualTo(SessionApprovalMode.AIAutoReview));
+            Assert.That(settings.DefaultApprovalMode, Is.EqualTo(SessionApprovalMode.HumanApproval));
         }
         finally
         {
@@ -313,7 +306,7 @@ public class PermissionSettingsMigrationTests
             };
 
             await TestAssert.ThrowsAsync<InvalidDataException>(() => UserConfigStore.SaveAsync(path, config,
-                                                                   CancellationToken.None));
+                                                                        CancellationToken.None));
         }
         finally
         {

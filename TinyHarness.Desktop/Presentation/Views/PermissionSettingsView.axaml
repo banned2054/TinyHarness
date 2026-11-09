@@ -40,19 +40,7 @@
         </ComboBox>
         <TextBlock Text="AI 使用独立审核请求，可能产生额外用量。AI 明确升级时才转交人工审批；拒绝或技术失败均保持未执行。"
                    TextWrapping="Wrap" FontSize="12" Foreground="{DynamicResource PopupMutedForegroundBrush}" />
-        <Border IsVisible="{Binding ConfigMigrationPending}" Classes="settings-row" Padding="12">
-            <StackPanel Spacing="8">
-                <TextBlock Text="旧权限配置待确认" FontWeight="SemiBold" />
-                <TextBlock Text="普通保存不会解除配置门禁。确认后才会将旧七模式写为双审批配置；旧会话仍需在会话页单独确认迁移。"
-                           TextWrapping="Wrap" />
-                <TextBlock Text="{Binding MigrationSummary}" TextWrapping="Wrap" FontSize="12"
-                           Foreground="{DynamicResource PopupMutedForegroundBrush}" />
-                <TextBlock Text="{Binding MigrationError}" IsVisible="{Binding ConfigMigrationPending}"
-                           TextWrapping="Wrap" />
-                <Button Content="确认迁移权限配置" Command="{Binding ConfirmMigrationCommand}"
-                        HorizontalAlignment="Left" />
-            </StackPanel>
-        </Border>
+
         <Border IsVisible="{Binding StandingTrustVisible}" Classes="settings-row" Padding="12">
             <StackPanel Spacing="8">
                 <TextBlock Text="常设授权（沙箱网络与附加写根）" FontWeight="SemiBold" />

@@ -1,8 +1,10 @@
 using NUnit.Framework;
 using System.Runtime.CompilerServices;
+using System.Text.Json;
 using TinyHarness.Core.Models.ChatCompletions;
 using TinyHarness.Core.Models.Configuration;
 using TinyHarness.Core.Models.Permissions;
+using TinyHarness.Core.Models.Persistence;
 using TinyHarness.Core.Services.ChatCompletions;
 using TinyHarness.Core.Services.ChatCompletions.Configuration;
 using TinyHarness.Core.Services.Persistence;
@@ -1372,7 +1374,42 @@ public sealed class DesktopProjectionTests
         Assert.That(settings.Editor!.ModelEntries.Single().DisplayName, Is.EqualTo("saved name"));
     }
 
-    private static async Task<string> CreateLegacySessionAsync(Fixture fixture)
+    [TestCase(null)]
+    [TestCase("ConfirmEveryAction")]
+    [TestCase("ReadOnly")]
+    [TestCase("ProjectWrite")]
+    [TestCase("FullAccess")]
+    [TestCase("ReviewEveryAction")]
+    [TestCase("ReadOnlyAutoReview")]
+    [TestCase("ProjectWriteAutoReview")]
+    public async Task LegacyPermissionSession_AutomaticallyMigratesToHumanApprovalAndPersists(string? legacyMode)
+    {
+        var fixture  = await Fixture.CreateAsync();
+        var id       = await CreateLegacySessionAsync(fixture, legacyMode);
+        var requests = new List<ChatCompletionRequest>();
+        var factory =
+            new DesktopSessionFactory((_, _) => new Model(Signal(), Signal(), "unused", observed : requests.Add),
+                                      new Credentials(), fixture.Config);
+        for (var attempt = 0; attempt < 2; attempt++)
+        {
+            await using var session = await factory.OpenAsync(
+                                                              new DesktopSessionRequest(fixture.First,
+                                                                  SessionApprovalMode.AIAutoReview, id),
+                                                              _ => ValueTask.CompletedTask,
+                                                              _ => ValueTask.CompletedTask, CancellationToken.None);
+            Assert.That(session.Host.Session.PermissionMigrationPending, Is.False);
+            Assert.That(session.Host.Session.PermissionSelectionV2!.ApprovalMode,
+                        Is.EqualTo(SessionApprovalMode.HumanApproval));
+            var saved = (await SessionStoreReader.ReadAsync(fixture.Store, id, CancellationToken.None))!;
+            Assert.That(saved.PermissionMigration!.PreviousMode, Is.EqualTo(legacyMode));
+            Assert.That(saved.PermissionMigration.ApprovalMode, Is.EqualTo(SessionApprovalMode.HumanApproval));
+            Assert.That(saved.PermissionSelectionV2!.Revision, Is.EqualTo(legacyMode is null ? 1 : 2));
+        }
+
+        Assert.That(requests, Is.Empty);
+    }
+
+    private static async Task<string> CreateLegacySessionAsync(Fixture fixture, string? legacyMode = null)
     {
         var finish = Signal();
         finish.SetResult();
@@ -1392,6 +1429,10 @@ public sealed class DesktopProjectionTests
         var legacy = snapshot with
         {
             Id = Guid.NewGuid().ToString("N"), ModelSelections = [],
+            PermissionSelectionV2 = null, PermissionMigration = null,
+            PermissionSelection = legacyMode is null
+                ? null
+                : new LegacyPermissionSelection { Revision = 1, Mode = legacyMode },
             Turns = snapshot.Turns.Select(turn => turn with
             {
                 Runs = turn.Runs.Select(run => run with { ModelSelectionRevision = null }).ToArray()
@@ -1401,6 +1442,14 @@ public sealed class DesktopProjectionTests
         var       restored = SessionResume.Restore(legacy, fixture.First, legacy.Conversation.Messages[0].Content);
         using var writer   = new SessionStoreWriter(fixture.Store, legacy.Id);
         await writer.CommitAsync(restored.Session, restored.Context, CancellationToken.None);
+        if (legacy.PermissionSelection is { } selection)
+            await writer.CommitControlAsync(restored.Session, restored.Context,
+            [
+                new SessionLogRecord(string.Empty, "permission-selection",
+                                     JsonSerializer.SerializeToElement(selection,
+                                                                       PermissionPersistenceJsonContext.Default
+                                                                          .LegacyPermissionSelection))
+            ], CancellationToken.None);
         return legacy.Id;
     }
 

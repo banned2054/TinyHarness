@@ -446,9 +446,8 @@ public sealed partial class SessionViewModel
         }
         else if (_runtime.Host.Session.PermissionSelection is { } legacy)
         {
-            SetPermissionMode(LegacyPermissionSelectionMapper.FromLegacyName(legacy.Mode)
-                           ?? SessionApprovalMode.HumanApproval, false);
-            _storedPermissionLabel = LegacyPermissionSelectionMapper.LegacyLabel(legacy.Mode) ?? "旧版模式";
+            SetPermissionMode(SessionApprovalMode.HumanApproval, false);
+            _storedPermissionLabel = null;
             OnPropertyChanged(nameof(PermissionPickerLabel));
         }
 
@@ -571,9 +570,8 @@ public sealed partial class SessionViewModel
                 return;
             }
 
-            var mapped = LegacyPermissionSelectionMapper.FromLegacyName(legacyModeName);
-            if (mapped is { } mode) SetPermissionMode(mode, false);
-            _storedPermissionLabel = LegacyPermissionSelectionMapper.LegacyLabel(legacyModeName) ?? "旧版模式";
+            SetPermissionMode(SessionApprovalMode.HumanApproval, false);
+            _storedPermissionLabel = null;
             OnPropertyChanged(nameof(PermissionPickerLabel));
         }
     }

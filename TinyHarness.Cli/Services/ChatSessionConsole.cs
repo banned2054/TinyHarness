@@ -202,7 +202,7 @@ internal sealed class ChatSessionConsole : IDisposable
                 _output.WriteLineAsync("Models: /models to switch model or reasoning effort when idle; /models list anytime.");
 
         await _output.WriteLineAsync("Approval mode: /approval human|ai (idle only; saved per session).");
-        await PromptPermissionMigrationIfNeededAsync(cancellationToken);
+        await MigratePermissionsIfNeededAsync(cancellationToken);
 
         await PromptInspectionIfNeededAsync(cancellationToken);
 
@@ -511,60 +511,16 @@ internal sealed class ChatSessionConsole : IDisposable
         }
     }
 
-    private async Task PromptPermissionMigrationIfNeededAsync(CancellationToken cancellationToken)
+    private async Task MigratePermissionsIfNeededAsync(CancellationToken cancellationToken)
     {
         if (Host?.Session.PermissionMigrationPending != true) return;
 
-        var session = Host.Session;
-        var mappedMode = session.PermissionSelection is { } legacy
-            ? LegacyPermissionSelectionMapper.FromLegacyName(legacy.Mode) ?? SessionApprovalMode.HumanApproval
-            : SessionApprovalMode.HumanApproval;
-        await _output.WriteLineAsync("This saved session needs permission migration confirmation.");
-        await
-            _output.WriteLineAsync($"  legacy mode: {session.PermissionSelection?.Mode ?? "(no saved selection)"} -> " +
-                                   ApprovalModeLabel(mappedMode) + " (migration mapping only)");
-        await
-            _output.WriteLineAsync("  new baseline: workspace read/write and sandbox Shell; add-on capabilities require approval");
-        await _output.WriteLineAsync("  removed: FullAccess; old grants and commandRules do not become permissions");
-        if (PermissionMigrationSummaryWriter is null)
+        try
         {
+            await Host.ConfirmPermissionMigrationAsync(SessionApprovalMode.HumanApproval, cancellationToken)
+                      .ConfigureAwait(false);
             await
-                _output.WriteLineAsync("Current sandbox/network settings could not be summarized; migration remains blocked.");
-            return;
-        }
-
-        try
-        {
-            await PermissionMigrationSummaryWriter(cancellationToken).ConfigureAwait(false);
-        }
-        catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException
-                                      or InvalidOperationException)
-        {
-            await _output.WriteLineAsync(TerminalDisplay.Format(
-                                                                $"Current sandbox/network settings could not be summarized; migration remains blocked: {ex.Message}",
-                                                                _redactor));
-            return;
-        }
-
-        if (!_interactive)
-        {
-            await _output.WriteLineAsync("Non-interactive input cannot confirm migration; model tools remain blocked.");
-            return;
-        }
-
-        await _output.WriteAsync("Confirm this session's permission migration? [y/N] ");
-        await _output.FlushAsync(cancellationToken).ConfigureAwait(false);
-        var answer = (await _input.ReadLineAsync(_cancellation.SessionToken).ConfigureAwait(false))?.Trim();
-        if (answer is not ("y" or "Y" or "yes" or "YES"))
-        {
-            await _output.WriteLineAsync("Session migration was not confirmed; model tools remain blocked.");
-            return;
-        }
-
-        try
-        {
-            await Host.ConfirmPermissionMigrationAsync(mappedMode, cancellationToken).ConfigureAwait(false);
-            await _output.WriteLineAsync($"Session permission migration saved: {ApprovalModeLabel(mappedMode)}.");
+                _output.WriteLineAsync($"Session permission migration saved: {ApprovalModeLabel(SessionApprovalMode.HumanApproval)}.");
         }
         catch (Exception ex) when (ex is SessionStoreException or InvalidOperationException or IOException
                                       or InvalidDataException
@@ -719,7 +675,7 @@ internal sealed class ChatSessionConsole : IDisposable
             _promptedInspectionRunId = null;
             await _output.WriteLineAsync($"session    : {next.Session.Id} ({next.Session.Turns.Count} turns)");
             await WriteUnappliedAmendmentsAsync();
-            await PromptPermissionMigrationIfNeededAsync(cancellationToken);
+            await MigratePermissionsIfNeededAsync(cancellationToken);
             await PromptInspectionIfNeededAsync(cancellationToken);
         }
         catch (OperationCanceledException) when (_cancellation.IsSessionCancelled ||
@@ -766,7 +722,7 @@ internal sealed class ChatSessionConsole : IDisposable
         if (!_interactive)
         {
             await _output.WriteLineAsync("Non-interactive input cannot confirm inspection; side effects stay blocked.")
-                        .ConfigureAwait(false);
+                         .ConfigureAwait(false);
             return;
         }
 

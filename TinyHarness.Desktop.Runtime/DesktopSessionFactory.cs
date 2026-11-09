@@ -147,11 +147,11 @@ public sealed partial class DesktopSessionFactory
         var user     = await UserConfigStore.LoadAsync(userPath, cancellationToken).ConfigureAwait(false);
         EnsurePermissionConfigConfirmed(user);
         // 常设信任三态只来自可信用户设置与显式确认记录；未确认时组合与引擎都按逐次审批消费。
-        var sandboxSettings = user.Settings?.WindowsSandbox;
-        var standingTrust   = StandingTrustEvaluation.Evaluate(sandboxSettings, user.Settings?.Permissions);
+        var sandboxSettings        = user.Settings?.WindowsSandbox;
+        var standingTrust          = StandingTrustEvaluation.Evaluate(sandboxSettings, user.Settings?.Permissions);
         // 组合实际消费的设置决定常设网络是否启用：与传给沙箱组合器的 EffectiveSandboxSettings
         // 同源同值；常设网络 restricted 时网络申请走逐次审批，写根确认不得复用为网络免审批。
-        var compositionSettings   = StandingTrustEvaluation.EffectiveSandboxSettings(sandboxSettings, standingTrust);
+        var compositionSettings    = StandingTrustEvaluation.EffectiveSandboxSettings(sandboxSettings, standingTrust);
         var standingNetworkEnabled = compositionSettings?.NetworkPolicy == SandboxNetworkPolicy.Enabled;
         // 恢复和显式选择不依赖全局默认目标可用；配置一律来自可信用户设置，不读取工作目录的 tinyharness.json。
         var resolution = request.SessionId is null && request.ProfileName is null
@@ -183,11 +183,11 @@ public sealed partial class DesktopSessionFactory
         WindowsSandboxExecution? sandbox = null;
         // 共享的 CLI workspace-trust.json（B7 两端超集）：OS deny 仅在文件已存在时配对
         // （helper 会把缺失条目物化为目录，绝不能让信任文件被物化）；应用层保护按路径形态恒生效。
-        var trustPath = Path.Combine(Path.GetDirectoryName(userPath)!, "workspace-trust.json");
+        var                      trustPath = Path.Combine(Path.GetDirectoryName(userPath)!, "workspace-trust.json");
         // C1 权限系统实例（实际路径）：组合期写根重叠校验与 grant 校验共用，底层不重新猜默认路径。
-        var permissionSystemPaths = new List<string> { userPath, trustPath, directory };
+        var                      permissionSystemPaths = new List<string> { userPath, trustPath, directory };
         // 基线广泛读保护的 C1 宿主密钥路径：组合与授权指纹共用同一列表，守卫重算同一 deny 集。
-        var baselineProtectedPaths = new List<string> { userPath };
+        var                      baselineProtectedPaths = new List<string> { userPath };
         if (sandboxSettings is { Enabled: true } settings)
         {
             // 会话存储不能落入任一可信写根；此处不进行 provisioning 或机器权限变更。
@@ -236,20 +236,23 @@ public sealed partial class DesktopSessionFactory
                                                       permissionSystemRoots : permissionSystemRoots,
                                                       sandboxRuntimeRoots : sandbox is not null
                                                           ? WindowsSandboxComposer.DeriveRuntimeWriteRoots(
-                                                               user.Settings?.WindowsSandbox)
+                                                           user.Settings?.WindowsSandbox)
                                                           : null,
                                                       standingTrust : standingTrust);
         // 组合授权指纹守卫：捕获组合实际消费的可信配置指纹，并注入同一函数的取值器——
         // 每次发送/派发前重读该配置重算，失配或取值失败即撤销授权并闩死会话（快照失效机制，
         // 独立于审批模式切换与 NeedsInspection）。
         var compositionGuard = new PermissionCompositionGuard(
-            PermissionCompositionFingerprint.Compute(sandboxSettings, user.Settings?.Permissions,
-                                                     user.Settings?.Network, root, sandbox is not null,
-                                                     baselineProtectedPaths,
-                                                     user.Settings?.SessionStoreDirectory),
-            PermissionCompositionFingerprint.CreateEvaluator(userPath, root, sandbox is not null,
-                                                             baselineProtectedPaths,
-                                                             trackSessionStoreDirectory : true));
+                                                              PermissionCompositionFingerprint.Compute(sandboxSettings,
+                                                                  user.Settings?.Permissions,
+                                                                  user.Settings?.Network, root,
+                                                                  sandbox is not null,
+                                                                  baselineProtectedPaths,
+                                                                  user.Settings?.SessionStoreDirectory),
+                                                              PermissionCompositionFingerprint.CreateEvaluator(userPath,
+                                                                  root, sandbox is not null,
+                                                                  baselineProtectedPaths,
+                                                                  true));
         // 常设信任只来自可信用户设置与显式确认记录：Confirmed 之外联网与附加写根写一律逐次审批；
         // 常设网络 restricted 时网络申请恒逐次审批，写根确认不复用为网络免审批。
         // sandboxExecutionAvailable 由组合结果决定：沙箱未组合即 Deny 进程执行，不回退宿主。
@@ -285,7 +288,7 @@ public sealed partial class DesktopSessionFactory
             }, () => grant.ValidatePreparationScope(access.Identity));
             repair = new DesktopWorkspaceCoordinator(access.Identity, services, state =>
                                                          events(new DesktopEvent("workspace-repair", null,
-                                                                         WorkspaceRepair : state)));
+                                                                    WorkspaceRepair : state)));
             backend = new DesktopWorkspaceBackend(backend, repair);
         }
 
@@ -296,8 +299,8 @@ public sealed partial class DesktopSessionFactory
                                                               () => ReviewContext(permissionHost!, permissions),
                                                               text => events(new DesktopEvent("state", null, text)),
                                                               () => TimeSpan.FromSeconds(permissionHost!
-                                                                          .EffectiveModelTimeouts
-                                                                          .ApprovalTimeoutSeconds));
+                                                                 .EffectiveModelTimeouts
+                                                                 .ApprovalTimeoutSeconds));
         // 沙箱未组合时 restricted Shell 不携带冻结策略身份：PermissionShellTool 的 workspace
         // 路由将明确失败，不回退宿主；沙箱可用性 Deny 由权限引擎的组合期布尔表达。
         // grant 上下文随组合冻结（含 C1 实例路径，grant 写根与之重叠在 Prepare 期 fail-closed）；
@@ -465,12 +468,14 @@ public sealed partial class DesktopSessionFactory
             }
 
             permissionHost = host;
-            if (!host.Session.PermissionMigrationPending   &&
-                host.Session.PermissionSelectionV2 is null && host.Session.PermissionSelection is null)
+            if (host.Session.PermissionMigrationPending)
             {
-                // 全新会话：按请求或可信默认写入首条 /2 审批模式选择。已恢复的 /2 与迁移待确认
-                // 的 /1 会话不在打开时写入——前者沿用已恢复模式（引擎在组合期按其运行），
-                // 后者由迁移确认流程落笔。
+                await host.ConfirmPermissionMigrationAsync(SessionApprovalMode.HumanApproval, cancellationToken)
+                          .ConfigureAwait(false);
+            }
+            else if (host.Session.PermissionSelectionV2 is null && host.Session.PermissionSelection is null)
+            {
+                // 全新会话采用请求或可信默认；旧会话自动迁移为人工审批，已有 /2 选择保持不变。
                 var requested = request.PermissionMode ??
                                 user.Settings?.Permissions?.DefaultApprovalMode ??
                                 SessionApprovalMode.HumanApproval;
@@ -744,7 +749,7 @@ internal sealed class DesktopEventSink(
             HostEventKind.ModelRequestWaiting => new DesktopEvent("state", @event.RunId, "等待模型响应"),
             HostEventKind.ToolStarted         => new DesktopEvent("state", @event.RunId, "工具执行中"),
             HostEventKind.RunError when @event.Payload is string error => new DesktopEvent("error", @event.RunId,
-                     _diagnostics.Redact(error)),
+                _diagnostics.Redact(error)),
             HostEventKind.RunFinished => new DesktopEvent("state", @event.RunId, "正在保存"),
             _                         => null
         };

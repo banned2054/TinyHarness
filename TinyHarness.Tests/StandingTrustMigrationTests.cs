@@ -37,7 +37,7 @@ public class StandingTrustMigrationTests
     [Test]
     public void Evaluate_NoStandingExpansion_IsNone_RegardlessOfRecord()
     {
-        var sandbox = new WindowsSandboxSettings { Enabled = true };
+        var sandbox  = new WindowsSandboxSettings { Enabled = true };
         var revision = StandingTrustEvaluation.ScopeRevision(sandbox);
         var record = new PermissionSettings
         {
@@ -80,7 +80,7 @@ public class StandingTrustMigrationTests
         var staleRecord = new PermissionSettings
         {
             StandingTrustConfirmation = new StandingTrustConfirmation(DateTimeOffset.UtcNow,
-                                                                     new string('A', 64))
+                                                                      new string('A', 64))
         };
 
         Assert.Multiple(() =>
@@ -127,14 +127,14 @@ public class StandingTrustMigrationTests
             Assert.That(StandingTrustEvaluation.ScopeRevision(reordered), Is.EqualTo(revision));
             // 任一受指纹维度变化都会改变修订。
             Assert.That(StandingTrustEvaluation.ScopeRevision(sandbox with
-                                                              {
-                                                                  AdditionalWriteRoots = [@"C:\trusted\write2"]
-                                                              }),
+                        {
+                            AdditionalWriteRoots = [@"C:\trusted\write2"]
+                        }),
                         Is.Not.EqualTo(revision));
             Assert.That(StandingTrustEvaluation.ScopeRevision(sandbox with
-                                                              {
-                                                                  NetworkPolicy = SandboxNetworkPolicy.Restricted
-                                                              }),
+                        {
+                            NetworkPolicy = SandboxNetworkPolicy.Restricted
+                        }),
                         Is.Not.EqualTo(revision));
         });
     }
@@ -185,8 +185,8 @@ public class StandingTrustMigrationTests
                 Permissions = baselinePermissions with
                 {
                     StandingTrustConfirmation = new StandingTrustConfirmation(DateTimeOffset.UtcNow,
-                                                                             StandingTrustEvaluation
-                                                                                .ScopeRevision(sandbox))
+                                                                              StandingTrustEvaluation
+                                                                                 .ScopeRevision(sandbox))
                 }
             }
         };
@@ -233,7 +233,7 @@ public class StandingTrustMigrationTests
         await UserConfigStore.SaveAsync(fixture.ConfigPath, candidate, CancellationToken.None);
 
         // 落盘形状：settings.permissions.standingTrust = { confirmedUtc(RFC 3339), scopeRevision(hex) }。
-        var json = JsonNode.Parse(await File.ReadAllTextAsync(fixture.ConfigPath))!;
+        var json   = JsonNode.Parse(await File.ReadAllTextAsync(fixture.ConfigPath))!;
         var record = json["settings"]!["permissions"]!["standingTrust"]!.AsObject();
         Assert.Multiple(() =>
         {
@@ -263,8 +263,8 @@ public class StandingTrustMigrationTests
         using var fixture = ConfigFixture.Create();
         var expanded = new WindowsSandboxSettings
         {
-            Enabled       = true,
-            NetworkPolicy = SandboxNetworkPolicy.Enabled,
+            Enabled              = true,
+            NetworkPolicy        = SandboxNetworkPolicy.Enabled,
             AdditionalWriteRoots = [fixture.Root]
         };
         var confirmed = new UserConfig
@@ -275,8 +275,8 @@ public class StandingTrustMigrationTests
                 Permissions = new PermissionSettings
                 {
                     StandingTrustConfirmation = new StandingTrustConfirmation(DateTimeOffset.UtcNow,
-                                                                             StandingTrustEvaluation
-                                                                                .ScopeRevision(expanded))
+                                                                              StandingTrustEvaluation
+                                                                                 .ScopeRevision(expanded))
                 }
             }
         };
@@ -289,7 +289,7 @@ public class StandingTrustMigrationTests
         // 记录删除本身由撤销入口（Desktop 撤销/沙箱保存路径）完成，此处固化判定层的失效语义。
         var cleared = expanded with
         {
-            NetworkPolicy        = SandboxNetworkPolicy.Restricted,
+            NetworkPolicy = SandboxNetworkPolicy.Restricted,
             AdditionalWriteRoots = []
         };
         Assert.That(StandingTrustEvaluation.Evaluate(cleared, confirmed.Settings.Permissions),
@@ -317,8 +317,8 @@ public class StandingTrustMigrationTests
     [Test]
     public async Task StandingTrustRecord_RoundTrips_InBothPermissionShapes()
     {
-        using var fixture = ConfigFixture.Create();
-        var confirmedUtc = "2026-11-08T01:02:03.4567890+00:00";
+        using var fixture      = ConfigFixture.Create();
+        var       confirmedUtc = "2026-11-08T01:02:03.4567890+00:00";
 
         // 当前形状：defaultApprovalMode + standingTrust 记录。
         await File.WriteAllTextAsync(fixture.ConfigPath,
@@ -331,7 +331,7 @@ public class StandingTrustMigrationTests
                                                  ["defaultApprovalMode"] = "AIAutoReview",
                                                  ["standingTrust"] = new JsonObject
                                                  {
-                                                     ["confirmedUtc"] = confirmedUtc,
+                                                     ["confirmedUtc"]  = confirmedUtc,
                                                      ["scopeRevision"] = "ABCD"
                                                  }
                                              }
@@ -352,7 +352,7 @@ public class StandingTrustMigrationTests
                         Is.EqualTo(current.Settings.Permissions.StandingTrustConfirmation!.ConfirmedUtc));
         });
 
-        // 旧形状（迁移待确认）同样绑定确认记录：迁移确认不吞掉常设信任记录。
+        // 旧形状自动迁移时保留独立的常设信任确认记录。
         await File.WriteAllTextAsync(fixture.ConfigPath,
                                      new JsonObject
                                      {
@@ -360,11 +360,11 @@ public class StandingTrustMigrationTests
                                          {
                                              ["permissions"] = new JsonObject
                                              {
-                                                 ["defaultMode"] = "ReadOnly",
+                                                 ["defaultMode"]   = "ReadOnly",
                                                  ["composerModes"] = new JsonArray("ReadOnly"),
                                                  ["standingTrust"] = new JsonObject
                                                  {
-                                                     ["confirmedUtc"] = confirmedUtc,
+                                                     ["confirmedUtc"]  = confirmedUtc,
                                                      ["scopeRevision"] = "ABCD"
                                                  }
                                              }
@@ -373,18 +373,18 @@ public class StandingTrustMigrationTests
         var legacy = await UserConfigStore.LoadAsync(fixture.ConfigPath, CancellationToken.None);
         Assert.Multiple(() =>
         {
-            Assert.That(legacy.Settings!.Permissions!.PendingMigration, Is.True);
+            Assert.That(legacy.Settings!.Permissions!.PendingMigration, Is.False);
             Assert.That(legacy.Settings.Permissions.StandingTrustConfirmation!.ScopeRevision,
                         Is.EqualTo("ABCD"));
         });
 
-        // 旧形状保存保持旧字段与记录并存（原样保留语义）。
+        // 保存迁移后的当前形状，保留常设信任记录。
         await UserConfigStore.SaveAsync(fixture.ConfigPath, legacy, CancellationToken.None);
         var legacyJson = JsonNode.Parse(await File.ReadAllTextAsync(fixture.ConfigPath))!
-                                 ["settings"]!["permissions"]!.AsObject();
+            ["settings"]!["permissions"]!.AsObject();
         Assert.Multiple(() =>
         {
-            Assert.That(legacyJson.ContainsKey("defaultMode"), Is.True);
+            Assert.That(legacyJson.ContainsKey("defaultMode"), Is.False);
             Assert.That(legacyJson["standingTrust"], Is.Not.Null);
         });
     }
@@ -400,7 +400,8 @@ public class StandingTrustMigrationTests
         await File.WriteAllTextAsync(fixture.ConfigPath, json);
 
         var error = await TestAssert.ThrowsAsync<InvalidDataException>(() =>
-            UserConfigStore.LoadAsync(fixture.ConfigPath, CancellationToken.None));
+                                                                           UserConfigStore.LoadAsync(fixture.ConfigPath,
+                                                                               CancellationToken.None));
         Assert.That(error!.Message, Does.Contain("standingTrust"));
     }
 
@@ -409,16 +410,16 @@ public class StandingTrustMigrationTests
     [Test]
     public void Engine_NetworkGate_FollowsTheThreeStates()
     {
-        using var dir = new TestTempDir();
-        var preparation = NetworkedPreparation(dir.Root);
+        using var dir         = new TestTempDir();
+        var       preparation = NetworkedPreparation(dir.Root);
 
         // 常设网络已启用（networkPolicy=enabled 的生产组合）时按三态判定。
-        var none = CreateEngine(dir.Root, StandingTrustState.None, standingNetworkEnabled : true)
-                  .Evaluate(preparation);
-        var unconfirmed = CreateEngine(dir.Root, StandingTrustState.Unconfirmed, standingNetworkEnabled : true)
-                  .Evaluate(preparation);
-        var confirmed = CreateEngine(dir.Root, StandingTrustState.Confirmed, standingNetworkEnabled : true)
-                  .Evaluate(preparation);
+        var none = CreateEngine(dir.Root, StandingTrustState.None, true)
+           .Evaluate(preparation);
+        var unconfirmed = CreateEngine(dir.Root, StandingTrustState.Unconfirmed, true)
+           .Evaluate(preparation);
+        var confirmed = CreateEngine(dir.Root, StandingTrustState.Confirmed, true)
+           .Evaluate(preparation);
 
         // None 与 Unconfirmed 都逐次审批（Level2 + network-access 缺口）；只有 Unconfirmed 的文案
         // 注明"常设信任未确认"语义标记。
@@ -443,12 +444,12 @@ public class StandingTrustMigrationTests
     [Test]
     public void Engine_NetworkGate_ConfirmedWriteRoots_NeverExemptNetworkWhenStandingNetworkRestricted()
     {
-        using var dir = new TestTempDir();
-        var preparation = NetworkedPreparation(dir.Root);
+        using var dir         = new TestTempDir();
+        var       preparation = NetworkedPreparation(dir.Root);
 
         // 常设网络 restricted（组合实际消费 restricted）：即便写根把状态推到 Confirmed，
         // 网络申请仍逐次审批，文案如实说明 restricted，不复用"常设信任未确认"措辞。
-        var confirmed = CreateEngine(dir.Root, StandingTrustState.Confirmed).Evaluate(preparation);
+        var confirmed   = CreateEngine(dir.Root, StandingTrustState.Confirmed).Evaluate(preparation);
         var unconfirmed = CreateEngine(dir.Root, StandingTrustState.Unconfirmed).Evaluate(preparation);
 
         Assert.Multiple(() =>
@@ -490,15 +491,15 @@ public class StandingTrustMigrationTests
     [Test]
     public void Engine_AdditionalWriteRootWrites_FollowTheThreeStates()
     {
-        using var workspace = new TestTempDir();
-        using var writeRoot = new TestTempDir();
-        var target = Path.Combine(writeRoot.Root, "artifact.txt");
-        var preparation = FileWritePreparation(target);
+        using var workspace   = new TestTempDir();
+        using var writeRoot   = new TestTempDir();
+        var       target      = Path.Combine(writeRoot.Root, "artifact.txt");
+        var       preparation = FileWritePreparation(target);
 
         // 生产组合点把同一状态同时注入策略与引擎；这里按同一配对断言。
         var unconfirmed = EvaluateWith(workspace, StandingTrustState.Unconfirmed, preparation);
-        var none = EvaluateWith(workspace, StandingTrustState.None, preparation);
-        var confirmed = EvaluateWith(workspace, StandingTrustState.Confirmed, preparation);
+        var none        = EvaluateWith(workspace, StandingTrustState.None, preparation);
+        var confirmed   = EvaluateWith(workspace, StandingTrustState.Confirmed, preparation);
 
         Assert.Multiple(() =>
         {
@@ -535,8 +536,8 @@ public class StandingTrustMigrationTests
             // Unconfirmed 用例带漂移修订），不得手工注入 Confirmed。
             var confirmation = new StandingTrustConfirmation(DateTimeOffset.UtcNow,
                                                              StandingTrustEvaluation.ScopeRevision(settings));
-            var confirmedRecord    = new PermissionSettings { StandingTrustConfirmation = confirmation };
-            var unconfirmedRecord  = new PermissionSettings
+            var confirmedRecord = new PermissionSettings { StandingTrustConfirmation = confirmation };
+            var unconfirmedRecord = new PermissionSettings
             {
                 StandingTrustConfirmation = confirmation with { ScopeRevision = new string('B', 64) }
             };
@@ -550,23 +551,23 @@ public class StandingTrustMigrationTests
             {
                 // 与生产组合同源：EffectiveSandboxSettings 决定组合实际消费的网络策略，
                 // 引擎的常设网络开关与之一致。
-                var effective = StandingTrustEvaluation.EffectiveSandboxSettings(settings, state);
+                var effective              = StandingTrustEvaluation.EffectiveSandboxSettings(settings, state);
                 var standingNetworkEnabled = effective?.NetworkPolicy == SandboxNetworkPolicy.Enabled;
                 var policy = new ResourceAccessPolicy(workspace.Root,
                                                       additionalWriteRoots : effective?.AdditionalWriteRoots,
-                                                      standingTrust        : state);
+                                                      standingTrust : state);
                 var engine = new PermissionEngine(workspace.Root,
-                                                  standingTrust           : state,
-                                                  standingNetworkEnabled  : standingNetworkEnabled,
-                                                  resourcePolicy          : policy);
+                                                  standingTrust : state,
+                                                  standingNetworkEnabled : standingNetworkEnabled,
+                                                  resourcePolicy : policy);
                 var evaluation = engine.Evaluate(NetworkedPreparation(workspace.Root));
 
                 // 期望：免审批当且仅当"组合实际消费 enabled + Confirmed"。Enabled+Unconfirmed 经
                 // EffectiveSandboxSettings 回落 restricted，与 restricted 配置同样逐次审批（Level2 +
                 // network-access 缺口），文案如实说明常设网络未启用，不复用未确认措辞。
-                var exempt = standingNetworkEnabled && state == StandingTrustState.Confirmed;
+                var exempt           = standingNetworkEnabled && state == StandingTrustState.Confirmed;
                 var expectedDecision = exempt ? PermissionDecision.Allow : PermissionDecision.Ask;
-                var expectedLevel = exempt ? PermissionLevel.Level1 : PermissionLevel.Level2;
+                var expectedLevel    = exempt ? PermissionLevel.Level1 : PermissionLevel.Level2;
                 Assert.Multiple(() =>
                 {
                     Assert.That(evaluation.Decision, Is.EqualTo(expectedDecision),
@@ -589,17 +590,18 @@ public class StandingTrustMigrationTests
     // ---- 夹具与工具 ----
 
     private static PermissionEngine CreateEngine(string workspaceRoot, StandingTrustState state,
-                                                 bool standingNetworkEnabled = false) =>
+                                                 bool   standingNetworkEnabled = false) =>
         new(workspaceRoot, standingTrust : state, standingNetworkEnabled : standingNetworkEnabled);
 
-    private static PermissionEvaluation EvaluateWith(TestTempDir workspace, StandingTrustState state,
-                                                    ToolPreparation preparation)
+    private static PermissionEvaluation EvaluateWith(TestTempDir     workspace, StandingTrustState state,
+                                                     ToolPreparation preparation)
     {
         var policy = new ResourceAccessPolicy(workspace.Root,
-                                              additionalWriteRoots : [Path.GetDirectoryName(preparation.TargetPaths[0])!],
-                                              standingTrust        : state);
+                                              additionalWriteRoots :
+                                              [Path.GetDirectoryName(preparation.TargetPaths[0])!],
+                                              standingTrust : state);
         return new PermissionEngine(workspace.Root, standingTrust : state, resourcePolicy : policy)
-            .Evaluate(preparation);
+           .Evaluate(preparation);
     }
 
     private static ToolPreparation NetworkedPreparation(string root) => new()
@@ -632,13 +634,6 @@ public class StandingTrustMigrationTests
     /// </summary>
     private sealed record ConfigFixture(string Root, string ConfigPath) : IDisposable
     {
-        public static ConfigFixture Create()
-        {
-            var root = Path.Combine(Path.GetTempPath(), $"tinyharness-standing-{Guid.NewGuid():N}");
-            Directory.CreateDirectory(root);
-            return new ConfigFixture(root, System.IO.Path.Combine(root, UserConfigStore.FileName));
-        }
-
         public void Dispose()
         {
             try
@@ -649,6 +644,13 @@ public class StandingTrustMigrationTests
             {
                 // 尽力清理临时目录。
             }
+        }
+
+        public static ConfigFixture Create()
+        {
+            var root = Path.Combine(Path.GetTempPath(), $"tinyharness-standing-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(root);
+            return new ConfigFixture(root, Path.Combine(root, UserConfigStore.FileName));
         }
     }
 }

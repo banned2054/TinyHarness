@@ -186,8 +186,9 @@ public class ChatSessionConsoleTests
             await Task.Delay(10, timeout.Token);
     }
 
-    [Test]
-    public async Task PermissionMigrationDecline_UsesConfigSummaryAndKeepsTheGateClosed()
+    [TestCase(true)]
+    [TestCase(false)]
+    public async Task PermissionMigration_AutomaticallyUsesHumanApprovalWithoutConsumingInput(bool interactive)
     {
         var host = NewHost(new FakeChatClient());
         host.Session.PermissionSelection = new LegacyPermissionSelection
@@ -195,45 +196,17 @@ public class ChatSessionConsoleTests
         host.Session.PermissionMigrationPending = true;
         using var cancellation = new ChatCancellation(false);
         var       output       = new StringWriter();
-        using var console      = new ChatSessionConsole(host, new StringReader("n\n"), output, cancellation);
-        var       summaryCalls = 0;
-        console.PermissionMigrationSummaryWriter = async _ =>
-        {
-            summaryCalls++;
-            await output.WriteLineAsync("networkPolicy: Enabled (standing full network access)");
-        };
+        using var console = new ChatSessionConsole(_ => Task.FromResult(host), new StringReader("continue\n"), output,
+                                                   cancellation, initialHost : host, interactive : interactive);
 
         Assert.That(await console.RunAsync(TestToken()), Is.Zero);
 
-        Assert.That(summaryCalls, Is.EqualTo(1));
-        Assert.That(host.Session.PermissionMigrationPending, Is.True);
-        Assert.That(output.ToString(), Does.Contain("AI review (migration mapping only)")
-                                           .And.Contain("networkPolicy: Enabled")
-                                           .And.Contain("model tools remain blocked"));
-    }
-
-    [Test]
-    public async Task PermissionMigrationNonInteractive_DoesNotPromptOrClearTheGate()
-    {
-        var host = NewHost(new FakeChatClient());
-        host.Session.PermissionMigrationPending = true;
-        using var cancellation = new ChatCancellation(false);
-        var       output       = new StringWriter();
-        using var console = new ChatSessionConsole(_ => Task.FromResult(host), new StringReader("y\n"), output,
-                                                   cancellation, initialHost : host, interactive : false);
-        var summaryCalls = 0;
-        console.PermissionMigrationSummaryWriter = _ =>
-        {
-            summaryCalls++;
-            return Task.CompletedTask;
-        };
-
-        Assert.That(await console.RunAsync(TestToken()), Is.Zero);
-
-        Assert.That(summaryCalls, Is.EqualTo(1));
-        Assert.That(host.Session.PermissionMigrationPending, Is.True);
-        Assert.That(output.ToString(), Does.Contain("Non-interactive input cannot confirm migration")
-                                           .And.Not.Contain("Confirm this session's permission migration?"));
+        Assert.That(host.Session.PermissionMigrationPending, Is.False);
+        Assert.That(host.Session.PermissionSelectionV2!.ApprovalMode, Is.EqualTo(SessionApprovalMode.HumanApproval));
+        Assert.That(host.Session.PermissionMigration!.ApprovalMode, Is.EqualTo(SessionApprovalMode.HumanApproval));
+        Assert.That(host.Session.Turns.Single().UserInput, Is.EqualTo("continue"));
+        Assert.That(output.ToString(), Does.Contain("Session permission migration saved: human approval")
+                                           .And.Not.Contain("[y/N]"));
     }
 
     [Test]
@@ -415,7 +388,7 @@ public class ChatSessionConsoleTests
                            new PermissionEngine(Path.Combine(Path.GetTempPath(),
                                                              "tinyharness-chat-console-tests"),
                                                 resourcePolicy : new TestResourcePolicy(Path.Combine(
-                                                 Path.GetTempPath(), "tinyharness-chat-console-tests"))),
+                                                              Path.GetTempPath(), "tinyharness-chat-console-tests"))),
                            new ConsoleApprovalProvider(reader, output, interactive : true),
                            new ConsoleHostEventSink(null, output));
         using var cancellation = new ChatCancellation(false);

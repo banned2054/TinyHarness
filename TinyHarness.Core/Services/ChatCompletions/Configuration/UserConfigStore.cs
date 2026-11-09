@@ -51,12 +51,12 @@ public static class UserConfigStore
 
     /// <summary>
     ///     <para>
-    ///         严格绑定用户权限设置并识别形状：旧 defaultMode/composerModes 进入迁移待确认态，
+    ///         严格绑定用户权限设置并识别形状：旧 defaultMode/composerModes 自动迁移为人工审批，
     ///         新旧字段混用一律拒绝；未知枚举不得回退成更宽松的授权。
     ///     </para>
     ///     <para>
     ///         Strictly binds user permission settings and detects the shape: legacy defaultMode/composerModes
-    ///         become pending-migration, mixing both shapes is always rejected, and unknown enums never fall back
+    ///         automatically become human approval, mixing both shapes is always rejected, and unknown enums never fall back
     ///         to a looser authorization.
     ///     </para>
     /// </summary>
@@ -75,11 +75,11 @@ public static class UserConfigStore
 
     /// <summary>
     ///     <para>
-    ///         按旧形状绑定权限设置：严格解析旧枚举并映射为审批模式；整体置迁移待确认态，其余配置不受影响。
+    ///         按旧形状绑定权限设置：严格校验旧枚举后自动转为人工审批，其余配置不受影响。
     ///     </para>
     ///     <para>
-    ///         Binds permission settings in the legacy shape: the legacy enums parse strictly and map to an
-    ///         approval mode; the whole block becomes pending-migration while every other config field stays usable.
+    ///         Binds permission settings in the legacy shape: the legacy enums parse strictly and map to
+    ///         human approval automatically while every other config field stays usable.
     ///     </para>
     /// </summary>
     private static PermissionSettings BindLegacyPermissions(JsonObject value, string filePath)
@@ -107,14 +107,20 @@ public static class UserConfigStore
             LegacyComposerModes = modes,
             DefaultApprovalMode = LegacyPermissionSelectionMapper.FromLegacyName(legacyDefault) ??
                                   throw new InvalidDataException("Unknown legacy permission mode."),
-            UseCurrentModel  = value["useCurrentModel"]?.GetValue<bool>() ?? true,
-            ReviewerProfile  = value["reviewerProfile"]?.GetValue<string>(),
-            ReviewerModel    = value["reviewerModel"]?.GetValue<string>(),
-            PendingMigration = true,
+            UseCurrentModel           = value["useCurrentModel"]?.GetValue<bool>() ?? true,
+            ReviewerProfile           = value["reviewerProfile"]?.GetValue<string>(),
+            ReviewerModel             = value["reviewerModel"]?.GetValue<string>(),
+            PendingMigration          = true,
             StandingTrustConfirmation = BindStandingTrustConfirmation(value, filePath)
         };
         result.Validate();
-        return result;
+        return result with
+        {
+            LegacyDefaultMode = null,
+            LegacyComposerModes = null,
+            DefaultApprovalMode = SessionApprovalMode.HumanApproval,
+            PendingMigration = false
+        };
     }
 
     /// <summary>
@@ -133,9 +139,9 @@ public static class UserConfigStore
             DefaultApprovalMode = value["defaultApprovalMode"] is null
                 ? SessionApprovalMode.HumanApproval
                 : ParseApprovalMode(value["defaultApprovalMode"]),
-            UseCurrentModel = value["useCurrentModel"]?.GetValue<bool>() ?? true,
-            ReviewerProfile = value["reviewerProfile"]?.GetValue<string>(),
-            ReviewerModel   = value["reviewerModel"]?.GetValue<string>(),
+            UseCurrentModel           = value["useCurrentModel"]?.GetValue<bool>() ?? true,
+            ReviewerProfile           = value["reviewerProfile"]?.GetValue<string>(),
+            ReviewerModel             = value["reviewerModel"]?.GetValue<string>(),
             StandingTrustConfirmation = BindStandingTrustConfirmation(value, filePath)
         };
         result.Validate();
@@ -461,7 +467,7 @@ public static class UserConfigStore
                 if (permissions.StandingTrustConfirmation is { } standingTrust)
                     permissionsNode["standingTrust"] = new JsonObject
                     {
-                        ["confirmedUtc"] = standingTrust.ConfirmedUtc.ToString("O", CultureInfo.InvariantCulture),
+                        ["confirmedUtc"]  = standingTrust.ConfirmedUtc.ToString("O", CultureInfo.InvariantCulture),
                         ["scopeRevision"] = standingTrust.ScopeRevision
                     };
                 settingsNode["permissions"] = permissionsNode;
@@ -950,7 +956,7 @@ public static class UserConfigStore
             foreach (var (name, value) in supplied) complete[name] = value?.DeepClone();
 
             var timeouts = complete.Deserialize(ModelTimeoutsJsonContext.Default.ModelTimeouts)
-                          ?? throw new JsonException("modelTimeouts must be an object");
+                        ?? throw new JsonException("modelTimeouts must be an object");
             timeouts.Validate();
             return timeouts;
         }
