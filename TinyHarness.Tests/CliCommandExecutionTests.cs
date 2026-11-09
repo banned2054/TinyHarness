@@ -324,6 +324,79 @@ public sealed class CliCommandExecutionTests
     }
 
     [Test]
+    public async Task ProviderEdit_ChangedEndpointOriginWithDefaultKeep_RequiresConfirmation()
+    {
+        using var fixture = new CliFixture(["https://new.example/v1", string.Empty, string.Empty, "n", "none", "y"]);
+        await UserConfigStore.SaveAsync(fixture.UserConfigPath, ProfileConfigWithCredentials(), CancellationToken.None);
+        fixture.Credentials.Save("old-target", "fake-old-secret");
+
+        var result = await ProviderCommand.ExecuteAsync(fixture.CreateContext(),
+                                                        CommandLine.Parse(["provider", "edit", "work"]),
+                                                        CancellationToken.None);
+        var saved = await UserConfigStore.LoadAsync(fixture.UserConfigPath, CancellationToken.None);
+
+        Assert.That(result, Is.EqualTo(0));
+        var profile = TestAssert.Single(saved.Profiles);
+        Assert.Multiple(() =>
+        {
+            Assert.That(profile.Endpoint, Is.EqualTo("https://new.example/v1"));
+            Assert.That(profile.ApiKeyEnvironmentVariable, Is.Empty);
+            Assert.That(profile.ApiKeyCredentialTarget, Is.Empty,
+                        "Declining reuse must not carry the old server's credential reference.");
+            Assert.That(fixture.Credentials.Read("old-target"), Is.EqualTo("fake-old-secret"),
+                        "Declining reuse must not read or delete the old credential.");
+            Assert.That(fixture.Credentials.Saves, Is.EqualTo(1), "Only the fixture's seed may exist.");
+            Assert.That(fixture.Io.Output, Does.Contain("requires confirmation"));
+            Assert.That(fixture.Io.Output, Does.Contain("was not reused"));
+        });
+    }
+
+    [Test]
+    public async Task ProviderEdit_ChangedEndpointOriginWithConfirmedKeep_KeepsCredentialReferences()
+    {
+        using var fixture = new CliFixture(["https://new.example/v1", string.Empty, string.Empty, "y", "y"]);
+        await UserConfigStore.SaveAsync(fixture.UserConfigPath, ProfileConfigWithCredentials(), CancellationToken.None);
+
+        var result = await ProviderCommand.ExecuteAsync(fixture.CreateContext(),
+                                                        CommandLine.Parse(["provider", "edit", "work"]),
+                                                        CancellationToken.None);
+        var saved = await UserConfigStore.LoadAsync(fixture.UserConfigPath, CancellationToken.None);
+
+        Assert.That(result, Is.EqualTo(0));
+        var profile = TestAssert.Single(saved.Profiles);
+        Assert.Multiple(() =>
+        {
+            Assert.That(profile.Endpoint, Is.EqualTo("https://new.example/v1"));
+            Assert.That(profile.ApiKeyEnvironmentVariable, Is.EqualTo("OLD_KEY"));
+            Assert.That(profile.ApiKeyCredentialTarget, Is.EqualTo("old-target"),
+                        "An explicit reuse confirmation may carry the reference to the new server.");
+        });
+    }
+
+    [Test]
+    public async Task ProviderEdit_SameEndpointOriginWithKeep_DoesNotAskForReuseConfirmation()
+    {
+        using var fixture = new CliFixture(["https://api.example/v1/tenant", string.Empty, string.Empty, "y"]);
+        await UserConfigStore.SaveAsync(fixture.UserConfigPath, ProfileConfigWithCredentials(), CancellationToken.None);
+
+        var result = await ProviderCommand.ExecuteAsync(fixture.CreateContext(),
+                                                        CommandLine.Parse(["provider", "edit", "work"]),
+                                                        CancellationToken.None);
+        var saved = await UserConfigStore.LoadAsync(fixture.UserConfigPath, CancellationToken.None);
+
+        Assert.That(result, Is.EqualTo(0));
+        var profile = TestAssert.Single(saved.Profiles);
+        Assert.Multiple(() =>
+        {
+            Assert.That(profile.Endpoint, Is.EqualTo("https://api.example/v1/tenant"));
+            Assert.That(profile.ApiKeyEnvironmentVariable, Is.EqualTo("OLD_KEY"));
+            Assert.That(profile.ApiKeyCredentialTarget, Is.EqualTo("old-target"),
+                        "A path change on the same origin keeps the existing references.");
+            Assert.That(fixture.Io.Output, Does.Not.Contain("origin changed"));
+        });
+    }
+
+    [Test]
     public async Task ModelAddSupportsDisplayAndEffortCapabilities()
     {
         using var fixture = new CliFixture();

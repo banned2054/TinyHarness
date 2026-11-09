@@ -245,8 +245,10 @@ Model selection is available through `/models` before the first request and betw
 Draft selection creates no session or writer. Current markers distinguish credential routes.
 The menu includes catalog management and accepts credential references only. Enter new keys
 through `auth set --store` or standalone provider forms. `provider edit <name>` and
-`model edit <id> [--provider <name>]` preserve other models and settings.
-`model add` also accepts `--display-name`, `--efforts low,high`, and `--default-effort high`.
+`model edit <id> [--provider <name>]` preserve other models and settings. After an endpoint-origin
+change, the default `keep` needs explicit confirmation before reusing an old reference; declining
+never carries it to the new server. `model add` also accepts `--display-name`, `--efforts low,high`,
+and `--default-effort high`.
 Desktop supports idle session switching, declared reasoning levels, and provider/model forms.
 Saving a catalog does not switch open sessions. Configuration drift requires explicit re-selection.
 New keys use fresh credential targets; save failures retain old references and report possible orphan entries.

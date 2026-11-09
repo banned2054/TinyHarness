@@ -244,6 +244,7 @@ tinyharness chat --session <session-id>
 草稿选择不创建会话或 writer，当前标记区分不同凭据路由。菜单提供目录管理，
 只收集凭据引用；新密钥使用独立表单或 `auth set --store` 隐藏输入。
 `provider edit <name>` 与 `model edit <id> [--provider <name>]` 保留其他模型与设置；
+更换 endpoint 来源后，默认的 `keep` 需再次确认才复用旧引用，拒绝则不会把旧引用带到新服务器。
 `model add` 支持 `--display-name`、`--efforts low,high` 和 `--default-effort high`。
 Desktop 模型菜单支持空闲时切换已有会话的模型与已声明强度，设置页可添加／编辑供应商和模型。
 保存目录不会自动切换会话，影响请求的配置变化须显式重新选择后再发送。

@@ -148,7 +148,7 @@ internal static class ProfileEditor
 
             if (choice == "3")
             {
-                if (!HasSameOrigin(existing?.Endpoint, endpoint))
+                if (!EndpointOrigin.Same(existing?.Endpoint, endpoint))
                 {
                     await io
                          .WriteLineAsync("  The endpoint origin changed; the existing API key reference was not reused. " +
@@ -207,22 +207,6 @@ internal static class ProfileEditor
 
             await io.WriteLineAsync("  The API key cannot be empty.", cancellationToken).ConfigureAwait(false);
         }
-    }
-
-    /// <summary>
-    ///     <para>判断两个 endpoint 是否共享 scheme、host 与 port；路径变化不影响凭据复用。</para>
-    ///     <para>
-    ///         Whether two endpoints share scheme, host and port; a path change does not affect credential reuse.
-    ///     </para>
-    /// </summary>
-    private static bool HasSameOrigin(string? existingEndpoint, string endpoint)
-    {
-        if (string.IsNullOrWhiteSpace(existingEndpoint)) return false;
-
-        return Uri.TryCreate(existingEndpoint, UriKind.Absolute, out var existingUri) &&
-               Uri.TryCreate(endpoint, UriKind.Absolute, out var endpointUri) &&
-               string.Equals(existingUri.GetLeftPart(UriPartial.Authority),
-                             endpointUri.GetLeftPart(UriPartial.Authority), StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>

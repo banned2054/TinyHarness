@@ -49,31 +49,7 @@ internal static class CatalogWizard
         if (!ChatApiKindParser.TryParse(protocol, out var chatApi)) throw new InvalidDataException("Unknown protocol.");
         await io.WriteLineAsync("Request route: " + endpoint.TrimEnd('/') +
                                 (chatApi == ChatApiKind.Responses ? "/responses" : "/chat/completions"), token);
-        var env    = existing?.ApiKeyEnvironmentVariable ?? string.Empty;
-        var target = existing?.ApiKeyCredentialTarget    ?? string.Empty;
-        var source = await FieldAsync(io, allowSecret
-                                          ? "Credentials: keep / env / reference / none / new-key"
-                                          : "Credentials: keep / env / reference / none (use auth set for hidden key input)",
-                                      "keep", token);
-        string? secret = null;
-        switch (source)
-        {
-            case "keep" : break;
-            case "env" :
-                env    = await FieldAsync(io, "Environment variable name", env, token);
-                target = string.Empty;
-                break;
-            case "reference" :
-                target = await FieldAsync(io, "Existing system credential target (reference only)", target, token);
-                env    = string.Empty;
-                break;
-            case "none" : env = target = string.Empty; break;
-            case "new-key" when allowSecret :
-                secret = await ProfileEditor.ReadSecretAsync(io, token);
-                if (secret == "/cancel") throw new OperationCanceledException("Catalog editing cancelled.");
-                break;
-            default : throw new InvalidOperationException("Unknown credential source.");
-        }
+        var (env, target, secret) = await PromptCredentialsAsync(context, existing, endpoint, allowSecret, token);
 
         var provider = new UserProfile
         {
@@ -85,6 +61,63 @@ internal static class CatalogWizard
         await ModelCatalogEditor.SaveAsync(context.ResolveUserConfigPath(), baseline, candidate, token,
                                            context.Credentials, secret, name);
         await io.WriteLineAsync("Provider saved; open sessions keep their confirmed selections.", token);
+    }
+
+    /// <summary>
+    ///     <para>收集凭据来源；更换 endpoint 来源后，默认保留旧引用必须先显式确认。</para>
+    ///     <para>
+    ///         Collects the credential source; after an endpoint-origin change, keeping the old reference requires
+    ///         explicit confirmation.
+    ///     </para>
+    /// </summary>
+    private static async Task<(string EnvironmentVariable, string CredentialTarget, string? Secret)>
+        PromptCredentialsAsync(CommandContext context, UserProfile? existing, string endpoint, bool allowSecret,
+                               CancellationToken token)
+    {
+        var io                    = context.Io;
+        var env                   = existing?.ApiKeyEnvironmentVariable ?? string.Empty;
+        var target                = existing?.ApiKeyCredentialTarget    ?? string.Empty;
+        var originChanged         = existing is not null && !EndpointOrigin.Same(existing.Endpoint, endpoint);
+        var keepNeedsConfirmation = originChanged && (env.Length > 0 || target.Length > 0);
+        if (keepNeedsConfirmation)
+            await io
+                 .WriteLineAsync("  The endpoint origin changed; reusing the existing credential reference requires confirmation.",
+                                 token);
+
+        while (true)
+        {
+            var source = await FieldAsync(io, allowSecret
+                                              ? "Credentials: keep / env / reference / none / new-key"
+                                              : "Credentials: keep / env / reference / none (use auth set for hidden key input)",
+                                          "keep", token);
+            switch (source)
+            {
+                case "keep" when !keepNeedsConfirmation :
+                    return (env, target, null);
+                case "keep" :
+                    if (await ConfirmAsync(io, "Reuse the existing credential reference for the new server?", false,
+                                           token))
+                        return (env, target, null);
+                    await io
+                         .WriteLineAsync("  The existing credential reference was not reused; choose another credential source.",
+                                         token);
+                    continue;
+                case "env" :
+                    env = await FieldAsync(io, "Environment variable name", env, token);
+                    return (env, string.Empty, null);
+                case "reference" :
+                    target = await FieldAsync(io, "Existing system credential target (reference only)", target, token);
+                    return (string.Empty, target, null);
+                case "none" :
+                    return (string.Empty, string.Empty, null);
+                case "new-key" when allowSecret :
+                    var secret = await ProfileEditor.ReadSecretAsync(io, token);
+                    if (secret == "/cancel") throw new OperationCanceledException("Catalog editing cancelled.");
+                    return (env, target, secret);
+                default :
+                    throw new InvalidOperationException("Unknown credential source.");
+            }
+        }
     }
 
     /// <summary>
