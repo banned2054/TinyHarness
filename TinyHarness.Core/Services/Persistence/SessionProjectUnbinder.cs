@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using TinyHarness.Core.Exceptions;
 using TinyHarness.Core.Models.Persistence;
@@ -85,10 +86,10 @@ public sealed record SessionProjectUnassignmentResult(
 public static class SessionProjectUnbinder
 {
     /// <summary>
-    ///     <para>逐一取得日志 writer 并重读最新归属；已无项目或属于其他项目的日志保持不变，占用或损坏的日志单独报告。</para>
+    ///     <para>用索引筛选未变日志，缺失或变化条目扫描摘要；目标日志在 writer 锁内严格重读，提交后增量更新索引。</para>
     ///     <para>
-    ///         Opens each journal writer and re-reads its current assignment; no-project and other-project journals stay
-    ///         unchanged, while held or damaged journals are reported individually.
+    ///         Filters unchanged journals through the index and scans summaries for missing or changed entries;
+    ///         target journals are strictly re-read under their writer locks and indexed after commit.
     ///     </para>
     /// </summary>
     /// <param name="storeDirectory">
@@ -136,6 +137,27 @@ public static class SessionProjectUnbinder
                                             ex);
         }
 
+        var index = new SessionIndexStore(directory);
+        IReadOnlyDictionary<string, SessionIndexRow> rows;
+        try
+        {
+            var availability = await index.GetAvailabilityAsync(cancellationToken).ConfigureAwait(false);
+            rows = availability.Status == SessionIndexAvailabilityStatus.Available
+                ? (await index.ListRowsAsync(cancellationToken).ConfigureAwait(false))
+                  .ToDictionary(row => row.Id, StringComparer.Ordinal)
+                : new Dictionary<string, SessionIndexRow>(StringComparer.Ordinal);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return new SessionProjectUnassignmentResult([], true);
+        }
+        catch (Exception ex) when (ex is SessionIndexException or IOException or UnauthorizedAccessException)
+        {
+            Trace.TraceError("Project deletion index lookup for '{0}' failed: {1}", directory, ex.Message);
+            rows = new Dictionary<string, SessionIndexRow>(StringComparer.Ordinal);
+        }
+
+        var updater  = new SessionIndexUpdater(index);
         var outcomes = new List<SessionProjectUnassignmentOutcome>();
         foreach (var sessionId in sessionIds)
         {
@@ -149,11 +171,23 @@ public static class SessionProjectUnbinder
                 continue;
             }
 
-            PersistedSession? observed;
+            SessionSummary? observed;
             try
             {
-                observed = await SessionStoreReader.ReadAsync(directory, sessionId, cancellationToken)
-                                                   .ConfigureAwait(false);
+                var path = Path.Combine(directory, sessionId + SessionStoreWriter.LogFileSuffix);
+                SessionStorePaths.EnsureStoreLeaf(directory, path);
+                var source = new FileInfo(path);
+                var row    = rows.GetValueOrDefault(sessionId);
+                // 来源标记仅筛选候选；实际追加仍由锁内严格读取决定，不能据索引跳过写入校验。
+                if (row is { State: SessionIndexEntryState.Current, Summary: { } summary } &&
+                    source.Exists &&
+                    row.SourceLength == source.Length &&
+                    row.SourceModifiedUtc?.ToUnixTimeMilliseconds() ==
+                    new DateTimeOffset(source.LastWriteTimeUtc).ToUnixTimeMilliseconds())
+                    observed = summary;
+                else
+                    observed = (await SessionSummaryBuilder.BuildAsync(directory, sessionId, cancellationToken)
+                                                          .ConfigureAwait(false))?.Summary;
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -180,7 +214,8 @@ public static class SessionProjectUnbinder
             SessionWriterOpenResult opened;
             try
             {
-                opened = await SessionStoreWriter.TryOpenExistingAsync(directory, sessionId, null, cancellationToken)
+                opened = await SessionStoreWriter.TryOpenExistingAsync(directory, sessionId, null, cancellationToken,
+                                                                       updater.HandleBatchCommittedAsync)
                                                  .ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)

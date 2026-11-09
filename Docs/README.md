@@ -277,7 +277,7 @@ MCP worker 使用用户配置，将获准读取的工作区内容发送给模型
 
 | 位置 | 内容 |
 | --- | --- |
-| 顶层活动计划 | [权限架构重构](permission-architecture-plan.md)；三级执行体系的当前契约、实施与待验收范围由该计划维护 |
+| 顶层活动计划 | [权限架构重构](permission-architecture-plan.md)；[会话存储治理与删除优化](session-storage-plan.md)：短期项目删除优化及长期存储迁移分阶段计划 |
 | [Archive](Archive/README.md) | 旧计划（含历史总计划、桌面迁移、模型选择、项目与会话）、阶段报告、已完成设计及历史验收；归档不取消仍有效的技术约束 |
 | Guides | [权限与审批](Guides/permission-modes.md)、[打包与发布](Guides/releasing.md)、[许可证与第三方声明维护](Guides/third-party-notices.md)等持续使用的维护说明 |
 | [Templates](Templates/README.md) | 可复制的跨项目代码风格母版 |

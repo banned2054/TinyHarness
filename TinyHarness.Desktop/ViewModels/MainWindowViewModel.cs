@@ -3522,11 +3522,9 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
             foreach (var session in projectSessions.Where(session => session.HasOpenRuntime))
                 await session.UnassignProjectAsync(project.Id, _lifetime.Token);
 
-            var result = await SessionProjectUnbinder.UnassignAsync(storeDirectory, project.Id, _lifetime.Token);
+            var result = await Task.Run(() => SessionProjectUnbinder.UnassignAsync(storeDirectory, project.Id,
+                                                                                  _lifetime.Token), _lifetime.Token);
             ApplyProjectUnassignmentResult(storeDirectory, project.Id, result);
-            // 解绑写入未接索引更新器：有成功解绑时对账把已提交事实追平，失败不回滚删除。
-            if (result.Outcomes.Any(outcome => outcome.Status == SessionProjectUnassignmentStatus.Unassigned))
-                await TryReconcileIndexAsync(storeDirectory);
             if (SameSidebarStore(_storeDirectory, storeDirectory)) RebuildProjects();
             if (result.Cancelled && _lifetime.IsCancellationRequested)
                 throw new OperationCanceledException(_lifetime.Token);
