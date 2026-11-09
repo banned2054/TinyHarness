@@ -156,7 +156,7 @@ internal static class ConfigCommand
         }
 
         config = config with { Settings = settings };
-        ValidateBudgetSettings(config);
+        ValidateChangedBudgetSetting(config, key);
         await UserConfigStore.SaveAsync(context.ResolveUserConfigPath(), config, baseline, cancellationToken)
                              .ConfigureAwait(false);
 
@@ -168,18 +168,20 @@ internal static class ConfigCommand
 
     /// <summary>
     ///     <para>
-    ///         校验候选的保留输出与压缩阈值相对所选模型的上下文窗口保持自洽；0 仍是压缩阈值的自动取值，
-    ///         未选择模型时按内置窗口校验。
+    ///         只校验本次修改的预算字段相对所选模型窗口是否合法；0 仍是压缩阈值的自动取值，
+    ///         未选择模型时按内置窗口校验。已有的另一项超限值不阻止本次修复或无关设置更新。
     ///     </para>
     ///     <para>
-    ///         Validates the candidate reserved-output and compaction thresholds against the selected model's context
-    ///         window; 0 remains the automatic compaction value, and the built-in window applies when no model is
-    ///         selected.
+    ///         Validates only the budget field being changed against the selected model's context window; 0 remains
+    ///         the automatic compaction value, and the built-in window applies when no model is selected. An
+    ///         already-oversized sibling value never blocks this repair or an unrelated setting update.
     ///     </para>
     /// </summary>
-    private static void ValidateBudgetSettings(UserConfig config)
+    private static void ValidateChangedBudgetSetting(UserConfig config, string key)
     {
-        if (config.Settings is not { } settings) return;
+        var checksReserved   = string.Equals(key, "reservedOutputTokens", StringComparison.Ordinal);
+        var checksCompaction = string.Equals(key, "compactionThreshold", StringComparison.Ordinal);
+        if ((!checksReserved && !checksCompaction) || config.Settings is not { } settings) return;
 
         var defaults = new TinyHarnessConfig();
         var profile  = UserConfigAccess.DefaultProfile(config);
@@ -187,16 +189,22 @@ internal static class ConfigCommand
             ? null
             : profile.Models.FirstOrDefault(m => string.Equals(m.Id, profile.DefaultModel, StringComparison.Ordinal));
         var contextWindow = model?.ContextWindowTokens ?? defaults.ContextWindowTokens;
-        var reserved      = settings.ReservedOutputTokens ?? defaults.ReservedOutputTokens;
-        var compaction    = settings.CompactionThreshold  ?? defaults.CompactionThreshold;
 
-        if (reserved >= contextWindow)
-            throw new
-                InvalidOperationException($"'reservedOutputTokens' ({reserved}) must be less than the selected model's context window ({contextWindow}); choose a smaller reserve or a model with a larger window.");
+        if (checksReserved)
+        {
+            var reserved = settings.ReservedOutputTokens ?? defaults.ReservedOutputTokens;
+            if (reserved >= contextWindow)
+                throw new
+                    InvalidOperationException($"'reservedOutputTokens' ({reserved}) must be less than the selected model's context window ({contextWindow}); choose a smaller reserve or a model with a larger window.");
+        }
 
-        if (compaction > contextWindow)
-            throw new
-                InvalidOperationException($"'compactionThreshold' ({compaction}) must not exceed the selected model's context window ({contextWindow}); use 0 for automatic compaction.");
+        if (checksCompaction)
+        {
+            var compaction = settings.CompactionThreshold ?? defaults.CompactionThreshold;
+            if (compaction > contextWindow)
+                throw new
+                    InvalidOperationException($"'compactionThreshold' ({compaction}) must not exceed the selected model's context window ({contextWindow}); use 0 for automatic compaction.");
+        }
     }
 
     /// <summary>

@@ -199,6 +199,35 @@ public sealed class CliCommandExecutionTests
     }
 
     [Test]
+    public async Task ConfigSet_RepairsOversizedBudgetsOneFieldAtATime()
+    {
+        using var fixture = new CliFixture();
+        var invalid = ProfileConfig("work") with
+        {
+            Settings = new UserConfigSettings
+                { ReservedOutputTokens = 64000, CompactionThreshold = 64001 }
+        };
+        await UserConfigStore.SaveAsync(fixture.UserConfigPath, invalid, CancellationToken.None);
+        var context = fixture.CreateContext();
+
+        Assert.That(await ConfigCommand.ExecuteAsync(context,
+                        CommandLine.Parse(["config", "set", "maxAgentSteps", "60"]), CancellationToken.None),
+                    Is.Zero);
+        Assert.That(await ConfigCommand.ExecuteAsync(context,
+                        CommandLine.Parse(["config", "set", "reservedOutputTokens", "8000"]),
+                        CancellationToken.None),
+                    Is.Zero);
+        Assert.That(await ConfigCommand.ExecuteAsync(context,
+                        CommandLine.Parse(["config", "set", "compactionThreshold", "0"]), CancellationToken.None),
+                    Is.Zero);
+
+        var saved = await UserConfigStore.LoadAsync(fixture.UserConfigPath, CancellationToken.None);
+        Assert.That(saved.Settings!.MaxAgentSteps, Is.EqualTo(60));
+        Assert.That(saved.Settings.ReservedOutputTokens, Is.EqualTo(8000));
+        Assert.That(saved.Settings.CompactionThreshold, Is.Zero);
+    }
+
+    [Test]
     public async Task AuthSet_StoresOnlyTheEnvironmentVariableReference()
     {
         using var fixture = new CliFixture();
