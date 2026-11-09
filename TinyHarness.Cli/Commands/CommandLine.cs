@@ -68,7 +68,9 @@ internal static class CommandLine
 
         if (string.Equals(first, "session", StringComparison.Ordinal)) return ParseSessionArgs(args[1..]);
 
-        if (string.Equals(first, "--reasoning", StringComparison.Ordinal)) return ParsePromptArgs(args, false);
+        if (string.Equals(first, "--reasoning", StringComparison.Ordinal) ||
+            string.Equals(first, "--config", StringComparison.Ordinal))
+            return ParsePromptArgs(args, false);
 
         if (first.StartsWith('-') && first.Length > 1)
             throw new CliUsageException($"Unknown option '{first}'.", HelpText.Overview);

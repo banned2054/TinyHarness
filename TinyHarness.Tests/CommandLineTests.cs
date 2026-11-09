@@ -53,6 +53,16 @@ public class CommandLineTests
     }
 
     [Test]
+    public void VerblessLeadingConfig_IsRecognizedBeforeThePrompt()
+    {
+        var options = CommandLine.Parse(["--config", "project.json", "task"]);
+
+        Assert.That(options.Kind, Is.EqualTo(CliCommandKind.Run));
+        Assert.That(options.ConfigPath, Is.EqualTo("project.json"));
+        Assert.That(options.Prompt, Is.EqualTo("task"));
+    }
+
+    [Test]
     public void RunDoubleDash_PreservesCommandLookingPromptText()
     {
         var options = CommandLine.Parse(["run", "--", "init", "notes", "--dry-run"]);
