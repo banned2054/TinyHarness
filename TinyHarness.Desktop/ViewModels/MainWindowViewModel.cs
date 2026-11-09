@@ -107,8 +107,8 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     private string                                            _organizeNotice = string.Empty;
     private CancellationTokenSource?                          _organizeSource;
     private bool?                                             _pendingProjectDeletionPromptPreference;
-    private PermissionSettings                                _permissionSettings = new();
     private string                                            _permissionMigrationSummary = string.Empty;
+    private PermissionSettings                                _permissionSettings         = new();
     private int                                               _projectDeletionDialogVersion;
     private string?                                           _projectDeletionErrorText;
     private bool                                              _projectDeletionOpen;
@@ -471,6 +471,12 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     ///     <para>Internal test seam for protected-directory resolution; production leaves it unset.</para>
     /// </summary>
     internal Func<string, CancellationToken, Task<string>>? ResolveDirectoryOverride { get; set; }
+
+    /// <summary>
+    ///     <para>测试用批次完成回调；在真实整理批次结束后、下一批开始前等待，并传递本轮取消令牌。</para>
+    ///     <para>Test callback awaited after a real organize batch and before the next, with the round's cancellation token.</para>
+    /// </summary>
+    internal Func<CancellationToken, Task>? OrganizeBatchCompletedOverride { get; set; }
 
     /// <summary>
     ///     <para>目录册同步循环的完成观察缝；未启动时为 null，供测试等待循环退出。</para>
@@ -1573,7 +1579,7 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     {
         var revision = _storeRevision;
         var user     = await UserConfigStore.LoadAsync(UserConfigPath, _lifetime.Token);
-        _permissionSettings = user.Settings?.Permissions ?? new PermissionSettings();
+        _permissionSettings         = user.Settings?.Permissions ?? new PermissionSettings();
         _permissionMigrationSummary = PermissionSettingsViewModel.BuildMigrationSummary(user);
         foreach (var page in Sessions.Concat(_failedDrafts).Append(_newConversation).Where(page => page is not null)
                                      .Distinct())
@@ -1581,6 +1587,7 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
             page!.ApplyPermissionSettings(_permissionSettings);
             page.ApplyPermissionMigrationSummary(_permissionMigrationSummary);
         }
+
         if (revision != _storeRevision && _storeDirectory is { } current) return (current, false);
         Models.Clear();
         foreach (var profile in user.Profiles)
@@ -3927,6 +3934,8 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
                                                     source.Token).ConfigureAwait(true);
                         foreach (var outcome in result.Outcomes) merged[outcome.SessionId] = outcome;
                         if (result.Cancelled) break;
+                        if (OrganizeBatchCompletedOverride is { } batchCompleted)
+                            await batchCompleted(source.Token).ConfigureAwait(true);
                     }
                 }
                 else
@@ -3955,6 +3964,8 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
                         }
 
                         if (!result.HasMore) break;
+                        if (OrganizeBatchCompletedOverride is { } batchCompleted)
+                            await batchCompleted(source.Token).ConfigureAwait(true);
                         cursor = result.NextCursor;
                     }
                 }

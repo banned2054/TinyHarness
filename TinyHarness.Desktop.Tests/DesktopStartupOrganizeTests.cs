@@ -294,21 +294,52 @@ public sealed class DesktopStartupOrganizeTests
     [Test]
     public async Task CancelStopsTheRoundEvenWhenMoreLogsRemainAndRestartCompletes()
     {
-        var fixture = await Fixture.CreateAsync();
-        for (var index = 0; index < 250; index++)
+        const int sessionCount = 101;
+        var       fixture      = await Fixture.CreateAsync();
+        for (var index = 0; index < sessionCount; index++)
             await CommitLegacySessionAsync(fixture.Store, fixture.First);
-        await using var model   = fixture.Window();
-        var             startup = model.StartAsync();
-        await WaitUntilAsync(() => File.Exists(ProjectStore.FilePath(fixture.Store)), "第一批未完成。");
-        model.CancelInitializationCommand.Execute(null);
-        await startup;
+        await using var model        = fixture.Window();
+        var             firstBatch   = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var             releaseBatch = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        // 等真实批次提交后再取消；门闩保证快机器也不会抢先处理完剩余日志。
+        model.OrganizeBatchCompletedOverride = async token =>
+        {
+            firstBatch.TrySetResult();
+            await releaseBatch.Task.WaitAsync(token);
+        };
+        var startup = model.StartAsync();
+        try
+        {
+            await Task.WhenAny(firstBatch.Task, startup).WaitAsync(TimeSpan.FromSeconds(60));
+            Assert.That(firstBatch.Task.IsCompletedSuccessfully, Is.True,
+                        $"整理在第一批完成前结束。startup={startup.Status}; Notice={model.Notice}; " +
+                        $"OrganizeNotice={model.OrganizeNotice}");
+            model.CancelInitializationCommand.Execute(null);
+            await startup.WaitAsync(TimeSpan.FromSeconds(60));
+        }
+        catch (TimeoutException)
+        {
+            Assert.Fail($"等待整理进度或取消结束超时。startup={startup.Status}; "                     +
+                        $"firstBatch={firstBatch.Task.Status}; Notice={model.Notice}; " +
+                        $"OrganizeNotice={model.OrganizeNotice}");
+        }
+        finally
+        {
+            model.CancelInitializationCommand.Execute(null);
+            releaseBatch.TrySetResult();
+            await startup.WaitAsync(TimeSpan.FromSeconds(60));
+            model.OrganizeBatchCompletedOverride = null;
+        }
+
         Assert.That(model.LoadingHistory, Is.False);
         var partial = await SessionStoreReader.ListAsync(fixture.Store, CancellationToken.None);
-        Assert.That(partial.Count(entry => entry.Session!.ProjectId is not null), Is.LessThan(250),
-                    "取消后不得继续扫描剩余日志。");
+        Assert.That(partial, Has.Count.EqualTo(sessionCount));
+        Assert.That(partial.Count(entry => entry.Session!.ProjectId is not null), Is.EqualTo(100),
+                    "第一批已提交，取消后不得继续处理剩余日志。");
 
         await model.StartAsync();
         var complete = await SessionStoreReader.ListAsync(fixture.Store, CancellationToken.None);
+        Assert.That(complete, Has.Count.EqualTo(sessionCount));
         Assert.That(complete.All(entry => entry.Session!.ProjectId is not null), Is.True, "下次启动必须从头重试。");
     }
 
