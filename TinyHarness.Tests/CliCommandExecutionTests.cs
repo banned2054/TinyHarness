@@ -169,6 +169,36 @@ public sealed class CliCommandExecutionTests
     }
 
     [Test]
+    public async Task ConfigSet_RejectsBudgetsThatExceedTheSelectedModelWindow()
+    {
+        using var fixture = new CliFixture();
+        await UserConfigStore.SaveAsync(fixture.UserConfigPath, ProfileConfig("work"), CancellationToken.None);
+        var before  = await File.ReadAllTextAsync(fixture.UserConfigPath);
+        var context = fixture.CreateContext();
+
+        var reserved = await TestAssert.ThrowsAsync<InvalidOperationException>(() =>
+                                                                                  ConfigCommand.ExecuteAsync(context,
+                                                                                          CommandLine.Parse([
+                                                                                              "config", "set",
+                                                                                              "reservedOutputTokens",
+                                                                                              "64000"
+                                                                                          ]),
+                                                                                          CancellationToken.None));
+        Assert.That(reserved.Message, Does.Contain("context window (64000)"));
+
+        var compaction = await TestAssert.ThrowsAsync<InvalidOperationException>(() =>
+                                                                                    ConfigCommand.ExecuteAsync(context,
+                                                                                            CommandLine.Parse([
+                                                                                                "config", "set",
+                                                                                                "compactionThreshold",
+                                                                                                "64001"
+                                                                                            ]),
+                                                                                            CancellationToken.None));
+        Assert.That(compaction.Message, Does.Contain("automatic compaction"));
+        Assert.That(await File.ReadAllTextAsync(fixture.UserConfigPath), Is.EqualTo(before));
+    }
+
+    [Test]
     public async Task AuthSet_StoresOnlyTheEnvironmentVariableReference()
     {
         using var fixture = new CliFixture();

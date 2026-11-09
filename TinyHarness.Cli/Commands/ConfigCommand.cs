@@ -156,6 +156,7 @@ internal static class ConfigCommand
         }
 
         config = config with { Settings = settings };
+        ValidateBudgetSettings(config);
         await UserConfigStore.SaveAsync(context.ResolveUserConfigPath(), config, baseline, cancellationToken)
                              .ConfigureAwait(false);
 
@@ -163,6 +164,39 @@ internal static class ConfigCommand
         await io.WriteLineAsync($"Saved to user config: {context.ResolveUserConfigPath()}", cancellationToken)
                 .ConfigureAwait(false);
         return 0;
+    }
+
+    /// <summary>
+    ///     <para>
+    ///         校验候选的保留输出与压缩阈值相对所选模型的上下文窗口保持自洽；0 仍是压缩阈值的自动取值，
+    ///         未选择模型时按内置窗口校验。
+    ///     </para>
+    ///     <para>
+    ///         Validates the candidate reserved-output and compaction thresholds against the selected model's context
+    ///         window; 0 remains the automatic compaction value, and the built-in window applies when no model is
+    ///         selected.
+    ///     </para>
+    /// </summary>
+    private static void ValidateBudgetSettings(UserConfig config)
+    {
+        if (config.Settings is not { } settings) return;
+
+        var defaults = new TinyHarnessConfig();
+        var profile  = UserConfigAccess.DefaultProfile(config);
+        var model = profile is null
+            ? null
+            : profile.Models.FirstOrDefault(m => string.Equals(m.Id, profile.DefaultModel, StringComparison.Ordinal));
+        var contextWindow = model?.ContextWindowTokens ?? defaults.ContextWindowTokens;
+        var reserved      = settings.ReservedOutputTokens ?? defaults.ReservedOutputTokens;
+        var compaction    = settings.CompactionThreshold  ?? defaults.CompactionThreshold;
+
+        if (reserved >= contextWindow)
+            throw new
+                InvalidOperationException($"'reservedOutputTokens' ({reserved}) must be less than the selected model's context window ({contextWindow}); choose a smaller reserve or a model with a larger window.");
+
+        if (compaction > contextWindow)
+            throw new
+                InvalidOperationException($"'compactionThreshold' ({compaction}) must not exceed the selected model's context window ({contextWindow}); use 0 for automatic compaction.");
     }
 
     /// <summary>
