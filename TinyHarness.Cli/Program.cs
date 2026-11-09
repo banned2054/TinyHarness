@@ -414,8 +414,8 @@ internal static class Program
             var              newStack    = CreateChatExecutionStack(composition);
             var newApprover = CliApprovalRouting.Create(
                                                         new ConsoleApprovalProvider(reader, Console.Out,
-                                                                                    composition.KnownSecrets,
-                                                                                    !Console.IsInputRedirected),
+                                                            composition.KnownSecrets,
+                                                            !Console.IsInputRedirected),
                                                         () => createdHost ??
                                                               throw new
                                                                   InvalidOperationException("The session host is not ready."),
@@ -493,15 +493,18 @@ internal static class Program
                 var snapshot = writer.LoadedSnapshot!;
                 // 先恢复历史事实：验证日志、完整历史与选择链，不以目标模型可用性为前提；
                 // 历史模型已删除不构成日志损坏，也不解析其凭据或构造其客户端。
-                var restored = SessionResume.Restore(snapshot, config.WorkspaceRoot, WorkspacePrompts.Current,
+                // 会话沿用保存的系统提示；应用升级不改变历史指令，当前权限由执行引擎独立约束。
+                var systemPrompt = snapshot.Conversation?.Messages.FirstOrDefault()?.Content ??
+                                   WorkspacePrompts.Current;
+                var restored = SessionResume.Restore(snapshot, config.WorkspaceRoot, systemPrompt,
                                                      composition.Options.Context);
                 await SessionProjectBinding.BindRestoredAsync(composition.SessionStoreDirectory!, restored.Session,
                                                               writer, token).ConfigureAwait(false);
                 var resumeStack = CreateChatExecutionStack(composition);
                 var resumeApprover = CliApprovalRouting.Create(
                                                                new ConsoleApprovalProvider(reader, Console.Out,
-                                                                                           composition.KnownSecrets,
-                                                                                           !Console.IsInputRedirected),
+                                                                   composition.KnownSecrets,
+                                                                   !Console.IsInputRedirected),
                                                                () => host ??
                                                                      throw new
                                                                          InvalidOperationException("The session host is not ready."),
@@ -530,7 +533,7 @@ internal static class Program
                 {
                     // 目标不可解析：以未绑定宿主接管已恢复历史与写入端，等待用户显式选择后再发送。
                     host = new ChatSessionHost(restored.Session, restored.Context, composition.Options,
-                                               null, resumeStack.Tools, WorkspacePrompts.Current,
+                                               null, resumeStack.Tools, systemPrompt,
                                                resumeStack.Permissions,
                                                resumeApprover,
                                                events, sessionWriter : writer,
@@ -549,7 +552,7 @@ internal static class Program
                 resolved = target;
                 // 启动客户端归组合根进程生命周期持有（借用）；目录解析构造的新客户端随宿主转交释放。
                 host = new ChatSessionHost(restored.Session, restored.Context, target.Options, target.Client,
-                                           resumeStack.Tools, WorkspacePrompts.Current, resumeStack.Permissions,
+                                           resumeStack.Tools, systemPrompt, resumeStack.Permissions,
                                            resumeApprover,
                                            events, sessionWriter : writer,
                                            needsInspection : restored.NeedsInspection,
@@ -932,7 +935,7 @@ internal static class Program
     /// </summary>
     internal static async Task<(IChatCompletionClient Client, string Model)> CreateReviewerAsync(
         ChatSessionHost host, IReadOnlyDictionary<string, string> knownSecrets, CancellationToken cancellationToken,
-        string? userConfigPath = null, ICredentialStore? credentialStore = null)
+        string?         userConfigPath = null, ICredentialStore? credentialStore = null)
     {
         var path     = userConfigPath ?? UserConfigStore.DefaultFilePath();
         var user     = await UserConfigStore.LoadAsync(path, cancellationToken).ConfigureAwait(false);
@@ -974,11 +977,11 @@ internal static class Program
     /// </summary>
     internal static (UserProfile Profile, UserProfileModel Model)? ResolveReviewerTarget(
         IReadOnlyList<UserProfile> profiles, PermissionSettings settings, SessionModelIdentity sessionModel,
-        SessionModelSelection? savedSelection)
+        SessionModelSelection?     savedSelection)
     {
         if (!settings.UseCurrentModel)
         {
-            var profile = profiles.SingleOrDefault(item => item.Name == settings.ReviewerProfile);
+            var profile = profiles.SingleOrDefault(item => item.Name      == settings.ReviewerProfile);
             var model   = profile?.Models.SingleOrDefault(item => item.Id == settings.ReviewerModel);
             return profile is not null && model is not null ? (profile, model) : null;
         }
@@ -986,15 +989,15 @@ internal static class Program
         var profileName = savedSelection?.ProfileHint;
         if (profileName is null && savedSelection?.CredentialRoute is { } route)
         {
-            var separator = route.IndexOf('|');
+            var separator                  = route.IndexOf('|');
             if (separator > 0) profileName = route[..separator];
         }
 
         if (profileName is not null)
         {
-            var profile = profiles.SingleOrDefault(item => item.Name == profileName);
+            var profile = profiles.SingleOrDefault(item => item.Name      == profileName);
             var model   = profile?.Models.SingleOrDefault(item => item.Id == sessionModel.ModelId);
-            if (profile is null || model is null ||
+            if (profile is null                                                                   || model is null ||
                 !string.Equals(profile.Endpoint, sessionModel.Endpoint, StringComparison.Ordinal) ||
                 profile.ChatApi != sessionModel.ChatApi)
                 return null;

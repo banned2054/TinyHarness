@@ -348,7 +348,10 @@ public sealed partial class DesktopSessionFactory
                                                                        .HandleBatchCommittedAsync)
                                                  .ConfigureAwait(false);
                 var snapshot = writer.LoadedSnapshot!;
-                var restored = SessionResume.Restore(snapshot, root, WorkspacePrompts.Current, options.Context);
+                // 会话沿用保存的系统提示；应用升级不改变历史指令，当前权限由执行引擎独立约束。
+                var systemPrompt = snapshot.Conversation?.Messages.FirstOrDefault()?.Content ??
+                                   WorkspacePrompts.Current;
+                var restored = SessionResume.Restore(snapshot, root, systemPrompt, options.Context);
                 await SessionProjectBinding.BindRestoredAsync(directory, restored.Session, writer, cancellationToken)
                                            .ConfigureAwait(false);
                 var     saved       = restored.Session.ModelSelection;
@@ -376,7 +379,7 @@ public sealed partial class DesktopSessionFactory
                                                Model = savedModel.ModelId,
                                                Context = saved is null ? options.Context : saved.Context,
                                                ReasoningEffort = savedEffort
-                                           }, model, tools, WorkspacePrompts.Current, permissions, routedApprovals,
+                                           }, model, tools, systemPrompt, permissions, routedApprovals,
                                            sink,
                                            sessionWriter : writer, needsInspection : restored.NeedsInspection,
                                            instructionLoader : instructions, knownSecrets : secrets,

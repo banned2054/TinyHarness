@@ -1409,7 +1409,45 @@ public sealed class DesktopProjectionTests
         Assert.That(requests, Is.Empty);
     }
 
-    private static async Task<string> CreateLegacySessionAsync(Fixture fixture, string? legacyMode = null)
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task SavedSystemPrompt_ResumesAcrossApplicationUpdates(bool reselect)
+    {
+        const string oldPrompt = "You are TinyHarness from an earlier application version.";
+        var          fixture   = await Fixture.CreateAsync();
+        var          id        = await CreateLegacySessionAsync(fixture, "ReadOnlyAutoReview", oldPrompt);
+        var          finish    = Signal();
+        finish.SetResult();
+        var requests = new List<ChatCompletionRequest>();
+        var factory =
+            new DesktopSessionFactory((_, _) => new Model(Signal(), finish, "continued", observed : requests.Add),
+                                      new Credentials(), fixture.Config);
+        await using (var session = await factory.OpenAsync(
+                                                           new DesktopSessionRequest(fixture.First, SessionId : id,
+                                                               Reselect : reselect),
+                                                           _ => ValueTask.CompletedTask, _ => ValueTask.CompletedTask,
+                                                           CancellationToken.None))
+        {
+            Assert.That(requests, Is.Empty);
+            Assert.That(session.Host.Session.PermissionMigrationPending, Is.False);
+            Assert.That(session.Host.Session.PermissionSelectionV2!.ApprovalMode,
+                        Is.EqualTo(SessionApprovalMode.HumanApproval));
+            Assert.That(session.Host.HasModelBinding, Is.EqualTo(!reselect));
+            if (!reselect)
+            {
+                await session.SubmitAsync("continue");
+                Assert.That(requests.Single().Messages[0].Content, Is.EqualTo(oldPrompt));
+                Assert.That(requests.Single().Messages.Select(message => message.Content),
+                            Does.Contain("legacy question").And.Contain("legacy answer"));
+            }
+        }
+
+        var saved = (await SessionStoreReader.ReadAsync(fixture.Store, id, CancellationToken.None))!;
+        Assert.That(saved.Conversation!.Messages[0].Content, Is.EqualTo(oldPrompt));
+    }
+
+    private static async Task<string> CreateLegacySessionAsync(Fixture fixture, string? legacyMode = null,
+                                                               string? systemPrompt = null)
     {
         var finish = Signal();
         finish.SetResult();
@@ -1437,7 +1475,18 @@ public sealed class DesktopProjectionTests
             {
                 Runs = turn.Runs.Select(run => run with { ModelSelectionRevision = null }).ToArray()
             }).ToArray(),
-            Conversation = snapshot.Conversation! with { CheckpointModelSelectionRevision = null }
+            Conversation = snapshot.Conversation! with
+            {
+                CheckpointModelSelectionRevision = null,
+                Messages = snapshot.Conversation.Messages.Select((message, index) =>
+                                                                     index == 0 && systemPrompt is not null
+                                                                         ? message with
+                                                                         {
+                                                                             Content = systemPrompt,
+                                                                             TextItems = null
+                                                                         }
+                                                                         : message).ToArray()
+            }
         };
         var       restored = SessionResume.Restore(legacy, fixture.First, legacy.Conversation.Messages[0].Content);
         using var writer   = new SessionStoreWriter(fixture.Store, legacy.Id);
