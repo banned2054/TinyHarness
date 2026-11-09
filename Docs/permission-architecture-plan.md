@@ -136,8 +136,8 @@ B1-B8 实施、本轮六项评审修复与 C2 获批读通道（应用侧+fork �
 - `master` 领先 `origin/master` 4 个提交；Phase 0 起点工作区干净（2026-11-07 确认）。
 - .NET 10 + NativeAOT 是必须持续满足的产品约束；所有变更不得回归 trimming/AOT warning。
 - 相关既有文档：[Docs/Guides/permission-modes.md](Guides/permission-modes.md)、
-  [Docs/Development/phase2-codex-sandbox-report.md](Development/phase2-codex-sandbox-report.md)、
-  [PAST_PLAN.md](../PAST_PLAN.md)。
+  [Phase 2 沙箱联网与开发工具链报告](Archive/phase2-codex-sandbox-report.md)、
+  [PAST_PLAN.md](Archive/PAST_PLAN.md)。
 
 ## 3. 已确认架构决策（主 Agent 冻结契约，2026-11-07）
 

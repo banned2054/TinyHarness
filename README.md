@@ -274,10 +274,10 @@ Project-rule logs are written to `%LOCALAPPDATA%\tinyharness\logs\project-instru
 
 - [Documentation navigation](Docs/README.md#documentation) — the Chinese README lists active plans and document locations.
 - [Changelog](Docs/CHANGELOG.md) and [code style](Docs/code-style.md).
-- Active plans: [provider/model selection](Docs/session-model-switching-design.md) and [desktop migration](Docs/desktop-migration-plan.md), mainly in Chinese.
-- [Completed designs and historical records](Docs/Archive/README.md) — session persistence, project rules, prompts, compaction, budgets, sandbox integration, and validation evidence.
+- Active plan: [permission architecture](Docs/permission-architecture-plan.md), mainly in Chinese.
+- [Archived plans, designs, and historical records](Docs/Archive/README.md) — historical milestones, desktop migration, model selection, projects and sessions, core designs, and validation evidence. Archiving preserves outstanding work and does not imply full acceptance.
 - Maintenance guides: [release packaging](Docs/Guides/releasing.md) and [third-party notices](Docs/Guides/third-party-notices.md).
-- [PLAN.md](PLAN.md), [historical plans](PAST_PLAN.md), and [AGENTS.md](AGENTS.md) — development entry points and repository rules.
+- [PLAN.md](PLAN.md), [historical plans](Docs/Archive/PAST_PLAN.md), and [AGENTS.md](AGENTS.md) — development entry points and repository rules.
 - [License](LICENSE) — Apache-2.0; [NOTICE](NOTICE) and [third-party licenses](THIRD-PARTY-LICENSES.txt) retain attribution and terms.
 
 ## 🤝 Contributing

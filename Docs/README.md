@@ -272,18 +272,18 @@ MCP worker 使用用户配置，将获准读取的工作区内容发送给模型
 
 ## 📚 文档
 
-`Docs/` 顶层仅保留本页、[代码风格](code-style.md)、[更新日志](CHANGELOG.md)和正在实施的单项计划。实施完成后，将计划与设计移入 [Archive](Archive/README.md)，不因仍有参考价值而继续留在顶层。
+`Docs/` 顶层仅保留本页、[代码风格](code-style.md)、[更新日志](CHANGELOG.md)和正在实施的单项计划。已完成或不再作为当前施工入口的旧计划与设计统一移入 [Archive](Archive/README.md)，不因仍有参考价值或残留未验收项而继续留在顶层；归档保留未完成项，不表示全部验收通过。
 
 | 位置 | 内容 |
 | --- | --- |
-| 顶层活动计划 | [供应商、模型管理与会话内选择](session-model-switching-design.md)、[桌面 GUI 迁移](desktop-migration-plan.md)、[项目实体、会话归属与多目录扩展](project-session-plan.md)；具体设计、实施与验证状态由各计划维护 |
-| [Archive](Archive/README.md) | 已完成的设计、实现边界、历史讨论、接力与验收；归档不取消仍有效的技术约束 |
+| 顶层活动计划 | [权限架构重构](permission-architecture-plan.md)；三级执行体系的当前契约、实施与待验收范围由该计划维护 |
+| [Archive](Archive/README.md) | 旧计划（含历史总计划、桌面迁移、模型选择、项目与会话）、阶段报告、已完成设计及历史验收；归档不取消仍有效的技术约束 |
 | Guides | [权限与审批](Guides/permission-modes.md)、[打包与发布](Guides/releasing.md)、[许可证与第三方声明维护](Guides/third-party-notices.md)等持续使用的维护说明 |
 | [Templates](Templates/README.md) | 可复制的跨项目代码风格母版 |
 
-[PLAN.md](../PLAN.md) 维护活动计划入口；[PAST_PLAN.md](../PAST_PLAN.md) 保留历史总计划；[AGENTS.md](../AGENTS.md) 规定仓库工作方式。项目采用 [Apache-2.0](../LICENSE)，[NOTICE](../NOTICE) 与[第三方许可](../THIRD-PARTY-LICENSES.txt)保留归属和条款。
+[PLAN.md](../PLAN.md) 维护活动计划入口；[PAST_PLAN.md](Archive/PAST_PLAN.md) 保留历史总计划；[AGENTS.md](../AGENTS.md) 规定仓库工作方式。项目采用 [Apache-2.0](../LICENSE)，[NOTICE](../NOTICE) 与[第三方许可](../THIRD-PARTY-LICENSES.txt)保留归属和条款。
 
-新增文档按职责放入相应位置。计划完成后及时归档，并更新本节、归档索引和相关引用；历史日期、测试结果及未验证范围保留原意，不把旧结论当作当前验证。当前仍有效的实现边界可继续在归档文档中维护，后续变更先核对源码和活动计划。
+新增文档按职责放入相应位置。计划完成或退出当前实施范围后及时归档，并更新本节、归档索引和相关引用；历史日期、测试结果及未验证范围保留原意，不把旧结论当作当前验证。当前仍有效的实现边界可继续在归档文档中维护，后续变更先核对源码和活动计划。
 
 ## 🤝 参与贡献
 

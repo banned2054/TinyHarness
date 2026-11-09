@@ -150,7 +150,7 @@ Shell 工具的可选参数 `networkAccess`（`default` 或 `enabled`）申请�
 拒绝、超时或取消都使整条命令不执行，不存在"降级为离线执行"的回退。
 host 作用域没有沙箱隔离，网络参数被忽略（按宿主账户实际网络权限展示）。
 HTTP 可达不代表 HTTPS 或 NuGet restore 已通过；
-TLS 与真实工具链限制单独记录（见[阶段交付报告](../Development/phase2-codex-sandbox-report.md)第 7 节）。
+TLS 与真实工具链限制单独记录（见[阶段交付报告](../Archive/phase2-codex-sandbox-report.md)第 7 节）。
 
 ## 文件工具与 search_text
 

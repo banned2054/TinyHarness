@@ -1,10 +1,12 @@
 # 项目实体、会话归属与多目录扩展
 
+> 历史归档（2026-11-09 整理）。保留原计划、实施记录、未完成项与验证边界；归档不表示全部完成，也不自动启动后续任务。当前活动项见 [PLAN.md](../../PLAN.md)。
+
 更新日期：2026-11-05。
 
 **状态：项目实体、会话归属、Desktop／CLI 接入、明确无项目会话、会话归档与项目删除已接入；Project 目录册跨进程自动同步已接入（见 §16）；阶段四综合验收待完成。** 本文记录独立 Project、会话归属、Desktop／CLI 接入和后续多目录执行的方案；已完成部分与验证见[实施状态](#15-实施状态)。CLI／Desktop 新建持久化会话保存项目归属，恢复旧日志在原 writer 内补齐；列表与历史只读，旧日志归属由 Desktop 在启动、生效 store 变化与“刷新历史”时自动分批整理，CLI 保留 `session initialize-projects` 显式命令。明确无项目的新会话使用单独日志记录，项目视图以底部“最近”分类直接列出无项目会话，空白会话的项目选择器支持搜索与创建项目；归档状态保存在 session store 的独立元数据中，不改写对话日志。删除项目会将其会话归属追加为无项目状态，保留会话历史与工作目录。
 
-入口见 [PLAN.md](../PLAN.md)。既有契约见[会话持久化](Archive/session-persistence-design.md)、[项目规则](Archive/project-instructions-design.md)、[桌面 GUI 迁移](desktop-migration-plan.md)和[Windows 沙箱管理](Archive/windows-sandbox-management.md)。操作授权以用户当前要求和 [AGENTS.md](../AGENTS.md) 为准，保存计划不构成代码实施、实际数据接入、Git 或发布授权。
+入口见 [PLAN.md](../../PLAN.md)。既有契约见[会话持久化](session-persistence-design.md)、[项目规则](project-instructions-design.md)、[桌面 GUI 迁移](desktop-migration-plan.md)和[Windows 沙箱管理](windows-sandbox-management.md)。操作授权以用户当前要求和 [AGENTS.md](../../AGENTS.md) 为准，保存计划不构成代码实施、实际数据接入、Git 或发布授权。
 
 ## 1. 目标与范围
 
@@ -30,17 +32,17 @@
 
 | 位置 | 当前职责与约束 |
 | --- | --- |
-| [ChatSession](../TinyHarness.Core/Models/Session/ChatSession.cs) | 固定保存一个 `WorkspaceRoot`，没有独立项目归属 |
-| [SessionLogIdentity](../TinyHarness.Core/Models/Persistence/SessionLogBatch.cs) | 身份日志保存原执行根目录 |
-| [PersistedSession](../TinyHarness.Core/Models/Persistence/PersistedSession.cs) | 从日志重建会话数据 |
-| [SessionResume](../TinyHarness.Core/Services/Session/SessionResume.cs) | 恢复时检查当前目录与保存目录一致 |
-| [Workspace](../TinyHarness.Core/Services/Runtime/Workspace.cs) | 路径解析与链接边界围绕单个 root |
-| [WorkspaceAccessState](../TinyHarness.Core/Services/Permissions/WorkspaceAccessState.cs) | 绑定目录身份、只读状态与工具准备版本 |
-| [SessionLogStore](../TinyHarness.Core/Services/Persistence/SessionLogStore.cs) | 唯一 JSONL、排他 writer、严格恢复与未知必需记录拒绝读取 |
-| [MainWindowViewModel](../TinyHarness.Desktop/ViewModels/MainWindowViewModel.cs) | 当前按会话列举、选择与加载历史 |
-| [DesktopSessionFactory](../TinyHarness.Desktop.Runtime/DesktopSessionFactory.cs) | 组装模型、单根工作区、权限、工具、规则和 writer |
-| [DesktopSessionManager](../TinyHarness.Desktop.Runtime/DesktopSessionManager.cs) | 按 SessionId 管理独立运行资源 |
-| [CLI Program](../TinyHarness.Cli/Program.cs) | 会话新建、恢复与导航的生产入口 |
+| [ChatSession](../../TinyHarness.Core/Models/Session/ChatSession.cs) | 固定保存一个 `WorkspaceRoot`，没有独立项目归属 |
+| [SessionLogIdentity](../../TinyHarness.Core/Models/Persistence/SessionLogBatch.cs) | 身份日志保存原执行根目录 |
+| [PersistedSession](../../TinyHarness.Core/Models/Persistence/PersistedSession.cs) | 从日志重建会话数据 |
+| [SessionResume](../../TinyHarness.Core/Services/Session/SessionResume.cs) | 恢复时检查当前目录与保存目录一致 |
+| [Workspace](../../TinyHarness.Core/Services/Runtime/Workspace.cs) | 路径解析与链接边界围绕单个 root |
+| [WorkspaceAccessState](../../TinyHarness.Core/Services/Permissions/WorkspaceAccessState.cs) | 绑定目录身份、只读状态与工具准备版本 |
+| [SessionLogStore](../../TinyHarness.Core/Services/Persistence/SessionLogStore.cs) | 唯一 JSONL、排他 writer、严格恢复与未知必需记录拒绝读取 |
+| [MainWindowViewModel](../../TinyHarness.Desktop/ViewModels/MainWindowViewModel.cs) | 当前按会话列举、选择与加载历史 |
+| [DesktopSessionFactory](../../TinyHarness.Desktop.Runtime/DesktopSessionFactory.cs) | 组装模型、单根工作区、权限、工具、规则和 writer |
+| [DesktopSessionManager](../../TinyHarness.Desktop.Runtime/DesktopSessionManager.cs) | 按 SessionId 管理独立运行资源 |
+| [CLI Program](../../TinyHarness.Cli/Program.cs) | 会话新建、恢复与导航的生产入口 |
 
 实施前重新核对工作区和实际源码，不把本文基线当作永久不变的事实。
 
@@ -407,12 +409,12 @@ SessionWorkspace
 2026-10-26 完成阶段一（项目核心）。全部为新增文件，未修改既有代码与任何运行入口；阶段二至四尚未开始。
 
 - 新增文件：
-  - [ProjectStoreException](../TinyHarness.Core/Exceptions/ProjectStoreException.cs)：目录册操作失败异常。
-  - [Project](../TinyHarness.Core/Models/Project/Project.cs)：项目数据与不变量；`CreateNew` 生成随机 ID 与默认名称，`Validate` 严格校验 ID、名称、root 数量与规范化形态、主目录归属和修订号。
-  - [ProjectRoot](../TinyHarness.Core/Models/Project/ProjectRoot.cs)：`Normalize` 转绝对路径并统一尾部分隔符（卷根保留分隔符），`AreEqual` 按平台大小写规则词法比较，`DefaultDisplayName` 取目录名、卷根退回完整路径。
-  - [ProjectCatalog](../TinyHarness.Core/Models/Project/ProjectCatalog.cs)：schema `tinyharness.projects/1`、目录册修订号、项目数量预算、跨项目 ID 与目录唯一性（歧义即报错）。
-  - [ProjectStore](../TinyHarness.Core/Services/Persistence/ProjectStore.cs)：缺失文件返回空目录册；读取先校验叶子（非目录、非链接）与 1 MiB 字节预算；损坏、未知 schema、未知字段、缺字段、超预算抛 `ProjectStoreException` 并保留原文件；保存走同目录临时文件安全替换；`GetOrCreateAsync` 在跨进程锁内重读并精确匹配，`RenameAsync` 按调用方修订号拒绝过期基线；JSON 使用 source-generated `ProjectJsonContext`（camelCase、拒绝未映射成员、缩进写出）。
-  - [ProjectStoreTests](../TinyHarness.Tests/ProjectStoreTests.cs)：19 项测试。
+  - [ProjectStoreException](../../TinyHarness.Core/Exceptions/ProjectStoreException.cs)：目录册操作失败异常。
+  - [Project](../../TinyHarness.Core/Models/Project/Project.cs)：项目数据与不变量；`CreateNew` 生成随机 ID 与默认名称，`Validate` 严格校验 ID、名称、root 数量与规范化形态、主目录归属和修订号。
+  - [ProjectRoot](../../TinyHarness.Core/Models/Project/ProjectRoot.cs)：`Normalize` 转绝对路径并统一尾部分隔符（卷根保留分隔符），`AreEqual` 按平台大小写规则词法比较，`DefaultDisplayName` 取目录名、卷根退回完整路径。
+  - [ProjectCatalog](../../TinyHarness.Core/Models/Project/ProjectCatalog.cs)：schema `tinyharness.projects/1`、目录册修订号、项目数量预算、跨项目 ID 与目录唯一性（歧义即报错）。
+  - [ProjectStore](../../TinyHarness.Core/Services/Persistence/ProjectStore.cs)：缺失文件返回空目录册；读取先校验叶子（非目录、非链接）与 1 MiB 字节预算；损坏、未知 schema、未知字段、缺字段、超预算抛 `ProjectStoreException` 并保留原文件；保存走同目录临时文件安全替换；`GetOrCreateAsync` 在跨进程锁内重读并精确匹配，`RenameAsync` 按调用方修订号拒绝过期基线；JSON 使用 source-generated `ProjectJsonContext`（camelCase、拒绝未映射成员、缩进写出）。
+  - [ProjectStoreTests](../../TinyHarness.Tests/ProjectStoreTests.cs)：19 项测试。
 - 关键偏差：目录册服务放入 `Services.Persistence`（与 `SessionStorePaths` 同域），不设 `Services/Project` 命名空间，避免与 `Project` 类型名冲突；目录册文件自身的链接校验由 `ProjectStore` 承担，存储目录对工作区的保护仍由调用方经 `SessionStorePaths.ResolveProtected` 保证，在阶段三接入时生效。
 - 已验证：`dotnet test --filter ProjectStoreTests` 19/19 通过，覆盖重启一致、等价词法路径与 Windows 大小写匹配、父子目录与同名目录不合并、并发创建共享单项目、卷根命名、改名与目录册修订号递增、过期基线失败不覆盖、空白根与非法名称拒绝、空文件／损坏 JSON／未知 schema／超预算文件／跨项目重复目录／未知字段／缺字段／非规范 root 的报告且不覆盖；CLI NativeAOT publish 无新增警告，发布产物 `smoke` 通过。
 - 未验证：跨进程并发、断电与设备故障、真实 GUI；阶段二（会话归属记录与初始化）、阶段三（CLI／Desktop 接入）与阶段四（综合验收）未实施。
@@ -562,9 +564,9 @@ SessionWorkspace
 
 2026-11-05 接入 Project 目录册跨进程自动同步（设计见 §16）：
 
-- Core 新增 [ProjectCatalogMonitor](../TinyHarness.Core/Services/Persistence/ProjectCatalogMonitor.cs)（文件元数据基线 + `LoadAsync` 三态检查 + 调用方显式确认基线），`Project`／`ProjectCatalog` 新增 `ContentEquals` 内容语义比较；不改目录册 schema、锁协议与 `ProjectStore` 公开契约，无新增依赖。
+- Core 新增 [ProjectCatalogMonitor](../../TinyHarness.Core/Services/Persistence/ProjectCatalogMonitor.cs)（文件元数据基线 + `LoadAsync` 三态检查 + 调用方显式确认基线），`Project`／`ProjectCatalog` 新增 `ContentEquals` 内容语义比较；不改目录册 schema、锁协议与 `ProjectStore` 公开契约，无新增依赖。
 - Desktop 新增 15 秒周期独立同步循环：stat 变化才加载目录册，与内存已应用列表逐项目比较，相等仅确认基线（覆盖本地改名／删除手改内存、同内容重写与重复事件），不等才替换 `_projects` 并 `RebuildProjects()`；实例复用、展开态、选中与草稿保持沿用既有逻辑，整理轮／删除流程进行中让位并下轮收敛。失败保留同 store 最后成功快照、有界退避（×1/×2/×4/×8）、通知去重、循环不因目录册或索引故障退出；store 切换作废基线并以 store 比对丢弃迟到结果。`PrepareAsync` 读取失败不再清空 `_projects`（store 真实变化时仍清空，避免旧 store 项目冒充新 store 目录册）；关闭时取消并等待同步循环退出。
-- 测试：Core 新增 19 项（Monitor 语义、恢复、取消、并发、平台守卫、`ContentEquals` 全字段）；Desktop 新增 23 项（外部创建／改名／删除、双实例同 store、内容未变不重建、损坏／缺失／共享冲突恢复、同长度改写、连续更新收敛、刷新／删除／整理交错、启动幂等、关闭退出、store 切换迟到丢弃、读取失败保留快照红绿）；[IndexProbe](../TinyHarness.IndexProbe/Program.cs) 新增 `catalog-create`／`catalog-rename` 模式并配 2 项真实子进程测试。
+- 测试：Core 新增 19 项（Monitor 语义、恢复、取消、并发、平台守卫、`ContentEquals` 全字段）；Desktop 新增 23 项（外部创建／改名／删除、双实例同 store、内容未变不重建、损坏／缺失／共享冲突恢复、同长度改写、连续更新收敛、刷新／删除／整理交错、启动幂等、关闭退出、store 切换迟到丢弃、读取失败保留快照红绿）；[IndexProbe](../../TinyHarness.IndexProbe/Program.cs) 新增 `catalog-create`／`catalog-rename` 模式并配 2 项真实子进程测试。
 - 独立 Review（并发／持久化／安全，UI／生命周期／回归各一）均无必须修复项；建议项已落实：`InitializeProjectsAsync` 补基线作废、Unchanged 复位失败状态、store 切换失败清空旧快照、移除双重脱敏、Desktop.Tests 补 IndexProbe 引用。本地改名与在途应用的交错回闪、stat 法修改时间精度边界记录为已知限制（§16.2）。
 - 已验证（Windows x64）：`TinyHarness.Tests` 1599 通过／4 跳过；`TinyHarness.Desktop.Tests` 299 通过；CLI 与 Desktop Release `win-x64` NativeAOT publish 0 compiler／trimming／AOT 警告，产物位于 `artifacts/project-sync-20261105/`，仓库外运行 CLI `smoke`（17 steps、16 tool executions）与 Desktop `--offline-smoke`（parallel=2、switched=A/B/A/B、refreshed=true、resumedTurns=4、disposedClients=6）均通过；IndexProbe AOT 产物 `catalog-create`／`catalog-rename` 手工验证通过。
 - 范围外记录：`DesktopStartupOrganizeTests.ExceptionRoundAfterStoreSwitchDoesNotMarkOldStoreUnboundGroups` 枚举 `Projects` 无快照复制，存在与本轮无关的偶发"Collection was modified"竞态（单独重跑通过）。

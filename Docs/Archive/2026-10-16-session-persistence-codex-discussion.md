@@ -2,7 +2,7 @@
 
 > 历史归档（2026-10-24 整理）。本页保留原日期、范围、结果与限制，不作为当前实现说明或新的操作授权。当前文档见[文档索引](../README.md#documentation)。
 
-> **历史材料（2026-10-17 标记，2026-10-23 更新入口）。** 本文保留当时对话、更正和旧计划验收证据，不再承载当前设计或下一步安排。当前入口为[使用说明](../README.md)与[会话持久化设计](session-persistence-design.md)，原阶段计划见[历史归档](../../PAST_PLAN.md#m12-m17)。下文关于“尚未改变计划”的表述描述的是 2026-10-16 当时状态。
+> **历史材料（2026-10-17 标记，2026-10-23 更新入口）。** 本文保留当时对话、更正和旧计划验收证据，不再承载当前设计或下一步安排。当前入口为[使用说明](../README.md)与[会话持久化设计](session-persistence-design.md)，原阶段计划见[历史归档](PAST_PLAN.md#m12-m17)。下文关于“尚未改变计划”的表述描述的是 2026-10-16 当时状态。
 
 - 日期：2026-10-16。
 - TinyHarness 核查基线：`45fae0b4a70e13c56846e4be1dab9bde5c9e0aa1`。
@@ -109,7 +109,7 @@ M14 的顺序是：
 
 旧 M7 快照以及 v1/v2 会话文件目前仍可检查，但不会自动升级成可续聊的 v3。
 
-相关依据见 [M7 历史计划](../../PAST_PLAN.md#15-持久化与审计) 和 [阶段计划中的存储说明](../../PAST_PLAN.md#7-持久化与安全续聊)。**准确总结就是：M7 做了“留档”，M13 在保留留档能力的基础上，新增了“跨进程接着聊”的存储与恢复体系。**
+相关依据见 [M7 历史计划](PAST_PLAN.md#15-持久化与审计) 和 [阶段计划中的存储说明](PAST_PLAN.md#7-持久化与安全续聊)。**准确总结就是：M7 做了“留档”，M13 在保留留档能力的基础上，新增了“跨进程接着聊”的存储与恢复体系。**
 
 > 归档补充：后续 Git 历史核查没有找到独立提交的 `CurrentFormatVersion = 2`；可见历史直接由 1 变为 3。关于 v2 的描述来自当前兼容契约、注释与计划记录，不能据此推导它曾独立发布或独立验证。
 
@@ -741,8 +741,8 @@ Codex 自身也有协议项、展示条目、索引和 SQLite 状态，并非绝
 
 | 范围 | 关键位置 |
 |---|---|
-| 当时路线及安全契约 | [归档阶段计划](../../PAST_PLAN.md#m12-m17)，尤其第 7 节与 M13／M14 路线 |
-| M7 历史定位 | [PAST_PLAN.md](../../PAST_PLAN.md) |
+| 当时路线及安全契约 | [归档阶段计划](PAST_PLAN.md#m12-m17)，尤其第 7 节与 M13／M14 路线 |
+| M7 历史定位 | [PAST_PLAN.md](PAST_PLAN.md) |
 | chat 同时接入两条保存路径 | [Program.cs](../../TinyHarness.Cli/Program.cs)，`RunChatAsync` |
 | 旧运行审计与全量检查快照 | [RunPersistence.cs](../../TinyHarness.Core/Services/Persistence/RunPersistence.cs)，`FileRunRecorder` |
 | v3 模型、检查视图与执行记录 | [PersistedSession.cs](../../TinyHarness.Core/Models/Persistence/PersistedSession.cs) |

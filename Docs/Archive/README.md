@@ -1,8 +1,20 @@
-# 已完成设计与历史文档归档
+# 计划、设计与历史文档归档
 
-整理日期：2026-10-24。常用说明与活动计划见[中文 README 文档入口](../README.md#documentation)。
+整理日期：2026-11-09。常用说明与活动计划见[中文 README 文档入口](../README.md#documentation)。
 
-这里保存已完成实现的设计与使用边界，以及历史讨论、调查、实施与验收记录。设计参考可在后续明确任务中随实现维护；按日期保存的调查与验收保留历史原意。原日期、适用版本、通过与失败、跳过及未验证范围保持原含义；章节编号沿用原文。历史结论不自动更新为当前状态，历史授权不作为新任务授权。本机 `artifacts/` 证据可能不在其他机器上。
+这里集中保存旧计划、已完成实现的设计与使用边界，以及历史讨论、调查、实施与验收记录。归档是文档分类，不表示原计划的所有目标或验收均已完成；未完成、未验证或另行实施的部分保留原意。设计参考可在后续明确任务中随实现维护；按日期保存的调查与验收保留历史原意。原日期、适用版本、通过与失败、跳过及未验证范围保持原含义；章节编号沿用原文。历史结论不自动更新为当前状态，历史授权不作为新任务授权。本机 `artifacts/` 证据可能不在其他机器上。
+
+## 本轮归档的旧计划与阶段报告
+
+| 文档 | 归档时保留的状态与边界 |
+| --- | --- |
+| [MVP 至 M17 历史总计划](PAST_PLAN.md) | 原阶段已收口；保留历史原文和当时的验收范围 |
+| [桌面 GUI 迁移](desktop-migration-plan.md) | 保留迁移契约、项目接入与后续修复记录；真实 GUI、模型及调试器实测边界按原文理解 |
+| [供应商、模型管理与会话内选择](session-model-switching-design.md) | 交互与目录管理已接入；原综合验收、真实提供方兼容及完整 GUI 闭环未全部验证 |
+| [项目实体、会话归属与多目录扩展](project-session-plan.md) | 项目、归属、侧栏与跨进程同步已接入；阶段四综合验收未完成，多目录执行另行实施 |
+| [Phase 2 沙箱联网与开发工具链报告](phase2-codex-sandbox-report.md) | 2026-11-06 阶段快照；保留 TLS 阻断、代理限制、测试结果和后续建议，不作为当前权限契约 |
+
+当前仍在推进的[权限架构重构](../permission-architecture-plan.md)保留在 Docs 顶层；活动入口统一见 [PLAN.md](../../PLAN.md)。
 
 ## 已完成实现的设计与使用边界
 
@@ -38,15 +50,15 @@
 | [系统提示词与模型评估](system-prompt-history.md) | 本地接入与 2026-10-20 至 10-21 真实评估 | [提示词契约](system-prompt-design.md) |
 | [上下文压缩验收](context-compaction-history.md) | 替换后的回归、规模、原生产物与真实样本 | [压缩契约](context-compaction-design.md) |
 | [任务控制与运行预算](task-control-history.md) | 原切片顺序与 M15 工程结果 | [控制与预算契约](task-control-design.md) |
-| [M16 交付证据核查](m16-verification.md) | 已收口阶段的核查矩阵、工程与模型样本 | [历史总计划](../../PAST_PLAN.md#m12-m17) |
+| [M16 交付证据核查](m16-verification.md) | 已收口阶段的核查矩阵、工程与模型样本 | [历史总计划](PAST_PLAN.md#m12-m17) |
 | [Session 列表索引验收](session-list-index-design.md) | 阶段 E 综合验收：矩阵证据、基准对比、NativeAOT 与隔离 smoke、验收发现 | [设计契约](session-list-index-design.md#2-设计契约仍然有效) |
 | [Windows 沙箱验收](windows-sandbox-verification.md) | M11、目录授权、PriceLab 和 TCP／UDP／DNS 专项 | [沙箱管理与验证边界](windows-sandbox-management.md) |
 
 ## 开发接力与历史计划
 
 - [截至 2026-10-22 的接力记录](current-progress-2026-10-22.md)：提交基线、产物哈希、请求观测、展示与默认预算等历史记录；当前活动计划见[PLAN.md](../../PLAN.md)。
-- [根目录历史计划](../../PAST_PLAN.md)：MVP 至 M17 原计划快照；当前计划入口见[PLAN.md](../../PLAN.md)。
+- [历史总计划](PAST_PLAN.md)：MVP 至 M17 原计划快照；当前计划入口见[PLAN.md](../../PLAN.md)。
 
 - [2026-10-24 接力快照](current-progress-2026-10-24.md)与[首次整理的索引快照](documentation-index-2026-10-24.md)：保留之前的导航；现行导航统一见中文 README 与 PLAN。
 
-完成的计划、设计及新增历史记录登记在本页，不再留在 Docs 顶层。归档搬迁只调整链接与归档说明，不把旧失败改成通过，也不删除仍有效的权限、恢复、协议或 NativeAOT 约束。
+旧计划、完成的设计及新增历史记录登记在本页，不再留在 Docs 顶层。归档搬迁只调整链接与归档说明，不把旧失败改成通过，也不删除仍有效的权限、恢复、协议或 NativeAOT 约束。
