@@ -3,6 +3,7 @@ using System.Text.Json;
 using TinyHarness.Core.Models.Agent;
 using TinyHarness.Core.Models.Configuration;
 using TinyHarness.Core.Models.Persistence;
+using TinyHarness.Core.Models.Permissions;
 using TinyHarness.Core.Models.Session;
 using TinyHarness.Core.Services.Persistence;
 using TinyHarness.Core.Services.Session;
@@ -25,6 +26,125 @@ public class SessionIndexReconcilerTests
 {
     private static readonly SessionModelIdentity Identity =
         new("offline", "https://offline.invalid/v1", ChatApiKind.ChatCompletions);
+
+    /// <summary>
+    ///     <para>摘要支持旧选择、迁移后的新选择，并隔离未知 schema，不阻断列表扫描或索引对账。</para>
+    ///     <para>Summaries support legacy and migrated selections, while an unknown schema stays isolated to its row.</para>
+    /// </summary>
+    [Test]
+    public async Task PermissionSelectionSchemas_ScanAndReconcileLegacyMigrationAndCurrentRows()
+    {
+        using var dir = new TestTempDir();
+        var       ids = await SeedSessionsAsync(dir.Root, "legacy migration", "current approval", "unknown selection");
+
+        await AppendRawBatchAsync(dir.Root, ids[0],
+        [
+            new SessionLogRecord(string.Empty, "permission-selection",
+                                 JsonSerializer.SerializeToElement(
+                                                                   new LegacyPermissionSelection
+                                                                       { Revision = 1, Mode = "ProjectWrite" },
+                                                                   PermissionPersistenceJsonContext.Default
+                                                                      .LegacyPermissionSelection)),
+            new SessionLogRecord(string.Empty, "permission-migration",
+                                 JsonSerializer.SerializeToElement(
+                                                                   new PermissionMigrationRecord
+                                                                   {
+                                                                       Revision     = 2,
+                                                                       CompletedUtc = DateTimeOffset.UtcNow,
+                                                                       PreviousMode = "ProjectWrite",
+                                                                       ApprovalMode = SessionApprovalMode
+                                                                          .AIAutoReview
+                                                                   },
+                                                                   PermissionPersistenceJsonContext.Default
+                                                                      .PermissionMigrationRecord)),
+            new SessionLogRecord(string.Empty, "permission-selection",
+                                 JsonSerializer.SerializeToElement(
+                                                                   new SessionPermissionSelectionV2
+                                                                   {
+                                                                       Revision = 2,
+                                                                       ApprovalMode = SessionApprovalMode
+                                                                          .AIAutoReview
+                                                                   },
+                                                                   PermissionPersistenceJsonContext.Default
+                                                                      .SessionPermissionSelectionV2))
+        ]);
+
+        var migratedSession = await SessionStoreReader.ReadAsync(dir.Root, ids[0], CancellationToken.None);
+        Assert.That(migratedSession!.PermissionMigration!.Revision, Is.EqualTo(2));
+        Assert.That(migratedSession.PermissionMigration.ApprovalMode, Is.EqualTo(SessionApprovalMode.AIAutoReview));
+        Assert.That(migratedSession.PermissionSelectionV2!.Revision, Is.EqualTo(2));
+        Assert.That(migratedSession.PermissionSelectionV2.ApprovalMode,
+                    Is.EqualTo(migratedSession.PermissionMigration.ApprovalMode));
+
+        await AppendCurrentPermissionSelectionAsync(ids[1], SessionApprovalMode.HumanApproval, dir.Root);
+        await AppendCurrentPermissionSelectionAsync(ids[2], SessionApprovalMode.AIAutoReview, dir.Root);
+        var damagedPath = Path.Combine(dir.Root, ids[2] + SessionStoreWriter.LogFileSuffix);
+        var damagedLog  = await File.ReadAllTextAsync(damagedPath, CancellationToken.None);
+        await File.WriteAllTextAsync(damagedPath,
+                                     damagedLog.Replace(SessionPermissionSelectionV2.CurrentSchema,
+                                                        "tinyharness.permission-selection/3", StringComparison.Ordinal),
+                                     CancellationToken.None);
+
+        var projection = new SessionListProjection(dir.Root);
+        var scans      = await projection.ScanSummariesAsync(CancellationToken.None);
+        Assert.That(scans.Single(entry => entry.Id == ids[0]).Summary!.PermissionModeName,
+                    Is.EqualTo(nameof(SessionApprovalMode.AIAutoReview)), "迁移后最后选择应覆盖旧模式摘要。");
+        Assert.That(scans.Single(entry => entry.Id == ids[1]).Summary!.PermissionModeName,
+                    Is.EqualTo(nameof(SessionApprovalMode.HumanApproval)));
+        Assert.That(scans.Single(entry => entry.Id == ids[2]).Summary, Is.Null,
+                    "未知 schema 应拒绝，但仅将该会话报告为失败。");
+
+        var index = new SessionIndexStore(dir.Root);
+        await index.InitializeAsync(CancellationToken.None);
+        var report = await new SessionIndexReconciler(index).ReconcileAsync(CancellationToken.None);
+        Assert.That(report.Rebuilt, Is.EqualTo(2));
+        Assert.That(report.MarkedFailed, Is.EqualTo(1));
+        Assert.That(report.ArchiveSynced, Is.True);
+        Assert.That((await index.GetRowAsync(ids[0], CancellationToken.None))!.Summary!.PermissionModeName,
+                    Is.EqualTo(nameof(SessionApprovalMode.AIAutoReview)));
+        Assert.That((await index.GetRowAsync(ids[1], CancellationToken.None))!.Summary!.PermissionModeName,
+                    Is.EqualTo(nameof(SessionApprovalMode.HumanApproval)));
+        Assert.That((await index.GetRowAsync(ids[2], CancellationToken.None))!.State,
+                    Is.EqualTo(SessionIndexEntryState.Failed));
+    }
+
+    private static async Task AppendCurrentPermissionSelectionAsync(
+        string sessionId, SessionApprovalMode approvalMode, string store)
+    {
+        await AppendRawBatchAsync(store, sessionId,
+        [
+            new SessionLogRecord(string.Empty, "permission-selection",
+                                 JsonSerializer.SerializeToElement(
+                                                                   new SessionPermissionSelectionV2
+                                                                       { Revision = 1, ApprovalMode = approvalMode },
+                                                                   PermissionPersistenceJsonContext.Default
+                                                                      .SessionPermissionSelectionV2))
+        ]);
+    }
+
+    private static async Task AppendRawBatchAsync(string                          store, string sessionId,
+                                                  IReadOnlyList<SessionLogRecord> records)
+    {
+        var path      = Path.Combine(store, sessionId + SessionStoreWriter.LogFileSuffix);
+        var lines     = await File.ReadAllLinesAsync(path, CancellationToken.None);
+        var lastBatch = JsonSerializer.Deserialize(lines[^1], SessionLogJsonContext.Default.SessionLogBatch)!;
+        var sequence  = lastBatch.Sequence + 1;
+        var batchId   = $"{sessionId}:{sequence:D20}";
+        var batch = new SessionLogBatch
+        {
+            Format     = SessionLogWriter.FormatName,
+            SessionId  = sessionId,
+            Sequence   = sequence,
+            BatchId    = batchId,
+            WrittenUtc = DateTimeOffset.UtcNow,
+            Records = records.Select((record, index) =>
+                                         record with { Id = $"{batchId}:{index:D4}" }).ToArray()
+        };
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(batch, SessionLogJsonContext.Default.SessionLogBatch);
+        await using var stream = new FileStream(path, FileMode.Append, FileAccess.Write, FileShare.Read);
+        await stream.WriteAsync(bytes, CancellationToken.None);
+        await stream.WriteAsync("\n"u8.ToArray(), CancellationToken.None);
+    }
 
     /// <summary>
     ///     <para>空索引整份建立全部条目，归档投影从可读来源同步。</para>
@@ -104,8 +224,10 @@ public class SessionIndexReconcilerTests
             await writer.AppendRecordsAsync([
                 new SessionLogRecord(string.Empty, "project-binding",
                                      JsonSerializer.SerializeToElement(new SessionLogProjectBinding(
-                                         SessionLogProjectBinding.SchemaName, projectId),
-                                         SessionLogJsonContext.Default.SessionLogProjectBinding))
+                                                                            SessionLogProjectBinding.SchemaName,
+                                                                            projectId),
+                                                                       SessionLogJsonContext.Default
+                                                                          .SessionLogProjectBinding))
             ], CancellationToken.None);
         }
 
@@ -208,8 +330,10 @@ public class SessionIndexReconcilerTests
             await writer.AppendRecordsAsync([
                 new SessionLogRecord(string.Empty, "project-binding",
                                      JsonSerializer.SerializeToElement(new SessionLogProjectBinding(
-                                         SessionLogProjectBinding.SchemaName, projectId),
-                                         SessionLogJsonContext.Default.SessionLogProjectBinding))
+                                                                            SessionLogProjectBinding.SchemaName,
+                                                                            projectId),
+                                                                       SessionLogJsonContext.Default
+                                                                          .SessionLogProjectBinding))
             ], CancellationToken.None);
         }
 
@@ -417,8 +541,9 @@ public class SessionIndexReconcilerTests
     private static SessionLogRecord ProjectBindingRecord() =>
         new(string.Empty, "project-binding",
             JsonSerializer.SerializeToElement(new SessionLogProjectBinding(
-                SessionLogProjectBinding.SchemaName, "0123456789abcdef0123456789abcdef"),
-                SessionLogJsonContext.Default.SessionLogProjectBinding));
+                                                                           SessionLogProjectBinding.SchemaName,
+                                                                           "0123456789abcdef0123456789abcdef"),
+                                              SessionLogJsonContext.Default.SessionLogProjectBinding));
 
     /// <summary>
     ///     <para>统计 store 内全部会话日志字节数，用于断言对账不改动权威日志。</para>

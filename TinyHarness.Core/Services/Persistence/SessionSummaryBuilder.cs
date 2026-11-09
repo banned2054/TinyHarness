@@ -172,15 +172,15 @@ public static class SessionSummaryBuilder
             if (summary.Id != _sessionId)
                 throw new ArgumentException("The seeded summary must belong to the projection's session.",
                                             nameof(summary));
-            _workspaceRoot   = summary.WorkspaceRoot;
-            _projectId       = summary.ProjectId;
-            _assignmentState = summary.ProjectAssignmentState;
+            _workspaceRoot      = summary.WorkspaceRoot;
+            _projectId          = summary.ProjectId;
+            _assignmentState    = summary.ProjectAssignmentState;
             _permissionModeName = summary.PermissionModeName;
-            _title           = summary.TurnCount > 0 ? summary.Title : summary.Id[..8];
-            _turnCount       = summary.TurnCount;
-            _createdUtc      = summary.CreatedUtc;
-            _updatedUtc      = summary.UpdatedUtc;
-            _lastActivityUtc = summary.LastActivityUtc;
+            _title              = summary.TurnCount > 0 ? summary.Title : summary.Id[..8];
+            _turnCount          = summary.TurnCount;
+            _createdUtc         = summary.CreatedUtc;
+            _updatedUtc         = summary.UpdatedUtc;
+            _lastActivityUtc    = summary.LastActivityUtc;
         }
 
         /// <summary>
@@ -219,12 +219,27 @@ public static class SessionSummaryBuilder
                         if (_turnCount == 1) _title = SummarizeTitle(turn.UserInput);
                         break;
                     case "permission-selection" :
-                        var selection =
-                            record.Payload.Deserialize(PermissionPersistenceJsonContext.Default.LegacyPermissionSelection)
-                         ?? throw new SessionStoreException(
-                                                            $"Session '{_sessionId}' has an empty permission-selection payload.");
-                        selection.Validate();
-                        _permissionModeName = selection.Mode;
+                        var permissionSchema = SessionStoreWriter.ReadSchemaName(record.Payload);
+                        if (permissionSchema == SessionPermissionSelectionV2.CurrentSchema)
+                        {
+                            var selection =
+                                record.Payload.Deserialize(PermissionPersistenceJsonContext.Default
+                                                              .SessionPermissionSelectionV2)
+                             ?? throw new SessionStoreException(
+                                                                $"Session '{_sessionId}' has an empty permission-selection payload.");
+                            selection.Validate();
+                            _permissionModeName = selection.ApprovalMode.ToString();
+                        }
+                        else
+                        {
+                            var selection =
+                                record.Payload.Deserialize(PermissionPersistenceJsonContext.Default
+                                                              .LegacyPermissionSelection)
+                             ?? throw new SessionStoreException(
+                                                                $"Session '{_sessionId}' has an empty permission-selection payload.");
+                            selection.Validate();
+                            _permissionModeName = selection.Mode;
+                        }
                         break;
                     case "project-binding" :
                         _projectId       = SessionLogProjectBinding.Parse(record.Payload);

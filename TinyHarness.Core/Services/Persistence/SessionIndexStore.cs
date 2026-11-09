@@ -882,17 +882,18 @@ public sealed class SessionIndexStore
 
     /// <summary>
     ///     <para>
-    ///         容忍解析 permission_mode 列：旧七模式字符串照常返回供展示层映射；未知或损坏值回落为 null，
-    ///         绝不因历史字符串抛异常。
+    ///         容忍解析 permission_mode 列：旧七模式与新审批模式规范名照常返回供展示层处理；未知或损坏值
+    ///         回落为 null，绝不因历史字符串抛异常。
     ///     </para>
     ///     <para>
-    ///         Tolerantly parses the permission_mode column: legacy seven-preset strings return as-is for
-    ///         display-layer mapping; unknown or damaged values fall back to null instead of throwing on
-    ///         historical strings.
+    ///         Tolerantly parses the permission_mode column: legacy preset names and canonical approval-mode names
+    ///         return as-is for display handling; unknown or damaged values fall back to null instead of throwing.
     ///     </para>
     /// </summary>
     private static string? ReadLegacyPermissionMode(string? value) =>
-        value is not null && LegacyPermissionSelection.KnownLegacyModeNames.Contains(value, StringComparer.Ordinal)
+        value is not null &&
+        (LegacyPermissionSelection.KnownLegacyModeNames.Contains(value, StringComparer.Ordinal) ||
+         value is nameof(SessionApprovalMode.HumanApproval) or nameof(SessionApprovalMode.AIAutoReview))
             ? value
             : null;
 

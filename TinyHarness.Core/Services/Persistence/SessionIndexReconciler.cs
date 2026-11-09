@@ -320,8 +320,9 @@ public sealed class SessionIndexReconciler
                             notes.Add($"Summary callback for session '{sessionId}' failed: {ex.Message}");
                     }
             }
-            catch (Exception ex) when (ex is SessionStoreException or IOException or UnauthorizedAccessException
-                                          or NotSupportedException or PathTooLongException)
+            catch (Exception ex) when (ex is SessionStoreException or InvalidDataException or IOException
+                                          or UnauthorizedAccessException or NotSupportedException
+                                          or PathTooLongException)
             {
                 // 摘要扫描被严格恢复语义拒绝，或来源被占用等原因不可读：条目先标记失败并保留旧摘要，
                 // 等来源恢复后由后续对账重建；其余条目与归档同步继续本轮，不中止对账。

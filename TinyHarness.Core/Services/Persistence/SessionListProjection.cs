@@ -169,7 +169,8 @@ public sealed class SessionListProjection
             {
                 throw;
             }
-            catch (Exception ex) when (ex is SessionStoreException or SessionIndexException or IOException
+            catch (Exception ex) when (ex is SessionStoreException or SessionIndexException or InvalidDataException
+                                          or IOException
                                           or UnauthorizedAccessException or NotSupportedException
                                           or PathTooLongException)
             {
