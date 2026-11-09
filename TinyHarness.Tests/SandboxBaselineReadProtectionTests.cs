@@ -79,7 +79,8 @@ public class SandboxBaselineReadProtectionTests
 
             // 不变量：deny 全部落在读根覆盖内，且没有盘根或读根本身。
             Assert.That(protection.DenyReadPaths,
-                        Has.All.Matches<string>(path => Workspace.IsInside(profile, path)), "coverage");
+                        Has.All.Matches<string>(path => path is not null && Workspace.IsInside(profile, path)),
+                        "coverage");
             Assert.That(ContainsOrdinal(protection.DenyReadPaths, profile), Is.False, "read-root itself");
         });
     }
@@ -182,7 +183,8 @@ public class SandboxBaselineReadProtectionTests
 
             // 覆盖不变量：deny ⊆ 读根覆盖。
             Assert.That(policy.DenyReadPaths,
-                        Has.All.Matches<string>(path => Workspace.IsInside(policy.BaselineReadRoots[0], path)),
+                        Has.All.Matches<string>(path => path is not null &&
+                                                        Workspace.IsInside(policy.BaselineReadRoots[0], path)),
                         "coverage");
         });
 
@@ -255,11 +257,12 @@ public class SandboxBaselineReadProtectionTests
         var       settings  = TrustedSettingsIn(home);
 
         // deny 覆盖沙箱 home（相等语义同样拒绝）：沙箱必须读取自身运行时状态与组件。
-        var protection = WindowsSandboxComposer.PlanBaselineReadProtection([], null, settings, static _ => [])
-            with
-            {
-                DenyReadPaths = [home.Root]
-            };
+        var planned = WindowsSandboxComposer.PlanBaselineReadProtection([], null, settings, static _ => []);
+        Assert.That(planned, Is.Not.Null);
+        var protection = planned! with
+        {
+            DenyReadPaths = [home.Root]
+        };
 
         var ex = TestAssert.Throws<InvalidOperationException>(() =>
                                                                   WindowsSandboxComposer.Compose(settings,
@@ -343,8 +346,8 @@ public class SandboxBaselineReadProtectionTests
                         Is.False, "normal file stays out");
             Assert.That(plan.DenyReadPaths.Any(p => p.EndsWith("cap_sid", StringComparison.OrdinalIgnoreCase)),
                         Is.True, "cap_sid entry");
-            Assert.That(plan.DenyReadPaths, Has.All.Matches<string>(p => Workspace.IsInside(root.Root, p)),
-                        "coverage");
+            Assert.That(plan.DenyReadPaths,
+                        Has.All.Matches<string>(p => p is not null && Workspace.IsInside(root.Root, p)), "coverage");
         });
     }
 

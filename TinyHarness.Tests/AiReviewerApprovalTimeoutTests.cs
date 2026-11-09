@@ -317,7 +317,7 @@ public class AiReviewerApprovalTimeoutTests
         await caller.CancelAsync();
         provider.Advance(TimeSpan.FromSeconds(31));
 
-        Assert.CatchAsync<OperationCanceledException>(async () => await AwaitWithGuard(task));
+        await Assert.CatchAsync<OperationCanceledException>(async () => await AwaitWithGuard(task));
     }
 
     /// <summary>

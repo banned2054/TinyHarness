@@ -64,7 +64,7 @@ public class SessionIndexStoreTests
 
         Assert.That((await store.GetAvailabilityAsync(CancellationToken.None)).Status,
                     Is.EqualTo(SessionIndexAvailabilityStatus.Unsupported));
-        Assert.ThrowsAsync<SessionIndexException>(() => store.InitializeAsync(CancellationToken.None));
+        await Assert.ThrowsAsync<SessionIndexException>(() => store.InitializeAsync(CancellationToken.None));
         // 拒绝不得破坏既有数据库内容。
         // The refusal must not damage the existing database content.
         Assert.That(await store.GetMetaAsync("schema_version", CancellationToken.None), Is.EqualTo("999"));
@@ -428,9 +428,8 @@ public class SessionIndexStoreTests
         var logPath = Path.Combine(store, sessionId + SessionStoreWriter.LogFileSuffix);
         await File.AppendAllTextAsync(logPath, "{\"format\":\"tinyharness.session-log/1", CancellationToken.None);
 
-        Assert.ThrowsAsync<SessionStoreException>(() =>
-                                                      SessionSummaryBuilder.BuildAsync(store, sessionId,
-                                                               CancellationToken.None));
+        await Assert.ThrowsAsync<SessionStoreException>(
+            () => SessionSummaryBuilder.BuildAsync(store, sessionId, CancellationToken.None));
     }
 
     /// <summary>
@@ -493,15 +492,15 @@ public class SessionIndexStoreTests
         var       store = new SessionIndexStore(dir.Root);
         await File.WriteAllTextAsync(store.DatabasePath, string.Empty, CancellationToken.None);
 
-        Assert.ThrowsAsync<SessionIndexException>(() => store.ListSummariesAsync(new SessionSummaryQuery(),
-                                                           CancellationToken.None));
-        Assert.ThrowsAsync<SessionIndexException>(() => store.GetRowAsync(HexId('a'), CancellationToken.None));
-        Assert.ThrowsAsync<SessionIndexException>(() => store.SetMetaAsync("key", "value", CancellationToken.None));
-        Assert.ThrowsAsync<SessionIndexException>(() =>
-                                                      store
-                                                         .SyncArchiveProjectionAsync(new HashSet<string>(StringComparer
-                                                                               .Ordinal),
-                                                                   CancellationToken.None));
+        await Assert.ThrowsAsync<SessionIndexException>(
+            () => store.ListSummariesAsync(new SessionSummaryQuery(), CancellationToken.None));
+        await Assert.ThrowsAsync<SessionIndexException>(
+            () => store.GetRowAsync(HexId('a'), CancellationToken.None));
+        await Assert.ThrowsAsync<SessionIndexException>(
+            () => store.SetMetaAsync("key", "value", CancellationToken.None));
+        await Assert.ThrowsAsync<SessionIndexException>(
+            () => store.SyncArchiveProjectionAsync(new HashSet<string>(StringComparer.Ordinal),
+                                                   CancellationToken.None));
     }
 
     /// <summary>

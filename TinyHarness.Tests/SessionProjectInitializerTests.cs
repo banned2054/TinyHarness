@@ -802,10 +802,10 @@ public class SessionProjectInitializerTests
         Assert.That(empty.Cancelled, Is.False);
         Assert.That(empty.HasMore, Is.False);
 
-        Assert.ThrowsAsync<ArgumentException>(() => SessionProjectInitializer.InitializeSessionsAsync(store.Root,
-                                                  ["not-a-session-id"]));
-        Assert.ThrowsAsync<ArgumentNullException>(() => SessionProjectInitializer.InitializeSessionsAsync(store.Root,
-                                                      null!));
+        await Assert.ThrowsAsync<ArgumentException>(
+            () => SessionProjectInitializer.InitializeSessionsAsync(store.Root, ["not-a-session-id"]));
+        await Assert.ThrowsAsync<ArgumentNullException>(
+            () => SessionProjectInitializer.InitializeSessionsAsync(store.Root, null!));
     }
 
     [Test]
