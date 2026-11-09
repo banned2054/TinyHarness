@@ -260,6 +260,75 @@ public class WindowsSandboxNetworkTests
     }
 
     [Test]
+    public async Task OnlineReadinessCheck_FollowsEffectiveNetworkAndBlocksWhenNotReady()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        var offlineChecks = 0;
+        var (offlineBackend, _, _, _, offlineHome) =
+            CreateBackend(NormalRunner, SandboxNetworkPolicy.Restricted,
+                          inspectOnlineAccount : _ =>
+                          {
+                              offlineChecks++;
+                              return Task.FromResult(WindowsSandboxStatus.Ok());
+                          });
+        using (offlineHome)
+        {
+            await offlineBackend.ExecuteAsync(PlainPlan(offlineHome.Components.SandboxHome),
+                                              new RecordingOutputCapture(), new RecordingOutputCapture(),
+                                              CancellationToken.None);
+        }
+
+        Assert.That(offlineChecks, Is.Zero, "Offline execution must not inspect the online account.");
+
+        var onlineChecks = 0;
+        var (onlineBackend, _, _, _, onlineHome) = CreateBackend(NormalRunner, SandboxNetworkPolicy.Restricted,
+                                                                 inspectOnlineAccount : _ =>
+                                                                 {
+                                                                     onlineChecks++;
+                                                                     return Task.FromResult(WindowsSandboxStatus.Ok());
+                                                                 });
+        using (onlineHome)
+        {
+            await onlineBackend.ExecuteAsync(PlainPlan(onlineHome.Components.SandboxHome) with
+            {
+                NetworkAccessEnabled = true
+            }, new RecordingOutputCapture(), new RecordingOutputCapture(), CancellationToken.None);
+        }
+
+        Assert.That(onlineChecks, Is.EqualTo(1), "Effective online execution must inspect the account once.");
+
+        var blockedChecks      = 0;
+        var blockedCredentials = new RecordingCredentialSource();
+        var (blockedBackend, blockedSetup, blockedDesktops, blockedLauncher, blockedHome) =
+            CreateBackend(NormalRunner, SandboxNetworkPolicy.Restricted, blockedCredentials,
+                          inspectOnlineAccount : _ =>
+                          {
+                              blockedChecks++;
+                              return Task.FromResult(WindowsSandboxStatus.Blocked(["online account unavailable"]));
+                          });
+        using (blockedHome)
+        {
+            var exception = await TestAssert.ThrowsAsync<ProcessExecutionStartException>(() =>
+                blockedBackend.ExecuteAsync(PlainPlan(blockedHome.Components.SandboxHome) with
+                {
+                    NetworkAccessEnabled = true
+                }, new RecordingOutputCapture(), new RecordingOutputCapture(), CancellationToken.None));
+
+            Assert.That(exception.Message, Does.Contain("online account unavailable"));
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(blockedChecks, Is.EqualTo(1));
+            Assert.That(blockedSetup.RefreshPayloads, Is.Empty);
+            Assert.That(blockedLauncher.LastRequest, Is.Null);
+            Assert.That(blockedDesktops.GrantedSids, Is.Empty);
+            Assert.That(blockedCredentials.Calls, Is.Empty);
+        });
+    }
+
+    [Test]
     public async Task ApprovedReadExecutions_LaunchDedicatedAuthorizationOfflineAccount()
     {
         if (!OperatingSystem.IsWindows()) return;
@@ -451,9 +520,10 @@ public class WindowsSandboxNetworkTests
         FakeSandboxRunnerLauncher Launcher, SandboxTestHome Home) CreateBackend(
             Func<Stream, Stream, CancellationToken, Task>         runnerBody,
             SandboxNetworkPolicy                                  network,
-            RecordingCredentialSource?                            credentials      = null,
-            IReadOnlyDictionary<string, string>?                  proxyEnvironment = null,
-            Func<SandboxIsolationPolicy, SandboxIsolationPolicy>? policyOverride   = null)
+            RecordingCredentialSource?                            credentials          = null,
+            IReadOnlyDictionary<string, string>?                  proxyEnvironment     = null,
+            Func<SandboxIsolationPolicy, SandboxIsolationPolicy>? policyOverride       = null,
+            Func<CancellationToken, Task<WindowsSandboxStatus>>?  inspectOnlineAccount = null)
     {
         var home = new SandboxTestHome();
         var environment = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
@@ -472,11 +542,14 @@ public class WindowsSandboxNetworkTests
         var backend = new WindowsSandboxBackend(home.Components, policy, environment, null,
                                                 setup,
                                                 credentials ?? new RecordingCredentialSource(),
-                                                desktopFactory : desktops, runnerLauncher : launcher,
-                                                limits : TestLimits, allowNullDeviceAccess : _ => { },
-                                                validateWriteAcls : (_, _) => Task.CompletedTask,
-                                                standingNetworkAccessEnabled : standingEnabled,
-                                                proxyEnvironment : proxyEnvironment);
+                                                null,
+                                                desktops, launcher,
+                                                TestLimits, _ => { },
+                                                (_, _) => Task.CompletedTask,
+                                                standingEnabled,
+                                                proxyEnvironment,
+                                                inspectOnlineAccount ??
+                                                (_ => Task.FromResult(WindowsSandboxStatus.Ok())));
         return (backend, setup, desktops, launcher, home);
     }
 

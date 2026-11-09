@@ -343,13 +343,22 @@ public class CliStandingTrustMigrationTests
     /// </summary>
     private static string LocateCliDll()
     {
-        // <repo>\TinyHarness.Tests\bin\Debug\net10.0 → 上溯四级到仓库根。
-        var repoRoot = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory,
-                                                     "..", "..", "..", ".."));
-        var candidate = Path.Combine(repoRoot, "TinyHarness.Cli", "bin", "Debug", "net10.0",
+        var testOutputDirectory = new DirectoryInfo(AppContext.BaseDirectory);
+        var configuration       = testOutputDirectory.Parent?.Name;
+        var targetFramework     = testOutputDirectory.Name;
+        var repositoryRoot      = testOutputDirectory.Parent?.Parent?.Parent?.Parent?.FullName;
+        Assert.That(configuration, Is.Not.Null.And.Not.Empty,
+                    $"The test configuration could not be inferred from '{AppContext.BaseDirectory}'.");
+        Assert.That(targetFramework, Is.Not.Null.And.Not.Empty,
+                    $"The test target framework could not be inferred from '{AppContext.BaseDirectory}'.");
+        Assert.That(repositoryRoot, Is.Not.Null.And.Not.Empty,
+                    $"The repository root could not be inferred from '{AppContext.BaseDirectory}'.");
+
+        var candidate = Path.Combine(repositoryRoot!, "TinyHarness.Cli", "bin", configuration!, targetFramework!,
                                      "TinyHarness.dll");
         Assert.That(File.Exists(candidate), Is.True,
-                    $"The CLI output was not found at '{candidate}'; build TinyHarness.Cli before running this test.");
+                    $"The CLI output for {configuration}/{targetFramework} was not found at '{candidate}'; " +
+                    "build TinyHarness.Cli with the same configuration and target framework before running this test.");
         return candidate;
     }
 }

@@ -82,18 +82,19 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
     private readonly Action<SecurityIdentifier> _allowNullDeviceAccess;
     private readonly SandboxCapabilitySidStore  _capabilitySidStore;
 
-    private readonly WindowsSandboxComponents            _components;
-    private readonly ISandboxCredentialSource            _credentialSource;
-    private readonly ISandboxDesktopFactory              _desktopFactory;
-    private readonly IReadOnlyDictionary<string, string> _knownSecrets;
-    private readonly WindowsSandboxBackendLimits         _limits;
-    private readonly SandboxIsolationPolicy              _policy;
-    private readonly IReadOnlyDictionary<string, string> _proxyEnvironment;
-    private readonly ISandboxRunnerLauncher              _runnerLauncher;
-    private readonly ISandboxSetupInvoker                _setupInvoker;
-    private readonly bool                                _standingNetworkAccessEnabled;
-    private readonly WindowsSandboxStateInspector        _stateInspector;
-    private readonly IReadOnlyDictionary<string, string> _targetEnvironment;
+    private readonly WindowsSandboxComponents                            _components;
+    private readonly ISandboxCredentialSource                            _credentialSource;
+    private readonly ISandboxDesktopFactory                              _desktopFactory;
+    private readonly Func<CancellationToken, Task<WindowsSandboxStatus>> _inspectOnlineAccount;
+    private readonly IReadOnlyDictionary<string, string>                 _knownSecrets;
+    private readonly WindowsSandboxBackendLimits                         _limits;
+    private readonly SandboxIsolationPolicy                              _policy;
+    private readonly IReadOnlyDictionary<string, string>                 _proxyEnvironment;
+    private readonly ISandboxRunnerLauncher                              _runnerLauncher;
+    private readonly ISandboxSetupInvoker                                _setupInvoker;
+    private readonly bool                                                _standingNetworkAccessEnabled;
+    private readonly WindowsSandboxStateInspector                        _stateInspector;
+    private readonly IReadOnlyDictionary<string, string>                 _targetEnvironment;
 
     private readonly Func<SandboxSetupPayload, CancellationToken, Task> _validateWriteAcls;
 
@@ -112,6 +113,32 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
         Func<SandboxSetupPayload, CancellationToken, Task>? validateWriteAcls            = null,
         bool                                                standingNetworkAccessEnabled = false,
         IReadOnlyDictionary<string, string>?                proxyEnvironment             = null)
+        : this(components, policy, targetEnvironment, knownSecrets, setupInvoker, credentialSource,
+               capabilitySidStore, desktopFactory, runnerLauncher, limits, allowNullDeviceAccess,
+               validateWriteAcls, standingNetworkAccessEnabled, proxyEnvironment, null)
+    {
+    }
+
+    /// <summary>
+    ///     <para>创建沙箱后端，并允许测试替换在线账户就绪检查。</para>
+    ///     <para>Creates the sandbox backend and allows tests to replace the online-account readiness check.</para>
+    /// </summary>
+    internal WindowsSandboxBackend(
+        WindowsSandboxComponents                             components,
+        SandboxIsolationPolicy                               policy,
+        IReadOnlyDictionary<string, string>                  targetEnvironment,
+        IReadOnlyDictionary<string, string>?                 knownSecrets,
+        ISandboxSetupInvoker?                                setupInvoker,
+        ISandboxCredentialSource?                            credentialSource,
+        SandboxCapabilitySidStore?                           capabilitySidStore,
+        ISandboxDesktopFactory?                              desktopFactory,
+        ISandboxRunnerLauncher?                              runnerLauncher,
+        WindowsSandboxBackendLimits?                         limits,
+        Action<SecurityIdentifier>?                          allowNullDeviceAccess,
+        Func<SandboxSetupPayload, CancellationToken, Task>?  validateWriteAcls,
+        bool                                                 standingNetworkAccessEnabled,
+        IReadOnlyDictionary<string, string>?                 proxyEnvironment,
+        Func<CancellationToken, Task<WindowsSandboxStatus>>? inspectOnlineAccount)
     {
         if (!OperatingSystem.IsWindows())
             throw new PlatformNotSupportedException("The Windows sandbox backend is available on Windows only.");
@@ -126,6 +153,7 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
         _standingNetworkAccessEnabled = standingNetworkAccessEnabled;
         _proxyEnvironment = proxyEnvironment ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         _stateInspector = new WindowsSandboxStateInspector(components);
+        _inspectOnlineAccount = inspectOnlineAccount ?? _stateInspector.InspectOnlineAccountAsync;
         _setupInvoker = setupInvoker ?? new ProcessSandboxSetupInvoker(components, limits?.RefreshTimeout);
         _credentialSource = credentialSource ?? new SandboxCredentialReader(components);
         _capabilitySidStore = capabilitySidStore ?? new SandboxCapabilitySidStore(components);
@@ -231,7 +259,7 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
         {
             if (!await TrySendFrameAsync(connection, writerGate,
                                          stream => RunnerFrameCodec.WriteFrameAsync(stream, "spawn_request", request,
-                                             CancellationToken.None),
+                                                  CancellationToken.None),
                                          cancellationToken).ConfigureAwait(false))
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -313,8 +341,7 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
 
         if (networkAccessEnabled)
         {
-            var onlineStatus = await _stateInspector.InspectOnlineAccountAsync(cancellationToken)
-                                                    .ConfigureAwait(false);
+            var onlineStatus = await _inspectOnlineAccount(cancellationToken).ConfigureAwait(false);
             if (!onlineStatus.Ready)
             {
                 SandboxDiagnosticLog.Event("readiness",
@@ -761,7 +788,7 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
         using var writeCancellation = new CancellationTokenSource(_limits.TerminateWriteTimeout);
         return TrySendFrameAsync(connection, writerGate,
                                  stream => RunnerFrameCodec.WriteControlFrameAsync(stream, "terminate",
-                                     writeCancellation.Token),
+                                          writeCancellation.Token),
                                  CancellationToken.None);
     }
 
