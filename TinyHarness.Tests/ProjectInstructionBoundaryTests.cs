@@ -81,6 +81,8 @@ public class ProjectInstructionBoundaryTests
                                              [
                                                  new InstructionBoundaryCheck(InstructionBoundaryStatus.Unchanged, null,
                                                                               null, null),
+                                                 new InstructionBoundaryCheck(InstructionBoundaryStatus.Unchanged, null,
+                                                                              null, null),
                                                  new InstructionBoundaryCheck(InstructionBoundaryStatus.Updated, null,
                                                                               "revision-2", null)
                                              ]);
@@ -275,6 +277,39 @@ public class ProjectInstructionBoundaryTests
         Assert.DoesNotThrow(() => ChatHistoryInvariants.EnsureCompleteToolGroups(messages));
     }
 
+    [Test]
+    public async Task InstructionChangeDuringExecutionCheckpoint_BlocksDispatchBeforeStart()
+    {
+        var client = new FakeChatClient();
+        client.Enqueue(FakeChatClient.ToolCall("fake", "{}", "checkpoint_round"));
+        client.Enqueue(FakeChatClient.Text("done"));
+        var tool        = new FakeTool("fake");
+        var boundary    = new CheckpointAwareInstructionBoundary();
+        var checkpoints = 0;
+        var loop = new AgentLoop(client, new ToolRegistry([tool]), Options(), null, null, null, null, null,
+                                 (_, _) =>
+                                 {
+                                     checkpoints++;
+                                     boundary.Changed = true;
+                                     return Task.CompletedTask;
+                                 }, boundary);
+
+        var result = await loop.RunAsync("sys", "run", CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(checkpoints, Is.EqualTo(1));
+            Assert.That(result.Status, Is.EqualTo(AgentStatus.Failed));
+            Assert.That(result.Error, Does.Contain("revision-2"));
+            Assert.That(tool.ExecuteCount, Is.Zero, "The old plan must not start after the checkpoint callback.");
+            Assert.That(result.ToolExecutions, Is.Zero);
+            Assert.That(result.ToolCalls!.Single().State, Is.EqualTo(ToolCallExecutionState.KnownNotStarted));
+            Assert.That(boundary.DispatchChecks, Is.EqualTo(2), "The guard must be rechecked after the checkpoint.");
+            Assert.That(boundary.ApplyCalls, Is.Zero, "A blocked dispatch must not commit the stale round.");
+            Assert.That(result.Budget?.ToolExecutions, Is.Zero, "An unstarted call must not consume the tool budget.");
+        });
+    }
+
     private static AgentOptions Options() => new()
     {
         Model                     = "test-model",
@@ -326,6 +361,45 @@ public class ProjectInstructionBoundaryTests
             ExecuteCount++;
             return Task.FromResult(new ToolResult { Succeeded = true, Content = "scoped ok" });
         }
+    }
+
+    private sealed class CheckpointAwareInstructionBoundary : IAgentInstructionBoundary
+    {
+        public bool Changed        { get; set; }
+        public int  ApplyCalls     { get; private set; }
+        public int  DispatchChecks { get; private set; }
+
+        public Task PrepareUserContextAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public Task<ProjectInstructionsChanged?> ConfirmInitialCommitAsync(CancellationToken cancellationToken) =>
+            Task.FromResult<ProjectInstructionsChanged?>(null);
+
+        public Task<ProjectInstructionsChanged?> RefreshBeforeModelRequestAsync(CancellationToken cancellationToken) =>
+            Task.FromResult<ProjectInstructionsChanged?>(null);
+
+        public Task<InstructionBoundaryCheck> CheckToolRoundAsync(
+            IReadOnlyList<ToolPreparation> preparations, CancellationToken cancellationToken) =>
+            Task.FromResult(Unchanged());
+
+        public Task<InstructionBoundaryCheck> RecheckBeforeDispatchAsync(
+            IReadOnlyList<ToolPreparation> preparations, CancellationToken cancellationToken)
+        {
+            DispatchChecks++;
+            return Task.FromResult(DispatchChecks == 1 || !Changed
+                                       ? Unchanged()
+                                       : new InstructionBoundaryCheck(InstructionBoundaryStatus.Updated, null,
+                                                                      "revision-2", null));
+        }
+
+        public Task<ProjectInstructionsChanged?> ApplyToolRoundUpdateAsync(
+            IReadOnlyList<ToolCallRecord> records, CancellationToken cancellationToken)
+        {
+            ApplyCalls++;
+            return Task.FromResult<ProjectInstructionsChanged?>(null);
+        }
+
+        private static InstructionBoundaryCheck Unchanged() =>
+            new(InstructionBoundaryStatus.Unchanged, null, null, null);
     }
 
     private sealed class SequencedInstructionBoundary(

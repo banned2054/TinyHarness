@@ -757,6 +757,69 @@ public sealed partial class AgentLoop
                         throw;
                     }
 
+                    // 暂停、检查点与 ToolStarted 回调期间规则或组合身份可能已变化；
+                    // 启动前最后一次核对，失配时整轮未启动的调用保持已知未执行。
+                    var dispatchCalls = authorized.Skip(dispatchIndex)
+                                                  .Select(candidate => candidate.RoundCall)
+                                                  .ToArray();
+                    InstructionBoundaryCheck? finalInstructionCheck = null;
+                    string?                   compositionBlock       = null;
+                    try
+                    {
+                        if (_instructionBoundary is not null)
+                            finalInstructionCheck =
+                                await _instructionBoundary
+                                     .RecheckBeforeDispatchAsync(dispatchCalls.Where(call => call.Preparation is not null)
+                                                                              .Select(call => call.Preparation!)
+                                                                              .ToArray(),
+                                                                 cancellationToken).ConfigureAwait(false);
+                        compositionBlock = _compositionGuardCheck?.Invoke();
+                    }
+                    catch (Exception)
+                    {
+                        // 守卫检查本身失败时工具同样未启动，不得把记录留在未知结果。
+                        foreach (var call in dispatchCalls)
+                            MarkRecordState(roundRecords, call.Call.Id, ToolCallExecutionState.KnownNotStarted);
+                        throw;
+                    }
+
+                    if (finalInstructionCheck is { Status: not InstructionBoundaryStatus.Unchanged } ||
+                        compositionBlock is not null)
+                    {
+                        var reason = finalInstructionCheck switch
+                        {
+                            { Status: InstructionBoundaryStatus.Updated } updated =>
+                                $"Not started because project instructions changed to revision {updated.NewRevision} after the dispatch checkpoint; the tool round was not started.",
+                            { Status: InstructionBoundaryStatus.Failed } failed =>
+                                "The tool was not started because project instructions could not be refreshed. " +
+                                failed.Error,
+                            _ => compositionBlock ??
+                                 "The tool was not started because the dispatch guard changed after the checkpoint."
+                        };
+
+                        foreach (var call in dispatchCalls)
+                            MarkRecordState(roundRecords, call.Call.Id, ToolCallExecutionState.KnownNotStarted);
+                        AppendDeferredToolResults(dispatchCalls, reason);
+                        if (_instructionBoundary is not null && finalInstructionCheck is { } final)
+                            await _instructionBoundary.RecordDecisionAsync("dispatch-final-recheck",
+                                                                           final.Status ==
+                                                                           InstructionBoundaryStatus.Failed
+                                                                               ? "stop-load-failure"
+                                                                               : "stop-stale-plan",
+                                                                           instructionDeferralsSinceExecution, steps,
+                                                                           toolExecutions).ConfigureAwait(false);
+                        await RecordNotStartedCallsAsync(roundRecords, dispatchCalls, cancellationToken)
+                           .ConfigureAwait(false);
+                        return await FinishAsync(new AgentResult
+                        {
+                            Status         = AgentStatus.Failed,
+                            Error          = reason,
+                            Steps          = steps,
+                            ToolExecutions = toolExecutions,
+                            Compactions    = compactions
+                        }).ConfigureAwait(false);
+                    }
+
                     // 首个真实启动构成新的安全推进边界；后续规则变化重新获得一次延期预算。
                     if (_instructionBoundary is not null)
                         await _instructionBoundary.RecordDecisionAsync("tool-start", "reset-deferrals",

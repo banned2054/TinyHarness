@@ -189,6 +189,59 @@ public class PermissionCompositionGuardTests
         });
     }
 
+    // ---- 暂停后的派发检查点：恢复后不得启动旧计划 ----
+
+    [Test]
+    public async Task FingerprintChangeWhilePaused_BlocksTheRemainingDispatchAfterResume()
+    {
+        using var dir    = new TestTempDir();
+        var       client = new FakeChatClient();
+        client.Enqueue(FakeChatClient.ToolCalls("fake", 2, "round"));
+        client.Enqueue(FakeChatClient.Text("done"));
+        var tool = new FakeTool("fake");
+
+        const string baseline = "composition-baseline";
+        var          drifted  = false;
+        ChatSessionHost? host = null;
+        var paused = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var sink = new CallbackSink(value =>
+        {
+            if (value.Kind == HostEventKind.RunControlChanged && value.Payload as string == "paused")
+                paused.TrySetResult();
+            return Task.CompletedTask;
+        });
+
+        string Evaluate()
+        {
+            // 第二个工具派发通过守卫后暂停；暂停期间配置漂移，恢复后必须重新检查。
+            if (tool.ExecuteCount == 1 && !drifted) host!.RequestPause();
+            return drifted ? "drifted-fingerprint" : baseline;
+        }
+
+        using (host = new ChatSessionHost(dir.Root, Identity, Options(), client, new ToolRegistry([tool]),
+                                          SystemPrompt, events : sink,
+                                          compositionGuard :
+                                          new PermissionCompositionGuard(baseline, Evaluate)))
+        {
+            var running = host.SubmitTurnAsync("apply two patches", CancellationToken.None);
+            await paused.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            drifted = true;
+            Assert.That(host.ResumeRun(), Is.True);
+
+            var result = (await running.WaitAsync(TimeSpan.FromSeconds(10))).Result!;
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(result.Status, Is.EqualTo(AgentStatus.Failed));
+                Assert.That(result.Error, Does.Contain(ChatSessionHost.CompositionInvalidatedNotice));
+                Assert.That(tool.ExecuteCount, Is.EqualTo(1), "The plan must not start after the pause.");
+                Assert.That(result.ToolCalls![1].State, Is.EqualTo(ToolCallExecutionState.KnownNotStarted));
+                Assert.That(result.ToolCalls[1].NotStartedReason,
+                            Does.Contain(ChatSessionHost.CompositionInvalidatedNotice));
+            });
+        }
+    }
+
     // ---- 无关配置变化：指纹稳定 ----
 
     [Test]
@@ -341,5 +394,11 @@ public class PermissionCompositionGuardTests
     {
         Throws,
         ReturnsNull
+    }
+
+    private sealed class CallbackSink(Func<HostEvent, Task> action) : IHostEventSink
+    {
+        public async ValueTask PublishAsync(HostEvent value, CancellationToken cancellationToken) =>
+            await action(value);
     }
 }
