@@ -7,14 +7,15 @@ namespace TinyHarness.Cli.Commands;
 /// <summary>
 ///     <para>
 ///         TinyHarness 命令行解析器。管理命令（init/config/provider/auth/model/doctor/sandbox）永远不作为
-///         提示词发送给模型；与命令名冲突的普通文本使用 `run -- "文本"`，`--` 之后全部按提示词处理。
-///         `chat` 启动交互会话，不接受提示词参数。
+///         提示词发送给模型，且命令名按忽略大小写识别；与命令名冲突的普通文本使用 `run -- "文本"`，
+///         `--` 之后全部按提示词处理。`chat` 启动交互会话，不接受提示词参数。
 ///     </para>
 ///     <para>
 ///         The TinyHarness command-line parser. Management commands
-///         (init/config/provider/auth/model/doctor/sandbox) are never sent to the model as a prompt;
-///         plain text that collides with a command name uses `run -- "text"`, and everything after `--`
-///         is treated as the prompt. `chat` starts an interactive session and takes no prompt argument.
+///         (init/config/provider/auth/model/doctor/sandbox) are never sent to the model as a prompt and are
+///         recognized case-insensitively; plain text that collides with a command name uses
+///         `run -- "text"`, and everything after `--` is treated as the prompt. `chat` starts an interactive
+///         session and takes no prompt argument.
 ///     </para>
 /// </summary>
 internal static class CommandLine
@@ -38,7 +39,7 @@ internal static class CommandLine
             string.Equals(first, "-h", StringComparison.Ordinal))
             return ParseHelpArgs(args[1..]);
 
-        if (string.Equals(first, "run", StringComparison.Ordinal))
+        if (IsCommand(first, "run"))
         {
             if (args.Length >= 2 && IsHelpFlag(args[1]))
                 return new CliOptions { Kind = CliCommandKind.Help, HelpTopic = "run" };
@@ -46,27 +47,27 @@ internal static class CommandLine
             return ParsePromptArgs(args[1..], true);
         }
 
-        if (string.Equals(first, "chat", StringComparison.Ordinal)) return ParseChatArgs(args[1..]);
+        if (IsCommand(first, "chat")) return ParseChatArgs(args[1..]);
 
-        if (string.Equals(first, "smoke", StringComparison.Ordinal)) return ParseSmokeArgs(args[1..]);
+        if (IsCommand(first, "smoke")) return ParseSmokeArgs(args[1..]);
 
-        if (string.Equals(first, "mcp", StringComparison.Ordinal)) return ParseMcpArgs(args[1..]);
+        if (IsCommand(first, "mcp")) return ParseMcpArgs(args[1..]);
 
-        if (string.Equals(first, "init", StringComparison.Ordinal)) return ParseInitArgs(args[1..]);
+        if (IsCommand(first, "init")) return ParseInitArgs(args[1..]);
 
-        if (string.Equals(first, "config", StringComparison.Ordinal)) return ParseConfigArgs(args[1..]);
+        if (IsCommand(first, "config")) return ParseConfigArgs(args[1..]);
 
-        if (string.Equals(first, "provider", StringComparison.Ordinal)) return ParseProviderArgs(args[1..]);
+        if (IsCommand(first, "provider")) return ParseProviderArgs(args[1..]);
 
-        if (string.Equals(first, "auth", StringComparison.Ordinal)) return ParseAuthArgs(args[1..]);
+        if (IsCommand(first, "auth")) return ParseAuthArgs(args[1..]);
 
-        if (string.Equals(first, "model", StringComparison.Ordinal)) return ParseModelArgs(args[1..]);
+        if (IsCommand(first, "model")) return ParseModelArgs(args[1..]);
 
-        if (string.Equals(first, "doctor", StringComparison.Ordinal)) return ParseDoctorArgs(args[1..]);
+        if (IsCommand(first, "doctor")) return ParseDoctorArgs(args[1..]);
 
-        if (string.Equals(first, "sandbox", StringComparison.Ordinal)) return ParseSandboxArgs(args[1..]);
+        if (IsCommand(first, "sandbox")) return ParseSandboxArgs(args[1..]);
 
-        if (string.Equals(first, "session", StringComparison.Ordinal)) return ParseSessionArgs(args[1..]);
+        if (IsCommand(first, "session")) return ParseSessionArgs(args[1..]);
 
         if (string.Equals(first, "--reasoning", StringComparison.Ordinal) ||
             string.Equals(first, "--config", StringComparison.Ordinal))
@@ -844,6 +845,16 @@ internal static class CommandLine
         if (!IsValidModelId(id))
             throw new CliUsageException($"'{id}' is not a valid model id: no whitespace, 1-200 characters.", usage);
     }
+
+    /// <summary>
+    ///     <para>按忽略大小写比较保留命令名；大小写变体不得落入提示词解析。</para>
+    ///     <para>
+    ///         Compares a reserved command name case-insensitively so casing variants never fall back to
+    ///         prompt parsing.
+    ///     </para>
+    /// </summary>
+    private static bool IsCommand(string argument, string command) =>
+        string.Equals(argument, command, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     ///     <para>判断参数是否为 help 标志。</para>

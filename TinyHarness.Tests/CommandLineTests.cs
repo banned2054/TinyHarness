@@ -71,6 +71,55 @@ public class CommandLineTests
         Assert.That(options.Prompt, Is.EqualTo("init notes --dry-run"));
     }
 
+    [TestCase("CONFIG show", "Config")]
+    [TestCase("AUTH set work --env WORK_KEY", "Auth")]
+    [TestCase("MODEL list", "Model")]
+    [TestCase("PROVIDER list", "Provider")]
+    [TestCase("DOCTOR", "Doctor")]
+    [TestCase("SANDBOX status", "Sandbox")]
+    [TestCase("INIT", "Init")]
+    [TestCase("CHAT", "Chat")]
+    public void ReservedCommandNames_AreCaseInsensitive(string commandLine, string expected)
+    {
+        var options = CommandLine.Parse(commandLine.Split(' '));
+
+        Assert.That(options.Kind.ToString(), Is.EqualTo(expected));
+    }
+
+    [TestCase("CONFIG")]
+    [TestCase("Auth")]
+    [TestCase("Provider")]
+    [TestCase("MODEL")]
+    [TestCase("SANDBOX")]
+    public void BareManagementCommandCasingVariants_AreUsageErrorsNotPrompts(string command)
+    {
+        TestAssert.Throws<CliUsageException>(() => CommandLine.Parse([command]));
+    }
+
+    [Test]
+    public void UppercaseRun_WithDoubleDash_KeepsTheExplicitPromptBoundary()
+    {
+        var options = CommandLine.Parse(["RUN", "--", "CONFIG", "show"]);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(options.Kind, Is.EqualTo(CliCommandKind.Run));
+            Assert.That(options.Prompt, Is.EqualTo("CONFIG show"));
+        });
+    }
+
+    [Test]
+    public void VerblessDoubleDash_PreservesReservedCommandCasingAsPrompt()
+    {
+        var options = CommandLine.Parse(["--", "CONFIG", "show"]);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(options.Kind, Is.EqualTo(CliCommandKind.Run));
+            Assert.That(options.Prompt, Is.EqualTo("CONFIG show"));
+        });
+    }
+
     [Test]
     public void RunWithoutPrompt_IsAUsageError()
     {
