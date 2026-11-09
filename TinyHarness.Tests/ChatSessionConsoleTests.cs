@@ -191,7 +191,7 @@ public class ChatSessionConsoleTests
     {
         var host = NewHost(new FakeChatClient());
         host.Session.PermissionSelection = new LegacyPermissionSelection
-            { Revision = 1, ModeName = "ReadOnlyAutoReview" };
+            { Revision = 1, Mode = "ReadOnlyAutoReview" };
         host.Session.PermissionMigrationPending = true;
         using var cancellation = new ChatCancellation(false);
         var       output       = new StringWriter();

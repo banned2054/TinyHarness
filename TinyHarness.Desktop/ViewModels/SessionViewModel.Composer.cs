@@ -446,9 +446,9 @@ public sealed partial class SessionViewModel
         }
         else if (_runtime.Host.Session.PermissionSelection is { } legacy)
         {
-            SetPermissionMode(LegacyPermissionSelectionMapper.FromLegacyName(legacy.ModeName)
+            SetPermissionMode(LegacyPermissionSelectionMapper.FromLegacyName(legacy.Mode)
                            ?? SessionApprovalMode.HumanApproval, false);
-            _storedPermissionLabel = LegacyPermissionSelectionMapper.LegacyLabel(legacy.ModeName) ?? "旧版模式";
+            _storedPermissionLabel = LegacyPermissionSelectionMapper.LegacyLabel(legacy.Mode) ?? "旧版模式";
             OnPropertyChanged(nameof(PermissionPickerLabel));
         }
 

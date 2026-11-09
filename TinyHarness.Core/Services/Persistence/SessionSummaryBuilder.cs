@@ -224,7 +224,7 @@ public static class SessionSummaryBuilder
                          ?? throw new SessionStoreException(
                                                             $"Session '{_sessionId}' has an empty permission-selection payload.");
                         selection.Validate();
-                        _permissionModeName = selection.ModeName;
+                        _permissionModeName = selection.Mode;
                         break;
                     case "project-binding" :
                         _projectId       = SessionLogProjectBinding.Parse(record.Payload);

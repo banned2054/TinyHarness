@@ -517,11 +517,11 @@ internal sealed class ChatSessionConsole : IDisposable
 
         var session = Host.Session;
         var mappedMode = session.PermissionSelection is { } legacy
-            ? LegacyPermissionSelectionMapper.FromLegacyName(legacy.ModeName) ?? SessionApprovalMode.HumanApproval
+            ? LegacyPermissionSelectionMapper.FromLegacyName(legacy.Mode) ?? SessionApprovalMode.HumanApproval
             : SessionApprovalMode.HumanApproval;
         await _output.WriteLineAsync("This saved session needs permission migration confirmation.");
         await
-            _output.WriteLineAsync($"  legacy mode: {session.PermissionSelection?.ModeName ?? "(no saved selection)"} -> " +
+            _output.WriteLineAsync($"  legacy mode: {session.PermissionSelection?.Mode ?? "(no saved selection)"} -> " +
                                    ApprovalModeLabel(mappedMode) + " (migration mapping only)");
         await
             _output.WriteLineAsync("  new baseline: workspace read/write and sandbox Shell; add-on capabilities require approval");
@@ -579,7 +579,7 @@ internal sealed class ChatSessionConsole : IDisposable
     private static SessionApprovalMode CurrentApprovalMode(ChatSession session) =>
         session.PermissionSelectionV2?.ApprovalMode ??
         (session.PermissionSelection is { } legacy
-            ? LegacyPermissionSelectionMapper.FromLegacyName(legacy.ModeName) ?? SessionApprovalMode.HumanApproval
+            ? LegacyPermissionSelectionMapper.FromLegacyName(legacy.Mode) ?? SessionApprovalMode.HumanApproval
             : SessionApprovalMode.HumanApproval);
 
     private static string ApprovalModeLabel(SessionApprovalMode mode) => mode switch

@@ -192,7 +192,7 @@ public class GrantEventWiringTests
         var session = new ChatSession(Guid.NewGuid().ToString("N"), workspace.Root, Identity);
         var context = new ConversationContext();
         context.Append(ChatMessage.System(SystemPrompt));
-        var selection = new LegacyPermissionSelection { Revision = 1, ModeName = "ReadOnly" };
+        var selection = new LegacyPermissionSelection { Revision = 1, Mode = "ReadOnly" };
         var writer = new SessionStoreWriter(store.Root, session.Id);
         try
         {

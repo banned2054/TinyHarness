@@ -773,7 +773,7 @@ public sealed partial class ChatSessionHost : IDisposable
         {
             // 未迁移的 /1 七模式选择保守映射为人工审批；迁移确认后由 /2 链接管。
             permissions ??= new PermissionEngine(Session.WorkspaceRoot);
-            permissions.SetApprovalMode(LegacyPermissionSelectionMapper.FromLegacyName(permission.ModeName)
+            permissions.SetApprovalMode(LegacyPermissionSelectionMapper.FromLegacyName(permission.Mode)
                                      ?? SessionApprovalMode.HumanApproval);
         }
 

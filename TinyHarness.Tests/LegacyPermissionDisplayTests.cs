@@ -1,4 +1,6 @@
+using System.Text.Json;
 using TinyHarness.Core.Models.Permissions;
+using TinyHarness.Core.Services.Persistence;
 
 namespace TinyHarness.Tests;
 
@@ -40,5 +42,37 @@ public class LegacyPermissionDisplayTests
     public void LegacyLabel_UnknownOrNumericNameFallsBack(string? legacyModeName)
     {
         Assert.That(LegacyPermissionSelectionMapper.LegacyLabel(legacyModeName), Is.EqualTo("旧版模式"));
+    }
+
+    /// <summary>
+    ///     <para>
+    ///         旧日志的选择记录只有 <c>mode</c> 字段：解析必须绑定到 <see cref="LegacyPermissionSelection.Mode" />，
+    ///         写回也必须保持同一个 wire 名，避免再次改名让已落盘记录解析失败。
+    ///     </para>
+    ///     <para>
+    ///         Legacy selection records only carry a <c>mode</c> field: parsing must bind it to
+    ///         <see cref="LegacyPermissionSelection.Mode" /> and writing must keep that same wire name, so another
+    ///         rename cannot silently break persisted logs.
+    ///     </para>
+    /// </summary>
+    [Test]
+    public void HistoricalPermissionSelection_UsesModeWireNameInBothDirections()
+    {
+        // 与真实会话日志同形的 /1 载荷（字段名固定为 mode）。
+        using var document = JsonDocument.Parse(
+            """{"schema":"tinyharness.permission-selection/1","revision":1,"mode":"ProjectWriteAutoReview"}""");
+        var selection =
+            document.RootElement.Deserialize(PermissionPersistenceJsonContext.Default.LegacyPermissionSelection);
+        Assert.That(selection, Is.Not.Null);
+        selection!.Validate();
+        Assert.That(selection.Mode, Is.EqualTo("ProjectWriteAutoReview"));
+
+        var written = JsonSerializer.Serialize(selection,
+                                               PermissionPersistenceJsonContext.Default.LegacyPermissionSelection);
+        Assert.Multiple(() =>
+        {
+            Assert.That(written, Does.Contain("\"mode\":"));
+            Assert.That(written, Does.Not.Contain("modeName"));
+        });
     }
 }

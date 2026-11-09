@@ -160,7 +160,7 @@ public sealed partial class ChatSessionHost
             {
                 Revision     = revision,
                 CompletedUtc = DateTimeOffset.UtcNow,
-                PreviousMode = Session.PermissionSelection?.ModeName,
+                PreviousMode = Session.PermissionSelection?.Mode,
                 ApprovalMode = mode
             };
             migration.Validate();

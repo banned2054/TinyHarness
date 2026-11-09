@@ -312,7 +312,7 @@ public class SessionIndexStoreTests
         Assert.That(summary.UpdatedUtc, Is.EqualTo(stored.UpdatedUtc));
         Assert.That(summary.LastActivityUtc, Is.EqualTo(stored.LastActivityUtc));
         Assert.That(summary.TurnCount, Is.EqualTo(stored.Turns.Count));
-        Assert.That(summary.PermissionModeName, Is.EqualTo(stored.PermissionSelection?.ModeName));
+        Assert.That(summary.PermissionModeName, Is.EqualTo(stored.PermissionSelection?.Mode));
         Assert.That(summary.CommitSequence, Is.EqualTo(stored.CommitSequence));
         Assert.That(summary.IndexedBytes, Is.EqualTo(logLength));
         Assert.That(build.SourceLength, Is.EqualTo(logLength));

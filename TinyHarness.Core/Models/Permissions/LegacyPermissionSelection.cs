@@ -3,16 +3,27 @@ namespace TinyHarness.Core.Models.Permissions;
 /// <summary>
 ///     <para>
 ///         旧七模式选择记录（协议 tinyharness.permission-selection/1）的最小解析模型：
-///         仅用于迁移判定（hasLegacySelection）与历史展示，<see cref="ModeName" /> 保留旧模式原名，
+///         仅用于迁移判定（hasLegacySelection）与历史展示，<see cref="Mode" /> 保留旧模式原名，
 ///         经 <see cref="LegacyPermissionSelectionMapper" /> 映射为审批模式；对运行时授权没有任何效力。
 ///     </para>
 ///     <para>
 ///         The minimal parsing model for the legacy seven-preset selection record (schema
 ///         tinyharness.permission-selection/1): used only for migration detection (hasLegacySelection) and history
-///         display. <see cref="ModeName" /> keeps the original legacy mode name, mapped to an approval mode through
+///         display. <see cref="Mode" /> keeps the original legacy mode name, mapped to an approval mode through
 ///         <see cref="LegacyPermissionSelectionMapper" />; it has no runtime authorization effect.
 ///     </para>
 /// </summary>
+/// <remarks>
+///     <para>
+///         历史记录写出的 JSON 字段是 <c>mode</c>，由 camelCase 命名策略从 <see cref="Mode" /> 推导；
+///         改名会直接让已落盘的旧日志解析失败，wire 名必须保持为 <c>mode</c>。
+///     </para>
+///     <para>
+///         Persisted legacy records use the JSON field <c>mode</c>, derived from <see cref="Mode" /> by the
+///         camelCase naming policy; renaming it makes already-written logs fail to parse, so the wire name must
+///         stay <c>mode</c>.
+///     </para>
+/// </remarks>
 public sealed record LegacyPermissionSelection
 {
     public const string LegacySchema = "tinyharness.permission-selection/1";
@@ -26,7 +37,7 @@ public sealed record LegacyPermissionSelection
 
     public string Schema   { get; init; } = LegacySchema;
     public long   Revision { get; init; }
-    public string ModeName { get; init; } = string.Empty;
+    public string Mode     { get; init; } = string.Empty;
 
     /// <summary>
     ///     <para>拒绝未知协议、无效修订与未知旧模式名；解析仅限已知名称，不做授权解释。</para>
@@ -35,7 +46,7 @@ public sealed record LegacyPermissionSelection
     public void Validate()
     {
         if (Schema != LegacySchema || Revision < 1 ||
-            !KnownLegacyModeNames.Contains(ModeName, StringComparer.Ordinal))
+            !KnownLegacyModeNames.Contains(Mode, StringComparer.Ordinal))
             throw new InvalidDataException("Invalid legacy session permission selection.");
     }
 }

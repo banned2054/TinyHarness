@@ -83,7 +83,7 @@ public class PermissionSelectionPersistenceTests
 
         var snapshot = await SessionStoreReader.ReadAsync(store.Root, host.Session.Id, CancellationToken.None);
         Assert.That(snapshot!.PermissionSelection!.Revision, Is.EqualTo(1));
-        Assert.That(snapshot.PermissionSelection!.ModeName, Is.EqualTo("ReadOnly"));
+        Assert.That(snapshot.PermissionSelection!.Mode, Is.EqualTo("ReadOnly"));
         Assert.That(snapshot.PermissionSelectionV2, Is.Null);
         Assert.That(snapshot.PermissionMigration, Is.Null);
         Assert.That(host.Session.PermissionMigrationPending, Is.True);
@@ -357,7 +357,7 @@ public class PermissionSelectionPersistenceTests
         var session = new ChatSession(Guid.NewGuid().ToString("N"), workspace.Root, Identity);
         var context = new ConversationContext();
         context.Append(ChatMessage.System(SystemPrompt));
-        var selection = new LegacyPermissionSelection { Revision = 1, ModeName = legacyModeName };
+        var selection = new LegacyPermissionSelection { Revision = 1, Mode = legacyModeName };
         var writer    = new SessionStoreWriter(store.Root, session.Id) { InjectWriteFault = injectWriteFault };
         try
         {
