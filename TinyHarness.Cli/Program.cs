@@ -930,54 +930,21 @@ internal static class Program
     ///         exposing credentials.
     ///     </para>
     /// </summary>
-    private static async Task<(IChatCompletionClient Client, string Model)> CreateReviewerAsync(
-        ChatSessionHost host, IReadOnlyDictionary<string, string> knownSecrets, CancellationToken cancellationToken)
+    internal static async Task<(IChatCompletionClient Client, string Model)> CreateReviewerAsync(
+        ChatSessionHost host, IReadOnlyDictionary<string, string> knownSecrets, CancellationToken cancellationToken,
+        string? userConfigPath = null, ICredentialStore? credentialStore = null)
     {
-        var path     = UserConfigStore.DefaultFilePath();
+        var path     = userConfigPath ?? UserConfigStore.DefaultFilePath();
         var user     = await UserConfigStore.LoadAsync(path, cancellationToken).ConfigureAwait(false);
         var settings = user.Settings?.Permissions ?? new PermissionSettings();
         settings.Validate();
 
-        (UserProfile Profile, UserProfileModel Model)? target;
-        if (settings.UseCurrentModel)
-        {
-            var saved       = host.Session.ModelSelection;
-            var profileName = saved?.ProfileHint;
-            if (profileName is null && saved?.CredentialRoute is { } route)
-            {
-                var separator                  = route.IndexOf('|');
-                if (separator > 0) profileName = route[..separator];
-            }
-
-            if (profileName is not null)
-            {
-                var profile = user.Profiles.SingleOrDefault(item => item.Name == profileName);
-                var model   = profile?.Models.SingleOrDefault(item => item.Id == host.Session.Model.ModelId);
-                target = profile is not null && model is not null ? (profile, model) : null;
-            }
-            else
-            {
-                var matches = user.Profiles
-                                  .SelectMany(profile =>
-                                                  profile.Models.Select(model => (Profile : profile, Model : model)))
-                                  .Where(item => item.Model.Id         == host.Session.Model.ModelId  &&
-                                                 item.Profile.Endpoint == host.Session.Model.Endpoint &&
-                                                 item.Profile.ChatApi  == host.Session.Model.ChatApi)
-                                  .ToArray();
-                target = matches.Length == 1 ? matches[0] : null;
-            }
-        }
-        else
-        {
-            var profile = user.Profiles.SingleOrDefault(item => item.Name == settings.ReviewerProfile);
-            var model   = profile?.Models.SingleOrDefault(item => item.Id == settings.ReviewerModel);
-            target = profile is not null && model is not null ? (profile, model) : null;
-        }
+        var target = ResolveReviewerTarget(user.Profiles, settings, host.Session.Model, host.Session.ModelSelection);
 
         if (target is not { } selected)
             throw new InvalidOperationException("The configured AI reviewer provider/model is missing or ambiguous.");
 
-        var credentials = new WindowsCredentialStore();
+        var credentials = credentialStore ?? new WindowsCredentialStore();
         var apiKey = StartupModelCredentials.Resolve(selected.Profile.ApiKeyEnvironmentVariable,
                                                      selected.Profile.ApiKeyCredentialTarget,
                                                      selected.Profile.Name, credentials, false)
@@ -993,6 +960,54 @@ internal static class Program
                                           selected.Profile.ChatApi, user.Settings?.Network,
                                           selected.Profile.Network, credentials,
                                           user.Settings?.ModelTimeouts ?? ModelTimeouts.Default), selected.Model.Id);
+    }
+
+    /// <summary>
+    ///     <para>
+    ///         从可信目录解析 AI 审核目标；“使用当前模型”同时核对模型、endpoint 与协议身份，
+    ///         与当前会话绑定的目标不一致时返回 null，由调用方失败关闭。
+    ///     </para>
+    ///     <para>
+    ///         Resolves the AI reviewer target from the trusted catalog; "use current model" also matches the
+    ///         endpoint and protocol identity, returning null on a mismatch so the caller fails closed.
+    ///     </para>
+    /// </summary>
+    internal static (UserProfile Profile, UserProfileModel Model)? ResolveReviewerTarget(
+        IReadOnlyList<UserProfile> profiles, PermissionSettings settings, SessionModelIdentity sessionModel,
+        SessionModelSelection? savedSelection)
+    {
+        if (!settings.UseCurrentModel)
+        {
+            var profile = profiles.SingleOrDefault(item => item.Name == settings.ReviewerProfile);
+            var model   = profile?.Models.SingleOrDefault(item => item.Id == settings.ReviewerModel);
+            return profile is not null && model is not null ? (profile, model) : null;
+        }
+
+        var profileName = savedSelection?.ProfileHint;
+        if (profileName is null && savedSelection?.CredentialRoute is { } route)
+        {
+            var separator = route.IndexOf('|');
+            if (separator > 0) profileName = route[..separator];
+        }
+
+        if (profileName is not null)
+        {
+            var profile = profiles.SingleOrDefault(item => item.Name == profileName);
+            var model   = profile?.Models.SingleOrDefault(item => item.Id == sessionModel.ModelId);
+            if (profile is null || model is null ||
+                !string.Equals(profile.Endpoint, sessionModel.Endpoint, StringComparison.Ordinal) ||
+                profile.ChatApi != sessionModel.ChatApi)
+                return null;
+
+            return (profile, model);
+        }
+
+        var matches = profiles.SelectMany(profile => profile.Models.Select(model => (Profile : profile, Model : model)))
+                              .Where(item => item.Model.Id         == sessionModel.ModelId  &&
+                                             item.Profile.Endpoint == sessionModel.Endpoint &&
+                                             item.Profile.ChatApi  == sessionModel.ChatApi)
+                              .ToArray();
+        return matches.Length == 1 ? matches[0] : null;
     }
 
     /// <summary>
