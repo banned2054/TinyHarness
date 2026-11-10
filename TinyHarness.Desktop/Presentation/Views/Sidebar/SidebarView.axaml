@@ -359,13 +359,14 @@
                                                                VerticalAlignment="Center" />
                                                 </Grid>
                                             </Button>
-                                            <Button Classes="popup-item" MinHeight="32" Padding="8,0" Margin="0"
+                                            <Button Classes="popup-item popup-item-danger" MinHeight="32" Padding="8,0"
+                                                    Margin="0"
                                                     AutomationProperties.Name="{Binding DeleteActionText}"
                                                     Click="OnProjectDeleteMenuClick">
                                                 <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8">
                                                     <Path Width="14" Height="14" VerticalAlignment="Center"
                                                           Data="{StaticResource Icon.TrashOutlineRegular}"
-                                                          Stroke="{DynamicResource PopupMutedForegroundBrush}"
+                                                          Stroke="{DynamicResource DangerTextBrush}"
                                                           StrokeThickness="1" />
                                                     <TextBlock Grid.Column="1" Text="{Binding DeleteActionText}"
                                                                VerticalAlignment="Center" />
@@ -497,7 +498,7 @@
                                         <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8">
                                             <Path Width="14" Height="14" VerticalAlignment="Center"
                                                   Data="{StaticResource Icon.TrashOutlineRegular}"
-                                                  Stroke="{DynamicResource StatusErrorBrush}" StrokeThickness="1" />
+                                                  Stroke="{DynamicResource DangerTextBrush}" StrokeThickness="1" />
                                             <TextBlock Grid.Column="1" Text="删除会话" VerticalAlignment="Center" />
                                         </Grid>
                                     </Button>
@@ -645,7 +646,8 @@
                    PlacementTarget="{Binding #Surface}" Placement="Center"
                    IsOpen="{Binding IsProjectDeletionOpen, Mode=TwoWay}"
                    IsLightDismissEnabled="False">
-                <Border x:Name="ProjectDeletionPanel" Classes="popup-surface" Width="340" Padding="14,12">
+                <Border x:Name="ProjectDeletionPanel" Classes="popup-surface popup-danger-surface" Width="340"
+                        Padding="14,12">
                     <StackPanel Spacing="10">
                         <TextBlock Text="删除项目"
                                    FontSize="14" FontWeight="SemiBold"
@@ -662,7 +664,7 @@
                             <Button Classes="approval-reject" Content="取消"
                                     Command="{Binding CancelProjectDeletionCommand}"
                                     IsEnabled="{Binding !IsProjectDeletionRunning}" />
-                            <Button Classes="approval-allow" Content="{Binding ProjectDeletionButtonText}"
+                            <Button Classes="popup-danger-action" Content="{Binding ProjectDeletionButtonText}"
                                     Command="{Binding ConfirmProjectDeletionCommand}"
                                     IsEnabled="{Binding CanConfirmProjectDeletion}" />
                         </StackPanel>
@@ -673,7 +675,7 @@
             <Popup PlacementTarget="{Binding #Surface}" Placement="Center"
                    IsOpen="{Binding IsSessionDeletionOpen, Mode=TwoWay}"
                    IsLightDismissEnabled="False">
-                <Border Classes="popup-surface" Width="340" Padding="14,12">
+                <Border Classes="popup-surface popup-danger-surface" Width="340" Padding="14,12">
                     <StackPanel Spacing="10">
                         <TextBlock Text="删除会话" FontSize="14" FontWeight="SemiBold"
                                    Foreground="{DynamicResource PopupForegroundBrush}" />

@@ -1,8 +1,8 @@
 <Styles xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
     <!-- 应用内设置面板样式：居中 modal 壳、左导航、通用行、供应商/模型卡与弹层下拉。
-         颜色一律引用 ThemeResources.axaml 的语义资源（Popup*/Composer*/Session* 系列复用
-         既有层级语义，SettingsPanelBackgroundBrush 承担面板独立表面）。 -->
+         颜色一律引用 ThemeResources.axaml 的语义资源（Popup*/Composer*/Session*/Settings* 系列复用
+         既有层级语义，SettingsPanelBackgroundBrush 承担面板独立表面，SettingsEntry* 承担条目卡片）。 -->
 
     <!-- 遮罩：约 24% 黑，点击关闭由视图 code-behind 承担。 -->
     <Style Selector="Border.settings-mask">
@@ -14,6 +14,24 @@
         <Setter Property="CornerRadius" Value="16" />
         <Setter Property="BoxShadow" Value="0 18 48 8 #66000000" />
         <Setter Property="ClipToBounds" Value="True" />
+    </Style>
+    <!-- 删除确认消息框：复用侧栏项目删除面板的紧凑尺寸（340×内容高），仅补居中定位。 -->
+    <Style Selector="Border.settings-confirm-dialog">
+        <Setter Property="Width" Value="340" />
+        <Setter Property="HorizontalAlignment" Value="Center" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+        <Setter Property="Padding" Value="14,12" />
+    </Style>
+    <Style Selector="TextBlock.settings-confirm-title">
+        <Setter Property="FontSize" Value="14" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="Foreground" Value="{DynamicResource PopupForegroundBrush}" />
+        <Setter Property="TextWrapping" Value="Wrap" />
+    </Style>
+    <Style Selector="TextBlock.settings-confirm-message">
+        <Setter Property="FontSize" Value="13" />
+        <Setter Property="Foreground" Value="{DynamicResource PopupMutedForegroundBrush}" />
+        <Setter Property="TextWrapping" Value="Wrap" />
     </Style>
     <!-- 左导航标题「设置」。 -->
     <Style Selector="TextBlock.settings-nav-title">
@@ -195,6 +213,25 @@
     <Style Selector="Button.settings-secondary:pointerover /template/ ContentPresenter#PART_ContentPresenter">
         <Setter Property="Background" Value="{DynamicResource PopupItemHoverBrush}" />
     </Style>
+    <!-- 危险文字按钮（供应商删除）：常态透明填充（与条目面板同色）并沿用次按钮的描边与内距；
+         悬停、按下与键盘聚焦改为危险填充 + 危险红字，描边同色融于填充。 -->
+    <Style Selector="Button.settings-danger-text">
+        <Setter Property="Padding" Value="14,6" />
+        <Setter Property="CornerRadius" Value="8" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="{DynamicResource PopupDividerBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource DangerTextBrush}" />
+        <Setter Property="FontSize" Value="13" />
+    </Style>
+    <Style
+        Selector="Button.settings-danger-text:pointerover /template/ ContentPresenter#PART_ContentPresenter,
+                     Button.settings-danger-text:pressed /template/ ContentPresenter#PART_ContentPresenter,
+                     Button.settings-danger-text:focus-visible /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource PopupDangerHoverBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource PopupDangerHoverBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource DangerTextBrush}" />
+    </Style>
     <!-- 头部关闭图标按钮：28×28。 -->
     <Style Selector="Button.settings-close-icon">
         <Setter Property="Width" Value="28" />
@@ -273,11 +310,14 @@
         <Setter Property="TextWrapping" Value="Wrap" />
         <Setter Property="Margin" Value="0,0,0,14" />
     </Style>
-    <!-- 提供方标题行与展开的编辑表面分层。 -->
+    <!-- 供应商条目：与面板同色的圆角卡片，以 1px 描边勾出边界；展开的编辑卡叠在其内。 -->
     <Style Selector="Border.settings-provider-row">
-        <Setter Property="Background" Value="Transparent" />
-        <Setter Property="CornerRadius" Value="10" />
-        <Setter Property="Padding" Value="0" />
+        <Setter Property="Background" Value="{DynamicResource SettingsEntryBackgroundBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource SettingsEntryBorderBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="12" />
+        <Setter Property="Padding" Value="16,10" />
+        <Setter Property="MinHeight" Value="56" />
     </Style>
     <Style Selector="Border.settings-provider-editor">
         <Setter Property="Background" Value="{DynamicResource PopupSurfaceBrush}" />

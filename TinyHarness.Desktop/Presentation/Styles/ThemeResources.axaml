@@ -78,14 +78,24 @@
             <SolidColorBrush x:Key="PopupSurfaceBrush" Color="#353638" />
             <SolidColorBrush x:Key="PopupItemSelectedBrush" Color="#454648" />
             <SolidColorBrush x:Key="PopupItemHoverBrush" Color="#3D3E40" />
-            <!-- 危险项悬停底：红调弱化底，配 StatusErrorBrush 红字（对齐 DSH hover-danger）。 -->
-            <SolidColorBrush x:Key="PopupDangerHoverBrush" Color="#46282A" />
+            <!-- 危险项/危险按钮的悬停与选中底：红调实底（参考截图的暗红填充），
+                 配 DangerTextBrush 红字；常态不填充，与所在面板同色。 -->
+            <SolidColorBrush x:Key="PopupDangerHoverBrush" Color="#573938" />
+            <!-- 删除确认面板：比通用弹层（#353638）更深的中性表面（参考截图的 #2C2C2C）；
+                 面板内取消按钮改用亮色文字保持对比。 -->
+            <SolidColorBrush x:Key="DeleteConfirmSurfaceBrush" Color="#2C2C2C" />
+            <SolidColorBrush x:Key="DeleteConfirmForegroundBrush" Color="#FFFFFF" />
             <SolidColorBrush x:Key="PopupForegroundBrush" Color="#F1F1F3" />
             <SolidColorBrush x:Key="PopupMutedForegroundBrush" Color="#A7ABB4" />
             <SolidColorBrush x:Key="PopupDividerBrush" Color="#414244" />
             <SolidColorBrush x:Key="SidebarSettingsDividerBrush" Color="#2D2D2D" />
-            <!-- 应用内居中设置面板：弹层语义的独立表面，略深于弹层菜单的 #353638。 -->
-            <SolidColorBrush x:Key="SettingsPanelBackgroundBrush" Color="#2C2C2E" />
+            <!-- 应用内居中设置面板：对齐 Codex 的中性深灰 #1E1E1E。
+                 设置条目与面板同色，仅靠 1px 描边勾出圆角矩形（对齐 DSH 供应商行）。 -->
+            <SolidColorBrush x:Key="SettingsPanelBackgroundBrush" Color="#1E1E1E" />
+            <SolidColorBrush x:Key="SettingsEntryBackgroundBrush" Color="#1E1E1E" />
+            <SolidColorBrush x:Key="SettingsEntryBorderBrush" Color="#3F3F41" />
+            <!-- 危险操作的文字色（供应商删除等）：中性深底上的珊瑚红。 -->
+            <SolidColorBrush x:Key="DangerTextBrush" Color="#F25A5A" />
             <!-- 消息气泡：中性灰表面（与 #262626 改动卡同系、微亮一档）；
                  OnAccent 白字在灰底上保持可用。 -->
             <SolidColorBrush x:Key="UserBubbleBrush" Color="#272727" />
@@ -192,12 +202,17 @@
             <SolidColorBrush x:Key="PopupItemSelectedBrush" Color="#F2F3F4" />
             <SolidColorBrush x:Key="PopupItemHoverBrush" Color="#F8F9FA" />
             <SolidColorBrush x:Key="PopupDangerHoverBrush" Color="#FBE7E7" />
+            <SolidColorBrush x:Key="DeleteConfirmSurfaceBrush" Color="#FFFFFF" />
+            <SolidColorBrush x:Key="DeleteConfirmForegroundBrush" Color="#1A1D22" />
             <SolidColorBrush x:Key="PopupForegroundBrush" Color="#1A1D22" />
             <SolidColorBrush x:Key="PopupMutedForegroundBrush" Color="#70757E" />
             <SolidColorBrush x:Key="PopupDividerBrush" Color="#EDEEF0" />
             <SolidColorBrush x:Key="SidebarSettingsDividerBrush" Color="#1A000000" />
-            <!-- 应用内居中设置面板（浅色对应：纯白面板）。 -->
+            <!-- 应用内居中设置面板（浅色对应：纯白面板）；条目同色，以细描边成卡。 -->
             <SolidColorBrush x:Key="SettingsPanelBackgroundBrush" Color="#FFFFFF" />
+            <SolidColorBrush x:Key="SettingsEntryBackgroundBrush" Color="#FFFFFF" />
+            <SolidColorBrush x:Key="SettingsEntryBorderBrush" Color="#E2E0E5" />
+            <SolidColorBrush x:Key="DangerTextBrush" Color="#CF222E" />
             <!-- 文本与状态：label-tertiary / link / warn-label / success / error-primary -->
             <SolidColorBrush x:Key="TextMutedBrush" Color="#81858C" />
             <SolidColorBrush x:Key="AccentTextBrush" Color="#4176E6" />

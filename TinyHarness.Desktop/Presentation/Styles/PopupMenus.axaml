@@ -12,6 +12,14 @@
         <Setter Property="CornerRadius" Value="14" />
         <Setter Property="Padding" Value="6" />
     </Style>
+    <!-- 删除确认面板：在通用弹层表面（#353638）上再深一档的中性表面（#2C2C2C），
+         与红色危险按钮配套；面板内取消按钮文字提亮为面板亮色，不再沿用通用弱化灰字。 -->
+    <Style Selector="Border.popup-danger-surface">
+        <Setter Property="Background" Value="{DynamicResource DeleteConfirmSurfaceBrush}" />
+    </Style>
+    <Style Selector="Border.popup-danger-surface Button.approval-reject">
+        <Setter Property="Foreground" Value="{DynamicResource DeleteConfirmForegroundBrush}" />
+    </Style>
     <Style Selector="Border.popup-search">
         <Setter Property="Height" Value="36" />
         <Setter Property="Margin" Value="0,0,0,4" />
@@ -79,29 +87,34 @@
     <Style Selector="Button.popup-item.selected /template/ Border#PART_Surface">
         <Setter Property="Background" Value="{DynamicResource PopupItemSelectedBrush}" />
     </Style>
-    <!-- 危险菜单项（删除工作区）：文字与图标取错误红，悬停/聚焦用红调弱底
-         （PopupDangerHoverBrush），其余几何与 popup-item 完全一致。 -->
+    <!-- 危险菜单项（删除会话/工作区）：常态与弹层面板同色、只以危险红字提示；
+         悬停/聚焦改用危险填充（PopupDangerHoverBrush）托底，其余几何与 popup-item 完全一致。 -->
     <Style Selector="Button.popup-item-danger">
-        <Setter Property="Foreground" Value="{DynamicResource StatusErrorBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource DangerTextBrush}" />
     </Style>
     <Style
         Selector="Button.popup-item-danger:pointerover /template/ Border#PART_Surface,
                      Button.popup-item-danger:focus-visible /template/ Border#PART_Surface">
         <Setter Property="Background" Value="{DynamicResource PopupDangerHoverBrush}" />
     </Style>
-    <!-- 弹窗内危险动作按钮（删除工作区）：描边幽灵 + 红字，对齐 DSH deleteAction
-         （variant 仍是 outline，红色只落在文字）；其余同 approval-reject 几何。 -->
+    <!-- 弹窗内危险动作按钮（删除供应商/永久删除）：常态透明底（与面板同色）描边红字；
+         悬停、按下与键盘聚焦改为危险填充 + 危险红字，描边同色融于填充，几何同 approval-reject。 -->
     <Style Selector="Button.popup-danger-action">
         <Setter Property="Padding" Value="16,6" />
         <Setter Property="CornerRadius" Value="8" />
         <Setter Property="BorderThickness" Value="1" />
         <Setter Property="Background" Value="Transparent" />
         <Setter Property="BorderBrush" Value="{DynamicResource SubtleBorderBrush}" />
-        <Setter Property="Foreground" Value="{DynamicResource StatusErrorBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource DangerTextBrush}" />
         <Setter Property="FontSize" Value="13" />
     </Style>
-    <Style Selector="Button.popup-danger-action:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+    <Style
+        Selector="Button.popup-danger-action:pointerover /template/ ContentPresenter#PART_ContentPresenter,
+                     Button.popup-danger-action:pressed /template/ ContentPresenter#PART_ContentPresenter,
+                     Button.popup-danger-action:focus-visible /template/ ContentPresenter#PART_ContentPresenter">
         <Setter Property="Background" Value="{DynamicResource PopupDangerHoverBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource PopupDangerHoverBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource DangerTextBrush}" />
     </Style>
     <!-- 弹窗内单行输入框（重命名工作区）：细描边圆角融入弹层面板，
          聚焦换强调描边；Fluent 状态底色画在模板 Border#PART_BorderElement 上，
