@@ -121,11 +121,11 @@ every component named in those notices is linked into a Desktop executable.
 Final binary linkage and the complete embedded grammar/theme provenance still need
 a separate distribution audit; see Docs/Guides/third-party-notices.md.
 
-Avalonia 12.1.5
+Avalonia 12.1.6
 License: MIT
 Copyright: Copyright 2013-2026 © The AvaloniaUI Project
 Source: https://github.com/AvaloniaUI/Avalonia/
-Source commit: 2d79ba55fae1b1e71c69f93a668080c9029e6a31
+Source commit: cf8e564674700348947e93ab19105f27afe859a9
 License text: [MIT-001]
 Additional upstream notices: [SPECIAL-066]
 
@@ -136,91 +136,91 @@ Source: https://github.com/AvaloniaUI/angle/
 Source commit: 1c89805903c1482166356d3b950d474973180e61
 License text: [SPECIAL-068]
 
-Avalonia.Desktop 12.1.5
+Avalonia.Desktop 12.1.6
 License: MIT
 Copyright: Copyright 2013-2026 © The AvaloniaUI Project
 Source: https://github.com/AvaloniaUI/Avalonia/
-Source commit: 2d79ba55fae1b1e71c69f93a668080c9029e6a31
+Source commit: cf8e564674700348947e93ab19105f27afe859a9
 License text: [MIT-001]
 Additional upstream notices: [SPECIAL-066]
 
-Avalonia.Fonts.Inter 12.1.5
+Avalonia.Fonts.Inter 12.1.6
 License: MIT
 Copyright: Copyright 2013-2026 © The AvaloniaUI Project
 Source: https://github.com/AvaloniaUI/Avalonia/
-Source commit: 2d79ba55fae1b1e71c69f93a668080c9029e6a31
+Source commit: cf8e564674700348947e93ab19105f27afe859a9
 License text: [MIT-001]
 Additional upstream notices: [SPECIAL-066]
 
-Avalonia.FreeDesktop 12.1.5
+Avalonia.FreeDesktop 12.1.6
 License: MIT
 Copyright: Copyright 2013-2026 © The AvaloniaUI Project
 Source: https://github.com/AvaloniaUI/Avalonia/
-Source commit: 2d79ba55fae1b1e71c69f93a668080c9029e6a31
+Source commit: cf8e564674700348947e93ab19105f27afe859a9
 License text: [MIT-001]
 Additional upstream notices: [SPECIAL-066]
 
-Avalonia.FreeDesktop.AtSpi 12.1.5
+Avalonia.FreeDesktop.AtSpi 12.1.6
 License: MIT
 Copyright: Copyright 2013-2026 © The AvaloniaUI Project
 Source: https://github.com/AvaloniaUI/Avalonia/
-Source commit: 2d79ba55fae1b1e71c69f93a668080c9029e6a31
+Source commit: cf8e564674700348947e93ab19105f27afe859a9
 License text: [MIT-001]
 Additional upstream notices: [SPECIAL-066]
 
-Avalonia.HarfBuzz 12.1.5
+Avalonia.HarfBuzz 12.1.6
 License: MIT
 Copyright: Copyright 2013-2026 © The AvaloniaUI Project
 Source: https://github.com/AvaloniaUI/Avalonia/
-Source commit: 2d79ba55fae1b1e71c69f93a668080c9029e6a31
+Source commit: cf8e564674700348947e93ab19105f27afe859a9
 License text: [MIT-001]
 Additional upstream notices: [SPECIAL-066]
 
-Avalonia.Native 12.1.5
+Avalonia.Native 12.1.6
 License: MIT
 Copyright: Copyright 2013-2026 © The AvaloniaUI Project
 Source: https://github.com/AvaloniaUI/Avalonia/
-Source commit: 2d79ba55fae1b1e71c69f93a668080c9029e6a31
+Source commit: cf8e564674700348947e93ab19105f27afe859a9
 License text: [MIT-001]
 Additional upstream notices: [SPECIAL-066]
 
-Avalonia.Remote.Protocol 12.1.5
+Avalonia.Remote.Protocol 12.1.6
 License: MIT
 Copyright: Copyright 2013-2026 © The AvaloniaUI Project
 Source: https://github.com/AvaloniaUI/Avalonia/
-Source commit: 2d79ba55fae1b1e71c69f93a668080c9029e6a31
+Source commit: cf8e564674700348947e93ab19105f27afe859a9
 License text: [MIT-001]
 Additional upstream notices: [SPECIAL-066]
 
-Avalonia.Skia 12.1.5
+Avalonia.Skia 12.1.6
 License: MIT
 Copyright: Copyright 2013-2026 © The AvaloniaUI Project
 Source: https://github.com/AvaloniaUI/Avalonia/
-Source commit: 2d79ba55fae1b1e71c69f93a668080c9029e6a31
+Source commit: cf8e564674700348947e93ab19105f27afe859a9
 License text: [MIT-001]
 Additional upstream notices: [SPECIAL-066]
 
-Avalonia.Themes.Fluent 12.1.5
+Avalonia.Themes.Fluent 12.1.6
 License: MIT
 Copyright: Copyright 2013-2026 © The AvaloniaUI Project
 Source: https://github.com/AvaloniaUI/Avalonia/
-Source commit: 2d79ba55fae1b1e71c69f93a668080c9029e6a31
+Source commit: cf8e564674700348947e93ab19105f27afe859a9
 License text: [MIT-001]
 Additional upstream notices: [SPECIAL-066]
 
-Avalonia.Win32 12.1.5
+Avalonia.Win32 12.1.6
 License: MIT
 Copyright: Copyright 2013-2026 © The AvaloniaUI Project
 Source: https://github.com/AvaloniaUI/Avalonia/
-Source commit: 2d79ba55fae1b1e71c69f93a668080c9029e6a31
+Source commit: cf8e564674700348947e93ab19105f27afe859a9
 License text: [MIT-001]
 Additional upstream notices: [SPECIAL-066]
 
-Avalonia.X11 12.1.5
+Avalonia.X11 12.1.6
 License: MIT
 Copyright: Copyright 2013-2026 © The AvaloniaUI Project
 Source: https://github.com/AvaloniaUI/Avalonia/
-Source commit: 2d79ba55fae1b1e71c69f93a668080c9029e6a31
+Source commit: cf8e564674700348947e93ab19105f27afe859a9
 License text: [MIT-001]
 Additional upstream notices: [SPECIAL-066]
 
@@ -317,10 +317,10 @@ Presentation styles also retain adaptations from the upstream client.
 No DeepSeek Harness backend, RPC client or Node runtime is included in Desktop.
 License text: [MIT-001]
 
-Inter font files embedded by Avalonia.Fonts.Inter 12.1.5
+Inter font files embedded by Avalonia.Fonts.Inter 12.1.6
 Font name-table version: Version 3.019;git-0a5106e0b
 Copyright 2020 The Inter Project Authors (https://github.com/rsms/inter)
-Source: https://github.com/AvaloniaUI/Avalonia/tree/2d79ba55fae1b1e71c69f93a668080c9029e6a31/src/Avalonia.Fonts.Inter/Assets
+Source: https://github.com/AvaloniaUI/Avalonia/tree/cf8e564674700348947e93ab19105f27afe859a9/src/Avalonia.Fonts.Inter/Assets
 License: OFL-1.1 (the font license is separate from the Avalonia wrapper's MIT license)
 License text: [SPECIAL-071]
 
@@ -3006,7 +3006,7 @@ Copyright 2020 Tomasz "Soveu" Marx
   zerocopy 0.8.37 / LICENSE-APACHE
 Copyright 2023 The Fuchsia Authors
 
-  Avalonia 12.1.5 / upstream licence.md
+  Avalonia 12.1.6 / upstream licence.md
 The MIT License (MIT)
 
 Copyright (c) AvaloniaUI OÜ
@@ -9774,7 +9774,7 @@ or licenses.
 
 [SPECIAL-066]
 Applies to:
-  Avalonia 12.1.5 / upstream NOTICE.md
+  Avalonia 12.1.6 / upstream NOTICE.md
 
 License / notice text:
 # WPF
