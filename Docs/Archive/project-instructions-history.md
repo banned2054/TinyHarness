@@ -143,7 +143,7 @@ dotnet test TinyHarness.Tests/TinyHarness.Tests.csproj --no-build --no-restore -
 dotnet publish TinyHarness.Cli/TinyHarness.Cli.csproj -c Release -r win-x64 --self-contained true --no-restore -o artifacts/m14-instructions-nativeaot
 ```
 
-- 普通回归结果见 `artifacts/test-results/m14-regression.trx`；最终统计在 README 项目状态列出。独立 scale **1/1 通过**，原预算不变，固定指标副本为 `artifacts/m14-instructions-scale-results.json`。
+- 普通回归结果见 `artifacts/test-results/m14-regression.trx`；最终统计在 README 项目状态列出。独立 scale **1/1 通过**，原预算不变，固定指标副本为 [按日期归档的原始指标](Evidence/session-scale/instructions-2026-10-18.json)。
 - 100／1,000／10,000 规模 append p95：2.6168／2.5574／2.5908 ms；10,000 恢复 1,570.0449 ms、89,891,968 B；200 条首屏 319.4492 ms、38,734,864 B，读取 24,901,127 B。返回页 8 MiB 不等于 scanner 总 I/O 上限。
 - 规则额外测量：10,011 条 canonical、10 次规则版本变更，模型视图 10,002 条、仅一份当前规则；当前规则 421 token，投影 0.134 ms、88,832 B 分配。该合成 workload 测量不是所有仓库的性能保证。
 - NativeAOT **0 warning／error**。从仓库外的独立临时目录，使用合成配置和隔离用户配置执行 `TinyHarness.exe smoke --config <临时配置>`，退出 0，Completed、17 steps、16 toolExecs；验证规则初始加载／更新／续聊来源、日志恢复／历史／confirmed patch diff。文本为 `artifacts/m14-instructions-native-smoke.txt`；exe SHA-256 为 `C9DE97E219B68F8BAEB8133A1EE25578FB5E11C0BD48C2CF5149BEBBBF8926F3`。

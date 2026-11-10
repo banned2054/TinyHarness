@@ -56,7 +56,7 @@
 
 - 普通回归：794 总、793 通过、1 项链接权限跳过、0 失败，35 s；`artifacts/test-results/session-log-regression.trx`。唯一跳过项为 `LockAndLogLeafLinks_AreRejectedWhenLinkCreationIsAvailable`，原因是环境无法创建文件符号链接。
 - History 9/9 覆盖 Prepare 失败完成条目即时进入原始 JSONL、live/page 同序，以及整 round 工具未执行。provider rawCallId 跨轮复用由独立 InvocationId 正确关联。
-- scale 单独 1/1 通过，23 s；`artifacts/test-results/session-log-scale.trx`，原始指标为 `artifacts/session-journal-scale-results.json`。原锁定预算不变：append p95 ≤100 ms；10,000 规模恢复 ≤5 s、累计分配 ≤256 MiB；200 条首屏 ≤2 s、累计分配 ≤64 MiB。
+- scale 单独 1/1 通过，23 s；原 TRX 为 `artifacts/test-results/session-log-scale.trx`，原始指标当时写入默认 `artifacts/session-journal-scale-results.json`。2026-11-10 整理时该默认文件已被后续测量覆盖，首次测量原始 JSON 未留存；本节数字保留历史含义，不能用后续文件补作证据，见[覆盖纠正](session-scale-measurements.md#默认指标文件被覆盖的纠正)。原锁定预算不变：append p95 ≤100 ms；10,000 规模恢复 ≤5 s、累计分配 ≤256 MiB；200 条首屏 ≤2 s、累计分配 ≤64 MiB。
 - 最终 `win-x64` NativeAOT 重 publish 成功，0 warning、0 error；仓库外隔离临时 workspace/config/store 的 exe smoke 退出 0，Completed、17 steps、16 toolExecs，验证 read、restore、history 和 confirmed patch diff，并确认唯一会话日志、无旧 snapshot/audit 输出。文本证据为 `artifacts/session-log-native-smoke.txt`，可执行产物为 `artifacts/session-log-nativeaot/TinyHarness.exe`。
 
 普通回归和 NativeAOT 的执行命令（从仓库根目录执行）：
@@ -94,7 +94,7 @@ dotnet publish TinyHarness.Cli/TinyHarness.Cli.csproj -c Release -r win-x64 --se
 
 - 普通回归：775 总、774 通过、1 项文件符号链接权限跳过、0 失败，32 s；`artifacts/test-results/journal-only-regression.trx`。沙箱内初跑受 HttpListener、CScript 和临时测试凭据权限限制；同一测试集在沙箱外复跑通过，未修改这些测试。
 - 新增检查覆盖旧文件被忽略且原样保留、旧文件不占用新日志身份，以及移除的 `session migrate` 按未知子命令拒绝。损坏日志仍拒绝读取，list 继续报告损坏条目。
-- scale：独立 1/1 通过，21 s，原预算未变；`artifacts/test-results/journal-only-scale.trx` 和 `artifacts/journal-only-scale-results.json`。100／1,000／10,000 规模 append p95 为 2.5906／2.4631／2.4654 ms；10,000 规模恢复 1,379.596 ms、91,243,704 B 累计分配；200 条首屏 290.2675 ms、54,436,424 B 累计分配，实际读取 24,661,153 B。
+- scale：独立 1/1 通过，21 s，原预算未变；`artifacts/test-results/journal-only-scale.trx` 和 [按日期归档的原始指标](Evidence/session-scale/journal-only-2026-10-17.json)。100／1,000／10,000 规模 append p95 为 2.5906／2.4631／2.4654 ms；10,000 规模恢复 1,379.596 ms、91,243,704 B 累计分配；200 条首屏 290.2675 ms、54,436,424 B 累计分配，实际读取 24,661,153 B。
 - `win-x64` NativeAOT publish 成功，无编译警告或错误；新产物 `artifacts/journal-only-nativeaot/TinyHarness.exe` 在仓库外、独立临时 workspace/config/store 下离线 smoke 退出 0，Completed、17 steps、16 toolExecs，验证 read／restore／history／confirmed patch diff。文本证据：`artifacts/journal-only-native-smoke.txt`。
 
 从仓库根执行的复验命令：

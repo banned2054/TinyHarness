@@ -76,4 +76,4 @@ dotnet publish TinyHarness.Cli/TinyHarness.Cli.csproj -c Release -r win-x64 --se
 - 最终相关回归 75/75，普通回归 965 通过／2 链接权限跳过／0 失败，scale 另 1/1。50 轮增长保持有界活动视图。最终 NativeAOT 无 compiler／trimming／AOT 警告，仓库外 fake-model smoke 通过；真实服务调用使用 managed Core 驱动，两类证据分别记录。
 - 最终另以离线回归统一压缩事件前后 token 估算的校准口径，没有改变摘要请求或提交契约。文本交接仍可能继承历史错误数字，本轮摘要重复旧截断长度错误；因此仅关闭指定样本的自动压缩／遵循／恢复尾项，不声称全部事实或模型可靠。
 
-完整命令、实际差异和机器结果见[本轮报告](../../artifacts/compaction-replacement-20261021/verification.md)。M15、GUI、断电与 OS 隔离不在本轮范围，§7–§8 保持历史含义。
+原完整报告与机器结果已清理，历史结论见本节及[归并说明](local-validation-records-2026-10.md#已有归档覆盖的记录)。M15、GUI、断电与 OS 隔离不在本轮范围，§7–§8 保持历史含义。

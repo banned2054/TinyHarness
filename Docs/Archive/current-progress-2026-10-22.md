@@ -80,7 +80,7 @@ CLI 第 8/9 轮各发起过摘要请求，但日志中 `context.compacted` 为 0
 
 ### 3.2 2026-10-21 压缩替换与验收
 
-- 设计：[有界交接摘要与上下文压缩](context-compaction-design.md)；本机详细证据：[本轮报告](../../artifacts/compaction-replacement-20261021/verification.md)、[最终机器结果](../../artifacts/compaction-replacement-20261021/evidence/final-proof.json)。
+- 设计：[有界交接摘要与上下文压缩](context-compaction-design.md)；本机详细证据：[归档摘要（原报告已清理）](local-validation-records-2026-10.md#已有归档覆盖的记录)、[最终机器结果](../../artifacts/compaction-replacement-20261021/evidence/final-proof.json)。
 - 沿用 ConversationContext／AgentLoop／唯一 session-log／SessionResume。删除 StructuredState、旧 JSON serializer、旧事实与 pending-work 逐字保留校验及其专属测试；终态 recorder 不再传完整摘要。保留完整 canonical、tool/opaque、来源与严格缩小校验；没有平行 writer、旧读取器或迁移入口。
 - 最终相关回归 75/75；普通回归 967 总／965 通过／2 链接权限跳过／0 失败；scale 另 1/1。50 轮增长用例验证有界视图、150 份完整工具结果和 352 条 canonical 消息仍在。NativeAOT 无 compiler／trimming／AOT 警告，仓库外原生 smoke Completed／17 steps／16 toolExecs。
 - 同一 GLM 配置，两个独立进程，真实请求共 10 次（摘要 5 次），自动事件和同日志 context.compacted 审计各 5 次。每轮 Completed，无工具请求／准备／执行和保存警告。原始九轮日志与夹具六文件哈希不变。真实链用当前 Core managed 驱动；原生 smoke 使用 fake model，不混为原生真实模型验收。
@@ -100,7 +100,7 @@ CLI 第 8/9 轮各发起过摘要请求，但日志中 `context.compacted` 为 0
 | 五个代码提交的独立副本 | 分别 52/52、26/26、115/115、132/132、103/103 | 集合重叠，不能相加当唯一用例数 |
 | 最新 NativeAOT 和离线 smoke | 发布无 compiler／trimming／AOT 警告；smoke 退出 0、Completed／17 steps／16 toolExecs | fake model，仓库外隔离配置，未调用真实模型／沙箱 |
 
-提交与最新本地验证见 [commit-batch 验证记录](../../artifacts/commit-batch-20261020-d17600/verification.md) 和 [final-proof.json](../../artifacts/commit-batch-20261020-d17600/final-proof.json)。中间副本测试曾因工具环境拒绝只读访问既有 home／目录身份而失败，普通宿主权限复跑通过，失败证据仍保留；没有放宽断言。受保护的 1055 个文件及实际用户配置当时哈希不变。
+提交与最新本地验证见 [归档摘要（原报告已清理）](local-validation-records-2026-10.md#已有归档覆盖的记录) 和 [final-proof.json](../../artifacts/commit-batch-20261020-d17600/final-proof.json)。中间副本测试曾因工具环境拒绝只读访问既有 home／目录身份而失败，普通宿主权限复跑通过，失败证据仍保留；没有放宽断言。受保护的 1055 个文件及实际用户配置当时哈希不变。
 
 新网络专项非环回地址实际为 Meta 接口 `198.18.0.1`，不能宣称物理 LAN、远端公网、非环回 IPv6 已验证。53/853 只验证直接端口通信阻断，不覆盖 Windows 系统解析器／DNS 服务代发、DoH 或完整 DNS 泄漏防护。严格模式与 TCP 环回模式的规则不同；详细契约见 [Windows 沙箱管理文档](windows-sandbox-management.md)。
 
@@ -211,7 +211,7 @@ SHA-256: 7CA34BFF187ED486B34223C56718C5232F2049018D01387E31C74730A1859B88
 - 最终普通离线回归 1041 总／1039 通过／2 链接权限跳过／0 失败，50 s；独立 scale 1/1，22 s。针对性 98/98 包含真实 SDK 对本机合成 SSE 的 Chat Completions／Responses 缺失结束场景，以及等待通知、取消分类和持久化后新回合成功。集合重叠，数字不相加。
 - win-x64 Release NativeAOT publish 成功，无 compiler／trimming／AOT warning。仓库外隔离配置原生 smoke 退出 0，主链 Completed／17 steps／16 tools；新增合成会话验证一次读取后 reasoning-only 失败、同日志恢复、缺失终止信息失败与下一轮成功，未重放工具。现有控制／预算／规则刷新／历史 diff 检查继续通过。
 - 受限执行中 SDK 测试曾因 HttpListener 句柄无效失败，普通宿主权限复跑通过；原 PATH 下三项进程模拟回归失败，去重并前置 System32 的子进程 PATH 下原断言通过。NativeAOT 构建曾出现找不到 where、输入行过长及 link 不可用；精简进程 PATH 后通过。首次原生 smoke 缺少 PowerShell 路径失败，补齐该进程 PATH 后通过。中间日志保留，未修改机器环境或产品依赖，不将上述表现扩大解释为 Windows 内部根因已定位。
-- 本机证据：[验证记录](../../artifacts/model-response-fix-20261022/verification.md)、[机器汇总](../../artifacts/model-response-fix-20261022/final-proof.json)。原会话 SHA-256 仍为 `71F87CE61FAE54FC1B21C2BE028C9168295F704A750B5F1959BDA83DCF48869F`；未改写原会话或替换用户运行中的 exe。真实供应商复测、GUI、断电和新的 OS 隔离验收未执行；本轮不自动进入 M17。
+- 本机证据：[归档摘要（原报告已清理）](local-validation-records-2026-10.md#已有归档覆盖的记录)、[机器汇总](../../artifacts/model-response-fix-20261022/final-proof.json)。原会话 SHA-256 仍为 `71F87CE61FAE54FC1B21C2BE028C9168295F704A750B5F1959BDA83DCF48869F`；未改写原会话或替换用户运行中的 exe。真实供应商复测、GUI、断电和新的 OS 隔离验收未执行；本轮不自动进入 M17。
 
 ## 10. 请求阶段观测与缓存元数据（2026-10-22）
 
@@ -221,7 +221,7 @@ SHA-256: 7CA34BFF187ED486B34223C56718C5232F2049018D01387E31C74730A1859B88
 - 原事件路径新增有界首次活动通知，CLI 立即区分等待首个 SDK 流事件、接收推理／正文／工具；同阶段等待提示最多三十秒一条，并显示距最近活动的时间。推理和压缩正文不展示。请求结束行保留未观察到的阶段，不补为零。
 - 通过现有 SDK UsageDetails 提取 CachedInputTokenCount／ReasoningTokenCount，保留 null、显式零和非零，按输入／输出子集验证；不重复累计到预算。两种协议的本机 SDK/SSE 测试验证映射。服务商未通过 SDK 公开字段报告时显示 unreported，不据此断言缓存未命中。
 - 请求终态观测作为 `model.request` 审计事实追加到唯一 session-log，包括取消和失败；AuditRecord 新增可选 ModelRequest 元数据，不存请求、正文、推理原文或头部，不参与模型历史／授权恢复，无新 writer、恢复格式或迁移入口。旧日志缺失该字段仍可读。观测保存失败报告 PersistenceWarning 并阻止新工具；摘要发生该故障也停止后续请求，既有模型失败原因保留。
-- 最终普通离线回归 1058 总／1056 通过／2 链接权限跳过／0 失败，55 s；独立 scale 1/1，22 s；NativeAOT publish 无 compiler／trimming／AOT warning。仓库外隔离配置原生 smoke 退出 0，主链 Completed／17 steps／16 tools，另外验证新计时与可选缓存字段的生成 JSON、取消落盘及同日志恢复。完整命令见[本轮验证记录](../../artifacts/model-request-observability-20261022/verification.md)。
+- 最终普通离线回归 1058 总／1056 通过／2 链接权限跳过／0 失败，55 s；独立 scale 1/1，22 s；NativeAOT publish 无 compiler／trimming／AOT warning。仓库外隔离配置原生 smoke 退出 0，主链 Completed／17 steps／16 tools，另外验证新计时与可选缓存字段的生成 JSON、取消落盘及同日志恢复。归并说明见[归档摘要（原报告已清理）](local-validation-records-2026-10.md#已有归档覆盖的记录)。
 - 本轮开始与结束的真实会话 SHA-256 均为 `20A29ADBB32EE02D012A26D7FEC263E76288103E1C581E9A511D7CE0E2140B0A`；与 §9 哈希不同来自用户恢复会话后的追加，不由本轮诊断修改。新产物见 §5，未替换用户进程。真实请求速度、上游缓存实际命中和 HTTP 首字节时间仍未验证，需后续明确授权的真实测试；本轮不宣称推理已经提速。
 
 ## 11. 默认关闭累计 token 上限（2026-10-22）
@@ -231,7 +231,7 @@ SHA-256: 7CA34BFF187ED486B34223C56718C5232F2049018D01387E31C74730A1859B88
 - 默认自动压缩条件仍是校准后的模型视图估算加工具定义与输出预留，大于声明窗口的 90%；显式压缩阈值仍可覆盖。压缩需要可折叠内容，失败后仍进行窗口检查。输出预留尚未映射成模型请求的最大输出参数，本轮只核实，没有改动上下文、协议或模型参数。
 - 针对性 98/98；普通离线回归 1064 总／1062 通过／2 链接权限跳过／0 失败，50 s；本轮未重跑独立 scale。NativeAOT publish 无 compiler／trimming／AOT warning，仓库外隔离配置原生 smoke Completed／17 steps／16 tools，包含显式零配置绑定与既有控制／预算／恢复等检查。测试包含超过原 200 万后继续工具／请求、流估算、用量保存恢复及零／缺省配置。
 - 受限环境的首次普通回归为 1013 通过／49 失败／2 跳过，失败涉及本机 HTTP 监听和进程／目录权限；同一测试集在普通宿主权限、相同精简 PATH 下通过。初轮新增配置测试暴露默认值绑定问题，修复后通过；保留所有中间日志，没有降低断言。
-- 本轮保留原有未提交修改，只实施本地变更与离线验证。没有真实模型调用、原始会话改写、用户进程替换、机器配置或 Git 写操作。新产物见 §5，详细证据见[本轮验证记录](../../artifacts/token-budget-disabled-20261022/verification.md)。
+- 本轮保留原有未提交修改，只实施本地变更与离线验证。没有真实模型调用、原始会话改写、用户进程替换、机器配置或 Git 写操作。新产物见 §5，详细证据见[归档摘要（原报告已清理）](local-validation-records-2026-10.md#已有归档覆盖的记录)。
 
 ## 12. 可选思考展示（2026-10-22）
 
@@ -240,7 +240,7 @@ SHA-256: 7CA34BFF187ED486B34223C56718C5232F2049018D01387E31C74730A1859B88
 - 该选项不改变模型请求参数、reasoning 历史回传、canonical 日志或恢复格式；重新启动／续聊时可另选展示模式。CLI 持有并释放动画任务，正文、工具、审批及终态前清理动画行。
 - 针对性测试 71/71；最终普通离线回归 1078 总／1076 通过／2 链接权限跳过／0 失败，57 s。受限环境首轮有 49 项本机 HTTP／进程／权限失败，同一集合普通宿主权限复跑通过，未修改断言。本轮未重跑独立 scale。
 - win-x64 Release NativeAOT 无 compiler／trimming／AOT warning；仓库外隔离配置原生 smoke Completed／17 steps／16 tools，包含默认思考隐藏、内容模式、增量去重、脱敏和既有恢复／取消检查。新产物为 `artifacts/reasoning-display-20261022/native/TinyHarness.exe`，没有替换用户运行中的 exe。
-- 真实模型和真实终端交互未验收；动画循环由可控计时器测试验证，原生 smoke 使用合成模型。证据与命令见[本轮验证记录](../../artifacts/reasoning-display-20261022/verification.md)。
+- 真实模型和真实终端交互未验收；动画循环由可控计时器测试验证，原生 smoke 使用合成模型。证据与命令见[归档摘要（原报告已清理）](local-validation-records-2026-10.md#已有归档覆盖的记录)。
 
 ## 13. 简洁请求状态与默认关闭总时长限制（2026-10-22）
 
@@ -249,7 +249,7 @@ SHA-256: 7CA34BFF187ED486B34223C56718C5232F2049018D01387E31C74730A1859B88
 - `maxWallClockSeconds` 默认改为 0；缺省或零只统计，正数按秒启用，负数及超出计时器范围的值拒绝。默认不创建截止计时器，仍统计耗时、响应用户取消，保留单工具超时、步数、模型请求和工具次数上限。累计 token 默认继续为 0；未改实际用户配置或旧进程。
 - 针对性 105/105；普通离线回归最终 1088 总／1086 通过／2 链接权限跳过／0 失败，51 s。首次完整回归仅一处旧断言仍要求逐请求 usage，更新为仅回合汇总后通过；核心计数及日志断言保留。本轮未重跑独立 scale。
 - 可控时钟推进到 901 秒，验证缺省／显式零不创建计时器、可继续请求和工具、耗时及用量准确，用户取消仍有效。显式 1 秒上限在模型／审批／工具等待中的既有检查继续通过。
-- win-x64 Release NativeAOT 无 compiler／trimming／AOT warning；仓库外隔离零上限配置原生 smoke Completed／17 steps／16 tools，涵盖精简输出、观测落盘、两种思考模式、取消与恢复。新产物：`artifacts/quiet-status-20261022/native/TinyHarness.exe`；真实模型和真实终端交互未验收。证据见[本轮验证记录](../../artifacts/quiet-status-20261022/verification.md)。
+- win-x64 Release NativeAOT 无 compiler／trimming／AOT warning；仓库外隔离零上限配置原生 smoke Completed／17 steps／16 tools，涵盖精简输出、观测落盘、两种思考模式、取消与恢复。新产物：`artifacts/quiet-status-20261022/native/TinyHarness.exe`；真实模型和真实终端交互未验收。证据见[归档摘要（原报告已清理）](local-validation-records-2026-10.md#已有归档覆盖的记录)。
 
 ## 14. 沙箱启动的旧会话目录检查修复（2026-10-22）
 
@@ -257,7 +257,7 @@ SHA-256: 7CA34BFF187ED486B34223C56718C5232F2049018D01387E31C74730A1859B88
 
 - 相关离线测试 87 通过／1 链接权限跳过；普通回归 1091 通过／2 链接权限跳过／0 失败，规模测试未重跑。
 - NativeAOT 构建与仓库外离线 smoke 通过；新产物：`artifacts/session-path-fix-20261022/native/TinyHarness.exe`。
-- 证据：[验证记录](../../artifacts/session-path-fix-20261022/verification.md)。未调用真实模型、打开用户实际会话或执行真实沙箱专项；Banori 交互续聊待用户使用新产物确认。
+- 证据：[归档摘要（原报告已清理）](local-validation-records-2026-10.md#已有归档覆盖的记录)。未调用真实模型、打开用户实际会话或执行真实沙箱专项；Banori 交互续聊待用户使用新产物确认。
 
 ## 15. 默认关闭普通 step 上限（2026-10-22）
 
@@ -265,4 +265,4 @@ SHA-256: 7CA34BFF187ED486B34223C56718C5232F2049018D01387E31C74730A1859B88
 - 离线用例验证 45 次工具轮后第 46 步正常完成、第 42 次请求取消、关闭 step 后独立请求预算仍生效，以及零值／正数读写和负数拒绝。只读 MCP worker 保留自身正数步数限制，累计请求 128／工具执行 256 默认限制不变。
 - 针对性 78/78；普通离线回归 1101 总／1099 通过／2 链接权限跳过／0 失败，54 s。独立 scale 未重跑。
 - NativeAOT publish 无 warning/error；仓库外隔离配置原生 smoke Completed／17 steps／16 tools，验证会话恢复、控制和预算；原生 `config set maxAgentSteps 0` 成功。未调用真实模型，未修改实际用户配置。
-- 新产物：`artifacts/unlimited-steps-20261022/native/TinyHarness.exe`；证据：[本轮验证记录](../../artifacts/unlimited-steps-20261022/verification.md)。
+- 新产物：`artifacts/unlimited-steps-20261022/native/TinyHarness.exe`；证据：[归档摘要（原报告已清理）](local-validation-records-2026-10.md#已有归档覆盖的记录)。
