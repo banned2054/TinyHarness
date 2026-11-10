@@ -7,10 +7,10 @@ namespace TinyHarness.Desktop.ViewModels;
 
 public sealed partial class MainWindowViewModel
 {
-    private int              _sessionDeletionDialogVersion;
-    private string?          _sessionDeletionErrorText;
-    private bool             _sessionDeletionOpen;
-    private bool             _sessionDeletionRunning;
+    private int               _sessionDeletionDialogVersion;
+    private string?           _sessionDeletionErrorText;
+    private bool              _sessionDeletionOpen;
+    private bool              _sessionDeletionRunning;
     private SessionViewModel? _sessionDeletionTarget;
 
     internal Func<string, string, string, CancellationToken, Task>? DeleteSessionLogOverride { get; set; }
@@ -36,7 +36,8 @@ public sealed partial class MainWindowViewModel
     }
 
     public string SessionDeletionTargetName => _sessionDeletionTarget?.Title ?? string.Empty;
-    public string SessionDeletionPrompt => "此操作会永久删除会话记录，且无法恢复。";
+    public string SessionDeletionPrompt     => "此操作会永久删除会话记录，且无法恢复。";
+
     public string? SessionDeletionErrorText
     {
         get => _sessionDeletionErrorText;
@@ -47,7 +48,7 @@ public sealed partial class MainWindowViewModel
         }
     }
 
-    public bool HasSessionDeletionError => SessionDeletionErrorText is not null;
+    public bool HasSessionDeletionError   => SessionDeletionErrorText is not null;
     public bool CanConfirmSessionDeletion => !IsSessionDeletionRunning && _sessionDeletionTarget is not null;
 
     /// <summary>
@@ -56,24 +57,36 @@ public sealed partial class MainWindowViewModel
     /// </summary>
     private void OpenSessionDeletion(SessionViewModel? session)
     {
-        if (!IsArchiveView || session is not { IsArchived: true, CanPin: true } ||
+        if (!IsArchiveView              || session is not { IsArchived: true, CanPin: true } ||
             !Sessions.Contains(session) || IsSessionDeletionRunning || !CanUseArchiveState(session.StoreDirectory!))
             return;
 
         _sessionDeletionTarget = session;
         _sessionDeletionDialogVersion++;
         SessionDeletionErrorText = null;
-        IsSessionDeletionOpen = true;
+        IsSessionDeletionOpen    = true;
         NotifySessionDeletionProperties();
     }
 
     /// <summary>
     ///     <para>释放本地宿主后持有会话 writer 锁删除日志，再清理归档、置顶、索引与旧侧栏投影。</para>
-    ///     <para>Deletes the log under its writer lock after releasing the local host, then clears archive, pin, index, and legacy sidebar projections.</para>
+    ///     <para>
+    ///         Deletes the log under its writer lock after releasing the local host, then clears archive, pin, index, and
+    ///         legacy sidebar projections.
+    ///     </para>
     /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         删除不预读历史：日志内容严格性属于恢复路径，损坏日志也可被用户明确地永久删除。
+    ///     </para>
+    ///     <para>
+    ///         Deletion never preloads history: journal strictness belongs to restore paths, and a damaged
+    ///         journal can still be permanently deleted by explicit user intent.
+    ///     </para>
+    /// </remarks>
     private async Task ConfirmSessionDeletionAsync()
     {
-        if (!CanConfirmSessionDeletion || _sessionDeletionTarget is not { } session ||
+        if (!CanConfirmSessionDeletion      || _sessionDeletionTarget is not { } session ||
             session.Id is not { } sessionId || session.StoreDirectory is not { } storeDirectory)
             return;
 
@@ -97,23 +110,33 @@ public sealed partial class MainWindowViewModel
                 throw new SessionStoreException(
                                                 "The configured session-store directory changed before session deletion; reload history and retry.");
 
-            await session.EnsureHistoryLoadedAsync();
+            // 历史加载只服务 UI 投影：删除、资源释放与并发保护都不依赖它，选中与续聊路径会按需加载。
             await session.ReleaseRuntimeForDeletionAsync();
+            IReadOnlyList<SessionStoreCleanupIssue> coreCleanupIssues;
             if (DeleteSessionLogOverride is { } deleteSessionLog)
+            {
                 await deleteSessionLog(protectedStoreDirectory, workspaceRoot, sessionId, _lifetime.Token);
+                coreCleanupIssues =
+                    await _storeOperations.CleanupDeletedSessionProjectionsAsync(protectedStoreDirectory, sessionId);
+            }
             else
-                await SessionStoreDeletion.DeleteAsync(protectedStoreDirectory, workspaceRoot, sessionId,
-                                                       _lifetime.Token);
+            {
+                coreCleanupIssues = await _storeOperations.DeleteSessionPermanentlyAsync(protectedStoreDirectory,
+                         workspaceRoot, sessionId,
+                         _lifetime.Token);
+            }
 
-            var cleanupIssues = new List<string>();
-            await RemoveDeletedSessionProjectionAsync(protectedStoreDirectory, sessionId, cleanupIssues);
+            // 旧侧栏偏好清理留在桌面资产内；失败并入清理提示，顺序保持在 Core 投影之后。
+            var cleanupIssues = new List<SessionStoreCleanupIssue>(coreCleanupIssues);
+            var legacyIssue   = await RemoveDeletedSessionLegacyPreferencesAsync(protectedStoreDirectory, sessionId);
+            if (legacyIssue is not null) cleanupIssues.Add(legacyIssue);
             Sessions.Remove(session);
             RebuildProjects();
             if (ReferenceEquals(SelectedSession, session))
                 SelectedSession = ConversationDraft();
 
             if (cleanupIssues.Count > 0)
-                Notice = $"会话记录已删除；部分侧栏投影清理失败：{string.Join("；", cleanupIssues)}";
+                Notice = $"会话记录已删除；部分侧栏投影清理失败：{DescribeSessionCleanupIssues(cleanupIssues)}";
             if (_sessionDeletionDialogVersion == dialogVersion) CloseSessionDeletion();
         }
         catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
@@ -136,57 +159,29 @@ public sealed partial class MainWindowViewModel
         }
     }
 
-    private async Task RemoveDeletedSessionProjectionAsync(
-        string storeDirectory, string sessionId, ICollection<string> cleanupIssues)
+    /// <summary>
+    ///     <para>把 Core 清理区域映射为界面提示标签，保持既有提示顺序与文案。</para>
+    ///     <para>Maps Core cleanup areas to notice labels, preserving the established order and wording.</para>
+    /// </summary>
+    private static string DescribeSessionCleanupIssues(IReadOnlyList<SessionStoreCleanupIssue> issues) =>
+        string.Join("；", issues.Select(issue => issue.Area switch
+        {
+            SessionStoreCleanupArea.ArchiveState => "归档状态",
+            SessionStoreCleanupArea.PinState     => "置顶状态",
+            SessionStoreCleanupArea.SessionIndex => "索引",
+            _                                    => "旧侧栏顺序"
+        }));
+
+    /// <summary>
+    ///     <para>清理桌面侧栏偏好中已删除会话的旧顺序与旧置顶引用；失败返回清理问题而不抛出。</para>
+    ///     <para>
+    ///         Clears the deleted session's legacy order and pin references from desktop preferences; a failure
+    ///         returns a cleanup issue instead of throwing.
+    ///     </para>
+    /// </summary>
+    private async Task<SessionStoreCleanupIssue?> RemoveDeletedSessionLegacyPreferencesAsync(
+        string storeDirectory, string sessionId)
     {
-        await _pinStateMutationGate.WaitAsync(CancellationToken.None);
-        try
-        {
-            try
-            {
-                var archives = await SessionStoreArchiveStore.SetArchivedAsync(
-                    storeDirectory, sessionId, false, CancellationToken.None);
-                SetStoreArchiveState(storeDirectory, archives);
-            }
-            catch (Exception exception)
-            {
-                cleanupIssues.Add("归档状态");
-                Trace.TraceError("Session archive cleanup for '{0}' failed: {1}", storeDirectory, exception.Message);
-            }
-
-            try
-            {
-                var pins = await SessionStorePinStore.SetSessionPinnedAsync(
-                    storeDirectory, sessionId, false, CancellationToken.None);
-                SetStorePinState(storeDirectory, pins);
-            }
-            catch (Exception exception)
-            {
-                cleanupIssues.Add("置顶状态");
-                Trace.TraceError("Session pin cleanup for '{0}' failed: {1}", storeDirectory, exception.Message);
-            }
-        }
-        finally
-        {
-            _pinnedSessionIdsByStore.Clear();
-            _archivedSessionIdsByStore.Clear();
-            _pinStateMutationGate.Release();
-        }
-
-        try
-        {
-            var index = new SessionIndexStore(storeDirectory);
-            var availability = await index.GetAvailabilityAsync(CancellationToken.None);
-            if (availability.Status == SessionIndexAvailabilityStatus.Available)
-                await index.RemoveAsync(sessionId, CancellationToken.None);
-        }
-        catch (Exception exception) when (exception is SessionIndexException or IOException or
-                                           UnauthorizedAccessException)
-        {
-            cleanupIssues.Add("索引");
-            Trace.TraceError("Session index cleanup for '{0}' failed: {1}", storeDirectory, exception.Message);
-        }
-
         try
         {
             await EnsureSidebarPreferencesLoadedAsync(CancellationToken.None);
@@ -202,11 +197,12 @@ public sealed partial class MainWindowViewModel
             });
             QueueSidebarPreferencesSave(true);
             await FlushSidebarPreferencesAsync();
+            return null;
         }
         catch (Exception exception)
         {
-            cleanupIssues.Add("旧侧栏顺序");
             Trace.TraceError("Legacy sidebar cleanup for '{0}' failed: {1}", storeDirectory, exception.Message);
+            return new SessionStoreCleanupIssue(SessionStoreCleanupArea.LegacySidebarOrder, exception.Message);
         }
     }
 
@@ -218,8 +214,8 @@ public sealed partial class MainWindowViewModel
 
     private void CloseSessionDeletion()
     {
-        IsSessionDeletionOpen = false;
-        _sessionDeletionTarget = null;
+        IsSessionDeletionOpen    = false;
+        _sessionDeletionTarget   = null;
         SessionDeletionErrorText = null;
         _sessionDeletionDialogVersion++;
         NotifySessionDeletionProperties();

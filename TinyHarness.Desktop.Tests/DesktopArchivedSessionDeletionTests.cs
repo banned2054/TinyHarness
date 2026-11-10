@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using NUnit.Framework;
+using TinyHarness.Core.Exceptions;
 using TinyHarness.Core.Models.Agent;
 using TinyHarness.Core.Models.ChatCompletions;
 using TinyHarness.Core.Models.Configuration;
@@ -24,9 +25,9 @@ public sealed class DesktopArchivedSessionDeletionTests
     [Test]
     public async Task ConfirmDeletion_RemovesLogAndProjections_AndRefreshDoesNotRestoreRow()
     {
-        using var fixture = Fixture.Create();
-        var id = await fixture.CreateArchivedSessionAsync();
-        await using var model = fixture.Window();
+        using var       fixture = Fixture.Create();
+        var             id      = await fixture.CreateArchivedSessionAsync();
+        await using var model   = fixture.Window();
         await model.InitializeAsync();
         model.ToggleArchiveViewCommand.Execute(null);
         var row = model.Sessions.Single(session => session.Id == id);
@@ -46,7 +47,7 @@ public sealed class DesktopArchivedSessionDeletionTests
         Assert.That(row.HasOpenRuntime, Is.False, "删除前应释放本地 runtime 与 writer。 ");
         Assert.That(model.SelectedSession, Is.Not.SameAs(row), "删除仍在当前页时切换到新建会话。 ");
         Assert.That((await SessionStoreArchiveStore.LoadAsync(fixture.Store, CancellationToken.None))
-                        .ArchivedSessionIds,
+                   .ArchivedSessionIds,
                     Does.Not.Contain(id));
         Assert.That((await SessionStorePinStore.LoadAsync(fixture.Store, CancellationToken.None)).PinnedSessionIds,
                     Does.Not.Contain(id));
@@ -60,9 +61,9 @@ public sealed class DesktopArchivedSessionDeletionTests
     [Test]
     public async Task CancelDeletion_LeavesArchivedSessionAndLogIntact()
     {
-        using var fixture = Fixture.Create();
-        var id = await fixture.CreateArchivedSessionAsync();
-        await using var model = fixture.Window();
+        using var       fixture = Fixture.Create();
+        var             id      = await fixture.CreateArchivedSessionAsync();
+        await using var model   = fixture.Window();
         await model.InitializeAsync();
         model.ToggleArchiveViewCommand.Execute(null);
         var row = model.Sessions.Single(session => session.Id == id);
@@ -79,14 +80,14 @@ public sealed class DesktopArchivedSessionDeletionTests
     [Test]
     public async Task ExternalWriterOccupancy_FailsWithoutRemovingSession()
     {
-        using var fixture = Fixture.Create();
-        var id = await fixture.CreateArchivedSessionAsync();
-        await using var model = fixture.Window();
+        using var       fixture = Fixture.Create();
+        var             id      = await fixture.CreateArchivedSessionAsync();
+        await using var model   = fixture.Window();
         await model.InitializeAsync();
         model.ToggleArchiveViewCommand.Execute(null);
         var row = model.Sessions.Single(session => session.Id == id);
         using var writer = await SessionStoreWriter.OpenExistingAsync(fixture.Store, id, null,
-                                                                       CancellationToken.None);
+                                                                      CancellationToken.None);
 
         model.OpenSessionDeletionCommand.Execute(row);
         model.ConfirmSessionDeletionCommand.Execute(null);
@@ -101,9 +102,9 @@ public sealed class DesktopArchivedSessionDeletionTests
     [Test]
     public async Task DeleteFailureAfterRuntimeRelease_LeavesSessionReopenable()
     {
-        using var fixture = Fixture.Create();
-        var id = await fixture.CreateArchivedSessionAsync();
-        await using var model = fixture.Window();
+        using var       fixture = Fixture.Create();
+        var             id      = await fixture.CreateArchivedSessionAsync();
+        await using var model   = fixture.Window();
         await model.InitializeAsync();
         model.ToggleArchiveViewCommand.Execute(null);
         var row = model.Sessions.Single(session => session.Id == id);
@@ -129,24 +130,115 @@ public sealed class DesktopArchivedSessionDeletionTests
         Assert.That(File.Exists(Path.Combine(fixture.Store, id + SessionStoreWriter.LogFileSuffix)), Is.True);
 
         model.DeleteSessionLogOverride = null;
-        row.Draft = "reopen after deletion failure";
+        row.Draft                      = "reopen after deletion failure";
         await row.SendAsync();
         await row.Completion;
         Assert.That(row.HasOpenRuntime, Is.True, "失败后会话应重新打开 runtime 并可续聊。 ");
     }
 
+    /// <summary>
+    ///     <para>删除不依赖预读历史：从未打开、从未加载历史的行也能完整删除并清理投影。</para>
+    ///     <para>
+    ///         Deletion never depends on preloaded history: a row that was never opened or history-loaded is
+    ///         still fully deleted with its projections.
+    ///     </para>
+    /// </summary>
     [Test]
-    public async Task DeletionWaitsForRefreshSnapshotBeforeRemovingRow()
+    public async Task ConfirmDeletion_SucceedsWithoutPreloadedHistory()
     {
-        using var fixture = Fixture.Create();
-        var id = await fixture.CreateArchivedSessionAsync();
-        await using var model = fixture.Window();
+        using var       fixture = Fixture.Create();
+        var             id      = await fixture.CreateArchivedSessionAsync();
+        await using var model   = fixture.Window();
         await model.InitializeAsync();
         model.ToggleArchiveViewCommand.Execute(null);
         var row = model.Sessions.Single(session => session.Id == id);
+        Assert.That(row.HasOpenRuntime, Is.False, "前置：目标会话未打开 runtime。 ");
+
+        model.OpenSessionDeletionCommand.Execute(row);
+        model.ConfirmSessionDeletionCommand.Execute(null);
+        await WaitUntilAsync(() => !model.Sessions.Contains(row));
+
+        Assert.That(File.Exists(Path.Combine(fixture.Store, id + SessionStoreWriter.LogFileSuffix)), Is.False);
+        Assert.That((await SessionStoreArchiveStore.LoadAsync(fixture.Store, CancellationToken.None))
+                   .ArchivedSessionIds,
+                    Does.Not.Contain(id));
+        Assert.That((await SessionStorePinStore.LoadAsync(fixture.Store, CancellationToken.None)).PinnedSessionIds,
+                    Does.Not.Contain(id));
+    }
+
+    /// <summary>
+    ///     <para>损坏日志不阻止永久删除：严格校验属于恢复路径，用户明确删除仍然成功并清理投影。</para>
+    ///     <para>
+    ///         A damaged journal never blocks permanent deletion: strict validation belongs to restore paths,
+    ///         and the user's explicit deletion still succeeds with projections cleared.
+    ///     </para>
+    /// </summary>
+    [Test]
+    public async Task ConfirmDeletion_DamagedLog_IsDeleted()
+    {
+        using var       fixture = Fixture.Create();
+        var             id      = await fixture.CreateArchivedSessionAsync();
+        await using var model   = fixture.Window();
+        await model.InitializeAsync();
+        var logPath = Path.Combine(fixture.Store, id + SessionStoreWriter.LogFileSuffix);
+        await File.WriteAllTextAsync(logPath, "{ damaged journal content", CancellationToken.None);
+        Assert.That(async () => await SessionStoreReader.ReadAsync(fixture.Store, id, CancellationToken.None),
+                    Throws.TypeOf<SessionStoreException>(), "前置：日志已损坏且严格读取会抛出。 ");
+        model.ToggleArchiveViewCommand.Execute(null);
+        var row = model.Sessions.Single(session => session.Id == id);
+
+        model.OpenSessionDeletionCommand.Execute(row);
+        model.ConfirmSessionDeletionCommand.Execute(null);
+        await WaitUntilAsync(() => !model.Sessions.Contains(row));
+
+        Assert.That(File.Exists(logPath), Is.False);
+        Assert.That((await SessionStoreArchiveStore.LoadAsync(fixture.Store, CancellationToken.None))
+                   .ArchivedSessionIds,
+                    Does.Not.Contain(id));
+        Assert.That(await new SessionIndexStore(fixture.Store).GetRowAsync(id, CancellationToken.None), Is.Null);
+    }
+
+    /// <summary>
+    ///     <para>会话置顶经统一入口持久化并更新行投影；取消置顶移除持久状态。</para>
+    ///     <para>
+    ///         Session pinning persists through the unified entry and updates the row projection; unpinning
+    ///         removes the persisted state.
+    ///     </para>
+    /// </summary>
+    [Test]
+    public async Task ToggleSessionPin_PersistsThroughCoreEntryAndUpdatesRow()
+    {
+        using var       fixture = Fixture.Create();
+        var             id      = await fixture.CreateUnpinnedSessionAsync();
+        await using var model   = fixture.Window();
+        await model.InitializeAsync();
+        var row = model.Sessions.Single(session => session.Id == id);
+        Assert.That(row.CanPin, Is.True, "前置：正式会话行可以置顶。 ");
+
+        model.ToggleSessionPinCommand.Execute(row);
+        await WaitUntilAsync(() => row.IsPinned);
+        Assert.That((await SessionStorePinStore.LoadAsync(fixture.Store, CancellationToken.None)).PinnedSessionIds,
+                    Does.Contain(id));
+
+        model.ToggleSessionPinCommand.Execute(row);
+        await WaitUntilAsync(() => !row.IsPinned);
+        Assert.That((await SessionStorePinStore.LoadAsync(fixture.Store, CancellationToken.None)).PinnedSessionIds,
+                    Does.Not.Contain(id));
+        Assert.That(row.IsPinned, Is.False);
+    }
+
+    [Test]
+    public async Task DeletionWaitsForRefreshSnapshotBeforeRemovingRow()
+    {
+        using var       fixture = Fixture.Create();
+        var             id      = await fixture.CreateArchivedSessionAsync();
+        await using var model   = fixture.Window();
+        await model.InitializeAsync();
+        model.ToggleArchiveViewCommand.Execute(null);
+        var row            = model.Sessions.Single(session => session.Id == id);
         var refreshEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var allowRefresh = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var resolveCount = 0;
+        var allowRefresh   = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var resolveCount   = 0;
         model.ResolveDirectoryOverride = async (_, token) =>
         {
             if (Interlocked.Increment(ref resolveCount) == 1)
@@ -188,8 +280,8 @@ public sealed class DesktopArchivedSessionDeletionTests
         private Fixture()
         {
             Workspace = Path.Combine(_root, "workspace");
-            Store = Path.Combine(_root, "sessions");
-            Config = Path.Combine(_root, "user.json");
+            Store     = Path.Combine(_root, "sessions");
+            Config    = Path.Combine(_root, "user.json");
             Directory.CreateDirectory(Workspace);
             Directory.CreateDirectory(Store);
         }
@@ -197,47 +289,6 @@ public sealed class DesktopArchivedSessionDeletionTests
         public string Workspace { get; }
         public string Store     { get; }
         public string Config    { get; }
-
-        public static Fixture Create() => new();
-
-        public MainWindowViewModel Window() => new(
-            new DesktopSessionFactory((_, _) => new OfflineClient(), new Credentials(), Config), Config, action =>
-            {
-                action();
-                return ValueTask.CompletedTask;
-            });
-
-        public async Task<string> CreateArchivedSessionAsync()
-        {
-            var session = new ChatSession(Guid.NewGuid().ToString("N"), Workspace, Identity, null, null,
-                                          SessionProjectAssignmentState.NoProject);
-            using (var writer = new SessionStoreWriter(Store, session.Id))
-            using (var host = new ChatSessionHost(session, new ConversationContext(new ContextOptions()),
-                                                 new AgentOptions
-                                                 {
-                                                     Model = "offline", MaxAgentSteps = 10, DefaultToolTimeoutSeconds = 30
-                                                 }, new OfflineClient(),
-                                                 new ToolRegistry([]), "session deletion tests", sessionWriter: writer))
-                await host.SubmitTurnAsync("seed archived session", CancellationToken.None);
-            await new SessionIndexReconciler(new SessionIndexStore(Store)).ReconcileAsync(CancellationToken.None);
-            await SessionStoreArchiveStore.SetArchivedAsync(Store, session.Id, true, CancellationToken.None);
-            await SessionStorePinStore.SetSessionPinnedAsync(Store, session.Id, true, CancellationToken.None);
-            await UserConfigStore.SaveAsync(Config, new UserConfig
-            {
-                DefaultProfile = "offline",
-                Profiles =
-                [
-                    new UserProfile
-                    {
-                        Name = "offline", Endpoint = Identity.Endpoint, ApiKeyCredentialTarget = "fixture",
-                        DefaultModel = "offline",
-                        Models = [new UserProfileModel { Id = "offline", ContextWindowTokens = 128_000 }]
-                    }
-                ],
-                Settings = new UserConfigSettings { SessionStoreDirectory = Store }
-            }, CancellationToken.None);
-            return session.Id;
-        }
 
         public void Dispose()
         {
@@ -250,14 +301,101 @@ public sealed class DesktopArchivedSessionDeletionTests
                 // 临时测试数据清理失败不掩盖测试结果。
             }
         }
+
+        public static Fixture Create() => new();
+
+        public MainWindowViewModel Window() => new(
+                                                   new DesktopSessionFactory((_, _) => new OfflineClient(),
+                                                                             new Credentials(), Config), Config,
+                                                   action =>
+                                                   {
+                                                       action();
+                                                       return ValueTask.CompletedTask;
+                                                   });
+
+        public async Task<string> CreateArchivedSessionAsync()
+        {
+            var session = new ChatSession(Guid.NewGuid().ToString("N"), Workspace, Identity, null, null,
+                                          SessionProjectAssignmentState.NoProject);
+            using (var writer = new SessionStoreWriter(Store, session.Id))
+            using (var host = new ChatSessionHost(session, new ConversationContext(new ContextOptions()),
+                                                  new AgentOptions
+                                                  {
+                                                      Model                     = "offline", MaxAgentSteps = 10,
+                                                      DefaultToolTimeoutSeconds = 30
+                                                  }, new OfflineClient(),
+                                                  new ToolRegistry([]), "session deletion tests",
+                                                  sessionWriter : writer))
+            {
+                await host.SubmitTurnAsync("seed archived session", CancellationToken.None);
+            }
+
+            await new SessionIndexReconciler(new SessionIndexStore(Store)).ReconcileAsync(CancellationToken.None);
+            await SessionStoreArchiveStore.SetArchivedAsync(Store, session.Id, true, CancellationToken.None);
+            await SessionStorePinStore.SetSessionPinnedAsync(Store, session.Id, true, CancellationToken.None);
+            await UserConfigStore.SaveAsync(Config, new UserConfig
+            {
+                DefaultProfile = "offline",
+                Profiles =
+                [
+                    new UserProfile
+                    {
+                        Name         = "offline", Endpoint = Identity.Endpoint, ApiKeyCredentialTarget = "fixture",
+                        DefaultModel = "offline",
+                        Models       = [new UserProfileModel { Id = "offline", ContextWindowTokens = 128_000 }]
+                    }
+                ],
+                Settings = new UserConfigSettings { SessionStoreDirectory = Store }
+            }, CancellationToken.None);
+            return session.Id;
+        }
+
+        /// <summary>
+        ///     <para>播种一份未归档、未置顶的正式会话，供置顶主路径测试使用。</para>
+        ///     <para>Seeds one established, unarchived, unpinned session for the pin main-path test.</para>
+        /// </summary>
+        public async Task<string> CreateUnpinnedSessionAsync()
+        {
+            var session = new ChatSession(Guid.NewGuid().ToString("N"), Workspace, Identity, null, null,
+                                          SessionProjectAssignmentState.NoProject);
+            using (var writer = new SessionStoreWriter(Store, session.Id))
+            using (var host = new ChatSessionHost(session, new ConversationContext(new ContextOptions()),
+                                                  new AgentOptions
+                                                  {
+                                                      Model                     = "offline", MaxAgentSteps = 10,
+                                                      DefaultToolTimeoutSeconds = 30
+                                                  }, new OfflineClient(),
+                                                  new ToolRegistry([]), "session deletion tests",
+                                                  sessionWriter : writer))
+            {
+                await host.SubmitTurnAsync("seed unpinned session", CancellationToken.None);
+            }
+
+            await new SessionIndexReconciler(new SessionIndexStore(Store)).ReconcileAsync(CancellationToken.None);
+            await UserConfigStore.SaveAsync(Config, new UserConfig
+            {
+                DefaultProfile = "offline",
+                Profiles =
+                [
+                    new UserProfile
+                    {
+                        Name         = "offline", Endpoint = Identity.Endpoint, ApiKeyCredentialTarget = "fixture",
+                        DefaultModel = "offline",
+                        Models       = [new UserProfileModel { Id = "offline", ContextWindowTokens = 128_000 }]
+                    }
+                ],
+                Settings = new UserConfigSettings { SessionStoreDirectory = Store }
+            }, CancellationToken.None);
+            return session.Id;
+        }
     }
 
     private sealed class Credentials : ICredentialStore
     {
-        public bool IsSupported => true;
-        public string? Read(string targetName) => "offline-test-key";
-        public void Save(string targetName, string secret) => throw new NotSupportedException();
-        public bool Delete(string targetName) => throw new NotSupportedException();
+        public bool    IsSupported                              => true;
+        public string? Read(string   targetName)                => "offline-test-key";
+        public void    Save(string   targetName, string secret) => throw new NotSupportedException();
+        public bool    Delete(string targetName) => throw new NotSupportedException();
     }
 
     private sealed class OfflineClient : IChatCompletionClient

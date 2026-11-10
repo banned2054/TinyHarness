@@ -46,39 +46,15 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
         PinnedCategory, ProjectsCategory, RecentCategory, SessionsCategory, ArchivedCategory
     ];
 
-    private readonly HashSet<string> _archiveStateUnavailableStores = new(
-                                                                          OperatingSystem.IsWindows()
-                                                                              ? StringComparer.OrdinalIgnoreCase
-                                                                              : StringComparer.Ordinal);
-
-    private readonly Dictionary<string, SessionStoreArchives> _archiveStatesByStore =
-        new(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
-
-    // 置顶/归档 ID 的按 store 懒构建查询缓存：快照写入点整体 Clear，下一次查询按当前快照重建。
-    private readonly Dictionary<string, HashSet<string>> _archivedSessionIdsByStore =
-        new(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
-
     private readonly ProjectCatalogMonitor _catalogMonitor = new();
 
     private readonly Func<Action, ValueTask>?        _dispatch;
     private readonly DesktopSessionFactory           _factory;
-    private readonly List<SessionViewModel>          _failedDrafts         = [];
-    private readonly CancellationTokenSource         _lifetime             = new();
-    private readonly object                          _listProjectionGate   = new();
-    private readonly DesktopSessionManager           _manager              = new();
-    private readonly ConcurrentQueue<SessionSummary> _pendingSummaryRows   = new();
-    private readonly SemaphoreSlim                   _pinStateMutationGate = new(1, 1);
-
-    private readonly HashSet<string> _pinStateUnavailableStores = new(
-                                                                      OperatingSystem.IsWindows()
-                                                                          ? StringComparer.OrdinalIgnoreCase
-                                                                          : StringComparer.Ordinal);
-
-    private readonly Dictionary<string, SessionStorePins> _pinStatesByStore =
-        new(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
-
-    private readonly Dictionary<string, HashSet<string>> _pinnedSessionIdsByStore =
-        new(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
+    private readonly List<SessionViewModel>          _failedDrafts       = [];
+    private readonly CancellationTokenSource         _lifetime           = new();
+    private readonly object                          _listProjectionGate = new();
+    private readonly DesktopSessionManager           _manager            = new();
+    private readonly ConcurrentQueue<SessionSummary> _pendingSummaryRows = new();
 
     private readonly HashSet<string> _projectReloadRetried       = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim   _refreshGate                = new(1, 1);
@@ -86,6 +62,9 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
     private readonly string          _sidebarPreferencesPath     = string.Empty;
 
     private readonly SemaphoreSlim _sidebarPreferencesSaveGate = new(1, 1);
+
+    // 置顶、归档与删除的存储协调入口：按 store 持快照与可用性，串行门与索引维护收口在 Core。
+    private readonly SessionStoreOperations _storeOperations = new();
 
     // 上次下发的项目菜单数组：内容逐引用相同时复用实例，让 SessionViewModel.ProjectOptions 的引用相等短路跳过整条菜单重建链。
     private IReadOnlyList<ProjectViewModel>?                  _cachedProjectOptions;
@@ -127,7 +106,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
     private ProjectViewModel?        _renameTarget;
     private bool                     _renamingProject;
     private SessionViewModel?        _selected;
-    private long                    _selectionRevision;
+    private long                     _selectionRevision;
     private bool                     _settingsOpen;
     private Task?                    _shutdown;
     private SidebarPreferences       _sidebarPreferences = new();
@@ -169,7 +148,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
         ToggleSessionArchiveCommand = new RelayCommand<SessionViewModel>(ToggleSessionArchive);
         OpenSessionDeletionCommand = new RelayCommand<SessionViewModel>(OpenSessionDeletion);
         ConfirmSessionDeletionCommand = new RelayCommand(() => _ = ConfirmSessionDeletionAsync());
-        CancelSessionDeletionCommand  = new RelayCommand(CancelSessionDeletion);
+        CancelSessionDeletionCommand = new RelayCommand(CancelSessionDeletion);
         ToggleArchiveViewCommand = new RelayCommand(ToggleArchiveView);
         ToggleProjectCommand = new RelayCommand<ProjectViewModel>(ToggleProjectGroup);
         ShowMoreSessionsCommand = new RelayCommand<ProjectViewModel>(group =>
@@ -458,7 +437,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
         set
         {
             if (ReferenceEquals(_selected, value)) return;
-            var previous                                            = _selected;
+            var previous = _selected;
             _selectionRevision++;
             if (previous is { } previousRow) previousRow.IsSelected = false;
             if (!SetProperty(ref _selected, value) || value is null) return;
@@ -1646,28 +1625,20 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
     /// </summary>
     private async Task PreparePinStateAsync(string storeDirectory, CancellationToken cancellationToken)
     {
-        var storeKey = PinStoreKey(storeDirectory);
-        await _pinStateMutationGate.WaitAsync(cancellationToken);
+        // Core 解析成功前使用传入 store 的旧列表；解析结果不一致时入口先拒绝，旧列表不会被使用。
+        var storeKey      = SessionStoreOperations.StoreKey(storeDirectory);
+        var legacy        = StoreSidebarPreferences(storeKey);
+        var legacyProject = legacy.LegacyPinnedProjectOrder;
+        var legacySession = legacy.LegacyPinnedSessionIds;
         try
         {
-            var protectedStoreDirectory = await ResolveProtectedDirectoryAsync(
-                                                                               SelectedSession?.WorkspaceRoot ??
-                                                                               Environment.CurrentDirectory,
-                                                                               cancellationToken);
-            if (!ProjectRoots.AreEqual(protectedStoreDirectory, storeDirectory))
-                throw new SessionStoreException(
-                                                "The configured session-store directory changed before its pin state was loaded.");
-
-            storeKey = PinStoreKey(protectedStoreDirectory);
-            var legacy = StoreSidebarPreferences(storeKey);
-            var pins = await SessionStorePinStore.LoadOrMigrateAsync(storeKey,
-                                                                     legacy.LegacyPinnedProjectOrder,
-                                                                     legacy.LegacyPinnedSessionIds,
-                                                                     cancellationToken);
-            _pinStatesByStore[storeKey] = pins;
-            _pinStateUnavailableStores.Remove(storeKey);
-
-            if (legacy.LegacyPinnedProjectOrder.Count == 0 && legacy.LegacyPinnedSessionIds.Count == 0) return;
+            var preparation =
+                await _storeOperations.PreparePinStateAsync(storeDirectory,
+                                                            token => ResolveProtectedDirectoryAsync(
+                                                             SelectedSession?.WorkspaceRoot ??
+                                                             Environment.CurrentDirectory, token),
+                                                            legacyProject, legacySession, cancellationToken);
+            if (!preparation.LegacyPinsPresent) return;
 
             UpdateStoreSidebarPreferences(storeKey, preferences => preferences with
             {
@@ -1683,39 +1654,22 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
         catch (Exception exception) when (exception is SessionStorePinException or SessionStoreException
                                            or IOException or UnauthorizedAccessException)
         {
-            _pinStatesByStore.Remove(storeKey);
-            _pinStateUnavailableStores.Add(storeKey);
             Notice = $"置顶信息无法读取或迁移：{exception.Message}";
-        }
-        finally
-        {
-            // 成功写入与失败移除都可能改快照：在 finally 整体失效两个 ID 集合缓存，未变化的轮次重建结果不变。
-            _pinnedSessionIdsByStore.Clear();
-            _archivedSessionIdsByStore.Clear();
-            _pinStateMutationGate.Release();
         }
     }
 
     private async Task PrepareArchiveStateAsync(string storeDirectory, CancellationToken cancellationToken)
     {
-        var storeKey = PinStoreKey(storeDirectory);
-        await _pinStateMutationGate.WaitAsync(cancellationToken);
         try
         {
-            var protectedStoreDirectory = await ResolveProtectedDirectoryAsync(
-                                                                               SelectedSession?.WorkspaceRoot ??
-                                                                               Environment.CurrentDirectory,
-                                                                               cancellationToken);
-            if (!ProjectRoots.AreEqual(protectedStoreDirectory, storeDirectory))
-                throw new SessionStoreException(
-                                                "The configured session-store directory changed before its archive state was loaded.");
-
-            storeKey = PinStoreKey(protectedStoreDirectory);
-            var archives = await SessionStoreArchiveStore.LoadAsync(storeKey, cancellationToken);
-            _archiveStatesByStore[storeKey] = archives;
-            _archiveStateUnavailableStores.Remove(storeKey);
+            var archives =
+                await _storeOperations.PrepareArchiveStateAsync(storeDirectory,
+                                                                token => ResolveProtectedDirectoryAsync(
+                                                                 SelectedSession?.WorkspaceRoot ??
+                                                                 Environment.CurrentDirectory, token),
+                                                                cancellationToken);
             foreach (var session in Sessions.Where(session => session.StoreDirectory is { } source &&
-                                                              ProjectRoots.AreEqual(source, storeKey)))
+                                                              ProjectRoots.AreEqual(source, storeDirectory)))
                 session.SetArchived(archives.ArchivedSessionIds.Contains(session.Id, StringComparer.Ordinal));
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -1725,15 +1679,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
         catch (Exception exception) when (exception is SessionStoreArchiveException or SessionStoreException
                                            or IOException or UnauthorizedAccessException)
         {
-            _archiveStateUnavailableStores.Add(storeKey);
             Notice = $"归档信息无法读取，会话归档状态未知：{exception.Message}";
-        }
-        finally
-        {
-            // 成功写入与失败移除都可能改快照：在 finally 整体失效两个 ID 集合缓存，未变化的轮次重建结果不变。
-            _pinnedSessionIdsByStore.Clear();
-            _archivedSessionIdsByStore.Clear();
-            _pinStateMutationGate.Release();
         }
     }
 
@@ -2411,16 +2357,12 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
     /// </summary>
     private async Task SetProjectPinAsync(string projectId, string storeDirectory, bool isPinned)
     {
-        var acquired = false;
         try
         {
-            await _pinStateMutationGate.WaitAsync(_lifetime.Token);
-            acquired = true;
-            if (IsProjectDeletionRunning) return;
-            var pins = await SessionStorePinStore.SetProjectPinnedAsync(storeDirectory, projectId, isPinned,
-                                                                        _lifetime.Token);
-            SetStorePinState(storeDirectory, pins);
-            RebuildProjects();
+            var applied = await _storeOperations.SetProjectPinnedAsync(storeDirectory, projectId, isPinned,
+                                                                       () => IsProjectDeletionRunning,
+                                                                       _lifetime.Token);
+            if (applied) RebuildProjects();
         }
         catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
         {
@@ -2430,10 +2372,6 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
         {
             Notice = $"项目置顶状态保存失败：{exception.Message}";
         }
-        finally
-        {
-            if (acquired) _pinStateMutationGate.Release();
-        }
     }
 
     /// <summary>
@@ -2442,14 +2380,9 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
     /// </summary>
     private async Task SetSessionPinAsync(string storeDirectory, string sessionId, bool isPinned)
     {
-        var acquired = false;
         try
         {
-            await _pinStateMutationGate.WaitAsync(_lifetime.Token);
-            acquired = true;
-            var pins = await SessionStorePinStore.SetSessionPinnedAsync(storeDirectory, sessionId, isPinned,
-                                                                        _lifetime.Token);
-            SetStorePinState(storeDirectory, pins);
+            await _storeOperations.SetSessionPinnedAsync(storeDirectory, sessionId, isPinned, _lifetime.Token);
             RebuildSidebarRows();
         }
         catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
@@ -2460,54 +2393,18 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
         {
             Notice = $"会话置顶状态保存失败：{exception.Message}";
         }
-        finally
-        {
-            if (acquired) _pinStateMutationGate.Release();
-        }
     }
 
     private async Task SetSessionArchivedAsync(
-        SessionViewModel session, string storeDirectory, string workspaceRoot, string sessionId, bool isArchived,
-        bool wasSelected, SessionViewModel? selectedAtRequest, long selectionRevision)
+        SessionViewModel session,     string storeDirectory, string workspaceRoot, string sessionId, bool isArchived,
+        bool             wasSelected, SessionViewModel? selectedAtRequest, long selectionRevision)
     {
-        var acquired = false;
         try
         {
-            await _pinStateMutationGate.WaitAsync(_lifetime.Token);
-            acquired = true;
-            var protectedStoreDirectory = await ResolveProtectedDirectoryAsync(workspaceRoot, _lifetime.Token);
-            if (!ProjectRoots.AreEqual(protectedStoreDirectory, storeDirectory))
-                throw new SessionStoreException(
-                                                "The configured session-store directory changed before its archive state was saved.");
-
-            var archives = await SessionStoreArchiveStore.SetArchivedAsync(
-                                                                           storeDirectory, sessionId, isArchived,
-                                                                           _lifetime.Token);
-            SetStoreArchiveState(storeDirectory, archives);
-            // 权威归档状态已保存；索引投影尽力同步，失败不回滚归档保存，由后台对账从归档来源追平。
-            // The authoritative archive state is saved; the index projection syncs best-effort — a failure never
-            // rolls the save back, and background reconciliation catches up from the archive source.
-            try
-            {
-                var index        = new SessionIndexStore(storeDirectory);
-                // 索引缺失或不可用时不同步也不创建库文件：归档权威已保存，投影缺口留给后台对账追平。
-                // A missing or unusable index skips the sync without creating a database file: the authoritative
-                // archive state is saved, and background reconciliation closes the projection gap.
-                var availability = await index.GetAvailabilityAsync(_lifetime.Token).ConfigureAwait(false);
-                if (availability.Status == SessionIndexAvailabilityStatus.Available)
-                    await index.SyncArchiveProjectionAsync(
-                                                           new HashSet<string>(archives.ArchivedSessionIds,
-                                                                               StringComparer.Ordinal),
-                                                           _lifetime.Token)
-                               .ConfigureAwait(false);
-            }
-            catch (Exception indexException) when (indexException is SessionIndexException or IOException or
-                                                                     UnauthorizedAccessException)
-            {
-                Trace.TraceError("Session index archive projection for '{0}' failed to sync: {1}",
-                                 storeDirectory, indexException.Message);
-            }
-
+            await _storeOperations.SetSessionArchivedAsync(storeDirectory,
+                                                           token =>
+                                                               ResolveProtectedDirectoryAsync(workspaceRoot, token),
+                                                           sessionId, isArchived, _lifetime.Token);
             await InvokeOnUiAsync(() =>
             {
                 foreach (var row in Sessions.Where(row => row.Id == sessionId              &&
@@ -2516,7 +2413,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
                     row.SetArchived(isArchived);
                 RebuildProjects();
 
-                if (isArchived && wasSelected &&
+                if (isArchived                                          && wasSelected &&
                     ReferenceEquals(SelectedSession, selectedAtRequest) &&
                     _selectionRevision == selectionRevision)
                     NewConversation();
@@ -2533,7 +2430,6 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
         }
         finally
         {
-            if (acquired) _pinStateMutationGate.Release();
             session.EndArchiveMutation();
         }
     }
@@ -2541,17 +2437,13 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
     private async Task MovePinnedProjectAsync(
         string storeDirectory, string sourceProjectId, string targetProjectId, bool insertAfter)
     {
-        var acquired = false;
         try
         {
-            await _pinStateMutationGate.WaitAsync(_lifetime.Token);
-            acquired = true;
-            if (IsProjectDeletionRunning) return;
-            var pins = await SessionStorePinStore.MovePinnedProjectAsync(storeDirectory, sourceProjectId,
-                                                                         targetProjectId, insertAfter,
-                                                                         _lifetime.Token);
-            SetStorePinState(storeDirectory, pins);
-            RebuildProjects();
+            var applied = await _storeOperations.MovePinnedProjectAsync(storeDirectory, sourceProjectId,
+                                                                        targetProjectId, insertAfter,
+                                                                        () => IsProjectDeletionRunning,
+                                                                        _lifetime.Token);
+            if (applied) RebuildProjects();
         }
         catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
         {
@@ -2561,99 +2453,37 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
         {
             Notice = $"置顶项目顺序保存失败：{exception.Message}";
         }
-        finally
-        {
-            if (acquired) _pinStateMutationGate.Release();
-        }
     }
 
     private bool CanUsePinState(string storeDirectory)
     {
-        if (!_pinStateUnavailableStores.Contains(PinStoreKey(storeDirectory))) return true;
+        if (!_storeOperations.IsPinStateUnavailable(storeDirectory)) return true;
         Notice = "当前会话存储目录的置顶状态不可用；请刷新历史后重试。";
         return false;
     }
 
     private bool CanUseArchiveState(string storeDirectory)
     {
-        if (!_archiveStateUnavailableStores.Contains(PinStoreKey(storeDirectory))) return true;
+        if (!_storeOperations.IsArchiveStateUnavailable(storeDirectory)) return true;
         Notice = "当前归档状态未知，无法查看或修改归档状态；请刷新历史后重试。";
         return false;
-    }
-
-    private void SetStorePinState(string storeDirectory, SessionStorePins pins)
-    {
-        var storeKey = PinStoreKey(storeDirectory);
-        _pinStatesByStore[storeKey] = pins;
-        _pinStateUnavailableStores.Remove(storeKey);
-        // 快照已变：整体失效两个 ID 集合缓存，懒重建成本可忽略。
-        _pinnedSessionIdsByStore.Clear();
-        _archivedSessionIdsByStore.Clear();
-    }
-
-    private SessionStorePins PinsForStore(string? storeDirectory)
-    {
-        if (storeDirectory is null) return SessionStorePins.Empty();
-        return _pinStatesByStore.GetValueOrDefault(PinStoreKey(storeDirectory)) ?? SessionStorePins.Empty();
-    }
-
-    private void SetStoreArchiveState(string storeDirectory, SessionStoreArchives archives)
-    {
-        var storeKey = PinStoreKey(storeDirectory);
-        _archiveStatesByStore[storeKey] = archives;
-        _archiveStateUnavailableStores.Remove(storeKey);
-        // 快照已变：整体失效两个 ID 集合缓存，懒重建成本可忽略。
-        _pinnedSessionIdsByStore.Clear();
-        _archivedSessionIdsByStore.Clear();
-    }
-
-    private SessionStoreArchives ArchivesForStore(string? storeDirectory)
-    {
-        if (storeDirectory is null) return SessionStoreArchives.Empty();
-        return _archiveStatesByStore.GetValueOrDefault(PinStoreKey(storeDirectory)) ??
-               SessionStoreArchives.Empty();
-    }
-
-    /// <summary>
-    ///     <para>按 store 懒构建已归档会话 ID 集合；快照写入点整体失效后由下一次查询重建。</para>
-    ///     <para>
-    ///         Lazily builds a store's archived-session id set; snapshot writes invalidate it wholesale and the
-    ///         next query rebuilds it.
-    ///     </para>
-    /// </summary>
-    private HashSet<string> ArchivedSessionIdsForStore(string storeDirectory)
-    {
-        var storeKey = PinStoreKey(storeDirectory);
-        if (_archivedSessionIdsByStore.TryGetValue(storeKey, out var archivedIds)) return archivedIds;
-        var ids = ArchivesForStore(storeDirectory).ArchivedSessionIds.ToHashSet(StringComparer.Ordinal);
-        _archivedSessionIdsByStore[storeKey] = ids;
-        return ids;
-    }
-
-    /// <summary>
-    ///     <para>按 store 懒构建置顶会话 ID 集合；快照写入点整体失效后由下一次查询重建。</para>
-    ///     <para>
-    ///         Lazily builds a store's pinned-session id set; snapshot writes invalidate it wholesale and the
-    ///         next query rebuilds it.
-    ///     </para>
-    /// </summary>
-    private HashSet<string> PinnedSessionIdsForStore(string storeDirectory)
-    {
-        var storeKey = PinStoreKey(storeDirectory);
-        if (_pinnedSessionIdsByStore.TryGetValue(storeKey, out var pinnedIds)) return pinnedIds;
-        var ids = PinsForStore(storeDirectory).PinnedSessionIds.ToHashSet(StringComparer.Ordinal);
-        _pinnedSessionIdsByStore[storeKey] = ids;
-        return ids;
     }
 
     private bool IsSessionArchived(SessionViewModel session)
     {
         if (session.Id is not { } id || session.StoreDirectory is not { } store) return false;
-        return ArchivedSessionIdsForStore(store).Contains(id);
+        return _storeOperations.ArchivedSessionIdsForStore(store).Contains(id);
     }
 
-    private static string PinStoreKey(string storeDirectory) =>
-        Path.TrimEndingDirectorySeparator(Path.GetFullPath(storeDirectory));
+    /// <summary>
+    ///     <para>按会话所属 store 查询其置顶状态。</para>
+    ///     <para>Looks up the pinned state in the session's owning store.</para>
+    /// </summary>
+    private bool IsSessionPinned(SessionViewModel session)
+    {
+        if (session.Id is not { } id || session.StoreDirectory is not { } store) return false;
+        return _storeOperations.PinnedSessionIdsForStore(store).Contains(id);
+    }
 
     /// <summary>
     ///     <para>按目录定位偏好状态并替换对应快照，不把不同 store 的同名 ID 合并。</para>
@@ -2903,7 +2733,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
         var projectGroups    = activityOrder.Where(group => group.Project is not null).ToArray();
         var storePreferences = StoreSidebarPreferences(_storeDirectory);
         var manualOrder      = storePreferences.ManualProjectOrder.ToList();
-        var pinnedOrder      = PinsForStore(_storeDirectory).PinnedProjectIds.ToList();
+        var pinnedOrder      = _storeOperations.PinsForStore(_storeDirectory).PinnedProjectIds.ToList();
         var pinnedIds        = pinnedOrder.ToHashSet(StringComparer.Ordinal);
         var newProjectKeys = projectGroups.Where(group => !group.IsDeleting)
                                           .Select(group => group.Key)
@@ -3003,7 +2833,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
         foreach (var session in items)
         {
             if (session.StoreDirectory is not { } store) continue;
-            var key = PinStoreKey(store);
+            var key = SessionStoreOperations.StoreKey(store);
             if (orders.ContainsKey(key)) continue;
 
             var manualOrder = StoreSidebarPreferences(key).ManualSessionOrder;
@@ -3014,8 +2844,9 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
 
         int ManualIndex(SessionViewModel session)
         {
-            if (session.Id is { } id                                  && session.StoreDirectory is { } store &&
-                orders.TryGetValue(PinStoreKey(store), out var order) && order.TryGetValue(id, out var index))
+            if (session.Id is { } id && session.StoreDirectory is { } store &&
+                orders.TryGetValue(SessionStoreOperations.StoreKey(store), out var order) &&
+                order.TryGetValue(id, out var index))
                 return index;
             return int.MaxValue;
         }
@@ -3040,7 +2871,8 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
         var pathComparer = OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
         var changed      = false;
         var sessionsByStore = Sessions.Where(session => session.Id is not null && session.StoreDirectory is not null)
-                                      .GroupBy(session => PinStoreKey(session.StoreDirectory!), pathComparer);
+                                      .GroupBy(session => SessionStoreOperations.StoreKey(session.StoreDirectory!),
+                                               pathComparer);
         foreach (var storeSessions in sessionsByStore)
         {
             var order = StoreSidebarPreferences(storeSessions.Key).ManualSessionOrder.ToList();
@@ -3187,7 +3019,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
         {
             session.SetPinned(session.CanPin && IsSessionPinned(session));
             if (session.StoreDirectory is not { } archiveStore ||
-                !_archiveStateUnavailableStores.Contains(PinStoreKey(archiveStore)))
+                !_storeOperations.IsArchiveStateUnavailable(archiveStore))
                 session.SetArchived(IsSessionArchived(session));
         }
 
@@ -3204,7 +3036,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
             else
             {
                 var stateUnknown = _storeDirectory is { } store &&
-                                   _archiveStateUnavailableStores.Contains(PinStoreKey(store));
+                                   _storeOperations.IsArchiveStateUnavailable(store);
                 rows.Add(stateUnknown ? ArchiveUnavailableCategory : ArchivedEmptyCategory);
             }
         }
@@ -3289,16 +3121,6 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
     {
         rows.Add(category);
         if (category.IsExpanded) rows.AddRange(categoryRows);
-    }
-
-    /// <summary>
-    ///     <para>按会话所属 store 查询其置顶状态。</para>
-    ///     <para>Looks up the pinned state in the session's owning store.</para>
-    /// </summary>
-    private bool IsSessionPinned(SessionViewModel session)
-    {
-        if (session.Id is not { } id || session.StoreDirectory is not { } store) return false;
-        return PinnedSessionIdsForStore(store).Contains(id);
     }
 
     /// <summary>
@@ -3502,49 +3324,25 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
                 throw new SessionStoreException(
                                                 "The configured session-store directory changed before project deletion; reload the project and retry.");
 
-            storeDirectory = protectedStoreDirectory;
-            var catalogPath = ProjectStore.FilePath(storeDirectory);
-            var deleting = await ProjectStore.BeginDeletionAsync(
-                                                                 catalogPath, project.Id, project.Revision,
-                                                                 cancellationToken : _lifetime.Token);
-            group.Update(deleting);
-            if (SameSidebarStore(_storeDirectory, storeDirectory))
-            {
-                _projects = _projects.Select(item => item.Id == deleting.Id ? deleting : item).ToArray();
-                RebuildProjects();
-            }
-
-            NotifyProjectDeletionProperties();
-
-            foreach (var draft in drafts)
-                await draft.SelectProjectAsync(null, draft.WorkspaceRoot, storeDirectory);
-
-            foreach (var session in projectSessions.Where(session => session.HasOpenRuntime))
-                await session.UnassignProjectAsync(project.Id, _lifetime.Token);
-
-            var result = await Task.Run(() => SessionProjectUnbinder.UnassignAsync(storeDirectory, project.Id,
-                                                                                  _lifetime.Token), _lifetime.Token);
-            ApplyProjectUnassignmentResult(storeDirectory, project.Id, result);
-            if (SameSidebarStore(_storeDirectory, storeDirectory)) RebuildProjects();
-            if (result.Cancelled && _lifetime.IsCancellationRequested)
-                throw new OperationCanceledException(_lifetime.Token);
-            if (!result.IsComplete)
-                throw new InvalidOperationException(DescribeIncompleteProjectUnassignment(result));
-
-            await RemoveProjectSidebarStateAsync(storeDirectory, project.Id, _lifetime.Token);
-            await ProjectStore.CompleteDeletionAsync(catalogPath, project.Id, deleting.Revision, _lifetime.Token);
-
-            if (SameSidebarStore(_storeDirectory, storeDirectory))
-            {
-                _projects = _projects.Where(item => item.Id != project.Id).ToArray();
-                RebuildProjects();
-            }
-
-            if (_projectDeletionDialogVersion == dialogVersion) CloseProjectDeletion();
+            // 标记、解绑、置顶清理与最终移除由 Core 编排；界面状态经 gateway 钩子在各阶段应用。
+            ISessionProjectDeletionGateway gateway =
+                new ProjectDeletionGateway(this, project.Id, protectedStoreDirectory, drafts, projectSessions, group,
+                                           dialogVersion);
+            await _storeOperations.DeleteProjectAsync(protectedStoreDirectory, project.Id, project.Revision, gateway,
+                                                      _lifetime.Token);
         }
         catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
         {
             // 关闭时停止本轮；目录册中的删除标记使下次启动可以继续。
+        }
+        catch (SessionProjectUnassignmentIncompleteException exception)
+        {
+            // 完整性拒绝由 Core 抛出；用户文案经既有描述方法生成，展示位置与既有异常路径一致。
+            var message = DescribeIncompleteProjectUnassignment(exception.Result);
+            if (_projectDeletionDialogVersion == dialogVersion && IsProjectDeletionOpen)
+                ProjectDeletionErrorText = _factory.Redact(message);
+            else
+                Notice = _factory.Redact(message);
         }
         catch (Exception exception)
         {
@@ -3620,33 +3418,15 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
     }
 
     /// <summary>
-    ///     <para>按当前项目所属 store 清理置顶、普通顺序、折叠分组和遗留置顶状态，并可靠保存偏好。</para>
+    ///     <para>清理当前项目所属 store 的普通顺序、折叠分组与遗留置顶偏好，并可靠保存。</para>
     ///     <para>
-    ///         Removes the project's pin, regular order, collapsed-group, and legacy pin references from its store, then
+    ///         Clears the project's regular order, collapsed-group, and legacy pin references from its store, then
     ///         durably saves preferences.
     ///     </para>
     /// </summary>
     private async Task RemoveProjectSidebarStateAsync(
         string storeDirectory, string projectId, CancellationToken cancellationToken)
     {
-        await _pinStateMutationGate.WaitAsync(cancellationToken);
-        try
-        {
-            var pins = await SessionStorePinStore.SetProjectPinnedAsync(
-                                                                        storeDirectory, projectId, false,
-                                                                        cancellationToken);
-            var storeKey = PinStoreKey(storeDirectory);
-            _pinStatesByStore[storeKey] = pins;
-            _pinStateUnavailableStores.Remove(storeKey);
-        }
-        finally
-        {
-            // 置顶快照已直写：整体失效两个 ID 集合缓存，保持与 SetStorePinState 相同的失效纪律。
-            _pinnedSessionIdsByStore.Clear();
-            _archivedSessionIdsByStore.Clear();
-            _pinStateMutationGate.Release();
-        }
-
         await EnsureSidebarPreferencesLoadedAsync(cancellationToken);
         if (!_sidebarPreferencesSaveAllowed)
             throw new InvalidOperationException("侧栏偏好文件损坏或无法读取；修复后可继续删除项目。");
@@ -3781,12 +3561,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
     {
         // 确定性测试注入点：控制解析完成顺序以复现竞态；生产保持为空走真实受保护解析。
         if (ResolveDirectoryOverride is { } resolver) return await resolver(root, token);
-        var user      = await UserConfigStore.LoadAsync(UserConfigPath, token);
-        var directory = SessionStorePaths.ResolveProtected(user.Settings?.SessionStoreDirectory, root);
-        if (user.Settings?.WindowsSandbox is { Enabled: true } sandbox)
-            foreach (var writable in sandbox.AdditionalWriteRoots)
-                SessionStorePaths.EnsureOutsideWorkspace(directory, writable, "settings.sessionStoreDirectory");
-        return directory;
+        return await SessionStoreOperations.ResolveProtectedStoreDirectoryAsync(root, UserConfigPath, token);
     }
 
     /// <summary>
@@ -4143,6 +3918,78 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
         catch (Exception exception)
         {
             session.ShowError(exception);
+        }
+    }
+
+    /// <summary>
+    ///     <para>单次项目删除的宿主接缝：把捕获的草稿、运行会话与弹窗状态应用到 Core 编排的各阶段。</para>
+    ///     <para>
+    ///         One deletion's host seam: applies the captured drafts, running sessions, and popup state to the Core
+    ///         orchestration's stages.
+    ///     </para>
+    /// </summary>
+    private sealed class ProjectDeletionGateway(
+        MainWindowViewModel             owner,
+        string                          projectId,
+        string                          storeDirectory,
+        IReadOnlyList<SessionViewModel> drafts,
+        IReadOnlyList<SessionViewModel> projectSessions,
+        ProjectViewModel                group,
+        int                             dialogVersion) : ISessionProjectDeletionGateway
+    {
+        public Task DeletionMarkedAsync(Project deleting, CancellationToken cancellationToken)
+        {
+            group.Update(deleting);
+            if (SameSidebarStore(owner._storeDirectory, storeDirectory))
+            {
+                owner._projects = owner._projects.Select(item => item.Id == deleting.Id ? deleting : item).ToArray();
+                owner.RebuildProjects();
+            }
+
+            owner.NotifyProjectDeletionProperties();
+            return Task.CompletedTask;
+        }
+
+        public async Task UnbindDraftPagesAsync(
+            string storeDirectory, string projectId, CancellationToken cancellationToken)
+        {
+            foreach (var draft in drafts)
+                await draft.SelectProjectAsync(null, draft.WorkspaceRoot, storeDirectory);
+        }
+
+        public async Task UnbindOpenRuntimeSessionsAsync(
+            string storeDirectory, string projectId, CancellationToken cancellationToken)
+        {
+            foreach (var session in projectSessions.Where(session => session.HasOpenRuntime))
+                await session.UnassignProjectAsync(projectId, cancellationToken);
+        }
+
+        public Task UnassignmentAppliedAsync(
+            SessionProjectUnassignmentResult result, CancellationToken cancellationToken)
+        {
+            owner.ApplyProjectUnassignmentResult(storeDirectory, projectId, result);
+            if (SameSidebarStore(owner._storeDirectory, storeDirectory)) owner.RebuildProjects();
+            // 取消判定属界面策略：宿主关闭时以 OCE 中止编排；完整性拒绝已上移 Core。
+            if (result.Cancelled && owner._lifetime.IsCancellationRequested)
+                throw new OperationCanceledException(owner._lifetime.Token);
+            return Task.CompletedTask;
+        }
+
+        public Task PrepareCompletionAsync(
+            string storeDirectory, string projectId, CancellationToken cancellationToken) =>
+            owner.RemoveProjectSidebarStateAsync(storeDirectory, projectId, cancellationToken);
+
+        public Task CompletedAsync(Project deleted, CancellationToken cancellationToken)
+        {
+            if (SameSidebarStore(owner._storeDirectory, storeDirectory))
+            {
+                owner._projects = owner._projects.Where(item => item.Id != projectId).ToArray();
+                owner.RebuildProjects();
+            }
+
+            // 迟到防护：弹窗已被其他操作取代时不关闭当前目标。
+            if (owner._projectDeletionDialogVersion == dialogVersion) owner.CloseProjectDeletion();
+            return Task.CompletedTask;
         }
     }
 
