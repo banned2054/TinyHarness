@@ -15,7 +15,7 @@
         <Border x:Name="PanelRoot" Classes="settings-panel" Width="800" Height="700"
                 HorizontalAlignment="Center" VerticalAlignment="Center" Focusable="True">
             <Grid>
-                <Grid ColumnDefinitions="188,*" IsEnabled="{Binding !Catalog.IsModelPickerOpen}">
+                <Grid ColumnDefinitions="188,*" IsEnabled="{Binding Catalog.IsSettingsContentEnabled}">
 
                     <!-- 左导航：标题「设置」+ 分区列表（纯文字行，无图标）。 -->
                     <Border Width="188" Padding="22,14,10,14"
@@ -167,6 +167,33 @@
                     <Border Background="#99000000" PointerPressed="OnMaskPointerPressed" />
                     <views:ModelDiscoveryDialogView x:Name="ModelDiscoveryDialog" Margin="24"
                                                     DataContext="{Binding Catalog.Editor}" />
+                </Grid>
+
+                <!-- 删除确认：复用侧栏项目删除面板的 340 宽紧凑消息框；遮罩点击、Esc 与取消按钮均取消。 -->
+                <Grid IsVisible="{Binding Catalog.IsDeleteConfirmationOpen}">
+                    <Border Background="#72000000" PointerPressed="OnDeleteConfirmationMaskPressed" />
+                    <Border Classes="popup-surface popup-danger-surface settings-confirm-dialog"
+                            AutomationProperties.Name="删除供应商确认"
+                            KeyboardNavigation.TabNavigation="Cycle">
+                        <StackPanel Spacing="10">
+                            <TextBlock Classes="settings-confirm-title"
+                                       Text="{Binding Catalog.DeleteConfirmationTitle}" />
+                            <TextBlock Text="{Binding Catalog.DeleteConfirmationName}"
+                                       FontWeight="SemiBold"
+                                       Foreground="{DynamicResource PopupForegroundBrush}"
+                                       TextTrimming="CharacterEllipsis" />
+                            <TextBlock Classes="settings-confirm-message"
+                                       Text="{Binding Catalog.DeleteConfirmationMessage}" />
+                            <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right">
+                                <Button x:Name="DeleteCancelButton" Classes="approval-reject" Content="取消"
+                                        Command="{Binding Catalog.CancelDeleteConfirmationCommand}"
+                                        AutomationProperties.Name="取消删除" />
+                                <Button Classes="popup-danger-action" Content="删除"
+                                        Command="{Binding Catalog.ConfirmDeleteConfirmationCommand}"
+                                        AutomationProperties.Name="确认删除" />
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
                 </Grid>
             </Grid>
         </Border>

@@ -53,9 +53,9 @@ public sealed class ModelDiscoveryTests
         var exception = await Assert.ThrowsAsync<InvalidDataException>(async () =>
                                                                            await ProviderModelDiscovery
                                                                               .FetchAsync(client,
-                                                                                   "https://provider.invalid/v1",
-                                                                                   "offline-key",
-                                                                                   CancellationToken.None));
+                                                                                        "https://provider.invalid/v1",
+                                                                                        "offline-key",
+                                                                                        CancellationToken.None));
         Assert.That(exception!.Message, Does.Contain(((int)status).ToString()));
         Assert.That(exception.Message, Does.Not.Contain("offline-key"));
     }
@@ -68,8 +68,8 @@ public sealed class ModelDiscoveryTests
         using var client = new HttpClient(new Handler((_, _) => Task.FromResult(Json(json))));
         await Assert.ThrowsAsync<InvalidDataException>(async () =>
                                                            await ProviderModelDiscovery.FetchAsync(client,
-                                                               "https://provider.invalid/v1", null,
-                                                               CancellationToken.None));
+                                                                    "https://provider.invalid/v1", null,
+                                                                    CancellationToken.None));
     }
 
     [Test]
@@ -79,8 +79,8 @@ public sealed class ModelDiscoveryTests
             new HttpClient(new Handler((_, _) => Task.FromResult(Json(new string('x', 4 * 1024 * 1024 + 1)))));
         await Assert.ThrowsAsync<InvalidDataException>(async () =>
                                                            await ProviderModelDiscovery.FetchAsync(client,
-                                                               "https://provider.invalid/v1", null,
-                                                               CancellationToken.None));
+                                                                    "https://provider.invalid/v1", null,
+                                                                    CancellationToken.None));
     }
 
     [Test]
@@ -333,7 +333,14 @@ public sealed class ModelDiscoveryTests
         var panel   = new SettingsPanelViewModel(new GeneralSettingsSectionViewModel(path), catalog);
         await panel.OpenAsync();
         panel.SelectSection(catalog);
+        var settingsContentNotifications = 0;
+        catalog.PropertyChanged += (_, args) =>
+        {
+            if (args.PropertyName == nameof(catalog.IsSettingsContentEnabled)) settingsContentNotifications++;
+        };
         catalog.Providers[0].EditCommand.Execute(null);
+        Assert.That(catalog.IsSettingsContentEnabled, Is.True);
+        Assert.That(settingsContentNotifications, Is.EqualTo(1), "replacing Editor must notify the derived state");
         var editor = catalog.Editor!;
         editor.Endpoint    = "https://edited.invalid/v1";
         editor.FetchModels = (_, _, _) => Task.FromResult<IReadOnlyList<string>>(["new-model"]);
@@ -346,8 +353,11 @@ public sealed class ModelDiscoveryTests
         panel.CloseRequested += (_, _) => closed++;
         await editor.FetchModelsCommand.ExecuteAsync();
         Assert.That(catalog.IsModelPickerOpen, Is.True);
+        Assert.That(catalog.IsSettingsContentEnabled, Is.False);
         panel.DismissCommand.Execute(null);
         Assert.That(catalog.IsModelPickerOpen, Is.False);
+        Assert.That(catalog.IsSettingsContentEnabled, Is.True);
+        Assert.That(settingsContentNotifications, Is.EqualTo(3));
         Assert.That(closed, Is.Zero);
         Assert.That(catalog.Editor, Is.SameAs(editor));
         Assert.That(editor.Endpoint, Is.EqualTo("https://edited.invalid/v1"));
@@ -577,8 +587,8 @@ public sealed class ModelDiscoveryTests
             Models = [new UserProfileModel { Id = "existing", DisplayName = "Keep name", ContextWindowTokens = 64000 }]
         };
         var baseline = new UserConfig { DefaultProfile = profile.Name, Profiles = [profile] };
-        var path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "tinyharness-discovery-" + Guid.NewGuid().ToString("N"),
-                                           "config.json");
+        var path = Path.Combine(Path.GetTempPath(), "tinyharness-discovery-" + Guid.NewGuid().ToString("N"),
+                                "config.json");
         return (CatalogProviderEditorViewModel.ForEdit(path, credentials, baseline, profile, _ => { }, _ => { }),
                 path, baseline);
     }
@@ -598,10 +608,10 @@ public sealed class ModelDiscoveryTests
 
     private sealed class Credentials : ICredentialStore
     {
-        public bool IsSupported => true;
         public bool FailRead    { get; init; }
         public int  ReadCount   { get; private set; }
         public int  SaveCount   { get; private set; }
+        public bool IsSupported => true;
 
         public string? Read(string targetName)
         {

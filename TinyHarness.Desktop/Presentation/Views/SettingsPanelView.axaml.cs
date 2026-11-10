@@ -49,12 +49,18 @@ public partial class SettingsPanelView : UserControl
 
     private void OnCatalogPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (e.PropertyName != nameof(CatalogSettingsViewModel.IsModelPickerOpen)) return;
-        Dispatcher.UIThread.Post(() =>
-        {
-            if (_catalog?.IsModelPickerOpen == true) ModelDiscoveryDialog.FocusSearch();
-            else if (IsEffectivelyVisible) PanelRoot.Focus();
-        }, DispatcherPriority.Input);
+        if (e.PropertyName == nameof(CatalogSettingsViewModel.IsModelPickerOpen))
+            Dispatcher.UIThread.Post(() =>
+            {
+                if (_catalog?.IsModelPickerOpen == true) ModelDiscoveryDialog.FocusSearch();
+                else if (IsEffectivelyVisible) PanelRoot.Focus();
+            }, DispatcherPriority.Input);
+        if (e.PropertyName == nameof(CatalogSettingsViewModel.IsDeleteConfirmationOpen))
+            Dispatcher.UIThread.Post(() =>
+            {
+                if (_catalog?.IsDeleteConfirmationOpen == true) DeleteCancelButton.Focus();
+                else if (IsEffectivelyVisible) PanelRoot.Focus();
+            }, DispatcherPriority.Input);
     }
 
     /// <summary>
@@ -87,11 +93,27 @@ public partial class SettingsPanelView : UserControl
         if (e.Key == Key.Escape && DataContext is SettingsPanelViewModel viewModel)
         {
             e.Handled = true;
-            viewModel.DismissCommand.Execute(null);
+            if (viewModel.Catalog.IsDeleteConfirmationOpen)
+                viewModel.Catalog.CancelDeleteConfirmationCommand.Execute(null);
+            else
+                viewModel.DismissCommand.Execute(null);
             return;
         }
 
         base.OnKeyDown(e);
+    }
+
+    /// <summary>
+    ///     <para>删除确认框的遮罩点击取消；点击消息框本身不会关闭。</para>
+    ///     <para>Clicks on the deletion confirmation mask cancel it; clicks inside the message box do not.</para>
+    /// </summary>
+    private void OnDeleteConfirmationMaskPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (!e.GetCurrentPoint(null).Properties.IsLeftButtonPressed) return;
+
+        e.Handled = true;
+        if (DataContext is SettingsPanelViewModel viewModel)
+            viewModel.Catalog.CancelDeleteConfirmationCommand.Execute(null);
     }
 
     /// <summary>

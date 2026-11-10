@@ -398,7 +398,7 @@
                     <DataTemplate x:DataType="vm:CatalogProviderRowViewModel">
                         <Border Classes="settings-provider-row" Margin="0,0,0,10">
                             <StackPanel>
-                                <Grid ColumnDefinitions="*,Auto" Margin="0,8">
+                                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12" MinHeight="34">
                                     <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="8"
                                                 VerticalAlignment="Center">
                                         <TextBlock Classes="settings-card-title" Text="{Binding Name}"
@@ -424,10 +424,19 @@
                                                      IsVisible="{Binding IsCredentialUnset}" />
                                         </StackPanel>
                                     </StackPanel>
-                                    <Button Grid.Column="1" Classes="settings-secondary"
-                                            Content="编辑" Command="{Binding EditCommand}"
-                                            AutomationProperties.Name="编辑"
-                                            VerticalAlignment="Center" />
+                                    <!-- 删除由设置面板统一弹出模态确认框，行内只保留红字入口。 -->
+                                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="4"
+                                                VerticalAlignment="Center">
+                                        <Button Classes="settings-secondary"
+                                                Content="编辑" Command="{Binding EditCommand}"
+                                                AutomationProperties.Name="编辑"
+                                                VerticalAlignment="Center" />
+                                        <Button Classes="settings-danger-text"
+                                                Content="删除" Command="{Binding RequestDeleteCommand}"
+                                                AutomationProperties.Name="删除供应商"
+                                                ToolTip.Tip="删除供应商"
+                                                VerticalAlignment="Center" />
+                                    </StackPanel>
                                 </Grid>
                                 <ContentControl Content="{Binding Editor}"
                                                 IsVisible="{Binding HasEditor}"

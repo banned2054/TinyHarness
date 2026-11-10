@@ -84,11 +84,123 @@ public sealed class ModelCatalogEditorTests
         await Task.CompletedTask;
     }
 
+    [Test]
+    public void RemovingProviderRejectsDefaultAndMissingNames()
+    {
+        var baseline = Baseline();
+        Assert.Throws<InvalidOperationException>(() => ModelCatalogEditor.RemoveProvider(baseline, "work"));
+        Assert.Throws<InvalidOperationException>(() => ModelCatalogEditor.RemoveProvider(baseline, "missing"));
+
+        var spare = baseline.Profiles[0] with
+        {
+            Name = "spare", ApiKeyCredentialTarget = string.Empty, DefaultModel = string.Empty
+        };
+        var candidate = ModelCatalogEditor.RemoveProvider(baseline with { Profiles = [.. baseline.Profiles, spare] },
+                                                          "spare");
+        Assert.That(candidate.Profiles.Select(item => item.Name), Is.EqualTo(new[] { "work" }));
+        Assert.That(candidate.DefaultProfile, Is.EqualTo("work"));
+        Assert.That(candidate.Settings, Is.EqualTo(baseline.Settings));
+    }
+
+    [Test]
+    public async Task DeletingProviderWritesConfigAndCleansOnlyItsGeneratedCredential()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "tinyharness-catalog-" + Guid.NewGuid().ToString("N"),
+                                "user-config.json");
+        var main = new UserProfile { Name = "main", Endpoint = "https://main.invalid/v1" };
+        var keep = new UserProfile
+        {
+            Name                   = "keep", Endpoint = "https://keep.invalid/v1",
+            ApiKeyCredentialTarget = "user-managed-credential",
+            Models                 = [new UserProfileModel { Id = "keep-model", ContextWindowTokens = 32_000 }]
+        };
+        var remove = new UserProfile
+        {
+            Name                   = "remove", Endpoint = "https://remove.invalid/v1",
+            ApiKeyCredentialTarget = "TinyHarness:remove:generated"
+        };
+        var baseline = new UserConfig { DefaultProfile = "main", Profiles = [main, keep, remove] };
+        await UserConfigStore.SaveAsync(path, baseline, CancellationToken.None);
+
+        var credentials = new DeletingCredentials();
+        var leftover = await ModelCatalogEditor.DeleteProviderAsync(path, baseline, "remove", CancellationToken.None,
+                                                                    credentials);
+
+        Assert.That(leftover, Is.False);
+        Assert.That(credentials.Deleted, Is.EqualTo(new[] { "TinyHarness:remove:generated" }));
+        var saved = await UserConfigStore.LoadAsync(path, CancellationToken.None);
+        Assert.That(saved.Profiles.Select(item => item.Name), Is.EqualTo(new[] { "main", "keep" }));
+        Assert.That(saved.DefaultProfile, Is.EqualTo("main"));
+
+        Assert.That(await ModelCatalogEditor.DeleteProviderAsync(path, saved, "keep", CancellationToken.None,
+                                                                 credentials),
+                    Is.False);
+        Assert.That(credentials.Deleted, Is.EqualTo(new[] { "TinyHarness:remove:generated" }),
+                    "user-supplied credential targets must not be deleted with the provider");
+    }
+
+    [Test]
+    public async Task DeletingProviderPreservesSharedGeneratedCredentialIgnoringTargetCase()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "tinyharness-catalog-" + Guid.NewGuid().ToString("N"),
+                                "user-config.json");
+        var target = "TinyHarness:remove:generated";
+        var baseline = new UserConfig
+        {
+            DefaultProfile = "main",
+            Profiles =
+            [
+                new UserProfile { Name = "main", Endpoint = "https://main.invalid/v1" },
+                new UserProfile
+                {
+                    Name                   = "keep", Endpoint = "https://keep.invalid/v1",
+                    ApiKeyCredentialTarget = target.ToUpperInvariant()
+                },
+                new UserProfile
+                {
+                    Name = "remove", Endpoint = "https://remove.invalid/v1", ApiKeyCredentialTarget = target
+                }
+            ]
+        };
+        await UserConfigStore.SaveAsync(path, baseline, CancellationToken.None);
+        var credentials = new DeletingCredentials();
+
+        var leftover = await ModelCatalogEditor.DeleteProviderAsync(path, baseline, "remove", CancellationToken.None,
+                                                                    credentials);
+
+        Assert.That(leftover, Is.False, "a live shared credential is retained, not reported as failed cleanup");
+        Assert.That(credentials.Deleted, Is.Empty);
+        var saved = await UserConfigStore.LoadAsync(path, CancellationToken.None);
+        Assert.That(saved.Profiles.Single(item => item.Name == "keep").ApiKeyCredentialTarget,
+                    Is.EqualTo(target.ToUpperInvariant()));
+    }
+
+    [Test]
+    public async Task CredentialCleanupFailureLeavesConfigDeletedAndReportsResidual()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "tinyharness-catalog-" + Guid.NewGuid().ToString("N"),
+                                "user-config.json");
+        var remove = new UserProfile
+        {
+            Name                   = "remove", Endpoint = "https://remove.invalid/v1",
+            ApiKeyCredentialTarget = "TinyHarness:remove:generated"
+        };
+        var baseline = new UserConfig { Profiles = [remove] };
+        await UserConfigStore.SaveAsync(path, baseline, CancellationToken.None);
+
+        var leftover = await ModelCatalogEditor.DeleteProviderAsync(path, baseline, "remove", CancellationToken.None,
+                                                                    new DeletingCredentials { FailDelete = true });
+
+        Assert.That(leftover, Is.True);
+        var saved = await UserConfigStore.LoadAsync(path, CancellationToken.None);
+        Assert.That(saved.Profiles, Is.Empty);
+    }
+
     private sealed class Credentials : ICredentialStore
     {
-        public bool IsSupported             => true;
-        public bool Fail { get; init; }
-        public string? Target { get; private set; }
+        public bool    Fail                    { get; init; }
+        public string? Target                  { get; private set; }
+        public bool    IsSupported             => true;
         public string? Read(string targetName) => throw new AssertionException("Saving must not read old secrets.");
 
         public void Save(string targetName, string secret)
@@ -98,5 +210,24 @@ public sealed class ModelCatalogEditorTests
         }
 
         public bool Delete(string targetName) => throw new AssertionException("Old secrets must not be deleted.");
+    }
+
+    private sealed class DeletingCredentials : ICredentialStore
+    {
+        public bool         FailDelete  { get; init; }
+        public List<string> Deleted     { get; } = [];
+        public bool         IsSupported => true;
+
+        public string? Read(string targetName) => throw new AssertionException("Deletion must not read secrets.");
+
+        public void Save(string targetName, string secret) =>
+            throw new AssertionException("Deletion must not save secrets.");
+
+        public bool Delete(string targetName)
+        {
+            Deleted.Add(targetName);
+            if (FailDelete) throw new IOException("credential backend unavailable");
+            return true;
+        }
     }
 }

@@ -31,6 +31,7 @@ public sealed class CatalogSettingsViewModel : SettingsSectionViewModel
     private          CatalogProviderEditorViewModel? _editor;
     private          bool                            _isAddOpen;
     private          bool                            _isRefreshing;
+    private          CatalogProviderRowViewModel?    _pendingDeleteRow;
     private          string                          _sectionNotice = string.Empty;
 
     /// <summary>
@@ -40,10 +41,12 @@ public sealed class CatalogSettingsViewModel : SettingsSectionViewModel
     public CatalogSettingsViewModel(string path, Func<Task> refresh, ICredentialStore? credentials = null)
         : base("模型")
     {
-        _path          = path;
-        _refresh       = refresh;
-        _credentials   = credentials ?? new WindowsCredentialStore();
-        OpenAddCommand = new RelayCommand(OpenAdd, () => CanSwitchCards);
+        _path                            = path;
+        _refresh                         = refresh;
+        _credentials                     = credentials ?? new WindowsCredentialStore();
+        OpenAddCommand                   = new RelayCommand(OpenAdd, () => CanSwitchCards);
+        CancelDeleteConfirmationCommand  = new RelayCommand(CancelDeleteConfirmation);
+        ConfirmDeleteConfirmationCommand = new AsyncCommand(ConfirmDeleteAsync, OnDeleteFailed);
     }
 
     public string Intro =>
@@ -54,6 +57,39 @@ public sealed class CatalogSettingsViewModel : SettingsSectionViewModel
     public bool HasProviders => Providers.Count > 0;
 
     public RelayCommand OpenAddCommand { get; }
+
+    /// <summary>
+    ///     <para>删除确认框的取消入口；关闭遮罩或按 Esc 也走同一命令。</para>
+    ///     <para>Cancels the deletion message box; the mask and Escape use the same command.</para>
+    /// </summary>
+    public RelayCommand CancelDeleteConfirmationCommand { get; }
+
+    /// <summary>
+    ///     <para>删除确认框的确认入口；保存成功后重建目录并刷新会话模型列表。</para>
+    ///     <para>Confirms the deletion message box and refreshes the catalog and session model list after saving.</para>
+    /// </summary>
+    public AsyncCommand ConfirmDeleteConfirmationCommand { get; }
+
+    /// <summary>
+    ///     <para>删除确认框是否打开；打开时由设置面板覆盖一层模态消息框。</para>
+    ///     <para>Whether the deletion message box is open; the settings panel then shows a modal confirmation.</para>
+    /// </summary>
+    public bool IsDeleteConfirmationOpen => _pendingDeleteRow is not null;
+
+    /// <summary>
+    ///     <para>模型发现或删除确认打开时禁用设置内容，并随弹层关闭恢复。</para>
+    ///     <para>Disables settings content while model discovery or deletion confirmation is open, then restores it.</para>
+    /// </summary>
+    public bool IsSettingsContentEnabled => !IsModelPickerOpen && !IsDeleteConfirmationOpen;
+
+    public string DeleteConfirmationTitle => "删除供应商";
+
+    public string DeleteConfirmationName => _pendingDeleteRow?.Name ?? string.Empty;
+
+    public string DeleteConfirmationMessage =>
+        _pendingDeleteRow is null
+            ? string.Empty
+            : "这会移除该供应商的配置与模型目录；由本应用保存的 API 密钥会一并清除。";
 
     private bool CanSwitchCards => !_isRefreshing && Editor?.IsSaving != true;
 
@@ -81,6 +117,7 @@ public sealed class CatalogSettingsViewModel : SettingsSectionViewModel
             SetProperty(ref _editor, value);
             if (_editor is not null) _editor.PropertyChanged += OnEditorPropertyChanged;
             OnPropertyChanged(nameof(IsModelPickerOpen));
+            OnPropertyChanged(nameof(IsSettingsContentEnabled));
             NotifyCardCommands();
         }
     }
@@ -142,7 +179,8 @@ public sealed class CatalogSettingsViewModel : SettingsSectionViewModel
         Providers.Clear();
         foreach (var provider in _baseline.Profiles)
             Providers.Add(new CatalogProviderRowViewModel(provider, _baseline.DefaultProfile == provider.Name,
-                                                          OpenEditor, () => CanSwitchCards));
+                                                          new CatalogProviderRowActions(
+                                                           OpenEditor, () => CanSwitchCards, RequestDelete)));
         OnPropertyChanged(nameof(HasProviders));
     }
 
@@ -181,6 +219,7 @@ public sealed class CatalogSettingsViewModel : SettingsSectionViewModel
 
     private void CloseCards()
     {
+        CancelDeleteConfirmation();
         Editor?.CloseModelPicker();
         _editingRow = null;
         Editor      = null;
@@ -195,6 +234,152 @@ public sealed class CatalogSettingsViewModel : SettingsSectionViewModel
             row.IsEditing = ReferenceEquals(row, _editingRow) && !IsAddOpen;
             row.Editor    = row.IsEditing ? Editor : null;
         }
+    }
+
+    /// <summary>
+    ///     <para>
+    ///         打开删除确认框：默认供应商直接拒绝；先收起编辑卡，避免在未保存草稿上删除。
+    ///     </para>
+    ///     <para>
+    ///         Opens the deletion message box, rejecting the default provider first and closing any editor so a
+    ///         deletion cannot race an unsaved draft.
+    ///     </para>
+    /// </summary>
+    private void RequestDelete(CatalogProviderRowViewModel row)
+    {
+        if (!CanSwitchCards) return;
+
+        CancelDeleteConfirmation();
+        CloseCards();
+        if (row.IsDefaultProvider)
+        {
+            SectionNotice = $"默认供应商“{row.Name}”不能删除；请先将其他供应商设为默认。";
+            return;
+        }
+
+        SectionNotice     = string.Empty;
+        _pendingDeleteRow = row;
+        NotifyDeleteConfirmationChanged();
+    }
+
+    /// <summary>
+    ///     <para>关闭删除确认框；不写配置，也不改动供应商行。</para>
+    ///     <para>Closes the deletion message box without writing config or changing provider rows.</para>
+    /// </summary>
+    private void CancelDeleteConfirmation()
+    {
+        if (_pendingDeleteRow is null) return;
+        _pendingDeleteRow = null;
+        NotifyDeleteConfirmationChanged();
+    }
+
+    private void NotifyDeleteConfirmationChanged()
+    {
+        OnPropertyChanged(nameof(IsDeleteConfirmationOpen));
+        OnPropertyChanged(nameof(IsSettingsContentEnabled));
+        OnPropertyChanged(nameof(DeleteConfirmationTitle));
+        OnPropertyChanged(nameof(DeleteConfirmationName));
+        OnPropertyChanged(nameof(DeleteConfirmationMessage));
+    }
+
+    /// <summary>
+    ///     <para>确认删除：先收起消息框，再保存目录；失败经 <see cref="OnDeleteFailed" /> 回到分区提示。</para>
+    ///     <para>
+    ///         Confirms deletion by closing the message box and saving the catalog; failures return to the section
+    ///         notice through <see cref="OnDeleteFailed" />.
+    ///     </para>
+    /// </summary>
+    private async Task ConfirmDeleteAsync()
+    {
+        if (_pendingDeleteRow is not { } row)
+        {
+            CancelDeleteConfirmation();
+            return;
+        }
+
+        _pendingDeleteRow = null;
+        NotifyDeleteConfirmationChanged();
+        await DeleteProviderAsync(row);
+    }
+
+    /// <summary>
+    ///     <para>删除供应商：保存成功后重建行并刷新会话目录；凭据清理失败只作为残留提示。</para>
+    ///     <para>
+    ///         Deletes a provider, rebuilding rows and refreshing the session catalog after saving; credential cleanup
+    ///         failures surface as a residual notice.
+    ///     </para>
+    /// </summary>
+    private async Task DeleteProviderAsync(CatalogProviderRowViewModel row)
+    {
+        if (!CanSwitchCards) return;
+
+        SetRefreshing(true);
+        SectionNotice = string.Empty;
+        var  name = row.Name;
+        bool credentialLeftBehind;
+        try
+        {
+            credentialLeftBehind = await ModelCatalogEditor.DeleteProviderAsync(_path, _baseline, name,
+                                                                                    CancellationToken.None,
+                                                                                    _credentials);
+        }
+        catch (Exception exception)
+        {
+            SetRefreshing(false);
+            SectionNotice = $"供应商“{name}”删除失败：{exception.Message}";
+            await ReloadAfterFailedDeleteAsync();
+            return;
+        }
+
+        try
+        {
+            try
+            {
+                await ReloadAsync();
+                ConfigSaved?.Invoke(_baseline);
+            }
+            catch (Exception exception)
+            {
+                SectionNotice = $"供应商“{name}”已删除，但重新读取目录失败：{exception.Message}";
+                return;
+            }
+
+            try
+            {
+                await _refresh();
+                SectionNotice = credentialLeftBehind
+                    ? $"供应商“{name}”已删除，但系统凭据未能清除。"
+                    : $"供应商“{name}”已删除；请回到会话重新选择模型。";
+            }
+            catch (Exception)
+            {
+                SectionNotice = credentialLeftBehind
+                    ? $"供应商“{name}”已删除，但系统凭据未能清除；会话目录刷新失败，请手动刷新。"
+                    : $"供应商“{name}”已删除；会话目录刷新失败，请手动刷新。";
+            }
+        }
+        finally
+        {
+            SetRefreshing(false);
+        }
+    }
+
+    private async Task ReloadAfterFailedDeleteAsync()
+    {
+        try
+        {
+            await ReloadAsync();
+        }
+        catch (Exception)
+        {
+            // 保留首次删除失败提示；重新读取也失败时由用户重开设置面板。
+        }
+    }
+
+    private void OnDeleteFailed(Exception exception)
+    {
+        SetRefreshing(false);
+        SectionNotice = $"删除供应商失败：{exception.Message}";
     }
 
     private void OnEditorSaved(CatalogProviderEditorViewModel editor)
@@ -214,7 +399,10 @@ public sealed class CatalogSettingsViewModel : SettingsSectionViewModel
     {
         if (args.PropertyName == nameof(CatalogProviderEditorViewModel.IsSaving)) NotifyCardCommands();
         if (args.PropertyName == nameof(CatalogProviderEditorViewModel.IsModelPickerOpen))
+        {
             OnPropertyChanged(nameof(IsModelPickerOpen));
+            OnPropertyChanged(nameof(IsSettingsContentEnabled));
+        }
     }
 
     private void SetRefreshing(bool value)
@@ -226,7 +414,11 @@ public sealed class CatalogSettingsViewModel : SettingsSectionViewModel
     private void NotifyCardCommands()
     {
         OpenAddCommand.RaiseCanExecuteChanged();
-        foreach (var row in Providers) row.EditCommand.RaiseCanExecuteChanged();
+        foreach (var row in Providers)
+        {
+            row.EditCommand.RaiseCanExecuteChanged();
+            row.RequestDeleteCommand.RaiseCanExecuteChanged();
+        }
     }
 
     private async Task SavedAsync()
@@ -262,29 +454,32 @@ public sealed class CatalogSettingsViewModel : SettingsSectionViewModel
 }
 
 /// <summary>
-///     <para>供应商行：名称、说明、凭据引用圆点与编辑按钮；编辑时行内展开编辑卡。</para>
 ///     <para>
-///         A provider row: name, caption, credential reference dot and the edit button; editing expands the editor card
-///         inline.
+///         供应商行：名称、说明、凭据引用圆点、编辑与删除按钮；编辑时行内展开编辑卡，
+///         删除由设置面板弹出模态确认框。
+///     </para>
+///     <para>
+///         A provider row: name, caption, credential reference dot and edit/delete actions; editing expands the editor
+///         card inline and deletion opens a modal confirmation owned by the settings panel.
 ///     </para>
 /// </summary>
 public sealed class CatalogProviderRowViewModel : ObservableObject
 {
-    private readonly Action<CatalogProviderRowViewModel> _onEdit;
-    private          CatalogProviderEditorViewModel?     _editor;
-    private          bool                                _isEditing;
+    private readonly CatalogProviderRowActions       _actions;
+    private          CatalogProviderEditorViewModel? _editor;
+    private          bool                            _isEditing;
 
     /// <summary>
     ///     <para>建立供应商行；卡片操作是否可用由所属分区统一决定。</para>
     ///     <para>Creates a provider row whose section decides whether card operations are available.</para>
     /// </summary>
-    public CatalogProviderRowViewModel(UserProfile                         source, bool       isDefaultProvider,
-                                       Action<CatalogProviderRowViewModel> onEdit, Func<bool> canEdit)
+    public CatalogProviderRowViewModel(UserProfile source, bool isDefaultProvider, CatalogProviderRowActions actions)
     {
-        Source            = source;
-        IsDefaultProvider = isDefaultProvider;
-        _onEdit           = onEdit;
-        EditCommand       = new RelayCommand(() => _onEdit(this), canEdit);
+        Source               = source;
+        IsDefaultProvider    = isDefaultProvider;
+        _actions             = actions;
+        EditCommand          = new RelayCommand(() => _actions.Edit(this), actions.CanSwitchCards);
+        RequestDeleteCommand = new RelayCommand(() => _actions.RequestDelete(this), actions.CanSwitchCards);
     }
 
     /// <summary>
@@ -310,6 +505,8 @@ public sealed class CatalogProviderRowViewModel : ObservableObject
 
     public RelayCommand EditCommand { get; }
 
+    public RelayCommand RequestDeleteCommand { get; }
+
     public bool IsEditing
     {
         get => _isEditing;
@@ -327,6 +524,15 @@ public sealed class CatalogProviderRowViewModel : ObservableObject
 
     public bool HasEditor => Editor is not null;
 }
+
+/// <summary>
+///     <para>供应商行交给分区的编辑与删除请求回调；操作可用性由分区统一判断。</para>
+///     <para>Edit and delete-request callbacks owned by the section, which decides whether actions are available.</para>
+/// </summary>
+public sealed record CatalogProviderRowActions(
+    Action<CatalogProviderRowViewModel> Edit,
+    Func<bool>                          CanSwitchCards,
+    Action<CatalogProviderRowViewModel> RequestDelete);
 
 /// <summary>
 ///     <para>

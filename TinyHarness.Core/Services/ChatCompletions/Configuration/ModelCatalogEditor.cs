@@ -12,12 +12,15 @@ public static class ModelCatalogEditor
 {
     /// <summary>
     ///     <para>添加或明确编辑供应商，保留其模型和默认项；重复添加与缺失编辑均拒绝。</para>
-    ///     <para>Adds or explicitly edits a provider, preserving its models and defaults; rejects duplicate adds and missing edits.</para>
+    ///     <para>
+    ///         Adds or explicitly edits a provider, preserving its models and defaults; rejects duplicate adds and missing
+    ///         edits.
+    ///     </para>
     /// </summary>
     public static UserConfig PutProvider(UserConfig baseline, UserProfile provider, bool edit)
     {
         var existing = baseline.Profiles.SingleOrDefault(item => item.Name == provider.Name);
-        if (edit != (existing is not null))
+        if (edit != existing is not null)
             throw new InvalidOperationException(edit
                                                     ? "Provider no longer exists; reload the catalog."
                                                     : "Provider already exists; use edit.");
@@ -27,8 +30,8 @@ public static class ModelCatalogEditor
             throw new
                 InvalidDataException("Provider names use 1-64 letters, digits, '.', '_' or '-', without a leading '-' or '.'.");
         if (provider.ApiKeyEnvironmentVariable.Length > 0 &&
-            (!char.IsAsciiLetter(provider.ApiKeyEnvironmentVariable[0]) &&
-              provider.ApiKeyEnvironmentVariable[0] != '_' ||
+            ((!char.IsAsciiLetter(provider.ApiKeyEnvironmentVariable[0]) &&
+              provider.ApiKeyEnvironmentVariable[0] != '_') ||
              provider.ApiKeyEnvironmentVariable.Any(ch => !char.IsAsciiLetterOrDigit(ch) && ch != '_')))
             throw new InvalidDataException("Invalid environment variable name.");
         var candidate = existing is null
@@ -40,6 +43,62 @@ public static class ModelCatalogEditor
                 ? [.. baseline.Profiles, candidate]
                 : baseline.Profiles.Select(item => item.Name == provider.Name ? candidate : item).ToArray()
         };
+    }
+
+    /// <summary>
+    ///     <para>移除一个非默认供应商；默认 profile 必须先切换，其余目录与设置保持不变。</para>
+    ///     <para>
+    ///         Removes a non-default provider; the default profile must be switched first and the rest of the catalog stays
+    ///         unchanged.
+    ///     </para>
+    /// </summary>
+    public static UserConfig RemoveProvider(UserConfig baseline, string providerName)
+    {
+        if (!baseline.Profiles.Any(item => item.Name == providerName))
+            throw new InvalidOperationException("Provider no longer exists; reload the catalog.");
+        if (string.Equals(baseline.DefaultProfile, providerName, StringComparison.Ordinal))
+            throw
+                new InvalidOperationException("The default provider cannot be removed; choose another default first.");
+        return baseline with
+        {
+            Profiles = baseline.Profiles.Where(item => item.Name != providerName).ToArray()
+        };
+    }
+
+    /// <summary>
+    ///     <para>
+    ///         保存供应商删除结果；仅清理由本程序按该供应商名称生成的系统凭据，
+    ///         返回是否有生成的凭据未能清除（用户自填的外部凭据不会删除）。
+    ///     </para>
+    ///     <para>
+    ///         Saves the provider removal; only credentials generated for this provider name are cleaned up and the
+    ///         return value reports a residual generated credential (user-supplied external targets are never deleted).
+    ///     </para>
+    /// </summary>
+    public static async Task<bool> DeleteProviderAsync(string            path, UserConfig baseline, string providerName,
+                                                       CancellationToken cancellationToken,
+                                                       ICredentialStore? credentials = null)
+    {
+        var provider = baseline.Profiles.SingleOrDefault(item => item.Name == providerName)
+                    ?? throw new InvalidOperationException("Provider no longer exists; reload the catalog.");
+        var candidate = RemoveProvider(baseline, providerName);
+        await UserConfigStore.SaveAsync(path, candidate, baseline, cancellationToken).ConfigureAwait(false);
+
+        var target = provider.ApiKeyCredentialTarget;
+        if (!target.StartsWith("TinyHarness:" + providerName + ":", StringComparison.Ordinal)) return false;
+        if (candidate.Profiles.Any(item => string.Equals(item.ApiKeyCredentialTarget, target,
+                                                         StringComparison.OrdinalIgnoreCase))) return false;
+        if (credentials is not { IsSupported: true }) return true;
+        try
+        {
+            credentials.Delete(target);
+            return false;
+        }
+        catch (Exception)
+        {
+            // 配置已删除；凭据残留只作为提示，不把删除结果改判为失败。
+            return true;
+        }
     }
 
     /// <summary>
@@ -104,7 +163,10 @@ public static class ModelCatalogEditor
 
     /// <summary>
     ///     <para>完成表单后保存；新密钥写入独立目标，配置失败保留原引用并报告残留目标，不删除旧凭据。</para>
-    ///     <para>Saves a completed form; new keys use fresh targets, and config failure preserves old references and reports orphan targets without deleting old credentials.</para>
+    ///     <para>
+    ///         Saves a completed form; new keys use fresh targets, and config failure preserves old references and reports
+    ///         orphan targets without deleting old credentials.
+    ///     </para>
     /// </summary>
     public static async Task SaveAsync(string            path, UserConfig baseline, UserConfig candidate,
                                        CancellationToken cancellationToken,

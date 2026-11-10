@@ -45,9 +45,34 @@ public sealed class ModelDiscoveryDialogLayoutTests
                                                                          "{Binding Catalog.IsModelPickerOpen}");
         var content = settings.Descendants(controls + "Grid").Single(element =>
                                                                          (string?)element.Attribute("IsEnabled") ==
-                                                                         "{Binding !Catalog.IsModelPickerOpen}");
+                                                                         "{Binding Catalog.IsSettingsContentEnabled}");
         Assert.That(overlay.Parent, Is.SameAs(content.Parent));
         Assert.That(overlay.Descendants().Any(element => element.Name.LocalName == "ModelDiscoveryDialogView"),
+                    Is.True);
+    }
+
+    [Test]
+    public void ProviderDeletionConfirmationDisablesSettingsAndCyclesTabFocus()
+    {
+        XNamespace controls = "https://github.com/avaloniaui";
+        var        settings = LoadView("SettingsPanelView.axaml");
+        var content = settings.Descendants(controls + "Grid").Single(element =>
+                                                                         (string?)element
+                                                                            .Attribute("ColumnDefinitions") ==
+                                                                         "188,*");
+        Assert.That((string?)content.Attribute("IsEnabled"),
+                    Is.EqualTo("{Binding Catalog.IsSettingsContentEnabled}"));
+
+        var confirmation = settings.Descendants(controls + "Grid").Single(element =>
+                                                                              (string?)element.Attribute("IsVisible") ==
+                                                                              "{Binding Catalog.IsDeleteConfirmationOpen}");
+        var dialog = confirmation.Elements(controls + "Border").Single(element =>
+                                                                           (string?)element
+                                                                              .Attribute("AutomationProperties.Name") ==
+                                                                           "删除供应商确认");
+        Assert.That((string?)dialog.Attribute("KeyboardNavigation.TabNavigation"), Is.EqualTo("Cycle"));
+        Assert.That(dialog.Descendants(controls + "Button").Any(button =>
+                                                                    (string?)button.Attribute("Content") == "取消"),
                     Is.True);
     }
 
