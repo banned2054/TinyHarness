@@ -221,7 +221,8 @@ public abstract class SettingsSectionViewModel : ObservableObject
 /// </summary>
 public sealed class GeneralSettingsSectionViewModel : SettingsSectionViewModel
 {
-    private bool _showProjectDeletionPrompt = true;
+    private bool   _showArchivedSessionDeletionPrompt = true;
+    private bool   _showProjectDeletionPrompt         = true;
 
     public GeneralSettingsSectionViewModel(string configPath) : base("通用")
     {
@@ -250,6 +251,20 @@ public sealed class GeneralSettingsSectionViewModel : SettingsSectionViewModel
         }
     }
 
+    /// <summary>
+    ///     <para>删除归档会话时是否显示确认面板。</para>
+    ///     <para>Whether to show a confirmation panel before deleting an archived session.</para>
+    /// </summary>
+    public bool ShowArchivedSessionDeletionPrompt
+    {
+        get => _showArchivedSessionDeletionPrompt;
+        set
+        {
+            if (!SetProperty(ref _showArchivedSessionDeletionPrompt, value)) return;
+            ArchivedSessionDeletionPromptChanged?.Invoke(value);
+        }
+    }
+
     // 主题由 Application 全局承担；不引入第二份状态，选中态即时读取当前生效变体。
     public bool IsLightSelected => Application.Current?.ActualThemeVariant != ThemeVariant.Dark;
 
@@ -262,11 +277,24 @@ public sealed class GeneralSettingsSectionViewModel : SettingsSectionViewModel
     public event Action<bool>? ProjectDeletionPromptChanged;
 
     /// <summary>
+    ///     <para>归档会话删除提示设置变更；宿主负责更新并保存桌面偏好。</para>
+    ///     <para>Raised when archived-session deletion confirmation changes so the host can save desktop preferences.</para>
+    /// </summary>
+    public event Action<bool>? ArchivedSessionDeletionPromptChanged;
+
+    /// <summary>
     ///     <para>应用已加载的项目删除提示偏好，不触发保存回调。</para>
     ///     <para>Applies the loaded project-deletion preference without raising the save callback.</para>
     /// </summary>
     internal void ApplyProjectDeletionPromptPreference(bool showPrompt) =>
         SetProperty(ref _showProjectDeletionPrompt, showPrompt, nameof(ShowProjectDeletionPrompt));
+
+    /// <summary>
+    ///     <para>应用已加载的归档会话删除提示偏好，不触发保存回调。</para>
+    ///     <para>Applies the loaded archived-session deletion preference without raising the save callback.</para>
+    /// </summary>
+    internal void ApplyArchivedSessionDeletionPromptPreference(bool showPrompt) =>
+        SetProperty(ref _showArchivedSessionDeletionPrompt, showPrompt, nameof(ShowArchivedSessionDeletionPrompt));
 
     private void SelectTheme(ThemeVariant variant)
     {

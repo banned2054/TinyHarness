@@ -85,6 +85,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
     private string?                                           _organizeIssuesStore;
     private string                                            _organizeNotice = string.Empty;
     private CancellationTokenSource?                          _organizeSource;
+    private bool?                                             _pendingArchivedSessionDeletionPromptPreference;
     private bool?                                             _pendingProjectDeletionPromptPreference;
     private string                                            _permissionMigrationSummary = string.Empty;
     private PermissionSettings                                _permissionSettings         = new();
@@ -134,6 +135,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
                                               Network,
                                               new WindowsSandboxSettingsViewModel(UserConfigPath, InitializeAsync));
         Settings.General.ProjectDeletionPromptChanged += OnProjectDeletionPromptChanged;
+        Settings.General.ArchivedSessionDeletionPromptChanged += OnArchivedSessionDeletionPromptChanged;
         Settings.CloseRequested += (_, _) => SettingsOpen = false;
         NewSessionCommand = new RelayCommand(NewConversation);
         SelectSessionCommand = new RelayCommand<SessionViewModel>(session => SelectedSession = session);
@@ -2044,10 +2046,20 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
             if (_pendingProjectDeletionPromptPreference is { } showPrompt)
                 _sidebarPreferences = _sidebarPreferences with { ShowProjectDeletionPrompt = showPrompt };
 
-            var savePromptPreference = _pendingProjectDeletionPromptPreference.HasValue &&
+            if (_pendingArchivedSessionDeletionPromptPreference is { } showArchivedPrompt)
+                _sidebarPreferences = _sidebarPreferences with
+                {
+                    ShowArchivedSessionDeletionPrompt = showArchivedPrompt
+                };
+
+            var savePromptPreference = (_pendingProjectDeletionPromptPreference.HasValue ||
+                                        _pendingArchivedSessionDeletionPromptPreference.HasValue) &&
                                        _sidebarPreferencesSaveAllowed;
-            _pendingProjectDeletionPromptPreference = null;
+            _pendingProjectDeletionPromptPreference         = null;
+            _pendingArchivedSessionDeletionPromptPreference = null;
             Settings.General.ApplyProjectDeletionPromptPreference(_sidebarPreferences.ShowProjectDeletionPrompt);
+            Settings.General.ApplyArchivedSessionDeletionPromptPreference(_sidebarPreferences
+                                                                             .ShowArchivedSessionDeletionPrompt);
 
             RestoreSidebarCategoryExpansion();
             SidebarPreferencesReady = true;
@@ -2070,6 +2082,22 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
         if (!SidebarPreferencesReady)
         {
             _pendingProjectDeletionPromptPreference = showPrompt;
+            return;
+        }
+
+        QueueSidebarPreferencesSave();
+    }
+
+    /// <summary>
+    ///     <para>同步归档会话删除提示开关，并保存到桌面侧栏偏好。</para>
+    ///     <para>Synchronizes archived-session deletion confirmation and saves it to desktop sidebar preferences.</para>
+    /// </summary>
+    private void OnArchivedSessionDeletionPromptChanged(bool showPrompt)
+    {
+        _sidebarPreferences = _sidebarPreferences with { ShowArchivedSessionDeletionPrompt = showPrompt };
+        if (!SidebarPreferencesReady)
+        {
+            _pendingArchivedSessionDeletionPromptPreference = showPrompt;
             return;
         }
 

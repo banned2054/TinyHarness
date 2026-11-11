@@ -52,8 +52,8 @@ public sealed partial class MainWindowViewModel
     public bool CanConfirmSessionDeletion => !IsSessionDeletionRunning && _sessionDeletionTarget is not null;
 
     /// <summary>
-    ///     <para>只为当前归档视图中的正式归档会话打开永久删除确认。</para>
-    ///     <para>Opens permanent-deletion confirmation only for an established archived session in the archive view.</para>
+    ///     <para>只允许删除当前归档视图中的正式归档会话；按通用设置显示确认或直接删除。</para>
+    ///     <para>Deletes only established archived sessions in the archive view, with confirmation when enabled.</para>
     /// </summary>
     private void OpenSessionDeletion(SessionViewModel? session)
     {
@@ -64,8 +64,9 @@ public sealed partial class MainWindowViewModel
         _sessionDeletionTarget = session;
         _sessionDeletionDialogVersion++;
         SessionDeletionErrorText = null;
-        IsSessionDeletionOpen    = true;
+        IsSessionDeletionOpen    = Settings.General.ShowArchivedSessionDeletionPrompt;
         NotifySessionDeletionProperties();
+        if (!IsSessionDeletionOpen) _ = ConfirmSessionDeletionAsync();
     }
 
     /// <summary>
@@ -92,7 +93,9 @@ public sealed partial class MainWindowViewModel
 
         if (!session.TryBeginDeleteMutation())
         {
-            SessionDeletionErrorText = "会话正在打开、运行或切换；请等待操作完成后重试。";
+            const string message = "会话正在打开、运行或切换；请等待操作完成后重试。";
+            if (IsSessionDeletionOpen) SessionDeletionErrorText = message;
+            else Notice                                         = message;
             return;
         }
 

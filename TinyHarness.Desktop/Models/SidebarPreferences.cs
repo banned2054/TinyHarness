@@ -3,8 +3,8 @@ using System.Text.Json.Serialization;
 namespace TinyHarness.Desktop.Models;
 
 /// <summary>
-///     <para>桌面界面偏好设置，保存侧栏展示和项目删除提示；置顶状态由 Core 持久化。</para>
-///     <para>Desktop UI preferences for sidebar presentation and project-deletion confirmation; Core persists pin state.</para>
+///     <para>桌面界面偏好设置，保存侧栏展示和删除提示；置顶状态由 Core 持久化。</para>
+///     <para>Desktop UI preferences for sidebar presentation and deletion confirmation; Core persists pin state.</para>
 /// </summary>
 internal sealed record SidebarPreferences
 {
@@ -31,6 +31,12 @@ internal sealed record SidebarPreferences
     ///     <para>Whether to show a confirmation panel before deleting a project.</para>
     /// </summary>
     public bool ShowProjectDeletionPrompt { get; init; } = true;
+
+    /// <summary>
+    ///     <para>删除归档会话时是否先显示确认面板。</para>
+    ///     <para>Whether to show a confirmation panel before deleting an archived session.</para>
+    /// </summary>
+    public bool ShowArchivedSessionDeletionPrompt { get; init; } = true;
 
     /// <summary>
     ///     <para>已折叠的固定侧栏分类键；未列出的分类默认展开。</para>

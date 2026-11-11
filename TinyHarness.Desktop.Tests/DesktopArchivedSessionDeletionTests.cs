@@ -15,6 +15,7 @@ using TinyHarness.Core.Services.Runtime;
 using TinyHarness.Core.Services.Session;
 using TinyHarness.Core.Services.Tools;
 using TinyHarness.Desktop.Runtime;
+using TinyHarness.Desktop.Services;
 using TinyHarness.Desktop.ViewModels;
 
 namespace TinyHarness.Desktop.Tests;
@@ -22,6 +23,98 @@ namespace TinyHarness.Desktop.Tests;
 [TestFixture]
 public sealed class DesktopArchivedSessionDeletionTests
 {
+    [Test]
+    public async Task LegacyPreferences_KeepArchivedDeletionConfirmationEnabled()
+    {
+        using var fixture = Fixture.Create();
+        var       id      = await fixture.CreateArchivedSessionAsync();
+        await File.WriteAllTextAsync(SidebarPreferencesStore.FilePathForUserConfig(fixture.Config),
+                                     """{"schema":"tinyharness.desktop-sidebar/1","showProjectDeletionPrompt":false}""");
+        await using var model = fixture.Window();
+        await model.InitializeAsync();
+        model.ToggleArchiveViewCommand.Execute(null);
+        var row = model.Sessions.Single(session => session.Id == id);
+
+        model.OpenSessionDeletionCommand.Execute(row);
+
+        Assert.That(model.Settings.General.ShowProjectDeletionPrompt, Is.False);
+        Assert.That(model.Settings.General.ShowArchivedSessionDeletionPrompt, Is.True);
+        Assert.That(model.IsSessionDeletionOpen, Is.True);
+        Assert.That(File.Exists(Path.Combine(fixture.Store, id + SessionStoreWriter.LogFileSuffix)), Is.True);
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task ArchivedDeletionPreference_PersistsAcrossRestart(bool changeBeforeInitialization)
+    {
+        using var fixture = Fixture.Create();
+        await fixture.CreateArchivedSessionAsync();
+        await using (var model = fixture.Window())
+        {
+            if (changeBeforeInitialization) model.Settings.General.ShowArchivedSessionDeletionPrompt = false;
+            await model.InitializeAsync();
+            if (!changeBeforeInitialization) model.Settings.General.ShowArchivedSessionDeletionPrompt = false;
+            Assert.That(model.Settings.General.ShowArchivedSessionDeletionPrompt, Is.False);
+        }
+
+        await using (var reopened = fixture.Window())
+        {
+            await reopened.InitializeAsync();
+            Assert.That(reopened.Settings.General.ShowArchivedSessionDeletionPrompt, Is.False);
+            Assert.That(reopened.Settings.General.ShowProjectDeletionPrompt, Is.True);
+            reopened.Settings.General.ShowArchivedSessionDeletionPrompt = true;
+        }
+
+        await using var restored = fixture.Window();
+        await restored.InitializeAsync();
+        Assert.That(restored.Settings.General.ShowArchivedSessionDeletionPrompt, Is.True);
+    }
+
+    [Test]
+    public async Task DisabledConfirmation_DeletesArchivedSessionWithoutOpeningPanel()
+    {
+        using var       fixture = Fixture.Create();
+        var             id      = await fixture.CreateArchivedSessionAsync();
+        await using var model   = fixture.Window();
+        await model.InitializeAsync();
+        model.ToggleArchiveViewCommand.Execute(null);
+        var row = model.Sessions.Single(session => session.Id == id);
+        model.Settings.General.ShowArchivedSessionDeletionPrompt = false;
+
+        model.OpenSessionDeletionCommand.Execute(row);
+        Assert.That(model.IsSessionDeletionOpen, Is.False);
+        await WaitUntilAsync(() => !model.IsSessionDeletionRunning && !model.Sessions.Contains(row));
+
+        Assert.That(File.Exists(Path.Combine(fixture.Store, id + SessionStoreWriter.LogFileSuffix)), Is.False);
+        Assert.That((await SessionStoreArchiveStore.LoadAsync(fixture.Store, CancellationToken.None))
+                   .ArchivedSessionIds,
+                    Does.Not.Contain(id));
+        Assert.That((await SessionStorePinStore.LoadAsync(fixture.Store, CancellationToken.None)).PinnedSessionIds,
+                    Does.Not.Contain(id));
+        Assert.That(await new SessionIndexStore(fixture.Store).GetRowAsync(id, CancellationToken.None), Is.Null);
+    }
+
+    [Test]
+    public async Task DisabledConfirmation_WriterOccupancyReportsNoticeAndPreservesSession()
+    {
+        using var       fixture = Fixture.Create();
+        var             id      = await fixture.CreateArchivedSessionAsync();
+        await using var model   = fixture.Window();
+        await model.InitializeAsync();
+        model.ToggleArchiveViewCommand.Execute(null);
+        var row = model.Sessions.Single(session => session.Id == id);
+        model.Settings.General.ShowArchivedSessionDeletionPrompt = false;
+        using var writer = await SessionStoreWriter.OpenExistingAsync(fixture.Store, id, null, CancellationToken.None);
+        model.Notice = string.Empty;
+
+        model.OpenSessionDeletionCommand.Execute(row);
+        await WaitUntilAsync(() => !model.IsSessionDeletionRunning && !string.IsNullOrEmpty(model.Notice));
+
+        Assert.That(model.IsSessionDeletionOpen, Is.False);
+        Assert.That(model.Sessions, Does.Contain(row));
+        Assert.That(File.Exists(Path.Combine(fixture.Store, id + SessionStoreWriter.LogFileSuffix)), Is.True);
+    }
+
     [Test]
     public async Task ConfirmDeletion_RemovesLogAndProjections_AndRefreshDoesNotRestoreRow()
     {
