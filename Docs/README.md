@@ -8,9 +8,10 @@
 
 <div>
     <a href="https://github.com/banned2054/TinyHarness/releases/tag/v0.0.1"><img alt="版本 0.0.1" src="https://img.shields.io/badge/version-0.0.1-blue"></a>
-    <a href="https://dotnet.microsoft.com/"><img alt=".NET 10" src="https://img.shields.io/badge/.NET-10.0-512BD4"></a>
+    <a href="https://dotnet.microsoft.com/"><img alt=".NET 11" src="https://img.shields.io/badge/.NET-11.0-512BD4"></a>
     <a href="#platform-status"><img alt="NativeAOT win-x64" src="https://img.shields.io/badge/NativeAOT-win--x64-009688"></a>
 </div>
+
 
 <br>
 

@@ -1,6 +1,6 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
+    <TargetFramework>net11.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <IsTestProject>true</IsTestProject>
@@ -10,7 +10,7 @@
     <ProjectReference Include="../TinyHarness.Desktop.Runtime/TinyHarness.Desktop.Runtime.csproj" />
     <ProjectReference Include="../TinyHarness.Desktop/TinyHarness.Desktop.csproj" />
     <ProjectReference Include="../TinyHarness.IndexProbe/TinyHarness.IndexProbe.csproj" />
-    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.11.0" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.11.1" />
     <PackageReference Include="NUnit" Version="5.0.0" />
     <PackageReference Include="NUnit3TestAdapter" Version="6.3.1" />
   </ItemGroup>
