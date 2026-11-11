@@ -1,17 +1,18 @@
 using Avalonia;
 using Avalonia.Styling;
+using TinyHarness.Desktop.Services;
 
 namespace TinyHarness.Desktop.ViewModels;
 
 /// <summary>
 ///     <para>
 ///         应用内居中设置面板：分区导航、加载与错误态、关闭请求；关闭只发事件，
-///         由宿主（MainWindowViewModel）收起面板。目录、网络、Windows 沙箱与权限分区各自保存对应可信设置。
+///         由宿主（MainWindowViewModel）收起面板。权限与审核设置位于通用页；各设置模型分别保存对应可信配置。
 ///     </para>
 ///     <para>
 ///         The in-app centered settings panel: section navigation, loading and error states, and the close
 ///         request. Closing only raises an event for the host (MainWindowViewModel) to hide the panel;
-///         the catalog, network, Windows sandbox and permissions sections save their respective trusted settings.
+///         permission and review settings appear on the general page, and each settings model saves its trusted config.
 ///     </para>
 /// </summary>
 public sealed class SettingsPanelViewModel : ObservableObject
@@ -21,17 +22,17 @@ public sealed class SettingsPanelViewModel : ObservableObject
     private bool                      _hasError;
     private bool                      _isLoading = true;
 
-    public SettingsPanelViewModel(GeneralSettingsSectionViewModel general, CatalogSettingsViewModel catalog,
-                                  PermissionSettingsViewModel?      permissions    = null,
-                                  NetworkSettingsViewModel?         network        = null,
-                                  WindowsSandboxSettingsViewModel?  windowsSandbox = null)
+    public SettingsPanelViewModel(GeneralSettingsSectionViewModel  general, CatalogSettingsViewModel catalog,
+                                  PermissionSettingsViewModel?     permissions    = null,
+                                  NetworkSettingsViewModel?        network        = null,
+                                  WindowsSandboxSettingsViewModel? windowsSandbox = null)
     {
-        General       = general;
-        Catalog       = catalog;
-        Permissions   = permissions   ?? new PermissionSettingsViewModel(general.ConfigPath);
-        Network       = network       ?? new NetworkSettingsViewModel(general.ConfigPath);
+        General        = general;
+        Catalog        = catalog;
+        Permissions    = permissions    ?? new PermissionSettingsViewModel(general.ConfigPath);
+        Network        = network        ?? new NetworkSettingsViewModel(general.ConfigPath);
         WindowsSandbox = windowsSandbox ?? new WindowsSandboxSettingsViewModel(general.ConfigPath);
-        Sections      = [General, Catalog, Network, WindowsSandbox, Permissions];
+        Sections       = [General, Catalog, Network, WindowsSandbox];
         Catalog.ConfigSaved += baseline =>
         {
             Network.AcceptBaseline(baseline);
@@ -74,10 +75,10 @@ public sealed class SettingsPanelViewModel : ObservableObject
 
     public GeneralSettingsSectionViewModel General { get; }
 
-    public CatalogSettingsViewModel       Catalog       { get; }
-    public NetworkSettingsViewModel       Network       { get; }
+    public CatalogSettingsViewModel        Catalog        { get; }
+    public NetworkSettingsViewModel        Network        { get; }
     public WindowsSandboxSettingsViewModel WindowsSandbox { get; }
-    public PermissionSettingsViewModel    Permissions   { get; }
+    public PermissionSettingsViewModel     Permissions    { get; }
 
     public IReadOnlyList<SettingsSectionViewModel> Sections { get; }
 
@@ -216,11 +217,12 @@ public abstract class SettingsSectionViewModel : ObservableObject
 }
 
 /// <summary>
-///     <para>通用分区：主题选择、项目删除提示与配置文件路径展示。</para>
-///     <para>The general section: theme selection, project-deletion confirmation and config path display.</para>
+///     <para>通用分区：主题选择、删除提示与配置目录入口。</para>
+///     <para>The general section: theme selection, deletion confirmation and access to the config folder.</para>
 /// </summary>
 public sealed class GeneralSettingsSectionViewModel : SettingsSectionViewModel
 {
+    private string _configFolderError                 = string.Empty;
     private bool   _showArchivedSessionDeletionPrompt = true;
     private bool   _showProjectDeletionPrompt         = true;
 
@@ -229,9 +231,27 @@ public sealed class GeneralSettingsSectionViewModel : SettingsSectionViewModel
         ConfigPath         = configPath;
         SelectLightCommand = new RelayCommand(() => SelectTheme(ThemeVariant.Light));
         SelectDarkCommand  = new RelayCommand(() => SelectTheme(ThemeVariant.Dark));
+        OpenConfigFolderCommand = new AsyncCommand(async () =>
+        {
+            ConfigFolderError = string.Empty;
+            await WindowsConfigurationFolder.OpenAsync(ConfigPath);
+        }, exception => ConfigFolderError = $"无法打开配置文件夹：{exception.Message}");
     }
 
     public string ConfigPath { get; }
+
+    public AsyncCommand OpenConfigFolderCommand { get; }
+
+    public string ConfigFolderError
+    {
+        get => _configFolderError;
+        private set
+        {
+            if (SetProperty(ref _configFolderError, value)) OnPropertyChanged(nameof(HasConfigFolderError));
+        }
+    }
+
+    public bool HasConfigFolderError => ConfigFolderError.Length > 0;
 
     public RelayCommand SelectLightCommand { get; }
 

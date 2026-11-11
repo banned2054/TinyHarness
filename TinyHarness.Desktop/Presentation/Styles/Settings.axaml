@@ -74,6 +74,48 @@
     <Style Selector="Button.settings-nav-item.selected /template/ Border#PART_Surface">
         <Setter Property="Background" Value="{DynamicResource PopupItemSelectedBrush}" />
     </Style>
+    <!-- 设置分组：标题在容器外，普通设置以组内分隔线区分。 -->
+    <Style Selector="TextBlock.settings-group-title">
+        <Setter Property="FontSize" Value="13" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="Foreground" Value="{DynamicResource PopupMutedForegroundBrush}" />
+        <Setter Property="Margin" Value="0,0,0,10" />
+    </Style>
+    <Style Selector="Border.settings-group">
+        <Setter Property="Background" Value="{DynamicResource SettingsGroupBackgroundBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource SettingsEntryBorderBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="{DynamicResource AppPanelCornerRadius}" />
+        <Setter Property="Padding" Value="16,0" />
+    </Style>
+    <Style Selector="Border.settings-group.list">
+        <Setter Property="Padding" Value="6" />
+    </Style>
+    <!-- 行的分隔线随外层内距缩进，末行不再描边。 -->
+    <Style Selector="Border.settings-row">
+        <Setter Property="Padding" Value="0,14" />
+        <Setter Property="MinHeight" Value="56" />
+        <Setter Property="BorderBrush" Value="{DynamicResource PopupDividerBrush}" />
+        <Setter Property="BorderThickness" Value="0,0,0,1" />
+    </Style>
+    <Style Selector="Border.settings-row.last">
+        <Setter Property="BorderThickness" Value="0" />
+    </Style>
+    <!-- 列表条目保持透明，只让内部操作控件显示交互状态。 -->
+    <Style Selector="Border.settings-list-entry, Border.settings-provider-row">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="CornerRadius" Value="{DynamicResource AppPanelCornerRadius}" />
+        <Setter Property="Padding" Value="10,12" />
+        <Setter Property="MinHeight" Value="56" />
+    </Style>
+    <Style Selector="Rectangle.settings-entry-divider">
+        <Setter Property="Height" Value="1" />
+        <Setter Property="Margin" Value="10,0" />
+        <Setter Property="Fill" Value="{DynamicResource PopupDividerBrush}" />
+    </Style>
+    <Style Selector="ItemsControl.settings-list ContentPresenter:nth-last-child(1) > StackPanel > Rectangle.settings-entry-divider">
+        <Setter Property="IsVisible" Value="False" />
+    </Style>
     <!-- 设置表单下拉保留宽度约束，触发器外观由全局 dropdown-trigger 提供。 -->
     <Style Selector="Button.settings-select">
         <Setter Property="MaxWidth" Value="260" />
@@ -109,12 +151,13 @@
     <Style Selector="Button.settings-choice:disabled">
         <Setter Property="Foreground" Value="{DynamicResource PopupMutedForegroundBrush}" />
     </Style>
-    <!-- 供应商/编辑卡：圆角 12、弹层表面色。 -->
+    <!-- 独立编辑表单沿用设置分组表面。 -->
     <Style Selector="Border.settings-card">
-        <Setter Property="Background" Value="{DynamicResource PopupSurfaceBrush}" />
+        <Setter Property="Background" Value="{DynamicResource SettingsGroupBackgroundBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource SettingsEntryBorderBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
         <Setter Property="CornerRadius" Value="{DynamicResource AppPanelCornerRadius}" />
         <Setter Property="Padding" Value="16" />
-        <Setter Property="Margin" Value="0,0,0,12" />
     </Style>
     <Style Selector="TextBlock.settings-card-title">
         <Setter Property="FontSize" Value="14" />
@@ -262,10 +305,10 @@
         <Setter Property="FontSize" Value="12" />
         <Setter Property="Foreground" Value="{DynamicResource PopupMutedForegroundBrush}" />
         <Setter Property="TextWrapping" Value="Wrap" />
-        <Setter Property="Margin" Value="0,0,0,14" />
+        <Setter Property="Margin" Value="0,0,0,18" />
     </Style>
     <Style Selector="Border.settings-provider-editor">
-        <Setter Property="Background" Value="{DynamicResource PopupSurfaceBrush}" />
+        <Setter Property="Background" Value="{DynamicResource SettingsGroupBackgroundBrush}" />
         <Setter Property="CornerRadius" Value="{DynamicResource AppPanelCornerRadius}" />
         <Setter Property="Padding" Value="16" />
         <Setter Property="Margin" Value="0,8,0,0" />

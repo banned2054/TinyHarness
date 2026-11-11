@@ -99,9 +99,9 @@
             <SolidColorBrush x:Key="DropdownItemHoverBrush" Color="#393939" />
             <SolidColorBrush x:Key="DropdownForegroundBrush" Color="#D4D4D4" />
             <SolidColorBrush x:Key="DropdownMutedForegroundBrush" Color="#909090" />
-            <!-- 应用内居中设置面板：对齐 Codex 的中性深灰 #1E1E1E。
-                 设置条目与面板同色，仅靠 1px 描边勾出圆角矩形（对齐 DSH 供应商行）。 -->
+            <!-- 设置面板与分组使用相邻的中性灰，列表条目融入分组表面。 -->
             <SolidColorBrush x:Key="SettingsPanelBackgroundBrush" Color="#1E1E1E" />
+            <SolidColorBrush x:Key="SettingsGroupBackgroundBrush" Color="#262626" />
             <SolidColorBrush x:Key="SettingsEntryBackgroundBrush" Color="#1E1E1E" />
             <SolidColorBrush x:Key="SettingsEntryBorderBrush" Color="#3F3F41" />
             <!-- 危险操作的文字色（供应商删除等）：中性深底上的珊瑚红。 -->
@@ -227,8 +227,9 @@
             <SolidColorBrush x:Key="DropdownItemHoverBrush" Color="#F1F2F4" />
             <SolidColorBrush x:Key="DropdownForegroundBrush" Color="#2D2F33" />
             <SolidColorBrush x:Key="DropdownMutedForegroundBrush" Color="#8A8D92" />
-            <!-- 应用内居中设置面板（浅色对应：纯白面板）；条目同色，以细描边成卡。 -->
+            <!-- 设置面板与分组表面的浅色对应。 -->
             <SolidColorBrush x:Key="SettingsPanelBackgroundBrush" Color="#FFFFFF" />
+            <SolidColorBrush x:Key="SettingsGroupBackgroundBrush" Color="#F7F7F8" />
             <SolidColorBrush x:Key="SettingsEntryBackgroundBrush" Color="#FFFFFF" />
             <SolidColorBrush x:Key="SettingsEntryBorderBrush" Color="#E2E0E5" />
             <SolidColorBrush x:Key="DangerTextBrush" Color="#CF222E" />

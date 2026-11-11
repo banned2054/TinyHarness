@@ -113,6 +113,58 @@ public sealed class CatalogSettingsEditorTests
         Assert.That(entry.WindowDraft, Is.EqualTo("96K"));
     }
 
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task AddingProviderPreservesExistingProvidersAfterEditingOrDeletingLastProvider(bool deleteLast)
+    {
+        var path = Path.Combine(Path.GetTempPath(), "tinyharness-settings-test-" + Guid.NewGuid().ToString("N"),
+                                "config.json");
+        var profiles = new[] { "glm", "deepseek", "openai" }.Select(name => new UserProfile
+        {
+            Name   = name, Endpoint = $"https://{name}.invalid/v1", DefaultModel = "existing-model",
+            Models = [new UserProfileModel { Id = "existing-model", ContextWindowTokens = 64000 }]
+        }).ToArray();
+        var baseline = new UserConfig { DefaultProfile = profiles[0].Name, Profiles = profiles };
+        await UserConfigStore.SaveAsync(path, baseline, CancellationToken.None);
+        var settings = new CatalogSettingsViewModel(path, () => Task.CompletedTask, new Credentials());
+        await settings.LoadAsync();
+        if (deleteLast)
+        {
+            settings.Providers.Last().RequestDeleteCommand.Execute(null);
+            await settings.ConfirmDeleteConfirmationCommand.ExecuteAsync();
+            Assert.That(settings.ConfirmDeleteConfirmationCommand.LastError, Is.Null);
+        }
+
+        settings.Providers.Last().EditCommand.Execute(null);
+        settings.Editor!.Endpoint = "https://discarded.invalid/v1";
+
+        settings.OpenAddCommand.Execute(null);
+
+        Assert.That(settings.IsAddOpen, Is.True);
+        Assert.That(settings.Providers.All(row => !row.IsEditing && !row.HasEditor), Is.True);
+        var editor = settings.Editor!;
+        Assert.That(editor.IsCreate, Is.True);
+        Assert.That(editor.Name, Is.Empty);
+        Assert.That(editor.Endpoint, Is.Empty);
+        Assert.That(editor.ModelEntries, Is.Empty);
+        editor.Name     = "new-provider";
+        editor.Endpoint = "https://new-provider.invalid/v1";
+        await editor.SaveAsync();
+
+        var saved    = await UserConfigStore.LoadAsync(path, CancellationToken.None);
+        var retained = deleteLast ? profiles[..^1] : profiles;
+        Assert.That(saved.DefaultProfile, Is.EqualTo(baseline.DefaultProfile));
+        Assert.That(saved.Profiles.Select(profile => profile.Name),
+                    Is.EqualTo(retained.Select(profile => profile.Name).Append("new-provider")));
+        foreach (var profile in retained)
+        {
+            var actual = saved.Profiles.Single(item => item.Name == profile.Name);
+            Assert.That(actual.Endpoint, Is.EqualTo(profile.Endpoint));
+            Assert.That(actual.DefaultModel, Is.EqualTo(profile.DefaultModel));
+            Assert.That(actual.Models, Is.EqualTo(profile.Models));
+        }
+    }
+
     [TestCase(true)]
     [TestCase(false)]
     public async Task SavingCollapsedEditorPreservesModelsAndOnlyReplacesCredentialsWhenKeyIsEntered(bool replaceKey)

@@ -7,7 +7,7 @@
              Focusable="True">
     <!-- 应用内居中设置面板（覆盖层，非 Popup）：透明遮罩点击关闭 + 居中 800×700 面板
          （小窗经 code-behind 钳制 MaxWidth/MaxHeight = 宿主 - 48）。左导航 188px 固定分区
-         （通用/模型/网络/Windows 沙箱/权限），右内容列 header（标题 + 关闭）与滚动内容区。Esc 关闭、
+         （通用/模型/网络/Windows 沙箱），右内容列 header（标题、配置入口与关闭）与滚动内容区。Esc 关闭、
          打开即聚焦面板根，均由 code-behind 承担；关闭请求经 VM 事件交宿主收起面板。 -->
     <Grid>
         <Border Classes="settings-mask" PointerPressed="OnMaskPointerPressed" />
@@ -39,12 +39,18 @@
 
                     <!-- 右内容列：header + 仅内容区滚动。 -->
                     <Grid Grid.Column="1" RowDefinitions="54,*">
-                        <Grid Grid.Row="0" Margin="0,0,24,0" ColumnDefinitions="*,Auto">
+                        <Grid Grid.Row="0" Margin="0,0,24,0" ColumnDefinitions="*,Auto,Auto" ColumnSpacing="12">
                             <TextBlock Text="{Binding ActiveSection.Title}"
                                        FontSize="16" FontWeight="SemiBold"
                                        Foreground="{DynamicResource PopupForegroundBrush}"
                                        VerticalAlignment="Center" Margin="24,0,0,0" />
-                            <Button Grid.Column="1" Classes="settings-close-icon"
+                            <Button Grid.Column="1" Classes="settings-secondary" Content="打开配置文件"
+                                    Command="{Binding General.OpenConfigFolderCommand}"
+                                    Height="28" Padding="10,0" FontSize="12"
+                                    HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
+                                    VerticalAlignment="Center" AutomationProperties.Name="打开配置文件"
+                                    ToolTip.Tip="打开配置文件所在文件夹" />
+                            <Button Grid.Column="2" Classes="settings-close-icon"
                                     Command="{Binding CloseCommand}"
                                     AutomationProperties.Name="关闭设置" ToolTip.Tip="关闭设置"
                                     VerticalAlignment="Center">
@@ -73,107 +79,96 @@
                                 </StackPanel>
 
                                 <StackPanel IsVisible="{Binding IsReady}">
-                                    <!-- 通用分区：主题选择、项目删除提示与配置文件路径。 -->
+                                    <TextBlock Classes="settings-error" Text="{Binding General.ConfigFolderError}"
+                                               IsVisible="{Binding General.HasConfigFolderError}" Margin="0,10,0,0" />
+                                    <!-- 通用分区：偏好、权限与审核。 -->
                                     <StackPanel IsVisible="{Binding General.IsActive}" Margin="0,10,0,0">
-                                        <Border Classes="settings-row">
-                                            <Grid ColumnDefinitions="*,Auto" MinHeight="56">
-                                                <StackPanel Grid.Column="0" Margin="0,0,48,0"
-                                                            VerticalAlignment="Center" Spacing="2">
-                                                    <TextBlock Text="主题" FontSize="14"
-                                                               Foreground="{DynamicResource PopupForegroundBrush}" />
-                                                    <TextBlock Text="深浅配色立即生效，不需要重启。" FontSize="12"
-                                                               TextWrapping="Wrap"
-                                                               Foreground="{DynamicResource PopupMutedForegroundBrush}" />
-                                                </StackPanel>
-                                                <StackPanel Grid.Column="1" Orientation="Horizontal"
-                                                            Spacing="8" Margin="0,8" VerticalAlignment="Center">
-                                                    <Button Classes="settings-choice"
-                                                            Classes.selected="{Binding General.IsLightSelected}"
-                                                            Command="{Binding General.SelectLightCommand}"
-                                                            AutomationProperties.Name="浅色主题">
-                                                        <StackPanel Spacing="4" HorizontalAlignment="Center">
-                                                            <Path Width="16" Height="16" Stretch="None"
-                                                                  Data="{StaticResource Icon.SunOutline}"
-                                                                  Stroke="{Binding $parent[Button].Foreground}"
-                                                                  StrokeThickness="1.2" StrokeLineCap="Round"
-                                                                  StrokeJoin="Round"
-                                                                  HorizontalAlignment="Center" />
-                                                            <TextBlock Text="浅色" FontSize="12"
-                                                                       HorizontalAlignment="Center" />
+                                        <TextBlock Classes="settings-group-title" Text="偏好设置" />
+                                        <Border Classes="settings-group">
+                                            <StackPanel>
+                                                <Border Classes="settings-row">
+                                                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="24">
+                                                        <StackPanel Grid.Column="0"
+                                                                    VerticalAlignment="Center" Spacing="2">
+                                                            <TextBlock Classes="settings-card-title" Text="主题" />
+                                                            <TextBlock Text="深浅配色立即生效，不需要重启。" FontSize="12"
+                                                                       TextWrapping="Wrap"
+                                                                       Foreground="{DynamicResource PopupMutedForegroundBrush}" />
                                                         </StackPanel>
-                                                    </Button>
-                                                    <Button Classes="settings-choice"
-                                                            Classes.selected="{Binding General.IsDarkSelected}"
-                                                            Command="{Binding General.SelectDarkCommand}"
-                                                            AutomationProperties.Name="深色主题">
-                                                        <StackPanel Spacing="4" HorizontalAlignment="Center">
-                                                            <Path Width="16" Height="16" Stretch="None"
-                                                                  Data="{StaticResource Icon.MoonOutline}"
-                                                                  Stroke="{Binding $parent[Button].Foreground}"
-                                                                  StrokeThickness="1.2" StrokeLineCap="Round"
-                                                                  StrokeJoin="Round"
-                                                                  HorizontalAlignment="Center" />
-                                                            <TextBlock Text="深色" FontSize="12"
-                                                                       HorizontalAlignment="Center" />
+                                                        <StackPanel Grid.Column="1" Orientation="Horizontal"
+                                                                    Spacing="8" VerticalAlignment="Center">
+                                                            <Button Classes="settings-choice"
+                                                                    Classes.selected="{Binding General.IsLightSelected}"
+                                                                    Command="{Binding General.SelectLightCommand}"
+                                                                    AutomationProperties.Name="浅色主题">
+                                                                <StackPanel Spacing="4" HorizontalAlignment="Center">
+                                                                    <Path Width="16" Height="16" Stretch="None"
+                                                                          Data="{StaticResource Icon.SunOutline}"
+                                                                          Stroke="{Binding $parent[Button].Foreground}"
+                                                                          StrokeThickness="1.2" StrokeLineCap="Round"
+                                                                          StrokeJoin="Round"
+                                                                          HorizontalAlignment="Center" />
+                                                                    <TextBlock Text="浅色" FontSize="12"
+                                                                               HorizontalAlignment="Center" />
+                                                                </StackPanel>
+                                                            </Button>
+                                                            <Button Classes="settings-choice"
+                                                                    Classes.selected="{Binding General.IsDarkSelected}"
+                                                                    Command="{Binding General.SelectDarkCommand}"
+                                                                    AutomationProperties.Name="深色主题">
+                                                                <StackPanel Spacing="4" HorizontalAlignment="Center">
+                                                                    <Path Width="16" Height="16" Stretch="None"
+                                                                          Data="{StaticResource Icon.MoonOutline}"
+                                                                          Stroke="{Binding $parent[Button].Foreground}"
+                                                                          StrokeThickness="1.2" StrokeLineCap="Round"
+                                                                          StrokeJoin="Round"
+                                                                          HorizontalAlignment="Center" />
+                                                                    <TextBlock Text="深色" FontSize="12"
+                                                                               HorizontalAlignment="Center" />
+                                                                </StackPanel>
+                                                            </Button>
                                                         </StackPanel>
-                                                    </Button>
-                                                </StackPanel>
-                                            </Grid>
+                                                    </Grid>
+                                                </Border>
+                                                <Border Classes="settings-row">
+                                                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="24">
+                                                        <StackPanel Grid.Column="0"
+                                                                    VerticalAlignment="Center" Spacing="2">
+                                                            <TextBlock Classes="settings-card-title" Text="项目删除提示" />
+                                                            <TextBlock Text="删除项目时先显示确认面板。"
+                                                                       FontSize="12" TextWrapping="Wrap"
+                                                                       Foreground="{DynamicResource PopupMutedForegroundBrush}" />
+                                                        </StackPanel>
+                                                        <ToggleSwitch Grid.Column="1"
+                                                                      IsChecked="{Binding General.ShowProjectDeletionPrompt, Mode=TwoWay}"
+                                                                      AutomationProperties.Name="项目删除提示"
+                                                                      VerticalAlignment="Center" />
+                                                    </Grid>
+                                                </Border>
+                                                <Border Classes="settings-row last">
+                                                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="24">
+                                                        <StackPanel Grid.Column="0"
+                                                                    VerticalAlignment="Center" Spacing="2">
+                                                            <TextBlock Classes="settings-card-title" Text="归档会话删除提示" />
+                                                            <TextBlock Text="永久删除归档会话时先显示确认面板。"
+                                                                       FontSize="12" TextWrapping="Wrap"
+                                                                       Foreground="{DynamicResource PopupMutedForegroundBrush}" />
+                                                        </StackPanel>
+                                                        <ToggleSwitch Grid.Column="1"
+                                                                      IsChecked="{Binding General.ShowArchivedSessionDeletionPrompt, Mode=TwoWay}"
+                                                                      AutomationProperties.Name="归档会话删除提示"
+                                                                      VerticalAlignment="Center" />
+                                                    </Grid>
+                                                </Border>
+                                            </StackPanel>
                                         </Border>
-                                        <Border Classes="settings-row">
-                                            <Grid ColumnDefinitions="*,Auto" MinHeight="56">
-                                                <StackPanel Grid.Column="0" Margin="0,0,48,0"
-                                                            VerticalAlignment="Center" Spacing="2">
-                                                    <TextBlock Text="项目删除提示" FontSize="14"
-                                                               Foreground="{DynamicResource PopupForegroundBrush}" />
-                                                    <TextBlock Text="删除项目时先显示确认面板。"
-                                                               FontSize="12" TextWrapping="Wrap"
-                                                               Foreground="{DynamicResource PopupMutedForegroundBrush}" />
-                                                </StackPanel>
-                                                <ToggleSwitch Grid.Column="1"
-                                                              IsChecked="{Binding General.ShowProjectDeletionPrompt, Mode=TwoWay}"
-                                                              AutomationProperties.Name="项目删除提示"
-                                                              VerticalAlignment="Center" />
-                                            </Grid>
-                                        </Border>
-                                        <Border Classes="settings-row">
-                                            <Grid ColumnDefinitions="*,Auto" MinHeight="56">
-                                                <StackPanel Grid.Column="0" Margin="0,0,48,0"
-                                                            VerticalAlignment="Center" Spacing="2">
-                                                    <TextBlock Text="归档会话删除提示" FontSize="14"
-                                                               Foreground="{DynamicResource PopupForegroundBrush}" />
-                                                    <TextBlock Text="永久删除归档会话时先显示确认面板。"
-                                                               FontSize="12" TextWrapping="Wrap"
-                                                               Foreground="{DynamicResource PopupMutedForegroundBrush}" />
-                                                </StackPanel>
-                                                <ToggleSwitch Grid.Column="1"
-                                                              IsChecked="{Binding General.ShowArchivedSessionDeletionPrompt, Mode=TwoWay}"
-                                                              AutomationProperties.Name="归档会话删除提示"
-                                                              VerticalAlignment="Center" />
-                                            </Grid>
-                                        </Border>
-                                        <Border Classes="settings-row last">
-                                            <Grid ColumnDefinitions="*,Auto" MinHeight="56">
-                                                <StackPanel Grid.Column="0" Margin="0,0,48,0"
-                                                            VerticalAlignment="Center" Spacing="2">
-                                                    <TextBlock Text="配置文件" FontSize="14"
-                                                               Foreground="{DynamicResource PopupForegroundBrush}" />
-                                                    <SelectableTextBlock Text="{Binding General.ConfigPath}"
-                                                                         FontSize="12" TextWrapping="Wrap"
-                                                                         Foreground="{DynamicResource PopupMutedForegroundBrush}" />
-                                                    <TextBlock Text="凭据引用与模型目录保存在该文件；密钥值只进系统凭据存储。"
-                                                               FontSize="12" TextWrapping="Wrap"
-                                                               Foreground="{DynamicResource PopupMutedForegroundBrush}" />
-                                                </StackPanel>
-                                            </Grid>
-                                        </Border>
+                                        <views:PermissionSettingsView DataContext="{Binding Permissions}" Margin="0,24,0,0" />
                                     </StackPanel>
 
                                     <!-- 模型分区：供应商行列表与添加/编辑卡。 -->
                                     <views:CatalogSettingsView DataContext="{Binding Catalog}" Margin="0,10,0,0" />
                                     <views:NetworkSettingsView DataContext="{Binding Network}" Margin="0,10,0,0" />
                                     <views:WindowsSandboxSettingsView DataContext="{Binding WindowsSandbox}" />
-                                    <views:PermissionSettingsView DataContext="{Binding Permissions}" />
                                 </StackPanel>
                             </Panel>
                         </ScrollViewer>

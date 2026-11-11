@@ -14,90 +14,100 @@
             <TextBlock Text="{Binding Label}" />
         </DataTemplate>
         <DataTemplate x:Key="NetworkProxyRowTemplate" x:DataType="vm:NetworkProxyRowViewModel">
-            <Border Classes="settings-row" Padding="12,10">
-                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
-                    <StackPanel Spacing="3" VerticalAlignment="Center">
-                        <StackPanel Orientation="Horizontal" Spacing="8">
-                            <TextBlock Classes="settings-card-title" Text="{Binding Name}" />
+            <StackPanel>
+                <Border Classes="settings-list-entry">
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                        <StackPanel Spacing="3" VerticalAlignment="Center">
+                            <TextBlock Classes="settings-card-title" Text="{Binding Name}"
+                                       TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Name}" />
                             <TextBlock Classes="settings-card-description" Text="{Binding Details}"
-                                       VerticalAlignment="Center" />
+                                       TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Details}" />
+                            <TextBlock Classes="settings-card-description" Text="{Binding ReferenceText}"
+                                       IsVisible="{Binding IsReferenced}" />
+                            <TextBlock Classes="settings-card-description" Text="{Binding TestStatus}"
+                                       IsVisible="{Binding !IsTesting}" />
+                            <TextBlock Classes="settings-card-description" Text="正在测试代理与 HTTPS 目标…"
+                                       IsVisible="{Binding IsTesting}" />
                         </StackPanel>
-                        <TextBlock Classes="settings-card-description" Text="{Binding ReferenceText}"
-                                   IsVisible="{Binding IsReferenced}" />
-                        <TextBlock Classes="settings-card-description" Text="{Binding TestStatus}"
-                                   IsVisible="{Binding !IsTesting}" />
-                        <TextBlock Classes="settings-card-description" Text="正在测试代理与 HTTPS 目标…"
-                                   IsVisible="{Binding IsTesting}" />
-                    </StackPanel>
-                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6"
-                                VerticalAlignment="Center">
-                        <Button Classes="settings-secondary" Content="编辑" Command="{Binding EditCommand}"
-                                AutomationProperties.Name="编辑代理" />
-                        <Button Classes="settings-secondary" Content="{Binding TestButtonText}"
-                                Command="{Binding TestCommand}" AutomationProperties.Name="测试代理连接" />
-                        <Button Classes="settings-secondary" Content="删除" Command="{Binding DeleteCommand}"
-                                IsEnabled="{Binding !IsReferenced}"
-                                AutomationProperties.Name="删除代理" />
-                    </StackPanel>
-                </Grid>
-            </Border>
+                        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6"
+                                    VerticalAlignment="Center">
+                            <Button Classes="settings-secondary" Content="编辑" Command="{Binding EditCommand}"
+                                    AutomationProperties.Name="编辑代理" />
+                            <Button Classes="settings-secondary" Content="{Binding TestButtonText}"
+                                    Command="{Binding TestCommand}" AutomationProperties.Name="测试代理连接" />
+                            <Button Classes="settings-danger-text" Content="删除" Command="{Binding DeleteCommand}"
+                                    IsEnabled="{Binding !IsReferenced}"
+                                    AutomationProperties.Name="删除代理" />
+                        </StackPanel>
+                    </Grid>
+                </Border>
+                <Rectangle Classes="settings-entry-divider" />
+            </StackPanel>
         </DataTemplate>
     </UserControl.Resources>
 
-    <StackPanel IsVisible="{Binding IsActive}" Spacing="14">
+    <StackPanel IsVisible="{Binding IsActive}">
         <TextBlock Classes="settings-section-intro" Text="{Binding Intro}" />
 
-        <Border Classes="settings-card">
-            <StackPanel Spacing="10">
-                <TextBlock Classes="settings-card-title" Text="全局默认网络" />
-                <TextBlock Classes="settings-card-description"
-                           Text="系统代理遵循当前 .NET/操作系统设置，未设置时允许直连。直连只关闭应用层代理；指定代理失败时不会切换到其他出口。" />
-                <ComboBox MinHeight="34" ItemsSource="{Binding DefaultModeOptions}"
-                          SelectedItem="{Binding SelectedDefaultMode, Mode=TwoWay}"
-                          ItemTemplate="{StaticResource DefaultNetworkChoiceTemplate}"
-                          AutomationProperties.Name="全局默认网络方式" />
-                <ComboBox MinHeight="34" IsVisible="{Binding IsDefaultProxyMode}"
-                          ItemsSource="{Binding ProxyChoices}"
-                          SelectedItem="{Binding SelectedDefaultProxy, Mode=TwoWay}"
-                          ItemTemplate="{StaticResource NetworkProxyChoiceTemplate}"
-                          AutomationProperties.Name="全局默认代理" />
-                <Button Classes="settings-primary" Content="保存全局默认"
-                        Command="{Binding SaveDefaultRouteCommand}"
-                        IsEnabled="{Binding CanSaveDefaultRoute}"
-                        HorizontalAlignment="Left" AutomationProperties.Name="保存全局默认网络方式" />
+        <TextBlock Classes="settings-group-title" Text="连接设置" />
+        <Border Classes="settings-group">
+            <StackPanel>
+                <Border Classes="settings-row">
+                    <StackPanel Spacing="10">
+                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                            <TextBlock Classes="settings-card-title" Text="默认网络" VerticalAlignment="Center" />
+                            <ComboBox Grid.Column="1" Classes="dropdown" MinWidth="156" MaxWidth="220"
+                                      ItemsSource="{Binding DefaultModeOptions}"
+                                      SelectedItem="{Binding SelectedDefaultMode, Mode=TwoWay}"
+                                      ItemTemplate="{StaticResource DefaultNetworkChoiceTemplate}"
+                                      AutomationProperties.Name="全局默认网络方式" />
+                        </Grid>
+                        <ComboBox Classes="dropdown" IsVisible="{Binding IsDefaultProxyMode}"
+                                  HorizontalAlignment="Stretch"
+                                  ItemsSource="{Binding ProxyChoices}"
+                                  SelectedItem="{Binding SelectedDefaultProxy, Mode=TwoWay}"
+                                  ItemTemplate="{StaticResource NetworkProxyChoiceTemplate}"
+                                  AutomationProperties.Name="全局默认代理" />
+                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                            <TextBlock Classes="settings-card-description" VerticalAlignment="Center"
+                                       Text="供未单独指定网络的供应商使用。"
+                                       ToolTip.Tip="系统代理未设置时直连；直连仅关闭应用层代理；指定代理失败时不切换出口。" />
+                            <Button Grid.Column="1" Classes="settings-secondary" Content="重试"
+                                    Command="{Binding SaveDefaultRouteCommand}"
+                                    IsVisible="{Binding HasDefaultRouteSaveError}"
+                                    IsEnabled="{Binding CanSaveDefaultRoute}"
+                                    AutomationProperties.Name="重试保存默认网络" />
+                        </Grid>
+                    </StackPanel>
+                </Border>
+                <Border Classes="settings-row last">
+                    <StackPanel Spacing="8">
+                        <TextBlock Classes="settings-card-title" Text="HTTPS 测试目标" />
+                        <TextBox Classes="settings-input" Text="{Binding TestTarget, Mode=TwoWay}"
+                                 PlaceholderText="https://api.example.com/v1/models"
+                                 AutomationProperties.Name="HTTPS 连接测试目标" />
+                        <TextBlock Classes="settings-card-description" Text="仅测试连接与延迟，不发送 API Key。" />
+                    </StackPanel>
+                </Border>
             </StackPanel>
         </Border>
 
-        <Grid ColumnDefinitions="*,Auto">
-            <StackPanel Spacing="3">
-                <TextBlock Classes="settings-card-title" Text="代理列表" />
-                <TextBlock Classes="settings-card-description"
-                           Text="测试会检查代理连接，并显示到达 HTTPS 测试目标的延迟。" />
-            </StackPanel>
+        <Grid ColumnDefinitions="*,Auto" Margin="0,24,0,10">
+            <TextBlock Classes="settings-group-title" Text="代理" Margin="0" VerticalAlignment="Center" />
             <Button Grid.Column="1" Classes="settings-secondary" Content="+ 添加代理"
                     Command="{Binding AddProxyCommand}" AutomationProperties.Name="添加代理" />
         </Grid>
 
-        <Border Classes="settings-card">
-            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
-                <StackPanel Spacing="4">
-                    <TextBlock Classes="settings-field-label" Text="HTTPS 测试目标" />
-                    <TextBox Classes="settings-input" Text="{Binding TestTarget, Mode=TwoWay}"
-                             PlaceholderText="https://api.example.com/v1/models"
-                             AutomationProperties.Name="HTTPS 连接测试目标" />
-                </StackPanel>
-                <TextBlock Classes="settings-card-description" Grid.Column="1"
-                           Text="仅请求目标并测量响应延迟，不发送 API Key。"
-                           VerticalAlignment="Center" />
-            </Grid>
+        <Border Classes="settings-group list">
+            <StackPanel>
+                <TextBlock Classes="settings-card-description" Text="还没有已保存的代理。" Margin="10,14"
+                           IsVisible="{Binding !HasProxies}" />
+                <ItemsControl Classes="settings-list" ItemsSource="{Binding Proxies}"
+                              ItemTemplate="{StaticResource NetworkProxyRowTemplate}" />
+            </StackPanel>
         </Border>
 
-        <StackPanel IsVisible="{Binding !HasProxies}" Spacing="3">
-            <TextBlock Classes="settings-card-description" Text="还没有已保存的代理。" />
-        </StackPanel>
-        <ItemsControl ItemsSource="{Binding Proxies}" ItemTemplate="{StaticResource NetworkProxyRowTemplate}" />
-
-        <Border Classes="settings-card" IsVisible="{Binding IsProxyEditorOpen}">
+        <Border Classes="settings-card" IsVisible="{Binding IsProxyEditorOpen}" Margin="0,12,0,0">
             <StackPanel Spacing="10">
                 <TextBlock Classes="settings-card-title" Text="{Binding ProxyEditorTitle}" />
                 <StackPanel Spacing="4">
@@ -108,7 +118,7 @@
                 <Grid ColumnDefinitions="*,2*" ColumnSpacing="8">
                     <StackPanel Spacing="4">
                         <TextBlock Classes="settings-field-label" Text="协议" />
-                        <ComboBox MinHeight="34" ItemsSource="{Binding ProxyProtocolOptions}"
+                        <ComboBox Classes="dropdown" ItemsSource="{Binding ProxyProtocolOptions}"
                                   SelectedItem="{Binding SelectedProxyProtocol, Mode=TwoWay}"
                                   ItemTemplate="{StaticResource ProxyProtocolChoiceTemplate}"
                                   AutomationProperties.Name="代理协议" />
@@ -158,6 +168,6 @@
         </Border>
 
         <TextBlock Classes="settings-error" Text="{Binding Notice}"
-                   IsVisible="{Binding HasNotice}" />
+                   IsVisible="{Binding HasNotice}" Margin="0,12,0,0" />
     </StackPanel>
 </UserControl>
