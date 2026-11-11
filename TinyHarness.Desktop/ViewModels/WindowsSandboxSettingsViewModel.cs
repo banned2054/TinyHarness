@@ -15,18 +15,22 @@ namespace TinyHarness.Desktop.ViewModels;
 /// </summary>
 public sealed class WindowsSandboxSettingsViewModel : SettingsSectionViewModel
 {
-    private readonly string     _path;
-    private readonly Func<Task> _refresh;
-    private          UserConfig _baseline = new();
-    private          bool       _allowTcpLoopback;
-    private          bool       _enabled;
-    private          string     _environmentText = string.Empty;
-    private          string     _notice          = string.Empty;
-    private          string?    _proxyName;
-    private          string     _readRootsText  = string.Empty;
-    private          SandboxProxyModeChoice? _selectedProxyMode;
+    private readonly SettingsAutoSaveQueue       _autoSave;
+    private readonly string                      _path;
+    private readonly Func<Task>                  _refresh;
+    private          bool                        _allowTcpLoopback;
+    private          UserConfig                  _baseline = new();
+    private          bool                        _enabled;
+    private          string                      _environmentText = string.Empty;
+    private          bool                        _hasAutoSaveError;
+    private          bool                        _hasLoaded;
+    private          bool                        _isUpdating;
+    private          string                      _notice = string.Empty;
+    private          string?                     _proxyName;
+    private          string                      _readRootsText = string.Empty;
     private          SandboxNetworkPolicyChoice? _selectedNetworkPolicy;
-    private          string     _writeRootsText = string.Empty;
+    private          SandboxProxyModeChoice?     _selectedProxyMode;
+    private          string                      _writeRootsText = string.Empty;
 
     /// <summary>
     ///     <para>使用可信配置路径及保存后的刷新回调建立 Windows 沙箱分区。</para>
@@ -34,13 +38,26 @@ public sealed class WindowsSandboxSettingsViewModel : SettingsSectionViewModel
     /// </summary>
     public WindowsSandboxSettingsViewModel(string path, Func<Task>? refresh = null) : base("Windows 沙箱")
     {
-        _path       = path;
-        _refresh    = refresh ?? (() => Task.CompletedTask);
-        SaveCommand = new AsyncCommand(SaveAsync, exception => Notice = exception.Message);
+        _path    = path;
+        _refresh = refresh ?? (() => Task.CompletedTask);
+        _autoSave = new SettingsAutoSaveQueue(async () =>
+        {
+            await SaveCoreAsync();
+            return true;
+        }, exception =>
+        {
+            HasAutoSaveError = true;
+            Notice           = $"沙箱设置保存失败：{exception.Message}";
+        }, TimeSpan.FromMilliseconds(350));
+        SaveCommand = new AsyncCommand(() =>
+        {
+            _autoSave.Request();
+            return _autoSave.WaitAsync();
+        }, exception => Notice = exception.Message);
         NetworkPolicyOptions =
         [
-            new SandboxNetworkPolicyChoice(SandboxNetworkPolicy.Restricted, "受限（每次联网申请需审批）"),
-            new SandboxNetworkPolicyChoice(SandboxNetworkPolicy.Enabled, "常设允许（不再逐次询问联网申请）")
+            new SandboxNetworkPolicyChoice(SandboxNetworkPolicy.Restricted, "受限（需审批）"),
+            new SandboxNetworkPolicyChoice(SandboxNetworkPolicy.Enabled, "常设允许")
         ];
         ProxyModeOptions =
         [
@@ -58,7 +75,10 @@ public sealed class WindowsSandboxSettingsViewModel : SettingsSectionViewModel
 
     public IReadOnlyList<SandboxProxyModeChoice> ProxyModeOptions { get; }
 
-    /// <summary>可被 named 模式引用的已保存代理；凭据只保存在系统凭据存储，此处不显示。Saved proxies referenceable by named mode; credentials stay in the system credential store and are never shown.</summary>
+    /// <summary>
+    ///     <para>可被 named 模式引用的已保存代理；此处不读取或显示凭据。</para>
+    ///     <para>Saved proxies referenceable by named mode; credentials are neither read nor displayed here.</para>
+    /// </summary>
     public ObservableCollection<NetworkProxyChoice> ProxyChoices { get; } = [];
 
     public AsyncCommand SaveCommand { get; }
@@ -66,7 +86,10 @@ public sealed class WindowsSandboxSettingsViewModel : SettingsSectionViewModel
     public bool Enabled
     {
         get => _enabled;
-        set => SetProperty(ref _enabled, value);
+        set
+        {
+            if (SetProperty(ref _enabled, value)) QueueAutoSave();
+        }
     }
 
     public SandboxNetworkPolicyChoice SelectedNetworkPolicy
@@ -74,14 +97,17 @@ public sealed class WindowsSandboxSettingsViewModel : SettingsSectionViewModel
         get => _selectedNetworkPolicy ?? NetworkPolicyOptions[0];
         set
         {
-            if (value is not null) SetProperty(ref _selectedNetworkPolicy, value);
+            if (value is not null && SetProperty(ref _selectedNetworkPolicy, value)) QueueAutoSave();
         }
     }
 
     public bool AllowTcpLoopback
     {
         get => _allowTcpLoopback;
-        set => SetProperty(ref _allowTcpLoopback, value);
+        set
+        {
+            if (SetProperty(ref _allowTcpLoopback, value)) QueueAutoSave();
+        }
     }
 
     public SandboxProxyModeChoice SelectedProxyMode
@@ -94,6 +120,7 @@ public sealed class WindowsSandboxSettingsViewModel : SettingsSectionViewModel
             {
                 OnPropertyChanged(nameof(IsNamedProxyMode));
                 OnPropertyChanged(nameof(SelectedProxy));
+                QueueAutoSave();
             }
         }
     }
@@ -104,28 +131,41 @@ public sealed class WindowsSandboxSettingsViewModel : SettingsSectionViewModel
     public NetworkProxyChoice? SelectedProxy
     {
         get => ProxyChoices.FirstOrDefault(choice => choice.Id == _proxyName);
-        set => SetProperty(ref _proxyName, value?.Id);
+        set
+        {
+            if (_isUpdating) return;
+            if (SetProperty(ref _proxyName, value?.Id)) QueueAutoSave();
+        }
     }
 
     /// <summary>额外只读根，一行一个绝对路径。Additional read roots, one absolute path per line.</summary>
     public string ReadRootsText
     {
         get => _readRootsText;
-        set => SetProperty(ref _readRootsText, value);
+        set
+        {
+            if (SetProperty(ref _readRootsText, value)) QueueAutoSave();
+        }
     }
 
     /// <summary>额外写根，一行一个绝对路径。Additional write roots, one absolute path per line.</summary>
     public string WriteRootsText
     {
         get => _writeRootsText;
-        set => SetProperty(ref _writeRootsText, value);
+        set
+        {
+            if (SetProperty(ref _writeRootsText, value)) QueueAutoSave();
+        }
     }
 
     /// <summary>附加环境变量，一行一条 KEY=VALUE。Extra environment variables, one KEY=VALUE pair per line.</summary>
     public string EnvironmentText
     {
         get => _environmentText;
-        set => SetProperty(ref _environmentText, value);
+        set
+        {
+            if (SetProperty(ref _environmentText, value)) QueueAutoSave();
+        }
     }
 
     public string Notice
@@ -134,7 +174,22 @@ public sealed class WindowsSandboxSettingsViewModel : SettingsSectionViewModel
         private set => SetProperty(ref _notice, value);
     }
 
+    public bool HasAutoSaveError
+    {
+        get => _hasAutoSaveError;
+        private set => SetProperty(ref _hasAutoSaveError, value);
+    }
+
     public event Action<UserConfig>? ConfigSaved;
+
+    private void QueueAutoSave()
+    {
+        if (!_hasLoaded || _isUpdating) return;
+        HasAutoSaveError = false;
+        _autoSave.Request();
+    }
+
+    internal Task WaitForAutoSaveAsync() => _autoSave.WaitAsync();
 
     /// <summary>
     ///     <para>只读加载可信沙箱设置；沙箱未启用时仍显示已保存字段供编辑。</para>
@@ -143,10 +198,23 @@ public sealed class WindowsSandboxSettingsViewModel : SettingsSectionViewModel
     ///         when the sandbox is disabled.
     ///     </para>
     /// </summary>
-    public async Task LoadAsync()
+    public Task LoadAsync() => _autoSave.ExecuteAsync(LoadCoreAsync);
+
+    private async Task LoadCoreAsync()
     {
-        _baseline = await UserConfigStore.LoadAsync(_path, CancellationToken.None);
-        ApplySavedSettings(_baseline);
+        _isUpdating = true;
+        try
+        {
+            _baseline = await UserConfigStore.LoadAsync(_path, CancellationToken.None);
+            ApplySavedSettings(_baseline);
+            _autoSave.Reset();
+            HasAutoSaveError = false;
+            _hasLoaded       = true;
+        }
+        finally
+        {
+            _isUpdating = false;
+        }
     }
 
     /// <summary>
@@ -155,17 +223,36 @@ public sealed class WindowsSandboxSettingsViewModel : SettingsSectionViewModel
     /// </summary>
     public void AcceptBaseline(UserConfig baseline)
     {
-        _baseline = baseline;
-        ApplySavedSettings(baseline);
+        _isUpdating = true;
+        try
+        {
+            _baseline = baseline;
+            if (!_autoSave.HasChanges)
+            {
+                ApplySavedSettings(baseline);
+            }
+            else
+            {
+                RebuildProxyChoices();
+                OnPropertyChanged(nameof(SelectedProxy));
+            }
+        }
+        finally
+        {
+            _isUpdating = false;
+        }
     }
 
     /// <summary>
     ///     <para>校验编辑内容并保存；失败保留编辑内容与基线。</para>
     ///     <para>Validates the edits and saves; failures retain edits and the baseline.</para>
     /// </summary>
-    public async Task SaveAsync()
+    public Task SaveAsync() => _autoSave.SaveAsync();
+
+    private async Task SaveCoreAsync()
     {
-        Notice          = string.Empty;
+        HasAutoSaveError = false;
+        Notice           = string.Empty;
         var readRoots   = ParseRoots(ReadRootsText, "额外只读根");
         var writeRoots  = ParseRoots(WriteRootsText, "额外写根");
         var environment = ParseEnvironment(EnvironmentText);
@@ -174,15 +261,15 @@ public sealed class WindowsSandboxSettingsViewModel : SettingsSectionViewModel
         var saved = _baseline.Settings?.WindowsSandbox ?? new WindowsSandboxSettings();
         var sandbox = saved with
         {
-            Enabled              = Enabled,
-            AllowTcpLoopback     = AllowTcpLoopback,
-            NetworkPolicy        = SelectedNetworkPolicy.Policy,
+            Enabled = Enabled,
+            AllowTcpLoopback = AllowTcpLoopback,
+            NetworkPolicy = SelectedNetworkPolicy.Policy,
             Proxy = SelectedProxyMode.Mode == SandboxProxyMode.Named
                 ? new SandboxProxyPolicy { Mode = SandboxProxyMode.Named, ProxyName = _proxyName }
                 : new SandboxProxyPolicy { Mode = SelectedProxyMode.Mode },
-            AdditionalReadRoots  = readRoots,
+            AdditionalReadRoots = readRoots,
             AdditionalWriteRoots = writeRoots,
-            ExtraEnvironment     = environment
+            ExtraEnvironment = environment
         };
         // 清除扩大设置（回 restricted/写根清空）自然解除常设授权门禁：确认记录随保存一并删除。
         // 原配置没有 permissions 节时保持缺席，不新增默认块。
@@ -190,9 +277,9 @@ public sealed class WindowsSandboxSettingsViewModel : SettingsSectionViewModel
             ? existingPermissions with
             {
                 StandingTrustConfirmation =
-                    StandingTrustEvaluation.HasStandingExpansion(sandbox)
-                        ? existingPermissions.StandingTrustConfirmation
-                        : null
+                StandingTrustEvaluation.HasStandingExpansion(sandbox)
+                    ? existingPermissions.StandingTrustConfirmation
+                    : null
             }
             : null;
         var candidate = _baseline with
@@ -200,7 +287,7 @@ public sealed class WindowsSandboxSettingsViewModel : SettingsSectionViewModel
             Settings = (_baseline.Settings ?? new UserConfigSettings()) with
             {
                 WindowsSandbox = sandbox,
-                Permissions    = permissions
+                Permissions = permissions
             }
         };
         await UserConfigStore.SaveAsync(_path, candidate, _baseline, CancellationToken.None);
@@ -212,17 +299,17 @@ public sealed class WindowsSandboxSettingsViewModel : SettingsSectionViewModel
 
     private void ApplySavedSettings(UserConfig config)
     {
-        var sandbox        = config.Settings?.WindowsSandbox ?? new WindowsSandboxSettings();
-        _enabled           = sandbox.Enabled;
-        _allowTcpLoopback  = sandbox.AllowTcpLoopback;
-        _proxyName         = sandbox.Proxy.ProxyName;
-        _readRootsText     = string.Join(Environment.NewLine, sandbox.AdditionalReadRoots);
-        _writeRootsText    = string.Join(Environment.NewLine, sandbox.AdditionalWriteRoots);
+        var sandbox = config.Settings?.WindowsSandbox ?? new WindowsSandboxSettings();
+        _enabled          = sandbox.Enabled;
+        _allowTcpLoopback = sandbox.AllowTcpLoopback;
+        _proxyName        = sandbox.Proxy.ProxyName;
+        _readRootsText    = string.Join(Environment.NewLine, sandbox.AdditionalReadRoots);
+        _writeRootsText   = string.Join(Environment.NewLine, sandbox.AdditionalWriteRoots);
         _environmentText = sandbox.ExtraEnvironment is { } environment
             ? string.Join(Environment.NewLine, environment.Select(pair => $"{pair.Key}={pair.Value}"))
             : string.Empty;
         _selectedNetworkPolicy = NetworkPolicyOptions.Single(option => option.Policy == sandbox.NetworkPolicy);
-        _selectedProxyMode     = ProxyModeOptions.Single(option => option.Mode == sandbox.Proxy.Mode);
+        _selectedProxyMode     = ProxyModeOptions.Single(option => option.Mode       == sandbox.Proxy.Mode);
         RebuildProxyChoices();
         OnPropertyChanged(nameof(SelectedNetworkPolicy));
         OnPropertyChanged(nameof(SelectedProxyMode));

@@ -16,6 +16,7 @@ namespace TinyHarness.Desktop.ViewModels;
 /// </summary>
 public sealed class NetworkSettingsViewModel : SettingsSectionViewModel
 {
+    private readonly SettingsAutoSaveQueue _autoSave;
     private readonly ICredentialStore      _credentials;
     private readonly string                _path;
     private readonly Func<Task>            _refresh;
@@ -26,8 +27,11 @@ public sealed class NetworkSettingsViewModel : SettingsSectionViewModel
     private          string?               _editingCredentialTarget;
     private          string?               _editingProxyError;
     private          string?               _editingProxyId;
+    private          bool                  _hasDefaultRouteSaveError;
+    private          bool                  _hasLoaded;
     private          bool                  _isAddingProxy;
     private          bool                  _isEditingProxy;
+    private          bool                  _isUpdating;
     private          string                _notice        = string.Empty;
     private          string                _proxyHost     = string.Empty;
     private          string                _proxyName     = string.Empty;
@@ -57,13 +61,22 @@ public sealed class NetworkSettingsViewModel : SettingsSectionViewModel
             new ProxyProtocolChoice(ProxyProtocol.Https, "HTTPS"),
             new ProxyProtocolChoice(ProxyProtocol.Socks5, "SOCKS5")
         ];
-        SaveDefaultRouteCommand = new AsyncCommand(SaveDefaultRouteAsync, exception => Notice = exception.Message);
-        AddProxyCommand         = new RelayCommand(OpenAddProxy, () => !IsEditingProxy);
-        SaveProxyCommand        = new AsyncCommand(SaveProxyAsync, exception => ProxyError = exception.Message);
-        CancelProxyEditCommand  = new RelayCommand(CancelProxyEdit);
+        _autoSave = new SettingsAutoSaveQueue(AutoSaveDefaultRouteAsync, exception =>
+        {
+            HasDefaultRouteSaveError = true;
+            Notice                   = $"默认网络保存失败：{exception.Message}";
+        });
+        SaveDefaultRouteCommand = new AsyncCommand(() =>
+        {
+            _autoSave.Request();
+            return _autoSave.WaitAsync();
+        }, exception => Notice = exception.Message);
+        AddProxyCommand        = new RelayCommand(OpenAddProxy, () => !IsEditingProxy);
+        SaveProxyCommand       = new AsyncCommand(SaveProxyAsync, exception => ProxyError = exception.Message);
+        CancelProxyEditCommand = new RelayCommand(CancelProxyEdit);
     }
 
-    public string Intro => "网络设置只影响 TinyHarness 自身发出的模型与模型目录 HTTP 请求，不会设置系统代理，也不会改变 Agent 工具进程的网络环境。";
+    public string Intro => "仅影响模型请求与模型目录，不改变系统或 Agent 工具网络。";
 
     public IReadOnlyList<DefaultNetworkChoice> DefaultModeOptions { get; }
 
@@ -95,6 +108,7 @@ public sealed class NetworkSettingsViewModel : SettingsSectionViewModel
             OnPropertyChanged(nameof(IsDefaultProxyMode));
             OnPropertyChanged(nameof(SelectedDefaultProxy));
             OnPropertyChanged(nameof(CanSaveDefaultRoute));
+            QueueDefaultRouteSave();
         }
     }
 
@@ -111,6 +125,7 @@ public sealed class NetworkSettingsViewModel : SettingsSectionViewModel
             _selectedDefaultProxy = value;
             OnPropertyChanged();
             OnPropertyChanged(nameof(CanSaveDefaultRoute));
+            QueueDefaultRouteSave();
         }
     }
 
@@ -133,6 +148,12 @@ public sealed class NetworkSettingsViewModel : SettingsSectionViewModel
     }
 
     public bool HasNotice => Notice.Length > 0;
+
+    public bool HasDefaultRouteSaveError
+    {
+        get => _hasDefaultRouteSaveError;
+        private set => SetProperty(ref _hasDefaultRouteSaveError, value);
+    }
 
     public bool IsAddingProxy
     {
@@ -275,12 +296,25 @@ public sealed class NetworkSettingsViewModel : SettingsSectionViewModel
     ///     <para>读取可信网络设置并重建代理行。</para>
     ///     <para>Loads trusted network settings and rebuilds the proxy rows.</para>
     /// </summary>
-    public async Task LoadAsync()
+    public Task LoadAsync() => _autoSave.ExecuteAsync(LoadCoreAsync);
+
+    private async Task LoadCoreAsync()
     {
-        _baseline = await UserConfigStore.LoadAsync(_path, CancellationToken.None);
-        ApplySavedSettings(_baseline);
-        CancelProxyEdit();
-        RebuildRows();
+        _isUpdating = true;
+        try
+        {
+            _baseline = await UserConfigStore.LoadAsync(_path, CancellationToken.None);
+            ApplySavedSettings(_baseline);
+            CancelProxyEdit();
+            RebuildRows();
+            _autoSave.Reset();
+            HasDefaultRouteSaveError = false;
+            _hasLoaded               = true;
+        }
+        finally
+        {
+            _isUpdating = false;
+        }
     }
 
     /// <summary>
@@ -289,12 +323,46 @@ public sealed class NetworkSettingsViewModel : SettingsSectionViewModel
     /// </summary>
     public void AcceptBaseline(UserConfig baseline)
     {
-        _baseline = baseline;
-        ApplySavedSettings(baseline);
-        OnPropertyChanged(nameof(ProxyChoices));
-        OnPropertyChanged(nameof(SelectedDefaultProxy));
-        OnPropertyChanged(nameof(CanSaveDefaultRoute));
-        RebuildRows();
+        _isUpdating = true;
+        try
+        {
+            _baseline = baseline;
+            if (!_autoSave.HasChanges) ApplySavedSettings(baseline);
+            OnPropertyChanged(nameof(ProxyChoices));
+            OnPropertyChanged(nameof(SelectedDefaultProxy));
+            OnPropertyChanged(nameof(CanSaveDefaultRoute));
+            RebuildRows();
+        }
+        finally
+        {
+            _isUpdating = false;
+        }
+    }
+
+    /// <summary>
+    ///     <para>只为用户更改默认路由排队保存，不保存加载或同步过程中的临时选择。</para>
+    ///     <para>Queues user changes to the default route without saving transient loading or synchronization values.</para>
+    /// </summary>
+    private void QueueDefaultRouteSave()
+    {
+        if (!_hasLoaded || _isUpdating) return;
+        HasDefaultRouteSaveError = false;
+        _autoSave.Request();
+    }
+
+    internal Task WaitForAutoSaveAsync() => _autoSave.WaitAsync();
+
+    private async Task<bool> AutoSaveDefaultRouteAsync()
+    {
+        HasDefaultRouteSaveError = false;
+        if (!CanSaveDefaultRoute)
+        {
+            Notice = "请选择一个已保存的代理作为全局默认。";
+            return false;
+        }
+
+        await SaveDefaultRouteAsync();
+        return true;
     }
 
     private void ApplySavedSettings(UserConfig config)
@@ -355,7 +423,9 @@ public sealed class NetworkSettingsViewModel : SettingsSectionViewModel
         ProxyError = null;
     }
 
-    private async Task SaveProxyAsync()
+    private Task SaveProxyAsync() => _autoSave.ExecuteAsync(SaveProxyCoreAsync);
+
+    private async Task SaveProxyCoreAsync()
     {
         if (!CanSaveProxy) return;
         Notice = string.Empty;
@@ -430,7 +500,10 @@ public sealed class NetworkSettingsViewModel : SettingsSectionViewModel
         return new NetworkRoute { Mode = NetworkMode.Proxy, ProxyId = _defaultProxyId };
     }
 
-    private async Task DeleteProxyAsync(NetworkProxyRowViewModel row)
+    private Task DeleteProxyAsync(NetworkProxyRowViewModel row) =>
+        _autoSave.ExecuteAsync(() => DeleteProxyCoreAsync(row));
+
+    private async Task DeleteProxyCoreAsync(NetworkProxyRowViewModel row)
     {
         Notice = string.Empty;
         var references = ReferencesTo(row.Source.Id);
@@ -507,10 +580,19 @@ public sealed class NetworkSettingsViewModel : SettingsSectionViewModel
     {
         UserConfigValidator.Validate(candidate);
         await UserConfigStore.SaveAsync(_path, candidate, _baseline, CancellationToken.None);
-        _baseline = candidate;
-        ApplySavedSettings(candidate);
-        RebuildRows();
-        OnPropertyChanged(nameof(ProxyChoices));
+        _baseline   = candidate;
+        _isUpdating = true;
+        try
+        {
+            if (!_autoSave.HasChanges) ApplySavedSettings(candidate);
+            RebuildRows();
+            OnPropertyChanged(nameof(ProxyChoices));
+        }
+        finally
+        {
+            _isUpdating = false;
+        }
+
         if (ConfigSaved is { } handlers)
             foreach (Action<UserConfig> handler in handlers.GetInvocationList())
                 try

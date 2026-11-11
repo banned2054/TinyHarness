@@ -8,19 +8,25 @@ using TinyHarness.Core.Services.Permissions;
 namespace TinyHarness.Desktop.ViewModels;
 
 /// <summary>
-///     <para>编辑双审批模式的新会话默认值和独立审批模型，并显式确认旧权限配置迁移。</para>
+///     <para>自动保存新会话的默认审批模式和审核模型；常设授权仍需显式确认或撤销。</para>
 ///     <para>
-///         Edits two-mode approval defaults and the independent reviewer model, with explicit legacy-config migration
-///         confirmation.
+///         Automatically saves default approval and reviewer settings; standing authorization still requires explicit
+///         confirmation or revocation.
 ///     </para>
 /// </summary>
 public sealed class PermissionSettingsViewModel : SettingsSectionViewModel
 {
     private readonly string             _path;
     private readonly Func<Task>         _refresh;
-    private          UserConfig         _baseline = new();
+    private readonly SemaphoreSlim      _saveGate = new(1, 1);
+    private          long               _autoSaveRevision;
+    private          Task               _autoSaveTask = Task.CompletedTask;
+    private          UserConfig         _baseline     = new();
     private          bool               _configMigrationPending;
     private          PermissionModeRow? _default;
+    private          bool               _hasAutoSaveError;
+    private          bool               _hasLoaded;
+    private          bool               _isUpdating;
 
     private string               _migrationError = string.Empty;
     private string               _notice         = string.Empty;
@@ -34,9 +40,13 @@ public sealed class PermissionSettingsViewModel : SettingsSectionViewModel
     /// </summary>
     public PermissionSettingsViewModel(string path, Func<Task>? refresh = null) : base("权限与审批")
     {
-        _path       = path;
-        _refresh    = refresh ?? (() => Task.CompletedTask);
-        SaveCommand = new AsyncCommand(SaveAsync, exception => Notice = exception.Message);
+        _path    = path;
+        _refresh = refresh ?? (() => Task.CompletedTask);
+        SaveCommand = new AsyncCommand(() =>
+        {
+            QueueAutoSave();
+            return _autoSaveTask;
+        }, exception => Notice = exception.Message);
         ConfirmMigrationCommand = new AsyncCommand(ConfirmMigrationAsync,
                                                    exception => MigrationError = exception.Message);
         ConfirmStandingTrustCommand = new AsyncCommand(ConfirmStandingTrustAsync,
@@ -110,10 +120,19 @@ public sealed class PermissionSettingsViewModel : SettingsSectionViewModel
         private set => SetProperty(ref _notice, value);
     }
 
+    public bool HasAutoSaveError
+    {
+        get => _hasAutoSaveError;
+        private set => SetProperty(ref _hasAutoSaveError, value);
+    }
+
     public PermissionModeRow? DefaultMode
     {
         get => _default;
-        set => SetProperty(ref _default, value);
+        set
+        {
+            if (SetProperty(ref _default, value)) QueueAutoSave();
+        }
     }
 
     public bool UseCurrentModel
@@ -121,7 +140,9 @@ public sealed class PermissionSettingsViewModel : SettingsSectionViewModel
         get => _useCurrent;
         set
         {
-            if (SetProperty(ref _useCurrent, value)) OnPropertyChanged(nameof(UseFixedModel));
+            if (!SetProperty(ref _useCurrent, value)) return;
+            OnPropertyChanged(nameof(UseFixedModel));
+            QueueAutoSave();
         }
     }
 
@@ -130,7 +151,10 @@ public sealed class PermissionSettingsViewModel : SettingsSectionViewModel
     public ApprovalModelChoice? ReviewerModel
     {
         get => _reviewer;
-        set => SetProperty(ref _reviewer, value);
+        set
+        {
+            if (SetProperty(ref _reviewer, value)) QueueAutoSave();
+        }
     }
 
     public event Action<UserConfig>? ConfigSaved;
@@ -139,38 +163,50 @@ public sealed class PermissionSettingsViewModel : SettingsSectionViewModel
     ///     <para>只读加载设置与模型目录，不读取凭据或请求模型。</para>
     ///     <para>Loads settings and the model catalog without credentials or model requests.</para>
     /// </summary>
-    public async Task LoadAsync()
+    public Task LoadAsync() => AfterAutoSaveAsync(LoadCoreAsync);
+
+    private async Task LoadCoreAsync()
     {
-        _baseline = await UserConfigStore.LoadAsync(_path, CancellationToken.None);
-        var settings = _baseline.Settings?.Permissions ?? new PermissionSettings();
-        Modes.Clear();
-        ConfigMigrationPending = settings.PendingMigration;
-        // 旧配置只用于确定迁移默认项；权限配置确认单独完成。
-        foreach (var mode in SessionApprovalModes.All)
-            Modes.Add(new PermissionModeRow(mode));
-        DefaultMode = Modes.Single(row => row.Mode ==
-                                          (settings.PendingMigration
-                                              ? LegacyPermissionSelectionMapper
-                                                   .FromLegacyName(settings.LegacyDefaultMode)
-                                             ?? SessionApprovalMode.HumanApproval
-                                              : settings.DefaultApprovalMode));
-        Models.Clear();
-        foreach (var profile in _baseline.Profiles)
-        foreach (var model in profile.Models)
-            Models.Add(new ApprovalModelChoice(profile.Name, model.Id));
-        UseCurrentModel = settings.UseCurrentModel;
-        ReviewerModel = Models.FirstOrDefault(choice => choice.Profile == settings.ReviewerProfile &&
-                                                        choice.Model   == settings.ReviewerModel);
-        MigrationError     = string.Empty;
-        StandingTrustError = string.Empty;
-        OnPropertyChanged(nameof(MigrationSummary));
-        OnPropertyChanged(nameof(StandingTrustVisible));
-        OnPropertyChanged(nameof(StandingTrustPending));
-        OnPropertyChanged(nameof(StandingTrustActive));
-        OnPropertyChanged(nameof(StandingTrustSummary));
-        Notice = !UseCurrentModel && ReviewerModel is null
-            ? "原审批模型已不存在，请重新选择；AI 审核不可用时操作保持未执行。"
-            : string.Empty;
+        _isUpdating = true;
+        try
+        {
+            _baseline = await UserConfigStore.LoadAsync(_path, CancellationToken.None);
+            var settings = _baseline.Settings?.Permissions ?? new PermissionSettings();
+            Modes.Clear();
+            ConfigMigrationPending = settings.PendingMigration;
+            // 旧配置只用于确定迁移默认项；权限配置确认单独完成。
+            foreach (var mode in SessionApprovalModes.All)
+                Modes.Add(new PermissionModeRow(mode));
+            DefaultMode = Modes.Single(row => row.Mode ==
+                                              (settings.PendingMigration
+                                                  ? LegacyPermissionSelectionMapper
+                                                       .FromLegacyName(settings.LegacyDefaultMode)
+                                                 ?? SessionApprovalMode.HumanApproval
+                                                  : settings.DefaultApprovalMode));
+            Models.Clear();
+            foreach (var profile in _baseline.Profiles)
+            foreach (var model in profile.Models)
+                Models.Add(new ApprovalModelChoice(profile.Name, model.Id));
+            UseCurrentModel = settings.UseCurrentModel;
+            ReviewerModel = Models.FirstOrDefault(choice => choice.Profile == settings.ReviewerProfile &&
+                                                            choice.Model   == settings.ReviewerModel);
+            MigrationError     = string.Empty;
+            StandingTrustError = string.Empty;
+            OnPropertyChanged(nameof(MigrationSummary));
+            OnPropertyChanged(nameof(StandingTrustVisible));
+            OnPropertyChanged(nameof(StandingTrustPending));
+            OnPropertyChanged(nameof(StandingTrustActive));
+            OnPropertyChanged(nameof(StandingTrustSummary));
+            Notice = !UseCurrentModel && ReviewerModel is null
+                ? "原审批模型已不存在，请重新选择；AI 审核不可用时操作保持未执行。"
+                : string.Empty;
+            HasAutoSaveError = false;
+            _hasLoaded       = true;
+        }
+        finally
+        {
+            _isUpdating = false;
+        }
     }
 
     /// <summary>
@@ -182,26 +218,107 @@ public sealed class PermissionSettingsViewModel : SettingsSectionViewModel
     /// </summary>
     public void AcceptBaseline(UserConfig baseline)
     {
-        var selected = ReviewerModel;
-        _baseline              = baseline;
-        ConfigMigrationPending = baseline.Settings?.Permissions?.PendingMigration == true;
-        Models.Clear();
-        foreach (var profile in baseline.Profiles)
-        foreach (var model in profile.Models)
-            Models.Add(new ApprovalModelChoice(profile.Name, model.Id));
-        ReviewerModel = Models.FirstOrDefault(choice => choice == selected);
-        OnPropertyChanged(nameof(MigrationSummary));
-        OnPropertyChanged(nameof(StandingTrustVisible));
-        OnPropertyChanged(nameof(StandingTrustPending));
-        OnPropertyChanged(nameof(StandingTrustActive));
-        OnPropertyChanged(nameof(StandingTrustSummary));
+        _isUpdating = true;
+        try
+        {
+            var selected = ReviewerModel;
+            _baseline              = baseline;
+            ConfigMigrationPending = baseline.Settings?.Permissions?.PendingMigration == true;
+            Models.Clear();
+            foreach (var profile in baseline.Profiles)
+            foreach (var model in profile.Models)
+                Models.Add(new ApprovalModelChoice(profile.Name, model.Id));
+            ReviewerModel = Models.FirstOrDefault(choice => choice == selected);
+            OnPropertyChanged(nameof(MigrationSummary));
+            OnPropertyChanged(nameof(StandingTrustVisible));
+            OnPropertyChanged(nameof(StandingTrustPending));
+            OnPropertyChanged(nameof(StandingTrustActive));
+            OnPropertyChanged(nameof(StandingTrustSummary));
+        }
+        finally
+        {
+            _isUpdating = false;
+        }
+    }
+
+    /// <summary>
+    ///     <para>合并尚未开始的自动保存；加载及基线同步不触发写入。</para>
+    ///     <para>Coalesces queued automatic saves without writing during loading or baseline synchronization.</para>
+    /// </summary>
+    private void QueueAutoSave()
+    {
+        if (!_hasLoaded || _isUpdating) return;
+        _autoSaveTask = AutoSaveAsync(_autoSaveTask, ++_autoSaveRevision);
+    }
+
+    /// <summary>
+    ///     <para>等待前次保存后提交最新完整选择；失败保留草稿并显示重试入口。</para>
+    ///     <para>Waits for the previous save and commits the latest complete selection, retaining drafts on failure.</para>
+    /// </summary>
+    private async Task AutoSaveAsync(Task previous, long revision)
+    {
+        await Task.Yield();
+        await previous;
+        if (revision != _autoSaveRevision) return;
+        HasAutoSaveError = false;
+        if (DefaultMode is null || (!UseCurrentModel && ReviewerModel is null))
+        {
+            Notice = "请选择审核使用的模型，选择后自动保存。";
+            return;
+        }
+
+        Notice = "正在保存…";
+        try
+        {
+            await RunSerializedAsync(SaveCoreAsync);
+        }
+        catch (Exception exception)
+        {
+            HasAutoSaveError = true;
+            Notice           = $"自动保存失败：{exception.Message}";
+        }
+    }
+
+    /// <summary>
+    ///     <para>等待当前已排队的自动保存完成，供离线验证使用。</para>
+    ///     <para>Waits for currently queued automatic saves for offline verification.</para>
+    /// </summary>
+    internal Task WaitForAutoSaveAsync() => _autoSaveTask;
+
+    /// <summary>
+    ///     <para>加载或显式操作先等待已排队的保存，避免覆盖尚未提交的选择。</para>
+    ///     <para>Loads and explicit operations wait for queued saves before proceeding.</para>
+    /// </summary>
+    private async Task AfterAutoSaveAsync(Func<Task> operation)
+    {
+        await _autoSaveTask;
+        await RunSerializedAsync(operation);
+    }
+
+    /// <summary>
+    ///     <para>串行处理设置写入与常设授权操作，保留最新配置基线。</para>
+    ///     <para>Serializes setting writes and standing-authorization operations against the latest baseline.</para>
+    /// </summary>
+    private async Task RunSerializedAsync(Func<Task> operation)
+    {
+        await _saveGate.WaitAsync();
+        try
+        {
+            await operation();
+        }
+        finally
+        {
+            _saveGate.Release();
+        }
     }
 
     /// <summary>
     ///     <para>带基线校验保存；默认模式始终可见，失败保留编辑内容。</para>
     ///     <para>Saves with baseline checking, keeping the default visible and retaining edits on failure.</para>
     /// </summary>
-    public async Task SaveAsync()
+    public Task SaveAsync() => AfterAutoSaveAsync(SaveCoreAsync);
+
+    private async Task SaveCoreAsync()
     {
         if (DefaultMode is null) throw new InvalidOperationException("请选择默认权限模式。");
         var existing = _baseline.Settings?.Permissions ?? new PermissionSettings();
@@ -233,7 +350,7 @@ public sealed class PermissionSettingsViewModel : SettingsSectionViewModel
         OnPropertyChanged(nameof(MigrationSummary));
         Notice = ConfigMigrationPending
             ? "其他权限设置已保存；旧配置仍待单独确认迁移。"
-            : "已保存。默认模式用于新会话，已有会话保留自己的模式。";
+            : string.Empty;
         ConfigSaved?.Invoke(candidate);
         await _refresh();
     }
@@ -245,7 +362,9 @@ public sealed class PermissionSettingsViewModel : SettingsSectionViewModel
     ///         state clears only after success.
     ///     </para>
     /// </summary>
-    public async Task ConfirmMigrationAsync()
+    public Task ConfirmMigrationAsync() => AfterAutoSaveAsync(ConfirmMigrationCoreAsync);
+
+    private async Task ConfirmMigrationCoreAsync()
     {
         if (!ConfigMigrationPending) throw new InvalidOperationException("当前没有待确认的权限配置迁移。");
         if (DefaultMode is null) throw new InvalidOperationException("请选择迁移后的默认审批模式。");
@@ -289,7 +408,9 @@ public sealed class PermissionSettingsViewModel : SettingsSectionViewModel
     ///         record (time and scope revision); the persistent-authorization state starts only after success.
     ///     </para>
     /// </summary>
-    public async Task ConfirmStandingTrustAsync()
+    public Task ConfirmStandingTrustAsync() => AfterAutoSaveAsync(ConfirmStandingTrustCoreAsync);
+
+    private async Task ConfirmStandingTrustCoreAsync()
     {
         if (StandingState != StandingTrustState.Unconfirmed)
             throw new InvalidOperationException("当前没有待确认的常设信任。");
@@ -334,7 +455,9 @@ public sealed class PermissionSettingsViewModel : SettingsSectionViewModel
     ///         write roots are cleared together with the confirmation record; additional read roots stay unchanged.
     ///     </para>
     /// </summary>
-    public async Task RevokeStandingTrustAsync()
+    public Task RevokeStandingTrustAsync() => AfterAutoSaveAsync(RevokeStandingTrustCoreAsync);
+
+    private async Task RevokeStandingTrustCoreAsync()
     {
         if (StandingState == StandingTrustState.None)
             throw new InvalidOperationException("当前没有可撤销的常设授权。");
