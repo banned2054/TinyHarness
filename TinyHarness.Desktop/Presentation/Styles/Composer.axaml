@@ -8,7 +8,7 @@
         <Setter Property="Background" Value="{DynamicResource ComposerBackgroundBrush}" />
         <Setter Property="BorderThickness" Value="1" />
         <Setter Property="BorderBrush" Value="Transparent" />
-        <Setter Property="CornerRadius" Value="22" />
+        <Setter Property="CornerRadius" Value="{DynamicResource AppPanelCornerRadius}" />
         <Setter Property="Padding" Value="8,8,8,6" />
     </Style>
     <!-- 输入框聚焦的克制反馈：整块面板描边轻微提亮（code-behind 切换 focused 类），
@@ -16,8 +16,7 @@
     <Style Selector="Border.composer-panel.focused">
         <Setter Property="BorderBrush" Value="{DynamicResource ComposerFocusRingBrush}" />
     </Style>
-    <!-- 面板内输入框不自带边框与底色，视觉容器由输入面板承担；
-         采用 WebUI 的紧凑单行基线，多行时由 TextBox 自然增高。 -->
+    <!-- 消息输入框沿用全局文字与选区配色，由外层面板承载聚焦反馈。 -->
     <Style Selector="TextBox.composer-input">
         <Setter Property="MinHeight" Value="44" />
         <Setter Property="MaxHeight" Value="200" />
@@ -25,22 +24,18 @@
         <Setter Property="FontSize" Value="14" />
         <Setter Property="LineHeight" Value="24" />
         <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="Transparent" />
         <Setter Property="BorderThickness" Value="0" />
         <Setter Property="Foreground" Value="{DynamicResource ComposerTextBrush}" />
         <Setter Property="CaretBrush" Value="{DynamicResource ComposerTextBrush}" />
         <Setter Property="PlaceholderForeground" Value="{DynamicResource ComposerTextMutedBrush}" />
     </Style>
-    <!-- Fluent 把 TextBox 的状态底色与描边画在模板部件 Border#PART_BorderElement 上：
-         聚焦时该部件会换成强调色描边加深色填充，仅改控件的 Background/BorderThickness
-         （模板绑定源）压不住这些状态样式；必须逐状态覆盖模板部件本身，
-         输入框悬停/聚焦下才能保持透明无描边、与面板融为一体。 -->
     <Style Selector="TextBox.composer-input /template/ Border#PART_BorderElement">
         <Setter Property="Background" Value="Transparent" />
         <Setter Property="BorderBrush" Value="Transparent" />
         <Setter Property="BorderThickness" Value="0" />
     </Style>
-    <Style
-        Selector="TextBox.composer-input:pointerover /template/ Border#PART_BorderElement,
+    <Style Selector="TextBox.composer-input:pointerover /template/ Border#PART_BorderElement,
                      TextBox.composer-input:focus /template/ Border#PART_BorderElement,
                      TextBox.composer-input:focus-visible /template/ Border#PART_BorderElement,
                      TextBox.composer-input:disabled /template/ Border#PART_BorderElement">
@@ -54,7 +49,7 @@
         <Setter Property="Width" Value="30" />
         <Setter Property="Height" Value="30" />
         <Setter Property="Padding" Value="0" />
-        <Setter Property="CornerRadius" Value="15" />
+        <Setter Property="CornerRadius" Value="{DynamicResource AppPillCornerRadius}" />
         <Setter Property="BorderThickness" Value="0" />
         <Setter Property="Background" Value="Transparent" />
         <Setter Property="Foreground" Value="{DynamicResource ComposerTextMutedBrush}" />
@@ -72,7 +67,7 @@
         <Setter Property="Width" Value="34" />
         <Setter Property="Height" Value="34" />
         <Setter Property="Padding" Value="0" />
-        <Setter Property="CornerRadius" Value="17" />
+        <Setter Property="CornerRadius" Value="{DynamicResource AppPillCornerRadius}" />
         <Setter Property="BorderThickness" Value="0" />
         <Setter Property="Background" Value="{DynamicResource ComposerActionBrush}" />
         <Setter Property="Foreground" Value="{DynamicResource OnAccentBrush}" />
@@ -96,7 +91,7 @@
         <Setter Property="Width" Value="34" />
         <Setter Property="Height" Value="34" />
         <Setter Property="Padding" Value="0" />
-        <Setter Property="CornerRadius" Value="17" />
+        <Setter Property="CornerRadius" Value="{DynamicResource AppPillCornerRadius}" />
         <Setter Property="Background" Value="{DynamicResource ComposerControlBrush}" />
         <Setter Property="BorderThickness" Value="0" />
         <Setter Property="Foreground" Value="{DynamicResource StatusErrorBrush}" />
@@ -115,7 +110,7 @@
         <Setter Property="MaxWidth" Value="300" />
         <Setter Property="Height" Value="28" />
         <Setter Property="Padding" Value="10,0" />
-        <Setter Property="CornerRadius" Value="8" />
+        <Setter Property="CornerRadius" Value="{DynamicResource AppPillCornerRadius}" />
         <Setter Property="BorderThickness" Value="0" />
         <Setter Property="Background" Value="{DynamicResource ComposerControlBrush}" />
         <Setter Property="Foreground" Value="{DynamicResource ComposerTextBrush}" />
@@ -136,7 +131,7 @@
         <Setter Property="MaxWidth" Value="220" />
         <Setter Property="Height" Value="28" />
         <Setter Property="Padding" Value="10,0" />
-        <Setter Property="CornerRadius" Value="8" />
+        <Setter Property="CornerRadius" Value="{DynamicResource AppPillCornerRadius}" />
         <Setter Property="BorderThickness" Value="0" />
         <Setter Property="Background" Value="{DynamicResource ComposerControlBrush}" />
         <Setter Property="Foreground" Value="{DynamicResource ComposerTextBrush}" />
@@ -150,10 +145,10 @@
     <Style Selector="Button.permission-picker-button:disabled /template/ ContentPresenter#PART_ContentPresenter">
         <Setter Property="Background" Value="{DynamicResource ComposerControlBrush}" />
     </Style>
-    <!-- 风险确认弹层内 auto 预设的 EXP 角标：弱化小圆角徽标。 -->
+    <!-- 风险确认弹层内 auto 预设的 EXP 角标：弱化胶囊徽标。 -->
     <Style Selector="Border.permission-exp-badge">
         <Setter Property="Background" Value="{DynamicResource PopupItemSelectedBrush}" />
-        <Setter Property="CornerRadius" Value="4" />
+        <Setter Property="CornerRadius" Value="{DynamicResource AppPillCornerRadius}" />
         <Setter Property="Padding" Value="4,1" />
         <Setter Property="VerticalAlignment" Value="Center" />
     </Style>
@@ -167,10 +162,10 @@
     </Style>
 
     <!-- 任务面板（TodoPanel）：输入框上方的任务清单卡片，形态对齐官方 dock 卡片——
-         与输入卡片同底色、radius-lg 16px、body padding 6px 12px、头部与列表 gap 8px。 -->
+         与输入卡片同底色和面板圆角、body padding 6px 12px、头部与列表 gap 8px。 -->
     <Style Selector="Border.todo-panel">
         <Setter Property="Background" Value="{DynamicResource ComposerBackgroundBrush}" />
-        <Setter Property="CornerRadius" Value="16" />
+        <Setter Property="CornerRadius" Value="{DynamicResource AppPanelCornerRadius}" />
         <Setter Property="Padding" Value="12,6" />
     </Style>
     <!-- 头部整行可点：透明按钮，悬停不画底（收起态的点击区即整行，对齐官方 header button）。 -->

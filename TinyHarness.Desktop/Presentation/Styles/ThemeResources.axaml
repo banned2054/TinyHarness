@@ -88,7 +88,17 @@
             <SolidColorBrush x:Key="PopupForegroundBrush" Color="#F1F1F3" />
             <SolidColorBrush x:Key="PopupMutedForegroundBrush" Color="#A7ABB4" />
             <SolidColorBrush x:Key="PopupDividerBrush" Color="#414244" />
-            <SolidColorBrush x:Key="SidebarSettingsDividerBrush" Color="#2D2D2D" />
+            <!-- 原生下拉控件：Codex 式中性触发器与深色浮层。 -->
+            <SolidColorBrush x:Key="DropdownTriggerBrush" Color="#343434" />
+            <SolidColorBrush x:Key="DropdownTriggerHoverBrush" Color="#3D3D3D" />
+            <SolidColorBrush x:Key="DropdownBorderBrush" Color="#484848" />
+            <SolidColorBrush x:Key="DropdownFocusBrush" Color="#5A5A5A" />
+            <SolidColorBrush x:Key="DropdownDisabledBrush" Color="#2A2A2A" />
+            <SolidColorBrush x:Key="DropdownMenuBrush" Color="#2C2C2C" />
+            <SolidColorBrush x:Key="DropdownMenuBorderBrush" Color="#3A3A3A" />
+            <SolidColorBrush x:Key="DropdownItemHoverBrush" Color="#393939" />
+            <SolidColorBrush x:Key="DropdownForegroundBrush" Color="#D4D4D4" />
+            <SolidColorBrush x:Key="DropdownMutedForegroundBrush" Color="#909090" />
             <!-- 应用内居中设置面板：对齐 Codex 的中性深灰 #1E1E1E。
                  设置条目与面板同色，仅靠 1px 描边勾出圆角矩形（对齐 DSH 供应商行）。 -->
             <SolidColorBrush x:Key="SettingsPanelBackgroundBrush" Color="#1E1E1E" />
@@ -207,7 +217,16 @@
             <SolidColorBrush x:Key="PopupForegroundBrush" Color="#1A1D22" />
             <SolidColorBrush x:Key="PopupMutedForegroundBrush" Color="#70757E" />
             <SolidColorBrush x:Key="PopupDividerBrush" Color="#EDEEF0" />
-            <SolidColorBrush x:Key="SidebarSettingsDividerBrush" Color="#1A000000" />
+            <SolidColorBrush x:Key="DropdownTriggerBrush" Color="#F1F2F3" />
+            <SolidColorBrush x:Key="DropdownTriggerHoverBrush" Color="#E8EAEC" />
+            <SolidColorBrush x:Key="DropdownBorderBrush" Color="#D1D3D6" />
+            <SolidColorBrush x:Key="DropdownFocusBrush" Color="#92969C" />
+            <SolidColorBrush x:Key="DropdownDisabledBrush" Color="#E4E5E7" />
+            <SolidColorBrush x:Key="DropdownMenuBrush" Color="#FFFFFF" />
+            <SolidColorBrush x:Key="DropdownMenuBorderBrush" Color="#E0E1E3" />
+            <SolidColorBrush x:Key="DropdownItemHoverBrush" Color="#F1F2F4" />
+            <SolidColorBrush x:Key="DropdownForegroundBrush" Color="#2D2F33" />
+            <SolidColorBrush x:Key="DropdownMutedForegroundBrush" Color="#8A8D92" />
             <!-- 应用内居中设置面板（浅色对应：纯白面板）；条目同色，以细描边成卡。 -->
             <SolidColorBrush x:Key="SettingsPanelBackgroundBrush" Color="#FFFFFF" />
             <SolidColorBrush x:Key="SettingsEntryBackgroundBrush" Color="#FFFFFF" />

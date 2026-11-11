@@ -16,13 +16,13 @@
         <Setter Property="Background" Value="{DynamicResource ChatBackgroundBrush}" />
         <Setter Property="BorderBrush" Value="{DynamicResource SubtleBorderBrush}" />
         <Setter Property="BorderThickness" Value="1" />
-        <Setter Property="CornerRadius" Value="10" />
+        <Setter Property="CornerRadius" Value="{DynamicResource AppPanelCornerRadius}" />
         <Setter Property="Padding" Value="12,10" />
     </Style>
     <!-- 裁决按钮：允许为强调色实底，拒绝为描边幽灵按钮。 -->
     <Style Selector="Button.approval-allow">
         <Setter Property="Padding" Value="16,6" />
-        <Setter Property="CornerRadius" Value="8" />
+        <Setter Property="CornerRadius" Value="{DynamicResource AppPillCornerRadius}" />
         <Setter Property="BorderThickness" Value="0" />
         <Setter Property="Background" Value="{DynamicResource AccentFillBrush}" />
         <Setter Property="Foreground" Value="{DynamicResource OnAccentBrush}" />
@@ -36,7 +36,7 @@
     </Style>
     <Style Selector="Button.approval-reject">
         <Setter Property="Padding" Value="16,6" />
-        <Setter Property="CornerRadius" Value="8" />
+        <Setter Property="CornerRadius" Value="{DynamicResource AppPillCornerRadius}" />
         <Setter Property="BorderThickness" Value="1" />
         <Setter Property="Background" Value="Transparent" />
         <Setter Property="BorderBrush" Value="{DynamicResource SubtleBorderBrush}" />

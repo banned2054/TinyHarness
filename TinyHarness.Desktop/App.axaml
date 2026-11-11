@@ -3,7 +3,9 @@
              x:Class="TinyHarness.Desktop.App" RequestedThemeVariant="Dark">
     <Application.Styles>
         <FluentTheme />
+        <StyleInclude Source="avares://TinyHarness.Desktop/Presentation/Styles/Shapes.axaml" />
         <StyleInclude Source="avares://LiveMarkdown.Avalonia/Styles.axaml" />
+        <StyleInclude Source="avares://TinyHarness.Desktop/Presentation/Styles/InputFields.axaml" />
         <StyleInclude Source="avares://TinyHarness.Desktop/Presentation/Styles/ScrollBars.axaml" />
         <StyleInclude Source="avares://TinyHarness.Desktop/Presentation/Styles/Markdown.axaml" />
         <StyleInclude Source="avares://TinyHarness.Desktop/Presentation/Styles/Typography.axaml" />
@@ -13,6 +15,7 @@
         <StyleInclude Source="avares://TinyHarness.Desktop/Presentation/Styles/Sidebar.axaml" />
         <StyleInclude Source="avares://TinyHarness.Desktop/Presentation/Styles/Composer.axaml" />
         <StyleInclude Source="avares://TinyHarness.Desktop/Presentation/Styles/Settings.axaml" />
+        <StyleInclude Source="avares://TinyHarness.Desktop/Presentation/Styles/Dropdowns.axaml" />
     </Application.Styles>
     <Application.Resources>
         <ResourceDictionary>

@@ -55,7 +55,7 @@
                             <StackPanel Grid.Row="2" MaxWidth="816" Margin="28,8" Spacing="8">
                                 <Border IsVisible="{Binding HasApproval}"
                                         Background="{DynamicResource PanelBackgroundBrush}" Padding="16"
-                                        CornerRadius="12">
+                                        CornerRadius="{DynamicResource AppPanelCornerRadius}">
                                     <StackPanel Spacing="10">
                                         <TextBlock Text="工具请求审批" FontWeight="SemiBold" />
                                         <ScrollViewer MaxHeight="200">
@@ -91,7 +91,8 @@
                                                 IsVisible="{Binding IsWorkspaceRepairBusy}" />
                                     </WrapPanel>
                                     <Border IsVisible="{Binding WorkspaceRepairDetailsOpen}" Padding="12"
-                                            Background="{DynamicResource PanelBackgroundBrush}" CornerRadius="8">
+                                            Background="{DynamicResource PanelBackgroundBrush}"
+                                            CornerRadius="{DynamicResource AppPanelCornerRadius}">
                                         <StackPanel Spacing="8">
                                             <ScrollViewer MaxHeight="240">
                                                 <SelectableTextBlock Text="{Binding WorkspaceRepairDetails}"
@@ -101,7 +102,8 @@
                                         </StackPanel>
                                     </Border>
                                     <Border IsVisible="{Binding WorkspaceRepairConfirmationOpen}" Padding="12"
-                                            Background="{DynamicResource PanelBackgroundBrush}" CornerRadius="8">
+                                            Background="{DynamicResource PanelBackgroundBrush}"
+                                            CornerRadius="{DynamicResource AppPanelCornerRadius}">
                                         <StackPanel Spacing="8">
                                             <TextBlock Text="确认目录权限修复范围" FontWeight="SemiBold" />
                                             <ScrollViewer MaxHeight="240">
@@ -126,7 +128,8 @@
                                  行常驻等高（MinHeight），转正不使输入卡跳位。 -->
                             <Grid Grid.Row="3" MaxWidth="816" Margin="28,0,28,10" MinHeight="36">
                                 <Panel IsVisible="{Binding CanChooseWorkspace}" HorizontalAlignment="Left">
-                                    <Border x:Name="WorkspacePickerShell" Classes="workspace-picker-shell">
+                                    <Border x:Name="WorkspacePickerShell"
+                                            Classes="workspace-picker-shell dropdown-trigger-surface">
                                         <Grid ColumnDefinitions="Auto,Auto">
                                             <Button Classes="workspace-picker-clear"
                                                     IsVisible="{Binding HasSelectedProject}"
@@ -164,12 +167,13 @@
                                             </Button>
                                         </Grid>
                                     </Border>
-                                    <Popup PlacementTarget="{Binding #WorkspacePickerShell}"
+                                    <Popup Classes="dropdown-popup"
+                                           PlacementTarget="{Binding #WorkspacePickerShell}"
                                            Placement="TopEdgeAlignedLeft"
                                            VerticalOffset="-4"
                                            IsOpen="{Binding IsWorkspaceMenuOpen, Mode=TwoWay}"
                                            IsLightDismissEnabled="True">
-                                        <Border Classes="popup-surface" Width="300" MaxHeight="420">
+                                        <Border Classes="popup-surface dropdown-popup" Width="300" MaxHeight="420">
                                             <StackPanel>
                                                 <Border Classes="popup-search">
                                                     <Grid ColumnDefinitions="16,*" ColumnSpacing="8">

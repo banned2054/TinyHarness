@@ -314,7 +314,7 @@
                                        VerticalOffset="{Binding ActionsMenuVerticalOffset}"
                                        IsOpen="{Binding IsActionsMenuOpen, Mode=TwoWay}"
                                        IsLightDismissEnabled="True">
-                                    <Border Classes="popup-surface" Width="184" Padding="4" CornerRadius="16">
+                                    <Border Classes="popup-surface" Width="184" Padding="4">
                                         <StackPanel>
                                             <Button Classes="popup-item" MinHeight="32" Padding="8,0" Margin="0"
                                                     AutomationProperties.Name="打开项目所在目录"
@@ -491,7 +491,7 @@
                                    VerticalOffset="{Binding ActionsMenuVerticalOffset}"
                                    IsOpen="{Binding IsActionsMenuOpen, Mode=TwoWay}"
                                    IsLightDismissEnabled="True">
-                                <Border Classes="popup-surface" Width="184" Padding="4" CornerRadius="16">
+                                <Border Classes="popup-surface" Width="184" Padding="4">
                                     <Button Classes="popup-item popup-item-danger" MinHeight="32" Padding="8,0"
                                             Margin="0" AutomationProperties.Name="删除会话"
                                             Click="OnSessionDeleteMenuClick">
@@ -509,16 +509,16 @@
                 </ListBox.DataTemplates>
             </ListBox>
 
-            <Popup x:Name="SidebarSettingsPopup"
+            <Popup x:Name="SidebarSettingsPopup" Classes="dropdown-popup"
                    PlacementTarget="{Binding #SidebarSettingsButton}"
                    Placement="BottomEdgeAlignedRight" VerticalOffset="4"
                    IsOpen="{Binding IsSidebarSettingsMenuOpen, Mode=TwoWay}"
                    IsLightDismissEnabled="True">
-                <Border Classes="popup-surface" Width="224" Padding="4" CornerRadius="16">
+                <Border Classes="popup-surface dropdown-popup" Width="224" Padding="5">
                     <StackPanel>
                         <TextBlock Text="分组方式" Classes="popup-section"
                                    FontSize="11" Margin="10,6,10,2" />
-                        <Button Classes="popup-item" MinHeight="30" Padding="8,0" Margin="0"
+                        <Button Classes="popup-item"
                                 AutomationProperties.Name="按项目"
                                 Command="{Binding SelectProjectSidebarModeCommand}">
                             <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="8">
@@ -532,7 +532,7 @@
                                       IsVisible="{Binding IsProjectMode}" />
                             </Grid>
                         </Button>
-                        <Button Classes="popup-item" MinHeight="30" Padding="8,0" Margin="0"
+                        <Button Classes="popup-item"
                                 AutomationProperties.Name="单列表"
                                 Command="{Binding SelectSessionSidebarModeCommand}">
                             <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="8">
@@ -548,13 +548,12 @@
                             </Grid>
                         </Button>
 
-                        <Border Height="1" Margin="8,5"
-                                Background="{DynamicResource SidebarSettingsDividerBrush}"
+                        <Border Classes="popup-divider" Margin="8,5"
                                 IsVisible="{Binding IsProjectMode}" />
                         <TextBlock Text="排序方式" Classes="popup-section"
                                    FontSize="11" Margin="10,4,10,2"
                                    IsVisible="{Binding IsProjectMode}" />
-                        <Button Classes="popup-item" MinHeight="30" Padding="8,0" Margin="0"
+                        <Button Classes="popup-item"
                                 IsVisible="{Binding IsProjectMode}"
                                 AutomationProperties.Name="手动排序"
                                 Command="{Binding SelectManualProjectOrderCommand}">
@@ -570,7 +569,7 @@
                                       IsVisible="{Binding IsManualProjectOrder}" />
                             </Grid>
                         </Button>
-                        <Button Classes="popup-item" MinHeight="30" Padding="8,0" Margin="0"
+                        <Button Classes="popup-item"
                                 IsVisible="{Binding IsProjectMode}"
                                 AutomationProperties.Name="最近更新"
                                 Command="{Binding SelectRecentProjectOrderCommand}">

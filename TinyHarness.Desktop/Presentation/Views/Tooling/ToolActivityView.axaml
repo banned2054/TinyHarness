@@ -39,7 +39,8 @@
         </Button>
         <StackPanel Spacing="8" IsVisible="{Binding IsExpanded}">
             <Border Background="{DynamicResource ChatBackgroundBrush}"
-                    CornerRadius="6" Padding="10,8" IsVisible="{Binding HasError}">
+                    CornerRadius="{DynamicResource AppPanelCornerRadius}" Padding="10,8"
+                    IsVisible="{Binding HasError}">
                 <TextBlock Text="{Binding ErrorReason}" FontSize="12"
                            TextWrapping="Wrap"
                            Foreground="{DynamicResource StatusErrorBrush}" />
@@ -53,7 +54,7 @@
                         IsVisible="{Binding ResultText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
                 <TextBlock Text="结果" Classes="caption" />
                 <Border Background="{DynamicResource ChatBackgroundBrush}"
-                        CornerRadius="6" Padding="10,8" MaxHeight="320">
+                        CornerRadius="{DynamicResource AppPanelCornerRadius}" Padding="10,8" MaxHeight="320">
                     <TextBlock Classes="tool-mono" Text="{Binding ResultPreview}" />
                 </Border>
             </StackPanel>

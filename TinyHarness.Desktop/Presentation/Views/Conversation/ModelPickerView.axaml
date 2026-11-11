@@ -10,7 +10,7 @@
     <!-- 草稿与已建立会话共用菜单结构，可用性由实际接入能力决定。 -->
     <Panel>
         <Button x:Name="ModelPickerButton"
-                Classes="model-picker-button"
+                Classes="model-picker-button dropdown-trigger"
                 Command="{Binding ToggleModelMenuCommand}"
                 AutomationProperties.Name="选择模型与推理等级"
                 ToolTip.Tip="模型与推理等级">
@@ -26,13 +26,13 @@
                       VerticalAlignment="Center" />
             </Grid>
         </Button>
-        <Popup x:Name="ModelPickerPopup"
+        <Popup x:Name="ModelPickerPopup" Classes="dropdown-popup"
                PlacementTarget="{Binding #ModelPickerButton}"
                Placement="Top"
                VerticalOffset="-4"
                IsOpen="{Binding IsModelMenuOpen, Mode=TwoWay}"
                IsLightDismissEnabled="True">
-            <Border Classes="popup-surface" Width="264" MaxHeight="420">
+            <Border Classes="popup-surface dropdown-popup" Width="264" MaxHeight="420">
                 <Panel>
                     <!-- 主菜单保留模型与推理等级导航。 -->
                     <StackPanel IsVisible="{Binding IsModelMenuRootPage}">

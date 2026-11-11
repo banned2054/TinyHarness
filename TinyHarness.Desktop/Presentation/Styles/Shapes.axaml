@@ -1,0 +1,17 @@
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Styles.Resources>
+        <!-- 紧凑控件使用饱和半径形成胶囊；大容器保留矩形内容区，统一面板圆角。 -->
+        <CornerRadius x:Key="AppPillCornerRadius">999</CornerRadius>
+        <CornerRadius x:Key="AppPanelCornerRadius">22</CornerRadius>
+        <!-- Rectangle 的圆角属性使用 double，与面板圆角保持一致。 -->
+        <x:Double x:Key="AppPanelRadius">22</x:Double>
+    </Styles.Resources>
+
+    <Style Selector="Button, ToggleButton, TextBox, ComboBox, ListBoxItem, MenuItem">
+        <Setter Property="CornerRadius" Value="{DynamicResource AppPillCornerRadius}" />
+    </Style>
+    <Style Selector="TextBox[AcceptsReturn=True], ToolTip, ContextMenu">
+        <Setter Property="CornerRadius" Value="{DynamicResource AppPanelCornerRadius}" />
+    </Style>
+</Styles>

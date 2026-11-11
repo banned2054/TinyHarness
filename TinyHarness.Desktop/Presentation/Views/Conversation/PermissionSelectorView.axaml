@@ -4,7 +4,7 @@
              x:Class="TinyHarness.Desktop.Presentation.Views.Conversation.PermissionSelectorView"
              x:DataType="vm:SessionViewModel">
     <Panel>
-        <Button x:Name="PermissionPickerButton" Classes="permission-picker-button"
+        <Button x:Name="PermissionPickerButton" Classes="permission-picker-button dropdown-trigger"
                 Command="{Binding TogglePermissionMenuCommand}"
                 AutomationProperties.Name="执行权限" ToolTip.Tip="本会话的执行权限">
             <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
@@ -14,10 +14,11 @@
                       StrokeThickness="1.6" VerticalAlignment="Center" />
             </Grid>
         </Button>
-        <Popup x:Name="PermissionPickerPopup" PlacementTarget="{Binding #PermissionPickerButton}"
+        <Popup x:Name="PermissionPickerPopup" Classes="dropdown-popup"
+               PlacementTarget="{Binding #PermissionPickerButton}"
                Placement="TopEdgeAlignedLeft" VerticalOffset="-4"
                IsOpen="{Binding IsPermissionMenuOpen, Mode=TwoWay}" IsLightDismissEnabled="True">
-            <Border Classes="popup-surface" Width="288" MaxHeight="420">
+            <Border Classes="popup-surface dropdown-popup" Width="288" MaxHeight="420">
                 <StackPanel>
                     <TextBlock Text="执行权限" Classes="popup-section" />
                     <TextBlock Text="{Binding PermissionChangeHint}" Classes="popup-value"

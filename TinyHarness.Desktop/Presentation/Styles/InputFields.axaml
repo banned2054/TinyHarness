@@ -1,0 +1,73 @@
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <!-- 可编辑文本框共用项目的填充、描边、圆角与选区配色。 -->
+    <Style Selector="TextBox.app-input, TextBox.settings-input, TextBox.popup-input, TextBox.composer-input">
+        <Setter Property="MinHeight" Value="32" />
+        <Setter Property="FontSize" Value="13" />
+        <Setter Property="Padding" Value="10,0" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+        <Setter Property="Background" Value="{DynamicResource ComposerBackgroundBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource PopupDividerBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="{DynamicResource AppPillCornerRadius}" />
+        <Setter Property="Foreground" Value="{DynamicResource PopupForegroundBrush}" />
+        <Setter Property="CaretBrush" Value="{DynamicResource PopupForegroundBrush}" />
+        <Setter Property="PlaceholderForeground" Value="{DynamicResource PopupMutedForegroundBrush}" />
+        <Setter Property="SelectionBrush" Value="{DynamicResource AccentFillBrush}" />
+        <Setter Property="SelectionForegroundBrush" Value="{DynamicResource OnAccentBrush}" />
+    </Style>
+    <Style Selector="TextBox.app-input /template/ Border#PART_BorderElement,
+                     TextBox.settings-input /template/ Border#PART_BorderElement,
+                     TextBox.popup-input /template/ Border#PART_BorderElement,
+                     TextBox.composer-input /template/ Border#PART_BorderElement">
+        <Setter Property="Background" Value="{DynamicResource ComposerBackgroundBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource PopupDividerBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="{DynamicResource AppPillCornerRadius}" />
+    </Style>
+    <Style Selector="TextBox.app-input:focus /template/ Border#PART_BorderElement,
+                     TextBox.app-input:focus-visible /template/ Border#PART_BorderElement,
+                     TextBox.settings-input:focus /template/ Border#PART_BorderElement,
+                     TextBox.settings-input:focus-visible /template/ Border#PART_BorderElement,
+                     TextBox.popup-input:focus /template/ Border#PART_BorderElement,
+                     TextBox.popup-input:focus-visible /template/ Border#PART_BorderElement,
+                     TextBox.composer-input:focus /template/ Border#PART_BorderElement,
+                     TextBox.composer-input:focus-visible /template/ Border#PART_BorderElement">
+        <Setter Property="Background" Value="{DynamicResource ComposerBackgroundBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource AccentTextBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="{DynamicResource AppPillCornerRadius}" />
+    </Style>
+    <!-- 多行输入框使用面板圆角；模板覆盖放在聚焦样式之后，保持聚焦前后形状一致。 -->
+    <Style Selector="TextBox.app-input[AcceptsReturn=True],
+                     TextBox.settings-input[AcceptsReturn=True],
+                     TextBox.popup-input[AcceptsReturn=True],
+                     TextBox.composer-input[AcceptsReturn=True]">
+        <Setter Property="CornerRadius" Value="{DynamicResource AppPanelCornerRadius}" />
+    </Style>
+    <Style Selector="TextBox.app-input[AcceptsReturn=True] /template/ Border#PART_BorderElement,
+                     TextBox.settings-input[AcceptsReturn=True] /template/ Border#PART_BorderElement,
+                     TextBox.popup-input[AcceptsReturn=True] /template/ Border#PART_BorderElement,
+                     TextBox.composer-input[AcceptsReturn=True] /template/ Border#PART_BorderElement,
+                     TextBox.app-input[AcceptsReturn=True]:focus /template/ Border#PART_BorderElement,
+                     TextBox.app-input[AcceptsReturn=True]:focus-visible /template/ Border#PART_BorderElement,
+                     TextBox.settings-input[AcceptsReturn=True]:focus /template/ Border#PART_BorderElement,
+                     TextBox.settings-input[AcceptsReturn=True]:focus-visible /template/ Border#PART_BorderElement,
+                     TextBox.popup-input[AcceptsReturn=True]:focus /template/ Border#PART_BorderElement,
+                     TextBox.popup-input[AcceptsReturn=True]:focus-visible /template/ Border#PART_BorderElement,
+                     TextBox.composer-input[AcceptsReturn=True]:focus /template/ Border#PART_BorderElement,
+                     TextBox.composer-input[AcceptsReturn=True]:focus-visible /template/ Border#PART_BorderElement">
+        <Setter Property="CornerRadius" Value="{DynamicResource AppPanelCornerRadius}" />
+    </Style>
+    <Style Selector="TextBox.app-input:disabled /template/ Border#PART_BorderElement,
+                     TextBox.settings-input:disabled /template/ Border#PART_BorderElement,
+                     TextBox.popup-input:disabled /template/ Border#PART_BorderElement,
+                     TextBox.composer-input:disabled /template/ Border#PART_BorderElement">
+        <Setter Property="Opacity" Value="0.55" />
+    </Style>
+    <!-- 搜索框由外层容器绘制统一的胶囊表面，文字选区仍使用全局强调色。 -->
+    <Style Selector="TextBox.popup-search, TextBox.sidebar-search-input">
+        <Setter Property="SelectionBrush" Value="{DynamicResource AccentFillBrush}" />
+        <Setter Property="SelectionForegroundBrush" Value="{DynamicResource OnAccentBrush}" />
+    </Style>
+</Styles>

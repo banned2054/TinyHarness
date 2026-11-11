@@ -15,7 +15,7 @@
             <Setter.Value>
                 <ControlTemplate TargetType="md:CodeBlock">
                     <Border Background="{DynamicResource CodeBlockBackgroundBrush}"
-                            CornerRadius="8" ClipToBounds="True">
+                            CornerRadius="{DynamicResource AppPanelCornerRadius}" ClipToBounds="True">
                         <StackPanel Orientation="Vertical">
                             <Grid ColumnDefinitions="*,Auto" Margin="12,7,6,0">
                                 <StackPanel Orientation="Horizontal" Spacing="7" VerticalAlignment="Center">
@@ -33,7 +33,7 @@
                                 <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="2">
                                     <ToggleButton x:Name="PART_ToggleTextWrapButton"
                                                   Width="26" Height="26"
-                                                  Padding="0" CornerRadius="5"
+                                                  Padding="0" CornerRadius="{DynamicResource AppPillCornerRadius}"
                                                   BorderThickness="0"
                                                   Focusable="False"
                                                   IsChecked="{TemplateBinding IsCodeWrapped, Mode=TwoWay}">
@@ -46,7 +46,7 @@
                                     </ToggleButton>
                                     <Button x:Name="PART_CopyButton"
                                             Width="26" Height="26"
-                                            Padding="0" CornerRadius="5"
+                                            Padding="0" CornerRadius="{DynamicResource AppPillCornerRadius}"
                                             BorderThickness="0"
                                             Focusable="False">
                                         <Viewbox Width="14" Height="14">
@@ -58,11 +58,13 @@
                                     </Button>
                                 </StackPanel>
                             </Grid>
+                            <!-- 滚动条向内避开面板圆角；与正文边距合计保留原有内距。 -->
                             <ScrollViewer x:Name="PART_ScrollViewer"
+                                          Margin="8,0,8,8"
                                           HorizontalScrollBarVisibility="{TemplateBinding HorizontalScrollBarVisibility}"
                                           VerticalScrollBarVisibility="Auto">
                                 <md:MarkdownTextBlock x:Name="PART_CodeTextBlock"
-                                                      Margin="12,6,12,12"
+                                                      Margin="4,6,4,4"
                                                       FontFamily="{TemplateBinding FontFamily}"
                                                       TextWrapping="{TemplateBinding TextWrapping}" />
                             </ScrollViewer>
@@ -113,6 +115,7 @@
     <Style Selector="md|CodeInline">
         <Setter Property="Foreground" Value="{DynamicResource SystemControlForegroundBaseHighBrush}" />
         <Setter Property="Background" Value="{DynamicResource InlineCodeBackgroundBrush}" />
+        <Setter Property="CornerRadius" Value="{DynamicResource AppPillCornerRadius}" />
         <Setter Property="Padding" Value="6,0" />
         <Setter Property="Margin" Value="0,2" />
     </Style>

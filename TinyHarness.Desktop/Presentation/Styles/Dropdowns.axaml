@@ -1,0 +1,239 @@
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Styles.Resources>
+        <ResourceDictionary>
+            <StreamGeometry x:Key="DropdownChevronGeometry">M3,3 L8,8 L13,3 L12,2 L8,6 L4,2 Z</StreamGeometry>
+            <StreamGeometry x:Key="DropdownCheckGeometry">M2.25,8.5 L5.49732,11.7473 C5.90519,12.1552 6.57263,12.1344 6.95426,11.7018 L13.75,4</StreamGeometry>
+        </ResourceDictionary>
+    </Styles.Resources>
+
+    <!-- 原生 ComboBox 复用胶囊触发器、独立浮层与文字行菜单。 -->
+    <Style Selector="ComboBox">
+        <Setter Property="MinHeight" Value="28" />
+        <Setter Property="Padding" Value="10,0" />
+        <Setter Property="Background" Value="{DynamicResource DropdownTriggerBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource DropdownBorderBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="{DynamicResource AppPillCornerRadius}" />
+        <Setter Property="Foreground" Value="{DynamicResource DropdownForegroundBrush}" />
+        <Setter Property="FontSize" Value="13" />
+        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+    </Style>
+    <Style Selector="ComboBox /template/ Border#Background">
+        <Setter Property="Background" Value="{DynamicResource DropdownTriggerBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource DropdownBorderBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="{DynamicResource AppPillCornerRadius}" />
+    </Style>
+    <Style Selector="ComboBox:pointerover /template/ Border#Background,
+                     ComboBox:pressed /template/ Border#Background">
+        <Setter Property="Background" Value="{DynamicResource DropdownTriggerHoverBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource DropdownBorderBrush}" />
+    </Style>
+    <Style Selector="ComboBox:focus-visible /template/ Border#HighlightBackground">
+        <Setter Property="Background" Value="{DynamicResource DropdownTriggerBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource DropdownFocusBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="{DynamicResource AppPillCornerRadius}" />
+    </Style>
+    <Style Selector="ComboBox:disabled /template/ Border#Background">
+        <Setter Property="Background" Value="{DynamicResource DropdownDisabledBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource DropdownBorderBrush}" />
+    </Style>
+    <Style Selector="ComboBox /template/ ContentControl#ContentPresenter">
+        <Setter Property="Foreground" Value="{DynamicResource DropdownForegroundBrush}" />
+    </Style>
+    <Style Selector="ComboBox:pointerover /template/ ContentControl#ContentPresenter,
+                     ComboBox:pressed /template/ ContentControl#ContentPresenter,
+                     ComboBox:focus-visible /template/ ContentControl#ContentPresenter">
+        <Setter Property="Foreground" Value="{DynamicResource DropdownForegroundBrush}" />
+    </Style>
+    <Style Selector="ComboBox /template/ PathIcon#DropDownGlyph">
+        <Setter Property="Foreground" Value="{DynamicResource DropdownForegroundBrush}" />
+    </Style>
+    <Style Selector="ComboBox:pointerover /template/ PathIcon#DropDownGlyph,
+                     ComboBox:pressed /template/ PathIcon#DropDownGlyph,
+                     ComboBox:focus-visible /template/ PathIcon#DropDownGlyph">
+        <Setter Property="Foreground" Value="{DynamicResource DropdownForegroundBrush}" />
+    </Style>
+    <Style Selector="ComboBox /template/ TextBlock#PlaceholderTextBlock">
+        <Setter Property="Foreground" Value="{DynamicResource DropdownMutedForegroundBrush}" />
+    </Style>
+    <Style Selector="ComboBox:disabled /template/ ContentControl#ContentPresenter">
+        <Setter Property="Foreground" Value="{DynamicResource DropdownMutedForegroundBrush}" />
+    </Style>
+    <Style Selector="ComboBox:disabled /template/ TextBlock#PlaceholderTextBlock">
+        <Setter Property="Foreground" Value="{DynamicResource DropdownMutedForegroundBrush}" />
+    </Style>
+    <Style Selector="ComboBox:disabled /template/ PathIcon#DropDownGlyph">
+        <Setter Property="Foreground" Value="{DynamicResource DropdownMutedForegroundBrush}" />
+    </Style>
+    <Style Selector="ComboBox /template/ PathIcon#DropDownGlyph">
+        <Setter Property="Data" Value="{StaticResource DropdownChevronGeometry}" />
+        <Setter Property="Width" Value="10" />
+        <Setter Property="Height" Value="8" />
+        <Setter Property="Margin" Value="0,0,10,0" />
+    </Style>
+
+    <!-- 类选择器提供高于模板值的优先级，覆盖 Fluent 弹层的圆角、配色和间距。 -->
+    <Style Selector="ComboBox.dropdown /template/ Popup#PART_Popup">
+        <Setter Property="WindowManagerAddShadowHint" Value="False" />
+    </Style>
+    <Style Selector="ComboBox.dropdown /template/ Border#PopupBorder">
+        <Setter Property="Background" Value="{DynamicResource DropdownMenuBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource DropdownMenuBorderBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="Padding" Value="5" />
+        <Setter Property="CornerRadius" Value="{DynamicResource AppPanelCornerRadius}" />
+    </Style>
+    <Style Selector="ComboBox.dropdown /template/ ItemsPresenter#PART_ItemsPresenter">
+        <Setter Property="Margin" Value="0" />
+    </Style>
+    <Style Selector="ComboBoxItem">
+        <Setter Property="MinHeight" Value="28" />
+        <Setter Property="Padding" Value="10,0" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Foreground" Value="{DynamicResource DropdownForegroundBrush}" />
+        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate>
+                    <Border x:Name="PART_Surface" Background="Transparent"
+                            CornerRadius="{DynamicResource AppPillCornerRadius}"
+                            Padding="{TemplateBinding Padding}">
+                        <Grid ColumnDefinitions="*,16" ColumnSpacing="8">
+                            <ContentPresenter x:Name="PART_ContentPresenter"
+                                              Content="{TemplateBinding Content}"
+                                              ContentTemplate="{TemplateBinding ContentTemplate}"
+                                              HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                              VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}"
+                                              Foreground="{TemplateBinding Foreground}"
+                                              Background="Transparent" BorderBrush="Transparent"
+                                              BorderThickness="0" />
+                            <Path x:Name="Checkmark" Grid.Column="1" Width="16" Height="16"
+                                  Data="{StaticResource DropdownCheckGeometry}"
+                                  Stroke="{TemplateBinding Foreground}" StrokeThickness="1.3"
+                                  Stretch="None" IsVisible="False"
+                                  HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Grid>
+                    </Border>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+    <Style Selector="ComboBoxItem:pointerover /template/ Border#PART_Surface,
+                     ComboBoxItem:focus-visible /template/ Border#PART_Surface">
+        <Setter Property="Background" Value="{DynamicResource DropdownItemHoverBrush}" />
+    </Style>
+    <Style Selector="ComboBoxItem:pressed /template/ Border#PART_Surface">
+        <Setter Property="Background" Value="{DynamicResource DropdownItemHoverBrush}" />
+    </Style>
+    <Style Selector="ComboBoxItem:pointerover /template/ ContentPresenter#PART_ContentPresenter,
+                     ComboBoxItem:focus-visible /template/ ContentPresenter#PART_ContentPresenter,
+                     ComboBoxItem:selected /template/ ContentPresenter#PART_ContentPresenter,
+                     ComboBoxItem:pressed /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Foreground" Value="{DynamicResource DropdownForegroundBrush}" />
+    </Style>
+    <Style Selector="ComboBoxItem:selected:pointerover /template/ ContentPresenter#PART_ContentPresenter,
+                     ComboBoxItem:selected:focus-visible /template/ ContentPresenter#PART_ContentPresenter,
+                     ComboBoxItem:selected:pressed /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Foreground" Value="{DynamicResource DropdownForegroundBrush}" />
+    </Style>
+    <Style Selector="ComboBoxItem:selected:disabled /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Foreground" Value="{DynamicResource DropdownMutedForegroundBrush}" />
+    </Style>
+    <Style Selector="ComboBoxItem:selected /template/ Path#Checkmark">
+        <Setter Property="IsVisible" Value="True" />
+    </Style>
+    <Style Selector="ComboBoxItem:disabled /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Foreground" Value="{DynamicResource DropdownMutedForegroundBrush}" />
+    </Style>
+    <Style Selector="ComboBoxItem:disabled /template/ Path#Checkmark">
+        <Setter Property="Stroke" Value="{DynamicResource DropdownMutedForegroundBrush}" />
+    </Style>
+
+    <!-- 自绘选择器沿用同一组触发器、浮层和选中反馈。 -->
+    <Style Selector="Button.dropdown-trigger">
+        <Setter Property="Height" Value="28" />
+        <Setter Property="Padding" Value="10,0" />
+        <Setter Property="CornerRadius" Value="{DynamicResource AppPillCornerRadius}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="Background" Value="{DynamicResource DropdownTriggerBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource DropdownBorderBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource DropdownForegroundBrush}" />
+        <Setter Property="FontSize" Value="13" />
+        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+    </Style>
+    <Style Selector="Button.dropdown-trigger /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource DropdownTriggerBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource DropdownBorderBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="{DynamicResource AppPillCornerRadius}" />
+        <Setter Property="Foreground" Value="{DynamicResource DropdownForegroundBrush}" />
+    </Style>
+    <Style Selector="Button.dropdown-trigger:pointerover /template/ ContentPresenter#PART_ContentPresenter,
+                     Button.dropdown-trigger:pressed /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource DropdownTriggerHoverBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource DropdownBorderBrush}" />
+    </Style>
+    <Style Selector="Button.dropdown-trigger:focus-visible /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource DropdownTriggerBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource DropdownFocusBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource DropdownForegroundBrush}" />
+    </Style>
+    <Style Selector="Button.dropdown-trigger:disabled /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource DropdownDisabledBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource DropdownMutedForegroundBrush}" />
+    </Style>
+    <Style Selector="Border.dropdown-trigger-surface">
+        <Setter Property="Background" Value="{DynamicResource DropdownTriggerBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource DropdownBorderBrush}" />
+        <Setter Property="CornerRadius" Value="{DynamicResource AppPillCornerRadius}" />
+    </Style>
+    <Style Selector="Border.dropdown-trigger-surface:pointerover">
+        <Setter Property="Background" Value="{DynamicResource DropdownTriggerHoverBrush}" />
+    </Style>
+    <Style Selector="Popup.dropdown-popup">
+        <Setter Property="WindowManagerAddShadowHint" Value="False" />
+    </Style>
+    <Style Selector="Border.dropdown-popup">
+        <Setter Property="Background" Value="{DynamicResource DropdownMenuBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource DropdownMenuBorderBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="{DynamicResource AppPanelCornerRadius}" />
+        <Setter Property="Padding" Value="5" />
+    </Style>
+    <Style Selector="Border.dropdown-popup Button.popup-item,
+                     Border.dropdown-popup Button.popup-navigation">
+        <Setter Property="MinHeight" Value="28" />
+        <Setter Property="Margin" Value="0" />
+        <Setter Property="Padding" Value="10,0" />
+        <Setter Property="Foreground" Value="{DynamicResource DropdownForegroundBrush}" />
+        <Setter Property="FontSize" Value="13" />
+    </Style>
+    <Style Selector="Border.dropdown-popup Button.popup-item.selected /template/ Border#PART_Surface">
+        <Setter Property="Background" Value="Transparent" />
+    </Style>
+    <Style Selector="Border.dropdown-popup Button.popup-item:pointerover /template/ Border#PART_Surface,
+                     Border.dropdown-popup Button.popup-item:focus-visible /template/ Border#PART_Surface,
+                     Border.dropdown-popup Button.popup-navigation:pointerover /template/ Border#PART_Surface,
+                     Border.dropdown-popup Button.popup-navigation:focus-visible /template/ Border#PART_Surface">
+        <Setter Property="Background" Value="{DynamicResource DropdownItemHoverBrush}" />
+    </Style>
+    <Style Selector="Border.dropdown-popup Button.popup-item.selected:pointerover /template/ Border#PART_Surface,
+                     Border.dropdown-popup Button.popup-item.selected:focus-visible /template/ Border#PART_Surface">
+        <Setter Property="Background" Value="{DynamicResource DropdownItemHoverBrush}" />
+    </Style>
+</Styles>

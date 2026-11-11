@@ -29,7 +29,7 @@
             <TextBlock Text="{Binding Label}" />
         </DataTemplate>
         <!-- 模型目录单条目：折叠仅 ID/名称行（API ID 是保存键，已有条目只读）；展开补窗口、
-             推理档位、多模态输入能力与默认档位。模型增删在获取模型面板中勾选确认，行内不设删除按钮。 -->
+             推理档位、多模态输入能力与默认档位。行内删除与模型面板的增删都先应用到供应商草稿。 -->
         <DataTemplate x:Key="ModelEntryTemplate" x:DataType="vm:CatalogModelEntryViewModel">
             <Border Classes="settings-model-entry" Margin="0,0,0,8">
                 <StackPanel Spacing="10">
@@ -48,7 +48,7 @@
                                 AutomationProperties.Name="展开或收起模型参数"
                                 ToolTip.Tip="展开或收起模型参数"
                                 VerticalAlignment="Center">
-                            <Path Classes="settings-chevron-icon"
+                            <Path Classes="settings-chevron-icon" Width="4"
                                   Classes.expanded="{Binding IsExpanded}"
                                   Data="{StaticResource Icon.ChevronRight}"
                                   Stroke="{Binding $parent[Button].Foreground}"
@@ -69,7 +69,7 @@
                             <StackPanel Grid.Column="1" Spacing="4">
                                 <TextBlock Classes="settings-field-label" Text="默认档位" />
                                 <Panel>
-                                    <Button x:Name="EffortSelectButton" Classes="settings-select"
+                                    <Button x:Name="EffortSelectButton" Classes="settings-select dropdown-trigger"
                                             Command="{Binding ToggleEffortMenuCommand}"
                                             AutomationProperties.Name="默认档位">
                                         <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
@@ -82,11 +82,11 @@
                                                   VerticalAlignment="Center" />
                                         </Grid>
                                     </Button>
-                                    <Popup PlacementTarget="{Binding #EffortSelectButton}"
+                                    <Popup Classes="dropdown-popup" PlacementTarget="{Binding #EffortSelectButton}"
                                            Placement="BottomEdgeAlignedLeft" VerticalOffset="4"
                                            IsOpen="{Binding IsEffortMenuOpen, Mode=TwoWay}"
                                            IsLightDismissEnabled="True">
-                                        <Border Classes="popup-surface" MinWidth="220" MaxHeight="320">
+                                        <Border Classes="popup-surface dropdown-popup" MinWidth="220" MaxHeight="320">
                                             <ScrollViewer>
                                                 <ItemsControl ItemsSource="{Binding DefaultEffortOptions}"
                                                               ItemTemplate="{StaticResource CatalogChoiceTemplate}" />
@@ -215,7 +215,7 @@
                         <StackPanel Spacing="6">
                             <TextBlock Classes="settings-field-label" Text="API 协议" />
                             <Panel>
-                                <Button x:Name="ProtocolSelectButton" Classes="settings-select"
+                                <Button x:Name="ProtocolSelectButton" Classes="settings-select dropdown-trigger"
                                         Command="{Binding ToggleProtocolMenuCommand}"
                                         AutomationProperties.Name="API 协议">
                                     <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
@@ -227,11 +227,11 @@
                                               VerticalAlignment="Center" />
                                     </Grid>
                                 </Button>
-                                <Popup PlacementTarget="{Binding #ProtocolSelectButton}"
+                                <Popup Classes="dropdown-popup" PlacementTarget="{Binding #ProtocolSelectButton}"
                                        Placement="BottomEdgeAlignedLeft" VerticalOffset="4"
                                        IsOpen="{Binding IsProtocolMenuOpen, Mode=TwoWay}"
                                        IsLightDismissEnabled="True">
-                                    <Border Classes="popup-surface" MinWidth="220" MaxHeight="320">
+                                    <Border Classes="popup-surface dropdown-popup" MinWidth="220" MaxHeight="320">
                                         <ScrollViewer>
                                             <ItemsControl ItemsSource="{Binding ProtocolOptions}"
                                                           ItemTemplate="{StaticResource CatalogChoiceTemplate}" />
@@ -243,12 +243,11 @@
 
                         <StackPanel Spacing="6">
                             <TextBlock Classes="settings-field-label" Text="网络连接" />
-                            <ComboBox MinHeight="34"
-                                      ItemsSource="{Binding ProviderNetworkOptions}"
+                            <ComboBox Classes="dropdown" ItemsSource="{Binding ProviderNetworkOptions}"
                                       SelectedItem="{Binding SelectedProviderNetwork, Mode=TwoWay}"
                                       ItemTemplate="{StaticResource ProviderNetworkChoiceTemplate}"
                                       AutomationProperties.Name="Provider 网络连接方式" />
-                            <ComboBox MinHeight="34" IsVisible="{Binding IsProviderProxyMode}"
+                            <ComboBox Classes="dropdown" IsVisible="{Binding IsProviderProxyMode}"
                                       ItemsSource="{Binding NetworkProxyOptions}"
                                       SelectedItem="{Binding SelectedProviderProxy, Mode=TwoWay}"
                                       ItemTemplate="{StaticResource NetworkProxyChoiceTemplate}"
@@ -271,7 +270,7 @@
                             <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
                                 <TextBlock Classes="settings-field-label" Text="默认模型" VerticalAlignment="Center" />
                                 <Panel>
-                                    <Button x:Name="DefaultModelSelectButton" Classes="settings-select"
+                                    <Button x:Name="DefaultModelSelectButton" Classes="settings-select dropdown-trigger"
                                             Command="{Binding ToggleDefaultModelMenuCommand}"
                                             AutomationProperties.Name="默认模型">
                                         <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
@@ -284,11 +283,11 @@
                                                   VerticalAlignment="Center" />
                                         </Grid>
                                     </Button>
-                                    <Popup PlacementTarget="{Binding #DefaultModelSelectButton}"
+                                    <Popup Classes="dropdown-popup" PlacementTarget="{Binding #DefaultModelSelectButton}"
                                            Placement="BottomEdgeAlignedRight" VerticalOffset="4"
                                            IsOpen="{Binding IsDefaultModelMenuOpen, Mode=TwoWay}"
                                            IsLightDismissEnabled="True">
-                                        <Border Classes="popup-surface" MinWidth="220" MaxHeight="320">
+                                        <Border Classes="popup-surface dropdown-popup" MinWidth="220" MaxHeight="320">
                                             <ScrollViewer>
                                                 <ItemsControl ItemsSource="{Binding DefaultModelOptions}"
                                                               ItemTemplate="{StaticResource CatalogChoiceTemplate}" />
@@ -305,7 +304,8 @@
                                 <Rectangle Fill="Transparent"
                                            Stroke="{DynamicResource PopupDividerBrush}"
                                            StrokeThickness="1" StrokeDashArray="4,3"
-                                           RadiusX="8" RadiusY="8" />
+                                           RadiusX="{DynamicResource AppPanelRadius}"
+                                           RadiusY="{DynamicResource AppPanelRadius}" />
                                 <TextBlock FontSize="12"
                                            Foreground="{DynamicResource PopupMutedForegroundBrush}"
                                            Text="还没有模型；可以先保存供应商，之后再添加模型。"
