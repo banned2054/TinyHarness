@@ -33,7 +33,7 @@
         <DataTemplate x:Key="ModelEntryTemplate" x:DataType="vm:CatalogModelEntryViewModel">
             <Border Classes="settings-model-entry" Margin="0,0,0,8">
                 <StackPanel Spacing="10">
-                    <Grid ColumnDefinitions="4*,3*,Auto" ColumnSpacing="8">
+                    <Grid ColumnDefinitions="4*,3*,Auto,Auto" ColumnSpacing="8">
                         <TextBox Grid.Column="0" Classes="settings-input"
                                  Text="{Binding Id, Mode=TwoWay}"
                                  PlaceholderText="模型 ID（API 标识）"
@@ -54,6 +54,17 @@
                                   Stroke="{Binding $parent[Button].Foreground}"
                                   StrokeThickness="1.4"
                                   StrokeLineCap="Round" StrokeJoin="Round"
+                                  HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Button>
+                        <Button Grid.Column="3" Classes="settings-entry-chevron settings-entry-delete"
+                                Command="{Binding $parent[ItemsControl].((vm:CatalogProviderEditorViewModel)DataContext).RemoveModelCommand}"
+                                CommandParameter="{Binding}"
+                                AutomationProperties.Name="删除模型"
+                                ToolTip.Tip="删除模型"
+                                VerticalAlignment="Center">
+                            <Path Width="16" Height="16" Stretch="None"
+                                  Data="{StaticResource Icon.TrashOutlineRegular}"
+                                  Stroke="{Binding $parent[Button].Foreground}" StrokeThickness="1"
                                   HorizontalAlignment="Center" VerticalAlignment="Center" />
                         </Button>
                     </Grid>

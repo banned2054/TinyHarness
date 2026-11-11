@@ -220,6 +220,9 @@
     <Style Selector="Button.settings-entry-chevron:pointerover /template/ ContentPresenter#PART_ContentPresenter">
         <Setter Property="Background" Value="{DynamicResource PopupItemHoverBrush}" />
     </Style>
+    <Style Selector="Button.settings-entry-delete:pointerover, Button.settings-entry-delete:pressed, Button.settings-entry-delete:focus-visible">
+        <Setter Property="Foreground" Value="{DynamicResource DangerTextBrush}" />
+    </Style>
     <!-- 条目折叠箭头：ChevronRight 8 viewBox（Path 尺寸=viewBox 规则），展开旋转 90° 朝下。 -->
     <Style Selector="Path.settings-chevron-icon">
         <Setter Property="Width" Value="8" />

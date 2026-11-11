@@ -180,7 +180,7 @@ public sealed class CatalogSettingsViewModel : SettingsSectionViewModel
         foreach (var provider in _baseline.Profiles)
             Providers.Add(new CatalogProviderRowViewModel(provider, _baseline.DefaultProfile == provider.Name,
                                                           new CatalogProviderRowActions(
-                                                           OpenEditor, () => CanSwitchCards, RequestDelete)));
+                                                               OpenEditor, () => CanSwitchCards, RequestDelete)));
         OnPropertyChanged(nameof(HasProviders));
     }
 
@@ -619,6 +619,7 @@ public sealed partial class CatalogProviderEditorViewModel : ObservableObject
         SaveCommand               = new AsyncCommand(SaveAsync, exception => SaveError = Redact(exception.Message));
         CancelCommand             = new RelayCommand(() => _cancelled(this));
         AddModelCommand           = new RelayCommand(AddModel);
+        RemoveModelCommand        = new RelayCommand<CatalogModelEntryViewModel>(RemoveModel);
         FetchModelsCommand        = new AsyncCommand(FetchModelsAsync, _ => ModelDiscoveryStatus = "获取模型失败，请检查配置后重试。");
         SaveModelSelectionCommand = new RelayCommand(SaveModelSelection, () => CanSaveModelSelection);
         CloseModelPickerCommand   = new RelayCommand(CloseModelPicker);
@@ -707,6 +708,12 @@ public sealed partial class CatalogProviderEditorViewModel : ObservableObject
     public RelayCommand CancelCommand { get; }
 
     public RelayCommand AddModelCommand { get; }
+
+    /// <summary>
+    ///     <para>从供应商草稿移除指定模型；整卡保存后才写入配置。</para>
+    ///     <para>Removes the specified model from the provider draft; config changes only when the card is saved.</para>
+    /// </summary>
+    public RelayCommand<CatalogModelEntryViewModel> RemoveModelCommand { get; }
 
     /// <summary>
     ///     <para>地址、协议与模型目录的展开状态；收起时仍可填写和保存 API 密钥。</para>
@@ -1030,6 +1037,23 @@ public sealed partial class CatalogProviderEditorViewModel : ObservableObject
         AttachEntry(entry);
         ModelEntries.Add(entry);
         SaveError = null;
+        RefreshDefaultModelOptions();
+        NotifyFormChanged();
+        OnPropertyChanged(nameof(HasModelEntries));
+    }
+
+    /// <summary>
+    ///     <para>移除模型草稿并更新默认选项；保留参数以便通过模型列表重新添加。</para>
+    ///     <para>Removes a model draft and updates defaults, retaining its parameters for readding from the model list.</para>
+    /// </summary>
+    private void RemoveModel(CatalogModelEntryViewModel? entry)
+    {
+        if (!CanEdit || IsModelPickerOpen || entry is null || !ModelEntries.Remove(entry)) return;
+
+        entry.PropertyChanged -= OnEntryPropertyChanged;
+        var id                                      = entry.Id.Trim();
+        if (id.Length > 0) _removedModelEntries[id] = entry;
+        if (id        == _defaultModelId) SelectDefaultModel(string.Empty);
         RefreshDefaultModelOptions();
         NotifyFormChanged();
         OnPropertyChanged(nameof(HasModelEntries));
