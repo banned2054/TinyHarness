@@ -34,6 +34,7 @@ public static class UserConfigValidator
     {
         ArgumentNullException.ThrowIfNull(config);
         config.Settings?.Permissions?.Validate();
+        config.Settings?.SessionTitles?.Validate();
 
         var network = config.Settings?.Network ?? new NetworkSettings();
         NetworkSettingsValidator.Validate(network);

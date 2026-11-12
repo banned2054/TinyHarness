@@ -341,9 +341,11 @@ public static class SessionResume
     /// </remarks>
     private static ChatSession RebuildSession(PersistedSession snapshot)
     {
+        snapshot.Title.Validate();
         var session = new ChatSession(snapshot.Id, snapshot.WorkspaceRoot, snapshot.Model!, snapshot.CreatedUtc,
                                       snapshot.ProjectId, snapshot.ProjectAssignmentState)
         {
+            Title                     = snapshot.Title,
             InspectionAcknowledgedUtc = snapshot.InspectionAcknowledgedUtc,
             PendingInspectionReason   = snapshot.PendingInspectionReason
         };

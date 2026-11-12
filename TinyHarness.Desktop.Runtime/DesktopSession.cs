@@ -19,7 +19,8 @@ public sealed class DesktopSession(
         null,
     Func<CancellationToken, Task>?  validateCurrent = null,
     DesktopWorkspaceCoordinator?    workspaceRepair = null,
-    DesktopWorkspaceOperationScope? workspaceScope  = null) : IAsyncDisposable
+    DesktopWorkspaceOperationScope? workspaceScope  = null,
+    Func<CancellationToken, Task>?  generateTitle   = null) : IAsyncDisposable
 {
     private readonly CancellationTokenSource  _lifetime = new();
     private readonly object                   _sync     = new();
@@ -28,6 +29,7 @@ public sealed class DesktopSession(
     private          Task?                    _disposeTask;
     private          Task<SessionRun>?        _run;
     private          CancellationTokenSource? _runCancellation;
+    private          Task                     _titleGeneration = Task.CompletedTask;
 
     public ChatSessionHost              Host            { get; } = host;
     public DesktopApprovalProvider      Approvals       { get; } = approvals;
@@ -59,6 +61,32 @@ public sealed class DesktopSession(
             _closing     =   true;
             _disposeTask ??= Task.Run(DisposeCoreAsync);
             return new ValueTask(_disposeTask);
+        }
+    }
+
+    /// <summary>
+    ///     <para>在用户回合提交后排队一次命名；并发补充和后续回合不重复启动未完成的请求。</para>
+    ///     <para>Queues naming after a committed user turn; concurrent input never duplicates an unfinished request.</para>
+    /// </summary>
+    internal void RequestTitleGeneration()
+    {
+        lock (_sync)
+        {
+            if (_closing || generateTitle is null || !_titleGeneration.IsCompleted || !Host.Session.Title.Pending)
+                return;
+            _titleGeneration = Task.Run(() => generateTitle(_lifetime.Token));
+        }
+    }
+
+    /// <summary>
+    ///     <para>等待当前命名请求结束，供离线验证使用。</para>
+    ///     <para>Waits for the current naming request for offline verification.</para>
+    /// </summary>
+    internal Task WaitForTitleGenerationAsync()
+    {
+        lock (_sync)
+        {
+            return _titleGeneration;
         }
     }
 
@@ -288,11 +316,14 @@ public sealed class DesktopSession(
                 {
                     /* 选择错误由发起者报告，关闭仍释放资源。 */
                 }
+
+            await _titleGeneration.ConfigureAwait(false);
         }
         finally
         {
             try
             {
+                Host.UserTurnCommitted -= RequestTitleGeneration;
                 Host.Dispose();
             }
             catch (Exception exception)

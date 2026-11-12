@@ -78,6 +78,8 @@ public sealed partial class DesktopSessionFactory
     private readonly ConcurrentDictionary<string, SessionIndexUpdater> _sessionIndexUpdaters =
         new(StringComparer.Ordinal);
 
+    private readonly Func<TinyHarnessConfig, string, IChatCompletionClient>? _titleModelFactory;
+
     private readonly string? _userConfigPath;
 
     /// <summary>
@@ -89,10 +91,25 @@ public sealed partial class DesktopSessionFactory
     /// </summary>
     public DesktopSessionFactory(Func<TinyHarnessConfig, string, IChatCompletionClient>? modelFactory = null,
                                  ICredentialStore? credentials = null, string? userConfigPath = null)
+        : this(modelFactory, credentials, userConfigPath, null)
     {
-        _modelFactory   = modelFactory;
-        _credentials    = credentials ?? new WindowsCredentialStore();
-        _userConfigPath = userConfigPath;
+    }
+
+    /// <summary>
+    ///     <para>离线验收须单独注入命名客户端；仅注入主模型的旧夹具不启动命名，也不回退真实请求。</para>
+    ///     <para>
+    ///         Offline title checks inject their own client; legacy worker-only fixtures neither name sessions nor fall back
+    ///         to live calls.
+    ///     </para>
+    /// </summary>
+    public DesktopSessionFactory(Func<TinyHarnessConfig, string, IChatCompletionClient>? modelFactory,
+                                 ICredentialStore? credentials, string? userConfigPath,
+                                 Func<TinyHarnessConfig, string, IChatCompletionClient>? titleModelFactory)
+    {
+        _modelFactory      = modelFactory;
+        _titleModelFactory = titleModelFactory;
+        _credentials       = credentials ?? new WindowsCredentialStore();
+        _userConfigPath    = userConfigPath;
     }
 
     /// <summary>
@@ -491,10 +508,15 @@ public sealed partial class DesktopSessionFactory
                 await host.ChangeApprovalModeAsync(requested, cancellationToken).ConfigureAwait(false);
             }
 
-            return new DesktopSession(host, approvals,
-                                      (profile, modelId, effort, revision, token) =>
-                                          ChangeAsync(host, profile, modelId, effort, revision, token),
-                                      token => RefreshCurrentAsync(host, token), repair);
+            var desktop = new DesktopSession(host, approvals,
+                                             (profile, modelId, effort, revision, token) =>
+                                                 ChangeAsync(host, profile, modelId, effort, revision, token),
+                                             token => RefreshCurrentAsync(host, token), repair,
+                                             generateTitle : _modelFactory is null || _titleModelFactory is not null
+                                                 ? token => GenerateTitleAsync(host, events, token)
+                                                 : null);
+            host.UserTurnCommitted += desktop.RequestTitleGeneration;
+            return desktop;
         }
         catch
         {
@@ -565,18 +587,19 @@ public sealed partial class DesktopSessionFactory
 
     private IChatCompletionClient CreateClient(TinyHarnessConfig config, UserProfile? profile,
                                                NetworkSettings?  networkSettings,
-                                               ModelTimeouts?    modelTimeouts = null)
+                                               ModelTimeouts?    modelTimeouts = null, bool titleRequest = false)
     {
         var key = ApiKeyReader.Read(config.ApiKeyEnvironmentVariable, config.ApiKeyCredentialTarget, _credentials,
                                     profile?.Name)
                ?? throw new InvalidOperationException("没有可用的模型凭据，请重新选择模型或配置凭据引用。");
         _secrets[Guid.NewGuid().ToString("N")] = key;
         if (config.ApiKeyEnvironmentVariable.Length > 0) _secrets[config.ApiKeyEnvironmentVariable] = key;
-        return _modelFactory is null
+        var factory = titleRequest ? _titleModelFactory : _modelFactory;
+        return factory is null
             ? ModelClientFactory.Create(config.Model, config.Endpoint, key, config.ChatApi,
                                         networkSettings, profile?.Network, _credentials,
                                         modelTimeouts ?? ModelTimeouts.Default)
-            : _modelFactory(config, key);
+            : factory(config, key);
     }
 
     private static string Route(UserProfile profile) =>

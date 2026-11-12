@@ -46,25 +46,34 @@ internal static class OfflineSmoke
             Settings = new UserConfigSettings { SessionStoreDirectory = store, Permissions = new PermissionSettings() }
         };
         await UserConfigStore.SaveAsync(configPath, user, CancellationToken.None);
-        var bothStarted   = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var entered       = 0;
-        var createdModels = 0;
-        var factory = new DesktopSessionFactory((_, _) => new OfflineModel(async token =>
-        {
-            if (Interlocked.Increment(ref entered) >= 2) bothStarted.TrySetResult();
-            await bothStarted.Task.WaitAsync(token);
-        }, () => Interlocked.Increment(ref createdModels)), new OfflineCredentials(), configPath);
+        var bothStarted         = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var entered             = 0;
+        var createdModels       = 0;
+        var titleEvents         = 0;
+        var disposedTitleModels = 0;
+        var titlesGenerated     = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var factory =
+            new DesktopSessionFactory((_, _) => new OfflineModel(async token =>
+                                      {
+                                          if (Interlocked.Increment(ref entered) >= 2) bothStarted.TrySetResult();
+                                          await bothStarted.Task.WaitAsync(token);
+                                      }, () => Interlocked.Increment(ref createdModels)),
+                                      new OfflineCredentials(), configPath,
+                                      (_, _) => new OfflineModel(_ => Task.CompletedTask,
+                                                                 () => Interlocked.Increment(ref disposedTitleModels)));
         try
         {
             string firstId;
             await using (var manager = new DesktopSessionManager())
             {
-                Task<DesktopSession> Open() => manager.OpenAsync(null,
-                                                                 token =>
-                                                                     factory
-                                                                        .OpenAsync(new DesktopSessionRequest(workspace),
-                                                                             _ => ValueTask.CompletedTask,
-                                                                             _ => ValueTask.CompletedTask, token));
+                Task<DesktopSession> Open() =>
+                    manager.OpenAsync(null, token => factory.OpenAsync(new DesktopSessionRequest(workspace),
+                        item =>
+                        {
+                            if (item.Kind == "title" && Interlocked.Increment(ref titleEvents) == 2)
+                                titlesGenerated.TrySetResult();
+                            return ValueTask.CompletedTask;
+                        }, _ => ValueTask.CompletedTask, token));
 
                 var first    = await Open();
                 var second   = await Open();
@@ -78,6 +87,7 @@ internal static class OfflineSmoke
                 var firstRun  = first.SubmitAsync("offline first");
                 var secondRun = second.SubmitAsync("offline second");
                 var runs      = await Task.WhenAll(firstRun, secondRun).WaitAsync(TimeSpan.FromSeconds(20));
+                await titlesGenerated.Task.WaitAsync(TimeSpan.FromSeconds(20));
                 if (first.Id == second.Id || runs.Any(run => run.Result?.Status      != AgentStatus.Completed ||
                                                              run.Result.FinalMessage != "offline desktop response"))
                     throw new InvalidOperationException("Parallel desktop sessions did not complete independently.");
@@ -127,7 +137,8 @@ internal static class OfflineSmoke
             }
 
             var saved = await SessionStoreReader.ReadAsync(store, firstId, CancellationToken.None);
-            if (saved?.Turns.Count != 4 || saved.ProjectId is null || createdModels != 6)
+            if (saved?.Turns.Count != 4 || saved.ProjectId is null || createdModels != 6 ||
+                saved.Title.Pending     || saved.Title.Name != "offline desktop response" || disposedTitleModels != 2)
                 throw new InvalidOperationException("Persistence or client ownership failed.");
             if (saved.Conversation?.Messages.LastOrDefault(message => message.Role == "Assistant")?.TextItems is not
                 [
@@ -136,7 +147,7 @@ internal static class OfflineSmoke
                 ])
                 throw new
                     InvalidOperationException("Assistant message boundaries or phases did not survive native persistence.");
-            Console.WriteLine($"PASS desktop: parallel=2 switched=A/B/A/B refreshed=true resumedTurns=4 disposedClients={createdModels}; fixture={root}");
+            Console.WriteLine($"PASS desktop: parallel=2 switched=A/B/A/B refreshed=true resumedTurns=4 disposedClients={createdModels} titles=2; fixture={root}");
             return 0;
         }
         catch (Exception exception)

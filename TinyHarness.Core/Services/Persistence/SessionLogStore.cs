@@ -290,7 +290,7 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
                                                   ex);
                     }
                 }
-                else if (record.Kind is "run-amendment" or "work-item" or "permission-grant-event")
+                else if (record.Kind is "run-amendment" or "work-item" or "permission-grant-event" or "session-title")
                 {
                     ValidateControlRecord(record);
                     normalized[i] = record with { Id = recordId };
@@ -935,6 +935,10 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
             throw new SessionStoreException("Control record IDs are assigned by the writer.");
         switch (record.Kind)
         {
+            case "session-title" :
+                (record.Payload.Deserialize(SessionLogJsonContext.Default.SessionTitle)
+              ?? throw new InvalidDataException("Missing session title state.")).Validate();
+                break;
             case "permission-selection" :
                 // /1 与 /2 共用 kind；按 payload 的 schema 字段分发，未知协议一律拒绝。
                 // /1 旧记录走迁移流程，不在运行时直接生效。
@@ -1129,6 +1133,7 @@ public static class SessionStoreReader
         private SessionProjectAssignmentState _projectAssignmentState;
         private string?                       _projectId;
         private SessionLogSessionState?       _state;
+        private SessionTitle                  _title = new();
         private DateTimeOffset                _updatedUtc;
 
         /// <summary>
@@ -1146,9 +1151,9 @@ public static class SessionStoreReader
         public void Apply(SessionLogBatch batch)
         {
             _updatedUtc = batch.WrittenUtc;
-            // 纯归属维护批次不构成对话活动；含任何其他记录的批次按其提交时间推进。
+            // 归属与命名维护不构成对话活动，避免后台任务改变侧栏排序。
             if (batch.Records.Any(record => record.Kind is not ("project-binding" or "project-assignment" or
-                                                                "project-unassignment")))
+                                                                "project-unassignment" or "session-title")))
                 _lastActivityUtc = batch.WrittenUtc;
             for (var recordIndex = 0; recordIndex < batch.Records.Count; recordIndex++)
             {
@@ -1158,6 +1163,10 @@ public static class SessionStoreReader
                         SessionStoreException($"Session '{sessionId}' is missing the history item bound to a project-instructions record.");
                 switch (record.Kind)
                 {
+                    case "session-title" :
+                        _title = Read<SessionTitle>(record.Payload, SessionLogJsonContext.Default.SessionTitle);
+                        _title.Validate();
+                        break;
                     case "history" :
                         var history = Read<SessionHistoryItem>(record.Payload,
                                                                SessionHistoryJsonContext.Default.SessionHistoryItem);
@@ -1481,6 +1490,7 @@ public static class SessionStoreReader
             return new PersistedSession
             {
                 Id                      = _identity.Id,
+                Title                   = _title,
                 WorkspaceRoot           = _identity.WorkspaceRoot,
                 ProjectId               = _projectId,
                 ProjectAssignmentState  = _projectAssignmentState,
@@ -1915,6 +1925,7 @@ public static class SessionStoreReader
 }
 
 [JsonSerializable(typeof(SessionLogBatch))]
+[JsonSerializable(typeof(SessionTitle))]
 [JsonSerializable(typeof(SessionLogRecord))]
 [JsonSerializable(typeof(SessionLogIdentity))]
 [JsonSerializable(typeof(SessionLogProjectBinding))]

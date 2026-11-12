@@ -84,6 +84,12 @@ public sealed partial class ChatSession
     public string Id { get; }
 
     /// <summary>
+    ///     <para>可靠提交的名称状态；待生成时继续使用首条输入摘要。</para>
+    ///     <para>The durably committed name state; pending sessions retain the first-input preview.</para>
+    /// </summary>
+    public SessionTitle Title { get; internal set; } = new();
+
+    /// <summary>
     ///     <para>最近一次可靠提交的权限模式；不是单次或运行期批准。</para>
     ///     <para>The last durably committed permission mode, distinct from one-shot or run-scoped approvals.</para>
     /// </summary>

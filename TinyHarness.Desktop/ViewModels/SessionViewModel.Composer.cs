@@ -439,6 +439,7 @@ public sealed partial class SessionViewModel
                                             token => _factory.OpenAsync(request, OnEventAsync, OnApprovalAsync, token),
                                             _openingCancellation?.Token ?? CancellationToken.None);
         Id                     = _runtime.Id;
+        if (_runtime.Host.Session.Title.Name is { } name) Title = name;
         _workspaceRoot         = _runtime.Host.Session.WorkspaceRoot;
         StoreDirectory         = Path.GetDirectoryName(_runtime.Host.PersistencePath);
         ProjectId              = _runtime.Host.Session.ProjectId;

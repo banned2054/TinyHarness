@@ -439,6 +439,17 @@ public static class UserConfigStore
         if (settings is not null)
         {
             var settingsNode = new JsonObject();
+            if (settings.SessionTitles is { } titles)
+            {
+                titles.Validate();
+                settingsNode["sessionTitles"] = new JsonObject
+                {
+                    ["useCurrentModel"] = titles.UseCurrentModel,
+                    ["profile"]         = titles.Profile,
+                    ["model"]           = titles.Model
+                };
+            }
+
             if (settings.Permissions is { } permissions)
             {
                 permissions.Validate();
@@ -799,6 +810,7 @@ public static class UserConfigStore
 
         settings = new UserConfigSettings
         {
+            SessionTitles = BindSessionTitles(settingsNode, filePath),
             Permissions   = BindPermissions(settingsNode, filePath),
             RunBudget     = BindRunBudget(settingsNode, filePath),
             ModelTimeouts = BindModelTimeouts(settingsNode, filePath),
@@ -933,14 +945,27 @@ public static class UserConfigStore
     }
 
     /// <summary>
-    ///     <para>
-    ///         严格绑定可信模型请求超时策略；拒绝未知字段、错误类型和非法期限，
-    ///         节缺失返回 null 沿用内置默认值。
-    ///     </para>
-    ///     <para>
-    ///         Strictly binds the trusted model-request timeout policy, rejecting unknown fields, wrong types and
-    ///         invalid deadlines; a missing section returns null and keeps the built-in defaults.
-    ///     </para>
+    ///     <para>独立读取命名模型配置，不使用权限配置作为默认值。</para>
+    ///     <para>Reads title-model settings independently, without defaults from permission settings.</para>
+    /// </summary>
+    private static SessionTitleSettings? BindSessionTitles(JsonObject settings, string filePath)
+    {
+        if (!settings.TryGetPropertyValue("sessionTitles", out var node)) return null;
+        if (node is not JsonObject value)
+            throw new InvalidDataException("settings.sessionTitles must be an object.");
+        var result = new SessionTitleSettings
+        {
+            UseCurrentModel = ReadBool(value, "useCurrentModel", filePath, "settings.sessionTitles.useCurrentModel") ?? true,
+            Profile = ReadString(value, "profile", filePath),
+            Model = ReadString(value, "model", filePath)
+        };
+        result.Validate();
+        return result;
+    }
+
+    /// <summary>
+    ///     <para>严格绑定可信模型请求超时策略；拒绝未知字段、错误类型和非法期限，缺省沿用内置默认值。</para>
+    ///     <para>Strictly binds model timeouts, rejecting unknown fields and invalid values; absence keeps built-in defaults.</para>
     /// </summary>
     private static ModelTimeouts? BindModelTimeouts(JsonObject settings, string filePath)
     {

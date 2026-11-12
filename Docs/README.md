@@ -122,6 +122,14 @@ $env:TINYHARNESS_API_KEY = Read-Host "API key" -MaskInput
 
 可信用户设置 `settings.modelTimeouts` 控制模型请求超时策略；只有用户配置可以设置它，显式 `--config` 文件与项目配置不接受该节。三个字段均以秒计：`streamIdleTimeoutSeconds` 默认 `300`，是模型流的空闲期限；`responseTimeoutSeconds` 默认 `0`（关闭），是单次响应的总期限；`approvalTimeoutSeconds` 默认 `300`，必须为正，约束单次 AI 审核的总期限。前两个字段允许 `0` 表示关闭对应期限；负数、非正的 `approvalTimeoutSeconds` 或超出计时器范围的值（上限 4,294,966 秒）会让配置加载或保存失败，并给出 `settings.modelTimeouts` 字段路径。流空闲按 M.E.AI SDK update 级观察：工具参数增量在 SDK 内部聚合，可能整段不产出可见 update，等待首个可见 update 的时间也计入空闲；`responseTimeoutSeconds` 默认关闭，需显式设置才会限制总时长。`streamIdleTimeoutSeconds` 设为 `0` 只关闭应用层 update 空闲保护，底层 SDK 仍保留每次网络操作 300 秒的保护，并非完全无限等待。
 
+### 会话自动命名
+
+Desktop 在用户回合保存后后台生成一次标题；生成期间或失败时，继续显示首条输入的首行摘要。失败会保留待重试标记，后续发送新回合时仍使用第一条输入重试；生成成功后名称固定。打开历史或浏览列表不会发起命名请求，命名维护不改变会话的活动排序。
+
+「设置 → 通用 → 会话自动命名」提供「命名使用当前模型」和指定供应商／模型的选择，自动保存到独立的 `settings.sessionTitles`（`useCurrentModel`、`profile`、`model`），与 AI 审批配置互不影响。指定模型失效时保留摘要和重试状态，不静默切到其他模型。请求不带工具或主会话历史，最长 30 秒，可能产生额外用量；标题最多 36 个 Unicode 字符。
+
+名称和待重试状态保存在会话日志的 `session-title/1` 记录中，列表索引可以从日志重建。新增记录使用日志 kind `session-title`；不认识该 kind 的旧版程序会拒绝恢复这些日志。
+
 ### 网络设置
 
 Desktop「设置 → 网络」可选择全局默认的系统代理、直连或已保存代理，并添加、编辑、删除和测试 HTTP、HTTPS、SOCKS5 代理。用户名和密码只存入受支持平台的系统凭据存储；普通用户配置只保留凭据目标引用。CLI、Desktop、MCP worker、`doctor --connect` 和在线模型发现共享同一套网络路由。

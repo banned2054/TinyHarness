@@ -28,12 +28,12 @@ public enum SessionIndexEntryState
 /// <remarks>
 ///     <para>
 ///         权威来源仍是会话 JSONL；摘要只是可重建投影，<see cref="CommitSequence" /> 与 <see cref="IndexedBytes" />
-///         必须对应同一来源快照中最后完整有效批次。标题来自首回合用户输入首行，可能包含用户内容。
+///         必须对应同一来源快照中最后完整有效批次。标题优先使用已保存名称，否则取首回合用户输入首行，可能包含用户内容。
 ///     </para>
 ///     <para>
 ///         The session JSONL stays authoritative; the summary is a rebuildable projection whose
 ///         <see cref="CommitSequence" /> and <see cref="IndexedBytes" /> must match the last complete valid batch of
-///         one source snapshot. The title comes from the first turn's first input line and may contain user content.
+///         one source snapshot. The title prefers a saved name, falling back to the first input line, and may contain user content.
 ///     </para>
 /// </remarks>
 public sealed record SessionSummary
@@ -52,10 +52,10 @@ public sealed record SessionSummary
         = SessionProjectAssignmentState.PendingInitialization;
 
     /// <summary>
-    ///     <para>侧栏标题：首回合输入首行（最多 48 字符）；尚无回合时为会话 ID 前 8 位。</para>
+    ///     <para>侧栏标题：优先使用已保存名称，否则取首回合输入首行（最多 48 字符）；尚无回合时为会话 ID 前 8 位。</para>
     ///     <para>
-    ///         Sidebar title: the first line of the first turn's input (48 characters at most); the first 8 id
-    ///         characters until a turn exists.
+    ///         Sidebar title: the saved name, otherwise the first input line (48 characters at most), or the first
+    ///         8 id characters until a turn exists.
     ///     </para>
     /// </summary>
     public string Title { get; init; } = string.Empty;
@@ -69,9 +69,9 @@ public sealed record SessionSummary
     public DateTimeOffset UpdatedUtc { get; init; }
 
     /// <summary>
-    ///     <para>最近一次对话活动时间；纯归属维护批次不推进，排序与归档筛选依赖它。</para>
+    ///     <para>最近一次对话活动时间；纯归属或命名维护批次不推进，排序与归档筛选依赖它。</para>
     ///     <para>
-    ///         The latest conversation-activity time; ownership-only batches do not advance it, and ordering and
+    ///         The latest conversation-activity time; ownership-only or title-only batches do not advance it, and ordering and
     ///         archive filtering depend on it.
     ///     </para>
     /// </summary>

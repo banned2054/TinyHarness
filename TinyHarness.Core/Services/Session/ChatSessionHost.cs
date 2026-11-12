@@ -493,6 +493,7 @@ public sealed partial class ChatSessionHost : IDisposable
         {
             if (_sessionWriter is not null)
                 await _sessionWriter.CommitAsync(Session, _context, cancellationToken).ConfigureAwait(false);
+            UserTurnCommitted?.Invoke();
             var loop   = ComposeRunLoop(run);
             var result = await loop.RunTurnAsync(_systemPrompt, userInput, control.Token).ConfigureAwait(false);
             if (!string.IsNullOrWhiteSpace(result.PersistenceWarning))

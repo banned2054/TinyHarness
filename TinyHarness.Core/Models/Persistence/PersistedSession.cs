@@ -76,6 +76,12 @@ public sealed record PersistedSession
 
     public string Id { get; init; } = string.Empty;
 
+    /// <summary>
+    ///     <para>持久化名称和待重试标记；旧日志缺省为待生成。</para>
+    ///     <para>The persisted name and retry marker; legacy journals default to pending generation.</para>
+    /// </summary>
+    public SessionTitle Title { get; init; } = new();
+
     public string WorkspaceRoot { get; init; } = string.Empty;
 
     /// <summary>
@@ -105,11 +111,11 @@ public sealed record PersistedSession
 
     /// <summary>
     ///     <para>
-    ///         最近一次非归属维护批次的提交时间；纯 project-binding 追加不推进本值，归属初始化不伪造新对话活动。
+    ///         最近一次对话活动批次的提交时间；纯归属或命名维护不推进本值，不伪造新对话活动。
     ///     </para>
     ///     <para>
-    ///         When the last non-ownership-maintenance batch committed; a pure project-binding append never
-    ///         advances it, so ownership initialization fabricates no new conversation activity.
+    ///         When the last conversation-activity batch committed; ownership-only or title-only maintenance never
+    ///         advances it or fabricates conversation activity.
     ///     </para>
     /// </summary>
     public DateTimeOffset LastActivityUtc { get; init; }

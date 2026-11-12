@@ -163,6 +163,7 @@
                                             </StackPanel>
                                         </Border>
                                         <views:PermissionSettingsView DataContext="{Binding Permissions}" Margin="0,24,0,0" />
+                                        <views:SessionTitleSettingsView DataContext="{Binding SessionTitles}" Margin="0,24,0,0" />
                                     </StackPanel>
 
                                     <!-- 模型分区：供应商行列表与添加/编辑卡。 -->

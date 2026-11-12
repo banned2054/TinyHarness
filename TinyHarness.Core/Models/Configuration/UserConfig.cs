@@ -123,6 +123,12 @@ public sealed record UserProfile
 public sealed record UserConfigSettings
 {
     /// <summary>
+    ///     <para>自动命名使用的独立模型配置；缺省跟随当前会话模型。</para>
+    ///     <para>Independent automatic-title model settings; defaults to the current session model.</para>
+    /// </summary>
+    public SessionTitleSettings? SessionTitles { get; init; }
+
+    /// <summary>
     ///     <para>桌面权限预设、输入区菜单与审批模型的可信设置。</para>
     ///     <para>Trusted desktop permission presets, composer menu, and reviewer model settings.</para>
     /// </summary>

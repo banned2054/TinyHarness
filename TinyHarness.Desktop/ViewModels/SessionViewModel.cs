@@ -888,6 +888,9 @@ public sealed partial class SessionViewModel : ObservableObject
     {
         switch (update.Kind)
         {
+            case "title" when !string.IsNullOrWhiteSpace(update.Text) :
+                Title = update.Text;
+                break;
             case "text" when !string.IsNullOrEmpty(update.Text) :
                 EnsureStream(update.RunId).AppendText(update.Text);
                 break;

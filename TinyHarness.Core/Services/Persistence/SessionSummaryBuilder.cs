@@ -192,15 +192,19 @@ public static class SessionSummaryBuilder
         public void Apply(SessionLogBatch batch)
         {
             _updatedUtc = batch.WrittenUtc;
-            // 纯归属维护批次不构成对话活动；含任何其他记录的批次按其提交时间推进，与完整恢复投影一致。
-            // Ownership-only batches are not conversation activity; any other record advances activity by the commit
-            // time, matching the full-recovery projection.
+            // 归属与命名维护不构成对话活动，避免后台任务改变侧栏排序；与完整恢复投影一致。
             if (batch.Records.Any(record => record.Kind is not ("project-binding" or "project-assignment" or
-                                                                "project-unassignment")))
+                                                                "project-unassignment" or "session-title")))
                 _lastActivityUtc = batch.WrittenUtc;
             foreach (var record in batch.Records)
                 switch (record.Kind)
                 {
+                    case "session-title" :
+                        var name = record.Payload.Deserialize(SessionLogJsonContext.Default.SessionTitle)
+                                ?? throw new SessionStoreException("Missing session title state.");
+                        name.Validate();
+                        if (name.Name is not null) _title = name.Name;
+                        break;
                     case "identity" :
                         var identity = record.Payload.Deserialize(SessionLogJsonContext.Default.SessionLogIdentity)
                                     ?? throw new SessionStoreException(

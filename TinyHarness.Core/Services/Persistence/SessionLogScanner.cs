@@ -328,6 +328,10 @@ internal static class SessionLogScanner
         {
             switch (record.Kind)
             {
+                case "session-title" :
+                    (record.Payload.Deserialize(SessionLogJsonContext.Default.SessionTitle)
+                  ?? throw new InvalidDataException("Missing session title state.")).Validate();
+                    break;
                 case "identity" :
                     RequireObject(record.Payload, "identity payload");
                     var model = Required(record.Payload, "model");

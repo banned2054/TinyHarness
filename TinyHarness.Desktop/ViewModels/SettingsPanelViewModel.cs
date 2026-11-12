@@ -32,30 +32,42 @@ public sealed class SettingsPanelViewModel : ObservableObject
         Permissions    = permissions    ?? new PermissionSettingsViewModel(general.ConfigPath);
         Network        = network        ?? new NetworkSettingsViewModel(general.ConfigPath);
         WindowsSandbox = windowsSandbox ?? new WindowsSandboxSettingsViewModel(general.ConfigPath);
+        SessionTitles  = new SessionTitleSettingsViewModel(general.ConfigPath);
         Sections       = [General, Catalog, Network, WindowsSandbox];
         Catalog.ConfigSaved += baseline =>
         {
+            SessionTitles.AcceptBaseline(baseline);
             Network.AcceptBaseline(baseline);
             WindowsSandbox.AcceptBaseline(baseline);
             Permissions.AcceptBaseline(baseline);
         };
         Network.ConfigSaved += baseline =>
         {
+            SessionTitles.AcceptBaseline(baseline);
             Catalog.AcceptBaseline(baseline);
             WindowsSandbox.AcceptBaseline(baseline);
             Permissions.AcceptBaseline(baseline);
         };
         WindowsSandbox.ConfigSaved += baseline =>
         {
+            SessionTitles.AcceptBaseline(baseline);
             Catalog.AcceptBaseline(baseline);
             Network.AcceptBaseline(baseline);
             Permissions.AcceptBaseline(baseline);
         };
         Permissions.ConfigSaved += baseline =>
         {
+            SessionTitles.AcceptBaseline(baseline);
             Catalog.AcceptBaseline(baseline);
             Network.AcceptBaseline(baseline);
             WindowsSandbox.AcceptBaseline(baseline);
+        };
+        SessionTitles.ConfigSaved += baseline =>
+        {
+            Catalog.AcceptBaseline(baseline);
+            Network.AcceptBaseline(baseline);
+            WindowsSandbox.AcceptBaseline(baseline);
+            Permissions.AcceptBaseline(baseline);
         };
         foreach (var section in Sections) section.SelectCommand = new RelayCommand(() => SelectSection(section));
         ActiveSection = General;
@@ -79,6 +91,7 @@ public sealed class SettingsPanelViewModel : ObservableObject
     public NetworkSettingsViewModel        Network        { get; }
     public WindowsSandboxSettingsViewModel WindowsSandbox { get; }
     public PermissionSettingsViewModel     Permissions    { get; }
+    public SessionTitleSettingsViewModel   SessionTitles  { get; }
 
     public IReadOnlyList<SettingsSectionViewModel> Sections { get; }
 
@@ -151,6 +164,7 @@ public sealed class SettingsPanelViewModel : ObservableObject
             await Network.LoadAsync();
             await WindowsSandbox.LoadAsync();
             await Permissions.LoadAsync();
+            await SessionTitles.LoadAsync();
         }
         catch (Exception exception)
         {
