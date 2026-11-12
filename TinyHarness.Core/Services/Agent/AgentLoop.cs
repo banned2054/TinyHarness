@@ -82,17 +82,7 @@ internal interface IAgentInstructionBoundary
 /// </remarks>
 public sealed partial class AgentLoop
 {
-    private readonly IApprovalProvider?  _approver;
-    private readonly ConversationContext _context;
-    private readonly IHostEventSink?     _events;
-
-    private readonly Func<IReadOnlyList<ToolCallRecord>, CancellationToken, Task>? _executionCheckpoint;
-
-    private readonly IAgentInstructionBoundary? _instructionBoundary;
-    private readonly IChatCompletionClient      _model;
-    private readonly AgentOptions               _options;
-    private readonly PermissionEngine?          _permissions;
-    private readonly IRunRecorder?              _recorder;
+    private readonly IApprovalProvider? _approver;
 
     /// <summary>
     ///     <para>
@@ -105,6 +95,17 @@ public sealed partial class AgentLoop
     ///     </para>
     /// </summary>
     private readonly Func<string?>? _compositionGuardCheck;
+
+    private readonly ConversationContext _context;
+    private readonly IHostEventSink?     _events;
+
+    private readonly Func<IReadOnlyList<ToolCallRecord>, CancellationToken, Task>? _executionCheckpoint;
+
+    private readonly IAgentInstructionBoundary? _instructionBoundary;
+    private readonly IChatCompletionClient      _model;
+    private readonly AgentOptions               _options;
+    private readonly PermissionEngine?          _permissions;
+    private readonly IRunRecorder?              _recorder;
 
     /// <summary>
     ///     <para>
@@ -174,7 +175,7 @@ public sealed partial class AgentLoop
                        IHostEventSink? events, ConversationContext? context,
                        Func<IReadOnlyList<ToolCallRecord>, CancellationToken, Task>? executionCheckpoint,
                        IAgentInstructionBoundary? instructionBoundary, SessionRunControl? control = null,
-                       Func<string?>?             compositionGuardCheck = null)
+                       Func<string?>? compositionGuardCheck = null)
     {
         ArgumentNullException.ThrowIfNull(model);
         ArgumentNullException.ThrowIfNull(tools);
@@ -416,8 +417,9 @@ public sealed partial class AgentLoop
                     continue;
                 }
 
-                // 整轮先做无副作用准备；任一调用无效时整轮不执行，避免留下部分副作用。
-                var round = PrepareRound(_tools, assistant.ToolCalls);
+                // 整轮先准备运行基础设施并冻结计划；任一调用无效时整轮不执行请求的操作。
+                var round = await PrepareRoundAsync(_tools, assistant.ToolCalls, cancellationToken)
+                   .ConfigureAwait(false);
                 if (_instructionBoundary is not null && round.Any(item => item.Preparation is not null))
                 {
                     var instructionCheck =
@@ -664,8 +666,8 @@ public sealed partial class AgentLoop
                                 var changedEvent =
                                     await _instructionBoundary
                                          .ApplyToolRoundUpdateAsync(deferred.Select(candidate =>
-                                                                                 roundRecords[candidate.RoundCall.Call
-                                                                                             .Id]).ToArray(),
+                                                                        roundRecords[candidate.RoundCall.Call
+                                                                           .Id]).ToArray(),
                                                                     cancellationToken).ConfigureAwait(false);
                                 await PublishInstructionChangedAsync(changedEvent, cancellationToken)
                                    .ConfigureAwait(false);
@@ -768,15 +770,16 @@ public sealed partial class AgentLoop
                                                   .Select(candidate => candidate.RoundCall)
                                                   .ToArray();
                     InstructionBoundaryCheck? finalInstructionCheck = null;
-                    string?                   compositionBlock       = null;
+                    string?                   compositionBlock      = null;
                     try
                     {
                         if (_instructionBoundary is not null)
                             finalInstructionCheck =
                                 await _instructionBoundary
-                                     .RecheckBeforeDispatchAsync(dispatchCalls.Where(call => call.Preparation is not null)
-                                                                              .Select(call => call.Preparation!)
-                                                                              .ToArray(),
+                                     .RecheckBeforeDispatchAsync(dispatchCalls
+                                                                .Where(call => call.Preparation is not null)
+                                                                .Select(call => call.Preparation!)
+                                                                .ToArray(),
                                                                  cancellationToken).ConfigureAwait(false);
                         compositionBlock = _compositionGuardCheck?.Invoke();
                     }
@@ -1359,7 +1362,8 @@ public sealed partial class AgentLoop
         }
     }
 
-    private static IReadOnlyList<RoundCall> PrepareRound(ToolRegistry tools, IReadOnlyList<ChatToolCall> calls)
+    private static async Task<IReadOnlyList<RoundCall>> PrepareRoundAsync(
+        ToolRegistry tools, IReadOnlyList<ChatToolCall> calls, CancellationToken cancellationToken)
     {
         var round = new List<RoundCall>(calls.Count);
         foreach (var call in calls)
@@ -1372,7 +1376,7 @@ public sealed partial class AgentLoop
 
             try
             {
-                var preparation = tool.Prepare(call);
+                var preparation = await tool.PrepareAsync(call, cancellationToken).ConfigureAwait(false);
                 round.Add(RoundCall.Ready(call, tool, preparation));
             }
             catch (Exception ex) when (ex is not OperationCanceledException)

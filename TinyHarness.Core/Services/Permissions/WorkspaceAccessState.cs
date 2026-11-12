@@ -38,10 +38,39 @@ public sealed class WorkspaceAccessState(WorkspaceDirectoryIdentity identity)
     {
         public ToolDefinition Definition => source().Definition;
 
-        public ToolPreparation Prepare(ChatToolCall call)
+        public ToolPreparation Prepare(ChatToolCall call) => Bind(source(), call);
+
+        /// <summary>
+        ///     <para>等待内层可取消准备完成，再绑定当前工作区修订。</para>
+        ///     <para>Awaits cancellable inner preparation before binding the current workspace revision.</para>
+        /// </summary>
+        public async ValueTask<ToolPreparation> PrepareAsync(ChatToolCall call, CancellationToken cancellationToken)
         {
-            var tool   = source();
-            var plan   = tool.Prepare(call);
+            var tool = source();
+            var plan = await tool.PrepareAsync(call, cancellationToken).ConfigureAwait(false);
+            return Bind(tool, plan);
+        }
+
+        public Task<ToolResult> ExecuteAsync(ToolPreparation preparation, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (preparation.ExecutionPlan is not GuardedPlan plan || plan.Owner != this ||
+                plan.Revision                                                   != state.Revision)
+                throw new InvalidOperationException("Workspace access changed; prepare and authorize the tool again.");
+            if (state.IsReadOnly && !ToolCapabilities.IsReadOnly(plan.Preparation.Capability))
+                throw new
+                    InvalidOperationException("This workspace is read-only. Use the host /trust command to change access.");
+            state.Identity.EnsureUnchanged();
+            var inner = preparation.Coverage is { } coverage
+                ? plan.Preparation.WithInstructionCoverage(coverage)
+                : plan.Preparation;
+            return plan.Tool.ExecuteAsync(inner, cancellationToken);
+        }
+
+        private ToolPreparation Bind(ITool tool, ChatToolCall call) => Bind(tool, tool.Prepare(call));
+
+        private ToolPreparation Bind(ITool tool, ToolPreparation plan)
+        {
             var policy = $"{plan.ExecutionPolicy}\nworkspace-access={state.Revision};read-only={state.IsReadOnly}";
             return new ToolPreparation
             {
@@ -63,22 +92,6 @@ public sealed class WorkspaceAccessState(WorkspaceDirectoryIdentity identity)
                 ResourceClassification = plan.ResourceClassification,
                 ExecutionPlan          = new GuardedPlan(this, tool, plan, state.Revision)
             };
-        }
-
-        public Task<ToolResult> ExecuteAsync(ToolPreparation preparation, CancellationToken cancellationToken)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (preparation.ExecutionPlan is not GuardedPlan plan || plan.Owner != this ||
-                plan.Revision                                                   != state.Revision)
-                throw new InvalidOperationException("Workspace access changed; prepare and authorize the tool again.");
-            if (state.IsReadOnly && !ToolCapabilities.IsReadOnly(plan.Preparation.Capability))
-                throw new
-                    InvalidOperationException("This workspace is read-only. Use the host /trust command to change access.");
-            state.Identity.EnsureUnchanged();
-            var inner = preparation.Coverage is { } coverage
-                ? plan.Preparation.WithInstructionCoverage(coverage)
-                : plan.Preparation;
-            return plan.Tool.ExecuteAsync(inner, cancellationToken);
         }
 
         // internal：派发前复核（FrozenCapabilityScopeReader）需穿透包装读取冻结的进程计划。

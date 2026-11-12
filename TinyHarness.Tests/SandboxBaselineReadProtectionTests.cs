@@ -488,4 +488,63 @@ public class SandboxBaselineReadProtectionTests
                                                                  .EnumerateBaselineSensitiveNameHits(root.Root, 3));
         Assert.That(ex.Message, Does.Contain("enumeration budget"));
     }
+
+    [Test]
+    public void Enumerator_CancelledBeforeStart_DoesNotEnumerate()
+    {
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        Assert.Throws<OperationCanceledException>(() => WindowsSandboxComposer.EnumerateBaselineSensitiveNameHits(
+                                                   "unused", cancellationToken : cancellation.Token,
+                                                   enumerateEntries : _ =>
+                                                       throw new AssertionException("Must not enumerate.")));
+    }
+
+    [Test]
+    public void Enumerator_CancelledDuringEnumeration_DoesNotReturnPartialHits()
+    {
+        using var root         = new TestTempDir();
+        var       sensitive    = root.WriteFile(".env", "fixture");
+        using var cancellation = new CancellationTokenSource();
+        var       disposed     = false;
+
+        IEnumerable<string> Entries(string directory)
+        {
+            try
+            {
+                yield return sensitive;
+                cancellation.Cancel();
+                yield return Path.Combine(directory, "unvisited.txt");
+            }
+            finally
+            {
+                disposed = true;
+            }
+        }
+
+        Assert.Throws<OperationCanceledException>(() => WindowsSandboxComposer.EnumerateBaselineSensitiveNameHits(
+                                                   root.Root, cancellationToken : cancellation.Token,
+                                                   enumerateEntries : Entries));
+        Assert.That(disposed, Is.True);
+    }
+
+    [Test]
+    public void Enumerator_BudgetBoundsStreamingEnumeration()
+    {
+        using var root       = new TestTempDir();
+        var       enumerated = 0;
+
+        IEnumerable<string> Entries(string directory)
+        {
+            while (true)
+            {
+                enumerated++;
+                yield return Path.Combine(directory, "missing.txt");
+            }
+        }
+
+        Assert.Throws<InvalidOperationException>(() => WindowsSandboxComposer.EnumerateBaselineSensitiveNameHits(
+                                                  root.Root, 3, enumerateEntries : Entries));
+        Assert.That(enumerated, Is.EqualTo(4), "不能先完整物化目录再检查预算。");
+    }
 }

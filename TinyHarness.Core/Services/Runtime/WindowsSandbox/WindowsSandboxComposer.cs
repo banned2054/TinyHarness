@@ -445,13 +445,28 @@ public static class WindowsSandboxComposer
     public static SandboxBaselineReadProtection? PlanBaselineReadProtection(
         IReadOnlyList<string>                protectedSecretPaths, string? ensureDirectory = null,
         WindowsSandboxSettings?              sandboxSettings = null,
-        Func<string, IReadOnlyList<string>>? sensitiveScan   = null)
+        Func<string, IReadOnlyList<string>>? sensitiveScan   = null) =>
+        PlanBaselineReadProtection(protectedSecretPaths, ensureDirectory, sandboxSettings, sensitiveScan,
+                                   CancellationToken.None);
+
+    /// <summary>
+    ///     <para>可取消地构建基线读保护；取消或预算耗尽时不返回部分保护集。</para>
+    ///     <para>
+    ///         Builds baseline read protection with cancellation; cancellation or budget exhaustion never returns a partial
+    ///         deny set.
+    ///     </para>
+    /// </summary>
+    public static SandboxBaselineReadProtection? PlanBaselineReadProtection(
+        IReadOnlyList<string>   protectedSecretPaths, string?                              ensureDirectory,
+        WindowsSandboxSettings? sandboxSettings,      Func<string, IReadOnlyList<string>>? sensitiveScan,
+        CancellationToken       cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var profileRoot = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         if (string.IsNullOrWhiteSpace(profileRoot) || !Path.IsPathFullyQualified(profileRoot)) return null;
 
         return PlanBaselineReadProtectionCore(Path.GetFullPath(profileRoot), protectedSecretPaths, ensureDirectory,
-                                              sandboxSettings, sensitiveScan);
+                                              sandboxSettings, sensitiveScan, cancellationToken);
     }
 
     /// <summary>
@@ -469,8 +484,10 @@ public static class WindowsSandboxComposer
         string                               profileRoot,
         IReadOnlyList<string>                protectedSecretPaths, string? ensureDirectory,
         WindowsSandboxSettings?              sandboxSettings,
-        Func<string, IReadOnlyList<string>>? sensitiveScan)
+        Func<string, IReadOnlyList<string>>? sensitiveScan,
+        CancellationToken                    cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var          root      = Path.GetFullPath(profileRoot);
         List<string> denyPaths = [];
 
@@ -552,9 +569,12 @@ public static class WindowsSandboxComposer
         // application-layer classification keeps protecting immediately; the boundary is stated
         // honestly rather than claimed complete. Budget exhaustion fails the composition
         // (fail-closed), never silently certifying a partially scanned boundary.
-        var scanHits = sensitiveScan?.Invoke(root) ?? EnumerateBaselineSensitiveNameHits(root);
+        var scanHits = sensitiveScan?.Invoke(root) ??
+                       EnumerateBaselineSensitiveNameHits(root, cancellationToken : cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
         foreach (var hit in scanHits)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (string.IsNullOrWhiteSpace(hit)) continue;
 
             var full = Path.GetFullPath(hit);
@@ -622,8 +642,11 @@ public static class WindowsSandboxComposer
     ///         scanned result.
     ///     </para>
     /// </summary>
-    internal static IReadOnlyList<string> EnumerateBaselineSensitiveNameHits(string root, int? budget = null)
+    internal static IReadOnlyList<string> EnumerateBaselineSensitiveNameHits(
+        string                             root, int? budget = null, CancellationToken cancellationToken = default,
+        Func<string, IEnumerable<string>>? enumerateEntries = null)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var remaining = budget ?? BaselineSensitiveScanBudget;
         var hits      = new List<string>();
         var stack     = new Stack<string>();
@@ -631,55 +654,60 @@ public static class WindowsSandboxComposer
 
         while (stack.Count > 0)
         {
-            IEnumerable<string> children;
-            var                 directory = stack.Pop();
+            cancellationToken.ThrowIfCancellationRequested();
+            var directory = stack.Pop();
             try
             {
-                children = Directory.EnumerateFileSystemEntries(directory).ToArray();
+                using var children =
+                    (enumerateEntries?.Invoke(directory) ?? Directory.EnumerateFileSystemEntries(directory))
+                   .GetEnumerator();
+                while (true)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (!children.MoveNext()) break;
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var child = children.Current;
+                    if (--remaining < 0)
+                        throw new
+                            InvalidOperationException($"The baseline sensitive-name scan exceeded its enumeration budget of {budget ?? BaselineSensitiveScanBudget} entries under '{root}'; " +
+                                                      "the sensitive-name deny set cannot be certified on a partially scanned profile, so the baseline fails closed. " +
+                                                      "Reduce the profile's entry count under the read root or exclude the sandbox to proceed.");
+
+                    FileAttributes attributes;
+                    try
+                    {
+                        attributes = File.GetAttributes(child);
+                    }
+                    catch (Exception ex) when (ex is UnauthorizedAccessException or IOException or FileNotFoundException
+                                                  or DirectoryNotFoundException)
+                    {
+                        // 属性不可读：按词法判定（fail-safe 方向），不下降。
+                        if (SensitivePathClassifier.IsKnownSensitivePath(child)) hits.Add(child);
+
+                        continue;
+                    }
+
+                    var isDirectory = attributes.HasFlag(FileAttributes.Directory);
+                    var isReparse   = attributes.HasFlag(FileAttributes.ReparsePoint);
+
+                    // 词法敏感判定（目录段含末段、文件名与扩展名）；命中不再下降
+                    // （命中目录的子树已随 deny 覆盖），普通目录继续下降。
+                    if (SensitivePathClassifier.IsKnownSensitivePath(child))
+                    {
+                        hits.Add(child);
+                        continue;
+                    }
+
+                    if (isDirectory && !isReparse) stack.Push(child);
+                }
             }
             catch (Exception ex) when (ex is UnauthorizedAccessException or IOException)
             {
                 // 不可读子树（权限或瞬时 IO）：跳过并在命中口径上如实“不声称完整”。
-                continue;
-            }
-
-            foreach (var child in children)
-            {
-                if (--remaining < 0)
-                    throw new
-                        InvalidOperationException($"The baseline sensitive-name scan exceeded its enumeration budget of {budget ?? BaselineSensitiveScanBudget} entries under '{root}'; " +
-                                                  "the sensitive-name deny set cannot be certified on a partially scanned profile, so the baseline fails closed. " +
-                                                  "Reduce the profile's entry count under the read root or exclude the sandbox to proceed.");
-
-                FileAttributes attributes;
-                try
-                {
-                    attributes = File.GetAttributes(child);
-                }
-                catch (Exception ex) when (ex is UnauthorizedAccessException or IOException or FileNotFoundException
-                                              or DirectoryNotFoundException)
-                {
-                    // 属性不可读：按词法判定（fail-safe 方向），不下降。
-                    if (SensitivePathClassifier.IsKnownSensitivePath(child)) hits.Add(child);
-
-                    continue;
-                }
-
-                var isDirectory = attributes.HasFlag(FileAttributes.Directory);
-                var isReparse   = attributes.HasFlag(FileAttributes.ReparsePoint);
-
-                // 词法敏感判定（目录段含末段、文件名与扩展名）；命中不再下降
-                // （命中目录的子树已随 deny 覆盖），普通目录继续下降。
-                if (SensitivePathClassifier.IsKnownSensitivePath(child))
-                {
-                    hits.Add(child);
-                    continue;
-                }
-
-                if (isDirectory && !isReparse) stack.Push(child);
             }
         }
 
+        cancellationToken.ThrowIfCancellationRequested();
         return hits;
     }
 

@@ -89,7 +89,39 @@ public sealed class PermissionShellTool(ITool restricted, ITool host) : ITool
         // 路由只由 executionScope 决定：权限模式不参与，宿主执行是显式 Level 3 申请。
         var isHost = scope == "host";
         var tool   = isHost ? host : restricted;
-        var plan   = tool.Prepare(call);
+        return Bind(tool, tool.Prepare(call), isHost);
+    }
+
+    /// <summary>
+    ///     <para>只初始化请求指定的后端；取消在冻结计划与审批之前传播。</para>
+    ///     <para>Initializes only the requested backend, propagating cancellation before plan freezing and approval.</para>
+    /// </summary>
+    public async ValueTask<ToolPreparation> PrepareAsync(ChatToolCall call, CancellationToken cancellationToken)
+    {
+        var args  = ToolArgs.ParseObject(call);
+        var scope = args["executionScope"]?.GetValue<string>() ?? "workspace";
+        if (scope is not ("workspace" or "host")) throw new InvalidDataException("Unknown shell execution scope.");
+        var isHost = scope == "host";
+        var tool   = isHost ? host : restricted;
+        var plan   = await tool.PrepareAsync(call, cancellationToken).ConfigureAwait(false);
+        return Bind(tool, plan, isHost);
+    }
+
+    /// <summary>
+    ///     <para>只执行本工具准备的后端及计划，并传递规则覆盖凭据。</para>
+    ///     <para>Executes only this tool's prepared backend and plan, forwarding instruction coverage.</para>
+    /// </summary>
+    public Task<ToolResult> ExecuteAsync(ToolPreparation preparation, CancellationToken cancellationToken)
+    {
+        if (preparation.ExecutionPlan is not Plan plan || plan.Owner != this)
+            throw new InvalidDataException("Missing prepared shell backend.");
+        return plan.Tool.ExecuteAsync(preparation.Coverage is { } coverage
+                                          ? plan.Preparation.WithInstructionCoverage(coverage)
+                                          : plan.Preparation, cancellationToken);
+    }
+
+    private ToolPreparation Bind(ITool tool, ToolPreparation plan, bool isHost)
+    {
         // workspace 路由的身份存在性结构校验：沙箱未组合时组合点提供无身份形态，这里明确失败；
         // 沙箱可用性判定属于权限引擎的组合期布尔，本检查不重复实现可用性判断。
         if (!isHost && string.IsNullOrWhiteSpace(plan.ExecutionPolicy))
@@ -119,19 +151,6 @@ public sealed class PermissionShellTool(ITool restricted, ITool host) : ITool
             RequestedBackend       = isHost ? ProcessExecutionBackendKind.Host : null,
             ExecutionPlan          = new Plan(this, tool, plan)
         };
-    }
-
-    /// <summary>
-    ///     <para>只执行本工具准备的后端及计划，并传递规则覆盖凭据。</para>
-    ///     <para>Executes only this tool's prepared backend and plan, forwarding instruction coverage.</para>
-    /// </summary>
-    public Task<ToolResult> ExecuteAsync(ToolPreparation preparation, CancellationToken cancellationToken)
-    {
-        if (preparation.ExecutionPlan is not Plan plan || plan.Owner != this)
-            throw new InvalidDataException("Missing prepared shell backend.");
-        return plan.Tool.ExecuteAsync(preparation.Coverage is { } coverage
-                                          ? plan.Preparation.WithInstructionCoverage(coverage)
-                                          : plan.Preparation, cancellationToken);
     }
 
     // internal：派发前复核（FrozenCapabilityScopeReader）需穿透包装读取冻结的进程计划。
