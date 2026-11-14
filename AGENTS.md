@@ -61,7 +61,7 @@
 ## .NET 开发规则
 
 - 使用仓库选择的 .NET SDK；修改构建行为前检查 `global.json`、`Directory.Build.props`、`Directory.Build.targets`、`Directory.Packages.props` 和 `NuGet.config` 是否存在。
-- 当前目标框架是 .NET 10，NativeAOT 是必须持续满足的产品约束。除非任务明确需要，不得修改 `TargetFramework`、`LangVersion`、`Nullable`、trimming、NativeAOT 或公开 API 兼容性设置。
+- 当前目标框架是 .NET 11（项目目标为 `net11.0`），NativeAOT 是必须持续满足的产品约束。除非任务明确需要，不得修改 `TargetFramework`、`LangVersion`、`Nullable`、trimming、NativeAOT 或公开 API 兼容性设置。
 - 保持 nullable reference types 和 implicit usings 启用。
 - 所有可能阻塞的 I/O 使用 async API，并从调用边界传递 `CancellationToken`。
 - 不吞异常；在协议、工具、运行时和 CLI 边界转换为包含上下文的错误。
