@@ -1,0 +1,48 @@
+{
+  "archivedOn": "2026-11-15",
+  "previousArchival": "2026-11-10",
+  "snapshotSourceFilesVerifiedInGitHistory": 710,
+  "snapshotSourceFilesNotInGitHistory": 0,
+  "archivedPatchNewBlobPrefix": "aaa93b6",
+  "archivedPatchNewBlobFoundInGitHistory": true,
+  "preservedFiles": [
+    {
+      "source": "artifacts/s3-store-database-20261115/core-full-tests.txt",
+      "archived": "s3-core-full-tests.txt",
+      "sha256": "2994e308ba1a91f703a7a6f4b26b80f4e2a4c84697825dbe3284fc86b7de1a65"
+    },
+    {
+      "source": "artifacts/s3-store-database-20261115/publish-cli-aot.log",
+      "archived": "s3-publish-cli-aot.log",
+      "sha256": "cc3545bfd97324eefe7d347819529e4207ebe8db533b96d29ef0d86395bdb593"
+    },
+    {
+      "source": "artifacts/s3-store-database-20261115/cli-aot-smoke.txt",
+      "archived": "s3-cli-aot-smoke.txt",
+      "sha256": "0066b46754273131de8ff2f50fe42af5046b4b0ed7fb99e63b25af5a3edddea3"
+    },
+    {
+      "source": ".tmp/lazy-sandbox-desktop-publish.log",
+      "archived": "desktop-aot-warnings.log",
+      "sha256": "acd832d2a8435e4b02c778052301c176de9e98e2b3921fd6a07dcaa5a3fee9f8"
+    },
+    {
+      "source": ".tmp/session-titles-20261112/native-cli-final.log",
+      "archived": "session-titles-cli-smoke.log",
+      "sha256": "5c13ecaead6214c44196706323b24625ef76b926c86410ab15cf3617ce55a997"
+    },
+    {
+      "source": ".tmp/session-titles-20261112/native-desktop-final.log",
+      "archived": "session-titles-desktop-smoke.log",
+      "sha256": "beac99ad28ef05964f9b3b49e7b1de94452e0aed0bf1aab2894f6ea9c17ac3d7"
+    },
+    {
+      "source": "artifacts/settings-ui/preview/Program.cs",
+      "archived": "settings-preview-source.cs.txt",
+      "sha256": "1b37afcdab8ecd519d87b9a3e633c1be1bc807ab50f3d857d1f6b3ad3997f49c"
+    }
+  ],
+  "scaleSource": "artifacts/session-journal-scale-results.json",
+  "scaleArchived": "../session-scale/session-journal-2026-11-15.json",
+  "scaleSha256": "5d2fac662af72bfa006f14680fb22583d05a2d8699a283ffd2f22559344d6f50"
+}

@@ -1,0 +1,142 @@
+using Avalonia;
+using Avalonia.Controls;
+using Avalonia.Controls.ApplicationLifetimes;
+using Avalonia.Markup.Xaml.Styling;
+using Avalonia.Media.Imaging;
+using Avalonia.Styling;
+using Avalonia.Themes.Fluent;
+using Avalonia.Threading;
+using Avalonia.VisualTree;
+using TinyHarness.Core.Models.Configuration;
+using TinyHarness.Core.Services.ChatCompletions.Configuration;
+using TinyHarness.Core.Services.Runtime;
+using TinyHarness.Desktop.Presentation.Views;
+using TinyHarness.Desktop.ViewModels;
+
+internal static class Program
+{
+    [STAThread]
+    public static void Main(string[] args) => AppBuilder.Configure<PreviewApp>()
+        .UsePlatformDetect().WithInterFont().StartWithClassicDesktopLifetime(args);
+}
+
+internal sealed class PreviewApp : Application
+{
+    private readonly string _output = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../images"));
+
+    public override void Initialize()
+    {
+        RequestedThemeVariant = ThemeVariant.Dark;
+        Styles.Add(new FluentTheme());
+        foreach (var name in new[] { "Shapes", "InputFields", "ScrollBars", "Typography", "PopupMenus", "Settings", "Dropdowns" })
+            Styles.Add(new StyleInclude(new Uri("avares://TinyHarness.Desktop/"))
+            {
+                Source = new Uri($"avares://TinyHarness.Desktop/Presentation/Styles/{name}.axaml")
+            });
+        foreach (var name in new[] { "ThemeResources", "Icons" })
+            Resources.MergedDictionaries.Add(new ResourceInclude(new Uri("avares://TinyHarness.Desktop/"))
+            {
+                Source = new Uri($"avares://TinyHarness.Desktop/Presentation/Styles/{name}.axaml")
+            });
+    }
+
+    public override void OnFrameworkInitializationCompleted()
+    {
+        if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
+        {
+            var window = new Window { Width = 880, Height = 760, Title = "TinyHarness 设置预览（隔离夹具）" };
+            desktop.MainWindow = window;
+            window.Opened += async (_, _) =>
+            {
+                try { await PreviewAsync(window); }
+                catch (Exception exception)
+                {
+                    Directory.CreateDirectory(_output);
+                    await File.WriteAllTextAsync(Path.Combine(_output, "error.txt"), exception.ToString());
+                }
+                desktop.Shutdown();
+            };
+        }
+        base.OnFrameworkInitializationCompleted();
+    }
+
+    private async Task PreviewAsync(Window window)
+    {
+        Directory.CreateDirectory(_output);
+        var configPath = Path.Combine(_output, "fixture.json");
+        var profiles = new[] { "glm", "deepseek", "openai" }.Select(name => new UserProfile
+        {
+            Name = name, Endpoint = "https://example.invalid/v1", DefaultModel = "preview-model",
+            Models = [new UserProfileModel { Id = "preview-model", ContextWindowTokens = 128000 }],
+            Network = name == "openai" ? new NetworkRoute { Mode = NetworkMode.Proxy, ProxyId = "local" } : null
+        }).ToArray();
+        var config = new UserConfig
+        {
+            DefaultProfile = "glm", Profiles = profiles,
+            Settings = new UserConfigSettings
+            {
+                Network = new NetworkSettings
+                {
+                    Proxies =
+                    [
+                        new ProxyDefinition { Id = "local", Name = "clash", Host = "127.0.0.1", Port = 7890 },
+                        new ProxyDefinition { Id = "backup", Name = "备用代理", Protocol = ProxyProtocol.Socks5, Host = "localhost", Port = 1080 }
+                    ]
+                }
+            }
+        };
+        await UserConfigStore.SaveAsync(configPath, config, CancellationToken.None);
+        var credentials = new PreviewCredentials();
+        var model = new SettingsPanelViewModel(new GeneralSettingsSectionViewModel(configPath),
+            new CatalogSettingsViewModel(configPath, () => Task.CompletedTask, credentials),
+            network: new NetworkSettingsViewModel(configPath, credentials: credentials));
+        var view = new SettingsPanelView { DataContext = model };
+        window.Content = view;
+        await model.OpenAsync();
+        if (!model.IsReady) throw new InvalidOperationException(model.ErrorText);
+        var diagnostics = new List<string>();
+        foreach (var theme in new[] { ThemeVariant.Dark, ThemeVariant.Light })
+        {
+            RequestedThemeVariant = theme;
+            foreach (var section in model.Sections)
+            {
+                section.SelectCommand.Execute(null);
+                await Task.Delay(100);
+                await Dispatcher.UIThread.InvokeAsync(() => { }, DispatcherPriority.Background);
+                Save(view, $"{section.Title}-{theme}");
+                foreach (var divider in view.GetVisualDescendants().OfType<Avalonia.Controls.Shapes.Rectangle>()
+                    .Where(item => item.Classes.Contains("settings-entry-divider") && item.IsEffectivelyVisible))
+                    diagnostics.Add($"{section.Title}-{theme}: divider visible {divider.Bounds}");
+            }
+        }
+        RequestedThemeVariant = ThemeVariant.Dark;
+        model.Network.SelectCommand.Execute(null);
+        model.Network.SelectedDefaultMode = model.Network.DefaultModeOptions.Single(option => option.Value == "proxy");
+        await Task.Delay(100);
+        Save(view, "指定代理-Dark");
+        model.Network.AddProxyCommand.Execute(null);
+        await Task.Delay(100);
+        Save(view, "添加代理-Dark");
+        model.Network.CancelProxyEditCommand.Execute(null);
+        model.Catalog.SelectCommand.Execute(null);
+        model.Catalog.Providers[0].EditCommand.Execute(null);
+        await Task.Delay(100);
+        Save(view, "编辑供应商-Dark");
+        await File.WriteAllLinesAsync(Path.Combine(_output, "layout.txt"), diagnostics);
+    }
+
+    private void Save(Control view, string name)
+    {
+        using var image = new RenderTargetBitmap(new PixelSize((int)view.Bounds.Width, (int)view.Bounds.Height));
+        image.Render(view);
+        image.Save(Path.Combine(_output, name + ".png"));
+    }
+}
+
+internal sealed class PreviewCredentials : ICredentialStore
+{
+    public bool IsSupported => true;
+    public string? Read(string targetName) => null;
+    public void Save(string targetName, string secret) => throw new InvalidOperationException("Preview is read-only.");
+    public bool Delete(string targetName) => throw new InvalidOperationException("Preview is read-only.");
+}

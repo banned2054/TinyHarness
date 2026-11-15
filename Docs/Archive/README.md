@@ -1,10 +1,12 @@
 # 计划、设计与历史文档归档
 
-整理日期：2026-11-10。常用说明与活动计划见[中文 README 文档入口](../README.md#documentation)。
+整理日期：2026-11-10；补充清理归档：2026-11-15。常用说明与活动计划见[中文 README 文档入口](../README.md#documentation)。
 
 这里集中保存旧计划、已完成实现的设计与使用边界，以及历史讨论、调查、实施与验收记录。归档是文档分类，不表示原计划的所有目标或验收均已完成；未完成、未验证或另行实施的部分保留原意。设计参考可在后续明确任务中随实现维护；按日期保存的调查与验收保留历史原意。原日期、适用版本、通过与失败、跳过及未验证范围保持原含义；章节编号沿用原文。历史结论不自动更新为当前状态，历史授权不作为新任务授权。
 
 2026-11-10 已清理本机 `artifacts/` 与 `.tmp/` 的旧产物和临时记录。独有结论已去重整理到下列归档，三份合成规模测量原始 JSON 保存于 `Evidence/session-scale/`。其他历史路径、哈希和执行命令只描述当时来源，不表示文件仍存在；历史正文中的“日志保留”“产物仍在”等也是当时状态。归档摘要不能替代已删除的原始日志。
+
+2026-11-15 对之后新增的临时产物作补充整理，去向见 [11 月本地验证记录](local-validation-records-2026-11.md)。本轮新增 TRX 摘要、少量原始日志与一份按日期冻结的规模测量，不重做或覆盖 11 月 10 日的归档；历史失败、重跑结果与未验证范围分别保留。
 
 ## 本轮归档的旧计划与阶段报告
 
@@ -56,8 +58,9 @@
 | [Session 列表索引验收](session-list-index-design.md) | 阶段 E 综合验收：矩阵证据、基准对比、NativeAOT 与隔离 smoke、验收发现 | [设计契约](session-list-index-design.md#2-设计契约仍然有效) |
 | [Windows 沙箱验收](windows-sandbox-verification.md) | M11、目录授权、PriceLab 和 TCP／UDP／DNS 专项 | [沙箱管理与验证边界](windows-sandbox-management.md) |
 | [10 月本地验证记录补充](local-validation-records-2026-10.md) | Desktop 取消/SDK/调试器中断、CLI Ctrl+C、格式化经验；重复原件的归并去向 | [Desktop 迁移](desktop-migration-plan.md) |
+| [11 月本地验证记录补充](local-validation-records-2026-11.md) | .NET 11、删除提示、延迟沙箱、自动命名与 S3 的历史验证边界；后续产物清理与证据去向 | [活动计划入口](../../PLAN.md) |
 | [三级执行体系实测与审查](permission-validation-2026-11-08.md) | 11 月 8 日真实 OS、离线与 AOT 检查点、二十条矩阵边界、审查关闭和遗留 | [权限主记录](../permission-architecture-plan.md) |
-| [会话日志规模测量](session-scale-measurements.md) | 三份按日期冻结的合成测量 JSON、环境与口径；默认指标文件被覆盖的纠正 | [持久化验收](session-persistence-history.md) |
+| [会话日志规模测量](session-scale-measurements.md) | 四份按日期冻结的合成测量 JSON、环境与口径；默认指标文件被覆盖的纠正 | [持久化验收](session-persistence-history.md) |
 
 ## 开发接力与历史计划
 
