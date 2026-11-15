@@ -1,8 +1,8 @@
 # 会话存储治理与删除优化
 
-更新日期：2026-11-14。
+更新日期：2026-11-15。
 
-状态：S1、S2 的实现与本地定向验证记录见第 7 节（截至 2026-11-11）；本次只读对账未重跑验证。真实 GUI 与用户库耗时待验收；S3–S5 待启动，尚未迁移配置或真实用户数据。入口见 [PLAN.md](../PLAN.md)。
+状态：S1、S2 的实现与本地定向验证记录见第 7 节（截至 2026-11-11）；本次只读对账未重跑验证。S3 已于 2026-11-15 完成 schema 冻结与版本化建库／升级基础（第 4 节），未切换生产读写权威、未导入真实数据；真实 GUI 与用户库耗时待验收，S4–S5 待启动。入口见 [PLAN.md](../PLAN.md)。
 
 ## 1. 目标与分期
 
@@ -48,29 +48,147 @@
 
 ## 4. S3：冻结 SQLite 业务数据与配置边界
 
-待启动；完成 S2 后形成可评审 schema 和迁移方案，再实施。
+2026-11-15 完成 schema 冻结与版本化建库／升级基础（第 4.11 节）。本阶段**不切换生产读写权威**：
+项目目录册、置顶、归档、桌面偏好与会话日志仍是实际读写来源，业务库没有任何生产调用方；也未导入真实用户数据。
+
+### 4.1 权威边界
 
 | 数据 | 长期目标权威来源 | 约束 |
 | --- | --- | --- |
-| 项目定义、目录、修订、删除状态 | 每个 store 的 SQLite 业务表 | 保留目录结构和并发修订语义 |
-| 会话当前归属、归档、置顶 | SQLite 业务表 | 当前归属不改变执行目录、模型或权限 |
-| 项目／会话手动顺序、项目展开状态 | SQLite 的组织／视图状态表 | 保留置顶前普通位置和现有拖动分类边界 |
-| 列表标题、活动时间、回合数、来源进度 | SQLite 可重建摘要表 | 已保存标题来自 JSONL 的 `session-title` 事件；标题回退规则和活动时间按日志重建。Updater 不得覆盖业务表；重建只清理派生数据 |
+| 项目定义、目录、修订、删除状态 | 每个 store 的 SQLite 业务表（`project`） | 保留目录结构和并发修订语义；删除仍需先解绑会话 |
+| 会话当前归属、归档、置顶 | SQLite 业务表（`session_placement`／`archived_session`／`pinned_session`） | 当前归属不改变执行目录、模型或权限；分表保存，便于分批切换 |
+| 项目／会话手动顺序、项目展开状态 | SQLite 组织／视图状态表（`project_order`／`session_order`／`pinned_project`／`collapsed_group`） | 保留置顶前普通位置和现有拖动分类边界 |
+| 列表标题、活动时间、回合数、来源进度 | SQLite 可重建摘要表（`session-index.db` 的 `session_summary`，本阶段不迁入业务库） | 已保存标题来自 JSONL 的 `session-title` 事件；标题回退规则和活动时间按日志重建。Updater 不得覆盖业务表；重建只清理派生数据 |
 | 对话、执行事实、检查点、模型／权限选择、固定执行目录、已保存标题状态 | JSONL | 严格恢复与安全判断继续依据日志，不用列表摘要替代；数据导入不得重新请求模型生成标题 |
-| 主题、窗口、删除确认提示等应用偏好 | 现有用户／桌面偏好存储 | 与每个 store 的组织状态分离；`ShowArchivedSessionDeletionPrompt` 保留在桌面偏好，不迁入 store 业务表 |
+| 主题、窗口、删除确认提示等应用偏好 | 现有用户／桌面偏好存储（`desktop-sidebar.json`／`user-config.json`） | 与每个 store 的组织状态分离；`ShowArchivedSessionDeletionPrompt` 保留在桌面偏好，不迁入 store 业务表 |
 | 供应商配置、网络配置、凭据引用与真实凭据 | 现有配置／凭据机制 | 本计划不将秘密搬入会话数据库，不扩展为全面配置重构 |
 
-数据库从缓存升级为业务存储后，缺失／损坏不能再静默重建为空；需要业务备份恢复和派生摘要重建的独立入口。具体数据库文件命名、schema 升级与表约束在此阶段冻结，不直接复用当前“整库索引重建”的假设。
+### 4.2 数据库文件与两类数据的关系
 
-### 2026-11-14 后续改动纳入边界
+同一 session store 目录下有两个**互不替代**的数据库文件：
+
+| 文件 | 内容 | 丢失或损坏的处置 |
+| --- | --- | --- |
+| `session-index.db`（既有，schema 版本 2） | 可从 JSONL 重建的列表摘要与归档投影 | 允许整库清空重建，由对账重新派生 |
+| `session-store.db`（本阶段新增，schema 版本 1） | 项目、归属、归档、置顶、顺序、展开状态 | **不可重建**：只能由业务备份恢复；缺失只表示"尚未迁移" |
+
+分成两个文件是刻意的结构约束：索引的整库重建路径（`RebuildSchemaAsync` 直接 DROP 表）与"缺失即初始化"只允许作用于派生数据，业务表不能出现在任何可能被清空的语句里。
+
+### 4.3 版本 1 schema（已冻结）
+
+`SessionStoreDatabase.CurrentSchemaVersion = 1`，全部表 `WITHOUT ROWID`。
+
+| 表 | 字段 | 约束与索引 | 现来源（迁移输入） |
+| --- | --- | --- | --- |
+| `store_meta` | `key`, `value` | 主键 `key`；键 `schema_version`／`store_identity`／`created_utc` | 新建 |
+| `project` | `id`, `name`, `root_path`, `root_key`, `revision`, `is_deleting`, `created_utc`, `updated_utc` | CHECK：`id` 长 32、`name` 1–200、`root_path`／`root_key` 1–2048、`revision ≥ 1`、`is_deleting ∈ {0,1}`；`ux_project_root_key`（UNIQUE，平台比较键） | `projects.json` |
+| `session_placement` | `session_id`, `project_id`（可空）, `updated_utc` | CHECK：`session_id` 长 32；外键 `project_id → project(id) ON DELETE RESTRICT`；`ix_session_placement_project` | JSONL `project-binding`／`project-assignment`／`project-unassignment` |
+| `archived_session` | `session_id` | 主键；CHECK 长 32 | `archived-sessions.json`（集合） |
+| `pinned_session` | `session_id`, `position` | 主键；CHECK 长 32、`position ≥ 0` | `pinned-items.json` `pinnedSessionIds`（有序） |
+| `pinned_project` | `project_id`, `position` | 主键；CHECK 长 32、`position ≥ 0` | `pinned-items.json` `pinnedProjectIds`（有序） |
+| `project_order` | `project_id`, `position` | 主键；CHECK 长 32、`position ≥ 0` | `desktop-sidebar.json` `stores[].manualProjectOrder` |
+| `session_order` | `session_id`, `position` | 主键；CHECK 长 32、`position ≥ 0` | `desktop-sidebar.json` `stores[].manualSessionOrder` |
+| `collapsed_group` | `group_key` | 主键 | `desktop-sidebar.json` `stores[].collapsedGroupKeys` |
+
+已冻结的语义决定：
+
+- **归属用行存在性表达三态**：`session_placement` 有行且 `project_id` 非空 = 已归属；有行且 `project_id` 为空 = 明确无项目；整行缺失 = 尚未迁移（对应 `PendingInitialization`）。缺行不能被读成"无项目"。
+- **归属外键 RESTRICT**：项目行删除必须先清空其归属行，把"目录册删除标记 → 解绑 → 最终移除"的顺序变成数据库不变量，而不是调用方约定。
+- **顺序表不建唯一约束**：`position` 允许并列，排序按 `(position, item_id)` 全序确定；SQLite 的唯一约束无法延迟到提交时检查，唯一化只会让整体重写在中间状态失败。
+- **数量预算不进数据库**：项目 ≤1000、归档／置顶 ≤10000 等上限无法用 CHECK 表达，仍由调用方校验。
+- **列类型由 `typeof()` 守卫**：SQLite 的 `INTEGER` 只是亲和性而非强类型，非数字文本会原样存成 TEXT，而 TEXT 在比较中恒大于数值，`revision >= 1` 之类的检查会被绕过。因此每个数值列同时约束 `typeof(col) = 'integer'`，每个文本列约束 `typeof(col) = 'text'`（可空列用 `IS NULL OR typeof(...) = 'text'`）。
+- **时间与 ID 口径**：时间统一 Unix 毫秒；项目与会话 ID 统一 32 位小写十六进制（`CHECK` 只强制长度 32，十六进制与大小写仍由调用方保证）。
+- **身份与来源分离**：`store_identity` 是随机 32 位十六进制，用于区分"已初始化的业务库"与被替换的同名文件；`created_utc` 记录建库时间。
+
+### 4.4 schema 版本管理、升级与失败处理
+
+版本号保存在 `store_meta.schema_version`（不依赖 `PRAGMA user_version`）。每个版本的迁移在**单个事务**内执行本版本语句，并在同一事务内写入 `store_identity`／`created_utc`（仅缺失时）与版本号，避免"表建好但版本没写"或相反的半迁移；迁移编号必须从 1 连续，编号断层在应用前抛错而不是半途而废。
+
+每个版本都声明自己**必须具备的表与显式索引**，可用性与迁移都按它核对，而不是只看版本号或表名：
+
+- 可用性：表、显式索引与元数据键（`schema_version`／`store_identity`／`created_utc`）必须齐全；缺索引意味着唯一性与查询约束已经失效，与缺表一样按损坏报告。
+- 迁移前：该版本声明的表与索引必须齐全，缺少即拒绝——迁移脚本用 `CREATE TABLE IF NOT EXISTS`，一旦放行就会把缺失的表补成空表并写入新版本号，把数据丢失伪装成升级成功。版本 0 的已知结构是空库，出现任何表都表示来源不明而拒绝。多出的对象既不清空，也不阻止迁移与读取，由后续版本显式纳管。
+- 迁移后：结构核对与版本号写入都在**同一事务内**完成；不符即回滚整个迁移（含 DDL 与版本号），不会留下"版本已推进但结构不完整"的库。
+
+| 观测 | 状态 | `InitializeAsync` | `UpgradeAsync` |
+| --- | --- | --- | --- |
+| 路径不存在 | `Missing` | 建库到当前版本 | 拒绝：业务数据只能备份恢复或后续阶段导入 |
+| 路径被目录或链接占用 | `Damaged` | 拒绝 | 拒绝 |
+| 路径无法判定（权限／IO） | `Failed` | 拒绝 | 拒绝 |
+| 有文件、无任何用户表 | `NeedsSchema` | 建库到当前版本 | 拒绝，指引改用建库 |
+| 有表但无 `store_meta` | `Damaged` | 拒绝 | 拒绝 |
+| `store_meta` 无版本行或非整数 | `Damaged` | 拒绝 | 拒绝 |
+| 版本 < 当前 | `NeedsUpgrade` | 拒绝，指引改用升级 | 结构包含该版本声明的全部表与索引时逐版本就地迁移；缺少或该版本无已知结构时**拒绝** |
+| 版本 = 当前但缺冻结表／索引／元数据键 | `Damaged` | 拒绝 | 拒绝 |
+| 版本 > 当前 | `Unsupported` | 拒绝，绝不降级 | 拒绝，绝不降级 |
+| 非 SQLite 文件（`SQLITE_NOTADB`）或 `SQLITE_CORRUPT` | `Damaged` | 拒绝并保持文件原样 | 拒绝并保持文件原样 |
+| 锁等待耗尽、只读、权限、IO 失败 | `Failed` | 拒绝 | 拒绝 |
+| 可用 | `Available` | 无操作（不重写库身份） | 无操作 |
+
+探测结论必须区分"确定不存在"、"暂时读不了"和"确实损坏"：`File.Exists` 在权限或路径错误时同样返回 false，不能用它判缺失，否则不可读的业务库会被报成尚未迁移并诱导首次导入；只有 SQLite 明确报告 `SQLITE_NOTADB`（26）或 `SQLITE_CORRUPT`（11）才算损坏，其余运行期失败按暂时不可用报告，避免把锁冲突误导成"去恢复备份"。
+
+连接与一致性：每次操作独立连接、禁用连接池、私有缓存；`journal_mode=WAL`、`synchronous=FULL`、`foreign_keys=ON`、`busy_timeout` 与命令超时同为 5 秒。可用性探测只设置锁等待，不切换 journal 模式、不建表、不写元数据，因此只读检查不改动业务文件。`synchronous`、缓存模式与外键这三处**有意不同于索引库**（索引为 `NORMAL`／共享缓存／无外键）：索引丢数据可重建，业务数据只能靠备份，写失败必须可见。
+
+### 4.5 备份／恢复边界
+
+- 需要备份：`session-store.db`。WAL 模式下还需同一时刻的 `-wal` 内容，或先 checkpoint 再复制；S3 不实现备份入口。
+- 可丢弃：`session-index.db` 及其 `-wal`／`-shm`。恢复业务库后删除索引文件，由既有对账从 JSONL 重新派生摘要与归档投影，不丢组织状态。
+- 恢复顺序：停止写入方 → 恢复业务库 → 删除索引库 → 启动后对账。S3 不实现该流程，仅冻结边界。
+- 仍未具备：导出／导入、`integrity_check`、损坏文件的自动修复、升级前自动备份。
+
+### 4.6 为什么不能直接复用索引重建机制
+
+索引库的下列既有假设对业务表都是数据丢失路径，因此 S3 既没有把业务表放进 `session-index.db`，也没有复用其生命周期：
+
+- 版本变旧即 `DROP TABLE` 整库重建（`SessionIndexStore.RebuildSchemaAsync`）；
+- 文件缺失或无 schema 时自动 `InitializeAsync`，读路径的 `ReadWriteCreate` 会先建出空库；
+- 对账把"枚举不到的日志"对应的行无条件删除（孤儿清理），无宽限期与墓碑；
+- 索引写失败只记 `Trace`／`LastFailure`，不阻断、不重试；
+- 3 秒有界等待、无退避重试、`synchronous=NORMAL`。
+
+### 4.7 JSONL 标题事件与会话事实边界
+
+- `session-title` 记录载荷为 `tinyharness.session-title/1`，字段 `schema`／`name`／`pending`，全部必需；`Validate()` 强制 `pending == (name is null)`，名称经 `Normalize()`（压缩空白、去引号与末尾标点、最多 36 个 Unicode 标量）。
+- 写入点唯一（`ChatSessionHost.Title`）：待重试标记可重复追加，命名结果只写一次且迟到结果不覆盖。日志因此**允许多条标题记录**，完整恢复取最后一条。
+- 标题事件与归属维护同属元数据：**不推进对话活动时间、不增加回合数**；提交时间与提交序号仍随批次推进。纯标题批次会刷新 `updated_utc` 与索引来源标记，但不得改变排序所依赖的活动时间。
+- 摘要投影对 `name = null` 的记录**不覆盖**已保存名称，与完整恢复的"最后一条胜"存在语义分叉（见 4.9 第 3 项）。
+- 导入或重建必须原样保留已有标题事件：不调用模型、不丢弃标题、不补写重复事件。S3 未实现导入。
+
+### 4.8 桌面应用偏好边界
+
+继续留在 `desktop-sidebar.json`、**不进入** store 业务表：`ShowArchivedSessionDeletionPrompt`、`ShowProjectDeletionPrompt`、`IsProjectMode`、`SortProjectsByActivity`、`CollapsedCategoryKeys`（全局固定分类折叠）。它们与 store 无关，复制进每个 store 会在多 store 并存时漂移，并破坏"偏好文件损坏时禁止保存、回退默认值"的既有行为。
+
+只有每 store 的组织状态（`manualProjectOrder`、`manualSessionOrder`、`collapsedGroupKeys`）与 legacy 迁移字段（`pinnedProjectOrder`、`pinnedSessionIds`，迁入 Core 后清空）属于后续迁移对象。主题与窗口目前没有持久化，不属于本阶段。
+
+### 4.9 未解决事项（S4／S5 输入）
+
+1. `Missing` 的两种含义尚未区分：首次迁移（应导入）与迁移后丢失（应拒绝并引导恢复）。需要在导入完成时写一个业务库之外的标记，或由导入阶段自带证明。
+2. 备份／恢复入口（含 WAL 一致性、checkpoint、`integrity_check`、升级前自动备份）未实现。
+3. 标题投影与完整恢复的 `pending` 语义分叉：需在 S4 明确"最后一条胜"还是"最后非空胜"，否则 SQLite 行与 JSONL 重放会给出不同标题。
+4. `session_placement` 以"无行"表达 `PendingInitialization`，导入标记必须能区分"未导入"与"明确无项目"。
+5. S5 需要的会话删除墓碑／可恢复删除状态不在 v1 schema，须走版本 2 迁移；项目删除的可恢复性同样未定义。
+6. 业务库写失败的重试／排队策略、双进程写者仲裁未确定（当前只有有界等待后失败）。
+7. 数量预算、名称与路径的规范化规则仍需调用方校验；`CHECK` 只覆盖可表达的形态与类型。
+8. 是否最终把摘要表并入业务库仍未决定；当前选择是两个文件。
+9. 迁移引擎的成功路径缺少真实跨版本验证：当前只有版本 1，`UpgradeAsync` 的"逐版本迁移"尚无已发布旧结构可测，现有测试只覆盖"结构不符即拒绝"与"已是当前版本为无操作"。加入版本 2 时必须同时提供一份旧结构夹具库，按真实数据验证迁移与备份恢复，不能只把版本号改小。
+10. AOT 与离线 smoke：本阶段新增类型没有任何调用方，`win-x64` NativeAOT 发布产物里确实不含 `session-store.db` 等字符串（即被裁剪），因此发布与 smoke 只证明编译与既有行为未退化，**不能**证明业务 schema 在 AOT 下可用；接入调用方的阶段必须重做该验证。
+
+### 4.10 2026-11-14 后续改动纳入边界
 
 - 自动命名已把保存标题作为 `session-title` JSONL 事件持久化；SQLite 列表标题仍是可重建摘要。导入应保留已有事件和标题，不调用模型、不追加重复事件；纯标题更新不得推进对话活动时间或回合数。
 - 归档会话删除确认选项属于桌面 UI 偏好，继续由现有 `SidebarPreferencesStore` 管理；不要把它并入每个 store 的业务 schema。
 - 当前项目目标框架和 `AGENTS.md` 规则均为 `net11.0`／.NET 11；S4/S5 的 NativeAOT 与离线 smoke 仍须按该目标框架验证。
 
+### 4.11 本轮代码落地
+
+- 新增 `TinyHarness.Core/Services/Persistence/SessionStoreDatabase.cs`：冻结 schema 常量与表清单、`PathFor`／`Exists`、可用性状态机、`InitializeAsync`（建库）、`UpgradeAsync`（就地升级）、版本化迁移与连接配置。没有生产调用方。
+- 新增 `TinyHarness.Core/Exceptions/SessionStoreDatabaseException.cs`。
+- 新增测试 `TinyHarness.Tests/SessionStoreDatabaseTests.cs`（25 项）与 `TinyHarness.Tests/SessionStorageBoundaryTests.cs`（3 项）。
+- 未修改任何既有生产类型、配置文件或依赖；未切换读写权威；未导入真实数据。
+
 ## 5. S4：分批导入、切换与兼容
 
-待启动；依赖 S3。
+待启动；依赖 S3 的冻结 schema（第 4 节）与第 4.9 节未解决事项。
 
 1. 基于隔离副本实现幂等导入与迁移标记，先验证，再允许真实数据迁移。旧文件在新存储完整校验前保持原样。
 2. 分批切换归档／置顶／排序、项目目录册、最后当前会话归属；每批只保留一个权威来源，过渡状态有版本标记，不长期双写。
@@ -81,7 +199,7 @@
 
 ## 6. S5：迁移后简化删除与验收
 
-待启动；依赖 S4。
+待启动；依赖 S4，且需要业务库版本 2 迁移（墓碑／可恢复删除状态，见第 4.9 节）。
 
 - 项目删除在 SQLite 事务内解除关系并清理项目组织状态，不再为组织变化逐日志追加记录；运行中会话限制与内存宿主更新仍需验证。
 - 会话删除使用可恢复的删除状态协调数据库和日志文件，保留 writer 锁与宿主释放；不宣称跨文件和数据库原子提交，避免后台扫描复活删除中条目。
@@ -92,6 +210,20 @@
 ## 7. 本轮实施与验证记录
 
 > 本节为截至 2026-11-11 的历史实施与验证快照。2026-11-14 的计划对账没有重跑其中的构建、测试、NativeAOT、smoke 或真实环境验收。
+
+2026-11-15，S3 schema 冻结与建库／升级基础（含评审修复）：
+
+- 新增 Core `SessionStoreDatabase`（`TinyHarness.Core/Services/Persistence/SessionStoreDatabase.cs`）与 `SessionStoreDatabaseException`：按 store 解析 `session-store.db`（`StoreDirectory` 必须绝对路径），导出 `CurrentSchemaVersion = 1`、`DatabaseFileName`、`PathFor`／`Exists`、可用性状态机（`Available`／`Missing`／`NeedsSchema`／`NeedsUpgrade`／`Unsupported`／`Damaged`／`Failed`）与两个写入入口 `InitializeAsync`（建库）／`UpgradeAsync`（就地升级）。**没有生产调用方**，未切换任何权威来源。
+- schema 版本 1 冻结 9 张 `WITHOUT ROWID` 表：`store_meta`、`project`（含 `ux_project_root_key` 唯一索引）、`session_placement`（外键 `project_id → project(id) ON DELETE RESTRICT` + `ix_session_placement_project`）、`archived_session`、`pinned_session`、`pinned_project`、`project_order`、`session_order`、`collapsed_group`。约束覆盖列类型（`typeof` 守卫）、ID 形态、名称/路径长度、修订号下界、删除标记取值与顺序表非负位置；数量预算仍由调用方校验。语义与理由见第 4.3 节。
+- 版本号存 `store_meta.schema_version`；迁移逐版本在单事务内执行并同事务写入版本号（身份与建库时间用 `INSERT OR IGNORE`，版本用 `INSERT OR REPLACE`），迁移编号必须从 1 连续。每个版本声明应具备的表与显式索引：可用性要求表、索引与元数据键齐全；迁移前后都按声明核对，缺失一律拒绝迁移，版本 0 必须是空库——避免 `CREATE TABLE IF NOT EXISTS` 把缺失表补成空表后宣称升级成功。升级探测只设置 `busy_timeout`，不切 journal、不建表、不写元数据。
+- 探测结论区分"确定缺失／暂时读不了／确实损坏"：路径不存在才是 `Missing`；目录或链接占位判 `Damaged`；权限或路径无法判定、锁等待耗尽、只读与 IO 失败判 `Failed`；只有 SQLite 明确报告 `SQLITE_NOTADB`（26）或 `SQLITE_CORRUPT`（11）才判 `Damaged`，不把运行期冲突误导成"去恢复备份"。`SessionStorePaths.EnsureStoreLeaf` 的拒绝也收敛为本类型的异常，不漏出其他异常类型。
+- 连接策略与索引库有意不同：禁用连接池、私有缓存、`journal_mode=WAL`、`synchronous=FULL`、`foreign_keys=ON`，`busy_timeout` 与命令超时同为 5 秒。理由见第 4.4 节，与"为何不能复用整库索引重建"一并见第 4.6 节。
+- 补齐标题边界测试：纯标题批次只改标题与提交时间，不推进活动时间、不增加回合数；待重试标记不清除已保存名称；无标题事件按首回合首行、无回合时按会话 ID 前 8 位回退。
+- 评审修复（4 项 + 复核追加 2 项，均在 S4 接入前处理）：①旧版本升级不再把任何低于当前的版本当成可升级——迁移前核对声明结构，未知或缺失即拒绝，版本 0 有表即拒绝；②可用性不再只看表名——缺显式索引或元数据键同样判损坏；③数值约束加 `typeof(...) = 'integer'`，堵住"非数字文本因 TEXT 恒大于数值而通过 `CHECK`"；④探测错误分级如上条，不再把权限/锁/只读错误报成缺失或损坏；⑤路径叶子校验只保留 `try` 内的一次——此前 `OpenAsync` 在 `try` 外还调用了一次，属性探测后文件若变成链接，`SessionStoreException` 会绕过本类型的异常契约与可用性分类；⑥迁移后的结构核对移入**同一事务**并在提交前完成——此前是先提交 DDL 与版本号再核对，迁移脚本遗漏必需对象时库已永久记录新版本。
+- ⑤⑥ 的覆盖状态：⑥ 已用故意漏建 `project` 的迁移夹具确定性覆盖（`Initialize_WhenMigrationProducesIncompleteStructure_RollsBackEverything` 断言异常、回滚后无任何表、库重新被判为 `NeedsSchema`，即未留下版本号）；为此给 `SessionStoreDatabase` 增加一个仅测试可见的迁移注入重载与 `internal` 迁移/结构类型，生产路径不变。⑤ 只在"属性探测之后、打开之前文件被换成链接"的竞态窗口内可达，目前**尚未覆盖**，只由单一调用点与 `try` 内校验的结构约束。
+- 验证：`TinyHarness.Core` 与 `TinyHarness.Tests` Debug 构建 **0 警告 0 错误**；新增定向测试 **28/28** 通过（`SessionStoreDatabaseTests` 25、`SessionStorageBoundaryTests` 3）；含既有相邻套件的定向回归 **74/74** 通过（另含 `SessionTitleTests`、`SessionIndexStoreTests`、`SessionIndexStoreVersionTests`、`SessionIndexReconcilerTests`）；`TinyHarness.Tests` 全量 **2224 通过／0 失败／10 跳过**（2234 总，跳过项为链接权限、网络隔离与基准测量等环境相关用例）。
+- NativeAOT 与 smoke：`dotnet publish TinyHarness.Cli/TinyHarness.Cli.csproj -c Release -r win-x64 --self-contained true` 成功，**0 条 compiler／trimming／AOT 警告**，产物含 `e_sqlite3.dll`；从仓库外工作目录运行原生产物 `smoke --config <repo>/tinyharness.json`（隔离 TEMP／APPDATA／LOCALAPPDATA、补系统 PowerShell 与 `dotnet` 路径）**PASS，退出码 0**：17 steps／16 tool executions，含 `session index: verified SQLite summary row for the smoke session`。检查产物字符串（UTF-16）确认 `session-index.db` 存在而 `session-store.db` 不存在，即本阶段新增类型被裁剪——发布与 smoke 只覆盖"编译无警告、既有行为未退化"，不覆盖业务 schema 在 AOT 下的实际执行。日志留在 `artifacts/s3-20261115/`，发布输出按测试资源规则放在 `.tmp` 并在验证后删除。
+- 未验证／未执行：未运行 Desktop 全量套件与 Desktop `--offline-smoke`（本轮未触碰 Desktop 代码）；未运行 ReSharper `jb cleanupcode`，新增文件按 `.editorconfig`（LF、文件末尾换行、无行尾空白）与邻近风格人工整理并逐行复核；`UpgradeAsync` 的"逐版本成功迁移"无真实旧版本可测（见第 4.9 节第 9 项）；真实 GUI、真实用户库、跨进程双写与备份恢复均未验收。
 
 2026-11-11，S2 review 修复：
 
