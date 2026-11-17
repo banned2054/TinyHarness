@@ -147,13 +147,83 @@ internal static class OfflineSmoke
                 ])
                 throw new
                     InvalidOperationException("Assistant message boundaries or phases did not survive native persistence.");
-            Console.WriteLine($"PASS desktop: parallel=2 switched=A/B/A/B refreshed=true resumedTurns=4 disposedClients={createdModels} titles=2; fixture={root}");
+            var business = await RunBusinessStoreSmokeAsync(root, workspace);
+            Console.WriteLine($"PASS desktop: parallel=2 switched=A/B/A/B refreshed=true resumedTurns=4 disposedClients={createdModels} titles=2 session-store={business}; fixture={root}");
             return 0;
         }
         catch (Exception exception)
         {
             Console.Error.WriteLine($"FAIL desktop: {exception.Message}; fixture={root}");
             return 1;
+        }
+    }
+
+    /// <summary>
+    ///     <para>
+    ///         在隔离目录内执行业务库建库、旧来源导入、读写、重开与备份恢复；用于证明 Desktop 原生产物在
+    ///         NativeAOT 下真的执行新增业务 schema，而不只是编译未退化。失败抛出，资源在 finally 中清理。
+    ///     </para>
+    ///     <para>
+    ///         Runs business-database creation, legacy import, read/write, reopen, and backup/restore in an isolated
+    ///         directory, proving the native Desktop artifact executes the new business schema under NativeAOT rather
+    ///         than merely compiling. Failures throw and resources are cleaned up in finally.
+    ///     </para>
+    /// </summary>
+    private static async Task<string> RunBusinessStoreSmokeAsync(string root, string workspace)
+    {
+        var businessRoot = Path.Combine(root, "business");
+        var store        = Path.Combine(businessRoot, "sessions");
+        var backup       = Path.Combine(businessRoot, "backup");
+        Directory.CreateDirectory(store);
+        try
+        {
+            var project = await ProjectStore.GetOrCreateAsync(ProjectStore.FilePath(store), workspace, null,
+                                                              CancellationToken.None);
+            var archived = Guid.NewGuid().ToString("N");
+            await SessionStoreArchiveStore.SetArchivedAsync(store, archived, true, CancellationToken.None);
+            await SessionStorePinStore.SetProjectPinnedAsync(store, project.Id, true, CancellationToken.None);
+
+            var migration = await SessionStoreMigration.MigrateAsync(new SessionStoreMigrationOptions(store),
+                                                                     CancellationToken.None);
+            if (migration.AlreadyCompleted || string.IsNullOrEmpty(migration.StoreIdentity))
+                throw new InvalidOperationException("Business-store migration did not run or returned no identity.");
+            var inspection = await SessionStoreMigration.InspectAsync(store, CancellationToken.None);
+            if (inspection.Status != SessionStoreMigrationStatus.Completed)
+                throw new InvalidOperationException($"Business-store status after migration was {inspection.Status}.");
+
+            var organization = await SessionStoreOrganizationStore.LoadAsync(store, CancellationToken.None);
+            if (!organization.ArchivedSessionIds.Contains(archived, StringComparer.Ordinal) ||
+                !organization.PinnedProjectIds.Contains(project.Id, StringComparer.Ordinal))
+                throw new InvalidOperationException("Business organization state did not import the legacy sources.");
+
+            var pinnedAdditionally = Guid.NewGuid().ToString("N");
+            await SessionStoreOrganizationStore.SetSessionPinnedAsync(store, pinnedAdditionally, true,
+                                                                      CancellationToken.None);
+            var reopened = await SessionStoreOrganizationStore.LoadAsync(store, CancellationToken.None);
+            if (!reopened.PinnedSessionIds.Contains(pinnedAdditionally, StringComparer.Ordinal))
+                throw new InvalidOperationException("Business organization write did not survive a reopen.");
+
+            await SessionStoreBackup.CreateAsync(store, backup, CancellationToken.None);
+            var verification = await SessionStoreBackup.VerifyAsync(backup, CancellationToken.None);
+            if (verification.Status != SessionStoreBackupVerificationStatus.Valid)
+                throw new InvalidOperationException($"Business backup verification was {verification.Status}.");
+            File.Delete(SessionStoreDatabase.PathFor(store));
+            await SessionStoreBackup.RestoreAsync(store, backup, CancellationToken.None);
+            var restored = await SessionStoreOrganizationStore.LoadAsync(store, CancellationToken.None);
+            if (!restored.PinnedSessionIds.Contains(pinnedAdditionally, StringComparer.Ordinal))
+                throw new InvalidOperationException("Business backup restore lost the organization state.");
+            return $"migrated+readwrite+restore identity={migration.StoreIdentity[..8]}";
+        }
+        finally
+        {
+            try
+            {
+                if (Directory.Exists(businessRoot)) Directory.Delete(businessRoot, true);
+            }
+            catch (Exception cleanupException) when (cleanupException is IOException or UnauthorizedAccessException)
+            {
+                // 尽力清理隔离 smoke 目录；失败不影响 smoke 结果。
+            }
         }
     }
 

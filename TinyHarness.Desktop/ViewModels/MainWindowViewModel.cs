@@ -46,6 +46,10 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
         PinnedCategory, ProjectsCategory, RecentCategory, SessionsCategory, ArchivedCategory
     ];
 
+    // 与 SessionStoreOperations.StoreKey 保持同一比较口径：完整路径、Windows 不区分大小写。
+    private static readonly StringComparer StoreKeyComparer =
+        OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+
     private readonly ProjectCatalogMonitor _catalogMonitor = new();
 
     private readonly Func<Action, ValueTask>?        _dispatch;
@@ -65,6 +69,16 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
 
     // 置顶、归档与删除的存储协调入口：按 store 持快照与可用性，串行门与索引维护收口在 Core。
     private readonly SessionStoreOperations _storeOperations = new();
+
+    // 按 store 缓存的权威模式与业务库组织快照；迁移完成的 store 的组织状态只从业务库读取与写入。
+    private readonly Dictionary<string, SessionStoreModeResolution>    _storeModes   = new(StoreKeyComparer);
+    private readonly Dictionary<string, SessionStoreOrganizationState> _storeOrganizationSnapshots = new(StoreKeyComparer);
+
+    // 组织状态写入串行门：迁移后的 store 同时只有一个候选在写业务库，避免并发写入互相覆盖。
+    private readonly SemaphoreSlim _storeOrganizationGate = new(1, 1);
+
+    // 迁移后的 store 组织快照尚未加载时的提示去重；正常情况下准备先于分组重建，不会触发。
+    private readonly HashSet<string> _storeOrganizationPendingNoticed = new(StoreKeyComparer);
 
     // 上次下发的项目菜单数组：内容逐引用相同时复用实例，让 SessionViewModel.ProjectOptions 的引用相等短路跳过整条菜单重建链。
     private IReadOnlyList<ProjectViewModel>?                  _cachedProjectOptions;
@@ -686,6 +700,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
         {
             await PreparePinStateAsync(store, _lifetime.Token);
             await PrepareArchiveStateAsync(store, _lifetime.Token);
+            await PrepareStoreOrganizationAsync(store, _lifetime.Token);
             if (_closing) return;
             if (_storeDirectory is not { } currentStore || !ProjectRoots.AreEqual(currentStore, store))
             {
@@ -1617,6 +1632,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
 
         await PreparePinStateAsync(directory, _lifetime.Token);
         await PrepareArchiveStateAsync(directory, _lifetime.Token);
+        await PrepareStoreOrganizationAsync(directory, _lifetime.Token);
 
         return (directory, changed);
     }
@@ -1684,6 +1700,176 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
             Notice = $"归档信息无法读取，会话归档状态未知：{exception.Message}";
         }
     }
+
+    /// <summary>
+    ///     <para>
+    ///         解析 store 的权威模式；迁移完成时加载业务库组织快照并合并进内存侧栏状态，阻塞状态提示迁移或恢复，
+    ///         未迁移 store 保持旧文件路径不变。
+    ///     </para>
+    ///     <para>
+    ///         Resolves a store's authority mode; a migrated store loads the business organization snapshot and merges it
+    ///         into the in-memory sidebar state, a blocked store surfaces the migration/restore notice, and an
+    ///         unmigrated store keeps the legacy file path unchanged.
+    ///     </para>
+    /// </summary>
+    private async Task PrepareStoreOrganizationAsync(string storeDirectory, CancellationToken cancellationToken)
+    {
+        var storeKey = SessionStoreOperations.StoreKey(storeDirectory);
+        try
+        {
+            var resolution = await SessionStoreAuthority.ResolveAsync(storeDirectory, cancellationToken);
+            _storeModes[storeKey] = resolution;
+            if (resolution.Mode == SessionStoreMode.Blocked)
+            {
+                Notice = $"会话存储需要完成迁移或恢复后才能读写：{resolution.Status}" +
+                         (resolution.Detail is { Length: > 0 } detail ? $"（{detail}）" : "");
+                return;
+            }
+
+            if (resolution.Mode == SessionStoreMode.Legacy)
+            {
+                _storeOrganizationSnapshots.Remove(storeKey);
+                return;
+            }
+
+            var snapshot = await SessionStoreOrganizationStore.LoadAsync(storeDirectory, cancellationToken);
+            _storeOrganizationSnapshots[storeKey] = snapshot;
+            _storeOrganizationPendingNoticed.Remove(storeKey);
+
+            // 导入后的旧文件副本不再权威：下一次保存把该 store 的组织字段投影为空，避免两份组织状态漂移。
+            var stored = _sidebarPreferences.Stores.FirstOrDefault(item =>
+                                                                       ProjectRoots.AreEqual(item.StoreDirectory,
+                                                                           storeDirectory));
+            if (stored is not null &&
+                (stored.ManualProjectOrder.Count > 0 || stored.ManualSessionOrder.Count > 0 ||
+                 stored.CollapsedGroupKeys.Count > 0 || stored.LegacyPinnedProjectOrder.Count > 0 ||
+                 stored.LegacyPinnedSessionIds.Count > 0))
+                QueueSidebarPreferencesSave(true);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception) when (exception is SessionStoreMigrationException or IOException
+                                           or UnauthorizedAccessException)
+        {
+            Notice = $"侧栏组织状态无法读取：{exception.Message}";
+        }
+    }
+
+    /// <summary>
+    ///     <para>返回 store 是否已切换到业务库组织状态；未准备或未迁移时按旧文件处理。</para>
+    ///     <para>Whether a store uses business organization state; an unprepared or unmigrated store keeps the legacy file path.</para>
+    /// </summary>
+    private bool UsesBusinessOrganization(string? storeDirectory) =>
+        storeDirectory is not null &&
+        _storeModes.TryGetValue(SessionStoreOperations.StoreKey(storeDirectory), out var resolution) &&
+        resolution.Mode == SessionStoreMode.Migrated;
+
+    /// <summary>
+    ///     <para>
+    ///         应用一次组织状态变更：迁移后的 store 只更新内存快照并串行写业务库，旧文件 store 保持原有偏好写入，
+    ///         阻塞状态不写入并给出提示。
+    ///     </para>
+    ///     <para>
+    ///         Applies one organization change: a migrated store updates the in-memory snapshot and writes the business
+    ///         database serially, a legacy store keeps the existing preference write, and a blocked store refuses with a
+    ///         notice.
+    ///     </para>
+    /// </summary>
+    /// <returns>
+    ///     <para>是否产生了实际变更。</para>
+    ///     <para>Whether the change actually altered state.</para>
+    /// </returns>
+    private bool ApplyStoreOrganizationChange(
+        string storeDirectory, Func<SidebarStorePreferences, SidebarStorePreferences> mutate)
+    {
+        var storeKey = SessionStoreOperations.StoreKey(storeDirectory);
+        if (_storeModes.TryGetValue(storeKey, out var resolution) && resolution.Mode == SessionStoreMode.Blocked)
+        {
+            Notice = $"会话存储需要完成迁移或恢复后才能修改侧栏组织状态：{resolution.Status}";
+            return false;
+        }
+
+        if (!UsesBusinessOrganization(storeDirectory))
+        {
+            var legacyChanged = false;
+            UpdateStoreSidebarPreferences(storeDirectory, preferences =>
+            {
+                var candidate = mutate(preferences);
+                legacyChanged = !SameOrganization(preferences, candidate);
+                return candidate;
+            });
+            if (legacyChanged) QueueSidebarPreferencesSave(true);
+            return legacyChanged;
+        }
+
+        var before = StoreSidebarPreferences(storeDirectory);
+        var after  = mutate(before) with { StoreDirectory = before.StoreDirectory };
+        if (SameOrganization(before, after)) return false;
+
+        var beforeSnapshot = SnapshotFromPreferences(before);
+        var afterSnapshot  = SnapshotFromPreferences(after);
+        _storeOrganizationSnapshots[storeKey] = afterSnapshot;
+        _ = PersistOrganizationAsync(storeDirectory, beforeSnapshot, afterSnapshot);
+        return true;
+    }
+
+    /// <summary>
+    ///     <para>把业务库组织状态差异串行写入业务库；失败时提示并重新加载业务库快照，避免界面与权威分叉。</para>
+    ///     <para>Serializes organization-state differences into the business database; a failure surfaces a notice and reloads the business snapshot so the UI never diverges from the authority.</para>
+    /// </summary>
+    private async Task PersistOrganizationAsync(
+        string storeDirectory, SessionStoreOrganizationState before, SessionStoreOrganizationState after)
+    {
+        var acquired = false;
+        try
+        {
+            await _storeOrganizationGate.WaitAsync(_lifetime.Token);
+            acquired = true;
+            if (!before.ManualProjectOrder.SequenceEqual(after.ManualProjectOrder, StringComparer.Ordinal))
+                await SessionStoreOrganizationStore.SetManualProjectOrderAsync(storeDirectory, after.ManualProjectOrder,
+                                                                               _lifetime.Token);
+            if (!before.ManualSessionOrder.SequenceEqual(after.ManualSessionOrder, StringComparer.Ordinal))
+                await SessionStoreOrganizationStore.SetManualSessionOrderAsync(storeDirectory, after.ManualSessionOrder,
+                                                                               _lifetime.Token);
+            foreach (var key in after.CollapsedGroupKeys.Except(before.CollapsedGroupKeys, StringComparer.Ordinal))
+                await SessionStoreOrganizationStore.SetGroupCollapsedAsync(storeDirectory, key, true, _lifetime.Token);
+            foreach (var key in before.CollapsedGroupKeys.Except(after.CollapsedGroupKeys, StringComparer.Ordinal))
+                await SessionStoreOrganizationStore.SetGroupCollapsedAsync(storeDirectory, key, false, _lifetime.Token);
+        }
+        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
+        {
+            // 关闭窗口时放弃尚未提交的组织状态写入；下一次准备会从业务库重读。
+        }
+        catch (Exception exception)
+        {
+            Notice = $"侧栏组织状态保存失败：{exception.Message}";
+            await PrepareStoreOrganizationAsync(storeDirectory, _lifetime.Token);
+            await InvokeOnUiAsync(() =>
+            {
+                RebuildProjects();
+                return Task.CompletedTask;
+            });
+        }
+        finally
+        {
+            if (acquired) _storeOrganizationGate.Release();
+        }
+    }
+
+    private static bool SameOrganization(SidebarStorePreferences left, SidebarStorePreferences right) =>
+        left.ManualProjectOrder.SequenceEqual(right.ManualProjectOrder, StringComparer.Ordinal) &&
+        left.ManualSessionOrder.SequenceEqual(right.ManualSessionOrder, StringComparer.Ordinal) &&
+        left.CollapsedGroupKeys.SequenceEqual(right.CollapsedGroupKeys, StringComparer.Ordinal);
+
+    private static SessionStoreOrganizationState SnapshotFromPreferences(SidebarStorePreferences preferences) => new(
+        [],
+        [],
+        [],
+        preferences.ManualProjectOrder,
+        preferences.ManualSessionOrder,
+        preferences.CollapsedGroupKeys);
 
     /// <summary>切换 store 后清空上一 store 的整理展示残留；新一轮结束时会重新汇总。</summary>
     private void ResetOrganizeDisplay()
@@ -2172,7 +2358,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
         if (SidebarStoreForGroup(group) is { } storeDirectory)
         {
             var key = SidebarGroupExpansionKey(group.Key);
-            UpdateStoreSidebarPreferences(storeDirectory, preferences =>
+            ApplyStoreOrganizationChange(storeDirectory, preferences =>
             {
                 var collapsed = preferences.CollapsedGroupKeys.ToHashSet(StringComparer.Ordinal);
                 var changed   = group.IsExpanded ? collapsed.Remove(key) : collapsed.Add(key);
@@ -2183,7 +2369,6 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
                     }
                     : preferences;
             });
-            QueueSidebarPreferencesSave(true);
         }
 
         RebuildSidebarRows();
@@ -2246,8 +2431,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
             return;
         }
 
-        var moved = false;
-        UpdateStoreSidebarPreferences(store, preferences =>
+        var moved = ApplyStoreOrganizationChange(store, preferences =>
         {
             var order       = preferences.ManualProjectOrder.ToList();
             var sourceIndex = order.IndexOf(source.Key);
@@ -2258,7 +2442,6 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
             var insertIndex = targetIndex + (insertAfter ? 1 : 0);
             if (sourceIndex < insertIndex) insertIndex--;
             order.Insert(Math.Clamp(insertIndex, 0, order.Count), source.Key);
-            moved = true;
             return preferences with { ManualProjectOrder = order };
         });
         if (!moved) return;
@@ -2303,8 +2486,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
             source.Id is not { } sourceId   || target.Id is not { } targetId)
             return;
 
-        var changed = false;
-        UpdateStoreSidebarPreferences(store, preferences =>
+        var changed = ApplyStoreOrganizationChange(store, preferences =>
         {
             var order    = preferences.ManualSessionOrder.ToList();
             var original = order.ToArray();
@@ -2330,8 +2512,9 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
                 order.Insert(Math.Clamp(insertIndex, 0, order.Count), sourceId);
             }
 
-            changed = !order.SequenceEqual(original, StringComparer.Ordinal);
-            return changed ? preferences with { ManualSessionOrder = order } : preferences;
+            return order.SequenceEqual(original, StringComparer.Ordinal)
+                ? preferences
+                : preferences with { ManualSessionOrder = order };
         });
         if (!changed) return;
 
@@ -2540,8 +2723,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
     {
         if (!SidebarPreferencesReady || session.Id is not { } id || session.StoreDirectory is not { } store) return;
 
-        var changed = false;
-        UpdateStoreSidebarPreferences(store, preferences =>
+        ApplyStoreOrganizationChange(store, preferences =>
         {
             if (preferences.ManualSessionOrder.FirstOrDefault() == id) return preferences;
 
@@ -2549,10 +2731,8 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
             order.Insert(0, id);
             if (order.Count > SidebarPreferencesStore.MaxSessionOrderEntries)
                 order.RemoveAt(order.Count - 1);
-            changed = true;
             return preferences with { ManualSessionOrder = order };
         });
-        if (changed) QueueSidebarPreferencesSave();
     }
 
     /// <summary>
@@ -2588,7 +2768,8 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
         {
             await _sidebarPreferencesSaveGate.WaitAsync(_lifetime.Token);
             acquired = true;
-            await SidebarPreferencesStore.SaveAsync(_sidebarPreferencesPath, _sidebarPreferences, _lifetime.Token);
+            await SidebarPreferencesStore.SaveAsync(_sidebarPreferencesPath, ProjectSidebarPreferencesForFile(),
+                                                    _lifetime.Token);
         }
         catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
         {
@@ -2617,7 +2798,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
         await _sidebarPreferencesSaveGate.WaitAsync();
         try
         {
-            await SidebarPreferencesStore.SaveAsync(_sidebarPreferencesPath, _sidebarPreferences,
+            await SidebarPreferencesStore.SaveAsync(_sidebarPreferencesPath, ProjectSidebarPreferencesForFile(),
                                                     CancellationToken.None);
         }
         finally
@@ -2627,16 +2808,59 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
     }
 
     /// <summary>
+    ///     <para>
+    ///         生成写入桌面偏好文件的视图：已迁移 store 的组织状态与旧置顶字段由业务库承载，文件只保留应用级偏好；
+    ///         未迁移 store 与其他偏好原样保留。
+    ///     </para>
+    ///     <para>
+    ///         Builds the desktop-preferences view written to disk: migrated stores leave organization and legacy pin
+    ///         fields to the business database while the file keeps app-level preferences; unmigrated stores and other
+    ///         preferences pass through unchanged.
+    ///     </para>
+    /// </summary>
+    private SidebarPreferences ProjectSidebarPreferencesForFile()
+    {
+        var stores = _sidebarPreferences.Stores.Select(store => UsesBusinessOrganization(store.StoreDirectory)
+            ? store with
+            {
+                ManualProjectOrder                 = [],
+                ManualSessionOrder                 = [],
+                CollapsedGroupKeys                 = [],
+                LegacyPinnedProjectOrder           = [],
+                LegacyPinnedSessionIds             = [],
+                ManualProjectOrderMigrationCompleted = true
+            }
+            : store).ToArray();
+        return _sidebarPreferences with { Stores = stores };
+    }
+
+    /// <summary>
     ///     <para>读取指定 store 的侧栏状态；未保存时返回空状态。</para>
     ///     <para>Returns one store's sidebar state, or an empty state when none has been saved.</para>
     /// </summary>
     private SidebarStorePreferences StoreSidebarPreferences(string? storeDirectory)
     {
         if (storeDirectory is null) return new SidebarStorePreferences();
-        return _sidebarPreferences.Stores.FirstOrDefault(item =>
-                                                             ProjectRoots.AreEqual(item.StoreDirectory,
-                                                                 storeDirectory)) ??
-               new SidebarStorePreferences { StoreDirectory = Path.GetFullPath(storeDirectory) };
+        var stored = _sidebarPreferences.Stores.FirstOrDefault(item =>
+                                                                   ProjectRoots.AreEqual(item.StoreDirectory,
+                                                                       storeDirectory)) ??
+                     new SidebarStorePreferences { StoreDirectory = Path.GetFullPath(storeDirectory) };
+        if (!UsesBusinessOrganization(storeDirectory)) return stored;
+
+        // 迁移后组织状态只认业务库快照：快照未加载时为空而不是回退旧文件，避免两个权威同时生效。
+        if (_storeOrganizationSnapshots.TryGetValue(SessionStoreOperations.StoreKey(storeDirectory),
+                                                    out var snapshot))
+            return stored with
+            {
+                ManualProjectOrder = snapshot.ManualProjectOrder,
+                ManualSessionOrder = snapshot.ManualSessionOrder,
+                CollapsedGroupKeys = snapshot.CollapsedGroupKeys
+            };
+
+        var storeKey = SessionStoreOperations.StoreKey(storeDirectory);
+        if (_storeOrganizationPendingNoticed.Add(storeKey))
+            Notice = "会话存储组织状态尚未加载，暂时按空顺序显示；切换存储或重新打开后会恢复。";
+        return stored with { ManualProjectOrder = [], ManualSessionOrder = [], CollapsedGroupKeys = [] };
     }
 
     /// <summary>
@@ -2768,11 +2992,12 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
                                           .Where(key => !manualOrder.Contains(key, StringComparer.Ordinal)).ToArray();
         var orderChanged = newProjectKeys.Length > 0;
         manualOrder.InsertRange(0, newProjectKeys);
-        var completeProjectOrderMigration = SidebarPreferencesReady                                &&
-                                            _storeDirectory is not null                            &&
-                                            projectGroups.Length > 0                               &&
+        var completeProjectOrderMigration = !UsesBusinessOrganization(_storeDirectory)       &&
+                                            SidebarPreferencesReady                       &&
+                                            _storeDirectory is not null                   &&
+                                            projectGroups.Length > 0                      &&
                                             !storePreferences.ManualProjectOrderMigrationCompleted &&
-                                            manualOrder.Count == projectGroups.Length              &&
+                                            manualOrder.Count == projectGroups.Length     &&
                                             manualOrder.All(key => projectGroups.Any(group => group.Key == key));
         if (completeProjectOrderMigration) orderChanged |= PromoteLatestCreatedProject(manualOrder, projectGroups);
 
@@ -2780,9 +3005,9 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
 
         if ((orderChanged || completeProjectOrderMigration) && _storeDirectory is { } currentStore &&
             SidebarPreferencesReady)
-            UpdateStoreSidebarPreferences(currentStore, preferences => preferences with
+            ApplyStoreOrganizationChange(currentStore, preferences => preferences with
             {
-                ManualProjectOrder = manualOrder,
+                ManualProjectOrder                 = manualOrder,
                 ManualProjectOrderMigrationCompleted = true
             });
 
@@ -2903,6 +3128,8 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
                                                pathComparer);
         foreach (var storeSessions in sessionsByStore)
         {
+            // 迁移后的手动顺序来自业务库导入结果：不再用"当前可见会话"补种，避免覆盖导入顺序。
+            if (UsesBusinessOrganization(storeSessions.Key)) continue;
             var order = StoreSidebarPreferences(storeSessions.Key).ManualSessionOrder.ToList();
             var known = order.ToHashSet(StringComparer.Ordinal);
             var missing = storeSessions.OrderByDescending(session => session.LastActivityUtc)
@@ -2914,7 +3141,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
 
             if (order.Count == 0) order.InsertRange(0, missing);
             else order.AddRange(missing);
-            UpdateStoreSidebarPreferences(storeSessions.Key, preferences => preferences with
+            ApplyStoreOrganizationChange(storeSessions.Key, preferences => preferences with
             {
                 ManualSessionOrder = order
             });
@@ -3456,10 +3683,28 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
         string storeDirectory, string projectId, CancellationToken cancellationToken)
     {
         await EnsureSidebarPreferencesLoadedAsync(cancellationToken);
-        if (!_sidebarPreferencesSaveAllowed)
+        if (!_sidebarPreferencesSaveAllowed && !UsesBusinessOrganization(storeDirectory))
             throw new InvalidOperationException("侧栏偏好文件损坏或无法读取；修复后可继续删除项目。");
 
         var expansionKey = SidebarGroupExpansionKey(projectId);
+        if (UsesBusinessOrganization(storeDirectory))
+        {
+            // 迁移后项目组织状态在业务库：本钩子清理折叠分组键与手动顺序；置顶与普通顺序已由 Core 删除编排清理。
+            try
+            {
+                await SessionStoreOrganizationStore.RemoveProjectAsync(storeDirectory, projectId, [expansionKey],
+                                                                        cancellationToken);
+                await PrepareStoreOrganizationAsync(storeDirectory, cancellationToken);
+            }
+            catch (Exception exception) when (exception is SessionStoreMigrationException or IOException
+                                               or UnauthorizedAccessException)
+            {
+                throw new InvalidOperationException($"项目侧栏组织状态清理失败：{exception.Message}", exception);
+            }
+
+            return;
+        }
+
         UpdateStoreSidebarPreferences(storeDirectory, preferences => preferences with
         {
             ManualProjectOrder = preferences.ManualProjectOrder
