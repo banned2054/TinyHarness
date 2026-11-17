@@ -1,8 +1,8 @@
 # 会话存储治理与删除优化
 
-更新日期：2026-11-15。
+更新日期：2026-11-17。
 
-状态：S1、S2 的实现与本地定向验证记录见第 7 节（截至 2026-11-11）；本次只读对账未重跑验证。S3 已于 2026-11-15 完成 schema 冻结与版本化建库／升级基础（第 4 节），未切换生产读写权威、未导入真实数据；真实 GUI 与用户库耗时待验收，S4–S5 待启动。入口见 [PLAN.md](../PLAN.md)。
+状态：S1、S2 的实现与本地定向验证记录见第 7 节（截至 2026-11-11）；本次只读对账未重跑验证。S3 已于 2026-11-15 完成 schema 冻结与版本化建库／升级基础（第 4 节），未切换生产读写权威、未导入真实数据；S4 已于 2026-11-15 实施分批导入、按迁移标记切换生产权威与旧版本兼容（第 5 节），并于 2026-11-17 修复静态审查发现的 5 项缺陷（第 5.8 节）；迁移只可在显式入口触发且未对真实用户 store 执行；S5 待启动。真实 GUI、真实用户库耗时与跨进程现场验收仍待验收。入口见 [PLAN.md](../PLAN.md)。
 
 ## 1. 目标与分期
 
@@ -160,18 +160,21 @@
 
 只有每 store 的组织状态（`manualProjectOrder`、`manualSessionOrder`、`collapsedGroupKeys`）与 legacy 迁移字段（`pinnedProjectOrder`、`pinnedSessionIds`，迁入 Core 后清空）属于后续迁移对象。主题与窗口目前没有持久化，不属于本阶段。
 
-### 4.9 未解决事项（S4／S5 输入）
+### 4.9 S4 输入事项的处理结果（2026-11-15）
 
-1. `Missing` 的两种含义尚未区分：首次迁移（应导入）与迁移后丢失（应拒绝并引导恢复）。需要在导入完成时写一个业务库之外的标记，或由导入阶段自带证明。
-2. 备份／恢复入口（含 WAL 一致性、checkpoint、`integrity_check`、升级前自动备份）未实现。
-3. 标题投影与完整恢复的 `pending` 语义分叉：需在 S4 明确"最后一条胜"还是"最后非空胜"，否则 SQLite 行与 JSONL 重放会给出不同标题。
-4. `session_placement` 以"无行"表达 `PendingInitialization`，导入标记必须能区分"未导入"与"明确无项目"。
-5. S5 需要的会话删除墓碑／可恢复删除状态不在 v1 schema，须走版本 2 迁移；项目删除的可恢复性同样未定义。
-6. 业务库写失败的重试／排队策略、双进程写者仲裁未确定（当前只有有界等待后失败）。
-7. 数量预算、名称与路径的规范化规则仍需调用方校验；`CHECK` 只覆盖可表达的形态与类型。
-8. 是否最终把摘要表并入业务库仍未决定；当前选择是两个文件。
-9. 迁移引擎的成功路径缺少真实跨版本验证：当前只有版本 1，`UpgradeAsync` 的"逐版本迁移"尚无已发布旧结构可测，现有测试只覆盖"结构不符即拒绝"与"已是当前版本为无操作"。加入版本 2 时必须同时提供一份旧结构夹具库，按真实数据验证迁移与备份恢复，不能只把版本号改小。
-10. AOT 与离线 smoke：本阶段新增类型没有任何调用方，`win-x64` NativeAOT 发布产物里确实不含 `session-store.db` 等字符串（即被裁剪），因此发布与 smoke 只证明编译与既有行为未退化，**不能**证明业务 schema 在 AOT 下可用；接入调用方的阶段必须重做该验证。
+1. `Missing` 的两种含义已由 store 级迁移标记区分：无标记＝首次迁移（旧文件仍是权威），标记完成而库缺失＝迁移后丢失、
+   只能备份恢复（第 5.1 节）。
+2. 备份／恢复入口已实现（SQLite 在线备份、完整性校验、身份匹配、恢复前保留原库副本、删除派生索引），见第 5.4 节；
+   `integrity_check`、恢复与回退策略一并落地。升级前自动备份仍未实现。
+3. 标题投影与完整恢复的 `pending` 语义已统一为"最后一条非空名称胜出"（第 5.6 节），两侧均有测试覆盖。
+4. `session_placement` 的"无行＝尚未初始化"与"空项目＝明确无项目"已由读写路径与测试区分（第 5.3 节）。
+5. S5 所需的删除墓碑／可恢复删除状态仍不在 v1 schema，须走版本 2 迁移；未在本阶段扩大 schema。
+6. 迁移互斥由 store 级租约实现，来源指纹复核覆盖旧写者在导入期间的写入，切换后以警告报告旧文件被改写（第 5.5 节）；
+   业务库写失败的重试／排队策略与双进程写者仲裁仍是后续事项。
+7. 数量预算、名称与路径规范化的调用方校验保持不变；`CHECK` 边界未变。
+8. 摘要表仍留在 `session-index.db`，未并入业务库。
+9. `UpgradeAsync` 的跨版本成功路径仍缺真实旧结构夹具；本阶段没有新增 schema 版本。
+10. AOT 与离线 smoke：本阶段已接入真实调用方，CLI/Desktop 发布产物需重做业务库建库、导入、读写与重开的 smoke 验证（见第 7 节）。
 
 ### 4.10 2026-11-14 后续改动纳入边界
 
@@ -188,14 +191,199 @@
 
 ## 5. S4：分批导入、切换与兼容
 
-待启动；依赖 S3 的冻结 schema（第 4 节）与第 4.9 节未解决事项。
+已于 2026-11-15 实施。生产权威按持久化迁移标记切换；迁移只能由显式入口触发，**不自动迁移真实用户 store**。
+本阶段只在隔离 fixture 与测试副本上执行迁移，未对真实用户数据运行，也未删除任何旧文件或用户备份。
 
-1. 基于隔离副本实现幂等导入与迁移标记，先验证，再允许真实数据迁移。旧文件在新存储完整校验前保持原样。
-2. 分批切换归档／置顶／排序、项目目录册、最后当前会话归属；每批只保留一个权威来源，过渡状态有版本标记，不长期双写。
-3. 归属迁移需同时调整恢复投影、运行宿主与旧日志初始化：旧归属记录仅作导入来源，不能覆盖迁移后的当前关系；数据库缺失不得静默回退旧关系。
-4. 明确中断续作、损坏报告、备份恢复及回退边界。旧版本仍会写旧文件，不能宣称新旧程序可同时写同一 store；在切换前制定实际可执行的升级／停止旧写者方案。
-5. 所有调用方切换后再移除旧生产读写路径；用户数据备份清理必须另行明确授权，不在升级中自动删除。
-6. 导入验收覆盖已保存标题、标题回退和标题事件重放；迁移不得触发模型调用、丢失标题或重复追加标题事件。桌面删除提示偏好保持在应用层存储。
+### 5.1 迁移标记与状态
+
+业务库之外新增迁移标记 `session-store-migration.json`（协议 `tinyharness.session-store-migration/1`），
+与业务库内的 `store_meta.store_identity`／`migration_id` 双向绑定，用于区分六种情形：
+
+| 观测 | 状态 | 生产读写 |
+| --- | --- | --- |
+| 无标记 | `NotStarted` | 旧文件仍是权威（未迁移 store 的兼容期） |
+| 有标记、仍有批次未切换 | `InProgress` | 拒绝，必须继续迁移，不静默回退旧文件 |
+| 全部批次已切换且业务库可用、身份一致 | `Completed` | 业务库是权威 |
+| 标记完整但业务库缺失 | `DatabaseMissing` | 拒绝，只能由业务备份恢复；不得重新导入旧来源 |
+| 业务库身份与标记记录不一致 | `DatabaseReplaced` | 拒绝，视为同名库被替换 |
+| 标记无法严格解析 | `MarkerDamaged` | 拒绝并保留文件，交人工恢复 |
+
+标记记录迁移标识、库身份、开始／更新时间、各批切换状态、各批来源指纹与最近一次可重试失败说明；
+写入使用同目录临时文件加原子替换，读取严格校验协议与字段形态。首次迁移先写开始标记再建库，
+使"标记已写、库未建"按可续作处理，而不是误判为首次迁移。
+
+### 5.2 分批导入协议
+
+固定顺序组织状态（归档、置顶、普通/置顶顺序、折叠分组）→ 项目目录册 → 会话当前归属：
+
+- 每批先完整读取并校验旧来源快照、计算来源指纹，随后在**单个事务**内用该快照整体替换该批的业务表，
+  核对导入行数后提交，最后把该批标记为已切换并写入来源指纹。任何批次失败只回滚本批事务，之前已切换批次不再重做。
+- 幂等：重试重新导入仍待切换的批次；已切换批次不会因重复运行而重复写入或覆盖新权威下的修改。
+- 崩溃窗口：提交成功但标记未写时该批仍待切换，重试重新导入（旧来源仍是该批权威）；
+  标记写完但库未建、库建好但身份未记录等窗口分别按"继续建库"和"接管已建库并写入迁移标识"处理。
+- 取消：提交前取消回滚事务、提交后取消保持该批待切换，均不破坏已切换批次；不宣称 SQLite、JSON 文件与标记
+  具有跨文件单事务原子性。
+- 来源变化：组织状态与项目目录册在提交后再次核对指纹，命中说明旧程序在导入期间写入，该批保持待切换并失败重试；
+  会话归属按文件名、长度与修改时间摘要记录指纹，更细的重扫由检查入口提示。
+
+### 5.3 生产权威切换与实际调用方
+
+- 新增 `SessionStoreAuthority`：按标记解析 `Legacy`／`Migrated`／`Blocked`；`Blocked` 一律以类型化异常拒绝，
+  绝不静默回退旧文件。旧文件读写实现只保留给尚未迁移 store 与导入器；已切换 store 的生产调用方不再触碰旧文件。
+- 组织状态：`SessionStoreOrganizationStore` 承担归档、置顶、普通/置顶顺序与折叠分组的事务化读写；
+  `SessionStorePinStore`／`SessionStoreArchiveStore` 在迁移后转调业务库并保持原有领域异常与模型，
+  `SessionStoreOperations` 的快照、串行门与索引投影维护语义不变。
+- 项目目录册：`SessionStoreProjectCatalogStore` 承担创建复用、改名修订号、删除标记与最终移除；
+  `project.root_key` 唯一索引与 `session_placement.project_id` 的 `ON DELETE RESTRICT` 外键把
+  "项目删除必须先解绑"变成数据库不变量。`ProjectStore` 按迁移状态在文件与业务库之间分派，
+  `ProjectCatalogMonitor` 在业务库模式下每轮直接读取业务库。
+- 会话当前归属：`SessionStorePlacementStore` 用行存在性表达三态（有行有项目＝已归属、有行空项目＝明确无项目、
+  缺行＝尚未初始化）。`SessionStoreReader` 严格恢复后叠加业务库归属，历史 JSONL 归属不再覆盖切换后关系；
+  `SessionSummaryBuilder` 与降级摘要扫描同样叠加，索引新增归属投影刷新（未变日志零正文扫描时也能纠正历史归属）。
+- 初始化：`SessionProjectInitializer` 迁移后只写业务库（项目 + 归属行，插入时仅缺行才写，后到者不覆盖先到者），
+  不再追加 JSONL 归属、不再获取 writer 锁；未绑定会话的日志正文不被改写。解绑：`SessionProjectUnbinder`
+  迁移后按项目批量把归属行改为明确无项目，不读不写日志、不抢 writer 锁，仍保留可重试与删除标记语义。
+- 新会话与恢复续聊：`SessionStoreWriter` 迁移后首次提交把归属写入业务库并**不再向 JSONL 追加 project-binding /
+  project-assignment**；续聊的待初始化会话由 `SessionProjectBinding.BindRestoredAsync` 写业务库归属行，
+  不再追加日志。等级/权限/执行目录语义不变。
+- 索引：`session-index.db` 仍是可重建派生投影；项目删除/会话删除在业务库模式下同时清理归属行、置顶与顺序引用，
+  失败以既有 issues 列表报告，不阻断已提交事实。
+
+### 5.4 备份、恢复与回退
+
+- 备份使用 SQLite 在线备份 API（读连接、`BackupDatabase`），WAL 内容随备份一致，不复制可能撕裂的 `-wal` 文件；
+  备份目录内固定文件名 `session-store.db`，已存在则拒绝覆盖，绝不删除用户已有备份。
+- 校验：完整性检查、schema 可用性、版本与库身份；恢复要求标记 `Completed` 且备份身份与标记记录一致，
+  否则拒绝（备份属于别的 store / 同名库被替换需显式恢复匹配身份的备份）。
+- 恢复：先校验备份，再持有迁移租约复制提交（同目录临时文件 + 替换），原业务库保留为
+  `session-store.db.pre-restore-<unixms>` 副本；随后删除派生索引 `session-index.db`、`-wal`、`-shm`，
+  由既有对账重建摘要与归档投影。旧 JSON 文件与用户备份保持原样，不自动删除。
+- 回退策略：迁移完成即不可通过"重新导入旧文件"回退；业务库写入后也没有把新数据合并回旧 JSON/JSONL 的路径。
+  唯一受支持的回退是按备份恢复业务库；若要回到旧版本程序，必须先恢复迁移前旧文件备份并显式移除业务库与迁移标记，
+  该操作不在本阶段自动执行。
+- 错误分级：缺失、损坏、版本不受支持、迁移进行中、库被替换、锁等待、权限、只读与 IO 失败分别报告，
+  不再混成"缺失"或"损坏"。
+
+### 5.5 旧写者停止与迁移互斥
+
+- 迁移、备份与恢复共享 store 级迁移租约（独占句柄），并发尝试有界等待后以 `Locked` 失败；进程退出由操作系统释放。
+- 旧程序不识别该租约，因此协议不假设旧写者会遵守新锁：组织状态与项目目录册在切换前复核来源指纹，
+  切换后由检查入口比较旧文件指纹并在 `Warnings` 中报告"旧文件在切换后被改写"；生产读取只认业务库，
+  不会被旧写入覆盖。仍明确要求升级迁移时关闭旧版本程序，不宣称新旧程序可同时写同一 store。
+
+### 5.6 标题、日志与桌面偏好
+
+- 导入只读取旧来源，不调用模型、不重写 JSONL、不重复追加标题事件；标题事件与归属维护不推进活动时间或回合数。
+- 待生成标题语义在 S4 明确为"最后一条非空名称胜出"：完整恢复与列表摘要都忽略晚到的待生成标记，
+  已保存名称不会被清除；不通过改写旧日志解决分叉。
+- 桌面应用偏好（删除确认、全局分类折叠、项目模式、项目排序）继续留在 `desktop-sidebar.json`；
+  只有每 store 的组织状态（手动项目/会话顺序、折叠分组）在迁移后由业务库承载。桌面保存时对已迁移 store
+  投影为空组织字段并保留其他偏好，不静默清空无关设置。
+- CLI 新增显式的 `session store status|migrate|backup|verify|restore` 命令；离线 smoke 覆盖
+  建库、导入、读写、重开与备份恢复。
+
+### 5.7 未完成边界
+
+- 本阶段不实施 S5 的会话删除墓碑与删除流程简化；现有删除功能在切换后保持正确，但仍是"日志 + 业务库"两步操作，
+  失败可重试、不宣称跨文件原子。
+- 真实用户 store 迁移、真实 GUI 验收、双进程实际争用与旧版本程序并发实测均未执行，属于用户显式授权的后续操作。
+- 已删除/移除旧文件存储的完整代码仍保留：未迁移 store 需要兼容期路径；完全移除需先确定强制迁移策略。
+
+### 5.8 S4 静态审查修复（2026-11-17）
+
+对 S4 的 42 个文件做静态审查发现 5 项缺陷，已全部修复；随后对备份恢复的 WAL 处理追加 1 项 P1 修复：
+
+1. **运行中宿主解绑绕开业务库（P1）**：`ChatSessionHost.UnassignProjectAsync` 原先一律追加
+   `project-unassignment` JSONL 记录，而迁移后的 writer 明确拒绝该记录，项目包含已打开会话时删除会停在删除标记。
+   现在迁移后直接改写业务库归属行为明确无项目，并尽力刷新索引投影；未迁移 store 保持原追加语义。
+   `ISessionStoreWriter` 增加默认实现的 `StoreDirectory`（由 `SnapshotPath` 父目录推导），使宿主无需额外构造参数即可
+   解析迁移权威。
+2. **阻塞状态回退历史归属（P1）**：`SessionPlacementOverlay.LoadAsync`／`ApplyAsync` 原用 `IsMigratedAsync`，
+   把 `InProgress` 与 `MarkerDamaged` 一并当作"未迁移"并返回日志推导值。现在改用 `ResolveAsync` +
+   `ThrowIfBlocked`，只有真正的 `Legacy` 才跳过叠加。迁移导入器改走新增的
+   `SessionStoreReader.ReadLogProjectionAsync`（internal，只读日志自身严格投影），避免"导入中"的阻塞反过来拒绝导入器。
+   降级摘要扫描与索引更新器同样改用该入口。
+3. **外键损坏备份先覆盖再报错（P1）**：`VerifyAsync` 只做 `integrity_check`，而它不检查外键引用；恢复因此可能先用
+   坏备份替换业务库再失败。现在 `VerifyAsync` 增加 `foreign_key_check`；恢复在替换前对**实际待提交的临时副本**
+   再做完整性、外键与 schema 版本校验；替换后的复核仍失败时把本次恢复保存的 `pre-restore` 副本放回原文件名
+   （替换本身不可回滚，提交前校验是主防线，回滚是兜底）。回滚只接受 `PreserveExistingDatabaseAsync` 返回的精确
+   副本路径：目录里更早的同名前缀副本不会被自动选用，恢复前业务库缺失（本次未生成副本）时明确拒绝回滚，避免用
+   历史副本覆盖刚恢复的数据库。
+4. **索引更新未叠加业务库归属（P2）**：`SessionIndexUpdater` 的整份扫描分支调用三参数 `BuildAsync`（恒传 null），
+   增量分支也没有叠加，迁移后新会话首次索引更新会被记成 `PendingInitialization`。现在两个分支都叠加：
+   整份扫描经 `SessionPlacementOverlay.LoadAsync` 传入归属快照，增量分支用 `ApplyAsync` 覆盖推进后的摘要。
+   `SessionIndexReconciler` 的重建分支同样提前叠加，避免同一轮内先写历史归属再由循环后同步纠正。
+5. **续聊初始化覆盖并发归属（P2）**：`SessionProjectBinding.BindRestoredAsync` 原用 `SetProjectAsync`（无条件 UPSERT），
+   恢复快照之后写入的归属（含显式 `NoProject`）会被覆盖。现在改用 `TryInitializeProjectAsync`（仅缺行时插入），
+   随后读回最终归属同步内存会话与索引投影；新增 `ChatSession.MarkNoProject` 供读回 `NoProject` 时镜像内存状态。
+6. **业务库 WAL／SHM 清理失败被当作成功（P1）**：提交与回滚此前都用 `TryDeleteSiblingFiles` 删除业务库同目录的
+   `-wal`／`-shm`，该方法吞掉 `IOException`／`UnauthorizedAccessException` 后照常返回，外层因此在旧 WAL 仍在
+   目录里时报告"恢复完成"或"原库已放回"。旧 WAL 属于数据库持久状态，后续打开会把它按新主文件重放并立即破坏
+   恢复结果，与可重建的索引派生文件不是同一类清理。现在改为**先隔离后替换**：`QuarantineJournalFiles` 把旧
+   `-wal`／`-shm` 改名到非日志文件名（SQLite 不会再应用它们），失败则以 `SessionStoreBackupException` 中止，
+   已移开的日志先放回；替换或回滚成功后才由 `DeleteQuarantinedJournals` 删除隔离副本，替换/放回本身失败时由
+   `RestoreQuarantinedJournals` 把日志放回原文件名，避免"主文件保留而日志被丢掉"的失配一代。
+   选择隔离而非直接删除，是因为日志可能仍持有未 checkpoint 的已提交内容，替换若随后失败，先删除等于在保留旧主
+   文件的同时丢掉它的数据。`TryDeleteSiblingFiles` 收窄为临时文件与派生索引的尽力清理，文档注释写明业务库日志
+   不在此范围。
+7. **WAL 隔离后进程退出缺少恢复机制（P1）**：上一项的隔离信息只保存在内存里。原 WAL 含未 checkpoint 的已提交
+   内容时（`PreserveExistingDatabaseAsync` 允许 checkpoint 失败后继续），进程若在日志改名之后、主库替换之前被
+   终止，旧主库就失去了原日志名下的 WAL：迁移标记仍是 `Completed`、租约随退出释放，而开库入口不识别
+   `.stale-*.tmp`，后续读取会拿到缺少最新数据的旧主库。现在新增 `SessionStoreRestoreRecovery`：在隔离**之前**
+   把待提交副本与计划隔离的全部日志文件名原子写入 `session-store-restore-recovery.json`（只存 store 目录内的
+   文件名，逐个经 `EnsureStoreLeaf` 校验，已存在的记录拒绝覆盖）。`SessionStoreDatabase.GetAvailabilityAsync`
+   在探测前先补完中断的恢复，恢复不了就以 `Failed` 拒绝打开；`MigrateAsync`／`CreateAsync`／`RestoreAsync`
+   在持有租约后先调用 `RecoverLockedAsync`，并用 `HoldSettled` 登记，使编排内部的打开既不重入租约也不会把
+   自己的窗口当成残留。判据是"待提交副本是否还在"：`File.Replace`／`File.Move` 成功会消耗源文件，因此副本仍在
+   表示替换未发生（隔离日志放回原日志名），副本已不在表示替换已提交（隔离日志属于上一代，必须丢弃而不是重放）。
+   备份校验通过 `SessionStoreDatabase(backupPath, false)` 构造，明确不把用户备份目录当作需要修复的业务库。
+   恢复只在持有迁移租约时改文件，因此不与另一个进程正在执行的恢复交错；"隔离完成、替换未提交"的窗口用
+   `QuarantineCommittedHookForTests` 接缝覆盖（生产路径始终为 null）。
+8. **替换失败时忽略日志复原失败（P2）**：`RestoreQuarantinedJournals` 返回首个复原失败原因，但提交与回滚两处都
+   直接丢弃并重新抛出替换异常；日志若也没移回，调用方只看到"替换失败"，不知道旧主库的 WAL 仍在隔离名下，也
+   拿不到需要手工处理的路径。现在两处都合并报告原异常与复原失败、保留恢复记录使存储继续不可用，直到文件代际
+   恢复一致；`SettleQuarantineFailureAsync` 负责"记录已落盘但隔离未完成"的收尾，避免把一次可以自愈的隔离失败
+   呈现成永久不可用。复原或收尾也失败时，错误消息同时包含日志路径、隔离副本路径与记录路径。
+
+验证（2026-11-17）：`TinyHarness.Core`／`TinyHarness.Desktop` Debug 构建 0 警告 0 错误；
+新增 7 项回归测试（阻塞态公开读取拒绝 + 导入器原始读取可用、运行中宿主解绑只写业务库、外键损坏备份校验与恢复不覆盖、
+迁移后索引更新两分支归属投影、续聊不覆盖并发归属、回滚只认本次副本、无本次副本时拒绝回滚）；定向回归 39/39 通过；
+WAL 隔离另加 3 项（独占句柄持有旧 WAL 时恢复在替换前中止且不留临时副本、回滚报告失败且不覆盖刚恢复的库、
+放回步骤失败时隔离日志回到原日志文件名），并用"把隔离失败改回吞掉"的临时改动验证前两项确实因此转红。
+第 7、8 项另加 6 项：进程在隔离之后、替换之前被终止时下一次打开必须把隔离日志放回原日志名并清除记录、
+进程在替换之后、记录清除之前被终止时必须丢弃上一代日志而不是重放、恢复记录损坏时业务库判为不可用且记录保留、
+记录点名的隔离日志无法放回时报告两个失败并保留记录（解除占用后同一记录可自行收尾）、成功恢复后不残留记录与
+隔离副本、待收尾记录必须先于文件叶子判断被处理（主文件缺失不得报成"尚未迁移"）；
+并用"把记录写入移到隔离之后"与"把恢复移到叶子判断之后"的临时改动分别验证对应项确实因此转红。
+`SessionStoreBackupTests` **25/25** 通过；持久化相关定向筛选 **306 通过／0 失败／3 跳过**；
+`TinyHarness.Tests` 全量 **2287 通过／0 失败／10 跳过**（2297 总计；WAL 轮为 2281／0／10）。
+本轮未改动 Desktop 代码，`TinyHarness.Desktop` Debug 构建 0 警告 0 错误，**未重跑** `TinyHarness.Desktop.Tests`
+与 Desktop `--offline-smoke`（WAL 轮记录的全量结果为 420 通过／1 失败，唯一失败是既有偶发
+`NetworkChangeDuringRunWaitsForTheNextRunBoundary`，单独重跑通过）。
+CLI `win-x64` NativeAOT publish 成功且无 compiler／trimming／AOT 警告，仓库外隔离环境下的发布产物 `smoke`
+PASS（exit 0，17 steps／16 tool executions，含 `session store: verified migration, read/write, reopen, backup and restore`，
+即本轮改动的备份／恢复路径在 AOT 产物中真实执行）。
+未对真实用户 store 执行迁移，未做真实 GUI、双进程并发恢复与真实断电验收。
+
+#### 5.8.1 恢复记录文件角色校验（2026-11-17 复审追加）
+
+第 7 项引入的记录只校验"名字是 store 目录内的普通文件名"，没有限制文件角色，因而结构合法的记录可以把任意目录内
+文件交给 `Apply` 删除或移动：`pendingFileName` 写成 `session-store.db` 且日志列表为空时，替换判据落到"副本已不在"，
+`Apply` 会把真实业务库当未提交副本删除；`quarantinedFileName` 同样可以指向会话日志。现在读取路径在改动任何文件之前
+完成角色校验：操作必须是 `restore` 或 `rollback`；待提交副本必须形如 `session-store.db.<operation>-<32 位小写十六进制>.tmp`；
+原日志只能是业务库的 `-wal`／`-shm`；隔离名必须是由对应原日志派生的 `<original>.stale-<32 位小写十六进制>.tmp`；
+同一个名字不得出现两次（含与原日志重名），空值与缺失字段一律拒绝。写入路径调用同一校验并在落盘前中止，产名逻辑
+合并为 `NewPendingCopyPath`／`NewQuarantinePath`，避免读写两侧命名漂移。违反任一条件按 `Damaged` 报告、保留记录、
+业务库保持不可用。
+
+验证（2026-11-17 复审）：新增 5 项测试——把业务库写成待提交副本、把会话日志写成隔离副本、五类语义非法形状
+（未知操作／待提交副本为会话日志／原日志不是业务库日志／隔离名与前缀不符／同一名字重复）、`RecoverAsync` 在被拒绝时
+不移动也不删除任何文件、写入端拒绝不符合替换窗口形状的待提交副本。`SessionStoreBackupTests` **30/30** 通过；
+备份／迁移／权威／数据库／边界定向筛选 **95/95** 通过；`TinyHarness.Core` Debug 构建 0 警告 0 错误。把读取路径的
+角色校验临时去掉后上述前 4 项均转红，恢复后重新转绿。
+**验证边界**：既有"进程终止"用例在**同一测试进程内**用 `OperationCanceledException` 与测试接缝模拟，不是真实子进程
+被终止；WAL 夹具是**文本文件**而非真实 SQLite WAL，因此未覆盖真实进程终止与 SQLite WAL 重放行为。本轮未重跑
+全量 `TinyHarness.Tests`，未执行 NativeAOT publish 与产物 smoke。真实用户 store、双进程并发与断电现场验收仍待授权。
 
 ## 6. S5：迁移后简化删除与验收
 
@@ -210,6 +398,19 @@
 ## 7. 本轮实施与验证记录
 
 > 本节为截至 2026-11-11 的历史实施与验证快照。2026-11-14 的计划对账没有重跑其中的构建、测试、NativeAOT、smoke 或真实环境验收。
+
+2026-11-15，S4 分批导入、切换与兼容：
+
+- 新增 Core 迁移与权威层：`SessionStoreMigrationContract`（标记/状态/批次/备份结果类型）、`SessionStoreMigration`（标记路径与读取、租约、显式 `MigrateAsync`／`InspectAsync`）、`SessionStoreMigrationStateStore`（标记严格读写与原子替换、store 级租约）、`SessionStoreMigration.Import`（三批导入、来源指纹、续作与崩溃窗口处理）、`SessionStoreBackup`（在线备份、校验、恢复）、`SessionStoreAuthority`（`Legacy`／`Migrated`／`Blocked` 解析与类型化拒绝）、`SessionPlacementOverlay`（三处投影共用同一归属叠加）、`SessionStoreOrganizationStore`／`SessionStoreProjectCatalogStore`／`SessionStorePlacementStore`（组织状态、项目目录册、会话归属的业务库读写）、`SessionStoreSidebarPreferencesReader`（导入用桌面偏好读取）与三个类型化异常。迁移标记 `session-store-migration.json` 记录迁移标识、库身份、各批状态与来源指纹，并与业务库 `store_meta.migration_id`／`store_identity` 双向绑定（第 5.1 节）。
+- 生产权威切换：`ProjectStore`、`SessionStorePinStore`、`SessionStoreArchiveStore` 按标记在旧文件与业务库之间分派；`SessionStoreReader`、`SessionSummaryBuilder`、`SessionIndexUpdater` 叠加业务库归属，历史 JSONL 归属不再覆盖切换后关系；`SessionIndexStore` 新增归属投影刷新（未变日志零正文扫描也能纠正历史归属）；`SessionIndexReconciler` 在迁移后同步归属投影；`SessionProjectInitializer`／`SessionProjectUnbinder`／`SessionProjectBinding` 在迁移后只写业务库、不追加 JSONL 归属、不抢 writer 锁；`SessionStoreWriter` 首次提交把归属写入业务库并停止写 ownership 记录；`SessionStoreOperations` 补齐业务库模式下的会话/项目删除清理。`ProjectCatalogMonitor` 在业务库模式下每轮直接读取业务库。未迁移 store 保持原文件语义（兼容期），迁移进行中或标记损坏时生产读写拒绝而不回退旧文件。旧文件在全部批次切换前保持原样，迁移后也不会被自动删除。
+- 备份与恢复：SQLite 在线备份（WAL 一致）、完整性检查、schema/身份校验、恢复前保留原库 `session-store.db.pre-restore-<unixms>`、恢复后删除派生索引 `session-index.db*`、拒绝异库备份与未迁移目标、不删除用户备份；迁移完成后的回退策略是"只能按业务备份恢复"，不提供把业务库数据合并回旧 JSON/JSONL 的路径（第 5.4 节）。
+- 标题与桌面偏好：完整恢复改为"最后一条非空名称胜出"，与列表摘要一致，晚到的待生成标记不会清除已保存名称；导入不调用模型、不重写日志、不重复追加标题事件。桌面侧栏仅在迁移后把每 store 组织状态（手动项目/会话顺序、折叠分组）切到业务库，应用级偏好（删除确认等）继续留在 `desktop-sidebar.json`，保存时为已迁移 store 投影为空组织字段且保留其他偏好；阻塞状态提示迁移/恢复并不写入。
+- CLI 新增 `session store status|migrate|backup|verify|restore`（迁移与恢复要求 `--yes`，路径须为绝对路径），离线 smoke 增加业务库建库、导入、读写、重开、备份与恢复步骤。
+- 测试（Core `TinyHarness.Tests`）：新增 `SessionStoreMigrationTests` 18 项（三批导入、重复导入无操作、重复置顶合并、中断续作保留已切换批次、崩溃窗口幂等、身份接管、标记损坏、完成后库缺失/替换/损坏、切换后旧来源改写警告、非法旧 ID 拒绝且库保持待切换、损坏 JSONL 留待初始化、悬挂项目引用丢弃、租约占用、取消重试、无效侧栏路径、缺目录册）、`SessionStoreBackupTests` 12 项（备份校验、拒绝覆盖、恢复原库副本与索引删除、异库/缺失/损坏备份拒绝、未迁移目标拒绝）、`SessionStoreBusinessAuthorityTests` 15 项（权威模式与阻塞拒绝、三个领域存储读写、归属三态、历史归属不覆盖、项目目录册修订与删除外键、初始化/并发插入/解绑/删除业务库路径、writer 首次提交与恢复绑定、旧来源读取绕过阻塞、标题一致语义）。Desktop 新增 `DesktopStoreOrganizationTests` 3 项（迁移后读业务库折叠状态、切换折叠只写业务库并清空文件组织字段、未迁移 store 保持文件权威）。
+- 构建与定向回归：`TinyHarness.Core`／`TinyHarness.Desktop` Debug 构建 0 警告 0 错误；新增迁移/备份 30/30、权威 15/15、Desktop 组织 3/3 通过；既有持久化定向回归（数据库/边界/Project/Pin/Archive/Initializer/Unbinder/Binding）133 通过 0 失败 2 跳过；既有索引与恢复定向回归 104/104 通过；Desktop 既有定向回归 97/97 通过；`TinyHarness.Tests` 全量 **2270 通过／0 失败／10 跳过（2280 总计，跳过项为链接权限、网络隔离与基准测量等环境相关用例）**；`TinyHarness.Desktop.Tests` 全量 **421 通过／0 失败**（一次全量运行中 `DesktopBlankConversationTests.ExplicitHumanApprovalSelectionProtectsAnOtherwisePristineNextDraft` 出现过一次与本阶段无关的集合枚举竞态，该测试单独重跑与全量重跑均通过，按既有偶发问题记录，未改动该测试或放宽断言）。
+- 离线 smoke（Debug 构建产物）：CLI `smoke --config <repo>/tinyharness.json` 在隔离 TEMP/APPDATA/LOCALAPPDATA 下 PASS（17 steps／16 tool executions），输出含 `session store: verified migration, read/write, reopen, backup and restore`；Desktop `--offline-smoke` 同条件 PASS，输出含 `session-store=migrated+readwrite+restore`。
+- NativeAOT 与产物 smoke（本阶段新增业务 schema 的真实执行证明）：`dotnet publish TinyHarness.Cli/TinyHarness.Cli.csproj -c Release -r win-x64 --self-contained true` 与 Desktop 同名发布命令均成功，退出码 0，无编译／trimming／AOT 警告行（Desktop 发布时 ILC 打印两条 Avalonia Win32 COM 内部方法的 "will always throw" 信息性诊断，属既有第三方库内容，不来自本阶段代码）。从仓库外工作目录、隔离 TEMP／APPDATA／LOCALAPPDATA 运行**发布产物**：CLI `smoke --config <repo>/tinyharness.json` PASS（17 steps／16 tool executions），并输出 `session store: verified migration, read/write, reopen, backup and restore`；Desktop `TinyHarness.Desktop.exe --offline-smoke` PASS，并输出 `session-store=migrated+readwrite+restore`。发布产物中实际执行了业务库建库、旧来源导入、组织状态读写、重开、备份校验与恢复，不是只跑旧索引 smoke。日志保留在 `artifacts/s4-20261115/`（`cli-aot-smoke.log`、`desktop-aot-smoke.log`、全量测试日志）；发布输出临时放在 `.tmp/aot-s4/` 并在验证后删除。
+- 未验证／未执行：未对真实用户 store 运行迁移（本阶段禁止），未删除任何旧文件或备份；未在真实 GUI 中做迁移/恢复交互验收；未做双进程真实旧写者争用、断电与磁盘只读的现场实测（仅有租约占用、来源指纹、取消与损坏夹具覆盖）；`UpgradeAsync` 的跨版本真实旧结构夹具仍缺失（本阶段无新 schema 版本）；S5 的删除墓碑／可恢复删除未实施。
 
 2026-11-15，S3 schema 冻结与建库／升级基础（含评审修复）：
 
