@@ -152,6 +152,10 @@ public sealed class SessionListProjection
     {
         var entries = new List<SessionListScanEntry>();
         if (!Directory.Exists(StoreDirectory)) return entries;
+        // 迁移完成后列表归属以业务库为准：降级扫描同样叠加归属，避免展示历史 JSONL 归属；
+        // 迁移进行中或标记损坏时按类型化异常拒绝，不回退日志推导值。
+        var placements = await SessionPlacementOverlay.LoadAsync(StoreDirectory, cancellationToken)
+                                                   .ConfigureAwait(false);
         foreach (var path in Directory.EnumerateFiles(StoreDirectory, "*" + SessionStoreWriter.LogFileSuffix))
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -159,7 +163,8 @@ public sealed class SessionListProjection
             try
             {
                 var build = await SessionSummaryBuilder
-                                 .BuildAsync(StoreDirectory, sessionId, cancellationToken).ConfigureAwait(false);
+                                 .BuildAsync(StoreDirectory, sessionId, placements, cancellationToken)
+                                 .ConfigureAwait(false);
                 entries.Add(build is null
                                 ? new SessionListScanEntry(sessionId, null,
                                                            $"Session log '{sessionId}' disappeared before it could be read.")

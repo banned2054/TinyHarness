@@ -92,7 +92,8 @@ public sealed class SessionIndexUpdater
             await UpdateEntryAsync(batch, logLengthBeforeBatch, cancellationToken).ConfigureAwait(false);
             LastFailure = null;
         }
-        catch (Exception ex) when (ex is SessionIndexException or SessionStoreException or IOException
+        catch (Exception ex) when (ex is SessionIndexException or SessionStoreException
+                                      or SessionStoreMigrationException or IOException
                                       or UnauthorizedAccessException or NotSupportedException or PathTooLongException)
         {
             LastFailure = ex.Message;
@@ -172,13 +173,19 @@ public sealed class SessionIndexUpdater
             projection.Apply(batch);
             var advanced = projection.ToSummary(batch.Sequence,
                                                 seeded.IndexedBytes + (sourceLength - logLengthBeforeBatch));
+            // 迁移后归属以业务库为准：增量批次可能不含归属记录，必须单独取当前归属覆盖日志推导值。
+            // After migration the business database owns placement: an incremental batch may carry no ownership
+            // record, so the current placement must override the log-derived value separately.
+            advanced = await SessionPlacementOverlay.ApplyAsync(_indexStore.StoreDirectory, sessionId, advanced,
+                                                                cancellationToken).ConfigureAwait(false);
             await _indexStore.TryAdvanceFromCommitAsync(advanced, sourceLength, sourceModified, cancellationToken)
                              .ConfigureAwait(false);
             return;
         }
 
         var build = await SessionSummaryBuilder
-                         .BuildAsync(_indexStore.StoreDirectory, sessionId, cancellationToken)
+                         .BuildAsync(_indexStore.StoreDirectory, sessionId, await LoadPlacementsAsync(cancellationToken)
+                                                                        .ConfigureAwait(false), cancellationToken)
                          .ConfigureAwait(false);
         if (build is null)
         {
@@ -189,4 +196,17 @@ public sealed class SessionIndexUpdater
         await _indexStore.WriteSummaryAsync(build.Summary, build.SourceLength, build.SourceModifiedUtc,
                                             cancellationToken).ConfigureAwait(false);
     }
+
+    /// <summary>
+    ///     <para>
+    ///         读取全量业务库归属供整份扫描分支叠加；未迁移时返回 null，迁移进行中或标记损坏时按类型化异常拒绝。
+    ///     </para>
+    ///     <para>
+    ///         Loads the full business placement for the full-scan branch; null while not migrated, and a running
+    ///         migration or a damaged marker is refused with a typed exception.
+    ///     </para>
+    /// </summary>
+    private Task<IReadOnlyDictionary<string, SessionStorePlacement>?> LoadPlacementsAsync(
+        CancellationToken cancellationToken) =>
+        SessionPlacementOverlay.LoadAsync(_indexStore.StoreDirectory, cancellationToken);
 }

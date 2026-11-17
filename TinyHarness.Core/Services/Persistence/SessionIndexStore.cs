@@ -569,6 +569,84 @@ public sealed class SessionIndexStore
     }
 
     /// <summary>
+    ///     <para>
+    ///         用业务库归属刷新索引投影：健康行的归属列改为业务库值，未出现在业务库的会话回到"尚未初始化"。
+    ///         索引只是可重建投影，本操作不写回业务库，也不改写会话日志。
+    ///     </para>
+    ///     <para>
+    ///         Refreshes the index placement projection from the business database: healthy rows take the business
+    ///         values, and sessions absent from the business database return to "not initialized". The index is only a
+    ///         rebuildable projection; this operation writes neither the business database nor the session logs.
+    ///     </para>
+    /// </summary>
+    public async Task SyncPlacementProjectionAsync(
+        IReadOnlyDictionary<string, SessionStorePlacement> placements, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(placements);
+        await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
+        var           command      = connection.CreateCommand();
+        command.CommandText = "SELECT id, project_id, assignment_state FROM session_summary WHERE entry_state != $failed;";
+        command.Parameters.AddWithValue("$failed", (long)SessionIndexEntryState.Failed);
+        var changes = new List<(string Id, string? ProjectId, long State)>();
+        await using (var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false))
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                var id = reader.GetString(0);
+                if (!placements.TryGetValue(id, out var placement))
+                {
+                    if (reader.IsDBNull(1) && reader.GetInt64(2) == (long)SessionProjectAssignmentState.PendingInitialization)
+                        continue;
+                    changes.Add((id, null, (long)SessionProjectAssignmentState.PendingInitialization));
+                    continue;
+                }
+
+                var projectId = placement.State == SessionProjectAssignmentState.Project ? placement.ProjectId : null;
+                var state     = (long)placement.State;
+                if (!reader.IsDBNull(1) && reader.GetString(1) != projectId) changes.Add((id, projectId, state));
+                else if (reader.IsDBNull(1) != (projectId is null)) changes.Add((id, projectId, state));
+                else if (reader.GetInt64(2) != state) changes.Add((id, projectId, state));
+            }
+
+        if (changes.Count == 0) return;
+        await ExecuteCoreAsync(async () =>
+        {
+            await using var transaction = await BeginWriteAsync(connection, cancellationToken).ConfigureAwait(false);
+            foreach (var change in changes)
+            {
+                var update = connection.CreateCommand();
+                update.Transaction = transaction;
+                update.CommandText = "UPDATE session_summary SET project_id = $project_id, assignment_state = $state " +
+                                     "WHERE id = $id;";
+                update.Parameters.AddWithValue("$project_id", (object?)change.ProjectId ?? DBNull.Value);
+                update.Parameters.AddWithValue("$state", change.State);
+                update.Parameters.AddWithValue("$id", change.Id);
+                await update.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            }
+
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        }).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    ///     <para>更新一个会话的归属投影；索引缺失或不可用时由调用方跳过，不作为业务写入的失败。</para>
+    ///     <para>Updates one session's placement projection; callers skip it when the index is missing or unusable, and it is never a business-write failure.</para>
+    /// </summary>
+    public async Task SetPlacementProjectionAsync(
+        string sessionId, string? projectId, SessionProjectAssignmentState state,
+        CancellationToken cancellationToken)
+    {
+        sessionId = NormalizeSessionId(sessionId);
+        await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
+        var command = connection.CreateCommand();
+        command.CommandText = "UPDATE session_summary SET project_id = $project_id, assignment_state = $state " +
+                              "WHERE id = $id;";
+        command.Parameters.AddWithValue("$project_id", (object?)projectId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$state", (long)state);
+        command.Parameters.AddWithValue("$id", sessionId);
+        await ExecuteCoreAsync(() => command.ExecuteNonQueryAsync(cancellationToken)).ConfigureAwait(false);
+    }
+
+    /// <summary>
     ///     <para>移除一个条目；来源日志已删除且索引不再引用它时使用。</para>
     ///     <para>Removes one entry; used when the source log is gone and the index should stop referencing it.</para>
     /// </summary>

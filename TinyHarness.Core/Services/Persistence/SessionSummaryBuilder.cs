@@ -83,8 +83,24 @@ public static class SessionSummaryBuilder
     ///         surfacing as the existing scan exceptions.
     ///     </para>
     /// </summary>
+    public static Task<SessionSummaryBuild?> BuildAsync(
+        string directory, string sessionId, CancellationToken cancellationToken) =>
+        BuildAsync(directory, sessionId, null, cancellationToken);
+
+    /// <summary>
+    ///     <para>
+    ///         严格扫描整份日志并构建摘要，并用迁移后业务库的归属覆盖日志推导的归属；归属行缺失表示尚未初始化，
+    ///         空项目表示明确无项目。传入 null 时不叠加（尚未迁移）。
+    ///     </para>
+    ///     <para>
+    ///         Strictly scans one log into a summary and overlays the post-migration business placement on the
+    ///         log-derived ownership: a missing placement row means not initialized and a null project means explicitly
+    ///         no project. A null overlay keeps the log-derived ownership (not migrated).
+    ///     </para>
+    /// </summary>
     public static async Task<SessionSummaryBuild?> BuildAsync(
-        string directory, string sessionId, CancellationToken cancellationToken)
+        string directory, string sessionId, IReadOnlyDictionary<string, SessionStorePlacement>? placements,
+        CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(directory);
         if (!SessionStorePaths.IsValidSessionId(sessionId))
@@ -104,8 +120,43 @@ public static class SessionSummaryBuilder
                                                          projection.Apply(batch);
                                                          return ValueTask.CompletedTask;
                                                      }, cancellationToken).ConfigureAwait(false);
-        return new SessionSummaryBuild(projection.ToSummary(scan.LastSequence, scan.BytesRead), sourceLength,
-                                       scan.BytesRead, sourceModified);
+        var summary = projection.ToSummary(scan.LastSequence, scan.BytesRead);
+        if (placements is not null) summary = ApplyPlacement(summary, sessionId, placements);
+        return new SessionSummaryBuild(summary, sourceLength, scan.BytesRead, sourceModified);
+    }
+
+    /// <summary>
+    ///     <para>用业务库归属覆盖摘要中的归属字段；缺行为尚未初始化，历史日志归属不再生效。</para>
+    ///     <para>Overlays the business placement fields on a summary; a missing row is not initialized and historical log ownership no longer applies.</para>
+    /// </summary>
+    private static SessionSummary ApplyPlacement(
+        SessionSummary summary, string sessionId, IReadOnlyDictionary<string, SessionStorePlacement> placements)
+    {
+        if (!placements.TryGetValue(sessionId, out var placement))
+            return summary with
+            {
+                ProjectId              = null,
+                ProjectAssignmentState = SessionProjectAssignmentState.PendingInitialization
+            };
+
+        return placement.State switch
+        {
+            SessionProjectAssignmentState.NoProject => summary with
+            {
+                ProjectId              = null,
+                ProjectAssignmentState = SessionProjectAssignmentState.NoProject
+            },
+            SessionProjectAssignmentState.Project => summary with
+            {
+                ProjectId              = placement.ProjectId,
+                ProjectAssignmentState = SessionProjectAssignmentState.Project
+            },
+            _ => summary with
+            {
+                ProjectId              = null,
+                ProjectAssignmentState = SessionProjectAssignmentState.PendingInitialization
+            }
+        };
     }
 
     /// <summary>

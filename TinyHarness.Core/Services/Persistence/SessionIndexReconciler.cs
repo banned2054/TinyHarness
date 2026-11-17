@@ -234,6 +234,30 @@ public sealed class SessionIndexReconciler
         var rows = (await _indexStore.ListRowsAsync(cancellationToken).ConfigureAwait(false))
            .ToDictionary(row => row.Id, StringComparer.Ordinal);
 
+        // 迁移完成后归属以业务库为准：重建摘要时就按业务库覆盖，避免本轮内先写入历史 JSONL 归属
+        // 再由循环后的投影同步纠正。索引是可重建投影，阻塞状态不在此抛出，交由上层提示迁移或恢复。
+        // After migration the business database owns placement: rebuilds overlay it up front instead of writing
+        // historical JSONL ownership first and correcting it in the post-loop projection sync. The index is a
+        // rebuildable projection, so a blocked state is not thrown here; upper layers surface it.
+        IReadOnlyDictionary<string, SessionStorePlacement>? placements = null;
+        try
+        {
+            if (await SessionStoreAuthority.IsMigratedAsync(_indexStore.StoreDirectory, cancellationToken)
+                                            .ConfigureAwait(false))
+                placements = await SessionStorePlacementStore.LoadAllAsync(_indexStore.StoreDirectory, cancellationToken)
+                                                             .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex) when (ex is SessionStoreMigrationException or SessionStoreException or IOException
+                                      or UnauthorizedAccessException)
+        {
+            if (notes.Count < MaxNotes)
+                notes.Add($"Placement overlay left out of this round: {ex.Message}");
+        }
+
         foreach (var path in Directory.EnumerateFiles(_indexStore.StoreDirectory,
                                                       "*" + SessionStoreWriter.LogFileSuffix))
         {
@@ -292,7 +316,7 @@ public sealed class SessionIndexReconciler
                 }
 
                 var build = await SessionSummaryBuilder
-                                 .BuildAsync(_indexStore.StoreDirectory, sessionId, cancellationToken)
+                                 .BuildAsync(_indexStore.StoreDirectory, sessionId, placements, cancellationToken)
                                  .ConfigureAwait(false);
                 if (build is null)
                 {
@@ -381,6 +405,27 @@ public sealed class SessionIndexReconciler
             // 归档来源不可读或投影写入失败：既有投影保持不变，不以本轮结果当作权威覆盖。
             if (notes.Count < MaxNotes)
                 notes.Add($"Archive projection left unchanged: {ex.Message}");
+        }
+
+        // 迁移完成后归属以业务库为准：未变日志不会重扫，必须单独把归属列刷新到业务库值，
+        // 否则索引行会继续显示日志里的历史归属。
+        try
+        {
+            if (await SessionStoreAuthority.IsMigratedAsync(_indexStore.StoreDirectory, cancellationToken)
+                                              .ConfigureAwait(false))
+            {
+                var currentPlacements = await SessionStorePlacementStore
+                                              .LoadAllAsync(_indexStore.StoreDirectory, cancellationToken)
+                                              .ConfigureAwait(false);
+                await _indexStore.SyncPlacementProjectionAsync(currentPlacements, cancellationToken)
+                                 .ConfigureAwait(false);
+            }
+        }
+        catch (Exception ex) when (ex is SessionStoreMigrationException or SessionIndexException or IOException
+                                      or UnauthorizedAccessException)
+        {
+            if (notes.Count < MaxNotes)
+                notes.Add($"Placement projection left unchanged: {ex.Message}");
         }
 
         return new SessionIndexReconcileReport(availability, sourceCount, unchanged, rebuilt, removed, markedFailed,

@@ -1,6 +1,7 @@
 using System.Text.Json;
 using TinyHarness.Core.Exceptions;
 using TinyHarness.Core.Models.Agent;
+using TinyHarness.Core.Models.ChatCompletions;
 using TinyHarness.Core.Models.Configuration;
 using TinyHarness.Core.Models.Context;
 using TinyHarness.Core.Models.Persistence;
@@ -281,6 +282,131 @@ public class SessionIndexUpdaterTests
 
         Assert.That(updater.LastFailure, Is.Not.Null);
         await Assert.ThrowsAsync<SessionIndexException>(() => index.GetRowAsync(sessionId, CancellationToken.None));
+    }
+
+    /// <summary>
+    ///     <para>
+    ///         迁移后的索引更新以业务库归属为准：新会话首次提交不再写 JSONL 归属，整份扫描分支与增量分支都必须
+    ///         投影业务库值，而不是把已归属会话记成尚未初始化。
+    ///     </para>
+    ///     <para>
+    ///         After migration the index updater projects business placement: a new session's first commit writes no
+    ///         JSONL ownership, and both the full-scan and incremental branches must project the business value instead
+    ///         of recording an assigned session as not initialized.
+    ///     </para>
+    /// </summary>
+    [Test]
+    public async Task Updater_MigratedStore_ProjectsBusinessPlacementInBothBranches()
+    {
+        using var dir       = new TestTempDir();
+        using var workspace = new TestTempDir();
+        var       index     = new SessionIndexStore(dir.Root);
+        await index.InitializeAsync(CancellationToken.None);
+        await CreateMigratedStoreAsync(dir.Root);
+        var project = await SessionStoreProjectCatalogStore.GetOrCreateAsync(dir.Root, workspace.Root, null,
+                                                                            CancellationToken.None);
+        var updater = new SessionIndexUpdater(index);
+
+        // 整份扫描分支：新会话首次提交先写业务库归属，日志里没有归属记录。
+        var client = new FakeChatClient();
+        client.Enqueue(FakeChatClient.Text("answer one"));
+        string sessionId;
+        using (var host = new MigratedSessionHost(dir.Root, workspace.Root, project.Id, client, updater))
+        {
+            await host.Host.SubmitTurnAsync("migrated question", CancellationToken.None);
+            sessionId = host.Host.Session.Id;
+        }
+
+        Assert.That(updater.LastFailure, Is.Null);
+        var log = await File.ReadAllTextAsync(Path.Combine(dir.Root, sessionId + SessionStoreWriter.LogFileSuffix),
+                                              CancellationToken.None);
+        Assert.That(log, Does.Not.Contain("project-binding"), "迁移后日志不得携带归属记录。");
+        var row = await index.GetRowAsync(sessionId, CancellationToken.None);
+        Assert.That(row!.Summary!.ProjectAssignmentState, Is.EqualTo(SessionProjectAssignmentState.Project),
+                    "整份扫描分支必须叠加业务库归属。");
+        Assert.That(row.Summary.ProjectId, Is.EqualTo(project.Id));
+
+        // 增量分支：从既有健康行推进摘要，批次不含归属记录，仍须保持业务库归属。
+        using (var writer =
+               await SessionStoreWriter.OpenExistingAsync(dir.Root, sessionId, null, CancellationToken.None,
+                                                          updater.HandleBatchCommittedAsync))
+            await writer.AppendRecordsAsync(
+            [
+                new SessionLogRecord(string.Empty, "session-title",
+                                     JsonSerializer.SerializeToElement(
+                                      new SessionTitle { Name = "renamed", Pending = false },
+                                      SessionLogJsonContext.Default.SessionTitle))
+            ], CancellationToken.None);
+
+        Assert.That(updater.LastFailure, Is.Null);
+        var advanced = await index.GetRowAsync(sessionId, CancellationToken.None);
+        Assert.That(advanced!.Summary!.Title, Is.EqualTo("renamed"));
+        Assert.That(advanced.Summary.ProjectAssignmentState, Is.EqualTo(SessionProjectAssignmentState.Project),
+                    "增量分支必须叠加业务库归属。");
+        Assert.That(advanced.Summary.ProjectId, Is.EqualTo(project.Id));
+    }
+
+    /// <summary>
+    ///     <para>构造一个已完成迁移的 store：业务库建库、写入库身份与迁移标识，并写下三批已切换的标记。</para>
+    ///     <para>Builds a fully migrated store: creates the business database, records its identity and migration id, and writes the marker with all three batches switched.</para>
+    /// </summary>
+    private static async Task CreateMigratedStoreAsync(string storeDirectory)
+    {
+        var database = new SessionStoreDatabase(storeDirectory);
+        await database.InitializeAsync(CancellationToken.None);
+        var migrationId = Guid.NewGuid().ToString("N");
+        string? identity;
+        await using (var connection = await database.OpenExistingForInternalUseAsync(CancellationToken.None))
+        {
+            identity = await SessionStoreDatabase.ReadStoreIdentityAsync(connection, CancellationToken.None);
+            await SessionStoreDatabase.WriteMetaValueAsync(connection, null, "migration_id", migrationId,
+                                                           CancellationToken.None);
+        }
+
+        var now    = DateTimeOffset.UtcNow;
+        var marker = SessionStoreMigrationMarker.Start(migrationId, now)
+                                                .WithStoreIdentity(
+                                                                   identity ?? throw new InvalidOperationException(
+                                                                       "The test database has no identity."), now)
+                                                .WithBatchSwitched(SessionStoreMigrationBatch.OrganizationState,
+                                                                   "org-fingerprint", now)
+                                                .WithBatchSwitched(SessionStoreMigrationBatch.ProjectCatalog,
+                                                                   "projects-fingerprint", now)
+                                                .WithBatchSwitched(SessionStoreMigrationBatch.SessionPlacement,
+                                                                   "placement-fingerprint", now);
+        await SessionStoreMigration.WriteMarkerAsync(storeDirectory, marker, CancellationToken.None);
+    }
+
+    /// <summary>
+    ///     <para>构造带业务库归属的会话宿主，供索引更新器测试使用；释放时一并释放宿主与写入端。</para>
+    ///     <para>Builds a session host carrying a business placement for index-updater tests, releasing the host and writer on dispose.</para>
+    /// </summary>
+    private sealed class MigratedSessionHost : IDisposable
+    {
+        public MigratedSessionHost(string store, string workspace, string projectId, FakeChatClient client,
+                                   SessionIndexUpdater updater)
+        {
+            var session = new ChatSession(Guid.NewGuid().ToString("N"), workspace, Identity, null, projectId,
+                                          SessionProjectAssignmentState.Project);
+            var context = new ConversationContext(new ContextOptions());
+            context.Append(ChatMessage.System("You are a test harness."));
+            Writer = new SessionStoreWriter(store, session.Id, null, updater.HandleBatchCommittedAsync);
+            Host = new ChatSessionHost(session, context,
+                                       new AgentOptions
+                                       {
+                                           Model = "offline", MaxAgentSteps = 10, DefaultToolTimeoutSeconds = 30
+                                       }, client, new ToolRegistry([]), "You are a test harness.",
+                                       sessionWriter : Writer);
+        }
+
+        public ChatSessionHost    Host   { get; }
+        public SessionStoreWriter Writer { get; }
+
+        public void Dispose()
+        {
+            Host.Dispose();
+            Writer.Dispose();
+        }
     }
 
     private static ChatSessionHost NewHost(string store, FakeChatClient client, SessionIndexUpdater? updater = null) =>

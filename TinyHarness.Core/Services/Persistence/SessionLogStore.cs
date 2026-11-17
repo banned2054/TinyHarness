@@ -81,6 +81,7 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
     private const    int SharingViolationHResult = unchecked((int)0x80070020);
     private const    int LockViolationHResult = unchecked((int)0x80070021);
     private readonly Func<SessionLogBatch, long, CancellationToken, ValueTask>? _batchCommitted;
+    private readonly string _directory;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly IReadOnlyDictionary<string, string>? _knownSecrets;
 
@@ -106,6 +107,9 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
     private string?                       _trackedTurnId;
     private int                           _trackedTurnRunCount;
 
+    // 迁移完成后归属以业务库为准：日志不再写入归属记录，首次提交前把会话归属写入业务库。
+    private bool? _usesBusinessPlacement;
+
     public SessionStoreWriter(
         string directory, string sessionId, IReadOnlyDictionary<string, string>? knownSecrets = null,
         Func<SessionLogBatch, long, CancellationToken, ValueTask>? batchCommitted = null)
@@ -125,6 +129,7 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
                                         nameof(sessionId));
 
         Directory.CreateDirectory(directory);
+        _directory      = Path.GetFullPath(directory);
         SessionId       = sessionId.ToLowerInvariant();
         SnapshotPath    = Path.Combine(directory, SessionId + LogFileSuffix);
         _knownSecrets   = knownSecrets;
@@ -232,6 +237,10 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
             if (CommitSequence == 0)
                 throw new
                     SessionStoreException("The session identity batch must be committed before appending run records.");
+            if (await UsesBusinessPlacementAsync(cancellationToken).ConfigureAwait(false) &&
+                records.Any(record => record.Kind is "project-binding" or "project-assignment" or "project-unassignment"))
+                throw new
+                    SessionStoreException($"Session '{SessionId}' ownership is stored in the business database after migration; legacy ownership records must not be appended to the journal.");
 
             var     sequence            = CommitSequence + 1;
             var     normalized          = new SessionLogRecord[records.Count];
@@ -409,6 +418,56 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
         }
     }
 
+    /// <summary>
+    ///     <para>
+    ///         解析会话 store 是否已迁移到业务库；业务库模式下归属不再写入 JSONL。阻塞状态按类型化异常拒绝，
+    ///         缓存只绑定当前 writer 的生命周期。
+    ///     </para>
+    ///     <para>
+    ///         Resolves whether the session store has migrated to the business database; in database mode ownership is
+    ///         no longer written to JSONL. A blocked state is refused with a typed exception, and the cached value is
+    ///         bound to this writer's lifetime only.
+    ///     </para>
+    /// </summary>
+    private async Task<bool> UsesBusinessPlacementAsync(CancellationToken cancellationToken)
+    {
+        if (_usesBusinessPlacement is { } cached) return cached;
+        var resolution = await SessionStoreAuthority.ResolveAsync(_directory, cancellationToken).ConfigureAwait(false);
+        SessionStoreAuthority.ThrowIfBlocked(_directory, resolution);
+        _usesBusinessPlacement = resolution.Mode == SessionStoreMode.Migrated;
+        return _usesBusinessPlacement.Value;
+    }
+
+    /// <summary>
+    ///     <para>
+    ///         把会话当前归属写入业务库；日志提交前先写归属行，失败时本次提交不写日志并抛出带上下文的异常。
+    ///     </para>
+    ///     <para>
+    ///         Writes the session's current placement to the business database before the journal commit; when this
+    ///         fails the journal batch is not written and an exception with context is thrown.
+    ///     </para>
+    /// </summary>
+    private async Task PersistPlacementAsync(ChatSession session, CancellationToken cancellationToken)
+    {
+        try
+        {
+            if (session.ProjectAssignmentState == SessionProjectAssignmentState.Project &&
+                session.ProjectId is { } projectId)
+                await SessionStorePlacementStore.SetProjectAsync(_directory, SessionId, projectId, cancellationToken)
+                                                .ConfigureAwait(false);
+            else if (session.ProjectAssignmentState == SessionProjectAssignmentState.NoProject)
+                await SessionStorePlacementStore.SetNoProjectAsync(_directory, SessionId, cancellationToken)
+                                                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is SessionStoreMigrationException or SessionStoreException
+                                       or IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            throw new SessionStoreException(
+                                            $"Session '{SessionId}' placement could not be written to the business database: {ex.Message}",
+                                            ex);
+        }
+    }
+
     public void Dispose()
     {
         _logStream.Dispose();
@@ -442,7 +501,15 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
         try
         {
             if (_poisoned) throw PoisonedException();
-            if (CommitSequence > 0 &&
+            var usesBusinessPlacement = await UsesBusinessPlacementAsync(cancellationToken)
+                                              .ConfigureAwait(false);
+            // 迁移完成后归属只写业务库：新会话首次提交前先落归属行，日志不再携带归属记录。
+            if (usesBusinessPlacement &&
+                CommitSequence == 0 &&
+                session.ProjectAssignmentState != SessionProjectAssignmentState.PendingInitialization)
+                await PersistPlacementAsync(session, cancellationToken).ConfigureAwait(false);
+            if (!usesBusinessPlacement &&
+                CommitSequence > 0 &&
                 (!string.Equals(session.ProjectId, _projectId, StringComparison.Ordinal) ||
                  session.ProjectAssignmentState != _projectAssignmentState))
                 throw new
@@ -472,14 +539,17 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
             {
                 Add("identity",
                     new SessionLogIdentity(SessionId, session.WorkspaceRoot, session.InitialModel, session.CreatedUtc));
-                // 初始归属随身份批次一次提交，不先请求模型再补写。
-                if (session.ProjectId is { } initialProjectId)
-                    Add("project-binding",
-                        new SessionLogProjectBinding(SessionLogProjectBinding.SchemaName, initialProjectId));
-                else if (session.ProjectAssignmentState == SessionProjectAssignmentState.NoProject)
-                    Add("project-assignment",
-                        new SessionLogProjectAssignment(SessionLogProjectAssignment.SchemaName,
-                                                        SessionLogProjectAssignment.NoProject));
+                // 初始归属随身份批次一次提交，不先请求模型再补写；业务库模式下归属已由业务库承载。
+                if (!usesBusinessPlacement)
+                {
+                    if (session.ProjectId is { } initialProjectId)
+                        Add("project-binding",
+                            new SessionLogProjectBinding(SessionLogProjectBinding.SchemaName, initialProjectId));
+                    else if (session.ProjectAssignmentState == SessionProjectAssignmentState.NoProject)
+                        Add("project-assignment",
+                            new SessionLogProjectAssignment(SessionLogProjectAssignment.SchemaName,
+                                                            SessionLogProjectAssignment.NoProject));
+                }
             }
 
             var modelSelectionCount = PersistedModelSelectionCount;
@@ -1063,6 +1133,65 @@ public static class SessionStoreReader
     public static async Task<PersistedSession?> ReadAsync(
         string directory, string sessionId, CancellationToken cancellationToken)
     {
+        var persisted  = await ReadLogAsync(directory, sessionId, cancellationToken).ConfigureAwait(false);
+        var placements = await SessionPlacementOverlay.LoadAsync(directory, cancellationToken).ConfigureAwait(false);
+        return SessionPlacementOverlay.Apply(persisted, placements);
+    }
+
+    /// <summary>
+    ///     <para>
+    ///         只读取日志自身的严格投影，不解析迁移权威、不叠加业务库归属；仅迁移导入器用它读取仍以旧文件为权威的
+    ///         来源，生产调用方一律走 <see cref="ReadAsync" />。
+    ///     </para>
+    ///     <para>
+    ///         Reads only the log's own strict projection without resolving the migration authority or overlaying the
+    ///         business placement; only the migration importer uses it to read sources still authoritative as legacy
+    ///         files, while every production caller goes through <see cref="ReadAsync" />.
+    ///     </para>
+    /// </summary>
+    internal static Task<PersistedSession?> ReadLogProjectionAsync(
+        string directory, string sessionId, CancellationToken cancellationToken) =>
+        ReadLogAsync(directory, sessionId, cancellationToken);
+
+    public static async Task<IReadOnlyList<SessionStoreEntry>> ListAsync(
+        string directory, CancellationToken cancellationToken)
+    {
+        if (!Directory.Exists(directory)) return [];
+        var placements = await SessionPlacementOverlay.LoadAsync(directory, cancellationToken).ConfigureAwait(false);
+        var entries    = new List<SessionStoreEntry>();
+        foreach (var path in Directory.EnumerateFiles(directory, "*" + SessionStoreWriter.LogFileSuffix))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var id = Path.GetFileName(path)[..^SessionStoreWriter.LogFileSuffix.Length];
+            try
+            {
+                var session = SessionPlacementOverlay.Apply(
+                                                            await ReadLogAsync(directory, id, cancellationToken)
+                                                               .ConfigureAwait(false),
+                                                            placements);
+                entries.Add(new SessionStoreEntry(id, session, null));
+            }
+            catch (SessionStoreException ex)
+            {
+                entries.Add(new SessionStoreEntry(id, null, ex.Message));
+            }
+        }
+
+        return entries.OrderByDescending(e => e.Session?.UpdatedUtc ?? DateTimeOffset.MinValue).ToArray();
+    }
+
+    /// <summary>
+    ///     <para>
+    ///         读取一份日志的严格投影，不叠加业务库归属；缺失返回 null，损坏与超限按既有异常抛出。
+    ///     </para>
+    ///     <para>
+    ///         Reads one log's strict projection without the business-database placement overlay; null when absent, with
+    ///         damage and size violations surfacing as the existing exceptions.
+    ///     </para>
+    /// </summary>
+    private static async Task<PersistedSession?> ReadLogAsync(
+        string directory, string sessionId, CancellationToken cancellationToken)
+    {
         ArgumentException.ThrowIfNullOrWhiteSpace(directory);
         if (!SessionStorePaths.IsValidSessionId(sessionId))
             throw new SessionStoreException($"'{sessionId}' is not a valid session id.");
@@ -1084,29 +1213,6 @@ public static class SessionStoreReader
                                                          return ValueTask.CompletedTask;
                                                      }, cancellationToken).ConfigureAwait(false);
         return builder.Build(scan.LastSequence);
-    }
-
-    public static async Task<IReadOnlyList<SessionStoreEntry>> ListAsync(
-        string directory, CancellationToken cancellationToken)
-    {
-        if (!Directory.Exists(directory)) return [];
-        var entries = new List<SessionStoreEntry>();
-        foreach (var path in Directory.EnumerateFiles(directory, "*" + SessionStoreWriter.LogFileSuffix))
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            var id = Path.GetFileName(path)[..^SessionStoreWriter.LogFileSuffix.Length];
-            try
-            {
-                var session = await ReadAsync(directory, id, cancellationToken).ConfigureAwait(false);
-                entries.Add(new SessionStoreEntry(id, session, null));
-            }
-            catch (SessionStoreException ex)
-            {
-                entries.Add(new SessionStoreEntry(id, null, ex.Message));
-            }
-        }
-
-        return entries.OrderByDescending(e => e.Session?.UpdatedUtc ?? DateTimeOffset.MinValue).ToArray();
     }
 
     private sealed class ProjectionBuilder(string sessionId, string logPath)
@@ -1164,8 +1270,11 @@ public static class SessionStoreReader
                 switch (record.Kind)
                 {
                     case "session-title" :
-                        _title = Read<SessionTitle>(record.Payload, SessionLogJsonContext.Default.SessionTitle);
-                        _title.Validate();
+                        var title = Read<SessionTitle>(record.Payload, SessionLogJsonContext.Default.SessionTitle);
+                        title.Validate();
+                        // 标题语义与列表摘要一致：最后一条非空名称胜出，待生成标记不清除已保存名称。
+                        // Kept identical to the list summary: the last non-null name wins and pending markers never clear a saved name.
+                        if (title.Name is not null) _title = title;
                         break;
                     case "history" :
                         var history = Read<SessionHistoryItem>(record.Payload,
