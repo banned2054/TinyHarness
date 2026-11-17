@@ -36,7 +36,15 @@ public enum SessionStoreDatabaseStatus
 ///     <para>非可用时的原因说明；可用时为 null。</para>
 ///     <para>The reason when unavailable, or null while available.</para>
 /// </param>
-public sealed record SessionStoreDatabaseAvailability(SessionStoreDatabaseStatus Status, string? Detail)
+/// <param name="Error">
+///     <para>导致失败的底层异常；用于区分锁等待、权限、只读与 IO 失败。可用或仅凭文件属性判定时为 null。</para>
+///     <para>
+///         The underlying exception behind a failure, used to tell lock waits, permissions, read-only media, and IO
+///         failures apart; null while available or when only file attributes established the classification.
+///     </para>
+/// </param>
+public sealed record SessionStoreDatabaseAvailability(
+    SessionStoreDatabaseStatus Status, string? Detail, Exception? Error = null)
 {
     /// <summary>
     ///     <para>可用的单例结果。</para>
@@ -223,6 +231,21 @@ public sealed class SessionStoreDatabase
 
     /// <summary>
     ///     <para>
+    ///         只读检查用的重载：把目录当作普通数据库位置而不是本程序的业务库，因此可用性探测不会补完中断的恢复，
+    ///         也不会为了恢复去申请迁移租约。备份校验用它检查备份目录，避免把用户备份目录当成业务库改写。
+    ///     </para>
+    ///     <para>
+    ///         The read-only-check overload: the directory is treated as an ordinary database location rather than
+    ///         this program's business store, so availability probing neither completes an interrupted restore nor takes
+    ///         the migration lease for one. Backup verification uses it so a user's backup directory is never treated as
+    ///         a business store to be repaired.
+    ///     </para>
+    /// </summary>
+    internal SessionStoreDatabase(string storeDirectory, bool isBusinessStore)
+        : this(storeDirectory) => IsBusinessStore = isBusinessStore;
+
+    /// <summary>
+    ///     <para>
     ///         测试专用：绑定目录并使用给定的迁移清单，用于确定性覆盖"迁移产物结构不符即回滚"。
     ///         生产不经过此重载。
     ///     </para>
@@ -239,6 +262,17 @@ public sealed class SessionStoreDatabase
             throw new ArgumentException("A test migration list must contain at least one version.", nameof(migrations));
         _migrations = migrations;
     }
+
+    /// <summary>
+    ///     <para>
+    ///         该目录是否承载本程序的业务库；为 false 时可用性探测与打开都只按普通数据库处理，不做恢复、不申请租约。
+    ///     </para>
+    ///     <para>
+    ///         Whether the directory carries this program's business store; when false both probing and opening treat it
+    ///         as an ordinary database, without recovery or lease acquisition.
+    ///     </para>
+    /// </summary>
+    private bool IsBusinessStore { get; init; } = true;
 
     /// <summary>
     ///     <para>绑定的 session store 目录（规范化绝对路径）。</para>
@@ -298,6 +332,23 @@ public sealed class SessionStoreDatabase
     /// </remarks>
     public async Task<SessionStoreDatabaseAvailability> GetAvailabilityAsync(CancellationToken cancellationToken)
     {
+        // 必须在读取文件叶子之前补完中断的恢复：替换已提交但记录未清除时，主文件可能就在原地，而日志仍停在隔离名
+        // 下；替换未提交时主文件甚至可能缺失。两种情形若被当成 Missing/Available 处理，都会让调用方基于不完整
+        // 的一代继续。恢复失败时按不可用报告，不穿透成未分类异常。
+        // The interrupted restore must be completed before the file leaf is read: when the replacement committed but
+        // its record was not cleared the main file may be in place while its journal still sits under a quarantined
+        // name, and when it did not commit the main file may even be absent. Treating either as Missing/Available would
+        // let the caller continue on an incomplete generation. A failed recovery reports as unavailable.
+        if (IsBusinessStore)
+            try
+            {
+                await SessionStoreRestoreRecovery.RecoverAsync(StoreDirectory, cancellationToken).ConfigureAwait(false);
+            }
+            catch (SessionStoreBackupException ex)
+            {
+                return new SessionStoreDatabaseAvailability(SessionStoreDatabaseStatus.Failed, ex.Message, ex);
+            }
+
         // 缺失与"无法判定"必须分开：File.Exists 在权限或路径错误时同样返回 false，会把不可读的业务库
         // 报成尚未迁移，从而误导调用方走首次导入。
         var leaf = ReadLeafState(out var leafDetail);
@@ -320,17 +371,17 @@ public sealed class SessionStoreDatabase
         }
         catch (SessionStoreDatabaseException ex) when (IndicatesDamage(ex))
         {
-            return new SessionStoreDatabaseAvailability(SessionStoreDatabaseStatus.Damaged, ex.Message);
+            return new SessionStoreDatabaseAvailability(SessionStoreDatabaseStatus.Damaged, ex.Message, ex);
         }
         catch (SessionStoreDatabaseException ex)
         {
             // 锁等待耗尽、只读、权限与其余运行期失败只说明"现在读不了"，不能据此断言数据已损坏并引导恢复。
-            return new SessionStoreDatabaseAvailability(SessionStoreDatabaseStatus.Failed, ex.Message);
+            return new SessionStoreDatabaseAvailability(SessionStoreDatabaseStatus.Failed, ex.Message, ex);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException
                                       or PathTooLongException)
         {
-            return new SessionStoreDatabaseAvailability(SessionStoreDatabaseStatus.Failed, ex.Message);
+            return new SessionStoreDatabaseAvailability(SessionStoreDatabaseStatus.Failed, ex.Message, ex);
         }
     }
 
@@ -659,7 +710,7 @@ public sealed class SessionStoreDatabase
     ///     <para>读取元数据表中的 schema 版本；行缺失或不是整数时返回 null。</para>
     ///     <para>Reads the schema version from the metadata table; null when the row is missing or not an integer.</para>
     /// </summary>
-    private static Task<int?> ReadSchemaVersionAsync(
+    internal static Task<int?> ReadSchemaVersionAsync(
         SqliteConnection connection, CancellationToken cancellationToken) =>
         ExecuteCoreAsync(async () =>
         {
@@ -703,15 +754,104 @@ public sealed class SessionStoreDatabase
     }
 
     /// <summary>
-    ///     <para>
-    ///         按属性判断叶子状态：缺失与"无法判定"必须区分——<see cref="File.Exists" /> 在权限或路径错误时
-    ///         同样返回 false，会把不可读的业务库报成尚未迁移。
-    ///     </para>
-    ///     <para>
-    ///         Classifies the leaf by attributes: missing and undeterminable must differ, because
-    ///         <see cref="File.Exists" /> also returns false for permission or path errors and would report an
-    ///         unreadable business database as never migrated.
-    ///     </para>
+    ///     <para>供迁移、备份与其他 Core 内部消费者打开已有业务库；启用写配置（WAL、FULL、外键）。</para>
+    ///     <para>Opens an existing business database for migration, backup, and other Core consumers with write configuration (WAL, FULL, foreign keys).</para>
+    /// </summary>
+    internal Task<SqliteConnection> OpenExistingForInternalUseAsync(CancellationToken cancellationToken) =>
+        OpenAsync(SqliteOpenMode.ReadWrite, true, cancellationToken);
+
+    /// <summary>
+    ///     <para>供迁移在首次建库事务前打开或创建业务库。</para>
+    ///     <para>Opens or creates the business database for the migration's first creation step.</para>
+    /// </summary>
+    internal Task<SqliteConnection> OpenOrCreateForInternalUseAsync(CancellationToken cancellationToken) =>
+        OpenAsync(SqliteOpenMode.ReadWriteCreate, true, cancellationToken);
+
+    /// <summary>
+    ///     <para>读取元数据表中一个键的值；行缺失或值不是文本时返回 null。</para>
+    ///     <para>Reads one metadata value; null when the row is missing or the value is not text.</para>
+    /// </summary>
+    internal static Task<string?> ReadMetaValueAsync(
+        SqliteConnection connection, string key, CancellationToken cancellationToken) =>
+        ExecuteCoreAsync(async () =>
+        {
+            var command = connection.CreateCommand();
+            command.CommandText = $"SELECT value FROM {MetaTableName} WHERE key = $key";
+            command.Parameters.AddWithValue("$key", key);
+            var value = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+            return value as string;
+        });
+
+    /// <summary>
+    ///     <para>写入（覆盖）元数据表中的键值；可加入调用方事务，使标记与业务写入处于同一提交边界。</para>
+    ///     <para>Writes or overwrites one metadata value; it may join the caller's transaction so the marker and business writes share one commit boundary.</para>
+    /// </summary>
+    internal static Task WriteMetaValueAsync(
+        SqliteConnection connection, SqliteTransaction? transaction, string key, string value,
+        CancellationToken cancellationToken) =>
+        ExecuteCoreAsync(async () =>
+        {
+            var command = connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText = $"""
+                INSERT INTO {MetaTableName} (key, value) VALUES ($key, $value)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value;
+                """;
+            command.Parameters.AddWithValue("$key", key);
+            command.Parameters.AddWithValue("$value", value);
+            await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        });
+
+    /// <summary>
+    ///     <para>读取业务库身份；尚未建库或缺少身份键时返回 null。</para>
+    ///     <para>Reads the business-database identity; null before creation or when the identity key is missing.</para>
+    /// </summary>
+    internal static Task<string?> ReadStoreIdentityAsync(
+        SqliteConnection connection, CancellationToken cancellationToken) =>
+        ReadMetaValueAsync(connection, StoreIdentityKey, cancellationToken);
+
+    /// <summary>
+    ///     <para>执行 SQLite 完整性检查；通过时返回 null，否则返回检查输出。</para>
+    ///     <para>Runs the SQLite integrity check; null when it passes, otherwise the check output.</para>
+    /// </summary>
+    internal static Task<string?> RunIntegrityCheckAsync(
+        SqliteConnection connection, CancellationToken cancellationToken) =>
+        ExecuteCoreAsync(async () =>
+        {
+            var command = connection.CreateCommand();
+            command.CommandText = "PRAGMA integrity_check;";
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            var failures = new List<string>();
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                var line = reader.GetString(0);
+                if (!string.Equals(line, "ok", StringComparison.Ordinal)) failures.Add(line);
+            }
+
+            return failures.Count == 0 ? null : string.Join("; ", failures.Take(5));
+        });
+
+    /// <summary>
+    ///     <para>执行 SQLite 外键检查；通过时返回 null，否则返回第一处违规说明。</para>
+    ///     <para>Runs the SQLite foreign-key check; null when it passes, otherwise the first violation.</para>
+    /// </summary>
+    internal static Task<string?> RunForeignKeyCheckAsync(
+        SqliteConnection connection, CancellationToken cancellationToken) =>
+        ExecuteCoreAsync(async () =>
+        {
+            var command = connection.CreateCommand();
+            command.CommandText = "PRAGMA foreign_key_check;";
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false)) return null;
+            var table = reader.GetString(0);
+            var rowId = reader.IsDBNull(1) ? "?" : reader.GetInt64(1).ToString(CultureInfo.InvariantCulture);
+            var parent = reader.GetString(2);
+            return $"foreign key violation in '{table}' row {rowId} referencing '{parent}'";
+        });
+
+    /// <summary>
+    ///     <para>读取业务库的叶子状态。</para>
+    ///     <para>Reads the leaf state of the business database.</para>
     /// </summary>
     private LeafState ReadLeafState(out string? detail)
     {
@@ -772,7 +912,7 @@ public sealed class SessionStoreDatabase
     ///         the lock wait is set and the journal mode is left alone, so probing never modifies the business file.
     ///     </para>
     /// </summary>
-    private async Task<SqliteConnection> OpenAsync(
+    internal async Task<SqliteConnection> OpenAsync(
         SqliteOpenMode mode, bool configureForWrite, CancellationToken cancellationToken)
     {
         // 业务库不使用共享缓存（Cache 保持默认的私有缓存）：WAL 已提供跨连接可见性，共享缓存反而
@@ -788,6 +928,13 @@ public sealed class SessionStoreDatabase
         var connection = new SqliteConnection(builder.ToString());
         try
         {
+            // 打开前补完中断的恢复：隔离名下的旧日志不在 SQLite 的视野里，直接打开等于读到缺少最新数据的旧主库。
+            // 探测与打开都经过这里，绕过可用性检查的调用方同样被拦住。
+            // Completing an interrupted restore before opening: journals under quarantined names are invisible to
+            // SQLite, so opening directly would read an old main file without its latest data. Probing and opening both
+            // pass through here, so callers that skip the availability check are protected too.
+            if (IsBusinessStore)
+                await SessionStoreRestoreRecovery.RecoverAsync(StoreDirectory, cancellationToken).ConfigureAwait(false);
             // 叶子校验只在这里做一次：它可能在目录逃逸、链接或占位时拒绝，必须落在下面的包装内，
             // 否则 SessionStoreException 会绕过本类型的异常契约和可用性分类。
             SessionStorePaths.EnsureStoreLeaf(StoreDirectory, DatabasePath);
