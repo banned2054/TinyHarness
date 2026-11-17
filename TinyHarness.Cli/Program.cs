@@ -156,6 +156,9 @@ internal static class Program
                                                         .ConfigureAwait(false),
             CliCommandKind.Sandbox => await SandboxCommand.ExecuteAsync(context, options, cts.Token)
                                                           .ConfigureAwait(false),
+            CliCommandKind.Session when options.Subcommand == "store" => await SessionStoreCommand
+                                                                          .ExecuteAsync(context, options, cts.Token)
+                                                                          .ConfigureAwait(false),
             CliCommandKind.Session => await SessionCommand.ExecuteAsync(context, options, cts.Token)
                                                           .ConfigureAwait(false),
             _ => throw new InvalidOperationException($"Unhandled command '{options.Kind}'.")
@@ -1804,6 +1807,17 @@ internal static class Program
                                            .ConfigureAwait(false);
             await Console.Out.WriteLineAsync(
                                              "  responses    : empty/termination/failure/restore/continue/timing/cache/cancel passed (offline)");
+            // 业务 schema 的 NativeAOT 证明：真实迁移、业务库读写、重开、备份与恢复都必须在本产物中可执行。
+            try
+            {
+                await SessionStoreOfflineSmoke.RunAsync(fixture.Root, cts.Token).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                await Console.Error.WriteLineAsync($"  session store verification failed: {ex.Message}");
+                TryDeleteSmokeDirectory(sessionDirectory);
+                return 1;
+            }
         }
 
         TryDeleteSmokeDirectory(sessionDirectory);

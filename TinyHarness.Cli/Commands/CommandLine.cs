@@ -120,9 +120,159 @@ internal static class CommandLine
 
                 return new CliOptions { Kind = CliCommandKind.Session, Subcommand = "show", Primary = args[1] };
 
+            case "store" :
+                return ParseSessionStoreArgs(args[1..]);
+
             default :
                 throw new CliUsageException($"Unknown session subcommand '{args[0]}'.", usage);
         }
+    }
+
+    /// <summary>
+    ///     <para>
+    ///         解析 session store 子命令：status／migrate／backup／verify／restore 的路径与确认选项；
+    ///         路径必须是绝对路径，缺失或重复的选项按使用错误处理。
+    ///     </para>
+    ///     <para>
+    ///         Parses the session store subcommands: paths and confirmation options of status, migrate, backup, verify,
+    ///         and restore. Paths must be absolute, and missing or repeated options are usage errors.
+    ///     </para>
+    /// </summary>
+    private static CliOptions ParseSessionStoreArgs(string[] args)
+    {
+        var usage = HelpText.SessionStore;
+        if (args.Length == 0)
+            throw new CliUsageException("session store requires a subcommand: status, migrate, backup, verify, or restore.",
+                                        usage);
+        if (IsHelpFlag(args[0])) return new CliOptions { Kind = CliCommandKind.Help, HelpTopic = "session-store" };
+
+        var operation = args[0].ToLowerInvariant();
+        if (operation is not ("status" or "migrate" or "backup" or "verify" or "restore"))
+            throw new CliUsageException($"Unknown session store subcommand '{args[0]}'.", usage);
+
+        string? directory = null, output = null, backup = null, sidebarPreferences = null;
+        var     assumeYes = false;
+        for (var i = 1; i < args.Length; i++)
+        {
+            switch (args[i])
+            {
+                case "--directory" :
+                    if (directory is not null)
+                        throw new CliUsageException("The --directory option may be given at most once.", usage);
+                    if (i + 1 >= args.Length)
+                        throw new CliUsageException("The --directory option requires an absolute store directory.", usage);
+                    directory = RequireAbsolutePath(args[++i], "--directory", usage);
+                    continue;
+                case "--output" :
+                    if (output is not null)
+                        throw new CliUsageException("The --output option may be given at most once.", usage);
+                    if (i + 1 >= args.Length)
+                        throw new CliUsageException("The --output option requires an absolute backup directory.", usage);
+                    output = RequireAbsolutePath(args[++i], "--output", usage);
+                    continue;
+                case "--backup" :
+                    if (backup is not null)
+                        throw new CliUsageException("The --backup option may be given at most once.", usage);
+                    if (i + 1 >= args.Length)
+                        throw new CliUsageException("The --backup option requires an absolute backup directory.", usage);
+                    backup = RequireAbsolutePath(args[++i], "--backup", usage);
+                    continue;
+                case "--sidebar-preferences" :
+                    if (sidebarPreferences is not null)
+                        throw new
+                            CliUsageException("The --sidebar-preferences option may be given at most once.", usage);
+                    if (i + 1 >= args.Length)
+                        throw new
+                            CliUsageException("The --sidebar-preferences option requires an absolute file path.", usage);
+                    sidebarPreferences = RequireAbsolutePath(args[++i], "--sidebar-preferences", usage);
+                    continue;
+                case "--yes" :
+                    assumeYes = true;
+                    continue;
+                default :
+                    throw new CliUsageException($"Unknown argument '{args[i]}' for session store {operation}.", usage);
+            }
+        }
+
+        switch (operation)
+        {
+            case "status" :
+                if (output is not null || backup is not null || sidebarPreferences is not null || assumeYes)
+                    throw new
+                        CliUsageException("session store status accepts only --directory.", usage);
+                RequireDirectory(operation, usage, directory);
+                break;
+            case "migrate" :
+                if (output is not null || backup is not null)
+                    throw new
+                        CliUsageException("session store migrate accepts --directory, --sidebar-preferences, and --yes only.",
+                                          usage);
+                RequireDirectory(operation, usage, directory);
+                break;
+            case "backup" :
+                if (backup is not null || sidebarPreferences is not null || assumeYes)
+                    throw new
+                        CliUsageException("session store backup accepts --directory and --output only.", usage);
+                RequireDirectory(operation, usage, directory);
+                if (output is null)
+                    throw new CliUsageException("session store backup requires --output <absolute backup directory>.",
+                                                usage);
+                break;
+            case "verify" :
+                if (directory is not null || output is not null || sidebarPreferences is not null || assumeYes)
+                    throw new
+                        CliUsageException("session store verify accepts only --backup.", usage);
+                if (backup is null)
+                    throw new CliUsageException("session store verify requires --backup <absolute backup directory>.",
+                                                usage);
+                break;
+            default :
+                if (output is not null || sidebarPreferences is not null)
+                    throw new
+                        CliUsageException("session store restore accepts --directory, --backup, and --yes only.", usage);
+                RequireDirectory(operation, usage, directory);
+                if (backup is null)
+                    throw new CliUsageException("session store restore requires --backup <absolute backup directory>.",
+                                                usage);
+                if (!assumeYes)
+                    throw new CliUsageException("session store restore requires --yes; it replaces the business database.",
+                                                usage);
+                break;
+        }
+
+        return new CliOptions
+        {
+            Kind                        = CliCommandKind.Session,
+            Subcommand                  = "store",
+            AssumeYes                   = assumeYes,
+            StoreOperation              = operation,
+            StoreDirectoryPath          = directory,
+            StoreOutputPath             = output,
+            StoreBackupPath             = backup,
+            StoreSidebarPreferencesPath = sidebarPreferences
+        };
+    }
+
+    /// <summary>
+    ///     <para>要求 --directory 已给出。</para>
+    ///     <para>Requires --directory to be present.</para>
+    /// </summary>
+    private static void RequireDirectory(string operation, string usage, string? directory)
+    {
+        if (directory is null)
+            throw new CliUsageException($"session store {operation} requires --directory <absolute store directory>.",
+                                        usage);
+    }
+
+    /// <summary>
+    ///     <para>校验选项路径为绝对路径，返回完整路径。</para>
+    ///     <para>Validates that an option path is absolute and returns its full form.</para>
+    /// </summary>
+    private static string RequireAbsolutePath(string value, string option, string usage)
+    {
+        if (string.IsNullOrWhiteSpace(value) || !Path.IsPathFullyQualified(value))
+            throw new CliUsageException($"The {option} option requires an absolute path.", usage);
+        return Path.GetFullPath(value);
     }
 
     /// <summary>

@@ -33,6 +33,11 @@ internal static class HelpText
           tinyharness doctor [--connect]
           tinyharness sandbox status | sandbox provision [--yes] | sandbox verify [--yes]
           tinyharness session list | session show <session-id>
+          tinyharness session store status --directory <abs store dir>
+          tinyharness session store migrate --directory <abs> [--sidebar-preferences <abs file>] --yes
+          tinyharness session store backup --directory <abs> --output <abs backup dir>
+          tinyharness session store verify --backup <abs backup dir>
+          tinyharness session store restore --directory <abs> --backup <abs> --yes
           tinyharness help [<command>]
 
         Management commands are never sent to the model. To prompt with text that starts
@@ -361,6 +366,49 @@ internal static class HelpText
         """;
 
     /// <summary>
+    ///     <para>session store 子命令帮助：迁移、备份、校验与恢复都只操作 store 目录内的文件，不联网。</para>
+    ///     <para>The session store help: migration, backup, verification, and restore only touch files in the store directory and never use the network.</para>
+    /// </summary>
+    public const string SessionStore = """
+        Usage:
+          tinyharness session store status --directory <abs store dir>
+          tinyharness session store migrate --directory <abs store dir>
+            [--sidebar-preferences <abs desktop-sidebar.json>] [--yes]
+          tinyharness session store backup --directory <abs store dir> --output <abs backup dir>
+          tinyharness session store verify --backup <abs backup dir>
+          tinyharness session store restore --directory <abs store dir> --backup <abs backup dir> --yes
+
+        Offline management of one session store's business database (session-store.db).
+        No API key is read, no model is called, no tool runs, and legacy JSON/JSONL files are
+        never deleted.
+
+        status prints the migration state (not started, in progress, completed, database
+        missing/replaced/damaged, marker damaged), each batch state, and warnings such as
+        legacy files rewritten after the batch switched. Exit 0 only for completed; any other
+        state exits 2.
+
+        migrate imports organization state, the project catalog, and session placement in that
+        fixed order, one transaction per batch, and records each switch in
+        session-store-migration.json. It is idempotent: a missing marker starts the first
+        import, an interrupted marker resumes at the first pending batch, and a completed
+        marker only verifies. Without --yes it prints the plan and exits 1. When
+        --sidebar-preferences is given, that file's per-store manual order and collapsed
+        groups are imported and a missing or damaged file fails the migration instead of
+        dropping them. Legacy files stay untouched and are never deleted.
+
+        backup writes session-store.db into the output directory through SQLite's online
+        backup API and refuses to overwrite an existing backup. verify checks structure,
+        integrity, identity, and schema version read-only. restore requires a completed
+        migration whose recorded identity matches the backup, preserves the current database
+        as session-store.db.pre-restore-<unixms>, commits the backup through a temporary file,
+        re-checks integrity and foreign keys, and deletes only the rebuildable
+        session-index.db/-wal/-shm files so the archive projection can be re-derived. A stale
+        session-store.db-wal/-shm must be moved aside before the replacement; failing to move it
+        aborts the restore instead of reporting success, because the leftover journal would be
+        applied to the newly restored file.
+        """;
+
+    /// <summary>
     ///     <para>判断是否为已知 help 主题。</para>
     ///     <para>Whether a name is a known help topic.</para>
     /// </summary>
@@ -380,6 +428,7 @@ internal static class HelpText
             "doctor"   => true,
             "sandbox"  => true,
             "session"  => true,
+            "session-store" => true,
             "help"     => true,
             _          => false
         };
@@ -405,6 +454,7 @@ internal static class HelpText
             "doctor"   => Doctor,
             "sandbox"  => Sandbox,
             "session"  => Session,
+            "session-store" => SessionStore,
             _          => Overview
         };
     }

@@ -100,4 +100,25 @@ internal sealed record CliOptions
     ///     --hold-seconds.
     /// </summary>
     public int? VerifyHoldSeconds { get; init; }
+
+    /// <summary>
+    ///     session store 的子命令：status／migrate／backup／verify／restore。
+    ///     The session-store subcommand: status, migrate, backup, verify, or restore.
+    /// </summary>
+    public string? StoreOperation { get; init; }
+
+    /// <summary>session store 的 --directory 值（受保护的 store 目录绝对路径）。The --directory value of session store (absolute protected store directory).</summary>
+    public string? StoreDirectoryPath { get; init; }
+
+    /// <summary>session store backup 的 --output 值（备份目录绝对路径）。The --output value of session store backup (absolute backup directory).</summary>
+    public string? StoreOutputPath { get; init; }
+
+    /// <summary>session store verify／restore 的 --backup 值（备份目录绝对路径）。The --backup value of session store verify/restore (absolute backup directory).</summary>
+    public string? StoreBackupPath { get; init; }
+
+    /// <summary>
+    ///     session store migrate 的 --sidebar-preferences 值（桌面侧栏偏好文件绝对路径）。
+    ///     The --sidebar-preferences value of session store migrate (absolute desktop sidebar preferences file path).
+    /// </summary>
+    public string? StoreSidebarPreferencesPath { get; init; }
 }
