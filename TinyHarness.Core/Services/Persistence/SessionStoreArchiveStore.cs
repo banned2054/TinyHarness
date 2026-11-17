@@ -48,10 +48,29 @@ public static class SessionStoreArchiveStore
     public static async Task<SessionStoreArchives> LoadAsync(
         string storeDirectory, CancellationToken cancellationToken)
     {
+        var resolution = await SessionStoreAuthority.ResolveAsync(storeDirectory, cancellationToken)
+                                                    .ConfigureAwait(false);
+        if (resolution.Mode == SessionStoreMode.Migrated)
+            return await LoadFromBusinessStoreAsync(storeDirectory, cancellationToken).ConfigureAwait(false);
+        SessionStoreAuthority.ThrowIfBlocked(storeDirectory, resolution);
+
         var filePath = FilePath(storeDirectory);
         cancellationToken.ThrowIfCancellationRequested();
         return await LoadCoreAsync(filePath, cancellationToken).ConfigureAwait(false);
     }
+
+    /// <summary>
+    ///     <para>
+    ///         只读取旧归档状态文件，不按迁移状态分派；仅供迁移引擎与兼容导入使用，理由同置顶文件的旧来源读取。
+    ///     </para>
+    ///     <para>
+    ///         Reads only the legacy archive-state file without authority dispatch; used by the migration engine and
+    ///         compatible imports for the same reason as the legacy pin reader.
+    ///     </para>
+    /// </summary>
+    internal static Task<SessionStoreArchives> LoadLegacyFileAsync(
+        string storeDirectory, CancellationToken cancellationToken) =>
+        LoadCoreAsync(FilePath(storeDirectory), cancellationToken);
 
     /// <summary>
     ///     <para>校验 32 位十六进制会话 ID 并将其规范为小写；归档状态重复设置幂等，并在锁内重读最新文件。</para>
@@ -73,6 +92,17 @@ public static class SessionStoreArchiveStore
                                         nameof(sessionId));
         sessionId = sessionId.ToLowerInvariant();
 
+        var resolution = await SessionStoreAuthority.ResolveAsync(storeDirectory, cancellationToken)
+                                                    .ConfigureAwait(false);
+        if (resolution.Mode == SessionStoreMode.Migrated)
+        {
+            await SessionStoreOrganizationStore.SetSessionArchivedAsync(storeDirectory, sessionId, isArchived,
+                                                                        cancellationToken).ConfigureAwait(false);
+            return await LoadFromBusinessStoreAsync(storeDirectory, cancellationToken).ConfigureAwait(false);
+        }
+
+        SessionStoreAuthority.ThrowIfBlocked(storeDirectory, resolution);
+
         var filePath = FilePath(storeDirectory);
         EnsureExistingStoreDirectory(filePath);
         await using var saveLock = await OpenSaveLockAsync(filePath, cancellationToken).ConfigureAwait(false);
@@ -86,6 +116,18 @@ public static class SessionStoreArchiveStore
         var candidate = current with { ArchivedSessionIds = ids };
         await SaveAsync(filePath, candidate, cancellationToken).ConfigureAwait(false);
         return candidate;
+    }
+
+    private static async Task<SessionStoreArchives> LoadFromBusinessStoreAsync(
+        string storeDirectory, CancellationToken cancellationToken)
+    {
+        var state = await SessionStoreOrganizationStore.LoadAsync(storeDirectory, cancellationToken)
+                                                       .ConfigureAwait(false);
+        return new SessionStoreArchives
+        {
+            Schema             = SessionStoreArchives.CurrentSchema,
+            ArchivedSessionIds = state.ArchivedSessionIds.Select(id => id.ToLowerInvariant()).ToArray()
+        };
     }
 
     private static async Task<SessionStoreArchives> LoadCoreAsync(

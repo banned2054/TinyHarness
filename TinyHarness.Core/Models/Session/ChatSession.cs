@@ -238,6 +238,26 @@ public sealed partial class ChatSession
         ProjectAssignmentState = SessionProjectAssignmentState.NoProject;
     }
 
+    /// <summary>
+    ///     <para>按已提交的业务库归属把内存会话镜像为明确无项目；仅用于恢复后的权威同步。</para>
+    ///     <para>
+    ///         Mirrors a committed business placement that has no project into memory; used only to sync authority
+    ///         after a restore.
+    ///     </para>
+    /// </summary>
+    /// <exception cref="InvalidOperationException">
+    ///     <para>会话仍带有项目 ID。</para>
+    ///     <para>The session still carries a project id.</para>
+    /// </exception>
+    internal void MarkNoProject()
+    {
+        if (ProjectId is not null)
+            throw new InvalidOperationException(
+                                                $"Session '{Id}' still carries project '{ProjectId}' and cannot be marked as no project.");
+
+        ProjectAssignmentState = SessionProjectAssignmentState.NoProject;
+    }
+
     internal void RecordModelSelection(SessionModelSelection selection)
     {
         selection.Validate();

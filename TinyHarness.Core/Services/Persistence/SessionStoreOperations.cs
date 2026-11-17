@@ -107,7 +107,13 @@ public enum SessionStoreCleanupArea
     ///     <para>桌面侧栏偏好中的旧顺序与旧置顶引用。</para>
     ///     <para>Legacy order and pin references in desktop preferences.</para>
     /// </summary>
-    LegacySidebarOrder
+    LegacySidebarOrder,
+
+    /// <summary>
+    ///     <para>业务库中的会话当前归属行。</para>
+    ///     <para>The session's current placement row in the business database.</para>
+    /// </summary>
+    SessionPlacement
 }
 
 /// <summary>
@@ -342,7 +348,8 @@ public sealed class SessionStoreOperations
             throw;
         }
         catch (Exception exception) when (exception is SessionStorePinException or SessionStoreException
-                                           or IOException or UnauthorizedAccessException)
+                                            or SessionStoreMigrationException or IOException
+                                            or UnauthorizedAccessException)
         {
             _pinStatesByStore.Remove(storeKey);
             _pinStateUnavailableStores.Add(storeKey);
@@ -410,7 +417,8 @@ public sealed class SessionStoreOperations
             throw;
         }
         catch (Exception exception) when (exception is SessionStoreArchiveException or SessionStoreException
-                                           or IOException or UnauthorizedAccessException)
+                                            or SessionStoreMigrationException or IOException
+                                            or UnauthorizedAccessException)
         {
             _archiveStateUnavailableStores.Add(storeKey);
             throw;
@@ -720,6 +728,12 @@ public sealed class SessionStoreOperations
             throw new SessionProjectUnassignmentIncompleteException(result);
 
         await ClearProjectPinStateAsync(storeDirectory, projectId, cancellationToken);
+
+        // 迁移完成后项目组织状态在业务库：置顶与手动顺序由 Core 直接清理，折叠分组键由宿主钩子按界面命名清理。
+        if (await SessionStoreAuthority.IsMigratedAsync(storeDirectory, cancellationToken).ConfigureAwait(false))
+            await SessionStoreOrganizationStore.RemoveProjectReferencesAsync(storeDirectory, projectId,
+                                                                             cancellationToken).ConfigureAwait(false);
+
         await gateway.PrepareCompletionAsync(storeDirectory, projectId, cancellationToken);
         await ProjectStore.CompleteDeletionAsync(catalogPath, projectId, deleting.Revision, cancellationToken);
         await gateway.CompletedAsync(deleting, cancellationToken);
@@ -830,6 +844,22 @@ public sealed class SessionStoreOperations
         {
             issues.Add(new SessionStoreCleanupIssue(SessionStoreCleanupArea.SessionIndex, exception.Message));
             Trace.TraceError("Session index cleanup for '{0}' failed: {1}", storeDirectory, exception.Message);
+        }
+
+        // 迁移完成后归属与手工会话顺序在业务库：删除日志时一并清理归属行与顺序引用，避免已删会话复活。
+        try
+        {
+            if (await SessionStoreAuthority.IsMigratedAsync(storeDirectory, CancellationToken.None))
+            {
+                await SessionStorePlacementStore.RemoveSessionAsync(storeDirectory, sessionId, CancellationToken.None);
+                await SessionStoreOrganizationStore.RemoveSessionAsync(storeDirectory, sessionId, CancellationToken.None);
+            }
+        }
+        catch (Exception exception) when (exception is SessionStoreMigrationException or SessionStoreException
+                                               or ArgumentException or IOException or UnauthorizedAccessException)
+        {
+            issues.Add(new SessionStoreCleanupIssue(SessionStoreCleanupArea.SessionPlacement, exception.Message));
+            Trace.TraceError("Session placement cleanup for '{0}' failed: {1}", storeDirectory, exception.Message);
         }
 
         return issues;

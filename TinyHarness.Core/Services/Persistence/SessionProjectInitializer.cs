@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using TinyHarness.Core.Exceptions;
 using TinyHarness.Core.Models.Persistence;
@@ -263,6 +264,13 @@ public static class SessionProjectInitializer
         if (cancellationToken.IsCancellationRequested)
             return new SessionProjectInitializationResult(true, afterSessionId, true, [], []);
 
+        var resolution = await SessionStoreAuthority.ResolveAsync(storeDirectory, cancellationToken)
+                                                   .ConfigureAwait(false);
+        SessionStoreAuthority.ThrowIfBlocked(storeDirectory, resolution);
+        if (resolution.Mode == SessionStoreMode.Migrated)
+            return await InitializeBusinessPlacementAsync(storeDirectory, afterSessionId, maxSessions, utcNow,
+                                                          restrictToIds, cancellationToken).ConfigureAwait(false);
+
         // 文件名枚举与排序是全量轻量操作（只取 ID 元数据）；有界的是逐日志正文读取。
         // 定向模式跳过目录枚举：集合来自列表索引，逐日志仍走同一条严格读取管线。
         // File-name enumeration and sorting are light whole-store operations (id metadata only); per-log body reads
@@ -271,37 +279,12 @@ public static class SessionProjectInitializer
         List<string> orderedIds;
         try
         {
-            if (restrictToIds is not null)
-            {
-                orderedIds = restrictToIds.Select(id => id.ToLowerInvariant())
-                                          .Distinct(StringComparer.Ordinal)
-                                          .OrderBy(id => id, StringComparer.Ordinal)
-                                          .ToList();
-            }
-            else
-            {
-                var ids = new List<string>();
-                foreach (var path in Directory.EnumerateFiles(storeDirectory,
-                                                              "*" + SessionStoreWriter.LogFileSuffix))
-                {
-                    // 枚举阶段每个条目都响应取消。
-                    cancellationToken.ThrowIfCancellationRequested();
-                    ids.Add(Path.GetFileName(path)[..^SessionStoreWriter.LogFileSuffix.Length]);
-                }
-
-                ids.Sort(StringComparer.Ordinal);
-                orderedIds = ids;
-            }
+            orderedIds = await ListSessionIdsAsync(storeDirectory, restrictToIds, cancellationToken)
+                              .ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
             return new SessionProjectInitializationResult(true, afterSessionId, true, [], []);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            throw new SessionStoreException(
-                                            $"Cannot enumerate the session store directory '{Path.GetFullPath(storeDirectory)}': {ex.Message}",
-                                            ex);
         }
 
         var eligible = orderedIds.Where(id => afterSessionId is null ||
@@ -548,6 +531,305 @@ public static class SessionProjectInitializer
         catch (Exception ex) when (SessionStoreWriter.IsRecoverableOpenFailure(ex))
         {
             return (null, ex.Message);
+        }
+    }
+
+    /// <summary>
+    ///     <para>
+    ///         枚举待检查日志：定向模式直接使用调用方集合，完整模式按会话 ID 顺序枚举 store 目录；
+    ///         枚举期间的取消原样传播，目录 IO 失败转换为存储异常。
+    ///     </para>
+    ///     <para>
+    ///         Enumerates the logs to examine: targeted mode takes the caller's set, while full mode enumerates the
+    ///         store in session-id order; cancellation propagates, and directory IO failures become store exceptions.
+    ///     </para>
+    /// </summary>
+    private static async Task<List<string>> ListSessionIdsAsync(
+        string storeDirectory, IReadOnlyList<string>? restrictToIds, CancellationToken cancellationToken)
+    {
+        if (restrictToIds is not null)
+            return restrictToIds.Select(id => id.ToLowerInvariant())
+                                .Distinct(StringComparer.Ordinal)
+                                .OrderBy(id => id, StringComparer.Ordinal)
+                                .ToList();
+
+        try
+        {
+            var ids = new List<string>();
+            foreach (var path in Directory.EnumerateFiles(storeDirectory, "*" + SessionStoreWriter.LogFileSuffix))
+            {
+                // 枚举阶段每个条目都响应取消。
+                cancellationToken.ThrowIfCancellationRequested();
+                ids.Add(Path.GetFileName(path)[..^SessionStoreWriter.LogFileSuffix.Length]);
+            }
+
+            ids.Sort(StringComparer.Ordinal);
+            return ids;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw new SessionStoreException(
+                                            $"Cannot enumerate the session store directory '{Path.GetFullPath(storeDirectory)}': {ex.Message}",
+                                            ex);
+        }
+    }
+
+    /// <summary>
+    ///     <para>
+    ///         迁移完成后的初始化路径：读取日志只为确定尚未初始化的会话与其执行根；项目与归属只写业务库，
+    ///         不追加 JSONL 归属记录，也不再获取 writer 锁。并发初始化以"仅缺行时插入"保证后到者不覆盖先到者。
+    ///     </para>
+    ///     <para>
+    ///         The post-migration initialization path: logs are read only to find sessions without placement and their
+    ///         execution roots; projects and placement go to the business database alone, no JSONL ownership record
+    ///         is appended, and no writer lock is taken. Concurrent initialization uses insert-only-when-missing so a
+    ///         later caller never overwrites an earlier placement.
+    ///     </para>
+    /// </summary>
+    private static async Task<SessionProjectInitializationResult> InitializeBusinessPlacementAsync(
+        string storeDirectory, string? afterSessionId, int? maxSessions, DateTimeOffset? utcNow,
+        IReadOnlyList<string>? restrictToIds, CancellationToken cancellationToken)
+    {
+        var          outcomes  = new List<SessionProjectBindingOutcome>();
+        var          projects  = new List<SessionProjectReference>();
+        var          cancelled = false;
+        List<string> orderedIds;
+        try
+        {
+            orderedIds = await ListSessionIdsAsync(storeDirectory, restrictToIds, cancellationToken)
+                              .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            return new SessionProjectInitializationResult(true, afterSessionId, true, [], []);
+        }
+
+        var eligible = orderedIds.Where(id => afterSessionId is null ||
+                                              string.CompareOrdinal(id, afterSessionId) > 0).ToList();
+        var examined        = maxSessions is { } limit ? eligible.Take(limit).ToList() : eligible;
+        var moreFilesRemain = restrictToIds is null && examined.Count < eligible.Count;
+        try
+        {
+            var candidates = new List<(string SessionId, string WorkspaceRoot)>();
+            foreach (var sessionId in examined)
+            {
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    cancelled = true;
+                    break;
+                }
+
+                var snapshot = await ReadSessionSnapshotAsync(storeDirectory, sessionId, cancellationToken)
+                                  .ConfigureAwait(false);
+                if (snapshot.Error is not null)
+                {
+                    outcomes.Add(new SessionProjectBindingOutcome(sessionId, string.Empty,
+                                                                  SessionProjectBindingStatus.Failed, null,
+                                                                  snapshot.Error));
+                    continue;
+                }
+
+                var session = snapshot.Session!;
+                if (session.ProjectId is { } boundProjectId)
+                {
+                    outcomes.Add(new SessionProjectBindingOutcome(sessionId, session.WorkspaceRoot,
+                                                                  SessionProjectBindingStatus.AlreadyBound,
+                                                                  boundProjectId, null));
+                    continue;
+                }
+
+                if (session.ProjectAssignmentState == SessionProjectAssignmentState.NoProject)
+                {
+                    outcomes.Add(new SessionProjectBindingOutcome(sessionId, session.WorkspaceRoot,
+                                                                  SessionProjectBindingStatus.NoProject, null, null));
+                    continue;
+                }
+
+                if (RootValidationError(storeDirectory, session.WorkspaceRoot) is { } rootError)
+                {
+                    outcomes.Add(new SessionProjectBindingOutcome(sessionId, session.WorkspaceRoot,
+                                                                  SessionProjectBindingStatus.Failed, null,
+                                                                  rootError));
+                    continue;
+                }
+
+                candidates.Add((sessionId, session.WorkspaceRoot));
+            }
+
+            var rootComparer   = OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+            var projectsByRoot = new Dictionary<string, Project>(rootComparer);
+            foreach (var group in candidates.GroupBy(candidate => ProjectRoots.Normalize(candidate.WorkspaceRoot),
+                                                     rootComparer))
+            {
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    cancelled = true;
+                    break;
+                }
+
+                Project project;
+                try
+                {
+                    project = await ProjectStore.GetOrCreateAsync(ProjectStore.FilePath(storeDirectory), group.Key,
+                                                                  utcNow, cancellationToken).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is ProjectStoreException or SessionStoreException
+                                               or SessionStoreMigrationException or IOException
+                                               or UnauthorizedAccessException)
+                {
+                    foreach (var candidate in group)
+                        outcomes.Add(new SessionProjectBindingOutcome(candidate.SessionId, candidate.WorkspaceRoot,
+                                                                      SessionProjectBindingStatus.Failed, null,
+                                                                      ex.Message));
+                    continue;
+                }
+
+                projectsByRoot[group.Key] = project;
+                projects.Add(new SessionProjectReference(project.Id, project.PrimaryRoot));
+                foreach (var (sessionId, scannedRoot) in group)
+                {
+                    if (cancellationToken.IsCancellationRequested)
+                    {
+                        cancelled = true;
+                        break;
+                    }
+
+                    // 插入前重读日志作为运行时边界：已绑定或无项目的会话保留其事实，执行根变化时不按旧扫描结果归属。
+                    var reloaded = await ReadSessionSnapshotAsync(storeDirectory, sessionId, cancellationToken)
+                                      .ConfigureAwait(false);
+                    if (reloaded.Error is not null)
+                    {
+                        outcomes.Add(new SessionProjectBindingOutcome(sessionId, scannedRoot,
+                                                                      SessionProjectBindingStatus.Failed, null,
+                                                                      reloaded.Error));
+                        continue;
+                    }
+
+                    var current = reloaded.Session!;
+                    if (current.ProjectId is { } existingProjectId)
+                    {
+                        outcomes.Add(new SessionProjectBindingOutcome(sessionId, current.WorkspaceRoot,
+                                                                      SessionProjectBindingStatus.AlreadyBound,
+                                                                      existingProjectId, null));
+                        continue;
+                    }
+
+                    if (current.ProjectAssignmentState == SessionProjectAssignmentState.NoProject)
+                    {
+                        outcomes.Add(new SessionProjectBindingOutcome(sessionId, current.WorkspaceRoot,
+                                                                      SessionProjectBindingStatus.NoProject, null,
+                                                                      null));
+                        continue;
+                    }
+
+                    if (!ProjectRoots.AreEqual(ProjectRoots.Normalize(current.WorkspaceRoot), group.Key))
+                    {
+                        outcomes.Add(new SessionProjectBindingOutcome(
+                                                                      sessionId, current.WorkspaceRoot,
+                                                                      SessionProjectBindingStatus.Failed, null,
+                                                                      $"The session's saved workspace root changed since the scan ('{current.WorkspaceRoot}'); it was not bound to the scanned project."));
+                        continue;
+                    }
+
+                    try
+                    {
+                        if (await SessionStorePlacementStore
+                                       .TryInitializeProjectAsync(storeDirectory, sessionId, project.Id,
+                                                                  cancellationToken).ConfigureAwait(false))
+                        {
+                            outcomes.Add(new SessionProjectBindingOutcome(sessionId, current.WorkspaceRoot,
+                                                                          SessionProjectBindingStatus.Bound,
+                                                                          project.Id, null));
+                            continue;
+                        }
+
+                        // 并发初始化已写入：后到者按当前归属报告，不覆盖先到者的结果。
+                        var placement = await SessionStorePlacementStore.GetAsync(storeDirectory, sessionId,
+                                                                                  cancellationToken)
+                                                                       .ConfigureAwait(false);
+                        outcomes.Add(placement.State switch
+                        {
+                            SessionProjectAssignmentState.Project => new SessionProjectBindingOutcome(
+                                sessionId, current.WorkspaceRoot, SessionProjectBindingStatus.AlreadyBound,
+                                placement.ProjectId, null),
+                            SessionProjectAssignmentState.NoProject => new SessionProjectBindingOutcome(
+                                sessionId, current.WorkspaceRoot, SessionProjectBindingStatus.NoProject, null, null),
+                            _ => new SessionProjectBindingOutcome(sessionId, current.WorkspaceRoot,
+                                                                  SessionProjectBindingStatus.Failed, null,
+                                                                  "The session still has no placement after an initialization attempt.")
+                        });
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        cancelled = true;
+                        break;
+                    }
+                    catch (Exception ex) when (ex is SessionStoreException or SessionStoreMigrationException
+                                                   or IOException or UnauthorizedAccessException)
+                    {
+                        outcomes.Add(new SessionProjectBindingOutcome(sessionId, current.WorkspaceRoot,
+                                                                      SessionProjectBindingStatus.Failed, null,
+                                                                      ex.Message));
+                    }
+                }
+            }
+
+            if (cancellationToken.IsCancellationRequested) cancelled = true;
+        }
+        catch (OperationCanceledException)
+        {
+            cancelled = true;
+        }
+
+        if (outcomes.Any(outcome => outcome.Status == SessionProjectBindingStatus.Bound))
+            await SyncPlacementProjectionQuietlyAsync(storeDirectory, cancellationToken).ConfigureAwait(false);
+
+        var factIds    = outcomes.Select(outcome => outcome.SessionId).ToHashSet(StringComparer.Ordinal);
+        var nextCursor = afterSessionId;
+        if (restrictToIds is null)
+            foreach (var sessionId in examined)
+            {
+                if (!factIds.Contains(sessionId)) break;
+                nextCursor = sessionId;
+            }
+
+        var hasUnprocessed = examined.Any(sessionId => !factIds.Contains(sessionId));
+        return new SessionProjectInitializationResult(cancelled, nextCursor,
+                                                      moreFilesRemain || hasUnprocessed,
+                                                      outcomes.OrderBy(outcome => outcome.SessionId,
+                                                                       StringComparer.Ordinal).ToArray(),
+                                                      projects);
+    }
+
+    /// <summary>
+    ///     <para>把业务库归属尽力同步到列表索引；索引缺失、不可用或写入失败只记诊断，不影响业务写入结果。</para>
+    ///     <para>Best-effort syncs business placements into the list index; a missing or unusable index and write failures are diagnostic only and never change the business outcome.</para>
+    /// </summary>
+    private static async Task SyncPlacementProjectionQuietlyAsync(
+        string storeDirectory, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var index        = new SessionIndexStore(storeDirectory);
+            var availability = await index.GetAvailabilityAsync(cancellationToken).ConfigureAwait(false);
+            if (availability.Status != SessionIndexAvailabilityStatus.Available) return;
+            var placements = await SessionStorePlacementStore.LoadAllAsync(storeDirectory, cancellationToken)
+                                                             .ConfigureAwait(false);
+            await index.SyncPlacementProjectionAsync(placements, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex) when (ex is SessionIndexException or SessionStoreException
+                                       or SessionStoreMigrationException or IOException
+                                       or UnauthorizedAccessException)
+        {
+            Trace.TraceError("Placement projection sync for '{0}' failed: {1}", storeDirectory, ex.Message);
         }
     }
 

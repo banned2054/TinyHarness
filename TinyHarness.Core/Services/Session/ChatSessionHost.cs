@@ -75,20 +75,20 @@ public sealed partial class ChatSessionHost : IDisposable
     internal const string CompositionInvalidatedNotice =
         "常设授权配置已变更，本次会话的授权快照已失效，请重新打开会话后继续";
 
-    private readonly IApprovalProvider?               _approver;
-    private readonly PermissionCompositionGuard?      _compositionGuard;
-    private readonly ConversationContext              _context;
-    private readonly SecretRedactor?                  _eventRedactor;
-    private readonly IHostEventSink?                  _events;
-    private readonly ProjectInstructionSnapshot?      _initialInstructions;
-    private readonly ProjectInstructionLoader?        _instructionLoader;
-    private readonly PermissionEngine?                _permissions;
-    private readonly Func<string, IRunRecorder>?      _recorderFactory;
-    private readonly ISessionStoreWriter?             _sessionWriter;
-    private readonly string                           _systemPrompt;
-    private readonly ToolRegistry                     _tools;
-    private          IRunRecorder?                    _activeRecorder;
+    private readonly IApprovalProvider?          _approver;
+    private readonly PermissionCompositionGuard? _compositionGuard;
+    private readonly ConversationContext         _context;
+    private readonly SecretRedactor?             _eventRedactor;
+    private readonly IHostEventSink?             _events;
+    private readonly ProjectInstructionSnapshot? _initialInstructions;
+    private readonly ProjectInstructionLoader?   _instructionLoader;
+    private readonly PermissionEngine?           _permissions;
+    private readonly Func<string, IRunRecorder>? _recorderFactory;
+    private readonly ISessionStoreWriter?        _sessionWriter;
+    private readonly string                      _systemPrompt;
+    private readonly ToolRegistry                _tools;
 
+    private IRunRecorder?        _activeRecorder;
     private int                  _activeRuns;
     private SessionModelBinding? _binding;
 
@@ -131,7 +131,7 @@ public sealed partial class ChatSessionHost : IDisposable
                            string?                              credentialRoute      = null,
                            bool                                 ownsModelClient      = true,
                            ModelTimeouts?                       modelTimeouts        = null,
-                           PermissionCompositionGuard?          compositionGuard    = null)
+                           PermissionCompositionGuard?          compositionGuard     = null)
         : this(new ChatSession(NewId(), workspaceRoot, model), ContextFor(options), options,
                // 新会话必须携带可执行客户端；仅恢复接管允许未绑定等待显式重选目标。
                modelClient ?? throw new ArgumentNullException(nameof(modelClient)), tools,
@@ -202,7 +202,7 @@ public sealed partial class ChatSessionHost : IDisposable
                            string?                              credentialRoute     = null,
                            bool                                 ownsModelClient     = true,
                            ModelTimeouts?                       modelTimeouts       = null,
-                           PermissionCompositionGuard?          compositionGuard   = null)
+                           PermissionCompositionGuard?          compositionGuard    = null)
         : this(session, context, options, modelClient, tools, systemPrompt, permissions, approver, events,
                recorderFactory, sessionWriter is null ? null : _ => sessionWriter, needsInspection,
                instructionLoader, initialInstructions, knownSecrets, credentialRoute, ownsModelClient,

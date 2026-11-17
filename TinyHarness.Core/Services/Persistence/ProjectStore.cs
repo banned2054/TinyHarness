@@ -133,6 +133,9 @@ public static class ProjectStore
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(filePath);
         cancellationToken.ThrowIfCancellationRequested();
+        if (await UsesBusinessStoreAsync(filePath, cancellationToken).ConfigureAwait(false))
+            return await SessionStoreProjectCatalogStore.LoadAsync(DirectoryOf(filePath), cancellationToken)
+                                                       .ConfigureAwait(false);
         return await LoadCoreAsync(filePath, true, cancellationToken).ConfigureAwait(false);
     }
 
@@ -359,6 +362,10 @@ public static class ProjectStore
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(filePath);
 
+        if (await UsesBusinessStoreAsync(filePath, cancellationToken).ConfigureAwait(false))
+            return await SessionStoreProjectCatalogStore.GetOrCreateAsync(DirectoryOf(filePath), workspaceRoot, utcNow,
+                                                                          cancellationToken).ConfigureAwait(false);
+
         var root = ProjectRoots.Normalize(workspaceRoot);
         EnsureParentDirectory(filePath);
 
@@ -409,6 +416,12 @@ public static class ProjectStore
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(filePath);
         ArgumentException.ThrowIfNullOrWhiteSpace(projectId);
+
+        if (await UsesBusinessStoreAsync(filePath, cancellationToken).ConfigureAwait(false))
+            return await SessionStoreProjectCatalogStore.RenameAsync(DirectoryOf(filePath), projectId, newName,
+                                                                     expectedRevision, utcNow, cancellationToken)
+                                                        .ConfigureAwait(false);
+
         var name = Project.ValidateName(newName);
 
         EnsureParentDirectory(filePath);
@@ -490,6 +503,12 @@ public static class ProjectStore
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(filePath);
         ArgumentException.ThrowIfNullOrWhiteSpace(projectId);
+
+        if (await UsesBusinessStoreAsync(filePath, cancellationToken).ConfigureAwait(false))
+            return await SessionStoreProjectCatalogStore.BeginDeletionAsync(DirectoryOf(filePath), projectId,
+                                                                            expectedRevision, utcNow, cancellationToken)
+                                                        .ConfigureAwait(false);
+
         EnsureParentDirectory(filePath);
         await using var saveLock = await OpenSaveLockAsync(filePath, cancellationToken).ConfigureAwait(false);
         var             catalog  = await LoadCoreAsync(filePath, false, cancellationToken).ConfigureAwait(false);
@@ -552,6 +571,15 @@ public static class ProjectStore
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(filePath);
         ArgumentException.ThrowIfNullOrWhiteSpace(projectId);
+
+        if (await UsesBusinessStoreAsync(filePath, cancellationToken).ConfigureAwait(false))
+        {
+            await SessionStoreProjectCatalogStore.CompleteDeletionAsync(DirectoryOf(filePath), projectId,
+                                                                        expectedRevision, cancellationToken)
+                                                 .ConfigureAwait(false);
+            return;
+        }
+
         EnsureParentDirectory(filePath);
         await using var saveLock = await OpenSaveLockAsync(filePath, cancellationToken).ConfigureAwait(false);
         var             catalog  = await LoadCoreAsync(filePath, false, cancellationToken).ConfigureAwait(false);
@@ -690,6 +718,49 @@ public static class ProjectStore
             // 清理失败不掩盖原始错误；临时文件名为 *.tmp-*，残留不影响后续保存。
         }
     }
+
+    /// <summary>
+    ///     <para>
+    ///         只读取旧目录册文件，不按迁移状态分派；仅供迁移引擎与兼容导入使用：迁移期间标记已存在时公开入口
+    ///         会拒绝阻塞状态，导入器必须绕过权威分派直接读取旧来源。
+    ///     </para>
+    ///     <para>
+    ///         Reads only the legacy catalog file without authority dispatch; used by the migration engine and
+    ///         compatible imports only: while the marker exists during migration the public entry refuses the blocked
+    ///         state, so the importer must bypass authority dispatch and read the legacy source directly.
+    ///     </para>
+    /// </summary>
+    internal static Task<ProjectCatalog> LoadLegacyFileAsync(
+        string filePath, CancellationToken cancellationToken) =>
+        LoadCoreAsync(filePath, true, cancellationToken);
+
+    /// <summary>
+    ///     <para>
+    ///         解析目录册所属 store 的权威模式：仅当文件名为本程序的目录册文件且该 store 已完成迁移时使用业务库；
+    ///         其他路径保持既有文件语义，迁移进行中或标记损坏时抛出类型化异常。
+    ///     </para>
+    ///     <para>
+    ///         Resolves the authority mode of the store owning a catalog path: the business database is used only when
+    ///         the file name is this program's catalog file and the store completed the migration; other paths keep
+    ///         legacy semantics, and a running migration or damaged marker throws a typed exception.
+    ///     </para>
+    /// </summary>
+    private static async Task<bool> UsesBusinessStoreAsync(string filePath, CancellationToken cancellationToken)
+    {
+        var fullPath = Path.GetFullPath(filePath);
+        if (!string.Equals(Path.GetFileName(fullPath), FileName, StringComparison.Ordinal)) return false;
+
+        var directory  = DirectoryOf(fullPath);
+        var resolution = await SessionStoreAuthority.ResolveAsync(directory, cancellationToken).ConfigureAwait(false);
+        SessionStoreAuthority.ThrowIfBlocked(directory, resolution);
+        return resolution.Mode == SessionStoreMode.Migrated;
+    }
+
+    /// <summary>
+    ///     <para>返回目录册文件所在目录（store 目录）。</para>
+    ///     <para>Returns the directory containing the catalog file (the store directory).</para>
+    /// </summary>
+    private static string DirectoryOf(string filePath) => Path.GetDirectoryName(Path.GetFullPath(filePath))!;
 
     /// <summary>
     ///     <para>确保目录册父目录存在，供保存与锁文件使用。</para>

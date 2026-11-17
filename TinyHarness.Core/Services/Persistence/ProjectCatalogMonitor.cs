@@ -189,7 +189,22 @@ public sealed class ProjectCatalogMonitor
         ArgumentException.ThrowIfNullOrWhiteSpace(storeDirectory);
         cancellationToken.ThrowIfCancellationRequested();
 
-        var                      filePath = ProjectStore.FilePath(storeDirectory);
+        var filePath = ProjectStore.FilePath(storeDirectory);
+        // 业务库模式下没有可 stat 的目录册文件：每轮直接读取业务库，避免"旧文件未变"掩盖外部库变更。
+        if (await SessionStoreAuthority.IsMigratedAsync(storeDirectory, cancellationToken).ConfigureAwait(false))
+        {
+            try
+            {
+                var migratedCatalog = await ProjectStore.LoadAsync(filePath, cancellationToken).ConfigureAwait(false);
+                return new ProjectCatalogCheckResult(ProjectCatalogCheckStatus.Loaded, migratedCatalog, default);
+            }
+            catch (Exception ex) when (ex is ProjectStoreException or SessionStoreException or IOException
+                                           or UnauthorizedAccessException or SessionStoreMigrationException)
+            {
+                return new ProjectCatalogCheckResult(ProjectCatalogCheckStatus.Failed, null, default);
+            }
+        }
+
         ProjectCatalogFileState? stat;
         ProjectCatalogFileState? baseline;
         lock (_gate)

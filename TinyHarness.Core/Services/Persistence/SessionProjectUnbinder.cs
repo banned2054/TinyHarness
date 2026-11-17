@@ -121,7 +121,12 @@ public static class SessionProjectUnbinder
             throw new ArgumentException("A project id must contain exactly 32 lowercase hexadecimal characters.",
                                         nameof(projectId));
 
-        var          directory = Path.GetFullPath(storeDirectory);
+        var directory  = Path.GetFullPath(storeDirectory);
+        var resolution = await SessionStoreAuthority.ResolveAsync(directory, cancellationToken).ConfigureAwait(false);
+        SessionStoreAuthority.ThrowIfBlocked(directory, resolution);
+        if (resolution.Mode == SessionStoreMode.Migrated)
+            return await UnassignFromBusinessStoreAsync(directory, projectId, cancellationToken).ConfigureAwait(false);
+
         List<string> sessionIds;
         try
         {
@@ -291,5 +296,56 @@ public static class SessionProjectUnbinder
         }
 
         return new SessionProjectUnassignmentResult(outcomes);
+    }
+
+    /// <summary>
+    ///     <para>
+    ///         迁移完成后的解绑路径：归属只改业务库，把仍指向该项目的归属行显式改为无项目；不读、不写 JSONL
+    ///         归属，也不获取 writer 锁，因此运行中会话不会被写锁阻塞。失败向上抛出并保留删除标记供重试。
+    ///     </para>
+    ///     <para>
+    ///         The post-migration unassignment path: only the business database changes, turning placement rows that
+    ///         still reference the project into explicitly no-project; no JSONL ownership is read or written and no
+    ///         writer lock is taken, so running sessions are not blocked by a write lock. Failures propagate and keep
+    ///         the deletion marker for a retry.
+    ///     </para>
+    /// </summary>
+    private static async Task<SessionProjectUnassignmentResult> UnassignFromBusinessStoreAsync(
+        string directory, string projectId, CancellationToken cancellationToken)
+    {
+        var sessionIds = await SessionStorePlacementStore.ListProjectSessionIdsAsync(directory, projectId,
+                                                                                   cancellationToken)
+                                                        .ConfigureAwait(false);
+        if (sessionIds.Count > 0)
+            await SessionStorePlacementStore.UnassignProjectAsync(directory, projectId, cancellationToken)
+                                            .ConfigureAwait(false);
+
+        try
+        {
+            var index        = new SessionIndexStore(directory);
+            var availability = await index.GetAvailabilityAsync(cancellationToken).ConfigureAwait(false);
+            if (availability.Status == SessionIndexAvailabilityStatus.Available)
+            {
+                var placements = await SessionStorePlacementStore.LoadAllAsync(directory, cancellationToken)
+                                                                 .ConfigureAwait(false);
+                await index.SyncPlacementProjectionAsync(placements, cancellationToken).ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex) when (ex is SessionIndexException or SessionStoreException
+                                       or SessionStoreMigrationException or IOException
+                                       or UnauthorizedAccessException)
+        {
+            // 归属权威已更新；索引投影由后台对账追平，不因此把解绑报告为失败。
+            Trace.TraceError("Placement projection sync for '{0}' failed: {1}", directory, ex.Message);
+        }
+
+        return new SessionProjectUnassignmentResult(
+                                                    sessionIds.Select(id => new SessionProjectUnassignmentOutcome(
+                                                                        id, SessionProjectUnassignmentStatus.Unassigned,
+                                                                        null)).ToArray());
     }
 }

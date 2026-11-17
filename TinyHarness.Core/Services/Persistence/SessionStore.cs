@@ -278,6 +278,18 @@ public interface ISessionStoreWriter : IDisposable
     string SnapshotPath { get; }
 
     /// <summary>
+    ///     <para>
+    ///         日志所属的 session store 目录；默认由 <see cref="SnapshotPath" /> 的父目录推导，
+    ///         供归属读写解析该 store 的迁移权威。
+    ///     </para>
+    ///     <para>
+    ///         The session-store directory owning the journal; derived from <see cref="SnapshotPath" />'s parent by
+    ///         default, so ownership reads and writes can resolve that store's migration authority.
+    ///     </para>
+    /// </summary>
+    string StoreDirectory => Path.GetDirectoryName(SnapshotPath)!;
+
+    /// <summary>
     ///     <para>最近一次成功提交的序号；首次提交前为 0。</para>
     ///     <para>The last successfully committed sequence; zero before the first commit.</para>
     /// </summary>

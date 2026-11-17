@@ -88,6 +88,12 @@ public static class SessionStorePinStore
     /// </param>
     public static async Task<SessionStorePins> LoadAsync(string storeDirectory, CancellationToken cancellationToken)
     {
+        var resolution = await SessionStoreAuthority.ResolveAsync(storeDirectory, cancellationToken)
+                                                    .ConfigureAwait(false);
+        if (resolution.Mode == SessionStoreMode.Migrated)
+            return await LoadFromBusinessStoreAsync(storeDirectory, cancellationToken).ConfigureAwait(false);
+        SessionStoreAuthority.ThrowIfBlocked(storeDirectory, resolution);
+
         var filePath = FilePath(storeDirectory);
         cancellationToken.ThrowIfCancellationRequested();
         return await LoadCoreAsync(filePath, cancellationToken).ConfigureAwait(false);
@@ -122,6 +128,12 @@ public static class SessionStorePinStore
         ArgumentNullException.ThrowIfNull(legacyPinnedProjectIds);
         ArgumentNullException.ThrowIfNull(legacyPinnedSessionIds);
 
+        var resolution = await SessionStoreAuthority.ResolveAsync(storeDirectory, cancellationToken)
+                                                    .ConfigureAwait(false);
+        if (resolution.Mode == SessionStoreMode.Migrated)
+            return await LoadFromBusinessStoreAsync(storeDirectory, cancellationToken).ConfigureAwait(false);
+        SessionStoreAuthority.ThrowIfBlocked(storeDirectory, resolution);
+
         var filePath = FilePath(storeDirectory);
         var legacy = new SessionStorePins
         {
@@ -155,25 +167,62 @@ public static class SessionStorePinStore
     }
 
     /// <summary>
-    ///     <para>切换项目置顶状态；新置顶项目进入列表顶部，取消置顶时移除。</para>
+    ///     <para>
+    ///         只读取旧置顶状态文件，不按迁移状态分派；仅供迁移引擎与兼容导入使用：迁移期间标记已存在但批次
+    ///         尚未切换，公开入口会因阻塞状态拒绝，导入器必须绕过权威分派直接读取旧来源。
+    ///     </para>
+    ///     <para>
+    ///         Reads only the legacy pin-state file without authority dispatch; used by the migration engine and
+    ///         compatible imports only: while the marker exists but batches are unswitched the public entry refuses the
+    ///         blocked state, so the importer must bypass authority dispatch and read the legacy source directly.
+    ///     </para>
+    /// </summary>
+    internal static Task<SessionStorePins> LoadLegacyFileAsync(
+        string storeDirectory, CancellationToken cancellationToken) =>
+        LoadCoreAsync(FilePath(storeDirectory), cancellationToken);
+
+    /// <summary>
+    ///     <para>
+    ///         切换项目置顶状态；新置顶项目进入列表顶部，取消置顶时移除。
+    ///     </para>
     ///     <para>Toggles a project's pin state; newly pinned projects enter at the top and unpinning removes them.</para>
     /// </summary>
-    public static Task<SessionStorePins> ToggleProjectPinAsync(
-        string storeDirectory, string projectId, CancellationToken cancellationToken) =>
-        UpdateAsync(storeDirectory, projectId, static (pins, id) =>
+    public static async Task<SessionStorePins> ToggleProjectPinAsync(
+        string storeDirectory, string projectId, CancellationToken cancellationToken)
+    {
+        if (await UsesBusinessStoreAsync(storeDirectory, cancellationToken).ConfigureAwait(false))
+        {
+            var state    = await SessionStoreOrganizationStore.LoadAsync(storeDirectory, cancellationToken)
+                                                              .ConfigureAwait(false);
+            var isPinned = !state.PinnedProjectIds.Contains(projectId, StringComparer.Ordinal);
+            await SessionStoreOrganizationStore.SetProjectPinnedAsync(storeDirectory, projectId, isPinned,
+                                                                       cancellationToken).ConfigureAwait(false);
+            return await LoadFromBusinessStoreAsync(storeDirectory, cancellationToken).ConfigureAwait(false);
+        }
+
+        return await UpdateAsync(storeDirectory, projectId, static (pins, id) =>
         {
             var projectIds = pins.PinnedProjectIds.ToList();
             if (!projectIds.Remove(id)) projectIds.Insert(0, id);
             return pins with { PinnedProjectIds = projectIds };
-        }, cancellationToken);
+        }, cancellationToken).ConfigureAwait(false);
+    }
 
     /// <summary>
     ///     <para>将项目置顶状态设为指定值；重复设置不会改变现有顺序。</para>
     ///     <para>Sets a project's pin state; repeating the same value preserves its current order.</para>
     /// </summary>
-    public static Task<SessionStorePins> SetProjectPinnedAsync(
-        string storeDirectory, string projectId, bool isPinned, CancellationToken cancellationToken) =>
-        UpdateAsync(storeDirectory, projectId, (pins, id) =>
+    public static async Task<SessionStorePins> SetProjectPinnedAsync(
+        string storeDirectory, string projectId, bool isPinned, CancellationToken cancellationToken)
+    {
+        if (await UsesBusinessStoreAsync(storeDirectory, cancellationToken).ConfigureAwait(false))
+        {
+            await SessionStoreOrganizationStore.SetProjectPinnedAsync(storeDirectory, projectId, isPinned,
+                                                                       cancellationToken).ConfigureAwait(false);
+            return await LoadFromBusinessStoreAsync(storeDirectory, cancellationToken).ConfigureAwait(false);
+        }
+
+        return await UpdateAsync(storeDirectory, projectId, (pins, id) =>
         {
             var projectIds        = pins.PinnedProjectIds.ToList();
             var isCurrentlyPinned = projectIds.Contains(id, StringComparer.Ordinal);
@@ -181,28 +230,49 @@ public static class SessionStorePinStore
             if (isPinned) projectIds.Insert(0, id);
             else projectIds.Remove(id);
             return pins with { PinnedProjectIds = projectIds };
-        }, cancellationToken);
+        }, cancellationToken).ConfigureAwait(false);
+    }
 
     /// <summary>
     ///     <para>切换会话置顶状态；新置顶会话插入列表顶部，取消置顶时移除。</para>
     ///     <para>Toggles a session's pin state; newly pinned sessions enter at the top and unpinning removes them.</para>
     /// </summary>
-    public static Task<SessionStorePins> ToggleSessionPinAsync(
-        string storeDirectory, string sessionId, CancellationToken cancellationToken) =>
-        UpdateAsync(storeDirectory, sessionId, static (pins, id) =>
+    public static async Task<SessionStorePins> ToggleSessionPinAsync(
+        string storeDirectory, string sessionId, CancellationToken cancellationToken)
+    {
+        if (await UsesBusinessStoreAsync(storeDirectory, cancellationToken).ConfigureAwait(false))
+        {
+            var state    = await SessionStoreOrganizationStore.LoadAsync(storeDirectory, cancellationToken)
+                                                              .ConfigureAwait(false);
+            var isPinned = !state.PinnedSessionIds.Contains(sessionId, StringComparer.Ordinal);
+            await SessionStoreOrganizationStore.SetSessionPinnedAsync(storeDirectory, sessionId, isPinned,
+                                                                       cancellationToken).ConfigureAwait(false);
+            return await LoadFromBusinessStoreAsync(storeDirectory, cancellationToken).ConfigureAwait(false);
+        }
+
+        return await UpdateAsync(storeDirectory, sessionId, static (pins, id) =>
         {
             var sessionIds = pins.PinnedSessionIds.ToList();
             if (!sessionIds.Remove(id)) sessionIds.Insert(0, id);
             return pins with { PinnedSessionIds = sessionIds };
-        }, cancellationToken);
+        }, cancellationToken).ConfigureAwait(false);
+    }
 
     /// <summary>
     ///     <para>将会话置顶状态设为指定值；重复设置不会改变其他会话状态。</para>
     ///     <para>Sets a session's pin state; repeating the same value leaves other session states unchanged.</para>
     /// </summary>
-    public static Task<SessionStorePins> SetSessionPinnedAsync(
-        string storeDirectory, string sessionId, bool isPinned, CancellationToken cancellationToken) =>
-        UpdateAsync(storeDirectory, sessionId, (pins, id) =>
+    public static async Task<SessionStorePins> SetSessionPinnedAsync(
+        string storeDirectory, string sessionId, bool isPinned, CancellationToken cancellationToken)
+    {
+        if (await UsesBusinessStoreAsync(storeDirectory, cancellationToken).ConfigureAwait(false))
+        {
+            await SessionStoreOrganizationStore.SetSessionPinnedAsync(storeDirectory, sessionId, isPinned,
+                                                                       cancellationToken).ConfigureAwait(false);
+            return await LoadFromBusinessStoreAsync(storeDirectory, cancellationToken).ConfigureAwait(false);
+        }
+
+        return await UpdateAsync(storeDirectory, sessionId, (pins, id) =>
         {
             var sessionIds        = pins.PinnedSessionIds.ToList();
             var isCurrentlyPinned = sessionIds.Contains(id, StringComparer.Ordinal);
@@ -210,16 +280,26 @@ public static class SessionStorePinStore
             if (isPinned) sessionIds.Insert(0, id);
             else sessionIds.Remove(id);
             return pins with { PinnedSessionIds = sessionIds };
-        }, cancellationToken);
+        }, cancellationToken).ConfigureAwait(false);
+    }
 
     /// <summary>
     ///     <para>按拖放位置调整置顶项目顺序；任一项目不在置顶列表时不写入。</para>
     ///     <para>Reorders pinned projects by a drop position; no write occurs unless both projects are pinned.</para>
     /// </summary>
-    public static Task<SessionStorePins> MovePinnedProjectAsync(
+    public static async Task<SessionStorePins> MovePinnedProjectAsync(
         string            storeDirectory, string sourceProjectId, string targetProjectId, bool insertAfter,
-        CancellationToken cancellationToken) =>
-        UpdateAsync(storeDirectory, sourceProjectId, (pins, sourceId) =>
+        CancellationToken cancellationToken)
+    {
+        if (await UsesBusinessStoreAsync(storeDirectory, cancellationToken).ConfigureAwait(false))
+        {
+            await SessionStoreOrganizationStore.MovePinnedProjectAsync(storeDirectory, sourceProjectId, targetProjectId,
+                                                                        insertAfter, cancellationToken)
+                                               .ConfigureAwait(false);
+            return await LoadFromBusinessStoreAsync(storeDirectory, cancellationToken).ConfigureAwait(false);
+        }
+
+        return await UpdateAsync(storeDirectory, sourceProjectId, (pins, sourceId) =>
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(targetProjectId);
             var projectIds  = pins.PinnedProjectIds.ToList();
@@ -232,7 +312,39 @@ public static class SessionStorePinStore
             if (sourceIndex < insertIndex) insertIndex--;
             projectIds.Insert(Math.Clamp(insertIndex, 0, projectIds.Count), sourceId);
             return pins with { PinnedProjectIds = projectIds };
-        }, cancellationToken);
+        }, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    ///     <para>解析权威模式并在阻塞状态下抛出类型化异常；返回是否使用业务库。</para>
+    ///     <para>Resolves the authority mode, throws on the blocked state, and returns whether the business database is used.</para>
+    /// </summary>
+    private static async Task<bool> UsesBusinessStoreAsync(
+        string storeDirectory, CancellationToken cancellationToken)
+    {
+        var resolution = await SessionStoreAuthority.ResolveAsync(storeDirectory, cancellationToken)
+                                                    .ConfigureAwait(false);
+        SessionStoreAuthority.ThrowIfBlocked(storeDirectory, resolution);
+        return resolution.Mode == SessionStoreMode.Migrated;
+    }
+
+    /// <summary>
+    ///     <para>把业务库组织状态转换为置顶模型；业务库模式下旧侧栏置顶列表视为已导入。</para>
+    ///     <para>Converts the business organization state to the pin model; in database mode the legacy sidebar pin lists count as imported.</para>
+    /// </summary>
+    private static async Task<SessionStorePins> LoadFromBusinessStoreAsync(
+        string storeDirectory, CancellationToken cancellationToken)
+    {
+        var state = await SessionStoreOrganizationStore.LoadAsync(storeDirectory, cancellationToken)
+                                                       .ConfigureAwait(false);
+        return new SessionStorePins
+        {
+            Schema                    = SessionStorePins.CurrentSchema,
+            PinnedProjectIds          = state.PinnedProjectIds,
+            PinnedSessionIds          = state.PinnedSessionIds,
+            LegacySidebarPinsImported = true
+        };
+    }
 
     /// <summary>
     ///     <para>在跨进程锁内重读最新状态、应用变更，并仅保存有差异的结果。</para>
