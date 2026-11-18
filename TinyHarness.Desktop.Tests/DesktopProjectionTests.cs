@@ -148,10 +148,37 @@ public sealed class DesktopProjectionTests
     public async Task DividerAppearsOncePerRunAcrossToolsStreamingCancellationAndHistoryPages(
         int toolRounds, bool cancel)
     {
-        var fixture      = await Fixture.CreateAsync();
-        var finalEntered = Signal();
-        var finish       = Signal();
-        var factory = new DesktopSessionFactory((_, _) => new MultiStepModel(toolRounds, finalEntered, finish),
+        var fixture             = await Fixture.CreateAsync();
+        var timeout             = TimeSpan.FromSeconds(toolRounds == 101 ? 90 : 30);
+        var firstFinalEntered   = Signal();
+        var finish              = Signal();
+        var completedToolCalls  = 0;
+        var finalRepliesEntered = 0;
+
+        void MarkFinalReplyEntered()
+        {
+            Interlocked.Increment(ref finalRepliesEntered);
+            firstFinalEntered.TrySetResult();
+        }
+
+        async Task WaitForRunAsync(Task task, int run, string phase)
+        {
+            try
+            {
+                await task.WaitAsync(timeout);
+            }
+            catch (TimeoutException exception)
+            {
+                var finalReplyEntered = Volatile.Read(ref finalRepliesEntered) >= run;
+                var completed         = Volatile.Read(ref completedToolCalls);
+                throw new
+                    TimeoutException($"Run {run} timed out after {timeout.TotalSeconds} seconds waiting for {phase}. " +
+                                     $"Completed tool calls: {completed}/{toolRounds}. "                               +
+                                     $"Entered final reply: {finalReplyEntered}.", exception);
+            }
+        }
+
+        var factory = new DesktopSessionFactory((_, _) => new MultiStepModel(toolRounds, MarkFinalReplyEntered, finish),
                                                 new Credentials(), fixture.Config);
         await using var manager = new DesktopSessionManager();
         var             page    = Page(manager, factory, fixture.First);
@@ -162,14 +189,19 @@ public sealed class DesktopProjectionTests
             foreach (var group in change.NewItems.OfType<ProcessGroupItemViewModel>())
                 group.Items.CollectionChanged += (_, added) =>
                 {
-                    if (added.NewItems is not null)
-                        streams.AddRange(added.NewItems.OfType<MessageItemViewModel>()
-                                              .Where(message => message.IsStreaming));
+                    if (added.NewItems is null) return;
+                    foreach (var item in added.NewItems)
+                    {
+                        if (item is MessageItemViewModel { IsStreaming: true } message) streams.Add(message);
+                        if (item is ToolActivityItemViewModel { IsSucceeded: true } or
+                                    ToolActivityItemViewModel { IsFailed   : true })
+                            Interlocked.Increment(ref completedToolCalls);
+                    }
                 };
         };
         page.Draft = "first run";
         await page.SendAsync();
-        await finalEntered.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        await WaitForRunAsync(firstFinalEntered.Task, 1, "the final reply");
         await page.FlushStreamingAsync();
         var firstGroup = page.Items.OfType<ProcessGroupItemViewModel>().Single();
         Assert.That(firstGroup.HasRunModelLabel, Is.True);
@@ -178,7 +210,7 @@ public sealed class DesktopProjectionTests
         Assert.That(streams.All(message => message.IsInProcessGroup), Is.True);
         if (cancel) page.CancelCommand.Execute(null);
         else finish.SetResult();
-        await page.Completion.WaitAsync(TimeSpan.FromSeconds(30));
+        await WaitForRunAsync(page.Completion, 1, "run completion");
         Assert.That(page.Status, Is.EqualTo(cancel ? "Cancelled" : "Completed"));
         Assert.That(page.Items.OfType<ProcessGroupItemViewModel>().Single(), Is.SameAs(firstGroup));
         Assert.That(firstGroup.IsExpanded || firstGroup.IsRunning, Is.False);
@@ -188,9 +220,10 @@ public sealed class DesktopProjectionTests
         Assert.That(page.Items.OfType<MessageItemViewModel>().Count(message => message.IsAssistantMessage),
                     Is.EqualTo(cancel ? 0 : 1));
         finish.TrySetResult();
+        Volatile.Write(ref completedToolCalls, 0);
         page.Draft = "second run";
         await page.SendAsync();
-        await page.Completion.WaitAsync(TimeSpan.FromSeconds(30));
+        await WaitForRunAsync(page.Completion, 2, "run completion");
         Assert.That(page.Status, Is.EqualTo("Completed"));
         Assert.That(page.Items.OfType<ProcessGroupItemViewModel>().Count(), Is.EqualTo(2));
         Assert.That(page.Items.OfType<ProcessGroupItemViewModel>().Count(group => group.HasRunModelLabel),
@@ -1576,7 +1609,7 @@ public sealed class DesktopProjectionTests
 
     private sealed class MultiStepModel(
         int                  toolRounds,
-        TaskCompletionSource finalEntered,
+        Action               markFinalReplyEntered,
         TaskCompletionSource finish) : IChatCompletionClient
     {
         private int _requests;
@@ -1600,7 +1633,7 @@ public sealed class DesktopProjectionTests
             }
             else
             {
-                finalEntered.TrySetResult();
+                markFinalReplyEntered();
                 await finish.Task.WaitAsync(cancellationToken);
                 yield return new ChatStreamEvent { Kind = ChatStreamEventKind.End, FinishReason = "stop" };
             }
