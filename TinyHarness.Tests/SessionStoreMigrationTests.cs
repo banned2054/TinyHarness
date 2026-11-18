@@ -1,6 +1,7 @@
+using Microsoft.Data.Sqlite;
+using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using Microsoft.Data.Sqlite;
 using TinyHarness.Core.Exceptions;
 using TinyHarness.Core.Models.Configuration;
 using TinyHarness.Core.Models.Context;
@@ -647,6 +648,393 @@ public class SessionStoreMigrationTests
 
     private static SessionStoreMigrationOptions MigrationOptions(StoreFixture fixture, string? sidebarPath = null) =>
         new(fixture.StoreDirectory) { SidebarPreferencesPath = sidebarPath };
+
+    /// <summary>
+    ///     <para>
+    ///         把业务库退回版本 1 的真实结构：删掉版本 2 新增的墓碑表与状态索引，再把版本号改回 1；
+    ///         版本 1 的业务行保持原样。升级路径必须能从这份结构继续，而不是要求重建库。
+    ///     </para>
+    ///     <para>
+    ///         Rolls the business database back to the real version-1 structure by dropping the version-2 tombstone
+    ///         table and its state index and setting the version to 1, while keeping every version-1 business row. The
+    ///         upgrade path must continue from this structure instead of demanding a rebuilt database.
+    ///     </para>
+    /// </summary>
+    private static async Task RollBackToVersionOneAsync(string storeDirectory)
+    {
+        var builder = new SqliteConnectionStringBuilder
+        {
+            DataSource = SessionStoreDatabase.PathFor(storeDirectory),
+            Mode       = SqliteOpenMode.ReadWrite,
+            Pooling    = false
+        };
+        await using var connection = new SqliteConnection(builder.ToString());
+        await connection.OpenAsync();
+        var command = connection.CreateCommand();
+        command.CommandText = $"""
+            DROP INDEX IF EXISTS {SessionStoreDatabase.TombstoneStateIndex};
+            DROP TABLE IF EXISTS {SessionStoreDatabase.TombstoneTableName};
+            UPDATE {SessionStoreDatabase.MetaTableName} SET value = '1'
+            WHERE key = '{SessionStoreDatabase.SchemaVersionKey}';
+            """;
+        await command.ExecuteNonQueryAsync();
+    }
+
+    /// <summary>
+    ///     <para>
+    ///         把业务库替换成另一份结构合法的版本 1 库：身份、建库时间与既有业务行都不同，版本号仍是 1，
+    ///         因此可用性探测只会报告"需要升级"。用于验证升级不得先改写异库。
+    ///     </para>
+    ///     <para>
+    ///         Replaces the business database with a different, structurally valid version-1 database whose identity,
+    ///         creation time, and business rows all differ while the version stays 1, so availability probing reports
+    ///         only "needs upgrade". It proves an upgrade never rewrites a foreign database first.
+    ///     </para>
+    /// </summary>
+    private static async Task ReplaceWithForeignVersionOneDatabaseAsync(string storeDirectory, string projectName)
+    {
+        var database = new SessionStoreDatabase(storeDirectory, isBusinessStore: false);
+        StoreFixture.DeleteDatabase(storeDirectory);
+        await database.InitializeAsync(CancellationToken.None);
+        var builder = new SqliteConnectionStringBuilder
+        {
+            DataSource = SessionStoreDatabase.PathFor(storeDirectory),
+            Mode       = SqliteOpenMode.ReadWrite,
+            Pooling    = false
+        };
+        await using (var connection = new SqliteConnection(builder.ToString()))
+        {
+            await connection.OpenAsync();
+            var insert = connection.CreateCommand();
+            insert.CommandText = $"""
+                INSERT INTO project (id, name, root_path, root_key, revision, is_deleting, created_utc, updated_utc)
+                VALUES ('{StoreFixture.NewId()}', $name, 'c:\foreign\root', 'C:\FOREIGN\ROOT', 1, 0, 1000, 1000);
+                UPDATE {SessionStoreDatabase.MetaTableName} SET value = '1'
+                WHERE key = '{SessionStoreDatabase.SchemaVersionKey}';
+                UPDATE {SessionStoreDatabase.MetaTableName} SET value = 'foreign-identity-0000000000000000'
+                WHERE key = '{SessionStoreDatabase.StoreIdentityKey}';
+                """;
+            insert.Parameters.AddWithValue("$name", projectName);
+            await insert.ExecuteNonQueryAsync();
+            var drop = connection.CreateCommand();
+            drop.CommandText = $"""
+                DROP INDEX IF EXISTS {SessionStoreDatabase.TombstoneStateIndex};
+                DROP TABLE IF EXISTS {SessionStoreDatabase.TombstoneTableName};
+                """;
+            await drop.ExecuteNonQueryAsync();
+        }
+    }
+
+    /// <summary>
+    ///     <para>读取业务库的 schema 版本、库身份与项目名，用于断言被拒绝的升级没有改写文件。</para>
+    ///     <para>Reads the schema version, store identity, and project name so a refused upgrade can be proven not to have rewritten the file.</para>
+    /// </summary>
+    private static async Task<(string? Version, string? Identity, IReadOnlyList<string> ProjectNames)>
+        ReadDatabaseFactsAsync(string storeDirectory)
+    {
+        var builder = new SqliteConnectionStringBuilder
+        {
+            DataSource = SessionStoreDatabase.PathFor(storeDirectory),
+            Mode       = SqliteOpenMode.ReadWrite,
+            Pooling    = false
+        };
+        await using var connection = new SqliteConnection(builder.ToString());
+        await connection.OpenAsync();
+        var version = await SessionStoreDatabase.ReadMetaValueAsync(connection, SessionStoreDatabase.SchemaVersionKey,
+                                                                    CancellationToken.None);
+        var identity = await SessionStoreDatabase.ReadStoreIdentityAsync(connection, CancellationToken.None);
+        var names = connection.CreateCommand();
+        names.CommandText = "SELECT name FROM project ORDER BY name;";
+        var projects = new List<string>();
+        await using var reader = await names.ExecuteReaderAsync();
+        while (await reader.ReadAsync()) projects.Add(reader.GetString(0));
+        return (version, identity, projects);
+    }
+
+    /// <summary>
+    ///     <para>
+    ///         已完成迁移的 store 在程序升级后仍可能带着旧 schema：显式迁移入口必须就地升级并保留业务行，
+    ///         结果报告升级来源版本，重复运行再变为无操作。
+    ///     </para>
+    ///     <para>
+    ///         A completed store can still carry an older schema after a program upgrade: the explicit migration entry
+    ///         must upgrade it in place, keep every business row, report the source version, and turn the next run into
+    ///         a no-op.
+    ///     </para>
+    /// </summary>
+    [Test]
+    public async Task Migrate_CompletedStoreWithOlderSchema_UpgradesInPlaceAndKeepsRows()
+    {
+        using var fixture = new StoreFixture();
+        fixture.WriteDefaultSources();
+        await fixture.WriteSessionAsync(fixture.BoundSessionId, fixture.ProjectId);
+        try
+        {
+            await SessionStoreMigration.MigrateAsync(MigrationOptions(fixture), CancellationToken.None);
+            await RollBackToVersionOneAsync(fixture.StoreDirectory);
+            var legacyBytes = fixture.ReadLegacyBytes();
+
+            var before = await SessionStoreMigration.InspectAsync(fixture.StoreDirectory, CancellationToken.None);
+            Assert.That(before.Status, Is.EqualTo(SessionStoreMigrationStatus.DatabaseNeedsUpgrade),
+                        "旧 schema 必须作为需要升级报告，而不是损坏或已完成。");
+            // 生产读写在此之前拒绝：迁移标记仍是 Completed，只有业务库连接入口能看出 schema 落后。
+            var refused = await TestAssert.ThrowsAsync<SessionStoreMigrationException>(
+                () => SessionStorePlacementStore.LoadAllAsync(fixture.StoreDirectory, CancellationToken.None));
+            Assert.That(refused.Kind, Is.EqualTo(SessionStoreFailureKind.Unsupported),
+                        $"升级前的业务库必须拒绝生产读写，实际为 {refused.Kind}。");
+
+            var upgraded = await SessionStoreMigration.MigrateAsync(MigrationOptions(fixture), CancellationToken.None);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(upgraded.AlreadyCompleted, Is.True, "迁移早已完成，本次只做 schema 升级。");
+                Assert.That(upgraded.SchemaUpgradedFrom, Is.EqualTo(1));
+                Assert.That(upgraded.StoreIdentity, Is.EqualTo(before.StoreIdentity));
+            });
+            var after = await SessionStoreMigration.InspectAsync(fixture.StoreDirectory, CancellationToken.None);
+            Assert.That(after.Status, Is.EqualTo(SessionStoreMigrationStatus.Completed));
+            Assert.That(await StoreFixture.CountRowsAsync(fixture.StoreDirectory, "project"), Is.EqualTo(1L),
+                        "升级不得丢失既有项目行。");
+            var placements = await SessionStorePlacementStore.LoadAllAsync(fixture.StoreDirectory,
+                                                                          CancellationToken.None);
+            Assert.That(placements[fixture.BoundSessionId].ProjectId, Is.EqualTo(fixture.ProjectId),
+                        "升级不得丢失既有归属行。");
+            var organization = await SessionStoreOrganizationStore.LoadAsync(fixture.StoreDirectory,
+                                                                            CancellationToken.None);
+            Assert.That(organization.ArchivedSessionIds, Is.EqualTo(new[] { fixture.ArchivedSessionId }));
+            // 墓碑表必须补上：新程序的删除协议依赖它，缺表会让删除路径在运行期失败。
+            await SessionStoreTombstoneStore.MarkPendingAsync(fixture.StoreDirectory, fixture.PendingSessionId,
+                                                             CancellationToken.None);
+            Assert.That(await SessionStoreTombstoneStore.IsTombstonedAsync(fixture.StoreDirectory,
+                                                                          fixture.PendingSessionId,
+                                                                          CancellationToken.None), Is.True);
+            AssertLegacyBytesEqual(legacyBytes, fixture.ReadLegacyBytes());
+
+            var repeated = await SessionStoreMigration.MigrateAsync(MigrationOptions(fixture), CancellationToken.None);
+            Assert.That(repeated.SchemaUpgradedFrom, Is.Null, "已升级的库再次运行不得重复升级。");
+        }
+        finally
+        {
+            fixture.Dispose();
+        }
+    }
+
+    /// <summary>
+    ///     <para>
+    ///         未完成迁移的 store 带着旧 schema 续作时，升级在导入之前发生：身份核对、导入与校验都按当前结构
+    ///         进行，不会因为版本更低而停在导入中途。
+    ///     </para>
+    ///     <para>
+    ///         When an unfinished store resumes on an older schema the upgrade happens before the import, so identity
+    ///         checks, imports, and validation all run on the current structure instead of stopping mid-import.
+    ///     </para>
+    /// </summary>
+    [Test]
+    public async Task Migrate_UnfinishedStoreWithOlderSchema_UpgradesBeforeResumingImport()
+    {
+        using var fixture = new StoreFixture();
+        fixture.WriteDefaultSources();
+        await fixture.WriteSessionAsync(fixture.BoundSessionId, fixture.ProjectId);
+        try
+        {
+            // 构造旧程序留下的现场：业务库由更早的版本建出（schema 1）并在导入任何批次前中断；迁移标记与
+            // 库身份都已绑定，旧来源仍是该 store 的唯一数据来源。
+            // Reproduce what an older build leaves behind: the business database was created by an earlier version
+            // (schema 1) and the run stopped before importing any batch, while the marker is already bound to its
+            // identity and the legacy sources still hold every row.
+            var migrationId = StoreFixture.NewId();
+            var database    = new SessionStoreDatabase(fixture.StoreDirectory);
+            await database.InitializeAsync(CancellationToken.None);
+            string identity;
+            await using (var connection = await database.OpenExistingForInternalUseAsync(CancellationToken.None))
+                identity = (await SessionStoreDatabase.ReadStoreIdentityAsync(connection, CancellationToken.None))!;
+            await RollBackToVersionOneAsync(fixture.StoreDirectory);
+            await WriteMigrationIdAsync(fixture.StoreDirectory, migrationId);
+            var now     = DateTimeOffset.UtcNow;
+            var started = SessionStoreMigrationMarker.Start(migrationId, now).WithStoreIdentity(identity, now);
+            await SessionStoreMigration.WriteMarkerAsync(fixture.StoreDirectory, started, CancellationToken.None);
+
+            var resumed = await SessionStoreMigration.MigrateAsync(MigrationOptions(fixture), CancellationToken.None);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(resumed.AlreadyCompleted, Is.False);
+                Assert.That(resumed.SchemaUpgradedFrom, Is.EqualTo(1),
+                            "续作必须先升级旧 schema 再导入，而不是直接按当前结构写入。");
+                Assert.That(resumed.Batches.All(batch => batch.SwitchedThisRun), Is.True);
+            });
+            Assert.That((await SessionStoreMigration.InspectAsync(fixture.StoreDirectory, CancellationToken.None))
+                       .Status, Is.EqualTo(SessionStoreMigrationStatus.Completed));
+            var placements = await SessionStorePlacementStore.LoadAllAsync(fixture.StoreDirectory,
+                                                                          CancellationToken.None);
+            Assert.That(placements[fixture.BoundSessionId].ProjectId, Is.EqualTo(fixture.ProjectId));
+        }
+        finally
+        {
+            fixture.Dispose();
+        }
+    }
+
+    /// <summary>
+    ///     <para>
+    ///         已完成迁移的 store 被另一份结构合法的旧库替换后再次运行迁移：本入口必须在提交任何升级写入前按
+    ///         迁移标记拒绝，被替换的文件保持原版本、原结构与原业务行，创建它的旧程序仍可继续使用。
+    ///     </para>
+    ///     <para>
+    ///         When a completed store's business database is replaced by a different structurally valid older
+    ///         database, running the migration again must refuse on the marker before committing any upgrade write,
+    ///         leaving the replaced file at its original version, structure, and rows so the older program that
+    ///         created it can keep using it.
+    ///     </para>
+    /// </summary>
+    [Test]
+    public async Task Migrate_CompletedStoreWithForeignOlderDatabase_RefusesWithoutUpgradingIt()
+    {
+        using var fixture = new StoreFixture();
+        fixture.WriteDefaultSources();
+        await fixture.WriteSessionAsync(fixture.BoundSessionId, fixture.ProjectId);
+        try
+        {
+            await SessionStoreMigration.MigrateAsync(MigrationOptions(fixture), CancellationToken.None);
+            var marker = (await SessionStoreMigration.ReadMarkerAsync(fixture.StoreDirectory, CancellationToken.None))
+               .Marker;
+            await ReplaceWithForeignVersionOneDatabaseAsync(fixture.StoreDirectory, "Foreign");
+            var before = await ReadDatabaseFactsAsync(fixture.StoreDirectory);
+            Assert.Multiple(() =>
+            {
+                Assert.That(before.Version, Is.EqualTo("1"), "夹具必须先是一份结构合法的版本 1 库。");
+                Assert.That(before.Identity, Is.Not.EqualTo(marker!.StoreIdentity),
+                            "夹具身份必须与迁移标记不同，才能代表被替换的异库。");
+                Assert.That(before.ProjectNames, Is.EqualTo(new[] { "Foreign" }));
+            });
+
+            var refused = await TestAssert.ThrowsAsync<SessionStoreMigrationException>(
+                () => SessionStoreMigration.MigrateAsync(MigrationOptions(fixture), CancellationToken.None));
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(refused.Kind, Is.EqualTo(SessionStoreFailureKind.Conflict));
+                Assert.That(refused.Message, Does.Contain("schema upgrade was refused"));
+            });
+            var after = await ReadDatabaseFactsAsync(fixture.StoreDirectory);
+            Assert.Multiple(() =>
+            {
+                Assert.That(after.Version, Is.EqualTo("1"), "拒绝升级后仍须保持原 schema 版本。");
+                Assert.That(after.Identity, Is.EqualTo(before.Identity), "异库身份不得被改写。");
+                Assert.That(after.ProjectNames, Is.EqualTo(before.ProjectNames), "异库业务行不得被改动。");
+            });
+            Assert.That(await MissingVersionTwoObjectsAsync(fixture.StoreDirectory), Is.True,
+                        "异库不得被补上版本 2 的墓碑结构。");
+        }
+        finally
+        {
+            fixture.Dispose();
+        }
+    }
+
+    /// <summary>
+    ///     <para>
+    ///         未完成迁移的 store 被另一份结构合法的旧库替换：续作路径同样必须先核对迁移归属再升级，拒绝后
+    ///         异库保持原版本与原业务行。
+    ///     </para>
+    ///     <para>
+    ///         When an unfinished store's business database is replaced by a different structurally valid older
+    ///         database, the resume path must also verify migration ownership before upgrading, and the refusal
+    ///         leaves that database at its original version and rows.
+    ///     </para>
+    /// </summary>
+    [Test]
+    public async Task Migrate_UnfinishedStoreWithForeignOlderDatabase_RefusesWithoutUpgradingIt()
+    {
+        using var fixture = new StoreFixture();
+        fixture.WriteDefaultSources();
+        await fixture.WriteSessionAsync(fixture.BoundSessionId, fixture.ProjectId);
+        try
+        {
+            // 中断现场：标记已绑定原库身份，但业务库被换成另一份属于别的迁移的版本 1 库。
+            // Interrupted state: the marker is bound to the original identity while the file was replaced by a
+            // version-1 database belonging to a different migration.
+            var migrationId = StoreFixture.NewId();
+            var original    = new SessionStoreDatabase(fixture.StoreDirectory);
+            await original.InitializeAsync(CancellationToken.None);
+            string originalIdentity;
+            await using (var connection = await original.OpenExistingForInternalUseAsync(CancellationToken.None))
+                originalIdentity =
+                    (await SessionStoreDatabase.ReadStoreIdentityAsync(connection, CancellationToken.None))!;
+            var now     = DateTimeOffset.UtcNow;
+            var started = SessionStoreMigrationMarker.Start(migrationId, now)
+                                                     .WithStoreIdentity(originalIdentity, now);
+            await SessionStoreMigration.WriteMarkerAsync(fixture.StoreDirectory, started, CancellationToken.None);
+
+            await ReplaceWithForeignVersionOneDatabaseAsync(fixture.StoreDirectory, "Foreign");
+            await WriteMigrationIdAsync(fixture.StoreDirectory, StoreFixture.NewId());
+            var before = await ReadDatabaseFactsAsync(fixture.StoreDirectory);
+
+            var refused = await TestAssert.ThrowsAsync<SessionStoreMigrationException>(
+                () => SessionStoreMigration.MigrateAsync(MigrationOptions(fixture), CancellationToken.None));
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(refused.Kind, Is.EqualTo(SessionStoreFailureKind.Conflict));
+                Assert.That(refused.Message, Does.Contain("schema upgrade was refused"));
+            });
+            var after = await ReadDatabaseFactsAsync(fixture.StoreDirectory);
+            Assert.Multiple(() =>
+            {
+                Assert.That(after.Version, Is.EqualTo("1"));
+                Assert.That(after.Identity, Is.EqualTo(before.Identity));
+                Assert.That(after.ProjectNames, Is.EqualTo(new[] { "Foreign" }));
+            });
+            Assert.That(await MissingVersionTwoObjectsAsync(fixture.StoreDirectory), Is.True);
+        }
+        finally
+        {
+            fixture.Dispose();
+        }
+    }
+
+    /// <summary>
+    ///     <para>检查业务库是否仍缺版本 2 的墓碑表与状态索引，用于断言被拒绝的升级没有写入任何结构。</para>
+    ///     <para>Checks whether the version-2 tombstone table and state index are still absent, proving a refused upgrade wrote no structure.</para>
+    /// </summary>
+    private static async Task<bool> MissingVersionTwoObjectsAsync(string storeDirectory)
+    {
+        var builder = new SqliteConnectionStringBuilder
+        {
+            DataSource = SessionStoreDatabase.PathFor(storeDirectory),
+            Mode       = SqliteOpenMode.ReadWrite,
+            Pooling    = false
+        };
+        await using var connection = new SqliteConnection(builder.ToString());
+        await connection.OpenAsync();
+        var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT COUNT(*) FROM sqlite_master
+            WHERE name IN ($table, $index);
+            """;
+        command.Parameters.AddWithValue("$table", SessionStoreDatabase.TombstoneTableName);
+        command.Parameters.AddWithValue("$index", SessionStoreDatabase.TombstoneStateIndex);
+        var found = Convert.ToInt64(await command.ExecuteScalarAsync(), CultureInfo.InvariantCulture);
+        return found == 0;
+    }
+
+    /// <summary>
+    ///     <para>把迁移标识写进业务库元数据，使标记与库的双向绑定成立。</para>
+    ///     <para>Writes the migration id into the business metadata so the marker and the database bind both ways.</para>
+    /// </summary>
+    private static async Task WriteMigrationIdAsync(string storeDirectory, string migrationId)
+    {
+        var builder = new SqliteConnectionStringBuilder
+        {
+            DataSource = SessionStoreDatabase.PathFor(storeDirectory),
+            Mode       = SqliteOpenMode.ReadWrite,
+            Pooling    = false
+        };
+        await using var connection = new SqliteConnection(builder.ToString());
+        await connection.OpenAsync();
+        await SessionStoreDatabase.WriteMetaValueAsync(connection, null, "migration_id", migrationId,
+                                                      CancellationToken.None);
+    }
 
     /// <summary>
     ///     <para>断言迁移前后旧文件的字节内容一致；字典值按数组逐元素比较，而不是比较数组引用。</para>

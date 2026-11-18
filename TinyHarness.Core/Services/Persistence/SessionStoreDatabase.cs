@@ -1,5 +1,5 @@
-using System.Globalization;
 using Microsoft.Data.Sqlite;
+using System.Globalization;
 using TinyHarness.Core.Exceptions;
 
 namespace TinyHarness.Core.Services.Persistence;
@@ -44,7 +44,9 @@ public enum SessionStoreDatabaseStatus
 ///     </para>
 /// </param>
 public sealed record SessionStoreDatabaseAvailability(
-    SessionStoreDatabaseStatus Status, string? Detail, Exception? Error = null)
+    SessionStoreDatabaseStatus Status,
+    string?                    Detail,
+    Exception?                 Error = null)
 {
     /// <summary>
     ///     <para>可用的单例结果。</para>
@@ -115,10 +117,13 @@ public sealed class SessionStoreDatabase
     public const string DatabaseFileName = "session-store.db";
 
     /// <summary>
-    ///     <para>当前实现支持的 schema 版本；版本 1 是首个业务 schema。</para>
-    ///     <para>The schema version supported by this implementation; version 1 is the first business schema.</para>
+    ///     <para>当前实现支持的 schema 版本；版本 1 是首个业务 schema，版本 2 增加会话删除墓碑。</para>
+    ///     <para>
+    ///         The schema version supported by this implementation; version 1 is the first business schema and
+    ///         version 2 adds session deletion tombstones.
+    ///     </para>
     /// </summary>
-    public const int CurrentSchemaVersion = 1;
+    public const int CurrentSchemaVersion = 2;
 
     /// <summary>
     ///     <para>元数据表名，保存 schema 版本与库身份。</para>
@@ -150,6 +155,144 @@ public sealed class SessionStoreDatabase
     private const int BusyTimeoutMs = 5000;
 
     /// <summary>
+    ///     <para>版本 2 引入的会话删除墓碑表名；删除先落墓碑，日志与投影清理随后收尾。</para>
+    ///     <para>
+    ///         The session-deletion tombstone table name introduced by version 2: a deletion lands its tombstone
+    ///         first and the log plus projection cleanup follows.
+    ///     </para>
+    /// </summary>
+    public const string TombstoneTableName = "session_tombstone";
+
+    /// <summary>
+    ///     <para>版本 2 新增的墓碑状态索引名；待收尾删除按状态顺序扫描。</para>
+    ///     <para>The tombstone-state index name added by version 2; pending deletions scan in state order.</para>
+    /// </summary>
+    public const string TombstoneStateIndex = "ix_session_tombstone_state";
+
+    /// <summary>
+    ///     <para>
+    ///         版本 1 的冻结 schema。约束按业务不变量设置：ID 形态、名称与路径长度、修订号下界、
+    ///         删除标记取值、项目目录唯一（平台比较键）与会话归属外键；预算类上限（如 1000 个项目）
+    ///         无法用 CHECK 表达，仍由调用方校验。
+    ///     </para>
+    ///     <para>
+    ///         The frozen version-1 schema. Constraints follow business invariants: identifier shape, name and path
+    ///         lengths, the revision lower bound, the deletion marker domain, project-root uniqueness on the
+    ///         platform comparison key, and the session-ownership foreign key. Count budgets (for example 1000
+    ///         projects) cannot be expressed as CHECKs and stay with the caller.
+    ///     </para>
+    /// </summary>
+    private const string BaseSchemaSql = """
+        CREATE TABLE IF NOT EXISTS store_meta (
+            key   TEXT NOT NULL PRIMARY KEY,
+            value TEXT NOT NULL,
+            CHECK (typeof(key) = 'text'),
+            CHECK (typeof(value) = 'text')
+        ) WITHOUT ROWID;
+
+        CREATE TABLE IF NOT EXISTS project (
+            id          TEXT    NOT NULL PRIMARY KEY,
+            name        TEXT    NOT NULL,
+            root_path   TEXT    NOT NULL,
+            root_key    TEXT    NOT NULL,
+            revision    INTEGER NOT NULL,
+            is_deleting INTEGER NOT NULL DEFAULT 0,
+            created_utc INTEGER NOT NULL,
+            updated_utc INTEGER NOT NULL,
+            CHECK (typeof(id) = 'text' AND length(id) = 32),
+            CHECK (typeof(name) = 'text' AND length(name) BETWEEN 1 AND 200),
+            CHECK (typeof(root_path) = 'text' AND length(root_path) BETWEEN 1 AND 2048),
+            CHECK (typeof(root_key) = 'text' AND length(root_key) BETWEEN 1 AND 2048),
+            CHECK (typeof(revision) = 'integer' AND revision >= 1),
+            CHECK (typeof(is_deleting) = 'integer' AND is_deleting IN (0, 1)),
+            CHECK (typeof(created_utc) = 'integer'),
+            CHECK (typeof(updated_utc) = 'integer')
+        ) WITHOUT ROWID;
+
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_project_root_key ON project (root_key);
+
+        CREATE TABLE IF NOT EXISTS project_order (
+            project_id TEXT    NOT NULL PRIMARY KEY,
+            position   INTEGER NOT NULL,
+            CHECK (typeof(project_id) = 'text' AND length(project_id) = 32),
+            CHECK (typeof(position) = 'integer' AND position >= 0)
+        ) WITHOUT ROWID;
+
+        CREATE TABLE IF NOT EXISTS pinned_project (
+            project_id TEXT    NOT NULL PRIMARY KEY,
+            position   INTEGER NOT NULL,
+            CHECK (typeof(project_id) = 'text' AND length(project_id) = 32),
+            CHECK (typeof(position) = 'integer' AND position >= 0)
+        ) WITHOUT ROWID;
+
+        CREATE TABLE IF NOT EXISTS pinned_session (
+            session_id TEXT    NOT NULL PRIMARY KEY,
+            position   INTEGER NOT NULL,
+            CHECK (typeof(session_id) = 'text' AND length(session_id) = 32),
+            CHECK (typeof(position) = 'integer' AND position >= 0)
+        ) WITHOUT ROWID;
+
+        CREATE TABLE IF NOT EXISTS archived_session (
+            session_id TEXT NOT NULL PRIMARY KEY,
+            CHECK (typeof(session_id) = 'text' AND length(session_id) = 32)
+        ) WITHOUT ROWID;
+
+        CREATE TABLE IF NOT EXISTS session_order (
+            session_id TEXT    NOT NULL PRIMARY KEY,
+            position   INTEGER NOT NULL,
+            CHECK (typeof(session_id) = 'text' AND length(session_id) = 32),
+            CHECK (typeof(position) = 'integer' AND position >= 0)
+        ) WITHOUT ROWID;
+
+        CREATE TABLE IF NOT EXISTS session_placement (
+            session_id  TEXT    NOT NULL PRIMARY KEY,
+            project_id  TEXT    NULL REFERENCES project (id) ON DELETE RESTRICT,
+            updated_utc INTEGER NOT NULL,
+            CHECK (typeof(session_id) = 'text' AND length(session_id) = 32),
+            CHECK (project_id IS NULL OR typeof(project_id) = 'text'),
+            CHECK (typeof(updated_utc) = 'integer')
+        ) WITHOUT ROWID;
+
+        CREATE INDEX IF NOT EXISTS ix_session_placement_project
+            ON session_placement (project_id, session_id);
+
+        CREATE TABLE IF NOT EXISTS collapsed_group (
+            group_key TEXT NOT NULL PRIMARY KEY,
+            CHECK (typeof(group_key) = 'text' AND length(group_key) >= 1)
+        ) WITHOUT ROWID;
+        """;
+
+    /// <summary>
+    ///     <para>
+    ///         版本 2 的冻结 schema：每行代表一次会话删除。状态 <c>pending</c> 表示删除意图已提交、日志或投影
+    ///         尚未收尾，下一次删除恢复必须继续；<c>deleted</c> 表示日志与投影已清理完成。墓碑行永久保留：
+    ///         会话日志若因备份、拷贝或旧进程写入重新出现，墓碑仍能阻止它复活成列表条目。
+    ///     </para>
+    ///     <para>
+    ///         The frozen version-2 schema: one row per session deletion. State <c>pending</c> means the deletion
+    ///         intent committed while the log or projections still need finishing, so the next recovery must
+    ///         continue; <c>deleted</c> means the log and projections are cleared. Tombstone rows are kept forever:
+    ///         if a log reappears through a backup, copy, or an older program, the tombstone still keeps it from
+    ///         coming back as a list entry.
+    ///     </para>
+    /// </summary>
+    private const string TombstoneSchemaSql = """
+        CREATE TABLE IF NOT EXISTS session_tombstone (
+            session_id    TEXT    NOT NULL PRIMARY KEY,
+            state         TEXT    NOT NULL,
+            requested_utc INTEGER NOT NULL,
+            updated_utc   INTEGER NOT NULL,
+            CHECK (typeof(session_id) = 'text' AND length(session_id) = 32),
+            CHECK (typeof(state) = 'text' AND state IN ('pending', 'deleted')),
+            CHECK (typeof(requested_utc) = 'integer'),
+            CHECK (typeof(updated_utc) = 'integer')
+        ) WITHOUT ROWID;
+
+        CREATE INDEX IF NOT EXISTS ix_session_tombstone_state
+            ON session_tombstone (state, session_id);
+        """;
+
+    /// <summary>
     ///     <para>业务表的冻结清单；缺失任意一张即视为损坏，不补建。</para>
     ///     <para>The frozen business-table list; a missing table counts as damage and is never recreated.</para>
     /// </summary>
@@ -178,6 +321,16 @@ public sealed class SessionStoreDatabase
     private static readonly string[] RequiredIndexes = ["ux_project_root_key", "ix_session_placement_project"];
 
     /// <summary>
+    ///     <para>版本 2 必须具备的完整表与索引清单：版本 1 的对象加删除墓碑及其状态索引。</para>
+    ///     <para>
+    ///         The complete table and index list version 2 requires: every version-1 object plus the deletion
+    ///         tombstone and its state index.
+    ///     </para>
+    /// </summary>
+    private static readonly SchemaShape Version2Shape =
+        new([.. RequiredTables, TombstoneTableName], [.. RequiredIndexes, TombstoneStateIndex]);
+
+    /// <summary>
     ///     <para>版本 1 必须存在的元数据键；缺失说明库结构不完整，不得按可用库继续。</para>
     ///     <para>
     ///         The metadata keys version 1 requires; a missing one means the structure is incomplete and must not
@@ -196,7 +349,7 @@ public sealed class SessionStoreDatabase
     ///     <para>按版本号升序排列的迁移；必须从 1 起连续编号。</para>
     ///     <para>Migrations ordered by version; numbering must be contiguous and start at one.</para>
     /// </summary>
-    private static readonly SchemaMigration[] Migrations = [CreateInitialSchema()];
+    private static readonly SchemaMigration[] Migrations = [CreateInitialSchema(), AddSessionTombstones()];
 
     /// <summary>
     ///     <para>本实例使用的迁移清单；生产固定为 <see cref="Migrations" />，测试可注入故意残缺的迁移。</para>
@@ -222,8 +375,8 @@ public sealed class SessionStoreDatabase
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(storeDirectory);
         if (!Path.IsPathFullyQualified(storeDirectory))
-            throw new SessionStoreDatabaseException(
-                $"Session-store directory '{storeDirectory}' must be an absolute path.");
+            throw new SessionStoreDatabaseException($"Session-store directory '{storeDirectory}' " +
+                                                    "must be an absolute path.");
         StoreDirectory = Path.GetFullPath(storeDirectory);
         DatabasePath   = PathFor(StoreDirectory);
         _migrations    = Migrations;
@@ -272,7 +425,7 @@ public sealed class SessionStoreDatabase
     ///         as an ordinary database, without recovery or lease acquisition.
     ///     </para>
     /// </summary>
-    private bool IsBusinessStore { get; init; } = true;
+    private bool IsBusinessStore { get; } = true;
 
     /// <summary>
     ///     <para>绑定的 session store 目录（规范化绝对路径）。</para>
@@ -398,7 +551,10 @@ public sealed class SessionStoreDatabase
     /// </summary>
     /// <exception cref="SessionStoreDatabaseException">
     ///     <para>库需要升级、版本不受支持、损坏、内容不属于本程序或存储失败。</para>
-    ///     <para>The database needs an upgrade, uses an unsupported version, is damaged, holds foreign content, or storage failed.</para>
+    ///     <para>
+    ///         The database needs an upgrade, uses an unsupported version, is damaged, holds foreign content, or storage
+    ///         failed.
+    ///     </para>
     /// </exception>
     /// <remarks>
     ///     <para>
@@ -425,14 +581,14 @@ public sealed class SessionStoreDatabase
             case SessionStoreDatabaseStatus.NeedsSchema :
                 break;
             case SessionStoreDatabaseStatus.NeedsUpgrade :
-                throw new SessionStoreDatabaseException($"Business database '{DatabasePath}' uses an older schema version; " +
-                                                         "upgrade it instead of creating it again.");
+                throw new SessionStoreDatabaseException($"Business database '{DatabasePath}' uses an older " +
+                                                        "schema version; upgrade it instead of creating it again.");
             case SessionStoreDatabaseStatus.Unsupported :
                 throw new SessionStoreDatabaseException($"Business database '{DatabasePath}' is newer than supported " +
-                                                         $"schema version {CurrentSchemaVersion}; it must not be downgraded.");
+                                                        $"schema version {CurrentSchemaVersion}; it must not be downgraded.");
             default :
-                throw new SessionStoreDatabaseException($"Business database '{DatabasePath}' cannot be created while it is " +
-                                                         $"{availability.Status}: {availability.Detail ?? "no detail"}.");
+                throw new SessionStoreDatabaseException($"Business database '{DatabasePath}' cannot be created " +
+                                                        $"while it is {availability.Status}: {availability.Detail ?? "no detail"}.");
         }
 
         await MigrateAsync(true, cancellationToken).ConfigureAwait(false);
@@ -463,17 +619,17 @@ public sealed class SessionStoreDatabase
             case SessionStoreDatabaseStatus.NeedsUpgrade :
                 break;
             case SessionStoreDatabaseStatus.Missing :
-                throw new SessionStoreDatabaseException($"Business database '{DatabasePath}' is missing; it is restored " +
-                                                         "from backup or imported by a later stage, never upgraded from nothing.");
+                throw new SessionStoreDatabaseException($"Business database '{DatabasePath}' is missing; " +
+                                                        "it is restored from backup or imported by a later stage, never upgraded from nothing.");
             case SessionStoreDatabaseStatus.NeedsSchema :
                 throw new SessionStoreDatabaseException($"Business database '{DatabasePath}' has no schema yet; " +
-                                                         "initialize it instead of upgrading.");
+                                                        "initialize it instead of upgrading.");
             case SessionStoreDatabaseStatus.Unsupported :
                 throw new SessionStoreDatabaseException($"Business database '{DatabasePath}' is newer than supported " +
-                                                         $"schema version {CurrentSchemaVersion}; it must not be downgraded.");
+                                                        $"schema version {CurrentSchemaVersion}; it must not be downgraded.");
             default :
-                throw new SessionStoreDatabaseException($"Business database '{DatabasePath}' cannot be upgraded while it is " +
-                                                         $"{availability.Status}: {availability.Detail ?? "no detail"}.");
+                throw new SessionStoreDatabaseException($"Business database '{DatabasePath}' cannot be upgraded " +
+                                                        $"while it is {availability.Status}: {availability.Detail ?? "no detail"}.");
         }
 
         await MigrateAsync(false, cancellationToken).ConfigureAwait(false);
@@ -517,7 +673,7 @@ public sealed class SessionStoreDatabase
             return new SessionStoreDatabaseAvailability(SessionStoreDatabaseStatus.Damaged,
                                                         $"Business schema version {version.Value} is incomplete: {missing}.");
 
-        var metaKeys = await ReadMetaKeysAsync(connection, cancellationToken).ConfigureAwait(false);
+        var metaKeys    = await ReadMetaKeysAsync(connection, cancellationToken).ConfigureAwait(false);
         var missingKeys = RequiredMetaKeys.Where(key => !metaKeys.Contains(key)).ToArray();
         return missingKeys.Length == 0
             ? SessionStoreDatabaseAvailability.Ok
@@ -550,39 +706,47 @@ public sealed class SessionStoreDatabase
         await using var connection = await OpenAsync(SqliteOpenMode.ReadWriteCreate, true, cancellationToken)
            .ConfigureAwait(false);
 
-        var objects = await ReadSchemaObjectsAsync(connection, cancellationToken).ConfigureAwait(false);
+        var  objects = await ReadSchemaObjectsAsync(connection, cancellationToken).ConfigureAwait(false);
         int? version;
         if (objects.Tables.Count == 0) version = null;
         else
             version = await ReadSchemaVersionAsync(connection, cancellationToken).ConfigureAwait(false)
-                   ?? throw new SessionStoreDatabaseException(
-                          $"Business database '{DatabasePath}' has tables but no readable schema version; it must not be modified.");
+                   ?? throw new SessionStoreDatabaseException($"Business database '{DatabasePath}' has tables " +
+                                                              "but no readable schema version; it must not be modified.");
 
-        if (requireEmptySchema && version is not null)
-            throw new SessionStoreDatabaseException($"Business database '{DatabasePath}' was created concurrently or already " +
-                                                     "holds data; it was left unchanged.");
-        if (!requireEmptySchema && version is null)
-            throw new SessionStoreDatabaseException($"Business database '{DatabasePath}' has no schema version to upgrade from.");
+        switch (requireEmptySchema)
+        {
+            case true when version is not null :
+                throw new SessionStoreDatabaseException($"Business database '{DatabasePath}' was created " +
+                                                        "concurrently or already holds data; it was left unchanged.");
+            case false when version is null :
+                throw new SessionStoreDatabaseException($"Business database '{DatabasePath}' has no schema version " +
+                                                        "to upgrade from.");
+        }
 
-        if (version > CurrentSchemaVersion)
-            throw new SessionStoreDatabaseException($"Business database '{DatabasePath}' uses schema version {version}, " +
-                                                     $"newer than supported version {CurrentSchemaVersion}; it must not be downgraded.");
+        switch (version)
+        {
+            case > CurrentSchemaVersion :
+                throw new SessionStoreDatabaseException($"Business database '{DatabasePath}' uses schema " +
+                                                        $"version {version}, newer than supported version {CurrentSchemaVersion}; " +
+                                                        "it must not be downgraded.");
+            // 迁移前该版本声明的表与索引必须齐全。迁移脚本用 CREATE TABLE IF NOT EXISTS：缺表被放行就会补成
+            // 空表并写入新版本号，把数据丢失伪装成升级成功。版本 0 是空库，出现任何表都表示来源不明。
+            case 0 when objects.Tables.Count != 0 :
+                throw new SessionStoreDatabaseException($"Business database '{DatabasePath}' claims schema " +
+                                                        $"version 0 but already holds table(s) " +
+                                                        $"{string.Join(", ", objects.Tables.Order(StringComparer.Ordinal))}. " +
+                                                        $"Refusing to migrate an unknown structure.");
+        }
 
-        // 迁移前该版本声明的表与索引必须齐全。迁移脚本用 CREATE TABLE IF NOT EXISTS：缺表被放行就会补成
-// 空表并写入新版本号，把数据丢失伪装成升级成功。版本 0 是空库，出现任何表都表示来源不明。
-        if (version is 0 && objects.Tables.Count != 0)
-            throw new SessionStoreDatabaseException($"Business database '{DatabasePath}' claims schema version 0 but already " +
-                                                     $"holds table(s) {string.Join(", ", objects.Tables.Order(StringComparer.Ordinal))}. " +
-                                                     "Refusing to migrate an unknown structure.");
         if (version is not null && DescribeMissingObjects(objects, ShapeForVersion(version.Value)) is { } mismatch)
-            throw new SessionStoreDatabaseException($"Business database '{DatabasePath}' does not match the known schema of " +
-                                                     $"version {version.Value}: {mismatch}. Refusing to migrate an unknown structure.");
+            throw new SessionStoreDatabaseException($"Business database '{DatabasePath}' does not match "        +
+                                                    $"the known schema of version {version.Value}: {mismatch}. " +
+                                                    "Refusing to migrate an unknown structure.");
 
         for (var next = (version ?? 0) + 1; next <= CurrentSchemaVersion; next++)
-        {
             // 结构核对与版本写入都在迁移事务内完成：不符即回滚，不会出现"版本已推进、结构不完整"的库。
             await ApplyMigrationAsync(connection, MigrationFor(next), cancellationToken).ConfigureAwait(false);
-        }
     }
 
     /// <summary>
@@ -605,12 +769,12 @@ public sealed class SessionStoreDatabase
     /// </summary>
     private static string? DescribeMissingObjects(SchemaObjects objects, SchemaShape shape)
     {
-        var missingTables = shape.Tables.Where(table => !objects.Tables.Contains(table)).ToArray();
+        var missingTables  = shape.Tables.Where(table => !objects.Tables.Contains(table)).ToArray();
         var missingIndexes = shape.Indexes.Where(index => !objects.Indexes.Contains(index)).ToArray();
         if (missingTables.Length == 0 && missingIndexes.Length == 0) return null;
 
         var parts = new List<string>(2);
-        if (missingTables.Length != 0) parts.Add($"missing table(s) {string.Join(", ", missingTables)}");
+        if (missingTables.Length  != 0) parts.Add($"missing table(s) {string.Join(", ", missingTables)}");
         if (missingIndexes.Length != 0) parts.Add($"missing index(es) {string.Join(", ", missingIndexes)}");
         return string.Join("; ", parts);
     }
@@ -633,8 +797,8 @@ public sealed class SessionStoreDatabase
         await ExecuteCoreAsync(async () =>
         {
             await using var transaction = (SqliteTransaction)await connection
-                                                                 .BeginTransactionAsync(cancellationToken)
-                                                                 .ConfigureAwait(false);
+                                                                  .BeginTransactionAsync(cancellationToken)
+                                                                  .ConfigureAwait(false);
             var schema = connection.CreateCommand();
             schema.Transaction = transaction;
             schema.CommandText = migration.Sql;
@@ -643,8 +807,8 @@ public sealed class SessionStoreDatabase
             // 同一连接在同一事务内可见刚执行的 DDL：结构不符必须在这里发现并回滚，而不是提交版本后再报错。
             var applied = await ReadSchemaObjectsAsync(connection, cancellationToken).ConfigureAwait(false);
             if (DescribeMissingObjects(applied, migration.Shape) is { } mismatch)
-                throw new SessionStoreDatabaseException(
-                    $"Migration to business schema version {migration.Version} produced an incomplete structure: {mismatch}.");
+                throw new SessionStoreDatabaseException($"Migration to business schema version {migration.Version} " +
+                                                        $"produced an incomplete structure: {mismatch}.");
 
             var identity = connection.CreateCommand();
             identity.Transaction = transaction;
@@ -658,7 +822,7 @@ public sealed class SessionStoreDatabase
             identity.Parameters.AddWithValue("$created_key", CreatedUtcKey);
             identity.Parameters.AddWithValue("$created",
                                              DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
-                                                          .ToString(CultureInfo.InvariantCulture));
+                                                           .ToString(CultureInfo.InvariantCulture));
             identity.Parameters.AddWithValue("$version_key", SchemaVersionKey);
             identity.Parameters.AddWithValue("$version",
                                              migration.Version.ToString(CultureInfo.InvariantCulture));
@@ -678,9 +842,9 @@ public sealed class SessionStoreDatabase
             var command = connection.CreateCommand();
             command.CommandText = "SELECT type, name FROM sqlite_master WHERE type IN ('table', 'index') " +
                                   "AND name NOT LIKE 'sqlite_%'";
-            await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
-            var tables  = new HashSet<string>(StringComparer.Ordinal);
-            var indexes = new HashSet<string>(StringComparer.Ordinal);
+            await using var reader  = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            var             tables  = new HashSet<string>(StringComparer.Ordinal);
+            var             indexes = new HashSet<string>(StringComparer.Ordinal);
             while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
             {
                 var names = reader.GetString(0) == "table" ? tables : indexes;
@@ -701,7 +865,7 @@ public sealed class SessionStoreDatabase
             var command = connection.CreateCommand();
             command.CommandText = $"SELECT key FROM {MetaTableName}";
             await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
-            var keys = new HashSet<string>(StringComparer.Ordinal);
+            var             keys   = new HashSet<string>(StringComparer.Ordinal);
             while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false)) keys.Add(reader.GetString(0));
             return keys;
         });
@@ -737,25 +901,16 @@ public sealed class SessionStoreDatabase
         if (version >= 1 && version <= _migrations.Count && _migrations[version - 1].Version == version)
             return _migrations[version - 1];
 
-        throw new SessionStoreDatabaseException(
-            $"No business-schema migration defines version {version}; migrations must be contiguous from 1.");
-    }
-
-    /// <summary>
-    ///     <para>业务库文件名的叶子状态：普通文件、缺失、被目录或链接占用、无法判定。</para>
-    ///     <para>The leaf state of the business-database name: regular file, missing, occupied by a directory or link, or undeterminable.</para>
-    /// </summary>
-    private enum LeafState
-    {
-        Regular,
-        Missing,
-        NotRegular,
-        Unreadable
+        throw new SessionStoreDatabaseException($"No business-schema migration defines version {version}; " +
+                                                "migrations must be contiguous from 1.");
     }
 
     /// <summary>
     ///     <para>供迁移、备份与其他 Core 内部消费者打开已有业务库；启用写配置（WAL、FULL、外键）。</para>
-    ///     <para>Opens an existing business database for migration, backup, and other Core consumers with write configuration (WAL, FULL, foreign keys).</para>
+    ///     <para>
+    ///         Opens an existing business database for migration, backup, and other Core consumers with write configuration
+    ///         (WAL, FULL, foreign keys).
+    ///     </para>
     /// </summary>
     internal Task<SqliteConnection> OpenExistingForInternalUseAsync(CancellationToken cancellationToken) =>
         OpenAsync(SqliteOpenMode.ReadWrite, true, cancellationToken);
@@ -784,10 +939,13 @@ public sealed class SessionStoreDatabase
 
     /// <summary>
     ///     <para>写入（覆盖）元数据表中的键值；可加入调用方事务，使标记与业务写入处于同一提交边界。</para>
-    ///     <para>Writes or overwrites one metadata value; it may join the caller's transaction so the marker and business writes share one commit boundary.</para>
+    ///     <para>
+    ///         Writes or overwrites one metadata value; it may join the caller's transaction so the marker and business
+    ///         writes share one commit boundary.
+    ///     </para>
     /// </summary>
     internal static Task WriteMetaValueAsync(
-        SqliteConnection connection, SqliteTransaction? transaction, string key, string value,
+        SqliteConnection  connection, SqliteTransaction? transaction, string key, string value,
         CancellationToken cancellationToken) =>
         ExecuteCoreAsync(async () =>
         {
@@ -820,8 +978,8 @@ public sealed class SessionStoreDatabase
         {
             var command = connection.CreateCommand();
             command.CommandText = "PRAGMA integrity_check;";
-            await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
-            var failures = new List<string>();
+            await using var reader   = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            var             failures = new List<string>();
             while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
             {
                 var line = reader.GetString(0);
@@ -843,8 +1001,8 @@ public sealed class SessionStoreDatabase
             command.CommandText = "PRAGMA foreign_key_check;";
             await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
             if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false)) return null;
-            var table = reader.GetString(0);
-            var rowId = reader.IsDBNull(1) ? "?" : reader.GetInt64(1).ToString(CultureInfo.InvariantCulture);
+            var table  = reader.GetString(0);
+            var rowId  = reader.IsDBNull(1) ? "?" : reader.GetInt64(1).ToString(CultureInfo.InvariantCulture);
             var parent = reader.GetString(2);
             return $"foreign key violation in '{table}' row {rowId} referencing '{parent}'";
         });
@@ -859,13 +1017,9 @@ public sealed class SessionStoreDatabase
         try
         {
             var attributes = File.GetAttributes(DatabasePath);
-            if ((attributes & (FileAttributes.Directory | FileAttributes.ReparsePoint)) != 0)
-            {
-                detail = $"Business database '{DatabasePath}' is a directory or reparse point, not a regular file.";
-                return LeafState.NotRegular;
-            }
-
-            return LeafState.Regular;
+            if ((attributes & (FileAttributes.Directory | FileAttributes.ReparsePoint)) == 0) return LeafState.Regular;
+            detail = $"Business database '{DatabasePath}' is a directory or reparse point, not a regular file.";
+            return LeafState.NotRegular;
         }
         catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
         {
@@ -892,11 +1046,10 @@ public sealed class SessionStoreDatabase
     /// </summary>
     internal static bool IndicatesDamage(Exception exception)
     {
-        const int sqliteCorrupt     = 11; // SQLITE_CORRUPT
+        const int sqliteCorrupt      = 11; // SQLITE_CORRUPT
         const int sqliteNotADatabase = 26; // SQLITE_NOTADB
-        for (Exception? current = exception; current is not null; current = current.InnerException)
-            if (current is SqliteException sqlite &&
-                sqlite.SqliteErrorCode is sqliteCorrupt or sqliteNotADatabase)
+        for (var current = exception; current is not null; current = current.InnerException)
+            if (current is SqliteException { SqliteErrorCode: sqliteCorrupt or sqliteNotADatabase })
                 return true;
 
         return false;
@@ -954,8 +1107,8 @@ public sealed class SessionStoreDatabase
                                       or UnauthorizedAccessException or NotSupportedException or PathTooLongException)
         {
             await connection.DisposeAsync().ConfigureAwait(false);
-            throw new SessionStoreDatabaseException(
-                $"Business database '{DatabasePath}' could not be opened: {ex.Message}", ex);
+            throw new SessionStoreDatabaseException($"Business database '{DatabasePath}' " +
+                                                    $"could not be opened: {ex.Message}", ex);
         }
         catch
         {
@@ -1006,10 +1159,39 @@ public sealed class SessionStoreDatabase
 
     /// <summary>
     ///     <para>版本 1 的迁移定义：首个业务 schema，建立元数据表与全部业务表/索引。</para>
-    ///     <para>The version-1 migration: the first business schema creating the metadata table and every business table and index.</para>
+    ///     <para>
+    ///         The version-1 migration: the first business schema creating the metadata table and every business table and
+    ///         index.
+    ///     </para>
     /// </summary>
     private static SchemaMigration CreateInitialSchema() =>
         new(1, BaseSchemaSql, new SchemaShape(RequiredTables, RequiredIndexes));
+
+    /// <summary>
+    ///     <para>
+    ///         版本 2 的迁移定义：新增会话删除墓碑表与状态索引，承载"先落删除意图、再收尾日志与投影"的可续作删除。
+    ///     </para>
+    ///     <para>
+    ///         The version-2 migration: adds the session-deletion tombstone table and its state index, carrying the
+    ///         resumable deletion that records intent before the log and projections are cleaned up.
+    ///     </para>
+    /// </summary>
+    private static SchemaMigration AddSessionTombstones() => new(2, TombstoneSchemaSql, Version2Shape);
+
+    /// <summary>
+    ///     <para>业务库文件名的叶子状态：普通文件、缺失、被目录或链接占用、无法判定。</para>
+    ///     <para>
+    ///         The leaf state of the business-database name: regular file, missing, occupied by a directory or link, or
+    ///         undeterminable.
+    ///     </para>
+    /// </summary>
+    private enum LeafState
+    {
+        Regular,
+        Missing,
+        NotRegular,
+        Unreadable
+    }
 
     /// <summary>
     ///     <para>单个版本的迁移定义：目标版本、要执行的 SQL，以及执行后必须呈现的结构。</para>
@@ -1031,97 +1213,4 @@ public sealed class SessionStoreDatabase
     ///     <para>The structure actually read from sqlite_master.</para>
     /// </summary>
     private sealed record SchemaObjects(HashSet<string> Tables, HashSet<string> Indexes);
-
-    /// <summary>
-    ///     <para>
-    ///         版本 1 的冻结 schema。约束按业务不变量设置：ID 形态、名称与路径长度、修订号下界、
-    ///         删除标记取值、项目目录唯一（平台比较键）与会话归属外键；预算类上限（如 1000 个项目）
-    ///         无法用 CHECK 表达，仍由调用方校验。
-    ///     </para>
-    ///     <para>
-    ///         The frozen version-1 schema. Constraints follow business invariants: identifier shape, name and path
-    ///         lengths, the revision lower bound, the deletion marker domain, project-root uniqueness on the
-    ///         platform comparison key, and the session-ownership foreign key. Count budgets (for example 1000
-    ///         projects) cannot be expressed as CHECKs and stay with the caller.
-    ///     </para>
-    /// </summary>
-    private const string BaseSchemaSql = """
-        CREATE TABLE IF NOT EXISTS store_meta (
-            key   TEXT NOT NULL PRIMARY KEY,
-            value TEXT NOT NULL,
-            CHECK (typeof(key) = 'text'),
-            CHECK (typeof(value) = 'text')
-        ) WITHOUT ROWID;
-
-        CREATE TABLE IF NOT EXISTS project (
-            id          TEXT    NOT NULL PRIMARY KEY,
-            name        TEXT    NOT NULL,
-            root_path   TEXT    NOT NULL,
-            root_key    TEXT    NOT NULL,
-            revision    INTEGER NOT NULL,
-            is_deleting INTEGER NOT NULL DEFAULT 0,
-            created_utc INTEGER NOT NULL,
-            updated_utc INTEGER NOT NULL,
-            CHECK (typeof(id) = 'text' AND length(id) = 32),
-            CHECK (typeof(name) = 'text' AND length(name) BETWEEN 1 AND 200),
-            CHECK (typeof(root_path) = 'text' AND length(root_path) BETWEEN 1 AND 2048),
-            CHECK (typeof(root_key) = 'text' AND length(root_key) BETWEEN 1 AND 2048),
-            CHECK (typeof(revision) = 'integer' AND revision >= 1),
-            CHECK (typeof(is_deleting) = 'integer' AND is_deleting IN (0, 1)),
-            CHECK (typeof(created_utc) = 'integer'),
-            CHECK (typeof(updated_utc) = 'integer')
-        ) WITHOUT ROWID;
-
-        CREATE UNIQUE INDEX IF NOT EXISTS ux_project_root_key ON project (root_key);
-
-        CREATE TABLE IF NOT EXISTS project_order (
-            project_id TEXT    NOT NULL PRIMARY KEY,
-            position   INTEGER NOT NULL,
-            CHECK (typeof(project_id) = 'text' AND length(project_id) = 32),
-            CHECK (typeof(position) = 'integer' AND position >= 0)
-        ) WITHOUT ROWID;
-
-        CREATE TABLE IF NOT EXISTS pinned_project (
-            project_id TEXT    NOT NULL PRIMARY KEY,
-            position   INTEGER NOT NULL,
-            CHECK (typeof(project_id) = 'text' AND length(project_id) = 32),
-            CHECK (typeof(position) = 'integer' AND position >= 0)
-        ) WITHOUT ROWID;
-
-        CREATE TABLE IF NOT EXISTS pinned_session (
-            session_id TEXT    NOT NULL PRIMARY KEY,
-            position   INTEGER NOT NULL,
-            CHECK (typeof(session_id) = 'text' AND length(session_id) = 32),
-            CHECK (typeof(position) = 'integer' AND position >= 0)
-        ) WITHOUT ROWID;
-
-        CREATE TABLE IF NOT EXISTS archived_session (
-            session_id TEXT NOT NULL PRIMARY KEY,
-            CHECK (typeof(session_id) = 'text' AND length(session_id) = 32)
-        ) WITHOUT ROWID;
-
-        CREATE TABLE IF NOT EXISTS session_order (
-            session_id TEXT    NOT NULL PRIMARY KEY,
-            position   INTEGER NOT NULL,
-            CHECK (typeof(session_id) = 'text' AND length(session_id) = 32),
-            CHECK (typeof(position) = 'integer' AND position >= 0)
-        ) WITHOUT ROWID;
-
-        CREATE TABLE IF NOT EXISTS session_placement (
-            session_id  TEXT    NOT NULL PRIMARY KEY,
-            project_id  TEXT    NULL REFERENCES project (id) ON DELETE RESTRICT,
-            updated_utc INTEGER NOT NULL,
-            CHECK (typeof(session_id) = 'text' AND length(session_id) = 32),
-            CHECK (project_id IS NULL OR typeof(project_id) = 'text'),
-            CHECK (typeof(updated_utc) = 'integer')
-        ) WITHOUT ROWID;
-
-        CREATE INDEX IF NOT EXISTS ix_session_placement_project
-            ON session_placement (project_id, session_id);
-
-        CREATE TABLE IF NOT EXISTS collapsed_group (
-            group_key TEXT NOT NULL PRIMARY KEY,
-            CHECK (typeof(group_key) = 'text' AND length(group_key) >= 1)
-        ) WITHOUT ROWID;
-        """;
 }

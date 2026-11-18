@@ -20,8 +20,8 @@ namespace TinyHarness.Tests;
 public class SessionStoreDatabaseTests
 {
     /// <summary>
-    ///     <para>版本 1 冻结的业务表清单；增删都意味着 schema 迁移与新旧测试同时更新。</para>
-    ///     <para>The frozen version-1 business tables; any addition or removal means a schema migration and an update here.</para>
+    ///     <para>当前版本冻结的业务表清单；增删都意味着 schema 迁移与新旧测试同时更新。</para>
+    ///     <para>The frozen business tables of the current schema; any addition or removal means a schema migration and an update here.</para>
     /// </summary>
     private static readonly string[] FrozenTables =
     [
@@ -33,6 +33,7 @@ public class SessionStoreDatabaseTests
         "project_order",
         "session_placement",
         "session_order",
+        "session_tombstone",
         "store_meta"
     ];
 
@@ -184,7 +185,7 @@ public class SessionStoreDatabaseTests
     }
 
     [Test]
-    public async Task Schema_FreezesVersionOneTablesColumnsAndIndexes()
+    public async Task Schema_FreezesCurrentTablesColumnsAndIndexes()
     {
         var storeDir = NewStoreDir();
         try
@@ -194,7 +195,8 @@ public class SessionStoreDatabaseTests
             // 表与索引清单是冻结契约：增删改都必须同时改版本迁移与这份断言。
             Assert.That(await ReadObjectNamesAsync(storeDir, "table"), Is.EquivalentTo(FrozenTables));
             Assert.That(await ReadObjectNamesAsync(storeDir, "index"),
-                        Is.EquivalentTo(["ix_session_placement_project", "ux_project_root_key"]));
+                        Is.EquivalentTo(["ix_session_placement_project", "ix_session_tombstone_state",
+                                         "ux_project_root_key"]));
 
             Assert.That(await ReadColumnNamesAsync(storeDir, "project"),
                         Is.EquivalentTo(["id", "name", "root_path", "root_key", "revision", "is_deleting",
@@ -204,6 +206,48 @@ public class SessionStoreDatabaseTests
                         Is.EquivalentTo(["session_id", "project_id", "updated_utc"]));
             Assert.That(await ReadColumnNamesAsync(storeDir, "archived_session"), Is.EquivalentTo(["session_id"]));
             Assert.That(await ReadColumnNamesAsync(storeDir, "collapsed_group"), Is.EquivalentTo(["group_key"]));
+            // 版本 2 的删除墓碑：状态只有 pending/deleted，请求与更新时间都是整数毫秒。
+            Assert.That(await ReadColumnNamesAsync(storeDir, SessionStoreDatabase.TombstoneTableName),
+                        Is.EquivalentTo(["session_id", "state", "requested_utc", "updated_utc"]));
+        }
+        finally
+        {
+            Directory.Delete(storeDir, true);
+        }
+    }
+
+    [Test]
+    public async Task Upgrade_FromVersionOne_AddsTombstonesAndKeepsBusinessRows()
+    {
+        var storeDir = NewStoreDir();
+        try
+        {
+            var database = new SessionStoreDatabase(storeDir);
+            await database.InitializeAsync(CancellationToken.None);
+            await InsertProjectAsync(storeDir);
+
+            // 构造真实的版本 1 结构：删掉版本 2 新增的对象并把版本号退回 1，其余业务行保持原样。
+            // 墓碑表自带的索引随表一起消失，无需单独删除。
+            await ExecuteAsync(storeDir, $"DROP TABLE {SessionStoreDatabase.TombstoneTableName}");
+            await ForceSchemaVersionAsync(storeDir, "1");
+
+            var before = await database.GetAvailabilityAsync(CancellationToken.None);
+            Assert.That(before.Status, Is.EqualTo(SessionStoreDatabaseStatus.NeedsUpgrade));
+
+            await database.UpgradeAsync(CancellationToken.None);
+
+            var after = await database.GetAvailabilityAsync(CancellationToken.None);
+            Assert.That(after.Status, Is.EqualTo(SessionStoreDatabaseStatus.Available));
+            Assert.That(await ReadMetaAsync(storeDir, SessionStoreDatabase.SchemaVersionKey),
+                        Is.EqualTo(SessionStoreDatabase.CurrentSchemaVersion.ToString()));
+            Assert.That(await ReadObjectNamesAsync(storeDir, "table"), Has.Member(SessionStoreDatabase.TombstoneTableName),
+                        "升级必须补上版本 2 的墓碑表。");
+            Assert.That(await ReadObjectNamesAsync(storeDir, "index"),
+                        Has.Member(SessionStoreDatabase.TombstoneStateIndex));
+            await using var connection = await OpenRawAsync(storeDir);
+            var             command    = connection.CreateCommand();
+            command.CommandText = "SELECT name FROM project";
+            Assert.That(await command.ExecuteScalarAsync(), Is.EqualTo("Alpha"), "升级不得丢失既有业务行。");
         }
         finally
         {
@@ -650,6 +694,40 @@ public class SessionStoreDatabaseTests
             deleteProject.CommandText = "DELETE FROM project WHERE id = $id";
             deleteProject.Parameters.AddWithValue("$id", projectId);
             await TestAssert.ThrowsAsync<SqliteException>(() => deleteProject.ExecuteNonQueryAsync());
+        }
+        finally
+        {
+            Directory.Delete(storeDir, true);
+        }
+    }
+
+    [Test]
+    public async Task Schema_RestrictsTombstoneStatesAndIdShapes()
+    {
+        var storeDir = NewStoreDir();
+        try
+        {
+            await new SessionStoreDatabase(storeDir).InitializeAsync(CancellationToken.None);
+
+            // 墓碑状态只有 pending/deleted：未知状态会让删除续作无法判定，必须在写入时拒绝。
+            await TestAssert.ThrowsAsync<SqliteException>(() => ExecuteAsync(storeDir, """
+                INSERT INTO session_tombstone (session_id, state, requested_utc, updated_utc)
+                VALUES ('0000000000000000000000000000000a', 'deleting', 1, 1)
+                """));
+            await TestAssert.ThrowsAsync<SqliteException>(() => ExecuteAsync(storeDir, """
+                INSERT INTO session_tombstone (session_id, state, requested_utc, updated_utc)
+                VALUES ('short', 'pending', 1, 1)
+                """));
+            await TestAssert.ThrowsAsync<SqliteException>(() => ExecuteAsync(storeDir, """
+                INSERT INTO session_tombstone (session_id, state, requested_utc, updated_utc)
+                VALUES ('0000000000000000000000000000000a', 'pending', 'not-a-time', 1)
+                """));
+
+            await ExecuteAsync(storeDir, """
+                INSERT INTO session_tombstone (session_id, state, requested_utc, updated_utc)
+                VALUES ('0000000000000000000000000000000a', 'pending', 1, 1)
+                """);
+            Assert.That(await ReadObjectNamesAsync(storeDir, "table"), Has.Member(SessionStoreDatabase.TombstoneTableName));
         }
         finally
         {

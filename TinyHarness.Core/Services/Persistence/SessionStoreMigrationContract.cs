@@ -48,7 +48,10 @@ public enum SessionStoreBatchState
 
     /// <summary>
     ///     <para>已切换；该批数据以业务库为准，旧来源只作导入输入与冲突诊断。</para>
-    ///     <para>Switched; the business database is authoritative and the legacy source is import input and conflict diagnosis only.</para>
+    ///     <para>
+    ///         Switched; the business database is authoritative and the legacy source is import input and conflict diagnosis
+    ///         only.
+    ///     </para>
     /// </summary>
     Switched
 }
@@ -113,6 +116,17 @@ public enum SessionStoreMigrationStatus
     DatabaseDamaged,
 
     /// <summary>
+    ///     <para>
+    ///         业务库版本低于本程序支持的版本：由显式 <c>session store migrate</c> 原地升级，生产读写在此之前拒绝。
+    ///     </para>
+    ///     <para>
+    ///         The business database uses an older schema version than this build supports: the explicit
+    ///         <c>session store migrate</c> upgrades it in place, and production access is refused until then.
+    ///     </para>
+    /// </summary>
+    DatabaseNeedsUpgrade,
+
+    /// <summary>
     ///     <para>迁移标记无法严格解析：保留文件并拒绝任何自动处理，交由人工恢复。</para>
     ///     <para>The migration marker cannot be parsed strictly: keep it and refuse automatic handling for manual recovery.</para>
     /// </summary>
@@ -147,7 +161,10 @@ public enum SessionStoreMarkerReadStatus
 /// </param>
 /// <param name="MigrationId">
 ///     <para>本次迁移的随机标识；与业务库元数据中的同名键共同绑定标记与库。</para>
-///     <para>The random identity of this migration; together with the same key in the database metadata it binds the marker to the database.</para>
+///     <para>
+///         The random identity of this migration; together with the same key in the database metadata it binds the
+///         marker to the database.
+///     </para>
 /// </param>
 /// <param name="StoreIdentity">
 ///     <para>业务库身份；在建库后写入，尚未建库时为 null。</para>
@@ -174,20 +191,31 @@ public enum SessionStoreMarkerReadStatus
 ///     <para>A credential-free note about the last retryable failure, empty on success.</para>
 /// </param>
 public sealed record SessionStoreMigrationMarker(
-    string                                            Schema,
-    string                                            MigrationId,
-    string?                                           StoreIdentity,
-    DateTimeOffset                                    StartedUtc,
-    DateTimeOffset                                    UpdatedUtc,
+    string                                                                  Schema,
+    string                                                                  MigrationId,
+    string?                                                                 StoreIdentity,
+    DateTimeOffset                                                          StartedUtc,
+    DateTimeOffset                                                          UpdatedUtc,
     IReadOnlyDictionary<SessionStoreMigrationBatch, SessionStoreBatchState> Batches,
-    IReadOnlyDictionary<SessionStoreMigrationBatch, string>                SourceFingerprints,
-    string?                                           LastError)
+    IReadOnlyDictionary<SessionStoreMigrationBatch, string>                 SourceFingerprints,
+    string?                                                                 LastError)
 {
     /// <summary>
     ///     <para>当前迁移标记协议版本。</para>
     ///     <para>The current migration-marker protocol version.</para>
     /// </summary>
     public const string CurrentSchema = "tinyharness.session-store-migration/1";
+
+    /// <summary>
+    ///     <para>固定的批次推进顺序。</para>
+    ///     <para>The fixed batch order of the migration.</para>
+    /// </summary>
+    public static readonly SessionStoreMigrationBatch[] BatchOrder =
+    [
+        SessionStoreMigrationBatch.OrganizationState,
+        SessionStoreMigrationBatch.ProjectCatalog,
+        SessionStoreMigrationBatch.SessionPlacement
+    ];
 
     /// <summary>
     ///     <para>全部批次是否都已切换。</para>
@@ -204,29 +232,13 @@ public sealed record SessionStoreMigrationMarker(
         BatchOrder.Where(batch => Batches.GetValueOrDefault(batch) != SessionStoreBatchState.Switched).ToArray();
 
     /// <summary>
-    ///     <para>固定的批次推进顺序。</para>
-    ///     <para>The fixed batch order of the migration.</para>
-    /// </summary>
-    public static readonly SessionStoreMigrationBatch[] BatchOrder =
-    [
-        SessionStoreMigrationBatch.OrganizationState,
-        SessionStoreMigrationBatch.ProjectCatalog,
-        SessionStoreMigrationBatch.SessionPlacement
-    ];
-
-    /// <summary>
     ///     <para>创建首次迁移标记：尚无库身份、全部批次待切换。</para>
     ///     <para>Creates the first-migration marker: no database identity yet and every batch pending.</para>
     /// </summary>
-    public static SessionStoreMigrationMarker Start(string migrationId, DateTimeOffset utcNow) => new(
-        CurrentSchema,
-        migrationId,
-        null,
-        utcNow,
-        utcNow,
-        BatchOrder.ToDictionary(batch => batch, _ => SessionStoreBatchState.Pending),
-        new Dictionary<SessionStoreMigrationBatch, string>(),
-        null);
+    public static SessionStoreMigrationMarker Start(string migrationId, DateTimeOffset utcNow) =>
+        new(CurrentSchema, migrationId, null, utcNow, utcNow,
+            BatchOrder.ToDictionary(batch => batch, _ => SessionStoreBatchState.Pending),
+            new Dictionary<SessionStoreMigrationBatch, string>(), null);
 
     /// <summary>
     ///     <para>返回记录业务库身份后的标记。</para>
@@ -236,7 +248,7 @@ public sealed record SessionStoreMigrationMarker(
         this with
         {
             StoreIdentity = storeIdentity,
-            UpdatedUtc    = utcNow
+            UpdatedUtc = utcNow
         };
 
     /// <summary>
@@ -252,21 +264,24 @@ public sealed record SessionStoreMigrationMarker(
         fingerprints[batch] = sourceFingerprint;
         return this with
         {
-            Batches            = batches,
+            Batches = batches,
             SourceFingerprints = fingerprints,
-            UpdatedUtc         = utcNow,
-            LastError          = null
+            UpdatedUtc = utcNow,
+            LastError = null
         };
     }
 
     /// <summary>
     ///     <para>返回记录一次可重试失败说明后的标记；批次状态不变，重试从原进度继续。</para>
-    ///     <para>Returns the marker with a retryable failure note; batch states are unchanged and a retry continues from the recorded progress.</para>
+    ///     <para>
+    ///         Returns the marker with a retryable failure note; batch states are unchanged and a retry continues from the
+    ///         recorded progress.
+    ///     </para>
     /// </summary>
     public SessionStoreMigrationMarker WithFailure(string detail, DateTimeOffset utcNow) =>
         this with
         {
-            LastError  = detail,
+            LastError = detail,
             UpdatedUtc = utcNow
         };
 }
@@ -290,7 +305,7 @@ public sealed record SessionStoreMigrationMarker(
 public sealed record SessionStoreMarkerRead(
     SessionStoreMarkerReadStatus Status,
     SessionStoreMigrationMarker? Marker,
-    string?                        Detail);
+    string?                      Detail);
 
 /// <summary>
 ///     <para>
@@ -374,11 +389,23 @@ public sealed record SessionStoreMigrationBatchReport(
 ///     <para>按迁移顺序的批次报告。</para>
 ///     <para>The batch reports in migration order.</para>
 /// </param>
+/// <param name="SchemaUpgradedFrom">
+///     <para>
+///         本次把已迁移业务的 schema 从哪个版本升到了当前版本；未升级时为 null。业务库升级只由显式迁移入口执行，
+///         生产读写在此之前一律拒绝。
+///     </para>
+///     <para>
+///         The schema version the already-migrated business database was upgraded from during this run, or null when
+///         no upgrade happened. Only the explicit migration entry upgrades the business database; production access
+///         stays refused until then.
+///     </para>
+/// </param>
 public sealed record SessionStoreMigrationResult(
-    bool                                         AlreadyCompleted,
-    string                                       MigrationId,
-    string                                       StoreIdentity,
-    IReadOnlyList<SessionStoreMigrationBatchReport> Batches);
+    bool                                            AlreadyCompleted,
+    string                                          MigrationId,
+    string                                          StoreIdentity,
+    IReadOnlyList<SessionStoreMigrationBatchReport> Batches,
+    int?                                            SchemaUpgradedFrom = null);
 
 /// <summary>
 ///     <para>迁移状态检查结果：状态分类、说明、标记内容摘要与旧来源在切换后被改写的诊断。</para>
@@ -409,15 +436,18 @@ public sealed record SessionStoreMigrationResult(
 /// </param>
 /// <param name="Warnings">
 ///     <para>不改变状态但需要提示的诊断（例如已切换批次对应的旧文件在切换后被改写）。</para>
-///     <para>Diagnostics that do not change the status but must be surfaced (for example legacy files changed after switching).</para>
+///     <para>
+///         Diagnostics that do not change the status but must be surfaced (for example legacy files changed after
+///         switching).
+///     </para>
 /// </param>
 public sealed record SessionStoreMigrationInspection(
-    SessionStoreMigrationStatus                                           Status,
-    string?                                                               Detail,
-    string?                                                               MigrationId,
-    string?                                                               StoreIdentity,
+    SessionStoreMigrationStatus                                             Status,
+    string?                                                                 Detail,
+    string?                                                                 MigrationId,
+    string?                                                                 StoreIdentity,
     IReadOnlyDictionary<SessionStoreMigrationBatch, SessionStoreBatchState> Batches,
-    IReadOnlyList<string>                                                 Warnings)
+    IReadOnlyList<string>                                                   Warnings)
 {
     /// <summary>
     ///     <para>生产读写是否可以使用业务库。</para>
@@ -428,7 +458,10 @@ public sealed record SessionStoreMigrationInspection(
 
 /// <summary>
 ///     <para>一个 store 的组织状态快照：归档集合、置顶顺序、普通顺序与折叠分组。</para>
-///     <para>The organization-state snapshot of one store: archived set, pinned order, regular orders, and collapsed groups.</para>
+///     <para>
+///         The organization-state snapshot of one store: archived set, pinned order, regular orders, and collapsed
+///         groups.
+///     </para>
 /// </summary>
 /// <param name="ArchivedSessionIds">
 ///     <para>已归档会话 ID（按序数排序）。</para>
@@ -471,7 +504,10 @@ public sealed record SessionStoreOrganizationState(
 
 /// <summary>
 ///     <para>导入用的会话归属行：会话 ID、项目 ID（null 表示明确无项目）与更新时间。</para>
-///     <para>One session-placement row for the import: session id, project id (null means explicitly no project), and update time.</para>
+///     <para>
+///         One session-placement row for the import: session id, project id (null means explicitly no project), and
+///         update time.
+///     </para>
 /// </summary>
 /// <param name="SessionId">
 ///     <para>32 位小写十六进制会话 ID。</para>
@@ -612,6 +648,6 @@ public enum SessionStoreBackupVerificationStatus
 /// </param>
 public sealed record SessionStoreBackupVerification(
     SessionStoreBackupVerificationStatus Status,
-    string?                             Detail,
-    string?                             StoreIdentity,
-    int?                                SchemaVersion);
+    string?                              Detail,
+    string?                              StoreIdentity,
+    int?                                 SchemaVersion);

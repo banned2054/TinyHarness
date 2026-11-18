@@ -1,7 +1,8 @@
+using Microsoft.Data.Sqlite;
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
-using Microsoft.Data.Sqlite;
 using TinyHarness.Core.Exceptions;
 using TinyHarness.Core.Models.Persistence;
 using TinyHarness.Core.Models.Project;
@@ -179,42 +180,54 @@ public static partial class SessionStoreMigration
                                                cancellationToken).ConfigureAwait(false);
 
         if (!marker.IsComplete)
-            return new SessionStoreMigrationInspection(
-                SessionStoreMigrationStatus.InProgress,
-                $"Batches still pending: {string.Join(", ", marker.PendingBatches)}.", marker.MigrationId,
-                marker.StoreIdentity, CopyBatches(marker), warnings);
+            return new SessionStoreMigrationInspection(SessionStoreMigrationStatus.InProgress,
+                                                       $"Batches still pending: {string.Join(", ", marker.PendingBatches)}.",
+                                                       marker.MigrationId,
+                                                       marker.StoreIdentity, CopyBatches(marker), warnings);
 
         var availability = await database.GetAvailabilityAsync(cancellationToken).ConfigureAwait(false);
         switch (availability.Status)
         {
             case SessionStoreDatabaseStatus.Missing :
-                return new SessionStoreMigrationInspection(
-                    SessionStoreMigrationStatus.DatabaseMissing,
-                    $"The marker says migration '{marker.MigrationId}' completed, but '{database.DatabasePath}' is missing; " +
-                    "restore the business database from a backup instead of importing legacy files again.",
-                    marker.MigrationId, marker.StoreIdentity, CopyBatches(marker), warnings);
-            case SessionStoreDatabaseStatus.Failed :
-                return new SessionStoreMigrationInspection(
-                    SessionStoreMigrationStatus.DatabaseDamaged,
-                    $"The business database could not be inspected: {availability.Detail ?? "no detail"}.",
-                    marker.MigrationId, marker.StoreIdentity, CopyBatches(marker), warnings);
+                return new SessionStoreMigrationInspection(SessionStoreMigrationStatus.DatabaseMissing,
+                                                           $"The marker says migration '{marker.MigrationId}' completed, " +
+                                                           $"but '{database.DatabasePath}' is missing; restore the business " +
+                                                           "database from a backup instead of importing legacy files again.",
+                                                           marker.MigrationId, marker.StoreIdentity,
+                                                           CopyBatches(marker), warnings);
             case SessionStoreDatabaseStatus.Available :
                 break;
+            case SessionStoreDatabaseStatus.NeedsUpgrade :
+                return new SessionStoreMigrationInspection(SessionStoreMigrationStatus.DatabaseNeedsUpgrade,
+                                                           "The business database uses schema version below " +
+                                                           $"{SessionStoreDatabase.CurrentSchemaVersion} ({availability.Detail ?? "no detail"}); " +
+                                                           "run the explicit session-store migration to upgrade it in place.",
+                                                           marker.MigrationId, marker.StoreIdentity,
+                                                           CopyBatches(marker), warnings);
+            case SessionStoreDatabaseStatus.Failed :
+                return new SessionStoreMigrationInspection(SessionStoreMigrationStatus.DatabaseDamaged,
+                                                           "The business database could not be inspected: " +
+                                                           $"{availability.Detail ?? "no detail"}.",
+                                                           marker.MigrationId, marker.StoreIdentity,
+                                                           CopyBatches(marker), warnings);
             default :
-                return new SessionStoreMigrationInspection(
-                    SessionStoreMigrationStatus.DatabaseDamaged,
-                    $"The business database is {availability.Status}: {availability.Detail ?? "no detail"}.",
-                    marker.MigrationId, marker.StoreIdentity, CopyBatches(marker), warnings);
+                return new SessionStoreMigrationInspection(SessionStoreMigrationStatus.DatabaseDamaged,
+                                                           $"The business database is {availability.Status}: " +
+                                                           $"{availability.Detail ?? "no detail"}.",
+                                                           marker.MigrationId, marker.StoreIdentity,
+                                                           CopyBatches(marker), warnings);
         }
 
         var identity = await ReadDatabaseIdentityAsync(database, cancellationToken).ConfigureAwait(false);
         if (marker.StoreIdentity is null || identity is null ||
             !string.Equals(identity, marker.StoreIdentity, StringComparison.Ordinal))
-            return new SessionStoreMigrationInspection(
-                SessionStoreMigrationStatus.DatabaseReplaced,
-                $"The business database carries identity '{identity ?? "(none)"}' while the marker recorded " +
-                $"'{marker.StoreIdentity ?? "(none)"}'; the file was replaced or the marker belongs to another store.",
-                marker.MigrationId, marker.StoreIdentity, CopyBatches(marker), warnings);
+            return new SessionStoreMigrationInspection(SessionStoreMigrationStatus.DatabaseReplaced,
+                                                       "The business database carries identity " +
+                                                       $"'{identity ?? "(none)"}' while the marker recorded " +
+                                                       $"'{marker.StoreIdentity ?? "(none)"}'; " +
+                                                       "the file was replaced or the marker belongs to another store.",
+                                                       marker.MigrationId, marker.StoreIdentity, CopyBatches(marker),
+                                                       warnings);
 
         return new SessionStoreMigrationInspection(SessionStoreMigrationStatus.Completed, null, marker.MigrationId,
                                                    marker.StoreIdentity, CopyBatches(marker), warnings);
@@ -302,7 +315,8 @@ public static partial class SessionStoreMigration
             return await BuildAlreadyCompletedResultAsync(storeDirectory, database, marker, cancellationToken)
                .ConfigureAwait(false);
 
-        marker = await EnsureDatabaseBindingAsync(database, marker, cancellationToken).ConfigureAwait(false);
+        var binding = await EnsureDatabaseBindingAsync(database, marker, cancellationToken).ConfigureAwait(false);
+        marker = binding.Marker;
 
         var switchedThisRun = new HashSet<SessionStoreMigrationBatch>();
         var expectedRows    = new Dictionary<SessionStoreMigrationBatch, int>();
@@ -331,12 +345,13 @@ public static partial class SessionStoreMigration
         var completed = marker with
         {
             UpdatedUtc = DateTimeOffset.UtcNow,
-            LastError  = diagnostics.Count == 0 ? null : JoinDiagnostics(diagnostics)
+            LastError = diagnostics.Count == 0 ? null : JoinDiagnostics(diagnostics)
         };
         await WriteMarkerAsync(storeDirectory, completed, cancellationToken).ConfigureAwait(false);
         var counts = await ReadBatchRowCountsAsync(database, cancellationToken).ConfigureAwait(false);
         return new SessionStoreMigrationResult(false, completed.MigrationId, completed.StoreIdentity!,
-                                               BuildReports(completed, switchedThisRun, counts));
+                                               BuildReports(completed, switchedThisRun, counts),
+                                               binding.UpgradedFrom);
     }
 
     /// <summary>
@@ -350,34 +365,56 @@ public static partial class SessionStoreMigration
     ///         lost is explicitly sent to backup restoration.
     ///     </para>
     /// </summary>
-    private static async Task<SessionStoreMigrationMarker> EnsureDatabaseBindingAsync(
+    private static async Task<SessionStoreDatabaseBinding> EnsureDatabaseBindingAsync(
         SessionStoreDatabase database, SessionStoreMigrationMarker marker, CancellationToken cancellationToken)
     {
-        var availability = await database.GetAvailabilityAsync(cancellationToken).ConfigureAwait(false);
-        if (marker.StoreIdentity is null)
+        var  availability = await database.GetAvailabilityAsync(cancellationToken).ConfigureAwait(false);
+        // 版本更低说明业务库来自升级前的程序：schema 升级只走本入口，先在租约内升到位，后续身份核对与导入
+        // 才按当前结构进行。生产读写在此之前一律拒绝，不会由某次普通读写顺带完成半套迁移。
+        // A lower version means the database predates this build: the schema is upgraded here, under the lease, so
+        // the identity check and the import below run on the current structure. Production access is refused until
+        // then, so no ordinary read or write ever performs a partial migration.
+        int? upgradedFrom = null;
+        if (availability.Status == SessionStoreDatabaseStatus.NeedsUpgrade)
         {
+            // 升级会提交 schema 写入，因此身份与迁移归属必须在它之前按旧库已有的 store_meta 核对：同名文件被
+            // 另一份结构合法的旧库替换时，本入口必须以冲突拒绝且保持该文件原版本原结构，供旧程序继续使用。
+            // The upgrade commits schema writes, so identity and migration ownership are verified first from the
+            // older database's existing store_meta: when a same-named file was replaced by another structurally valid
+            // older database, this entry must refuse with a conflict and leave that file's version and structure as
+            // they are, so the older program can keep using it.
+            await VerifyUpgradeOwnershipAsync(database, marker, cancellationToken).ConfigureAwait(false);
+            upgradedFrom = await ReadSchemaVersionOrNullAsync(database, cancellationToken).ConfigureAwait(false);
+            await UpgradeExistingDatabaseAsync(database, availability, cancellationToken).ConfigureAwait(false);
+            availability = await database.GetAvailabilityAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        if (marker.StoreIdentity is null)
             switch (availability.Status)
             {
                 case SessionStoreDatabaseStatus.Missing :
                 case SessionStoreDatabaseStatus.NeedsSchema :
                     // 开始标记已写入但建库未完成：允许补建，旧来源尚未导入任何批次。
                     await database.InitializeAsync(cancellationToken).ConfigureAwait(false);
-                    return await AdoptFreshDatabaseAsync(database, marker, cancellationToken).ConfigureAwait(false);
+                    return new SessionStoreDatabaseBinding(await AdoptFreshDatabaseAsync(database, marker,
+                                                                    cancellationToken).ConfigureAwait(false),
+                                                           upgradedFrom);
                 case SessionStoreDatabaseStatus.Available :
-                    return await AdoptFreshDatabaseAsync(database, marker, cancellationToken).ConfigureAwait(false);
+                    return new SessionStoreDatabaseBinding(await AdoptFreshDatabaseAsync(database, marker,
+                                                                    cancellationToken).ConfigureAwait(false),
+                                                           upgradedFrom);
                 default :
                     throw SessionStoreBusinessConnection.MapUnavailable(database.StoreDirectory, availability);
             }
-        }
 
         switch (availability.Status)
         {
             case SessionStoreDatabaseStatus.Missing :
-                throw new SessionStoreMigrationException(
-                                                        $"Business database '{database.DatabasePath}' is missing although the migration marker " +
-                                                        $"'{marker.MigrationId}' recorded its identity '{marker.StoreIdentity}'; restore the business " +
-                                                        "database from a backup instead of importing legacy files again.",
-                                                        SessionStoreFailureKind.Missing);
+                throw new SessionStoreMigrationException($"Business database '{database.DatabasePath}' is missing " +
+                                                         $"although the migration marker '{marker.MigrationId}' "   +
+                                                         $"recorded its identity '{marker.StoreIdentity}'; "        +
+                                                         "restore the business database from a backup instead of importing legacy files again.",
+                                                         SessionStoreFailureKind.Missing);
             case SessionStoreDatabaseStatus.Available :
                 break;
             default :
@@ -387,30 +424,25 @@ public static partial class SessionStoreMigration
         await using var connection = await database.OpenExistingForInternalUseAsync(cancellationToken)
                                                    .ConfigureAwait(false);
         var identity = await SessionStoreDatabase.ReadStoreIdentityAsync(connection, cancellationToken)
-                                                .ConfigureAwait(false);
+                                                 .ConfigureAwait(false);
         if (!string.Equals(identity, marker.StoreIdentity, StringComparison.Ordinal))
-            throw new SessionStoreMigrationException(
-                                                    $"Business database '{database.DatabasePath}' carries identity " +
-                                                    $"'{identity ?? "(none)"}' while the migration marker recorded " +
-                                                    $"'{marker.StoreIdentity}'; the file was replaced or belongs to another store.",
-                                                    SessionStoreFailureKind.Conflict);
+            throw new SessionStoreMigrationException($"Business database '{database.DatabasePath}' carries identity " +
+                                                     $"'{identity ?? "(none)"}' while the migration marker recorded " +
+                                                     $"'{marker.StoreIdentity}'; the file was replaced or belongs to another store.",
+                                                     SessionStoreFailureKind.Conflict);
         var migrationId = await SessionStoreDatabase.ReadMetaValueAsync(connection, MigrationIdMetaKey,
                                                                         cancellationToken).ConfigureAwait(false);
         if (migrationId is null)
-        {
             // 建库与写入迁移标识之间中断：身份已核对，补齐标识即可继续。
             await SessionStoreDatabase.WriteMetaValueAsync(connection, null, MigrationIdMetaKey, marker.MigrationId,
                                                            cancellationToken).ConfigureAwait(false);
-        }
         else if (!string.Equals(migrationId, marker.MigrationId, StringComparison.Ordinal))
-        {
-            throw new SessionStoreMigrationException(
-                                                    $"Business database '{database.DatabasePath}' belongs to migration '{migrationId}', not to " +
-                                                    $"the marker's migration '{marker.MigrationId}'; keep both files and resolve the conflict manually.",
-                                                    SessionStoreFailureKind.Conflict);
-        }
+            throw new SessionStoreMigrationException($"Business database '{database.DatabasePath}' belongs to " +
+                                                     $"migration '{migrationId}', not to the marker's migration '{marker.MigrationId}'; " +
+                                                     "keep both files and resolve the conflict manually.",
+                                                     SessionStoreFailureKind.Conflict);
 
-        return marker;
+        return new SessionStoreDatabaseBinding(marker, upgradedFrom);
     }
 
     /// <summary>
@@ -905,41 +937,137 @@ public static partial class SessionStoreMigration
         await using var connection = await database.OpenExistingForInternalUseAsync(cancellationToken)
                                                    .ConfigureAwait(false);
         var identity = await SessionStoreDatabase.ReadStoreIdentityAsync(connection, cancellationToken)
-                                                .ConfigureAwait(false);
-        if (!string.Equals(identity, marker.StoreIdentity, StringComparison.Ordinal))
-            throw new SessionStoreMigrationException(
-                                                    $"Business database '{database.DatabasePath}' identity '{identity ?? "(none)"}' contradicts " +
-                                                    $"the migration marker '{marker.StoreIdentity ?? "(none)"}' after the import.",
-                                                    SessionStoreFailureKind.Conflict);
-        var migrationId = await SessionStoreDatabase.ReadMetaValueAsync(connection, MigrationIdMetaKey,
-                                                                       cancellationToken).ConfigureAwait(false);
-        if (!string.Equals(migrationId, marker.MigrationId, StringComparison.Ordinal))
-            throw new SessionStoreMigrationException(
-                                                    $"Business database '{database.DatabasePath}' migration id '{migrationId ?? "(none)"}' " +
-                                                    $"does not match the marker's migration '{marker.MigrationId}'.",
-                                                    SessionStoreFailureKind.Conflict);
-        var integrity = await SessionStoreDatabase.RunIntegrityCheckAsync(connection, cancellationToken)
                                                  .ConfigureAwait(false);
-        if (integrity is not null)
-            throw new SessionStoreMigrationException(
-                                                    $"Business database '{database.DatabasePath}' failed its integrity check after the import: " +
-                                                    $"{integrity}.",
-                                                    SessionStoreFailureKind.Damaged);
-        var foreignKey = await SessionStoreDatabase.RunForeignKeyCheckAsync(connection, cancellationToken)
+        if (!string.Equals(identity, marker.StoreIdentity, StringComparison.Ordinal))
+            throw new SessionStoreMigrationException($"Business database '{database.DatabasePath}' identity " +
+                                                     $"'{identity ?? "(none)"}' contradicts the migration marker " +
+                                                     $"'{marker.StoreIdentity ?? "(none)"}' after the import.",
+                                                     SessionStoreFailureKind.Conflict);
+        var migrationId = await SessionStoreDatabase.ReadMetaValueAsync(connection, MigrationIdMetaKey,
+                                                                        cancellationToken).ConfigureAwait(false);
+        if (!string.Equals(migrationId, marker.MigrationId, StringComparison.Ordinal))
+            throw new SessionStoreMigrationException($"Business database '{database.DatabasePath}' migration id " +
+                                                     $"'{migrationId ?? "(none)"}' does not match the marker's migration '{marker.MigrationId}'.",
+                                                     SessionStoreFailureKind.Conflict);
+        var integrity = await SessionStoreDatabase.RunIntegrityCheckAsync(connection, cancellationToken)
                                                   .ConfigureAwait(false);
+        if (integrity is not null)
+            throw new SessionStoreMigrationException($"Business database '{database.DatabasePath}' failed its " +
+                                                     $"integrity check after the import: {integrity}.",
+                                                     SessionStoreFailureKind.Damaged);
+        var foreignKey = await SessionStoreDatabase.RunForeignKeyCheckAsync(connection, cancellationToken)
+                                                   .ConfigureAwait(false);
         if (foreignKey is not null)
-            throw new SessionStoreMigrationException(
-                                                    $"Business database '{database.DatabasePath}' failed its foreign-key check after the " +
-                                                    $"import: {foreignKey}.",
-                                                    SessionStoreFailureKind.Damaged);
+            throw new SessionStoreMigrationException($"Business database '{database.DatabasePath}' failed its " +
+                                                     $"foreign-key check after the import: {foreignKey}.",
+                                                     SessionStoreFailureKind.Damaged);
 
         var counts = await ReadBatchRowCountsAsync(connection, cancellationToken).ConfigureAwait(false);
         foreach (var (batch, expected) in expectedRows)
             if (counts[batch] != expected)
-                throw new SessionStoreMigrationException(
-                                                        $"Imported batch '{batch}' holds {counts[batch]} rows while its validated snapshot " +
-                                                        $"expected {expected}; the database content changed during the migration.",
-                                                        SessionStoreFailureKind.Conflict);
+                throw new SessionStoreMigrationException($"Imported batch '{batch}' holds {counts[batch]} rows " +
+                                                         $"while its validated snapshot expected {expected}; "   +
+                                                         "the database content changed during the migration.",
+                                                         SessionStoreFailureKind.Conflict);
+    }
+
+    /// <summary>
+    ///     <para>
+    ///         在迁移租约内把版本更低的业务库升到当前 schema；升级失败按对应失败类别报告，库保持原版本与原结构。
+    ///     </para>
+    ///     <para>
+    ///         Upgrades an older business database to the current schema while the migration lease is held; a failure
+    ///         reports with the matching category and leaves the database at its original version and structure.
+    ///     </para>
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         只接受 <see cref="SessionStoreDatabaseStatus.NeedsUpgrade" />：缺失、无 schema、版本更高与损坏仍按各自
+    ///         类别拒绝，绝不由升级路径重建或降级业务库。
+    ///     </para>
+    ///     <para>
+    ///         Only <see cref="SessionStoreDatabaseStatus.NeedsUpgrade" /> is accepted; a missing, schema-less, newer,
+    ///         or damaged database is still refused with its own category, and the upgrade path never recreates or
+    ///         downgrades a business database.
+    ///     </para>
+    /// </remarks>
+    private static async Task UpgradeExistingDatabaseAsync(
+        SessionStoreDatabase database, SessionStoreDatabaseAvailability availability,
+        CancellationToken    cancellationToken)
+    {
+        if (availability.Status is not SessionStoreDatabaseStatus.NeedsUpgrade)
+            throw SessionStoreBusinessConnection.MapUnavailable(database.StoreDirectory, availability);
+        try
+        {
+            await database.UpgradeAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (SessionStoreDatabaseException exception)
+        {
+            throw new SessionStoreMigrationException($"Business database '{database.DatabasePath}' " +
+                                                     "could not be upgraded to schema version "      +
+                                                     $"{SessionStoreDatabase.CurrentSchemaVersion}: {exception.Message}",
+                                                     SessionStoreErrorClassifier.Classify(exception), exception);
+        }
+    }
+
+    /// <summary>
+    ///     <para>
+    ///         升级前按旧库自带的元数据核对身份与迁移归属：核对通过才允许提交 schema 升级，核对不通过时该文件
+    ///         保持原版本与原结构，异库仍可被创建它的旧程序继续使用。
+    ///     </para>
+    ///     <para>
+    ///         Verifies identity and migration ownership from the older database's own metadata before any upgrade
+    ///         commits; a failed check leaves the file at its original version and structure, so a foreign database
+    ///         stays usable by the older program that created it.
+    ///     </para>
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         读取只用锁等待配置，不切换 journal 模式，因此该步骤本身不写业务文件。元数据不可读时按对应失败
+    ///         类别拒绝：无法确认归属就不得升级。
+    ///     </para>
+    ///     <para>
+    ///         The read only sets the lock wait and never switches the journal mode, so this step itself writes
+    ///         nothing. Unreadable metadata is refused with the matching failure category: without a confirmed
+    ///         ownership the database must not be upgraded.
+    ///     </para>
+    /// </remarks>
+    private static async Task VerifyUpgradeOwnershipAsync(
+        SessionStoreDatabase database, SessionStoreMigrationMarker marker, CancellationToken cancellationToken)
+    {
+        string? identity;
+        string? migrationId;
+        try
+        {
+            await using var connection = await database.OpenAsync(SqliteOpenMode.ReadWrite, false, cancellationToken)
+                                                       .ConfigureAwait(false);
+            identity = await SessionStoreDatabase.ReadStoreIdentityAsync(connection, cancellationToken)
+                                                 .ConfigureAwait(false);
+            migrationId = await SessionStoreDatabase.ReadMetaValueAsync(connection, MigrationIdMetaKey,
+                                                                        cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            throw new SessionStoreMigrationException($"Business database '{database.DatabasePath}' "      +
+                                                     "could not be identified before the schema upgrade " +
+                                                     $"({exception.Message}); it was left unchanged.",
+                                                     SessionStoreErrorClassifier.Classify(exception), exception);
+        }
+
+        // 标记尚未记录身份（首次迁移在建库前中断）时没有可比较的身份，但库里若已写明属于另一次迁移，同样拒绝。
+        if (marker.StoreIdentity is { } expectedIdentity &&
+            !string.Equals(identity, expectedIdentity, StringComparison.Ordinal))
+            throw new SessionStoreMigrationException($"Business database '{database.DatabasePath}' carries identity " +
+                                                     $"'{identity ?? "(none)"}' while the migration marker recorded '{expectedIdentity}'; " +
+                                                     "the schema upgrade was refused and the file keeps its version and structure.",
+                                                     SessionStoreFailureKind.Conflict);
+        if (migrationId is { } recordedMigrationId &&
+            !string.Equals(recordedMigrationId, marker.MigrationId, StringComparison.Ordinal))
+            throw new SessionStoreMigrationException($"Business database '{database.DatabasePath}' belongs to " +
+                                                     $"migration '{recordedMigrationId}', not to the marker's migration " +
+                                                     $"'{marker.MigrationId}'; the schema upgrade was refused and the file " +
+                                                     "keeps its version and structure.",
+                                                     SessionStoreFailureKind.Conflict);
     }
 
     /// <summary>
@@ -954,57 +1082,100 @@ public static partial class SessionStoreMigration
     ///     </para>
     /// </summary>
     private static async Task<SessionStoreMigrationResult> BuildAlreadyCompletedResultAsync(
-        string storeDirectory, SessionStoreDatabase database, SessionStoreMigrationMarker marker,
+        string            storeDirectory, SessionStoreDatabase database, SessionStoreMigrationMarker marker,
         CancellationToken cancellationToken)
     {
         var storeIdentity = marker.StoreIdentity;
         if (storeIdentity is null)
-            throw new SessionStoreMigrationException(
-                                                    $"Migration marker '{MarkerPathFor(storeDirectory)}' marks every batch switched but records no " +
-                                                    "business-database identity; restore the marker or the database manually.",
-                                                    SessionStoreFailureKind.Conflict);
-        var availability = await database.GetAvailabilityAsync(cancellationToken).ConfigureAwait(false);
-        if (availability.Status != SessionStoreDatabaseStatus.Available)
+            throw new SessionStoreMigrationException($"Migration marker '{MarkerPathFor(storeDirectory)}' marks " +
+                                                     "every batch switched but records no business-database identity; " +
+                                                     "restore the marker or the database manually.",
+                                                     SessionStoreFailureKind.Conflict);
+        var  availability = await database.GetAvailabilityAsync(cancellationToken).ConfigureAwait(false);
+        // 旧版本业务库在已完成迁移的 store 里同样必须由本入口升级：读取与对账都按当前结构工作，程序升级后
+        // 第一次跑迁移就是既定的升级时机，而不是要求用户手工换 schema 版本号。
+        // A completed store may still carry an older schema, and this entry is the only upgrade point: reads and
+        // reconciliation work on the current structure, so the first migration run after a program upgrade is where
+        // the schema moves, without asking anyone to edit the version row by hand.
+        int? upgradedFrom = null;
+        if (availability.Status == SessionStoreDatabaseStatus.NeedsUpgrade)
         {
-            throw availability.Status == SessionStoreDatabaseStatus.Missing
-                ? new SessionStoreMigrationException(
-                                                    $"Migration '{marker.MigrationId}' completed but business database " +
-                                                    $"'{database.DatabasePath}' is missing; restore it from a business backup instead of " +
-                                                    "re-importing legacy files.",
-                                                    SessionStoreFailureKind.Missing)
-                : SessionStoreBusinessConnection.MapUnavailable(storeDirectory, availability);
+            // 同上：身份与迁移归属必须先于升级提交核对，异库不得被本入口改写 schema。
+            // As above: identity and migration ownership are checked before the upgrade commits, so a foreign
+            // database is never rewritten into the current schema by this entry.
+            await VerifyUpgradeOwnershipAsync(database, marker, cancellationToken).ConfigureAwait(false);
+            upgradedFrom = await ReadSchemaVersionOrNullAsync(database, cancellationToken).ConfigureAwait(false);
+            await UpgradeExistingDatabaseAsync(database, availability, cancellationToken).ConfigureAwait(false);
+            availability = await database.GetAvailabilityAsync(cancellationToken).ConfigureAwait(false);
         }
+
+        if (availability.Status != SessionStoreDatabaseStatus.Available)
+            throw availability.Status == SessionStoreDatabaseStatus.Missing
+                ? new SessionStoreMigrationException($"Migration '{marker.MigrationId}' completed "                  +
+                                                     $"but business database '{database.DatabasePath}' is missing; " +
+                                                     "restore it from a business backup instead of re-importing legacy files.",
+                                                     SessionStoreFailureKind.Missing)
+                : SessionStoreBusinessConnection.MapUnavailable(storeDirectory, availability);
 
         await using var connection = await database.OpenExistingForInternalUseAsync(cancellationToken)
                                                    .ConfigureAwait(false);
         var identity = await SessionStoreDatabase.ReadStoreIdentityAsync(connection, cancellationToken)
-                                                .ConfigureAwait(false);
+                                                 .ConfigureAwait(false);
         if (!string.Equals(identity, storeIdentity, StringComparison.Ordinal))
-            throw new SessionStoreMigrationException(
-                                                    $"Business database '{database.DatabasePath}' carries identity '{identity ?? "(none)"}' while " +
-                                                    $"migration '{marker.MigrationId}' recorded '{storeIdentity}'; the file was replaced " +
-                                                    "and must be restored from a backup or confirmed explicitly.",
-                                                    SessionStoreFailureKind.Conflict);
+            throw new SessionStoreMigrationException($"Business database '{database.DatabasePath}' "               +
+                                                     $"carries identity '{identity ?? "(none)"}' while migration " +
+                                                     $"'{marker.MigrationId}' recorded '{storeIdentity}'; "        +
+                                                     "the file was replaced and must be restored from a backup or confirmed explicitly.",
+                                                     SessionStoreFailureKind.Conflict);
         var counts = await ReadBatchRowCountsAsync(connection, cancellationToken).ConfigureAwait(false);
         return new SessionStoreMigrationResult(true, marker.MigrationId, storeIdentity,
-                                               BuildReports(marker, new HashSet<SessionStoreMigrationBatch>(), counts));
+                                               BuildReports(marker, new HashSet<SessionStoreMigrationBatch>(), counts),
+                                               upgradedFrom);
+    }
+
+    /// <summary>
+    ///     <para>读取业务库当前 schema 版本；文件或版本行不可读时返回 null，仅供升级诊断使用。</para>
+    ///     <para>Reads the current schema version for upgrade diagnostics; null when the file or version row is unreadable.</para>
+    /// </summary>
+    private static async Task<int?> ReadSchemaVersionOrNullAsync(
+        SessionStoreDatabase database, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await using var connection = await database.OpenExistingForInternalUseAsync(cancellationToken)
+                                                       .ConfigureAwait(false);
+            return await SessionStoreDatabase.ReadSchemaVersionAsync(connection, cancellationToken)
+                                             .ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is SessionStoreDatabaseException or SessionStoreException
+                                           or IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
     }
 
     /// <summary>
     ///     <para>按迁移顺序构造批次报告；行数取业务库当前计数，来源指纹取标记记录。</para>
-    ///     <para>Builds the batch reports in migration order; row counts come from the database and fingerprints from the marker.</para>
+    ///     <para>
+    ///         Builds the batch reports in migration order; row counts come from the database and fingerprints from the
+    ///         marker.
+    ///     </para>
     /// </summary>
     private static IReadOnlyList<SessionStoreMigrationBatchReport> BuildReports(
         SessionStoreMigrationMarker marker, IReadOnlySet<SessionStoreMigrationBatch> switchedThisRun,
         IReadOnlyDictionary<SessionStoreMigrationBatch, int> counts) =>
         SessionStoreMigrationMarker.BatchOrder.Select(batch => new SessionStoreMigrationBatchReport(
-                                                      batch, switchedThisRun.Contains(batch), counts[batch],
-                                                      marker.SourceFingerprints.GetValueOrDefault(batch) ?? string.Empty))
-                                             .ToArray();
+                                                           batch, switchedThisRun.Contains(batch), counts[batch],
+                                                           marker.SourceFingerprints.GetValueOrDefault(batch) ??
+                                                           string.Empty))
+                                   .ToArray();
 
     /// <summary>
     ///     <para>读取各批次的当前行数：组织状态为六张表之和，项目目录册取项目表，会话归属取归属表。</para>
-    ///     <para>Reads the current row count of every batch: the six organization tables combined, the project table, and the placement table.</para>
+    ///     <para>
+    ///         Reads the current row count of every batch: the six organization tables combined, the project table, and the
+    ///         placement table.
+    ///     </para>
     /// </summary>
     private static async Task<Dictionary<SessionStoreMigrationBatch, int>> ReadBatchRowCountsAsync(
         SessionStoreDatabase database, CancellationToken cancellationToken)
@@ -1396,8 +1567,28 @@ public static partial class SessionStoreMigration
     }
 
     /// <summary>
+    ///     <para>业务库绑定步骤的结果：绑定后的迁移标记，以及本次把 schema 升级掉的来源版本。</para>
+    ///     <para>
+    ///         The result of the database-binding step: the bound migration marker and the schema version upgraded
+    ///         during this run, if any.
+    ///     </para>
+    /// </summary>
+    /// <param name="Marker">
+    ///     <para>已与业务库身份绑定的迁移标记。</para>
+    ///     <para>The migration marker bound to the business-database identity.</para>
+    /// </param>
+    /// <param name="UpgradedFrom">
+    ///     <para>本次升级前的 schema 版本；未升级时为 null。</para>
+    ///     <para>The schema version before this run's upgrade, or null when nothing was upgraded.</para>
+    /// </param>
+    private sealed record SessionStoreDatabaseBinding(SessionStoreMigrationMarker Marker, int? UpgradedFrom);
+
+    /// <summary>
     ///     <para>一个批次的导入结果：行数、来源指纹与不阻断迁移的诊断。</para>
-    ///     <para>The import result of one batch: row count, source fingerprint, and diagnostics that do not block the migration.</para>
+    ///     <para>
+    ///         The import result of one batch: row count, source fingerprint, and diagnostics that do not block the
+    ///         migration.
+    ///     </para>
     /// </summary>
     private sealed record BatchImportResult(int ImportedRows, string Fingerprint, IReadOnlyList<string> Diagnostics);
 
