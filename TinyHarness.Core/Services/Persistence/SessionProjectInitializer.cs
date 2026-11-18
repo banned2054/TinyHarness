@@ -265,7 +265,7 @@ public static class SessionProjectInitializer
             return new SessionProjectInitializationResult(true, afterSessionId, true, [], []);
 
         var resolution = await SessionStoreAuthority.ResolveAsync(storeDirectory, cancellationToken)
-                                                   .ConfigureAwait(false);
+                                                    .ConfigureAwait(false);
         SessionStoreAuthority.ThrowIfBlocked(storeDirectory, resolution);
         if (resolution.Mode == SessionStoreMode.Migrated)
             return await InitializeBusinessPlacementAsync(storeDirectory, afterSessionId, maxSessions, utcNow,
@@ -280,7 +280,7 @@ public static class SessionProjectInitializer
         try
         {
             orderedIds = await ListSessionIdsAsync(storeDirectory, restrictToIds, cancellationToken)
-                              .ConfigureAwait(false);
+               .ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -375,76 +375,71 @@ public static class SessionProjectInitializer
                     continue;
                 }
 
-                using (var writer = open.Writer!)
+                using var writer = open.Writer!;
+                if (cancellationToken.IsCancellationRequested)
                 {
-                    if (cancellationToken.IsCancellationRequested)
-                    {
-                        cancelled = true;
-                        break;
-                    }
+                    cancelled = true;
+                    break;
+                }
 
-                    var reloaded = writer.LoadedSnapshot!;
-                    if (reloaded.ProjectId is { } existingProjectId)
-                    {
-                        // 重读已绑定即保留现值，不按过期扫描结果换绑。
-                        outcomes.Add(new SessionProjectBindingOutcome(sessionId, reloaded.WorkspaceRoot,
-                                                                      SessionProjectBindingStatus.AlreadyBound,
-                                                                      existingProjectId, null));
-                        continue;
-                    }
+                var reloaded = writer.LoadedSnapshot!;
+                if (reloaded.ProjectId is { } existingProjectId)
+                {
+                    // 重读已绑定即保留现值，不按过期扫描结果换绑。
+                    outcomes.Add(new SessionProjectBindingOutcome(sessionId, reloaded.WorkspaceRoot,
+                                                                  SessionProjectBindingStatus.AlreadyBound,
+                                                                  existingProjectId, null));
+                    continue;
+                }
 
-                    if (reloaded.ProjectAssignmentState == SessionProjectAssignmentState.NoProject)
-                    {
-                        outcomes.Add(new SessionProjectBindingOutcome(sessionId, reloaded.WorkspaceRoot,
-                                                                      SessionProjectBindingStatus.NoProject, null,
-                                                                      null));
-                        continue;
-                    }
+                if (reloaded.ProjectAssignmentState == SessionProjectAssignmentState.NoProject)
+                {
+                    outcomes.Add(new SessionProjectBindingOutcome(sessionId, reloaded.WorkspaceRoot,
+                                                                  SessionProjectBindingStatus.NoProject, null,
+                                                                  null));
+                    continue;
+                }
 
-                    if (RootValidationError(storeDirectory, reloaded.WorkspaceRoot) is { } reloadedRootError)
-                    {
-                        outcomes.Add(new SessionProjectBindingOutcome(sessionId, reloaded.WorkspaceRoot,
-                                                                      SessionProjectBindingStatus.Failed, null,
-                                                                      reloadedRootError));
-                        continue;
-                    }
+                if (RootValidationError(storeDirectory, reloaded.WorkspaceRoot) is { } reloadedRootError)
+                {
+                    outcomes.Add(new SessionProjectBindingOutcome(sessionId, reloaded.WorkspaceRoot,
+                                                                  SessionProjectBindingStatus.Failed, null,
+                                                                  reloadedRootError));
+                    continue;
+                }
 
-                    if (!ProjectRoots.AreEqual(ProjectRoots.Normalize(reloaded.WorkspaceRoot), normalizedRoot))
-                    {
-                        outcomes.Add(new SessionProjectBindingOutcome(
-                                                                      sessionId, reloaded.WorkspaceRoot,
-                                                                      SessionProjectBindingStatus.Failed, null,
-                                                                      $"The session's saved workspace root changed since the scan ('{reloaded.WorkspaceRoot}'); it was not bound to the scanned project."));
-                        continue;
-                    }
+                if (!ProjectRoots.AreEqual(ProjectRoots.Normalize(reloaded.WorkspaceRoot), normalizedRoot))
+                {
+                    outcomes.Add(new SessionProjectBindingOutcome(sessionId, reloaded.WorkspaceRoot,
+                                                                  SessionProjectBindingStatus.Failed, null,
+                                                                  $"The session's saved workspace root changed since the scan ('{reloaded.WorkspaceRoot}'); it was not bound to the scanned project."));
+                    continue;
+                }
 
-                    var projectId = projectsByRoot[normalizedRoot].Id;
-                    try
-                    {
-                        await AppendOwnershipAsync(ownershipAppend, sessionId, writer, projectId,
-                                                   cancellationToken).ConfigureAwait(false);
-                        outcomes.Add(new SessionProjectBindingOutcome(sessionId, reloaded.WorkspaceRoot,
-                                                                      SessionProjectBindingStatus.Bound, projectId,
-                                                                      null));
-                    }
-                    catch (OperationCanceledException)
-                    {
-                        // 写盘前取消：本次未写入任何字节，无失败事实，仅停止本轮。
-                        cancelled = true;
-                        break;
-                    }
-                    catch (SessionStoreException ex)
-                    {
-                        // 追加失败（含 poison 的不确定写入）当轮不重试；令牌已取消时保留失败事实并停止。
-                        outcomes.Add(new SessionProjectBindingOutcome(sessionId, reloaded.WorkspaceRoot,
-                                                                      SessionProjectBindingStatus.Failed, projectId,
-                                                                      ex.Message));
-                        if (cancellationToken.IsCancellationRequested)
-                        {
-                            cancelled = true;
-                            break;
-                        }
-                    }
+                var projectId = projectsByRoot[normalizedRoot].Id;
+                try
+                {
+                    await AppendOwnershipAsync(ownershipAppend, sessionId, writer, projectId,
+                                               cancellationToken).ConfigureAwait(false);
+                    outcomes.Add(new SessionProjectBindingOutcome(sessionId, reloaded.WorkspaceRoot,
+                                                                  SessionProjectBindingStatus.Bound, projectId,
+                                                                  null));
+                }
+                catch (OperationCanceledException)
+                {
+                    // 写盘前取消：本次未写入任何字节，无失败事实，仅停止本轮。
+                    cancelled = true;
+                    break;
+                }
+                catch (SessionStoreException ex)
+                {
+                    // 追加失败（含 poison 的不确定写入）当轮不重试；令牌已取消时保留失败事实并停止。
+                    outcomes.Add(new SessionProjectBindingOutcome(sessionId, reloaded.WorkspaceRoot,
+                                                                  SessionProjectBindingStatus.Failed, projectId,
+                                                                  ex.Message));
+                    if (!cancellationToken.IsCancellationRequested) continue;
+                    cancelled = true;
+                    break;
                 }
             }
 
@@ -493,11 +488,9 @@ public static class SessionProjectInitializer
     {
         if (ownershipAppend is { } injected)
             return injected(sessionId, writer, projectId, cancellationToken);
-        return writer.AppendRecordsAsync(
-        [
+        return writer.AppendRecordsAsync([
             new SessionLogRecord(string.Empty, "project-binding",
-                                 JsonSerializer.SerializeToElement(
-                                                                   new SessionLogProjectBinding(SessionLogProjectBinding
+                                 JsonSerializer.SerializeToElement(new SessionLogProjectBinding(SessionLogProjectBinding
                                                                                .SchemaName, projectId),
                                                                    SessionLogJsonContext.Default
                                                                       .SessionLogProjectBinding))
@@ -572,9 +565,8 @@ public static class SessionProjectInitializer
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            throw new SessionStoreException(
-                                            $"Cannot enumerate the session store directory '{Path.GetFullPath(storeDirectory)}': {ex.Message}",
-                                            ex);
+            throw new SessionStoreException("Cannot enumerate the session store directory " +
+                                            $"'{Path.GetFullPath(storeDirectory)}': {ex.Message}", ex);
         }
     }
 
@@ -591,8 +583,8 @@ public static class SessionProjectInitializer
     ///     </para>
     /// </summary>
     private static async Task<SessionProjectInitializationResult> InitializeBusinessPlacementAsync(
-        string storeDirectory, string? afterSessionId, int? maxSessions, DateTimeOffset? utcNow,
-        IReadOnlyList<string>? restrictToIds, CancellationToken cancellationToken)
+        string                 storeDirectory, string? afterSessionId, int? maxSessions, DateTimeOffset? utcNow,
+        IReadOnlyList<string>? restrictToIds,  CancellationToken cancellationToken)
     {
         var          outcomes  = new List<SessionProjectBindingOutcome>();
         var          projects  = new List<SessionProjectReference>();
@@ -601,7 +593,7 @@ public static class SessionProjectInitializer
         try
         {
             orderedIds = await ListSessionIdsAsync(storeDirectory, restrictToIds, cancellationToken)
-                              .ConfigureAwait(false);
+               .ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -665,7 +657,7 @@ public static class SessionProjectInitializer
                 candidates.Add((sessionId, session.WorkspaceRoot));
             }
 
-            var rootComparer   = OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+            var rootComparer = OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
             var projectsByRoot = new Dictionary<string, Project>(rootComparer);
             foreach (var group in candidates.GroupBy(candidate => ProjectRoots.Normalize(candidate.WorkspaceRoot),
                                                      rootComparer))
@@ -683,8 +675,8 @@ public static class SessionProjectInitializer
                                                                   utcNow, cancellationToken).ConfigureAwait(false);
                 }
                 catch (Exception ex) when (ex is ProjectStoreException or SessionStoreException
-                                               or SessionStoreMigrationException or IOException
-                                               or UnauthorizedAccessException)
+                                                                       or SessionStoreMigrationException or IOException
+                                                                       or UnauthorizedAccessException)
                 {
                     foreach (var candidate in group)
                         outcomes.Add(new SessionProjectBindingOutcome(candidate.SessionId, candidate.WorkspaceRoot,
@@ -705,7 +697,7 @@ public static class SessionProjectInitializer
 
                     // 插入前重读日志作为运行时边界：已绑定或无项目的会话保留其事实，执行根变化时不按旧扫描结果归属。
                     var reloaded = await ReadSessionSnapshotAsync(storeDirectory, sessionId, cancellationToken)
-                                      .ConfigureAwait(false);
+                       .ConfigureAwait(false);
                     if (reloaded.Error is not null)
                     {
                         outcomes.Add(new SessionProjectBindingOutcome(sessionId, scannedRoot,
@@ -733,8 +725,7 @@ public static class SessionProjectInitializer
 
                     if (!ProjectRoots.AreEqual(ProjectRoots.Normalize(current.WorkspaceRoot), group.Key))
                     {
-                        outcomes.Add(new SessionProjectBindingOutcome(
-                                                                      sessionId, current.WorkspaceRoot,
+                        outcomes.Add(new SessionProjectBindingOutcome(sessionId, current.WorkspaceRoot,
                                                                       SessionProjectBindingStatus.Failed, null,
                                                                       $"The session's saved workspace root changed since the scan ('{current.WorkspaceRoot}'); it was not bound to the scanned project."));
                         continue;
@@ -743,8 +734,8 @@ public static class SessionProjectInitializer
                     try
                     {
                         if (await SessionStorePlacementStore
-                                       .TryInitializeProjectAsync(storeDirectory, sessionId, project.Id,
-                                                                  cancellationToken).ConfigureAwait(false))
+                                 .TryInitializeProjectAsync(storeDirectory, sessionId, project.Id,
+                                                            cancellationToken).ConfigureAwait(false))
                         {
                             outcomes.Add(new SessionProjectBindingOutcome(sessionId, current.WorkspaceRoot,
                                                                           SessionProjectBindingStatus.Bound,
@@ -755,14 +746,14 @@ public static class SessionProjectInitializer
                         // 并发初始化已写入：后到者按当前归属报告，不覆盖先到者的结果。
                         var placement = await SessionStorePlacementStore.GetAsync(storeDirectory, sessionId,
                                                                                   cancellationToken)
-                                                                       .ConfigureAwait(false);
+                                                                        .ConfigureAwait(false);
                         outcomes.Add(placement.State switch
                         {
-                            SessionProjectAssignmentState.Project => new SessionProjectBindingOutcome(
-                                sessionId, current.WorkspaceRoot, SessionProjectBindingStatus.AlreadyBound,
-                                placement.ProjectId, null),
-                            SessionProjectAssignmentState.NoProject => new SessionProjectBindingOutcome(
-                                sessionId, current.WorkspaceRoot, SessionProjectBindingStatus.NoProject, null, null),
+                            SessionProjectAssignmentState.Project => new SessionProjectBindingOutcome(sessionId,
+                                     current.WorkspaceRoot, SessionProjectBindingStatus.AlreadyBound,
+                                     placement.ProjectId, null),
+                            SessionProjectAssignmentState.NoProject => new SessionProjectBindingOutcome(sessionId,
+                                     current.WorkspaceRoot, SessionProjectBindingStatus.NoProject, null, null),
                             _ => new SessionProjectBindingOutcome(sessionId, current.WorkspaceRoot,
                                                                   SessionProjectBindingStatus.Failed, null,
                                                                   "The session still has no placement after an initialization attempt.")
@@ -774,7 +765,8 @@ public static class SessionProjectInitializer
                         break;
                     }
                     catch (Exception ex) when (ex is SessionStoreException or SessionStoreMigrationException
-                                                   or IOException or UnauthorizedAccessException)
+                                                                           or IOException
+                                                                           or UnauthorizedAccessException)
                     {
                         outcomes.Add(new SessionProjectBindingOutcome(sessionId, current.WorkspaceRoot,
                                                                       SessionProjectBindingStatus.Failed, null,
@@ -812,7 +804,10 @@ public static class SessionProjectInitializer
 
     /// <summary>
     ///     <para>把业务库归属尽力同步到列表索引；索引缺失、不可用或写入失败只记诊断，不影响业务写入结果。</para>
-    ///     <para>Best-effort syncs business placements into the list index; a missing or unusable index and write failures are diagnostic only and never change the business outcome.</para>
+    ///     <para>
+    ///         Best-effort syncs business placements into the list index; a missing or unusable index and write failures are
+    ///         diagnostic only and never change the business outcome.
+    ///     </para>
     /// </summary>
     private static async Task SyncPlacementProjectionQuietlyAsync(
         string storeDirectory, CancellationToken cancellationToken)
@@ -830,9 +825,11 @@ public static class SessionProjectInitializer
         {
             throw;
         }
-        catch (Exception ex) when (ex is SessionIndexException or SessionStoreException
-                                       or SessionStoreMigrationException or IOException
-                                       or UnauthorizedAccessException)
+        catch (Exception ex) when (ex is SessionIndexException
+                                      or SessionStoreException
+                                      or SessionStoreMigrationException
+                                      or IOException
+                                      or UnauthorizedAccessException)
         {
             Trace.TraceError("Placement projection sync for '{0}' failed: {1}", storeDirectory, ex.Message);
         }
@@ -850,8 +847,8 @@ public static class SessionProjectInitializer
         if (string.IsNullOrWhiteSpace(workspaceRoot))
             return "The session's saved workspace root is empty.";
         if (!Path.IsPathFullyQualified(workspaceRoot))
-            return
-                $"The session's saved workspace root '{workspaceRoot}' is not an absolute path; it was not resolved against the process directory.";
+            return $"The session's saved workspace root '{workspaceRoot}' is not an absolute path; " +
+                   "it was not resolved against the process directory.";
         try
         {
             ProjectRoots.Normalize(workspaceRoot);

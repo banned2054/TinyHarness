@@ -2,13 +2,13 @@ using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
-using TinyHarness.Core.Models.Permissions;
 using System.Text.Json.Serialization;
 using System.Text.Json.Serialization.Metadata;
 using TinyHarness.Core.Exceptions;
 using TinyHarness.Core.Models.Agent;
 using TinyHarness.Core.Models.ChatCompletions;
 using TinyHarness.Core.Models.Configuration;
+using TinyHarness.Core.Models.Permissions;
 using TinyHarness.Core.Models.Persistence;
 using TinyHarness.Core.Models.ProjectInstructions;
 using TinyHarness.Core.Models.Session;
@@ -154,8 +154,8 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
         if (requireNew && File.Exists(SnapshotPath))
         {
             _lockStream.Dispose();
-            throw new
-                SessionStoreException($"Session '{SessionId}' already has stored data; new sessions require an unused id.");
+            throw new SessionStoreException($"Session '{SessionId}' already has stored data; new sessions " +
+                                            "require an unused id.");
         }
 
         _lockStream.SetLength(0);
@@ -235,12 +235,15 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
         {
             if (_poisoned) throw PoisonedException();
             if (CommitSequence == 0)
-                throw new
-                    SessionStoreException("The session identity batch must be committed before appending run records.");
+                throw new SessionStoreException("The session identity batch must be committed " +
+                                                "before appending run records.");
             if (await UsesBusinessPlacementAsync(cancellationToken).ConfigureAwait(false) &&
-                records.Any(record => record.Kind is "project-binding" or "project-assignment" or "project-unassignment"))
-                throw new
-                    SessionStoreException($"Session '{SessionId}' ownership is stored in the business database after migration; legacy ownership records must not be appended to the journal.");
+                records.Any(record => record.Kind is "project-binding"
+                                                  or "project-assignment"
+                                                  or "project-unassignment"))
+                throw new SessionStoreException($"Session '{SessionId}' ownership is stored in the "   +
+                                                "business database after migration; legacy ownership " +
+                                                "records must not be appended to the journal.");
 
             var     sequence            = CommitSequence + 1;
             var     normalized          = new SessionLogRecord[records.Count];
@@ -251,8 +254,8 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
             {
                 var record = records[i] ?? throw new SessionStoreException("The record batch contains a null record.");
                 if (!string.IsNullOrEmpty(record.Id))
-                    throw new
-                        SessionStoreException("Callers must leave journal record IDs empty; the writer assigns them.");
+                    throw new SessionStoreException("Callers must leave journal record IDs empty; " +
+                                                    "the writer assigns them.");
                 if (string.IsNullOrWhiteSpace(record.Kind) ||
                     record.Payload.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
                     throw new SessionStoreException("A journal record must have a kind and a non-null typed payload.");
@@ -264,15 +267,15 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
                         if (record.Kind == "history")
                         {
                             var item = record.Payload.Deserialize(SessionHistoryJsonContext.Default.SessionHistoryItem)
-                                    ?? throw new
-                                           SessionStoreException("A history record must contain a typed history item.");
+                                    ?? throw new SessionStoreException("A history record must contain " +
+                                                                       "a typed history item.");
                             if (!string.Equals(item.SessionId, SessionId, StringComparison.Ordinal))
-                                throw new
-                                    SessionStoreException($"History item session '{item.SessionId}' does not match '{SessionId}'.");
+                                throw new SessionStoreException($"History item session '{item.SessionId}' " +
+                                                                $"does not match '{SessionId}'.");
                             if (item.Kind is not (SessionHistoryKind.User or SessionHistoryKind.Process or
                                                   SessionHistoryKind.Final or SessionHistoryKind.Tool))
-                                throw new
-                                    SessionStoreException($"History kind '{item.Kind}' cannot be appended through the generic journal API.");
+                                throw new SessionStoreException($"History kind '{item.Kind}' cannot be appended " +
+                                                                "through the generic journal API.");
                             var boundItem = item with { Id = recordId, Sequence = sequence };
                             normalized[i] = record with
                             {
@@ -285,8 +288,8 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
                         else
                         {
                             var audit = record.Payload.Deserialize(PersistenceJsonContext.Default.AuditRecord)
-                                     ?? throw new
-                                            SessionStoreException("An audit record must contain a typed payload.");
+                                     ?? throw new SessionStoreException("An audit record must contain " +
+                                                                        "a typed payload.");
                             if (string.IsNullOrWhiteSpace(audit.Kind) || string.IsNullOrWhiteSpace(audit.RunId))
                                 throw new SessionStoreException("An audit record must identify its run and fact kind.");
                             normalized[i] = record with { Id = recordId };
@@ -294,9 +297,8 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
                     }
                     catch (JsonException ex)
                     {
-                        throw new
-                            SessionStoreException($"Journal record '{record.Kind}' has an invalid typed payload: {ex.Message}",
-                                                  ex);
+                        throw new SessionStoreException($"Journal record '{record.Kind}' has an invalid " +
+                                                        $"typed payload: {ex.Message}", ex);
                     }
                 }
                 else if (record.Kind is "run-amendment" or "work-item" or "permission-grant-event" or "session-title")
@@ -308,17 +310,16 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
                 {
                     if (_projectId is not null || bindingProjectId is not null ||
                         _projectAssignmentState == SessionProjectAssignmentState.NoProject || explicitlyNoProject)
-                        throw new
-                            SessionStoreException($"Session '{SessionId}' already carries a project binding; ownership is bound once and never appended again or transferred.");
+                        throw new SessionStoreException($"Session '{SessionId}' already carries a project binding; " +
+                                                        "ownership is bound once and never appended again or transferred.");
                     try
                     {
                         bindingProjectId = SessionLogProjectBinding.Parse(record.Payload);
                     }
                     catch (Exception ex) when (ex is InvalidDataException or JsonException)
                     {
-                        throw new
-                            SessionStoreException($"Journal record 'project-binding' has an invalid typed payload: {ex.Message}",
-                                                  ex);
+                        throw new SessionStoreException("Journal record 'project-binding' has an invalid typed " +
+                                                        $"payload: {ex.Message}", ex);
                     }
 
                     normalized[i] = record with { Id = recordId };
@@ -329,17 +330,16 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
                         bindingProjectId is not null                                                   ||
                         _projectAssignmentState != SessionProjectAssignmentState.PendingInitialization ||
                         explicitlyNoProject)
-                        throw new SessionStoreException(
-                                                        $"Session '{SessionId}' already has a project assignment; an explicit no-project state can only initialize an unbound legacy session.");
+                        throw new SessionStoreException($"Session '{SessionId}' already has a project assignment; " +
+                                                        "an explicit no-project state can only initialize an unbound legacy session.");
                     try
                     {
                         SessionLogProjectAssignment.ValidateNoProject(record.Payload);
                     }
                     catch (InvalidDataException ex)
                     {
-                        throw new SessionStoreException(
-                                                        $"Journal record 'project-assignment' has an invalid typed payload: {ex.Message}",
-                                                        ex);
+                        throw new SessionStoreException("Journal record 'project-assignment' has an invalid typed " +
+                                                        $"payload: {ex.Message}", ex);
                     }
 
                     explicitlyNoProject = true;
@@ -354,16 +354,15 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
                     }
                     catch (InvalidDataException ex)
                     {
-                        throw new SessionStoreException(
-                                                        $"Journal record 'project-unassignment' has an invalid typed payload: {ex.Message}",
-                                                        ex);
+                        throw new SessionStoreException("Journal record 'project-unassignment' has an invalid typed " +
+                                                        $"payload: {ex.Message}", ex);
                     }
 
                     if (_projectAssignmentState != SessionProjectAssignmentState.Project ||
                         _projectId              != unassignmentProjectId || bindingProjectId is not null ||
                         explicitlyNoProject || unassignedProjectId is not null)
-                        throw new SessionStoreException(
-                                                        $"Session '{SessionId}' cannot remove project ownership that does not match '{unassignmentProjectId}'.");
+                        throw new SessionStoreException($"Session '{SessionId}' cannot remove project ownership that " +
+                                                        $"does not match '{unassignmentProjectId}'.");
 
                     unassignedProjectId = unassignmentProjectId;
                     normalized[i]       = record with { Id = recordId };
@@ -385,11 +384,11 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
             };
             var bytes = JsonSerializer.SerializeToUtf8Bytes(batch, SessionLogJsonContext.Default.SessionLogBatch);
             if (bytes.Length + 1 > MaxSnapshotBytes)
-                throw new
-                    SessionStoreException($"Session batch exceeds {MaxSnapshotBytes:N0} bytes; no data was appended.");
+                throw new SessionStoreException($"Session batch exceeds {MaxSnapshotBytes:N0} bytes; " +
+                                                "no data was appended.");
             if (_logStream.Length + bytes.Length + 1 > MaxLogBytes)
-                throw new
-                    SessionStoreException($"Session log would exceed {MaxLogBytes:N0} bytes; no data was appended.");
+                throw new SessionStoreException($"Session log would exceed {MaxLogBytes:N0} bytes; " +
+                                                "no data was appended.");
 
             var logLengthBeforeBatch = _logStream.Length;
             await WriteBatchAsync(batch, bytes, cancellationToken).ConfigureAwait(false);
@@ -416,6 +415,13 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
         {
             _gate.Release();
         }
+    }
+
+    public void Dispose()
+    {
+        _logStream.Dispose();
+        _lockStream.Dispose();
+        _gate.Dispose();
     }
 
     /// <summary>
@@ -451,33 +457,35 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
     {
         try
         {
-            if (session.ProjectAssignmentState == SessionProjectAssignmentState.Project &&
-                session.ProjectId is { } projectId)
-                await SessionStorePlacementStore.SetProjectAsync(_directory, SessionId, projectId, cancellationToken)
-                                                .ConfigureAwait(false);
-            else if (session.ProjectAssignmentState == SessionProjectAssignmentState.NoProject)
-                await SessionStorePlacementStore.SetNoProjectAsync(_directory, SessionId, cancellationToken)
-                                                .ConfigureAwait(false);
+            switch (session.ProjectAssignmentState)
+            {
+                case SessionProjectAssignmentState.Project when
+                    session.ProjectId is { } projectId :
+                    await SessionStorePlacementStore
+                         .SetProjectAsync(_directory, SessionId, projectId, cancellationToken)
+                         .ConfigureAwait(false);
+                    break;
+                case SessionProjectAssignmentState.NoProject :
+                    await SessionStorePlacementStore.SetNoProjectAsync(_directory, SessionId, cancellationToken)
+                                                    .ConfigureAwait(false);
+                    break;
+            }
         }
-        catch (Exception ex) when (ex is SessionStoreMigrationException or SessionStoreException
-                                       or IOException or UnauthorizedAccessException or ArgumentException)
+        catch (Exception ex) when (ex is SessionStoreMigrationException
+                                      or SessionStoreException
+                                      or IOException
+                                      or UnauthorizedAccessException
+                                      or ArgumentException)
         {
-            throw new SessionStoreException(
-                                            $"Session '{SessionId}' placement could not be written to the business database: {ex.Message}",
-                                            ex);
+            throw new SessionStoreException($"Session '{SessionId}' placement could not be written " +
+                                            $"to the business database: {ex.Message}", ex);
         }
     }
 
-    public void Dispose()
-    {
-        _logStream.Dispose();
-        _lockStream.Dispose();
-        _gate.Dispose();
-    }
-
-    private IRunRecorder CreateBoundRunRecorder(
-        string sessionId, string turnId, string runId, Func<CancellationToken, Task> commitInitialContext,
-        Func<SessionHistoryItem, CancellationToken, ValueTask>? historyItemCommitted)
+    private IRunRecorder CreateBoundRunRecorder(string                        sessionId, string turnId, string runId,
+                                                Func<CancellationToken, Task> commitInitialContext,
+                                                Func<SessionHistoryItem, CancellationToken, ValueTask>?
+                                                    historyItemCommitted)
     {
         _historyItemCommitted = historyItemCommitted;
         var recorder = new SessionLogRunRecorder(this, sessionId, turnId, runId, commitInitialContext, _knownSecrets,
@@ -502,21 +510,28 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
         {
             if (_poisoned) throw PoisonedException();
             var usesBusinessPlacement = await UsesBusinessPlacementAsync(cancellationToken)
-                                              .ConfigureAwait(false);
-            // 迁移完成后归属只写业务库：新会话首次提交前先落归属行，日志不再携带归属记录。
-            if (usesBusinessPlacement &&
-                CommitSequence == 0 &&
-                session.ProjectAssignmentState != SessionProjectAssignmentState.PendingInitialization)
-                await PersistPlacementAsync(session, cancellationToken).ConfigureAwait(false);
-            if (!usesBusinessPlacement &&
-                CommitSequence > 0 &&
-                (!string.Equals(session.ProjectId, _projectId, StringComparison.Ordinal) ||
-                 session.ProjectAssignmentState != _projectAssignmentState))
-                throw new
-                    SessionStoreException($"Session '{SessionId}' carries project state '{session.ProjectAssignmentState}' and project '{session.ProjectId ?? "(none)"}' while the committed journal carries '{_projectAssignmentState}' and '{_projectId ?? "(none)"}'.");
+               .ConfigureAwait(false);
+            switch (usesBusinessPlacement)
+            {
+                // 迁移完成后归属只写业务库：新会话首次提交前先落归属行，日志不再携带归属记录。
+                case true when
+                    CommitSequence                 == 0 &&
+                    session.ProjectAssignmentState != SessionProjectAssignmentState.PendingInitialization :
+                    await PersistPlacementAsync(session, cancellationToken).ConfigureAwait(false);
+                    break;
+                case false when
+                    CommitSequence > 0 &&
+                    (!string.Equals(session.ProjectId, _projectId, StringComparison.Ordinal) ||
+                     session.ProjectAssignmentState != _projectAssignmentState) :
+                    throw new SessionStoreException($"Session '{SessionId}' carries project state " +
+                                                    $"'{session.ProjectAssignmentState}' and project " +
+                                                    $"'{session.ProjectId ?? "(none)"}' while the committed " +
+                                                    $"journal carries '{_projectAssignmentState}' and '{_projectId ?? "(none)"}'.");
+            }
+
             if (context.Messages.Count < _persistedMessageCount)
-                throw new
-                    SessionStoreException("The in-memory conversation rewound behind the committed journal prefix.");
+                throw new SessionStoreException("The in-memory conversation rewound behind " +
+                                                "the committed journal prefix.");
 
             var nextSequence = CommitSequence + 1;
             var records      = new List<SessionLogRecord>();
@@ -524,8 +539,8 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
             void Add<T>(string kind, T payload) =>
                 records.Add(new SessionLogRecord(RecordId(SessionId, nextSequence, records.Count), kind,
                                                  JsonSerializer.SerializeToElement(payload,
-                                                     (JsonTypeInfo<T>)SessionLogJsonContext.Default
-                                                        .GetTypeInfo(typeof(T))!)));
+                                                          (JsonTypeInfo<T>)SessionLogJsonContext.Default
+                                                             .GetTypeInfo(typeof(T))!)));
 
             var persistedTurnCount    = _persistedTurnCount;
             var trackedTurnId         = _trackedTurnId;
@@ -584,8 +599,8 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
             {
                 var lastTurn = turns[^1];
                 if (trackedTurnId != lastTurn.Id)
-                    throw new
-                        SessionStoreException("The session turn sequence changed behind the committed journal cursor.");
+                    throw new SessionStoreException("The session turn sequence changed behind " +
+                                                    "the committed journal cursor.");
 
                 for (var i = trackedTurnRunCount; i < lastTurn.Runs.Count; i++)
                 {
@@ -617,8 +632,8 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
 
             var projectInstructionRecords = context.ProjectInstructionRecords;
             if (projectInstructionRecords.Count < _persistedProjectInstructionRecordCount)
-                throw new
-                    SessionStoreException("The in-memory project-instruction record list rewound behind the committed journal prefix.");
+                throw new SessionStoreException("The in-memory project-instruction record list rewound " +
+                                                "behind the committed journal prefix.");
             for (var i = _persistedProjectInstructionRecordCount; i < projectInstructionRecords.Count; i++)
             {
                 var instructionRecord = projectInstructionRecords[i];
@@ -642,7 +657,7 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
                 };
                 records.Add(new SessionLogRecord(item.Id, "history",
                                                  JsonSerializer.SerializeToElement(item,
-                                                     SessionHistoryJsonContext.Default.SessionHistoryItem)));
+                                                          SessionHistoryJsonContext.Default.SessionHistoryItem)));
                 (committedHistoryItems ??= []).Add(item);
             }
 
@@ -691,11 +706,11 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
             };
             var bytes = JsonSerializer.SerializeToUtf8Bytes(batch, SessionLogJsonContext.Default.SessionLogBatch);
             if (bytes.Length + 1 > MaxSnapshotBytes)
-                throw new
-                    SessionStoreException($"Session batch exceeds {MaxSnapshotBytes:N0} bytes; no data was appended.");
+                throw new SessionStoreException($"Session batch exceeds {MaxSnapshotBytes:N0} bytes; " +
+                                                $"no data was appended.");
             if (_logStream.Length + bytes.Length + 1 > MaxLogBytes)
-                throw new
-                    SessionStoreException($"Session log would exceed {MaxLogBytes:N0} bytes; no data was appended.");
+                throw new SessionStoreException($"Session log would exceed {MaxLogBytes:N0} bytes; " +
+                                                $"no data was appended.");
 
             var logLengthBeforeBatch = _logStream.Length;
             await WriteBatchAsync(batch, bytes, cancellationToken).ConfigureAwait(false);
@@ -767,17 +782,16 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
                 : "no source bodies loaded"
             : string.Join("; ", instructionRecord.Snapshot.Documents.Select(document =>
                                                                                 $"source: {_redactor.Redact(document.SourcePath)} (scope: {_redactor.Redact(document.ScopeDirectory)})"));
-        var notices       = ProjectInstructionRenderer.BudgetNotices(instructionRecord.Snapshot);
+        var notices = ProjectInstructionRenderer.BudgetNotices(instructionRecord.Snapshot);
         var budgetSummary = notices.Count == 0 ? string.Empty : "\n" + string.Join('\n', notices);
-        return
-            _redactor.Redact($"Project instructions {instructionRecord.Action}: revision {instructionRecord.Revision}; " +
-                             $"{instructionRecord.Snapshot.Documents.Count} document(s); {sources}; reason {instructionRecord.Reason}.{budgetSummary}");
+        return _redactor.Redact($"Project instructions {instructionRecord.Action}: " +
+                                $"revision {instructionRecord.Revision}; {instructionRecord.Snapshot.Documents.Count} document(s); " +
+                                $"{sources}; reason {instructionRecord.Reason}.{budgetSummary}");
     }
 
     private async Task PublishCommittedHistoryItemsAsync(
-        Func<SessionHistoryItem, CancellationToken, ValueTask>? callback,
-        Action<Exception>?                                      historyPublishError,
-        IReadOnlyList<SessionHistoryItem>                       items, CancellationToken cancellationToken)
+        Func<SessionHistoryItem, CancellationToken, ValueTask>? callback, Action<Exception>? historyPublishError,
+        IReadOnlyList<SessionHistoryItem>                       items,    CancellationToken  cancellationToken)
     {
         if (callback is null) return;
         foreach (var item in items)
@@ -875,9 +889,8 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
         sessionId = sessionId.ToLowerInvariant();
         var path = Path.Combine(directory, sessionId + LogFileSuffix);
         if (!File.Exists(path))
-            return SessionWriterOpenResult.FromFailure(
-                                                       new
-                                                           SessionStoreException($"No JSONL session log '{path}' exists."));
+            return SessionWriterOpenResult
+               .FromFailure(new SessionStoreException($"No JSONL session log '{path}' exists."));
 
         var                 lockPath   = Path.Combine(directory, $"{sessionId}.lock");
         FileStream?         lockStream = null;
@@ -910,9 +923,9 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
         {
             return SessionWriterOpenResult.FromFailure(ex is SessionStoreException storeFailure
                                                            ? storeFailure
-                                                           : new SessionStoreException(
-                                                            $"Cannot open session '{sessionId}' for ownership initialization: {ex.Message}",
-                                                            ex));
+                                                           : new SessionStoreException("Cannot open session " +
+                                                                    $"'{sessionId}' for ownership initialization: {ex.Message}",
+                                                                    ex));
         }
         finally
         {
@@ -928,8 +941,7 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
                      OverflowException or NotSupportedException;
 
     private static bool IsLockContention(IOException ex) =>
-        OperatingSystem.IsWindows() &&
-        (ex.HResult == SharingViolationHResult || ex.HResult == LockViolationHResult);
+        OperatingSystem.IsWindows() && ex.HResult is SharingViolationHResult or LockViolationHResult;
 
     /// <summary>
     ///     <para>以严格读取的快照续种 writer 的提交游标与各持久化缓存；归属缓存一并从日志镜像。</para>
@@ -1076,9 +1088,8 @@ public sealed class SessionStoreWriter : ISessionStoreWriter
         {
             _poisoned    = true;
             WriteFailure = ex.Message;
-            throw new
-                SessionStoreException($"Session '{SessionId}' journal write failed; the writer is poisoned and will not retry.",
-                                      ex);
+            throw new SessionStoreException($"Session '{SessionId}' journal write failed; " +
+                                            $"the writer is poisoned and will not retry.", ex);
         }
     }
 
@@ -1209,8 +1220,8 @@ public static class SessionStoreReader
         if (!File.Exists(path)) return null;
         var length = new FileInfo(path).Length;
         if (length > SessionStoreWriter.MaxLogBytes)
-            throw new
-                SessionStoreException($"Session log '{path}' exceeds the {SessionStoreWriter.MaxLogBytes:N0}-byte limit.");
+            throw new SessionStoreException($"Session log '{path}' exceeds " +
+                                            $"the {SessionStoreWriter.MaxLogBytes:N0}-byte limit.");
 
         var builder = new ProjectionBuilder(sessionId, path);
         SessionStorePaths.EnsureStoreLeaf(directory, path);
@@ -1273,8 +1284,8 @@ public static class SessionStoreReader
             {
                 var record = batch.Records[recordIndex];
                 if (_expectedInstructionHistory is not null && record.Kind != "history")
-                    throw new
-                        SessionStoreException($"Session '{sessionId}' is missing the history item bound to a project-instructions record.");
+                    throw new SessionStoreException($"Session '{sessionId}' is missing " +
+                                                    $"the history item bound to a project-instructions record.");
                 switch (record.Kind)
                 {
                     case "session-title" :
@@ -1290,26 +1301,26 @@ public static class SessionStoreReader
                         if (history.SessionId != sessionId ||
                             history.Id        != record.Id ||
                             history.Sequence  != batch.Sequence)
-                            throw new
-                                SessionStoreException($"Session '{sessionId}' contains an unbound history item at sequence {batch.Sequence}.");
+                            throw new SessionStoreException($"Session '{sessionId}' contains " +
+                                                            $"an unbound history item at sequence {batch.Sequence}.");
                         ApplyHistory(history);
                         break;
                     case "audit" :
                         var audit = record.Payload.Deserialize(PersistenceJsonContext.Default.AuditRecord)
-                                 ?? throw new
-                                        SessionStoreException($"Session '{sessionId}' contains an empty audit record.");
+                                 ?? throw new SessionStoreException($"Session '{sessionId}' contains " +
+                                                                    "an empty audit record.");
                         if (string.IsNullOrWhiteSpace(audit.Kind) || string.IsNullOrWhiteSpace(audit.RunId))
                             throw new SessionStoreException($"Session '{sessionId}' contains an invalid audit record.");
                         break;
                     case "identity" :
                         if (_identity is not null || batch.Sequence != 1)
-                            throw new
-                                SessionStoreException($"Session '{sessionId}' has a duplicate or misplaced identity record.");
+                            throw new SessionStoreException($"Session '{sessionId}' has a duplicate " +
+                                                            "or misplaced identity record.");
                         _identity = Read<SessionLogIdentity>(record.Payload,
                                                              SessionLogJsonContext.Default.SessionLogIdentity);
                         if (_identity.Id != sessionId || _identity.Model is null)
-                            throw new
-                                SessionStoreException($"Session log identity '{_identity.Id}' does not match file session '{sessionId}'.");
+                            throw new SessionStoreException($"Session log identity '{_identity.Id}' " +
+                                                            $"does not match file session '{sessionId}'.");
                         break;
                     case "turn" :
                         var turn = Read<SessionLogTurn>(record.Payload, SessionLogJsonContext.Default.SessionLogTurn);
@@ -1323,9 +1334,9 @@ public static class SessionStoreReader
                         if (SessionStoreWriter.ReadSchemaName(record.Payload) ==
                             SessionPermissionSelectionV2.CurrentSchema)
                         {
-                            var selectionV2 = Read<SessionPermissionSelectionV2>(
-                             record.Payload,
-                             PermissionPersistenceJsonContext.Default.SessionPermissionSelectionV2);
+                            var selectionV2 = Read<SessionPermissionSelectionV2>(record.Payload,
+                                     PermissionPersistenceJsonContext.Default
+                                                                     .SessionPermissionSelectionV2);
                             selectionV2.Validate();
                             if (selectionV2.Revision != LatestPermissionRevision() + 1)
                                 throw new SessionStoreException("Permission selection revisions must be contiguous.");
@@ -1344,18 +1355,17 @@ public static class SessionStoreReader
                     case "permission-migration" :
                         // 迁移记录与其伴随的 /2 选择共享同一修订号，先后顺序不固定：允许等于当前链尾
                         // 或链尾 +1，其余一律拒绝；每个会话至多一条迁移记录。
-                        var migration = Read<PermissionMigrationRecord>(
-                                                                        record.Payload,
+                        var migration = Read<PermissionMigrationRecord>(record.Payload,
                                                                         PermissionPersistenceJsonContext.Default
                                                                            .PermissionMigrationRecord);
                         migration.Validate();
                         if (_permissionMigration is not null)
-                            throw new
-                                SessionStoreException($"Session '{sessionId}' repeats its permission migration record.");
+                            throw new SessionStoreException($"Session '{sessionId}' repeats " +
+                                                            $"its permission migration record.");
                         var latestRevision = LatestPermissionRevision();
                         if (migration.Revision != latestRevision && migration.Revision != latestRevision + 1)
-                            throw new
-                                SessionStoreException("A permission migration record must share its companion selection's revision.");
+                            throw new SessionStoreException("A permission migration record must " +
+                                                            "share its companion selection's revision.");
                         _permissionMigration = migration;
                         break;
                     case "permission-grant-event" :
@@ -1428,17 +1438,16 @@ public static class SessionStoreReader
                         var message = Read<SessionLogMessage>(record.Payload,
                                                               SessionLogJsonContext.Default.SessionLogMessage).Message;
                         if (message is null)
-                            throw
-                                new SessionStoreException($"Session '{sessionId}' contains a null canonical message.");
+                            throw new SessionStoreException($"Session '{sessionId}' contains a " +
+                                                            $"null canonical message.");
                         try
                         {
                             message.ValidateTextItems();
                         }
                         catch (InvalidDataException ex)
                         {
-                            throw new
-                                SessionStoreException($"Session '{sessionId}' contains invalid text items: {ex.Message}",
-                                                      ex);
+                            throw new SessionStoreException($"Session '{sessionId}' contains invalid " +
+                                                            $"text items: {ex.Message}", ex);
                         }
 
                         _messages.Add(message);
@@ -1455,8 +1464,8 @@ public static class SessionStoreReader
                                 amendment.CanonicalMessageIndex is null          ||
                                 priorAmendment with { CanonicalMessageIndex = amendment.CanonicalMessageIndex } !=
                                 amendment)
-                                throw
-                                    new SessionStoreException("An amendment was rewritten or applied more than once.");
+                                throw new SessionStoreException("An amendment was rewritten or " +
+                                                                "applied more than once.");
                         }
                         else if (amendment.CanonicalMessageIndex is not null)
                         {
@@ -1483,13 +1492,13 @@ public static class SessionStoreReader
                         if (_workItems.TryGetValue(item.Id, out var priorItem))
                         {
                             if (priorItem.SourceTurnId != item.SourceTurnId || item.Revision != priorItem.Revision + 1)
-                                throw new
-                                    SessionStoreException("A work item does not continue its source and revision chain.");
+                                throw new SessionStoreException("A work item does not continue " +
+                                                                "its source and revision chain.");
                         }
                         else if (item.Revision != 1 || _workItems.Count >= 128)
                         {
-                            throw new
-                                SessionStoreException("Invalid initial work-item revision or too many work items.");
+                            throw new SessionStoreException("Invalid initial work-item revision " +
+                                                            "or too many work items.");
                         }
 
                         _workItems[item.Id] = item;
@@ -1507,8 +1516,8 @@ public static class SessionStoreReader
                                                        SessionLogJsonContext.Default.SessionLogCheckpoint);
                         if (_checkpoint.ModelSelectionRevision is { } checkpointRevision &&
                             _modelSelections.All(selection => selection.Revision != checkpointRevision))
-                            throw new
-                                SessionStoreException("A compaction checkpoint references an unknown model selection.");
+                            throw new SessionStoreException("A compaction checkpoint references " +
+                                                            "an unknown model selection.");
                         break;
                     case "session-state" :
                         _state = Read<SessionLogSessionState>(record.Payload,
@@ -1528,15 +1537,15 @@ public static class SessionStoreReader
                         }
                         catch (Exception ex) when (ex is InvalidDataException or JsonException)
                         {
-                            throw new
-                                SessionStoreException($"Session '{sessionId}' contains an invalid project-binding record: {ex.Message}",
-                                                      ex);
+                            throw new SessionStoreException($"Session '{sessionId}' contains " +
+                                                            $"an invalid project-binding record: {ex.Message}", ex);
                         }
 
                         if (_projectId is not null ||
                             _projectAssignmentState != SessionProjectAssignmentState.PendingInitialization)
-                            throw new
-                                SessionStoreException($"Session '{sessionId}' repeats or conflicts with project assignment '{_projectAssignmentState}'; ownership is assigned exactly once.");
+                            throw new SessionStoreException($"Session '{sessionId}' repeats or " +
+                                                            $"conflicts with project assignment '{_projectAssignmentState}'; " +
+                                                            $"ownership is assigned exactly once.");
                         _projectId              = boundProjectId;
                         _projectAssignmentState = SessionProjectAssignmentState.Project;
                         break;
@@ -1547,15 +1556,14 @@ public static class SessionStoreReader
                         }
                         catch (InvalidDataException ex)
                         {
-                            throw new SessionStoreException(
-                                                            $"Session '{sessionId}' contains an invalid project-assignment record: {ex.Message}",
-                                                            ex);
+                            throw new SessionStoreException($"Session '{sessionId}' contains " +
+                                                            $"an invalid project-assignment record: {ex.Message}", ex);
                         }
 
                         if (_projectId is not null ||
                             _projectAssignmentState != SessionProjectAssignmentState.PendingInitialization)
-                            throw new SessionStoreException(
-                                                            $"Session '{sessionId}' has a conflicting or duplicate explicit no-project assignment.");
+                            throw new SessionStoreException($"Session '{sessionId}' has a conflicting " +
+                                                            "or duplicate explicit no-project assignment.");
                         _projectAssignmentState = SessionProjectAssignmentState.NoProject;
                         break;
                     case "project-unassignment" :
@@ -1566,27 +1574,26 @@ public static class SessionStoreReader
                         }
                         catch (Exception ex) when (ex is InvalidDataException or JsonException)
                         {
-                            throw new SessionStoreException(
-                                                            $"Session '{sessionId}' contains an invalid project-unassignment record: {ex.Message}",
-                                                            ex);
+                            throw new SessionStoreException($"Session '{sessionId}' contains an invalid " +
+                                                            $"project-unassignment record: {ex.Message}", ex);
                         }
 
                         if (_projectAssignmentState != SessionProjectAssignmentState.Project ||
                             _projectId              != unassignedProjectId)
-                            throw new SessionStoreException(
-                                                            $"Session '{sessionId}' contains a project-unassignment record that does not match its current project.");
+                            throw new SessionStoreException($"Session '{sessionId}' contains a project-unassignment " +
+                                                            "record that does not match its current project.");
                         _projectId              = null;
                         _projectAssignmentState = SessionProjectAssignmentState.NoProject;
                         break;
                     default :
-                        throw new
-                            SessionStoreException($"Session '{sessionId}' contains unknown required record kind '{record.Kind}'.");
+                        throw new SessionStoreException($"Session '{sessionId}' contains " +
+                                                        $"unknown required record kind '{record.Kind}'.");
                 }
             }
 
             if (_expectedInstructionHistory is not null)
-                throw new
-                    SessionStoreException($"Session '{sessionId}' ends a batch without the history item bound to a project-instructions record.");
+                throw new SessionStoreException($"Session '{sessionId}' ends a batch " +
+                                                $"without the history item bound to a project-instructions record.");
         }
 
         public PersistedSession Build(long sequence)
@@ -1664,8 +1671,8 @@ public static class SessionStoreReader
                     (expected.Value.DocumentCount > 0 &&
                      (!item.Text.Contains("source:", StringComparison.Ordinal) ||
                       !item.Text.Contains("(scope:", StringComparison.Ordinal))))
-                    throw new
-                        SessionStoreException($"Session '{sessionId}' contains an unbound project-instructions history item.");
+                    throw new SessionStoreException($"Session '{sessionId}' contains " +
+                                                    $"an unbound project-instructions history item.");
                 _expectedInstructionHistory = null;
                 return;
             }
@@ -1674,37 +1681,37 @@ public static class SessionStoreReader
             if (string.IsNullOrWhiteSpace(item.RunId)  ||
                 string.IsNullOrWhiteSpace(item.CallId) ||
                 string.IsNullOrWhiteSpace(item.State))
-                throw new
-                    SessionStoreException($"Session '{sessionId}' contains an incomplete terminal tool history item.");
+                throw new SessionStoreException($"Session '{sessionId}' contains " +
+                                                "an incomplete terminal tool history item.");
 
             var callState = item.State switch
             {
                 nameof(ToolCallExecutionState.UnknownResult)   => nameof(ToolCallExecutionState.UnknownResult),
                 nameof(ToolCallExecutionState.ConfirmedResult) => nameof(ToolCallExecutionState.ConfirmedResult),
                 nameof(ToolCallExecutionState.KnownNotStarted) => nameof(ToolCallExecutionState.KnownNotStarted),
-                _ => throw new
-                    SessionStoreException($"Session '{sessionId}' contains an invalid terminal tool state '{item.State}'.")
+                _ => throw new SessionStoreException($"Session '{sessionId}' contains " +
+                                                     $"an invalid terminal tool state '{item.State}'.")
             };
             if (item.NotStartedReason is { } notStartedReason &&
                 (callState != nameof(ToolCallExecutionState.KnownNotStarted) ||
                  string.IsNullOrWhiteSpace(notStartedReason)))
-                throw new
-                    SessionStoreException($"Session '{sessionId}' contains an invalid not-started reason for call '{item.CallId}'.");
+                throw new SessionStoreException($"Session '{sessionId}' contains an " +
+                                                $"invalid not-started reason for call '{item.CallId}'.");
             var turnIndex = _turns.FindIndex(turn => turn.Id == item.TurnId);
             if (turnIndex < 0)
-                throw new
-                    SessionStoreException($"Session '{sessionId}' history references unknown turn '{item.TurnId}'.");
+                throw new SessionStoreException($"Session '{sessionId}' history " +
+                                                $"references unknown turn '{item.TurnId}'.");
             var turn     = _turns[turnIndex];
             var runs     = turn.Runs.ToList();
             var runIndex = runs.FindIndex(run => run.Id == item.RunId);
             if (runIndex < 0)
-                throw
-                    new SessionStoreException($"Session '{sessionId}' history references unknown run '{item.RunId}'.");
+                throw new SessionStoreException($"Session '{sessionId}' history references " +
+                                                $"unknown run '{item.RunId}'.");
             var run     = runs[runIndex];
             var factKey = UnknownCallKey(item.TurnId, item.RunId, item.InvocationId, item.CallId);
             if (_completedToolFacts.ContainsKey(factKey))
-                throw new
-                    SessionStoreException($"Session '{sessionId}' contains duplicate terminal history for run '{item.RunId}', call '{item.CallId}'.");
+                throw new SessionStoreException($"Session '{sessionId}' contains " +
+                                                $"duplicate terminal history for run '{item.RunId}', call '{item.CallId}'.");
             var calls = run.ToolCalls?.ToList() ?? [];
             var callIndex = calls.FindIndex(call => call.InvocationId is not null && item.InvocationId is not null
                                                 ? call.InvocationId == item.InvocationId
@@ -1714,8 +1721,9 @@ public static class SessionStoreReader
             if (callIndex < 0)
             {
                 if (requiresIntent)
-                    throw new
-                        SessionStoreException($"Session '{sessionId}', run '{item.RunId}', invocation '{item.InvocationId ?? item.CallId}' has an executed side-effect history fact without an execution-intent record.");
+                    throw new SessionStoreException($"Session '{sessionId}', run '{item.RunId}', "      +
+                                                    $"invocation '{item.InvocationId ?? item.CallId}' " +
+                                                    $"has an executed side-effect history fact without an execution-intent record.");
                 // 拒绝、准备失败及只读调用可能先写终态事实，随后才提交运行的完整记录。
                 calls.Add(new PersistedToolCallRecord
                 {
@@ -1738,11 +1746,11 @@ public static class SessionStoreReader
                 if (call.CallId != item.CallId                                        ||
                     (item.ToolName is not null   && call.ToolName   != item.ToolName) ||
                     (item.Capability is not null && call.Capability != item.Capability))
-                    throw new
-                        SessionStoreException($"Session '{sessionId}', run '{item.RunId}', invocation '{item.InvocationId}' has conflicting tool identity in terminal history.");
+                    throw new SessionStoreException($"Session '{sessionId}', run '{item.RunId}', " +
+                                                    $"invocation '{item.InvocationId}' has conflicting tool identity in terminal history.");
                 if (requiresIntent && (!call.SideEffects || call.State != nameof(ToolCallExecutionState.UnknownResult)))
-                    throw new
-                        SessionStoreException($"Session '{sessionId}', run '{item.RunId}', invocation '{item.InvocationId}' has no pending side-effect execution intent.");
+                    throw new SessionStoreException($"Session '{sessionId}', run '{item.RunId}', " +
+                                                    $"invocation '{item.InvocationId}' has no pending side-effect execution intent.");
             }
 
             calls[callIndex] = calls[callIndex] with
@@ -1805,8 +1813,8 @@ public static class SessionStoreReader
                 if (instructionRecord.Action == "scopes-tracked")
                 {
                     if (previousInstructionRecord is null || instructionRecord.Snapshot.Documents.Count != 0)
-                        throw
-                            InvalidProjectInstruction("scopes-tracked must reference an existing revision and omit document bodies");
+                        throw InvalidProjectInstruction("scopes-tracked must reference " +
+                                                        "an existing revision and omit document bodies");
                     instructionRecord = instructionRecord with
                     {
                         Snapshot = instructionRecord.Snapshot with
@@ -1842,11 +1850,11 @@ public static class SessionStoreReader
                             messageIndex    <= priorMessageIndex     ||
                             ChatHistoryInvariants.LastCompleteBoundary(_messages.Select(ToChatMessage).ToArray()) !=
                             _messages.Count)
-                            throw
-                                InvalidProjectInstruction("record is not bound to its exact canonical user message outside a tool group");
+                            throw InvalidProjectInstruction("record is not bound to " +
+                                                            "its exact canonical user message outside a tool group");
                         if (recordIndex + 1 >= recordCount)
-                            throw
-                                InvalidProjectInstruction("record cannot be bound to its history item in the same batch");
+                            throw InvalidProjectInstruction("record cannot be bound to " +
+                                                            "its history item in the same batch");
                         _expectedInstructionHistory =
                             ($"{sessionId}:{sequence:D20}:{recordIndex + 1:D4}", sequence,
                              instructionRecord.TurnId, instructionRecord.RunId, instructionRecord.Revision,
@@ -1860,8 +1868,8 @@ public static class SessionStoreReader
                                            StringComparison.Ordinal)                                  ||
                             instructionRecord.Snapshot.RenderedHash    != prior.Snapshot.RenderedHash ||
                             instructionRecord.Snapshot.RendererVersion != prior.Snapshot.RendererVersion)
-                            throw
-                                InvalidProjectInstruction("scopes-tracked must reference the current revision without a message binding");
+                            throw InvalidProjectInstruction("scopes-tracked must " +
+                                                            "reference the current revision without a message binding");
                         break;
                     default :
                         throw InvalidProjectInstruction($"contains unknown action '{instructionRecord.Action}'");
@@ -1890,8 +1898,8 @@ public static class SessionStoreReader
                 string.IsNullOrWhiteSpace(snapshot.DiscoveryFingerprint) ||
                 string.IsNullOrWhiteSpace(snapshot.RenderedHash)         ||
                 string.IsNullOrWhiteSpace(snapshot.RendererVersion))
-                throw
-                    InvalidProjectInstruction("snapshot has a missing revision, fingerprint, rendered hash, or renderer version");
+                throw InvalidProjectInstruction("snapshot has a missing revision, " +
+                                                "fingerprint, rendered hash, or renderer version");
 
             foreach (var directory in snapshot.ProbedDirectories)
             {
@@ -1909,8 +1917,8 @@ public static class SessionStoreReader
                     document.Content is null                           ||
                     string.IsNullOrWhiteSpace(document.ContentHash)    ||
                     document.ByteCount < 0)
-                    throw
-                        InvalidProjectInstruction("snapshot document has a null or invalid source, scope, content, hash, or byte count");
+                    throw InvalidProjectInstruction("snapshot document has a null or " +
+                                                    "invalid source, scope, content, hash, or byte count");
 
                 ValidateRelativePath(document.SourcePath, "source path");
                 ValidateRelativePath(document.ScopeDirectory, "scope directory", true);
@@ -1931,8 +1939,8 @@ public static class SessionStoreReader
                     document.ContentHash.Any(character =>
                                                  character is not (>= '0' and <= '9') and not (>= 'a' and <= 'f')
                                                  and not (>= 'A' and <= 'F')))
-                    throw
-                        InvalidProjectInstruction($"source '{document.SourcePath}' has a malformed SHA-256 content hash");
+                    throw InvalidProjectInstruction($"source '{document.SourcePath}' " +
+                                                    "has a malformed SHA-256 content hash");
 
                 byte[] contentBytes;
                 try
@@ -1949,8 +1957,8 @@ public static class SessionStoreReader
                 var actualHash = Convert.ToHexString(SHA256.HashData(contentBytes));
                 if (document.ByteCount != contentBytes.Length ||
                     !string.Equals(actualHash, document.ContentHash, StringComparison.OrdinalIgnoreCase))
-                    throw
-                        InvalidProjectInstruction($"source '{document.SourcePath}' does not match its raw-byte hash or byte count");
+                    throw InvalidProjectInstruction($"source '{document.SourcePath}' does not match " +
+                                                    "its raw-byte hash or byte count");
             }
 
             if (!validateRenderer) return;
@@ -1967,8 +1975,8 @@ public static class SessionStoreReader
 
         private SessionStoreException InvalidProjectInstruction(string detail, Exception? innerException = null)
         {
-            var message =
-                $"Session '{sessionId}' log '{logPath}' contains invalid project-instructions data: {detail}.";
+            var message = $"Session '{sessionId}' log '{logPath}' contains " +
+                          $"invalid project-instructions data: {detail}.";
             return innerException is null
                 ? new SessionStoreException(message)
                 : new SessionStoreException(message, innerException);
@@ -1998,8 +2006,8 @@ public static class SessionStoreReader
             {
                 if (call.InvocationId is null) continue;
                 if (string.IsNullOrWhiteSpace(call.InvocationId) || !invocationIds.Add(call.InvocationId))
-                    throw new
-                        SessionStoreException($"Session '{sessionId}', run '{incoming.Id}' repeats or omits an invocation identity.");
+                    throw new SessionStoreException($"Session '{sessionId}', " +
+                                                    $"run '{incoming.Id}' repeats or omits an invocation identity.");
                 var key = UnknownCallKey(turnId, incoming.Id, call.InvocationId, call.CallId);
                 if (!_completedToolFacts.TryGetValue(key, out var terminal)) continue;
                 if (call.State            != terminal.State       ||
@@ -2008,8 +2016,8 @@ public static class SessionStoreReader
                     call.Capability       != terminal.Capability  ||
                     call.SideEffects      != terminal.SideEffects ||
                     call.NotStartedReason != terminal.NotStartedReason)
-                    throw new
-                        SessionStoreException($"Session '{sessionId}', run '{incoming.Id}', invocation '{call.InvocationId}' contradicts its terminal history fact.");
+                    throw new SessionStoreException($"Session '{sessionId}', run '{incoming.Id}', " +
+                                                    $"invocation '{call.InvocationId}' contradicts its terminal history fact.");
             }
 
             foreach (var call in previous?.ToolCalls ?? [])
@@ -2017,8 +2025,8 @@ public static class SessionStoreReader
                     !invocationIds.Contains(call.InvocationId) &&
                     _completedToolFacts.ContainsKey(UnknownCallKey(turnId, incoming.Id, call.InvocationId,
                                                                    call.CallId)))
-                    throw new
-                        SessionStoreException($"Session '{sessionId}', run '{incoming.Id}' omits completed invocation '{call.InvocationId}'.");
+                    throw new SessionStoreException($"Session '{sessionId}', " +
+                                                    $"run '{incoming.Id}' omits completed invocation '{call.InvocationId}'.");
         }
 
         private T Read<T>(JsonElement payload, JsonTypeInfo<T> typeInfo) =>

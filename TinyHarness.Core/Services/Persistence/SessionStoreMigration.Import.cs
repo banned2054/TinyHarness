@@ -62,7 +62,10 @@ public static partial class SessionStoreMigration
 {
     /// <summary>
     ///     <para>业务库元数据中保存本次迁移标识的键；用于确认库与标记属于同一次迁移。</para>
-    ///     <para>The metadata key holding this migration's identity; it confirms that the database and the marker belong to one migration.</para>
+    ///     <para>
+    ///         The metadata key holding this migration's identity; it confirms that the database and the marker belong to
+    ///         one migration.
+    ///     </para>
     /// </summary>
     internal const string MigrationIdMetaKey = "migration_id";
 
@@ -248,10 +251,10 @@ public static partial class SessionStoreMigration
     /// <remarks>
     ///     <para>
     ///         同一 store 的迁移、备份与恢复由迁移租约互斥；并发尝试等待有界后以
-    ///     <see cref="SessionStoreFailureKind.Locked" /> 失败。取消在批次提交前发生时不留下部分事务；提交后、
-    ///     标记写入前取消时该批仍待切换，重试重新导入。旧来源在全部批次切换前保持原样，任何失败都不删除
-    ///     迁移标记、业务库或旧文件。取得租约后先收尾上一次中断的替换窗口，否则导入会读到日志仍停在隔离名下的
-    ///     旧主文件；收尾失败时按对应类别拒绝，不基于不完整的一代继续导入。
+    ///         <see cref="SessionStoreFailureKind.Locked" /> 失败。取消在批次提交前发生时不留下部分事务；提交后、
+    ///         标记写入前取消时该批仍待切换，重试重新导入。旧来源在全部批次切换前保持原样，任何失败都不删除
+    ///         迁移标记、业务库或旧文件。取得租约后先收尾上一次中断的替换窗口，否则导入会读到日志仍停在隔离名下的
+    ///         旧主文件；收尾失败时按对应类别拒绝，不基于不完整的一代继续导入。
     ///     </para>
     ///     <para>
     ///         Migration, backup, and restore of one store are mutually exclusive through the migration lease; a
@@ -275,32 +278,38 @@ public static partial class SessionStoreMigration
     /// </param>
     /// <returns>
     ///     <para>迁移标识、库身份与按迁移顺序的批次报告；已完成时为 <see cref="SessionStoreMigrationResult.AlreadyCompleted" />。</para>
-    ///     <para>The migration identity, database identity, and batch reports in migration order; already-completed runs set <see cref="SessionStoreMigrationResult.AlreadyCompleted" />.</para>
+    ///     <para>
+    ///         The migration identity, database identity, and batch reports in migration order; already-completed runs set
+    ///         <see cref="SessionStoreMigrationResult.AlreadyCompleted" />.
+    ///     </para>
     /// </returns>
     /// <exception cref="SessionStoreMigrationException">
     ///     <para>标记损坏、旧来源无法表示、来源在导入期间变化、库身份不符、业务库丢失或损坏、租约被占用。</para>
-    ///     <para>The marker is damaged, a legacy source cannot be represented, sources changed during the import, the database identity contradicts the marker, the database is lost or damaged, or the lease is held.</para>
+    ///     <para>
+    ///         The marker is damaged, a legacy source cannot be represented, sources changed during the import, the database
+    ///         identity contradicts the marker, the database is lost or damaged, or the lease is held.
+    ///     </para>
     /// </exception>
     public static async Task<SessionStoreMigrationResult> MigrateAsync(
         SessionStoreMigrationOptions options, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(options);
-        var storeDirectory = NormalizeStoreDirectory(options.StoreDirectory);
+        var             storeDirectory = NormalizeStoreDirectory(options.StoreDirectory);
         await using var lease = await AcquireLeaseAsync(storeDirectory, cancellationToken).ConfigureAwait(false);
         // 迁移前先收尾中断的恢复：隔离中的旧日志未归位时，后续导入会读到缺少最新数据的旧主库。
         await SessionStoreRestoreRecovery.RecoverLockedAsync(storeDirectory, cancellationToken).ConfigureAwait(false);
         using var settled = SessionStoreRestoreRecovery.HoldSettled(storeDirectory);
 
         var markerRead = await ReadMarkerAsync(storeDirectory, cancellationToken).ConfigureAwait(false);
-        var database   = new SessionStoreDatabase(storeDirectory);
+        var database = new SessionStoreDatabase(storeDirectory);
         SessionStoreMigrationMarker marker;
         switch (markerRead.Status)
         {
             case SessionStoreMarkerReadStatus.Damaged :
-                throw new SessionStoreMigrationException(
-                                                        $"Session-store migration marker '{MarkerPathFor(storeDirectory)}' is damaged; " +
-                                                        "keep it and recover it manually instead of overwriting it.",
-                                                        SessionStoreFailureKind.Damaged);
+                throw new SessionStoreMigrationException("Session-store migration marker "                 +
+                                                         $"'{MarkerPathFor(storeDirectory)}' is damaged; " +
+                                                         "keep it and recover it manually instead of overwriting it.",
+                                                         SessionStoreFailureKind.Damaged);
             case SessionStoreMarkerReadStatus.Missing :
                 marker = SessionStoreMigrationMarker.Start(Guid.NewGuid().ToString("N"), DateTimeOffset.UtcNow);
                 // 先写开始标记再建库：中断后由"标记存在、身份为空"恢复，绝不把已迁移 store 当成首次迁移。
@@ -460,20 +469,19 @@ public static partial class SessionStoreMigration
         await using var connection = await database.OpenExistingForInternalUseAsync(cancellationToken)
                                                    .ConfigureAwait(false);
         var identity = await SessionStoreDatabase.ReadStoreIdentityAsync(connection, cancellationToken)
-                                                .ConfigureAwait(false);
+                                                 .ConfigureAwait(false);
         if (!IsStoreIdentifier(identity))
-            throw new SessionStoreMigrationException(
-                                                    $"Business database '{database.DatabasePath}' has no valid store identity; " +
-                                                    "it must not be filled by the migration.",
-                                                    SessionStoreFailureKind.Damaged);
+            throw new SessionStoreMigrationException($"Business database '{database.DatabasePath}' has no valid " +
+                                                     "store identity; it must not be filled by the migration.",
+                                                     SessionStoreFailureKind.Damaged);
         var existingMigrationId = await SessionStoreDatabase.ReadMetaValueAsync(connection, MigrationIdMetaKey,
-                                                                               cancellationToken).ConfigureAwait(false);
+                                                                                    cancellationToken)
+                                                            .ConfigureAwait(false);
         if (existingMigrationId is not null &&
             !string.Equals(existingMigrationId, marker.MigrationId, StringComparison.Ordinal))
-            throw new SessionStoreMigrationException(
-                                                    $"Business database '{database.DatabasePath}' belongs to migration " +
-                                                    $"'{existingMigrationId}', not to the marker's migration '{marker.MigrationId}'.",
-                                                    SessionStoreFailureKind.Conflict);
+            throw new SessionStoreMigrationException($"Business database '{database.DatabasePath}' belongs to " +
+                                                     $"migration '{existingMigrationId}', not to the marker's migration '{marker.MigrationId}'.",
+                                                     SessionStoreFailureKind.Conflict);
         if (existingMigrationId is null)
             await SessionStoreDatabase.WriteMetaValueAsync(connection, null, MigrationIdMetaKey, marker.MigrationId,
                                                            cancellationToken).ConfigureAwait(false);
@@ -487,16 +495,17 @@ public static partial class SessionStoreMigration
     ///     <para>导入一个批次并返回导入行数、来源指纹与诊断；空结果表示该批没有可导入内容。</para>
     ///     <para>Imports one batch and returns its imported row count, source fingerprint, and diagnostics.</para>
     /// </summary>
-    private static Task<BatchImportResult> ImportBatchAsync(
-        string storeDirectory, SessionStoreDatabase database, SessionStoreMigrationBatch batch,
-        SessionStoreMigrationOptions options, CancellationToken cancellationToken) => batch switch
+    private static Task<BatchImportResult> ImportBatchAsync(string storeDirectory, SessionStoreDatabase database,
+                                                            SessionStoreMigrationBatch batch,
+                                                            SessionStoreMigrationOptions options,
+                                                            CancellationToken cancellationToken) => batch switch
     {
         SessionStoreMigrationBatch.OrganizationState => ImportOrganizationStateAsync(storeDirectory, database, options,
-            cancellationToken),
+                 cancellationToken),
         SessionStoreMigrationBatch.ProjectCatalog => ImportProjectCatalogAsync(storeDirectory, database,
-            cancellationToken),
+                                                                               cancellationToken),
         SessionStoreMigrationBatch.SessionPlacement => ImportSessionPlacementAsync(storeDirectory, database,
-            cancellationToken),
+                 cancellationToken),
         _ => throw new ArgumentOutOfRangeException(nameof(batch), batch, "Unknown migration batch.")
     };
 
@@ -511,7 +520,7 @@ public static partial class SessionStoreMigration
     ///     </para>
     /// </summary>
     private static async Task<BatchImportResult> ImportOrganizationStateAsync(
-        string storeDirectory, SessionStoreDatabase database, SessionStoreMigrationOptions options,
+        string            storeDirectory, SessionStoreDatabase database, SessionStoreMigrationOptions options,
         CancellationToken cancellationToken)
     {
         var snapshot = await ReadOrganizationSnapshotAsync(storeDirectory, options.SidebarPreferencesPath,
@@ -519,15 +528,15 @@ public static partial class SessionStoreMigration
         await using var connection = await database.OpenExistingForInternalUseAsync(cancellationToken)
                                                    .ConfigureAwait(false);
         await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken)
-                                                                        .ConfigureAwait(false);
+                                                                         .ConfigureAwait(false);
         await SessionStoreOrganizationStore.ReplaceAllAsync(connection, transaction, snapshot.State,
                                                             cancellationToken).ConfigureAwait(false);
         var actual = await CountOrganizationRowsAsync(connection, transaction, cancellationToken).ConfigureAwait(false);
         if (actual != snapshot.TotalRows)
-            throw new SessionStoreMigrationException(
-                                                    $"Imported organization state holds {actual} rows while the validated snapshot expected " +
-                                                    $"{snapshot.TotalRows}; the business database did not accept the import.",
-                                                    SessionStoreFailureKind.Damaged);
+            throw new SessionStoreMigrationException($"Imported organization state holds {actual} rows "             +
+                                                     $"while the validated snapshot expected {snapshot.TotalRows}; " +
+                                                     "the business database did not accept the import.",
+                                                     SessionStoreFailureKind.Damaged);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return new BatchImportResult(snapshot.TotalRows, snapshot.Fingerprint, snapshot.Diagnostics);
     }
@@ -548,16 +557,16 @@ public static partial class SessionStoreMigration
         await using var connection = await database.OpenExistingForInternalUseAsync(cancellationToken)
                                                    .ConfigureAwait(false);
         await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken)
-                                                                        .ConfigureAwait(false);
+                                                                         .ConfigureAwait(false);
         await SessionStoreProjectCatalogStore.ReplaceAllAsync(connection, transaction, snapshot.Projects,
                                                               cancellationToken).ConfigureAwait(false);
         var actual = await CountRowsAsync(connection, transaction, "project", cancellationToken)
            .ConfigureAwait(false);
         if (actual != snapshot.Projects.Count)
-            throw new SessionStoreMigrationException(
-                                                    $"Imported project catalog holds {actual} rows while the validated snapshot expected " +
-                                                    $"{snapshot.Projects.Count}; the business database did not accept the import.",
-                                                    SessionStoreFailureKind.Damaged);
+            throw new SessionStoreMigrationException($"Imported project catalog holds {actual} rows " +
+                                                     $"while the validated snapshot expected {snapshot.Projects.Count}; " +
+                                                     "the business database did not accept the import.",
+                                                     SessionStoreFailureKind.Damaged);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return new BatchImportResult(snapshot.Projects.Count, snapshot.Fingerprint, []);
     }
@@ -581,16 +590,16 @@ public static partial class SessionStoreMigration
         await using var connection = await database.OpenExistingForInternalUseAsync(cancellationToken)
                                                    .ConfigureAwait(false);
         await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken)
-                                                                        .ConfigureAwait(false);
+                                                                         .ConfigureAwait(false);
         await SessionStorePlacementStore.ReplaceAllAsync(connection, transaction, snapshot.Rows,
                                                          cancellationToken).ConfigureAwait(false);
         var actual = await CountRowsAsync(connection, transaction, "session_placement", cancellationToken)
            .ConfigureAwait(false);
         if (actual != snapshot.Rows.Count)
-            throw new SessionStoreMigrationException(
-                                                    $"Imported session placement holds {actual} rows while the validated snapshot expected " +
-                                                    $"{snapshot.Rows.Count}; the business database did not accept the import.",
-                                                    SessionStoreFailureKind.Damaged);
+            throw new SessionStoreMigrationException($"Imported session placement holds {actual} rows "               +
+                                                     $"while the validated snapshot expected {snapshot.Rows.Count}; " +
+                                                     "the business database did not accept the import.",
+                                                     SessionStoreFailureKind.Damaged);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return new BatchImportResult(snapshot.Rows.Count, snapshot.Fingerprint, snapshot.Diagnostics);
     }
@@ -609,55 +618,56 @@ public static partial class SessionStoreMigration
     private static async Task<OrganizationSnapshot> ReadOrganizationSnapshotAsync(
         string storeDirectory, string? sidebarPreferencesPath, CancellationToken cancellationToken)
     {
-        SessionStorePins       pins;
-        SessionStoreArchives   archives;
+        SessionStorePins                pins;
+        SessionStoreArchives            archives;
         SessionStoreSidebarPreferences? sidebar = null;
         try
         {
-            pins     = await SessionStorePinStore.LoadLegacyFileAsync(storeDirectory, cancellationToken)
-                                               .ConfigureAwait(false);
+            pins = await SessionStorePinStore.LoadLegacyFileAsync(storeDirectory, cancellationToken)
+                                             .ConfigureAwait(false);
             archives = await SessionStoreArchiveStore.LoadLegacyFileAsync(storeDirectory, cancellationToken)
-                                                    .ConfigureAwait(false);
+                                                     .ConfigureAwait(false);
             if (sidebarPreferencesPath is not null)
                 sidebar = await SessionStoreSidebarPreferencesReader.ReadAsync(sidebarPreferencesPath, storeDirectory,
-                                                                             cancellationToken).ConfigureAwait(false);
+                                                                               cancellationToken).ConfigureAwait(false);
         }
         catch (SessionStorePinException ex)
         {
-            throw new SessionStoreMigrationException(
-                                                    $"Legacy pin state '{SessionStorePinStore.FilePath(storeDirectory)}' cannot be imported: {ex.Message}",
-                                                    SessionStoreFailureKind.Damaged, ex);
+            throw new SessionStoreMigrationException("Legacy pin state " +
+                                                     $"'{SessionStorePinStore.FilePath(storeDirectory)}' cannot be imported: {ex.Message}",
+                                                     SessionStoreFailureKind.Damaged, ex);
         }
         catch (SessionStoreArchiveException ex)
         {
-            throw new SessionStoreMigrationException(
-                                                    $"Legacy archive state '{SessionStoreArchiveStore.FilePath(storeDirectory)}' cannot be " +
-                                                    $"imported: {ex.Message}",
-                                                    SessionStoreFailureKind.Damaged, ex);
+            throw new SessionStoreMigrationException("Legacy archive state " +
+                                                     $"'{SessionStoreArchiveStore.FilePath(storeDirectory)}' cannot be imported: {ex.Message}",
+                                                     SessionStoreFailureKind.Damaged, ex);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException
-                                       or PathTooLongException or SessionStoreException)
+                                      or PathTooLongException or SessionStoreException)
         {
-            throw new SessionStoreMigrationException(
-                                                    $"Organization-state sources in '{storeDirectory}' cannot be read: {ex.Message}",
-                                                    SessionStoreErrorClassifier.Classify(ex), ex);
+            throw new SessionStoreMigrationException($"Organization-state sources in '{storeDirectory}' " +
+                                                     $"cannot be read: {ex.Message}",
+                                                     SessionStoreErrorClassifier.Classify(ex), ex);
         }
 
         var archived = NormalizeIdSet(ValidateIds(archives.ArchivedSessionIds, "archived session id",
                                                   SessionStoreArchiveStore.FileName),
                                       StringComparer.Ordinal);
-        var pinnedProjects = MergeOrderedIds(
-            ValidateIds(pins.PinnedProjectIds, "pinned project id", SessionStorePinStore.FileName),
-            sidebar is null
-                ? []
-                : ValidateIds(sidebar.LegacyPinnedProjectOrder, "legacy pinned project id",
-                              SessionStoreSidebarPreferencesReader.FileName));
-        var pinnedSessions = MergeOrderedIds(
-            ValidateIds(pins.PinnedSessionIds, "pinned session id", SessionStorePinStore.FileName),
-            sidebar is null
-                ? []
-                : ValidateIds(sidebar.LegacyPinnedSessionIds, "legacy pinned session id",
-                              SessionStoreSidebarPreferencesReader.FileName));
+        var pinnedProjects =
+            MergeOrderedIds(ValidateIds(pins.PinnedProjectIds, "pinned project id", SessionStorePinStore.FileName),
+                            sidebar is null
+                                ? []
+                                : ValidateIds(sidebar.LegacyPinnedProjectOrder,
+                                              "legacy pinned project id",
+                                              SessionStoreSidebarPreferencesReader.FileName));
+        var pinnedSessions =
+            MergeOrderedIds(ValidateIds(pins.PinnedSessionIds, "pinned session id", SessionStorePinStore.FileName),
+                            sidebar is null
+                                ? []
+                                : ValidateIds(sidebar.LegacyPinnedSessionIds,
+                                              "legacy pinned session id",
+                                              SessionStoreSidebarPreferencesReader.FileName));
         var manualProjects = sidebar is null
             ? []
             : ValidateIds(sidebar.ManualProjectOrder, "manual project order id",
@@ -673,8 +683,8 @@ public static partial class SessionStoreMigration
 
         var state = new SessionStoreOrganizationState(archived, pinnedProjects, pinnedSessions, manualProjects,
                                                       manualSessions, collapsedKeys);
-        var totalRows = state.ArchivedSessionIds.Count + state.PinnedProjectIds.Count +
-                        state.PinnedSessionIds.Count + state.ManualProjectOrder.Count +
+        var totalRows = state.ArchivedSessionIds.Count + state.PinnedProjectIds.Count   +
+                        state.PinnedSessionIds.Count   + state.ManualProjectOrder.Count +
                         state.ManualSessionOrder.Count + state.CollapsedGroupKeys.Count;
         var fingerprint = ComputeOrganizationFingerprint(state, sidebar is not null);
         return new OrganizationSnapshot(state, totalRows, fingerprint, []);
@@ -682,12 +692,15 @@ public static partial class SessionStoreMigration
 
     /// <summary>
     ///     <para>读取项目目录册并计算指纹；文件缺失按空目录册处理，损坏或超预算明确失败。</para>
-    ///     <para>Reads the project catalog and computes its fingerprint; a missing file is an empty catalog, while damage or an over-budget file fails explicitly.</para>
+    ///     <para>
+    ///         Reads the project catalog and computes its fingerprint; a missing file is an empty catalog, while damage or
+    ///         an over-budget file fails explicitly.
+    ///     </para>
     /// </summary>
     private static async Task<ProjectSnapshot> ReadProjectSnapshotAsync(
         string storeDirectory, CancellationToken cancellationToken)
     {
-        var catalogPath = ProjectStore.FilePath(storeDirectory);
+        var            catalogPath = ProjectStore.FilePath(storeDirectory);
         ProjectCatalog catalog;
         try
         {
@@ -695,16 +708,16 @@ public static partial class SessionStoreMigration
         }
         catch (ProjectStoreException ex)
         {
-            throw new SessionStoreMigrationException(
-                                                    $"Legacy project catalog '{catalogPath}' cannot be imported: {ex.Message}",
-                                                    SessionStoreFailureKind.Damaged, ex);
+            throw new SessionStoreMigrationException($"Legacy project catalog '{catalogPath}' " +
+                                                     $"cannot be imported: {ex.Message}",
+                                                     SessionStoreFailureKind.Damaged, ex);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException
-                                       or PathTooLongException or SessionStoreException)
+                                      or PathTooLongException or SessionStoreException)
         {
-            throw new SessionStoreMigrationException(
-                                                    $"Legacy project catalog '{catalogPath}' cannot be read: {ex.Message}",
-                                                    SessionStoreErrorClassifier.Classify(ex), ex);
+            throw new SessionStoreMigrationException($"Legacy project catalog '{catalogPath}' " +
+                                                     $"cannot be read: {ex.Message}",
+                                                     SessionStoreErrorClassifier.Classify(ex), ex);
         }
 
         // 目录册读取已按旧文件契约校验 ID 形态、名称、路径与修订号；这里再核对数据库 CHECK 可表达的长度边界，
@@ -729,7 +742,7 @@ public static partial class SessionStoreMigration
     private static async Task<PlacementSnapshot> ReadPlacementSnapshotAsync(
         string storeDirectory, SessionStoreDatabase database, CancellationToken cancellationToken)
     {
-        var projectIds = await ReadProjectIdsAsync(database, cancellationToken).ConfigureAwait(false);
+        var projectIds  = await ReadProjectIdsAsync(database, cancellationToken).ConfigureAwait(false);
         var importedUtc = DateTimeOffset.UtcNow;
         var diagnostics = new List<string>();
         var files       = EnumerateSessionLogFiles(storeDirectory, diagnostics);
@@ -738,12 +751,13 @@ public static partial class SessionStoreMigration
         foreach (var file in files)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var fileName = Path.GetFileName(file);
+            var fileName  = Path.GetFileName(file);
             var sessionId = fileName[..^SessionStoreWriter.LogFileSuffix.Length];
             if (!IsStoreIdentifier(sessionId))
             {
                 AddDiagnostic(diagnostics,
-                              $"Session log '{fileName}' does not carry a 32-character lowercase hexadecimal session id and was not imported.");
+                              $"Session log '{fileName}' does not carry a 32-character " +
+                              "lowercase hexadecimal session id and was not imported.");
                 continue;
             }
 
@@ -753,7 +767,7 @@ public static partial class SessionStoreMigration
                 // 导入器读取的是仍以旧文件为权威的来源：只取日志自身的严格投影，不解析迁移权威，
                 // 否则"导入中"的阻塞状态会反过来拒绝导入器自己。
                 session = await SessionStoreReader.ReadLogProjectionAsync(storeDirectory, sessionId, cancellationToken)
-                                                 .ConfigureAwait(false);
+                                                  .ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
@@ -766,8 +780,8 @@ public static partial class SessionStoreMigration
                 continue;
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException
-                                           or PathTooLongException or JsonException or InvalidDataException
-                                           or FormatException)
+                                          or PathTooLongException or JsonException or InvalidDataException
+                                          or FormatException)
             {
                 AddDiagnostic(diagnostics,
                               $"Session '{sessionId}' was not imported because its log could not be read: {ex.Message}");
@@ -793,8 +807,8 @@ public static partial class SessionStoreMigration
                     if (!IsStoreIdentifier(projectId))
                     {
                         AddDiagnostic(diagnostics,
-                                      $"Session '{sessionId}' carries project id '{projectId}' that cannot be represented and was " +
-                                      "not imported.");
+                                      $"Session '{sessionId}' carries project id '{projectId}' " +
+                                      "that cannot be represented and was not imported.");
                         break;
                     }
 
@@ -802,8 +816,8 @@ public static partial class SessionStoreMigration
                     {
                         // 旧归属指向已不存在的项目：保留为待整理，绝不猜测或替用户选择新项目。
                         AddDiagnostic(diagnostics,
-                                      $"Session '{sessionId}' references project '{projectId}' that is not in the imported project " +
-                                      "catalog; the dangling reference was not imported.");
+                                      $"Session '{sessionId}' references project '{projectId}' " +
+                                      "that is not in the imported project catalog; the dangling reference was not imported.");
                         break;
                     }
 
@@ -826,7 +840,10 @@ public static partial class SessionStoreMigration
 
     /// <summary>
     ///     <para>读取业务库中的项目 ID 集合，用于校验归属引用；目录册批次总是先于归属批次。</para>
-    ///     <para>Reads the project ids in the business database to validate placement references; the catalog batch always precedes placement.</para>
+    ///     <para>
+    ///         Reads the project ids in the business database to validate placement references; the catalog batch always
+    ///         precedes placement.
+    ///     </para>
     /// </summary>
     private static async Task<HashSet<string>> ReadProjectIdsAsync(
         SessionStoreDatabase database, CancellationToken cancellationToken)
@@ -836,7 +853,7 @@ public static partial class SessionStoreMigration
         var command = connection.CreateCommand();
         command.CommandText = "SELECT id FROM project;";
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
-        var ids = new HashSet<string>(StringComparer.Ordinal);
+        var             ids    = new HashSet<string>(StringComparer.Ordinal);
         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false)) ids.Add(reader.GetString(0));
         return ids;
     }
@@ -859,11 +876,11 @@ public static partial class SessionStoreMigration
                             .ToList();
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException
-                                       or PathTooLongException)
+                                      or PathTooLongException)
         {
-            throw new SessionStoreMigrationException(
-                                                    $"Session logs in '{storeDirectory}' cannot be enumerated: {ex.Message}",
-                                                    SessionStoreErrorClassifier.Classify(ex), ex);
+            throw new SessionStoreMigrationException($"Session logs in '{storeDirectory}' " +
+                                                     $"cannot be enumerated: {ex.Message}",
+                                                     SessionStoreErrorClassifier.Classify(ex), ex);
         }
     }
 
@@ -878,9 +895,10 @@ public static partial class SessionStoreMigration
     ///         new source. A failed re-read also reports as a conflict.
     ///     </para>
     /// </summary>
-    private static async Task EnsureSourceUnchangedAsync(
-        string storeDirectory, SessionStoreMigrationBatch batch, SessionStoreMigrationOptions options,
-        string expectedFingerprint, CancellationToken cancellationToken)
+    private static async Task EnsureSourceUnchangedAsync(string storeDirectory, SessionStoreMigrationBatch batch,
+                                                         SessionStoreMigrationOptions options,
+                                                         string expectedFingerprint,
+                                                         CancellationToken cancellationToken)
     {
         string currentFingerprint;
         try
@@ -888,28 +906,28 @@ public static partial class SessionStoreMigration
             currentFingerprint = batch switch
             {
                 SessionStoreMigrationBatch.OrganizationState => (await ReadOrganizationSnapshotAsync(
-                        storeDirectory, options.SidebarPreferencesPath, cancellationToken).ConfigureAwait(false))
+                         storeDirectory, options.SidebarPreferencesPath, cancellationToken).ConfigureAwait(false))
                    .Fingerprint,
                 SessionStoreMigrationBatch.ProjectCatalog => (await ReadProjectSnapshotAsync(storeDirectory,
-                        cancellationToken).ConfigureAwait(false)).Fingerprint,
+                         cancellationToken).ConfigureAwait(false)).Fingerprint,
                 _ => throw new ArgumentOutOfRangeException(nameof(batch), batch, "Unknown migration batch.")
             };
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            throw new SessionStoreMigrationException(
-                                                    $"Legacy sources for batch '{batch}' could not be re-read after the import " +
-                                                    $"({ex.Message}); the batch stays pending, so retry the migration.",
-                                                    SessionStoreFailureKind.Conflict, ex);
+            throw new SessionStoreMigrationException($"Legacy sources for batch '{batch}' "                    +
+                                                     $"could not be re-read after the import ({ex.Message}); " +
+                                                     "the batch stays pending, so retry the migration.",
+                                                     SessionStoreFailureKind.Conflict, ex);
         }
 
         if (string.Equals(currentFingerprint, expectedFingerprint, StringComparison.Ordinal)) return;
 
-        var conflict = "Legacy sources for batch '" + batch + "' changed while they were being imported; the batch stays " +
-                       "pending and the database import will be redone on the next run.";
+        var conflict = $"Legacy sources for batch '{batch}' changed while they were being imported; " +
+                       "the batch stays pending and the database import will be redone on the next run.";
         // 数据库已提交但批次未切换：记录可重试说明后退出，绝不把旧快照标记成已切换的来源。
         var read = await ReadMarkerAsync(storeDirectory, cancellationToken).ConfigureAwait(false);
-        if (read.Status == SessionStoreMarkerReadStatus.Present && read.Marker is { } marker)
+        if (read is { Status: SessionStoreMarkerReadStatus.Present, Marker: { } marker })
             await WriteMarkerAsync(storeDirectory, marker.WithFailure(conflict, DateTimeOffset.UtcNow),
                                    cancellationToken).ConfigureAwait(false);
         throw new SessionStoreMigrationException(conflict, SessionStoreFailureKind.Conflict);
@@ -926,9 +944,10 @@ public static partial class SessionStoreMigration
     ///         verified again.
     ///     </para>
     /// </summary>
-    private static async Task VerifyMigratedDatabaseAsync(
-        SessionStoreDatabase database, SessionStoreMigrationMarker marker,
-        IReadOnlyDictionary<SessionStoreMigrationBatch, int> expectedRows, CancellationToken cancellationToken)
+    private static async Task VerifyMigratedDatabaseAsync(SessionStoreDatabase        database,
+                                                          SessionStoreMigrationMarker marker,
+                                                          IReadOnlyDictionary<SessionStoreMigrationBatch, int>
+                                                              expectedRows, CancellationToken cancellationToken)
     {
         var availability = await database.GetAvailabilityAsync(cancellationToken).ConfigureAwait(false);
         if (availability.Status != SessionStoreDatabaseStatus.Available)
@@ -1217,7 +1236,7 @@ public static partial class SessionStoreMigration
         command.Transaction = transaction;
         command.CommandText = $"SELECT COUNT(*) FROM {table};";
         var value = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
-        return Convert.ToInt32(value, System.Globalization.CultureInfo.InvariantCulture);
+        return Convert.ToInt32(value, CultureInfo.InvariantCulture);
     }
 
     /// <summary>
@@ -1256,9 +1275,10 @@ public static partial class SessionStoreMigration
     ///         write-time digest. A failed comparison degrades to a warning and never changes the inspected status.
     ///     </para>
     /// </summary>
-    private static async Task CollectLegacySourceWarningsAsync(
-        string storeDirectory, string? sidebarPreferencesPath, SessionStoreMigrationMarker marker,
-        List<string> warnings, CancellationToken cancellationToken)
+    private static async Task CollectLegacySourceWarningsAsync(string storeDirectory, string? sidebarPreferencesPath,
+                                                               SessionStoreMigrationMarker marker,
+                                                               List<string> warnings,
+                                                               CancellationToken cancellationToken)
     {
         if (marker.Batches.GetValueOrDefault(SessionStoreMigrationBatch.OrganizationState) ==
             SessionStoreBatchState.Switched)
@@ -1267,7 +1287,7 @@ public static partial class SessionStoreMigration
                 var snapshot = await ReadOrganizationSnapshotAsync(storeDirectory, sidebarPreferencesPath,
                                                                    cancellationToken).ConfigureAwait(false);
                 if (!string.Equals(snapshot.Fingerprint, marker.SourceFingerprints.GetValueOrDefault(
-                                       SessionStoreMigrationBatch.OrganizationState), StringComparison.Ordinal))
+                                        SessionStoreMigrationBatch.OrganizationState), StringComparison.Ordinal))
                     warnings.Add("Legacy organization-state sources no longer reproduce the fingerprint recorded at switch time; " +
                                  "pinned-items.json or archived-sessions.json was rewritten, or the desktop sidebar preferences " +
                                  "imported then are not available to this inspection. The business database remains authoritative.");
@@ -1283,7 +1303,7 @@ public static partial class SessionStoreMigration
             {
                 var snapshot = await ReadProjectSnapshotAsync(storeDirectory, cancellationToken).ConfigureAwait(false);
                 if (!string.Equals(snapshot.Fingerprint, marker.SourceFingerprints.GetValueOrDefault(
-                                       SessionStoreMigrationBatch.ProjectCatalog), StringComparison.Ordinal))
+                                        SessionStoreMigrationBatch.ProjectCatalog), StringComparison.Ordinal))
                     warnings.Add("Legacy project catalog no longer reproduces the fingerprint recorded at switch time; " +
                                  "projects.json was rewritten after the batch switched. The business database remains authoritative.");
             }
@@ -1299,7 +1319,7 @@ public static partial class SessionStoreMigration
                 var diagnostics = new List<string>();
                 var files       = EnumerateSessionLogFiles(storeDirectory, diagnostics);
                 if (!string.Equals(ComputePlacementFingerprint(files), marker.SourceFingerprints.GetValueOrDefault(
-                                       SessionStoreMigrationBatch.SessionPlacement), StringComparison.Ordinal))
+                                        SessionStoreMigrationBatch.SessionPlacement), StringComparison.Ordinal))
                     warnings.Add("Legacy session logs no longer reproduce the fingerprint recorded at switch time; at least one log was " +
                                  "written after the placement batch switched. The business database remains authoritative.");
             }
@@ -1311,7 +1331,10 @@ public static partial class SessionStoreMigration
 
     /// <summary>
     ///     <para>校验旧来源中的 ID 列表并保持顺序；任一 ID 不是 32 位小写十六进制时明确拒绝并指出来源文件。</para>
-    ///     <para>Validates an id list from a legacy source while preserving order; any id that is not 32 lowercase hexadecimal characters is refused with the source file named.</para>
+    ///     <para>
+    ///         Validates an id list from a legacy source while preserving order; any id that is not 32 lowercase hexadecimal
+    ///         characters is refused with the source file named.
+    ///     </para>
     /// </summary>
     private static IReadOnlyList<string> ValidateIds(
         IReadOnlyList<string> values, string description, string sourceFileName)
@@ -1320,10 +1343,10 @@ public static partial class SessionStoreMigration
         foreach (var value in values)
         {
             if (!IsStoreIdentifier(value))
-                throw new SessionStoreMigrationException(
-                                                        $"Legacy source '{sourceFileName}' contains {description} '{value}' that cannot be " +
-                                                        "represented in the business database; keep the file and fix the entry before migrating.",
-                                                        SessionStoreFailureKind.Damaged);
+                throw new SessionStoreMigrationException($"Legacy source '{sourceFileName}' " +
+                                                         $"contains {description} '{value}' that cannot be represented " +
+                                                         "in the business database; keep the file and fix the entry before migrating.",
+                                                         SessionStoreFailureKind.Damaged);
             result.Add(value);
         }
 
@@ -1332,7 +1355,10 @@ public static partial class SessionStoreMigration
 
     /// <summary>
     ///     <para>校验折叠分组键：非空白、不超过 256 字符且不重复，按序数排序返回。</para>
-    ///     <para>Validates collapsed group keys as non-blank, at most 256 characters, and unique, returning them ordinal-sorted.</para>
+    ///     <para>
+    ///         Validates collapsed group keys as non-blank, at most 256 characters, and unique, returning them
+    ///         ordinal-sorted.
+    ///     </para>
     /// </summary>
     private static IReadOnlyList<string> NormalizeGroupKeys(
         IReadOnlyList<string> values, string sourceFileName)
@@ -1341,10 +1367,10 @@ public static partial class SessionStoreMigration
         foreach (var key in values)
         {
             if (string.IsNullOrWhiteSpace(key) || key.Length > SessionStorePinStore.MaxIdentifierLength)
-                throw new SessionStoreMigrationException(
-                                                        $"Legacy source '{sourceFileName}' contains collapsed group key '{key}' that cannot be " +
-                                                        "represented in the business database.",
-                                                        SessionStoreFailureKind.Damaged);
+                throw new SessionStoreMigrationException($"Legacy source '{sourceFileName}' contains " +
+                                                         $"collapsed group key '{key}' "               +
+                                                         "that cannot be represented in the business database.",
+                                                         SessionStoreFailureKind.Damaged);
             keys.Add(key);
         }
 
@@ -1353,21 +1379,30 @@ public static partial class SessionStoreMigration
 
     /// <summary>
     ///     <para>把有序 ID 列表规范为去重后的集合，按序数排序；迁移的存档集合由数据库读取顺序决定。</para>
-    ///     <para>Normalizes an ordered id list into a duplicate-free set sorted ordinally; the archive set order is decided by database reads.</para>
+    ///     <para>
+    ///         Normalizes an ordered id list into a duplicate-free set sorted ordinally; the archive set order is decided by
+    ///         database reads.
+    ///     </para>
     /// </summary>
     private static IReadOnlyList<string> NormalizeIdSet(IReadOnlyList<string> values, StringComparer comparer) =>
         values.Distinct(comparer).Order(comparer).ToArray();
 
     /// <summary>
     ///     <para>合并两段有序 ID：保留第一段的顺序，追加第二段中尚未出现的条目。</para>
-    ///     <para>Merges two ordered id sequences: the first order is preserved and entries not yet present are appended from the second.</para>
+    ///     <para>
+    ///         Merges two ordered id sequences: the first order is preserved and entries not yet present are appended from
+    ///         the second.
+    ///     </para>
     /// </summary>
     private static IReadOnlyList<string> MergeOrderedIds(
         IReadOnlyList<string> primary, IReadOnlyList<string> secondary)
     {
-        var seen   = new HashSet<string>(primary, StringComparer.Ordinal);
-        var result = new List<string>(primary.Count + secondary.Count);
-        result.AddRange(primary);
+        var seen = new HashSet<string>(primary, StringComparer.Ordinal);
+        List<string> result =
+        [
+            with(primary.Count + secondary.Count),
+            .. primary
+        ];
         foreach (var id in secondary)
             if (seen.Add(id))
                 result.Add(id);
@@ -1376,35 +1411,41 @@ public static partial class SessionStoreMigration
 
     /// <summary>
     ///     <para>校验目录册项目能否写入业务表：ID、名称、目录长度与修订号必须满足冻结的 CHECK 约束。</para>
-    ///     <para>Validates that a catalog project can be written to the business table: id, name, root length, and revision must satisfy the frozen CHECK constraints.</para>
+    ///     <para>
+    ///         Validates that a catalog project can be written to the business table: id, name, root length, and revision
+    ///         must satisfy the frozen CHECK constraints.
+    ///     </para>
     /// </summary>
     private static void ValidateProjectForImport(Project project, string catalogPath)
     {
         if (!IsStoreIdentifier(project.Id))
-            throw new SessionStoreMigrationException(
-                                                    $"Legacy project catalog '{catalogPath}' contains project id '{project.Id}' that cannot be " +
-                                                    "represented in the business database.",
-                                                    SessionStoreFailureKind.Damaged);
+            throw new SessionStoreMigrationException($"Legacy project catalog '{catalogPath}' " +
+                                                     $"contains project id '{project.Id}' "     +
+                                                     "that cannot be represented in the business database.",
+                                                     SessionStoreFailureKind.Damaged);
         if (project.Name.Length is 0 or > Project.MaxNameLength || project.Name != project.Name.Trim())
-            throw new SessionStoreMigrationException(
-                                                    $"Legacy project catalog '{catalogPath}' contains project '{project.Id}' with name " +
-                                                    $"'{project.Name}' that cannot be represented in the business database.",
-                                                    SessionStoreFailureKind.Damaged);
+            throw new SessionStoreMigrationException($"Legacy project catalog '{catalogPath}' "                     +
+                                                     $"contains project '{project.Id}' with name '{project.Name}' " +
+                                                     "that cannot be represented in the business database.",
+                                                     SessionStoreFailureKind.Damaged);
         if (project.PrimaryRoot.Length is 0 or > Project.MaxRootPathLength)
-            throw new SessionStoreMigrationException(
-                                                    $"Legacy project catalog '{catalogPath}' contains project '{project.Id}' with root " +
-                                                    $"'{project.PrimaryRoot}' that cannot be represented in the business database.",
-                                                    SessionStoreFailureKind.Damaged);
+            throw new SessionStoreMigrationException($"Legacy project catalog '{catalogPath}' " +
+                                                     $"contains project '{project.Id}' with root '{project.PrimaryRoot}' " +
+                                                     "that cannot be represented in the business database.",
+                                                     SessionStoreFailureKind.Damaged);
         if (project.Revision < 1)
-            throw new SessionStoreMigrationException(
-                                                    $"Legacy project catalog '{catalogPath}' contains project '{project.Id}' with revision " +
-                                                    $"{project.Revision}; a positive revision is required.",
-                                                    SessionStoreFailureKind.Damaged);
+            throw new SessionStoreMigrationException($"Legacy project catalog '{catalogPath}' " +
+                                                     $"contains project '{project.Id}' with revision {project.Revision}; " +
+                                                     "a positive revision is required.",
+                                                     SessionStoreFailureKind.Damaged);
     }
 
     /// <summary>
     ///     <para>计算组织状态指纹：覆盖六张组织表的最终内容与侧栏偏好是否参与导入，长度前缀避免拼接歧义。</para>
-    ///     <para>Computes the organization-state fingerprint over the final content of the six tables plus whether sidebar preferences took part, with length prefixes to avoid concatenation ambiguity.</para>
+    ///     <para>
+    ///         Computes the organization-state fingerprint over the final content of the six tables plus whether sidebar
+    ///         preferences took part, with length prefixes to avoid concatenation ambiguity.
+    ///     </para>
     /// </summary>
     private static string ComputeOrganizationFingerprint(SessionStoreOrganizationState state, bool sidebarPresent)
     {
@@ -1422,7 +1463,10 @@ public static partial class SessionStoreMigration
 
     /// <summary>
     ///     <para>计算项目目录册指纹：覆盖目录册修订号与每个项目的持久化语义字段，规范化路径按原值参与比较。</para>
-    ///     <para>Computes the project-catalog fingerprint over the catalog revision and every project's persisted-semantic fields; normalized roots participate verbatim.</para>
+    ///     <para>
+    ///         Computes the project-catalog fingerprint over the catalog revision and every project's persisted-semantic
+    ///         fields; normalized roots participate verbatim.
+    ///     </para>
     /// </summary>
     private static string ComputeProjectFingerprint(ProjectCatalog catalog)
     {
@@ -1474,7 +1518,10 @@ public static partial class SessionStoreMigration
 
     /// <summary>
     ///     <para>把 ID 列表写入规范化文本；每行带长度前缀，保证不同列表不会拼出相同文本。</para>
-    ///     <para>Appends an id list to canonical text; every line carries a length prefix so distinct lists never concatenate identically.</para>
+    ///     <para>
+    ///         Appends an id list to canonical text; every line carries a length prefix so distinct lists never concatenate
+    ///         identically.
+    ///     </para>
     /// </summary>
     private static void AppendIdList(StringBuilder builder, string name, IReadOnlyList<string> values)
     {
@@ -1521,7 +1568,10 @@ public static partial class SessionStoreMigration
 
     /// <summary>
     ///     <para>追加一条诊断，最多保留 <see cref="MaxDiagnostics" /> 条以免标记文件超预算。</para>
-    ///     <para>Appends one diagnostic, keeping at most <see cref="MaxDiagnostics" /> entries so the marker file stays within budget.</para>
+    ///     <para>
+    ///         Appends one diagnostic, keeping at most <see cref="MaxDiagnostics" /> entries so the marker file stays within
+    ///         budget.
+    ///     </para>
     /// </summary>
     private static void AddDiagnostic(List<string> diagnostics, string detail)
     {
@@ -1555,7 +1605,10 @@ public static partial class SessionStoreMigration
 
     /// <summary>
     ///     <para>校验并规范化 store 目录；核心迁移不接受相对路径，避免依赖启动目录。</para>
-    ///     <para>Validates and normalizes the store directory; the migration refuses relative paths that depend on the launch directory.</para>
+    ///     <para>
+    ///         Validates and normalizes the store directory; the migration refuses relative paths that depend on the launch
+    ///         directory.
+    ///     </para>
     /// </summary>
     private static string NormalizeStoreDirectory(string storeDirectory)
     {
@@ -1597,7 +1650,10 @@ public static partial class SessionStoreMigration
     ///     <para>The organization-state snapshot: final state, row count, source fingerprint, and diagnostics.</para>
     /// </summary>
     private sealed record OrganizationSnapshot(
-        SessionStoreOrganizationState State, int TotalRows, string Fingerprint, IReadOnlyList<string> Diagnostics);
+        SessionStoreOrganizationState State,
+        int                           TotalRows,
+        string                        Fingerprint,
+        IReadOnlyList<string>         Diagnostics);
 
     /// <summary>
     ///     <para>项目目录册快照：项目列表与来源指纹。</para>
@@ -1610,5 +1666,7 @@ public static partial class SessionStoreMigration
     ///     <para>The session-placement snapshot: placement rows, source fingerprint, and diagnostics such as damaged logs.</para>
     /// </summary>
     private sealed record PlacementSnapshot(
-        IReadOnlyList<SessionStorePlacementRow> Rows, string Fingerprint, IReadOnlyList<string> Diagnostics);
+        IReadOnlyList<SessionStorePlacementRow> Rows,
+        string                                  Fingerprint,
+        IReadOnlyList<string>                   Diagnostics);
 }
