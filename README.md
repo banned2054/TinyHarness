@@ -22,44 +22,39 @@ English | [简体中文](Docs/README.md)
 
 </div>
 
-**TinyHarness.NET** is a lightweight local coding-agent harness built with .NET 10.
-
-It connects a language model to a local workspace so you can discuss code, inspect files, apply patches, and run commands through a CLI. Model access uses the official OpenAI SDK through `Microsoft.Extensions.AI.IChatClient`, with Chat Completions or Responses selected explicitly in configuration.
+**TinyHarness.NET** connects language models to a local workspace for coding tasks in CLI and Desktop. It runs on .NET 11 and supports Chat Completions and Responses.
 
 ## 🚧 Project Status
 
-**0.0.1 is the first public release.** The project remains an early prototype: basic tasks can run, and practical issues are still being fixed through use and feedback.
-
-The terminal interface is unfinished: permission requests, AI replies, and user input are not clearly separated. Commands, configuration, and session formats may change. Existing tests and limited real-use checks do not establish production readiness or a comprehensive security review.
+**v0.0.1** is the first public release. Commands, settings, and session formats may change. Production readiness and comprehensive security remain unverified.
 
 ## ✨ Features
 
-- **Conversations and workspaces** — One-shot tasks, streaming multi-turn conversations, local session history, and cross-process resume.
-- **Projects** — Shared CLI/Desktop project identities, a desktop project sidebar, per-project drafts and renaming. Existing unified logs are organized automatically by the desktop app on startup, store switches, and manual history refresh (up to 100 logs checked per batch); the CLI keeps the explicit `session initialize-projects [after-session-id]` command. Writing project ownership makes those logs unreadable by older versions. Sessions retain their original execution directory and permissions.
-- **File and process tools** — List files, search text, read files, apply patches, and run commands with approval, timeouts, and bounded output.
-- **Context and project rules** — Root and scoped `AGENTS.md` loading, token accounting, and automatic context compaction while retaining full local history.
-- **Models and configuration** — Provider profiles, explicit model context windows, environment-variable or Windows Credential Manager key references, global and per-provider network routes, and offline configuration checks.
-- **Additional integrations** — A local read-only MCP worker and optional Windows isolation for `shell` tool processes.
+- **Sessions** — One-shot tasks, streaming chat, local history, and cross-process resume.
+- **Projects** — Shared project identities across CLI and Desktop, with a desktop sidebar and per-project drafts.
+- **Tools** — List, search, read, patch, and run commands with approvals and timeouts.
+- **Context** — Scoped `AGENTS.md` rules, token tracking, and automatic context compaction.
+- **Models** — Provider profiles, configurable context windows, key references, and per-provider proxies.
+- **Integrations** — A read-only MCP worker and Windows Shell sandboxing.
 
 ## 🗺️ Limitations
 
-- Input editing, output layout, and controls during execution are rudimentary. There is no full terminal UI, multiline editor, or interactive terminal for tools.
-- Model answers, summaries, and work-item statuses can be wrong. Check file changes and actual command results before relying on a completion report.
-- **Approval is application-level policy.** Without the optional Windows sandbox, approved processes can access files outside the workspace and use the network. The sandbox covers only its `shell` processes, not the whole harness or model requests; it requires separately configured components and machine setup.
-- Sessions preserve conversation and tool content without encryption and may contain secrets. Resume has strict identity and format checks; upgrades can make old sessions incompatible, and no old-format migration is provided.
-- Windows x64 is the only platform with recorded NativeAOT validation. Other platforms, broader provider compatibility, power-loss durability, and comprehensive security remain unverified.
+- The CLI has basic input and run controls. Tools have no interactive terminal.
+- Models can report incorrect results. Check file changes and command output.
+- Shell commands are blocked when the Windows sandbox is unavailable. The sandbox covers sandboxed Shell processes only. Approved host execution runs without OS isolation.
+- Session files are unencrypted and may contain secrets. Back up your store before upgrading. Compatibility details are under [Inspect and resume sessions](#inspect-and-resume-sessions).
 
 ## 🚀 Build and Run
 
 ### Download Windows x64
 
-Download `TinyHarness-0.0.1-win-x64.zip` and `SHA256SUMS.txt` from [Release v0.0.1](https://github.com/banned2054/TinyHarness/releases/tag/v0.0.1). Verify the ZIP's SHA-256, then extract the entire directory to a stable location outside your target workspace and sandbox write roots. Keep `sandbox/`, `LICENSE`, `NOTICE`, and `THIRD-PARTY-LICENSES.txt` beside `TinyHarness.exe`.
+Download the CLI ZIP and `SHA256SUMS.txt` from [Release v0.0.1](https://github.com/banned2054/TinyHarness/releases/tag/v0.0.1). Verify the SHA-256 checksum and extract the whole ZIP outside your workspaces and sandbox write roots. The package includes sandbox components and runs without the .NET runtime.
 
-The package includes the three matching sandbox components and does not require the .NET runtime. Add the extracted directory to `PATH`, open a terminal in your target project, and run `tinyharness init`. See [Usage](#-usage) for model configuration and commands. Enabling the optional sandbox requires separately configured component paths and explicit provisioning; extraction alone does not change machine settings.
+Add the extracted directory to `PATH`, then run `tinyharness init` in your project.
 
 ### Build from source
 
-Requires the [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0). The first restore needs network access. Default tests and the smoke path use simulated models and do not need an API key.
+Install the [.NET 11 SDK](https://dotnet.microsoft.com/download/dotnet/11.0). The first restore needs network access.
 
 ```powershell
 git clone https://github.com/banned2054/TinyHarness.git
@@ -69,38 +64,31 @@ dotnet test TinyHarness.Tests/TinyHarness.Tests.csproj --no-restore
 dotnet run --project TinyHarness.Cli -- smoke --config tinyharness.json
 ```
 
-The smoke command exercises file and process tools in a temporary workspace. It does not test a real provider or the Windows sandbox.
+Tests and smoke use simulated models. Smoke runs file and process tools without a real provider or the Windows sandbox.
 
 ### NativeAOT publish
 
-On Windows, also install MSVC C++ build tools and the Windows SDK:
+Install MSVC C++ build tools and the Windows SDK. From the repository root, publish the CLI and add the output directory to the current PowerShell session's `PATH`.
 
 ```powershell
 dotnet publish TinyHarness.Cli/TinyHarness.Cli.csproj -c Release -r win-x64 --self-contained true
-```
-
-The executable is written to `TinyHarness.Cli/bin/Release/net10.0/win-x64/publish/TinyHarness.exe`. The native executable does not need the .NET runtime installed. The optional sandbox components are configured separately.
-
-To use it from another workspace, add the publish directory to the current PowerShell session's `PATH` while still at the repository root:
-
-```powershell
-$publishDirectory = (Resolve-Path .\TinyHarness.Cli\bin\Release\net10.0\win-x64\publish).Path
+$publishDirectory = (Resolve-Path .\TinyHarness.Cli\bin\Release\net11.0\win-x64\publish).Path
 $env:PATH = "$publishDirectory;$env:PATH"
 ```
 
+For Desktop packaging, see the [release guide](Docs/Guides/releasing.md).
+
 ### Windows sandbox components and source
 
-The optional Windows tool-process sandbox uses components built from [banned2054/codex](https://github.com/banned2054/codex), this project's fork of [OpenAI Codex](https://github.com/openai/codex). The fork gives TinyHarness its own machine-level identifiers and includes its network-isolation changes. TinyHarness's C# runtime directly orchestrates these components; running the Codex CLI or agent is not required.
+TinyHarness uses setup and runner executables from its [fork](https://github.com/banned2054/codex) of [OpenAI Codex](https://github.com/openai/codex). Use the matching components from the ZIP or [build them from source](Docs/Archive/windows-sandbox-dotnet-integration.md#构建产物已在本机构建验证).
 
-The two runtime components are `codex-windows-sandbox-setup.exe` and `codex-command-runner.exe`. Use the matching components included in the release ZIP, or build them from the fork, and configure their absolute paths in user `settings.windowsSandbox.setupExecutablePath` and `runnerExecutablePath`. They are not produced or automatically downloaded by `dotnet publish`. See the [component build and integration instructions](Docs/Archive/windows-sandbox-dotnet-integration.md#构建产物已在本机构建验证) and [sandbox management guide](Docs/Archive/windows-sandbox-management.md) for setup and validation scope.
+Set the absolute paths in `settings.windowsSandbox.setupExecutablePath` and `runnerExecutablePath`, then run `tinyharness sandbox provision`. Provisioning requires elevation and changes machine accounts, ACLs, and network rules. See the [sandbox setup guide](Docs/Archive/windows-sandbox-management.md).
 
 ## 📖 Usage
 
-The examples below use the published executable on `PATH`. Its file name is `TinyHarness.exe`; the command is written as `tinyharness` without a hyphen. Windows command lookup is case-insensitive, so `TinyHarness` works too. To launch directly from the publish directory in PowerShell, use `.\TinyHarness.exe`. There is no `tiny-harness` executable or alias supplied by this project.
+The examples use `tinyharness` on `PATH`. To launch from the package directory in PowerShell, run `.\TinyHarness.exe`.
 
 ### Configure a model
-
-Change to the project you want to work on, then run the setup guide:
 
 ```powershell
 Set-Location C:\Code\YourProject
@@ -109,41 +97,29 @@ tinyharness config show
 tinyharness doctor
 ```
 
-`init` asks for a provider profile, endpoint, API key source, model ID, and context window. The endpoint is the SDK base URL, usually ending in `/v1`, not a full `/chat/completions` or `/responses` URL. The model must support streaming and tool calling. New profiles default to Chat Completions; Responses requires an explicit `chatApi` setting.
+In Desktop, use **Settings** to add a provider and model. Choose a model that supports streaming and tool calls. Enter the provider base URL, usually ending in `/v1`. Chat Completions is the default. Set `chatApi` explicitly for Responses.
 
-Choose either an environment-variable reference or Windows Credential Manager. When using an environment variable, set its value in the shell that will start TinyHarness, for example with PowerShell 7.1+:
+Use Windows Credential Manager or an environment-variable key reference. For the latter, set the key before launching TinyHarness, for example in PowerShell 7.1+.
 
 ```powershell
 $env:TINYHARNESS_API_KEY = Read-Host "API key" -MaskInput
 ```
 
-User configuration is stored at `%APPDATA%\tinyharness\user-config.json`; it stores key references rather than key values. `TINYHARNESS_USER_CONFIG_DIR` overrides that directory. `config show` identifies the effective configuration and its source; `doctor` checks it offline. `doctor --connect` makes a real model request and may incur charges.
+CLI and Desktop share `%APPDATA%\tinyharness\user-config.json` by default. It stores key references. Override its directory with `TINYHARNESS_USER_CONFIG_DIR`. Configuration lookup goes from explicit `--config` to user settings to built-in defaults, with no implicit merge. The repository's `tinyharness.json` is a smoke fixture and requires explicit `--config`. `doctor` checks offline. `doctor --connect` sends a real model request and may incur charges.
 
-Configuration lookup is: explicit `--config <file>`, user configuration, then built-in defaults. Files are not implicitly merged, and a `tinyharness.json` in the working directory is never read automatically — opening a project directory cannot override the application configuration. **The repository's bundled `tinyharness.json` is a smoke example with a placeholder endpoint, used only through an explicit `--config`** (for example the offline `smoke` command). Real tasks use the profile created by `init`; supply an explicit configuration only when you want a different one.
-
-The trusted user setting `settings.modelTimeouts` controls the model-request timeout policy; only user configuration can set it — an explicit `--config` file and project configuration never carry this section. All three fields are seconds: `streamIdleTimeoutSeconds` defaults to `300` and bounds idle gaps in the model stream; `responseTimeoutSeconds` defaults to `0` (disabled) and bounds one response end-to-end; `approvalTimeoutSeconds` defaults to `300`, must be positive, and bounds one AI review. The first two fields accept `0` to disable their deadline; negative values, a non-positive `approvalTimeoutSeconds`, or values beyond the timer range (at most 4,294,966 seconds) fail loading or saving with the `settings.modelTimeouts` field path. Stream idleness is observed at the M.E.AI SDK update level: tool-argument deltas are aggregated inside the SDK and may produce no visible update for a whole segment, so waiting for the first visible update also counts as idle time. `responseTimeoutSeconds` stays disabled until it is set explicitly. Setting `streamIdleTimeoutSeconds` to `0` only disables the app-layer update idle guard; the underlying SDK still keeps its 300-second per-network-operation protection, so the wait is never unlimited.
+Set model timeouts in trusted user settings under `settings.modelTimeouts`. Defaults are 300 seconds for stream idle (`streamIdleTimeoutSeconds`), 0 for total response (`responseTimeoutSeconds`, disabled), and 300 seconds for AI review (`approvalTimeoutSeconds`). Set the stream value to 0 to disable the app-level idle timer. The SDK still enforces its network timeout.
 
 ### Automatic session titles
 
-Desktop generates a title in the background after a user turn is saved. Until naming succeeds, the sidebar keeps the first input's first-line preview. Failures remain pending and retry on a later turn using the original first input; a successful name stays fixed. Opening history and browsing the list never request titles, and naming maintenance does not change conversation activity ordering.
+Desktop uses the first request to generate a title after saving a turn. The sidebar shows a preview until a title is available. Failed requests retry on a later turn.
 
-**Settings → General → Automatic session titles** offers the current session model or a fixed provider/model. These choices autosave to independent `settings.sessionTitles` fields (`useCurrentModel`, `profile`, `model`) and never change AI reviewer settings. An unavailable fixed model keeps the preview and pending state instead of silently selecting another model. Naming uses a tool-free request without the main conversation history, with a 30-second deadline and a 36-Unicode-character title limit; it may incur additional usage.
-
-Names and retry markers are persisted as `session-title/1` payloads under the `session-title` journal kind, allowing index reconstruction. Older versions that do not recognize this kind refuse to restore these journals.
+In **Settings → General → Automatic session titles**, use the session model or choose a dedicated model. Title generation may incur extra usage. Old binaries that lack `session-title` support cannot open logs containing these records.
 
 ### Network settings
 
-Desktop **Settings → Network** sets the global default route to the system proxy, direct, or a saved HTTP, HTTPS, or SOCKS5 proxy. It also manages reusable proxy entries. Usernames and passwords are kept in the system credential store on supported platforms; the ordinary user config contains only a credential target reference. CLI, Desktop, the MCP worker, `doctor --connect`, and online model discovery share the same route behavior.
+In **Settings → Network**, choose the system proxy, direct connection, or a saved HTTP, HTTPS, or SOCKS5 proxy. Providers inherit this route unless you select an override. A selected proxy fails without falling back to another route. Proxy credentials use the system credential store.
 
-Provider editing defaults to **Follow software default**. A provider can instead use the system proxy, direct, or a saved proxy; all models under that provider share the route. Older user configs without `settings.network` default to the system proxy, and older providers without `network` inherit the global route.
-
-- **System proxy** follows the current .NET and operating-system proxy configuration, including applicable proxy environment variables. Requests can connect directly when no system proxy is configured.
-- **Direct** disables the application-level proxy for TinyHarness HTTP requests. It does not bypass an operating-system VPN or TUN.
-- **Selected proxy** uses the chosen proxy strictly. Connection, proxy-authentication, or DNS failures do not fall back to the system proxy or a direct connection.
-
-Network routes affect only TinyHarness-managed model requests, model-list requests, and user-triggered proxy tests. They do not change the environment of Agent shell, git, npm, or other child processes, and they do not configure the operating system proxy. The proxy test requests an HTTPS target through the selected proxy and reports success with response-header latency when it receives a target response; it does not send provider credentials.
-
-The network-specific portion of the trusted user config has this shape; the Desktop settings pages are the usual way to manage it:
+These settings apply to TinyHarness model and catalog requests and its proxy test. Shell tools use their own networking policy. For manual configuration, merge this fragment into your user configuration.
 
 ```json
 {
@@ -151,52 +127,38 @@ The network-specific portion of the trusted user config has this shape; the Desk
     "network": {
       "defaultRoute": { "mode": "proxy", "proxyId": "local-mihomo" },
       "proxies": [
-        {
-          "id": "local-mihomo",
-          "name": "Local Mihomo",
-          "protocol": "socks5",
-          "host": "127.0.0.1",
-          "port": 7890
-        }
+        { "id": "local-mihomo", "name": "Local Mihomo", "protocol": "socks5", "host": "127.0.0.1", "port": 7890 }
       ]
     }
   },
   "profiles": [
-    {
-      "name": "openai",
-      "network": { "mode": "proxy", "proxyId": "local-mihomo" }
-    }
+    { "name": "openai", "network": { "mode": "proxy", "proxyId": "local-mihomo" } }
   ]
 }
 ```
-
-Omitting a provider's `network` field means inherit. `mode` accepts only `system`, `direct`, or `proxy`; `proxy` must reference an existing proxy ID. SOCKS5 destination names are sent for proxy-side DNS resolution. Input `socks5h` is accepted and normalized to `socks5`.
 
 ### Start a task or conversation
 
 ```powershell
 tinyharness run -- "Explain how this project is organized"
-tinyharness
 tinyharness chat
 ```
 
-`tinyharness` with no arguments and `tinyharness chat` open the same interactive entry and list stored sessions. Use `/new` to create and select a saved conversation, `/sessions` to list all conversations (`*` marks the current one), and `/switch <session-id>` with the full 32-character ID to resume one. These commands make no model requests. A first ordinary request also creates a conversation automatically; exiting before selection creates none.
+Running `tinyharness` with no arguments also opens chat. Sending a request starts a turn and may incur model charges. The provider receives the conversation and relevant tool content.
 
-In a selected conversation, each submitted line starts a turn. You can discuss a problem first and explicitly request a change later. Model requests send conversation and relevant tool content to the configured provider and may incur charges.
+The CLI asks for trust in a new workspace. Untrusted workspaces allow read-only file tools. Patch and process tools require trust and are subject to tool permissions. At approval prompts, `a` allows once, `t` allows for the current run, `s` allows for the current session, and `d` denies. Use the scopes shown in the prompt.
 
-Interactive startup asks about trust for a new workspace. Read-only workspaces allow list/search/read tools; patches and processes require workspace trust and then the normal permission flow. Noninteractive workspaces without saved trust stay read-only. Trust does not automatically approve commands; Windows directory authorization may separately require UAC.
-
-At an approval prompt, `a` allows once, `t` allows matching requests for the current run, `s` explicitly allows them for the current session instance, and `d` denies. Only the scopes listed by the prompt are available; host execution accepts single-operation approval only. Grants never survive a restart. Review the proposed action before approving it.
-
-In Desktop, registering a project, selecting a permission mode, and approving a tool do not establish Windows sandbox directory readiness. If directory preparation blocks a command before launch, the idle session offers details and an explicit sandbox-directory repair action. Confirm the exact workspace and inheritance-propagation scope first; a separate UAC confirmation is requested only when normal privilege is insufficient. There is no need to launch CLI `/trust`. Repair does not take ownership, reset the whole tree's ACLs, or reprovision the machine sandbox. It must pass a final check and never replays the failed command. An unknown authorization result blocks immediate retries and requires inspection and an application restart.
+In Desktop, if directory permissions block a sandbox command, use **View details** or **Repair sandbox directory permissions** while idle. Review the affected directory before confirming. Retry the command after the repair succeeds.
 
 ### Desktop permissions and approvals
 
-There are two approval modes: human approval (the default) and AI review. Under the three-level execution model, the sandbox baseline runs ordinary reads (not limited to the workspace), workspace writes, and the sandboxed shell automatically; writes outside the workspace, known sensitive locations (reads and writes), protected-metadata writes, networking requests, and shell write-root requests ask at Level 2, and `executionScope=host` is explicit single-approval host execution with no OS isolation. Grants expire or can be revoked, and never survive a restart; grant lifecycles and trusted authorization changes are persisted as required `permission-grant-event/1` records in the session log. CLI and Desktop register the same shell routing shape, and approval prompts render fact lines from one shared source (backend and isolation declaration, file and network permissions, validity, active grant summary). Settings → Permissions and approvals configures new-session defaults, the independent AI reviewer, and a standing-authorization block (sandbox network and additional write roots) with confirm and revoke actions.
+**Ask for approval** is the default. **Approve for me** routes eligible requests to an AI reviewer. Set the default mode, reviewer model, and standing authorizations under **Settings → Permissions and approvals**.
 
-Standing trust migrates explicitly: with `networkPolicy=enabled` or additional write roots configured, networking and additional-write-root writes stay on per-call approval until you confirm (the OS baseline is the profile root plus the workspace); after interactive confirmation they run as explicit persistent authorization, and revoking returns the network policy to restricted and clears the write roots. Additional read roots ride the confirmed authorization into the sandbox OS read surface (outside-profile roots become readable) and are listed in the confirmation display.
+- **Baseline** allows ordinary reads, including outside the workspace, workspace edits, and sandboxed Shell.
+- **Sandbox extensions** ask for approval for sensitive paths, out-of-workspace writes, protected metadata writes, network access, and extra Shell write roots. Standing network access and extra write roots require explicit confirmation.
+- **Host execution** (`executionScope=host`) requires separate approval for each operation and runs without OS isolation.
 
-Legacy settings and saved sessions require separate migration confirmations. Desktop provides an explicit configuration-migration button in permission settings and a notification in each affected session. Interactive CLI chat prompts for confirmation (including the standing-trust confirmation); redirected input cannot confirm, `run` refuses pending legacy settings, and `run` with unconfirmed standing trust stays usable on per-call approvals with a notice. Ordinary settings saves and approval-mode switches do not clear the migration gate. See the [permission guide](Docs/Guides/permission-modes.md) and [implementation and validation record](Docs/permission-architecture-plan.md).
+Temporary grants expire at restart. Follow the separate prompts for legacy settings and sessions. See the [permission guide](Docs/Guides/permission-modes.md) and [implementation record](Docs/permission-architecture-plan.md).
 
 ### Reasoning and basic controls
 
@@ -205,25 +167,21 @@ tinyharness chat --reasoning content
 tinyharness run --reasoning status -- "Explain this project"
 ```
 
-The default `status` display shows waiting/reasoning elapsed time. `content` displays readable reasoning when provided by the service; it changes display only. Internal compaction text and opaque reasoning payloads are not displayed. Detailed request timings and usage are recorded in the session log.
-
-During an active `chat` run, ordinary text is queued as an amendment for a safe boundary. The basic controls are:
+`status` shows elapsed time. `content` shows readable reasoning when the provider returns it. During a run, ordinary input is queued until a safe model or tool boundary.
 
 | Input | Behavior |
 | --- | --- |
-| `/new` | Create and select a new saved conversation |
-| `/sessions` | List all stored conversations |
-| `/switch <session-id>` | Switch to a stored conversation |
-| `/pause` | Request a pause at a model/tool boundary |
-| `/resume` | Continue a paused run |
-| `/cancel` | Cancel the active run and wait for cleanup |
-| `/work` | Show work-item claims and unapplied amendment counts |
-| `/approval human\|ai` | Save the selected session's approval mode while idle |
-| `Ctrl+C` | Cancel the active turn; at the idle prompt, exit the session |
+| `/new` | Create and select a saved session |
+| `/sessions` | List saved sessions |
+| `/switch <session-id>` | Switch using the full session ID |
+| `/pause` | Pause at a model or tool boundary |
+| `/resume` | Resume a paused run |
+| `/cancel` | Cancel and wait for cleanup |
+| `/work` | Show work items and pending input |
+| `/approval human\|ai` | Save the approval mode while idle |
+| `Ctrl+C` | Cancel the current turn or exit while idle |
 
-These are limited controls, not a general command system. Approval replies use their own prompt. `/trust` is available at the idle input prompt. Saved amendments that were not applied are not replayed automatically after cancellation or restart.
-
-During a run, `/new` and `/switch` cancel it and wait for cleanup and saving before changing conversations. A failed switch keeps the current conversation; unreliable saves prevent leaving it. Switching requires the same workspace, endpoint, model and protocol as the stored conversation, so an incompatible conversation listed by `/sessions` must be reopened with its matching configuration.
+`/new` and `/switch` cancel an active run and wait for the session to save. Use `/trust` while idle to manage workspace trust. Pending input is not replayed after cancellation or restart.
 
 ### Inspect and resume sessions
 
@@ -233,45 +191,32 @@ tinyharness session show <session-id>
 tinyharness chat --session <session-id>
 ```
 
-`session list` and `session show` are strictly offline: they do not call a model, run tools, or read an API key. Sessions default to `%LOCALAPPDATA%\tinyharness\sessions`; `settings.sessionStoreDirectory` or `TINYHARNESS_SESSION_STORE_DIR` can override the store. The legacy `sessionDirectory` field does not select this store.
+`list` and `show` work offline. The default store is `%LOCALAPPDATA%\tinyharness\sessions`. Override it with `settings.sessionStoreDirectory` or `TINYHARNESS_SESSION_STORE_DIR`.
 
-Resume requires matching workspace, endpoint, model, protocol, current built-in prompt, and valid stored protocol content. If interrupted tool effects are uncertain, writes and processes stay blocked until you inspect and acknowledge the state. Local answers, readable reasoning, tool parameters, output, diffs, and `session show` preserve recorded content; terminal controls are escaped. Diagnostics, audits, and command summaries retain best-effort redaction. Earlier redacted history stays as recorded. Raw session files and local display output may contain secrets and are not safe-to-share exports; session files are not encrypted.
+Resume checks the workspace, endpoint, model, protocol, built-in prompt, and saved content. Inspect and acknowledge any uncertain effects from interrupted tools before resuming writes or commands. Keep raw history and local output private. Diagnostics and audit output redact secrets on a best-effort basis.
+
+Older binaries may refuse logs written by newer versions. Session-store migration is explicit. Close older clients and back up the store before migrating. Use `tinyharness help session` for commands. See [backup, restore, and rollback](Docs/session-storage-plan.md#54-备份恢复与回退).
 
 ### Configuration, budgets, and integrations
 
-Use `tinyharness help <command>` for full syntax:
+Use `tinyharness help <command>` for full syntax.
 
 | Command | Purpose |
 | --- | --- |
-| `provider list / add / use` | Manage provider profiles |
-| `model list / add / use` | Manage explicitly configured models and context windows |
-| `auth set <profile>` | Set a profile's API key reference |
-| `config show / set` | Inspect sources or change supported user defaults |
+| `provider list / add / use` | Manage providers |
+| `model list / add / use` | Manage models and context windows |
+| `auth set <profile>` | Set an API key reference |
+| `config show / set` | Inspect or change user settings |
 | `mcp` | Serve the read-only `ask_glm` worker over stdio |
-| `sandbox status / provision / verify` | Inspect, provision, or test the optional Windows sandbox |
+| `sandbox status / provision / verify` | Inspect, set up, or test the Windows sandbox |
 
-Model selection is available through `/models` before the first request and between runs;
-`list`, `use <id> --provider <name> [--effort <id>]`, and `effort <id|default>` also work directly.
-Draft selection creates no session or writer. Current markers distinguish credential routes.
-The menu includes catalog management and accepts credential references only. Enter new keys
-through `auth set --store` or standalone provider forms. `provider edit <name>` and
-`model edit <id> [--provider <name>]` preserve other models and settings. After an endpoint-origin
-change, the default `keep` needs explicit confirmation before reusing an old reference; declining
-never carries it to the new server. `model add` also accepts `--display-name`, `--efforts low,high`,
-and `--default-effort high`.
-Desktop supports idle session switching, declared reasoning levels, and provider/model forms.
-Saving a catalog does not switch open sessions. Configuration drift requires explicit re-selection.
-New keys use fresh credential targets; save failures retain old references and report possible orphan entries.
+Use `/models` in the CLI or the Desktop model menu to switch models and reasoning effort while idle. Saving catalog edits does not change an open session's model. Reusing a key after an endpoint-origin change requires confirmation.
 
-`maxAgentSteps` defaults to `0` (unlimited). Trusted user `settings.runBudget` defaults to 128 logical model requests, including compaction, and 256 tool executions per run. Total tokens and wall time are tracked without limits by default (`maxTotalTokens` / `maxWallClockSeconds` are `0`); positive values enable those limits. Individual tool timeouts and cancellation remain active. See the [budget contract](Docs/Archive/task-control-design.md) for details.
+`settings.runBudget` defaults to 128 model requests and 256 tool executions per run. Total token and time limits are optional. See the [budget guide](Docs/Archive/task-control-design.md).
 
-`settings.modelTimeouts` provides the timeout policy for every model request, applied uniformly to chat, run, the MCP worker, `doctor --connect`, and approval calls made by AI review: `streamIdleTimeoutSeconds` defaults to `300` seconds (`0` disables the app-layer guard; the underlying 300-second per-network-operation protection is kept) watching stream idle gaps, `responseTimeoutSeconds` defaults to `0` (disabled) bounding one response end-to-end, and `approvalTimeoutSeconds` defaults to `300` seconds bounding one AI review; a deadline expiry is handled as a timeout failure — the operation stays unexecuted, never reaches a human, and records no denial memory. The section comes only from trusted user configuration; field semantics and error behavior are described in [Configure a model](#configure-a-model). After changing this section, same-model refreshes and reselections rebuild and replace the client under the new policy without resetting reasoning continuity.
+`AGENTS.md` rules follow the ancestors of explicit file targets. Recursive listing and search do not load descendant rules. See the [project rule design and diagnostics](Docs/Archive/project-instructions-design.md).
 
-Project instructions follow the ancestor chains of explicit tool targets. Directory listing and recursive searches do not activate descendant `AGENTS.md` files; reads, edits, and searches targeting a specific file still check its ancestor rules before execution. New tool scopes replace the active scopes; refreshes without new scopes retain the current set. Source reads are bounded to 1 MiB per file and 1 MiB per candidate, preferring more specific sources. Oversized sources are omitted with recorded reasons. The model projection, including framing and notices, is limited to 32 KiB and an estimated 8,000 tokens: broader bodies are omitted before the remaining specific body is truncated. Full successfully read sources retain their original hashes and text in the session log; notices also appear in history. Budget trimming does not fail the run. File-count or tracked-directory limits can still require narrower paths or split calls; invalid encoding, access, link, and consistency failures still stop the run. Existing renderer `/1` snapshots restore unchanged and refresh to `/2` on the next turn; older binaries cannot resume `/2` snapshots.
-
-The MCP worker uses user configuration and sends permitted workspace content to the configured model; it cannot write files or run commands. It is an MCP server, not a client for external tools. `sandbox provision` changes machine accounts, ACLs, and network rules with elevation; `sandbox verify` runs real isolation checks. Follow the [sandbox setup and acceptance documentation](Docs/Archive/windows-sandbox-management.md) before using either.
-
-Project-rule logs are written to `%LOCALAPPDATA%\tinyharness\logs\project-instructions-TIMESTAMP-pPID.log`, correlated by `session`/`run`. Debug retains individual checks, scopes, revisions, and full source-hash comparisons. Release keeps only important Information/Warning/Error events: applied rules, budget truncation/omission, actual deferrals, excessive scopes, check failures, and terminal outcomes; routine checks, tool-start counter resets, and full source inventories are excluded. `event=decision` retains deferral counts and `retry`/`stop-deferral-limit` decisions. Rule bodies, chat content, search terms, and command text are excluded; known secrets and common secret assignments are redacted. Each process writes at most 8 MiB, adding `event=log-limit` before stopping. Write failures disable diagnostics without changing run outcomes. These files are diagnostic evidence, not recovery state; detailed sandbox and desktop lifecycle logs remain Debug-only.
+The MCP server sends permitted workspace content to the configured model and has no write or Shell tools. `sandbox verify` runs real isolation checks. See the [sandbox setup guide](Docs/Archive/windows-sandbox-management.md).
 
 <a id="platform-status"></a>
 
@@ -279,19 +224,16 @@ Project-rule logs are written to `%LOCALAPPDATA%\tinyharness\logs\project-instru
 
 | Platform | Status |
 | --- | --- |
-| Windows x64 | Primary development and prototype-use platform; NativeAOT and limited real-use/isolation evidence recorded |
-| Other RIDs | Not yet validated for distribution or daily use |
+| Windows x64 | NativeAOT and limited real-use and isolation validation |
+| Other RIDs | Distribution and daily use remain unverified |
 
 ## 📚 Documentation
 
-- [Documentation navigation](Docs/README.md#documentation) — the Chinese README lists active plans and document locations.
-- [Changelog](Docs/CHANGELOG.md) and [code style](Docs/code-style.md).
-- Active plan: [permission architecture](Docs/permission-architecture-plan.md), mainly in Chinese.
-- [Archived plans, designs, and historical records](Docs/Archive/README.md) — historical milestones, desktop migration, model selection, projects and sessions, core designs, and validation evidence. Archiving preserves outstanding work and does not imply full acceptance.
-- Maintenance guides: [release packaging](Docs/Guides/releasing.md) and [third-party notices](Docs/Guides/third-party-notices.md).
-- [PLAN.md](PLAN.md), [historical plans](Docs/Archive/PAST_PLAN.md), and [AGENTS.md](AGENTS.md) — development entry points and repository rules.
-- [License](LICENSE) — Apache-2.0; [NOTICE](NOTICE) and [third-party licenses](THIRD-PARTY-LICENSES.txt) retain attribution and terms.
+- [Documentation index](Docs/README.md#documentation), [changelog](Docs/CHANGELOG.md), and [code style](Docs/code-style.md).
+- [Active plans](PLAN.md), [archived designs and validation](Docs/Archive/README.md), and [historical plan](Docs/Archive/PAST_PLAN.md).
+- [Permissions](Docs/Guides/permission-modes.md), [release packaging](Docs/Guides/releasing.md), and [third-party notices](Docs/Guides/third-party-notices.md).
+- [Repository rules](AGENTS.md), [Apache-2.0 license](LICENSE), [NOTICE](NOTICE), and [third-party licenses](THIRD-PARTY-LICENSES.txt).
 
 ## 🤝 Contributing
 
-Focused problem reports and fixes are welcome. Include reproduction steps, the relevant command, and redacted output. Keep default tests offline and distinguish verified results from assumptions. See [AGENTS.md](AGENTS.md) for repository rules.
+For issues and fixes, include reproduction steps, the command, and redacted output. Keep default tests offline and distinguish verified results from assumptions. See [AGENTS.md](AGENTS.md).
