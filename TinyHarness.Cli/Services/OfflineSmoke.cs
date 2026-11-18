@@ -48,6 +48,9 @@ internal sealed class SmokeApprover : IApprovalProvider
 /// </summary>
 internal sealed class SmokeWorkspace : IDisposable
 {
+    internal const string FixtureTargetFramework = "net11.0";
+    private const string RequiredSdk = ".NET 11 SDK and targeting pack";
+
     /// <summary>
     ///     包装已经创建的临时工作区根目录。
     ///     Wraps an already-created temporary workspace root.
@@ -90,10 +93,10 @@ internal sealed class SmokeWorkspace : IDisposable
                            .ConfigureAwait(false);
             await workspace.WriteAsync("src/fixme.cs", "line1\nline2\nline3\n", cancellationToken)
                            .ConfigureAwait(false);
-            await workspace.WriteAsync("SmokeFixture.csproj", """
+            await workspace.WriteAsync("SmokeFixture.csproj", $"""
                                        <Project Sdk="Microsoft.NET.Sdk">
                                          <PropertyGroup>
-                                           <TargetFramework>net10.0</TargetFramework>
+                                           <TargetFramework>{FixtureTargetFramework}</TargetFramework>
                                            <OutputType>Exe</OutputType>
                                            <ImplicitUsings>enable</ImplicitUsings>
                                            <Nullable>enable</Nullable>
@@ -188,10 +191,11 @@ internal sealed class SmokeWorkspace : IDisposable
     }
 
     /// <summary>
-    ///     使用空包源配置正常还原无第三方依赖的 fixture。这样只依赖本机 .NET 10 SDK/targeting pack，
-    ///     不复制或伪造仓库中的 assets 文件。
-    ///     Restores the package-free fixture through the SDK with all package sources cleared, relying only on the
-    ///     installed .NET 10 SDK/targeting pack instead of copying or fabricating repository assets.
+    ///     <para>使用本机 .NET 11 SDK 和引用包离线还原无第三方依赖的 fixture，清空所有 NuGet 源。</para>
+    ///     <para>
+    ///         Restores the package-free fixture offline with the installed .NET 11 SDK and targeting pack,
+    ///         clearing all NuGet sources.
+    ///     </para>
     /// </summary>
     private async Task RestoreFixtureAsync(CancellationToken cancellationToken)
     {
@@ -233,9 +237,7 @@ internal sealed class SmokeWorkspace : IDisposable
         }
         catch (Exception ex) when (ex is Win32Exception or InvalidOperationException)
         {
-            throw new
-                InvalidOperationException("Cannot restore the smoke fixture. Install the .NET 10 SDK and targeting pack.",
-                                          ex);
+            throw new InvalidOperationException($"Cannot restore the smoke fixture. Install the {RequiredSdk}.", ex);
         }
 
         using (process)
@@ -259,7 +261,7 @@ internal sealed class SmokeWorkspace : IDisposable
             var stderr = await stderrTask.ConfigureAwait(false);
             if (process.ExitCode != 0)
                 throw new
-                    InvalidOperationException("Smoke fixture restore failed. Ensure the .NET 10 SDK and targeting pack are installed. " +
+                    InvalidOperationException($"Smoke fixture restore failed. Ensure the {RequiredSdk} are installed. " +
                                               BoundedProcessOutput(stdout, stderr));
         }
     }
@@ -516,7 +518,7 @@ internal static class SmokeScript
 
     private static string CheckArguments(string fixtureRoot) => ShellArguments("dotnet",
     [
-        Path.Combine(fixtureRoot, "bin", "Debug", "net10.0", "TinyHarness.SmokeFixture.dll")
+        Path.Combine(fixtureRoot, "bin", "Debug", SmokeWorkspace.FixtureTargetFramework, "TinyHarness.SmokeFixture.dll")
     ]);
 
     private static string TestPatchArguments()
