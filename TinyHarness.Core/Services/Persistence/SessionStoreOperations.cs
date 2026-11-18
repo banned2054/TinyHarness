@@ -707,14 +707,15 @@ public sealed class SessionStoreOperations
     ///         marker is kept and no cleanup or removal ran.
     ///     </para>
     /// </exception>
-    public async Task<Project> DeleteProjectAsync(
-        string                         storeDirectory,
-        string                         projectId,
-        long                           projectRevision,
-        ISessionProjectDeletionGateway gateway,
-        CancellationToken              cancellationToken)
+    public async Task<Project> DeleteProjectAsync(string storeDirectory, string projectId, long projectRevision,
+                                                  ISessionProjectDeletionGateway gateway,
+                                                  CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(gateway);
+        if (await SessionStoreAuthority.IsMigratedAsync(storeDirectory, cancellationToken).ConfigureAwait(false))
+            return await DeleteMigratedProjectAsync(storeDirectory, projectId, projectRevision, gateway,
+                                                    cancellationToken).ConfigureAwait(false);
+
         var catalogPath = ProjectStore.FilePath(storeDirectory);
         var deleting = await ProjectStore.BeginDeletionAsync(catalogPath, projectId, projectRevision,
                                                              cancellationToken : cancellationToken);
@@ -723,9 +724,9 @@ public sealed class SessionStoreOperations
         await gateway.UnbindOpenRuntimeSessionsAsync(storeDirectory, projectId, cancellationToken);
 
         // 解绑放工作线程：日志扫描与追加不占用调用方上下文，与既有调度语义一致。
-        var result = await Task.Run(() => SessionProjectUnbinder.UnassignAsync(storeDirectory, projectId,
-                                                                               cancellationToken),
-                                    cancellationToken);
+        var result =
+            await Task.Run(() => SessionProjectUnbinder.UnassignAsync(storeDirectory, projectId, cancellationToken),
+                           cancellationToken);
         await gateway.UnassignmentAppliedAsync(result, cancellationToken);
 
         // 完整性由 Core 把关：应用行投影后仍有占用或失败时中止，删除标记、置顶与日志归属保留供重试。
@@ -736,13 +737,84 @@ public sealed class SessionStoreOperations
 
         // 迁移完成后项目组织状态在业务库：置顶与手动顺序由 Core 直接清理，折叠分组键由宿主钩子按界面命名清理。
         if (await SessionStoreAuthority.IsMigratedAsync(storeDirectory, cancellationToken).ConfigureAwait(false))
-            await SessionStoreOrganizationStore.RemoveProjectReferencesAsync(storeDirectory, projectId,
-                                                                             cancellationToken).ConfigureAwait(false);
+            await SessionStoreOrganizationStore
+                 .RemoveProjectReferencesAsync(storeDirectory, projectId, cancellationToken).ConfigureAwait(false);
 
         await gateway.PrepareCompletionAsync(storeDirectory, projectId, cancellationToken);
         await ProjectStore.CompleteDeletionAsync(catalogPath, projectId, deleting.Revision, cancellationToken);
         await gateway.CompletedAsync(deleting, cancellationToken);
         return deleting;
+    }
+
+    /// <summary>
+    ///     <para>
+    ///         迁移后的项目删除：标记、解绑与项目组织引用清理在单个业务库事务内完成，不再扫描会话日志或追加归属
+    ///         记录；宿主钩子仍按原契约收到各阶段事实。
+    ///     </para>
+    ///     <para>
+    ///         A post-migration project deletion: the marker, unassignment, and project-organization cleanup finish
+    ///         inside one business-database transaction, without scanning session logs or appending ownership records;
+    ///         the host hooks still receive each stage's facts under the original contract.
+    ///     </para>
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         事务提交后重新挂上该项目的归属由完成前的核对兜底，仍存在引用时按不完整中止并保留删除标记；
+    ///         最终移除还受归属外键约束，并发写入无法被静默覆盖。
+    ///     </para>
+    ///     <para>
+    ///         Placements re-attached after the commit are caught by the check before completion, which aborts as
+    ///         incomplete and keeps the deletion marker; the final removal is also guarded by the placement foreign
+    ///         key, so a concurrent write is never silently overwritten.
+    ///     </para>
+    /// </remarks>
+    private async Task<Project> DeleteMigratedProjectAsync(string storeDirectory, string projectId,
+                                                           long projectRevision, ISessionProjectDeletionGateway gateway,
+                                                           CancellationToken cancellationToken)
+    {
+        var started = await SessionStoreProjectCatalogStore
+                           .BeginDeletionAndUnassignAsync(storeDirectory, projectId, projectRevision, null,
+                                                          cancellationToken)
+                           .ConfigureAwait(false);
+        await gateway.DeletionMarkedAsync(started.Project, cancellationToken).ConfigureAwait(false);
+        await gateway.UnbindDraftPagesAsync(storeDirectory, projectId, cancellationToken).ConfigureAwait(false);
+        await gateway.UnbindOpenRuntimeSessionsAsync(storeDirectory, projectId, cancellationToken)
+                     .ConfigureAwait(false);
+
+        // 解绑已在事务内完成：把实际解绑的会话 ID 交给宿主应用行投影。只传空结果会让没有打开 runtime 的现存行
+// 继续显示已删除的项目，直到后续刷新才被纠正。
+        // The unassignment already completed inside the transaction, so the host receives the ids that were actually
+        // unassigned; an empty result would leave existing rows without an open runtime showing the deleted project
+        // until a later refresh.
+        var applied = new SessionProjectUnassignmentResult(started.UnassignedSessionIds
+                                                                  .Select(id =>
+                                                                              new SessionProjectUnassignmentOutcome(id,
+                                                                                       SessionProjectUnassignmentStatus
+                                                                                          .Unassigned, null))
+                                                                  .ToArray());
+        await gateway.UnassignmentAppliedAsync(applied, cancellationToken).ConfigureAwait(false);
+
+        var remaining = await SessionStorePlacementStore
+                             .ListProjectSessionIdsAsync(storeDirectory, projectId, cancellationToken)
+                             .ConfigureAwait(false);
+        if (remaining.Count > 0)
+        {
+            var outcomes = remaining
+                          .Select(id => new SessionProjectUnassignmentOutcome(id,
+                                                                              SessionProjectUnassignmentStatus.Pending,
+                                                                              "the session was assigned to the project " +
+                                                                              "after the deletion transaction committed"))
+                          .ToArray();
+            throw new SessionProjectUnassignmentIncompleteException(new SessionProjectUnassignmentResult(outcomes));
+        }
+
+        await ClearProjectPinStateAsync(storeDirectory, projectId, cancellationToken).ConfigureAwait(false);
+        await gateway.PrepareCompletionAsync(storeDirectory, projectId, cancellationToken).ConfigureAwait(false);
+        await ProjectStore
+             .CompleteDeletionAsync(ProjectStore.FilePath(storeDirectory), projectId, started.Project.Revision,
+                                    cancellationToken).ConfigureAwait(false);
+        await gateway.CompletedAsync(started.Project, cancellationToken).ConfigureAwait(false);
+        return started.Project;
     }
 
     /// <summary>

@@ -278,6 +278,31 @@ public class SessionStoreTombstoneTests
     }
 
     [Test]
+    public async Task ProjectDeletion_MigratedStore_ReportsUnassignedSessionIdsToHost()
+    {
+        using var temp      = new TestTempDir();
+        var       workspace = temp.CreateDirectory("workspace");
+        var       store     = temp.CreateDirectory("sessions");
+        await CreateMigratedStoreAsync(store);
+
+        var project = await SessionStoreProjectCatalogStore.GetOrCreateAsync(store, workspace, null,
+                                                                             CancellationToken.None);
+        var first  = await CommitSessionAsync(store, workspace, project.Id);
+        var second = await CommitSessionAsync(store, workspace, project.Id);
+        var catalog = await SessionStoreProjectCatalogStore.LoadAsync(store, CancellationToken.None);
+        var deleting = catalog.Projects.Single(item => item.Id == project.Id);
+
+        var gateway = new RecordingDeletionGateway();
+        await new SessionStoreOperations().DeleteProjectAsync(store, project.Id, deleting.Revision, gateway,
+                                                              CancellationToken.None);
+
+        Assert.That(gateway.UnassignedSessionIds, Is.EquivalentTo(new[] { first, second }),
+                    "宿主必须收到实际解绑的会话 ID，才能更新没有打开 runtime 的现存行。");
+        Assert.That(gateway.UnassignmentAppliedComplete, Is.True,
+                    "解绑已在事务内完成，交给宿主的解绑结果必须按完整报告。");
+    }
+
+    [Test]
     public async Task Reconciliation_RemovesAndNeverRewritesTombstonedRow()
     {
         using var temp      = new TestTempDir();
@@ -298,5 +323,217 @@ public class SessionStoreTombstoneTests
         // 再跑一轮也不能把仍在磁盘上的日志重新投影回索引。
         await new SessionIndexReconciler(index).ReconcileAsync(CancellationToken.None);
         Assert.That(await index.GetRowAsync(sessionId, CancellationToken.None), Is.Null);
+    }
+
+    [Test]
+    public async Task ProjectDeletion_MigratedStore_UnassignsAndClearsOrganizationInOnePass()
+    {
+        using var temp      = new TestTempDir();
+        var       workspace = temp.CreateDirectory("workspace");
+        var       store     = temp.CreateDirectory("sessions");
+        await CreateMigratedStoreAsync(store);
+
+        var project = await SessionStoreProjectCatalogStore.GetOrCreateAsync(store, workspace, null,
+                                                                             CancellationToken.None);
+        var first  = await CommitSessionAsync(store, workspace, project.Id);
+        var second = await CommitSessionAsync(store, workspace, project.Id);
+        await SessionStorePinStore.SetProjectPinnedAsync(store, project.Id, true, CancellationToken.None);
+        await SessionStoreOrganizationStore.SetManualProjectOrderAsync(store, [project.Id], CancellationToken.None);
+        var catalog = await SessionStoreProjectCatalogStore.LoadAsync(store, CancellationToken.None);
+        var deleting = catalog.Projects.Single(item => item.Id == project.Id);
+
+        var gateway = new RecordingDeletionGateway();
+        var operations = new SessionStoreOperations();
+        await operations.DeleteProjectAsync(store, project.Id, deleting.Revision, gateway, CancellationToken.None);
+
+        Assert.That(gateway.Calls, Is.EqualTo(["marked", "draft", "runtime", "applied", "prepare", "completed"]));
+        Assert.That((await SessionStoreProjectCatalogStore.LoadAsync(store, CancellationToken.None)).Projects,
+                    Is.Empty, "项目必须从业务库移除。");
+        foreach (var sessionId in new[] { first, second })
+            Assert.That((await SessionStorePlacementStore.GetAsync(store, sessionId, CancellationToken.None)).State,
+                        Is.EqualTo(SessionProjectAssignmentState.NoProject),
+                        "事务必须把归属改为明确无项目，而不是删除归属行。");
+        var organization = await SessionStoreOrganizationStore.LoadAsync(store, CancellationToken.None);
+        Assert.That(organization.PinnedProjectIds, Is.Empty);
+        Assert.That(organization.ManualProjectOrder, Is.Empty);
+        Assert.That(File.Exists(ProjectStore.FilePath(store)), Is.False, "迁移后不得再写旧 projects.json。");
+    }
+
+    /// <summary>
+    ///     <para>
+    ///         事务已提交但宿主应用行投影前失败时，重试仍必须把解绑名单交给宿主：此时归属行已全部为"明确无
+    ///         项目"，名单只能来自与解绑同事务落库的记录，否则现存行永远无法校正。
+    ///     </para>
+    ///     <para>
+    ///         When the transaction committed but the host failed before applying row projections, a retry must still
+    ///         hand the unassignment roster to the host: the placements are now all explicitly no-project, so the
+    ///         roster can only come from the record written in the same transaction as the unassignment, without
+    ///         which the surviving rows could never be corrected.
+    ///     </para>
+    /// </summary>
+    [Test]
+    public async Task ProjectDeletion_RetryAfterSelectionApplyFailure_StillReportsUnassignedSessionIds()
+    {
+        using var temp      = new TestTempDir();
+        var       workspace = temp.CreateDirectory("workspace");
+        var       store     = temp.CreateDirectory("sessions");
+        await CreateMigratedStoreAsync(store);
+
+        var project = await SessionStoreProjectCatalogStore.GetOrCreateAsync(store, workspace, null,
+                                                                             CancellationToken.None);
+        var first  = await CommitSessionAsync(store, workspace, project.Id);
+        var second = await CommitSessionAsync(store, workspace, project.Id);
+        var catalog = await SessionStoreProjectCatalogStore.LoadAsync(store, CancellationToken.None);
+        var deleting = catalog.Projects.Single(item => item.Id == project.Id);
+
+        var operations = new SessionStoreOperations();
+        var failing    = new RecordingDeletionGateway { FailOnApply = true };
+        var failure = await TestAssert.ThrowsAsync<InvalidOperationException>(
+            () => operations.DeleteProjectAsync(store, project.Id, deleting.Revision, failing,
+                                                CancellationToken.None));
+        Assert.That(failure.Message, Does.Contain("host projection failed"),
+                    "夹具必须让失败发生在事务提交之后、行投影应用期间。");
+        Assert.That(failing.UnassignedSessionIds, Is.EquivalentTo(new[] { first, second }),
+                    "首次运行本身也必须把名单交给宿主。");
+        Assert.That(await SessionStorePlacementStore.ListProjectSessionIdsAsync(store, project.Id,
+                                                                               CancellationToken.None), Is.Empty,
+                    "事务已提交：重试时业务库中该项目已无归属行。");
+
+        var retry = new RecordingDeletionGateway();
+        await operations.DeleteProjectAsync(store, project.Id, deleting.Revision, retry, CancellationToken.None);
+
+        Assert.That(retry.UnassignedSessionIds, Is.EquivalentTo(new[] { first, second }),
+                    "重试必须重放已提交的解绑名单，否则现存行会一直显示已删除的项目。");
+        Assert.That(retry.UnassignmentAppliedComplete, Is.True);
+        Assert.That((await SessionStoreProjectCatalogStore.LoadAsync(store, CancellationToken.None)).Projects,
+                    Is.Empty, "重试必须完成项目移除。");
+    }
+
+    /// <summary>
+    ///     <para>
+    ///         项目删除完成后不得留下解绑名单：该记录只服务于中断后的重试，残留会让后续同 ID 项目携带
+    ///         无关的会话校正事实。
+    ///     </para>
+    ///     <para>
+    ///         A completed project deletion must leave no unassignment roster behind: the record exists only for
+    ///         retries after an interruption, and a leftover would make a later project with the same id carry
+    ///         unrelated row-correction facts.
+    ///     </para>
+    /// </summary>
+    [Test]
+    public async Task ProjectDeletion_CompletedRemovesUnassignmentRosterRecord()
+    {
+        using var temp      = new TestTempDir();
+        var       workspace = temp.CreateDirectory("workspace");
+        var       store     = temp.CreateDirectory("sessions");
+        await CreateMigratedStoreAsync(store);
+
+        var project = await SessionStoreProjectCatalogStore.GetOrCreateAsync(store, workspace, null,
+                                                                             CancellationToken.None);
+        var sessionId = await CommitSessionAsync(store, workspace, project.Id);
+        var catalog   = await SessionStoreProjectCatalogStore.LoadAsync(store, CancellationToken.None);
+        var deleting  = catalog.Projects.Single(item => item.Id == project.Id);
+
+        await new SessionStoreOperations().DeleteProjectAsync(store, project.Id, deleting.Revision,
+                                                             new RecordingDeletionGateway(),
+                                                             CancellationToken.None);
+
+        var keys = await ReadUnassignmentRosterKeysAsync(store);
+        Assert.That(keys, Does.Not.Contain(project.Id), "完成的删除不得把解绑名单留在业务库元数据里。");
+        Assert.That(keys, Is.Empty, "除该项目外也不应出现其他名单记录。");
+        Assert.That(sessionId, Is.Not.Empty);
+    }
+
+    /// <summary>
+    ///     <para>读取业务库元数据中所有解绑名单记录的项目 ID，用于断言记录的生命周期。</para>
+    ///     <para>Reads the project ids of every unassignment roster record in the business metadata to assert the record's lifetime.</para>
+    /// </summary>
+    private static async Task<IReadOnlyList<string>> ReadUnassignmentRosterKeysAsync(string storeDirectory)
+    {
+        var builder = new SqliteConnectionStringBuilder
+        {
+            DataSource = SessionStoreDatabase.PathFor(storeDirectory),
+            Mode       = SqliteOpenMode.ReadWrite,
+            Pooling    = false
+        };
+        await using var connection = new SqliteConnection(builder.ToString());
+        await connection.OpenAsync();
+        var command = connection.CreateCommand();
+        command.CommandText = $"SELECT key FROM {SessionStoreDatabase.MetaTableName} WHERE key LIKE 'project_unassigned:%';";
+        await using var reader = await command.ExecuteReaderAsync();
+        var keys = new List<string>();
+        while (await reader.ReadAsync()) keys.Add(reader.GetString(0)["project_unassigned:".Length..]);
+        return keys;
+    }
+
+    /// <summary>
+    ///     <para>记录项目删除各阶段回调顺序的宿主接缝；不执行界面动作。</para>
+    ///     <para>The host seam recording project-deletion callback order without performing UI work.</para>
+    /// </summary>
+    private sealed class RecordingDeletionGateway : ISessionProjectDeletionGateway
+    {
+        /// <summary>
+        ///     <para>true 表示在应用行投影的阶段抛错，模拟事务提交后宿主失败。</para>
+        ///     <para>True makes the row-projection stage throw, simulating a host failure after the transaction committed.</para>
+        /// </summary>
+        public bool FailOnApply { get; init; }
+
+        public List<string> Calls { get; } = [];
+
+        /// <summary>
+        ///     <para>宿主收到的实际解绑会话 ID；用于证明事务内解绑事实被带给宿主。</para>
+        ///     <para>The ids the host was told were actually unassigned, proving the transactional facts reach the host.</para>
+        /// </summary>
+        public IReadOnlyList<string> UnassignedSessionIds { get; private set; } = [];
+
+        /// <summary>
+        ///     <para>宿主收到的解绑结果是否被报告为完整。</para>
+        ///     <para>Whether the unassignment result handed to the host reported itself complete.</para>
+        /// </summary>
+        public bool UnassignmentAppliedComplete { get; private set; }
+
+        public Task DeletionMarkedAsync(Project deleting, CancellationToken cancellationToken)
+        {
+            Calls.Add("marked");
+            return Task.CompletedTask;
+        }
+
+        public Task UnbindDraftPagesAsync(string storeDirectory, string projectId, CancellationToken cancellationToken)
+        {
+            Calls.Add("draft");
+            return Task.CompletedTask;
+        }
+
+        public Task UnbindOpenRuntimeSessionsAsync(string storeDirectory, string projectId,
+                                                   CancellationToken cancellationToken)
+        {
+            Calls.Add("runtime");
+            return Task.CompletedTask;
+        }
+
+        public Task UnassignmentAppliedAsync(SessionProjectUnassignmentResult result,
+                                             CancellationToken cancellationToken)
+        {
+            Calls.Add("applied");
+            UnassignedSessionIds = result.Outcomes
+                                        .Where(outcome => outcome.Status == SessionProjectUnassignmentStatus.Unassigned)
+                                        .Select(outcome => outcome.SessionId)
+                                        .ToArray();
+            UnassignmentAppliedComplete = result.IsComplete;
+            if (FailOnApply) throw new InvalidOperationException("host projection failed");
+            return Task.CompletedTask;
+        }
+
+        public Task PrepareCompletionAsync(string storeDirectory, string projectId, CancellationToken cancellationToken)
+        {
+            Calls.Add("prepare");
+            return Task.CompletedTask;
+        }
+
+        public Task CompletedAsync(Project deleted, CancellationToken cancellationToken)
+        {
+            Calls.Add("completed");
+            return Task.CompletedTask;
+        }
     }
 }
