@@ -18,19 +18,37 @@
                PlacementTarget="{Binding #PermissionPickerButton}"
                Placement="TopEdgeAlignedLeft" VerticalOffset="-4"
                IsOpen="{Binding IsPermissionMenuOpen, Mode=TwoWay}" IsLightDismissEnabled="True">
-            <Border Classes="popup-surface dropdown-popup" Width="288" MaxHeight="420">
+            <!-- 宽度按最长的一行说明定：图标 + 两行文字 + 勾选位在 344 内不截断。 -->
+            <Border Classes="popup-surface dropdown-popup" Width="344" MaxHeight="420">
                 <StackPanel>
                     <TextBlock Text="执行权限" Classes="popup-section" />
-                    <TextBlock Text="{Binding PermissionChangeHint}" Classes="popup-value"
-                               TextWrapping="Wrap" MaxWidth="266" Margin="10,4,10,8" />
                     <ItemsControl ItemsSource="{Binding PermissionOptions}">
                         <ItemsControl.ItemTemplate>
-                            <DataTemplate x:DataType="vm:ComposerMenuOption">
-                                <Button Classes="popup-item" Classes.selected="{Binding IsSelected}"
+                            <DataTemplate x:DataType="vm:PermissionModeOption">
+                                <Button Classes="popup-item permission-mode-item"
+                                        Classes.selected="{Binding IsSelected}"
                                         Command="{Binding SelectCommand}" ToolTip.Tip="{Binding ToolTip}">
-                                    <Grid ColumnDefinitions="*,Auto">
-                                        <TextBlock Text="{Binding Label}" TextTrimming="CharacterEllipsis" />
-                                        <TextBlock Grid.Column="1" Classes="popup-check" Text="✓"
+                                    <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10">
+                                        <!-- 行首图标盒与 Sidebar 弹层同一约定：16 viewBox 原样绘制后整体缩到 14。
+                                             两种模式各一个 Path，按模式可见性切换，避免在视图模型里构造几何。 -->
+                                        <Panel Grid.Column="0" Classes="popup-icon">
+                                            <Path Data="{StaticResource Icon.ApprovalHuman}"
+                                                  IsVisible="{Binding IsHumanApproval}"
+                                                  Stroke="{Binding $parent[Button].Foreground}"
+                                                  StrokeThickness="1" StrokeLineCap="Round"
+                                                  StrokeJoin="Round" />
+                                            <Path Data="{StaticResource Icon.ApprovalAi}"
+                                                  IsVisible="{Binding !IsHumanApproval}"
+                                                  Stroke="{Binding $parent[Button].Foreground}"
+                                                  StrokeThickness="1" StrokeLineCap="Round"
+                                                  StrokeJoin="Round" />
+                                        </Panel>
+                                        <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                            <TextBlock Text="{Binding Label}"
+                                                       TextTrimming="CharacterEllipsis" />
+                                            <TextBlock Classes="permission-mode-caption" Text="{Binding Caption}" />
+                                        </StackPanel>
+                                        <TextBlock Grid.Column="2" Classes="popup-check" Text="✓"
                                                    IsVisible="{Binding IsSelected}" />
                                     </Grid>
                                 </Button>

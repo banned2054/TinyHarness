@@ -223,6 +223,11 @@
         <Setter Property="Foreground" Value="{DynamicResource DropdownForegroundBrush}" />
         <Setter Property="FontSize" Value="13" />
     </Style>
+    <!-- 两行菜单行（审批模式）：行几何沿用 popup-item，只放开纵向内边距容纳名称下方的说明。 -->
+    <Style Selector="Border.dropdown-popup Button.permission-mode-item">
+        <Setter Property="MinHeight" Value="46" />
+        <Setter Property="Padding" Value="10,6" />
+    </Style>
     <Style Selector="Border.dropdown-popup Button.popup-item.selected /template/ Border#PART_Surface">
         <Setter Property="Background" Value="Transparent" />
     </Style>

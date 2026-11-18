@@ -362,7 +362,6 @@ public sealed partial class SessionViewModel : ObservableObject
             OnPropertyChanged(nameof(CanReorder));
             OnPropertyChanged(nameof(CanChangeModel));
             OnPropertyChanged(nameof(CanConfirmPermissionMigration));
-            OnPropertyChanged(nameof(PermissionChangeHint));
             OnPropertyChanged(nameof(ComposerSendHint));
             OnPropertyChanged(nameof(CanRepairWorkspace));
             OnPropertyChanged(nameof(CanArchive));

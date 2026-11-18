@@ -540,8 +540,8 @@ internal sealed class ChatSessionConsole : IDisposable
 
     private static string ApprovalModeLabel(SessionApprovalMode mode) => mode switch
     {
-        SessionApprovalMode.HumanApproval => "human approval",
-        SessionApprovalMode.AIAutoReview  => "AI review",
+        SessionApprovalMode.HumanApproval => "ask for approval",
+        SessionApprovalMode.AIAutoReview  => "approve for me",
         _                                 => mode.ToString()
     };
 

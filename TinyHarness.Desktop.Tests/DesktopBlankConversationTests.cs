@@ -650,7 +650,7 @@ public sealed class DesktopBlankConversationTests
         var next = model.SelectedSession!;
         Assert.That(next.PermissionMode, Is.EqualTo(SessionApprovalMode.HumanApproval));
         next.TogglePermissionMenuCommand.Execute(null);
-        next.PermissionOptions.Single(option => option.Label == "人工审批").SelectCommand.Execute(null);
+        next.PermissionOptions.Single(option => option.Label == "请求批准").SelectCommand.Execute(null);
         model.SelectedSession = history;
         release.TrySetResult();
         await Assert.ThrowsAsync<InvalidOperationException>(async () =>

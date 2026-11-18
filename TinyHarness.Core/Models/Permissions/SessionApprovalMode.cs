@@ -42,14 +42,28 @@ public static class SessionApprovalModes
     /// </summary>
     public static string Label(this SessionApprovalMode mode) => mode switch
     {
-        SessionApprovalMode.HumanApproval => "人工审批",
-        SessionApprovalMode.AIAutoReview  => "AI 审核",
+        SessionApprovalMode.HumanApproval => "请求批准",
+        SessionApprovalMode.AIAutoReview  => "帮我批准",
         _                                 => throw new ArgumentOutOfRangeException(nameof(mode))
     };
 
     /// <summary>
-    ///     <para>返回该模式自动范围与审批路由的说明。</para>
-    ///     <para>Describes the mode's automatic scope and approval routing.</para>
+    ///     <para>返回菜单行使用的单行说明；比 <see cref="Description" /> 短，只讲何时需要询问。</para>
+    ///     <para>
+    ///         Returns the one-line menu caption; shorter than <see cref="Description" /> and limited to when
+    ///         approval is requested.
+    ///     </para>
+    /// </summary>
+    public static string Summary(this SessionApprovalMode mode) => mode switch
+    {
+        SessionApprovalMode.HumanApproval => "编辑工作区外文件、联网和宿主执行时始终询问",
+        SessionApprovalMode.AIAutoReview  => "仅对 AI 判断有风险的操作请求你批准",
+        _                                 => throw new ArgumentOutOfRangeException(nameof(mode))
+    };
+
+    /// <summary>
+    ///     <para>返回该模式自动范围与审批路由的完整说明。</para>
+    ///     <para>Describes the mode's automatic scope and approval routing in full.</para>
     /// </summary>
     public static string Description(this SessionApprovalMode mode) => mode switch
     {

@@ -541,7 +541,7 @@ public sealed class PermissionSettingsViewModel : SettingsSectionViewModel
         var proxy = sandbox.Proxy.Mode == SandboxProxyMode.Named
             ? $"Named（{sandbox.Proxy.ProxyName ?? "未命名"}）"
             : sandbox.Proxy.Mode.ToString();
-        return "新权限基线：工作区内读写和沙箱 Shell 自动允许；附加权限按人工审批或 AI 审核处理。"                                           +
+        return "新权限基线：工作区内读写和沙箱 Shell 自动允许；附加权限按所选审批模式处理。"                                              +
                "FullAccess 已删除，不会自动取得 Host 执行；旧临时授权和 commandRules 免审批规则不继承。\n"                            +
                $"以下可信沙箱配置保持原值：常设网络策略 {network}；"                                                          +
                $"附加只读根：{Roots(sandbox.AdditionalReadRoots)}；附加写入根：{Roots(sandbox.AdditionalWriteRoots)}；" +

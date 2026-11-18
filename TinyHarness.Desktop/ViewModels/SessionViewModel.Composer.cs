@@ -81,10 +81,6 @@ public sealed partial class SessionViewModel
     public string              PermissionPickerLabel => _storedPermissionLabel ?? PermissionMode.Label();
     public SessionApprovalMode PermissionMode        { get; private set; } = SessionApprovalMode.HumanApproval;
 
-    public string PermissionChangeHint => CanChangeModel
-        ? "选择将保存到本会话；默认与菜单显示可在设置中调整。"
-        : "请先停止当前运行，再切换权限；对话会保留。";
-
     public string WorkspaceLabel => Path.GetFileName(Path.TrimEndingDirectorySeparator(WorkspaceRoot)) is
         { Length: > 0 } name
         ? name
@@ -484,12 +480,14 @@ public sealed partial class SessionViewModel
     private void RebuildPermissionMenu()
     {
         PermissionOptions.Clear();
-        // 双审批模式菜单（人工审批 / AI 审核）。
+        // 两种审批模式：行首图标 + 名称 + 灰色单行说明，与 Codex 的批准方式菜单同构。
         foreach (var mode in SessionApprovalModes.All)
-            PermissionOptions.Add(new ComposerMenuOption(mode.Label(), () => _ = ApplyPermissionSelectionAsync(mode),
-                                                         () => CanChangeModel)
+            PermissionOptions.Add(new PermissionModeOption(mode.Label(), mode,
+                                                           () => _ = ApplyPermissionSelectionAsync(mode),
+                                                           () => CanChangeModel)
             {
-                IsSelected = PermissionMode == mode, ToolTip = mode.Description()
+                IsSelected = PermissionMode == mode,
+                ToolTip    = mode.Description()
             });
     }
 
@@ -665,7 +663,6 @@ public sealed partial class SessionViewModel
         _changing = true;
         OnPropertyChanged(nameof(CanChangeModel));
         OnPropertyChanged(nameof(CanDeleteArchived));
-        OnPropertyChanged(nameof(PermissionChangeHint));
         try
         {
             await EnsureHistoryLoadedAsync();
@@ -681,7 +678,6 @@ public sealed partial class SessionViewModel
             _changing = false;
             OnPropertyChanged(nameof(CanChangeModel));
             OnPropertyChanged(nameof(CanDeleteArchived));
-            OnPropertyChanged(nameof(PermissionChangeHint));
             RebuildPermissionMenu();
         }
     }
@@ -713,7 +709,7 @@ public sealed record ComposerModelGroup(string Name, IReadOnlyList<ComposerMenuO
 ///     <para>菜单展示值与带可用性检查的操作；禁用项不会更改配置。</para>
 ///     <para>A menu label and guarded action; disabled entries never change configuration.</para>
 /// </summary>
-public sealed class ComposerMenuOption(string label, Action select, Func<bool> canSelect) : ObservableObject
+public class ComposerMenuOption(string label, Action select, Func<bool> canSelect) : ObservableObject
 {
     private bool _isSelected;
 
@@ -731,4 +727,29 @@ public sealed class ComposerMenuOption(string label, Action select, Func<bool> c
     {
         if (canSelect()) select();
     }, canSelect);
+}
+
+/// <summary>
+///     <para>审批模式菜单项：在通用菜单项上补模式相关的两行文案与行首图标选择依据。</para>
+///     <para>
+///         An approval-mode menu entry: the generic entry plus the mode's two-line caption and the signal the
+///         view uses to pick its leading icon.
+///     </para>
+/// </summary>
+public sealed class PermissionModeOption(string label, SessionApprovalMode mode, Action select, Func<bool> canSelect)
+    : ComposerMenuOption(label, select, canSelect)
+{
+    public SessionApprovalMode Mode { get; } = mode;
+
+    /// <summary>
+    ///     <para>名称下方的灰色单行说明。</para>
+    ///     <para>The muted one-line caption below the label.</para>
+    /// </summary>
+    public string Caption => Mode.Summary();
+
+    /// <summary>
+    ///     <para>是否属于由用户批准的模式；视图据此在两种行首图标间选择。</para>
+    ///     <para>Whether the user is the approver; the view uses it to choose between the two leading icons.</para>
+    /// </summary>
+    public bool IsHumanApproval => Mode == SessionApprovalMode.HumanApproval;
 }

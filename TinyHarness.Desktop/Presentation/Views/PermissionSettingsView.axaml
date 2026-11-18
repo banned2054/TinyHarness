@@ -23,7 +23,7 @@
                             </ComboBox>
                         </Grid>
                         <TextBlock Classes="settings-card-description"
-                                   Text="沙箱基础操作自动执行，额外权限由人工或 AI 审核。" />
+                                   Text="沙箱基础操作自动执行，额外权限按所选模式请求批准。" />
                     </StackPanel>
                 </Border>
                 <Border Classes="settings-row" Classes.last="{Binding UseCurrentModel}">
@@ -53,7 +53,7 @@
         </Border>
         <TextBlock Classes="settings-card-description" Margin="0,10,0,0"
                    Text="AI 审核可能产生额外用量；拒绝或失败时不执行。"
-                   ToolTip.Tip="AI 使用独立审核请求，仅明确要求人工介入时转交人工审批。" />
+                   ToolTip.Tip="AI 使用独立审核请求，仅明确要求人工介入时转交你批准。" />
 
         <TextBlock Classes="settings-group-title" Text="常设授权" Margin="0,24,0,10"
                    IsVisible="{Binding StandingTrustVisible}" />

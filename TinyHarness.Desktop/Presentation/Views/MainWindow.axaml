@@ -124,10 +124,10 @@
                                         IsEnabled="{Binding !IsRunning}"
                                         Command="{Binding AcknowledgeInspectionCommand}" />
                             </StackPanel>
-                            <!-- 目标行紧贴输入卡上缘：空白页为项目/目录选择入口，正式页为只读状态；
-                                 行常驻等高（MinHeight），转正不使输入卡跳位。 -->
-                            <Grid Grid.Row="3" MaxWidth="816" Margin="28,0,28,10" MinHeight="36">
-                                <Panel IsVisible="{Binding CanChooseWorkspace}" HorizontalAlignment="Left">
+                            <!-- 只在可选择项目的空白对话中显示项目选择行。 -->
+                            <Grid Grid.Row="3" MaxWidth="816" Margin="28,0,28,10" MinHeight="36"
+                                  IsVisible="{Binding CanChooseWorkspace}">
+                                <Panel HorizontalAlignment="Left">
                                     <Border x:Name="WorkspacePickerShell"
                                             Classes="workspace-picker-shell dropdown-trigger-surface">
                                         <Grid ColumnDefinitions="Auto,Auto">
@@ -255,11 +255,6 @@
                                         </Border>
                                     </Popup>
                                 </Panel>
-                                <TextBlock IsVisible="{Binding !CanChooseWorkspace}"
-                                           HorizontalAlignment="Left" VerticalAlignment="Center"
-                                           Text="{Binding WorkspaceTargetLabel}"
-                                           Classes="caption" TextTrimming="CharacterEllipsis" MaxWidth="360"
-                                           ToolTip.Tip="{Binding WorkspaceRoot}" />
                             </Grid>
                             <conversation:ComposerView Grid.Row="4" MaxWidth="816" Margin="28,0,28,16" />
                         </Grid>

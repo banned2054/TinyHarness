@@ -43,6 +43,34 @@
         <Setter Property="Foreground" Value="{DynamicResource PopupMutedForegroundBrush}" />
         <Setter Property="Margin" Value="10,8,10,2" />
     </Style>
+    <!-- 菜单行首图标盒：Path 按 16 viewBox 原始坐标绘制（尺寸=viewBox、Stretch=None），
+         再整体缩到 14px 视觉尺寸。与 Conversation.axaml 的 row-leading 同一约定：
+         盒、Path 都是 16，矩阵 ×0.875 + 1px 让墨迹正好落在中间 14px。
+         不能直接把 Path 设成 14px：几何仍按 16 坐标落进 14 盒，未占满 viewBox 的
+         图形会整体下沉，贴近右/下边缘的还会被裁掉。 -->
+    <Style Selector="Panel.popup-icon">
+        <Setter Property="Width" Value="16" />
+        <Setter Property="Height" Value="16" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+    <Style Selector="Panel.popup-icon Path">
+        <Setter Property="Width" Value="16" />
+        <Setter Property="Height" Value="16" />
+        <Setter Property="Stretch" Value="None" />
+        <Setter Property="HorizontalAlignment" Value="Center" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+        <Setter Property="RenderTransformOrigin" Value="0,0" />
+        <Setter Property="RenderTransform">
+            <MatrixTransform Matrix="0.875,0,0,0.875,1,1" />
+        </Setter>
+    </Style>
+    <!-- 两行菜单行的说明文字（审批模式）：弱化色单行，超宽截断，避免不同模式的菜单行高度参差。 -->
+    <Style Selector="TextBlock.permission-mode-caption">
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="Foreground" Value="{DynamicResource PopupMutedForegroundBrush}" />
+        <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+        <Setter Property="Margin" Value="0,2,0,0" />
+    </Style>
     <!-- 可选择行（popup-item）与「名称 + 当前值 + chevron」导航行（popup-navigation）
          共用同一套行几何与模板：高 34、胶囊圆角、横向 Stretch、PART_Surface 自绘高亮，
          与 Sidebar 行同构（Fluent 12 下按钮默认不再横向撑满，需显式 Stretch）。

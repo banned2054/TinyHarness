@@ -320,10 +320,16 @@
                                                     AutomationProperties.Name="打开项目所在目录"
                                                     Click="OnOpenProjectDirectoryMenuClick">
                                                 <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8">
-                                                    <Path Width="14" Height="14" VerticalAlignment="Center"
-                                                          Data="{StaticResource Icon.FolderOpenFront}"
-                                                          Stroke="{DynamicResource PopupMutedForegroundBrush}"
-                                                          StrokeThickness="1" />
+                                                    <!-- 三段共用一个 16 viewBox：前板单独使用会整体落在下半格。 -->
+                                                    <Panel Classes="popup-icon">
+                                                        <Path Data="{StaticResource Icon.FolderOpenPlate}"
+                                                              Fill="{DynamicResource PopupMutedForegroundBrush}"
+                                                              Opacity="0.16" />
+                                                        <Path Data="{StaticResource Icon.FolderOpenFront}"
+                                                              Fill="{DynamicResource PopupMutedForegroundBrush}" />
+                                                        <Path Data="{StaticResource Icon.FolderOpenBack}"
+                                                              Fill="{DynamicResource PopupMutedForegroundBrush}" />
+                                                    </Panel>
                                                     <TextBlock Grid.Column="1" Text="打开项目所在目录"
                                                                VerticalAlignment="Center" />
                                                 </Grid>
@@ -333,10 +339,11 @@
                                                     Click="OnToggleProjectPinMenuClick"
                                                     IsVisible="{Binding !IsDeleting}">
                                                 <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8">
-                                                    <Path Width="14" Height="14" VerticalAlignment="Center"
-                                                          Data="{StaticResource Icon.PinOutlineRegular}"
-                                                          Stroke="{DynamicResource PopupMutedForegroundBrush}"
-                                                          StrokeThickness="1" />
+                                                    <Panel Classes="popup-icon">
+                                                        <Path Data="{StaticResource Icon.PinOutlineRegular}"
+                                                              Stroke="{DynamicResource PopupMutedForegroundBrush}"
+                                                              StrokeThickness="1" />
+                                                    </Panel>
                                                     <TextBlock Grid.Column="1" Text="{Binding PinActionName}"
                                                                VerticalAlignment="Center" />
                                                 </Grid>
@@ -346,12 +353,10 @@
                                                     Click="OnRenameProjectMenuClick"
                                                     IsVisible="{Binding !IsDeleting}">
                                                 <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8">
-                                                    <Panel Width="14" Height="14">
-                                                        <Path Width="14" Height="14"
-                                                              Data="{StaticResource Icon.EditBodyFill}"
+                                                    <Panel Classes="popup-icon">
+                                                        <Path Data="{StaticResource Icon.EditBodyFill}"
                                                               Fill="{DynamicResource PopupMutedForegroundBrush}" />
-                                                        <Path Width="14" Height="14"
-                                                              Data="{StaticResource Icon.EditPenStroke}"
+                                                        <Path Data="{StaticResource Icon.EditPenStroke}"
                                                               Stroke="{DynamicResource PopupMutedForegroundBrush}"
                                                               StrokeThickness="1" />
                                                     </Panel>
@@ -364,10 +369,11 @@
                                                     AutomationProperties.Name="{Binding DeleteActionText}"
                                                     Click="OnProjectDeleteMenuClick">
                                                 <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8">
-                                                    <Path Width="14" Height="14" VerticalAlignment="Center"
-                                                          Data="{StaticResource Icon.TrashOutlineRegular}"
-                                                          Stroke="{DynamicResource DangerTextBrush}"
-                                                          StrokeThickness="1" />
+                                                    <Panel Classes="popup-icon">
+                                                        <Path Data="{StaticResource Icon.TrashOutlineRegular}"
+                                                              Stroke="{DynamicResource DangerTextBrush}"
+                                                              StrokeThickness="1" />
+                                                    </Panel>
                                                     <TextBlock Grid.Column="1" Text="{Binding DeleteActionText}"
                                                                VerticalAlignment="Center" />
                                                 </Grid>
@@ -496,9 +502,11 @@
                                             Margin="0" AutomationProperties.Name="删除会话"
                                             Click="OnSessionDeleteMenuClick">
                                         <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8">
-                                            <Path Width="14" Height="14" VerticalAlignment="Center"
-                                                  Data="{StaticResource Icon.TrashOutlineRegular}"
-                                                  Stroke="{DynamicResource DangerTextBrush}" StrokeThickness="1" />
+                                            <Panel Classes="popup-icon">
+                                                <Path Data="{StaticResource Icon.TrashOutlineRegular}"
+                                                      Stroke="{DynamicResource DangerTextBrush}"
+                                                      StrokeThickness="1" />
+                                            </Panel>
                                             <TextBlock Grid.Column="1" Text="删除会话" VerticalAlignment="Center" />
                                         </Grid>
                                     </Button>

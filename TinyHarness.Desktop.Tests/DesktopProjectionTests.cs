@@ -607,9 +607,9 @@ public sealed class DesktopProjectionTests
         Assert.That(page.ModelGroups[0].Options[0].Label, Is.EqualTo("model"));
         Assert.That(page.IsModelMenuOpen, Is.False);
         page.IsPermissionMenuOpen = true;
-        page.PermissionOptions.Single(option => option.Label == "AI 审核").SelectCommand.Execute(null);
+        page.PermissionOptions.Single(option => option.Label == "帮我批准").SelectCommand.Execute(null);
         Assert.That(page.PermissionMode, Is.EqualTo(SessionApprovalMode.AIAutoReview));
-        Assert.That(page.PermissionPickerLabel, Is.EqualTo("AI 审核"));
+        Assert.That(page.PermissionPickerLabel, Is.EqualTo("帮我批准"));
         foreach (var option in page.EffortOptions)
         {
             Assert.That(option.SelectCommand.CanExecute(null), Is.False);
@@ -620,6 +620,32 @@ public sealed class DesktopProjectionTests
         page.IsPermissionMenuOpen = true;
         Assert.That(page.PermissionOptions, Has.Count.EqualTo(2));
         Assert.That(page.PermissionOptions.All(option => option.SelectCommand.CanExecute(null)), Is.True);
+    }
+
+    [Test]
+    public async Task PermissionMenuExposesTwoLineCaptionForEachApprovalMode()
+    {
+        await using var manager = new DesktopSessionManager();
+        var             page    = new SessionViewModel(manager, new DesktopSessionFactory(), Path.GetTempPath());
+        page.IsPermissionMenuOpen = true;
+
+        var modes = page.PermissionOptions.OfType<PermissionModeOption>().ToArray();
+        Assert.That(modes.Select(option => option.Mode),
+                    Is.EquivalentTo(new[] { SessionApprovalMode.HumanApproval, SessionApprovalMode.AIAutoReview }));
+        foreach (var option in modes)
+        {
+            Assert.That(option.Caption, Is.EqualTo(option.Mode.Summary()),
+                        "菜单第二行与模式说明必须同源，避免文案改一处漏一处。");
+            Assert.That(option.Caption, Is.Not.Empty);
+            Assert.That(option.IsHumanApproval, Is.EqualTo(option.Mode == SessionApprovalMode.HumanApproval));
+            Assert.That(option.ToolTip, Is.EqualTo(option.Mode.Description()),
+                        "行内说明只讲何时询问，完整范围仍挂在悬停提示上。");
+        }
+
+        Assert.That(modes.Single(option => option.Mode == SessionApprovalMode.HumanApproval).Label,
+                    Is.EqualTo("请求批准"));
+        Assert.That(modes.Single(option => option.Mode == SessionApprovalMode.AIAutoReview).Label,
+                    Is.EqualTo("帮我批准"));
     }
 
     [Test]

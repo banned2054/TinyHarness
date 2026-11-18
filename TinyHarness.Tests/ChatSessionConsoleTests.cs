@@ -150,9 +150,9 @@ public class ChatSessionConsoleTests
 
         Assert.That(host.Session.PermissionSelectionV2?.ApprovalMode,
                     Is.EqualTo(SessionApprovalMode.HumanApproval));
-        Assert.That(output.ToString(), Does.Contain("Approval mode saved: AI review")
-                                           .And.Contain("Approval mode: AI review")
-                                           .And.Contain("Approval mode saved: human approval"));
+        Assert.That(output.ToString(), Does.Contain("Approval mode saved: approve for me")
+                                           .And.Contain("Approval mode: approve for me")
+                                           .And.Contain("Approval mode saved: ask for approval"));
     }
 
     [Test]
@@ -205,7 +205,7 @@ public class ChatSessionConsoleTests
         Assert.That(host.Session.PermissionSelectionV2!.ApprovalMode, Is.EqualTo(SessionApprovalMode.HumanApproval));
         Assert.That(host.Session.PermissionMigration!.ApprovalMode, Is.EqualTo(SessionApprovalMode.HumanApproval));
         Assert.That(host.Session.Turns.Single().UserInput, Is.EqualTo("continue"));
-        Assert.That(output.ToString(), Does.Contain("Session permission migration saved: human approval")
+        Assert.That(output.ToString(), Does.Contain("Session permission migration saved: ask for approval")
                                            .And.Not.Contain("[y/N]"));
     }
 
