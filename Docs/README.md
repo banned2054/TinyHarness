@@ -7,7 +7,7 @@
 <br>
 
 <div>
-    <a href="https://github.com/banned2054/TinyHarness/releases/tag/v0.0.1"><img alt="版本 0.0.1" src="https://img.shields.io/badge/version-0.0.1-blue"></a>
+    <a href="https://github.com/banned2054/TinyHarness/releases/tag/v0.1.0-alpha.1"><img alt="版本 0.1.0-alpha.1" src="https://img.shields.io/badge/version-0.1.0--alpha.1-blue"></a>
     <a href="https://dotnet.microsoft.com/"><img alt=".NET 11" src="https://img.shields.io/badge/.NET-11.0-512BD4"></a>
     <a href="#platform-status"><img alt="NativeAOT win-x64" src="https://img.shields.io/badge/NativeAOT-win--x64-009688"></a>
 </div>
@@ -24,7 +24,7 @@
 
 ## 🚧 项目状态
 
-**v0.0.1** 是首个公开版本。命令、配置和会话格式可能变化，生产可用性和全面安全性尚未验证。
+**v0.1.0-alpha.1** 是预发布版本。命令、配置和会话格式可能变化，生产可用性和全面安全性尚未验证。
 
 ## ✨ 特性
 
@@ -46,7 +46,7 @@
 
 ### 下载 Windows x64 版本
 
-从 [Release v0.0.1](https://github.com/banned2054/TinyHarness/releases/tag/v0.0.1) 下载 CLI ZIP 和 `SHA256SUMS.txt`。校验 SHA-256 后，将整包解压到工作区和沙箱写根之外。包内含沙箱组件，运行无需 .NET runtime。
+从 [Release v0.1.0-alpha.1](https://github.com/banned2054/TinyHarness/releases/tag/v0.1.0-alpha.1) 下载 CLI 与 Desktop ZIP 和 `SHA256SUMS.txt`。校验 SHA-256 后，将各包完整解压到工作区和沙箱写根之外，且两个包解压到不同目录。包内含沙箱组件，运行无需 .NET runtime。
 
 将解压目录加入 `PATH`，在项目目录运行 `tinyharness init`。
 

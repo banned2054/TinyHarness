@@ -16,15 +16,15 @@ MIT 正文共享一份。BSD-2-Clause、BSD-3-Clause 分开；ISC、Unicode、Zl
 
 按实际分发内容确定范围：直接或传递依赖只要带入受许可约束的代码，就保留相应版权与条款；上游声明仅选取相关部分。未使用的上游组件不因出现在上游仓库就纳入。对难以准确区分的运行库内部共享代码、内联代码及原生库归属，保守保留相关声明。
 
-- 主程序：`net10.0/win-x64` 的 14 个生产 NuGet 依赖输入，以及 .NET NativeAOT runtime 10.0.12；组件记录保留版本、包版权和源提交。这是保守的库级归属范围，不表示每个包均有独立代码进入最终 exe。
+- 主程序：`net11.0/win-x64` 的生产 NuGet 依赖输入（Microsoft.Extensions.AI.OpenAI 11.0.0 与 OpenAI 2.14.0 链路、Microsoft.Data.Sqlite 11.0.0／SQLitePCLRaw 3.0.5／SQLite 3.53.4），以及 .NET NativeAOT runtime 11.0.x；组件记录保留版本、包版权和源提交。这是保守的库级归属范围，不表示每个包均有独立代码进入最终 exe。
 - 桌面端：根据 Desktop 的 `project.assets.json` 与安装包元数据记录 UI、Markdown、渲染及语法高亮依赖，排除构建工具与其他平台的原生资产包；Inter 字体单独保留 OFL-1.1，DeepSeek Harness 图标单独保留 MIT 来源声明。作者自有的 DshDesktop 代码统一使用项目 Apache-2.0，不再作为第三方组件附带独立许可文件。
 - 桌面端上游与原生包随附的复合声明暂按来源整体保留，不表示每项均链接进最终二进制。TextMateSharp.Grammars 保留包声明、已核对的资源归属和 Swift 补充许可；完整语法／主题资源来源和最终 Desktop NativeAOT 产物仍需在二进制分发前专项复核，本次合并不代表完整分发审计。
-- 沙箱：Codex fork 提交 `1b647eac0adc5f31140340ffcc5d49b19a235fad` 的 Windows x64 normal 依赖，排除仅用于 build／proc-macro／test 的路径，当前 420 个外部 crate；这是依赖范围，不是逐符号链接清单。
-- Rust 运行时：保留 Rust 1.95.0 Windows x64 标准库、Unicode、相关运行时依赖／Windows 绑定及 compiler-builtins 的许可材料。
+- 沙箱：Codex fork 提交 `1266c81f6efa769103075018a24a5cd3d306f265` 的 Windows x64 normal 依赖，排除仅用于 build／proc-macro／test 的路径，当前 435 个外部 crate；这是依赖范围，不是逐符号链接清单。
+- Rust 运行时：保留 Rust 1.99.1 Windows x64 标准库、Unicode、相关运行时依赖／Windows 绑定及 compiler-builtins 的许可材料。
 
-本次核对以实际 NativeAOT publish 的映射、链接响应文件和 PE 导入为依据，并与 runtime 提交 `95017c711e6afc1085133d440e42b4bd78155701` 的来源核对。链接输入包含 GC、压缩（zlib／Brotli）和全局化原生库；这些库及 BCL 内部来源无法可靠逐段拆分的部分保守保留。映射中没有某个独立符号不能单独证明代码未被内联，因此没有据此机械删除 NuGet 归属。
+10.0.12 时期的核对以实际 NativeAOT publish 的映射、链接响应文件和 PE 导入为依据，并与 runtime 提交 `95017c711e6afc1085133d440e42b4bd78155701` 的来源核对。链接输入包含 GC、压缩（zlib／Brotli）和全局化原生库；这些库及 BCL 内部来源无法可靠逐段拆分的部分保守保留。映射中没有某个独立符号不能单独证明代码未被内联，因此没有据此机械删除 NuGet 归属。升级到 .NET 11 后尚未重复映射级核对：11.0.0 运行时声明中新增的 ANTLR 4、Intel Decimal Floating-Point 与 zstd 按保守原则纳入（清单 section 3），Project Wycheproof 按上游验证数据边界排除；发布时可用 `-p:IlcGenerateMapFile=true` 重新核对（见「更新与分发」）。
 
-从 .NET 上游随附声明中排除以下八项，其余内部来源按上述边界保留。声明中的 ASP.NET、Mono、MessagePack 等名称也可能标识共享源码的来源，不表示分发了同名独立产品。
+从 .NET 上游随附声明中排除以下九项，其余内部来源按上述边界保留。声明中的 ASP.NET、Mono、MessagePack 等名称也可能标识共享源码的来源，不表示分发了同名独立产品。
 
 | 排除项 | 当前分发不适用的依据 |
 | --- | --- |
@@ -36,6 +36,7 @@ MIT 正文共享一份。BSD-2-Clause、BSD-3-Clause 分开；ISC、Unicode、Zl
 | remote stack unwind / CompactUnwindInfo.cpp | Apple compact-unwind／LLDB 来源；当前使用 Windows unwind，未链接 Unix libunwind。其他无法细分的运行库来源仍保留。 |
 | SharpFuzz and related samples | 上游独立 fuzzing 工具和插桩样例，不属于 publish 输入。 |
 | NIST ACVP Data | 上游验证／测试数据，不属于主程序、运行库或发布文件输入。 |
+| Project Wycheproof | 上游密码学测试向量（验证数据），与 NIST ACVP Data 同类；11.0.0 运行时声明新增项。 |
 
 Codex NOTICE 保留 OpenAI 的版权归属；所选沙箱生产源码与依赖范围不含 Ratatui／TUI，故不继承该部分声明。这里只构建沙箱组件，未把整个 Codex 产品的依赖作为本项目的分发清单。Rust 部分同样以 Windows 生产库及标准库范围保守保留，不引入全工作区、其他目标平台或仅用于测试／构建的工具清单。
 

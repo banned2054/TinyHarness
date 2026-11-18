@@ -7,7 +7,7 @@
 <br>
 
 <div>
-    <a href="https://github.com/banned2054/TinyHarness/releases/tag/v0.0.1"><img alt="Version 0.0.1" src="https://img.shields.io/badge/version-0.0.1-blue"></a>
+    <a href="https://github.com/banned2054/TinyHarness/releases/tag/v0.1.0-alpha.1"><img alt="Version 0.1.0-alpha.1" src="https://img.shields.io/badge/version-0.1.0--alpha.1-blue"></a>
     <a href="https://dotnet.microsoft.com/"><img alt=".NET 11" src="https://img.shields.io/badge/.NET-11.0-512BD4"></a>
     <a href="#platform-status"><img alt="NativeAOT win-x64" src="https://img.shields.io/badge/NativeAOT-win--x64-009688"></a>
 </div>
@@ -26,7 +26,7 @@ English | [简体中文](Docs/README.md)
 
 ## 🚧 Project Status
 
-**v0.0.1** is the first public release. Commands, settings, and session formats may change. Production readiness and comprehensive security remain unverified.
+**v0.1.0-alpha.1** is a prerelease. Commands, settings, and session formats may change. Production readiness and comprehensive security remain unverified.
 
 ## ✨ Features
 
@@ -48,7 +48,7 @@ English | [简体中文](Docs/README.md)
 
 ### Download Windows x64
 
-Download the CLI ZIP and `SHA256SUMS.txt` from [Release v0.0.1](https://github.com/banned2054/TinyHarness/releases/tag/v0.0.1). Verify the SHA-256 checksum and extract the whole ZIP outside your workspaces and sandbox write roots. The package includes sandbox components and runs without the .NET runtime.
+Download the CLI and Desktop ZIPs and `SHA256SUMS.txt` from [Release v0.1.0-alpha.1](https://github.com/banned2054/TinyHarness/releases/tag/v0.1.0-alpha.1). Verify the SHA-256 checksum and extract each ZIP whole into separate directories outside your workspaces and sandbox write roots. The packages include sandbox components and run without the .NET runtime.
 
 Add the extracted directory to `PATH`, then run `tinyharness init` in your project.
 

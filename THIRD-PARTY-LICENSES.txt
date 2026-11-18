@@ -20,64 +20,28 @@ Source file labels identify original inputs; no separate licenses/ directory is 
 1. .NET application components
 ------------------------------
 
-Microsoft.Extensions.AI.Abstractions 10.11.0
+Microsoft.Data.Sqlite 11.0.0
 License: MIT
 Copyright: © Microsoft Corporation. All rights reserved.
-Source: https://github.com/dotnet/extensions/tree/25f07afa51034e37b334210642d7dc5f191c142d
+Source: https://github.com/dotnet/dotnet/tree/297acf930fb0f5c07fd4e51d78e521b4ad2e5d1f
 License text: [MIT-001]
 
-Microsoft.Extensions.AI.OpenAI 10.11.0
+Microsoft.Data.Sqlite.Core 11.0.0
 License: MIT
 Copyright: © Microsoft Corporation. All rights reserved.
-Source: https://github.com/dotnet/extensions/tree/25f07afa51034e37b334210642d7dc5f191c142d
+Source: https://github.com/dotnet/dotnet/tree/297acf930fb0f5c07fd4e51d78e521b4ad2e5d1f
 License text: [MIT-001]
 
-Microsoft.Extensions.Configuration.Abstractions 10.0.9
+Microsoft.Extensions.AI.Abstractions 11.0.0
 License: MIT
 Copyright: © Microsoft Corporation. All rights reserved.
-Source: https://github.com/dotnet/dotnet/tree/901ca941248413c79832d2fdbd709da0c4386353
+Source: https://github.com/dotnet/extensions/tree/c60d72e7973a90cd4e4300d9153e97b93315e4b7
 License text: [MIT-001]
 
-Microsoft.Extensions.DependencyInjection.Abstractions 10.0.9
+Microsoft.Extensions.AI.OpenAI 11.0.0
 License: MIT
 Copyright: © Microsoft Corporation. All rights reserved.
-Source: https://github.com/dotnet/dotnet/tree/901ca941248413c79832d2fdbd709da0c4386353
-License text: [MIT-001]
-
-Microsoft.Extensions.Diagnostics.Abstractions 10.0.9
-License: MIT
-Copyright: © Microsoft Corporation. All rights reserved.
-Source: https://github.com/dotnet/dotnet/tree/901ca941248413c79832d2fdbd709da0c4386353
-License text: [MIT-001]
-
-Microsoft.Extensions.FileProviders.Abstractions 10.0.9
-License: MIT
-Copyright: © Microsoft Corporation. All rights reserved.
-Source: https://github.com/dotnet/dotnet/tree/901ca941248413c79832d2fdbd709da0c4386353
-License text: [MIT-001]
-
-Microsoft.Extensions.Hosting.Abstractions 10.0.9
-License: MIT
-Copyright: © Microsoft Corporation. All rights reserved.
-Source: https://github.com/dotnet/dotnet/tree/901ca941248413c79832d2fdbd709da0c4386353
-License text: [MIT-001]
-
-Microsoft.Extensions.Logging.Abstractions 10.0.9
-License: MIT
-Copyright: © Microsoft Corporation. All rights reserved.
-Source: https://github.com/dotnet/dotnet/tree/901ca941248413c79832d2fdbd709da0c4386353
-License text: [MIT-001]
-
-Microsoft.Extensions.Options 10.0.9
-License: MIT
-Copyright: © Microsoft Corporation. All rights reserved.
-Source: https://github.com/dotnet/dotnet/tree/901ca941248413c79832d2fdbd709da0c4386353
-License text: [MIT-001]
-
-Microsoft.Extensions.Primitives 10.0.9
-License: MIT
-Copyright: © Microsoft Corporation. All rights reserved.
-Source: https://github.com/dotnet/dotnet/tree/901ca941248413c79832d2fdbd709da0c4386353
+Source: https://github.com/dotnet/extensions/tree/c60d72e7973a90cd4e4300d9153e97b93315e4b7
 License text: [MIT-001]
 
 OpenAI 2.14.0
@@ -85,6 +49,36 @@ License: MIT
 Copyright: Copyright (c) 2026 OpenAI (https://openai.com)
 Source: https://github.com/openai/openai-dotnet/tree/2e77b08828145f658ec04e49aec87abb1543c553
 License text: [MIT-001]
+
+SQLite 3.53.4
+License: Public Domain
+Copyright: The SQLite authors dedicate the code to the public domain (https://sqlite.org/copyright.html); package metadata lists Copyright 2014-2026 SourceGear, LLC.
+Source: https://sqlite.org/
+License text: [SQLITE-PD-001]
+
+SQLitePCLRaw.bundle_e_sqlite3 3.0.5
+License: Apache-2.0
+Copyright: Copyright 2014-2026 SourceGear, LLC
+Source: https://github.com/ericsink/SQLitePCL.raw
+License text: LICENSE (root Apache-2.0 text)
+
+SQLitePCLRaw.config.e_sqlite3 3.0.5
+License: Apache-2.0
+Copyright: Copyright 2014-2026 SourceGear, LLC
+Source: https://github.com/ericsink/SQLitePCL.raw/tree/96043b8cff323f21919df86a431c136655d81b4a
+License text: LICENSE (root Apache-2.0 text)
+
+SQLitePCLRaw.core 3.0.5
+License: Apache-2.0
+Copyright: Copyright 2014-2025 SourceGear, LLC
+Source: https://github.com/ericsink/SQLitePCL.raw/tree/ed046114d5a30534e13294d94d78eb73de896ad4
+License text: LICENSE (root Apache-2.0 text)
+
+SQLitePCLRaw.provider.e_sqlite3 3.0.5
+License: Apache-2.0
+Copyright: Copyright 2014-2025 SourceGear, LLC
+Source: https://github.com/ericsink/SQLitePCL.raw/tree/ed046114d5a30534e13294d94d78eb73de896ad4
+License text: LICENSE (root Apache-2.0 text)
 
 System.ClientModel 1.15.0
 License: MIT
@@ -98,13 +92,13 @@ Copyright: © Microsoft Corporation. All rights reserved.
 Source: https://github.com/dotnet/dotnet/tree/901ca941248413c79832d2fdbd709da0c4386353
 License text: [MIT-001]
 
-System.Security.Cryptography.ProtectedData 10.0.14
+System.Security.Cryptography.ProtectedData 11.0.0
 License: MIT
 Copyright: © Microsoft Corporation. All rights reserved.
-Source: https://github.com/dotnet/dotnet/tree/0427b9abbead3fa64c6655eb4290c537397131fa
+Source: https://github.com/dotnet/dotnet/tree/297acf930fb0f5c07fd4e51d78e521b4ad2e5d1f
 License text: [MIT-001]
 
-Embedded .NET NativeAOT runtime 10.0.12
+Embedded .NET NativeAOT runtime 11.0.x
 Source: https://github.com/dotnet/dotnet
 License text: [MIT-001]
 Additional bundled notices are listed in section 3.
@@ -336,7 +330,7 @@ Full embedded grammar/theme provenance remains subject to the separate audit abo
 2. Codex Windows sandbox and Cargo runtime components
 ----------------------------------------------------
 
-Source: https://github.com/banned2054/codex/tree/1b647eac0adc5f31140340ffcc5d49b19a235fad
+Source: https://github.com/banned2054/codex/tree/1266c81f6efa769103075018a24a5cd3d306f265
 Upstream: https://github.com/openai/codex
 Copyright 2025 OpenAI
 Codex license: [APACHE-2-0-001]
@@ -463,6 +457,12 @@ MIT alternative selected for the crate; separate bundled-code notices below are 
   LICENSE-MIT [MIT-001]
   LICENSE-THIRD-PARTY [MIT-001]
 
+aws-credential-types 1.2.11
+License expression: Apache-2.0
+Source: https://crates.io/crates/aws-credential-types/1.2.11
+Supplemental license source: https://github.com/smithy-lang/smithy-rs/tree/f031610a8cbb4ac2dac3229bfaeaa88182787ab4
+  LICENSE [APACHE-2-0-001]
+
 aws-lc-rs 1.18.1
 License expression: ISC AND (Apache-2.0 OR ISC)
 Source: https://crates.io/crates/aws-lc-rs/1.18.1
@@ -475,11 +475,52 @@ Source: https://crates.io/crates/aws-lc-sys/0.45.0
   aws-lc/third_party/fiat/LICENSE [MIT-001]
   LICENSE [SPECIAL-004]
 
+aws-sigv4 1.3.7
+License expression: Apache-2.0
+Source: https://crates.io/crates/aws-sigv4/1.3.7
+Supplemental license source: https://github.com/smithy-lang/smithy-rs/tree/f031610a8cbb4ac2dac3229bfaeaa88182787ab4
+  LICENSE [APACHE-2-0-001]
+
+aws-smithy-async 1.2.14
+License expression: Apache-2.0
+Source: https://crates.io/crates/aws-smithy-async/1.2.14
+Supplemental license source: https://github.com/smithy-lang/smithy-rs
+Package has no source revision record. This supplemental upstream snapshot is not verified as the historical package revision.
+  LICENSE [APACHE-2-0-001]
+
+aws-smithy-http 0.62.6
+License expression: Apache-2.0
+Source: https://crates.io/crates/aws-smithy-http/0.62.6
+Supplemental license source: https://github.com/smithy-lang/smithy-rs
+Package has no source revision record. This supplemental upstream snapshot is not verified as the historical package revision.
+  LICENSE [APACHE-2-0-001]
+
+aws-smithy-runtime-api 1.12.0
+License expression: Apache-2.0
+Source: https://crates.io/crates/aws-smithy-runtime-api/1.12.0
+Supplemental license source: https://github.com/smithy-lang/smithy-rs
+Package has no source revision record. This supplemental upstream snapshot is not verified as the historical package revision.
+  LICENSE [APACHE-2-0-001]
+
+aws-smithy-types 1.4.7
+License expression: Apache-2.0
+Source: https://crates.io/crates/aws-smithy-types/1.4.7
+Supplemental license source: https://github.com/smithy-lang/smithy-rs
+Package has no source revision record. This supplemental upstream snapshot is not verified as the historical package revision.
+  LICENSE [APACHE-2-0-001]
+
 base64 0.22.1
 License expression: MIT OR Apache-2.0
 Source: https://crates.io/crates/base64/0.22.1
 MIT alternative selected for the crate; separate bundled-code notices below are retained.
   LICENSE-MIT [MIT-001]
+
+base64-simd 0.8.0
+License expression: MIT
+Source: https://crates.io/crates/base64-simd/0.8.0
+Supplemental license source: https://github.com/Nugine/simd/tree/d74c030d9dc4f3cae02146d1f497ff62726ef09a
+No separate license file supplied by the package. Standard terms follow the declared package license.
+  Standard-MIT-Terms.txt [MIT-001]
 
 bit-set 0.8.0
 License expression: Apache-2.0 OR MIT
@@ -555,6 +596,13 @@ bytes 1.12.1
 License expression: MIT
 Source: https://crates.io/crates/bytes/1.12.1
   LICENSE [MIT-001]
+
+bytes-utils 0.1.4
+License expression: Apache-2.0/MIT
+Source: https://crates.io/crates/bytes-utils/0.1.4
+Supplemental license source: https://github.com/vorner/bytes-utils/tree/119e5f90ecb3c7786ca87b325ee10ee908e43247
+Apache-2.0 alternative selected for the crate.
+  LICENSE-APACHE [APACHE-2-0-001]
 
 cfg-if 1.0.4
 License expression: MIT OR Apache-2.0
@@ -737,6 +785,20 @@ License expression: Apache-2.0 OR MIT
 Source: https://crates.io/crates/ctor/1.0.6
 MIT alternative selected for the crate; separate bundled-code notices below are retained.
   LICENSE-MIT [MIT-001]
+
+curl 0.4.50
+License expression: MIT
+Source: https://crates.io/crates/curl/0.4.50
+Supplemental license source: https://github.com/alexcrichton/curl-rust/tree/0cfd9e3b8b1aa0b8fc2c8d552597555a30a21416
+  LICENSE [MIT-001]
+
+curl-sys 0.4.90+curl-8.21.0
+License expression: MIT
+Source: https://crates.io/crates/curl-sys/0.4.90+curl-8.21.0
+Supplemental license source: https://github.com/alexcrichton/curl-rust/tree/bae5dc561e0711b4982eeddda8b5dbac45d531f1
+  LICENSE [MIT-001]
+  curl/COPYING [SPECIAL-072]
+The bundled libcurl 8.21.0 C sources are compiled into the published sandbox binaries.
 
 dashmap 6.1.0
 License expression: MIT
@@ -1186,6 +1248,13 @@ Source: https://crates.io/crates/hex/0.4.3
 MIT alternative selected for the crate; separate bundled-code notices below are retained.
   LICENSE-MIT [MIT-001]
 
+hmac 0.12.1
+License expression: MIT OR Apache-2.0
+Source: https://crates.io/crates/hmac/0.12.1
+Supplemental license source: https://github.com/RustCrypto/MACs/tree/46797e3b44973a30edb9d7f3a3ebb41810061d90
+MIT alternative selected for the crate; separate bundled-code notices below are retained.
+  LICENSE-MIT [MIT-001]
+
 hickory-proto 0.25.2
 License expression: MIT OR Apache-2.0
 Source: https://crates.io/crates/hickory-proto/0.25.2
@@ -1204,11 +1273,24 @@ Source: https://crates.io/crates/home/0.5.12
 MIT alternative selected for the crate; separate bundled-code notices below are retained.
   LICENSE-MIT [MIT-001]
 
+http 0.2.12
+License expression: MIT OR Apache-2.0
+Source: https://crates.io/crates/http/0.2.12
+Supplemental license source: https://github.com/hyperium/http/tree/351b63a991fe508e70a00af13e66099b3055c73f
+MIT alternative selected for the crate; separate bundled-code notices below are retained.
+  LICENSE-MIT [MIT-001]
+
 http 1.4.0
 License expression: MIT OR Apache-2.0
 Source: https://crates.io/crates/http/1.4.0
 MIT alternative selected for the crate; separate bundled-code notices below are retained.
   LICENSE-MIT [MIT-001]
+
+http-body 0.4.6
+License expression: MIT
+Source: https://crates.io/crates/http-body/0.4.6
+Supplemental license source: https://github.com/hyperium/http-body/tree/930f1a256dc823ccfd85eebbb7307018a84e112d
+  LICENSE [MIT-001]
 
 http-body 1.0.1
 License expression: MIT
@@ -1411,6 +1493,15 @@ License expression: MIT OR Apache-2.0
 Source: https://crates.io/crates/libc/0.2.186
 MIT alternative selected for the crate; separate bundled-code notices below are retained.
   LICENSE-MIT [MIT-001]
+
+libz-sys 1.1.29
+License expression: MIT OR Apache-2.0
+Source: https://crates.io/crates/libz-sys/1.1.29
+Supplemental license source: https://github.com/rust-lang/libz-sys/tree/c589ac52bdf9f735dfc2858487e9b1f33b40c5cd
+MIT alternative selected for the crate; separate bundled-code notices below are retained.
+  LICENSE-MIT [MIT-001]
+  src/zlib (bundled zlib C sources) [ZLIB-010]
+The bundled stock zlib C sources are compiled into the published sandbox binaries.
 
 link-section 0.17.2
 License expression: Apache-2.0 OR MIT
@@ -1669,6 +1760,12 @@ License expression: MIT
 Source: https://crates.io/crates/os_info/3.14.0
   LICENSE [MIT-001]
 
+outref 0.5.2
+License expression: MIT
+Source: https://crates.io/crates/outref/0.5.2
+Supplemental license source: https://github.com/Nugine/outref/tree/cbbce9e3977ef154023bbda0660027c5e523766a
+  LICENSE [MIT-001]
+
 pagable 0.4.1
 License expression: Apache-2.0
 Source: https://crates.io/crates/pagable/0.4.1
@@ -1714,6 +1811,13 @@ MIT alternative selected for the crate; separate bundled-code notices below are 
 pin-project-lite 0.2.16
 License expression: Apache-2.0 OR MIT
 Source: https://crates.io/crates/pin-project-lite/0.2.16
+MIT alternative selected for the crate; separate bundled-code notices below are retained.
+  LICENSE-MIT [MIT-001]
+
+pin-utils 0.1.0
+License expression: MIT OR Apache-2.0
+Source: https://crates.io/crates/pin-utils/0.1.0
+Supplemental license source: https://github.com/rust-lang-nursery/pin-utils/tree/cddb4e490757830eff709310b32376420d7f5e93
 MIT alternative selected for the crate; separate bundled-code notices below are retained.
   LICENSE-MIT [MIT-001]
 
@@ -2069,9 +2173,9 @@ Source: https://crates.io/crates/rustls-platform-verifier/0.7.0
 MIT alternative selected for the crate; separate bundled-code notices below are retained.
   LICENSE-MIT [MIT-001]
 
-rustls-webpki 0.103.15
+rustls-webpki 0.103.16
 License expression: ISC
-Source: https://crates.io/crates/rustls-webpki/0.103.15
+Source: https://crates.io/crates/rustls-webpki/0.103.16
   LICENSE [ISC-002]
 
 rustyline 14.0.0
@@ -2416,11 +2520,6 @@ License expression: MIT
 Source: https://crates.io/crates/tokio-test/0.4.5
   LICENSE [MIT-001]
 
-tokio-tungstenite 0.28.0
-License expression: MIT
-Source: https://github.com/openai-oss-forks/tokio-tungstenite?rev=0e5b2d73aa18dd9f0a50ee9ff199d5aef7594186#0e5b2d73
-  LICENSE [MIT-001]
-
 tokio-util 0.7.18
 License expression: MIT
 Source: https://crates.io/crates/tokio-util/0.7.18
@@ -2504,12 +2603,6 @@ License expression: MIT
 Source: https://crates.io/crates/ts-rs/11.1.0
 Supplemental license source: https://github.com/Aleph-Alpha/ts-rs/tree/1dce5297090804082e9639d2b7d851ba815aa359
   LICENSE [MIT-001]
-
-tungstenite 0.27.0
-License expression: MIT OR Apache-2.0
-Source: https://github.com/openai-oss-forks/tungstenite-rs?rev=4fffad30fe373adbdcffab9545e9e9bf4f2fc19f#4fffad30
-MIT alternative selected for the crate; separate bundled-code notices below are retained.
-  LICENSE-MIT [MIT-001]
 
 typeid 1.0.3
 License expression: MIT OR Apache-2.0
@@ -2597,14 +2690,21 @@ Source: https://crates.io/crates/uuid/1.20.0
 MIT alternative selected for the crate; separate bundled-code notices below are retained.
   LICENSE-MIT [MIT-001]
 
+vsimd 0.8.0
+License expression: MIT
+Source: https://crates.io/crates/vsimd/0.8.0
+Supplemental license source: https://github.com/Nugine/simd/tree/d74c030d9dc4f3cae02146d1f497ff62726ef09a
+No separate license file supplied by the package. Standard terms follow the declared package license.
+  Standard-MIT-Terms.txt [MIT-001]
+
 want 0.3.1
 License expression: MIT
 Source: https://crates.io/crates/want/0.3.1
   LICENSE [MIT-001]
 
-webpki-roots 1.0.5
+webpki-roots 1.0.10
 License expression: CDLA-Permissive-2.0
-Source: https://crates.io/crates/webpki-roots/1.0.5
+Source: https://crates.io/crates/webpki-roots/1.0.10
   LICENSE [SPECIAL-033]
 
 weezl 0.1.12
@@ -2912,6 +3012,7 @@ License notice for m-ou-se/floatconv: [BSD-2-CLAUSE-006]
 License notice for code from The Practice of Programming: [SPECIAL-056]
 Notice for Euclidean Affine Functions and Applications to Calendar Algorithms: [SPECIAL-057]
 License notice for amd/aocl-libm-ose: [BSD-3-CLAUSE-001]
+License notice for zstd: [SPECIAL-075]
 License notice for fmtlib/fmt: [MIT-001]
 License for Jb Evain: [SPECIAL-058]
 License for MurmurHash3: [SPECIAL-059]
@@ -2920,22 +3021,22 @@ License for C# Implementation of Fast CRC Computation: [SPECIAL-060]
 License for the Teddy multi-substring searching implementation: [MIT-001]
 License notice for Avx512Vbmi base64 encoding / decoding: [BSD-2-CLAUSE-007]
 License for FormatJS Intl.Segmenter grapheme segmentation algorithm: [MIT-001]
+License notice for ANTLR 4: [SPECIAL-073]
+License notice for Intel Decimal Floating-Point Math Library: [SPECIAL-074]
 
 4. Rust standard library and runtime intrinsics
 ----------------------------------------------
 
-Windows x64 subset from Rust 1.95.0 COPYRIGHT-library.html and rust-src/library.
+Windows x64 subset from Rust 1.99.1 COPYRIGHT-library.html and rust-src/library.
 Other target platforms, tests and build tools are excluded. Compound intrinsic licenses remain intact.
 
-Rust 1.95.0 core/alloc/std, backtrace and mpmc: [MIT-001]
+Rust 1.99.1 core/alloc/std, backtrace and mpmc: [MIT-001]
 Rust core Unicode data: [UNICODE-003]
 cfg-if-1.0.4: [MIT-001]
-hashbrown-0.16.1: [MIT-001]
-rustc-demangle-0.1.27: [MIT-001]
+hashbrown-0.17.1: [MIT-001]
+rustc-demangle-0.1.28: [MIT-001]
 windows-link-0.2.1: [SPECIAL-061]
-windows-sys-0.60.2: [SPECIAL-062]
-windows-targets-0.53.5: [SPECIAL-063]
-windows_x86_64_msvc-0.53.1: [SPECIAL-064]
+windows-sys-0.61.2: [SPECIAL-062]
 compiler_builtins 0.1.160 - runtime intrinsics: [SPECIAL-065]
 
 5. Shared license texts, copyrights and special notices
@@ -2951,6 +3052,12 @@ Applies to:
 Copyright 2025 OpenAI
 
   allocative 0.3.6 / LICENSE-APACHE
+  aws-credential-types 1.2.11 / LICENSE
+  aws-sigv4 1.3.7 / LICENSE
+  aws-smithy-async 1.2.14 / LICENSE
+  aws-smithy-http 0.62.6 / LICENSE
+  aws-smithy-runtime-api 1.12.0 / LICENSE
+  aws-smithy-types 1.4.7 / LICENSE
   pagable 0.4.1 / LICENSE
   starlark 0.14.2 / LICENSE
   starlark_map 0.14.2 / LICENSE
@@ -2958,6 +3065,7 @@ Copyright 2025 OpenAI
   blake3 1.8.2 / LICENSE_A2
 Copyright 2019 Jack O'Connor and Samuel Neves
 
+  bytes-utils 0.1.4 / LICENSE-APACHE
   bytemuck 1.25.0 / LICENSE-APACHE
 
   constant_time_eq 0.3.1 / LICENSE-APACHE
@@ -3073,6 +3181,7 @@ All rights reserved.
   anyhow 1.0.103 / LICENSE-MIT
   async-channel 2.5.0 / LICENSE-MIT
   atomic-waker 1.1.2 / LICENSE-MIT
+  base64-simd 0.8.0 / crates.io MIT license text
   concurrent-queue 2.5.0 / LICENSE-MIT
   const-hex 1.17.0 / LICENSE-MIT
   dyn-clone 1.0.20 / LICENSE-MIT
@@ -3102,6 +3211,7 @@ All rights reserved.
   thiserror 2.0.18 / LICENSE-MIT
   typeid 1.0.3 / LICENSE-MIT
   utf-8 0.7.6 / LICENSE-MIT
+  vsimd 0.8.0 / crates.io MIT license text
   zmij 1.0.19 / LICENSE-MIT
 
   ahash 0.8.12 / LICENSE-MIT
@@ -3273,6 +3383,10 @@ Copyright (c) 2021 RustCrypto Developers
   ctor 1.0.6 / LICENSE-MIT
   link-section 0.17.2 / LICENSE-MIT
 
+  curl 0.4.50 / LICENSE
+  curl-sys 0.4.90+curl-8.21.0 / LICENSE
+Copyright (c) 2014 Carl Lerche
+
   dashmap 6.1.0 / LICENSE
 Copyright (c) 2019 Acrimon
 
@@ -3418,8 +3532,17 @@ Copyright (c) 2015-2020 The rust-hex Developers
 Copyright (c) 2015 The Hickory DNS Developers
 Copyright (c) 2017 Google LLC.
 
+  hmac 0.12.1 / LICENSE-MIT
+Copyright (c) 2017 Artyom Pavlov
+
+  http 0.2.12 / LICENSE-MIT
+Copyright (c) 2017 http-rs authors
+
   http 1.4.0 / LICENSE-MIT
 Copyright (c) 2017 http-rs authors
+
+  http-body 0.4.6 / LICENSE
+Copyright (c) 2019 Hyper Contributors
 
   http-body 1.0.1 / LICENSE
 Copyright (c) 2019-2024 Sean McArthur & Hyper Contributors
@@ -3479,6 +3602,10 @@ Copyright (c) 2010 The Rust Project Developers
 
   libc 0.2.186 / LICENSE-MIT
 Copyright (c) The Rust Project Developers
+
+  libz-sys 1.1.29 / LICENSE-MIT
+Copyright (c) 2014 Alex Crichton
+Copyright (c) 2020 Josh Triplett
 
   logos 0.15.1 / LICENSE-MIT
 Copyright (c) 2018 Maciej Hirsz <maciej.hirsz@gmail.com>
@@ -3552,8 +3679,14 @@ Copyright (c) 2023 Jacob Pratt
   os_info 3.14.0 / LICENSE
 Copyright (c) 2017 Stanislav Tkach
 
+  outref 0.5.2 / LICENSE
+Copyright (c) 2022 Nugine
+
   pem 3.0.6 / LICENSE.md
 Copyright (c) 2016 Jonathan Creekmore
+
+  pin-utils 0.1.0 / LICENSE-MIT
+Copyright (c) 2018 The pin-utils authors
 
   png 0.18.0 / LICENSE-MIT
 Copyright (c) 2015 nwin
@@ -3735,10 +3868,6 @@ Copyright (c) 2019 Tokio Contributors
   tokio-rustls 0.26.4 / LICENSE-MIT
 Copyright (c) 2017 quininer kel
 
-  tokio-tungstenite 0.28.0 / LICENSE
-Copyright (c) 2017 Daniel Abramov
-Copyright (c) 2017 Alexey Galakhov
-
   tonic 0.14.3 / LICENSE
   tonic-prost 0.14.3 / LICENSE
 Copyright (c) 2025 Lucio Franco
@@ -3763,10 +3892,6 @@ Copyright (c) 2016 Alex Crichton
 
   ts-rs 11.1.0 / LICENSE
 Copyright (c) 2020 Aleph Alpha GmbH
-
-  tungstenite 0.27.0 / LICENSE-MIT
-Copyright (c) 2017 Alexey Galakhov
-Copyright (c) 2016 Jason Housley
 
   typenum 1.20.0 / LICENSE-MIT
 Copyright (c) 2014 Paho Lurie-Gregg
@@ -3894,11 +4019,11 @@ MIT License
 
 Copyright (c) 2022 FormatJS
 
-  Rust 1.95.0 / standard library
-Rust 1.95.0 standard library - Windows x64 notices
+  Rust 1.99.1 / standard library
+Rust 1.99.1 standard library - Windows x64 notices
 ================================================
 
-Source: Rust 1.95.0 toolchain COPYRIGHT-library.html and rust-src/library.
+Source: Rust 1.99.1 toolchain COPYRIGHT-library.html and rust-src/library.
 This is a target-specific extraction, not an unchanged copy of the upstream
 multi-platform inventory. Build tools, tests and other target platforms have
 been omitted. Windows binding notices are retained with the standard-library
@@ -3911,7 +4036,7 @@ library/backtrace: Copyright 2014 Alex Crichton; The Rust Project Developers
 library/std/src/sync/mpmc: Copyright 2019 The Crossbeam Project Developers;
 The Rust Project Developers
 
-  Rust 1.95.0 / cfg-if-1.0.4
+  Rust 1.99.1 / cfg-if-1.0.4
 cfg-if-1.0.4
 URL: https://crates.io/crates/cfg-if/1.0.4
 Authors: Alex Crichton <alex@alexcrichton.com>
@@ -3920,18 +4045,18 @@ MIT alternative selected.
 
 Copyright (c) 2014 Alex Crichton
 
-  Rust 1.95.0 / hashbrown-0.16.1
-hashbrown-0.16.1
-URL: https://crates.io/crates/hashbrown/0.16.1
+  Rust 1.99.1 / hashbrown-0.17.1
+hashbrown-0.17.1
+URL: https://crates.io/crates/hashbrown/0.17.1
 Authors: Amanieu d'Antras <amanieu@gmail.com>
 License: MIT OR Apache-2.0
 MIT alternative selected.
 
 Copyright (c) 2016 Amanieu d'Antras
 
-  Rust 1.95.0 / rustc-demangle-0.1.27
-rustc-demangle-0.1.27
-URL: https://crates.io/crates/rustc-demangle/0.1.27
+  Rust 1.99.1 / rustc-demangle-0.1.28
+rustc-demangle-0.1.28
+URL: https://crates.io/crates/rustc-demangle/0.1.28
 Authors: Alex Crichton <alex@alexcrichton.com>
 License: MIT/Apache-2.0
 MIT alternative selected.
@@ -4465,7 +4590,7 @@ THIS SOFTWARE.
 
 [ISC-002]
 Applies to:
-  rustls-webpki 0.103.15 / LICENSE
+  rustls-webpki 0.103.16 / LICENSE
 Except as otherwise noted, this project is licensed under the following
 (ISC-style) terms:
 
@@ -4926,7 +5051,7 @@ written authorization of the copyright holder.
 
 [UNICODE-003]
 Applies to:
-  Rust 1.95.0 / core Unicode data
+  Rust 1.99.1 / core Unicode data
 
 License / notice text:
 Unicode data in library/core/src/unicode/unicode_data.rs
@@ -8343,7 +8468,7 @@ licensed under the Apache License, Version 2.0 <LICENSE-APACHE> or
 
 [SPECIAL-033]
 Applies to:
-  webpki-roots 1.0.5 / LICENSE
+  webpki-roots 1.0.10 / LICENSE
 
 License / notice text:
 # Community Data License Agreement - Permissive - Version 2.0
@@ -9359,7 +9484,7 @@ https://github.com/SixLabors/ImageSharp/blob/f4f689ce67ecbcc35cebddba5aacb603e6d
 
 [SPECIAL-061]
 Applies to:
-  Rust 1.95.0 / windows-link-0.2.1
+  Rust 1.99.1 / windows-link-0.2.1
 
 License / notice text:
 windows-link-0.2.1
@@ -9392,78 +9517,12 @@ MIT alternative selected.
 
 [SPECIAL-062]
 Applies to:
-  Rust 1.95.0 / windows-sys-0.60.2
+  Rust 1.99.1 / windows-sys-0.61.2
 
 License / notice text:
-windows-sys-0.60.2
-URL: https://crates.io/crates/windows-sys/0.60.2
+windows-sys-0.61.2
+URL: https://crates.io/crates/windows-sys/0.61.2
 Authors: Microsoft
-License: MIT OR Apache-2.0
-MIT alternative selected.
-
-    MIT License
-
-    Copyright (c) Microsoft Corporation.
-
-    Permission is hereby granted, free of charge, to any person obtaining a copy
-    of this software and associated documentation files (the "Software"), to deal
-    in the Software without restriction, including without limitation the rights
-    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-    copies of the Software, and to permit persons to whom the Software is
-    furnished to do so, subject to the following conditions:
-
-    The above copyright notice and this permission notice shall be included in all
-    copies or substantial portions of the Software.
-
-    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-    SOFTWARE
-
-[SPECIAL-063]
-Applies to:
-  Rust 1.95.0 / windows-targets-0.53.5
-
-License / notice text:
-windows-targets-0.53.5
-URL: https://crates.io/crates/windows-targets/0.53.5
-Authors: 
-License: MIT OR Apache-2.0
-MIT alternative selected.
-
-    MIT License
-
-    Copyright (c) Microsoft Corporation.
-
-    Permission is hereby granted, free of charge, to any person obtaining a copy
-    of this software and associated documentation files (the "Software"), to deal
-    in the Software without restriction, including without limitation the rights
-    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-    copies of the Software, and to permit persons to whom the Software is
-    furnished to do so, subject to the following conditions:
-
-    The above copyright notice and this permission notice shall be included in all
-    copies or substantial portions of the Software.
-
-    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-    SOFTWARE
-
-[SPECIAL-064]
-Applies to:
-  Rust 1.95.0 / windows_x86_64_msvc-0.53.1
-
-License / notice text:
-windows_x86_64_msvc-0.53.1
-URL: https://crates.io/crates/windows_x86_64_msvc/0.53.1
-Authors: 
 License: MIT OR Apache-2.0
 MIT alternative selected.
 
@@ -9491,7 +9550,7 @@ MIT alternative selected.
 
 [SPECIAL-065]
 Applies to:
-  Rust 1.95.0 / compiler_builtins 0.1.160 - runtime intrinsics
+  Rust 1.99.1 / compiler_builtins 0.1.160 - runtime intrinsics
 
 License / notice text:
 compiler_builtins 0.1.160 - runtime intrinsics
@@ -13136,3 +13195,182 @@ INCLUDING ANY GENERAL, SPECIAL, INDIRECT, INCIDENTAL, OR CONSEQUENTIAL
 DAMAGES, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
 FROM, OUT OF THE USE OR INABILITY TO USE THE FONT SOFTWARE OR FROM
 OTHER DEALINGS IN THE FONT SOFTWARE.
+
+[SQLITE-PD-001]
+Applies to:
+  SQLite 3.53.4 / package LICENSE.txt
+
+License / notice text:
+
+SQLite is Public Domain
+
+https://sqlite.org/copyright.html
+
+[ZLIB-010]
+Applies to:
+  libz-sys 1.1.29 / src/zlib (bundled zlib C sources)
+
+License / notice text:
+
+  Copyright (C) 1995-2026 Jean-loup Gailly and Mark Adler
+
+  This software is provided 'as-is', without any express or implied
+  warranty.  In no event will the authors be held liable for any damages
+  arising from the use of this software.
+
+  Permission is granted to anyone to use this software for any purpose,
+  including commercial applications, and to alter it and redistribute it
+  freely, subject to the following restrictions:
+
+  1. The origin of this software must not be misrepresented; you must not
+     claim that you wrote the original software. If you use this software
+     in a product, an acknowledgment in the product documentation would be
+     appreciated but is not required.
+  2. Altered source versions must be plainly marked as such, and must not be
+     misrepresented as being the original software.
+  3. This notice may not be removed or altered from any source distribution.
+
+[SPECIAL-072]
+Applies to:
+  curl-sys 0.4.90+curl-8.21.0 / curl/COPYING (bundled libcurl 8.21.0)
+
+License / notice text:
+COPYRIGHT AND PERMISSION NOTICE
+
+Copyright (c) 1996 - 2026, Daniel Stenberg, <daniel@haxx.se>, and many
+contributors, see the THANKS file.
+
+All rights reserved.
+
+Permission to use, copy, modify, and distribute this software for any purpose
+with or without fee is hereby granted, provided that the above copyright
+notice and this permission notice appear in all copies.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT OF THIRD PARTY RIGHTS. IN
+NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE
+OR OTHER DEALINGS IN THE SOFTWARE.
+
+Except as contained in this notice, the name of a copyright holder shall not
+be used in advertising or otherwise to promote the sale, use or other dealings
+in this Software without prior written authorization of the copyright holder.
+
+[SPECIAL-073]
+Applies to:
+  .NET bundled notices / License notice for ANTLR 4
+
+License / notice text:
+License notice for ANTLR 4
+-------------------------------
+
+https://github.com/antlr/antlr4
+
+Copyright (c) 2012-2022 The ANTLR Project. All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions
+are met:
+
+1. Redistributions of source code must retain the above copyright
+   notice, this list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright
+   notice, this list of conditions and the following disclaimer in the
+   documentation and/or other materials provided with the distribution.
+
+3. Neither name of copyright holders nor the names of its contributors
+   may be used to endorse or promote products derived from this software
+   without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE REGENTS OR
+CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+[SPECIAL-074]
+Applies to:
+  .NET bundled notices / License notice for Intel Decimal Floating-Point Math Library
+
+License / notice text:
+License notice for Intel Decimal Floating-Point Math Library
+-------------------------------
+
+https://www.intel.com/content/www/us/en/developer/articles/tool/intel-decimal-floating-point-math-library.html
+
+Copyright (c) 2007-2025, Intel Corp.
+
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without modification,
+are permitted provided that the following conditions are met:
+
+   * Redistributions of source code must retain the above copyright notice, this
+     list of conditions and the following disclaimer.
+   * Redistributions in binary form must reproduce the above copyright notice,
+     this list of conditions and the following disclaimer in the documentation
+     and/or other materials provided with the distribution.
+   * Neither the name of Intel Corporation nor the names of its contributors
+     may be used to endorse or promote products derived from this software
+     without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED.
+IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT,
+INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
+BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE
+OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
+ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+[SPECIAL-075]
+Applies to:
+  .NET bundled notices / License notice for zstd
+
+License / notice text:
+License notice for zstd
+-----------------------
+
+https://github.com/facebook/zstd/blob/dev/LICENSE
+
+BSD License
+
+For Zstandard software
+Copyright (c) Meta Platforms, Inc. and affiliates. All rights reserved.
+
+Redistribution and use in source and binary forms, with or without modification,
+are permitted provided that the following conditions are met:
+
+ * Redistributions of source code must retain the above copyright notice, this
+   list of conditions and the following disclaimer.
+
+ * Redistributions in binary form must reproduce the above copyright notice,
+   this list of conditions and the following disclaimer in the documentation
+   and/or other materials provided with the distribution.
+
+ * Neither the name Facebook, nor Meta, nor the names of its contributors may
+   be used to endorse or promote products derived from this software without
+   specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
+ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
+ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
