@@ -614,6 +614,9 @@ public static class SessionProjectInitializer
         var moreFilesRemain = restrictToIds is null && examined.Count < eligible.Count;
         try
         {
+            // 删除墓碑优先于日志：待收尾删除的会话不再补建归属，否则一次初始化就会把它写回列表。
+            var deleted = await SessionStoreTombstoneStore.TryLoadForReadsAsync(storeDirectory, cancellationToken)
+                                                          .ConfigureAwait(false);
             var candidates = new List<(string SessionId, string WorkspaceRoot)>();
             foreach (var sessionId in examined)
             {
@@ -623,8 +626,10 @@ public static class SessionProjectInitializer
                     break;
                 }
 
+                if (deleted is not null && deleted.Contains(sessionId)) continue;
+
                 var snapshot = await ReadSessionSnapshotAsync(storeDirectory, sessionId, cancellationToken)
-                                  .ConfigureAwait(false);
+                   .ConfigureAwait(false);
                 if (snapshot.Error is not null)
                 {
                     outcomes.Add(new SessionProjectBindingOutcome(sessionId, string.Empty,

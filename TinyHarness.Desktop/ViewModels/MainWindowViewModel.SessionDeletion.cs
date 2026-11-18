@@ -1,16 +1,16 @@
 using System.Diagnostics;
 using TinyHarness.Core.Exceptions;
-using TinyHarness.Core.Models.Persistence;
 using TinyHarness.Core.Services.Persistence;
 
 namespace TinyHarness.Desktop.ViewModels;
 
 public sealed partial class MainWindowViewModel
 {
-    private int               _sessionDeletionDialogVersion;
-    private string?           _sessionDeletionErrorText;
-    private bool              _sessionDeletionOpen;
-    private bool              _sessionDeletionRunning;
+    private int     _sessionDeletionDialogVersion;
+    private string? _sessionDeletionErrorText;
+    private bool    _sessionDeletionOpen;
+    private bool    _sessionDeletionRunning;
+
     private SessionViewModel? _sessionDeletionTarget;
 
     internal Func<string, string, string, CancellationToken, Task>? DeleteSessionLogOverride { get; set; }
@@ -169,10 +169,12 @@ public sealed partial class MainWindowViewModel
     private static string DescribeSessionCleanupIssues(IReadOnlyList<SessionStoreCleanupIssue> issues) =>
         string.Join("；", issues.Select(issue => issue.Area switch
         {
-            SessionStoreCleanupArea.ArchiveState => "归档状态",
-            SessionStoreCleanupArea.PinState     => "置顶状态",
-            SessionStoreCleanupArea.SessionIndex => "索引",
-            _                                    => "旧侧栏顺序"
+            SessionStoreCleanupArea.ArchiveState     => "归档状态",
+            SessionStoreCleanupArea.PinState         => "置顶状态",
+            SessionStoreCleanupArea.SessionIndex     => "索引",
+            SessionStoreCleanupArea.SessionPlacement => "会话归属",
+            SessionStoreCleanupArea.SessionDeletion  => "删除收尾",
+            _                                        => "旧侧栏顺序"
         }));
 
     /// <summary>

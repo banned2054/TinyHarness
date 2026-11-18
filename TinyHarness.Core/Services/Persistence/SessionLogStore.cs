@@ -1133,6 +1133,11 @@ public static class SessionStoreReader
     public static async Task<PersistedSession?> ReadAsync(
         string directory, string sessionId, CancellationToken cancellationToken)
     {
+        // 迁移后的删除墓碑优先于日志存在性：崩溃窗口里日志可能仍在，但删除意图已提交，续聊与恢复必须拒绝。
+        var deleted = await SessionStoreTombstoneStore.TryLoadForReadsAsync(directory, cancellationToken)
+                                                      .ConfigureAwait(false);
+        if (deleted is not null && deleted.Contains(sessionId.ToLowerInvariant()))
+            throw new SessionStoreException($"Session '{sessionId}' has been deleted and cannot be reopened.");
         var persisted  = await ReadLogAsync(directory, sessionId, cancellationToken).ConfigureAwait(false);
         var placements = await SessionPlacementOverlay.LoadAsync(directory, cancellationToken).ConfigureAwait(false);
         return SessionPlacementOverlay.Apply(persisted, placements);
@@ -1158,17 +1163,20 @@ public static class SessionStoreReader
     {
         if (!Directory.Exists(directory)) return [];
         var placements = await SessionPlacementOverlay.LoadAsync(directory, cancellationToken).ConfigureAwait(false);
-        var entries    = new List<SessionStoreEntry>();
+        // 墓碑中的会话即使日志仍在也不进入列表：删除的可续作窗口不允许被后台扫描复活。
+        var deleted = await SessionStoreTombstoneStore.TryLoadForReadsAsync(directory, cancellationToken)
+                                                      .ConfigureAwait(false);
+        var entries = new List<SessionStoreEntry>();
         foreach (var path in Directory.EnumerateFiles(directory, "*" + SessionStoreWriter.LogFileSuffix))
         {
             cancellationToken.ThrowIfCancellationRequested();
             var id = Path.GetFileName(path)[..^SessionStoreWriter.LogFileSuffix.Length];
+            if (deleted is not null && deleted.Contains(id.ToLowerInvariant())) continue;
             try
             {
-                var session = SessionPlacementOverlay.Apply(
-                                                            await ReadLogAsync(directory, id, cancellationToken)
-                                                               .ConfigureAwait(false),
-                                                            placements);
+                var session =
+                    SessionPlacementOverlay.Apply(await ReadLogAsync(directory, id, cancellationToken)
+                                                     .ConfigureAwait(false), placements);
                 entries.Add(new SessionStoreEntry(id, session, null));
             }
             catch (SessionStoreException ex)

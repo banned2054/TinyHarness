@@ -3,8 +3,8 @@ using TinyHarness.Core.Exceptions;
 namespace TinyHarness.Core.Services.Persistence;
 
 /// <summary>
-///     <para>在会话 writer 锁保护下永久删除一份会话日志。</para>
-///     <para>Permanently deletes a session log while holding its writer lock.</para>
+///     <para>在会话 writer 锁保护下删除一份会话日志。</para>
+///     <para>Deletes a session log while holding its writer lock.</para>
 /// </summary>
 public static class SessionStoreDeletion
 {
@@ -28,17 +28,62 @@ public static class SessionStoreDeletion
     ///     <para>取消锁获取前的等待；进入删除临界区后不再取消。</para>
     ///     <para>Cancels before acquiring the lock; deletion is not cancelled after entering the critical section.</para>
     /// </param>
-    public static async Task DeleteAsync(string storeDirectory, string workspaceRoot, string sessionId,
-                                         CancellationToken cancellationToken)
+    public static async Task DeleteAsync(
+        string storeDirectory, string workspaceRoot, string sessionId, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(storeDirectory);
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
+        var directory = SessionStorePaths.ResolveProtected(storeDirectory, workspaceRoot);
+        await DeleteCoreAsync(directory, sessionId, true, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    ///     <para>
+    ///         在已解析的受保护 store 上删除日志；日志已不存在时按幂等返回 false，用于删除墓碑的续作与收尾。
+    ///     </para>
+    ///     <para>
+    ///         Deletes the log inside an already-resolved protected store; a log that no longer exists returns false
+    ///         idempotently, which deletion-tombstone continuation and cleanup rely on.
+    ///     </para>
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         调用方必须传入已经由受保护路径解析校验过的 store 目录；本重载不再重复解析工作区，也不放宽叶子校验
+    ///         与 writer 锁。日志被占用时抛出 <see cref="SessionStoreException" />，墓碑保持待收尾。
+    ///     </para>
+    ///     <para>
+    ///         The caller must pass a store directory already validated through protected-path resolution; this
+    ///         overload neither re-resolves the workspace nor relaxes the leaf checks or the writer lock. A held log
+    ///         throws <see cref="SessionStoreException" /> and leaves the tombstone pending.
+    ///     </para>
+    /// </remarks>
+    /// <returns>
+    ///     <para>是否删除了日志；false 表示日志原本就不存在。</para>
+    ///     <para>Whether a log was deleted; false means it was already absent.</para>
+    /// </returns>
+    internal static Task<bool> TryDeleteResolvedAsync(
+        string storeDirectory, string sessionId, CancellationToken cancellationToken) =>
+        DeleteCoreAsync(Path.GetFullPath(storeDirectory), sessionId, false, cancellationToken);
+
+    /// <summary>
+    ///     <para>
+    ///         校验会话 ID 与 store 目录，取得 writer 锁后删除日志；<paramref name="requireLog" /> 为 true 时日志
+    ///         缺失按失败报告，否则按幂等成功返回 false。
+    ///     </para>
+    ///     <para>
+    ///         Validates the session id and store directory, then deletes the log under its writer lock; a missing log
+    ///         fails when <paramref name="requireLog" /> is true and returns false idempotently otherwise.
+    ///     </para>
+    /// </summary>
+    private static async Task<bool> DeleteCoreAsync(
+        string directory, string sessionId, bool requireLog, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(directory);
         ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
         if (!SessionStorePaths.IsValidSessionId(sessionId))
             throw new ArgumentException("A session id must contain exactly 32 hexadecimal characters.",
                                         nameof(sessionId));
 
-        var directory = SessionStorePaths.ResolveProtected(storeDirectory, workspaceRoot);
         if (!Directory.Exists(directory))
             throw new SessionStoreException($"Session store directory '{directory}' no longer exists.");
 
@@ -66,7 +111,11 @@ public static class SessionStoreDeletion
             SessionStorePaths.EnsureStoreLeaf(directory, lockPath);
             SessionStorePaths.EnsureStoreLeaf(directory, logPath);
             if (!File.Exists(logPath))
-                throw new SessionStoreException($"Session log '{logPath}' no longer exists.");
+            {
+                if (requireLog)
+                    throw new SessionStoreException($"Session log '{logPath}' no longer exists.");
+                return false;
+            }
 
             try
             {
@@ -77,6 +126,8 @@ public static class SessionStoreDeletion
                 throw new SessionStoreException($"Could not delete session log '{logPath}': {exception.Message}",
                                                 exception);
             }
+
+            return true;
         }
     }
 }

@@ -1719,30 +1719,46 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
         {
             var resolution = await SessionStoreAuthority.ResolveAsync(storeDirectory, cancellationToken);
             _storeModes[storeKey] = resolution;
-            if (resolution.Mode == SessionStoreMode.Blocked)
+            switch (resolution.Mode)
             {
-                Notice = $"会话存储需要完成迁移或恢复后才能读写：{resolution.Status}" +
-                         (resolution.Detail is { Length: > 0 } detail ? $"（{detail}）" : "");
-                return;
-            }
-
-            if (resolution.Mode == SessionStoreMode.Legacy)
-            {
-                _storeOrganizationSnapshots.Remove(storeKey);
-                return;
+                case SessionStoreMode.Blocked :
+                    Notice = $"会话存储需要完成迁移或恢复后才能读写：{resolution.Status}" +
+                             (resolution.Detail is { Length: > 0 } detail ? $"（{detail}）" : "");
+                    return;
+                case SessionStoreMode.Legacy :
+                    _storeOrganizationSnapshots.Remove(storeKey);
+                    return;
             }
 
             var snapshot = await SessionStoreOrganizationStore.LoadAsync(storeDirectory, cancellationToken);
             _storeOrganizationSnapshots[storeKey] = snapshot;
             _storeOrganizationPendingNoticed.Remove(storeKey);
 
+            // 上一次删除若停在墓碑之后、日志与投影收尾之前，这里补完；失败只提示，不阻断侧栏可用性。
+            try
+            {
+                var issues = await _storeOperations.RecoverPendingSessionDeletionsAsync(storeDirectory,
+                    cancellationToken);
+                if (issues.Count > 0)
+                    Notice = $"部分已删除会话的收尾未完成：{DescribeSessionCleanupIssues(issues)}";
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception exception) when (exception is SessionStoreMigrationException or IOException
+                                               or UnauthorizedAccessException)
+            {
+                Notice = $"已删除会话的收尾未能继续：{exception.Message}";
+            }
+
             // 导入后的旧文件副本不再权威：下一次保存把该 store 的组织字段投影为空，避免两份组织状态漂移。
             var stored = _sidebarPreferences.Stores.FirstOrDefault(item =>
                                                                        ProjectRoots.AreEqual(item.StoreDirectory,
                                                                            storeDirectory));
             if (stored is not null &&
-                (stored.ManualProjectOrder.Count > 0 || stored.ManualSessionOrder.Count > 0 ||
-                 stored.CollapsedGroupKeys.Count > 0 || stored.LegacyPinnedProjectOrder.Count > 0 ||
+                (stored.ManualProjectOrder.Count     > 0 || stored.ManualSessionOrder.Count       > 0 ||
+                 stored.CollapsedGroupKeys.Count     > 0 || stored.LegacyPinnedProjectOrder.Count > 0 ||
                  stored.LegacyPinnedSessionIds.Count > 0))
                 QueueSidebarPreferencesSave(true);
         }

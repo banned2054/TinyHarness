@@ -185,9 +185,8 @@ public sealed class SessionIndexReconciler
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException
                                       or PathTooLongException)
         {
-            throw new SessionIndexException(
-                                            $"Session index reconciliation for '{_indexStore.DatabasePath}' failed: {ex.Message}",
-                                            ex);
+            throw new SessionIndexException("Session index reconciliation for " +
+                                            $"'{_indexStore.DatabasePath}' failed: {ex.Message}", ex);
         }
         finally
         {
@@ -218,11 +217,8 @@ public sealed class SessionIndexReconciler
             }
             catch (SessionIndexException ex)
             {
-                return new SessionIndexReconcileReport(
-                                                       new SessionIndexAvailability(
-                                                            SessionIndexAvailabilityStatus
-                                                               .Failed, ex.Message),
-                                                       0, 0, 0, 0, 0, false, notes);
+                return new SessionIndexReconcileReport(new SessionIndexAvailability(SessionIndexAvailabilityStatus
+                                                                   .Failed, ex.Message), 0, 0, 0, 0, 0, false, notes);
             }
 
         var sourceCount  = 0;
@@ -243,9 +239,10 @@ public sealed class SessionIndexReconciler
         try
         {
             if (await SessionStoreAuthority.IsMigratedAsync(_indexStore.StoreDirectory, cancellationToken)
-                                            .ConfigureAwait(false))
-                placements = await SessionStorePlacementStore.LoadAllAsync(_indexStore.StoreDirectory, cancellationToken)
-                                                             .ConfigureAwait(false);
+                                           .ConfigureAwait(false))
+                placements = await SessionStorePlacementStore
+                                  .LoadAllAsync(_indexStore.StoreDirectory, cancellationToken)
+                                  .ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -258,6 +255,16 @@ public sealed class SessionIndexReconciler
                 notes.Add($"Placement overlay left out of this round: {ex.Message}");
         }
 
+        // 删除墓碑优先于来源日志：待收尾删除的日志即使仍在，也不得被本轮重新写入索引。
+        var deleted = await SessionStoreTombstoneStore.TryLoadForReadsAsync(_indexStore.StoreDirectory,
+                                                                            cancellationToken).ConfigureAwait(false);
+        // 本轮已按墓碑清掉的索引行；孤儿清理只排除这些，不能排除全部墓碑 ID——日志已消失而索引清理尚未成功的
+        // 残留行不属于来源集合，只有孤儿清理会处理它。
+        // Index rows already cleared through tombstones this round. Orphan cleanup excludes only these and never the
+        // whole tombstone set: a leftover row whose log already disappeared is not a source, so only the orphan pass
+        // can remove it.
+        var clearedByTombstone = new HashSet<string>(StringComparer.Ordinal);
+
         foreach (var path in Directory.EnumerateFiles(_indexStore.StoreDirectory,
                                                       "*" + SessionStoreWriter.LogFileSuffix))
         {
@@ -267,6 +274,19 @@ public sealed class SessionIndexReconciler
             if (!SessionStorePaths.IsValidSessionId(sessionId))
             {
                 if (notes.Count < MaxNotes) notes.Add($"Skipped invalid session log file name '{fileName}'.");
+                continue;
+            }
+
+            // 已删除会话：清掉残留索引行后跳过，不进入来源集合，也不参与重建。
+            if (deleted is not null && deleted.Contains(sessionId))
+            {
+                if (rows.ContainsKey(sessionId))
+                {
+                    await _indexStore.RemoveAsync(sessionId, cancellationToken).ConfigureAwait(false);
+                    _ = clearedByTombstone.Add(sessionId);
+                    removed++;
+                }
+
                 continue;
             }
 
@@ -372,7 +392,8 @@ public sealed class SessionIndexReconciler
             }
         }
 
-        foreach (var orphan in rows.Keys.Except(sourceIds, StringComparer.Ordinal))
+        foreach (var orphan in rows.Keys.Except(sourceIds, StringComparer.Ordinal)
+                                   .Where(id => !clearedByTombstone.Contains(id)))
         {
             cancellationToken.ThrowIfCancellationRequested();
             try
@@ -393,9 +414,7 @@ public sealed class SessionIndexReconciler
                                 .LoadAsync(_indexStore.StoreDirectory, cancellationToken)
                                 .ConfigureAwait(false);
             await _indexStore
-                 .SyncArchiveProjectionAsync(
-                                             new HashSet<string>(archives.ArchivedSessionIds,
-                                                                 StringComparer.Ordinal),
+                 .SyncArchiveProjectionAsync(new HashSet<string>(archives.ArchivedSessionIds, StringComparer.Ordinal),
                                              cancellationToken)
                  .ConfigureAwait(false);
             archiveSynced = true;
@@ -412,11 +431,11 @@ public sealed class SessionIndexReconciler
         try
         {
             if (await SessionStoreAuthority.IsMigratedAsync(_indexStore.StoreDirectory, cancellationToken)
-                                              .ConfigureAwait(false))
+                                           .ConfigureAwait(false))
             {
                 var currentPlacements = await SessionStorePlacementStore
-                                              .LoadAllAsync(_indexStore.StoreDirectory, cancellationToken)
-                                              .ConfigureAwait(false);
+                                             .LoadAllAsync(_indexStore.StoreDirectory, cancellationToken)
+                                             .ConfigureAwait(false);
                 await _indexStore.SyncPlacementProjectionAsync(currentPlacements, cancellationToken)
                                  .ConfigureAwait(false);
             }

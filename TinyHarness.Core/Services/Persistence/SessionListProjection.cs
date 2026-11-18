@@ -104,12 +104,14 @@ public sealed class SessionListProjection
         SessionSummaryQuery query, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(query);
+        var deleted = await SessionStoreTombstoneStore.TryLoadForReadsAsync(StoreDirectory, cancellationToken)
+                                                      .ConfigureAwait(false);
         var summaries = new List<SessionSummary>();
         var cursor    = query with { };
         while (true)
         {
             var page = await _store.ListSummariesAsync(cursor, cancellationToken).ConfigureAwait(false);
-            summaries.AddRange(page);
+            summaries.AddRange(deleted is null ? page : page.Where(summary => !deleted.Contains(summary.Id)));
             if (page.Count < cursor.Limit) return summaries;
             var last = page[^1];
             cursor = cursor with
@@ -121,13 +123,19 @@ public sealed class SessionListProjection
     }
 
     /// <summary>
-    ///     <para>返回全部索引行状态，供失败条目展示与归属整理挑出待处理集合。</para>
+    ///     <para>返回全部索引行状态，供失败条目展示与归属整理挑出待处理集合；墓碑中的会话不返回。</para>
     ///     <para>
-    ///         Returns every index row for failed-entry display and for organize to pick its pending set.
+    ///         Returns every index row for failed-entry display and for organize to pick its pending set; tombstoned
+    ///         sessions are excluded.
     ///     </para>
     /// </summary>
-    public Task<IReadOnlyList<SessionIndexRow>> ListRowsAsync(CancellationToken cancellationToken) =>
-        _store.ListRowsAsync(cancellationToken);
+    public async Task<IReadOnlyList<SessionIndexRow>> ListRowsAsync(CancellationToken cancellationToken)
+    {
+        var deleted = await SessionStoreTombstoneStore.TryLoadForReadsAsync(StoreDirectory, cancellationToken)
+                                                      .ConfigureAwait(false);
+        var rows = await _store.ListRowsAsync(cancellationToken).ConfigureAwait(false);
+        return deleted is null ? rows : rows.Where(row => !deleted.Contains(row.Id)).ToArray();
+    }
 
     /// <summary>
     ///     <para>
@@ -155,11 +163,15 @@ public sealed class SessionListProjection
         // 迁移完成后列表归属以业务库为准：降级扫描同样叠加归属，避免展示历史 JSONL 归属；
         // 迁移进行中或标记损坏时按类型化异常拒绝，不回退日志推导值。
         var placements = await SessionPlacementOverlay.LoadAsync(StoreDirectory, cancellationToken)
-                                                   .ConfigureAwait(false);
+                                                      .ConfigureAwait(false);
+        // 墓碑优先于日志：待收尾的删除不允许经降级扫描重新出现在列表里。
+        var deleted = await SessionStoreTombstoneStore.TryLoadForReadsAsync(StoreDirectory, cancellationToken)
+                                                      .ConfigureAwait(false);
         foreach (var path in Directory.EnumerateFiles(StoreDirectory, "*" + SessionStoreWriter.LogFileSuffix))
         {
             cancellationToken.ThrowIfCancellationRequested();
             var sessionId = Path.GetFileName(path)[..^SessionStoreWriter.LogFileSuffix.Length];
+            if (deleted is not null && deleted.Contains(sessionId.ToLowerInvariant())) continue;
             try
             {
                 var build = await SessionSummaryBuilder

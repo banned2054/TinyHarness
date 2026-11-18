@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using TinyHarness.Core.Exceptions;
-using TinyHarness.Core.Models.Configuration;
 using TinyHarness.Core.Models.Persistence;
 using TinyHarness.Core.Models.Project;
 using TinyHarness.Core.Services.ChatCompletions.Configuration;
@@ -113,7 +112,13 @@ public enum SessionStoreCleanupArea
     ///     <para>业务库中的会话当前归属行。</para>
     ///     <para>The session's current placement row in the business database.</para>
     /// </summary>
-    SessionPlacement
+    SessionPlacement,
+
+    /// <summary>
+    ///     <para>会话删除墓碑与删除收尾本身。</para>
+    ///     <para>The session deletion tombstone and the deletion finishing itself.</para>
+    /// </summary>
+    SessionDeletion
 }
 
 /// <summary>
@@ -274,9 +279,9 @@ public sealed class SessionStoreOperations
     {
         var user      = await UserConfigStore.LoadAsync(userConfigPath, cancellationToken).ConfigureAwait(false);
         var directory = SessionStorePaths.ResolveProtected(user.Settings?.SessionStoreDirectory, workspaceRoot);
-        if (user.Settings?.WindowsSandbox is { Enabled: true } sandbox)
-            foreach (var writable in sandbox.AdditionalWriteRoots)
-                SessionStorePaths.EnsureOutsideWorkspace(directory, writable, "settings.sessionStoreDirectory");
+        if (user.Settings?.WindowsSandbox is not { Enabled: true } sandbox) return directory;
+        foreach (var writable in sandbox.AdditionalWriteRoots)
+            SessionStorePaths.EnsureOutsideWorkspace(directory, writable, "settings.sessionStoreDirectory");
         return directory;
     }
 
@@ -332,8 +337,8 @@ public sealed class SessionStoreOperations
         {
             var protectedStoreDirectory = await resolveProtectedDirectory(cancellationToken);
             if (!ProjectRoots.AreEqual(protectedStoreDirectory, storeDirectory))
-                throw new SessionStoreException(
-                                                "The configured session-store directory changed before its pin state was loaded.");
+                throw new SessionStoreException("The configured session-store directory changed " +
+                                                "before its pin state was loaded.");
 
             storeKey = StoreKey(protectedStoreDirectory);
             var pins = await SessionStorePinStore.LoadOrMigrateAsync(storeKey, legacyPinnedProjectIds,
@@ -348,8 +353,8 @@ public sealed class SessionStoreOperations
             throw;
         }
         catch (Exception exception) when (exception is SessionStorePinException or SessionStoreException
-                                            or SessionStoreMigrationException or IOException
-                                            or UnauthorizedAccessException)
+                                           or SessionStoreMigrationException or IOException
+                                           or UnauthorizedAccessException)
         {
             _pinStatesByStore.Remove(storeKey);
             _pinStateUnavailableStores.Add(storeKey);
@@ -403,8 +408,8 @@ public sealed class SessionStoreOperations
         {
             var protectedStoreDirectory = await resolveProtectedDirectory(cancellationToken);
             if (!ProjectRoots.AreEqual(protectedStoreDirectory, storeDirectory))
-                throw new SessionStoreException(
-                                                "The configured session-store directory changed before its archive state was loaded.");
+                throw new SessionStoreException("The configured session-store directory changed " +
+                                                "before its archive state was loaded.");
 
             storeKey = StoreKey(protectedStoreDirectory);
             var archives = await SessionStoreArchiveStore.LoadAsync(storeKey, cancellationToken);
@@ -417,8 +422,8 @@ public sealed class SessionStoreOperations
             throw;
         }
         catch (Exception exception) when (exception is SessionStoreArchiveException or SessionStoreException
-                                            or SessionStoreMigrationException or IOException
-                                            or UnauthorizedAccessException)
+                                           or SessionStoreMigrationException or IOException
+                                           or UnauthorizedAccessException)
         {
             _archiveStateUnavailableStores.Add(storeKey);
             throw;
@@ -595,8 +600,8 @@ public sealed class SessionStoreOperations
         {
             var protectedStoreDirectory = await resolveProtectedDirectory(cancellationToken);
             if (!ProjectRoots.AreEqual(protectedStoreDirectory, storeDirectory))
-                throw new SessionStoreException(
-                                                "The configured session-store directory changed before its archive state was saved.");
+                throw new SessionStoreException("The configured session-store directory changed " +
+                                                "before its archive state was saved.");
 
             var archives = await SessionStoreArchiveStore.SetArchivedAsync(storeDirectory, sessionId, isArchived,
                                                                            cancellationToken);
@@ -741,12 +746,28 @@ public sealed class SessionStoreOperations
     }
 
     /// <summary>
-    ///     <para>持有会话 writer 锁永久删除日志，并尽力清理归档、置顶与索引投影。</para>
     ///     <para>
-    ///         Permanently deletes the log under its writer lock and clears archive, pin, and index projections
-    ///         best-effort.
+    ///         永久删除一个会话：迁移完成后先提交删除墓碑，再在 writer 锁下删除日志并清理投影，最后把墓碑置为
+    ///         已删除；未迁移 store 保持"删日志 + 清理投影"的旧路径。
+    ///     </para>
+    ///     <para>
+    ///         Permanently deletes a session: after migration it commits the deletion tombstone first, removes the log
+    ///         under the writer lock, clears the projections, and only then marks the tombstone deleted; an unmigrated
+    ///         store keeps the legacy "delete log and clear projections" path.
     ///     </para>
     /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         墓碑与日志文件不在同一事务，删除因此是可续作的：墓碑提交后中断，下一次恢复入口会继续删除剩余日志
+    ///         与投影，期间任何读取路径都把该会话视为已删除。已标记为已删除的会话重复调用按幂等完成返回。
+    ///     </para>
+    ///     <para>
+    ///         The tombstone and the log file never share a transaction, so the deletion is resumable: an interruption
+    ///         after the tombstone commit leaves the recovery entry to finish the remaining log and projections, while
+    ///         every read path treats the session as deleted. Repeating the call for an already deleted session returns
+    ///         idempotently as complete.
+    ///     </para>
+    /// </remarks>
     /// <param name="storeDirectory">
     ///     <para>调用方已解析的受保护存储目录。</para>
     ///     <para>The caller-resolved protected store directory.</para>
@@ -764,18 +785,132 @@ public sealed class SessionStoreOperations
     ///     <para>Cancels the deletion; projection cleanup never cancels.</para>
     /// </param>
     /// <returns>
-    ///     <para>未成功的清理项；列表非空表示删除已成功但部分投影残留。</para>
-    ///     <para>Failed cleanup items; a non-empty list means deletion succeeded with leftover projections.</para>
+    ///     <para>
+    ///         未成功的清理项；列表非空表示日志已删除但投影尚未清理完毕，删除保持待收尾并由恢复入口继续重试。
+    ///     </para>
+    ///     <para>
+    ///         Failed cleanup items; a non-empty list means the log is deleted while projections are not fully cleared,
+    ///         so the deletion stays pending and the recovery entry retries it.
+    ///     </para>
     /// </returns>
     /// <exception cref="SessionStoreException">
-    ///     <para>writer 被占用、日志缺失或删除失败；此时不做投影清理。</para>
-    ///     <para>The writer is held, the log is missing, or deletion failed; no cleanup runs in that case.</para>
+    ///     <para>
+    ///         writer 被占用或删除失败；未迁移 store 的日志缺失同样失败，迁移后缺失日志按幂等完成继续清理投影。
+    ///     </para>
+    ///     <para>
+    ///         The writer is held or deletion failed; a missing log fails for an unmigrated store, while after
+    ///         migration it counts as already deleted and projection cleanup continues.
+    ///     </para>
     /// </exception>
     public async Task<IReadOnlyList<SessionStoreCleanupIssue>> DeleteSessionPermanentlyAsync(
         string storeDirectory, string workspaceRoot, string sessionId, CancellationToken cancellationToken)
     {
-        await SessionStoreDeletion.DeleteAsync(storeDirectory, workspaceRoot, sessionId, cancellationToken);
-        return await CleanupDeletedSessionProjectionsAsync(storeDirectory, sessionId);
+        if (!await SessionStoreAuthority.IsMigratedAsync(storeDirectory, cancellationToken).ConfigureAwait(false))
+        {
+            await SessionStoreDeletion.DeleteAsync(storeDirectory, workspaceRoot, sessionId, cancellationToken);
+            return await CleanupDeletedSessionProjectionsAsync(storeDirectory, sessionId);
+        }
+
+        var directory = SessionStorePaths.ResolveProtected(storeDirectory, workspaceRoot);
+        // 墓碑先提交：此后任何读取路径都不再看见该会话，中断只会留下待收尾状态。
+        if (!await SessionStoreTombstoneStore.MarkPendingAsync(directory, sessionId, cancellationToken)
+                                             .ConfigureAwait(false))
+            return [];
+
+        await SessionStoreDeletion.TryDeleteResolvedAsync(directory, sessionId, cancellationToken)
+                                  .ConfigureAwait(false);
+        var issues = await CleanupDeletedSessionProjectionsAsync(directory, sessionId).ConfigureAwait(false);
+        // 清理未完成时保留待收尾：置顶、归属、顺序或索引任一项暂时失败都会让墓碑退出恢复扫描，残留便再无补做路径。
+        // Keep the tombstone pending while any cleanup is unfinished: a temporary archive, placement, order, or index
+        // failure would otherwise move it out of the recovery scan and leave the leftovers without a retry path.
+        if (issues.Count == 0)
+            await SessionStoreTombstoneStore.MarkDeletedAsync(directory, sessionId, cancellationToken)
+                                            .ConfigureAwait(false);
+        return issues;
+    }
+
+    /// <summary>
+    ///     <para>
+    ///         续作仍处于待收尾状态的会话删除：尽力删除残留日志、清理投影并把墓碑置为已删除；日志被占用时保留
+    ///         待收尾状态供下次重试。
+    ///     </para>
+    ///     <para>
+    ///         Continues session deletions still pending cleanup: it best-effort removes leftover logs, clears the
+    ///         projections, and marks the tombstone deleted; a held log stays pending for the next retry.
+    ///     </para>
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         本方法只处理迁移完成且可用的 store；未迁移返回空列表。调用方必须传入已解析的受保护存储目录。
+    ///         单项失败记入结果并继续其余会话，不抛出；取消原样传播。
+    ///     </para>
+    ///     <para>
+    ///         It handles migrated and available stores only and returns an empty list for an unmigrated one. The
+    ///         caller must pass a resolved protected store directory. A failed item is recorded while the remaining
+    ///         sessions continue without throwing; cancellation propagates unchanged.
+    ///     </para>
+    /// </remarks>
+    public async Task<IReadOnlyList<SessionStoreCleanupIssue>> RecoverPendingSessionDeletionsAsync(
+        string storeDirectory, CancellationToken cancellationToken)
+    {
+        List<SessionDeletionTombstone> pending;
+        try
+        {
+            if (!await SessionStoreAuthority.IsMigratedAsync(storeDirectory, cancellationToken).ConfigureAwait(false))
+                return [];
+            pending = (await SessionStoreTombstoneStore.ListPendingAsync(storeDirectory, cancellationToken)
+                                                       .ConfigureAwait(false)).ToList();
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception exception) when (exception is SessionStoreMigrationException or SessionStoreException
+                                           or IOException or UnauthorizedAccessException)
+        {
+            return [new SessionStoreCleanupIssue(SessionStoreCleanupArea.SessionDeletion, exception.Message)];
+        }
+
+        if (pending.Count == 0) return [];
+        List<SessionStoreCleanupIssue> issues = [];
+        foreach (var tombstone in pending)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                await SessionStoreDeletion
+                     .TryDeleteResolvedAsync(storeDirectory, tombstone.SessionId, cancellationToken)
+                     .ConfigureAwait(false);
+            }
+            catch (Exception exception) when (exception is SessionStoreException or IOException
+                                               or UnauthorizedAccessException)
+            {
+                // 日志仍被 writer 占用：保留待收尾墓碑，恢复不覆盖正在写入的会话。
+                issues.Add(new SessionStoreCleanupIssue(SessionStoreCleanupArea.SessionDeletion, exception.Message));
+                continue;
+            }
+
+            var before = issues.Count;
+            issues.AddRange(await CleanupDeletedSessionProjectionsAsync(storeDirectory, tombstone.SessionId)
+                               .ConfigureAwait(false));
+            // 清理未完成时保留待收尾墓碑：否则该会话退出待收尾扫描，残留投影再也没有重试路径。
+            // Keep the tombstone pending while any cleanup is unfinished; otherwise the session leaves the pending
+            // scan and the leftover projections lose every retry path.
+            if (issues.Count != before) continue;
+
+            try
+            {
+                await SessionStoreTombstoneStore
+                     .MarkDeletedAsync(storeDirectory, tombstone.SessionId, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception exception) when (exception is SessionStoreMigrationException or SessionStoreException
+                                               or IOException or UnauthorizedAccessException)
+            {
+                issues.Add(new SessionStoreCleanupIssue(SessionStoreCleanupArea.SessionDeletion, exception.Message));
+            }
+        }
+
+        return issues;
     }
 
     /// <summary>
@@ -805,8 +940,8 @@ public sealed class SessionStoreOperations
         {
             try
             {
-                var archives = await SessionStoreArchiveStore.SetArchivedAsync(storeDirectory, sessionId, false,
-                                                                               CancellationToken.None);
+                var archives = await SessionStoreArchiveStore
+                   .SetArchivedAsync(storeDirectory, sessionId, false, CancellationToken.None);
                 UpdateArchiveState(storeDirectory, archives);
             }
             catch (Exception exception)
@@ -817,8 +952,8 @@ public sealed class SessionStoreOperations
 
             try
             {
-                var pins = await SessionStorePinStore.SetSessionPinnedAsync(storeDirectory, sessionId, false,
-                                                                            CancellationToken.None);
+                var pins = await SessionStorePinStore
+                   .SetSessionPinnedAsync(storeDirectory, sessionId, false, CancellationToken.None);
                 UpdatePinState(storeDirectory, pins);
             }
             catch (Exception exception)
@@ -852,11 +987,12 @@ public sealed class SessionStoreOperations
             if (await SessionStoreAuthority.IsMigratedAsync(storeDirectory, CancellationToken.None))
             {
                 await SessionStorePlacementStore.RemoveSessionAsync(storeDirectory, sessionId, CancellationToken.None);
-                await SessionStoreOrganizationStore.RemoveSessionAsync(storeDirectory, sessionId, CancellationToken.None);
+                await SessionStoreOrganizationStore
+                   .RemoveSessionAsync(storeDirectory, sessionId, CancellationToken.None);
             }
         }
         catch (Exception exception) when (exception is SessionStoreMigrationException or SessionStoreException
-                                               or ArgumentException or IOException or UnauthorizedAccessException)
+                                           or ArgumentException or IOException or UnauthorizedAccessException)
         {
             issues.Add(new SessionStoreCleanupIssue(SessionStoreCleanupArea.SessionPlacement, exception.Message));
             Trace.TraceError("Session placement cleanup for '{0}' failed: {1}", storeDirectory, exception.Message);
