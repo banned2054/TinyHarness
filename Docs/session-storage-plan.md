@@ -1,8 +1,6 @@
 # 会话存储治理与删除优化
 
-更新日期：2026-11-17。
-
-状态：S1、S2 的实现与本地定向验证记录见第 7 节（截至 2026-11-11）；本次只读对账未重跑验证。S3 已于 2026-11-15 完成 schema 冻结与版本化建库／升级基础（第 4 节），未切换生产读写权威、未导入真实数据；S4 已于 2026-11-15 实施分批导入、按迁移标记切换生产权威与旧版本兼容（第 5 节），并于 2026-11-17 修复静态审查发现的 5 项缺陷（第 5.8 节）；迁移只可在显式入口触发且未对真实用户 store 执行；S5 待启动。真实 GUI、真实用户库耗时与跨进程现场验收仍待验收。入口见 [PLAN.md](../PLAN.md)。
+更新日期：2026-11-17。S1、S2 的实现与本地定向验证记录见第 7 节（截至 2026-11-11）；本次只读对账未重跑验证。S3 已于 2026-11-15 完成 schema 冻结与版本化建库／升级基础（第 4 节），未切换生产读写权威、未导入真实数据；S4 已于 2026-11-15 实施分批导入、按迁移标记切换生产权威与旧版本兼容（第 5 节），并于 2026-11-17 修复静态审查发现的 5 项缺陷（第 5.8 节）；S5 已于 2026-11-17 实施业务库 schema 版本 2 的删除墓碑、可续作会话删除与迁移后项目删除事务（第 6 节），并同日修复静态审查发现的 4 项缺陷（第 7 节：v1 业务库的生产升级入口、清理未完成时保留待收尾墓碑、项目删除向宿主传递实际解绑会话、日志已消失的墓碑索引行由孤儿清理处理）；本地定向与全量验证见第 7 节。迁移与 schema 升级只可在显式入口触发且未对真实用户 store 执行。真实 GUI、真实用户库耗时、双进程并发恢复与断电现场验收仍待授权。入口见 [PLAN.md](../PLAN.md)。
 
 ## 1. 目标与分期
 
@@ -70,7 +68,7 @@
 | 文件 | 内容 | 丢失或损坏的处置 |
 | --- | --- | --- |
 | `session-index.db`（既有，schema 版本 2） | 可从 JSONL 重建的列表摘要与归档投影 | 允许整库清空重建，由对账重新派生 |
-| `session-store.db`（本阶段新增，schema 版本 1） | 项目、归属、归档、置顶、顺序、展开状态 | **不可重建**：只能由业务备份恢复；缺失只表示"尚未迁移" |
+| `session-store.db`（S3 新增，schema 版本 2） | 项目、归属、归档、置顶、顺序、展开状态与会话删除墓碑 | **不可重建**：只能由业务备份恢复；缺失只表示"尚未迁移" |
 
 分成两个文件是刻意的结构约束：索引的整库重建路径（`RebuildSchemaAsync` 直接 DROP 表）与"缺失即初始化"只允许作用于派生数据，业务表不能出现在任何可能被清空的语句里。
 
@@ -168,12 +166,12 @@
    `integrity_check`、恢复与回退策略一并落地。升级前自动备份仍未实现。
 3. 标题投影与完整恢复的 `pending` 语义已统一为"最后一条非空名称胜出"（第 5.6 节），两侧均有测试覆盖。
 4. `session_placement` 的"无行＝尚未初始化"与"空项目＝明确无项目"已由读写路径与测试区分（第 5.3 节）。
-5. S5 所需的删除墓碑／可恢复删除状态仍不在 v1 schema，须走版本 2 迁移；未在本阶段扩大 schema。
+5. S5 所需的删除墓碑／可恢复删除状态仍不在 v1 schema，须走版本 2 迁移；未在本阶段扩大 schema。（2026-11-17 已由 S5 的版本 2 实现，见第 4.12 节。）
 6. 迁移互斥由 store 级租约实现，来源指纹复核覆盖旧写者在导入期间的写入，切换后以警告报告旧文件被改写（第 5.5 节）；
    业务库写失败的重试／排队策略与双进程写者仲裁仍是后续事项。
 7. 数量预算、名称与路径规范化的调用方校验保持不变；`CHECK` 边界未变。
 8. 摘要表仍留在 `session-index.db`，未并入业务库。
-9. `UpgradeAsync` 的跨版本成功路径仍缺真实旧结构夹具；本阶段没有新增 schema 版本。
+9. `UpgradeAsync` 的跨版本成功路径仍缺真实旧结构夹具；本阶段没有新增 schema 版本。（2026-11-17：S5 的版本 2 升级已补真实 v1→v2 夹具，见第 4.12 节。）
 10. AOT 与离线 smoke：本阶段已接入真实调用方，CLI/Desktop 发布产物需重做业务库建库、导入、读写与重开的 smoke 验证（见第 7 节）。
 
 ### 4.10 2026-11-14 后续改动纳入边界
@@ -188,6 +186,20 @@
 - 新增 `TinyHarness.Core/Exceptions/SessionStoreDatabaseException.cs`。
 - 新增测试 `TinyHarness.Tests/SessionStoreDatabaseTests.cs`（25 项）与 `TinyHarness.Tests/SessionStorageBoundaryTests.cs`（3 项）。
 - 未修改任何既有生产类型、配置文件或依赖；未切换读写权威；未导入真实数据。
+
+### 4.12 版本 2 schema（S5，2026-11-17 冻结）
+
+`CurrentSchemaVersion = 2`。版本 2 只新增会话删除墓碑，不改动版本 1 的任何列、约束与索引：
+
+| 表 | 字段 | 约束与索引 | 用途 |
+| --- | --- | --- | --- |
+| `session_tombstone` | `session_id`, `state`, `requested_utc`, `updated_utc` | 主键 `session_id`；CHECK：长 32、`state ∈ {pending, deleted}`、时间为整数；`ix_session_tombstone_state`（`state, session_id`） | 先于日志删除提交删除意图，跨文件崩溃窗口可续作；墓碑永久保留，阻止同一 ID 的日志复活 |
+
+- **墓碑先于日志**：业务库事务与日志文件不能共享事务，因此删除协议不宣称跨文件原子。`pending` 表示删除意图已提交、日志或投影尚待收尾；`deleted` 表示已清理完成。两种状态都使该会话对所有读取路径不可见。
+- **墓碑不删除**：日志可能因备份恢复、文件拷贝或旧版本程序重新出现；保留行是不让它复活成列表条目的唯一持久标记。行数上限由历史删除会话数决定，不随活跃数据增长。
+- **升级**：迁移 2 用 `CREATE TABLE/INDEX IF NOT EXISTS`，形状为版本 1 全部对象加墓碑表与状态索引；迁移前要求版本 1 结构齐全，升级后同一事务内核对并写版本号。S3 缺失的"跨版本成功迁移"夹具已由"把版本 2 库删掉墓碑对象、版本号退回 1，再升级"的真实 v1 结构覆盖。
+- **升级入口唯一**：`SessionStoreDatabase.UpgradeAsync` 不直接对外，只由显式 `session store migrate`（`SessionStoreMigration.MigrateAsync`）在迁移租约内调用，且两条路径都覆盖：迁移标记**已完整**的 store 就地升级已迁移业务库（本次不导入任何批次，结果以 `SchemaUpgradedFrom` 报告来源版本）；**未完成**的 store 在身份核对与批次导入之前先升级，避免按新结构导入旧库或停在半途。`InspectAsync` 对版本更低的库报告 `DatabaseNeedsUpgrade`，`SessionStoreBusinessConnection.OpenVerifiedAsync` 把 `NeedsUpgrade` 映射为 `Unsupported` 拒绝，因此升级前的生产读写一律失败而不是读半套结构。
+- **备份边界不变**：版本 1 期间生成的备份在版本 2 程序中按 `NeedsUpgrade` 报告；S4 未对真实用户 store 迁移，因此不存在需要兼容的 v1 真实备份。恢复路径不接受需要升级的备份，仍然只能由备份恢复旧版本库存。
 
 ## 5. S4：分批导入、切换与兼容
 
@@ -387,17 +399,122 @@ PASS（exit 0，17 steps／16 tool executions，含 `session store: verified mig
 
 ## 6. S5：迁移后简化删除与验收
 
-待启动；依赖 S4，且需要业务库版本 2 迁移（墓碑／可恢复删除状态，见第 4.9 节）。
+已于 2026-11-17 实施，依赖 S4 与业务库版本 2（删除墓碑，见第 4.12 节）。本阶段只改迁移完成后的删除路径；
+未迁移 store 保持原有"日志 + 旧文件"语义，真实用户 store 迁移仍只能由显式入口触发。
 
-- 项目删除在 SQLite 事务内解除关系并清理项目组织状态，不再为组织变化逐日志追加记录；运行中会话限制与内存宿主更新仍需验证。
-- 会话删除使用可恢复的删除状态协调数据库和日志文件，保留 writer 锁与宿主释放；不宣称跨文件和数据库原子提交，避免后台扫描复活删除中条目。
-- 元数据操作不刷新对话活动时间；运行会话优先、空闲手动排序、取消置顶恢复原位置等语义不变。
-- 归档会话删除继续尊重桌面偏好中的确认提示；迁移或删除 store 组织数据不得改写该 UI 偏好。
-- 覆盖双进程、在途写入、崩溃窗口、版本冲突、只读与不可写库、业务备份恢复、摘要重建不丢组织状态，并执行 NativeAOT／离线 smoke 与真实 GUI 验收。
+### 6.1 会话删除协议
+
+- **墓碑先行**：`SessionStoreOperations.DeleteSessionPermanentlyAsync` 在迁移后先提交 `session_tombstone(pending)`，
+  再在既有 writer 锁下删除日志（`SessionStoreDeletion.TryDeleteResolvedAsync`），随后清理归档、置顶、索引、
+  归属行与手工会话顺序，最后把墓碑置为 `deleted`。重复删除对 `deleted` 墓碑按幂等完成返回。
+- **只有清理确实完成才置为已删除**：`CleanupDeletedSessionProjectionsAsync` 把单项失败转为 `SessionStoreCleanupIssue`
+  而不抛出，因此两条删除路径都以"本次是否新增清理问题"决定墓碑状态——有任何残留时墓碑保持 `pending`，返回
+  清理问题，并由恢复入口在下次准备 store 时重试。否则一次暂时的置顶、归属、顺序或索引失败会让墓碑退出
+  待收尾扫描，残留投影再无补做路径。
+- **可续作**：日志被 writer 占用或进程在任一阶段退出时，墓碑停留在 `pending`。`RecoverPendingSessionDeletionsAsync`
+  按请求时间遍历待收尾墓碑，尽力删除残留日志、清理投影并置为 `deleted`；日志仍被占用时保留待收尾并作为
+  `SessionDeletion` 清理问题返回，不覆盖正在写入的会话。桌面在准备每个 store 时调用该入口补完中断删除。
+- **不复活**：读取路径一律以墓碑优先于日志存在性——`SessionStoreReader.ReadAsync` 拒绝已删除会话、
+  `ListAsync`／`SessionListProjection.ScanSummariesAsync`／`ListSummariesAsync`／`ListRowsAsync` 过滤墓碑 ID、
+  `SessionIndexReconciler` 删除残留索引行且不再重建、`SessionProjectInitializer` 不为墓碑会话补建归属。
+  墓碑查询失败时读取按原有降级路径继续并记诊断，不把整个列表拒绝。
+- **日志已消失的墓碑索引行由孤儿清理处理**：对账的墓碑分支只在枚举到对应日志时执行，因此"日志已删除、索引
+  清理尚未成功"的中断窗口里，残留行不在来源集合内，只能由孤儿清理移除。孤儿清理只排除本轮已按墓碑删掉的
+  行，不排除全部墓碑 ID——否则这条残留行两条路径都不会处理，之后每轮对账都会保留它。
+- **边界**：墓碑与日志不在同一事务，不宣称跨文件原子；墓碑行永久保留，用于阻止备份恢复、文件拷贝或旧程序
+  写回的日志复活。writer 锁、宿主释放与"运行中会话不可删除"语义不变。
+
+### 6.2 迁移后的项目删除
+
+- `SessionStoreProjectCatalogStore.BeginDeletionAndUnassignAsync` 在单个事务内：标记 `is_deleting`、读出仍归属
+  该项目的会话 ID、把这些 `session_placement` 改为显式无项目、删除 `pinned_project` 与 `project_order` 引用。
+  迁移后不再扫描会话日志、不再追加 `project-unassignment` 记录。
+- `SessionStoreOperations.DeleteProjectAsync` 的迁移分支复用既有 `ISessionProjectDeletionGateway` 六阶段契约
+  （标记 → 草稿页 → 运行宿主 → 行投影 → 完成前准备 → 完成），并在 `UnassignmentAppliedAsync` 中把事务内实际
+  解绑的会话 ID 以 `Unassigned` 结果交给宿主——只传空结果会让没有打开 runtime 的现存侧栏行继续显示已删除的
+  项目，直到后续刷新才被纠正。事务后重新核对归属；并发写回的项目归属按解绑不完整中止并保留删除标记，最终
+  移除仍由 `ON DELETE RESTRICT` 外键兜底。折叠分组键属于界面层，继续由宿主钩子按项目清理。
+- 未迁移 store 的目录册、日志解绑与旧侧栏清理路径完全不变。
+
+### 6.3 未完成／未验证边界
+
+- 双进程真实争用、在途写入与断电现场未实测：墓碑续作只由同一测试进程内的状态构造覆盖（writer 占用、
+  墓碑已提交而日志仍在），不含真实子进程终止与 SQLite WAL 重放。
+- 真实 GUI 的删除交互与真实用户 store 迁移后删除未验收；本轮 NativeAOT publish 与两端产物 smoke 已执行
+  （见第 7 节），但 smoke 本身仍不含会话删除步骤。
+- 已删除会话的墓碑不提供用户可见的恢复／撤销：本阶段"可恢复"指删除操作本身可续作，不是恢复已删会话。
+- 备份恢复不做墓碑合并：恢复的是整库快照，墓碑随快照回到备份时刻的状态。
+- 真实用户库从版本 1 升到版本 2 的升级现场未实测：升级夹具是把版本 2 库退回版本 1 结构构造的，覆盖了
+  结构与数据保留，但不含真实用户库的历史数据分布与耗时。
 
 ## 7. 本轮实施与验证记录
 
 > 本节为截至 2026-11-11 的历史实施与验证快照。2026-11-14 的计划对账没有重跑其中的构建、测试、NativeAOT、smoke 或真实环境验收。
+
+2026-11-17，S5 静态审查 4 项修复：
+
+对 S5 的 15 个变更文件做静态审查发现 4 项缺陷，已全部修复：
+
+1. **v1 业务库没有生产升级入口（P1）**：`CurrentSchemaVersion` 升到 2 后，已完成 S4 的 v1 库会被
+   `OpenVerifiedAsync` 以 `NeedsUpgrade` 拒绝，而全仓生产代码没有调用 `UpgradeAsync`；再次执行显式
+   `MigrateAsync` 也会在"已完成迁移"分支按当前版本核对身份后直接返回，无法升级。现在两条迁移路径都在
+   持有租约的前提下就地升级：已完成的 store 在 `BuildAlreadyCompletedResultAsync` 升级已迁移业务库
+   （不导入任何批次，`SessionStoreMigrationResult.SchemaUpgradedFrom` 报告来源版本），未完成的 store 在
+   `EnsureDatabaseBindingAsync` 升级后继续导入，因此身份核对、导入与校验都按当前结构进行。`InspectAsync`
+   新增 `SessionStoreMigrationStatus.DatabaseNeedsUpgrade`，不再把版本更低报成 `DatabaseDamaged`；升级前的
+   生产读写仍由连接入口以 `Unsupported` 拒绝。
+2. **清理失败仍标记完成，导致无法续作（P2）**：`CleanupDeletedSessionProjectionsAsync` 把单项失败转为 issues
+   返回，而 `DeleteSessionPermanentlyAsync` 与 `RecoverPendingSessionDeletionsAsync` 都无条件
+   `MarkDeletedAsync`。一旦归档、置顶、归属、顺序或索引清理暂时失败，墓碑便退出待收尾扫描，重复删除又按
+   幂等直接返回，残留永久不再重试。现在两条路径都以"本次是否新增清理问题"决定墓碑状态：有残留时保持
+   `pending` 并把问题返回给调用方，恢复入口下次准备 store 时继续重试。
+3. **空解绑结果没有更新 Desktop 会话行（P2）**：迁移分支向 gateway 传 `SessionProjectUnassignmentResult([])`，
+   而 Desktop 的 `ApplyProjectUnassignmentResult` 只更新结果中标为 `Unassigned` 的会话，因此没有打开 runtime
+   的现存侧栏行仍保留旧 `ProjectId`，项目移除后在 `RebuildProjects` 中被归入"项目信息缺失"直到后续刷新。
+   `SessionProjectDeletionStart` 增加 `UnassignedSessionIds`（事务内先读后改，保证名单与解绑一致），
+   `DeleteMigratedProjectAsync` 把它们按 `Unassigned` 交给宿主。原 `RecordingDeletionGateway` 只检查回调顺序，
+   新测试同时断言宿主收到的会话 ID 与"结果完整"。
+4. **日志已消失的墓碑索引行被永久跳过（P2）**：`SessionIndexReconciler` 的墓碑删除分支只在枚举到对应日志时
+   执行，孤儿清理又排除全部墓碑 ID，因此"日志已删除、索引清理尚未成功"的中断窗口里残留索引行两条路径都不
+   处理，之后每轮对账都保留它。现在孤儿清理只排除本轮已按墓碑移除的行（`clearedByTombstone`），该残留行由
+   孤儿清理删除；原有测试保留了日志，未覆盖这一窗口。
+
+逐项反向验证（把修复改回旧行为后对应测试必须转红，恢复后重新转绿）：
+
+| 修复 | 反向改动 | 结果 |
+| --- | --- | --- |
+| 第 1 项（已完成分支） | 删掉 `BuildAlreadyCompletedResultAsync` 内的升级块 | `Migrate_CompletedStoreWithOlderSchema_UpgradesInPlaceAndKeepsRows` 转红 |
+| 第 2 项 | 去掉 `issues.Count == 0` 与 `issues.Count != before` 两处判断 | 两项墓碑清理测试同时转红 |
+| 第 3 项 | 把 gateway 载荷改回空结果 | `ProjectDeletion_MigratedStore_ReportsUnassignedSessionIdsToHost` 转红 |
+| 第 4 项 | 孤儿清理改回排除全部墓碑 ID | `Reconciliation_RemovesTombstonedRowWhoseLogIsAlreadyGone` 转红 |
+
+验证（2026-11-17）：`TinyHarness.slnx` Debug 构建 **0 警告 0 错误**；`TinyHarness.Tests` 全量
+**2306 通过／0 失败／10 跳过（2316 总计）**；`TinyHarness.Desktop.Tests` 全量 **421 通过／0 失败**。
+新增 6 项测试：`Migrate_CompletedStoreWithOlderSchema_UpgradesInPlaceAndKeepsRows`（就地升级、保留项目／归属／
+归档行、升级后可写墓碑、重复运行不再升级）、`Migrate_UnfinishedStoreWithOlderSchema_UpgradesBeforeResumingImport`
+（旧结构续作先升级再导入）、`Delete_WhenProjectionCleanupFails_LeavesTombstonePendingForRetry`
+（索引清理失败保留待收尾，恢复入口补齐后转为已删除）、`Recovery_WhenProjectionCleanupStillFails_KeepsTombstonePending`、
+`Reconciliation_RemovesTombstonedRowWhoseLogIsAlreadyGone`、`ProjectDeletion_MigratedStore_ReportsUnassignedSessionIdsToHost`。
+CLI 与 Desktop `win-x64` NativeAOT publish 均成功，**0 条 compiler／trimming／AOT 警告**（Desktop 仍有既有的两条
+Avalonia Win32 COM `will always throw` 信息性诊断，来自第三方库）；从仓库外工作目录、隔离
+TEMP／APPDATA／LOCALAPPDATA 运行**发布产物**：CLI `smoke --config <repo>/tinyharness.json` PASS（exit 0，
+17 steps／16 tool executions，含 `session store: verified migration, read/write, reopen, backup and restore`），
+Desktop `--offline-smoke` PASS（`session-store=migrated+readwrite+restore`）。日志保留在 `artifacts/s5-20261117/`
+（`cli-publish.log`、`desktop-publish.log`、`cli-aot-smoke.log`、`desktop-aot-smoke.log`），发布输出临时放在
+`.tmp/aot-s5-20261117/` 并在验证后删除。
+未验证／未执行：未对真实用户 store 执行迁移或 v1→v2 升级（升级夹具是把版本 2 库退回版本 1 结构构造的）；
+未做真实 GUI 删除交互、双进程并发、断电与真实进程终止验收；两端 smoke 不含会话删除步骤。
+
+2026-11-17，S5 删除墓碑与项目删除事务：
+
+- 新增 `SessionStoreTombstoneStore`（墓碑读写、待收尾扫描、读取路径过滤入口）与 `SessionStoreDeletionState`／`SessionDeletionTombstone`；`SessionStoreDatabase` 的 `CurrentSchemaVersion` 升到 2，新增 `session_tombstone` 表与 `ix_session_tombstone_state` 索引，迁移 2 声明版本 1 全部对象加墓碑对象的完整形状。
+- `SessionStoreDeletion` 拆出 `TryDeleteResolvedAsync`：允许在已解析的受保护 store 上按幂等语义删除日志（缺失返回 false），供墓碑续作使用；公开 `DeleteAsync` 的 writer 锁与叶子校验语义不变。
+- `SessionStoreOperations.DeleteSessionPermanentlyAsync` 迁移后走"墓碑 → 日志 → 投影 → 置为已删除"，新增 `RecoverPendingSessionDeletionsAsync`；`SessionStoreCleanupArea` 增加 `SessionDeletion`，桌面把新区域映射为"删除收尾"并在准备 store 时调用恢复入口。
+- 读取路径排除墓碑：`SessionStoreReader.ReadAsync`／`ListAsync`、`SessionListProjection` 的降级扫描与索引查询、`SessionIndexReconciler`、`SessionProjectInitializer`。对账遇到墓碑会话会删除残留索引行且不重建。
+- 项目删除：`SessionStoreProjectCatalogStore.BeginDeletionAndUnassignAsync` 在单事务内标记删除、归属改为显式无项目、清理置顶与手动顺序；`SessionStoreOperations.DeleteProjectAsync` 的迁移分支复用 gateway 六阶段并在事务后复核归属。
+- 测试：`SessionStoreTombstoneTests` 5 项（迁移后删除清理日志/墓碑/索引/归属并幂等、writer 占用保留待收尾且恢复续作、读取与两条列表路径过滤待收尾会话、对账删除且不重建墓碑行、项目删除单事务解绑与组织清理）；`SessionStoreDatabaseTests` 更新冻结表/索引清单，新增真实 v1 结构升级到 v2 的成功夹具（覆盖 S3 缺失的跨版本成功路径）。
+- 验证：`TinyHarness.slnx` Debug 构建 0 警告 0 错误；`TinyHarness.Tests` 全量 **2300 通过／0 失败／10 跳过（2310 总计）**，`TinyHarness.Desktop.Tests` 全量 **421 通过／0 失败**；持久化定向筛选 **301 通过／0 失败／3 跳过**（含本轮新增 5 项墓碑测试、数据库 27 项与真实 v1→v2 升级夹具）。Desktop `--offline-smoke` 在隔离 TEMP／APPDATA／LOCALAPPDATA 下 PASS（`session-store=migrated+readwrite+restore`），覆盖业务库迁移后的读写与恢复，但 smoke 本身尚未加入删除步骤。
+- 未验证／未执行：未执行 CLI／Desktop NativeAOT publish 与发布产物 smoke（本轮未改入口、依赖、JSON 序列化或配置绑定，也没有新增反射／动态代码；按仓库规则未触发该项）；未做真实 GUI 删除交互、双进程并发、断电与真实用户 store 迁移后删除验收；墓碑续作用例在同一测试进程内构造状态（writer 占用、墓碑已提交而日志仍在），不是真实进程终止与 SQLite WAL 重放。
 
 2026-11-15，S4 分批导入、切换与兼容：
 
