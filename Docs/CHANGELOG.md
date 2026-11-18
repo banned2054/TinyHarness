@@ -7,61 +7,170 @@ All notable changes to TinyHarness.NET are documented here, with matching Simpli
 ## 📘 Versions / 版本
 
 - [🚧 Unreleased / 未发布](#unreleased)
+- [🚀 Release v0.1.0-alpha.1 — Desktop Preview / 桌面预览](#release-v010-alpha1)
 - [🚀 Release v0.0.1 — Initial Prototype / 首个原型](#release-v001)
 
 <a id="unreleased"></a>
 
 ## 🚧 Unreleased / 未发布
 
-### 简体中文
+（暂无）/(Nothing yet.)
+
+<a id="release-v010-alpha1"></a>
+
+## 🚀 Release v0.1.0-alpha.1 — Desktop Preview / 桌面预览
+
+[简体中文](#简体中文-v010-alpha1) | [English](#english-v010-alpha1)
+
+Release Date / 发布日期：2026-11-18
+
+[Download / 下载 v0.1.0-alpha.1](https://github.com/banned2054/TinyHarness/releases/tag/v0.1.0-alpha.1)
+
+### 简体中文 v0.1.0-alpha.1
+
+这是 TinyHarness.NET 的第一个预发布版本（alpha），也是首个包含 Desktop 桌面客户端的发布。自 v0.0.1 以来，权限体系重构为三级执行模型并引入授权治理，会话存储引入业务库与显式迁移，新增项目实体、受控联网与 Desktop 客户端。alpha 阶段命令、配置和存储格式仍可能变化；升级前请备份用户配置与会话存储。
 
 #### ✨ 新增
 
-- 三级执行体系（Windows 沙箱基线 / 沙箱扩展 / 显式宿主执行）：普通读取不限工作区、工作区写入与沙箱 Shell 自动执行；越界写入、已知敏感位置（读与写都 L2）、受保护元数据写入、联网申请与 shell 写根申请按 Level 2 逐次审批；`executionScope=host` 为显式单次批准的宿主执行，CLI 生产路径与 Desktop 注册同一 Shell 路由形态。
-- 常设信任显式迁移：`networkPolicy=enabled` 与附加写根不再静默扩大授权；检测到即进入未确认态（联网与附加写根写逐次审批、OS 基线不注入），经 CLI chat 启动确认或 Desktop 设置页常设授权区块确认后作为显式持久授权运行，撤销入口随时可用；确认展示如实列出网络范围、附加读/写根与敏感位置提示。
-- OS 层基线广泛读与读保护：沙箱进程 OS 读边界=用户 profile 根；C1 宿主密钥路径（trust.json/用户配置/会话存储/trust 存储）、`.codex` 授权内容、`cap_sid` 与 C2 敏感目录段经 deny-read 集随每命令同步施加、可回收（deny 集=目录段；文件级敏感由应用层保护）。
-- shell 写根申请参数 `writeRoots`（≤8 个绝对路径，空格/引号/盘根拒绝）：批准后写根冻结进授权与策略身份并经 grant 通道在沙箱内生效；仅允许单次与 Turn 授权。
-- 授权治理：授权生命周期与可信授权变更以必需记录 `permission-grant-event/1` 写入会话日志（旧程序拒读）；Reviewer 授权上下文补目标摘要、约束、有效期与策略修订；审批展示事实行（后端与隔离声明、文件与网络权限、有效期、活动授权摘要）在 CLI 与 Desktop 同源一致；拒绝记忆仅在可信授权变更点解除。
-- 未信任工作区入口恢复：`run` 在未信任工作区保持可用（模型与只读文件工具可用、进程执行 fail-closed 拒绝），stderr 给出 /trust 指引；沙箱组合的基线读保护 pairing 校验不变。
-- C2 获批读授权通道（沙箱 payload 协议 v7）：获批的敏感位置读取由不在 deny 组内的专用授权主体在单次执行窗口内完成（`authorized_read_paths` 载荷；不含授权读即普通执行，普通执行行为与旧版完全一致），获批读路径不再并入 read_roots 组通道；执行窗口跨进程串行，授权执行身份与普通执行隔离。三道前置门：helper 能力未声明 v7 即拒绝；恢复失败或进程回收状态未知即禁用授权主体并持久化；helper 侧以沙箱组不可篡改的保护清单核对 C1 保护面（缺失/解析失败/与授权读重叠即拒绝）。授权执行需沙箱组件声明 v7 能力，未声明的环境下入口拒绝（fail-closed），普通沙箱行为不变。
+**Desktop 桌面应用（首个版本）**
+
+- 新增基于 Avalonia 的 Windows 桌面客户端，与 CLI 共享 Core 运行时、用户配置与会话存储：项目侧栏（分类视图、手动排序、置顶、展开状态持久化）、会话列表首屏先行与逐批展开、归档会话与可恢复项目删除、会话自动命名与失败重试。
+- 对话视图：流式输出按批调度、执行过程分组、思考内容展示、底部自动跟随、Markdown 列表标记对齐；用户气泡支持文本选择与悬停复制，助手回复支持整轮复制。
+- 供应商与模型管理：供应商编辑卡与 API 密钥输入、从供应商获取模型目录并多选导入、编辑卡内删除模型、供应商删除确认与共享凭据保护；设置分区选择即自动保存；多模态输入能力配置项。
+
+**权限与沙箱执行**
+
+- 三级执行体系（Windows 沙箱基线 / 沙箱扩展 / 显式宿主执行）：普通读取不限工作区、工作区写入与沙箱 Shell 自动执行；越界写入、敏感位置、受保护元数据写入、联网申请与 shell 写根申请（`writeRoots`）按 Level 2 逐次审批；`executionScope=host` 为显式单次批准的宿主执行。
+- 权限引擎重写为 Grant 决策链：单次／Turn／会话／常设授权，授权生命周期与可信授权变更以必需记录 `permission-grant-event/1` 写入会话日志（旧程序拒读）；组合指纹守卫在发送入口与每次工具派发前核对当前可信配置，失配即撤销全部授权并失效会话；审批展示事实行在 CLI 与 Desktop 同源一致，审批授权上下文聚合展示。
+- 常设信任显式迁移：`networkPolicy=enabled` 与附加写根不再静默扩大授权；检测到即进入未确认态，经 CLI chat 启动确认或 Desktop 设置页确认后作为显式持久授权运行，撤销入口随时可用。
+- OS 层读基线与读防护：沙箱进程 OS 读边界为用户 profile 根；宿主密钥路径、`.codex` 授权内容、`cap_sid` 与敏感目录段经 deny-read 集随每命令同步施加并可回收；C1 保护覆盖双向重叠，申请根覆盖保护对象同样硬拒。
+- C2 获批读通道（沙箱 payload 协议 v7）：获批的敏感位置读取由专用授权主体在单次执行窗口内完成，执行窗口跨进程串行，授权执行身份与普通执行隔离；helper 能力声明、恢复失败禁用与保护清单核对三道前置门，未声明环境下入口拒绝（fail-closed）。
+- Desktop 审批与沙箱界面：「请求批准」与「帮我批准」（AI 审核）双模式、审批三分展示、独立 AI 审批总期限（CLI 与 Desktop 同源）、沙箱设置分区与延迟初始化、沙箱目录权限修复入口。
+
+**受控联网**
+
+- 沙箱网络三态模型（禁用／受限／启用）：代理支持、NuGet 缓存共享、`sandbox verify --network` 验收模式；按任务意图判断必要联网查询授权；常设网络免审批收紧为双条件（常设网络策略 `enabled` 且常设信任已确认）；未信任工作区 `run` 保持可用（模型与只读文件工具可用、进程执行 fail-closed）。
+- Desktop 网络设置：系统代理、直连或已保存的 HTTP／HTTPS／SOCKS5 代理，供应商可继承或单独指定；代理凭据保存在系统凭据存储。
+
+**项目实体与会话归属**
+
+- 项目核心模型与受保护目录册：会话归属项目并在旧日志上幂等初始化，启动时自动为旧会话补齐归属；目录册变化检测与跨进程自动同步（内容语义比较）；可恢复项目删除与提示设置。
+
+**会话列表索引与存储迁移**
+
+- 会话列表 SQLite 摘要索引（Microsoft.Data.Sqlite）：首屏先行、定向整理、跨进程监视同步与对账、侧栏轻刷新，显著降低大会话库的列表加载耗时。
+- 会话存储业务库（`session-store.db`）与显式迁移：冻结业务库 schema 并提供版本化迁移协议（v1→v2）、分批导入与迁移标记、业务库权威接管（组织状态、项目目录册、会话归属投影）、备份／校验／恢复／回退保护、业务库 WAL/SHM 隔离与恢复记录；新增 CLI 显式迁移管理命令。
+- 永久删除会话支持中断续作（墓碑机制）；迁移后项目删除在单事务中完成会话解绑。
+
+**模型与续聊**
+
+- 会话内切换模型、推理强度与原文持久化；推理档位对齐官方全集（含 `xhigh` 规范拼写），传输使用 raw representation；旧会话恢复按保存绑定回退。
+- 可配置模型请求超时策略：流空闲超时、总响应超时与 AI 审批总期限（`settings.modelTimeouts`）。
+- CLI 交互式会话新建与切换（`/new`、`/sessions`、`/switch`）；`search_text` 支持正则过滤与输出增强。
 
 #### 🛠 修复
 
-- 文件工具 grant 缺策略身份导致授权事件记录被拒的断路（文件工具计划现携带稳定策略身份）。
-- CLI 守卫包装丢失网络申请标志导致的审批旁路（守卫路径网络申请恢复逐次审批）。
-- 常设网络免审批收紧为双条件：需常设网络策略 `enabled` 且常设信任已确认同时成立；`restricted` 下仅确认附加写根不再连带免网络审批（PermissionEngine 新增 standingNetworkEnabled 独立门）。
-- C1 保护覆盖双向重叠：申请根覆盖 C1 保护对象（如用户配置、信任文件、会话存储的父目录）同样硬拒；检查覆盖全部四个写根来源（单次申请、常设附加写根、活动 Grant、用户配置运行时根），按组合实例实际路径比对。
-- 撤销常设授权即失效会话：发送入口与每次工具派发前核对组合指纹与当前可信配置（CLI 与 Desktop 同机制、两端重读配置，读取/解析失败同样失效）；失配即撤销全部授权并失效会话，提示重新打开；已启动命令沿用既有取消回收，不自动重组。
-- 权限系统保护根细化：整沙箱 home 收缩为四个敏感子路径（`.sandbox-secrets`、`.sandbox`、`cap_sid`、`.sandbox-bin`）；默认 tmp/tools/nuget-cache 运行时根恢复运行时根分类与 L1 自动执行；OS ACL 与组合完整性校验仍覆盖整 home。
+- 修复文件工具 grant 缺策略身份导致授权事件记录被拒的断路；修复 CLI 守卫包装丢失网络申请标志导致的审批旁路。
+- 非交互输入不得授予审批权限或解除检查阻断；派发前重新核对指令与组合守卫。
+- 更换 endpoint 来源后不再沿用旧凭据引用，复用旧密钥前需确认；无动词调用支持前置 `--config`。
+- 修复 Desktop 停止时的取消异常中断，完善取消清理与生命周期取证；修复 Windows Ctrl+C 将交互输入误判为结束。
+- 修复旧会话切换模型时的空引用异常；自动刷新桌面会话的供应商和模型配置。
+- 修复会话索引归档投影同值行切断 `data_version` 反馈环。
+- 旧版权限配置与会话自动迁移至人工审查；修复旧版权限选择记录与历史摘要解析。
+- 沙箱目录 ACL 异常时阻断启动命令；CLI 可经受限 helper 修复目录 ACL，Desktop 提供修复入口。
+- `config set` 校验预算与所选模型窗口一致性，支持逐项修复超限配置；忽略工作目录中的应用配置。
+- 权限系统保护根细化：整沙箱 home 收缩为四个敏感子路径，默认 tmp/tools/nuget-cache 运行时根恢复 L1 自动执行；OS ACL 与组合完整性校验仍覆盖整 home。
+
+#### 📦 构建与分发
+
+- 运行时升级至 .NET 11（`net11.0`），NativeAOT 与 trimming 约束持续满足；发布工作流改为 CLI 与 Desktop 两个同构 ZIP，各自包含沙箱组件与许可材料，并分别执行原生 smoke（CLI `smoke`、Desktop `--offline-smoke`）。
+- CLI 随 Microsoft.Data.Sqlite 携带 `e_sqlite3.dll`；Desktop 额外携带 Avalonia 渲染原生库。
+- 依赖升级：Avalonia 12.1.6、LiveMarkdown.Avalonia 2.5.1、Microsoft.Extensions.AI.OpenAI 11.0.0、OpenAI 2.14.0、Microsoft.Data.Sqlite 11.0.0、System.Security.Cryptography.ProtectedData 11.0.0。
 
 #### 🧪 测试
 
-- 真实沙箱验收测试改为环境变量门禁：默认 `dotnet test` 不触机器沙箱、固定用户目录与外网；探针根必须经 `TINYHARNESS_REAL_SANDBOX_PROBE` 显式指定（无默认值，避免 %TEMP% 历史 ACL 污染），负向隔离探针先验探针根 ACL 前提（不满足记为 Inconclusive 不计通过），代理经 `TINYHARNESS_REAL_SANDBOX_PROXY` 参数化。
+- 真实沙箱验收测试改为环境变量门禁：默认 `dotnet test` 不触机器沙箱、固定用户目录与外网；探针根经 `TINYHARNESS_REAL_SANDBOX_PROBE` 显式指定（无默认值），负向隔离探针先验 ACL 前提（不满足记为 Inconclusive 不计通过），代理经 `TINYHARNESS_REAL_SANDBOX_PROXY` 参数化。
+- 新增会话索引 IndexProbe 探针、列表加载基准与侧栏投影链路基准测试；打包流程增加两端独立版本与原生依赖检查、`build-info.json` 来源与哈希清单。
 
-### English
+#### ⚠️ 已知限制
+
+- CLI 的编辑与运行控制仍较基础，工具没有交互式终端；Desktop 为首个版本，界面与交互仍在打磨。
+- 模型回答、摘要、自动命名与 AI 审批建议可能出错；本版不作稳定性或全面安全性保证，需核对实际文件变化和工具结果。
+- 会话内容不加密且可能包含秘密。会话存储自动迁移尚未在真实用户数据上完成验收；迁移前请关闭旧版程序并备份会话目录。旧程序可能无法打开新版写入的日志（如 `session-title`、`permission-grant-event`）。
+- 目前以 Windows x64 为验证平台。沙箱需要单独配置组件路径并由用户明确初始化，只隔离其工具进程；其他平台及与 Codex 发布版共存仍未验证。
+
+### English v0.1.0-alpha.1
+
+This is TinyHarness.NET's first prerelease (alpha) and the first release that ships the Desktop client. Since v0.0.1, the permission system has been reworked into a three-level execution model with grant governance, session storage gained a business store with explicit migration, and project entities, controlled networking, and the Desktop client were added. Commands, settings, and storage formats may still change during alpha; back up your user configuration and session store before upgrading.
 
 #### ✨ Added
 
-- Three-level execution (Windows sandbox baseline / sandbox extension / explicit host execution): ordinary reads beyond the workspace, workspace writes, and the sandboxed shell run automatically; writes outside the workspace, known sensitive locations (reads and writes at L2), protected-metadata writes, networking requests, and shell write-root requests ask per call at Level 2; `executionScope=host` is explicit single-approval host execution, with CLI production registering the same shell routing shape as Desktop.
-- Explicit standing-trust migration: `networkPolicy=enabled` and additional write roots no longer expand authority silently; detection enters an unconfirmed state (per-call approvals for networking and write-root writes, OS baseline not injected) until confirmed via the CLI chat startup prompt or the Desktop standing-authorization block, after which they run as explicit persistent authorization with a revoke entry. The confirmation display lists the network scope, additional read/write roots, and the sensitive-location hint.
-- OS-level broad read baseline and read protection: the sandbox process OS read boundary is the user profile root; C1 host secret paths (trust.json/user config/session store/trust store), `.codex` authorization content, `cap_sid`, and C2 sensitive directory segments ship in a deny-read set applied per command and reclaimable (the deny set is directory segments; file-level sensitive names stay protected by the application layer).
-- The shell write-root request parameter `writeRoots` (≤8 absolute paths; spaces, quotes, and drive roots refused): approved roots freeze into the grant and policy identity and take effect inside the sandbox through the grant channel; only single-operation and turn grants are offered.
-- Authorization governance: grant lifecycles and trusted authorization changes persist as required `permission-grant-event/1` session-log records (older programs refuse them); the reviewer context gains target summaries, constraint, expiry, and policy revision; approval prompts render fact lines (backend and isolation declaration, file and network permissions, validity, active grant summary) from one shared source across CLI and Desktop; denial memory clears only at trusted authorization changes.
-- Untrusted-workspace entry restored: `run` stays usable without trust (model and read-only file tools work; process execution fails closed) with a stderr `/trust` hint; the composed sandbox keeps its baseline read-protection pairing checks unchanged.
-- The approved C2 read authorization channel (sandbox payload protocol v7): approved sensitive-location reads run inside the sandbox under a dedicated authorization subject outside the deny group within a single execution window (`authorized_read_paths`; a payload without authorized reads is ordinary execution with unchanged v5 behavior), and approved read paths no longer merge into the read_roots group channel; the execution window is cross-process serialized, and the authorized execution identity is isolated from ordinary execution. Three gates: the entry is refused when the helper does not declare v7 capability; the authorization subject is persistently disabled after a failed restore or unknown reclamation; and the helper verifies the C1 protected surface from the tamper-resistant protected-paths list before executing (refusing on absence, parse failure, or overlap with the authorized reads). Authorized execution requires sandboxing components that declare v7 capability; environments without it refuse the entry (fail-closed) with ordinary sandbox execution unchanged.
+**Desktop application (first release)**
+
+- A new Avalonia-based Windows desktop client sharing the Core runtime, user configuration, and session store with the CLI: project sidebar (category view, manual ordering, pinning, persisted expansion state), session list with first-screen loading and batched expansion, archived sessions with recoverable project deletion, and automatic session titles with retries.
+- Conversation view: batched streaming output, process grouping, reasoning display, bottom auto-follow, and aligned Markdown list markers; user bubbles support text selection with a hover copy button, and assistant replies support full-turn copy.
+- Provider and model management: provider edit cards with API key input, fetching provider model catalogs with multi-select import, deleting models inside an edit card, provider deletion confirmation with shared-credential protection; settings save on selection; multimodal input capability configuration.
+
+**Permissions and sandboxed execution**
+
+- Three-level execution (Windows sandbox baseline / sandbox extension / explicit host execution): ordinary reads beyond the workspace, workspace writes, and the sandboxed shell run automatically; writes outside the workspace, sensitive locations, protected-metadata writes, networking requests, and shell write-root requests (`writeRoots`) ask per call at Level 2; `executionScope=host` is explicit single-approval host execution.
+- The permission engine was rewritten as a Grant decision chain: one-time / turn / session / standing grants, with grant lifecycles and trusted authorization changes persisted as required `permission-grant-event/1` session-log records (older programs refuse them); a composition fingerprint guard re-verifies the current trusted configuration on send and before every tool dispatch, revoking all grants and invalidating the session on mismatch; approval fact lines render from one shared source across CLI and Desktop, with the approval context presented in an aggregated window.
+- Explicit standing-trust migration: `networkPolicy=enabled` and additional write roots no longer expand authority silently; detection enters an unconfirmed state until confirmed via the CLI chat startup prompt or the Desktop settings page, after which they run as explicit persistent authorization with a revoke entry.
+- OS-level read baseline and read protection: the sandbox process OS read boundary is the user profile root; host secret paths, `.codex` authorization content, `cap_sid`, and sensitive directory segments ship in a deny-read set applied per command and reclaimable; C1 protection covers bidirectional overlap, hard-refusing request roots that cover protected objects.
+- The approved C2 read channel (sandbox payload protocol v7): approved sensitive-location reads run under a dedicated authorization subject within a single execution window that is cross-process serialized, with the authorized execution identity isolated from ordinary execution; three gates (helper capability declaration, persistent disable after failed restore, and protected-manifest verification) refuse the entry fail-closed where capability is undeclared.
+- Desktop approval and sandbox UI: the "Ask for approval" and "Approve for me" (AI reviewer) modes, three-part approval display, an independent AI-review deadline shared by CLI and Desktop, a sandbox settings section with delayed initialization, and a sandbox directory-permission repair entry.
+
+**Controlled networking**
+
+- A three-state sandbox network model (disabled / restricted / enabled): proxy support, shared NuGet caching, and a `sandbox verify --network` acceptance mode; networking-query authorization follows task intent; standing-network exemption now requires both an `enabled` standing network policy and confirmed standing trust; `run` stays usable in untrusted workspaces (model and read-only file tools work; process execution fails closed).
+- Desktop network settings: system proxy, direct connection, or saved HTTP/HTTPS/SOCKS5 proxies, inherited or overridden per provider; proxy credentials stay in the system credential store.
+
+**Projects and session ownership**
+
+- Project core model and the protected project catalog: sessions belong to projects, old logs initialize idempotently, and startup automatically backfills ownership for old sessions; catalog change detection with cross-process automatic sync (semantic content comparison); recoverable project deletion with prompt settings.
+
+**Session list index and storage migration**
+
+- A SQLite summary index for the session list (Microsoft.Data.Sqlite): first-screen loading, targeted compaction, cross-process watcher sync with reconciliation, and lightweight sidebar refresh, sharply reducing list load times for large stores.
+- The session business store (`session-store.db`) and explicit migration: a frozen business schema with a versioned migration protocol (v1→v2), batched import with migration markers, business-store authority for organization state, the project catalog, and session ownership projection, backup/verification/restore/rollback protection, and business-store WAL/SHM quarantine with recovery records; a new explicit CLI migration command.
+- Permanent session deletion supports resumable continuation (tombstones); project deletion after migration unbinds sessions in a single transaction.
+
+**Models and resume**
+
+- In-session model switching, reasoning effort, and verbatim persistence; the reasoning effort set is aligned with the official full set (including the canonical `xhigh` spelling) sent as the raw representation; old sessions fall back along their saved bindings on resume.
+- Configurable model request timeout policy: stream idle timeout, total response timeout, and an independent AI-review deadline (`settings.modelTimeouts`).
+- Interactive session creation and switching in the CLI (`/new`, `/sessions`, `/switch`); `search_text` supports regex filtering and richer output.
 
 #### 🛠 Fixed
 
-- The file-tool grant audit breakage where grants without a policy identity failed grant-event validation (file-tool plans now carry a stable policy identity).
-- The CLI guard wrapper dropping the network-request flag, which bypassed approval on guarded paths (guarded network requests ask for approval again).
-- Standing network exemption is tightened to two conditions: an `enabled` standing network policy and confirmed standing trust must both hold; confirming only additional write roots under `restricted` no longer exempts networking from approval (an independent standing-network gate in the permission engine).
-- C1 protection now covers bidirectional overlap: a request root that covers a C1 protected object (such as a parent directory of the user config, trust files, or the session store) is hard-refused as well; the check spans all four write-root sources (per-call requests, standing additional write roots, active grants, and user-configured runtime roots) against the composed instance's actual paths.
-- Revoking standing authorization now invalidates the session: the send entry and every tool dispatch re-verify the composition fingerprint against the current trusted configuration (CLI and Desktop share the mechanism and both re-read configuration; read or parse failures invalidate too); on mismatch all grants are revoked and the session is invalidated with a prompt to reopen it. Started commands keep the existing cancellation reclamation without automatic recomposition.
-- The permission-system root set is narrowed from the whole sandbox home to four sensitive subpaths (`.sandbox-secrets`, `.sandbox`, `cap_sid`, `.sandbox-bin`); the default tmp/tools/nuget-cache runtime roots regain their runtime-root classification and L1 automatic execution, while OS ACLs and composition integrity checks still cover the whole home.
+- Fixed the file-tool grant audit breakage where grants without a policy identity failed grant-event validation; fixed the CLI guard wrapper dropping the network-request flag, which bypassed approval.
+- Non-interactive input can no longer grant approval authority or clear inspection blocks; instructions and the composition guard are re-verified before dispatch.
+- Changing an endpoint origin no longer reuses the old credential reference and requires confirmation before key reuse; verb-less invocations accept a leading `--config`.
+- Fixed the Desktop stop cancellation exception, with better cancellation cleanup and lifecycle forensics; fixed Windows Ctrl+C misreading interactive input as EOF.
+- Fixed a null-reference crash when switching models in old sessions; provider and model configuration refresh automatically for desktop sessions.
+- Fixed the session-index archive projection breaking the `data_version` feedback loop on same-value rows.
+- Legacy permission configuration and sessions migrate automatically to human review; fixed parsing of legacy permission records and historical summaries.
+- Sandbox directory ACL anomalies now block command startup; the CLI can repair directory ACLs through the restricted helper and Desktop offers a repair entry.
+- `config set` validates budget consistency with the selected model's context window and supports per-item fixes; application configs in working directories are ignored.
+- Permission-system roots narrowed: the whole sandbox home shrinks to four sensitive subpaths while default tmp/tools/nuget-cache runtime roots regain L1 automatic execution; OS ACLs and composition integrity checks still cover the whole home.
+
+#### 📦 Build and Distribution
+
+- The runtime upgraded to .NET 11 (`net11.0`) with NativeAOT and trimming constraints still enforced; the release workflow now produces two isomorphic ZIPs (CLI and Desktop), each with sandbox components and license materials, and runs native smoke per edition (CLI `smoke`, Desktop `--offline-smoke`).
+- The CLI carries `e_sqlite3.dll` with Microsoft.Data.Sqlite; Desktop additionally carries Avalonia rendering native libraries.
+- Dependency upgrades: Avalonia 12.1.6, LiveMarkdown.Avalonia 2.5.1, Microsoft.Extensions.AI.OpenAI 11.0.0, OpenAI 2.14.0, Microsoft.Data.Sqlite 11.0.0, System.Security.Cryptography.ProtectedData 11.0.0.
 
 #### 🧪 Tests
 
-- Real-sandbox acceptance tests are now environment-gated: default `dotnet test` no longer touches the machine sandbox, fixed user directories, or the network; the probe root must be set explicitly via `TINYHARNESS_REAL_SANDBOX_PROBE` (no default, avoiding %TEMP%'s historical ACL pollution), the negative isolation probe first verifies the probe root's ACL precondition (unmet = Inconclusive, not counted as passing), and the proxy is parameterized via `TINYHARNESS_REAL_SANDBOX_PROXY`.
+- Real-sandbox acceptance tests are environment-gated: default `dotnet test` no longer touches the machine sandbox, fixed user directories, or the network; the probe root is explicit via `TINYHARNESS_REAL_SANDBOX_PROBE` (no default), the negative isolation probe verifies its ACL precondition first (unmet = Inconclusive, not counted as passing), and the proxy is parameterized via `TINYHARNESS_REAL_SANDBOX_PROXY`.
+- New session-index IndexProbe, list-load benchmarks, and sidebar projection benchmarks; packaging adds per-edition version and native-dependency checks plus a `build-info.json` provenance and hash manifest.
+
+#### ⚠️ Known Limitations
+
+- CLI input and run controls remain basic and tools have no interactive terminal; Desktop is a first release with UI and interactions still being polished.
+- Model answers, summaries, automatic titles, and AI-review suggestions can be wrong; this version provides no stability or comprehensive security guarantee. Check actual file changes and tool results.
+- Sessions are not encrypted and may contain secrets. Session-store migration has not been accepted against real user data; close older clients and back up the session directory before migrating. Older binaries may refuse logs written by newer versions (such as `session-title` and `permission-grant-event`).
+- Windows x64 remains the validated platform. The sandbox requires separately configured component paths and explicit user provisioning and isolates only its tool processes; other platforms and coexistence with a Codex release installation remain unverified.
 
 <a id="release-v001"></a>
 
