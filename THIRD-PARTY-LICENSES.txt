@@ -330,7 +330,7 @@ Full embedded grammar/theme provenance remains subject to the separate audit abo
 2. Codex Windows sandbox and Cargo runtime components
 ----------------------------------------------------
 
-Source: https://github.com/banned2054/codex/tree/1266c81f6efa769103075018a24a5cd3d306f265
+Source: https://github.com/banned2054/codex/tree/86192f15d82b893c68931ca080384c0038bfb8c8
 Upstream: https://github.com/openai/codex
 Copyright 2025 OpenAI
 Codex license: [APACHE-2-0-001]

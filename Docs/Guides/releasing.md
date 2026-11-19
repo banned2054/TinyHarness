@@ -12,7 +12,7 @@
 
 ## 构建来源与验证
 
-TinyHarness 使用触发本轮的 commit。沙箱来源为 [`banned2054/codex`](https://github.com/banned2054/codex)，当前固定 SHA 为 `1266c81f6efa769103075018a24a5cd3d306f265`；更新组件时显式修改 YAML 中的 `CODEX_REF` 并重新核对兼容性，不追踪浮动 `main`。
+TinyHarness 使用触发本轮的 commit。沙箱来源为 [`banned2054/codex`](https://github.com/banned2054/codex)，当前固定 SHA 为 `86192f15d82b893c68931ca080384c0038bfb8c8`；更新组件时显式修改 YAML 中的 `CODEX_REF` 并重新核对兼容性，不追踪浮动 `main`。
 
 构建 job 使用 `windows-2025`，只给 `contents: read`；Actions 使用 YAML 中声明的官方主版本标签，沙箱源码仍固定到完整 commit。通过 setup-dotnet 选择 .NET 11，并在 CI checkout 内临时创建 `global.json` 固定本次实际安装的 SDK，不写回仓库。Rust 工具链读取固定 fork 的 `rust-toolchain.toml`。
 
