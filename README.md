@@ -158,7 +158,7 @@ In Desktop, if directory permissions block a sandbox command, use **View details
 - **Sandbox extensions** ask for approval for sensitive paths, out-of-workspace writes, protected metadata writes, network access, and extra Shell write roots. Standing network access and extra write roots require explicit confirmation.
 - **Host execution** (`executionScope=host`) requires separate approval for each operation and runs without OS isolation.
 
-Temporary grants expire at restart. Follow the separate prompts for legacy settings and sessions. See the [permission guide](Docs/Guides/permission-modes.md) and [implementation record](Docs/permission-architecture-plan.md).
+Temporary grants expire at restart. Follow the separate prompts for legacy settings and sessions. See the [permission guide](Docs/Guides/permission-modes.md) and [implementation record](Docs/Archive/permission-architecture-plan.md).
 
 ### Reasoning and basic controls
 

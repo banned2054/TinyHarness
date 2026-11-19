@@ -40,7 +40,7 @@ Debug 生命周期日志只记录阶段、异常类型、HResult、托管栈与�
 | `token-budget-disabled`、`reasoning-display`、`quiet-status`、`session-path-fix`、`unlimited-steps` | 同接力记录第 11–15 节已有缺省/零值、显式限制和离线验证边界 |
 | `composer-layout` 与旧 GUI 验收步骤 | [Desktop 迁移](desktop-migration-plan.md)和[项目与会话](project-session-plan.md)已有实施与未验收范围；原夹具及脚本已不存在，旧启动步骤不可执行 |
 | 自动归属实施 prompt、阶段二中断 handoff | 后续自动整理及阶段二收口已见[项目与会话](project-session-plan.md#15-实施状态)，不保留过期的工作区错误、配额与继续指令 |
-| 旧七权限模式交付报告 | 已由[权限主记录](../permission-architecture-plan.md)中的三级执行体系与后续自动迁移取代 |
+| 旧七权限模式交付报告 | 已由[权限主记录](permission-architecture-plan.md)中的三级执行体系与后续自动迁移取代 |
 | v0.0.1 Release 草稿 | [更新日志](../CHANGELOG.md)与历史总计划保留版本范围；旧发布操作说明不作当前流程 |
 | 七份根目录 smoke 文本 | 持久化、项目指令、系统提示词及沙箱归档已有同批结果；只有 Completed/17 steps/16 tools 的重复输出不再单独保存 |
 | 11 月 7 日权限 repair/finish 的构建日志、TRX、路径清单 | 权限主记录第 10–11 节已有失败、最终通过、跳过、testhost 替代与 PATH 限制；原始日志清理不改变这些历史结果 |

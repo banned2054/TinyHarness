@@ -156,7 +156,7 @@ CLI 会询问是否信任新工作区。未信任时仅可使用只读文件工�
 - **沙箱扩展**需审批敏感路径、越界写入、受保护元数据写入、联网和额外 Shell 写根。常设联网和附加写根须显式确认。
 - **宿主执行**（`executionScope=host`）每次都须单独批准，执行时没有操作系统隔离。
 
-临时授权在重启后失效。旧配置与旧会话按各自提示确认迁移。详见[权限与审批](Guides/permission-modes.md)和[实施记录](permission-architecture-plan.md)。
+临时授权在重启后失效。旧配置与旧会话按各自提示确认迁移。详见[权限与审批](Guides/permission-modes.md)和[实施记录](Archive/permission-architecture-plan.md)。
 
 ### 思考展示与基础控制
 
@@ -233,7 +233,7 @@ MCP server 将获准读取的工作区内容发送给配置的模型，仅提供
 
 | 位置 | 内容 |
 | --- | --- |
-| 活动计划 | [权限架构](permission-architecture-plan.md)、[会话存储](session-storage-plan.md) |
+| 活动计划 | [Desktop 无项目会话隔离](no-project-workspace-isolation-plan.md)、[会话存储](session-storage-plan.md) |
 | [Archive](Archive/README.md) | [历史总计划](Archive/PAST_PLAN.md)、设计与验收记录 |
 | Guides | [权限与审批](Guides/permission-modes.md)、[打包与发布](Guides/releasing.md)、[第三方声明](Guides/third-party-notices.md) |
 | [Templates](Templates/README.md) | 跨项目代码风格模板 |

@@ -21,7 +21,7 @@
 
 ## 删除提示、延迟沙箱与自动命名
 
-功能契约与后续状态继续由[权限主记录](../permission-architecture-plan.md)、[会话存储计划](../session-storage-plan.md)和[项目与会话归档](project-session-plan.md)维护；此处只记录原临时结果中的验证边界。
+功能契约与后续状态继续由[权限主记录](permission-architecture-plan.md)、[会话存储计划](../session-storage-plan.md)和[项目与会话归档](project-session-plan.md)维护；此处只记录原临时结果中的验证边界。
 
 | 历史记录 | 核对结果 |
 | --- | --- |

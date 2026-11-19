@@ -1,7 +1,7 @@
 # 权限与审批
 
 > 随权限架构重构更新（当前产品契约=2026-11-08 冻结三级执行体系契约，见
-> [权限架构重构任务记录](../permission-architecture-plan.md)第 0 节）。实现与验证进度见同文件；
+> [权限架构重构任务记录](../Archive/permission-architecture-plan.md#permission-product-contract)第 0 节）。实现与验证结果见同文件；
 > 离线测试不替代真实模型和机器沙箱验收。
 
 审批只有两种模式，工具执行按三级分类路由；授权以显式 Grant 生存、消费或失效。
@@ -41,7 +41,7 @@ C2 读保护敏感档：已知敏感名单（.ssh/.aws/.docker/.gnupg/.kube/.san
 
 新基线意味着：**工作区内的读写、一切普通读取与沙箱内 Shell 默认自动执行**。这是当前权限体系的基线；附加能力（越界写入、敏感位置、受保护元数据写入、联网、Host、
 写根申请）仍需逐次审批。受保护元数据写入的 grant 在新工作区的可用性取决于 deny ACE 历史
-（限制详情见[权限架构重构任务记录](../permission-architecture-plan.md)0.7 GAP-3）。
+（限制详情见[权限架构重构任务记录](../Archive/permission-architecture-plan.md)0.7 GAP-3）。
 
 沙箱未配置或不可用时，`process.execute` 一律拒绝（fail closed），Host 申请同样拒绝，
 绝不回退宿主执行；文件工具不受影响。执行入口在运行前复核（Revalidate），

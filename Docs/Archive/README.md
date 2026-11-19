@@ -17,8 +17,9 @@
 | [供应商、模型管理与会话内选择](session-model-switching-design.md) | 交互与目录管理已接入；原综合验收、真实提供方兼容及完整 GUI 闭环未全部验证 |
 | [项目实体、会话归属与多目录扩展](project-session-plan.md) | 项目、归属、侧栏与跨进程同步已接入；阶段四综合验收未完成，多目录执行另行实施 |
 | [Phase 2 沙箱联网与开发工具链报告](phase2-codex-sandbox-report.md) | 2026-11-06 阶段快照；保留 TLS 阻断、代理限制、测试结果和后续建议，不作为当前权限契约 |
+| [权限架构重构](permission-architecture-plan.md) | 2026-11-19 归档，保留现行三级权限契约与 C2 真机结果。真实沙箱综合验收、GUI 和真实 Reviewer 验收仍有未完成项 |
 
-当前仍在推进的[权限架构重构](../permission-architecture-plan.md)保留在 Docs 顶层；活动入口统一见 [PLAN.md](../../PLAN.md)。
+活动计划见 [PLAN.md](../../PLAN.md)。
 
 ## 已完成实现的设计与使用边界
 
@@ -59,7 +60,7 @@
 | [Windows 沙箱验收](windows-sandbox-verification.md) | M11、目录授权、PriceLab 和 TCP／UDP／DNS 专项 | [沙箱管理与验证边界](windows-sandbox-management.md) |
 | [10 月本地验证记录补充](local-validation-records-2026-10.md) | Desktop 取消/SDK/调试器中断、CLI Ctrl+C、格式化经验；重复原件的归并去向 | [Desktop 迁移](desktop-migration-plan.md) |
 | [11 月本地验证记录补充](local-validation-records-2026-11.md) | .NET 11、删除提示、延迟沙箱、自动命名与 S3 的历史验证边界；后续产物清理与证据去向 | [活动计划入口](../../PLAN.md) |
-| [三级执行体系实测与审查](permission-validation-2026-11-08.md) | 11 月 8 日真实 OS、离线与 AOT 检查点、二十条矩阵边界、审查关闭和遗留 | [权限主记录](../permission-architecture-plan.md) |
+| [三级执行体系实测与审查](permission-validation-2026-11-08.md) | 11 月 8 日真实 OS、离线与 AOT 检查点、二十条矩阵边界、审查关闭和遗留 | [权限主记录](permission-architecture-plan.md) |
 | [会话日志规模测量](session-scale-measurements.md) | 四份按日期冻结的合成测量 JSON、环境与口径；默认指标文件被覆盖的纠正 | [持久化验收](session-persistence-history.md) |
 
 ## 开发接力与历史计划
