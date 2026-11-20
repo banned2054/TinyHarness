@@ -233,7 +233,7 @@ MCP server 将获准读取的工作区内容发送给配置的模型，仅提供
 
 | 位置 | 内容 |
 | --- | --- |
-| 活动计划 | [Desktop 无项目会话隔离](no-project-workspace-isolation-plan.md)、[会话存储](session-storage-plan.md) |
+| 活动计划 | [Desktop 沙箱敏感扫描与无项目会话工具目录隔离](desktop-sandbox-scan-and-no-project-isolation-plan.md)、[会话存储](session-storage-plan.md) |
 | [Archive](Archive/README.md) | [历史总计划](Archive/PAST_PLAN.md)、设计与验收记录 |
 | Guides | [权限与审批](Guides/permission-modes.md)、[打包与发布](Guides/releasing.md)、[第三方声明](Guides/third-party-notices.md) |
 | [Templates](Templates/README.md) | 跨项目代码风格模板 |
