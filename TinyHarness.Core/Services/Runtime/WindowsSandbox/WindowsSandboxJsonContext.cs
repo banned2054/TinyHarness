@@ -15,6 +15,7 @@ namespace TinyHarness.Core.Services.Runtime.WindowsSandbox;
 [JsonSerializable(typeof(SandboxUsersFile))]
 [JsonSerializable(typeof(SandboxAuthorizedUserPair))]
 [JsonSerializable(typeof(SandboxAuthorizedReadState))]
+[JsonSerializable(typeof(SandboxDenyReadAclState))]
 [JsonSerializable(typeof(string[]))]
 [JsonSerializable(typeof(SandboxCapabilitySids))]
 [JsonSerializable(typeof(RunnerSpawnRequest))]
