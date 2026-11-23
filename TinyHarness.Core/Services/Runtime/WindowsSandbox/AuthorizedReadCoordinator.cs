@@ -9,8 +9,10 @@ namespace TinyHarness.Core.Services.Runtime.WindowsSandbox;
 ///         C2 获批读授权通道的派发前协调器：识别携带 authorized_read_paths 的授权执行并施加三道
 ///         门——禁用门（恢复失败/回收未知后的持久化禁用，含每实例一次的恢复尝试）、能力门（部署的
 ///         helper 必须声明 v7 授权代能力）与串行门（Global 互斥体限定的授权窗口），门内完成授权
-///         refresh、执行与恢复 refresh（v7 空 authorized_read_paths 重同步授权组全量 deny），禁用
-///         状态的恢复刷新同属授权 ACL 变更，亦持窗口执行。普通
+///         refresh、执行与恢复 refresh（v7 空 authorized_read_paths 重同步授权组全量 deny；deny_read_paths
+///         叠加 helper 拒读簿记的只增并集，与后端 refresh 共用同一实现），禁用
+///         状态的恢复刷新同属授权 ACL 变更，亦持窗口执行；恢复 refresh 成功后、内层命令启动前，
+///         与后端共用同一后刷新校验（写 ACL 继承校验 + 组读根就绪门）。普通
 ///         执行原样透传，行为零变化；任何门失败都以明确错误拒绝该次授权执行，绝不降级或静默去除
 ///         授权路径后放行。
 ///     </para>
@@ -21,9 +23,13 @@ namespace TinyHarness.Core.Services.Runtime.WindowsSandbox;
 ///         instance), the capability gate (the deployed helper must declare the v7 authorized
 ///         generation), and the serialization gate (a Global-mutex-bounded authorization window). The
 ///         window covers the authorized refresh, the execution, and the restore refresh (a v7 payload
-///         with empty authorized_read_paths resyncing the authorization group's full deny); the
-///         disable-state recovery refresh, being the same kind of authorized-ACL mutation, also runs
-///         inside the window. Normal
+///         with empty authorized_read_paths resyncing the authorization group's full deny; deny_read_paths
+///         folds the helper deny-read bookkeeping in as an add-only union sharing the backend's
+///         implementation), and the disable-state recovery refresh, being the same kind of
+///         authorized-ACL mutation, also runs inside the window; after a successful recovery refresh
+///         and before the inner command starts, the shared post-refresh validation (write-ACL
+///         inheritance validation plus the group read-root readiness gate) runs like the backend's.
+///         Normal
 ///         executions pass through untouched with zero behavior change; every gate failure refuses the
 ///         authorized execution with a distinct error instead of downgrading or silently dropping the
 ///         approved paths.
@@ -50,6 +56,23 @@ namespace TinyHarness.Core.Services.Runtime.WindowsSandbox;
 ///         authorization group's deny-minus-approved face; ordinary executions keep the ordinary
 ///         accounts.
 ///     </para>
+///     <para>
+///         锁序固定为授权窗口（<see cref="GlobalAuthorizedReadWindowLock.MutexName" />）→ 拒读
+///         刷新门（按 home 键控的 <c>Global\TinyHarness-DenyRead-Refresh-*</c> 互斥体），无反向
+///         获取路径，无死锁；拒读刷新门使恢复/退出 refresh 与其他进程的普通每命令 refresh 跨进程
+///         串行化，门等待失败（超时或内核对象不可用）按既有"恢复失败/退出刷新失败"语义转为
+///         禁用或拒绝，不破坏授权窗口。
+///     </para>
+///     <para>
+///         The lock order is fixed as the authorization window
+///         (<see cref="GlobalAuthorizedReadWindowLock.MutexName" />) → the deny-read refresh gate
+///         (the home-keyed <c>Global\TinyHarness-DenyRead-Refresh-*</c> mutex), with no reverse
+///         acquisition path and no deadlock; the deny-read refresh gate serializes the recovery /
+///         exit refreshes against other processes' ordinary per-command refreshes across processes,
+///         and a failed gate wait (timeout or an unusable kernel object) turns into the existing
+///         recovery-failure / exit-refresh-failure semantics (disable or refuse) without breaking
+///         the authorization window.
+///     </para>
 /// </remarks>
 public sealed class AuthorizedReadCoordinator : IProcessExecutionBackend
 {
@@ -62,47 +85,63 @@ public sealed class AuthorizedReadCoordinator : IProcessExecutionBackend
     private readonly Func<CancellationToken, Task<uint>> _capabilityProbe;
     private readonly WindowsSandboxComponents            _components;
 
+    private readonly TimeSpan                    _denyReadGateTimeout;
+    private readonly ISandboxDenyReadRefreshGate _denyReadRefreshGate;
     private readonly IAuthorizedReadDisableStore _disableStore;
     private readonly IProcessExecutionBackend    _inner;
     private readonly ISandboxSetupInvoker        _restoreInvoker;
     private readonly IAuthorizedReadWindowLock   _windowLock;
     private readonly TimeSpan                    _windowTimeout;
+    private readonly Func<SandboxSetupPayload, CancellationToken, Task> _postRefreshValidation;
     private          bool                        _recoveryAttempted;
 
     /// <summary>
     ///     <para>
     ///         构造协调器；恢复 refresh 调用器、窗口锁、禁用状态存储与能力探测缺省取进程实现
     ///         （ProcessSandboxSetupInvoker / Global 互斥体 / 凭据目录状态文件 / 凭据文件版本探测），
-    ///         测试注入全部可替换。
+    ///         拒读刷新门缺省为按 home 键控的 Global 互斥体、门期限缺省
+    ///         <see cref="GlobalDenyReadRefreshGate.DefaultAcquireTimeout" />，后刷新校验缺省为共享
+    ///         步骤（写 ACL 继承校验 + 组读根就绪门），测试注入全部可替换。
     ///     </para>
     ///     <para>
     ///         Builds the coordinator; the restore invoker, the window lock, the disable store, and the
     ///         capability probe default to the process-backed implementations
     ///         (<see cref="ProcessSandboxSetupInvoker" />, the Global mutex, the credentials-directory
-    ///         state file, and the credentials-file version probe), all replaceable by test injection.
+    ///         state file, and the credentials-file version probe), the deny-read refresh gate defaults
+    ///         to the home-keyed Global mutex with
+    ///         <see cref="GlobalDenyReadRefreshGate.DefaultAcquireTimeout" /> as its deadline, the
+    ///         post-refresh validation
+    ///         defaults to the shared step (write-ACL inheritance validation plus the group read-root
+    ///         readiness gate), and all of them are replaceable by test injection.
     ///     </para>
     /// </summary>
     public AuthorizedReadCoordinator(
         IProcessExecutionBackend             innerBackend,
         WindowsSandboxComponents             components,
         SandboxIsolationPolicy               policy,
-        ISandboxSetupInvoker?                restoreInvoker  = null,
-        IAuthorizedReadWindowLock?           windowLock      = null,
-        IAuthorizedReadDisableStore?         disableStore    = null,
-        Func<CancellationToken, Task<uint>>? capabilityProbe = null,
-        TimeSpan?                            windowTimeout   = null)
+        ISandboxSetupInvoker?                restoreInvoker       = null,
+        IAuthorizedReadWindowLock?           windowLock           = null,
+        IAuthorizedReadDisableStore?         disableStore         = null,
+        Func<CancellationToken, Task<uint>>? capabilityProbe      = null,
+        TimeSpan?                            windowTimeout        = null,
+        Func<SandboxSetupPayload, CancellationToken, Task>? postRefreshValidation = null,
+        ISandboxDenyReadRefreshGate?         denyReadRefreshGate  = null,
+        TimeSpan?                            denyReadGateTimeout  = null)
     {
         ArgumentNullException.ThrowIfNull(innerBackend);
         ArgumentNullException.ThrowIfNull(components);
         ArgumentNullException.ThrowIfNull(policy);
-        _inner           = innerBackend;
-        _components      = components;
-        Policy           = policy;
-        _restoreInvoker  = restoreInvoker  ?? new ProcessSandboxSetupInvoker(components);
-        _windowLock      = windowLock      ?? new GlobalAuthorizedReadWindowLock();
-        _disableStore    = disableStore    ?? new AuthorizedReadDisableFile(components);
-        _capabilityProbe = capabilityProbe ?? (token => ReadProvisionedVersionAsync(components, token));
-        _windowTimeout   = windowTimeout   ?? DefaultWindowTimeout;
+        _inner                 = innerBackend;
+        _components            = components;
+        Policy                 = policy;
+        _restoreInvoker        = restoreInvoker      ?? new ProcessSandboxSetupInvoker(components);
+        _windowLock            = windowLock          ?? new GlobalAuthorizedReadWindowLock();
+        _disableStore          = disableStore        ?? new AuthorizedReadDisableFile(components);
+        _capabilityProbe       = capabilityProbe     ?? (token => ReadProvisionedVersionAsync(components, token));
+        _windowTimeout         = windowTimeout       ?? DefaultWindowTimeout;
+        _denyReadRefreshGate   = denyReadRefreshGate ?? new GlobalDenyReadRefreshGate();
+        _denyReadGateTimeout   = denyReadGateTimeout ?? GlobalDenyReadRefreshGate.DefaultAcquireTimeout;
+        _postRefreshValidation = postRefreshValidation ?? SandboxPostRefreshValidation.Default;
     }
 
     /// <summary>
@@ -221,24 +260,61 @@ public sealed class AuthorizedReadCoordinator : IProcessExecutionBackend
     ///     <para>
     ///         窗口内恢复：以恢复 refresh（v7 空 authorized_read_paths）重同步授权组全量 deny，成功
     ///         即清除持久化禁用；失败以"主体已禁用"拒绝并保留禁用状态。恢复属授权 ACL 变更，持
-    ///         窗口执行避免撤掉其他进程正在使用的授权读。
+    ///         窗口执行避免撤掉其他进程正在使用的授权读；[读簿记 → 合并 → refresh → 持久化] 另持
+    ///         按 home 键控的拒读刷新门与其他进程串行化，门超时（null）与等待失败都由现有 catch
+    ///         转为禁用语义。
     ///     </para>
     ///     <para>
     ///         The in-window recovery: a restore refresh (a v7 payload with empty authorized_read_paths)
     ///         resyncs the authorization group's full deny and a success clears the persisted disable
     ///         state, while a failure refuses with the disabled error and keeps the state. Being an
     ///         authorized-ACL mutation, the recovery runs inside the window so it never strips an
-    ///         approved read another process is currently using.
+    ///         approved read another process is currently using; [read bookkeeping → merge → refresh →
+    ///         persistence] additionally holds the home-keyed deny-read refresh gate serializing
+    ///         against other processes, and a gate timeout (null) or a failed wait converts to the
+    ///         disable semantics through the existing catch.
     ///     </para>
     /// </summary>
     private async Task RecoverInsideWindowAsync(
         PreparedProcessExecution execution, string reason, CancellationToken cancellationToken)
     {
         _recoveryAttempted = true;
+        SandboxSetupPayload payload;
         try
         {
-            await _restoreInvoker.RefreshAsync(BuildRestorePayload(execution), CancellationToken.None)
-                                 .ConfigureAwait(false);
+            // 门等待复用授权窗口已取得的 token；超时（null）与等待失败（含取消）都由现有 catch
+            // 转为禁用语义，绝不无门恢复——否则会撤销另一端刚同步的共享主体 deny。获取置于刷新
+            // try 之外：过滤器只守护刷新阶段，门在进入该 try 前已确定持有。
+            ISandboxDenyReadRefreshGateHandle? gate =
+                await _denyReadRefreshGate
+                      .TryAcquireAsync(_components.SandboxHome, _denyReadGateTimeout, cancellationToken)
+                      .ConfigureAwait(false)
+                ?? throw new
+                    InvalidOperationException("The recovery refresh could not acquire the deny-read refresh gate " +
+                                              $"(home '{_components.SandboxHome}') within {(int)_denyReadGateTimeout.TotalSeconds}s; " +
+                                              "the recovery is refused instead of refreshing ungated.");
+            try
+            {
+                payload = BuildRestorePayload(execution);
+                await _restoreInvoker.RefreshAsync(payload, CancellationToken.None)
+                                     .ConfigureAwait(false);
+            }
+            catch (Exception ex) when (SandboxRefreshExitUncertainty.TryGetConfirmation(ex, out var confirmation))
+            {
+                // helper 退出状态未知：门经 ReleaseWhenConfirmed 转入后台确认后释放（fail-closed），
+                // 所有权在此移交并置空，finally 不再 Dispose；异常继续流向既有恢复失败 catch。
+                SandboxDiagnosticLog.Event("authorized-read",
+                                           $"helper-exit-uncertain phase=recovery type={ex.GetType().Name}");
+                gate.ReleaseWhenConfirmed(confirmation!);
+                gate = null;
+                throw;
+            }
+            finally
+            {
+                // RefreshAsync 返回或超时/取消路径确认退出即 helper 不再写簿记，此刻释放门安全；
+                // 退出未确认时门已移交 ReleaseWhenConfirmed，由后台确认任务在 helper 退出后才释放。
+                gate?.Dispose();
+            }
         }
         catch (Exception recoveryFailure)
         {
@@ -250,6 +326,30 @@ public sealed class AuthorizedReadCoordinator : IProcessExecutionBackend
 
         await _disableStore.ClearAsync(cancellationToken).ConfigureAwait(false);
         SandboxDiagnosticLog.Event("authorized-read", "disable cleared after successful restore");
+
+        // 恢复 refresh 成功后、内层命令启动前：与后端 refresh 共用同一后刷新校验（写 ACL 继承
+        // 校验 + 组读根就绪门）。失败 fail-closed：命令保持未启动、窗口随 finally 释放；恢复本身
+        // 已完成（禁用状态已清除），下一次授权执行无需再次恢复。
+        try
+        {
+            await _postRefreshValidation(payload, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (ProcessExecutionStartException)
+        {
+            throw;
+        }
+        catch (Exception validationFailure)
+        {
+            SandboxDiagnosticLog.Event("authorized-read",
+                                       $"post-refresh validation failed type={validationFailure.GetType().Name}");
+            throw new
+                ProcessExecutionStartException($"The sandbox post-refresh validation failed after the recovery refresh: {validationFailure.Message}",
+                                               validationFailure);
+        }
     }
 
     /// <summary>
@@ -276,14 +376,19 @@ public sealed class AuthorizedReadCoordinator : IProcessExecutionBackend
     /// <summary>
     ///     <para>
     ///         恢复 refresh：以同一 grant 范围构造 v7 空 authorized_read_paths payload，对授权组重同步
-    ///         全量 deny。恢复使用独立期限（调用器自带刷新超时），用户取消后仍须完成；失败持久化
-    ///         禁用状态并留诊断，不覆盖调用方正在处理的原始终止语义。
+    ///         全量 deny。恢复使用独立期限（调用器自带刷新超时），用户取消后仍须完成；
+    ///         [读簿记 → 合并 → refresh → 持久化] 持按 home 键控的拒读刷新门与其他进程串行化
+    ///         （门等待不随用户取消，有缺省 90s 上界）；失败——含门超时——持久化禁用状态并留
+    ///         诊断，不覆盖调用方正在处理的原始终止语义。
     ///     </para>
     ///     <para>
     ///         The restore refresh: a v7 payload with empty authorized_read_paths built from the same
     ///         grant scope resyncs the authorization group's full deny. The restore keeps its own
-    ///         deadline (the invoker's refresh timeout) and still runs after a user cancellation; a
-    ///         failure persists the disable state with a diagnostic and never overrides the original
+    ///         deadline (the invoker's refresh timeout) and still runs after a user cancellation;
+    ///         [read bookkeeping → merge → refresh → persistence] holds the home-keyed deny-read
+    ///         refresh gate serializing against other processes (the gate wait ignores user
+    ///         cancellation and is bounded by the default 90s deadline); a failure — including a gate
+    ///         timeout — persists the disable state with a diagnostic and never overrides the original
     ///         termination semantics the caller is already handling.
     ///     </para>
     /// </summary>
@@ -291,9 +396,39 @@ public sealed class AuthorizedReadCoordinator : IProcessExecutionBackend
     {
         try
         {
-            await _restoreInvoker.RefreshAsync(BuildRestorePayload(execution), CancellationToken.None)
-                                 .ConfigureAwait(false);
-            SandboxDiagnosticLog.Event("authorized-read", "restore ok");
+            // 门等待用 None（恢复刷新本身不随用户取消，等待有缺省 90s 上界）；超时（null）由
+            // 现有 catch 转为禁用：授权组停留获批状态，禁用后续授权执行，语义与 refresh 失败一致。
+            // 获取置于刷新 try 之外：过滤器只守护刷新阶段，门在进入该 try 前已确定持有。
+            ISandboxDenyReadRefreshGateHandle? gate =
+                await _denyReadRefreshGate
+                      .TryAcquireAsync(_components.SandboxHome, _denyReadGateTimeout, CancellationToken.None)
+                      .ConfigureAwait(false)
+                ?? throw new
+                    InvalidOperationException("The restore refresh could not acquire the deny-read refresh gate " +
+                                              $"(home '{_components.SandboxHome}') within {(int)_denyReadGateTimeout.TotalSeconds}s; " +
+                                              "the gate wait timed out and no refresh was executed.");
+            try
+            {
+                await _restoreInvoker.RefreshAsync(BuildRestorePayload(execution), CancellationToken.None)
+                                     .ConfigureAwait(false);
+                SandboxDiagnosticLog.Event("authorized-read", "restore ok");
+            }
+            catch (Exception ex) when (SandboxRefreshExitUncertainty.TryGetConfirmation(ex, out var confirmation))
+            {
+                // helper 退出状态未知：门经 ReleaseWhenConfirmed 转入后台确认后释放（fail-closed），
+                // 所有权在此移交并置空，finally 不再 Dispose；异常继续流向既有禁用 catch。
+                SandboxDiagnosticLog.Event("authorized-read",
+                                           $"helper-exit-uncertain phase=restore type={ex.GetType().Name}");
+                gate.ReleaseWhenConfirmed(confirmation!);
+                gate = null;
+                throw;
+            }
+            finally
+            {
+                // RefreshAsync 返回或超时/取消路径确认退出即 helper 不再写簿记，此刻释放门安全；
+                // 退出未确认时门已移交 ReleaseWhenConfirmed，由后台确认任务在 helper 退出后才释放。
+                gate?.Dispose();
+            }
         }
         catch (Exception failure)
         {
@@ -306,15 +441,38 @@ public sealed class AuthorizedReadCoordinator : IProcessExecutionBackend
     }
 
     /// <summary>
-    ///     构造恢复 payload：与授权执行同一 grant 范围，authorized_read_paths 置空数组（v7）。 Builds the restore payload: the same grant scope
-    ///     with an empty authorized_read_paths array (v7).
+    ///     <para>
+    ///         构造恢复 payload：与授权执行同一 grant 范围，authorized_read_paths 置空数组（v7）；
+    ///         deny_read_paths 在冻结语义集之上叠加 helper 拒读簿记的只增并集（与后端 refresh 共用
+    ///         <see cref="SandboxDenyReadBookkeeping.Merge" /> 同一实现）——授权组与普通组的 deny
+    ///         基面都只收窄不扩权，恢复/退出 refresh 不撤销另一端写入簿记的条目。调用方须持有按
+    ///         home 键控的拒读刷新门，使簿记读取与 refresh 跨进程串行化。
+    ///     </para>
+    ///     <para>
+    ///         Builds the restore payload: the same grant scope with an empty authorized_read_paths
+    ///         array (v7); deny_read_paths folds the helper deny-read bookkeeping into the frozen
+    ///         semantic set as an add-only union (sharing
+    ///         <see cref="SandboxDenyReadBookkeeping.Merge" /> with the backend's refresh) — the deny
+    ///         base of both the authorization and the ordinary group only narrows, and the restore /
+    ///         exit refresh never revokes entries another side wrote into the bookkeeping. The caller
+    ///         must hold the home-keyed deny-read refresh gate so the bookkeeping read and the
+    ///         refresh stay serialized across processes.
+    ///     </para>
     /// </summary>
     private SandboxSetupPayload BuildRestorePayload(PreparedProcessExecution execution)
     {
         // 与后端 Preflight 的 payload 构造同一份确定性合并：read_roots 已剔除 deny 冲突根。
         var payload = Policy.CreateSetupPayload(_components, execution.WorkingDirectory, Environment.UserName, true,
                                                 execution.GrantScope);
-        return payload with { AuthorizedReadPaths = [] };
+        var (denyPaths, bookkeepingEntries, bookkeepingMerged) = SandboxDenyReadBookkeeping.Merge(
+            "authorized-read refresh", payload.DenyReadPaths, payload.ReadRoots, _components.SandboxHome);
+        SandboxDiagnosticLog.Event("deny-read-union",
+                                   $"authorized bookkeepingEntries={bookkeepingEntries} bookkeepingMerged={bookkeepingMerged}");
+        return payload with
+        {
+            DenyReadPaths       = SandboxIsolationPolicy.Deduplicate(denyPaths),
+            AuthorizedReadPaths = []
+        };
     }
 
     /// <summary>持久化禁用状态；写入失败随当前异常路径如实上抛。 Persists the disable state; a write failure propagates on the current exception path.</summary>

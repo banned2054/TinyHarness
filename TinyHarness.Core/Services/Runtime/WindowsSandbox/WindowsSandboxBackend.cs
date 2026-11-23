@@ -27,6 +27,19 @@ public sealed record WindowsSandboxBackendLimits
 
     public TimeSpan RefreshTimeout { get; init; } = TimeSpan.FromSeconds(60);
 
+    /// <summary>
+    ///     <para>
+    ///         拒读刷新门的限时获取期限；默认须覆盖另一端最坏 refresh 时长（调用器默认 60s 超时 +
+    ///         余量），超时按命令未启动 fail-closed。
+    ///     </para>
+    ///     <para>
+    ///         The bounded acquisition deadline of the deny-read refresh gate; the default must cover
+    ///         the other side's worst refresh duration (the invoker's default 60s timeout plus
+    ///         margin), and a timeout fails closed with the command not started.
+    ///     </para>
+    /// </summary>
+    public TimeSpan DenyReadRefreshGateTimeout { get; init; } = TimeSpan.FromSeconds(90);
+
     public TimeSpan SpawnReadyTimeout { get; init; } = TimeSpan.FromSeconds(15);
 
     /// <summary>
@@ -56,18 +69,27 @@ public sealed record WindowsSandboxBackendLimits
 /// </summary>
 /// <remarks>
 ///     <para>
-///         启动前检查状态（生效在线时另查在线账户就绪）、刷新 ACL、加载凭据与 capability SID，
-///         并创建私有桌面；spawn 网络与代理环境按生效网络填写，账户按生效网络选择。
+///         启动前在按 home 键控的拒读刷新门内检查状态（生效在线时另查在线账户就绪；home 缺失走
+///         无门预检路径保持 "not ready" 语义）并完成 [读簿记并集 → ACL 刷新]（门等待超时按命令
+///         未启动 fail-closed）、加载凭据，并在同一键控门的再次限时获取内解析 capability SID
+///         （get-or-create 与整表写回同另一端解析及门内 helper 的表写互斥；门等待超时按命令未启动
+///         fail-closed），再创建私有桌面；spawn 网络与代理环境按生效网络填写，账户按生效网络选择。
 ///         生效在线时以 LOGON_WITH_PROFILE 加载在线账户 profile，使登录会话具备 schannel
 ///         客户端凭据；offline 不加载 profile。
 ///         退出码仅来自 exit 帧，超时标志独立保留；缺失终态不补造退出码。
 ///         运行期协议失败或回收无法确认时保留执行不确定性，停止后续工具。
 ///     </para>
 ///     <para>
-///         Before launch, checks readiness (plus online-account readiness whenever the
-///         effective network is online), refreshes ACLs, loads credentials and capability SIDs,
-///         and creates a private desktop; the spawn network and proxy environment follow the
-///         effective network, which also selects the launch account. While online, the launch
+///         Before launch, the backend checks readiness inside the home-keyed deny-read refresh gate
+///         (plus online-account readiness whenever the effective network is online; a missing home
+///         takes the ungated pre-check path keeping the "not ready" semantics) and completes
+///         [bookkeeping union → ACL refresh] there (a gate-wait timeout fails closed with the command
+///         not started), loads credentials, and resolves capability SIDs behind a second bounded
+///         acquisition of the same keyed gate (the get-or-create plus whole-table write-back is
+///         mutually exclusive with the other side's resolution and the helper's in-gate table
+///         writes; a gate-wait timeout fails closed with the command not started), then creates a
+///         private desktop; the spawn network and proxy environment follow the effective network,
+///         which also selects the launch account. While online, the launch
 ///         loads the online account profile via LOGON_WITH_PROFILE so the logon session gains
 ///         schannel client credentials; offline launches load no profile.
 ///         Exit codes come only from exit frames;
@@ -84,6 +106,7 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
 
     private readonly WindowsSandboxComponents                            _components;
     private readonly ISandboxCredentialSource                            _credentialSource;
+    private readonly ISandboxDenyReadRefreshGate                         _denyReadRefreshGate;
     private readonly ISandboxDesktopFactory                              _desktopFactory;
     private readonly Func<CancellationToken, Task<WindowsSandboxStatus>> _inspectOnlineAccount;
     private readonly IReadOnlyDictionary<string, string>                 _knownSecrets;
@@ -98,6 +121,8 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
 
     private readonly Func<SandboxSetupPayload, CancellationToken, Task> _validateWriteAcls;
 
+    private readonly Func<SandboxSetupPayload, CancellationToken, Task> _validateReadRootReadiness;
+
     public WindowsSandboxBackend(
         WindowsSandboxComponents                            components,
         SandboxIsolationPolicy                              policy,
@@ -111,11 +136,14 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
         WindowsSandboxBackendLimits?                        limits                       = null,
         Action<SecurityIdentifier>?                         allowNullDeviceAccess        = null,
         Func<SandboxSetupPayload, CancellationToken, Task>? validateWriteAcls            = null,
+        Func<SandboxSetupPayload, CancellationToken, Task>? validateReadRootReadiness    = null,
         bool                                                standingNetworkAccessEnabled = false,
-        IReadOnlyDictionary<string, string>?                proxyEnvironment             = null)
+        IReadOnlyDictionary<string, string>?                proxyEnvironment             = null,
+        ISandboxDenyReadRefreshGate?                        denyReadRefreshGate          = null)
         : this(components, policy, targetEnvironment, knownSecrets, setupInvoker, credentialSource,
                capabilitySidStore, desktopFactory, runnerLauncher, limits, allowNullDeviceAccess,
-               validateWriteAcls, standingNetworkAccessEnabled, proxyEnvironment, null)
+               validateWriteAcls, validateReadRootReadiness, standingNetworkAccessEnabled, proxyEnvironment,
+               null, denyReadRefreshGate)
     {
     }
 
@@ -136,9 +164,11 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
         WindowsSandboxBackendLimits?                         limits,
         Action<SecurityIdentifier>?                          allowNullDeviceAccess,
         Func<SandboxSetupPayload, CancellationToken, Task>?  validateWriteAcls,
+        Func<SandboxSetupPayload, CancellationToken, Task>?  validateReadRootReadiness,
         bool                                                 standingNetworkAccessEnabled,
         IReadOnlyDictionary<string, string>?                 proxyEnvironment,
-        Func<CancellationToken, Task<WindowsSandboxStatus>>? inspectOnlineAccount)
+        Func<CancellationToken, Task<WindowsSandboxStatus>>? inspectOnlineAccount,
+        ISandboxDenyReadRefreshGate?                         denyReadRefreshGate)
     {
         if (!OperatingSystem.IsWindows())
             throw new PlatformNotSupportedException("The Windows sandbox backend is available on Windows only.");
@@ -155,6 +185,8 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
         _stateInspector = new WindowsSandboxStateInspector(components);
         _inspectOnlineAccount = inspectOnlineAccount ?? _stateInspector.InspectOnlineAccountAsync;
         _setupInvoker = setupInvoker ?? new ProcessSandboxSetupInvoker(components, limits?.RefreshTimeout);
+        // 门按 home 键控串行化 [读簿记→合并→refresh→持久化]；不可用时拒绝本次 refresh（fail-closed）。
+        _denyReadRefreshGate = denyReadRefreshGate ?? new GlobalDenyReadRefreshGate();
         _credentialSource = credentialSource ?? new SandboxCredentialReader(components);
         _capabilitySidStore = capabilitySidStore ?? new SandboxCapabilitySidStore(components);
         _desktopFactory = desktopFactory ?? new WindowsSandboxDesktopFactory();
@@ -163,6 +195,8 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
         // NUL 设备 ACE 是机器级共享状态；默认测试注入空操作，避免修改宿主 ACL。
         _allowNullDeviceAccess = allowNullDeviceAccess ?? SandboxNullDeviceAcl.AllowCapabilitySid;
         _validateWriteAcls = validateWriteAcls ?? WorkspaceAclInheritance.ValidateAsync;
+        // 读根就绪门与写校验同形注入：生产默认走真实 DACL 就绪判定，测试可整体替换。
+        _validateReadRootReadiness = validateReadRootReadiness ?? SandboxReadRootReadiness.ValidateAsync;
     }
 
     public async Task<ProcessExecutionResult> ExecuteAsync(
@@ -329,59 +363,123 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
         SandboxDiagnosticLog.Event("preflight",
                                    $"network={(networkAccessEnabled ? "enabled" : "restricted")} " +
                                    $"proxyVariables={(networkAccessEnabled ? _proxyEnvironment.Count : 0)}");
-        var status = await _stateInspector.InspectAsync(cancellationToken).ConfigureAwait(false);
-        if (!status.Ready)
+        // 就绪检查读 cap_sid，门外执行会撞上门内整表写回的中间态（共享冲突/半 JSON），把另一端
+        // 正在进行的 refresh 误报成沙箱未就绪；因此就绪检查随 payload 构造与 refresh 一起移入门内
+        // （纯读毫秒级）。home 缺失时不可能有同 home 的门内写者，而门键控对缺失目录必抛（最终路径
+        // 解析失败），故先廉价预检走既有无门路径，保住 "not ready" 的失败语义。
+        if (!Directory.Exists(_components.SandboxHome))
         {
-            SandboxDiagnosticLog.Event("readiness", $"blocked problems=[{string.Join(" | ", status.Problems)}]");
+            var missingHomeStatus = await _stateInspector.InspectAsync(cancellationToken).ConfigureAwait(false);
+            SandboxDiagnosticLog.Event("readiness",
+                                       $"blocked problems=[{string.Join(" | ", missingHomeStatus.Problems)}]");
             throw new ProcessExecutionStartException("The Windows sandbox is not ready; refusing to execute: " +
-                                                     string.Join("; ", status.Problems),
+                                                     string.Join("; ", missingHomeStatus.Problems),
                                                      new
                                                          InvalidOperationException("Sandbox readiness check failed; failing closed without fallback."));
         }
 
-        if (networkAccessEnabled)
-        {
-            var onlineStatus = await _inspectOnlineAccount(cancellationToken).ConfigureAwait(false);
-            if (!onlineStatus.Ready)
-            {
-                SandboxDiagnosticLog.Event("readiness",
-                                           $"online-blocked problems=[{string.Join(" | ", onlineStatus.Problems)}]");
-                throw new
-                    ProcessExecutionStartException("The Windows sandbox online account is not ready; refusing network-enabled execution: " +
-                                                   string.Join("; ", onlineStatus.Problems),
-                                                   new
-                                                       InvalidOperationException("Online sandbox readiness check failed; failing closed without fallback."));
-            }
-        }
-
-        // 每命令 refresh 的 payload 按计划内冻结的 grant 范围合并：活动快照在 Prepare 已冻结，
-        // 执行期不再查询任何实时源（R-identity：授权与执行之间无竞态）。
-        var payload = _policy.CreateSetupPayload(_components, execution.WorkingDirectory, Environment.UserName, true,
-                                                 execution.GrantScope);
-#if DEBUG
-        // run id 经 AsyncLocal 流入本轮 helper/validate/acl 诊断事件；不新增参数，也不改变执行语义。
-        SandboxDiagnosticLog.BeginRun(Guid.NewGuid().ToString("N")[..8]);
-#endif
-        SandboxDiagnosticLog.Event("refresh",
-                                   $"request workspace='{_policy.WorkspaceRoot}' cwd='{execution.WorkingDirectory}' " +
-                                   $"writeRoots=[{string.Join(";", payload.WriteRoots)}] denyWriteCount={payload.DenyWritePaths.Count} " +
-                                   $"version={payload.Version} refreshOnly={payload.RefreshOnly}");
-#if DEBUG
-        // 宿主 token 单独成行并显式标注 subject=host；不得与 helper 实际身份混淆。
-        SandboxProcessDiagnostics.LogHostToken();
-#endif
         var stopwatch = Stopwatch.StartNew();
         // 诊断只输出本地 phase 与异常类型；ex.Message 可携带 setup_error.json 的任意 helper 文本，不属白名单。
-        var phase     = "refresh";
+        var phase     = "deny-read-gate";
+        ISandboxDenyReadRefreshGateHandle? gate = null;
         try
         {
-            await _setupInvoker
-                 .RefreshAsync(payload, cancellationToken).ConfigureAwait(false);
-            SandboxDiagnosticLog.Event("refresh", $"helper-finished elapsedMs={stopwatch.ElapsedMilliseconds}");
+            // 门限时获取：超时抛启动期异常（inner=TimeoutException），命令保持未启动，绝不无门
+            // refresh——否则后到的旧 payload 会撤销另一端刚同步的共享主体 deny。就绪检查与
+            // payload 构造同入门内（见上），不改变任何检查语义。
+            gate = await _denyReadRefreshGate
+                         .TryAcquireAsync(_components.SandboxHome, _limits.DenyReadRefreshGateTimeout,
+                                          cancellationToken).ConfigureAwait(false)
+                   ?? throw new
+                       ProcessExecutionStartException($"The deny-read refresh gate for sandbox home '{_components.SandboxHome}' " +
+                                                      $"was not acquired within {(int)_limits.DenyReadRefreshGateTimeout.TotalSeconds}s; " +
+                                                      "the command was not started, so no stale refresh can revoke deny entries " +
+                                                      "another side just persisted. Retry the command once the concurrent refresh completes.",
+                                                      new TimeoutException("The deny-read refresh gate acquisition timed out."));
+            SandboxSetupPayload payload;
+            try
+            {
+                phase = "inspect";
+                var status = await _stateInspector.InspectAsync(cancellationToken).ConfigureAwait(false);
+                if (!status.Ready)
+                {
+                    SandboxDiagnosticLog.Event("readiness", $"blocked problems=[{string.Join(" | ", status.Problems)}]");
+                    throw new ProcessExecutionStartException("The Windows sandbox is not ready; refusing to execute: " +
+                                                             string.Join("; ", status.Problems),
+                                                             new
+                                                                 InvalidOperationException("Sandbox readiness check failed; failing closed without fallback."));
+                }
+
+                if (networkAccessEnabled)
+                {
+                    var onlineStatus = await _inspectOnlineAccount(cancellationToken).ConfigureAwait(false);
+                    if (!onlineStatus.Ready)
+                    {
+                        SandboxDiagnosticLog.Event("readiness",
+                                                   $"online-blocked problems=[{string.Join(" | ", onlineStatus.Problems)}]");
+                        throw new
+                            ProcessExecutionStartException("The Windows sandbox online account is not ready; refusing network-enabled execution: " +
+                                                           string.Join("; ", onlineStatus.Problems),
+                                                           new
+                                                               InvalidOperationException("Online sandbox readiness check failed; failing closed without fallback."));
+                    }
+                }
+
+                // 每命令 refresh 的 grant 范围仍冻结于 Prepare（活动快照不在执行期查询）；deny-read 在
+                // 冻结语义集之上叠加 helper 拒读簿记的只增并集——该并集是执行期唯一实时源，且只收窄
+                // （只追加 deny，绝不授读、绝不撤销既有 deny）。[读簿记 → 合并 → refresh → 簿记持久化]
+                // 运行在按 home 键控的跨进程拒读刷新门内：后到的 refresh 必然重新读到先到者已持久化的
+                // 条目，撤销集不会收缩共享主体依赖的 deny；门等待本身 fail-closed（超时=命令未启动）。
+                phase   = "payload";
+                payload = _policy.CreateSetupPayload(_components, execution.WorkingDirectory, Environment.UserName, true,
+                                                     execution.GrantScope);
+#if DEBUG
+                // run id 经 AsyncLocal 流入本轮 union/helper/validate 诊断事件；不新增参数，也不改变执行语义。
+                SandboxDiagnosticLog.BeginRun(Guid.NewGuid().ToString("N")[..8]);
+#endif
+                // 门内重读簿记做只增并集：会话冻结期间另一端写入簿记的条目同样被并入，refresh
+                // 不撤销共享主体依赖的既有 deny；簿记不可读经瞬态重试后 fail-closed，命令保持未启动。
+                phase   = "deny-read-union";
+                payload = ApplyDenyReadBookkeepingUnion(payload);
+                phase   = "refresh";
+                SandboxDiagnosticLog.Event("refresh",
+                                           $"request workspace='{_policy.WorkspaceRoot}' cwd='{execution.WorkingDirectory}' " +
+                                           $"writeRoots=[{string.Join(";", payload.WriteRoots)}] denyWriteCount={payload.DenyWritePaths.Count} " +
+                                           $"denyReadCount={payload.DenyReadPaths.Count} version={payload.Version} refreshOnly={payload.RefreshOnly}");
+#if DEBUG
+                // 宿主 token 单独成行并显式标注 subject=host；不得与 helper 实际身份混淆。
+                SandboxProcessDiagnostics.LogHostToken();
+#endif
+                await _setupInvoker
+                     .RefreshAsync(payload, cancellationToken).ConfigureAwait(false);
+                SandboxDiagnosticLog.Event("refresh", $"helper-finished elapsedMs={stopwatch.ElapsedMilliseconds}");
+            }
+            catch (Exception ex) when (SandboxRefreshExitUncertainty.TryGetConfirmation(ex, out var confirmation))
+            {
+                // helper 退出状态未知：门经 ReleaseWhenConfirmed 转入后台确认后释放（fail-closed），
+                // 此处立即移交所有权并置空，finally 不再 Dispose；异常按原有语义继续上抛。
+                SandboxDiagnosticLog.Event("refresh",
+                                           $"helper-exit-uncertain type={ex.GetType().Name} elapsedMs={stopwatch.ElapsedMilliseconds}");
+                gate.ReleaseWhenConfirmed(confirmation!);
+                gate = null;
+                throw;
+            }
+            finally
+            {
+                // RefreshAsync 的三种退出状态：返回或超时/取消路径确认退出即 helper 不再写簿记，
+                // 此刻释放门安全；退出未确认（终止或确认等待失败）时门已移交 ReleaseWhenConfirmed，
+                // 由后台确认任务在 helper 退出后才释放，此处不再 Dispose。读根就绪校验留在门外，
+                // 不延长门的持有时间。
+                gate?.Dispose();
+            }
+
             stopwatch.Restart();
             phase = "validate";
-            SandboxDiagnosticLog.Event("validate", $"start writeRoots=[{string.Join(";", payload.WriteRoots)}]");
-            await _validateWriteAcls(payload, cancellationToken).ConfigureAwait(false);
+            SandboxDiagnosticLog.Event("validate",
+                                       $"start writeRoots=[{string.Join(";", payload.WriteRoots)}] readRootCount={payload.ReadRoots.Count}");
+            await SandboxPostRefreshValidation
+                 .ValidateAsync(payload, _validateWriteAcls, _validateReadRootReadiness, cancellationToken)
+                 .ConfigureAwait(false);
             SandboxDiagnosticLog.Event("validate", $"passed elapsedMs={stopwatch.ElapsedMilliseconds}");
         }
         catch (OperationCanceledException ex)
@@ -390,12 +488,48 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
                                        $"phase={phase} cancelled type={ex.GetType().Name} elapsedMs={stopwatch.ElapsedMilliseconds}");
             throw;
         }
+        catch (ProcessExecutionStartException ex)
+        {
+            // 读根就绪门已带启动期语义（阶段与未就绪读根在消息内）：保留原始异常，不再叠加 refresh 前缀。
+            SandboxDiagnosticLog.Event("preflight",
+                                       $"phase={phase} failed elapsedMs={stopwatch.ElapsedMilliseconds} type={ex.GetType().Name}");
+            throw;
+        }
         catch (Exception ex)
         {
             SandboxDiagnosticLog.Event("preflight",
                                        $"phase={phase} failed elapsedMs={stopwatch.ElapsedMilliseconds} type={ex.GetType().Name}");
             throw new ProcessExecutionStartException($"The sandbox ACL refresh failed: {ex.Message}", ex);
         }
+    }
+
+    /// <summary>
+    ///     <para>
+    ///         在冻结语义 deny 集之上叠加 helper 拒读簿记的只增并集：语义集 ∪ 全部主体的可配对
+    ///         簿记条目，去重后替换 payload 的 deny_read_paths。与首次准备共用
+    ///         <see cref="SandboxDenyReadBookkeeping.Merge" /> 同一实现；只增不减——会话冻结期间
+    ///         另一端写入簿记的条目同样被并入。调用方须持有按 home 键控的拒读刷新门，使
+    ///         [读簿记 → 合并 → refresh → 持久化] 跨进程串行化。
+    ///     </para>
+    ///     <para>
+    ///         Folds the helper deny-read bookkeeping into the frozen semantic deny set as an
+    ///         add-only union: the semantic set plus every principal's pairable bookkeeping entries,
+    ///         deduplicated into the payload's deny_read_paths. Shares
+    ///         <see cref="SandboxDenyReadBookkeeping.Merge" /> with the first preparation; strictly
+    ///         add-only — entries another side writes while this session is frozen are folded in too.
+    ///         The caller must hold the home-keyed deny-read refresh gate so
+    ///         [read → merge → refresh → persist] stays serialized across processes.
+    ///     </para>
+    /// </summary>
+    private SandboxSetupPayload ApplyDenyReadBookkeepingUnion(SandboxSetupPayload payload)
+    {
+        var (denyPaths, bookkeepingEntries, bookkeepingMerged) = SandboxDenyReadBookkeeping.Merge(
+            "per-command refresh", payload.DenyReadPaths, payload.ReadRoots, _components.SandboxHome);
+        var unioned = SandboxIsolationPolicy.Deduplicate(denyPaths);
+        SandboxDiagnosticLog.Event("deny-read-union",
+                                   $"bookkeepingEntries={bookkeepingEntries} bookkeepingMerged={bookkeepingMerged} " +
+                                   $"denyReadCount={unioned.Count}");
+        return payload with { DenyReadPaths = unioned };
     }
 
     private async Task<WindowsSandboxAccount> LoadAccount(bool              networkAccessEnabled, bool authorizedReads,
@@ -431,14 +565,45 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
         }
     }
 
+    /// <summary>
+    ///     <para>
+    ///         在按 home 键控的拒读刷新门内解析 capability SID：get-or-create 与整表写回同另一端
+    ///         host 解析、门内 helper refresh 的表写共用一张 <c>cap_sid</c>，无门并发会产生共享
+    ///         冲突或丢更新（SID/ACE 失配）。仅解析这一小段持门，runner 启动与桌面创建不持门；
+    ///         此处无 helper 参与，门经 Dispose 直接归还，门等待超时按命令未启动 fail-closed。
+    ///     </para>
+    ///     <para>
+    ///         Resolves capability SIDs while holding the home-keyed deny-read refresh gate: the
+    ///         get-or-create plus whole-table write-back share one cap_sid table with the other
+    ///         host's resolution and the helper's in-gate refresh writes, so ungated concurrency
+    ///         produces sharing violations or lost updates (SID/ACE mismatch). Only this short
+    ///         resolution holds the gate — the runner launch and desktop creation never do; no
+    ///         helper participates here, so Dispose returns the gate directly, and a gate-wait
+    ///         timeout fails closed with the command not started.
+    ///     </para>
+    /// </summary>
     private async Task<IReadOnlyList<string>> ResolveCapabilitySids(
         PreparedProcessExecution execution, CancellationToken cancellationToken)
     {
         if (!OperatingSystem.IsWindows())
             throw new PlatformNotSupportedException("The Windows sandbox backend is available on Windows only.");
 
+        ISandboxDenyReadRefreshGateHandle? gate = null;
         try
         {
+            // 门限时获取（语义对齐 preflight 的拒读门）：cap_sid 的 get-or-create + 整表写回绝不
+            // 在门外进行，否则与另一端 host 解析及门内 helper 的表写并发时共享冲突或丢更新；
+            // 超时即命令未启动，绝不无门写表。
+            gate = await _denyReadRefreshGate
+                         .TryAcquireAsync(_components.SandboxHome, _limits.DenyReadRefreshGateTimeout,
+                                          cancellationToken).ConfigureAwait(false)
+                   ?? throw new
+                       ProcessExecutionStartException($"The deny-read refresh gate for sandbox home '{_components.SandboxHome}' " +
+                                                      $"was not acquired within {(int)_limits.DenyReadRefreshGateTimeout.TotalSeconds}s " +
+                                                      "before resolving capability SIDs; the command was not started, so the shared " +
+                                                      "capability SID table is never written without the gate. Retry the command once " +
+                                                      "the concurrent refresh completes.",
+                                                      new TimeoutException("The deny-read refresh gate acquisition timed out."));
             // cwd 必须与 refresh 的 command_cwd 一致，使 spawn token 的工作区 SID 匹配目录 ACE。
             // 此约束与 Rust 的 workspace_write_cap_sid_for_root 保持一致。
             // grant 冻结写根一并并入 SID 解析：refresh payload 已含相同根（先 refresh 后解析，
@@ -455,9 +620,20 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
         {
             throw;
         }
+        catch (ProcessExecutionStartException)
+        {
+            // 门限时获取的启动期拒绝原样上抛，不叠加解析失败前缀。
+            throw;
+        }
         catch (Exception ex)
         {
             throw new ProcessExecutionStartException($"Failed to resolve sandbox capability SIDs: {ex.Message}", ex);
+        }
+        finally
+        {
+            // 本段无 helper 参与（helper 的 cap 写只发生在门内 refresh），Dispose 直接归还；
+            // 解析失败路径同样先释放，命令保持未启动。
+            gate?.Dispose();
         }
     }
 

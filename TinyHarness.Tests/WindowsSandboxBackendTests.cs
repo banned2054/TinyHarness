@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json;
 using TinyHarness.Core.Models.Runtime;
 using TinyHarness.Core.Models.Runtime.WindowsSandbox;
 using TinyHarness.Core.Services.Runtime;
@@ -36,20 +37,24 @@ public class WindowsSandboxBackendTests
 
     private static (WindowsSandboxBackend Backend, FakeSetupInvoker Setup, FakeDesktopFactory Desktops,
         FakeSandboxRunnerLauncher Launcher, SandboxTestHome Home) CreateBackend(
-            Func<Stream, Stream, CancellationToken, Task>       runnerBody,
-            string?                                             workspaceRoot     = null,
-            SandboxPolicyKind                                   kind              = SandboxPolicyKind.WorkspaceWrite,
-            IReadOnlyDictionary<string, string>?                knownSecrets      = null,
-            Exception?                                          refreshError      = null,
-            WindowsSandboxComponents?                           components        = null,
-            WindowsSandboxBackendLimits?                        limits            = null,
-            Exception?                                          launchError       = null,
-            Func<SandboxSetupPayload, CancellationToken, Task>? validateWriteAcls = null)
+        Func<Stream, Stream, CancellationToken, Task>       runnerBody,
+        string?                                             workspaceRoot           = null,
+        SandboxPolicyKind                                   kind                    = SandboxPolicyKind.WorkspaceWrite,
+        IReadOnlyDictionary<string, string>?                knownSecrets            = null,
+        Exception?                                          refreshError            = null,
+        WindowsSandboxComponents?                           components              = null,
+        WindowsSandboxBackendLimits?                        limits                  = null,
+        Exception?                                          launchError             = null,
+        Func<SandboxSetupPayload, CancellationToken, Task>? validateWriteAcls       = null,
+        Func<SandboxSetupPayload, CancellationToken, Task>? validateReadRootReadiness = null,
+        Func<WindowsSandboxComponents, SandboxIsolationPolicy, SandboxIsolationPolicy>? policyOverride = null,
+        ISandboxDenyReadRefreshGate?                        denyReadRefreshGate     = null)
     {
         var home              = new SandboxTestHome();
         var workspace         = workspaceRoot ?? home.Components.SandboxHome; // 策略范围内的测试根。
         var targetEnvironment = new Dictionary<string, string> { ["TEMP"] = workspace };
         var policy            = SandboxPolicyResolver.Resolve(kind, workspace, targetEnvironment);
+        if (policyOverride is not null) policy = policyOverride(home.Components, policy);
         var setup             = new FakeSetupInvoker { ThrowOnRefresh = refreshError };
         var desktops          = new FakeDesktopFactory();
         var launcher          = new FakeSandboxRunnerLauncher { RunnerBody = runnerBody, ThrowOnLaunch = launchError };
@@ -60,7 +65,12 @@ public class WindowsSandboxBackendTests
                                                 desktopFactory : desktops, runnerLauncher : launcher,
                                                 limits : limits ?? TestLimits, allowNullDeviceAccess : _ => { },
                                                 validateWriteAcls : validateWriteAcls ??
-                                                                    ((_, _) => Task.CompletedTask));
+                                                                    ((_, _) => Task.CompletedTask),
+                                                // 读根就绪门按用例注入：默认 stub（无真实 DACL 依赖），
+                                                // 就绪门行为由 SandboxReadRootReadinessTests 单独覆盖。
+                                                validateReadRootReadiness : validateReadRootReadiness ??
+                                                                            ((_, _) => Task.CompletedTask),
+                                                denyReadRefreshGate : denyReadRefreshGate);
         return (backend, setup, desktops, launcher, home);
     }
 
@@ -893,5 +903,763 @@ public class WindowsSandboxBackendTests
         Assert.That(refresh.WriteRoots, Does.Not.Contain(Path.Combine(home.Components.SandboxHome, "grant-root")));
         var request = await spawnSeen.Task.WaitAsync(TimeSpan.FromSeconds(3));
         Assert.That(request.CapabilitySids, Has.Count.EqualTo(1));
+    }
+
+    // ---------------------------------------------------------------- 拒读簿记并集与后刷新校验
+
+    private static string DenyBookkeepingJson(params (string Sid, string[] Paths)[] principals)
+    {
+        var principalsMap = new Dictionary<string, string[]>(StringComparer.Ordinal);
+        foreach (var (sid, paths) in principals) principalsMap[sid] = paths;
+
+        return JsonSerializer.Serialize(new { principals = principalsMap });
+    }
+
+    private static void WriteDenyBookkeeping(string home, string json) =>
+        File.WriteAllText(Path.Combine(home, ".sandbox", "deny_read_acl_state.json"), json);
+
+    [Test]
+    public async Task Execute_RefreshPayloadFoldsDenyReadBookkeepingUnion()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        using var outside = new TestTempDir();
+        var (backend, setup, _, _, home) = CreateBackend(NormalRunner,
+                                                         policyOverride : (components, policy) => policy with
+                                                         {
+                                                             DenyReadPaths = [Path.Combine(components.SandboxHome,
+                                                                                           ".ssh")]
+                                                         });
+        using var homeScope = home;
+        var       sandboxHome = home.Components.SandboxHome;
+        var       semantic    = Path.Combine(sandboxHome, ".ssh");
+        var       pairable    = Path.Combine(sandboxHome, "legacy-scan-hit");
+        var       unpaired    = Path.Combine(outside.Root, "unrelated-hit");
+        WriteDenyBookkeeping(sandboxHome,
+                             DenyBookkeepingJson(("S-1-5-21-9001", [pairable, sandboxHome, unpaired])));
+
+        await backend.ExecuteAsync(Plan(sandboxHome), new RecordingOutputCapture(), new RecordingOutputCapture(),
+                                   CancellationToken.None);
+
+        // refresh payload 的 deny_read_paths = 冻结语义集 ∪ 可配对簿记条目（只增不减）：
+        // 等于读根本身与脱离覆盖/兄弟的条目被过滤，读根集合不受并集影响。
+        var refresh = TestAssert.Single(setup.RefreshPayloads);
+        Assert.Multiple(() =>
+        {
+            Assert.That(refresh.DenyReadPaths, Does.Contain(semantic));
+            Assert.That(refresh.DenyReadPaths, Does.Contain(pairable));
+            Assert.That(refresh.DenyReadPaths, Does.Not.Contain(sandboxHome));
+            Assert.That(refresh.DenyReadPaths, Does.Not.Contain(unpaired));
+            Assert.That(refresh.ReadRoots, Does.Contain(sandboxHome));
+        });
+    }
+
+    [Test]
+    public async Task Execute_BookkeepingEntriesAddedWhileSessionFrozen_AreStillApplied()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        var (backend, setup, _, _, home) = CreateBackend(NormalRunner,
+                                                         policyOverride : (components, policy) => policy with
+                                                         {
+                                                             DenyReadPaths = [Path.Combine(components.SandboxHome,
+                                                                                           ".ssh")]
+                                                         });
+        using var homeScope  = home;
+        var       sandboxHome = home.Components.SandboxHome;
+        var       semantic    = Path.Combine(sandboxHome, ".ssh");
+        var       lateEntry   = Path.Combine(sandboxHome, "late-scan-hit");
+
+        // 第一条命令：会话冻结的语义集为唯一来源，无簿记文件=空集贡献。
+        await backend.ExecuteAsync(Plan(sandboxHome), new RecordingOutputCapture(), new RecordingOutputCapture(),
+                                   CancellationToken.None);
+        Assert.That(TestAssert.Single(setup.RefreshPayloads).DenyReadPaths, Is.EqualTo([semantic]));
+
+        // 会话冻结期间另一端（共享主体与 home 的 CLI）写入簿记：第二条命令 refresh 前并入，
+        // 语义集永不收缩——只增不减正是交替 refresh 不撤另一端 deny 的收口点。
+        WriteDenyBookkeeping(sandboxHome, DenyBookkeepingJson(("S-1-5-21-9001", [lateEntry])));
+        await backend.ExecuteAsync(Plan(sandboxHome), new RecordingOutputCapture(), new RecordingOutputCapture(),
+                                   CancellationToken.None);
+
+        Assert.That(setup.RefreshPayloads, Has.Count.EqualTo(2));
+        var second = setup.RefreshPayloads[1];
+        Assert.Multiple(() =>
+        {
+            Assert.That(second.DenyReadPaths, Does.Contain(semantic));
+            Assert.That(second.DenyReadPaths, Does.Contain(lateEntry));
+            Assert.That(second.DenyReadPaths.Count, Is.GreaterThanOrEqualTo(setup.RefreshPayloads[0].DenyReadPaths.Count));
+        });
+    }
+
+    [Test]
+    public async Task Execute_PostRefreshValidationRunsWriteThenReadinessBeforeLaunch()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        var trace = new List<string>();
+        var (backend, setup, _, launcher, home) = CreateBackend(async (downstream, upstream, end) =>
+        {
+            trace.Add("launch");
+            await NormalRunner(downstream, upstream, end);
+        }, validateWriteAcls : (_, _) =>
+        {
+            trace.Add("write");
+            return Task.CompletedTask;
+        }, validateReadRootReadiness : (_, _) =>
+        {
+            trace.Add("readiness");
+            return Task.CompletedTask;
+        });
+        using var homeScope = home;
+
+        await backend.ExecuteAsync(Plan(home.Components.SandboxHome), new RecordingOutputCapture(),
+                                   new RecordingOutputCapture(), CancellationToken.None);
+
+        // 共享后刷新校验的固定顺序：refresh 成功 → 写 ACL 继承校验 → 组读根就绪门 → 启动。
+        Assert.Multiple(() =>
+        {
+            Assert.That(trace, Is.EqualTo(["write", "readiness", "launch"]));
+            Assert.That(setup.RefreshPayloads, Has.Count.EqualTo(1));
+            Assert.That(launcher.LastRequest, Is.Not.Null);
+        });
+    }
+
+    [Test]
+    public async Task Execute_UnreadyReadRootsFailClosedBeforeLaunch()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        var (backend, setup, _, launcher, home) = CreateBackend(NormalRunner,
+                                                                validateReadRootReadiness : (_, _) =>
+                                                                    throw new ProcessExecutionStartException(
+                                                                        "read-root readiness blocked by test stub",
+                                                                        new TimeoutException("stub")));
+        using var homeScope = home;
+
+        var error = await TestAssert.ThrowsAsync<ProcessExecutionStartException>(() => backend.ExecuteAsync(
+            Plan(home.Components.SandboxHome), new RecordingOutputCapture(), new RecordingOutputCapture(),
+            CancellationToken.None));
+
+        // 就绪门失败为启动期异常原样上抛（不叠加 refresh 前缀），命令保持未启动。
+        Assert.Multiple(() =>
+        {
+            Assert.That(error.Message, Does.Contain("read-root readiness"));
+            Assert.That(setup.RefreshPayloads, Has.Count.EqualTo(1));
+            Assert.That(launcher.LastRequest, Is.Null);
+        });
+    }
+
+    // ---------------------------------------------------------------- 拒读刷新门（跨进程串行化）
+
+    /// <summary>共享 home 上模拟 helper 全量同步的簿记主体 SID。 The bookkeeping principal SID for the helper's wholesale sync on a shared home.</summary>
+    private const string BookkeepingSid = "S-1-5-21-9001";
+
+    private static string[] ReadDenyBookkeepingPaths(string home, string sid)
+    {
+        var path = Path.Combine(home, ".sandbox", "deny_read_acl_state.json");
+        if (!File.Exists(path)) return []; // helper 的 load_state：文件缺失 = 空簿记（全新 home）。
+
+        using var document = JsonDocument.Parse(File.ReadAllText(path));
+        return document.RootElement
+                       .GetProperty("principals")
+                       .GetProperty(sid)
+                       .EnumerateArray()
+                       .Select(element => element.GetString()!)
+                       .ToArray();
+    }
+
+    private static SandboxIsolationPolicy ResolveSharedHomePolicy(WindowsSandboxComponents components,
+                                                                  params string[]          semanticDenyPaths)
+    {
+        var targetEnvironment = new Dictionary<string, string> { ["TEMP"] = components.SandboxHome };
+        return SandboxPolicyResolver.Resolve(SandboxPolicyKind.WorkspaceWrite, components.SandboxHome,
+                                             targetEnvironment)
+                   with { DenyReadPaths = semanticDenyPaths };
+    }
+
+    private static (WindowsSandboxBackend Backend, FakeSandboxRunnerLauncher Launcher) CreateSharedHomeBackend(
+        WindowsSandboxComponents     components,
+        SandboxIsolationPolicy       policy,
+        ISandboxSetupInvoker         setup,
+        WindowsSandboxBackendLimits? limits     = null,
+        Func<Stream, Stream, CancellationToken, Task>? runnerBody = null,
+        ISandboxDenyReadRefreshGate? denyReadRefreshGate = null)
+    {
+        var targetEnvironment = new Dictionary<string, string> { ["TEMP"] = components.SandboxHome };
+        var launcher          = new FakeSandboxRunnerLauncher { RunnerBody = runnerBody ?? NormalRunner };
+        var backend           = new WindowsSandboxBackend(
+                                                components, policy, targetEnvironment, null, setup,
+                                                new FakeCredentialSource(),
+                                                desktopFactory : new FakeDesktopFactory(), runnerLauncher : launcher,
+                                                limits : limits ?? TestLimits, allowNullDeviceAccess : _ => { },
+                                                validateWriteAcls : (_, _) => Task.CompletedTask,
+                                                validateReadRootReadiness : (_, _) => Task.CompletedTask,
+                                                denyReadRefreshGate : denyReadRefreshGate);
+        return (backend, launcher);
+    }
+
+    /// <summary>
+    ///     模拟 helper ACL 层的 deny 面：门内 refresh 按主体语义施加/撤销，最终断言用。
+    ///     The simulated helper ACL deny face: gate-held refreshes apply and revoke per the
+    ///     helper's semantics, asserted at the end.
+    /// </summary>
+    private sealed class SimulatedDenyState(params string[] initialPaths)
+    {
+        // 门保证 [读簿记→合并→refresh] 跨进程串行化后，本状态只在门内变更；无须额外锁。
+        private readonly HashSet<string> _paths = new(initialPaths, StringComparer.OrdinalIgnoreCase);
+
+        public void Revoke(IEnumerable<string> paths)
+        {
+            foreach (var path in paths) _paths.Remove(path);
+        }
+
+        public void UnionWith(IEnumerable<string> paths) => _paths.UnionWith(paths);
+
+        public string[] Snapshot() => [.. _paths];
+    }
+
+    /// <summary>
+    ///     模拟 helper sync_persistent_principal_paths 的 fake invoker：load_state → applied=
+    ///     payload.DenyReadPaths → 从模拟 deny 面撤销 previous 中不在 applied 的路径 →
+    ///     principals[sid]=applied 写回真实簿记文件；钩子支持确定性交错。
+    ///     A fake invoker simulating the helper's sync_persistent_principal_paths:
+    ///     load_state → applied = payload.DenyReadPaths → revoke the previous paths missing
+    ///     from applied on the simulated deny face → store principals[sid]=applied into the
+    ///     real bookkeeping file; hooks support deterministic interleaving.
+    /// </summary>
+    private sealed class SimulatedHelperInvoker(
+        string             sandboxHome,
+        string             principalSid,
+        SimulatedDenyState denyState,
+        Func<Task>?        beforeApply = null,
+        Action?            onEntered   = null,
+        Action?            onCompleted = null) : ISandboxSetupInvoker
+    {
+        public List<SandboxSetupPayload> RefreshPayloads { get; } = [];
+
+        public async Task RefreshAsync(SandboxSetupPayload payload, CancellationToken cancellationToken)
+        {
+            onEntered?.Invoke();
+            if (beforeApply is not null) await beforeApply().ConfigureAwait(false);
+            RefreshPayloads.Add(payload);
+
+            // helper 语义：全量按主体同步——不在 payload 即撤销，簿记写回 applied 全集。
+            var previous = ReadDenyBookkeepingPaths(sandboxHome, principalSid);
+            var applied  = payload.DenyReadPaths.ToHashSet(StringComparer.OrdinalIgnoreCase);
+            denyState.Revoke(previous.Where(path => !applied.Contains(path)));
+            denyState.UnionWith(applied);
+            WriteDenyBookkeeping(sandboxHome,
+                                 DenyBookkeepingJson((principalSid, payload.DenyReadPaths.ToArray())));
+            onCompleted?.Invoke();
+        }
+    }
+
+    [Test]
+    public async Task Execute_DenyReadRefreshGateSerializesConcurrentRefreshesOnSharedHome()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        using var home        = new SandboxTestHome();
+        var       sandboxHome = home.Components.SandboxHome;
+        var       oldEntry    = Path.Combine(sandboxHome, "shared-scan-hit");
+        var       entryA      = Path.Combine(sandboxHome, "desktop-store");
+        var       entryB      = Path.Combine(sandboxHome, "cli-d");
+        var       denyState   = new SimulatedDenyState(oldEntry);
+        WriteDenyBookkeeping(sandboxHome, DenyBookkeepingJson((BookkeepingSid, [oldEntry])));
+
+        var aEntered   = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var aCompleted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var invokerA   = new SimulatedHelperInvoker(sandboxHome, BookkeepingSid, denyState,
+                                                    onEntered : () => aEntered.TrySetResult(true),
+                                                    onCompleted : () => aCompleted.TrySetResult(true));
+        var invokerB   = new SimulatedHelperInvoker(sandboxHome, BookkeepingSid, denyState,
+                                                    beforeApply : () => aCompleted.Task.WaitAsync(TimeSpan.FromSeconds(10)));
+        var (backendA, _) = CreateSharedHomeBackend(home.Components,
+                                                    ResolveSharedHomePolicy(home.Components, oldEntry, entryA),
+                                                    invokerA);
+        var (backendB, _) = CreateSharedHomeBackend(home.Components,
+                                                    ResolveSharedHomePolicy(home.Components, oldEntry, entryB),
+                                                    invokerB);
+
+        // 确定性交错：A 先进入 invoker（已持门），B 随后启动并被门挡住；B 的 invoker 再阻塞到
+        // A 的 invoker 完成。无门时 B 会在 A 持久化前读簿记，其旧 payload 将撤销 A 的条目。
+        var taskA = backendA.ExecuteAsync(Plan(sandboxHome), new RecordingOutputCapture(), new RecordingOutputCapture(),
+                                          CancellationToken.None);
+        await aEntered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        var taskB = backendB.ExecuteAsync(Plan(sandboxHome), new RecordingOutputCapture(), new RecordingOutputCapture(),
+                                          CancellationToken.None);
+        await Task.WhenAll(taskA, taskB);
+
+        // B 的 refresh payload 在门内重读簿记，包含 A 刚持久化的条目；最终簿记与模拟 deny 面
+        // 同时保留 old + A + B。
+        var payloadB        = TestAssert.Single(invokerB.RefreshPayloads);
+        var finalBookkeeping = ReadDenyBookkeepingPaths(sandboxHome, BookkeepingSid);
+        Assert.Multiple(() =>
+        {
+            Assert.That(payloadB.DenyReadPaths, Does.Contain(entryA));
+            Assert.That(payloadB.DenyReadPaths, Does.Contain(entryB));
+            Assert.That(finalBookkeeping, Does.Contain(entryA));
+            Assert.That(finalBookkeeping, Does.Contain(entryB));
+            Assert.That(finalBookkeeping, Does.Contain(oldEntry));
+            Assert.That(denyState.Snapshot(), Does.Contain(entryA));
+            Assert.That(denyState.Snapshot(), Does.Contain(entryB));
+            Assert.That(denyState.Snapshot(), Does.Contain(oldEntry));
+        });
+    }
+
+    [Test]
+    public async Task Execute_ConcurrentDenyReadRefreshesOnSharedHome_PreserveBothSidesEntries()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        // 并发不变量：重复 3 轮、每轮新 home，两端并发 refresh 后簿记与模拟 deny 面都保留
+        // 双方条目，两端命令都正常完成（不 fail-closed）。
+        for (var round = 0; round < 3; round++)
+        {
+            using var home        = new SandboxTestHome();
+            var       sandboxHome = home.Components.SandboxHome;
+            var       entryA      = Path.Combine(sandboxHome, "desktop-store");
+            var       entryB      = Path.Combine(sandboxHome, "cli-d");
+            var       denyState   = new SimulatedDenyState();
+            var       invokerA    = new SimulatedHelperInvoker(sandboxHome, BookkeepingSid, denyState);
+            var       invokerB    = new SimulatedHelperInvoker(sandboxHome, BookkeepingSid, denyState);
+            var (backendA, _) = CreateSharedHomeBackend(home.Components,
+                                                        ResolveSharedHomePolicy(home.Components, entryA),
+                                                        invokerA);
+            var (backendB, _) = CreateSharedHomeBackend(home.Components,
+                                                        ResolveSharedHomePolicy(home.Components, entryB),
+                                                        invokerB);
+
+            var results = await Task.WhenAll(
+                backendA.ExecuteAsync(Plan(sandboxHome), new RecordingOutputCapture(), new RecordingOutputCapture(),
+                                      CancellationToken.None),
+                backendB.ExecuteAsync(Plan(sandboxHome), new RecordingOutputCapture(), new RecordingOutputCapture(),
+                                      CancellationToken.None));
+
+            var finalBookkeeping = ReadDenyBookkeepingPaths(sandboxHome, BookkeepingSid);
+            Assert.Multiple(() =>
+            {
+                Assert.That(results[0].ExitCode, Is.EqualTo(0));
+                Assert.That(results[1].ExitCode, Is.EqualTo(0));
+                Assert.That(finalBookkeeping, Does.Contain(entryA));
+                Assert.That(finalBookkeeping, Does.Contain(entryB));
+                Assert.That(denyState.Snapshot(), Does.Contain(entryA));
+                Assert.That(denyState.Snapshot(), Does.Contain(entryB));
+            });
+        }
+    }
+
+    [Test]
+    public async Task Execute_ConcurrentFirstWorkspaceResolutionsOnSharedHome_AgreeOnOneSidAndPreserveExistingEntries()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        using var home        = new SandboxTestHome();
+        var       sandboxHome = home.Components.SandboxHome;
+        // 预置既有映射：并发首次解析的整表写回不得把它覆盖丢失。
+        SeedCapabilitySidTable(sandboxHome);
+
+        var spawnA = new TaskCompletionSource<RunnerSpawnRequest>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var spawnB = new TaskCompletionSource<RunnerSpawnRequest>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var invokerA = new SimulatedHelperInvoker(sandboxHome, BookkeepingSid, new SimulatedDenyState());
+        var invokerB = new SimulatedHelperInvoker(sandboxHome, BookkeepingSid, new SimulatedDenyState());
+        var (backendA, launcherA) = CreateSharedHomeBackend(home.Components,
+                                                            ResolveSharedHomePolicy(home.Components), invokerA,
+                                                            runnerBody : SpawnCapturingRunner(spawnA));
+        var (backendB, launcherB) = CreateSharedHomeBackend(home.Components,
+                                                            ResolveSharedHomePolicy(home.Components), invokerB,
+                                                            runnerBody : SpawnCapturingRunner(spawnB));
+
+        // 同根并发首次解析：两端 policy 与 cwd 完全一致，修复前各自 miss → 随机 SID → 整表写回，
+        // 出现共享冲突或丢更新；修复后门内串行，后到者读到先到者写入的同一映射。
+        var results = await Task.WhenAll(
+            backendA.ExecuteAsync(Plan(sandboxHome), new RecordingOutputCapture(), new RecordingOutputCapture(),
+                                  CancellationToken.None),
+            backendB.ExecuteAsync(Plan(sandboxHome), new RecordingOutputCapture(), new RecordingOutputCapture(),
+                                  CancellationToken.None));
+
+        var sidA   = (await spawnA.Task.WaitAsync(TimeSpan.FromSeconds(10))).CapabilitySids[0];
+        var sidB   = (await spawnB.Task.WaitAsync(TimeSpan.FromSeconds(10))).CapabilitySids[0];
+        var table  = ReadCapabilitySidTable(sandboxHome);
+        Assert.Multiple(() =>
+        {
+            Assert.That(results[0].ExitCode, Is.EqualTo(0));
+            Assert.That(results[1].ExitCode, Is.EqualTo(0));
+            Assert.That(launcherA.LastRequest, Is.Not.Null);
+            Assert.That(launcherB.LastRequest, Is.Not.Null);
+            // 同根收敛到同一 SID；表内该键与两侧 token 携带一致；预置映射保留。
+            Assert.That(sidB, Is.EqualTo(sidA));
+            Assert.That(table.WorkspaceByCwd[SandboxCapabilitySidStore.CanonicalRootKey(sandboxHome)],
+                        Is.EqualTo(sidA));
+            Assert.That(table.WritableRootByPath["c:/outside/pre-existing"], Is.EqualTo("S-1-5-21-33-33-33-33"));
+        });
+    }
+
+    [Test]
+    public async Task Execute_ConcurrentDistinctRootResolutionsOnSharedHome_PreserveBothSidesMappings()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        using var home        = new SandboxTestHome();
+        var       sandboxHome = home.Components.SandboxHome;
+        SeedCapabilitySidTable(sandboxHome);
+
+        var spawnA = new TaskCompletionSource<RunnerSpawnRequest>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var spawnB = new TaskCompletionSource<RunnerSpawnRequest>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var invokerA = new SimulatedHelperInvoker(sandboxHome, BookkeepingSid, new SimulatedDenyState());
+        var invokerB = new SimulatedHelperInvoker(sandboxHome, BookkeepingSid, new SimulatedDenyState());
+        var (backendA, _) = CreateSharedHomeBackend(home.Components,
+                                                    ResolveSharedHomePolicy(home.Components), invokerA,
+                                                    runnerBody : SpawnCapturingRunner(spawnA));
+        // B 从 home 的子目录运行：工作区写根 ≠ cwd，走 writable_root_by_path 表——两键异表，
+        // 修复前整表写回互相覆盖或共享冲突；修复后门内串行，两个映射并存。
+        var (backendB, _) = CreateSharedHomeBackend(home.Components,
+                                                    ResolveSharedHomePolicy(home.Components), invokerB,
+                                                    runnerBody : SpawnCapturingRunner(spawnB));
+
+        var results = await Task.WhenAll(
+            backendA.ExecuteAsync(Plan(sandboxHome), new RecordingOutputCapture(), new RecordingOutputCapture(),
+                                  CancellationToken.None),
+            backendB.ExecuteAsync(Plan(Path.Combine(sandboxHome, "cli-d")), new RecordingOutputCapture(),
+                                  new RecordingOutputCapture(), CancellationToken.None));
+
+        var sidA  = (await spawnA.Task.WaitAsync(TimeSpan.FromSeconds(10))).CapabilitySids[0];
+        var sidB  = (await spawnB.Task.WaitAsync(TimeSpan.FromSeconds(10))).CapabilitySids[0];
+        var table = ReadCapabilitySidTable(sandboxHome);
+        Assert.Multiple(() =>
+        {
+            Assert.That(results[0].ExitCode, Is.EqualTo(0));
+            Assert.That(results[1].ExitCode, Is.EqualTo(0));
+            // 异根两端各得独立随机 SID（不同键），两侧映射都保留在各自表中；预置映射保留。
+            Assert.That(sidB, Is.Not.EqualTo(sidA));
+            Assert.That(table.WorkspaceByCwd[SandboxCapabilitySidStore.CanonicalRootKey(sandboxHome)],
+                        Is.EqualTo(sidA));
+            Assert.That(table.WritableRootByPath[SandboxCapabilitySidStore.CanonicalRootKey(sandboxHome)],
+                        Is.EqualTo(sidB));
+            Assert.That(table.WritableRootByPath["c:/outside/pre-existing"], Is.EqualTo("S-1-5-21-33-33-33-33"));
+        });
+    }
+
+    [Test]
+    public async Task Execute_ResolveCapabilitySidsHoldsHomeGateForResolutionOnly()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        using var home        = new SandboxTestHome();
+        var       sandboxHome = home.Components.SandboxHome;
+        var       trace       = new List<string>();
+        var       gate        = new ScriptedDenyReadGate(trace);
+        var invoker = new SimulatedHelperInvoker(sandboxHome, BookkeepingSid, new SimulatedDenyState(),
+                                                 onEntered   : () => trace.Add("refresh-entered"),
+                                                 onCompleted : () => trace.Add("refresh-completed"));
+        var launcher = new TracingRunnerLauncher(new FakeSandboxRunnerLauncher { RunnerBody = NormalRunner }, trace);
+        var backend  = new WindowsSandboxBackend(
+                                                home.Components, ResolveSharedHomePolicy(home.Components),
+                                                new Dictionary<string, string> { ["TEMP"] = sandboxHome }, null,
+                                                invoker, new FakeCredentialSource(),
+                                                desktopFactory : new FakeDesktopFactory(), runnerLauncher : launcher,
+                                                limits : TestLimits, allowNullDeviceAccess : _ => trace.Add("resolve-sids"),
+                                                validateWriteAcls         : (_, _) => Task.CompletedTask,
+                                                validateReadRootReadiness : (_, _) => Task.CompletedTask,
+                                                denyReadRefreshGate       : gate);
+
+        var result = await backend.ExecuteAsync(Plan(sandboxHome), new RecordingOutputCapture(),
+                                                new RecordingOutputCapture(), CancellationToken.None);
+
+        // 门序证明：refresh 在第一次持门窗口内；SID 解析（以 NUL ACE 回调为观测点）严格落在
+        // 第二次 acquire/release 窗口内；runner 启动在门释放之后——解析绝不包住启动。
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.ExitCode, Is.EqualTo(0));
+            Assert.That(trace, Is.EqualTo(["deny-gate-acquire", "refresh-entered", "refresh-completed",
+                                           "deny-gate-release", "deny-gate-acquire", "resolve-sids",
+                                           "deny-gate-release", "launch"]));
+            Assert.That(gate.AcquireCalls, Is.EqualTo(2));
+            Assert.That(gate.LastHome, Is.EqualTo(sandboxHome));
+        });
+    }
+
+    [Test]
+    public async Task Execute_CapabilityResolutionGateTimeout_FailsClosedWithoutStartingCommand()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        var gate  = new ScriptedDenyReadGate();
+        var calls = 0;
+        // 第一次获取（preflight refresh）成功放行，第二次（capability 解析）超时返回 null。
+        gate.Script = () => ++calls == 1
+            ? Task.FromResult<ISandboxDenyReadRefreshGateHandle?>(new ScriptedDenyGateHandle(gate))
+            : Task.FromResult<ISandboxDenyReadRefreshGateHandle?>(null);
+        var (backend, setup, _, launcher, home) =
+            CreateBackend(NormalRunner, denyReadRefreshGate : gate);
+        using var homeScope = home;
+
+        var error = await TestAssert.ThrowsAsync<ProcessExecutionStartException>(() =>
+            backend.ExecuteAsync(Plan(homeScope.Components.SandboxHome), new RecordingOutputCapture(),
+                                 new RecordingOutputCapture(), CancellationToken.None));
+
+        // preflight refresh 已完成（第一次获取成功），门在解析阶段限时失败：消息含门名与 home，
+        // 命令未启动；门句柄仅经第一次获取的 Dispose 归还，第二次获取无句柄可释放。
+        Assert.Multiple(() =>
+        {
+            Assert.That(setup.RefreshPayloads, Has.Count.EqualTo(1));
+            TestAssert.Contains("deny-read refresh gate", error!.Message, StringComparison.Ordinal);
+            TestAssert.Contains(homeScope.Components.SandboxHome, error.Message, StringComparison.Ordinal);
+            TestAssert.Contains("capability SIDs", error.Message, StringComparison.Ordinal);
+            Assert.That(launcher.LastRequest, Is.Null);
+            Assert.That(gate.Trace, Is.EqualTo(["deny-gate-acquire", "deny-gate-release", "deny-gate-acquire"]));
+            Assert.That(gate.LastHandle!.DisposeCalls, Is.EqualTo(1));
+        });
+    }
+
+    /// <summary>把 launch 事件写入共享时序的转发启动器：其余行为委托内部 fake。 A forwarding launcher appending the launch event to the shared trace; everything else delegates to the inner fake.</summary>
+    private sealed class TracingRunnerLauncher(ISandboxRunnerLauncher inner, List<string> trace) : ISandboxRunnerLauncher
+    {
+        public async Task<SandboxRunnerConnection> LaunchAsync(RunnerLaunchRequest request,
+                                                               CancellationToken cancellationToken)
+        {
+            trace.Add("launch");
+            return await inner.LaunchAsync(request, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>捕获 spawn_request 的 runner body 工厂：记录 token 携带的 capability SID 供断言。 A capturing runner-body factory: records the token-carried capability SIDs for assertions.</summary>
+    private static Func<Stream, Stream, CancellationToken, Task> SpawnCapturingRunner(
+        TaskCompletionSource<RunnerSpawnRequest> spawnSeen)
+    {
+        return async (downstream, upstream, end) =>
+        {
+            var frame = await RunnerFrameCodec.ReadFrameAsync(downstream, end);
+            spawnSeen.TrySetResult(RunnerFrameCodec.ParsePayload<RunnerSpawnRequest>(frame!));
+            await RunnerFrameCodec.WriteFrameAsync(upstream, "spawn_ready", new RunnerSpawnReady { ProcessId = 1 }, end);
+            await RunnerFrameCodec.WriteFrameAsync(upstream, "exit",
+                                                   new RunnerExitPayload { ExitCode = 0, TimedOut = false }, end);
+        };
+    }
+
+    /// <summary>把 cap_sid 表预置为空映射外加一条既有 writable_root_by_path 映射。 Seeds the cap_sid table with empty maps plus one pre-existing writable_root_by_path mapping.</summary>
+    private static void SeedCapabilitySidTable(string sandboxHome)
+    {
+        File.WriteAllText(Path.Combine(sandboxHome, "cap_sid"),
+                          """{"workspace":"S-1-5-21-11-11-11-11","readonly":"S-1-5-21-22-22-22-22","workspace_by_cwd":{},"writable_root_by_path":{"c:/outside/pre-existing":"S-1-5-21-33-33-33-33"}}""");
+    }
+
+    /// <summary>解析 cap_sid 表的两张映射；键为存盘的规范化小写形态。 Parses both mappings of the cap_sid table; keys use the stored canonical lowercase form.</summary>
+    private static (Dictionary<string, string> WorkspaceByCwd, Dictionary<string, string> WritableRootByPath)
+        ReadCapabilitySidTable(string sandboxHome)
+    {
+        using var document = JsonDocument.Parse(File.ReadAllText(Path.Combine(sandboxHome, "cap_sid")));
+        static Dictionary<string, string> ReadTable(JsonElement element) =>
+            element.EnumerateObject()
+                   .ToDictionary(property => property.Name, property => property.Value.GetString()!,
+                                 StringComparer.Ordinal);
+        return (ReadTable(document.RootElement.GetProperty("workspace_by_cwd")),
+                ReadTable(document.RootElement.GetProperty("writable_root_by_path")));
+    }
+
+    [Test]
+    public async Task Execute_DenyReadRefreshGateHeldByConcurrentRefresh_FailsClosedWithoutStartingCommand()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        using var home        = new SandboxTestHome();
+        var       sandboxHome = home.Components.SandboxHome;
+        var       entryA      = Path.Combine(sandboxHome, "desktop-store");
+        var       entryB      = Path.Combine(sandboxHome, "cli-d");
+        var       denyState   = new SimulatedDenyState();
+        var enteredA = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseA = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var invokerA = new SimulatedHelperInvoker(sandboxHome, BookkeepingSid, denyState,
+                                                  onEntered : () => enteredA.TrySetResult(true),
+                                                  beforeApply : () => releaseA.Task.WaitAsync(TimeSpan.FromSeconds(10)));
+        var invokerB = new SimulatedHelperInvoker(sandboxHome, BookkeepingSid, denyState);
+        var (backendA, launcherA) = CreateSharedHomeBackend(home.Components,
+                                                            ResolveSharedHomePolicy(home.Components, entryA),
+                                                            invokerA);
+        var (backendB, launcherB) = CreateSharedHomeBackend(home.Components,
+                                                            ResolveSharedHomePolicy(home.Components, entryB),
+                                                            invokerB,
+                                                            limits : TestLimits with
+                                                            {
+                                                                DenyReadRefreshGateTimeout = TimeSpan.FromSeconds(1)
+                                                            });
+
+        // A 持门阻塞在 refresh 中；B 注入短门期限并发执行 → 门等待超时 fail-closed。
+        var taskA = backendA.ExecuteAsync(Plan(sandboxHome), new RecordingOutputCapture(), new RecordingOutputCapture(),
+                                          CancellationToken.None);
+        await enteredA.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        var error = await TestAssert.ThrowsAsync<ProcessExecutionStartException>(() =>
+            backendB.ExecuteAsync(Plan(sandboxHome), new RecordingOutputCapture(), new RecordingOutputCapture(),
+                                  CancellationToken.None));
+
+        Assert.Multiple(() =>
+        {
+            TestAssert.Contains("deny-read refresh gate", error.Message, StringComparison.Ordinal);
+            TestAssert.Contains(sandboxHome, error.Message, StringComparison.Ordinal);
+            // B 的 invoker 未被调用：命令未启动（runner 同样未触达）。
+            Assert.That(invokerB.RefreshPayloads, Is.Empty);
+            Assert.That(launcherB.LastRequest, Is.Null);
+        });
+
+        // 放行 A 完成：门的串行化不阻塞先到者，A 正常结束。
+        releaseA.TrySetResult(true);
+        var result = await taskA.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.That(result.ExitCode, Is.EqualTo(0));
+        Assert.That(launcherA.LastRequest, Is.Not.Null);
+    }
+
+    [Test]
+    public async Task Execute_PreflightReadinessWaitsForGateDuringConcurrentCapSidWriteWindow()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        using var home        = new SandboxTestHome();
+        var       sandboxHome = home.Components.SandboxHome;
+        var       capSidPath  = Path.Combine(sandboxHome, "cap_sid");
+        // 撕裂表模拟门内整表 WriteAllText 的中间态：门外读会判成无效 JSON → "not ready" 误报。
+        var completeTable = File.ReadAllText(capSidPath);
+        const string tornTable = """{"workspace":"S-1-5-21-11""";
+
+        // A 持同一隔离 home 的真实刷新门并控制 cap_sid 写入窗口；B 从正常 backend preflight 入口进入，
+        // 其门是带进入信号的门装饰器——A 自己持门不经过它，进入信号只会由 B 置位。
+        var gate  = new GlobalDenyReadRefreshGate();
+        var heldA = await gate.TryAcquireAsync(sandboxHome, TimeSpan.FromSeconds(5), CancellationToken.None)
+                              .WaitAsync(TimeSpan.FromSeconds(10));
+        TestAssert.NotNull(heldA);
+        var setup     = new FakeSetupInvoker();
+        var gateProbe = new GateEntrySignalingDenyReadRefreshGate(gate);
+        var (backendB, launcherB) = CreateSharedHomeBackend(home.Components,
+                                                            ResolveSharedHomePolicy(home.Components), setup,
+                                                            denyReadRefreshGate : gateProbe);
+        Task<ProcessExecutionResult>? taskB   = null;
+        string?                       failure = null;
+        var                           failed  = false;
+        try
+        {
+            File.WriteAllText(capSidPath, tornTable);
+            taskB = backendB.ExecuteAsync(Plan(sandboxHome), new RecordingOutputCapture(),
+                                          new RecordingOutputCapture(), CancellationToken.None);
+            // 确定性信号：等到 B 实际进入门等待（撞上 A 持有的门）后才做短负等待；修复前 B 在门外
+            // 立即读到撕裂表，进入门等待之前就以 "The Windows sandbox is not ready" 失败结束。
+            failure = await gateProbe.ObserveGateWaitAsync(taskB, () => Assert.That(launcherB.LastRequest, Is.Null))
+                                     .ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            failed = true;
+            throw;
+        }
+        finally
+        {
+            // A 写回完整表并释放门：B 随后在门内读到完整表并正常完成；收尾等待只观察，不覆盖原始失败。
+            File.WriteAllText(capSidPath, completeTable);
+            heldA?.Dispose();
+            if (taskB is not null)
+                failure = await gateProbe.DrainAfterReleaseAsync(taskB, failure, failure is not null || failed)
+                                         .ConfigureAwait(false);
+        }
+
+        if (failure is not null)
+            Assert.Fail("Preflight must wait for the deny-read refresh gate instead of reading the torn cap_sid " +
+                        "outside the gate (pre-fix: the task faults with 'The Windows sandbox is not ready')." +
+                        Environment.NewLine + failure);
+
+        // B 在门内读到 A 写回的完整表后正常完成，全程无 "not ready" 异常。
+        var result = await taskB!.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.ExitCode, Is.EqualTo(0));
+            Assert.That(launcherB.LastRequest, Is.Not.Null);
+            Assert.That(setup.RefreshPayloads, Has.Count.EqualTo(1));
+        });
+    }
+
+    // ---------------------------------------------------------------- 拒读刷新门（退出未知的门保留）
+
+    [Test]
+    public async Task Execute_HelperExitUncertainDuringRefresh_HoldsGateUntilExitConfirmedWithoutStartingCommand()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        var pending = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var gate = new ScriptedDenyReadGate();
+        var (backend, setup, _, launcher, home) =
+            CreateBackend(NormalRunner,
+                          refreshError : new SandboxRefreshExitUncertainException(
+                              "The sandbox setup helper did not finish refreshing ACLs within 5s. The helper exit " +
+                              "state is unknown; it may still be writing deny-read bookkeeping.",
+                              pending.Task, null),
+                          denyReadRefreshGate : gate);
+        using var homeScope = home;
+
+        var error = await TestAssert.ThrowsAsync<ProcessExecutionStartException>(() => backend.ExecuteAsync(
+            Plan(home.Components.SandboxHome), new RecordingOutputCapture(), new RecordingOutputCapture(),
+            CancellationToken.None));
+
+        // 退出未知：超时语义经通用失败路径包装，命令未启动；门经确认释放被调而非立即归还
+        // （Dispose 未被调），确认任务随异常移交门侧。
+        var handle = TestAssert.NotNull(gate.LastHandle);
+        Assert.Multiple(() =>
+        {
+            TestAssert.Contains("ACL refresh failed", error!.Message, StringComparison.Ordinal);
+            TestAssert.Contains("exit state is unknown", error.Message, StringComparison.Ordinal);
+            Assert.That(launcher.LastRequest, Is.Null);
+            Assert.That(setup.RefreshPayloads, Has.Count.EqualTo(1));
+            Assert.That(handle.ConfirmationTasks, Has.Count.EqualTo(1));
+            Assert.That(handle.DisposeCalls, Is.EqualTo(0));
+        });
+
+        // 模拟确认完成后（确认任务完成 true），下一条命令可正常走门并完成。
+        setup.ThrowOnRefresh = null;
+        pending.TrySetResult(true);
+        var result = await backend.ExecuteAsync(Plan(home.Components.SandboxHome), new RecordingOutputCapture(),
+                                                new RecordingOutputCapture(), CancellationToken.None);
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.ExitCode, Is.EqualTo(0));
+            Assert.That(launcher.LastRequest, Is.Not.Null);
+            // 第二条命令按新契约各持门两次：preflight refresh 与其后的 capability SID 解析。
+            Assert.That(gate.AcquireCalls, Is.EqualTo(3));
+            Assert.That(gate.Trace, Is.EqualTo(["deny-gate-acquire",
+                                                "deny-gate-release-when-confirmed",
+                                                "deny-gate-acquire",
+                                                "deny-gate-release",
+                                                "deny-gate-acquire",
+                                                "deny-gate-release"]));
+        });
+    }
+
+    [Test]
+    public async Task Execute_HelperExitUncertainCancellationDuringRefresh_HoldsGateAndStaysACancellation()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        var pending = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var gate = new ScriptedDenyReadGate();
+        var (backend, setup, _, launcher, home) =
+            CreateBackend(NormalRunner,
+                          refreshError : new SandboxRefreshExitUncertainCancellationException(
+                              "The sandbox setup helper refresh was cancelled. The helper exit state is unknown; " +
+                              "it may still be writing deny-read bookkeeping.",
+                              CancellationToken.None, pending.Task),
+                          denyReadRefreshGate : gate);
+        using var homeScope = home;
+
+        var error = await Assert.CatchAsync<OperationCanceledException>(() => backend.ExecuteAsync(
+            Plan(home.Components.SandboxHome), new RecordingOutputCapture(), new RecordingOutputCapture(),
+            CancellationToken.None));
+
+        // 上层仍按取消处理（不确定取消子类原样上抛，不包装为启动失败）；门经确认释放被调，
+        // Dispose 未被调，命令未启动。
+        var handle = TestAssert.NotNull(gate.LastHandle);
+        Assert.Multiple(() =>
+        {
+            Assert.That(error, Is.InstanceOf<SandboxRefreshExitUncertainCancellationException>());
+            Assert.That(launcher.LastRequest, Is.Null);
+            Assert.That(setup.RefreshPayloads, Has.Count.EqualTo(1));
+            Assert.That(handle.ConfirmationTasks, Has.Count.EqualTo(1));
+            Assert.That(handle.DisposeCalls, Is.EqualTo(0));
+        });
+        pending.TrySetResult(true);
     }
 }

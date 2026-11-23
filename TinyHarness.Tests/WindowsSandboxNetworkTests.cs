@@ -546,10 +546,12 @@ public class WindowsSandboxNetworkTests
                                                 desktops, launcher,
                                                 TestLimits, _ => { },
                                                 (_, _) => Task.CompletedTask,
+                                                (_, _) => Task.CompletedTask,
                                                 standingEnabled,
                                                 proxyEnvironment,
                                                 inspectOnlineAccount ??
-                                                (_ => Task.FromResult(WindowsSandboxStatus.Ok())));
+                                                (_ => Task.FromResult(WindowsSandboxStatus.Ok())),
+                                                null);
         return (backend, setup, desktops, launcher, home);
     }
 

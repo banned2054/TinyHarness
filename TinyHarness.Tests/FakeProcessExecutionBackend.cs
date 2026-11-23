@@ -34,6 +34,13 @@ internal sealed class FakeProcessExecutionBackend : IProcessExecutionBackend
     /// </summary>
     public Exception? ThrowOnExecute { get; init; }
 
+    /// <summary>
+    ///     设置后在执行时把 "inner" 写入该列表，供与其他假件共享的时序断言使用。
+    ///     When set, "inner" is appended to the list on execution, for cross-fake
+    ///     ordering assertions.
+    /// </summary>
+    public List<string>? Trace { get; init; }
+
     public PreparedProcessExecution? ReceivedExecution { get; private set; }
 
     public async Task<ProcessExecutionResult> ExecuteAsync(PreparedProcessExecution execution,
@@ -42,6 +49,7 @@ internal sealed class FakeProcessExecutionBackend : IProcessExecutionBackend
                                                            CancellationToken        cancellationToken)
     {
         ReceivedExecution = execution;
+        Trace?.Add("inner");
         if (ThrowOnExecute is not null) throw ThrowOnExecute;
 
         await PushAsync(stdoutCapture, StdoutChunks, cancellationToken).ConfigureAwait(false);

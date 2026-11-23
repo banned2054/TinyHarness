@@ -225,7 +225,8 @@ public class WindowsSandboxTcpLoopbackTests
                                                 new FakeCredentialSource(), desktopFactory : new FakeDesktopFactory(),
                                                 runnerLauncher : launcher, limits : BackendTestLimits(),
                                                 allowNullDeviceAccess : _ => { },
-                                                validateWriteAcls : (_, _) => Task.CompletedTask);
+                                                validateWriteAcls : (_, _) => Task.CompletedTask,
+                                                validateReadRootReadiness : (_, _) => Task.CompletedTask);
         var plan = new PreparedProcessExecution("cmd.exe", ["/c", "whoami"], home.Components.SandboxHome, 30, false, null)
         {
             NetworkAccessEnabled = true
@@ -250,7 +251,8 @@ public class WindowsSandboxTcpLoopbackTests
                                                        },
                                                        limits : BackendTestLimits(),
                                                        allowNullDeviceAccess : _ => { },
-                                                       validateWriteAcls : (_, _) => Task.CompletedTask);
+                                                       validateWriteAcls : (_, _) => Task.CompletedTask,
+                                                       validateReadRootReadiness : (_, _) => Task.CompletedTask);
         var result = await backendOffline.ExecuteAsync(offlinePlan, new RecordingOutputCapture(),
                                                        new RecordingOutputCapture(), CancellationToken.None);
         Assert.That(result.ExitCode, Is.EqualTo(0));
