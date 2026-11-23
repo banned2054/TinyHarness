@@ -197,6 +197,21 @@ public class WorkspaceAccessTests
     }
 
     [Test]
+    public async Task CorruptCapSidJsonException_ConvertsToAuthorizationFailureWithoutEscaping()
+    {
+        using var fixture = new Fixture(true, "t\n");
+        // 读 cap_sid 遇损坏表抛 JsonException：与同列表异常一样转为授权失败语义，保持只读不逃逸。
+        fixture.Grant.CanChangePermissionsException = new JsonException("corrupt cap_sid");
+        await fixture.Coordinator.InitializeAsync(CancellationToken.None);
+        Assert.Multiple(() =>
+        {
+            Assert.That(fixture.State.IsReadOnly, Is.True);
+            Assert.That(fixture.Activations, Is.Zero);
+            Assert.That(fixture.Output.ToString(), Does.Contain("activation failed"));
+        });
+    }
+
+    [Test]
     public void DirectoryIdentity_RejectsReplacement()
     {
         if (!OperatingSystem.IsWindows()) Assert.Ignore("Windows file identity check.");
@@ -340,8 +355,14 @@ public class WorkspaceAccessTests
         public WorkspaceGrantOutcome Outcome = WorkspaceGrantOutcome.Completed;
         public bool                  Ready;
 
+        /// <summary>设置后 CanChangePermissionsAsync 以该异常失败（如损坏 cap_sid 的 JsonException）。 When set, CanChangePermissionsAsync fails with this exception (e.g. a JsonException from a corrupt cap_sid).</summary>
+        public Exception? CanChangePermissionsException;
+
         public Task<bool> CanChangePermissionsAsync(
-            WorkspaceDirectoryIdentity identity, CancellationToken cancellationToken) => Task.FromResult(Ready);
+            WorkspaceDirectoryIdentity identity, CancellationToken cancellationToken) =>
+            CanChangePermissionsException is not null
+                ? Task.FromException<bool>(CanChangePermissionsException)
+                : Task.FromResult(Ready);
 
         public Task<WorkspaceGrantOutcome> GrantAsync(
             WorkspaceDirectoryIdentity identity, CancellationToken cancellationToken)

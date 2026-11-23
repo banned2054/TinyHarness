@@ -7,6 +7,7 @@ using System.Security.Principal;
 using System.Text.Json.Serialization;
 using TinyHarness.Core.Models.Configuration;
 using TinyHarness.Core.Models.Runtime.WindowsSandbox;
+using TinyHarness.Core.Services.Runtime.WindowsSandbox;
 
 namespace TinyHarness.Core.Services.Runtime;
 
@@ -120,7 +121,10 @@ public sealed partial class ProcessWorkspaceAclGrant(
                 UnauthorizedAccessException("Normal-privilege workspace ACL preparation requires READ_CONTROL | WRITE_DAC.");
         var sandbox = await WorkspaceSandboxAclContext.CaptureAsync(settings, identity, cancellationToken)
                                                       .ConfigureAwait(false);
-        await sandbox.ValidateAsync(identity, cancellationToken).ConfigureAwait(false);
+        // 宿主侧核对走带门重载：此刻 CaptureAsync 的门已释放，方法内自取门读表，避免读到
+        // 另一端门内整表写回的中间态（共享冲突/半 JSON/陈旧映射 → 误报 mapping changed）。
+        await sandbox.ValidateAsync(identity, cancellationToken, new GlobalDenyReadRefreshGate())
+                     .ConfigureAwait(false);
         await WorkspaceSandboxAclRepair.RunAsync(
                                                  () => WorkspaceDirectoryAcl.GrantSandboxWritePermissions(identity,
                                                           [sandbox.SandboxGroupSid, sandbox.WorkspaceCapabilitySid]),
@@ -283,6 +287,22 @@ public sealed partial class ProcessWorkspaceAclGrant(
     ///     <para>执行固定授权请求，校验原进程身份及目录身份；不解析其他命令。</para>
     ///     <para>Executes a fixed grant request after verifying caller and directory identities; parses no other commands.</para>
     /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         提权 helper 侧经 <c>ValidateAsync</c> 读 cap_sid 表不取跨进程拒读刷新门：helper 以
+    ///         提权完整性级别运行，跨完整性级别的互斥体访问权限未经验证，本进程内不等待刷新门。
+    ///         撕裂读（撞上门内整表写回的中间态）的后果是授权判定 Failed（fail-closed，可重试），
+    ///         不会以半读表为依据改动 ACL。
+    ///     </para>
+    ///     <para>
+    ///         The elevated helper reads the cap_sid table through <c>ValidateAsync</c> without taking
+    ///         the cross-process deny-read refresh gate: the helper runs at an elevated integrity
+    ///         level and cross-integrity-level mutex access is unverified, so this process never
+    ///         waits on the refresh gate. A torn read (hitting the in-gate write's intermediate
+    ///         state) fails the grant verdict (fail-closed, retryable) and never changes ACLs based
+    ///         on a half-read table.
+    ///     </para>
+    /// </remarks>
     public static async Task<int> ExecuteHelperAsync(string pipeName)
     {
         if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException("UAC grants require Windows.");
@@ -321,6 +341,8 @@ public sealed partial class ProcessWorkspaceAclGrant(
             {
                 stage = "sandbox-identity";
                 ValidateProtectedPaths(request.Directory, [sandbox.SandboxHome]);
+                // 提权 helper 侧读表不取跨进程门（调用无门重载）：跨完整性级别互斥体访问权限未经
+                // 验证；撕裂读后果为授权判定 Failed（fail-closed，可重试）。
                 await sandbox.ValidateAsync(request.Directory, deadline.Token).ConfigureAwait(false);
                 await WorkspaceSandboxAclRepair.RunAsync(() =>
                                                          {

@@ -219,11 +219,13 @@ internal sealed class SmokeWorkspace : IDisposable
             RedirectStandardError  = true,
             Environment =
             {
-                ["APPDATA"]                           = appDataPath,
-                ["DOTNET_CLI_HOME"]                   = cliHomePath,
-                ["DOTNET_SKIP_FIRST_TIME_EXPERIENCE"] = "1",
-                ["NUGET_PACKAGES"]                    = packagesPath,
-                ["NUGET_HTTP_CACHE_PATH"]             = httpCachePath
+                ["APPDATA"]                         = appDataPath,
+                // 临时 CLI home 下 SDK 会把全局工具目录追加进用户持久化 PATH；显式传 0 阻止该注入，
+                // 取代已不受支持且无法阻止该行为的 DOTNET_SKIP_FIRST_TIME_EXPERIENCE。
+                ["DOTNET_ADD_GLOBAL_TOOLS_TO_PATH"] = "0",
+                ["DOTNET_CLI_HOME"]                 = cliHomePath,
+                ["NUGET_PACKAGES"]                  = packagesPath,
+                ["NUGET_HTTP_CACHE_PATH"]           = httpCachePath
             }
         };
         foreach (var argument in new[] { "restore", projectPath, "--configfile", configPath, "--nologo" })

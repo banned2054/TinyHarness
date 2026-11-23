@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Text.Json;
 using TinyHarness.Core.Models.Runtime;
 using TinyHarness.Core.Services.Permissions;
 using TinyHarness.Core.Services.Runtime;
@@ -223,8 +224,9 @@ internal sealed class WorkspaceAccessCoordinator
             await
                 _output.WriteLineAsync($"Workspace access: trusted; {Policy.DisplayName}. Normal tool approvals remain required.");
         }
+        // JsonException（读 cap_sid 遇损坏表）与既有四类同转为授权失败语义，保持只读不逃逸。
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException
-                                      or Win32Exception)
+                                      or Win32Exception or JsonException)
         {
             await
                 _output.WriteLineAsync($"Workspace activation failed; remaining read-only: {TerminalDisplay.Format(ex.Message)}");
