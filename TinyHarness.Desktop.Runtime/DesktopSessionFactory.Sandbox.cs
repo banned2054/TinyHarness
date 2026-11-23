@@ -8,8 +8,11 @@ namespace TinyHarness.Desktop.Runtime;
 public sealed partial class DesktopSessionFactory
 {
     /// <summary>
-    ///     <para>隔离测试可替换基线扫描；生产默认使用真实的可取消扫描。</para>
-    ///     <para>Allows isolated tests to replace baseline scanning; production uses the real cancellable scan.</para>
+    ///     <para>隔离测试可替换基线读保护规划；生产默认使用真实的可取消顶层规划。</para>
+    ///     <para>
+    ///         Allows isolated tests to replace the baseline read-protection planning; production uses the real
+    ///         cancellable top-level planning.
+    ///     </para>
     /// </summary>
     internal Func<CancellationToken, SandboxBaselineReadProtection?>? BaselineReadProtectionOverride { get; init; }
 
@@ -34,8 +37,11 @@ public sealed partial class DesktopSessionFactory
            .Prepare(call);
 
         /// <summary>
-        ///     <para>用当前运行的取消令牌在后台扫描；只有完整成功的组合才发布给后续调用。</para>
-        ///     <para>Scans in the background with the current run token, publishing only a fully successful composition.</para>
+        ///     <para>用当前运行的取消令牌在后台规划并组合；只有完整成功的组合才发布给后续调用。</para>
+        ///     <para>
+        ///         Plans and composes in the background with the current run token, publishing only a fully successful
+        ///         composition.
+        ///     </para>
         /// </summary>
         public async ValueTask<ToolPreparation> PrepareAsync(ChatToolCall call, CancellationToken cancellationToken)
         {

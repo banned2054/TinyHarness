@@ -10,9 +10,11 @@ namespace TinyHarness.Tests;
 /// <summary>
 ///     <para>
 ///         两端一致（B7，对位测试设计 §3 CliDesktopToolParityTests）：两份 WorkspacePrompts 的 shell
-///         描述逐字节一致（源级提取比对）；deny 计划两端同构——trust.json 存在时 Desktop 与 CLI 的
-///         条目集合一致（10 条=trust+用户配置+会话存储+5 C2 目录段+.codex+cap_sid），不存在时
-///         Desktop 按存在性分支不加入也不物化（9 条；B6-0 后 CLI 生产组合的 plan 调用已移入信任
+///         描述逐字节一致（源级提取比对）；deny 计划两端同构——两端计划均以 CLI 生产（旧）planner
+///         构建，对比的是受保护路径组合的同构性（Desktop 生产规划入口已切至顶层规划器，其行为由
+///         SandboxTopLevelReadProtectionTests 覆盖）：trust.json 存在时 Desktop 侧组合与 CLI 侧
+///         组合的条目集合一致（10 条=trust+用户配置+会话存储+5 C2 目录段+.codex+cap_sid），不存在时
+///         Desktop 侧按存在性分支不加入也不物化（9 条；B6-0 后 CLI 生产组合的 plan 调用已移入信任
 ///         激活回调，trust 缺失只发生在 Desktop 分支）；离线 smoke 与生产的差异显式声明（源级静态
 ///         检查：声明标记+smoke 槽位 PermissionShellTool 形态）。CLI 组合态 PermissionShellTool 注册
 ///         与未组合回退由真实入口测试（RS-10 与未信任 run）功能性覆盖，不在此重复。
@@ -20,9 +22,12 @@ namespace TinyHarness.Tests;
 ///     <para>
 ///         Two-ends consistency (B7, mirroring test design §3 CliDesktopToolParityTests): the two
 ///         WorkspacePrompts' shell descriptions are byte-identical (source-level extraction compare); the
-///         deny plans are isomorphic — with workspace-trust.json present the Desktop set matches the CLI
-///         set (10 entries), and without it the Desktop keeps the existence branch, neither listing nor
-///         materializing the file (9 entries; after B6-0 the CLI production plan call runs inside the
+///         deny plans are isomorphic — both plans are built by the CLI production (legacy) planner, so
+///         the comparison pins the two ends' protected-path compositions (Desktop production planning
+///         has switched to the top-level planner, whose behavior SandboxTopLevelReadProtectionTests
+///         covers): with workspace-trust.json present the Desktop-side composition matches the CLI-side
+///         set (10 entries), and without it the Desktop-side keeps the existence branch, neither listing
+///         nor materializing the file (9 entries; after B6-0 the CLI production plan call runs inside the
 ///         trust-activation callback, so a missing trust store only reaches the Desktop branch); the
 ///         offline smoke declares its difference from production (source-level static check). The CLI
 ///         composed PermissionShellTool registration and the bare fallback are covered functionally by
@@ -190,7 +195,9 @@ public class CliDesktopParityTests
             cliPlan = WindowsSandboxComposer.PlanBaselineReadProtection(
                                                                         [trustPath, userConfigPath], storage.Root,
                                                                         settings, static _ => []);
-            // Desktop 生产输入（DesktopSessionFactory 组合态）：用户配置恒入、trust 按存在性分支。
+            // Desktop 侧受保护路径组合（与 DesktopSessionFactory 的 baselineProtectedPaths 同形）：
+            // 用户配置恒入、trust 按存在性分支。Desktop 生产规划入口已切至顶层规划器
+            // （SandboxTopLevelReadProtectionTests 覆盖），此处以 CLI 生产同款旧 planner 对比两端组合。
             var desktopSecrets = new List<string> { userConfigPath };
             if (File.Exists(trustPath)) desktopSecrets.Add(trustPath);
             desktopPlan = WindowsSandboxComposer.PlanBaselineReadProtection(

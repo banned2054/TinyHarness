@@ -25,19 +25,19 @@ public sealed class DesktopLazySandboxTests
     public async Task ChatAndFileTools_DoNotInitializeSandbox(bool readFile)
     {
         using var fixture = await Fixture.CreateAsync();
-        var       scans   = 0;
+        var       plans   = 0;
         var factory = fixture.Factory(new ScriptModel(readFile ? "read_file" : null, """{"path":"ordinary.txt"}"""),
                                       _ =>
                                       {
-                                          scans++;
-                                          throw new InvalidOperationException("A chat must never scan the profile.");
+                                          plans++;
+                                          throw new InvalidOperationException("A chat must never plan the baseline.");
                                       });
         await using var session = await fixture.OpenAsync(factory);
         var             run     = await session.SubmitAsync("hello").WaitAsync(Limit);
 
         Assert.That(run.Result!.Status, Is.EqualTo(AgentStatus.Completed));
         Assert.That(run.Result.ToolExecutions, Is.EqualTo(readFile ? 1 : 0));
-        Assert.That(scans, Is.Zero);
+        Assert.That(plans, Is.Zero);
         Assert.That(Directory.Exists(fixture.SandboxHome), Is.False, "聊天不能创建沙箱运行目录。");
         var persisted = await SessionStoreReader.ReadAsync(fixture.Store, session.Id, default);
         Assert.That(persisted!.Conversation!.Messages.Any(message => message.Role    == "User" &&
@@ -45,30 +45,88 @@ public sealed class DesktopLazySandboxTests
     }
 
     [Test]
-    public async Task FirstSandboxTool_ScanFailureLeavesToolUnexecutedAndChatUsable()
+    public async Task ProductionEntry_TopLevelPlanningCompletesBeforeComponentCheck()
     {
         using var fixture = await Fixture.CreateAsync();
-        var       scans   = 0;
+        // 正常生产入口（无 override）：真实 TopLevel 规划在组合前完成，失败来自组件校验
+        // ——证明规划阶段（只读 profile 顶层与会话存储目录创建）已成功走完。
+        var       factory = fixture.Factory(new ScriptModel("shell", ShellArguments));
+        await using var session = await fixture.OpenAsync(factory);
+        var       run     = await session.SubmitAsync("try shell").WaitAsync(Limit);
+        Assert.Multiple(() =>
+        {
+            Assert.That(run.Result!.ToolExecutions, Is.Zero);
+            Assert.That(run.Result.ToolCalls!.Single().PreparationError,
+                        Does.Contain("setup executable was not found"));
+            Assert.That(Directory.Exists(fixture.SandboxHome), Is.False);
+        });
+
+        var chat = await session.SubmitAsync("plain chat afterwards").WaitAsync(Limit);
+        Assert.That(chat.Result!.Status, Is.EqualTo(AgentStatus.Completed));
+    }
+
+    [Test]
+    public async Task FirstSandboxTool_PlanningFailureLeavesToolUnexecutedAndChatUsable()
+    {
+        using var fixture = await Fixture.CreateAsync();
+        var       plans   = 0;
         var factory = fixture.Factory(new ScriptModel("shell", ShellArguments), _ =>
         {
-            scans++;
-            throw new InvalidOperationException("enumeration budget exhausted");
+            plans++;
+            throw new InvalidOperationException("top-level baseline planning failed");
         });
         await using var session = await fixture.OpenAsync(factory);
-        Assert.That(scans, Is.Zero);
+        Assert.That(plans, Is.Zero);
         var run = await session.SubmitAsync("try shell").WaitAsync(Limit);
-        Assert.That(scans, Is.EqualTo(1));
+        Assert.That(plans, Is.EqualTo(1));
         Assert.That(run.Result!.ToolExecutions, Is.Zero);
-        Assert.That(run.Result.ToolCalls!.Single().PreparationError, Does.Contain("enumeration budget exhausted"));
+        Assert.That(run.Result.ToolCalls!.Single().PreparationError,
+                    Does.Contain("top-level baseline planning failed"));
         Assert.That(Directory.Exists(fixture.SandboxHome), Is.False);
 
         var chat = await session.SubmitAsync("plain chat afterwards").WaitAsync(Limit);
         Assert.That(chat.Result!.Status, Is.EqualTo(AgentStatus.Completed));
-        Assert.That(scans, Is.EqualTo(1));
+        Assert.That(plans, Is.EqualTo(1));
     }
 
     [Test]
-    public async Task StopDuringScan_CancelsPreparationAndAllowsFollowingChat()
+    public async Task ProjectBoundSession_PlanningFailureLeavesToolUnexecutedAndChatUsable()
+    {
+        using var fixture = await Fixture.CreateAsync();
+        var       plans   = 0;
+        var factory = fixture.Factory(new ScriptModel("shell", ShellArguments), _ =>
+        {
+            plans++;
+            throw new InvalidOperationException("top-level baseline planning failed");
+        });
+        // 有项目会话与无项目会话共用同一延迟准备与基线规划调用点。
+        await using var session =
+            await fixture.OpenAsync(factory, SessionProjectAssignmentState.Project);
+        // 显式证明走了项目绑定分支：会话归属 Project 且 ProjectId 非空。
+        Assert.Multiple(() =>
+        {
+            Assert.That(session.Host.Session.ProjectId, Is.Not.Null);
+            Assert.That(session.Host.Session.ProjectAssignmentState,
+                        Is.EqualTo(SessionProjectAssignmentState.Project));
+        });
+        Assert.That(plans, Is.Zero);
+        var run = await session.SubmitAsync("try shell").WaitAsync(Limit);
+        Assert.Multiple(() =>
+        {
+            Assert.That(plans, Is.EqualTo(1));
+            Assert.That(run.Result!.ToolExecutions, Is.Zero);
+            Assert.That(run.Result.ToolCalls!.Single().PreparationError,
+                        Does.Contain("top-level baseline planning failed"));
+            Assert.That(Directory.Exists(fixture.SandboxHome), Is.False);
+        });
+
+        var chat = await session.SubmitAsync("plain chat afterwards").WaitAsync(Limit);
+        Assert.That(chat.Result!.Status, Is.EqualTo(AgentStatus.Completed));
+        Assert.That(plans, Is.EqualTo(1));
+    }
+
+    [Test]
+    public async Task StopDuringPlanning_CancelsPreparationAndAllowsFollowingChat()
     {
         using var fixture = await Fixture.CreateAsync();
         var       entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -88,7 +146,7 @@ public sealed class DesktopLazySandboxTests
             }
         });
         await using var session = await fixture.OpenAsync(factory);
-        var             running = session.SubmitAsync("start scan");
+        var             running = session.SubmitAsync("start shell preparation");
         await entered.Task.WaitAsync(Limit);
         Assert.That(session.Cancel(), Is.True);
         var run = await running.WaitAsync(Limit);
@@ -227,8 +285,9 @@ public sealed class DesktopLazySandboxTests
             return fixture;
         }
 
+        // scan 为 null 时不注入 override：走正常生产入口的真实 TopLevel 规划。
         public DesktopSessionFactory Factory(IChatCompletionClient                                   model,
-                                             Func<CancellationToken, SandboxBaselineReadProtection?> scan) =>
+                                             Func<CancellationToken, SandboxBaselineReadProtection?>? scan = null) =>
             new((_, _) => model, new Credentials(), Config) { BaselineReadProtectionOverride = scan };
 
         public async Task SeedSandboxComponentsAsync()
@@ -238,9 +297,11 @@ public sealed class DesktopLazySandboxTests
             await File.WriteAllBytesAsync(Path.Combine(_parent, "missing-runner.exe"), []);
         }
 
-        public Task<DesktopSession> OpenAsync(DesktopSessionFactory factory) => factory.OpenAsync(
-         new DesktopSessionRequest(Root) { ProjectAssignmentState = SessionProjectAssignmentState.NoProject },
-         _ => ValueTask.CompletedTask, _ => ValueTask.CompletedTask, default);
+        public Task<DesktopSession> OpenAsync(
+            DesktopSessionFactory factory,
+            SessionProjectAssignmentState assignmentState = SessionProjectAssignmentState.NoProject) =>
+            factory.OpenAsync(new DesktopSessionRequest(Root) { ProjectAssignmentState = assignmentState },
+                              _ => ValueTask.CompletedTask, _ => ValueTask.CompletedTask, default);
     }
 
     private sealed class Credentials : ICredentialStore

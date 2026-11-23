@@ -208,7 +208,7 @@ public sealed partial class DesktopSessionFactory
         var                       baselineProtectedPaths = new List<string> { userPath };
         if (sandboxSettings is { Enabled: true } settings)
         {
-            // 只派生应用层保护路径；组件检查、目录创建与敏感名扫描延迟到首次沙箱工具准备。
+            // 只派生应用层保护路径；组件检查、目录创建与顶层读根规划延迟到首次沙箱工具准备。
             if (File.Exists(trustPath)) baselineProtectedPaths.Add(trustPath);
             sandboxComponents = new WindowsSandboxComponents
             {
@@ -316,10 +316,22 @@ public sealed partial class DesktopSessionFactory
             {
                 foreach (var writeRoot in sandboxSettings!.AdditionalWriteRoots)
                     SessionStorePaths.EnsureOutsideWorkspace(directory, writeRoot, "settings.sessionStoreDirectory");
-                var baseline = BaselineReadProtectionOverride is { } planner
-                    ? planner(token)
-                    : WindowsSandboxComposer.PlanBaselineReadProtection(baselineProtectedPaths, directory,
-                                                                        sandboxSettings, null, token);
+                SandboxBaselineReadProtection? baseline;
+                if (BaselineReadProtectionOverride is { } planner)
+                {
+                    // internal 测试钩子：计划并非来自真实规划调用，TopLevel 诊断事件不适用。
+                    baseline = planner(token);
+                }
+                else
+                {
+                    // 正常生产入口走顶层读根规划：只枚举 profile 直接子项一层，诊断事件由
+                    // 规划器自带（baseline-top-level）；顶层枚举或簿记协调失败时准备失败
+                    // （fail-closed），命令保持未启动。
+                    baseline = WindowsSandboxComposer.PlanBaselineReadProtectionTopLevel(baselineProtectedPaths,
+                                                                                         directory,
+                                                                                         sandboxSettings, token);
+                }
+
                 token.ThrowIfCancellationRequested();
                 var sandbox = WindowsSandboxComposer.Compose(compositionSettings ?? sandboxSettings, root, secrets,
                                                              user.Settings?.Network, baseline, permissionSystemPaths);
