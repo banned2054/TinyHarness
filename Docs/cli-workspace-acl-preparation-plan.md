@@ -1,6 +1,6 @@
 # CLI 工作区 ACL 按需准备
 
-**状态：后续事项，非首要任务，待安排。** 当前优先项是[替换 Desktop 首次 Shell 的全 profile 敏感名扫描](desktop-sandbox-scan-and-no-project-isolation-plan.md)。CLI 工作区 ACL 体验单独设计和验收。
+**状态：后续事项，非首要任务，待安排。** 当前优先项是[按会话隔离 Windows 沙箱读取权限](desktop-sandbox-scan-and-no-project-isolation-plan.md#windows-sandbox-session-isolation)。CLI 工作区 ACL 体验单独设计和验收。
 
 ## 1. 当前行为
 

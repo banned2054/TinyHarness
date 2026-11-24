@@ -1,8 +1,8 @@
-# Desktop 沙箱读取策略与无项目会话工具目录隔离
+# Windows 沙箱读取策略与会话隔离
 
-Desktop 首次 Shell 已切换到参考 Codex 传统 Windows 后端的广泛读取方案。WP5 隔离环境复验结果与尚待收口的验收项见第 1.6 节。无项目会话的独立工具目录另行安排。CLI 初次进入目录时的 ACL 授权体验另见[后续计划](cli-workspace-acl-preparation-plan.md)。
+当前优先项是[按会话隔离 Windows 沙箱读取权限](#windows-sandbox-session-isolation)。第 1 节保留 Desktop 顶层读根与精确拒读的原轮记录，第 3 节安排无项目会话的独立工具目录。CLI 初次进入目录时的 ACL 授权体验另见[后续计划](cli-workspace-acl-preparation-plan.md)。
 
-## 1. 优先实施：按顶层读根和精确路径配置沙箱
+## 1. 顶层读根与精确拒读（原轮记录）
 
 ### 1.1 背景与范围
 
@@ -47,7 +47,7 @@ Desktop 首次 Shell 已切换到参考 Codex 传统 Windows 后端的广泛读�
 
 ### 1.6 实施状态（2026-11-22，WP5 指定用例复验；WP6 并发收口复验；WP6 复核修复轮；2026-11-23，WP6 `cap_sid` 写侧持门与门外读收口轮）
 
-总体状态：**已实现，WP5/WP6 指定隔离用例通过，§1.5 尚未完成。** 已复验真实 helper 的冷启动、超界关闭、顺序刷新及既有拒读集合的并发保持。Desktop 正常入口（有项目与无项目）使用 `WindowsSandboxComposer.PlanBaselineReadProtectionTopLevel`，只枚举 profile 顶层并下发精确拒读。CLI 仍使用原扫描入口。
+**2026-11-24 收尾。** 第 1 节的原实施与验收轮已结束。顶层读根和精确拒读已实现，WP5／WP6 指定的隔离环境用例通过。Desktop 正常入口（有项目与无项目）使用 `WindowsSandboxComposer.PlanBaselineReadProtectionTopLevel`，只枚举 profile 顶层并下发精确拒读。CLI 仍使用原扫描入口。下文保留原轮的验收结果和未覆盖的范围，收尾后发现的问题进入第 2 节。
 
 实测失败（用户复核确认）：
 
@@ -135,17 +135,50 @@ WP6 `cap_sid` 写侧持门与门外读收口轮（2026-11-22 至 2026-11-23；�
 - **用户 PATH 口径更正**：上一轮记录为收尾时用户 PATH 无 tinyharness 条目，与该记录不符的是——本轮基线采集时（2026-11-23 15:10，早于测试加固编辑与验证运行）实测用户 PATH 为 94 条，其中 65 条指向 tinyharness 临时工具路径（63 条在 `%TEMP%` 下、1 条在 `C:\Code\Temp\tinyharness-wp3b-tmp` 下、1 条在仓库 `.tmp\cli-smoke-20261115` 下；`.tmp/2026-11-23-wp6-capsid-precommit-closure/baseline/07b-user-path-values.txt`）。上一轮那次检查的判负方式是否可靠，本轮没有查证。本轮各次运行前后用户 PATH 各自逐字节一致、未新增：测试加固前后（`logs/a-00-user-path-before.txt` 与 `logs/a-11-user-path-after.txt`）、验证运行前后（`logs/00c-precheck.log` 与 `logs/05-closing-checks.log`）。
 - **本轮未重跑的验证**：NativeAOT publish、产物 smoke test、`TinyHarness.Desktop.Tests`、全量 solution 测试、`jb` 格式化均未执行；上一轮上述各项的记录原样保留在上文，但本轮没有重新验证，不作为本轮改动后仍然成立的证据。
 
-本轮残余边界与 §1.5 剩余验收项（如实）：
+原轮收尾时保留的实现边界与未验收项：
 
 - **提权 helper `ExecuteHelperAsync` → `ValidateAsync`（`R3b`）有意不持门**：helper 以提权完整性级别运行，跨完整性级别访问互斥体的权限没有真机证据，helper 内不等待刷新门；撕裂读的后果是授权判定 Failed（fail-closed，可重试），不会以半读表为依据改动 ACL。
 - **`WindowsSandboxProvisioner`（`W2-provision` / `R1e`）是离线管理命令边界，无门**：provisioning 是显式的 `sandbox provision` 管理入口，不取拒读刷新门，代码中没有任何机制阻止它与同 home 的活动会话并行——"不并行"是使用约定而非已验证的保证。
 - **诊断/展示路径无门**：CLI `sandbox status`/`verify` 经 `WindowsSandboxStateInspector.InspectAsync` 门外读 `cap_sid`（只影响展示的就绪状态）；`#if DEBUG` 诊断在写根继承校验失败时只读汇总 `cap_sid`（`WorkspaceAclInheritanceDiagnostics`），失败方向均为只读、不作为授权或执行依据。
 - **abandoned mutex 边界**：前持有者进程死亡表现为放弃互斥体，按获得处理；但 `setup.exe` 由 `ProcessSandboxSetupInvoker` 以裸 `Process.Start` 启动、未绑定 kill-on-close 的 Job Object（仓库内唯一的此类 Job Object `WindowsJobProcess` 只用于 `HostProcessBackend`），宿主死亡或孤儿 helper 时 `ReleaseWhenConfirmed` 无法运行——孤儿 helper 可能继续写簿记而另一端已按放弃互斥体获得门。
-- **仍属 §1.5 生产验收**：真实 GUI、真实 profile refresh、C2 v7 端到端、CLI 与 Desktop 各持真实会话并行、真实 helper 首次写 `cap_sid` 的跨进程窗口，均未实测。
+- **原轮未覆盖的生产验收**包括真实 GUI、真实 profile refresh 成功路径、C2 v7 端到端、CLI 与 Desktop 各持真实会话并行，以及真实 helper 首次写 `cap_sid` 的跨进程窗口。
 
-## 2. 后续：无项目会话独立工具目录
+<a id="windows-sandbox-session-isolation"></a>
+
+## 2. 按会话隔离 Windows 沙箱读取权限（当前优先）
+
+### 2.1 发现的问题
+
+- **真实首次 Shell 被旧路径阻塞。** 2026-11-24 19:16，无项目会话的 setup helper 以 Medium 完整性运行。它在撤销 `deny_read_acl_state.json` 中记录的旧拒读规则时，遇到已删除的测试用目录并收到 `ERROR_PATH_NOT_FOUND (3)`，导致刷新退出，PowerShell 未启动。后续宿主执行返回 0，沙箱内读取尚未通过。现场核对的 8 条旧记录均指向该已删除的目录。
+- **共享沙箱组无法表达相互独立的读取策略。** 普通 Shell 的拒读 ACL 写给 `TinyHarnessUsers`，helper 按 SID 同步。宿主只合并符合当前读根条件的旧条目，刷新锁在命令启动前释放。若 B 刷新时没有合并 A 仍需要的规则，helper 可撤销这条共享组规则，即使 A 的进程还在运行。已有隔离环境结果覆盖符合合并条件的条目，这个风险来自源码分析，尚未在真实会话并行时验证。
+
+### 2.2 目标与范围
+
+- Windows 必须按各活动会话的策略执行读取权限。Desktop 有项目、无项目及使用同一后端的 CLI 都在范围内。不同会话可以同时对同一测试文件得到各自策略所要求的不同读取结果。
+- C1 等通用保护对所有会话生效。保留普通文件的 L1 读取体验、现行写根和网络边界、L2 的授权范围与撤销规则，以及 [L3 显式宿主审批](Archive/permission-architecture-plan.md#permission-product-contract)。本节落实读取隔离，第 3 节接入无项目会话的独立工具目录。
+- 会话宿主保存有效策略。实际命令使用与该策略绑定的执行身份或令牌。恢复会话时按当前归属和可信配置重新核验，已失效的授权不能恢复。结束、取消或宿主异常退出时，按已确认的进程退出状态回收该执行实例的保护和状态。
+
+### 2.3 实施顺序
+
+1. **修复旧拒读条目的撤销。** helper 撤销已记录的规则时，仅把确认目标已不存在的情况视为清理完成，包括目标文件缺失和父目录缺失。现行拒读条目无法应用，或撤销遇到访问拒绝、其他 I/O 错误时，仍须报告具体阶段和路径并保持命令未启动。成功同步后才更新记录。
+2. **在 Rust fork 验证隔离机制。** 比较独立 Windows 执行身份与能约束读取的受限令牌。用真实 runner 验证候选机制在旧共享组已持有广泛读 ACL 的情况下仍可执行各会话的策略。选定方案后明确身份分配、进程寿命、回收条件、状态归属和旧组件兼容边界。
+3. **接入 CLI 与 Desktop 正常入口。** 为选定机制定义 runner／helper 的协议和能力检查，冻结本次执行使用的身份和策略。公共保护与会话规则各有明确的管理范围。旧组件与新状态混用时，无法落实所需隔离的命令保持未启动。
+4. **复验第 1 节的产品条件。** 在隔离环境验证后，再按授权进行真实 Windows 复验，覆盖首次 Shell、普通读、固定路径拒读、C2 授权及双端并行。记录运行身份、权限检查结果、退出码、准备耗时和审批次数。
+
+### 2.4 验收条件
+
+| 场景 | 通过条件 |
+| --- | --- |
+| 删除旧路径 | 保留已删除目录对应的历史记录开始验证。helper 成功清理过期记录，现行拒读仍生效。无法访问的现存旧目标仍报告失败，命令保持未启动。 |
+| 首次 Shell | Desktop 有项目与无项目各在同一新会话中先普通聊天、再跑 L1 Shell。聊天不初始化沙箱。已配置且权限正常时，首次 Shell 由沙箱 runner 成功读取项目外普通文件，UAC、人工审批和 AI Review 均为零。 |
+| 会话读取隔离 | 使用真实 runner 和普通测试文件，覆盖同一项目的两个 Desktop 会话、不同项目的两个 Desktop 会话、有项目与无项目会话，以及 Desktop 与 CLI 会话并行。A 的策略拒读、B 的策略允许时，两边同时得到各自的结果。B 刷新、结束或失败后，仍在运行的 A 保持原有保护。 |
+| 恢复与回收 | A 停止后启动 B，再恢复 A。每次以当前策略重新核验权限。覆盖会话取消和未确认子进程退出的情况，回收范围只包含可确认归属且已结束的执行实例。 |
+| 公共保护与升级 | 预置旧共享读 ACL，再验证 C1、有效写根及网络边界。C2 仅在批准的会话和范围内生效，结束后恢复保护。覆盖链接真实落点及旧组件能力不匹配时的失败行为。 |
+| 回归与产物 | 跑受影响的 Rust 和 .NET 定向测试、CLI 与 Desktop 的 NativeAOT 发布及产物 smoke。单独记录真实 Windows 权限效果的验收结果。 |
+
+## 3. 无项目会话独立工具目录（后续）
 
 - 每个运行实例拥有独立临时工具目录。Shell 的工作目录、OS 层用户数据读写边界及内置列举、搜索、读文件和补丁工具共用该目录。验证绝对路径、相对路径和链接最终落点。
 - 无项目工具调用不能通过附加根、既有文件授权或宿主 Shell 扩大范围。需访问本机项目时使用现有项目入口。网络许可继续使用既有审批和代理规则。
 - 新建、恢复和解绑按当前有效归属选择策略。旧会话历史继续可读，历史工作目录不自动成为当前授权。归属变化时先使旧策略和授权失效。临时目录以运行实例为生命周期，回收前确认子进程退出，异常残留按归属和进程状态处理。
-- 先在 Rust fork 验证独立身份或能强制读取边界的令牌，再落地 runner／helper 协议及能力识别，最后接入 Desktop。真实验收在项目会话已经建立广泛读 ACL 后启动无项目会话，并覆盖两者并行。组件能力失配时保持命令未启动。
+- 以[第 2 节](#windows-sandbox-session-isolation)通过验收的读取隔离机制接入 Desktop。真实验收在项目会话已经建立广泛读 ACL 后启动无项目会话，并覆盖两者并行。组件能力失配时保持命令未启动。
