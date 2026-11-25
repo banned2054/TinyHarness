@@ -1166,15 +1166,18 @@ internal static class Program
                                                     activeGrants =>
                                                     {
                                                         // 组合门禁：基线读保护计划与沙箱同点组合（信任激活
-                                                        // 之后）。trust.json 由信任激活先行创建，此时
-                                                        // pairing fail-closed 校验的 C1 宿主密钥路径必然
-                                                        // 存在；未信任工作区不进入本回调，组合保持为空
+                                                        // 之后），CLI 已统一切换到顶层读根与固定拒读规划
+                                                        // （与 Desktop 同口径，不走全盘递归扫描）。
+                                                        // trust.json 由信任激活先行创建，此时 pairing
+                                                        // fail-closed 校验的 C1 宿主密钥路径必然存在；
+                                                        // 未信任工作区不进入本回调，组合保持为空
                                                         // （process.execute 走沙箱不可用 fail-closed）。
                                                         var baselineReadProtection =
-                                                            WindowsSandboxComposer.PlanBaselineReadProtection(
-                                                             [trustPath, UserConfigStore.DefaultFilePath()],
+                                                            WindowsSandboxComposer.PlanBaselineReadProtectionTopLevel(
+                                                             [trustPath, userConfigPath],
                                                              sessionStoreDirectory,
-                                                             settings);
+                                                             settings,
+                                                             cancellationToken);
                                                         sandbox =
                                                             SandboxCliComposition.TryCompose(settings,
                                                                 config.WorkspaceRoot, knownSecrets,

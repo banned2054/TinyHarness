@@ -280,25 +280,27 @@ public class CliStandingTrustMigrationTests
 
     /// <summary>
     ///     <para>
-    ///         B6-0 对照（既有 CLI 组合模式）：信任激活（trust.json 存在）后，CLI 生产同形输入的
-    ///         基线读保护计划与沙箱组合均成功——pairing fail-closed 只在受保护路径缺失时触发。
+    ///         B6-0 对照（CLI 顶层读根组合模式）：信任激活（trust.json 存在）后，CLI 生产同形输入的
+    ///         顶层基线读保护计划与沙箱组合均成功——pairing fail-closed 只在受保护路径缺失时触发。
     ///     </para>
     ///     <para>
-    ///         The B6-0 control (the existing CLI composition mode): once trust is activated (the trust
-    ///         store exists), the CLI-shaped baseline read-protection plan and the sandbox composition both
-    ///         succeed — the pairing fail-closed triggers only when protected paths are missing.
+    ///         The B6-0 control (the CLI top-level read-root composition mode): once trust is activated
+    ///         (the trust store exists), the CLI-shaped top-level baseline read-protection plan and the
+    ///         sandbox composition both succeed — the pairing fail-closed triggers only when protected
+    ///         paths are missing.
     ///     </para>
     /// </summary>
     [Test]
     public async Task TrustedWorkspace_ComposesBaselineReadProtectionAndSandbox()
     {
         if (!OperatingSystem.IsWindows()) Assert.Ignore("Windows sandbox composition requires Windows.");
-        using var configDir      = new TestTempDir();
+        using var profileRoot    = new TestTempDir();
         using var workspace      = new TestTempDir();
         using var storage        = new TestTempDir();
-        using var home           = new TestTempDir();
-        var       userConfigPath = Path.Combine(configDir.Root, UserConfigStore.FileName);
-        var       trustPath      = Path.Combine(configDir.Root, "workspace-trust.json");
+        var       configDir      = profileRoot.CreateDirectory("config");
+        var       homeDir        = profileRoot.CreateDirectory("sandbox-home");
+        var       userConfigPath = Path.Combine(configDir, UserConfigStore.FileName);
+        var       trustPath      = Path.Combine(configDir, "workspace-trust.json");
         // 受保护路径（用户配置）必须存在：pairing fail-closed 校验覆盖内全部 C1 宿主密钥路径。
         await File.WriteAllTextAsync(userConfigPath,
                                      """{"settings":{"sessionStoreDirectory":"sessions"}}""");
@@ -309,15 +311,20 @@ public class CliStandingTrustMigrationTests
         var settings = new WindowsSandboxSettings
         {
             Enabled              = true,
-            SetupExecutablePath  = home.WriteFile("setup.exe", "stub"),
-            RunnerExecutablePath = home.WriteFile("runner.exe", "stub"),
-            SandboxHome          = home.Root
+            SetupExecutablePath  = profileRoot.WriteFile("sandbox-home/setup.exe", "stub"),
+            RunnerExecutablePath = profileRoot.WriteFile("sandbox-home/runner.exe", "stub"),
+            SandboxHome          = homeDir
         };
 
-        // CLI 生产同形输入：受保护路径=trust.json+用户配置；激活后两者都存在，计划与组合均成功。
-        var protection = WindowsSandboxComposer.PlanBaselineReadProtection([trustPath, userConfigPath],
-                                                                           null, settings,
-                                                                           static _ => []);
+        // CLI 生产同形输入（合成 profile 根与受控空簿记，隔离本机真实 UserProfile 与簿记文件）：
+        // 受保护路径=trust.json+用户配置；激活后两者都存在，顶层读根计划与沙箱组合均成功。
+        var protection =
+            WindowsSandboxComposer.PlanBaselineReadProtectionTopLevelCore(profileRoot.Root,
+                                                                         [trustPath, userConfigPath],
+                                                                         null,
+                                                                         settings,
+                                                                         CancellationToken.None,
+                                                                         readDenyBookkeeping : static _ => null);
         var execution = SandboxCliComposition.TryCompose(settings, workspace.Root,
                                                          new Dictionary<string, string>(), storage.Root,
                                                          baselineReadProtection : protection);
