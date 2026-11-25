@@ -29,6 +29,24 @@ internal interface IWorkspaceAclGrant
     Task<bool> CanChangePermissionsAsync(WorkspaceDirectoryIdentity identity, CancellationToken cancellationToken);
 
     /// <summary>
+    ///     <para>宿主确认精确范围后，以普通权限准备当前工作区；不启动组件或提权。</para>
+    ///     <para>Prepares the current workspace at normal privilege after host scope consent, without components or elevation.</para>
+    /// </summary>
+    Task PrepareWithoutElevationAsync(WorkspaceDirectoryIdentity identity, CancellationToken cancellationToken);
+
+    /// <summary>
+    ///     <para>严格只读复核沙箱根授权及子项继承；管理能力不代表已就绪。</para>
+    ///     <para>Strictly reads sandbox root grants and child inheritance; management access does not establish readiness.</para>
+    /// </summary>
+    Task<bool> IsReadyAsync(WorkspaceDirectoryIdentity identity, CancellationToken cancellationToken);
+
+    /// <summary>
+    ///     <para>只读校验授权范围及宿主程序位置；不启动子进程、不修改 ACL。</para>
+    ///     <para>Checks grant scope and executable placement without starting a child or changing ACLs.</para>
+    /// </summary>
+    void ValidatePreparationScope(WorkspaceDirectoryIdentity identity);
+
+    /// <summary>
     ///     <para>仅在宿主确认之后申请授权；取消后结果可能仍未知。</para>
     ///     <para>Requests a grant only after host consent; cancellation may leave its result unknown.</para>
     /// </summary>
@@ -36,8 +54,8 @@ internal interface IWorkspaceAclGrant
 }
 
 /// <summary>
-///     <para>保留 CLI 授权入口，安全规则由共享 Core 实现唯一拥有。</para>
-///     <para>Preserves the CLI grant entry while shared Core exclusively owns the security rules.</para>
+///     <para>只为已确认目录启动专用 UAC 授权子进程；不运行 provisioning 或项目命令。</para>
+///     <para>Starts a dedicated UAC grant child for a confirmed directory without provisioning or project commands.</para>
 /// </summary>
 internal sealed class ProcessWorkspaceAclGrant(
     IReadOnlyList<string>   protectedPaths,
@@ -51,6 +69,19 @@ internal sealed class ProcessWorkspaceAclGrant(
     public Task<bool> CanChangePermissionsAsync(WorkspaceDirectoryIdentity identity,
                                                 CancellationToken          cancellationToken) =>
         _grant.CanChangePermissionsAsync(identity, cancellationToken);
+
+    /// <inheritdoc />
+    public Task PrepareWithoutElevationAsync(WorkspaceDirectoryIdentity identity,
+                                             CancellationToken          cancellationToken) =>
+        _grant.PrepareWithoutElevationAsync(identity, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<bool> IsReadyAsync(WorkspaceDirectoryIdentity identity, CancellationToken cancellationToken) =>
+        _grant.IsReadyAsync(identity, cancellationToken);
+
+    /// <inheritdoc />
+    public void ValidatePreparationScope(WorkspaceDirectoryIdentity identity) =>
+        _grant.ValidatePreparationScope(identity);
 
     /// <inheritdoc />
     public async Task<WorkspaceGrantOutcome> GrantAsync(

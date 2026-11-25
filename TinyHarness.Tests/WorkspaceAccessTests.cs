@@ -19,6 +19,7 @@ using IWorkspaceAclGrant = TinyHarness.Cli.Services.IWorkspaceAclGrant;
 using ProcessWorkspaceAclGrant = TinyHarness.Cli.Services.ProcessWorkspaceAclGrant;
 using WorkspaceGrantOutcome = TinyHarness.Cli.Services.WorkspaceGrantOutcome;
 using WorkspaceGrantChannel = TinyHarness.Cli.Services.WorkspaceGrantChannel;
+using WorkspaceGrantFailureException = TinyHarness.Core.Services.Runtime.WorkspaceGrantFailureException;
 
 namespace TinyHarness.Tests;
 
@@ -116,7 +117,10 @@ public class WorkspaceAccessTests
         await fixture.Coordinator.InitializeAsync(CancellationToken.None);
         Assert.That(fixture.State.IsReadOnly, Is.True);
         Assert.That(fixture.Activations, Is.Zero);
-        Assert.That(fixture.Grant.Calls, Is.Zero);
+        Assert.That(fixture.Grant.GrantCalls, Is.Zero);
+        Assert.That(fixture.Grant.IsReadyCalls, Is.Zero);
+        Assert.That(fixture.Grant.CanChangeCalls, Is.Zero);
+        Assert.That(fixture.Grant.PrepareCalls, Is.Zero);
         Assert.That(File.Exists(fixture.TrustPath), Is.False);
         Assert.That(await fixture.Input.ReadLineAsync(), Is.EqualTo("t"));
     }
@@ -138,77 +142,552 @@ public class WorkspaceAccessTests
     }
 
     [Test]
-    public async Task TrustConfirmation_PersistsButRechecksReadiness()
+    public async Task Startup_NewAndPersistedTrust_ActivateWithoutAclChecksOrUac_AndReadOnlyToolsWork()
     {
         using var fixture = new Fixture(true, "t\n");
-        fixture.Grant.Ready = true;
-        await fixture.Coordinator.InitializeAsync(CancellationToken.None);
-        Assert.That(fixture.State.IsReadOnly, Is.False);
-        fixture.Grant.Ready = false;
-        await fixture.Coordinator.InitializeAsync(CancellationToken.None);
-        Assert.That(fixture.State.IsReadOnly, Is.True);
-        Assert.That(fixture.Activations, Is.EqualTo(1));
-        Assert.That(fixture.Output.ToString(), Does.Contain("WRITE_DAC"));
-    }
+        fixture.Workspace.WriteFile("notes.txt", "hello-readonly");
+        fixture.Grant.Ready                = false;
+        fixture.Grant.CanChangePermissions = false;
 
-    [TestCase(1)]
-    [TestCase(2)]
-    [TestCase(3)]
-    public async Task GrantFailure_StaysReadOnlyWithoutActivationOrAutomaticRetry(int resultValue)
-    {
-        using var fixture = new Fixture(true, "t\ny\nt\ny\n");
-        fixture.Grant.Outcome = (WorkspaceGrantOutcome)resultValue;
         await fixture.Coordinator.InitializeAsync(CancellationToken.None);
-        Assert.That(fixture.State.IsReadOnly, Is.True);
-        Assert.That(fixture.Activations, Is.Zero);
-        Assert.That(fixture.Grant.Calls, Is.EqualTo(1));
-        if ((WorkspaceGrantOutcome)resultValue == WorkspaceGrantOutcome.DidNotFinish)
+
+        Assert.Multiple(() =>
         {
-            await fixture.Coordinator.ChangeAsync(CancellationToken.None);
-            Assert.That(fixture.Grant.Calls, Is.EqualTo(1));
-        }
+            Assert.That(fixture.State.IsReadOnly, Is.False);
+            Assert.That(fixture.Activations, Is.EqualTo(1));
+            Assert.That(fixture.Grant.IsReadyCalls, Is.Zero);
+            Assert.That(fixture.Grant.CanChangeCalls, Is.Zero);
+            Assert.That(fixture.Grant.PrepareCalls, Is.Zero);
+            Assert.That(fixture.Grant.ScopeCalls, Is.Zero);
+            Assert.That(fixture.Grant.GrantCalls, Is.Zero);
+            Assert.That(fixture.Output.ToString(), Does.Not.Contain("[a] repair workspace ACL"));
+        });
+
+        var readTool = fixture.State.Guard(() => new ReadFileTool(fixture.Workspace.Workspace));
+        var readPlan = readTool.Prepare(new ChatToolCall("r1", "read_file", "{\"path\":\"notes.txt\"}"));
+        var readRes  = await readTool.ExecuteAsync(readPlan, CancellationToken.None);
+        Assert.That(readRes.Content, Does.Contain("hello-readonly"));
+
+        using var second = new Fixture(true, string.Empty, sharedWorkspace : fixture.Workspace,
+                                       sharedTrustPath : fixture.TrustPath);
+        second.Grant.Ready                = false;
+        second.Grant.CanChangePermissions = false;
+        await second.Coordinator.InitializeAsync(CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(second.State.IsReadOnly, Is.False);
+            Assert.That(second.Activations, Is.EqualTo(1));
+            Assert.That(second.Grant.IsReadyCalls, Is.Zero);
+            Assert.That(second.Grant.CanChangeCalls, Is.Zero);
+            Assert.That(second.Grant.PrepareCalls, Is.Zero);
+            Assert.That(second.Grant.ScopeCalls, Is.Zero);
+            Assert.That(second.Grant.GrantCalls, Is.Zero);
+        });
     }
 
     [Test]
-    public async Task GrantSuccess_RechecksBeforeActivation_AndDowngradeRejectsOldPlan()
+    public async Task TrustDowngrade_RevokesWriteAccessAndRejectsOldPlan()
     {
-        using var fixture = new Fixture(true, "t\ny\nr\n");
+        using var fixture = new Fixture(true, "t\nr\n");
         await fixture.Coordinator.InitializeAsync(CancellationToken.None);
-        Assert.That(fixture.Grant.Calls, Is.EqualTo(1));
         Assert.That(fixture.State.IsReadOnly, Is.False);
         var guarded = fixture.State.Guard(() => new CountingTool("filesystem.write", fixture.Workspace.Root));
         var plan    = guarded.Prepare(new ChatToolCall("id", "probe", "{}"));
         fixture.Permissions.Grants.Add(GrantScope.SingleOperation, plan);
+
+        await fixture.Coordinator.ChangeAsync(CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(fixture.Grant.GrantCalls, Is.Zero);
+            Assert.That(fixture.State.IsReadOnly, Is.True);
+            Assert.That(fixture.Permissions.Evaluate(plan).Decision, Is.EqualTo(PermissionDecision.Deny));
+        });
+        await Assert.ThrowsAsync<InvalidOperationException>(() => guarded.ExecuteAsync(plan, CancellationToken.None));
+    }
+
+    [Test]
+    public async Task TrustPrompt_ReadOnlyState_DoesNotExposeRepairOption()
+    {
+        using var fixture = new Fixture(true, "r\na\n");
+        await fixture.Coordinator.InitializeAsync(CancellationToken.None);
+        Assert.That(fixture.State.IsReadOnly, Is.True);
+
+        await fixture.Coordinator.ChangeAsync(CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(fixture.Output.ToString(), Does.Not.Contain("[a] repair workspace ACL"));
+            Assert.That(fixture.Output.ToString(), Does.Contain("Unrecognized choice; access was not changed."));
+            Assert.That(fixture.Grant.GrantCalls, Is.Zero);
+            Assert.That(fixture.Grant.PrepareCalls, Is.Zero);
+        });
+    }
+
+    [Test]
+    public async Task WorkspaceWriteShell_NormalPrivilegePreparable_PreparesOnce_ReusesCache_ReverifiesOnPolicyChange()
+    {
+        using var fixture = new Fixture(true, "t\n");
+        fixture.Grant.Ready                = false;
+        fixture.Grant.CanChangePermissions = true;
+        fixture.Grant.PrepareSetsReady     = true;
+        await fixture.Coordinator.InitializeAsync(CancellationToken.None);
+
+        var inner   = new CountingProcessBackend();
+        var wrapped = fixture.Coordinator.WrapSandboxBackend(inner);
+
+        await ExecuteSampleAsync(wrapped, fixture.Workspace.Root);
+        Assert.Multiple(() =>
+        {
+            Assert.That(inner.Executions, Is.EqualTo(1));
+            Assert.That(fixture.Grant.IsReadyCalls, Is.EqualTo(2));
+            Assert.That(fixture.Grant.ScopeCalls, Is.EqualTo(1));
+            Assert.That(fixture.Grant.PrepareCalls, Is.EqualTo(1));
+            Assert.That(fixture.Grant.GrantCalls, Is.Zero);
+        });
+
+        await ExecuteSampleAsync(wrapped, fixture.Workspace.Root);
+        Assert.Multiple(() =>
+        {
+            Assert.That(inner.Executions, Is.EqualTo(2));
+            Assert.That(fixture.Grant.IsReadyCalls, Is.EqualTo(2));
+            Assert.That(fixture.Grant.PrepareCalls, Is.EqualTo(1));
+            Assert.That(fixture.Grant.GrantCalls, Is.Zero);
+        });
+
+        await ExecuteSampleAsync(wrapped, fixture.Workspace.Root, networkAccessEnabled : true);
+        Assert.Multiple(() =>
+        {
+            Assert.That(inner.Executions, Is.EqualTo(3));
+            Assert.That(fixture.Grant.IsReadyCalls, Is.EqualTo(3));
+            Assert.That(fixture.Grant.PrepareCalls, Is.EqualTo(1));
+            Assert.That(fixture.Grant.GrantCalls, Is.Zero);
+        });
+    }
+
+    [Test]
+    public async Task WorkspaceWriteShell_DirectoryReplaced_RejectsExecutionWithoutStartingBackend()
+    {
+        if (!OperatingSystem.IsWindows()) Assert.Ignore("Windows file identity check.");
+        using var parent        = new TestTempDir();
+        var       workspacePath = parent.CreateDirectory("ws");
+        using var storage       = new TestTempDir();
+        var       trustPath     = Path.Combine(storage.Root, "trust.json");
+        var       state         = new WorkspaceAccessState(WorkspaceDirectoryIdentity.Capture(workspacePath));
+        var       permissions   = new PermissionEngine(workspacePath, workspaceReadOnly : () => state.IsReadOnly);
+        var       grant         = new FakeGrant { Ready = true };
+        using var input         = new StringReader("t\n");
+        using var output        = new StringWriter();
+        using var coordinator = new WorkspaceAccessCoordinator(state, new WorkspaceTrustStore(trustPath, [workspacePath]),
+                                                             permissions, input, output, true, true, grant,
+                                                             _ => Task.FromResult((
+                                                                 new ShellTool(new Workspace(workspacePath)) as ITool,
+                                                                 ProcessExecutionPolicy.Host())));
+        await coordinator.InitializeAsync(CancellationToken.None);
+
+        var inner   = new CountingProcessBackend();
+        var wrapped = coordinator.WrapSandboxBackend(inner);
+        await ExecuteSampleAsync(wrapped, workspacePath);
+        Assert.That(inner.Executions, Is.EqualTo(1));
+
+        Directory.Move(workspacePath, workspacePath + "-moved");
+        Directory.CreateDirectory(workspacePath);
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                                                                         ExecuteSampleAsync(wrapped, workspacePath));
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex!.InnerException, Is.TypeOf<InvalidDataException>());
+            Assert.That(ex.Message, Does.Contain(workspacePath));
+            Assert.That(ex.Message, Does.Contain("identity-validation"));
+            Assert.That(ex.Message, Does.Contain("No command was started"));
+            Assert.That(inner.Executions, Is.EqualTo(1));
+            Assert.That(grant.GrantCalls, Is.Zero);
+        });
+    }
+
+    [TestCase(true)]
+    [TestCase(false)]
+    public async Task WorkspaceWriteShell_NormalPrivilegeFails_ReportsDirectoryAndStage_WithoutStartingCommandOrUac(
+        bool interactive)
+    {
+        using var fixture = new Fixture(interactive, interactive ? "t\n" : string.Empty);
+        if (!interactive)
+        {
+            var store = new WorkspaceTrustStore(fixture.TrustPath, [fixture.Workspace.Root]);
+            await store.SaveAsync(fixture.State.Identity, true, CancellationToken.None);
+        }
+
+        fixture.Grant.Ready            = false;
+        fixture.Grant.PrepareException = new UnauthorizedAccessException("normal-privilege denied");
+        await fixture.Coordinator.InitializeAsync(CancellationToken.None);
+
+        var inner   = new CountingProcessBackend();
+        var wrapped = fixture.Coordinator.WrapSandboxBackend(inner);
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                                                                         ExecuteSampleAsync(wrapped,
+                                                                                            fixture.Workspace.Root));
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex!.Message, Does.Contain(fixture.Workspace.Root));
+            Assert.That(ex.Message, Does.Contain("normal-privilege-preparation"));
+            Assert.That(ex.Message, Does.Contain("normal-privilege denied"));
+            Assert.That(ex.Message, Does.Contain("No command was started"));
+            Assert.That(ex.Message, Does.Contain("/trust"));
+            if (!interactive) Assert.That(ex.Message, Does.Contain("Non-interactive"));
+            Assert.That(inner.Executions, Is.Zero);
+            Assert.That(fixture.Grant.GrantCalls, Is.Zero);
+        });
+    }
+
+    [Test]
+    public async Task WorkspaceWriteShell_CorruptCapSidJsonException_ReportsErrorWithoutUacOrCommandStart()
+    {
+        using var fixture = new Fixture(true, "t\n");
+        fixture.Grant.IsReadyException = new JsonException("corrupt cap_sid");
+        await fixture.Coordinator.InitializeAsync(CancellationToken.None);
+
+        var inner   = new CountingProcessBackend();
+        var wrapped = fixture.Coordinator.WrapSandboxBackend(inner);
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                                                                         ExecuteSampleAsync(wrapped,
+                                                                                            fixture.Workspace.Root));
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex!.InnerException, Is.TypeOf<JsonException>());
+            Assert.That(ex.Message, Does.Contain(fixture.Workspace.Root));
+            Assert.That(ex.Message, Does.Contain("readiness-check"));
+            Assert.That(ex.Message, Does.Contain("corrupt cap_sid"));
+            Assert.That(ex.Message, Does.Contain("No command was started"));
+            Assert.That(inner.Executions, Is.Zero);
+            Assert.That(fixture.Grant.GrantCalls, Is.Zero);
+        });
+    }
+
+    [Test]
+    public async Task WorkspaceWriteShell_PostRefreshAclFailure_ClearsCacheAndRecordsPendingRepairForTrust()
+    {
+        using var fixture = new Fixture(true, "t\nr\n");
+        fixture.Grant.Ready = true;
+        await fixture.Coordinator.InitializeAsync(CancellationToken.None);
+
+        var problem = new WorkspaceAclProblem(fixture.Workspace.Root,
+                                              Path.Combine(fixture.Workspace.Root, "sub"),
+                                              WorkspaceAclProblemCategory.MissingInheritedAccess,
+                                              [], false, null);
+        var inner   = new CountingProcessBackend();
+        var wrapped = fixture.Coordinator.WrapSandboxBackend(inner);
+
+        await ExecuteSampleAsync(wrapped, fixture.Workspace.Root);
+        Assert.That(fixture.Grant.IsReadyCalls, Is.EqualTo(1));
+
+        inner.ExceptionToThrow = new WorkspaceAclPreparationException(problem);
+        await Assert.ThrowsAsync<WorkspaceAclPreparationException>(() =>
+                                                                       ExecuteSampleAsync(wrapped,
+                                                                                          fixture.Workspace.Root));
+
+        // 缓存必须已失效：下一次执行会重新调用 IsReadyAsync，而不是复用旧准备态。
+        inner.ExceptionToThrow = null;
+        fixture.Grant.Ready    = true;
+        await ExecuteSampleAsync(wrapped, fixture.Workspace.Root);
+        Assert.That(fixture.Grant.IsReadyCalls, Is.EqualTo(2));
+
+        // 再次触发刷新后 ACL 失败，验证 /trust 提示包含待修复目录与阶段。
+        inner.ExceptionToThrow = new WorkspaceAclPreparationException(problem);
+        await Assert.ThrowsAsync<WorkspaceAclPreparationException>(() =>
+                                                                       ExecuteSampleAsync(wrapped,
+                                                                                          fixture.Workspace.Root));
+
+        await fixture.Coordinator.ChangeAsync(CancellationToken.None);
+        Assert.Multiple(() =>
+        {
+            Assert.That(fixture.Output.ToString(), Does.Contain("post-refresh-validation"));
+            Assert.That(fixture.Output.ToString(), Does.Contain(fixture.Workspace.Root));
+            Assert.That(fixture.Output.ToString(), Does.Contain("[a] repair workspace ACL"));
+        });
+    }
+
+    [Test]
+    public async Task TrustRepair_NormalPrivilegeSucceeds_VerifiesAndAllowsRetryWithoutReplay()
+    {
+        using var fixture = new Fixture(true, "t\na\n");
+        fixture.Grant.Ready                = false;
+        fixture.Grant.CanChangePermissions = true;
+        fixture.Grant.PrepareException     = new UnauthorizedAccessException("transient permission lock");
+        await fixture.Coordinator.InitializeAsync(CancellationToken.None);
+
+        var inner   = new CountingProcessBackend();
+        var wrapped = fixture.Coordinator.WrapSandboxBackend(inner);
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                                                                ExecuteSampleAsync(wrapped, fixture.Workspace.Root));
+        Assert.That(inner.Executions, Is.Zero);
+
+        fixture.Grant.PrepareException = null;
+        fixture.Grant.PrepareSetsReady = true;
+
+        await fixture.Coordinator.ChangeAsync(CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(fixture.Grant.GrantCalls, Is.Zero);
+            Assert.That(inner.Executions, Is.Zero);
+            Assert.That(fixture.Output.ToString(), Does.Contain("normal-privilege-preparation"));
+            Assert.That(fixture.Output.ToString(), Does.Contain("completed without elevation and was verified"));
+            Assert.That(fixture.Output.ToString(), Does.Contain("No command was replayed"));
+        });
+
+        await ExecuteSampleAsync(wrapped, fixture.Workspace.Root);
+        Assert.That(inner.Executions, Is.EqualTo(1));
+    }
+
+    [Test]
+    public async Task TrustRepair_ElevationDeclinedByUser_DoesNotCallGrantAsync_AndKeepsSessionUsable()
+    {
+        using var fixture = new Fixture(true, "t\na\nn\nr\n");
+        fixture.Grant.Ready                = false;
+        fixture.Grant.CanChangePermissions = false;
+        await fixture.Coordinator.InitializeAsync(CancellationToken.None);
+
+        await fixture.Coordinator.ChangeAsync(CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(fixture.Grant.GrantCalls, Is.Zero);
+            Assert.That(fixture.State.IsReadOnly, Is.False);
+            Assert.That(fixture.Output.ToString(), Does.Contain("READ_CONTROL | WRITE_DAC"));
+            Assert.That(fixture.Output.ToString(), Does.Contain("Request Windows UAC for this directory? [y/N]:"));
+            Assert.That(fixture.Output.ToString(), Does.Contain("Directory authorization declined"));
+        });
+
         await fixture.Coordinator.ChangeAsync(CancellationToken.None);
         Assert.That(fixture.State.IsReadOnly, Is.True);
-        Assert.That(fixture.Permissions.Evaluate(plan).Decision, Is.EqualTo(PermissionDecision.Deny));
-        await Assert.ThrowsAsync<InvalidOperationException>(() => guarded.ExecuteAsync(plan, CancellationToken.None));
+    }
+
+    [Test]
+    public async Task TrustRepair_ElevationCompletedAndVerified_AllowsSubsequentCommandRetry()
+    {
+        using var fixture = new Fixture(true, "t\na\ny\n");
+        fixture.Grant.Ready                = false;
+        fixture.Grant.CanChangePermissions = false;
+        fixture.Grant.Outcome              = WorkspaceGrantOutcome.Completed;
+        fixture.Grant.GrantSetsReady       = true;
+        await fixture.Coordinator.InitializeAsync(CancellationToken.None);
+
+        var inner   = new CountingProcessBackend();
+        var wrapped = fixture.Coordinator.WrapSandboxBackend(inner);
+
+        await fixture.Coordinator.ChangeAsync(CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(fixture.Grant.GrantCalls, Is.EqualTo(1));
+            Assert.That(fixture.Grant.IsReadyCalls, Is.GreaterThanOrEqualTo(2));
+            Assert.That(inner.Executions, Is.Zero);
+            Assert.That(fixture.Output.ToString(),
+                        Does.Contain("Directory authorization completed and workspace ACLs were verified"));
+            Assert.That(fixture.Output.ToString(), Does.Contain("No command was replayed"));
+        });
+
+        await ExecuteSampleAsync(wrapped, fixture.Workspace.Root);
+        Assert.That(inner.Executions, Is.EqualTo(1));
+    }
+
+    [Test]
+    public async Task TrustRepair_ElevationCompletedButNotReady_DoesNotMarkCacheReady()
+    {
+        using var fixture = new Fixture(true, "t\na\ny\n");
+        fixture.Grant.Ready                = false;
+        fixture.Grant.CanChangePermissions = false;
+        fixture.Grant.Outcome              = WorkspaceGrantOutcome.Completed;
+        fixture.Grant.GrantSetsReady       = false;
+        await fixture.Coordinator.InitializeAsync(CancellationToken.None);
+
+        await fixture.Coordinator.ChangeAsync(CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(fixture.Grant.GrantCalls, Is.EqualTo(1));
+            Assert.That(fixture.Output.ToString(), Does.Contain("verification is still incomplete"));
+        });
+
+        var inner   = new CountingProcessBackend();
+        var wrapped = fixture.Coordinator.WrapSandboxBackend(inner);
+        fixture.Grant.PrepareSetsReady = false;
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                                                                ExecuteSampleAsync(wrapped, fixture.Workspace.Root));
+        Assert.That(fixture.Grant.PrepareCalls, Is.EqualTo(1));
+        Assert.That(inner.Executions, Is.Zero);
+    }
+
+    [TestCase(1)]
+    [TestCase(2)]
+    public async Task TrustRepair_DeclinedOrFailedOutcome_AllowsSubsequentTrustRetry(int outcomeValue)
+    {
+        var outcome = (WorkspaceGrantOutcome)outcomeValue;
+        using var fixture = new Fixture(true, "t\na\ny\na\ny\n");
+        fixture.Grant.Ready                = false;
+        fixture.Grant.CanChangePermissions = false;
+        fixture.Grant.Outcome              = outcome;
+        await fixture.Coordinator.InitializeAsync(CancellationToken.None);
+
+        await fixture.Coordinator.ChangeAsync(CancellationToken.None);
+        Assert.Multiple(() =>
+        {
+            Assert.That(fixture.Grant.GrantCalls, Is.EqualTo(1));
+            Assert.That(fixture.Output.ToString(), Does.Contain($"Directory authorization: {outcome}"));
+        });
+
+        fixture.Grant.Outcome        = WorkspaceGrantOutcome.Completed;
+        fixture.Grant.GrantSetsReady = true;
+        await fixture.Coordinator.ChangeAsync(CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(fixture.Grant.GrantCalls, Is.EqualTo(2));
+            Assert.That(fixture.Output.ToString(), Does.Contain("workspace ACLs were verified"));
+        });
+    }
+
+    [Test]
+    public async Task TrustRepair_GrantFailureException_AllowsSubsequentTrustRetry()
+    {
+        using var fixture = new Fixture(true, "t\na\ny\na\ny\n");
+        fixture.Grant.Ready                = false;
+        fixture.Grant.CanChangePermissions = false;
+        fixture.Grant.GrantException       = new WorkspaceGrantFailureException("helper exited with error");
+        await fixture.Coordinator.InitializeAsync(CancellationToken.None);
+
+        await fixture.Coordinator.ChangeAsync(CancellationToken.None);
+        Assert.Multiple(() =>
+        {
+            Assert.That(fixture.Grant.GrantCalls, Is.EqualTo(1));
+            Assert.That(fixture.Output.ToString(), Does.Contain("helper exited with error"));
+        });
+
+        fixture.Grant.GrantException = null;
+        fixture.Grant.Outcome        = WorkspaceGrantOutcome.Completed;
+        fixture.Grant.GrantSetsReady = true;
+        await fixture.Coordinator.ChangeAsync(CancellationToken.None);
+
+        Assert.That(fixture.Grant.GrantCalls, Is.EqualTo(2));
+        Assert.That(fixture.Output.ToString(), Does.Contain("workspace ACLs were verified"));
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task TrustRepair_DidNotFinishOrInterruptedDuringGrant_LocksUncertainState(bool cancelDuringGrant)
+    {
+        using var fixture = new Fixture(true, "t\na\ny\n");
+        fixture.Grant.Ready                = false;
+        fixture.Grant.CanChangePermissions = false;
+        if (cancelDuringGrant)
+            fixture.Grant.GrantException = new OperationCanceledException("cancelled mid-grant");
+        else
+            fixture.Grant.Outcome = WorkspaceGrantOutcome.DidNotFinish;
+
+        await fixture.Coordinator.InitializeAsync(CancellationToken.None);
+        await fixture.Coordinator.ChangeAsync(CancellationToken.None);
+        await fixture.Coordinator.ChangeAsync(CancellationToken.None);
+
+        var inner   = new CountingProcessBackend();
+        var wrapped = fixture.Coordinator.WrapSandboxBackend(inner);
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                                                                         ExecuteSampleAsync(wrapped,
+                                                                                            fixture.Workspace.Root));
+        Assert.Multiple(() =>
+        {
+            Assert.That(fixture.Grant.GrantCalls, Is.EqualTo(1));
+            Assert.That(fixture.Output.ToString(), Does.Contain("Directory authorization may still be running"));
+            Assert.That(ex!.Message, Does.Contain("may still be running"));
+            Assert.That(inner.Executions, Is.Zero);
+        });
+    }
+
+    [Test]
+    public async Task TrustRepair_CancelledBeforeGrantStarts_DoesNotLockUncertainState()
+    {
+        using var fixture = new Fixture(true, "t\na\na\ny\n");
+        fixture.Grant.Ready                = false;
+        fixture.Grant.CanChangePermissions = false;
+        fixture.Grant.IsReadyException     = new OperationCanceledException("cancelled pre-check");
+        await fixture.Coordinator.InitializeAsync(CancellationToken.None);
+
+        await fixture.Coordinator.ChangeAsync(CancellationToken.None);
+        Assert.That(fixture.Output.ToString(), Does.Contain("Workspace ACL repair was cancelled"));
+
+        fixture.Grant.IsReadyException = null;
+        fixture.Grant.Outcome          = WorkspaceGrantOutcome.Completed;
+        fixture.Grant.GrantSetsReady   = true;
+        await fixture.Coordinator.ChangeAsync(CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(fixture.Grant.GrantCalls, Is.EqualTo(1));
+            Assert.That(fixture.Output.ToString(), Does.Contain("workspace ACLs were verified"));
+        });
+    }
+
+    [Test]
+    public async Task WorkspaceWriteShell_ScopeValidationFails_ReportsStageWithoutStartingCommand()
+    {
+        using var fixture = new Fixture(true, "t\n");
+        fixture.Grant.Ready          = false;
+        fixture.Grant.ScopeException = new InvalidDataException("executable inside write root");
+        await fixture.Coordinator.InitializeAsync(CancellationToken.None);
+
+        var inner   = new CountingProcessBackend();
+        var wrapped = fixture.Coordinator.WrapSandboxBackend(inner);
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                                                                         ExecuteSampleAsync(wrapped,
+                                                                                            fixture.Workspace.Root));
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex!.InnerException, Is.TypeOf<InvalidDataException>());
+            Assert.That(ex.Message, Does.Contain("scope-validation"));
+            Assert.That(ex.Message, Does.Contain("executable inside write root"));
+            Assert.That(ex.Message, Does.Contain("No command was started"));
+            Assert.That(inner.Executions, Is.Zero);
+            Assert.That(fixture.Grant.PrepareCalls, Is.Zero);
+        });
+    }
+
+    [Test]
+    public async Task TrustRepair_CorruptCapSidJsonException_ReportsErrorWithoutCrashingLoop()
+    {
+        using var fixture = new Fixture(true, "t\na\na\nr\n");
+        fixture.Grant.IsReadyException = new JsonException("corrupt cap_sid");
+        await fixture.Coordinator.InitializeAsync(CancellationToken.None);
+
+        await fixture.Coordinator.ChangeAsync(CancellationToken.None);
+        Assert.Multiple(() =>
+        {
+            Assert.That(fixture.Output.ToString(), Does.Contain("Workspace ACL repair failed"));
+            Assert.That(fixture.Output.ToString(), Does.Contain(fixture.Workspace.Root));
+            Assert.That(fixture.Output.ToString(), Does.Contain("corrupt cap_sid"));
+        });
+
+        fixture.Grant.IsReadyException              = null;
+        fixture.Grant.Ready                         = false;
+        fixture.Grant.CanChangePermissionsException = new JsonException("corrupt cap_sid in probe");
+        await fixture.Coordinator.ChangeAsync(CancellationToken.None);
+        Assert.That(fixture.Output.ToString(), Does.Contain("corrupt cap_sid in probe"));
+
+        await fixture.Coordinator.ChangeAsync(CancellationToken.None);
+        Assert.That(fixture.State.IsReadOnly, Is.True);
     }
 
     [Test]
     public async Task ActivationFailure_DoesNotEnablePatching()
     {
         using var fixture = new Fixture(true, "t\n");
-        fixture.Grant.Ready    = true;
         fixture.FailActivation = true;
         await fixture.Coordinator.InitializeAsync(CancellationToken.None);
         Assert.That(fixture.State.IsReadOnly, Is.True);
         Assert.That(fixture.Output.ToString(), Does.Contain("activation failed"));
-    }
-
-    [Test]
-    public async Task CorruptCapSidJsonException_ConvertsToAuthorizationFailureWithoutEscaping()
-    {
-        using var fixture = new Fixture(true, "t\n");
-        // 读 cap_sid 遇损坏表抛 JsonException：与同列表异常一样转为授权失败语义，保持只读不逃逸。
-        fixture.Grant.CanChangePermissionsException = new JsonException("corrupt cap_sid");
-        await fixture.Coordinator.InitializeAsync(CancellationToken.None);
-        Assert.Multiple(() =>
-        {
-            Assert.That(fixture.State.IsReadOnly, Is.True);
-            Assert.That(fixture.Activations, Is.Zero);
-            Assert.That(fixture.Output.ToString(), Does.Contain("activation failed"));
-        });
     }
 
     [Test]
@@ -338,6 +817,45 @@ public class WorkspaceAccessTests
                     Is.True);
     }
 
+    private static Task<ProcessExecutionResult> ExecuteSampleAsync(
+        IProcessExecutionBackend backend, string workingDirectory, bool networkAccessEnabled = false)
+    {
+        var execution = new PreparedProcessExecution("cmd.exe", ["/c", "echo", "ok"], workingDirectory, 10, false,
+                                                     null, networkAccessEnabled);
+        return backend.ExecuteAsync(execution, NoopOutputCapture.Instance, NoopOutputCapture.Instance,
+                                    CancellationToken.None);
+    }
+
+    private sealed class NoopOutputCapture : IProcessOutputCapture
+    {
+        public static readonly NoopOutputCapture Instance = new();
+
+        public ValueTask AppendAsync(ReadOnlyMemory<char> chunk, CancellationToken cancellationToken) =>
+            ValueTask.CompletedTask;
+
+        public CapturedProcessOutput Complete() => new(string.Empty, false, 0, null);
+
+        public void Discard()
+        {
+        }
+    }
+
+    private sealed class CountingProcessBackend : IProcessExecutionBackend
+    {
+        public int        Executions;
+        public Exception? ExceptionToThrow;
+
+        public Task<ProcessExecutionResult> ExecuteAsync(PreparedProcessExecution execution,
+                                                         IProcessOutputCapture    stdoutCapture,
+                                                         IProcessOutputCapture    stderrCapture,
+                                                         CancellationToken        cancellationToken)
+        {
+            if (ExceptionToThrow is not null) return Task.FromException<ProcessExecutionResult>(ExceptionToThrow);
+            Executions++;
+            return Task.FromResult(new ProcessExecutionResult(0, false, null));
+        }
+    }
+
     private sealed class AllowOnceApprover : IApprovalProvider
     {
         public int Calls;
@@ -351,24 +869,60 @@ public class WorkspaceAccessTests
 
     private sealed class FakeGrant : IWorkspaceAclGrant
     {
-        public int                   Calls;
+        public int                   CanChangeCalls;
+        public bool                  CanChangePermissions;
+        public Exception?            CanChangePermissionsException;
+        public int                   GrantCalls;
+        public Exception?            GrantException;
+        public bool                  GrantSetsReady = true;
+        public int                   IsReadyCalls;
+        public Exception?            IsReadyException;
         public WorkspaceGrantOutcome Outcome = WorkspaceGrantOutcome.Completed;
+        public int                   PrepareCalls;
+        public Exception?            PrepareException;
+        public bool                  PrepareSetsReady = true;
         public bool                  Ready;
-
-        /// <summary>设置后 CanChangePermissionsAsync 以该异常失败（如损坏 cap_sid 的 JsonException）。 When set, CanChangePermissionsAsync fails with this exception (e.g. a JsonException from a corrupt cap_sid).</summary>
-        public Exception? CanChangePermissionsException;
+        public int                   ScopeCalls;
+        public Exception?            ScopeException;
 
         public Task<bool> CanChangePermissionsAsync(
-            WorkspaceDirectoryIdentity identity, CancellationToken cancellationToken) =>
-            CanChangePermissionsException is not null
+            WorkspaceDirectoryIdentity identity, CancellationToken cancellationToken)
+        {
+            CanChangeCalls++;
+            return CanChangePermissionsException is not null
                 ? Task.FromException<bool>(CanChangePermissionsException)
+                : Task.FromResult(CanChangePermissions);
+        }
+
+        public Task PrepareWithoutElevationAsync(
+            WorkspaceDirectoryIdentity identity, CancellationToken cancellationToken)
+        {
+            PrepareCalls++;
+            if (PrepareException is not null) return Task.FromException(PrepareException);
+            if (PrepareSetsReady) Ready = true;
+            return Task.CompletedTask;
+        }
+
+        public Task<bool> IsReadyAsync(WorkspaceDirectoryIdentity identity, CancellationToken cancellationToken)
+        {
+            IsReadyCalls++;
+            return IsReadyException is not null
+                ? Task.FromException<bool>(IsReadyException)
                 : Task.FromResult(Ready);
+        }
+
+        public void ValidatePreparationScope(WorkspaceDirectoryIdentity identity)
+        {
+            ScopeCalls++;
+            if (ScopeException is not null) throw ScopeException;
+        }
 
         public Task<WorkspaceGrantOutcome> GrantAsync(
             WorkspaceDirectoryIdentity identity, CancellationToken cancellationToken)
         {
-            Calls++;
-            if (Outcome == WorkspaceGrantOutcome.Completed) Ready = true;
+            GrantCalls++;
+            if (GrantException is not null) return Task.FromException<WorkspaceGrantOutcome>(GrantException);
+            if (Outcome == WorkspaceGrantOutcome.Completed && GrantSetsReady) Ready = true;
             return Task.FromResult(Outcome);
         }
     }
@@ -377,15 +931,29 @@ public class WorkspaceAccessTests
     {
         public readonly  FakeGrant    Grant = new();
         public readonly  StringReader Input;
-        public readonly  StringWriter Output    = new();
-        public readonly  TestTempDir  Workspace = new();
-        private readonly TestTempDir  _storage  = new();
+        public readonly  StringWriter Output = new();
+        public readonly  TestTempDir  Workspace;
+        private readonly bool         _ownsWorkspace;
+        private readonly TestTempDir? _storage;
         public           int          Activations;
         public           bool         FailActivation;
 
-        public Fixture(bool interactive, string input)
+        public Fixture(bool         interactive, string input, TestTempDir? sharedWorkspace = null,
+                       string?      sharedTrustPath = null)
         {
-            Input = new StringReader(input);
+            Input          = new StringReader(input);
+            _ownsWorkspace = sharedWorkspace is null;
+            Workspace      = sharedWorkspace ?? new TestTempDir();
+            if (sharedTrustPath is null)
+            {
+                _storage  = new TestTempDir();
+                TrustPath = Path.Combine(_storage.Root, "trust.json");
+            }
+            else
+            {
+                TrustPath = sharedTrustPath;
+            }
+
             State = new WorkspaceAccessState(WorkspaceDirectoryIdentity.Capture(Workspace.Root));
             Permissions = new PermissionEngine(Workspace.Root, workspaceReadOnly : () => State.IsReadOnly,
                                                resourcePolicy : new TestResourcePolicy(Workspace.Root));
@@ -409,14 +977,15 @@ public class WorkspaceAccessTests
         public WorkspaceAccessState       State       { get; }
         public PermissionEngine           Permissions { get; }
         public WorkspaceAccessCoordinator Coordinator { get; }
-        public string                     TrustPath   => Path.Combine(_storage.Root, "trust.json");
+        public string                     TrustPath   { get; }
 
         public void Dispose()
         {
+            Coordinator.Dispose();
             Input.Dispose();
             Output.Dispose();
-            Workspace.Dispose();
-            _storage.Dispose();
+            if (_ownsWorkspace) Workspace.Dispose();
+            _storage?.Dispose();
         }
     }
 

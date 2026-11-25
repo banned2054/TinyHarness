@@ -135,9 +135,11 @@ internal static class HelpText
         remain inspectable after cancellation/restart and are not automatically replayed.
 
         /trust is a host command at the input prompt. It changes workspace trust without
-        sending a model request. Read-only workspaces permit list/search/read only; patch
-        and shell are disabled. Trust is saved per exact directory identity outside sandbox
-        write roots. Windows directory authorization is separate from sandbox provisioning.
+        sending a model request, and on Windows with workspace-write sandbox enabled it can also
+        explicitly repair workspace ACLs when needed. Read-only workspaces permit
+        list/search/read only; patch and shell are disabled. Trust is saved per exact directory
+        identity outside sandbox write roots. Windows directory authorization is separate from
+        sandbox provisioning.
         """;
 
     public const string Smoke = """

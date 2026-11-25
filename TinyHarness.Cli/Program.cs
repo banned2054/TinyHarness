@@ -1156,79 +1156,81 @@ internal static class Program
                                                grantRegistry : grants,
                                                frozenScopeReader : FrozenCapabilityScopeReader.FromPreparation);
 
-        WindowsSandboxExecution? sandbox = null;
-        var access = new WorkspaceAccessCoordinator(accessState, new WorkspaceTrustStore(trustPath, writeRoots),
-                                                    permissions, input ?? new ExclusiveInputReader(Console.In),
-                                                    Console.Out, !Console.IsInputRedirected,
-                                                    OperatingSystem.IsWindows() && settings is
-                                                        { Enabled: true, Policy: SandboxPolicyKind.WorkspaceWrite },
-                                                    new ProcessWorkspaceAclGrant(protectedPaths, writeRoots, settings),
-                                                    activeGrants =>
+        WindowsSandboxExecution?    sandbox = null;
+        WorkspaceAccessCoordinator? access  = null;
+        access = new WorkspaceAccessCoordinator(accessState, new WorkspaceTrustStore(trustPath, writeRoots),
+                                                permissions, input ?? new ExclusiveInputReader(Console.In),
+                                                Console.Out, !Console.IsInputRedirected,
+                                                OperatingSystem.IsWindows() && settings is
+                                                    { Enabled: true, Policy: SandboxPolicyKind.WorkspaceWrite },
+                                                new ProcessWorkspaceAclGrant(protectedPaths, writeRoots, settings),
+                                                activeGrants =>
+                                                {
+                                                    // 组合门禁：基线读保护计划与沙箱同点组合（信任激活
+                                                    // 之后），CLI 已统一切换到顶层读根与固定拒读规划
+                                                    // （与 Desktop 同口径，不走全盘递归扫描）。
+                                                    // trust.json 由信任激活先行创建，此时 pairing
+                                                    // fail-closed 校验的 C1 宿主密钥路径必然存在；
+                                                    // 未信任工作区不进入本回调，组合保持为空
+                                                    // （process.execute 走沙箱不可用 fail-closed）。
+                                                    var baselineReadProtection =
+                                                        WindowsSandboxComposer.PlanBaselineReadProtectionTopLevel(
+                                                         [trustPath, userConfigPath],
+                                                         sessionStoreDirectory,
+                                                         settings,
+                                                         cancellationToken);
+                                                    sandbox =
+                                                        SandboxCliComposition.TryCompose(settings,
+                                                            config.WorkspaceRoot, knownSecrets,
+                                                            sessionStoreDirectory,
+                                                            userConfig.Settings?.Network,
+                                                            baselineReadProtection,
+                                                            standingTrust,
+                                                            permissionSystemPaths);
+                                                    var policy = sandbox?.ExecutionPolicy ??
+                                                                 ProcessExecutionPolicy.Host();
+                                                    // 与 BuildTools 的 shell 槽位同构：沙箱已组合时注册
+                                                    // PermissionShellTool（workspace 路由沙箱、host 显
+                                                    // 式 L3），未组合回退裸 ShellTool 形态。
+                                                    ITool workspaceShell;
+                                                    if (sandbox is { } composed)
                                                     {
-                                                        // 组合门禁：基线读保护计划与沙箱同点组合（信任激活
-                                                        // 之后），CLI 已统一切换到顶层读根与固定拒读规划
-                                                        // （与 Desktop 同口径，不走全盘递归扫描）。
-                                                        // trust.json 由信任激活先行创建，此时 pairing
-                                                        // fail-closed 校验的 C1 宿主密钥路径必然存在；
-                                                        // 未信任工作区不进入本回调，组合保持为空
-                                                        // （process.execute 走沙箱不可用 fail-closed）。
-                                                        var baselineReadProtection =
-                                                            WindowsSandboxComposer.PlanBaselineReadProtectionTopLevel(
-                                                             [trustPath, userConfigPath],
-                                                             sessionStoreDirectory,
-                                                             settings,
-                                                             cancellationToken);
-                                                        sandbox =
-                                                            SandboxCliComposition.TryCompose(settings,
-                                                                config.WorkspaceRoot, knownSecrets,
-                                                                sessionStoreDirectory,
-                                                                userConfig.Settings?.Network,
-                                                                baselineReadProtection,
-                                                                standingTrust,
-                                                                permissionSystemPaths);
-                                                        var policy = sandbox?.ExecutionPolicy ??
-                                                                     ProcessExecutionPolicy.Host();
-                                                        // 与 BuildTools 的 shell 槽位同构：沙箱已组合时注册
-                                                        // PermissionShellTool（workspace 路由沙箱、host 显
-                                                        // 式 L3），未组合回退裸 ShellTool 形态。
-                                                        ITool workspaceShell;
-                                                        if (sandbox is { } composed)
-                                                        {
-                                                            var restricted =
-                                                                new ShellTool(new Workspace(config.WorkspaceRoot, true),
-                                                                              config.DefaultToolTimeoutSeconds,
-                                                                              knownSecrets,
-                                                                              processBackend : composed.Backend,
-                                                                              executionPolicy :
-                                                                              composed.ExecutionPolicy,
-                                                                              activeCapabilities : activeGrants,
-                                                                              grantContext :
-                                                                              new SandboxGrantContext(
-                                                                               composed.Policy,
-                                                                               composed.Components,
-                                                                               permissionSystemPaths));
-                                                            var hostShell =
-                                                                new ShellTool(new Workspace(config.WorkspaceRoot, true),
-                                                                              config.DefaultToolTimeoutSeconds,
-                                                                              knownSecrets,
-                                                                              executionPolicy :
-                                                                              ProcessExecutionPolicy.Host());
-                                                            workspaceShell =
-                                                                new PermissionShellTool(restricted, hostShell);
-                                                        }
-                                                        else
-                                                        {
-                                                            workspaceShell =
-                                                                new ShellTool(new Workspace(config.WorkspaceRoot, true),
-                                                                              config.DefaultToolTimeoutSeconds,
-                                                                              knownSecrets,
-                                                                              processBackend :
-                                                                              new HostProcessBackend(knownSecrets),
-                                                                              executionPolicy : policy);
-                                                        }
+                                                        var restricted =
+                                                            new ShellTool(new Workspace(config.WorkspaceRoot, true),
+                                                                          config.DefaultToolTimeoutSeconds,
+                                                                          knownSecrets,
+                                                                          processBackend :
+                                                                          access!.WrapSandboxBackend(composed.Backend),
+                                                                          executionPolicy :
+                                                                          composed.ExecutionPolicy,
+                                                                          activeCapabilities : activeGrants,
+                                                                          grantContext :
+                                                                          new SandboxGrantContext(
+                                                                           composed.Policy,
+                                                                           composed.Components,
+                                                                           permissionSystemPaths));
+                                                        var hostShell =
+                                                            new ShellTool(new Workspace(config.WorkspaceRoot, true),
+                                                                          config.DefaultToolTimeoutSeconds,
+                                                                          knownSecrets,
+                                                                          executionPolicy :
+                                                                          ProcessExecutionPolicy.Host());
+                                                        workspaceShell =
+                                                            new PermissionShellTool(restricted, hostShell);
+                                                    }
+                                                    else
+                                                    {
+                                                        workspaceShell =
+                                                            new ShellTool(new Workspace(config.WorkspaceRoot, true),
+                                                                          config.DefaultToolTimeoutSeconds,
+                                                                          knownSecrets,
+                                                                          processBackend :
+                                                                          new HostProcessBackend(knownSecrets),
+                                                                          executionPolicy : policy);
+                                                    }
 
-                                                        return Task.FromResult((workspaceShell, policy));
-                                                    });
+                                                    return Task.FromResult((workspaceShell, policy));
+                                                });
         await access.InitializeAsync(cancellationToken).ConfigureAwait(false);
         // M3：派生运行时写根仅在沙箱实际组合后注入资源策略（与 DesktopSessionFactory 同构），
         // 消除 OS 基线可写与应用层审批的错位；未组合（未信任/组合失败）时 harness 目录分类
@@ -1443,7 +1445,10 @@ internal static class Program
         ITool shell = sandbox is { } composed
             ? new PermissionShellTool(
                                       new ShellTool(workspace, config.DefaultToolTimeoutSeconds, secrets,
-                                                    processBackend : composed.Backend,
+                                                    processBackend :
+                                                    access is null
+                                                        ? composed.Backend
+                                                        : access.WrapSandboxBackend(composed.Backend),
                                                     executionPolicy : composed.ExecutionPolicy,
                                                     activeCapabilities : activeCapabilities,
                                                     grantContext : new SandboxGrantContext(composed.Policy,
