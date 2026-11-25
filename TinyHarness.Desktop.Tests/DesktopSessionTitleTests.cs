@@ -145,6 +145,37 @@ public sealed class DesktopSessionTitleTests
         Assert.That((await SessionStoreReader.ReadAsync(fixture.Store, session.Id, default))!.Title.Pending, Is.True);
     }
 
+    [Test]
+    public async Task TitleGenerationWaitsUntilFirstReplyCompletes()
+    {
+        var fixture     = await Fixture.CreateAsync();
+        var mainStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseMain = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var titleCalls  = 0;
+        var factory = fixture.Factory((_, _) => new Model(async (request, token) =>
+        {
+            if (IsTitle(request))
+            {
+                Interlocked.Increment(ref titleCalls);
+                return "延迟生成的标题";
+            }
+
+            mainStarted.TrySetResult();
+            await releaseMain.Task.WaitAsync(token);
+            return "ordinary answer";
+        }));
+        await using var session = await fixture.OpenAsync(factory, new ConcurrentQueue<DesktopEvent>());
+        var             submit  = session.SubmitAsync("首轮问题");
+        await mainStarted.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await Task.Delay(150);
+        Assert.That(Volatile.Read(ref titleCalls), Is.EqualTo(0), "Title request must not run concurrently with the first reply.");
+        releaseMain.TrySetResult();
+        await submit.WaitAsync(TimeSpan.FromSeconds(10));
+        await session.WaitForTitleGenerationAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.That(Volatile.Read(ref titleCalls), Is.EqualTo(1));
+        Assert.That(session.Host.Session.Title.Name, Is.EqualTo("延迟生成的标题"));
+    }
+
     private static bool IsTitle(ChatCompletionRequest request) =>
         request.Messages[0].Content == SessionTitleGenerator.Instructions;
 

@@ -551,6 +551,9 @@ public sealed partial class ChatSessionHost : IDisposable
                 _activeControl  = null;
                 Interlocked.Exchange(ref _activeRuns, 0);
             }
+
+            // 在首轮/本轮回复完整收尾后再通知完成，避免自动标题与主模型请求开局并发。
+            if (run.Result?.Status == AgentStatus.Completed) TurnCompleted?.Invoke();
         }
     }
 

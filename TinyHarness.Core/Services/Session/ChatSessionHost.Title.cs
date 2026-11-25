@@ -9,10 +9,19 @@ public sealed partial class ChatSessionHost
     private readonly SemaphoreSlim _titleGate = new(1, 1);
 
     /// <summary>
-    ///     <para>用户回合已提交；订阅者只排队后台命名，不阻塞会话执行。</para>
-    ///     <para>A user turn was committed; subscribers only queue background naming without blocking execution.</para>
+    ///     <para>用户回合已提交；订阅者不应阻塞会话执行。</para>
+    ///     <para>A user turn was committed; subscribers must not block session execution.</para>
     /// </summary>
     public event Action? UserTurnCommitted;
+
+    /// <summary>
+    ///     <para>回合回复已完成且状态已收尾；用于在不与主模型并发的前提下排队后台命名。</para>
+    ///     <para>
+    ///         A turn reply has completed and settled; used to queue background naming without running
+    ///         concurrently with the main model request.
+    ///     </para>
+    /// </summary>
+    public event Action? TurnCompleted;
 
     /// <summary>
     ///     <para>在第一次命名前持久化待重试标记；旧日志在首次尝试时补记。</para>

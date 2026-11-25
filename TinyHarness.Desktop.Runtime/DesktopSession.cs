@@ -65,8 +65,8 @@ public sealed class DesktopSession(
     }
 
     /// <summary>
-    ///     <para>在用户回合提交后排队一次命名；并发补充和后续回合不重复启动未完成的请求。</para>
-    ///     <para>Queues naming after a committed user turn; concurrent input never duplicates an unfinished request.</para>
+    ///     <para>在回合回复完成后排队一次命名；并发补充和后续回合不重复启动未完成的请求。</para>
+    ///     <para>Queues naming after a turn reply completes; concurrent input never duplicates an unfinished request.</para>
     /// </summary>
     internal void RequestTitleGeneration()
     {
@@ -323,7 +323,7 @@ public sealed class DesktopSession(
         {
             try
             {
-                Host.UserTurnCommitted -= RequestTitleGeneration;
+                Host.TurnCompleted -= RequestTitleGeneration;
                 Host.Dispose();
             }
             catch (Exception exception)

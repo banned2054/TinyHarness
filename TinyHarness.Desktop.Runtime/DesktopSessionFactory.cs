@@ -527,7 +527,7 @@ public sealed partial class DesktopSessionFactory
                                              generateTitle : _modelFactory is null || _titleModelFactory is not null
                                                  ? token => GenerateTitleAsync(host, events, token)
                                                  : null);
-            host.UserTurnCommitted += desktop.RequestTitleGeneration;
+            host.TurnCompleted += desktop.RequestTitleGeneration;
             return desktop;
         }
         catch
