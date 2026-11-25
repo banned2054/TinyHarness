@@ -1,8 +1,10 @@
 # Windows 沙箱可用性收口计划
 
+> **2026-11-25 归档说明**：第 1～3 步实施（Rust fork `a79f27f5`、CLI 顶层读根 `b225af0`、CLI 工作区 ACL 按需延迟准备 `207bdb7`）及第 4 步 NativeAOT 发布、离线 smoke 与真机主闭环验收已完成，本文与 [CLI 工作区 ACL 按需准备](cli-workspace-acl-preparation-plan.md) 一并移入 `Docs/Archive/`。下文保留原计划、实际验收结果、现场发现与未覆盖边界。
+
 更新日期：2026-11-25。目标是将现有基于 Codex fork 的 Windows 沙箱在 CLI 与 Desktop 上收敛到**稳定、可预期、日常可用**的状态。
 
-> 历史顶层读根实施记录（WP3b／WP5／WP6）与已退出当前范围的"按会话隔离 OS 读权限"实验记录，已归档至 [Windows 沙箱读取策略与会话隔离（已归档）](Archive/desktop-sandbox-scan-and-no-project-isolation-plan.md)。
+> 历史顶层读根实施记录（WP3b／WP5／WP6）与已退出当前范围的"按会话隔离 OS 读权限"实验记录，已归档至 [Windows 沙箱读取策略与会话隔离（已归档）](desktop-sandbox-scan-and-no-project-isolation-plan.md)。
 
 ## 1. 权限边界（与 Codex 定位对齐）
 
@@ -47,3 +49,17 @@
 - **每会话 OS 级并发不同读策略**：已退出当前范围（见归档文档 2026-11-25 收尾记录）。
 - **无项目会话独立工具目录**：在当前定位下（写目录 + 内置文件工具隔离，OS 读沿用全机统一底线），列为本轮收口完成后的后续事项。
 - **新平台沙箱后端（如 Windows 11 24H2+ MXC）**：待本轮现有沙箱达到稳定可用后再另行评估，不阻塞本轮收口。
+- **沙箱自有运行时临时写根历史子项继承漂移（2026-11-25 现场发现）**：`windows-sandbox-tcp-loopback-home\tmp` 中若残留历史旧子目录且缺少上层新增的继承 ACE（如 `AppData` 刷新顶层读根后新增的 `TinyHarnessUsers:(I)(OI)(CI)(RX)` 等），会触发刷新后写继承校验 fail-closed（清空 `tmp` 后即恢复）；已转入 [PLAN.md](../../PLAN.md) 后续方案。
+
+## 5. 2026-11-25 实施与验收记录
+
+- **已落地提交**：
+  - 第 1 步（Rust fork `C:\Code\Rust\codex`）：`a79f27f57984a0dc9651e38ccb9787b2ed25ac7f`，并按 `release` 目标 `x86_64-pc-windows-msvc` 重新编译 `codex-windows-sandbox-setup.exe`、`codex-command-runner.exe`、`codex-windows-managed-deny-probe.exe`。
+  - 第 2 步（CLI 顶层读根与固定拒读）：`b225af05e8610be9a1333ce1357e0ea22b572339`；定向离线测试 76/76 通过。
+  - 第 3 步（CLI 工作区 ACL 按需延迟准备与 `/trust` 显式修复）：`207bdb79cc05a0ec30b1cd7a92fca7d4e9ce0e9e`；定向离线测试 65/65 通过。
+- **已验证（NativeAOT 发布、离线 smoke 与真机主闭环）**：
+  - CLI 与 Desktop `.NET 11` `win-x64` NativeAOT 发布零项目 trim/AOT 警告；CLI `--help`、`smoke` 与 Desktop `--offline-smoke` 均退出码 `0`。
+  - 真机 Windows 实测通过：CLI 新目录信任与 `read_file` 零 ACL/UAC；普通可写目录首次 `workspace-write` Shell 无 UAC 自动准备并成功写入、后续复用；`/trust` 菜单展示 `[a] repair workspace ACL` 且已就绪核验零 UAC、不重放命令；项目外普通目录（`Documents`）直接可读、固定敏感目录（`.ssh`）OS 拒读、工作区外写入 OS 拒写、`executionScope=host` 走单次审批生效；Desktop 写入与 `.ssh` 拒读及 CLI ↔ Desktop 交替刷新互不撤销固定拒读。
+- **未在真机实测（仅离线单测覆盖）**：
+  - 受阻目录（普通账户无 `WRITE_DAC`）触发真实 UAC 弹窗修复及非交互拒绝路径；
+  - 真实簿记文件含已删除历史路径时的首次自动清理恢复路径。

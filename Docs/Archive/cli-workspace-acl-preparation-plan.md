@@ -1,10 +1,10 @@
 # CLI 工作区 ACL 按需准备
 
-**状态：已纳入当前收口计划（第 3 步）。** 见 [Windows 沙箱可用性收口计划](windows-sandbox-readiness-plan.md)。本文保留 CLI 工作区 ACL 按需准备的具体设计与验收细则。
+**状态：已于 2026-11-25 实施（提交 `207bdb7`）并归档。** 见 [Windows 沙箱可用性收口计划（已归档）](windows-sandbox-readiness-plan.md)。本文保留 CLI 工作区 ACL 按需准备的设计、验收细则与验证边界。
 
-## 1. 当前行为
+## 1. 原行为
 
-在新目录打开交互式 `chat` 时，CLI 读取工作区信任记录并询问是否信任。选择允许修改后，如果启用了 Windows `workspace-write` 沙箱，CLI 就检查能否准备目录 ACL。普通权限不能完成时，CLI 在还没执行 Shell 的情况下询问是否请求目录 UAC。[CLI 入口](../TinyHarness.Cli/Program.cs) · [工作区信任与 ACL 准备](../TinyHarness.Cli/Services/WorkspaceAccessCoordinator.cs) · [现行目录授权说明](Archive/windows-sandbox-management.md#工作区信任与目录授权)
+在新目录打开交互式 `chat` 时，CLI 读取工作区信任记录并询问是否信任。选择允许修改后，如果启用了 Windows `workspace-write` 沙箱，CLI 就检查能否准备目录 ACL。普通权限不能完成时，CLI 在还没执行 Shell 的情况下询问是否请求目录 UAC。[CLI 入口](../../TinyHarness.Cli/Program.cs) · [工作区信任与 ACL 准备](../../TinyHarness.Cli/Services/WorkspaceAccessCoordinator.cs) · [现行目录授权说明](windows-sandbox-management.md#工作区信任与目录授权)
 
 ## 2. 目标与实现
 
@@ -18,3 +18,8 @@
 - 在普通账户能准备 ACL 的隔离目录执行首条 workspace-write Shell，确认普通权限准备后成功启动，且没有 UAC。后续调用可重用准备结果。
 - 在普通账户不能准备 ACL 的隔离目录，确认失败只影响该操作，报告指向问题目录，命令未启动。分别验证显式修复的成功、拒绝、取消和结果未知分支，以及非交互调用没有 UAC。
 - 用真实 Windows 隔离环境确认实际写边界。对话启动、授权时机和失败状态用定向离线测试覆盖。
+
+## 4. 2026-11-25 验收边界
+
+- **已验证**：定向离线测试（`WorkspaceAccessTests` 等 65/65 通过）覆盖启动零 ACL/UAC、普通权限首次准备/缓存复用/策略与身份变化重验、普通权限失败（交互与非交互无 UAC）、刷新后 ACL 失败及 `/trust` `[a]` 显式修复全部终态分支；真机 Windows 实测覆盖新目录启动信任与只读工具零 ACL/UAC、普通可写目录首次可写 Shell 无 UAC 自动准备与复用、实际写边界拦截、以及 `/trust` `[a]` 已就绪核验。
+- **未在真机实测**：受阻目录（普通账户无权限修改 ACL）触发真实 Windows UAC 弹窗修复流（仅离线单测覆盖）。

@@ -6,18 +6,20 @@
 
 ## 当前活动计划
 
-- [Windows 沙箱可用性收口计划](Docs/windows-sandbox-readiness-plan.md) 是当前沙箱工作的优先项。OS 沙箱层收敛回与 Codex 对齐的定位（按工作区隔离写、控网络、全机统一固定读底线；应用层内置工具按会话控权），按顺序推进 4 步：Rust fork 清理实验残局并收口旧路径撤销／错误链补丁 → CLI 统一切换顶层读根与固定拒读 → [CLI 工作区 ACL 按需准备](Docs/cli-workspace-acl-preparation-plan.md) → 真实 Windows 端到端验收。原[Windows 沙箱读取策略与会话隔离](Docs/Archive/desktop-sandbox-scan-and-no-project-isolation-plan.md)已归档，其中每会话 OS 级读隔离退出当前范围。
-- [会话存储治理与删除优化](Docs/session-storage-plan.md)：S1、S2 已实施；S3 已于 2026-11-15 冻结业务 schema（`session-store.db` 版本 1）与版本化建库／升级基础；S4 已于 2026-11-15 实施分批导入、迁移标记与按批次切换生产权威（组织状态/项目目录册/会话归属），并补齐备份、校验与恢复入口、CLI 显式迁移命令与离线 smoke；2026-11-17 修复 S4 静态审查发现的 5 项缺陷（运行中宿主解绑绕开业务库、阻塞状态回退历史归属、外键损坏备份先覆盖再报错、索引更新未叠加业务库归属、续聊覆盖并发归属）、备份恢复中业务库 WAL／SHM 清理失败被当作成功的缺陷，以及追加复审发现的两项（WAL 隔离后进程退出缺少恢复机制、替换失败时忽略日志复原失败；见专项计划第 5.8 节）。同日复审追加恢复记录文件角色校验，堵住"结构合法但把业务库或会话日志写成副本／隔离名"会被删除的路径（第 5.8.1 节）。S5 已于 2026-11-17 实施业务库 schema 版本 2（会话删除墓碑）、可续作的会话删除与迁移后项目删除单事务（第 6 节）；读取与对账按墓碑排除已删除会话，中断删除由恢复入口续作。同日修复 S5 静态审查发现的 4 项缺陷：v1 业务库改由显式迁移入口在租约内就地升级（迁移标记已完成的 store 与未完成的续作都覆盖，升级前生产读写一律拒绝）、投影清理未完成时保留待续作墓碑、迁移后项目删除把实际解绑的会话 ID 交给宿主、日志已消失的墓碑索引行改由孤儿清理移除。迁移未对真实用户 store 执行，真实 GUI、双进程并发恢复与断电现场验收仍待授权；既有"进程终止"覆盖是同一测试进程内的状态构造与文本 WAL 夹具，不含真实子进程终止与 SQLite WAL 重放。范围、迁移协议与未验证边界见专项计划第 4–6 节。
+当前无进行中的专项实施计划；后续待排项见下节。
 
 ## 后续方案
 
-- 无项目会话独立工具目录（写目录与内置文件工具隔离）及新平台沙箱后端评估（如 Windows 11 24H2+ MXC），待[Windows 沙箱可用性收口计划](Docs/windows-sandbox-readiness-plan.md)完成后再安排。
+- **沙箱自有运行时临时写根（`windows-sandbox-*-home\tmp`）历史子项继承自愈／清理**：2026-11-25 真机验收发现，当 `AppData` 等上层目录新增继承 ACE（如顶层读根刷新）时，`tmp` 下残留的历史旧子目录若未同步继承 ACE，会触发刷新后写继承校验（`WorkspaceAclInheritance.ValidateAsync`）fail-closed 并阻断工作区 Shell 启动（清空 `tmp` 后恢复）。后续安排针对沙箱自有 `tmp` 写根的继承同步或安全清理机制。
+- 无项目会话独立工具目录（写目录与内置文件工具隔离）及新平台沙箱后端评估（如 Windows 11 24H2+ MXC）。
 
 ## 文档入口
 
 - 使用方式与已知限制：[英文 README](README.md)、[中文 README](Docs/README.md)。
 - 文档分类与导航：[中文 README 文档导航](Docs/README.md#documentation)。
 - 旧计划、设计与阶段记录：[Archive 索引](Docs/Archive/README.md)。
+- [Windows 沙箱可用性收口计划](Docs/Archive/windows-sandbox-readiness-plan.md) 与 [CLI 工作区 ACL 按需准备](Docs/Archive/cli-workspace-acl-preparation-plan.md) 已于 2026-11-25 完成实施与主闭环真机验收并归档（残留的受阻目录真实 UAC 与已删除旧路径真实簿记清理未真机实测，保留于归档边界记录）。
+- [会话存储治理与删除优化](Docs/Archive/session-storage-plan.md) 已于 2026-11-25 归档（S1–S5 实施、审查修复与离线／NativeAOT smoke 已于 2026-11-17 完成；真实用户 store 迁移、真实 GUI、双进程并发恢复与断电现场验收仍待授权，保留于归档边界记录）。
 - 权限架构重构已归档。三级执行体系与延迟沙箱初始化仍以[权限契约](Docs/Archive/permission-architecture-plan.md#permission-product-contract)为准，C2 和双进程隔离的结果见[真机验收记录](Docs/Archive/permission-architecture-plan.md#c2-v7-acceptance-2026-11-19)。
 - 历史总计划：[MVP／M1–M11](Docs/Archive/PAST_PLAN.md#m1-m11)、[M12–M17](Docs/Archive/PAST_PLAN.md#m12-m17)。
 - 本轮移入归档的旧计划：[桌面 GUI 迁移](Docs/Archive/desktop-migration-plan.md)、[供应商与模型选择](Docs/Archive/session-model-switching-design.md)、[项目与会话](Docs/Archive/project-session-plan.md)。原未完成项和未验证范围保留在各文档中，多目录执行仍属另行实施范围。
