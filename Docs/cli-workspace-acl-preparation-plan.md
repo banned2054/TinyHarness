@@ -1,6 +1,6 @@
 # CLI 工作区 ACL 按需准备
 
-**状态：后续事项，非首要任务，待安排。** 当前优先项是[按会话隔离 Windows 沙箱读取权限](desktop-sandbox-scan-and-no-project-isolation-plan.md#windows-sandbox-session-isolation)。CLI 工作区 ACL 体验单独设计和验收。
+**状态：已纳入当前收口计划（第 3 步）。** 见 [Windows 沙箱可用性收口计划](windows-sandbox-readiness-plan.md)。本文保留 CLI 工作区 ACL 按需准备的具体设计与验收细则。
 
 ## 1. 当前行为
 

@@ -2,7 +2,7 @@
 
 本文件规定编码 Agent 在本仓库中的操作方式。使用方式与已知限制位于中英文 README；旧计划、设计与验收记录统一从 [Docs/Archive/](Docs/Archive/README.md) 查阅，历史总计划见 [PAST_PLAN.md](Docs/Archive/PAST_PLAN.md)。
 
-文档导航位于[中文 README](Docs/README.md#documentation)。`Docs/` 顶层只保留中文 README、代码风格、更新日志和正在实施的单项计划；已完成或退出当前实施范围的旧计划与设计移入 [Docs/Archive/](Docs/Archive/README.md)，不因残留未验收项长期保留在顶层。归档时保留未完成项与验证边界，不等同于宣布完成。持续使用的发布与许可维护说明放入 `Docs/Guides/`。归档不取消仍有效的技术约束；历史记录不作为当前状态或新任务。
+文档导航位于[中文 README](Docs/README.md#documentation)。`Docs/` 顶层只保留中文 README、代码风格、更新日志和正在实施的单项计划；已完成或退出当前实施范围的旧计划与设计移入 [Docs/Archive/](Docs/Archive/README.md)，不因残留未验收项长期保留在顶层。归档时保留未完成项与验证边界，不等同于宣布完成。`Docs/Archive/` 下的已归档文档仅作历史记录，归档后禁止修改（仅在执行新文档归档搬迁时允许更新 `Docs/Archive/README.md` 索引，或按用户明确指令修改）；新进展、状态更新与验收记录一律写入当前活动计划，不得回写已归档文件。持续使用的发布与许可维护说明放入 `Docs/Guides/`。归档不取消仍有效的技术约束；历史记录不作为当前状态或新任务。
 
 在规划或实施项目变更前，必须完整阅读 [PLAN.md](PLAN.md) 的当前入口，并读取与任务相关的设计或单项计划。活动计划与状态由该入口导航，不在本文件复制阶段待办；历史计划不自动产生下一步任务，也不构成实施授权。本文件只定义操作边界与长期工作规则。
 

@@ -18,6 +18,7 @@
 | [项目实体、会话归属与多目录扩展](project-session-plan.md) | 项目、归属、侧栏与跨进程同步已接入；阶段四综合验收未完成，多目录执行另行实施 |
 | [Phase 2 沙箱联网与开发工具链报告](phase2-codex-sandbox-report.md) | 2026-11-06 阶段快照；保留 TLS 阻断、代理限制、测试结果和后续建议，不作为当前权限契约 |
 | [权限架构重构](permission-architecture-plan.md) | 2026-11-19 归档，保留现行三级权限契约与 C2 真机结果。真实沙箱综合验收、GUI 和真实 Reviewer 验收仍有未完成项 |
+| [Windows 沙箱读取策略与会话隔离](desktop-sandbox-scan-and-no-project-isolation-plan.md) | 2026-11-25 归档；第 1 节顶层读根与 WP5／WP6 记录保留；§2.3-1 补丁转入[可用性收口计划](../windows-sandbox-readiness-plan.md)，§2.3-2 每会话 OS 读隔离因实验证伪与定位收敛退出当前范围 |
 
 活动计划见 [PLAN.md](../../PLAN.md)。
 

@@ -1,17 +1,17 @@
 # TinyHarness.NET 计划入口
 
-更新日期：2026-11-24。
+更新日期：2026-11-25。
 
 项目当前处于预览阶段，已发布版本见[更新日志](Docs/CHANGELOG.md)。本页维护当前活动计划、后续方案和文档入口。
 
 ## 当前活动计划
 
-- [Windows 沙箱读取策略与会话隔离](Docs/desktop-sandbox-scan-and-no-project-isolation-plan.md) 的[第 2 节](Docs/desktop-sandbox-scan-and-no-project-isolation-plan.md#windows-sandbox-session-isolation)是当前沙箱工作的优先项。第 1 节的顶层读根与精确拒读工作已收尾，WP5／WP6 验收结果及当时未覆盖的范围保留在第 1.6 节。新一轮先修复旧路径缺失导致的首次 Shell 启动失败，再使 Windows 沙箱读取权限按执行会话独立生效。无项目会话的独立工具目录在第 3 节，依赖第 2 节。
+- [Windows 沙箱可用性收口计划](Docs/windows-sandbox-readiness-plan.md) 是当前沙箱工作的优先项。OS 沙箱层收敛回与 Codex 对齐的定位（按工作区隔离写、控网络、全机统一固定读底线；应用层内置工具按会话控权），按顺序推进 4 步：Rust fork 清理实验残局并收口旧路径撤销／错误链补丁 → CLI 统一切换顶层读根与固定拒读 → [CLI 工作区 ACL 按需准备](Docs/cli-workspace-acl-preparation-plan.md) → 真实 Windows 端到端验收。原[Windows 沙箱读取策略与会话隔离](Docs/Archive/desktop-sandbox-scan-and-no-project-isolation-plan.md)已归档，其中每会话 OS 级读隔离退出当前范围。
 - [会话存储治理与删除优化](Docs/session-storage-plan.md)：S1、S2 已实施；S3 已于 2026-11-15 冻结业务 schema（`session-store.db` 版本 1）与版本化建库／升级基础；S4 已于 2026-11-15 实施分批导入、迁移标记与按批次切换生产权威（组织状态/项目目录册/会话归属），并补齐备份、校验与恢复入口、CLI 显式迁移命令与离线 smoke；2026-11-17 修复 S4 静态审查发现的 5 项缺陷（运行中宿主解绑绕开业务库、阻塞状态回退历史归属、外键损坏备份先覆盖再报错、索引更新未叠加业务库归属、续聊覆盖并发归属）、备份恢复中业务库 WAL／SHM 清理失败被当作成功的缺陷，以及追加复审发现的两项（WAL 隔离后进程退出缺少恢复机制、替换失败时忽略日志复原失败；见专项计划第 5.8 节）。同日复审追加恢复记录文件角色校验，堵住"结构合法但把业务库或会话日志写成副本／隔离名"会被删除的路径（第 5.8.1 节）。S5 已于 2026-11-17 实施业务库 schema 版本 2（会话删除墓碑）、可续作的会话删除与迁移后项目删除单事务（第 6 节）；读取与对账按墓碑排除已删除会话，中断删除由恢复入口续作。同日修复 S5 静态审查发现的 4 项缺陷：v1 业务库改由显式迁移入口在租约内就地升级（迁移标记已完成的 store 与未完成的续作都覆盖，升级前生产读写一律拒绝）、投影清理未完成时保留待续作墓碑、迁移后项目删除把实际解绑的会话 ID 交给宿主、日志已消失的墓碑索引行改由孤儿清理移除。迁移未对真实用户 store 执行，真实 GUI、双进程并发恢复与断电现场验收仍待授权；既有"进程终止"覆盖是同一测试进程内的状态构造与文本 WAL 夹具，不含真实子进程终止与 SQLite WAL 重放。范围、迁移协议与未验证边界见专项计划第 4–6 节。
 
 ## 后续方案
 
-- [CLI 工作区 ACL 按需准备](Docs/cli-workspace-acl-preparation-plan.md) 是后续事项，非首要任务。待安排将目录 ACL 准备从打开对话移到首次需要可写沙箱 Shell 时。
+- 无项目会话独立工具目录（写目录与内置文件工具隔离）及新平台沙箱后端评估（如 Windows 11 24H2+ MXC），待[Windows 沙箱可用性收口计划](Docs/windows-sandbox-readiness-plan.md)完成后再安排。
 
 ## 文档入口
 

@@ -1,6 +1,8 @@
-# Windows 沙箱读取策略与会话隔离
+# Windows 沙箱读取策略与会话隔离（已归档）
 
-当前优先项是[按会话隔离 Windows 沙箱读取权限](#windows-sandbox-session-isolation)。第 1 节保留 Desktop 顶层读根与精确拒读的原轮记录，第 3 节安排无项目会话的独立工具目录。CLI 初次进入目录时的 ACL 授权体验另见[后续计划](cli-workspace-acl-preparation-plan.md)。
+> **2026-11-25 归档说明**：当前活动计划已切换为 [Windows 沙箱可用性收口计划](../windows-sandbox-readiness-plan.md)。第 1 节顶层读根实施记录与未验证边界原样保留；§2.3-1 的两份 Rust fork 补丁（缺失旧路径视为已清理、`setup_error.json` 完整错误链）转入新版计划继续收口；§2.3-2（每会话 OS 级并发不同读策略）经实测证伪原轻量候选且定位收敛回与 Codex 对齐的"全机统一固定读底线 + 按工作区隔离写"，退出当前实施范围；第 3 节（无项目会话独立工具目录）不再绑定每会话 OS 读隔离，留作后续事项。
+
+原说明：当前优先项是[按会话隔离 Windows 沙箱读取权限](#windows-sandbox-session-isolation)。第 1 节保留 Desktop 顶层读根与精确拒读的原轮记录，第 3 节安排无项目会话的独立工具目录。CLI 初次进入目录时的 ACL 授权体验另见[后续计划](../cli-workspace-acl-preparation-plan.md)。
 
 ## 1. 顶层读根与精确拒读（原轮记录）
 
@@ -8,7 +10,7 @@
 
 当前 Desktop 首次 workspace Shell 在生成 OS 拒读集合时递归枚举用户 profile。取消原 500,000 条目上限并加入默认 10 分钟预算后，2026-11-21 的无项目生产入口验收在枚举 3,737,580 条时超时，Shell 未启动。该结果验证了准备失败时不会启动命令，有项目组未运行，生产入口的普通文件可读和敏感文件拒读均未完成正反对照。
 
-本轮覆盖启用 Windows 沙箱的 Desktop 有项目和无项目会话。保留 [L1／L2／L3 执行层级、审批和网络契约](Archive/permission-architecture-plan.md#permission-product-contract)。本轮修改的是 L1 的 OS 读取策略。CLI 现有扫描及启动流程暂时保留，两端共享的后端拒读状态纳入兼容性验收。
+本轮覆盖启用 Windows 沙箱的 Desktop 有项目和无项目会话。保留 [L1／L2／L3 执行层级、审批和网络契约](permission-architecture-plan.md#permission-product-contract)。本轮修改的是 L1 的 OS 读取策略。CLI 现有扫描及启动流程暂时保留，两端共享的后端拒读状态纳入兼容性验收。
 
 ### 1.2 新读取策略
 
@@ -32,7 +34,7 @@
 
 1. **先定义顶层读根与拒读的配对。** 让 Desktop 的策略生成与冻结执行计划共享同一结果。调整组合校验，支持给已经排除出默认读根的路径显式下发拒读。策略身份记录实际读根和拒读集合，配置复核沿用现有失效规则，避免每次消息或审批都枚举文件系统。
 2. **验证固定 Windows 组件能否落实该策略。** 当前 runner 使用 `WRITE_RESTRICTED`，helper 授予共享沙箱组的读 ACL 会持续存在。缩小 `read_roots` 不能撤销旧授权。拒读集合又按安全主体同步，Desktop 和 CLI 如果共享主体及拒读状态，交替 refresh 可能撤掉另一端正在依赖的拒读项。先用已配置沙箱的隔离环境验证旧 ACL、关闭继承的子目录、真实落点和两端并行行为。固定组件无法维持覆盖时，在切换正式入口前补齐主体隔离或拒读状态协调能力。机器 ACL 修复、组件部署和真实环境操作分别授权。
-3. **切换 Desktop 正常入口，收尾旧扫描接线。** 有项目和无项目的首次 workspace Shell 都走新策略。在拒读已生效后启动 runner，保持取消、失败不运行命令及不回退宿主的行为。CLI 初次聊天时的 UAC 提示归[独立后续计划](cli-workspace-acl-preparation-plan.md)。
+3. **切换 Desktop 正常入口，收尾旧扫描接线。** 有项目和无项目的首次 workspace Shell 都走新策略。在拒读已生效后启动 runner，保持取消、失败不运行命令及不回退宿主的行为。CLI 初次聊天时的 UAC 提示归[独立后续计划](../cli-workspace-acl-preparation-plan.md)。
 
 ### 1.5 验收
 
@@ -155,7 +157,7 @@ WP6 `cap_sid` 写侧持门与门外读收口轮（2026-11-22 至 2026-11-23；�
 ### 2.2 目标与范围
 
 - Windows 必须按各活动会话的策略执行读取权限。Desktop 有项目、无项目及使用同一后端的 CLI 都在范围内。不同会话可以同时对同一测试文件得到各自策略所要求的不同读取结果。
-- C1 等通用保护对所有会话生效。保留普通文件的 L1 读取体验、现行写根和网络边界、L2 的授权范围与撤销规则，以及 [L3 显式宿主审批](Archive/permission-architecture-plan.md#permission-product-contract)。本节落实读取隔离，第 3 节接入无项目会话的独立工具目录。
+- C1 等通用保护对所有会话生效。保留普通文件的 L1 读取体验、现行写根和网络边界、L2 的授权范围与撤销规则，以及 [L3 显式宿主审批](permission-architecture-plan.md#permission-product-contract)。本节落实读取隔离，第 3 节接入无项目会话的独立工具目录。
 - 会话宿主保存有效策略。实际命令使用与该策略绑定的执行身份或令牌。恢复会话时按当前归属和可信配置重新核验，已失效的授权不能恢复。结束、取消或宿主异常退出时，按已确认的进程退出状态回收该执行实例的保护和状态。
 
 ### 2.3 实施顺序
@@ -175,6 +177,14 @@ WP6 `cap_sid` 写侧持门与门外读收口轮（2026-11-22 至 2026-11-23；�
 | 恢复与回收 | A 停止后启动 B，再恢复 A。每次以当前策略重新核验权限。覆盖会话取消和未确认子进程退出的情况，回收范围只包含可确认归属且已结束的执行实例。 |
 | 公共保护与升级 | 预置旧共享读 ACL，再验证 C1、有效写根及网络边界。C2 仅在批准的会话和范围内生效，结束后恢复保护。覆盖链接真实落点及旧组件能力不匹配时的失败行为。 |
 | 回归与产物 | 跑受影响的 Rust 和 .NET 定向测试、CLI 与 Desktop 的 NativeAOT 发布及产物 smoke。单独记录真实 Windows 权限效果的验收结果。 |
+
+### 2.5 归档前实测结论（2026-11-24 至 2026-11-25）
+
+- **§2.3-1（已完成补丁与隔离夹具验证，转入新计划收口）**：Rust fork 新增缺失目标处理（`revoke_read_deny_aces` 对 raw error 2/3 返回成功）与 `setup_error.json` 完整错误链（`{err:#}`）；单测与隔离夹具真 helper 验证（A1/A2/B1/B2）通过（证据见 `.tmp/2026-11-24-session-read-isolation/`）。
+- **§2.3-2（原轻量方案证伪，退出当前实施范围）**：
+  1. `SetTokenInformation(TokenGroups)` 无法向进程令牌注入新组 SID：自定义授权机构、域形态、logon 形态及"将现有 13 个组原样回写"的对照组均返回 Win32 错误 87。
+  2. `CreateProcessWithLogonW` 复用宿主 logon SID：宿主进程与两次 runner 子令牌的 logon SID 完全相同（`S-1-5-5-0-2812703922`），不能作为每会话独立身份（且本机 `whoami /groups` 不列出 logon SID）。
+  3. 后续决定不再为当前 Codex fork 底座引入提权独立登录会话或全盘读白名单，OS 层收敛为与 Codex 一致的"全机统一固定读底线 + 按工作区写隔离"，转由 [Windows 沙箱可用性收口计划](../windows-sandbox-readiness-plan.md) 推进。
 
 ## 3. 无项目会话独立工具目录（后续）
 
