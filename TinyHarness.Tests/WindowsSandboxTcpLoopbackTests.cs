@@ -21,7 +21,7 @@ public class WindowsSandboxTcpLoopbackTests
     [TestCase(false, true)]
     [TestCase(true, false)]
     [TestCase(true, true)]
-    public async Task TrustedSettings_RoundTripBothEnvironmentBindingBranches(bool enabled, bool extras)
+    public async Task TrustedSettings_AlwaysKeepTwoStateNetworkAndNeverPersistLoopback(bool enabled, bool extras)
     {
         using var directory = new TestTempDir();
         var       path      = Path.Combine(directory.Root, "user-config.json");
@@ -38,19 +38,24 @@ public class WindowsSandboxTcpLoopbackTests
             }
         }, CancellationToken.None);
         var loaded = await UserConfigStore.LoadAsync(path, CancellationToken.None);
-        Assert.That(loaded.Settings!.WindowsSandbox!.AllowTcpLoopback, Is.EqualTo(enabled));
+        Assert.That(loaded.Settings!.WindowsSandbox!.AllowTcpLoopback, Is.False);
+        Assert.That(await File.ReadAllTextAsync(path), Does.Not.Contain("allowTcpLoopback"));
         Assert.That(new WindowsSandboxSettings().AllowTcpLoopback, Is.False);
     }
 
+    [TestCase("true")]
+    [TestCase("false")]
     [TestCase("1")]
     [TestCase("\"true\"")]
-    [TestCase("{}")]
-    public async Task TrustedSettings_RejectsNonBooleanOptIn(string value)
+    public async Task TrustedSettings_IgnoresLegacyLoopbackField(string value)
     {
         using var directory = new TestTempDir();
         var path = directory.WriteFile("user-config.json",
-                                       "{\"settings\":{\"windowsSandbox\":{\"allowTcpLoopback\":" + value + "}}}");
-        await Assert.ThrowsAsync<InvalidDataException>(() => UserConfigStore.LoadAsync(path, CancellationToken.None));
+                                       "{\"settings\":{\"windowsSandbox\":{\"enabled\":true,\"allowTcpLoopback\":" +
+                                       value + "}}}");
+        var loaded = await UserConfigStore.LoadAsync(path, CancellationToken.None);
+        Assert.That(loaded.Settings!.WindowsSandbox!.Enabled, Is.True);
+        Assert.That(loaded.Settings.WindowsSandbox.AllowTcpLoopback, Is.False);
     }
 
     [Test]

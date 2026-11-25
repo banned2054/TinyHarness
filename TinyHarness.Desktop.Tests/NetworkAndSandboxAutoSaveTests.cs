@@ -102,8 +102,7 @@ public sealed class NetworkAndSandboxAutoSaveTests
         var sandbox = new WindowsSandboxSettingsViewModel(path);
         await sandbox.LoadAsync();
         var root = Path.GetDirectoryName(path)!;
-        sandbox.Enabled          = true;
-        sandbox.AllowTcpLoopback = true;
+        sandbox.Enabled = true;
         sandbox.SelectedNetworkPolicy =
             sandbox.NetworkPolicyOptions.Single(option => option.Policy == SandboxNetworkPolicy.Enabled);
         sandbox.SelectedProxyMode = sandbox.ProxyModeOptions.Single(option => option.Mode == SandboxProxyMode.Named);
@@ -116,7 +115,7 @@ public sealed class NetworkAndSandboxAutoSaveTests
         var settings = saved.Settings!.WindowsSandbox!;
         Assert.That(sandbox.HasAutoSaveError, Is.False, sandbox.Notice);
         Assert.That(settings.Enabled, Is.True);
-        Assert.That(settings.AllowTcpLoopback, Is.True);
+        Assert.That(settings.AllowTcpLoopback, Is.False);
         Assert.That(settings.NetworkPolicy, Is.EqualTo(SandboxNetworkPolicy.Enabled));
         Assert.That(settings.Proxy.ProxyName, Is.EqualTo("Second proxy"));
         Assert.That(settings.AdditionalReadRoots, Is.EqualTo(new[] { Path.Combine(root, "read-root") }));

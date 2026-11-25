@@ -7,9 +7,9 @@ using TinyHarness.Core.Services.Permissions;
 namespace TinyHarness.Desktop.ViewModels;
 
 /// <summary>
-///     <para>编辑可信的 Windows 沙箱设置：启用、网络策略、环回、代理与额外读写范围。</para>
+///     <para>编辑可信的 Windows 沙箱设置：启用、网络策略、代理与额外读写范围。</para>
 ///     <para>
-///         Edits the trusted Windows sandbox settings: enablement, network policy, loopback,
+///         Edits the trusted Windows sandbox settings: enablement, network policy,
 ///         proxy, and additional read/write roots.
 ///     </para>
 /// </summary>
@@ -18,7 +18,6 @@ public sealed class WindowsSandboxSettingsViewModel : SettingsSectionViewModel
     private readonly SettingsAutoSaveQueue       _autoSave;
     private readonly string                      _path;
     private readonly Func<Task>                  _refresh;
-    private          bool                        _allowTcpLoopback;
     private          UserConfig                  _baseline = new();
     private          bool                        _enabled;
     private          string                      _environmentText = string.Empty;
@@ -98,15 +97,6 @@ public sealed class WindowsSandboxSettingsViewModel : SettingsSectionViewModel
         set
         {
             if (value is not null && SetProperty(ref _selectedNetworkPolicy, value)) QueueAutoSave();
-        }
-    }
-
-    public bool AllowTcpLoopback
-    {
-        get => _allowTcpLoopback;
-        set
-        {
-            if (SetProperty(ref _allowTcpLoopback, value)) QueueAutoSave();
         }
     }
 
@@ -262,7 +252,7 @@ public sealed class WindowsSandboxSettingsViewModel : SettingsSectionViewModel
         var sandbox = saved with
         {
             Enabled = Enabled,
-            AllowTcpLoopback = AllowTcpLoopback,
+            AllowTcpLoopback = false,
             NetworkPolicy = SelectedNetworkPolicy.Policy,
             Proxy = SelectedProxyMode.Mode == SandboxProxyMode.Named
                 ? new SandboxProxyPolicy { Mode = SandboxProxyMode.Named, ProxyName = _proxyName }
@@ -300,11 +290,10 @@ public sealed class WindowsSandboxSettingsViewModel : SettingsSectionViewModel
     private void ApplySavedSettings(UserConfig config)
     {
         var sandbox = config.Settings?.WindowsSandbox ?? new WindowsSandboxSettings();
-        _enabled          = sandbox.Enabled;
-        _allowTcpLoopback = sandbox.AllowTcpLoopback;
-        _proxyName        = sandbox.Proxy.ProxyName;
-        _readRootsText    = string.Join(Environment.NewLine, sandbox.AdditionalReadRoots);
-        _writeRootsText   = string.Join(Environment.NewLine, sandbox.AdditionalWriteRoots);
+        _enabled        = sandbox.Enabled;
+        _proxyName      = sandbox.Proxy.ProxyName;
+        _readRootsText  = string.Join(Environment.NewLine, sandbox.AdditionalReadRoots);
+        _writeRootsText = string.Join(Environment.NewLine, sandbox.AdditionalWriteRoots);
         _environmentText = sandbox.ExtraEnvironment is { } environment
             ? string.Join(Environment.NewLine, environment.Select(pair => $"{pair.Key}={pair.Value}"))
             : string.Empty;
@@ -315,7 +304,6 @@ public sealed class WindowsSandboxSettingsViewModel : SettingsSectionViewModel
         OnPropertyChanged(nameof(SelectedProxyMode));
         OnPropertyChanged(nameof(IsNamedProxyMode));
         OnPropertyChanged(nameof(Enabled));
-        OnPropertyChanged(nameof(AllowTcpLoopback));
         OnPropertyChanged(nameof(ReadRootsText));
         OnPropertyChanged(nameof(WriteRootsText));
         OnPropertyChanged(nameof(EnvironmentText));

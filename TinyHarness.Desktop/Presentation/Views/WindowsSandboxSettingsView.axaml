@@ -38,18 +38,6 @@
                         </ComboBox>
                     </Grid>
                 </Border>
-                <Border Classes="settings-row">
-                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
-                        <StackPanel Spacing="4">
-                            <TextBlock Classes="settings-card-title" Text="允许 TCP 环回" />
-                            <TextBlock Text="允许访问宿主本地 TCP 服务；外部网络与 UDP 仍被阻断。"
-                                       TextWrapping="Wrap" FontSize="12"
-                                       Foreground="{DynamicResource PopupMutedForegroundBrush}" />
-                        </StackPanel>
-                        <ToggleSwitch Grid.Column="1" IsChecked="{Binding AllowTcpLoopback}" VerticalAlignment="Center"
-                                      AutomationProperties.Name="允许 TCP 环回" />
-                    </Grid>
-                </Border>
                 <Border Classes="settings-row last">
                     <StackPanel Spacing="8">
                         <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">

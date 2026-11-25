@@ -549,8 +549,6 @@ public static class UserConfigStore
             if (settings.WindowsSandbox is { } sandbox)
             {
                 var sandboxNode = new JsonObject();
-                if (sandbox.AllowTcpLoopback)
-                    sandboxNode["allowTcpLoopback"] = true;
                 if (sandbox.Enabled)
                     sandboxNode["enabled"] = true;
                 if (!string.IsNullOrWhiteSpace(sandbox.SetupExecutablePath))
@@ -1033,12 +1031,12 @@ public static class UserConfigStore
         var additionalReadRoots = BindAdditionalReadRoots(sandboxNode, filePath);
 
         IReadOnlyDictionary<string, string>? extraEnvironment = null;
+        // 沙箱网络固定为两态（全断网 / 全联网），忽略旧配置中残留的 allowTcpLoopback。
         if (sandboxNode["extraEnvironment"] is null)
             return new WindowsSandboxSettings
             {
-                Enabled = ReadBool(sandboxNode, "enabled", filePath, "settings.windowsSandbox.enabled") ?? false,
-                AllowTcpLoopback = ReadBool(sandboxNode, "allowTcpLoopback", filePath,
-                                            "settings.windowsSandbox.allowTcpLoopback") ?? false,
+                Enabled              = ReadBool(sandboxNode, "enabled", filePath, "settings.windowsSandbox.enabled") ?? false,
+                AllowTcpLoopback     = false,
                 SetupExecutablePath  = ReadString(sandboxNode, "setupExecutablePath", filePath)  ?? string.Empty,
                 RunnerExecutablePath = ReadString(sandboxNode, "runnerExecutablePath", filePath) ?? string.Empty,
                 SandboxHome          = ReadString(sandboxNode, "sandboxHome", filePath)          ?? string.Empty,
@@ -1072,10 +1070,8 @@ public static class UserConfigStore
 
         return new WindowsSandboxSettings
         {
-            Enabled = ReadBool(sandboxNode, "enabled", filePath, "settings.windowsSandbox.enabled") ?? false,
-            AllowTcpLoopback =
-                ReadBool(sandboxNode, "allowTcpLoopback", filePath, "settings.windowsSandbox.allowTcpLoopback") ??
-                false,
+            Enabled              = ReadBool(sandboxNode, "enabled", filePath, "settings.windowsSandbox.enabled") ?? false,
+            AllowTcpLoopback     = false,
             SetupExecutablePath  = ReadString(sandboxNode, "setupExecutablePath", filePath)  ?? string.Empty,
             RunnerExecutablePath = ReadString(sandboxNode, "runnerExecutablePath", filePath) ?? string.Empty,
             SandboxHome          = ReadString(sandboxNode, "sandboxHome", filePath)          ?? string.Empty,
