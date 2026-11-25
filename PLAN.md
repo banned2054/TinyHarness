@@ -1,16 +1,15 @@
 # TinyHarness.NET 计划入口
 
-更新日期：2026-11-25。
+更新日期：2026-11-26。
 
 项目当前处于预览阶段，已发布版本见[更新日志](Docs/CHANGELOG.md)。本页维护当前活动计划、后续方案和文档入口。
 
 ## 当前活动计划
 
-当前无进行中的专项实施计划；后续待排项见下节。
+- [沙箱运行时临时写根隔离与按契约校验计划（`runtime-tmp-v2`）](Docs/sandbox-runtime-temp-isolation-plan.md)：待实施（2026-11-26 设计已对齐）。采用每次 Shell 执行独占槽位、跨进程租约、受保护显式 DACL 与句柄绑定回收，使旧 `<sandboxHome>\tmp` 退出新命令热路径，并在普通预检与 C2 恢复路径保持一致的 fail-closed 契约。
 
 ## 后续方案
 
-- **沙箱自有运行时临时写根（`windows-sandbox-*-home\tmp`）历史子项继承自愈／清理**：2026-11-25 真机验收发现，当 `AppData` 等上层目录新增继承 ACE（如顶层读根刷新）时，`tmp` 下残留的历史旧子目录若未同步继承 ACE，会触发刷新后写继承校验（`WorkspaceAclInheritance.ValidateAsync`）fail-closed 并阻断工作区 Shell 启动（清空 `tmp` 后恢复）。后续安排针对沙箱自有 `tmp` 写根的继承同步或安全清理机制。
 - 无项目会话独立工具目录（写目录与内置文件工具隔离）及新平台沙箱后端评估（如 Windows 11 24H2+ MXC）。
 
 ## 文档入口
