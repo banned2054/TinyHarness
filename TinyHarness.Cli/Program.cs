@@ -52,6 +52,7 @@ internal static class Program
     /// </returns>
     public static async Task<int> Main(string[] args)
     {
+        ModelRequestDiagnosticLog.Initialize();
         try
         {
             return await DispatchAsync(args).ConfigureAwait(false);

@@ -38,7 +38,11 @@ public sealed partial class AgentLoop
         var streamedText = false;
         try
         {
-            await PublishEventAsync(HostEventKind.ModelRequestStarted, observation.Snapshot(), cancellationToken)
+            var started = observation.Snapshot();
+            ModelRequestDiagnosticLog.Event("model-request",
+                                            $"phase=started request={started.RequestNumber} summary={started.SummaryRequest} " +
+                                            $"estimatedInputTokens={started.EstimatedInputTokens} messages={started.InputMessageCount}");
+            await PublishEventAsync(HostEventKind.ModelRequestStarted, started, cancellationToken)
                .ConfigureAwait(false);
             await foreach (var value in ReadModelStreamAsync(request, observation, cancellationToken)
                               .ConfigureAwait(false))
@@ -57,9 +61,15 @@ public sealed partial class AgentLoop
                                   }
                                   : value);
                 if (observation.Observe(value))
-                    await PublishEventAsync(HostEventKind.ModelRequestActivity, observation.Snapshot(),
-                                            cancellationToken)
+                {
+                    var activity = observation.Snapshot();
+                    ModelRequestDiagnosticLog.Event("model-request",
+                                                    $"phase=activity request={activity.RequestNumber} streamPhase={activity.Phase} " +
+                                                    $"elapsedMs={activity.ElapsedMilliseconds} firstStreamEventMs={activity.FirstStreamEventMilliseconds} " +
+                                                    $"firstReasoningMs={activity.FirstReasoningMilliseconds} firstTextMs={activity.FirstTextMilliseconds}");
+                    await PublishEventAsync(HostEventKind.ModelRequestActivity, activity, cancellationToken)
                        .ConfigureAwait(false);
+                }
                 if (value.Kind == ChatStreamEventKind.End) ended = true;
                 if (publishTextDeltas && _events?.IncludeReasoningText == true &&
                     accumulator.ReasoningDisplayDelta is { Length: > 0 } reasoningDelta)
@@ -147,6 +157,10 @@ public sealed partial class AgentLoop
             }
             finally
             {
+                ModelRequestDiagnosticLog.Event("model-request",
+                                                $"phase=finished request={progress.RequestNumber} outcome={progress.Outcome} " +
+                                                $"elapsedMs={progress.ElapsedMilliseconds} firstStreamEventMs={progress.FirstStreamEventMilliseconds} " +
+                                                $"streamPhase={progress.Phase} inputTokens={progress.InputTokens} outputTokens={progress.OutputTokens}");
                 await PublishEventAsync(HostEventKind.ModelRequestFinished, progress, CancellationToken.None)
                    .ConfigureAwait(false);
             }
@@ -224,10 +238,15 @@ public sealed partial class AgentLoop
         PeriodicTimer timer, ModelRequestObservation observation, CancellationToken cancellationToken)
     {
         while (await timer.WaitForNextTickAsync(cancellationToken).ConfigureAwait(false))
+        {
+            var waiting = observation.Snapshot();
+            ModelRequestDiagnosticLog.Event("model-request",
+                                            $"phase=waiting request={waiting.RequestNumber} elapsedMs={waiting.ElapsedMilliseconds} " +
+                                            $"streamPhase={waiting.Phase} firstStreamEventMs={waiting.FirstStreamEventMilliseconds}");
             // 展示取消不能中断当前 MoveNext 的回收；请求令牌仍传给模型流，等待通知用 None 发布。
-            await PublishEventAsync(HostEventKind.ModelRequestWaiting, observation.Snapshot(),
-                                    CancellationToken.None)
+            await PublishEventAsync(HostEventKind.ModelRequestWaiting, waiting, CancellationToken.None)
                .ConfigureAwait(false);
+        }
     }
 
     /// <summary>

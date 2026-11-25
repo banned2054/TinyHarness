@@ -3,6 +3,9 @@ using OpenAI;
 using OpenAI.Chat;
 using OpenAI.Responses;
 using System.ClientModel;
+#if DEBUG
+using System.ClientModel.Primitives;
+#endif
 using TinyHarness.Core.Models.Configuration;
 using TinyHarness.Core.Services.ChatCompletions.Configuration;
 using TinyHarness.Core.Services.Runtime;
@@ -77,6 +80,9 @@ public static class ModelClientFactory
                 Transport      = transport.Transport,
                 NetworkTimeout = PerOperationTimeout(effectiveTimeouts)
             };
+#if DEBUG
+            options.AddPolicy(new ModelRetryDiagnosticPolicy(model, api), PipelinePosition.PerTry);
+#endif
             switch (api)
             {
                 case ChatApiKind.ChatCompletions :
@@ -93,6 +99,9 @@ public static class ModelClientFactory
                         Transport      = transport.Transport,
                         NetworkTimeout = PerOperationTimeout(effectiveTimeouts)
                     };
+#if DEBUG
+                    responsesOptions.AddPolicy(new ModelRetryDiagnosticPolicy(model, api), PipelinePosition.PerTry);
+#endif
                     var responsesClient = new ResponsesClient(new ApiKeyCredential(apiKey), responsesOptions);
                     return new MicrosoftAiChatClient(responsesClient.AsIChatClient(model), api, transport,
                                                      routeIdentity, effectiveTimeouts, null);
