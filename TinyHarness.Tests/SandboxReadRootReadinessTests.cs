@@ -40,6 +40,32 @@ public class SandboxReadRootReadinessTests
     };
 
     [SupportedOSPlatform("windows")]
+    private static void SetOwnerOnlyDacl(string directory)
+    {
+        var info     = new DirectoryInfo(directory);
+        var security = info.GetAccessControl(AccessControlSections.Access);
+        // 阻断来自 %TEMP% 父链的继承（例如本机已授予的 TinyHarnessUsers / BUILTIN\Users / Everyone 读 ACE），
+        // 仅保留当前用户、SYSTEM 与 Administrators 的完全控制，避免测试结论依赖宿主 %TEMP% ACL。
+        security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+        foreach (FileSystemAccessRule existing in security.GetAccessRules(true, false, typeof(SecurityIdentifier)))
+            security.RemoveAccessRuleSpecific(existing);
+
+        var currentUser = WindowsIdentity.GetCurrent().User
+                          ?? throw new InvalidOperationException("Cannot resolve current Windows user SID.");
+        var inheritance = InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit;
+        security.AddAccessRule(new FileSystemAccessRule(currentUser, FileSystemRights.FullControl, inheritance,
+                                                        PropagationFlags.None, AccessControlType.Allow));
+        security.AddAccessRule(new FileSystemAccessRule(new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null),
+                                                        FileSystemRights.FullControl, inheritance,
+                                                        PropagationFlags.None, AccessControlType.Allow));
+        security.AddAccessRule(new FileSystemAccessRule(new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid,
+                                                                               null),
+                                                        FileSystemRights.FullControl, inheritance,
+                                                        PropagationFlags.None, AccessControlType.Allow));
+        info.SetAccessControl(security);
+    }
+
+    [SupportedOSPlatform("windows")]
     private static void GrantAllowRead(string directory, IdentityReference identity)
     {
         var security = new DirectoryInfo(directory).GetAccessControl(AccessControlSections.Access);
@@ -71,6 +97,7 @@ public class SandboxReadRootReadinessTests
         }
 
         using var root = new TestTempDir();
+        SetOwnerOnlyDacl(root.Root);
         var readRoot = root.CreateDirectory("read-root");
         GrantAllowRead(readRoot, group);
 
@@ -89,8 +116,9 @@ public class SandboxReadRootReadinessTests
 
         // helper 对已有内置读跳过授予的形态：BUILTIN\Users 的 Allow 读 ACE（此处经父目录继承
         // 落到读根）即视为就绪，不要求沙箱组 ACE 在位。
-        using var root   = new TestTempDir();
-        var       parent = root.CreateDirectory("read-parent");
+        using var root = new TestTempDir();
+        SetOwnerOnlyDacl(root.Root);
+        var parent = root.CreateDirectory("read-parent");
         GrantAllowRead(parent, new SecurityIdentifier(WellKnownSidType.BuiltinUsersSid, null));
         var readRoot = root.CreateDirectory("read-parent/read-root");
 
@@ -108,6 +136,7 @@ public class SandboxReadRootReadinessTests
         }
 
         using var root = new TestTempDir();
+        SetOwnerOnlyDacl(root.Root);
         var readRoot = root.CreateDirectory("read-root");
         var granted  = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         _ = Task.Run(async () =>
@@ -136,6 +165,7 @@ public class SandboxReadRootReadinessTests
         }
 
         using var root = new TestTempDir();
+        SetOwnerOnlyDacl(root.Root);
         var missingGrant = root.CreateDirectory("no-grant");
         var vanished     = Path.Combine(root.Root, "never-existed");
 
