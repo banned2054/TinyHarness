@@ -1,12 +1,15 @@
+using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using TinyHarness.Core.Models.Configuration;
 using TinyHarness.Core.Models.Context;
 using TinyHarness.Core.Models.Persistence;
+using TinyHarness.Core.Models.Runtime.WindowsSandbox;
 using TinyHarness.Core.Models.Session;
 using TinyHarness.Core.Services.Context;
 using TinyHarness.Core.Services.Persistence;
+using TinyHarness.Core.Services.Runtime.WindowsSandbox;
 
 namespace TinyHarness.IndexProbe;
 
@@ -79,7 +82,8 @@ internal static class Program
             {
                 "create-log" or "append-log" or "hold-lock" or "catalog-create" => 3,
                 "write-summary"                                                 => 6,
-                "reconcile" or "list" or "corrupt-index"                        => 2,
+                "sandbox-provision-timeout"                                     => 5,
+                "reconcile" or "list" or "corrupt-index" or "sleep"             => 2,
                 "catalog-rename"                                                => 4,
                 _                                                               => 1
             };
@@ -93,11 +97,14 @@ internal static class Program
                 "list"       => await ListAsync(args[1]),
                 "write-summary" => await WriteSummaryAsync(args[1], args[2], args[3], args[4],
                                                            string.Join(' ', args.Skip(5))),
-                "hold-lock"      => await HoldLockAsync(args[1], ParsePositive(args, 2, "milliseconds")),
-                "corrupt-index"  => CorruptIndex(args[1]),
-                "catalog-create" => await CatalogCreateAsync(args[1], args[2]),
-                "catalog-rename" => await CatalogRenameAsync(args[1], args[2], string.Join(' ', args.Skip(3))),
-                _                => throw new ArgumentException($"Unknown probe mode '{args[0]}'.")
+                "hold-lock"                 => await HoldLockAsync(args[1], ParsePositive(args, 2, "milliseconds")),
+                "corrupt-index"             => CorruptIndex(args[1]),
+                "catalog-create"            => await CatalogCreateAsync(args[1], args[2]),
+                "catalog-rename"            => await CatalogRenameAsync(args[1], args[2], string.Join(' ', args.Skip(3))),
+                "sleep"                     => await SleepAsync(ParsePositive(args, 1, "milliseconds")),
+                "sandbox-provision-timeout" => await SandboxProvisionTimeoutAsync(args[1], args[2], args[3],
+                                                                                  ParsePositive(args, 4, "milliseconds")),
+                _                           => throw new ArgumentException($"Unknown probe mode '{args[0]}'.")
             };
         }
         catch (Exception ex)
@@ -332,4 +339,105 @@ internal static class Program
     private static DateTimeOffset TruncateToMilliseconds(DateTimeOffset value) =>
         new(value.UtcDateTime.Ticks - value.UtcDateTime.Ticks % TimeSpan.TicksPerMillisecond,
             TimeSpan.Zero);
+
+    private static async Task<int> SleepAsync(int milliseconds)
+    {
+        await Task.Delay(milliseconds).ConfigureAwait(false);
+        return 0;
+    }
+
+    /// <summary>
+    ///     <para>
+    ///         在独立子进程中执行一次会超时返回 NotFinished 的 <see cref="WindowsSandboxProvisioner.ProvisionAsync" />：
+    ///         启动真实子进程模拟仍在写 ACL 的提权 helper，超时后不杀除该写入者，打印其 PID 并立刻退出（退出码 1），
+    ///         用于验证子进程退出并放弃互斥体后跨进程保护仍持续到实际写入者确认退出。
+    ///     </para>
+    ///     <para>
+    ///         Runs a <see cref="WindowsSandboxProvisioner.ProvisionAsync" /> call that times out with
+    ///         NotFinished inside a separate child process: spawns a real sleeping child process simulating
+    ///         a still-running elevated helper, leaves it alive on timeout, prints its PID, and exits
+    ///         immediately (exit code 1) to verify cross-process protection survives CLI exit until the
+    ///         actual writer exits.
+    ///     </para>
+    /// </summary>
+    private static async Task<int> SandboxProvisionTimeoutAsync(
+        string sandboxHome, string workspaceRoot, string packageDir, int helperDurationMs)
+    {
+        var probeDll = Path.Combine(AppContext.BaseDirectory, "TinyHarness.IndexProbe.dll");
+        var elevator = new SpawningTimeoutElevator(probeDll, helperDurationMs);
+        var provisioner = new WindowsSandboxProvisioner(elevator, new GlobalDenyReadRefreshGate(),
+                                                        TimeSpan.FromSeconds(5));
+        var plan = provisioner.BuildPlan(new WindowsSandboxSettings { SandboxHome = sandboxHome },
+                                         workspaceRoot, Environment.UserName, packageDir);
+        var result = await provisioner.ProvisionAsync(plan, CancellationToken.None).ConfigureAwait(false);
+        if (result.Outcome != SandboxProvisionOutcome.NotFinished || elevator.SpawnedProcessId is not { } helperPid)
+            throw new InvalidOperationException($"Expected NotFinished with a spawned writer PID, got {result.Outcome}.");
+
+        Console.Out.WriteLine($"HELPER_PID={helperPid}");
+        Console.Out.Flush();
+        return 1;
+    }
+
+    private sealed class SpawningTimeoutElevator(string probeDllPath, int helperDurationMs) : ISandboxSetupElevator
+    {
+        public int? SpawnedProcessId { get; private set; }
+
+        public Task<SandboxSetupElevationResult> ElevateAsync(
+            WindowsSandboxComponents components, string base64Payload, CancellationToken cancellationToken) =>
+            ElevateCoreAsync(null);
+
+        public Task<SandboxSetupElevationResult> ElevateAsync(
+            WindowsSandboxComponents               components,
+            string                                 base64Payload,
+            Action<SandboxElevatedProcessIdentity> onProcessStarted,
+            CancellationToken                      cancellationToken) =>
+            ElevateCoreAsync(onProcessStarted);
+
+        private async Task<SandboxSetupElevationResult> ElevateCoreAsync(
+            Action<SandboxElevatedProcessIdentity>? onProcessStarted)
+        {
+            var startInfo = new ProcessStartInfo("dotnet")
+            {
+                UseShellExecute        = false,
+                CreateNoWindow         = true,
+                // 隔离标准流，避免模拟写入子进程继承父 CLI 子进程的 stdout/stderr 管道，
+                // 否则调用方 ReadToEndAsync 会一直阻塞到写入子进程结束。
+                RedirectStandardInput  = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError  = true
+            };
+            startInfo.ArgumentList.Add("exec");
+            startInfo.ArgumentList.Add(probeDllPath);
+            startInfo.ArgumentList.Add("sleep");
+            startInfo.ArgumentList.Add(helperDurationMs.ToString());
+
+            var process = Process.Start(startInfo)
+                          ?? throw new InvalidOperationException("Failed to start simulated helper writer process.");
+            SpawnedProcessId = process.Id;
+            var identity = SandboxElevatedProcessIdentity.TryCapture(process)
+                           ?? throw new InvalidOperationException("Failed to capture simulated writer process identity.");
+            onProcessStarted?.Invoke(identity);
+
+            // 短暂等待后按超时返回 NotFinished，不终止子进程，让其在当前 CLI 进程退出后继续存活。
+            await Task.Delay(50).ConfigureAwait(false);
+            var exitConfirmation = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
+                    exitConfirmation.TrySetResult(true);
+                }
+                catch
+                {
+                    exitConfirmation.TrySetResult(false);
+                }
+                finally
+                {
+                    process.Dispose();
+                }
+            });
+            return SandboxSetupElevationResult.DidNotFinish(exitConfirmation.Task, identity);
+        }
+    }
 }
