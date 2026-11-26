@@ -71,35 +71,6 @@
                 </Border>
             </StackPanel>
         </Border>
-        <TextBlock Classes="settings-group-title" Text="目录与环境" Margin="0,24,0,10" />
-        <Border Classes="settings-group">
-            <StackPanel>
-                <Border Classes="settings-row">
-                    <StackPanel Spacing="4">
-                        <TextBlock Classes="settings-card-title" Text="额外只读根" />
-                        <TextBlock Classes="settings-card-description" Text="一行一个绝对路径。" />
-                        <TextBox Classes="settings-input" Text="{Binding ReadRootsText}" AcceptsReturn="True"
-                                 MinHeight="56" Padding="10,6" TextWrapping="Wrap" VerticalContentAlignment="Top" />
-                    </StackPanel>
-                </Border>
-                <Border Classes="settings-row">
-                    <StackPanel Spacing="4">
-                        <TextBlock Classes="settings-card-title" Text="额外写根" />
-                        <TextBlock Classes="settings-card-description" Text="一行一个绝对路径。" />
-                        <TextBox Classes="settings-input" Text="{Binding WriteRootsText}" AcceptsReturn="True"
-                                 MinHeight="56" Padding="10,6" TextWrapping="Wrap" VerticalContentAlignment="Top" />
-                    </StackPanel>
-                </Border>
-                <Border Classes="settings-row last">
-                    <StackPanel Spacing="4">
-                        <TextBlock Classes="settings-card-title" Text="附加环境变量" />
-                        <TextBlock Classes="settings-card-description" Text="一行一条 KEY=VALUE。" />
-                        <TextBox Classes="settings-input" Text="{Binding EnvironmentText}" AcceptsReturn="True"
-                                 MinHeight="56" Padding="10,6" TextWrapping="Wrap" VerticalContentAlignment="Top" />
-                    </StackPanel>
-                </Border>
-            </StackPanel>
-        </Border>
         <TextBlock Classes="settings-card-description" Text="{Binding Notice}" Margin="0,12,0,0" />
         <Button Content="重试" Command="{Binding SaveCommand}" Classes="settings-secondary"
                 IsVisible="{Binding HasAutoSaveError}"
