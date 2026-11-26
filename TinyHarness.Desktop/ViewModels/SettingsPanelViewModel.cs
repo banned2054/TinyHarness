@@ -1,5 +1,6 @@
 using Avalonia;
 using Avalonia.Styling;
+using TinyHarness.Desktop.Models;
 using TinyHarness.Desktop.Services;
 
 namespace TinyHarness.Desktop.ViewModels;
@@ -236,20 +237,44 @@ public abstract class SettingsSectionViewModel : ObservableObject
 /// </summary>
 public sealed class GeneralSettingsSectionViewModel : SettingsSectionViewModel
 {
-    private string _configFolderError                 = string.Empty;
-    private bool   _showArchivedSessionDeletionPrompt = true;
-    private bool   _showProjectDeletionPrompt         = true;
+    private string                _configFolderError                 = string.Empty;
+    private ModelPickerStyleChoice _selectedModelPickerStyle;
+    private bool                  _showArchivedSessionDeletionPrompt = true;
+    private bool                  _showProjectDeletionPrompt         = true;
 
     public GeneralSettingsSectionViewModel(string configPath) : base("通用")
     {
         ConfigPath         = configPath;
         SelectLightCommand = new RelayCommand(() => SelectTheme(ThemeVariant.Light));
         SelectDarkCommand  = new RelayCommand(() => SelectTheme(ThemeVariant.Dark));
+        ModelPickerStyleOptions =
+        [
+            new ModelPickerStyleChoice(ModelPickerStyle.CompactSlider, "紧凑滑块"),
+            new ModelPickerStyleChoice(ModelPickerStyle.UnifiedPanel, "一体面板"),
+            new ModelPickerStyleChoice(ModelPickerStyle.ClassicList, "经典列表")
+        ];
+        _selectedModelPickerStyle = ModelPickerStyleOptions[0];
         OpenConfigFolderCommand = new AsyncCommand(async () =>
         {
             ConfigFolderError = string.Empty;
             await WindowsConfigurationFolder.OpenAsync(ConfigPath);
         }, exception => ConfigFolderError = $"无法打开配置文件夹：{exception.Message}");
+    }
+
+    public IReadOnlyList<ModelPickerStyleChoice> ModelPickerStyleOptions { get; }
+
+    /// <summary>
+    ///     <para>输入区模型选择器弹层的展示样式。</para>
+    ///     <para>The presentation style of the composer model picker popup.</para>
+    /// </summary>
+    public ModelPickerStyleChoice SelectedModelPickerStyle
+    {
+        get => _selectedModelPickerStyle;
+        set
+        {
+            if (value is null || !SetProperty(ref _selectedModelPickerStyle, value)) return;
+            ModelPickerStyleChanged?.Invoke(value.Style);
+        }
     }
 
     public string ConfigPath { get; }
@@ -330,10 +355,33 @@ public sealed class GeneralSettingsSectionViewModel : SettingsSectionViewModel
     internal void ApplyArchivedSessionDeletionPromptPreference(bool showPrompt) =>
         SetProperty(ref _showArchivedSessionDeletionPrompt, showPrompt, nameof(ShowArchivedSessionDeletionPrompt));
 
+    /// <summary>
+    ///     <para>模型选择器样式变更；宿主负责更新各会话视图并保存桌面偏好。</para>
+    ///     <para>Raised when the model picker style changes so the host can update sessions and save preferences.</para>
+    /// </summary>
+    public event Action<ModelPickerStyle>? ModelPickerStyleChanged;
+
+    /// <summary>
+    ///     <para>应用已加载的模型选择器样式偏好，不触发保存回调。</para>
+    ///     <para>Applies the loaded model picker style preference without raising the save callback.</para>
+    /// </summary>
+    internal void ApplyModelPickerStylePreference(ModelPickerStyle style)
+    {
+        var choice = ModelPickerStyleOptions.FirstOrDefault(option => option.Style == style) ??
+                     ModelPickerStyleOptions[0];
+        SetProperty(ref _selectedModelPickerStyle, choice, nameof(SelectedModelPickerStyle));
+    }
+
     private void SelectTheme(ThemeVariant variant)
     {
         if (Application.Current is { } application) application.RequestedThemeVariant = variant;
         OnPropertyChanged(nameof(IsLightSelected));
         OnPropertyChanged(nameof(IsDarkSelected));
     }
+}
+
+/// <summary>模型选择器样式选项。A model picker style option.</summary>
+public sealed record ModelPickerStyleChoice(ModelPickerStyle Style, string Label)
+{
+    public override string ToString() => Label;
 }

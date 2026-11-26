@@ -7,7 +7,7 @@
         <Setter Property="Padding" Value="10,0" />
         <Setter Property="VerticalContentAlignment" Value="Center" />
         <Setter Property="Background" Value="{DynamicResource ComposerBackgroundBrush}" />
-        <Setter Property="BorderBrush" Value="{DynamicResource PopupDividerBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource DropdownBorderBrush}" />
         <Setter Property="BorderThickness" Value="1" />
         <Setter Property="CornerRadius" Value="{DynamicResource AppPillCornerRadius}" />
         <Setter Property="Foreground" Value="{DynamicResource PopupForegroundBrush}" />
@@ -21,7 +21,7 @@
                      TextBox.popup-input /template/ Border#PART_BorderElement,
                      TextBox.composer-input /template/ Border#PART_BorderElement">
         <Setter Property="Background" Value="{DynamicResource ComposerBackgroundBrush}" />
-        <Setter Property="BorderBrush" Value="{DynamicResource PopupDividerBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource DropdownBorderBrush}" />
         <Setter Property="BorderThickness" Value="1" />
         <Setter Property="CornerRadius" Value="{DynamicResource AppPillCornerRadius}" />
     </Style>

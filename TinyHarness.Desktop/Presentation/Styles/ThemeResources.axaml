@@ -61,11 +61,10 @@
                  清晰但不过亮，也不会盖过选中态。 -->
             <SolidColorBrush x:Key="SessionHoverBrush" Color="#262627" />
             <SolidColorBrush x:Key="SessionSelectedBrush" Color="#2D2D2E" />
-            <!-- 侧栏顶部「新建会话」按钮三态（对齐 DSH newSession 的实底形态）：
-                 常规 #43454A、悬停微亮、按下/激活 #353638。 -->
-            <SolidColorBrush x:Key="NewSessionButtonBrush" Color="#43454A" />
-            <SolidColorBrush x:Key="NewSessionButtonHoverBrush" Color="#4C4E53" />
-            <SolidColorBrush x:Key="NewSessionButtonActiveBrush" Color="#353638" />
+            <!-- 侧栏顶部「新对话」与底部「设置」按钮三态：常态透明融入侧栏底色，悬停与按下取侧栏中性灰。 -->
+            <SolidColorBrush x:Key="NewSessionButtonBrush" Color="Transparent" />
+            <SolidColorBrush x:Key="NewSessionButtonHoverBrush" Color="#262627" />
+            <SolidColorBrush x:Key="NewSessionButtonActiveBrush" Color="#2D2D2E" />
             <!-- 侧栏头部图标按钮与搜索行（对齐 DSH WorkspaceBrowser 头部）：
                  图标按钮悬停 interactive-bg-hover rgba(255,255,255,0.08)、
                  搜索框描边 border-l4 rgba(255,255,255,0.2)，搜索框底透明吃侧栏色。 -->
@@ -99,6 +98,14 @@
             <SolidColorBrush x:Key="DropdownItemHoverBrush" Color="#393939" />
             <SolidColorBrush x:Key="DropdownForegroundBrush" Color="#D4D4D4" />
             <SolidColorBrush x:Key="DropdownMutedForegroundBrush" Color="#909090" />
+            <!-- 推理强度滑块：中性轨道、强调蓝进度条、白球与柔和刻度点。 -->
+            <SolidColorBrush x:Key="EffortSliderTrackBrush" Color="#3F4044" />
+            <SolidColorBrush x:Key="EffortSliderFillBrush" Color="#0A84FF" />
+            <SolidColorBrush x:Key="EffortSliderThumbBrush" Color="#FFFFFF" />
+            <SolidColorBrush x:Key="EffortSliderThumbBorderBrush" Color="#26000000" />
+            <SolidColorBrush x:Key="EffortSliderMutedThumbBrush" Color="#7D8087" />
+            <SolidColorBrush x:Key="EffortSliderTickBrush" Color="#59FFFFFF" />
+            <SolidColorBrush x:Key="EffortSliderActiveTickBrush" Color="#8CFFFFFF" />
             <!-- 设置面板与分组使用相邻的中性灰，列表条目融入分组表面。 -->
             <SolidColorBrush x:Key="SettingsPanelBackgroundBrush" Color="#1E1E1E" />
             <SolidColorBrush x:Key="SettingsGroupBackgroundBrush" Color="#262626" />
@@ -196,11 +203,10 @@
             <SolidColorBrush x:Key="ChangesCardBorderBrush" Color="#E2E0E5" />
             <SolidColorBrush x:Key="DiffAddedBrush" Color="#1A7F37" />
             <SolidColorBrush x:Key="DiffDeletedBrush" Color="#CF222E" />
-            <!-- 侧栏顶部「新建会话」按钮三态的浅色对应：实底中性灰同构。
-                 （当前应用固定 Dark 主题，浅色值仅保持语义资源完整性。） -->
-            <SolidColorBrush x:Key="NewSessionButtonBrush" Color="#E7EAEE" />
-            <SolidColorBrush x:Key="NewSessionButtonHoverBrush" Color="#DDE0E4" />
-            <SolidColorBrush x:Key="NewSessionButtonActiveBrush" Color="#D2D5DA" />
+            <!-- 侧栏顶部「新对话」与底部「设置」按钮三态的浅色对应：常态透明融入侧栏底色，悬停与按下取中性浅灰。 -->
+            <SolidColorBrush x:Key="NewSessionButtonBrush" Color="Transparent" />
+            <SolidColorBrush x:Key="NewSessionButtonHoverBrush" Color="#F1F3F5" />
+            <SolidColorBrush x:Key="NewSessionButtonActiveBrush" Color="#E8EAEC" />
             <!-- 侧栏头部图标按钮与搜索行的浅色对应：interactive-bg-hover
                  rgba(38,49,72,0.06)、border-l4 rgba(0,0,0,0.16)。
                  （当前应用固定 Dark 主题，浅色值仅保持语义资源完整性。） -->
@@ -227,6 +233,14 @@
             <SolidColorBrush x:Key="DropdownItemHoverBrush" Color="#F1F2F4" />
             <SolidColorBrush x:Key="DropdownForegroundBrush" Color="#2D2F33" />
             <SolidColorBrush x:Key="DropdownMutedForegroundBrush" Color="#8A8D92" />
+            <!-- 推理强度滑块的浅色对应。 -->
+            <SolidColorBrush x:Key="EffortSliderTrackBrush" Color="#E4E6EA" />
+            <SolidColorBrush x:Key="EffortSliderFillBrush" Color="#2563EB" />
+            <SolidColorBrush x:Key="EffortSliderThumbBrush" Color="#FFFFFF" />
+            <SolidColorBrush x:Key="EffortSliderThumbBorderBrush" Color="#2E000000" />
+            <SolidColorBrush x:Key="EffortSliderMutedThumbBrush" Color="#B0B5BE" />
+            <SolidColorBrush x:Key="EffortSliderTickBrush" Color="#47000000" />
+            <SolidColorBrush x:Key="EffortSliderActiveTickBrush" Color="#99FFFFFF" />
             <!-- 设置面板与分组表面的浅色对应。 -->
             <SolidColorBrush x:Key="SettingsPanelBackgroundBrush" Color="#FFFFFF" />
             <SolidColorBrush x:Key="SettingsGroupBackgroundBrush" Color="#F7F7F8" />

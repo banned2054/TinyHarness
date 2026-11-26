@@ -16,11 +16,13 @@
     <Style Selector="Border.composer-panel.focused">
         <Setter Property="BorderBrush" Value="{DynamicResource ComposerFocusRingBrush}" />
     </Style>
-    <!-- 消息输入框沿用全局文字与选区配色，由外层面板承载聚焦反馈。 -->
+    <!-- 消息输入框沿用全局文字与选区配色，由外层面板承载聚焦反馈；
+         多行输入显式顶部对齐，覆盖全局单行输入框的垂直居中，避免首行光标下沉。 -->
     <Style Selector="TextBox.composer-input">
         <Setter Property="MinHeight" Value="44" />
         <Setter Property="MaxHeight" Value="200" />
-        <Setter Property="Padding" Value="6,4,8,0" />
+        <Setter Property="Padding" Value="4,2,8,0" />
+        <Setter Property="VerticalContentAlignment" Value="Top" />
         <Setter Property="FontSize" Value="14" />
         <Setter Property="LineHeight" Value="24" />
         <Setter Property="Background" Value="Transparent" />
@@ -29,6 +31,9 @@
         <Setter Property="Foreground" Value="{DynamicResource ComposerTextBrush}" />
         <Setter Property="CaretBrush" Value="{DynamicResource ComposerTextBrush}" />
         <Setter Property="PlaceholderForeground" Value="{DynamicResource ComposerTextMutedBrush}" />
+    </Style>
+    <Style Selector="TextBox.composer-input /template/ TextBlock#PART_Placeholder">
+        <Setter Property="LineHeight" Value="24" />
     </Style>
     <Style Selector="TextBox.composer-input /template/ Border#PART_BorderElement">
         <Setter Property="Background" Value="Transparent" />
@@ -124,6 +129,18 @@
     </Style>
     <Style Selector="Button.model-picker-button:disabled /template/ ContentPresenter#PART_ContentPresenter">
         <Setter Property="Background" Value="{DynamicResource ComposerControlBrush}" />
+    </Style>
+    <!-- 紧凑滑块卡片内的模型切换入口：常态弱化文字，悬停轻高亮。 -->
+    <Style Selector="Button.model-card-switcher">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Padding" Value="8,2" />
+        <Setter Property="CornerRadius" Value="{DynamicResource AppPillCornerRadius}" />
+        <Setter Property="Foreground" Value="{DynamicResource PopupMutedForegroundBrush}" />
+    </Style>
+    <Style Selector="Button.model-card-switcher:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource DropdownItemHoverBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource PopupForegroundBrush}" />
     </Style>
     <!-- 执行权限选择按钮：与模型按钮同基线的紧凑变体（预设名较短）；仅在选中会话时可见。 -->
     <Style Selector="Button.permission-picker-button">

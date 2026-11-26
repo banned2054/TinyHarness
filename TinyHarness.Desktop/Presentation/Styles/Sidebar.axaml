@@ -286,7 +286,7 @@
     <Style Selector="Border.sidebar-search">
         <Setter Property="Height" Value="30" />
         <Setter Property="Background" Value="{DynamicResource ComposerBackgroundBrush}" />
-        <Setter Property="BorderBrush" Value="{DynamicResource PopupDividerBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource DropdownBorderBrush}" />
         <Setter Property="BorderThickness" Value="1" />
         <Setter Property="CornerRadius" Value="{DynamicResource AppPillCornerRadius}" />
         <Setter Property="Padding" Value="0,0,4,0" />
@@ -357,39 +357,65 @@
     <Style Selector="Button.session-row.current /template/ Border#PART_Surface">
         <Setter Property="Background" Value="{DynamicResource SessionSelectedBrush}" />
     </Style>
-    <!-- 顶部「新建会话」按钮：高 38、胶囊圆角、
-         内边距 16,8、气泡加号与文字间距 6、字号 14 中等字重。
-         HorizontalAlignment 显式 Stretch（Fluent 12 下按钮默认不横向撑满），
-         按钮占满侧栏内容区宽度，内容经 HorizontalContentAlignment 居中。
-         Fluent 把状态底色画在模板 ContentPresenter 上，状态覆盖指向该部件。 -->
+    <!-- 侧栏主入口按钮（「新对话」与「设置」）：高 38、胶囊圆角、1px 中性描边，
+         配色与输入区下拉触发器统一，深浅主题共用同套前景与状态反馈。
+         Fluent 把状态底色与描边画在模板 ContentPresenter 上，状态覆盖指向该部件。 -->
     <Style Selector="Button.new-session">
         <Setter Property="Height" Value="38" />
         <Setter Property="Padding" Value="16,8" />
         <Setter Property="CornerRadius" Value="{DynamicResource AppPillCornerRadius}" />
-        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="BorderBrush" Value="{DynamicResource DropdownBorderBrush}" />
         <Setter Property="HorizontalAlignment" Value="Stretch" />
         <Setter Property="Background" Value="{DynamicResource NewSessionButtonBrush}" />
-        <Setter Property="Foreground" Value="{DynamicResource OnAccentBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource DropdownForegroundBrush}" />
         <Setter Property="FontSize" Value="14" />
         <Setter Property="FontWeight" Value="Medium" />
         <Setter Property="HorizontalContentAlignment" Value="Center" />
         <Setter Property="VerticalContentAlignment" Value="Center" />
     </Style>
+    <Style Selector="Button.new-session /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource NewSessionButtonBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource DropdownBorderBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="{DynamicResource AppPillCornerRadius}" />
+        <Setter Property="Foreground" Value="{DynamicResource DropdownForegroundBrush}" />
+    </Style>
     <Style Selector="Button.new-session:pointerover /template/ ContentPresenter#PART_ContentPresenter">
         <Setter Property="Background" Value="{DynamicResource NewSessionButtonHoverBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource DropdownBorderBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource DropdownForegroundBrush}" />
     </Style>
     <Style Selector="Button.new-session:pressed /template/ ContentPresenter#PART_ContentPresenter">
         <Setter Property="Background" Value="{DynamicResource NewSessionButtonActiveBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource DropdownBorderBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource DropdownForegroundBrush}" />
     </Style>
     <Style Selector="Button.new-session:disabled /template/ ContentPresenter#PART_ContentPresenter">
-        <Setter Property="Background" Value="{DynamicResource NewSessionButtonBrush}" />
+        <Setter Property="Background" Value="{DynamicResource DropdownDisabledBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource DropdownBorderBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource DropdownMutedForegroundBrush}" />
     </Style>
     <Style Selector="Button.new-session:focus-visible /template/ ContentPresenter#PART_ContentPresenter">
-        <Setter Property="Background" Value="{DynamicResource NewSessionButtonHoverBrush}" />
+        <Setter Property="Background" Value="{DynamicResource NewSessionButtonBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource DropdownFocusBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource DropdownForegroundBrush}" />
     </Style>
-    <!-- 激活态（选中空白页期间）：沿用按下的实底色并保持悬停可用；声明在状态样式之后以覆盖悬停。 -->
+    <!-- 激活态（选中空白页期间）：保持透明填充融入侧栏底色，悬停和按下仍响应。 -->
     <Style Selector="Button.new-session.current /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource NewSessionButtonBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource DropdownBorderBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource DropdownForegroundBrush}" />
+    </Style>
+    <Style Selector="Button.new-session.current:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource NewSessionButtonHoverBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource DropdownBorderBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource DropdownForegroundBrush}" />
+    </Style>
+    <Style Selector="Button.new-session.current:pressed /template/ ContentPresenter#PART_ContentPresenter">
         <Setter Property="Background" Value="{DynamicResource NewSessionButtonActiveBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource DropdownBorderBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource DropdownForegroundBrush}" />
     </Style>
     <!-- 侧栏分隔条：自绘模板去掉 Fluent 默认外观，常态完全透明、不占视觉宽度，
          悬停时以列表悬停色轻微提示可拖拽。 -->

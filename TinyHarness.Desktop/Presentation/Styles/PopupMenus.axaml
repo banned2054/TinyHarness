@@ -25,7 +25,7 @@
         <Setter Property="Margin" Value="0,0,0,4" />
         <Setter Property="Padding" Value="8,0" />
         <Setter Property="Background" Value="{DynamicResource ComposerBackgroundBrush}" />
-        <Setter Property="BorderBrush" Value="{DynamicResource PopupDividerBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource DropdownBorderBrush}" />
         <Setter Property="BorderThickness" Value="1" />
         <Setter Property="CornerRadius" Value="{DynamicResource AppPillCornerRadius}" />
     </Style>

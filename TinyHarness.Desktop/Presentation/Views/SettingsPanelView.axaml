@@ -134,6 +134,28 @@
                                                     <Grid ColumnDefinitions="*,Auto" ColumnSpacing="24">
                                                         <StackPanel Grid.Column="0"
                                                                     VerticalAlignment="Center" Spacing="2">
+                                                            <TextBlock Classes="settings-card-title" Text="模型选择器样式" />
+                                                            <TextBlock Text="切换底部模型与推理等级弹层的交互形态。"
+                                                                       FontSize="12" TextWrapping="Wrap"
+                                                                       Foreground="{DynamicResource PopupMutedForegroundBrush}" />
+                                                        </StackPanel>
+                                                        <ComboBox Classes="dropdown" Grid.Column="1" Width="160"
+                                                                  VerticalAlignment="Center"
+                                                                  ItemsSource="{Binding General.ModelPickerStyleOptions}"
+                                                                  SelectedItem="{Binding General.SelectedModelPickerStyle}"
+                                                                  AutomationProperties.Name="模型选择器样式">
+                                                            <ComboBox.ItemTemplate>
+                                                                <DataTemplate x:DataType="vm:ModelPickerStyleChoice">
+                                                                    <TextBlock Text="{Binding Label}" />
+                                                                </DataTemplate>
+                                                            </ComboBox.ItemTemplate>
+                                                        </ComboBox>
+                                                    </Grid>
+                                                </Border>
+                                                <Border Classes="settings-row">
+                                                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="24">
+                                                        <StackPanel Grid.Column="0"
+                                                                    VerticalAlignment="Center" Spacing="2">
                                                             <TextBlock Classes="settings-card-title" Text="项目删除提示" />
                                                             <TextBlock Text="删除项目时先显示确认面板。"
                                                                        FontSize="12" TextWrapping="Wrap"

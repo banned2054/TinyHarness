@@ -101,6 +101,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
     private string                        _organizeNotice = string.Empty;
     private CancellationTokenSource?      _organizeSource;
     private bool?                         _pendingArchivedSessionDeletionPromptPreference;
+    private ModelPickerStyle?             _pendingModelPickerStylePreference;
     private bool?                         _pendingProjectDeletionPromptPreference;
     private string                        _permissionMigrationSummary = string.Empty;
     private PermissionSettings            _permissionSettings         = new();
@@ -151,6 +152,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
                                               new WindowsSandboxSettingsViewModel(UserConfigPath, InitializeAsync));
         Settings.General.ProjectDeletionPromptChanged += OnProjectDeletionPromptChanged;
         Settings.General.ArchivedSessionDeletionPromptChanged += OnArchivedSessionDeletionPromptChanged;
+        Settings.General.ModelPickerStyleChanged += OnModelPickerStyleChanged;
         Settings.CloseRequested += (_, _) => SettingsOpen = false;
         NewSessionCommand = new RelayCommand(NewConversation);
         SelectSessionCommand = new RelayCommand<SessionViewModel>(session => SelectedSession = session);
@@ -964,6 +966,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
                                        summary.ProjectAssignmentState)
         {
             ModelOptions        = Models,
+            ModelPickerStyle    = CurrentModelPickerStyle,
             ManageModelsCommand = OpenSettingsCommand,
             // 缓存为空时与原实现同样得到当前可选项目数组；加载尾部的 RebuildProjects 会统一刷新到正式实例。
             ProjectOptions      = _cachedProjectOptions ?? Projects.Where(group => group.CanEdit).ToArray()
@@ -1994,6 +1997,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
                                            SessionProjectAssignmentState.NoProject)
         {
             ModelOptions        = Models,
+            ModelPickerStyle    = CurrentModelPickerStyle,
             ManageModelsCommand = OpenSettingsCommand,
             // 与 CreateSessionRow 同一纪律：优先复用缓存分发实例；空缓存等价于原来的空数组，RebuildProjects 尾部统一兜底。
             ProjectOptions      = _cachedProjectOptions ?? Projects.Where(group => group.CanEdit).ToArray()
@@ -2256,14 +2260,25 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
                     ShowArchivedSessionDeletionPrompt = showArchivedPrompt
                 };
 
+            if (_pendingModelPickerStylePreference is { } pendingPickerStyle)
+                _sidebarPreferences = _sidebarPreferences with
+                {
+                    ModelPickerStyle = ModelPickerStyleCodec.ToValue(pendingPickerStyle)
+                };
+
             var savePromptPreference = (_pendingProjectDeletionPromptPreference.HasValue ||
-                                        _pendingArchivedSessionDeletionPromptPreference.HasValue) &&
+                                        _pendingArchivedSessionDeletionPromptPreference.HasValue ||
+                                        _pendingModelPickerStylePreference.HasValue) &&
                                        _sidebarPreferencesSaveAllowed;
             _pendingProjectDeletionPromptPreference         = null;
             _pendingArchivedSessionDeletionPromptPreference = null;
+            _pendingModelPickerStylePreference              = null;
             Settings.General.ApplyProjectDeletionPromptPreference(_sidebarPreferences.ShowProjectDeletionPrompt);
             Settings.General.ApplyArchivedSessionDeletionPromptPreference(_sidebarPreferences
                                                                              .ShowArchivedSessionDeletionPrompt);
+            var pickerStyle = CurrentModelPickerStyle;
+            Settings.General.ApplyModelPickerStylePreference(pickerStyle);
+            ApplyModelPickerStyleToSessions(pickerStyle);
 
             RestoreSidebarCategoryExpansion();
             SidebarPreferencesReady = true;
@@ -2306,6 +2321,33 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
         }
 
         QueueSidebarPreferencesSave();
+    }
+
+    private ModelPickerStyle CurrentModelPickerStyle =>
+        ModelPickerStyleCodec.Parse(_sidebarPreferences.ModelPickerStyle);
+
+    /// <summary>
+    ///     <para>同步模型选择器样式到所有会话，并保存到桌面偏好。</para>
+    ///     <para>Synchronizes the model picker style across sessions and persists it to desktop preferences.</para>
+    /// </summary>
+    private void OnModelPickerStyleChanged(ModelPickerStyle style)
+    {
+        _sidebarPreferences = _sidebarPreferences with { ModelPickerStyle = ModelPickerStyleCodec.ToValue(style) };
+        ApplyModelPickerStyleToSessions(style);
+        if (!SidebarPreferencesReady)
+        {
+            _pendingModelPickerStylePreference = style;
+            return;
+        }
+
+        QueueSidebarPreferencesSave();
+    }
+
+    private void ApplyModelPickerStyleToSessions(ModelPickerStyle style)
+    {
+        foreach (var session in Sessions) session.ModelPickerStyle = style;
+        if (_newConversation is not null) _newConversation.ModelPickerStyle = style;
+        if (_selected is not null) _selected.ModelPickerStyle = style;
     }
 
     /// <summary>

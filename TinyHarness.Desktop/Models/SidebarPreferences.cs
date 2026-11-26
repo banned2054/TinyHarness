@@ -39,6 +39,12 @@ internal sealed record SidebarPreferences
     public bool ShowArchivedSessionDeletionPrompt { get; init; } = true;
 
     /// <summary>
+    ///     <para>输入区模型选择器弹层样式；缺省或未知值回退到紧凑滑块。</para>
+    ///     <para>Composer model picker popup style; missing or unknown values fall back to compact slider.</para>
+    /// </summary>
+    public string ModelPickerStyle { get; init; } = ModelPickerStyleCodec.CompactSliderValue;
+
+    /// <summary>
     ///     <para>已折叠的固定侧栏分类键；未列出的分类默认展开。</para>
     ///     <para>Collapsed fixed sidebar category keys; categories not listed are expanded by default.</para>
     /// </summary>

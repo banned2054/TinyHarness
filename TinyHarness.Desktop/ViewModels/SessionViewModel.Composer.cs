@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using TinyHarness.Core.Models.ChatCompletions;
 using TinyHarness.Core.Models.Session;
 using TinyHarness.Core.Services.ChatCompletions.Configuration;
+using TinyHarness.Desktop.Models;
 using TinyHarness.Desktop.Runtime;
 using TinyHarness.Core.Models.Configuration;
 using TinyHarness.Core.Models.Permissions;
@@ -18,6 +19,10 @@ public sealed partial class SessionViewModel
     private          bool                                   _isPermissionMenuOpen;
     private          bool                                   _isWorkspaceMenuOpen;
     private          int                                    _modelMenuPage;
+    private          ModelPickerStyle                       _modelPickerStyle = ModelPickerStyle.CompactSlider;
+    private          int?                                   _previewEffortIndex;
+    private          IReadOnlyList<ModelReasoningEffort>    _effortLevels     = [];
+    private          ModelChoice?                           _effortTargetChoice;
     private          IReadOnlyList<ProjectViewModel>?       _projectOptions;
     private          string                                 _projectSearchText = string.Empty;
 
@@ -141,20 +146,63 @@ public sealed partial class SessionViewModel
         ? ProjectOptions?.FirstOrDefault(item => item.Project?.Id == id)?.Name ?? WorkspaceLabel
         : "选择项目";
 
-    public bool IsModelMenuRootPage => _modelMenuPage == 0;
-    public bool IsModelsMenuPage    => _modelMenuPage == 1;
-    public bool IsEffortsMenuPage   => _modelMenuPage == 2;
+    public ModelPickerStyle ModelPickerStyle
+    {
+        get => _modelPickerStyle;
+        set
+        {
+            if (!SetProperty(ref _modelPickerStyle, value)) return;
+            NotifyModelMenuLayoutProperties();
+        }
+    }
+
+    public bool IsModelMenuRootPage       => _modelMenuPage == 0;
+    public bool IsModelsMenuPage          => _modelMenuPage == 1;
+    public bool IsEffortsMenuPage         => _modelMenuPage == 2;
+    public bool IsCompactSliderRootPage   => _modelMenuPage == 0 && _modelPickerStyle == ModelPickerStyle.CompactSlider;
+    public bool IsUnifiedPanelPage        => _modelMenuPage == 0 && _modelPickerStyle == ModelPickerStyle.UnifiedPanel;
+    public bool IsClassicListRootPage     => _modelMenuPage == 0 && _modelPickerStyle == ModelPickerStyle.ClassicList;
+    public bool IsModelsSubPage           => _modelMenuPage == 1 && _modelPickerStyle != ModelPickerStyle.UnifiedPanel;
+    public bool IsEffortsSubPage          => _modelMenuPage == 2 && _modelPickerStyle == ModelPickerStyle.ClassicList;
+
+    public int EffortOptionCount => EffortOptions.Count;
+
+    public int SelectedEffortIndex
+    {
+        get
+        {
+            for (var i = 0; i < EffortOptions.Count; i++)
+                if (EffortOptions[i].IsSelected) return i;
+            return -1;
+        }
+    }
+
+    public string EffortSliderDisplayText
+    {
+        get
+        {
+            if (_previewEffortIndex is { } preview && preview >= 0 && preview < EffortOptions.Count)
+                return EffortOptions[preview].Label;
+            return CurrentEffortText.Length > 0 ? CurrentEffortText : "默认";
+        }
+    }
+
+    public bool CanAdjustEffortSlider => CanChangeModel && _effortTargetChoice is not null && EffortOptions.Count >= 2;
 
     public bool IsModelMenuOpen
     {
         get => _isModelMenuOpen;
         set
         {
-            if (!SetProperty(ref _isModelMenuOpen, value) || !value) return;
+            if (!SetProperty(ref _isModelMenuOpen, value)) return;
+            _previewEffortIndex = null;
+            OnPropertyChanged(nameof(EffortSliderDisplayText));
+            if (!value) return;
             IsPermissionMenuOpen = false;
             IsWorkspaceMenuOpen  = false;
             SetModelMenuPage(0);
             RebuildModelMenu();
+            RebuildEfforts();
         }
     }
 
@@ -250,9 +298,46 @@ public sealed partial class SessionViewModel
     private void SetModelMenuPage(int page)
     {
         _modelMenuPage = page;
+        NotifyModelMenuLayoutProperties();
+    }
+
+    private void NotifyModelMenuLayoutProperties()
+    {
         OnPropertyChanged(nameof(IsModelMenuRootPage));
         OnPropertyChanged(nameof(IsModelsMenuPage));
         OnPropertyChanged(nameof(IsEffortsMenuPage));
+        OnPropertyChanged(nameof(IsCompactSliderRootPage));
+        OnPropertyChanged(nameof(IsUnifiedPanelPage));
+        OnPropertyChanged(nameof(IsClassicListRootPage));
+        OnPropertyChanged(nameof(IsModelsSubPage));
+        OnPropertyChanged(nameof(IsEffortsSubPage));
+    }
+
+    /// <summary>
+    ///     <para>更新滑块拖拽过程中的预览档位，仅刷新标题显示不提交切换。</para>
+    ///     <para>Updates the preview effort index while dragging so the header updates without committing.</para>
+    /// </summary>
+    public void SetEffortPreviewIndex(int? index)
+    {
+        if (_previewEffortIndex == index) return;
+        _previewEffortIndex = index;
+        OnPropertyChanged(nameof(EffortSliderDisplayText));
+    }
+
+    /// <summary>
+    ///     <para>按滑块索引提交推理强度变更；保持弹层打开以便继续调节。</para>
+    ///     <para>Commits a reasoning-effort change by slider index while keeping the popup open.</para>
+    /// </summary>
+    public void SelectEffortByIndex(int index)
+    {
+        _previewEffortIndex = null;
+        if (!CanChangeModel || _effortTargetChoice is null || index < 0 || index >= _effortLevels.Count)
+        {
+            OnPropertyChanged(nameof(EffortSliderDisplayText));
+            return;
+        }
+
+        _ = ApplyMenuSelectionAsync(_effortTargetChoice, _effortLevels[index], false);
     }
 
     private void RebuildModelMenu()
@@ -263,7 +348,9 @@ public sealed partial class SessionViewModel
     }
 
     private ComposerMenuOption ModelMenuOption(ModelChoice choice) =>
-        new(choice.Label, () => _ = ApplyMenuSelectionAsync(choice, choice.DefaultEffort),
+        new(choice.Label,
+            () => _ = ApplyMenuSelectionAsync(choice, choice.DefaultEffort,
+                                              _modelPickerStyle != ModelPickerStyle.UnifiedPanel),
             () => CanChangeModel)
         {
             IsSelected = choice.ProfileName ==
@@ -344,6 +431,9 @@ public sealed partial class SessionViewModel
             : ModelOptions.FirstOrDefault(item => item.ProfileName == selection.ProfileHint &&
                                                   item.ModelId     == selection.Model.ModelId);
         var levels  = choice?.Efforts            ?? selection?.ReasoningCapabilities ?? [];
+        _effortTargetChoice = choice;
+        _effortLevels       = levels;
+        _previewEffortIndex = null;
         // 选中态取真实生效档位，未显式选择时以模型默认档为当前档；都没有则不高亮任何项。
         var current = selection?.ReasoningEffort ?? (Id is null ? _effort : null)    ?? choice?.DefaultEffort;
         EffortOptions = levels.Select(level => new ComposerMenuOption(EffortText(level),
@@ -351,6 +441,10 @@ public sealed partial class SessionViewModel
                                                                       () => CanChangeModel && choice is not null)
                                           { IsSelected = current == level }).ToArray();
         OnPropertyChanged(nameof(EffortOptions));
+        OnPropertyChanged(nameof(EffortOptionCount));
+        OnPropertyChanged(nameof(SelectedEffortIndex));
+        OnPropertyChanged(nameof(EffortSliderDisplayText));
+        OnPropertyChanged(nameof(CanAdjustEffortSlider));
     }
 
     /// <summary>
@@ -362,11 +456,11 @@ public sealed partial class SessionViewModel
                                               item.ModelId     == selection.Model.ModelId)
         : null;
 
-    private async Task ApplyMenuSelectionAsync(ModelChoice? choice, ModelReasoningEffort? effort)
+    private async Task ApplyMenuSelectionAsync(ModelChoice? choice, ModelReasoningEffort? effort, bool closeMenu = true)
     {
         try
         {
-            await SelectModelAsync(choice, effort);
+            await SelectModelAsync(choice, effort, closeMenu);
         }
         catch (Exception exception)
         {
@@ -381,7 +475,10 @@ public sealed partial class SessionViewModel
     ///         labels and drafts on failure.
     ///     </para>
     /// </summary>
-    public async Task SelectModelAsync(ModelChoice? choice, ModelReasoningEffort? effort)
+    public Task SelectModelAsync(ModelChoice? choice, ModelReasoningEffort? effort) =>
+        SelectModelAsync(choice, effort, true);
+
+    private async Task SelectModelAsync(ModelChoice? choice, ModelReasoningEffort? effort, bool closeMenu)
     {
         if (!CanChangeModel) throw new InvalidOperationException("当前运行结束后可切换。");
         if (Id is null)
@@ -391,13 +488,16 @@ public sealed partial class SessionViewModel
             // 草稿模型偏好是用户显式选择，参与空白页回收判定。
             HasUserPreselection = true;
             NotifyModelSelection();
-            CloseComposerMenus();
+            RebuildModelMenu();
+            RebuildEfforts();
+            if (closeMenu) CloseComposerMenus();
             return;
         }
 
         if (choice is null) throw new InvalidOperationException("请选择已配置的模型。");
         _changing = true;
         OnPropertyChanged(nameof(CanChangeModel));
+        OnPropertyChanged(nameof(CanAdjustEffortSlider));
         OnPropertyChanged(nameof(CanDeleteArchived));
         Status = "正在切换模型";
         try
@@ -412,12 +512,15 @@ public sealed partial class SessionViewModel
             Status          = "模型选择已保存";
             UpdateNotices();
             NotifyModelSelection();
-            CloseComposerMenus();
+            RebuildModelMenu();
+            RebuildEfforts();
+            if (closeMenu) CloseComposerMenus();
         }
         finally
         {
             _changing = false;
             OnPropertyChanged(nameof(CanChangeModel));
+            OnPropertyChanged(nameof(CanAdjustEffortSlider));
             OnPropertyChanged(nameof(CanDeleteArchived));
         }
     }
@@ -688,6 +791,7 @@ public sealed partial class SessionViewModel
         OnPropertyChanged(nameof(CurrentModelLabel));
         OnPropertyChanged(nameof(ModelPickerLabel));
         OnPropertyChanged(nameof(CurrentEffortText));
+        OnPropertyChanged(nameof(EffortSliderDisplayText));
         OnPropertyChanged(nameof(ChangeModelHint));
     }
 

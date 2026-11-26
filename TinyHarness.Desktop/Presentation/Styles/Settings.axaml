@@ -135,7 +135,7 @@
         <Setter Property="Padding" Value="0" />
         <Setter Property="CornerRadius" Value="{DynamicResource AppPanelCornerRadius}" />
         <Setter Property="BorderThickness" Value="1" />
-        <Setter Property="BorderBrush" Value="{DynamicResource PopupDividerBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource DropdownBorderBrush}" />
         <Setter Property="Background" Value="Transparent" />
         <Setter Property="Foreground" Value="{DynamicResource PopupForegroundBrush}" />
         <Setter Property="HorizontalContentAlignment" Value="Center" />
@@ -143,10 +143,15 @@
     </Style>
     <Style Selector="Button.settings-choice:pointerover /template/ ContentPresenter#PART_ContentPresenter">
         <Setter Property="Background" Value="{DynamicResource PopupItemHoverBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource DropdownBorderBrush}" />
     </Style>
     <Style Selector="Button.settings-choice.selected">
         <Setter Property="BorderBrush" Value="{DynamicResource AccentFillBrush}" />
         <Setter Property="Background" Value="{DynamicResource PopupItemSelectedBrush}" />
+    </Style>
+    <Style Selector="Button.settings-choice.selected:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource PopupItemSelectedBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource AccentFillBrush}" />
     </Style>
     <Style Selector="Button.settings-choice:disabled">
         <Setter Property="Foreground" Value="{DynamicResource PopupMutedForegroundBrush}" />
@@ -193,18 +198,19 @@
         <Setter Property="Foreground" Value="{DynamicResource OnAccentMutedBrush}" />
         <Setter Property="Opacity" Value="0.6" />
     </Style>
-    <!-- 卡内次按钮（取消/编辑）：描边幽灵。 -->
+    <!-- 卡内次按钮（取消/编辑）：中性描边幽灵按钮，描边与下拉触发器一致。 -->
     <Style Selector="Button.settings-secondary">
         <Setter Property="Padding" Value="14,6" />
         <Setter Property="CornerRadius" Value="{DynamicResource AppPillCornerRadius}" />
         <Setter Property="BorderThickness" Value="1" />
         <Setter Property="Background" Value="Transparent" />
-        <Setter Property="BorderBrush" Value="{DynamicResource PopupDividerBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource DropdownBorderBrush}" />
         <Setter Property="Foreground" Value="{DynamicResource PopupForegroundBrush}" />
         <Setter Property="FontSize" Value="13" />
     </Style>
     <Style Selector="Button.settings-secondary:pointerover /template/ ContentPresenter#PART_ContentPresenter">
         <Setter Property="Background" Value="{DynamicResource PopupItemHoverBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource DropdownBorderBrush}" />
     </Style>
     <!-- 危险文字按钮（供应商删除）：常态透明填充（与条目面板同色）并沿用次按钮的描边与内距；
          悬停、按下与键盘聚焦改为危险填充 + 危险红字，描边同色融于填充。 -->
@@ -213,7 +219,7 @@
         <Setter Property="CornerRadius" Value="{DynamicResource AppPillCornerRadius}" />
         <Setter Property="BorderThickness" Value="1" />
         <Setter Property="Background" Value="Transparent" />
-        <Setter Property="BorderBrush" Value="{DynamicResource PopupDividerBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource DropdownBorderBrush}" />
         <Setter Property="Foreground" Value="{DynamicResource DangerTextBrush}" />
         <Setter Property="FontSize" Value="13" />
     </Style>
