@@ -7,6 +7,7 @@ using TinyHarness.Core.Services.ChatCompletions;
 using TinyHarness.Core.Services.ChatCompletions.Configuration;
 using TinyHarness.Core.Services.Persistence;
 using TinyHarness.Core.Services.Runtime;
+using TinyHarness.Core.Services.Runtime.WindowsSandbox;
 using TinyHarness.Desktop.Runtime;
 
 namespace TinyHarness.Desktop;
@@ -148,6 +149,16 @@ internal static class OfflineSmoke
                 throw new
                     InvalidOperationException("Assistant message boundaries or phases did not survive native persistence.");
             var business = await RunBusinessStoreSmokeAsync(root, workspace);
+            // 默认复用本次 smoke 的临时配置，绝不读取宿主真实用户配置；仅在发布 smoke 显式注入
+            // TINYHARNESS_USER_CONFIG_DIR 时读取该共享测试配置以验证双包解析。
+            var componentConfigPath =
+                !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(UserConfigStore.DirectoryOverrideVariable))
+                    ? UserConfigStore.DefaultFilePath()
+                    : configPath;
+            var activeUserConfig  = await UserConfigStore.LoadAsync(componentConfigPath, CancellationToken.None);
+            var sandboxResolution = WindowsSandboxComponentResolver.Resolve(activeUserConfig.Settings?.WindowsSandbox);
+            var probe             = WindowsSandboxComponentResolver.InspectDenyProbe(sandboxResolution);
+            Console.WriteLine($"sandbox-components: setup={sandboxResolution.Setup.CandidatePath} runner={sandboxResolution.Runner.CandidatePath} probe={probe.ExpectedPath} probeExists={probe.Exists}");
             Console.WriteLine($"PASS desktop: parallel=2 switched=A/B/A/B refreshed=true resumedTurns=4 disposedClients={createdModels} titles=2 session-store={business}; fixture={root}");
             return 0;
         }

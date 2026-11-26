@@ -1,14 +1,15 @@
 using TinyHarness.Cli.Services;
 using TinyHarness.Core.Services.ChatCompletions.Configuration;
 using TinyHarness.Core.Services.Runtime;
+using TinyHarness.Core.Services.Runtime.WindowsSandbox;
 
 namespace TinyHarness.Cli.Commands;
 
 /// <summary>
-///     <para>管理命令的共享依赖：终端 I/O、凭据存储与可选的用户配置路径覆盖（测试与便携部署使用）。</para>
+///     <para>管理命令的共享依赖：终端 I/O、凭据存储、可选的用户配置路径与应用基准目录覆盖。</para>
 ///     <para>
-///         Shared dependencies for management commands: console I/O, the credential store, and an optional
-///         user config path override (for tests and portable setups).
+///         Shared dependencies for management commands: console I/O, the credential store, and optional
+///         user config path and application base directory overrides.
 ///     </para>
 /// </summary>
 internal sealed class CommandContext
@@ -33,6 +34,15 @@ internal sealed class CommandContext
     public string? WorkingDirectory { get; init; }
 
     /// <summary>
+    ///     <para>应用基准目录（用于定位随包沙箱组件）；null 表示使用 <see cref="AppContext.BaseDirectory" />。</para>
+    ///     <para>
+    ///         Application base directory used to locate bundled sandbox components; null means
+    ///         <see cref="AppContext.BaseDirectory" />.
+    ///     </para>
+    /// </summary>
+    public string? AppBaseDirectory { get; init; }
+
+    /// <summary>
     ///     <para>解析实际使用的用户配置路径。</para>
     ///     <para>Resolves the user config path actually in effect.</para>
     /// </summary>
@@ -47,4 +57,11 @@ internal sealed class CommandContext
     public string ResolveWorkingDirectory() => string.IsNullOrWhiteSpace(WorkingDirectory)
         ? Environment.CurrentDirectory
         : Path.GetFullPath(WorkingDirectory);
+
+    /// <summary>
+    ///     <para>返回规范化的应用基准目录。</para>
+    ///     <para>Returns the normalized application base directory.</para>
+    /// </summary>
+    public string ResolveAppBaseDirectory() =>
+        WindowsSandboxComponentResolver.NormalizeAppBaseDirectory(AppBaseDirectory);
 }

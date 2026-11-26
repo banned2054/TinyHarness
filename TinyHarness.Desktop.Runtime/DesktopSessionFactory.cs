@@ -82,6 +82,8 @@ public sealed partial class DesktopSessionFactory
 
     private readonly string? _userConfigPath;
 
+    private readonly string _appBaseDirectory;
+
     /// <summary>
     ///     <para>允许离线验收注入模型与凭据存储；生产默认使用 Core 的正式客户端和系统凭据。</para>
     ///     <para>
@@ -90,8 +92,9 @@ public sealed partial class DesktopSessionFactory
     ///     </para>
     /// </summary>
     public DesktopSessionFactory(Func<TinyHarnessConfig, string, IChatCompletionClient>? modelFactory = null,
-                                 ICredentialStore? credentials = null, string? userConfigPath = null)
-        : this(modelFactory, credentials, userConfigPath, null)
+                                 ICredentialStore? credentials = null, string? userConfigPath = null,
+                                 string? appBaseDirectory = null)
+        : this(modelFactory, credentials, userConfigPath, null, appBaseDirectory)
     {
     }
 
@@ -104,12 +107,14 @@ public sealed partial class DesktopSessionFactory
     /// </summary>
     public DesktopSessionFactory(Func<TinyHarnessConfig, string, IChatCompletionClient>? modelFactory,
                                  ICredentialStore? credentials, string? userConfigPath,
-                                 Func<TinyHarnessConfig, string, IChatCompletionClient>? titleModelFactory)
+                                 Func<TinyHarnessConfig, string, IChatCompletionClient>? titleModelFactory,
+                                 string? appBaseDirectory = null)
     {
         _modelFactory      = modelFactory;
         _titleModelFactory = titleModelFactory;
         _credentials       = credentials ?? new WindowsCredentialStore();
         _userConfigPath    = userConfigPath;
+        _appBaseDirectory  = WindowsSandboxComponentResolver.NormalizeAppBaseDirectory(appBaseDirectory);
     }
 
     /// <summary>
@@ -203,17 +208,20 @@ public sealed partial class DesktopSessionFactory
         // （helper 会把缺失条目物化为目录，绝不能让信任文件被物化）；应用层保护按路径形态恒生效。
         var                       trustPath = Path.Combine(Path.GetDirectoryName(userPath)!, "workspace-trust.json");
         // C1 权限系统实例（实际路径）：组合期写根重叠校验与 grant 校验共用，底层不重新猜默认路径。
-        var                       permissionSystemPaths = new List<string> { userPath, trustPath, directory };
+        var provisionLeaseDirectory = GlobalDenyReadRefreshGate.DefaultProvisionLeaseDirectory;
+        var permissionSystemPaths   = new List<string> { userPath, trustPath, directory, provisionLeaseDirectory };
         // 基线广泛读保护的 C1 宿主密钥路径：组合与授权指纹共用同一列表，守卫重算同一 deny 集。
         var                       baselineProtectedPaths = new List<string> { userPath };
+        WindowsSandboxComponentResolution? resolvedSandboxComponents = null;
         if (sandboxSettings is { Enabled: true } settings)
         {
             // 只派生应用层保护路径；组件检查、目录创建与顶层读根规划延迟到首次沙箱工具准备。
             if (File.Exists(trustPath)) baselineProtectedPaths.Add(trustPath);
+            resolvedSandboxComponents = WindowsSandboxComponentResolver.Resolve(settings, _appBaseDirectory);
             sandboxComponents = new WindowsSandboxComponents
             {
-                SetupExecutablePath  = settings.SetupExecutablePath.Trim(),
-                RunnerExecutablePath = settings.RunnerExecutablePath.Trim(),
+                SetupExecutablePath  = resolvedSandboxComponents.Setup.CandidatePath  ?? settings.SetupExecutablePath.Trim(),
+                RunnerExecutablePath = resolvedSandboxComponents.Runner.CandidatePath ?? settings.RunnerExecutablePath.Trim(),
                 SandboxHome =
                     WindowsSandboxComponents.ResolveSandboxHome(settings.SandboxHome, settings.AllowTcpLoopback),
                 AllowTcpLoopback = settings.AllowTcpLoopback
@@ -232,11 +240,13 @@ public sealed partial class DesktopSessionFactory
         // 沙箱 home 收缩为敏感子路径（凭据目录、deny 簿记、授权映射与执行组件目录）：默认
         // tmp/tools/nuget-cache 运行时根物理位于 home 下，整 home 入 C1 会把运行时根恒判保护类；
         // 组合期完整性保护仍以整 home 为准（另一层，不受此影响）。
-        var permissionSystemRoots = new List<string> { userPath, trustPath, directory };
+        var permissionSystemRoots = new List<string> { userPath, trustPath, directory, provisionLeaseDirectory };
         if (sandboxComponents is not null)
         {
-            permissionSystemRoots.Add(sandboxComponents.SetupExecutablePath);
-            permissionSystemRoots.Add(sandboxComponents.RunnerExecutablePath);
+            if (resolvedSandboxComponents?.Setup.CandidatePath is { } setupPath)
+                permissionSystemRoots.Add(setupPath);
+            if (resolvedSandboxComponents?.Runner.CandidatePath is { } runnerPath)
+                permissionSystemRoots.Add(runnerPath);
             permissionSystemRoots.AddRange(sandboxComponents.ProtectedHomeSubpaths);
         }
 
@@ -259,11 +269,13 @@ public sealed partial class DesktopSessionFactory
                                                                   user.Settings?.Network, root,
                                                                   sandboxConfigured,
                                                                   baselineProtectedPaths,
-                                                                  user.Settings?.SessionStoreDirectory),
+                                                                  user.Settings?.SessionStoreDirectory,
+                                                                  _appBaseDirectory),
                                                               PermissionCompositionFingerprint.CreateEvaluator(userPath,
                                                                   root, sandboxConfigured,
                                                                   baselineProtectedPaths,
-                                                                  true));
+                                                                  true,
+                                                                  _appBaseDirectory));
         // 常设信任只来自可信用户设置与显式确认记录：Confirmed 之外联网与附加写根写一律逐次审批；
         // 常设网络 restricted 时网络申请恒逐次审批，写根确认不复用为网络免审批。
         // 启用沙箱时准备阶段先组合成功才产出可授权的冻结计划；禁用时拒绝沙箱进程执行。
@@ -278,14 +290,15 @@ public sealed partial class DesktopSessionFactory
         DesktopWorkspaceCoordinator? repair = null;
         if (sandboxComponents is not null && sandboxSettings is { } aclSandboxSettings)
         {
-            var grant = new ProcessWorkspaceAclGrant(
-                                                     [
-                                                         userPath, directory, sandboxComponents.SetupExecutablePath,
-                                                         sandboxComponents.RunnerExecutablePath,
-                                                         sandboxComponents.SandboxHome
-                                                     ],
+            var grantProtected = new List<string> { userPath, directory, sandboxComponents.SandboxHome };
+            if (resolvedSandboxComponents?.Setup.CandidatePath is { } setupPath)
+                grantProtected.Add(setupPath);
+            if (resolvedSandboxComponents?.Runner.CandidatePath is { } runnerPath)
+                grantProtected.Add(runnerPath);
+            var grant = new ProcessWorkspaceAclGrant(grantProtected,
                                                      [root, .. aclSandboxSettings.AdditionalWriteRoots],
-                                                     aclSandboxSettings);
+                                                     aclSandboxSettings,
+                                                     _appBaseDirectory);
             var services = new DesktopWorkspaceRepairServices(async token =>
             {
                 if (!await grant.CanChangePermissionsAsync(access.Identity, token).ConfigureAwait(false)) return false;
@@ -334,7 +347,8 @@ public sealed partial class DesktopSessionFactory
 
                 token.ThrowIfCancellationRequested();
                 var sandbox = WindowsSandboxComposer.Compose(compositionSettings ?? sandboxSettings, root, secrets,
-                                                             user.Settings?.Network, baseline, permissionSystemPaths);
+                                                             user.Settings?.Network, baseline, permissionSystemPaths,
+                                                             _appBaseDirectory);
                 token.ThrowIfCancellationRequested();
                 var backend = repair is null ? sandbox.Backend : new DesktopWorkspaceBackend(sandbox.Backend, repair);
                 return CreateWorkspaceShellTool(workspace, config.DefaultToolTimeoutSeconds, backend, sandbox, grants,

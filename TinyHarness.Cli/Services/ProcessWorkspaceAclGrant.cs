@@ -60,10 +60,11 @@ internal interface IWorkspaceAclGrant
 internal sealed class ProcessWorkspaceAclGrant(
     IReadOnlyList<string>   protectedPaths,
     IReadOnlyList<string>   writeRoots,
-    WindowsSandboxSettings? sandboxSettings = null) : IWorkspaceAclGrant
+    WindowsSandboxSettings? sandboxSettings  = null,
+    string?                 appBaseDirectory = null) : IWorkspaceAclGrant
 {
     internal const   string    HelperArgument = CoreGrant.HelperArgument;
-    private readonly CoreGrant _grant         = new(protectedPaths, writeRoots, sandboxSettings);
+    private readonly CoreGrant _grant         = new(protectedPaths, writeRoots, sandboxSettings, appBaseDirectory);
 
     /// <inheritdoc />
     public Task<bool> CanChangePermissionsAsync(WorkspaceDirectoryIdentity identity,

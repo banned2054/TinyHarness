@@ -20,6 +20,45 @@
                 </Grid>
             </Border>
         </Border>
+        <Grid ColumnDefinitions="*,Auto" Margin="0,24,0,10">
+            <TextBlock Classes="settings-group-title" Text="沙箱组件路径" Margin="0" VerticalAlignment="Center" />
+            <Button Grid.Column="1" Classes="settings-secondary" Content="恢复默认"
+                    Command="{Binding ResetComponentPathsCommand}"
+                    IsEnabled="{Binding HasCustomComponentPaths}"
+                    AutomationProperties.Name="恢复随包默认组件路径" />
+        </Grid>
+        <Border Classes="settings-group">
+            <StackPanel>
+                <Border Classes="settings-row">
+                    <StackPanel Spacing="6">
+                        <TextBlock Classes="settings-card-title" Text="Setup 组件（codex-windows-sandbox-setup.exe）" />
+                        <TextBox Classes="settings-input"
+                                 Text="{Binding SetupExecutablePathText, Mode=TwoWay}"
+                                 PlaceholderText="留空使用当前安装包默认组件"
+                                 AutomationProperties.Name="Setup 组件自定义路径" />
+                        <TextBlock Classes="settings-card-description" Text="{Binding SetupStatusSummaryText}"
+                                   TextWrapping="Wrap" />
+                        <TextBlock Classes="settings-card-description" Text="{Binding SetupEffectivePathText}"
+                                   TextWrapping="Wrap" />
+                    </StackPanel>
+                </Border>
+                <Border Classes="settings-row last">
+                    <StackPanel Spacing="6">
+                        <TextBlock Classes="settings-card-title" Text="Runner 组件（codex-command-runner.exe）" />
+                        <TextBox Classes="settings-input"
+                                 Text="{Binding RunnerExecutablePathText, Mode=TwoWay}"
+                                 PlaceholderText="留空使用当前安装包默认组件"
+                                 AutomationProperties.Name="Runner 组件自定义路径" />
+                        <TextBlock Classes="settings-card-description" Text="{Binding RunnerStatusSummaryText}"
+                                   TextWrapping="Wrap" />
+                        <TextBlock Classes="settings-card-description" Text="{Binding RunnerEffectivePathText}"
+                                   TextWrapping="Wrap" />
+                        <TextBlock Classes="settings-card-description" Text="{Binding ComponentOverrideHint}"
+                                   TextWrapping="Wrap" Margin="0,4,0,0" />
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+        </Border>
         <TextBlock Classes="settings-group-title" Text="网络访问" Margin="0,24,0,10" />
         <Border Classes="settings-group">
             <StackPanel>

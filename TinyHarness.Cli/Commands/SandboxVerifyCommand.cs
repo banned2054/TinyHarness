@@ -60,10 +60,11 @@ internal static class SandboxVerifyCommand
             return 1;
         }
 
-        var configPath      = context.ResolveUserConfigPath();
-        var userConfig      = await UserConfigStore.LoadAsync(configPath, cancellationToken).ConfigureAwait(false);
-        var settings        = userConfig.Settings?.WindowsSandbox;
-        var networkSettings = userConfig.Settings?.Network;
+        var configPath       = context.ResolveUserConfigPath();
+        var appBaseDirectory = context.ResolveAppBaseDirectory();
+        var userConfig       = await UserConfigStore.LoadAsync(configPath, cancellationToken).ConfigureAwait(false);
+        var settings         = userConfig.Settings?.WindowsSandbox;
+        var networkSettings  = userConfig.Settings?.Network;
         // --network 决定验收的网络模式与用例集；restricted（默认）保持原有 17 用例行为零变化。
         var networkPolicy = ResolveNetworkPolicy(options.VerifyNetwork);
 
@@ -72,17 +73,7 @@ internal static class SandboxVerifyCommand
         await io.WriteLineAsync($"  network  : {NetworkDisplay(networkPolicy)}", cancellationToken)
                 .ConfigureAwait(false);
 
-        if (settings is null || IsBlankSettings(settings))
-        {
-            await io
-                 .WriteLineAsync("  [fail] 用户配置未设置 settings.windowsSandbox；sandbox verify 需要先配置组件路径" +
-                                 "（sandboxHome 可省略，缺省使用独立固定默认 home）并运行 tinyharness sandbox provision",
-                                 cancellationToken)
-                 .ConfigureAwait(false);
-            return 1;
-        }
-
-        if (!settings.Enabled)
+        if (settings is not { Enabled: true })
         {
             await io
                  .WriteLineAsync("  [fail] settings.windowsSandbox.enabled 不是 true；sandbox verify 不做任何事。" +
@@ -92,7 +83,8 @@ internal static class SandboxVerifyCommand
             return 1;
         }
 
-        var pathProblems = CollectPathProblems(settings);
+        var componentResolution = WindowsSandboxComponentResolver.Resolve(settings, appBaseDirectory);
+        var pathProblems        = CollectPathProblems(settings, componentResolution);
         if (pathProblems.Count > 0)
         {
             foreach (var problem in pathProblems)
@@ -101,12 +93,26 @@ internal static class SandboxVerifyCommand
             return 1;
         }
 
+        var setupInspection  = WindowsSandboxComponentResolver.InspectComponent(componentResolution.Setup, appBaseDirectory);
+        var runnerInspection = WindowsSandboxComponentResolver.InspectComponent(componentResolution.Runner, appBaseDirectory);
+        var componentProblems = new List<string>();
+        if (!setupInspection.IsUsable && setupInspection.Error is not null) componentProblems.Add(setupInspection.Error);
+        if (!runnerInspection.IsUsable && runnerInspection.Error is not null) componentProblems.Add(runnerInspection.Error);
+        if (componentProblems.Count > 0)
+        {
+            foreach (var problem in componentProblems)
+                await io.WriteLineAsync($"  [fail] {problem}", cancellationToken).ConfigureAwait(false);
+
+            return 1;
+        }
+
         var components = new WindowsSandboxComponents
         {
-            AllowTcpLoopback = settings.AllowTcpLoopback,
-            SetupExecutablePath = settings.SetupExecutablePath.Trim(),
-            RunnerExecutablePath = settings.RunnerExecutablePath.Trim(),
-            SandboxHome = WindowsSandboxComponents.ResolveSandboxHome(settings.SandboxHome, settings.AllowTcpLoopback)
+            AllowTcpLoopback     = settings.AllowTcpLoopback,
+            SetupExecutablePath  = componentResolution.Setup.CandidatePath!,
+            RunnerExecutablePath = componentResolution.Runner.CandidatePath!,
+            SandboxHome          = WindowsSandboxComponents.ResolveSandboxHome(settings.SandboxHome,
+                                                                               settings.AllowTcpLoopback)
         };
         var readiness = await new WindowsSandboxStateInspector(components).InspectAsync(cancellationToken)
                                                                           .ConfigureAwait(false);
@@ -143,7 +149,7 @@ internal static class SandboxVerifyCommand
         // knownSecrets 的解析与 run 完全一致，使验收环境匹配生产组合语义。
         // 密钥源不可用（如凭据存储在当前环境不可读）只意味着没有已知 secret：
         // verify 不调用模型，不得被密钥可用性阻塞。
-        var resolution   = await ConfigResolver.ResolveAsync(null, cancellationToken).ConfigureAwait(false);
+        var resolution   = await ConfigResolver.ResolveAsync(null, cancellationToken, configPath).ConfigureAwait(false);
         var knownSecrets = ResolveKnownSecrets(context, resolution, cancellationToken);
 
         // 验收不写持久会话日志；共享组合路径在确认门之前校验组件与验收工作区。
@@ -154,7 +160,8 @@ internal static class SandboxVerifyCommand
         try
         {
             preview = SandboxCliComposition.TryCompose(WithNetworkPolicy(settings, networkPolicy), workspaceRoot,
-                                                       knownSecrets, null, networkSettings)
+                                                       knownSecrets, null, networkSettings,
+                                                       appBaseDirectory : appBaseDirectory)
                    ?? throw new InvalidOperationException("settings.windowsSandbox.enabled is required for verify.");
         }
         catch (Exception ex) when (ex is InvalidOperationException or ArgumentException)
@@ -163,7 +170,7 @@ internal static class SandboxVerifyCommand
             return 1;
         }
 
-        await PrintOverviewAsync(io, preview, components, caseCount, workspaceRoot, networkPolicy,
+        await PrintOverviewAsync(io, preview, components, componentResolution, caseCount, workspaceRoot, networkPolicy,
                                  NamedProxyHostPort(networkSettings, settings.Proxy),
                                  WindowsSandboxAcceptanceLimits.Default.OnlineExternalProbeUrl, cancellationToken)
            .ConfigureAwait(false);
@@ -189,7 +196,7 @@ internal static class SandboxVerifyCommand
 
         var factory = backendFactory ?? ((kind, extraEnvironment) =>
             ComposeCase(settings, kind, extraEnvironment, workspaceRoot, knownSecrets, networkPolicy,
-                        networkSettings));
+                        networkSettings, appBaseDirectory));
         var spawner = workerSpawner ?? ((markerPath, holdSeconds) =>
             StartWorkerProcess(markerPath, holdSeconds, workspaceRoot, networkPolicy));
         var onlineProxyHostPort = NamedProxyHostPort(networkSettings, settings.Proxy);
@@ -259,8 +266,9 @@ internal static class SandboxVerifyCommand
             return 1;
         }
 
-        var configPath = context.ResolveUserConfigPath();
-        var userConfig = await UserConfigStore.LoadAsync(configPath, cancellationToken).ConfigureAwait(false);
+        var configPath       = context.ResolveUserConfigPath();
+        var appBaseDirectory = context.ResolveAppBaseDirectory();
+        var userConfig       = await UserConfigStore.LoadAsync(configPath, cancellationToken).ConfigureAwait(false);
         var settings   = userConfig.Settings?.WindowsSandbox;
         if (settings is not { Enabled: true })
         {
@@ -291,11 +299,12 @@ internal static class SandboxVerifyCommand
                 return 1;
             }
 
-            // 组合方式与父进程 verify 一致：同一验收网络模式与同源 networkSettings，不检查未使用的旧快照目录。
-            var resolution   = await ConfigResolver.ResolveAsync(null, cancellationToken).ConfigureAwait(false);
+            // 组合方式与父进程 verify 一致：同一验收网络模式、同源用户配置、networkSettings 与应用基准目录。
+            var resolution   = await ConfigResolver.ResolveAsync(null, cancellationToken, configPath).ConfigureAwait(false);
             var knownSecrets = ResolveKnownSecrets(context, resolution, cancellationToken);
             var execution    = SandboxCliComposition.TryCompose(WithNetworkPolicy(settings, networkPolicy),
-                                                                workspaceRoot, knownSecrets, null, networkSettings);
+                                                                workspaceRoot, knownSecrets, null, networkSettings,
+                                                                appBaseDirectory : appBaseDirectory);
             if (execution is null)
             {
                 await context.Io.WriteErrorLineAsync("sandbox verify-worker: 沙箱未启用；退出。", cancellationToken)
@@ -461,7 +470,8 @@ internal static class SandboxVerifyCommand
         string                               workspaceRoot,
         IReadOnlyDictionary<string, string>  knownSecrets,
         SandboxNetworkPolicy                 networkPolicy,
-        NetworkSettings?                     networkSettings)
+        NetworkSettings?                     networkSettings,
+        string?                              appBaseDirectory = null)
     {
         var merged = extraEnvironment is null
             ? settings.ExtraEnvironment
@@ -472,7 +482,8 @@ internal static class SandboxVerifyCommand
             ExtraEnvironment = merged,
             NetworkPolicy    = networkPolicy
         };
-        return WindowsSandboxComposer.Compose(caseSettings, workspaceRoot, knownSecrets, networkSettings);
+        return WindowsSandboxComposer.Compose(caseSettings, workspaceRoot, knownSecrets, networkSettings,
+                                              appBaseDirectory : appBaseDirectory);
     }
 
     private static IReadOnlyDictionary<string, string> MergeEnvironment(
@@ -520,14 +531,22 @@ internal static class SandboxVerifyCommand
     }
 
     private static async Task PrintOverviewAsync(ICliConsole io, WindowsSandboxExecution preview,
-                                                 WindowsSandboxComponents components, int caseCount,
-                                                 string workspaceRoot, SandboxNetworkPolicy networkPolicy,
+                                                 WindowsSandboxComponents components,
+                                                 WindowsSandboxComponentResolution componentResolution,
+                                                 int caseCount, string workspaceRoot,
+                                                 SandboxNetworkPolicy networkPolicy,
                                                  string? onlineProxyHostPort, string probeUrl,
                                                  CancellationToken cancellationToken)
     {
-        await io.WriteLineAsync($"  setup    : {components.SetupExecutablePath}", cancellationToken)
+        var probe = WindowsSandboxComponentResolver.InspectDenyProbe(componentResolution);
+        await io.WriteLineAsync($"  setup    : {components.SetupExecutablePath}（{componentResolution.Setup.SourceDisplayZh}）",
+                                cancellationToken)
                 .ConfigureAwait(false);
-        await io.WriteLineAsync($"  runner   : {components.RunnerExecutablePath}", cancellationToken)
+        await io.WriteLineAsync($"  runner   : {components.RunnerExecutablePath}（{componentResolution.Runner.SourceDisplayZh}）",
+                                cancellationToken)
+                .ConfigureAwait(false);
+        await io.WriteLineAsync($"  probe    : {probe.ExpectedPath}（{(probe.Exists ? "存在" : "缺失；deny-probe 用例将报告 INDETERMINATE")}）",
+                                cancellationToken)
                 .ConfigureAwait(false);
         await io.WriteLineAsync($"  home     : {components.SandboxHome}" +
                                 (string.Equals(components.SandboxHome,
@@ -629,25 +648,18 @@ internal static class SandboxVerifyCommand
         return clean ? 0 : AcceptanceFailedExitCode;
     }
 
-    private static bool IsBlankSettings(WindowsSandboxSettings settings) =>
-        string.IsNullOrWhiteSpace(settings.SetupExecutablePath)  &&
-        string.IsNullOrWhiteSpace(settings.RunnerExecutablePath) &&
-        string.IsNullOrWhiteSpace(settings.SandboxHome);
-
-    private static List<string> CollectPathProblems(WindowsSandboxSettings settings)
+    private static List<string> CollectPathProblems(
+        WindowsSandboxSettings settings, WindowsSandboxComponentResolution resolution)
     {
         var problems = new List<string>();
-        foreach (var (value, field) in new[]
-                 {
-                     (settings.SetupExecutablePath, "setupExecutablePath"),
-                     (settings.RunnerExecutablePath, "runnerExecutablePath")
-                 })
-            if (string.IsNullOrWhiteSpace(value) || !Path.IsPathFullyQualified(value))
-                problems.Add($"settings.windowsSandbox.{field} 缺失或不是绝对路径" +
-                             (string.IsNullOrWhiteSpace(value) ? "。" : $"：'{value}'。"));
+        if (!resolution.Setup.IsValid)
+            problems.Add($"settings.windowsSandbox.setupExecutablePath 非法：{resolution.Setup.Error}");
+
+        if (!resolution.Runner.IsValid)
+            problems.Add($"settings.windowsSandbox.runnerExecutablePath 非法：{resolution.Runner.Error}");
 
         // home 可留空（使用固定的独立默认值）；只有显式相对路径才是配置错误。
-        if (!string.IsNullOrWhiteSpace(settings.SandboxHome) && !Path.IsPathFullyQualified(settings.SandboxHome))
+        if (!string.IsNullOrWhiteSpace(settings.SandboxHome) && !Path.IsPathFullyQualified(settings.SandboxHome.Trim()))
             problems.Add($"settings.windowsSandbox.sandboxHome 不是绝对路径（留空则使用固定默认 home）：'{settings.SandboxHome}'。");
 
         return problems;

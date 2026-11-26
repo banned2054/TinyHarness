@@ -39,59 +39,59 @@ internal static class SandboxCommand
     };
 
     /// <summary>
-    ///     <para>严格只读的状态检查。未配置或就绪返回 0；有任何问题返回 1。不要求 enabled=true。</para>
     ///     <para>
-    ///         The strictly read-only status check. Not configured or ready returns
-    ///         0; any reported problem returns 1. enabled=true is not required.
+    ///         严格只读的状态检查。逐项展示组件来源、有效绝对路径、文件与探针状态以及机器就绪状态。
+    ///         禁用且无显式配置错误、无发布包缺件时返回 0 并给出操作提示；启用后未就绪、显式配置错误
+    ///         或已识别发布包缺件返回 1。
+    ///     </para>
+    ///     <para>
+    ///         Strictly read-only status check. Reports each component's source, effective absolute path,
+    ///         file and probe state, and machine readiness. Returns 0 with guidance when disabled without
+    ///         configuration errors or missing release-package files; returns 1 when enabled and not ready,
+    ///         explicitly misconfigured, or missing release-package files.
     ///     </para>
     /// </summary>
     private static async Task<int> StatusAsync(CommandContext context, CancellationToken cancellationToken)
     {
-        var io         = context.Io;
-        var configPath = context.ResolveUserConfigPath();
-        var userConfig = await UserConfigStore.LoadAsync(configPath, cancellationToken).ConfigureAwait(false);
-        var settings   = userConfig.Settings?.WindowsSandbox;
+        var io               = context.Io;
+        var configPath       = context.ResolveUserConfigPath();
+        var appBaseDirectory = context.ResolveAppBaseDirectory();
+        var userConfig       = await UserConfigStore.LoadAsync(configPath, cancellationToken).ConfigureAwait(false);
+        var configured       = userConfig.Settings?.WindowsSandbox;
+        var effective        = configured ?? new WindowsSandboxSettings();
+        var hasExplicitSetup = HasExplicitSandboxSettings(configured);
+
+        var resolution       = WindowsSandboxComponentResolver.Resolve(effective, appBaseDirectory);
+        var setupInspection  = WindowsSandboxComponentResolver.InspectComponent(resolution.Setup, appBaseDirectory);
+        var runnerInspection = WindowsSandboxComponentResolver.InspectComponent(resolution.Runner, appBaseDirectory);
+        var probeInspection  = WindowsSandboxComponentResolver.InspectDenyProbe(resolution);
 
         await io.WriteLineAsync("TinyHarness sandbox status", cancellationToken).ConfigureAwait(false);
         await io.WriteLineAsync($"  config   : {configPath}", cancellationToken).ConfigureAwait(false);
-
-        if (settings is null || IsBlankSettings(settings))
-        {
-            await io
-                 .WriteLineAsync("  [ok]   未配置 windowsSandbox；run/smoke/doctor 保持宿主执行（无 OS 隔离），也不会修改机器",
-                                 cancellationToken)
-                 .ConfigureAwait(false);
-            await io
-                 .WriteLineAsync("  要启用：在上述用户配置的 settings.windowsSandbox 中设置 setupExecutablePath、"                    +
-                                 "runnerExecutablePath（两个组件 exe 的绝对路径）；sandboxHome 可省略（缺省使用独立固定默认 "                   +
-                                 $"{WindowsSandboxComponents.DefaultSandboxHome}），再运行 tinyharness sandbox provision；" +
-                                 "enabled 显式设为 true 后 run 才会使用沙箱。",
-                                 cancellationToken)
-                 .ConfigureAwait(false);
-            return 0;
-        }
-
-        await io.WriteLineAsync($"  enabled  : {(settings.Enabled ? "true" : "false")}（false 时 run 保持宿主执行）",
+        await io.WriteLineAsync($"  appDir   : {appBaseDirectory}", cancellationToken).ConfigureAwait(false);
+        await io.WriteLineAsync($"  enabled  : {(effective.Enabled ? "true" : "false")}（false 时 run 保持宿主执行）",
                                 cancellationToken)
                 .ConfigureAwait(false);
-        await io.WriteLineAsync($"  policy   : {PolicyDisplay(settings.Policy)}", cancellationToken)
+        await io.WriteLineAsync($"  policy   : {PolicyDisplay(effective.Policy)}", cancellationToken)
                 .ConfigureAwait(false);
-        await io.WriteLineAsync(settings.AllowTcpLoopback
+        await io.WriteLineAsync(effective.AllowTcpLoopback
                                     ? "  network  : external-blocked; TCP loopback allowed (host services included); UDP blocked"
                                     : "  network  : restricted; TCP loopback blocked", cancellationToken)
                 .ConfigureAwait(false);
-        await io.WriteLineAsync($"  setup    : {settings.SetupExecutablePath}", cancellationToken)
+        await io.WriteLineAsync($"  setup    : {FormatComponentLine(setupInspection)}", cancellationToken)
                 .ConfigureAwait(false);
-        await io.WriteLineAsync($"  runner   : {settings.RunnerExecutablePath}", cancellationToken)
+        await io.WriteLineAsync($"  runner   : {FormatComponentLine(runnerInspection)}", cancellationToken)
+                .ConfigureAwait(false);
+        await io.WriteLineAsync($"  probe    : {FormatProbeLine(probeInspection)}", cancellationToken)
                 .ConfigureAwait(false);
         // 相对 home 不在此抛出，改由下方问题清单报告，status 对错误输入保持只读诊断。
-        await io.WriteLineAsync(string.IsNullOrWhiteSpace(settings.SandboxHome)
-                                    ? $"  home     : {WindowsSandboxComponents.ResolveSandboxHome(null, settings.AllowTcpLoopback)}（sandboxHome 未设置，使用固定默认）"
-                                    : $"  home     : {settings.SandboxHome}",
+        await io.WriteLineAsync(string.IsNullOrWhiteSpace(effective.SandboxHome)
+                                    ? $"  home     : {WindowsSandboxComponents.ResolveSandboxHome(null, effective.AllowTcpLoopback)}（sandboxHome 未设置，使用固定默认）"
+                                    : $"  home     : {effective.SandboxHome}",
                                 cancellationToken)
                 .ConfigureAwait(false);
         await io
-             .WriteLineAsync($"  versions : 本 build 期望 setup v{(settings.AllowTcpLoopback ? WindowsSandboxComponents.TcpLoopbackSetupVersion : WindowsSandboxComponents.SetupVersion)} / ipc v{WindowsSandboxComponents.IpcVersion}",
+             .WriteLineAsync($"  versions : 本 build 期望 setup v{(effective.AllowTcpLoopback ? WindowsSandboxComponents.TcpLoopbackSetupVersion : WindowsSandboxComponents.SetupVersion)} / ipc v{WindowsSandboxComponents.IpcVersion}",
                              cancellationToken)
              .ConfigureAwait(false);
 
@@ -101,7 +101,7 @@ internal static class SandboxCommand
                                  cancellationToken)
                  .ConfigureAwait(false);
 
-        var pathProblems = CollectPathProblems(settings);
+        var pathProblems = CollectPathProblems(effective, resolution);
         if (pathProblems.Count > 0)
         {
             foreach (var problem in pathProblems)
@@ -113,18 +113,85 @@ internal static class SandboxCommand
             return 1;
         }
 
+        var componentErrors = CollectComponentErrors(setupInspection, runnerInspection);
+        var releasePackageMissing = setupInspection.IsReleasePackageBundled  && !setupInspection.Exists ||
+                                    runnerInspection.IsReleasePackageBundled && !runnerInspection.Exists;
+        var hasExplicitComponentOrBoundaryError =
+            (!setupInspection.IsUsable &&
+             (setupInspection.Resolved.Source == WindowsSandboxComponentSource.Configured ||
+              setupInspection.Exists)) ||
+            (!runnerInspection.IsUsable &&
+             (runnerInspection.Resolved.Source == WindowsSandboxComponentSource.Configured ||
+              runnerInspection.Exists));
+
         var components = new WindowsSandboxComponents
         {
-            AllowTcpLoopback = settings.AllowTcpLoopback,
-            SetupExecutablePath = settings.SetupExecutablePath.Trim(),
-            RunnerExecutablePath = settings.RunnerExecutablePath.Trim(),
-            SandboxHome = WindowsSandboxComponents.ResolveSandboxHome(settings.SandboxHome, settings.AllowTcpLoopback)
+            AllowTcpLoopback     = effective.AllowTcpLoopback,
+            SetupExecutablePath  = resolution.Setup.CandidatePath!,
+            RunnerExecutablePath = resolution.Runner.CandidatePath!,
+            SandboxHome          = WindowsSandboxComponents.ResolveSandboxHome(effective.SandboxHome,
+                                                                               effective.AllowTcpLoopback)
         };
         var status = await new WindowsSandboxStateInspector(components).InspectAsync(cancellationToken)
                                                                        .ConfigureAwait(false);
+        // 机器级问题（marker/cap_sid/credentials）：组件缺失已由上方的结构化诊断覆盖，此处过滤重复文件缺失项。
+        var machineProblems = status.Problems
+                                    .Where(problem => !problem.StartsWith("Setup executable not found:",
+                                                                          StringComparison.Ordinal) &&
+                                                      !problem.StartsWith("Runner executable not found:",
+                                                                          StringComparison.Ordinal))
+                                    .ToList();
+
+        if (componentErrors.Count > 0)
+        {
+            var mustFail = effective.Enabled || hasExplicitSetup || releasePackageMissing ||
+                           hasExplicitComponentOrBoundaryError;
+            if (!mustFail)
+            {
+                await io.WriteLineAsync("  [ok]   未启用 windowsSandbox，且当前应用目录没有随包沙箱组件；run/smoke/doctor 保持宿主执行（无 OS 隔离）",
+                                        cancellationToken)
+                        .ConfigureAwait(false);
+                foreach (var error in componentErrors)
+                    await io.WriteLineAsync($"  [info] {error}", cancellationToken).ConfigureAwait(false);
+                await io.WriteLineAsync("  要启用：发布包请完整解压同版本 ZIP；源码运行请在用户配置的 settings.windowsSandbox 中设置 " +
+                                        "setupExecutablePath 与 runnerExecutablePath 绝对路径，再运行 tinyharness sandbox provision，" +
+                                        "最后将 enabled 设为 true。",
+                                        cancellationToken)
+                        .ConfigureAwait(false);
+                return 0;
+            }
+
+            foreach (var error in componentErrors)
+                await io.WriteLineAsync($"  [fail] {error}", cancellationToken).ConfigureAwait(false);
+            foreach (var problem in machineProblems)
+                await io.WriteLineAsync($"  [fail] {problem}", cancellationToken).ConfigureAwait(false);
+
+            var totalProblems = componentErrors.Count + machineProblems.Count;
+            await io.WriteLineAsync($"{totalProblems} 项问题；修复后再运行 tinyharness sandbox provision 或启用沙箱。",
+                                    cancellationToken)
+                    .ConfigureAwait(false);
+            return 1;
+        }
+
         if (status.Ready)
         {
-            await io.WriteLineAsync("  [ok]   沙箱就绪：组件存在，marker 版本一致，cap_sid 与账户凭据可解析",
+            await io.WriteLineAsync(effective.Enabled
+                                        ? "  [ok]   沙箱就绪：组件存在，marker 版本一致，cap_sid 与账户凭据可解析"
+                                        : "  [ok]   沙箱组件与机器状态已就绪（当前 enabled=false，run 保持宿主执行；将 settings.windowsSandbox.enabled 设为 true 即可启用）",
+                                    cancellationToken)
+                    .ConfigureAwait(false);
+            return 0;
+        }
+
+        if (!effective.Enabled && !hasExplicitSetup)
+        {
+            await io.WriteLineAsync("  [ok]   未启用 windowsSandbox；已发现当前安装包的随包组件，机器尚未初始化，run/smoke/doctor 保持宿主执行（无 OS 隔离）",
+                                    cancellationToken)
+                    .ConfigureAwait(false);
+            foreach (var problem in status.Problems)
+                await io.WriteLineAsync($"  [info] {problem}", cancellationToken).ConfigureAwait(false);
+            await io.WriteLineAsync("  要启用：直接运行 tinyharness sandbox provision（无需手动填写随包组件路径），完成后将 " +
+                                    "settings.windowsSandbox.enabled 设为 true。",
                                     cancellationToken)
                     .ConfigureAwait(false);
             return 0;
@@ -162,38 +229,19 @@ internal static class SandboxCommand
             return 1;
         }
 
-        var configPath = context.ResolveUserConfigPath();
-        var userConfig = await UserConfigStore.LoadAsync(configPath, cancellationToken).ConfigureAwait(false);
-        var settings   = userConfig.Settings?.WindowsSandbox;
+        var configPath       = context.ResolveUserConfigPath();
+        var appBaseDirectory = context.ResolveAppBaseDirectory();
+        var userConfig       = await UserConfigStore.LoadAsync(configPath, cancellationToken).ConfigureAwait(false);
+        var effective        = userConfig.Settings?.WindowsSandbox ?? new WindowsSandboxSettings();
 
         await io.WriteLineAsync("TinyHarness sandbox provision", cancellationToken).ConfigureAwait(false);
         await io.WriteLineAsync($"  config   : {configPath}", cancellationToken).ConfigureAwait(false);
 
-        if (settings is null)
-        {
-            await io
-                 .WriteLineAsync("  [fail] 用户配置未设置 settings.windowsSandbox；先配置 setupExecutablePath 与 " +
-                                 "runnerExecutablePath（sandboxHome 可省略，缺省使用独立固定默认 home）",
-                                 cancellationToken)
-                 .ConfigureAwait(false);
-            return 1;
-        }
-
-        if (IsMissingOrRelative(settings.SetupExecutablePath))
-        {
-            await io
-                 .WriteLineAsync("  [fail] settings.windowsSandbox.setupExecutablePath 缺失或不是绝对路径" +
-                                 DescribeSetting(settings.SetupExecutablePath),
-                                 cancellationToken)
-                 .ConfigureAwait(false);
-            return 1;
-        }
-
-        if (IsExplicitRelative(settings.SandboxHome))
+        if (IsExplicitRelative(effective.SandboxHome))
         {
             await io
                  .WriteLineAsync("  [fail] settings.windowsSandbox.sandboxHome 不是绝对路径（留空则使用固定默认 home）" +
-                                 DescribeSetting(settings.SandboxHome),
+                                 DescribeSetting(effective.SandboxHome),
                                  cancellationToken)
                  .ConfigureAwait(false);
             return 1;
@@ -203,20 +251,13 @@ internal static class SandboxCommand
         try
         {
             provisioner ??= new WindowsSandboxProvisioner(new ProcessSandboxSetupElevator());
-            plan        =   provisioner.BuildPlan(settings, context.ResolveWorkingDirectory(), Environment.UserName);
+            plan = provisioner.BuildPlan(effective, context.ResolveWorkingDirectory(), Environment.UserName,
+                                         appBaseDirectory);
         }
         catch (Exception ex) when
             (ex is InvalidOperationException or ArgumentException or PlatformNotSupportedException)
         {
             await io.WriteLineAsync($"  [fail] 无法构造 provisioning 计划：{ex.Message}", cancellationToken)
-                    .ConfigureAwait(false);
-            return 1;
-        }
-
-        if (!File.Exists(plan.Components.SetupExecutablePath))
-        {
-            await io.WriteLineAsync($"  [fail] setup 可执行文件不存在：{plan.Components.SetupExecutablePath}",
-                                    cancellationToken)
                     .ConfigureAwait(false);
             return 1;
         }
@@ -242,7 +283,18 @@ internal static class SandboxCommand
             }
         }
 
-        var result = await provisioner.ProvisionAsync(plan, cancellationToken).ConfigureAwait(false);
+        WindowsSandboxProvisionResult result;
+        try
+        {
+            result = await provisioner.ProvisionAsync(plan, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or ArgumentException)
+        {
+            await io.WriteLineAsync($"  [fail] 提权前校验失败，未启动 setup helper：{ex.Message}", cancellationToken)
+                    .ConfigureAwait(false);
+            return 1;
+        }
+
         if (result.AuditWriteError is not null)
             await io.WriteLineAsync($"  [warn] {result.AuditWriteError}", cancellationToken).ConfigureAwait(false);
 
@@ -259,7 +311,11 @@ internal static class SandboxCommand
     private static async Task PrintSideEffectsAsync(
         ICliConsole io, WindowsSandboxProvisionPlan plan, CancellationToken cancellationToken)
     {
-        await io.WriteLineAsync($"  setup    : {plan.Components.SetupExecutablePath}", cancellationToken)
+        await io.WriteLineAsync($"  setup    : {plan.Components.SetupExecutablePath}（{plan.ResolvedComponents.Setup.SourceDisplayZh}）",
+                                cancellationToken)
+                .ConfigureAwait(false);
+        await io.WriteLineAsync($"  runner   : {plan.Components.RunnerExecutablePath}（{plan.ResolvedComponents.Runner.SourceDisplayZh}）",
+                                cancellationToken)
                 .ConfigureAwait(false);
         await io.WriteLineAsync($"  home     : {plan.Components.SandboxHome}", cancellationToken).ConfigureAwait(false);
         await io.WriteLineAsync($"  tempRoot : {plan.TempRoot}（仅作为路径进入 payload，本命令不创建）",
@@ -331,14 +387,13 @@ internal static class SandboxCommand
         }
     }
 
-    private static bool IsBlankSettings(WindowsSandboxSettings settings) =>
-        !settings.AllowTcpLoopback                               &&
-        string.IsNullOrWhiteSpace(settings.SetupExecutablePath)  &&
-        string.IsNullOrWhiteSpace(settings.RunnerExecutablePath) &&
-        string.IsNullOrWhiteSpace(settings.SandboxHome);
-
-    private static bool IsMissingOrRelative(string? value) =>
-        string.IsNullOrWhiteSpace(value) || !Path.IsPathFullyQualified(value);
+    private static bool HasExplicitSandboxSettings(WindowsSandboxSettings? settings) =>
+        settings is not null &&
+        (settings.Enabled                                         ||
+         settings.AllowTcpLoopback                                ||
+         !string.IsNullOrWhiteSpace(settings.SetupExecutablePath) ||
+         !string.IsNullOrWhiteSpace(settings.RunnerExecutablePath) ||
+         !string.IsNullOrWhiteSpace(settings.SandboxHome));
 
     /// <summary>
     ///     <para>显式设置但非绝对（home 可留空使用固定默认，只有显式相对路径才是错误）。</para>
@@ -348,26 +403,56 @@ internal static class SandboxCommand
     ///     </para>
     /// </summary>
     private static bool IsExplicitRelative(string? value) =>
-        !string.IsNullOrWhiteSpace(value) && !Path.IsPathFullyQualified(value);
+        !string.IsNullOrWhiteSpace(value) && !Path.IsPathFullyQualified(value.Trim());
 
     private static string DescribeSetting(string? value) => string.IsNullOrWhiteSpace(value) ? "。" : $"：'{value}'。";
 
-    private static List<string> CollectPathProblems(WindowsSandboxSettings settings)
+    private static List<string> CollectPathProblems(
+        WindowsSandboxSettings settings, WindowsSandboxComponentResolution resolution)
     {
         var problems = new List<string>();
-        if (IsMissingOrRelative(settings.SetupExecutablePath))
-            problems.Add("settings.windowsSandbox.setupExecutablePath 缺失或不是绝对路径" +
-                         DescribeSetting(settings.SetupExecutablePath));
+        if (!resolution.Setup.IsValid)
+            problems.Add($"settings.windowsSandbox.setupExecutablePath 非法：{resolution.Setup.Error}");
 
-        if (IsMissingOrRelative(settings.RunnerExecutablePath))
-            problems.Add("settings.windowsSandbox.runnerExecutablePath 缺失或不是绝对路径" +
-                         DescribeSetting(settings.RunnerExecutablePath));
+        if (!resolution.Runner.IsValid)
+            problems.Add($"settings.windowsSandbox.runnerExecutablePath 非法：{resolution.Runner.Error}");
 
         if (IsExplicitRelative(settings.SandboxHome))
             problems.Add("settings.windowsSandbox.sandboxHome 不是绝对路径（留空则使用固定默认 home）" +
                          DescribeSetting(settings.SandboxHome));
 
         return problems;
+    }
+
+    private static List<string> CollectComponentErrors(
+        WindowsSandboxComponentInspection setup, WindowsSandboxComponentInspection runner)
+    {
+        var errors = new List<string>();
+        if (!setup.IsUsable && setup.Error is not null) errors.Add(setup.Error);
+        if (!runner.IsUsable && runner.Error is not null) errors.Add(runner.Error);
+        return errors;
+    }
+
+    private static string FormatComponentLine(WindowsSandboxComponentInspection inspection)
+    {
+        var resolved = inspection.Resolved;
+        var pathText = resolved.CandidatePath ?? resolved.ConfiguredValue ?? "<invalid>";
+        var state = !resolved.IsValid
+            ? "非法路径"
+            : inspection.IsUsable
+                ? "存在"
+                : inspection.Exists
+                    ? "边界校验失败"
+                    : "缺失";
+        return $"{pathText}（{resolved.SourceDisplayZh}，{state}）";
+    }
+
+    private static string FormatProbeLine(WindowsSandboxProbeInspection probe)
+    {
+        if (probe.ExpectedPath is null) return "<不可用：runner 路径非法>";
+
+        var sourceText = probe.Source == WindowsSandboxComponentSource.Configured ? "自定义 runner 同目录" : "当前安装包默认";
+        return $"{probe.ExpectedPath}（{sourceText}，{(probe.Exists ? "存在" : "缺失；仅 deny-probe 验收需要")}）";
     }
 
     private static string PolicyDisplay(SandboxPolicyKind kind) => kind switch

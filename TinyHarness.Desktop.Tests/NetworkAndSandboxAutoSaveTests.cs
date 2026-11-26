@@ -211,6 +211,72 @@ public sealed class NetworkAndSandboxAutoSaveTests
         Assert.That(saved.Settings.Network!.DefaultRoute.Mode, Is.EqualTo(NetworkMode.Direct));
     }
 
+    [Test]
+    public async Task SandboxComponentPathsSupportCustomOverridesValidationAndResetToBundledDefaults()
+    {
+        var (path, _) = await CreateConfigAsync();
+        var appDir    = Path.Combine(Path.GetDirectoryName(path)!, "desktop-app");
+        var customDir = Path.Combine(Path.GetDirectoryName(path)!, "custom-fork");
+        Directory.CreateDirectory(Path.Combine(appDir, "sandbox"));
+        Directory.CreateDirectory(customDir);
+        var bundledSetup  = Path.Combine(appDir, "sandbox", "codex-windows-sandbox-setup.exe");
+        var bundledRunner = Path.Combine(appDir, "sandbox", "codex-command-runner.exe");
+        var customSetup   = Path.Combine(customDir, "codex-windows-sandbox-setup.exe");
+        var customRunner  = Path.Combine(customDir, "codex-command-runner.exe");
+        await File.WriteAllTextAsync(bundledSetup, "stub");
+        await File.WriteAllTextAsync(bundledRunner, "stub");
+        await File.WriteAllTextAsync(customSetup, "stub");
+        await File.WriteAllTextAsync(customRunner, "stub");
+
+        var sandbox = new WindowsSandboxSettingsViewModel(path, appBaseDirectory : appDir);
+        await sandbox.LoadAsync();
+
+        Assert.That(sandbox.HasCustomComponentPaths, Is.False);
+        Assert.That(sandbox.ResetComponentPathsCommand.CanExecute(null), Is.False);
+        Assert.That(sandbox.SetupStatusSummaryText, Does.Contain("当前安装包默认"));
+        Assert.That(sandbox.SetupStatusSummaryText, Does.Contain("已找到"));
+        Assert.That(sandbox.SetupEffectivePathText, Does.Contain(bundledSetup));
+        Assert.That(sandbox.RunnerEffectivePathText, Does.Contain(bundledRunner));
+
+        // 填写非法相对路径时拒绝落盘，保留原有配置。
+        var beforeInvalid = await File.ReadAllTextAsync(path);
+        sandbox.SetupExecutablePathText = @"relative\setup.exe";
+        await sandbox.WaitForAutoSaveAsync();
+        Assert.That(sandbox.HasAutoSaveError, Is.True);
+        Assert.That(await File.ReadAllTextAsync(path), Is.EqualTo(beforeInvalid));
+
+        // 填写合法绝对路径覆盖，自动保存写入配置并更新来源展示。
+        sandbox.SetupExecutablePathText  = customSetup;
+        sandbox.RunnerExecutablePathText = customRunner;
+        await sandbox.WaitForAutoSaveAsync();
+        Assert.That(sandbox.HasAutoSaveError, Is.False, sandbox.Notice);
+        Assert.That(sandbox.HasCustomComponentPaths, Is.True);
+        Assert.That(sandbox.ResetComponentPathsCommand.CanExecute(null), Is.True);
+        Assert.That(sandbox.SetupStatusSummaryText, Does.Contain("自定义路径"));
+        Assert.That(sandbox.SetupEffectivePathText, Does.Contain(customSetup));
+
+        var savedWithCustom = await UserConfigStore.LoadAsync(path, default);
+        Assert.That(savedWithCustom.Settings!.WindowsSandbox!.SetupExecutablePath, Is.EqualTo(customSetup));
+        Assert.That(savedWithCustom.Settings.WindowsSandbox.RunnerExecutablePath, Is.EqualTo(customRunner));
+
+        // 点击恢复默认：清空两个输入框并自动保存，配置文件不再写出两个路径键。
+        sandbox.ResetComponentPathsCommand.Execute(null);
+        await sandbox.WaitForAutoSaveAsync();
+        Assert.That(sandbox.HasAutoSaveError, Is.False, sandbox.Notice);
+        Assert.That(sandbox.HasCustomComponentPaths, Is.False);
+        Assert.That(sandbox.SetupExecutablePathText, Is.Empty);
+        Assert.That(sandbox.RunnerExecutablePathText, Is.Empty);
+        Assert.That(sandbox.SetupStatusSummaryText, Does.Contain("当前安装包默认"));
+        Assert.That(sandbox.SetupEffectivePathText, Does.Contain(bundledSetup));
+
+        var savedReset = await UserConfigStore.LoadAsync(path, default);
+        Assert.That(savedReset.Settings?.WindowsSandbox?.SetupExecutablePath ?? string.Empty, Is.Empty);
+        Assert.That(savedReset.Settings?.WindowsSandbox?.RunnerExecutablePath ?? string.Empty, Is.Empty);
+        var rawJson = await File.ReadAllTextAsync(path);
+        Assert.That(rawJson, Does.Not.Contain("setupExecutablePath"));
+        Assert.That(rawJson, Does.Not.Contain("runnerExecutablePath"));
+    }
+
     private static async Task<(string Path, UserConfig Baseline)> CreateConfigAsync()
     {
         var root = Path.Combine(Path.GetTempPath(),

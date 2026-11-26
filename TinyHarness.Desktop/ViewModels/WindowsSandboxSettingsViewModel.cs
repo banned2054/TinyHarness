@@ -3,18 +3,20 @@ using TinyHarness.Core.Models.Configuration;
 using TinyHarness.Core.Models.Runtime.WindowsSandbox;
 using TinyHarness.Core.Services.ChatCompletions.Configuration;
 using TinyHarness.Core.Services.Permissions;
+using TinyHarness.Core.Services.Runtime.WindowsSandbox;
 
 namespace TinyHarness.Desktop.ViewModels;
 
 /// <summary>
-///     <para>编辑可信的 Windows 沙箱设置：启用、网络策略、代理与额外读写范围。</para>
+///     <para>编辑可信的 Windows 沙箱设置：启用、组件路径覆盖、网络策略、代理与额外读写范围。</para>
 ///     <para>
-///         Edits the trusted Windows sandbox settings: enablement, network policy,
+///         Edits the trusted Windows sandbox settings: enablement, component-path overrides, network policy,
 ///         proxy, and additional read/write roots.
 ///     </para>
 /// </summary>
 public sealed class WindowsSandboxSettingsViewModel : SettingsSectionViewModel
 {
+    private readonly string                      _appBaseDirectory;
     private readonly SettingsAutoSaveQueue       _autoSave;
     private readonly string                      _path;
     private readonly Func<Task>                  _refresh;
@@ -27,18 +29,29 @@ public sealed class WindowsSandboxSettingsViewModel : SettingsSectionViewModel
     private          string                      _notice = string.Empty;
     private          string?                     _proxyName;
     private          string                      _readRootsText = string.Empty;
+    private          string                      _runnerEffectivePathText = string.Empty;
+    private          string                      _runnerExecutablePathText = string.Empty;
+    private          string                      _runnerStatusSummaryText = string.Empty;
     private          SandboxNetworkPolicyChoice? _selectedNetworkPolicy;
     private          SandboxProxyModeChoice?     _selectedProxyMode;
+    private          string                      _setupEffectivePathText = string.Empty;
+    private          string                      _setupExecutablePathText = string.Empty;
+    private          string                      _setupStatusSummaryText = string.Empty;
     private          string                      _writeRootsText = string.Empty;
 
     /// <summary>
-    ///     <para>使用可信配置路径及保存后的刷新回调建立 Windows 沙箱分区。</para>
-    ///     <para>Creates the Windows sandbox section with a trusted config path and a post-save refresh callback.</para>
+    ///     <para>使用可信配置路径、保存后的刷新回调与可选的应用基准目录建立 Windows 沙箱分区。</para>
+    ///     <para>
+    ///         Creates the Windows sandbox section with a trusted config path, a post-save refresh callback,
+    ///         and an optional application base directory.
+    ///     </para>
     /// </summary>
-    public WindowsSandboxSettingsViewModel(string path, Func<Task>? refresh = null) : base("Windows 沙箱")
+    public WindowsSandboxSettingsViewModel(
+        string path, Func<Task>? refresh = null, string? appBaseDirectory = null) : base("Windows 沙箱")
     {
-        _path    = path;
-        _refresh = refresh ?? (() => Task.CompletedTask);
+        _path             = path;
+        _refresh          = refresh ?? (() => Task.CompletedTask);
+        _appBaseDirectory = WindowsSandboxComponentResolver.NormalizeAppBaseDirectory(appBaseDirectory);
         _autoSave = new SettingsAutoSaveQueue(async () =>
         {
             await SaveCoreAsync();
@@ -53,6 +66,7 @@ public sealed class WindowsSandboxSettingsViewModel : SettingsSectionViewModel
             _autoSave.Request();
             return _autoSave.WaitAsync();
         }, exception => Notice = exception.Message);
+        ResetComponentPathsCommand = new RelayCommand(ResetComponentPaths, () => HasCustomComponentPaths);
         NetworkPolicyOptions =
         [
             new SandboxNetworkPolicyChoice(SandboxNetworkPolicy.Restricted, "受限（需审批）"),
@@ -65,6 +79,7 @@ public sealed class WindowsSandboxSettingsViewModel : SettingsSectionViewModel
             new SandboxProxyModeChoice(SandboxProxyMode.Direct, "直连"),
             new SandboxProxyModeChoice(SandboxProxyMode.Named, "指定已有代理")
         ];
+        UpdateComponentDiagnostics();
     }
 
     public string Intro =>
@@ -82,6 +97,12 @@ public sealed class WindowsSandboxSettingsViewModel : SettingsSectionViewModel
 
     public AsyncCommand SaveCommand { get; }
 
+    /// <summary>
+    ///     <para>清空自定义组件路径覆盖，恢复使用当前安装包自带的默认组件。</para>
+    ///     <para>Clears custom component-path overrides to restore the current package's bundled defaults.</para>
+    /// </summary>
+    public RelayCommand ResetComponentPathsCommand { get; }
+
     public bool Enabled
     {
         get => _enabled;
@@ -90,6 +111,67 @@ public sealed class WindowsSandboxSettingsViewModel : SettingsSectionViewModel
             if (SetProperty(ref _enabled, value)) QueueAutoSave();
         }
     }
+
+    /// <summary>
+    ///     <para>用户输入的 setup 组件绝对路径覆盖；留空表示使用当前安装包默认组件。</para>
+    ///     <para>User-entered setup executable absolute path override; blank uses the current package default.</para>
+    /// </summary>
+    public string SetupExecutablePathText
+    {
+        get => _setupExecutablePathText;
+        set
+        {
+            if (!SetProperty(ref _setupExecutablePathText, value)) return;
+            UpdateComponentDiagnostics();
+            QueueAutoSave();
+        }
+    }
+
+    /// <summary>
+    ///     <para>用户输入的 runner 组件绝对路径覆盖；留空表示使用当前安装包默认组件。</para>
+    ///     <para>User-entered runner executable absolute path override; blank uses the current package default.</para>
+    /// </summary>
+    public string RunnerExecutablePathText
+    {
+        get => _runnerExecutablePathText;
+        set
+        {
+            if (!SetProperty(ref _runnerExecutablePathText, value)) return;
+            UpdateComponentDiagnostics();
+            QueueAutoSave();
+        }
+    }
+
+    public bool HasCustomComponentPaths =>
+        !string.IsNullOrWhiteSpace(_setupExecutablePathText) ||
+        !string.IsNullOrWhiteSpace(_runnerExecutablePathText);
+
+    public string SetupStatusSummaryText
+    {
+        get => _setupStatusSummaryText;
+        private set => SetProperty(ref _setupStatusSummaryText, value);
+    }
+
+    public string SetupEffectivePathText
+    {
+        get => _setupEffectivePathText;
+        private set => SetProperty(ref _setupEffectivePathText, value);
+    }
+
+    public string RunnerStatusSummaryText
+    {
+        get => _runnerStatusSummaryText;
+        private set => SetProperty(ref _runnerStatusSummaryText, value);
+    }
+
+    public string RunnerEffectivePathText
+    {
+        get => _runnerEffectivePathText;
+        private set => SetProperty(ref _runnerEffectivePathText, value);
+    }
+
+    public string ComponentOverrideHint =>
+        "留空时 CLI 与 Desktop 各自使用本安装包内的默认组件；填写自定义绝对路径会写入共享用户配置，对 CLI 和 Desktop 同时生效。";
 
     public SandboxNetworkPolicyChoice SelectedNetworkPolicy
     {
@@ -243,6 +325,8 @@ public sealed class WindowsSandboxSettingsViewModel : SettingsSectionViewModel
     {
         HasAutoSaveError = false;
         Notice           = string.Empty;
+        var setupPath   = ParseOptionalAbsolutePath(SetupExecutablePathText, "setup 组件路径");
+        var runnerPath  = ParseOptionalAbsolutePath(RunnerExecutablePathText, "runner 组件路径");
         var readRoots   = ParseRoots(ReadRootsText, "额外只读根");
         var writeRoots  = ParseRoots(WriteRootsText, "额外写根");
         var environment = ParseEnvironment(EnvironmentText);
@@ -251,15 +335,17 @@ public sealed class WindowsSandboxSettingsViewModel : SettingsSectionViewModel
         var saved = _baseline.Settings?.WindowsSandbox ?? new WindowsSandboxSettings();
         var sandbox = saved with
         {
-            Enabled = Enabled,
-            AllowTcpLoopback = false,
-            NetworkPolicy = SelectedNetworkPolicy.Policy,
+            Enabled              = Enabled,
+            AllowTcpLoopback     = false,
+            SetupExecutablePath  = setupPath,
+            RunnerExecutablePath = runnerPath,
+            NetworkPolicy        = SelectedNetworkPolicy.Policy,
             Proxy = SelectedProxyMode.Mode == SandboxProxyMode.Named
                 ? new SandboxProxyPolicy { Mode = SandboxProxyMode.Named, ProxyName = _proxyName }
                 : new SandboxProxyPolicy { Mode = SelectedProxyMode.Mode },
-            AdditionalReadRoots = readRoots,
+            AdditionalReadRoots  = readRoots,
             AdditionalWriteRoots = writeRoots,
-            ExtraEnvironment = environment
+            ExtraEnvironment     = environment
         };
         // 清除扩大设置（回 restricted/写根清空）自然解除常设授权门禁：确认记录随保存一并删除。
         // 原配置没有 permissions 节时保持缺席，不新增默认块。
@@ -282,7 +368,8 @@ public sealed class WindowsSandboxSettingsViewModel : SettingsSectionViewModel
         };
         await UserConfigStore.SaveAsync(_path, candidate, _baseline, CancellationToken.None);
         _baseline = candidate;
-        Notice    = "已保存。改动在下次会话或下次组合沙箱时生效，不影响正在运行的命令。";
+        UpdateComponentDiagnostics();
+        Notice = "已保存。改动在下次会话或下次组合沙箱时生效，不影响正在运行的命令。";
         ConfigSaved?.Invoke(candidate);
         await _refresh();
     }
@@ -290,24 +377,103 @@ public sealed class WindowsSandboxSettingsViewModel : SettingsSectionViewModel
     private void ApplySavedSettings(UserConfig config)
     {
         var sandbox = config.Settings?.WindowsSandbox ?? new WindowsSandboxSettings();
-        _enabled        = sandbox.Enabled;
-        _proxyName      = sandbox.Proxy.ProxyName;
-        _readRootsText  = string.Join(Environment.NewLine, sandbox.AdditionalReadRoots);
-        _writeRootsText = string.Join(Environment.NewLine, sandbox.AdditionalWriteRoots);
+        _enabled                  = sandbox.Enabled;
+        _setupExecutablePathText  = sandbox.SetupExecutablePath;
+        _runnerExecutablePathText = sandbox.RunnerExecutablePath;
+        _proxyName                = sandbox.Proxy.ProxyName;
+        _readRootsText            = string.Join(Environment.NewLine, sandbox.AdditionalReadRoots);
+        _writeRootsText           = string.Join(Environment.NewLine, sandbox.AdditionalWriteRoots);
         _environmentText = sandbox.ExtraEnvironment is { } environment
             ? string.Join(Environment.NewLine, environment.Select(pair => $"{pair.Key}={pair.Value}"))
             : string.Empty;
         _selectedNetworkPolicy = NetworkPolicyOptions.Single(option => option.Policy == sandbox.NetworkPolicy);
         _selectedProxyMode     = ProxyModeOptions.Single(option => option.Mode       == sandbox.Proxy.Mode);
         RebuildProxyChoices();
+        UpdateComponentDiagnostics();
         OnPropertyChanged(nameof(SelectedNetworkPolicy));
         OnPropertyChanged(nameof(SelectedProxyMode));
         OnPropertyChanged(nameof(IsNamedProxyMode));
         OnPropertyChanged(nameof(Enabled));
+        OnPropertyChanged(nameof(SetupExecutablePathText));
+        OnPropertyChanged(nameof(RunnerExecutablePathText));
         OnPropertyChanged(nameof(ReadRootsText));
         OnPropertyChanged(nameof(WriteRootsText));
         OnPropertyChanged(nameof(EnvironmentText));
         OnPropertyChanged(nameof(SelectedProxy));
+    }
+
+    private void ResetComponentPaths()
+    {
+        if (!HasCustomComponentPaths) return;
+
+        var changed = false;
+        if (!string.IsNullOrEmpty(_setupExecutablePathText))
+        {
+            _setupExecutablePathText = string.Empty;
+            OnPropertyChanged(nameof(SetupExecutablePathText));
+            changed = true;
+        }
+
+        if (!string.IsNullOrEmpty(_runnerExecutablePathText))
+        {
+            _runnerExecutablePathText = string.Empty;
+            OnPropertyChanged(nameof(RunnerExecutablePathText));
+            changed = true;
+        }
+
+        UpdateComponentDiagnostics();
+        if (changed) QueueAutoSave();
+    }
+
+    private void UpdateComponentDiagnostics()
+    {
+        var preview = new WindowsSandboxSettings
+        {
+            SetupExecutablePath  = _setupExecutablePathText,
+            RunnerExecutablePath = _runnerExecutablePathText
+        };
+        var resolution       = WindowsSandboxComponentResolver.Resolve(preview, _appBaseDirectory);
+        var setupInspection  = WindowsSandboxComponentResolver.InspectComponent(resolution.Setup, _appBaseDirectory);
+        var runnerInspection = WindowsSandboxComponentResolver.InspectComponent(resolution.Runner, _appBaseDirectory);
+
+        SetupStatusSummaryText  = FormatComponentSummary(setupInspection);
+        SetupEffectivePathText  = FormatEffectivePath(setupInspection);
+        RunnerStatusSummaryText = FormatComponentSummary(runnerInspection);
+        RunnerEffectivePathText = FormatEffectivePath(runnerInspection);
+
+        OnPropertyChanged(nameof(HasCustomComponentPaths));
+        ResetComponentPathsCommand.RaiseCanExecuteChanged();
+    }
+
+    private static string FormatComponentSummary(WindowsSandboxComponentInspection inspection)
+    {
+        var resolved = inspection.Resolved;
+        var state = !resolved.IsValid
+            ? "路径无效（需填写完整绝对路径）"
+            : inspection.IsUsable
+                ? "已找到"
+                : inspection.Exists
+                    ? "目录边界校验失败"
+                    : inspection.IsReleasePackageBundled
+                        ? "发布包缺件（请重新完整解压 ZIP）"
+                        : "未找到文件";
+        return $"当前来源：{resolved.SourceDisplayZh} · 状态：{state}";
+    }
+
+    private static string FormatEffectivePath(WindowsSandboxComponentInspection inspection) =>
+        inspection.Resolved.CandidatePath is { } path
+            ? $"当前 Desktop 解析路径：{path}"
+            : $"当前配置值：{inspection.Resolved.ConfiguredValue ?? "<空>"}";
+
+    private static string ParseOptionalAbsolutePath(string text, string label)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return string.Empty;
+
+        var trimmed = text.Trim();
+        if (!Path.IsPathFullyQualified(trimmed))
+            throw new InvalidOperationException($"{label}必须是完整绝对路径（或留空使用当前安装包默认组件）：{trimmed}");
+
+        return trimmed;
     }
 
     private void RebuildProxyChoices()

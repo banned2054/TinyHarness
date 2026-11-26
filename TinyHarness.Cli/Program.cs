@@ -1107,29 +1107,40 @@ internal static class Program
         var trustPath = Path.Combine(Path.GetDirectoryName(userConfigPath)!, "workspace-trust.json");
         IReadOnlyList<string> writeRoots = [config.WorkspaceRoot, .. settings?.AdditionalWriteRoots ?? []];
         // C1 权限系统实例（实际路径）：组合期写根重叠校验与 grant 校验共用，底层不重新猜默认路径。
-        var permissionSystemPaths = new List<string> { trustPath, userConfigPath };
+        var provisionLeaseDirectory = GlobalDenyReadRefreshGate.DefaultProvisionLeaseDirectory;
+        var permissionSystemPaths   = new List<string> { trustPath, userConfigPath, provisionLeaseDirectory };
         if (sessionStoreDirectory is not null) permissionSystemPaths.Add(sessionStoreDirectory);
         // OS ACL 保护集保持整 home 不收缩（与组合期完整性保护同层）；应用层 C1 分类集把 home
         // 收缩为敏感子路径（凭据目录、deny 簿记、授权映射与执行组件目录），默认 tmp/tools/
         // nuget-cache 运行时根物理位于 home 下，不得被 C1 遮蔽。
+        var appBaseDirectory      = WindowsSandboxComponentResolver.NormalizeAppBaseDirectory();
         var protectedPaths        = new List<string>(permissionSystemPaths);
         var permissionSystemRoots = new List<string>(permissionSystemPaths);
         if (settings is { Enabled: true })
         {
-            var sandboxHome = WindowsSandboxComponents.ResolveSandboxHome(settings.SandboxHome,
-                                                                          settings.AllowTcpLoopback);
+            var resolvedComponents = WindowsSandboxComponentResolver.Resolve(settings, appBaseDirectory);
+            var sandboxHome        = WindowsSandboxComponents.ResolveSandboxHome(settings.SandboxHome,
+                                                                                 settings.AllowTcpLoopback);
             var components = new WindowsSandboxComponents
             {
-                SetupExecutablePath  = settings.SetupExecutablePath,
-                RunnerExecutablePath = settings.RunnerExecutablePath,
+                SetupExecutablePath  = resolvedComponents.Setup.CandidatePath  ?? settings.SetupExecutablePath,
+                RunnerExecutablePath = resolvedComponents.Runner.CandidatePath ?? settings.RunnerExecutablePath,
                 SandboxHome          = sandboxHome,
                 AllowTcpLoopback     = settings.AllowTcpLoopback
             };
-            protectedPaths.Add(settings.SetupExecutablePath);
-            protectedPaths.Add(settings.RunnerExecutablePath);
+            if (resolvedComponents.Setup.CandidatePath is { } setupPath)
+            {
+                protectedPaths.Add(setupPath);
+                permissionSystemRoots.Add(setupPath);
+            }
+
+            if (resolvedComponents.Runner.CandidatePath is { } runnerPath)
+            {
+                protectedPaths.Add(runnerPath);
+                permissionSystemRoots.Add(runnerPath);
+            }
+
             protectedPaths.Add(sandboxHome);
-            permissionSystemRoots.Add(settings.SetupExecutablePath);
-            permissionSystemRoots.Add(settings.RunnerExecutablePath);
             permissionSystemRoots.AddRange(components.ProtectedHomeSubpaths);
         }
 
@@ -1164,7 +1175,8 @@ internal static class Program
                                                 Console.Out, !Console.IsInputRedirected,
                                                 OperatingSystem.IsWindows() && settings is
                                                     { Enabled: true, Policy: SandboxPolicyKind.WorkspaceWrite },
-                                                new ProcessWorkspaceAclGrant(protectedPaths, writeRoots, settings),
+                                                new ProcessWorkspaceAclGrant(protectedPaths, writeRoots, settings,
+                                                                             appBaseDirectory),
                                                 activeGrants =>
                                                 {
                                                     // 组合门禁：基线读保护计划与沙箱同点组合（信任激活
@@ -1187,7 +1199,8 @@ internal static class Program
                                                             userConfig.Settings?.Network,
                                                             baselineReadProtection,
                                                             standingTrust,
-                                                            permissionSystemPaths);
+                                                            permissionSystemPaths,
+                                                            appBaseDirectory);
                                                     var policy = sandbox?.ExecutionPolicy ??
                                                                  ProcessExecutionPolicy.Host();
                                                     // 与 BuildTools 的 shell 槽位同构：沙箱已组合时注册
@@ -1311,11 +1324,13 @@ internal static class Program
                                                                   sessionStoreDirectory is null
                                                                       ? null
                                                                       : userConfig.Settings
-                                                                        ?.SessionStoreDirectory),
+                                                                        ?.SessionStoreDirectory,
+                                                                  appBaseDirectory),
                                                               PermissionCompositionFingerprint
                                                                  .CreateEvaluator(userConfigPath, config.WorkspaceRoot,
                                                                       sandbox is not null, baselineProtectedPaths,
-                                                                      sessionStoreDirectory is not null));
+                                                                      sessionStoreDirectory is not null,
+                                                                      appBaseDirectory));
 
         return new AgentComposition(resolution, config,
                                     apiKey is null
@@ -1987,7 +2002,8 @@ internal static class SandboxCliComposition
         NetworkSettings?                    networkSettings        = null,
         SandboxBaselineReadProtection?      baselineReadProtection = null,
         StandingTrustState                  standingTrust          = StandingTrustState.None,
-        IReadOnlyList<string>?              permissionSystemPaths  = null)
+        IReadOnlyList<string>?              permissionSystemPaths  = null,
+        string?                             appBaseDirectory       = null)
     {
         if (settings is not { Enabled: true }) return null;
 
@@ -1997,7 +2013,7 @@ internal static class SandboxCliComposition
                                   settings;
         if (sessionStoreDirectory is null)
             return WindowsSandboxComposer.Compose(compositionSettings, workspaceRoot, knownSecrets, networkSettings,
-                                                  baselineReadProtection, permissionSystemPaths);
+                                                  baselineReadProtection, permissionSystemPaths, appBaseDirectory);
         var fullStoreDirectory = Path.GetFullPath(sessionStoreDirectory);
         var offendingRoot = settings.AdditionalWriteRoots?
                                     .Select(Path.GetFullPath)
@@ -2011,7 +2027,7 @@ internal static class SandboxCliComposition
                                           "(settings.sessionStoreDirectory) before enabling the Windows sandbox.");
 
         return WindowsSandboxComposer.Compose(compositionSettings, workspaceRoot, knownSecrets, networkSettings,
-                                              baselineReadProtection, permissionSystemPaths);
+                                              baselineReadProtection, permissionSystemPaths, appBaseDirectory);
     }
 
     /// <summary>
