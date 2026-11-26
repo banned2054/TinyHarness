@@ -287,6 +287,25 @@ public class ShellToolTests
         Assert.That(watch.Elapsed < TimeSpan.FromSeconds(4), Is.True, $"Capture failure cleanup took {watch.Elapsed}.");
     }
 
+    [Test]
+    public void Definition_IncludesSchannelGuidanceOnlyForWindowsRestrictedTokenSandbox()
+    {
+        using var dir      = new TestTempDir();
+        var       hostTool = new ShellTool(dir.Workspace);
+        var sandboxTool = new ShellTool(dir.Workspace, executionPolicy : new ProcessExecutionPolicy
+        {
+            Backend        = ProcessExecutionBackendKind.WindowsSandbox,
+            DisplayName    = "windows-sandbox: workspace-write",
+            PolicyIdentity = "backend=windows-sandbox"
+        });
+
+        Assert.That(hostTool.Definition.Description, Does.Not.Contain("SEC_E_NO_CREDENTIALS"));
+        Assert.That(sandboxTool.Definition.Description, Does.Contain("SEC_E_NO_CREDENTIALS"));
+        Assert.That(sandboxTool.Definition.Description, Does.Contain("node"));
+        Assert.That(ShellTool.CreateDefinition(true).Description, Does.Contain("SEC_E_NO_CREDENTIALS"));
+        Assert.That(ShellTool.CreateDefinition().Description, Does.Not.Contain("SEC_E_NO_CREDENTIALS"));
+    }
+
     private static ChatToolCall Call(string executable, IReadOnlyList<string> arguments, string workingDirectory = ".",
                                      int?   timeoutSeconds = null)
     {

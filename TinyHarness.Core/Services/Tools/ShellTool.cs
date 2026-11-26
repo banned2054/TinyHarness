@@ -162,6 +162,7 @@ public sealed class ShellTool : ITool
         _executionPolicy      = executionPolicy;
         _activeCapabilities   = activeCapabilities;
         _grantContext         = grantContext;
+        Definition            = CreateDefinition(executionPolicy?.Backend == ProcessExecutionBackendKind.WindowsSandbox);
     }
 
     internal ShellTool(Workspace workspace,
@@ -176,14 +177,30 @@ public sealed class ShellTool : ITool
                executionPolicy, activeCapabilities, grantContext) =>
         _captureFactory = captureFactory ?? throw new ArgumentNullException(nameof(captureFactory));
 
-    public ToolDefinition Definition { get; } = new()
+    /// <summary>
+    ///     <para>构造 shell 工具定义；启用 Windows 受限令牌沙箱时附加 Schannel TLS 限制提示。</para>
+    ///     <para>
+    ///         Creates the shell tool definition, appending Schannel TLS guidance when running under
+    ///         the Windows restricted-token sandbox.
+    ///     </para>
+    /// </summary>
+    public static ToolDefinition CreateDefinition(bool windowsRestrictedTokenSandbox = false) => new()
     {
         Name = "shell",
         Description =
             "Runs either a direct executable/arguments invocation or an explicit shell command inside the workspace. " +
-            "Returns exit code, timeout state, stdout, and stderr.",
+            "Returns exit code, timeout state, stdout, and stderr." +
+            (windowsRestrictedTokenSandbox
+                ? " In the Windows restricted-token sandbox, native Windows Schannel TLS clients "          +
+                  "(system curl.exe, PowerShell Invoke-WebRequest/Invoke-RestMethod, and .NET HTTPS) "      +
+                  "fail with SEC_E_NO_CREDENTIALS even when networkAccess='enabled'; prefer an "            +
+                  "OpenSSL-backed client such as node (e.g. node -e \"fetch(...)\") for HTTPS inside "      +
+                  "the sandbox instead of escalating to executionScope='host' solely for Schannel."
+                : string.Empty),
         Parameters = Schema
     };
+
+    public ToolDefinition Definition { get; }
 
     public ToolPreparation Prepare(ChatToolCall call)
     {

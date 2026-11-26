@@ -312,7 +312,7 @@ public sealed partial class DesktopSessionFactory
                                                                  .ApprovalTimeoutSeconds));
         // 定义可立即发给模型；真正的沙箱、能力快照和执行身份在首次 workspace Shell 准备时一起冻结。
         ITool restrictedShell = sandboxConfigured
-            ? new DeferredShellTool(new ShellTool(workspace).Definition, token =>
+            ? new DeferredShellTool(ShellTool.CreateDefinition(windowsRestrictedTokenSandbox : true), token =>
             {
                 foreach (var writeRoot in sandboxSettings!.AdditionalWriteRoots)
                     SessionStorePaths.EnsureOutsideWorkspace(directory, writeRoot, "settings.sessionStoreDirectory");
