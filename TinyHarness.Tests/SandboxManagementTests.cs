@@ -107,7 +107,7 @@ public sealed class SandboxManagementTests
                                                        CancellationToken.None);
 
         Assert.That(result, Is.EqualTo(0));
-        Assert.That(fixture.Io.Output, Does.Contain("未配置 windowsSandbox"));
+        Assert.That(fixture.Io.Output, Does.Contain("未启用 windowsSandbox"));
         Assert.That(fixture.Io.Output, Does.Contain("settings.windowsSandbox"));
         Assert.That(fixture.Io.Output, Does.Contain("sandbox provision"));
     }
@@ -126,7 +126,7 @@ public sealed class SandboxManagementTests
                                                        CancellationToken.None);
 
         Assert.That(result, Is.EqualTo(0));
-        Assert.That(fixture.Io.Output, Does.Contain("未配置 windowsSandbox"));
+        Assert.That(fixture.Io.Output, Does.Contain("未启用 windowsSandbox"));
     }
 
     [Test]
@@ -178,7 +178,7 @@ public sealed class SandboxManagementTests
                                                        CancellationToken.None);
 
         Assert.That(result, Is.EqualTo(1));
-        Assert.That(fixture.Io.Output, Does.Contain("Runner executable not found"));
+        Assert.That(fixture.Io.Output, Does.Contain("runner executable was not found"));
         Assert.That(fixture.Io.Output, Does.Contain("not provisioned"));
     }
 
@@ -281,7 +281,7 @@ public sealed class SandboxManagementTests
 
         Assert.That(result, Is.EqualTo(1));
         Assert.That(elevator.Requests, Is.Empty);
-        Assert.That(fixture.Io.Output, Does.Contain("setup 可执行文件不存在"));
+        Assert.That(fixture.Io.Output, Does.Contain("setup executable was not found"));
     }
 
     [Test]
@@ -610,12 +610,13 @@ public sealed class SandboxManagementTests
 
         using var home      = new SandboxTestHome();
         using var workspace = new TestTempDir();
+        using var cts       = new CancellationTokenSource();
         var provisioner = new WindowsSandboxProvisioner(new FakeSetupElevator
-                                                            { Result = SandboxSetupElevationResult.Cancelled });
+        {
+            Result    = SandboxSetupElevationResult.Cancelled,
+            OnElevate = cts.Cancel
+        });
         var plan = provisioner.BuildPlan(SandboxSettings(home), workspace.Root, "TestUser");
-
-        using var cts = new CancellationTokenSource();
-        cts.Cancel();
 
         var result = await provisioner.ProvisionAsync(plan, cts.Token);
 
@@ -734,11 +735,14 @@ public sealed class SandboxManagementTests
 
         public SandboxSetupElevationResult Result { get; set; } = SandboxSetupElevationResult.Completed0;
 
+        public Action? OnElevate { get; set; }
+
         public Task<SandboxSetupElevationResult> ElevateAsync(WindowsSandboxComponents components,
                                                               string                   base64Payload,
                                                               CancellationToken        cancellationToken)
         {
             Requests.Add((components, base64Payload));
+            OnElevate?.Invoke();
             return Task.FromResult(Result);
         }
     }

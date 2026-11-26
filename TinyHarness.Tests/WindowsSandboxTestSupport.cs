@@ -395,6 +395,7 @@ internal sealed class SandboxTestHome : IDisposable
 
     public void Dispose()
     {
+        SandboxProvisionLeaseStore.TryDeleteLeaseForHome(Components.SandboxHome);
         _directory.Dispose();
     }
 }
