@@ -39,8 +39,46 @@ public sealed record SandboxSetupElevationResult
     /// <summary>helper 进程退出码；仅 Outcome == Completed 时有值。</summary>
     public int? ExitCode { get; init; }
 
+    /// <summary>
+    ///     <para>
+    ///         仅 <see cref="SandboxSetupElevationOutcome.DidNotFinish" /> 时可选携带的后台退出确认任务：
+    ///         提权 helper 进程退出后完成 true，等待失败则完成 false。为 null 时表示没有可追踪的退出确认，
+    ///         调用方必须 fail-closed 保持刷新门持有而不提前释放。
+    ///     </para>
+    ///     <para>
+    ///         Optional background exit-confirmation task carried on
+    ///         <see cref="SandboxSetupElevationOutcome.DidNotFinish" />: completes true once the elevated
+    ///         helper exits and false when waiting fails. Null means exit confirmation is unavailable,
+    ///         so callers must keep the refresh gate held fail-closed instead of releasing early.
+    ///     </para>
+    /// </summary>
+    public Task<bool>? ExitConfirmation { get; init; }
+
+    /// <summary>
+    ///     <para>
+    ///         已启动的提权 helper 进程身份（PID 与创建时间），供跨进程持久化租约在调用方 CLI 提前退出后
+    ///         仍能向 OS 核对实际写入者是否仍在运行。
+    ///     </para>
+    ///     <para>
+    ///         Started elevated helper process identity (PID and creation time), used by durable
+    ///         cross-process leases to verify with the OS whether the actual writer is still running even
+    ///         after the calling CLI process exits early.
+    ///     </para>
+    /// </summary>
+    public SandboxElevatedProcessIdentity? ProcessIdentity { get; init; }
+
     public static SandboxSetupElevationResult Completed(int exitCode) =>
         new() { Outcome = SandboxSetupElevationOutcome.Completed, ExitCode = exitCode };
+
+    public static SandboxSetupElevationResult DidNotFinish(
+        Task<bool>?                     exitConfirmation,
+        SandboxElevatedProcessIdentity? processIdentity = null) =>
+        new()
+        {
+            Outcome          = SandboxSetupElevationOutcome.DidNotFinish,
+            ExitConfirmation = exitConfirmation,
+            ProcessIdentity  = processIdentity
+        };
 }
 
 /// <summary>提权执行的终态：已完成 / 用户拒绝 / 未在期限内完成（超时或取消，状态未知）。</summary>
@@ -75,6 +113,25 @@ public interface ISandboxSetupElevator
     /// </summary>
     Task<SandboxSetupElevationResult> ElevateAsync(
         WindowsSandboxComponents components, string base64Payload, CancellationToken cancellationToken);
+
+    /// <summary>
+    ///     <para>
+    ///         以 UAC 启动 setup.exe，并在进程启动后立即回调其进程身份，使调用方在等待前即可落盘
+    ///         跨进程租约，防止宿主持锁进程中途异常终止导致保护失效。默认实现委托给三参数重载。
+    ///     </para>
+    ///     <para>
+    ///         Starts setup.exe under UAC and immediately reports the started process identity through
+    ///         <paramref name="onProcessStarted" /> so the caller can persist the cross-process lease
+    ///         before waiting, preserving protection even if the host crashes mid-wait. Defaults to the
+    ///         three-argument overload.
+    ///     </para>
+    /// </summary>
+    Task<SandboxSetupElevationResult> ElevateAsync(
+        WindowsSandboxComponents               components,
+        string                                 base64Payload,
+        Action<SandboxElevatedProcessIdentity> onProcessStarted,
+        CancellationToken                      cancellationToken) =>
+        ElevateAsync(components, base64Payload, cancellationToken);
 }
 
 /// <summary>
@@ -101,8 +158,25 @@ public sealed class ProcessSandboxSetupElevator(TimeSpan? timeout = null) : ISan
 
     private readonly TimeSpan _timeout = timeout ?? DefaultTimeout;
 
-    public async Task<SandboxSetupElevationResult> ElevateAsync(
-        WindowsSandboxComponents components, string base64Payload, CancellationToken cancellationToken)
+    public Task<SandboxSetupElevationResult> ElevateAsync(
+        WindowsSandboxComponents components, string base64Payload, CancellationToken cancellationToken) =>
+        ElevateCoreAsync(components, base64Payload, null, cancellationToken);
+
+    public Task<SandboxSetupElevationResult> ElevateAsync(
+        WindowsSandboxComponents               components,
+        string                                 base64Payload,
+        Action<SandboxElevatedProcessIdentity> onProcessStarted,
+        CancellationToken                      cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(onProcessStarted);
+        return ElevateCoreAsync(components, base64Payload, onProcessStarted, cancellationToken);
+    }
+
+    private async Task<SandboxSetupElevationResult> ElevateCoreAsync(
+        WindowsSandboxComponents                components,
+        string                                  base64Payload,
+        Action<SandboxElevatedProcessIdentity>? onProcessStarted,
+        CancellationToken                       cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(components);
         ArgumentException.ThrowIfNullOrWhiteSpace(base64Payload);
@@ -118,43 +192,111 @@ public sealed class ProcessSandboxSetupElevator(TimeSpan? timeout = null) : ISan
             WorkingDirectory = Path.GetDirectoryName(components.SetupExecutablePath)!
         };
 
-        using var process = new Process();
+        var process = new Process();
         process.StartInfo = startInfo;
+        // 进程所有权显式管理：超时/取消未退出时移交给后台退出确认任务，其余路径由 finally 释放。
+        var exitConfirmationOwningProcess = false;
         try
         {
-            process.Start();
-        }
-        catch (Win32Exception ex) when (ex.NativeErrorCode == 1223)
-        {
-            // The user clicked "No" on the UAC consent dialog.
-            return SandboxSetupElevationResult.Declined;
-        }
-        catch (Exception ex) when (ex is Win32Exception or InvalidOperationException)
-        {
-            throw new
-                InvalidOperationException($"Failed to launch the elevated sandbox setup helper '{components.SetupExecutablePath}': {ex.Message}",
-                                          ex);
-        }
+            try
+            {
+                process.Start();
+            }
+            catch (Win32Exception ex) when (ex.NativeErrorCode == 1223)
+            {
+                // The user clicked "No" on the UAC consent dialog.
+                return SandboxSetupElevationResult.Declined;
+            }
+            catch (Exception ex) when (ex is Win32Exception or InvalidOperationException)
+            {
+                throw new
+                    InvalidOperationException($"Failed to launch the elevated sandbox setup helper '{components.SetupExecutablePath}': {ex.Message}",
+                                              ex);
+            }
 
-        using var timeoutSource = new CancellationTokenSource(_timeout);
-        using var linkedSource =
-            CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutSource.Token);
-        try
-        {
-            await process.WaitForExitAsync(linkedSource.Token).ConfigureAwait(false);
-            return SandboxSetupElevationResult.Completed(process.ExitCode);
+            // 进程启动后立刻捕获 PID + 创建时间并通知调用方落盘跨进程租约，防止等待中途进程崩溃失守。
+            var processIdentity = SandboxProvisionLeaseStore.TryCaptureProcessIdentity(process);
+            if (processIdentity is not null)
+                onProcessStarted?.Invoke(processIdentity);
+
+            using var timeoutSource = new CancellationTokenSource(_timeout);
+            using var linkedSource =
+                CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutSource.Token);
+            try
+            {
+                await process.WaitForExitAsync(linkedSource.Token).ConfigureAwait(false);
+                return SandboxSetupElevationResult.Completed(process.ExitCode);
+            }
+            catch (OperationCanceledException) when (timeoutSource.IsCancellationRequested &&
+                                                     !cancellationToken.IsCancellationRequested)
+            {
+                // The deadline elapsed; the elevated helper keeps running and its
+                // state is unknown, so it is deliberately not killed here.
+                exitConfirmationOwningProcess = true;
+                return SandboxSetupElevationResult.DidNotFinish(StartExitConfirmationInBackground(process),
+                                                                processIdentity);
+            }
+            catch (OperationCanceledException)
+            {
+                // The caller cancelled; same unknown-state reasoning as timeouts.
+                exitConfirmationOwningProcess = true;
+                return SandboxSetupElevationResult.DidNotFinish(StartExitConfirmationInBackground(process),
+                                                                processIdentity);
+            }
+            catch (Exception ex) when (ex is Win32Exception or InvalidOperationException or IOException)
+            {
+                // 进程已启动后的等待异常同样无法确认 helper 已退出：收敛为 DidNotFinish，
+                // 防止调用方把等待失败误判为"未启动"而提前清除持久租约。
+                SandboxDiagnosticLog.Event("provision", $"elevated-wait-failed type={ex.GetType().Name}");
+                exitConfirmationOwningProcess = true;
+                return SandboxSetupElevationResult.DidNotFinish(StartExitConfirmationInBackground(process),
+                                                                processIdentity);
+            }
         }
-        catch (OperationCanceledException) when (timeoutSource.IsCancellationRequested &&
-                                                 !cancellationToken.IsCancellationRequested)
+        finally
         {
-            // The deadline elapsed; the elevated helper keeps running and its
-            // state is unknown, so it is deliberately not killed here.
-            return SandboxSetupElevationResult.TimedOut;
+            if (!exitConfirmationOwningProcess)
+                process.Dispose();
         }
-        catch (OperationCanceledException)
+    }
+
+    /// <summary>
+    ///     <para>
+    ///         启动提权 helper 的后台退出确认任务：等待完成即确认进程退出（刷新门可释放）；
+    ///         等待失败按未确认处理（门保持持有）；进程句柄在任务 finally 中释放。
+    ///     </para>
+    ///     <para>
+    ///         Starts the background exit-confirmation task for the elevated helper: a completed wait
+    ///         confirms process exit (allowing the refresh gate to release); a failed wait counts as
+    ///         unconfirmed (keeping the gate held); the process handle is disposed in finally.
+    ///     </para>
+    /// </summary>
+    private static Task<bool> StartExitConfirmationInBackground(Process process)
+    {
+        var confirmation = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _ = Task.Run(async () =>
         {
-            // The caller cancelled; same unknown-state reasoning as timeouts.
-            return SandboxSetupElevationResult.Cancelled;
-        }
+            try
+            {
+                try
+                {
+                    await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
+                    SandboxDiagnosticLog.Event("provision", "elevated-helper-exit-confirmed gate-release-safe");
+                    confirmation.TrySetResult(true);
+                }
+                catch (Exception ex)
+                {
+                    // 等待失败保持未确认语义：门保持持有，不因确认失败而释放。
+                    SandboxDiagnosticLog.Event("provision",
+                                               $"elevated-helper-exit-confirmation-failed type={ex.GetType().Name}");
+                    confirmation.TrySetResult(false);
+                }
+            }
+            finally
+            {
+                process.Dispose();
+            }
+        });
+        return confirmation.Task;
     }
 }

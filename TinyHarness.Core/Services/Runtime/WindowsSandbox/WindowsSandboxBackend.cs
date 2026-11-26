@@ -433,6 +433,12 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
                 phase   = "payload";
                 payload = _policy.CreateSetupPayload(_components, execution.WorkingDirectory, Environment.UserName, true,
                                                      execution.GrantScope);
+                // 门内复核最终写根（含基线写根、临时写根与 grant 写根）不得覆盖共享 home 下后来登记的另一端组件或 C1 路径：
+                // 本校验与组合期登记共用同一把按 home 键控的跨进程刷新门，消除跨端并发竞态。
+                phase = "protected-paths-check";
+                WindowsSandboxComposer.ValidateWriteRootsAgainstRegisteredProtectedPaths(payload.WriteRoots,
+                                                                                         _components.SandboxHome,
+                                                                                         "sandbox refresh write root");
 #if DEBUG
                 // run id 经 AsyncLocal 流入本轮 union/helper/validate 诊断事件；不新增参数，也不改变执行语义。
                 SandboxDiagnosticLog.BeginRun(Guid.NewGuid().ToString("N")[..8]);

@@ -158,7 +158,8 @@ public static class WindowsSandboxComposer
         IReadOnlyDictionary<string, string>? knownSecrets           = null,
         NetworkSettings?                     networkSettings        = null,
         SandboxBaselineReadProtection?       baselineReadProtection = null,
-        IReadOnlyList<string>?               permissionSystemPaths  = null)
+        IReadOnlyList<string>?               permissionSystemPaths  = null,
+        string?                              appBaseDirectory       = null)
     {
         ArgumentNullException.ThrowIfNull(settings);
 
@@ -212,12 +213,22 @@ public static class WindowsSandboxComposer
         }
 
         // 根与环境推导与 provisioning 入口（WindowsSandboxPolicyPlanner）共用，防止 refresh ACL 与 provisioning payload 漂移。
-        var plan = WindowsSandboxPolicyPlanner.Plan(settings, workspaceRoot, knownSecrets, baselineReadProtection);
+        var plan = WindowsSandboxPolicyPlanner.Plan(settings, workspaceRoot, knownSecrets, baselineReadProtection,
+                                                    appBaseDirectory);
 
-        // 可信组件绝不允许被目标命令写入：拒绝位于工作区或任一额外写根（含派生根）内的组件。
+        // 可信组件绝不允许被目标命令写入：拒绝位于工作区、额外写根或实际临时写根（含 extraEnvironment 覆盖的 TEMP/TMP）内的组件。
         IReadOnlyList<string> writeRoots = [workspaceRoot, .. plan.AdditionalWriteRoots];
-        RequireTrustedPathOutsideWriteRoots(plan.SetupExecutablePath, "setup executable", writeRoots);
-        RequireTrustedPathOutsideWriteRoots(plan.RunnerExecutablePath, "runner executable", writeRoots);
+        IReadOnlyList<string> effectiveComponentWriteRoots = SandboxIsolationPolicy.Deduplicate(
+        [
+            workspaceRoot,
+            .. plan.Policy.EffectiveWriteRoots,
+            .. plan.Policy.TempWriteRoots,
+            plan.TempRoot,
+            .. plan.AdditionalWriteRoots
+        ]);
+        RequireTrustedPathOutsideWriteRoots(plan.SetupExecutablePath, "setup executable", effectiveComponentWriteRoots);
+        RequireTrustedPathOutsideWriteRoots(plan.RunnerExecutablePath, "runner executable",
+                                            effectiveComponentWriteRoots);
         RequireTrustedPathOutsideWriteRoots(plan.SandboxHome, "sandbox home", writeRoots);
         RequireTrustedPathOutsideWriteRoots(plan.TempRoot, "sandbox temp root", writeRoots);
 
@@ -253,7 +264,8 @@ public static class WindowsSandboxComposer
                          credentialsDirectory, plan.SetupExecutablePath, plan.RunnerExecutablePath,
                          Path.Combine(plan.SandboxHome, ".sandbox"),
                          Path.Combine(plan.SandboxHome, "cap_sid"),
-                         Path.Combine(plan.SandboxHome, ".sandbox-bin")
+                         Path.Combine(plan.SandboxHome, ".sandbox-bin"),
+                         SandboxProvisionLeaseStore.ResolveDefaultLeaseDirectory()
                      })
                 if (OverlapsProtection(configuredRoot, integrityPath))
                     throw new
@@ -288,22 +300,18 @@ public static class WindowsSandboxComposer
                                                   "settings.windowsSandbox.sandboxHome and the component executables outside " +
                                                   "every denied directory.");
 
-        if (!File.Exists(plan.SetupExecutablePath))
-            throw new
-                InvalidOperationException($"The Windows sandbox setup executable was not found at '{plan.SetupExecutablePath}'; refusing to fall back to host execution.");
-
-        if (!File.Exists(plan.RunnerExecutablePath))
-            throw new
-                InvalidOperationException($"The Windows sandbox runner executable was not found at '{plan.RunnerExecutablePath}'; refusing to fall back to host execution.");
+        // 对必须存在的可执行组件做严格句柄最终路径校验、随包目录边界校验及词法/最终落点写根互斥（含实际临时写根，不回落词法）。
+        WindowsSandboxComponentResolver.ValidateExecutableForUse(plan.ResolvedComponents.Setup,
+                                                                 plan.ResolvedComponents.AppBaseDirectory,
+                                                                 effectiveComponentWriteRoots);
+        WindowsSandboxComponentResolver.ValidateExecutableForUse(plan.ResolvedComponents.Runner,
+                                                                 plan.ResolvedComponents.AppBaseDirectory,
+                                                                 effectiveComponentWriteRoots);
 
         if (!Directory.Exists(plan.SandboxHome))
             throw new
                 InvalidOperationException($"The Windows sandbox home was not found at '{plan.SandboxHome}'; run provisioning first. " +
                                           "Refusing to fall back to host execution.");
-
-        Directory.CreateDirectory(plan.TempRoot);
-        Directory.CreateDirectory(plan.NuGetCacheRoot);
-        Directory.CreateDirectory(plan.ToolsRoot);
 
         var standingNetworkEnabled = settings.NetworkPolicy == SandboxNetworkPolicy.Enabled;
         var proxyEnvironment       = ResolveProxyEnvironment(settings.Proxy, networkSettings);
@@ -323,11 +331,20 @@ public static class WindowsSandboxComposer
             SandboxHome          = plan.SandboxHome
         };
 
-        // C1 可信名单随组合成功写入 helper 可读位置：授权豁免的 helper 侧"绝不触碰 C1"第二道防线；
-        // 写入失败 fail closed（见 SandboxProtectedPathsStore）。
-        SandboxProtectedPathsStore.WriteIfChanged(components,
-                                                  SandboxProtectedPathsStore.ComposeManifest(components,
-                                                      permissionSystemPaths));
+        // 与执行期 refresh 共用按 home 键控的跨进程同步边界（GlobalDenyReadRefreshGate）：
+        // 在同一临界区内复核已有登记保护路径并合并写入本次 C1 清单，防止另一端并发刷新或刚登记时产生竞态。
+        using (AcquireHomeProtectionGate(plan.SandboxHome))
+        {
+            ValidateWriteRootsAgainstRegisteredProtectedPaths(effectiveComponentWriteRoots, plan.SandboxHome,
+                                                              "sandbox write root");
+            SandboxProtectedPathsStore.WriteIfChanged(components,
+                                                      SandboxProtectedPathsStore.ComposeManifest(components,
+                                                          permissionSystemPaths));
+        }
+
+        Directory.CreateDirectory(plan.TempRoot);
+        Directory.CreateDirectory(plan.NuGetCacheRoot);
+        Directory.CreateDirectory(plan.ToolsRoot);
 
         var executionPolicy = new ProcessExecutionPolicy
         {
@@ -1601,20 +1618,32 @@ public static class WindowsSandboxComposer
                     InvalidOperationException($"The {GrantRootLabel(root, readRoots, writeRoots, metadataWrites)} '{root}' overlaps the sandbox " +
                                               $"credentials directory of '{components.SandboxHome}'; refusing the grant scope without falling back.");
 
-        // 可信组件保护：写根与元数据写路径不得覆盖组件、home、凭据目录或 users 文件，
-        // 否则沙箱内命令可以篡改执行基础设施。读根不在此列：沙箱组本就需要读取并执行组件。
+        // 可信组件保护：写根与元数据写路径不得覆盖本端组件、home、凭据目录、users 文件或共享 home 下
+        // 已登记的另一端保护路径，否则沙箱内命令可以篡改执行基础设施。读根不在此列：沙箱组本就需要读取并执行组件。
         var protectedPaths = new List<string>
         {
             components.SetupExecutablePath, components.RunnerExecutablePath, components.SandboxHome,
             components.CredentialsDirectory, components.UsersFilePath
         };
+        var registeredPaths         = SandboxProtectedPathsStore.ReadRegisteredPathsForHome(components.SandboxHome);
+        var provisionLeaseDirectory = SandboxProvisionLeaseStore.ResolveDefaultLeaseDirectory();
         foreach (var root in writeRoots.Concat(metadataWrites))
         {
+            var label = GrantRootLabel(root, readRoots, writeRoots, metadataWrites);
             foreach (var trustedPath in protectedPaths)
                 if (Workspace.IsInside(root, trustedPath))
                     throw new
-                        InvalidOperationException($"The {GrantRootLabel(root, readRoots, writeRoots, metadataWrites)} '{root}' covers the trusted " +
+                        InvalidOperationException($"The {label} '{root}' covers the trusted " +
                                                   $"sandbox path '{trustedPath}'; sandboxed commands could tamper with it, refusing the grant scope.");
+
+            if (OverlapsProtection(root, provisionLeaseDirectory))
+                throw new
+                    InvalidOperationException($"The {label} '{root}' overlaps the sandbox provisioning lease directory " +
+                                              $"'{provisionLeaseDirectory}'; sandboxed commands could remove active " +
+                                              "cross-process provisioning leases, refusing the grant scope.");
+
+            ValidateSingleWriteRootAgainstRegisteredProtectedPaths(root, components.SandboxHome, registeredPaths,
+                                                                   label);
 
             // C1 权限系统资源双向重叠：覆盖（改写保护文件/目录内容）与落入（在保护目录内部创建
             // 或改写条目）都拒绝；词法与最终形态都参与比对。
@@ -1623,7 +1652,7 @@ public static class WindowsSandboxComposer
             foreach (var protectedPath in permissionSystemPaths)
                 if (OverlapsProtection(root, protectedPath))
                     throw new
-                        InvalidOperationException($"The {GrantRootLabel(root, readRoots, writeRoots, metadataWrites)} '{root}' overlaps the permission-system " +
+                        InvalidOperationException($"The {label} '{root}' overlaps the permission-system " +
                                                   $"protected path '{protectedPath}'; permission-system resources cannot be exposed " +
                                                   "as grant write scope, refusing the grant scope.");
         }
@@ -2017,15 +2046,98 @@ public static class WindowsSandboxComposer
     ///         and keeps validating, never skipping.
     ///     </para>
     /// </summary>
-    private static bool OverlapsProtection(string left, string right)
+    internal static ISandboxDenyReadRefreshGateHandle? AcquireHomeProtectionGate(string sandboxHome)
     {
-        // 解析失败回落词法路径（同值），词法×词法、最终×最终与交叉四种配对全部比对。
-        var leftFinal  = SandboxFinalPathResolver.TryGetFinalPath(left)  ?? left;
-        var rightFinal = SandboxFinalPathResolver.TryGetFinalPath(right) ?? right;
-        return Workspace.IsInside(left, right)           || Workspace.IsInside(right, left)           ||
-               Workspace.IsInside(leftFinal, rightFinal) || Workspace.IsInside(rightFinal, leftFinal) ||
-               Workspace.IsInside(left, rightFinal)      || Workspace.IsInside(rightFinal, left)      ||
-               Workspace.IsInside(leftFinal, right)      || Workspace.IsInside(right, leftFinal);
+        if (!OperatingSystem.IsWindows()) return null;
+
+        var gate = new GlobalDenyReadRefreshGate()
+                  .TryAcquireAsync(sandboxHome, WindowsSandboxBackendLimits.Default.DenyReadRefreshGateTimeout,
+                                   CancellationToken.None)
+                  .ConfigureAwait(false)
+                  .GetAwaiter()
+                  .GetResult();
+        return gate ?? throw new InvalidOperationException(
+            $"Timed out waiting for the cross-process sandbox home gate for '{sandboxHome}' while synchronizing " +
+            "shared protected paths; refusing the operation (fail closed).");
+    }
+
+    internal static void ValidateWriteRootsAgainstRegisteredProtectedPaths(
+        IReadOnlyList<string> writeRoots, string sandboxHome, string rootLabel)
+    {
+        // 无论共享清单是否已存在，持久化提权租约目录始终属于受保护路径，不得与任何有效写根重叠。
+        var provisionLeaseDirectory = SandboxProvisionLeaseStore.ResolveDefaultLeaseDirectory();
+        foreach (var root in writeRoots)
+            if (OverlapsProtection(root, provisionLeaseDirectory))
+                throw new InvalidOperationException(
+                    $"The {rootLabel} '{root}' overlaps the sandbox provisioning lease directory " +
+                    $"'{provisionLeaseDirectory}'; sandboxed commands could remove active cross-process " +
+                    "provisioning leases, refusing the operation.");
+
+        var registeredPaths = SandboxProtectedPathsStore.ReadRegisteredPathsForHome(sandboxHome);
+        if (registeredPaths.Count == 0) return;
+
+        foreach (var root in writeRoots)
+            ValidateSingleWriteRootAgainstRegisteredProtectedPaths(root, sandboxHome, registeredPaths, rootLabel);
+    }
+
+    private static void ValidateSingleWriteRootAgainstRegisteredProtectedPaths(
+        string writeRoot, string sandboxHome, IReadOnlyList<string> registeredPaths, string rootLabel)
+    {
+        var fullHome  = Path.TrimEndingDirectorySeparator(Path.GetFullPath(sandboxHome));
+        var finalHome = SandboxFinalPathResolver.TryGetFinalPath(fullHome);
+        var fullRoot  = Path.GetFullPath(writeRoot);
+        var finalRoot = SandboxFinalPathResolver.TryGetFinalPath(fullRoot) ?? fullRoot;
+
+        foreach (var registered in registeredPaths)
+        {
+            var fullRegistered = Path.TrimEndingDirectorySeparator(Path.GetFullPath(registered));
+            var isHomeItself = string.Equals(fullRegistered, fullHome, StringComparison.OrdinalIgnoreCase) ||
+                               (finalHome is not null &&
+                                string.Equals(SandboxFinalPathResolver.TryGetFinalPath(fullRegistered),
+                                              Path.TrimEndingDirectorySeparator(finalHome),
+                                              StringComparison.OrdinalIgnoreCase));
+            if (isHomeItself)
+            {
+                // 默认基础设施根（tmp/tools/nuget-cache）物理位于 sandboxHome 内，因此对 home 自身仅拒绝
+                // 覆盖或等于 home 的写根，不反向拒绝 home 内的基础设施根。
+                var finalRegistered = SandboxFinalPathResolver.TryGetFinalPath(fullRegistered) ?? fullRegistered;
+                if (Workspace.IsInside(fullRoot, fullRegistered)  ||
+                    Workspace.IsInside(fullRoot, finalRegistered) ||
+                    Workspace.IsInside(finalRoot, fullRegistered) ||
+                    Workspace.IsInside(finalRoot, finalRegistered))
+                    throw new InvalidOperationException(
+                        $"The {rootLabel} '{writeRoot}' covers the registered sandbox home '{registered}'; " +
+                        "sandboxed commands could tamper with shared sandbox infrastructure, refusing the operation.");
+                continue;
+            }
+
+            if (OverlapsProtection(fullRoot, fullRegistered))
+                throw new InvalidOperationException(
+                    $"The {rootLabel} '{writeRoot}' overlaps the shared-home registered protected path '{registered}'; " +
+                    "another installation or permission-system asset sharing this sandbox home would become writable, " +
+                    "refusing the operation.");
+        }
+    }
+
+    internal static bool OverlapsProtection(string left, string right)
+    {
+        // 优先展开真实最终落点；路径尚未创建时按最近已存在祖先展开最终落点再拼回缺失尾部段，
+        // 防止写根或尚未物化的保护目录通过祖先 junction/8.3 短名绕过重叠校验。
+        // 在 Windows 上若任一侧最终落点无法确认（例如悬空 junction/symlink、无权限或不可解析卷），
+        // 绝不回落词法路径放行，直接 fail-closed 视作重叠拒绝授权。
+        var leftFinal = SandboxFinalPathResolver.TryGetFinalPath(left)
+                        ?? GlobalDenyReadRefreshGate.TryResolveCanonicalPathAllowMissing(left);
+        var rightFinal = SandboxFinalPathResolver.TryGetFinalPath(right)
+                         ?? GlobalDenyReadRefreshGate.TryResolveCanonicalPathAllowMissing(right);
+        if (OperatingSystem.IsWindows() && (leftFinal is null || rightFinal is null))
+            return true;
+
+        var effectiveLeft  = leftFinal  ?? left;
+        var effectiveRight = rightFinal ?? right;
+        return Workspace.IsInside(left, right)                   || Workspace.IsInside(right, left)                   ||
+               Workspace.IsInside(effectiveLeft, effectiveRight) || Workspace.IsInside(effectiveRight, effectiveLeft) ||
+               Workspace.IsInside(left, effectiveRight)          || Workspace.IsInside(effectiveRight, left)          ||
+               Workspace.IsInside(effectiveLeft, right)          || Workspace.IsInside(right, effectiveLeft);
     }
 
     private static string PolicyKindDisplay(SandboxPolicyKind kind) => kind switch

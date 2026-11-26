@@ -25,6 +25,10 @@ public sealed record WindowsSandboxProvisionPlan
 {
     public required WindowsSandboxComponents Components { get; init; }
 
+    public required WindowsSandboxComponentResolution ResolvedComponents { get; init; }
+
+    public SandboxFileIdentity? SetupIdentity { get; init; }
+
     public required SandboxSetupPayload Payload { get; init; }
 
     /// <summary>
@@ -140,9 +144,14 @@ public sealed record WindowsSandboxProvisionResult
 ///         <see cref="ProcessSandboxSetupInvoker" />, which this type never widens.
 ///     </para>
 /// </summary>
-public sealed class WindowsSandboxProvisioner(ISandboxSetupElevator elevator)
+public sealed class WindowsSandboxProvisioner(
+    ISandboxSetupElevator        elevator,
+    ISandboxDenyReadRefreshGate? denyReadRefreshGate = null,
+    TimeSpan?                    denyReadGateTimeout = null)
 {
-    private const int ErrorSummaryLimit = 400;
+    private const    int                         ErrorSummaryLimit    = 400;
+    private readonly ISandboxDenyReadRefreshGate _denyReadRefreshGate = denyReadRefreshGate ?? new GlobalDenyReadRefreshGate();
+    private readonly TimeSpan                    _denyReadGateTimeout = denyReadGateTimeout ?? GlobalDenyReadRefreshGate.DefaultAcquireTimeout;
 
     /// <summary>
     ///     <para>
@@ -160,7 +169,10 @@ public sealed class WindowsSandboxProvisioner(ISandboxSetupElevator elevator)
     ///     </para>
     /// </summary>
     public WindowsSandboxProvisionPlan BuildPlan(
-        WindowsSandboxSettings settings, string commandWorkingDirectory, string realUser)
+        WindowsSandboxSettings settings,
+        string                 commandWorkingDirectory,
+        string                 realUser,
+        string?                appBaseDirectory = null)
     {
         ArgumentNullException.ThrowIfNull(settings);
         ArgumentException.ThrowIfNullOrWhiteSpace(commandWorkingDirectory);
@@ -169,7 +181,26 @@ public sealed class WindowsSandboxProvisioner(ISandboxSetupElevator elevator)
             throw new PlatformNotSupportedException(
                                                     "Windows sandbox provisioning is available on Windows only.");
 
-        var plan = WindowsSandboxPolicyPlanner.Plan(settings, commandWorkingDirectory);
+        var plan = WindowsSandboxPolicyPlanner.Plan(settings, commandWorkingDirectory,
+                                                    appBaseDirectory : appBaseDirectory);
+        IReadOnlyList<string> effectiveWriteRoots = SandboxIsolationPolicy.Deduplicate(
+        [
+            commandWorkingDirectory,
+            .. plan.Policy.EffectiveWriteRoots,
+            .. plan.Policy.TempWriteRoots,
+            plan.TempRoot,
+            .. plan.AdditionalWriteRoots
+        ]);
+        // 提权前与运行时共用同一套组件与实际写根集合校验：setup 与 runner 均须存在、合法、随包不越界且落在所有写根之外。
+        var setupIdentity = WindowsSandboxComponentResolver.ValidateExecutableForUse(
+            plan.ResolvedComponents.Setup, plan.ResolvedComponents.AppBaseDirectory, effectiveWriteRoots);
+        WindowsSandboxComponentResolver.ValidateExecutableForUse(
+            plan.ResolvedComponents.Runner, plan.ResolvedComponents.AppBaseDirectory, effectiveWriteRoots);
+        // 若该 home 已由另一端登记了保护路径（例如另一套安装包组件），provisioning 写根同样不得覆盖它们。
+        WindowsSandboxComposer.ValidateWriteRootsAgainstRegisteredProtectedPaths(effectiveWriteRoots,
+                                                                                 plan.SandboxHome,
+                                                                                 "provisioning write root");
+
         var components = new WindowsSandboxComponents
         {
             SetupExecutablePath  = plan.SetupExecutablePath,
@@ -195,6 +226,8 @@ public sealed class WindowsSandboxProvisioner(ISandboxSetupElevator elevator)
         return new WindowsSandboxProvisionPlan
         {
             Components           = components,
+            ResolvedComponents   = plan.ResolvedComponents,
+            SetupIdentity        = setupIdentity,
             Payload              = payload,
             PayloadJson          = payloadJson,
             Base64Payload        = base64Payload,
@@ -313,23 +346,82 @@ public sealed class WindowsSandboxProvisioner(ISandboxSetupElevator elevator)
 
     /// <summary>
     ///     <para>
-    ///         提权执行计划并汇总结果。每次调用都对应一次提权尝试并追加一行审计（含拒绝、失败、
-    ///         超时/取消）。Completed 后重新 InspectAsync；NotFinished 不 kill 提权进程，状态未知。
+    ///         提权执行计划并汇总结果。无论 <c>SandboxHome</c> 是已存在还是首次初始化尚未创建，均在按
+    ///         home 规范键控的拒读刷新门内串行执行最终身份复核、共享保护清单复核与提权写 ACL，使之与
+    ///         另一端的组件登记（<see cref="WindowsSandboxComposer.Compose" />）使用同一同步边界。正常结束
+    ///         （Completed / Failed / Declined）立即清理持久化租约并释放门；NotFinished 不 kill 提权进程，
+    ///         通过 <see cref="ISandboxDenyReadRefreshGateHandle.PersistUntilProcessExits" /> 持久化绑定实际
+    ///         写入者进程身份，使即便 CLI 进程立即退出、互斥体被内核标记为已放弃，保护仍持续到 OS 确认
+    ///         实际写入者退出。每次调用都追加一行审计，Completed 后重新 InspectAsync。
     ///     </para>
     ///     <para>
-    ///         Runs the plan elevated and summarizes the outcome. Every call is one
-    ///         elevation attempt and appends one audit line (declines, failures,
-    ///         and timeouts/cancellations included). Completed re-runs
-    ///         InspectAsync; NotFinished never kills the elevated process — the
-    ///         machine state is unknown.
+    ///         Runs the plan elevated and summarizes the outcome. Holds the canonical home-keyed deny-read
+    ///         refresh gate across the final identity check, the shared protected-path check, and elevated
+    ///         ACL writes for both existing homes and first-time provisioning (before the home directory
+    ///         exists), sharing the same synchronization boundary with peer component registration
+    ///         (<see cref="WindowsSandboxComposer.Compose" />). Completed / Failed / Declined clear the
+    ///         durable lease and release the gate immediately; NotFinished never kills the elevated process
+    ///         and durably binds protection to the actual writer process through
+    ///         <see cref="ISandboxDenyReadRefreshGateHandle.PersistUntilProcessExits" /> so protection
+    ///         survives even after the CLI exits and the mutex becomes abandoned, until the OS confirms the
+    ///         writer has exited. Every call appends one audit line, and Completed re-runs InspectAsync.
     ///     </para>
     /// </summary>
     public async Task<WindowsSandboxProvisionResult> ProvisionAsync(
         WindowsSandboxProvisionPlan plan, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(plan);
-        var elevation = await elevator.ElevateAsync(plan.Components, plan.Base64Payload, cancellationToken)
+
+        // 首次 provisioning（home 尚未创建）与已有 home 均使用同一规范 home 键获取跨进程刷新门，
+        // 避免 helper 创建 home 后、ACL 尚未写完期间另一端并发登记组件。
+        ISandboxDenyReadRefreshGateHandle? gate =
+            await _denyReadRefreshGate
+                  .TryAcquireForProvisioningAsync(plan.Components.SandboxHome, _denyReadGateTimeout, cancellationToken)
+                  .ConfigureAwait(false)
+            ?? throw new
+                InvalidOperationException($"The deny-read refresh gate for sandbox home '{plan.Components.SandboxHome}' " +
+                                          $"was not acquired within {(int)_denyReadGateTimeout.TotalSeconds}s; " +
+                                          "refusing to start provisioning while another operation holds the home gate.");
+
+        SandboxSetupElevationResult elevation;
+        try
+        {
+            // 提权前重新核对计划里的 setup 文件身份与共享保护清单，发现替换或冲突即停止，绝不发起 UAC。
+            if (plan.SetupIdentity is not null)
+                WindowsSandboxComponentResolver.VerifyFileIdentityUnchanged(plan.Components.SetupExecutablePath,
+                                                                            plan.SetupIdentity,
+                                                                            "Windows sandbox setup executable");
+            WindowsSandboxComposer.ValidateWriteRootsAgainstRegisteredProtectedPaths(plan.Payload.WriteRoots,
+                                                                                     plan.Components.SandboxHome,
+                                                                                     "provisioning write root");
+
+            // 启动提权 helper 前先建立持久化预启动租约：若落盘失败则不发起 UAC；若启动后 CLI 退出或
+            // 后续租约更新失败，已落盘的预启动租约仍能持续阻断另一端。
+            gate.BeginProvisioning(plan.Components.SetupExecutablePath);
+
+            elevation = await elevator.ElevateAsync(plan.Components,
+                                                    plan.Base64Payload,
+                                                    identity => gate.BeginExternalWriter(identity,
+                                                        plan.Components.SetupExecutablePath),
+                                                    cancellationToken)
                                       .ConfigureAwait(false);
+            if (elevation.Outcome == SandboxSetupElevationOutcome.DidNotFinish)
+            {
+                // helper 退出未确认（超时或取消，可能仍在后台修改 ACL）：先断开 finally 的 Dispose 路径，
+                // 再转移所有权并尽力更新持久化租约（更新失败保留既有租约），确保 CLI 退出后保护不中断。
+                var handedOffGate = gate;
+                gate = null;
+                handedOffGate.PersistUntilProcessExits(elevation.ProcessIdentity,
+                                                       elevation.ExitConfirmation ?? Task.FromResult(false),
+                                                       plan.Components.SetupExecutablePath);
+            }
+        }
+        finally
+        {
+            // 仅在确认 helper 未启动（前置校验失败/预启动租约失败/Declined/启动前异常）或已确认退出
+            // （Completed/Failed）时经 Dispose 清理租约并释放门；DidNotFinish 已置空 gate。
+            gate?.Dispose();
+        }
 
         WindowsSandboxProvisionResult result;
 

@@ -68,7 +68,8 @@ public interface IWorkspaceAclGrant
 public sealed partial class ProcessWorkspaceAclGrant(
     IReadOnlyList<string>   protectedPaths,
     IReadOnlyList<string>   writeRoots,
-    WindowsSandboxSettings? sandboxSettings = null) : IWorkspaceAclGrant
+    WindowsSandboxSettings? sandboxSettings  = null,
+    string?                 appBaseDirectory = null) : IWorkspaceAclGrant
 {
     public const string HelperArgument = "--internal-workspace-acl";
 
@@ -119,7 +120,8 @@ public sealed partial class ProcessWorkspaceAclGrant(
             !await WorkspaceAclInheritance.CanManageAsync(identity, cancellationToken).ConfigureAwait(false))
             throw new
                 UnauthorizedAccessException("Normal-privilege workspace ACL preparation requires READ_CONTROL | WRITE_DAC.");
-        var sandbox = await WorkspaceSandboxAclContext.CaptureAsync(settings, identity, cancellationToken)
+        var sandbox = await WorkspaceSandboxAclContext.CaptureAsync(settings, identity, cancellationToken,
+                                                                    appBaseDirectory : appBaseDirectory)
                                                       .ConfigureAwait(false);
         // 宿主侧核对走带门重载：此刻 CaptureAsync 的门已释放，方法内自取门读表，避免读到
         // 另一端门内整表写回的中间态（共享冲突/半 JSON/陈旧映射 → 误报 mapping changed）。
@@ -183,7 +185,8 @@ public sealed partial class ProcessWorkspaceAclGrant(
                     throw new InvalidDataException("The sandbox home must lie outside every write root.");
         var sandbox = sandboxSettings is null
             ? null
-            : await WorkspaceSandboxAclContext.CaptureAsync(sandboxSettings, identity, cancellationToken)
+            : await WorkspaceSandboxAclContext.CaptureAsync(sandboxSettings, identity, cancellationToken,
+                                                            appBaseDirectory : appBaseDirectory)
                                               .ConfigureAwait(false);
         var request = new WorkspaceAclRequest(identity, current.User!.Value, caller.Id,
                                               caller.StartTime.ToUniversalTime().Ticks, protectedPaths.ToArray(),
@@ -265,13 +268,24 @@ public sealed partial class ProcessWorkspaceAclGrant(
         foreach (var root in writeRoots.Prepend(identity.Path))
             if (Workspace.IsInside(root, executable))
                 throw new InvalidDataException($"当前程序位于沙箱写根内：{executable}。请将完整程序发布到所有写根之外的独立目录，启动后再修复权限。");
-        var paths = new List<string>(protectedPaths) { executable };
+        var provisionLeaseDirectory = SandboxProvisionLeaseStore.ResolveDefaultLeaseDirectory();
+        var paths                   = new List<string>(protectedPaths) { executable, provisionLeaseDirectory };
         if (sandboxSettings is { } settings)
         {
-            paths.Add(settings.SetupExecutablePath);
-            paths.Add(settings.RunnerExecutablePath);
-            paths.Add(WindowsSandboxComponents.ResolveSandboxHome(settings.SandboxHome, settings.AllowTcpLoopback));
+            var resolved = WindowsSandboxComponentResolver.RequireValidPaths(settings, appBaseDirectory);
+            var home     = WindowsSandboxComponents.ResolveSandboxHome(settings.SandboxHome, settings.AllowTcpLoopback);
+            paths.Add(resolved.Setup.CandidatePath!);
+            paths.Add(resolved.Runner.CandidatePath!);
+            paths.Add(home);
+            // 共享同一 home 时，已登记的另一端安装组件与权限系统路径同样不得落入本次授权或写根范围。
+            paths.AddRange(SandboxProtectedPathsStore.ReadRegisteredPathsForHome(home));
         }
+
+        // 持久提权租约目录须按最终落点与全部待授权目标及有效写根双向互斥，防止经 junction 暴露给沙箱。
+        foreach (var root in writeRoots.Prepend(identity.Path))
+            if (WindowsSandboxComposer.OverlapsProtection(root, provisionLeaseDirectory))
+                throw new InvalidDataException(
+                    $"Protected provisioning lease directory '{provisionLeaseDirectory}' overlaps sandbox write or authorization root '{root}'.");
 
         ValidateProtectedPaths(identity, paths);
         foreach (var root in writeRoots)

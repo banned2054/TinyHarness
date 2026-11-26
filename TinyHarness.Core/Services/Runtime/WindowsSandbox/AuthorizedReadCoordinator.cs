@@ -443,20 +443,22 @@ public sealed class AuthorizedReadCoordinator : IProcessExecutionBackend
     /// <summary>
     ///     <para>
     ///         构造恢复 payload：与授权执行同一 grant 范围，authorized_read_paths 置空数组（v7）；
-    ///         deny_read_paths 在冻结语义集之上叠加 helper 拒读簿记的只增并集（与后端 refresh 共用
+    ///         构造后在门内复核所有写根不得与共享 home 已登记的保护路径冲突，随后在冻结语义集之上叠加
+    ///         helper 拒读簿记的只增并集（与后端 refresh 共用
     ///         <see cref="SandboxDenyReadBookkeeping.Merge" /> 同一实现）——授权组与普通组的 deny
     ///         基面都只收窄不扩权，恢复/退出 refresh 不撤销另一端写入簿记的条目。调用方须持有按
-    ///         home 键控的拒读刷新门，使簿记读取与 refresh 跨进程串行化。
+    ///         home 键控的拒读刷新门，使保护清单校验、簿记读取与 refresh 跨进程串行化。
     ///     </para>
     ///     <para>
     ///         Builds the restore payload: the same grant scope with an empty authorized_read_paths
-    ///         array (v7); deny_read_paths folds the helper deny-read bookkeeping into the frozen
-    ///         semantic set as an add-only union (sharing
+    ///         array (v7); after building it, validates under the gate that no write root overlaps any
+    ///         protected path registered for the shared home, then folds the helper deny-read
+    ///         bookkeeping into the frozen semantic set as an add-only union (sharing
     ///         <see cref="SandboxDenyReadBookkeeping.Merge" /> with the backend's refresh) — the deny
     ///         base of both the authorization and the ordinary group only narrows, and the restore /
     ///         exit refresh never revokes entries another side wrote into the bookkeeping. The caller
-    ///         must hold the home-keyed deny-read refresh gate so the bookkeeping read and the
-    ///         refresh stay serialized across processes.
+    ///         must hold the home-keyed deny-read refresh gate so the protected-path check, the
+    ///         bookkeeping read, and the refresh stay serialized across processes.
     ///     </para>
     /// </summary>
     private SandboxSetupPayload BuildRestorePayload(PreparedProcessExecution execution)
@@ -464,6 +466,11 @@ public sealed class AuthorizedReadCoordinator : IProcessExecutionBackend
         // 与后端 Preflight 的 payload 构造同一份确定性合并：read_roots 已剔除 deny 冲突根。
         var payload = Policy.CreateSetupPayload(_components, execution.WorkingDirectory, Environment.UserName, true,
                                                 execution.GrantScope);
+        // 门内复核恢复写根不得覆盖共享 home 下新登记的另一端组件或 C1 路径；抛出后由恢复/退出路径
+        // 既有 catch 保留持久化禁用语义，不向 helper 下发恢复 refresh。
+        WindowsSandboxComposer.ValidateWriteRootsAgainstRegisteredProtectedPaths(payload.WriteRoots,
+                                                                                 _components.SandboxHome,
+                                                                                 "authorized-read restore write root");
         var (denyPaths, bookkeepingEntries, bookkeepingMerged) = SandboxDenyReadBookkeeping.Merge(
             "authorized-read refresh", payload.DenyReadPaths, payload.ReadRoots, _components.SandboxHome);
         SandboxDiagnosticLog.Event("deny-read-union",
