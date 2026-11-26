@@ -32,20 +32,25 @@ Basic use
 
 Optional Windows sandbox
 Unpacking does NOT enable or provision the sandbox. Without it, approved commands
-run on the host. To opt in:
-1. After init, open %APPDATA%\tinyharness\user-config.json (or the directory selected
-   by TINYHARNESS_USER_CONFIG_DIR).
-2. Merge ONLY settings.windowsSandbox from sandbox-settings.example.json into your
-   existing settings. Do not replace the whole user config or lose provider/key
-   references. Change BOTH component paths to the actual absolute extracted paths.
-   The example C:\Tools\TinyHarness is a placeholder, not automatic discovery.
-3. Run: tinyharness sandbox status
-   A not-provisioned report is expected before the next step.
-4. Review the reported machine changes, then explicitly run:
+run on the host. When setupExecutablePath and runnerExecutablePath are omitted or
+blank, CLI and Desktop each locate their own bundled components under sandbox\
+beside TinyHarness.exe, so both packages can share user-config.json and move
+directories without rewriting paths. To opt in:
+1. Run: tinyharness sandbox status
+   It verifies the bundled components beside TinyHarness.exe; a not-provisioned
+   state is expected before the next step.
+2. Review the reported machine changes, then explicitly run:
    tinyharness sandbox provision
    This requests UAC and changes local accounts, ACLs, and Firewall/WFP rules.
    It has no uninstall/rollback command. Nothing in this package runs it for you.
-5. Run: tinyharness sandbox status
+3. Enable the sandbox in %APPDATA%\tinyharness\user-config.json (or the directory
+   selected by TINYHARNESS_USER_CONFIG_DIR) by merging ONLY settings.windowsSandbox
+   from sandbox-settings.example.json into your existing settings (or toggling
+   Windows Sandbox in Desktop Settings). Do not replace the whole user config or
+   lose provider/key references. Leave setupExecutablePath and runnerExecutablePath
+   omitted to use bundled components, or set explicit absolute paths only when you
+   intentionally want both CLI and Desktop to override with external fork builds.
+4. Run: tinyharness sandbox status
    It should report ready before sandboxed tool execution.
    sandbox verify is a separate, real system isolation test; it is not an offline
    self-check and can prepare test-directory ACLs and trigger firewall prompts.
@@ -89,15 +94,17 @@ build-info.json，ZIP 校验文件为 SHA256SUMS.txt。
 
 可选沙箱
 解压不会自动启用或初始化沙箱；未启用时，获准的命令在宿主执行。
-先 init，再打开 %APPDATA%\tinyharness\user-config.json；若设置了
-TINYHARNESS_USER_CONFIG_DIR，则使用该目录。仅将示例中的 settings.windowsSandbox
-合并到已有 settings，保留 provider 和密钥引用，不要覆盖整份用户配置。
-把 setupExecutablePath、runnerExecutablePath 都改成解压后组件的实际绝对路径，
-示例 C:\Tools\TinyHarness 只是占位路径，程序不会自动查找组件。
+省略或留空 setupExecutablePath 与 runnerExecutablePath 时，CLI 和 Desktop 各自自动
+使用本包 TinyHarness.exe 旁 sandbox\ 目录内的随包组件；移动解压目录也无需改配置。
 
-先运行 tinyharness sandbox status；未初始化时报告未就绪是正常的。核对副作用后，
-由用户明确执行 tinyharness sandbox provision。它请求 UAC，修改机器账户、ACL、
-Firewall/WFP，且没有卸载或回滚命令。随后再用 sandbox status 确认就绪。
+1. 先运行 tinyharness sandbox status，确认已找到随包组件（尚未初始化属于正常状态）。
+2. 核对副作用后，由用户明确执行 tinyharness sandbox provision（无需提前手写组件路径）。
+   它请求 UAC，修改机器账户、ACL、Firewall/WFP，且没有卸载或回滚命令。
+3. 在 %APPDATA%\tinyharness\user-config.json（或 TINYHARNESS_USER_CONFIG_DIR 对应目录）
+   中，仅将 sandbox-settings.example.json 里的 settings.windowsSandbox 合并到已有 settings
+   以开启 enabled: true（也可在 Desktop 设置页直接开启），不要覆盖整份配置。只有刻意
+   替换外部 fork 组件时才填写 setupExecutablePath / runnerExecutablePath 绝对路径。
+4. 随后再用 tinyharness sandbox status 确认就绪。
 sandbox verify 是另行选择的真实隔离验收，不是离线自检，可能准备测试目录 ACL
 并触发防火墙提示。工作区信任与目录授权是独立确认流程，工具执行仍需审批。
 

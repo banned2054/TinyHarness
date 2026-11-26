@@ -64,7 +64,7 @@ dotnet run --project TinyHarness.Cli -- smoke --config tinyharness.json
 
 ### Windows 沙箱组件
 
-沙箱使用本项目 [Codex fork](https://github.com/banned2054/codex) 的 setup 和 runner（随发布包提供，也可[从源码构建](Archive/windows-sandbox-dotnet-integration.md#构建产物已在本机构建验证)）。在 `settings.windowsSandbox` 中配置 `setupExecutablePath` 和 `runnerExecutablePath` 的绝对路径，再运行 `tinyharness sandbox provision`（需提权，会修改机器账户、ACL 和防火墙规则；详见[沙箱管理说明](Archive/windows-sandbox-management.md)）。
+沙箱使用本项目 [Codex fork](https://github.com/banned2054/codex) 的 setup 和 runner（随发布包放在各自安装目录的 `sandbox\` 下，也可[从源码构建](Archive/windows-sandbox-dotnet-integration.md#构建产物已在本机构建验证)）。`settings.windowsSandbox` 中的 `setupExecutablePath` 和 `runnerExecutablePath` 留空时默认使用当前安装包自带组件（源码运行或需覆盖时可填写绝对路径），然后运行 `tinyharness sandbox provision`（需提权，会修改机器账户、ACL 和防火墙规则；详见[沙箱管理说明](Archive/windows-sandbox-management.md)）。
 
 ## 📖 使用说明
 

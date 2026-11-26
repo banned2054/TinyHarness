@@ -64,7 +64,7 @@ Default tests and `smoke` use simulated models without a real provider or the Wi
 
 ### Windows sandbox components
 
-TinyHarness uses setup and runner executables from its [Codex fork](https://github.com/banned2054/codex) (bundled in the release ZIP or [built from source](Docs/Archive/windows-sandbox-dotnet-integration.md#构建产物已在本机构建验证)). Set `settings.windowsSandbox.setupExecutablePath` and `runnerExecutablePath` to their absolute paths, then run `tinyharness sandbox provision` (requires elevation and modifies machine accounts, ACLs, and firewall rules; see the [sandbox guide](Docs/Archive/windows-sandbox-management.md)).
+TinyHarness uses setup and runner executables from its [Codex fork](https://github.com/banned2054/codex) (bundled under `sandbox\` in each release ZIP or [built from source](Docs/Archive/windows-sandbox-dotnet-integration.md#构建产物已在本机构建验证)). Leave `settings.windowsSandbox.setupExecutablePath` and `runnerExecutablePath` blank to use each installation's bundled components (or set explicit absolute paths to override for both CLI and Desktop), then run `tinyharness sandbox provision` (requires elevation and modifies machine accounts, ACLs, and firewall rules; see the [sandbox guide](Docs/Archive/windows-sandbox-management.md)).
 
 ## 📖 Usage
 

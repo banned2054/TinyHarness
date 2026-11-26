@@ -31,13 +31,16 @@ TINYHARNESS_USER_CONFIG_DIR and TINYHARNESS_SESSION_STORE_DIR override those pat
 settings.sessionStoreDirectory can also select a session store.
 
 Optional Windows sandbox
-Extraction and app launch do not provision the sandbox. Configure the actual
-absolute component paths using ONLY settings.windowsSandbox from the supplied
-sandbox-settings.example.json; merge it into your existing settings and retain
-provider/key references. C:\Tools\TinyHarness in the example is a placeholder.
-Use the separately downloaded CLI package for sandbox status, explicit sandbox
-provision, and optional sandbox verify. Provisioning requests UAC and changes
-local accounts, ACLs, and Firewall/WFP rules; there is no uninstall/rollback command.
+Extraction and app launch do not provision the sandbox. When setupExecutablePath
+and runnerExecutablePath are left blank in Settings (or omitted in user-config.json),
+CLI and Desktop each automatically use the bundled components under their own
+sandbox\ directory. Use the separately downloaded CLI package for sandbox status,
+explicit sandbox provision, and optional sandbox verify, then enable Windows
+Sandbox in Desktop Settings (or merge ONLY settings.windowsSandbox from
+sandbox-settings.example.json). Provisioning requests UAC and changes local
+accounts, ACLs, and Firewall/WFP rules; there is no uninstall/rollback command.
+Entering custom absolute component paths overrides both CLI and Desktop; use
+"Reset to default" in Settings to clear overrides.
 The example blocks external networking and TCP loopback for sandboxed tools.
 allowTcpLoopback=true also permits access to host TCP loopback services.
 Harness model requests are not routed through the tool-process sandbox.
@@ -74,11 +77,13 @@ TINYHARNESS_USER_CONFIG_DIR、TINYHARNESS_SESSION_STORE_DIR 覆盖；
 settings.sessionStoreDirectory 也可指定会话目录。
 
 可选沙箱
-解压和启动应用不会初始化沙箱。只将示例中的 settings.windowsSandbox 合并到
-已有 settings，保留供应商与密钥引用；两个组件路径均需替换为实际绝对路径，
-示例 C:\Tools\TinyHarness 只是占位值。请使用另行下载的 CLI 包运行 sandbox
-status、明确选择执行 sandbox provision，以及按需执行 sandbox verify。
-provision 请求 UAC，修改机器账户、ACL、Firewall/WFP，且没有卸载或回滚命令。
+解压和启动应用不会初始化沙箱。设置页的组件路径保持留空（或 user-config.json 中省略
+setupExecutablePath、runnerExecutablePath）时，CLI 与 Desktop 各自自动使用本包
+sandbox\ 目录内的随包组件。请使用另行下载的 CLI 包运行 sandbox status、明确选择执行
+sandbox provision，以及按需执行 sandbox verify，随后在 Desktop 设置页启用 Windows
+沙箱（或仅合并 sandbox-settings.example.json 中的 settings.windowsSandbox）。
+provision 请求 UAC，修改机器账户、ACL、Firewall/WFP，且没有卸载或回滚命令。如填写
+自定义绝对路径，会同时覆盖 CLI 与 Desktop，可在设置页点击「恢复默认」清除覆盖。
 示例阻断外部网络和 TCP 环回；allowTcpLoopback=true 也允许访问宿主 TCP 环回
 服务。模型请求不受此工具进程沙箱隔离。
 

@@ -248,7 +248,9 @@ jobs:
                   $PSNativeCommandUseErrorActionPreference = $true
                   $extracted = Join-Path $env:RUNNER_TEMP 'extracted'
                   $smokeDirectory = Join-Path $env:RUNNER_TEMP 'native-smoke'
-                  New-Item -ItemType Directory -Path $smokeDirectory | Out-Null
+                  $sharedConfigDirectory = Join-Path $smokeDirectory 'shared-user-config'
+                  New-Item -ItemType Directory -Path $sharedConfigDirectory -Force | Out-Null
+                  '{"settings":{"windowsSandbox":{"enabled":false}}}' | Set-Content -LiteralPath (Join-Path $sharedConfigDirectory 'user-config.json') -Encoding utf8NoBOM
                   $configPath = (Resolve-Path -LiteralPath tinyharness.json).Path
                   foreach ($edition in @('CLI', 'Desktop')) {
                     $packageName = if ($edition -eq 'CLI') { $env:CLI_PACKAGE_NAME } else { $env:DESKTOP_PACKAGE_NAME }
@@ -267,21 +269,47 @@ jobs:
                       $hash = (Get-FileHash -LiteralPath (Join-Path $packageRoot $entry.Key) -Algorithm SHA256).Hash.ToLowerInvariant()
                       if ($hash -cne $entry.Value) { throw "Extracted file hash mismatch: $packageName/$($entry.Key)" }
                     }
+                    $expectedSetup = Join-Path $packageRoot 'sandbox\codex-windows-sandbox-setup.exe'
+                    $expectedRunner = Join-Path $packageRoot 'sandbox\codex-command-runner.exe'
+                    $expectedProbe = Join-Path $packageRoot 'sandbox\codex-windows-managed-deny-probe.exe'
+                    $previousUserConfigDir = $env:TINYHARNESS_USER_CONFIG_DIR
+                    $env:TINYHARNESS_USER_CONFIG_DIR = $sharedConfigDirectory
                     Push-Location $smokeDirectory
                     try {
                       if ($edition -eq 'CLI') {
                         & "$packageRoot/TinyHarness.exe" --help
                         & "$packageRoot/TinyHarness.exe" smoke --config $configPath
+                        $statusOutput = (& "$packageRoot/TinyHarness.exe" sandbox status | Out-String)
+                        Write-Host $statusOutput
+                        if ($LASTEXITCODE -ne 0) { throw "CLI sandbox status failed: $LASTEXITCODE" }
+                        foreach ($expected in @($expectedSetup, $expectedRunner, $expectedProbe)) {
+                          if ($statusOutput.IndexOf($expected, [StringComparison]::OrdinalIgnoreCase) -lt 0) {
+                            throw "CLI sandbox status did not resolve bundled component: $expected"
+                          }
+                        }
                       } else {
                         $stdout = Join-Path $smokeDirectory 'desktop-stdout.txt'
                         $stderr = Join-Path $smokeDirectory 'desktop-stderr.txt'
                         # WinExe 必须显式等待并检查退出码，不能仅以成功启动判断 smoke 通过。
                         $process = Start-Process -FilePath "$packageRoot/TinyHarness.exe" -ArgumentList '--offline-smoke' `
                           -WindowStyle Hidden -PassThru -Wait -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+                        $desktopOutput = (Get-Content -LiteralPath $stdout -Raw)
                         Get-Content -LiteralPath $stdout, $stderr
                         if ($process.ExitCode -ne 0) { throw "Desktop offline smoke failed: $($process.ExitCode)" }
+                        foreach ($expected in @($expectedSetup, $expectedRunner, $expectedProbe)) {
+                          if ($desktopOutput.IndexOf($expected, [StringComparison]::OrdinalIgnoreCase) -lt 0) {
+                            throw "Desktop offline smoke did not resolve bundled component: $expected"
+                          }
+                        }
                       }
-                    } finally { Pop-Location }
+                    } finally {
+                      Pop-Location
+                      if ($null -eq $previousUserConfigDir) {
+                        Remove-Item Env:TINYHARNESS_USER_CONFIG_DIR -ErrorAction SilentlyContinue
+                      } else {
+                        $env:TINYHARNESS_USER_CONFIG_DIR = $previousUserConfigDir
+                      }
+                    }
                   }
 
             - name: Upload the verified CLI and Desktop packages
