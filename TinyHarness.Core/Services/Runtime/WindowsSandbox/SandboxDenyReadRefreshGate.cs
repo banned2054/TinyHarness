@@ -61,6 +61,25 @@ public interface ISandboxDenyReadRefreshGate
     /// </exception>
     Task<ISandboxDenyReadRefreshGateHandle?> TryAcquireAsync(
         string sandboxHome, TimeSpan timeout, CancellationToken cancellationToken);
+
+    /// <summary>
+    ///     <para>
+    ///         为显式 provisioning 获取按 <paramref name="sandboxHome" /> 键控的刷新门：允许首次初始化时
+    ///         home 目录尚不存在（经最近已存在祖先的最终路径与缺失尾部段推导同一规范键），使首次
+    ///         provisioning 与目录创建后的组件登记使用同一同步边界。默认实现委托给
+    ///         <see cref="TryAcquireAsync" />。
+    ///     </para>
+    ///     <para>
+    ///         Acquires the refresh gate keyed by <paramref name="sandboxHome" /> for explicit
+    ///         provisioning: allows first-time initialization where the home directory does not yet exist
+    ///         (resolving the deepest existing ancestor's final path plus the missing tail segments to
+    ///         produce the identical canonical key) so initial provisioning and post-creation component
+    ///         registration share one synchronization boundary. Defaults to <see cref="TryAcquireAsync" />.
+    ///     </para>
+    /// </summary>
+    Task<ISandboxDenyReadRefreshGateHandle?> TryAcquireForProvisioningAsync(
+        string sandboxHome, TimeSpan timeout, CancellationToken cancellationToken) =>
+        TryAcquireAsync(sandboxHome, timeout, cancellationToken);
 }
 
 /// <summary>
@@ -104,6 +123,61 @@ public interface ISandboxDenyReadRefreshGateHandle : IDisposable
     ///     </para>
     /// </param>
     void ReleaseWhenConfirmed(Task<bool> helperExitConfirmation);
+
+    /// <summary>
+    ///     <para>
+    ///         在启动外部提权 helper 之前先行建立按 home 键控的持久化预启动租约（fail-closed）：
+    ///         若预启动落盘失败则调用方中止，不启动 helper；若 helper 启动后 CLI 崩溃或后续更新
+    ///         租约失败，已有预启动租约仍持续保护该 home。仅在确认 helper 未启动或已退出后清理。
+    ///     </para>
+    ///     <para>
+    ///         Establishes the home-keyed durable pre-launch lease (fail-closed) before starting the
+    ///         elevated helper: if writing fails, the caller aborts before launching the helper; if the
+    ///         CLI exits or a later lease update fails after launch, the pre-launch lease keeps the home
+    ///         protected. Cleared only once the helper is confirmed never started or exited.
+    ///     </para>
+    /// </summary>
+    void BeginProvisioning(string? setupExecutablePath = null)
+    {
+    }
+
+    /// <summary>
+    ///     <para>
+    ///         将已启动的外部提权写入者进程身份原子更新到持久化租约；若更新发生 I/O 或权限错误，
+    ///         保留已存在的预启动租约而不抛出或删除，确保保护不中断。
+    ///     </para>
+    ///     <para>
+    ///         Atomically updates the durable lease with the started external elevated writer's process
+    ///         identity; on I/O or permission errors, preserves the existing pre-launch lease without
+    ///         throwing or deleting so protection never drops.
+    ///     </para>
+    /// </summary>
+    void BeginExternalWriter(SandboxElevatedProcessIdentity writerProcess, string? setupExecutablePath = null)
+    {
+    }
+
+    /// <summary>
+    ///     <para>
+    ///         在提权结果未确认（超时/取消）时，先原子转移门所有权再尽力更新持久化租约：
+    ///         更新失败时保留已存在的预启动/写入者租约且绝不删除或抛出，即便当前 CLI 进程立刻退出、
+    ///         互斥体被内核标记为已放弃，另一端在写入者确认退出前仍无法取得该 home 的门；若本进程
+    ///         保持存活且 <paramref name="helperExitConfirmation" /> 完成 true，再清理租约并归还门。
+    ///     </para>
+    ///     <para>
+    ///         On an unconfirmed elevation outcome (timeout/cancellation), transfers handle ownership
+    ///         first and then best-effort updates the durable lease: on update failure, preserves the
+    ///         existing pre-launch or writer lease without deleting or throwing so even if the CLI exits
+    ///         immediately and the mutex becomes abandoned, peer processes stay blocked until the OS
+    ///         confirms the writer has exited; if this process stays alive until
+    ///         <paramref name="helperExitConfirmation" /> completes true, clears the lease and returns
+    ///         the gate.
+    ///     </para>
+    /// </summary>
+    void PersistUntilProcessExits(
+        SandboxElevatedProcessIdentity? writerProcess,
+        Task<bool>                      helperExitConfirmation,
+        string?                         setupExecutablePath = null) =>
+        ReleaseWhenConfirmed(helperExitConfirmation);
 }
 
 /// <summary>
@@ -173,8 +247,22 @@ public interface ISandboxDenyReadRefreshGateHandle : IDisposable
 ///         semantics.
 ///     </para>
 /// </remarks>
-public sealed class GlobalDenyReadRefreshGate : ISandboxDenyReadRefreshGate
+public sealed class GlobalDenyReadRefreshGate(string? provisionLeaseDirectory = null) : ISandboxDenyReadRefreshGate
 {
+    /// <summary>
+    ///     <para>
+    ///         跨进程提权持久化租约的默认存储目录；CLI 与 Desktop 的权限系统保护与写根互斥校验均须
+    ///         将该目录纳入保护，防止沙箱命令删除活跃租约。
+    ///     </para>
+    ///     <para>
+    ///         The default directory storing durable cross-process provisioning leases; both CLI and
+    ///         Desktop permission-system protection and write-root exclusion checks must protect this
+    ///         directory so sandboxed commands cannot delete active leases.
+    ///     </para>
+    /// </summary>
+    public static string DefaultProvisionLeaseDirectory => SandboxProvisionLeaseStore.ResolveDefaultLeaseDirectory();
+
+    private readonly string? _provisionLeaseDirectory = provisionLeaseDirectory;
     /// <summary>
     ///     <para>
     ///         缺省获取期限：须覆盖另一端最坏 refresh 时长（调用器默认 60s 超时 + 余量）；
@@ -223,37 +311,108 @@ public sealed class GlobalDenyReadRefreshGate : ISandboxDenyReadRefreshGate
     ///         relies on with a stale payload. The message contains the original home path.
     ///     </para>
     /// </exception>
-    internal static string MutexNameForHome(string sandboxHome)
+    internal static string HomeKeyForHome(string sandboxHome, bool allowMissingHome = false)
     {
         // 同一个实际 home 必须共用一把锁：junction/8.3 别名先收敛到最终落点再键控；解析失败
-        // （不存在/无权限/非 Windows）无法建立安全键控，拒绝 refresh 而不是放行无门 refresh。
-        var finalPath = SandboxFinalPathResolver.TryGetFinalPath(sandboxHome) ??
-                        throw new
-                            InvalidOperationException($"The sandbox home '{sandboxHome}' cannot be pinned to a directory " +
-                                                      "identity (final-path resolution failed: the path may be missing, " +
-                                                      "inaccessible, or the platform may not support resolution); " +
-                                                      "the home-keyed deny-read refresh gate cannot be established safely, " +
-                                                      "so this refresh is refused — an ungated refresh could revoke deny " +
-                                                      "entries the other side relies on with a stale payload.");
+        // （不存在/无权限/非 Windows）无法建立安全键控，拒绝操作而不是放行无门操作。
+        // 首次 provisioning 允许 home 尚不存在：向已存在祖先展开最终落点并拼回缺失尾部段，
+        // 使目录创建前后得出完全一致的规范路径与哈希键。
+        var finalPath = allowMissingHome
+            ? ResolveCanonicalHomePathAllowMissing(sandboxHome)
+            : SandboxFinalPathResolver.TryGetFinalPath(sandboxHome);
+        if (finalPath is null)
+            throw new
+                InvalidOperationException($"The sandbox home '{sandboxHome}' cannot be pinned to a directory " +
+                                          "identity (final-path resolution failed: the path may be missing, " +
+                                          "inaccessible, or the platform may not support resolution); " +
+                                          "the home-keyed deny-read refresh gate cannot be established safely, " +
+                                          "so this refresh is refused — an ungated refresh could revoke deny " +
+                                          "entries the other side relies on with a stale payload.");
 
         // 最终落点已是绝对规范形态，GetFullPath 幂等；沿用既有归一化（去尾部分隔符 + 大写不变式）与哈希。
         var normalized = Path.GetFullPath(finalPath)
                          .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
                          .ToUpperInvariant();
         var hash = SHA256.HashData(Encoding.UTF8.GetBytes(normalized));
-        return MutexNamePrefix + Convert.ToHexString(hash.AsSpan(0, 8));
+        return Convert.ToHexString(hash.AsSpan(0, 8));
+    }
+
+    internal static string MutexNameForHome(string sandboxHome) =>
+        MutexNamePrefix + HomeKeyForHome(sandboxHome, allowMissingHome : false);
+
+    internal static string MutexNameForHomeAllowMissing(string sandboxHome) =>
+        MutexNamePrefix + HomeKeyForHome(sandboxHome, allowMissingHome : true);
+
+    internal static string? TryResolveCanonicalPathAllowMissing(string path) =>
+        ResolveCanonicalHomePathAllowMissing(path);
+
+    private static string? ResolveCanonicalHomePathAllowMissing(string sandboxHome)
+    {
+        if (!OperatingSystem.IsWindows() || string.IsNullOrWhiteSpace(sandboxHome) ||
+            !Path.IsPathFullyQualified(sandboxHome))
+            return null;
+
+        var fullPath        = Path.TrimEndingDirectorySeparator(Path.GetFullPath(sandboxHome));
+        var missingSegments = new Stack<string>();
+        var current         = fullPath;
+
+        while (!string.IsNullOrEmpty(current))
+        {
+            var resolved = SandboxFinalPathResolver.TryGetFinalDirectoryPath(current, out var win32Error);
+            if (resolved is not null)
+            {
+                var combined = resolved;
+                while (missingSegments.Count > 0)
+                    combined = Path.Combine(combined, missingSegments.Pop());
+                return combined;
+            }
+
+            if (!SandboxFinalPathResolver.IsPathMissingError(win32Error))
+                return null;
+
+            // 悬空重解析点（链接本身存在但目标缺失）：禁止越过它回退到父目录。
+            try
+            {
+                _ = File.GetAttributes(current);
+                return null;
+            }
+            catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+            {
+                // 确认当前段确实不存在，继续向上查找最近已存在祖先目录。
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                return null;
+            }
+
+            var parent = Path.GetDirectoryName(current);
+            if (string.IsNullOrEmpty(parent) || string.Equals(parent, current, StringComparison.OrdinalIgnoreCase))
+                return null;
+
+            var leaf = Path.GetFileName(current);
+            if (string.IsNullOrEmpty(leaf)) return null;
+
+            missingSegments.Push(leaf);
+            current = Path.TrimEndingDirectorySeparator(parent);
+        }
+
+        return null;
     }
 
     private sealed class Worker(
         TaskCompletionSource<ISandboxDenyReadRefreshGateHandle?> completion,
         Mutex                                                    mutex,
+        string                                                   homeKey,
+        string?                                                  leaseDirectory,
         TimeSpan                                                 timeout,
         CancellationToken                                        cancellationToken)
     {
         private readonly ManualResetEventSlim _releaseSignal = new(false);
 
-        // 所有权标志：0=未转移（Dispose 即归还），1=已转移给 ReleaseWhenConfirmed（Dispose 为 no-op）。
+        // 所有权标志：0=未转移（Dispose 即归还），1=已转移给 ReleaseWhenConfirmed/PersistUntilProcessExits。
         private int _ownershipTransferred;
+        // 本次持有期间是否写过持久化提权租约：仅写过租约的持有者在正常释放或确认退出时清理对应租约文件。
+        private int _leaseWritten;
 
         public void AcquireAndHold()
         {
@@ -271,11 +430,37 @@ public sealed class GlobalDenyReadRefreshGate : ISandboxDenyReadRefreshGate
                     }
                     catch (AbandonedMutexException)
                     {
-                        // 前持有者进程死亡：内核已把所有权交给本线程，门按获得处理。
+                        // 前持有者进程死亡：内核已把所有权交给本线程；随后仍须检查跨进程持久化租约，
+                        // 防止前 CLI 提前退出时放行仍在写 ACL 的外部提权 helper。
                         owned = true;
                     }
 
-                    if (owned) break;
+                    if (owned)
+                    {
+                        var leaseStatus = SandboxProvisionLeaseStore.EvaluateAndCleanStaleLease(homeKey, leaseDirectory);
+                        if (leaseStatus == SandboxProvisionLeaseStatus.Clear)
+                            break;
+
+                        TryRelease();
+                        owned = false;
+                        if (leaseStatus == SandboxProvisionLeaseStatus.OrphanedPreLaunch)
+                        {
+                            var leasePath = SandboxProvisionLeaseStore.ResolveLeasePath(homeKey, leaseDirectory);
+                            throw new InvalidOperationException(
+                                $"A previous sandbox provisioning process exited before confirming whether the UAC " +
+                                $"elevation request finished or started the setup helper (pre-launch lease '{leasePath}'). " +
+                                "Refusing to acquire the home gate on the same boot while an elevation request may still " +
+                                "be pending (fail closed). Confirm the UAC elevation request has finished (no pending " +
+                                "elevation prompt or in-flight request) and no sandbox setup helper is running before " +
+                                "removing the lease file, or reboot to recover automatically.");
+                        }
+
+                        if (leaseStatus == SandboxProvisionLeaseStatus.Corrupted)
+                            throw new InvalidOperationException(
+                                $"The cross-process sandbox provisioning lease for home key '{homeKey}' could not be read or parsed; " +
+                                "refusing to acquire the home gate while the elevated helper state cannot be verified (fail closed).");
+                    }
+
                     if (stopwatch.Elapsed >= timeout) break;
 
                     Thread.Sleep(PollInterval);
@@ -304,9 +489,65 @@ public sealed class GlobalDenyReadRefreshGate : ISandboxDenyReadRefreshGate
 
         public void RequestRelease()
         {
-            // Dispose 路径：所有权已转移给 ReleaseWhenConfirmed 后不再直接归还，归还时机由确认任务决定。
+            // Dispose 路径：所有权已转移给 ReleaseWhenConfirmed/PersistUntilProcessExits 后不再直接归还。
             if (Volatile.Read(ref _ownershipTransferred) != 0) return;
+            ClearOwnedLeaseIfPresent();
             SignalRelease();
+        }
+
+        public void BeginProvisioning(string? setupExecutablePath)
+        {
+            // 启动 helper 前先写入 fail-closed 预启动租约：落盘失败立即抛错阻止启动 helper；
+            // 一旦落盘成功即标记 _leaseWritten，保证只有确认未启动或确认退出后才会清除。
+            SandboxProvisionLeaseStore.WriteLease(homeKey, null, setupExecutablePath, leaseDirectory);
+            Volatile.Write(ref _leaseWritten, 1);
+        }
+
+        public void BeginExternalWriter(SandboxElevatedProcessIdentity writerProcess, string? setupExecutablePath)
+        {
+            try
+            {
+                // 原子替换预启动租约为具体写入者 PID+CreateTime；更新失败保留原预启动租约，绝不抛出或删除。
+                SandboxProvisionLeaseStore.WriteLease(homeKey, writerProcess, setupExecutablePath, leaseDirectory);
+                Volatile.Write(ref _leaseWritten, 1);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                SandboxDiagnosticLog.Event("provision-lease",
+                                           $"update-writer-failed type={ex.GetType().Name} keeping-existing-lease");
+            }
+        }
+
+        public void PersistUntilProcessExits(
+            SandboxElevatedProcessIdentity? writerProcess,
+            Task<bool>                      helperExitConfirmation,
+            string?                         setupExecutablePath)
+        {
+            // 先原子转移所有权（此后任何 Dispose 都是 no-op，绝不会误删已落盘的租约），再尽力更新租约；
+            // 若更新失败保留既有预启动/写入者租约，不抛出。
+            var transferredNow = Interlocked.Exchange(ref _ownershipTransferred, 1) == 0;
+            if (writerProcess is not null || Volatile.Read(ref _leaseWritten) == 0)
+            {
+                try
+                {
+                    SandboxProvisionLeaseStore.WriteLease(homeKey, writerProcess, setupExecutablePath, leaseDirectory);
+                    Volatile.Write(ref _leaseWritten, 1);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    SandboxDiagnosticLog.Event("provision-lease",
+                                               $"persist-update-failed type={ex.GetType().Name} keeping-existing-lease");
+                }
+            }
+
+            if (transferredNow)
+                AttachConfirmationContinuation(helperExitConfirmation);
+        }
+
+        private void ClearOwnedLeaseIfPresent()
+        {
+            if (Interlocked.Exchange(ref _leaseWritten, 0) != 0)
+                SandboxProvisionLeaseStore.TryDeleteLease(homeKey, leaseDirectory);
         }
 
         /// <summary>置位释放信号：双重释放或工作线程已退出时信号可能已释放，归还竞态由信号语义兜底。 Sets the release signal: double releases or an exited worker may find it disposed, with the return race covered by the signal semantics.</summary>
@@ -335,7 +576,11 @@ public sealed class GlobalDenyReadRefreshGate : ISandboxDenyReadRefreshGate
         public void ReleaseWhenConfirmed(Task<bool> helperExitConfirmation)
         {
             if (Interlocked.Exchange(ref _ownershipTransferred, 1) != 0) return;
+            AttachConfirmationContinuation(helperExitConfirmation);
+        }
 
+        private void AttachConfirmationContinuation(Task<bool> helperExitConfirmation)
+        {
             // 已完成任务同步处理，不等 continuation 调度；未完成的挂续体，完成时按结果决定释放或保持持有。
             if (helperExitConfirmation.IsCompleted)
             {
@@ -351,10 +596,10 @@ public sealed class GlobalDenyReadRefreshGate : ISandboxDenyReadRefreshGate
 
         private void HandleConfirmation(Task<bool> confirmation)
         {
-            // true=helper 进程已确认退出（不再写簿记）→ 直接置位释放信号归还门；确认路径是转移后
-            // 的所有者，不受 Dispose 的所有权标志检查约束。
+            // true=helper 进程已确认退出（不再写簿记/ACL）→ 先清理本轮持久化租约，再置位释放信号归还门。
             if (confirmation.Status == TaskStatus.RanToCompletion && confirmation.Result)
             {
+                ClearOwnedLeaseIfPresent();
                 SignalRelease();
                 return;
             }
@@ -393,14 +638,37 @@ public sealed class GlobalDenyReadRefreshGate : ISandboxDenyReadRefreshGate
 
             public void ReleaseWhenConfirmed(Task<bool> helperExitConfirmation) =>
                 worker.ReleaseWhenConfirmed(helperExitConfirmation);
+
+            public void BeginProvisioning(string? setupExecutablePath = null) =>
+                worker.BeginProvisioning(setupExecutablePath);
+
+            public void BeginExternalWriter(
+                SandboxElevatedProcessIdentity writerProcess, string? setupExecutablePath = null) =>
+                worker.BeginExternalWriter(writerProcess, setupExecutablePath);
+
+            public void PersistUntilProcessExits(
+                SandboxElevatedProcessIdentity? writerProcess,
+                Task<bool>                      helperExitConfirmation,
+                string?                         setupExecutablePath = null) =>
+                worker.PersistUntilProcessExits(writerProcess, helperExitConfirmation, setupExecutablePath);
         }
     }
 
     /// <inheritdoc />
     public Task<ISandboxDenyReadRefreshGateHandle?> TryAcquireAsync(
-        string sandboxHome, TimeSpan timeout, CancellationToken cancellationToken)
+        string sandboxHome, TimeSpan timeout, CancellationToken cancellationToken) =>
+        TryAcquireCoreAsync(sandboxHome, allowMissingHome : false, timeout, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<ISandboxDenyReadRefreshGateHandle?> TryAcquireForProvisioningAsync(
+        string sandboxHome, TimeSpan timeout, CancellationToken cancellationToken) =>
+        TryAcquireCoreAsync(sandboxHome, allowMissingHome : true, timeout, cancellationToken);
+
+    private Task<ISandboxDenyReadRefreshGateHandle?> TryAcquireCoreAsync(
+        string sandboxHome, bool allowMissingHome, TimeSpan timeout, CancellationToken cancellationToken)
     {
-        var mutexName = MutexNameForHome(sandboxHome);
+        var homeKey   = HomeKeyForHome(sandboxHome, allowMissingHome);
+        var mutexName = MutexNamePrefix + homeKey;
         Mutex mutex;
         try
         {
@@ -417,7 +685,7 @@ public sealed class GlobalDenyReadRefreshGate : ISandboxDenyReadRefreshGate
 
         var completion = new TaskCompletionSource<ISandboxDenyReadRefreshGateHandle?>(
             TaskCreationOptions.RunContinuationsAsynchronously);
-        var worker = new Worker(completion, mutex, timeout, cancellationToken);
+        var worker = new Worker(completion, mutex, homeKey, _provisionLeaseDirectory, timeout, cancellationToken);
         var thread = new Thread(worker.AcquireAndHold)
         {
             IsBackground = true,
