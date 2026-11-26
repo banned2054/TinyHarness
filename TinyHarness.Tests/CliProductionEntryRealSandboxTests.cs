@@ -63,10 +63,13 @@ public class CliProductionEntryRealSandboxTests
 {
     private const int RunTimeoutMs = 300_000;
 
-    private const string GateVariable      = "TINYHARNESS_REAL_SANDBOX_TESTS";
-    private const string ProbeRootVariable = "TINYHARNESS_REAL_SANDBOX_PROBE";
-    private const string ProxyVariable     = "TINYHARNESS_REAL_SANDBOX_PROXY";
-    private const string DefaultProxyUrl   = "http://127.0.0.1:7890";
+    private const string GateVariable       = "TINYHARNESS_REAL_SANDBOX_TESTS";
+    private const string ProbeRootVariable  = "TINYHARNESS_REAL_SANDBOX_PROBE";
+    private const string ProxyVariable      = "TINYHARNESS_REAL_SANDBOX_PROXY";
+    private const string HostPathVariable   = "TINYHARNESS_REAL_SANDBOX_HOST";
+    private const string UserConfigVariable = "TINYHARNESS_REAL_SANDBOX_CONFIG";
+    private const string SandboxHomeVar     = "TINYHARNESS_REAL_SANDBOX_HOME";
+    private const string DefaultProxyUrl    = "http://127.0.0.1:7890";
 
     // 沙箱组名与生产 WorkspaceSandboxAclPreparation 的发现逻辑同源；账户名复用组件默认常量。
     private const string SandboxGroupName = "TinyHarnessUsers";
@@ -358,14 +361,26 @@ public class CliProductionEntryRealSandboxTests
         };
     }
 
-    private static (string Setup, string Runner) ReadMachineComponentPaths()
+    private static (string? Setup, string? Runner, string? SandboxHome) ReadConfiguredSandboxOverrides()
     {
-        var machineConfig = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                                         "tinyharness", "user-config.json");
-        using var document = JsonDocument.Parse(File.ReadAllText(machineConfig));
-        var sandbox = document.RootElement.GetProperty("settings").GetProperty("windowsSandbox");
-        return (sandbox.GetProperty("setupExecutablePath").GetString()!,
-                sandbox.GetProperty("runnerExecutablePath").GetString()!);
+        var explicitHome = Environment.GetEnvironmentVariable(SandboxHomeVar)?.Trim();
+        var explicitConfig = Environment.GetEnvironmentVariable(UserConfigVariable)?.Trim();
+        if (string.IsNullOrWhiteSpace(explicitConfig))
+            return (null, null, string.IsNullOrWhiteSpace(explicitHome) ? null : explicitHome);
+
+        using var document = JsonDocument.Parse(File.ReadAllText(explicitConfig));
+        if (!document.RootElement.TryGetProperty("settings", out var settings) ||
+            !settings.TryGetProperty("windowsSandbox", out var sandbox))
+            return (null, null, string.IsNullOrWhiteSpace(explicitHome) ? null : explicitHome);
+
+        var setup = sandbox.TryGetProperty("setupExecutablePath", out var setupEl) ? setupEl.GetString() : null;
+        var runner = sandbox.TryGetProperty("runnerExecutablePath", out var runnerEl) ? runnerEl.GetString() : null;
+        var home = !string.IsNullOrWhiteSpace(explicitHome)
+            ? explicitHome
+            : sandbox.TryGetProperty("sandboxHome", out var homeEl)
+                ? homeEl.GetString()
+                : null;
+        return (setup, runner, home);
     }
 
     private static ChatToolCallScript HostScopeCall(string workspace)
@@ -434,7 +449,7 @@ public class CliProductionEntryRealSandboxTests
     {
         (string Host, int Port, string Protocol)? proxyEndPoint =
             networkMode != NetworkMode.None ? ResolveProxyEndPoint() : null;
-        var cliDll = LocateCliDll();
+        var hostTarget = ResolveCliHost();
         using var configDir = new TestTempDir();
         using var sessionsRoot = new TestTempDir();
         using var mockServer = new MockSseServer();
@@ -442,15 +457,16 @@ public class CliProductionEntryRealSandboxTests
         var workspace = Directory.CreateDirectory(Path.Combine(probeRoot, $"ws-{caseId}-{Guid.NewGuid():N}")).FullName;
         var configPath = Path.Combine(configDir.Root, UserConfigStore.FileName);
         var trustPath = Path.Combine(configDir.Root, "workspace-trust.json");
-        var (setupPath, runnerPath) = ReadMachineComponentPaths();
+        var (setupPath, runnerPath, sandboxHome) = ReadConfiguredSandboxOverrides();
 
         var sandbox = new JsonObject
         {
-            ["enabled"]         = true,
-            ["setupExecutablePath"]  = setupPath,
-            ["runnerExecutablePath"] = runnerPath,
-            ["policy"] = "workspace-write"
+            ["enabled"] = true,
+            ["policy"]  = "workspace-write"
         };
+        if (!string.IsNullOrWhiteSpace(setupPath)) sandbox["setupExecutablePath"] = setupPath;
+        if (!string.IsNullOrWhiteSpace(runnerPath)) sandbox["runnerExecutablePath"] = runnerPath;
+        if (!string.IsNullOrWhiteSpace(sandboxHome)) sandbox["sandboxHome"] = sandboxHome;
         var standing = networkMode is NetworkMode.StandingConfirmed or NetworkMode.StandingUnconfirmed;
         if (networkMode != NetworkMode.None)
         {
@@ -515,14 +531,16 @@ public class CliProductionEntryRealSandboxTests
 
         var start = new ProcessStartInfo
         {
-            FileName                   = "dotnet",
-            Arguments                  = $"exec \"{cliDll}\" run \"execute the scripted tool call\"",
-            RedirectStandardInput      = true,
-            RedirectStandardOutput     = true,
-            RedirectStandardError      = true,
-            UseShellExecute            = false,
-            CreateNoWindow             = true,
-            WorkingDirectory           = workspace
+            FileName               = hostTarget.UseDotnet ? "dotnet" : hostTarget.Path,
+            Arguments              = hostTarget.UseDotnet
+                ? $"exec \"{hostTarget.Path}\" run \"execute the scripted tool call\""
+                : "run \"execute the scripted tool call\"",
+            RedirectStandardInput  = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError  = true,
+            UseShellExecute        = false,
+            CreateNoWindow         = true,
+            WorkingDirectory       = workspace
         };
         start.Environment[UserConfigStore.DirectoryOverrideVariable] = configDir.Root;
         start.Environment["TH_REAL_ENTRY_KEY"] = "dummy-key";
@@ -564,14 +582,23 @@ public class CliProductionEntryRealSandboxTests
         return node.ToJsonString();
     }
 
-    private static string LocateCliDll()
+    private static (string Path, bool UseDotnet) ResolveCliHost()
     {
-        var repoRoot = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory,
-                                                     "..", "..", "..", ".."));
-        var candidate = Path.Combine(repoRoot, "TinyHarness.Cli", "bin", "Debug", "net10.0",
-                                     "TinyHarness.dll");
+        var explicitHost = Environment.GetEnvironmentVariable(HostPathVariable)?.Trim();
+        if (!string.IsNullOrWhiteSpace(explicitHost))
+        {
+            var full = System.IO.Path.GetFullPath(explicitHost);
+            Assert.That(File.Exists(full), Is.True,
+                        $"The host specified by {HostPathVariable} was not found at '{full}'.");
+            return (full, full.EndsWith(".dll", StringComparison.OrdinalIgnoreCase));
+        }
+
+        var repoRoot = System.IO.Path.GetFullPath(System.IO.Path.Combine(AppContext.BaseDirectory,
+                                                                         "..", "..", "..", ".."));
+        var candidate = System.IO.Path.Combine(repoRoot, "TinyHarness.Cli", "bin", "Debug", "net11.0",
+                                               "TinyHarness.dll");
         Assert.That(File.Exists(candidate), Is.True,
-                    $"The CLI output was not found at '{candidate}'; build TinyHarness.Cli before running this test.");
-        return candidate;
+                    $"The CLI output was not found at '{candidate}'; build TinyHarness.Cli or set {HostPathVariable}.");
+        return (candidate, true);
     }
 }
