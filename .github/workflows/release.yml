@@ -14,7 +14,7 @@ concurrency:
 
 env:
     CODEX_REPOSITORY: banned2054/codex
-    CODEX_REF: 86192f15d82b893c68931ca080384c0038bfb8c8
+    CODEX_REF: a79f27f57984a0dc9651e38ccb9787b2ed25ac7f
     DOTNET_NOLOGO: "true"
     DOTNET_CLI_TELEMETRY_OPTOUT: "true"
 
