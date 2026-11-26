@@ -124,7 +124,8 @@ public static class PermissionCompositionFingerprint
         string                  workspaceRoot,
         bool                    sandboxComposed,
         IReadOnlyList<string>   protectedSecretPaths,
-        string?                 configuredSessionStoreDirectory)
+        string?                 configuredSessionStoreDirectory,
+        string?                 appBaseDirectory = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
         var root = Path.GetFullPath(workspaceRoot);
@@ -152,7 +153,7 @@ public static class PermissionCompositionFingerprint
                              : WindowsSandboxComponents.SetupVersion)
                  .Append('\n');
         AppendSandbox(canonical, sandboxSettings, networkSettings, sandboxComposed, protectedSecretPaths,
-                      storeDirectory);
+                      storeDirectory, appBaseDirectory);
         if (storeDirectory is not null)
             canonical.Append("sessionStore=").Append(storeDirectory).Append('\n');
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical.ToString())));
@@ -203,7 +204,8 @@ public static class PermissionCompositionFingerprint
         string                workspaceRoot,
         bool                  sandboxComposed,
         IReadOnlyList<string> protectedSecretPaths,
-        bool                  trackSessionStoreDirectory)
+        bool                  trackSessionStoreDirectory,
+        string?               appBaseDirectory = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(userConfigPath);
         return () =>
@@ -217,7 +219,8 @@ public static class PermissionCompositionFingerprint
                            workspaceRoot,
                            sandboxComposed,
                            protectedSecretPaths,
-                           trackSessionStoreDirectory ? user.Settings?.SessionStoreDirectory : null);
+                           trackSessionStoreDirectory ? user.Settings?.SessionStoreDirectory : null,
+                           appBaseDirectory);
         };
     }
 
@@ -234,7 +237,8 @@ public static class PermissionCompositionFingerprint
         NetworkSettings?        networkSettings,
         bool                    sandboxComposed,
         IReadOnlyList<string>   protectedSecretPaths,
-        string?                 storeDirectory)
+        string?                 storeDirectory,
+        string?                 appBaseDirectory)
     {
         if (settings is null)
         {
@@ -242,11 +246,17 @@ public static class PermissionCompositionFingerprint
             return;
         }
 
+        var resolvedComponents = WindowsSandboxComponentResolver.Resolve(settings, appBaseDirectory);
+        var effectiveSetup     = resolvedComponents.Setup.CandidatePath  ?? settings.SetupExecutablePath;
+        var effectiveRunner    = resolvedComponents.Runner.CandidatePath ?? settings.RunnerExecutablePath;
+
         canonical.Append("sandbox.enabled=").Append(settings.Enabled ? '1' : '0').Append('\n');
         canonical.Append("sandbox.policy=").Append(settings.Policy).Append('\n');
         canonical.Append("sandbox.tcpLoopback=").Append(settings.AllowTcpLoopback ? '1' : '0').Append('\n');
-        canonical.Append("sandbox.setup=").Append(settings.SetupExecutablePath).Append('\n');
-        canonical.Append("sandbox.runner=").Append(settings.RunnerExecutablePath).Append('\n');
+        canonical.Append("sandbox.setupSource=").Append(resolvedComponents.Setup.Source).Append('\n');
+        canonical.Append("sandbox.setup=").Append(effectiveSetup).Append('\n');
+        canonical.Append("sandbox.runnerSource=").Append(resolvedComponents.Runner.Source).Append('\n');
+        canonical.Append("sandbox.runner=").Append(effectiveRunner).Append('\n');
         canonical.Append("sandbox.home=")
                  .Append(WindowsSandboxComponents.ResolveSandboxHome(settings.SandboxHome,
                                                                      settings.AllowTcpLoopback))

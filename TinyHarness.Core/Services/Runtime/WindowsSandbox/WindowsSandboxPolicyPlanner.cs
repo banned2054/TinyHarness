@@ -44,7 +44,8 @@ internal static class WindowsSandboxPolicyPlanner
         WindowsSandboxSettings               settings,
         string                               workspaceRoot,
         IReadOnlyDictionary<string, string>? knownSecrets           = null,
-        SandboxBaselineReadProtection?       baselineReadProtection = null)
+        SandboxBaselineReadProtection?       baselineReadProtection = null,
+        string?                              appBaseDirectory       = null)
     {
         ArgumentNullException.ThrowIfNull(settings);
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
@@ -52,8 +53,9 @@ internal static class WindowsSandboxPolicyPlanner
             throw new
                 InvalidOperationException($"The workspace root must be a fully qualified absolute path to enable the Windows sandbox: '{workspaceRoot}'.");
 
-        var setupPath   = RequireAbsoluteSetting(settings.SetupExecutablePath, "setupExecutablePath");
-        var runnerPath  = RequireAbsoluteSetting(settings.RunnerExecutablePath, "runnerExecutablePath");
+        var resolvedComponents = WindowsSandboxComponentResolver.RequireValidPaths(settings, appBaseDirectory);
+        var setupPath          = resolvedComponents.Setup.CandidatePath!;
+        var runnerPath         = resolvedComponents.Runner.CandidatePath!;
         // 空白 home 解析为独立的固定默认 home；显式值必须保持绝对（fail closed）。
         var sandboxHome = WindowsSandboxComponents.ResolveSandboxHome(settings.SandboxHome, settings.AllowTcpLoopback);
         var (nugetCacheRoot, toolsRoot, tempRoot) = DeriveInfrastructureRoots(settings, sandboxHome);
@@ -75,6 +77,7 @@ internal static class WindowsSandboxPolicyPlanner
                                                    baselineReadProtection?.DenyReadPaths);
         return new PolicyPlan
         {
+            ResolvedComponents   = resolvedComponents,
             SetupExecutablePath  = setupPath,
             RunnerExecutablePath = runnerPath,
             SandboxHome          = sandboxHome,
@@ -270,6 +273,8 @@ internal static class WindowsSandboxPolicyPlanner
     /// </summary>
     internal sealed record PolicyPlan
     {
+        public required WindowsSandboxComponentResolution ResolvedComponents { get; init; }
+
         public required string SetupExecutablePath { get; init; }
 
         public required string RunnerExecutablePath { get; init; }

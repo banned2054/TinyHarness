@@ -40,14 +40,16 @@ internal sealed record WorkspaceSandboxAclContext(
     /// </summary>
     internal static async Task<WorkspaceSandboxAclContext> CaptureAsync(
         WindowsSandboxSettings settings, WorkspaceDirectoryIdentity identity, CancellationToken token,
-        ISandboxDenyReadRefreshGate? denyReadRefreshGate = null)
+        ISandboxDenyReadRefreshGate? denyReadRefreshGate = null, string? appBaseDirectory = null)
     {
         if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException("Windows sandbox SIDs are required.");
+        var resolved = WindowsSandboxComponentResolver.RequireValidPaths(settings, appBaseDirectory);
         var components = new WindowsSandboxComponents
         {
-            AllowTcpLoopback = settings.AllowTcpLoopback,
-            SetupExecutablePath = settings.SetupExecutablePath, RunnerExecutablePath = settings.RunnerExecutablePath,
-            SandboxHome = WindowsSandboxComponents.ResolveSandboxHome(settings.SandboxHome, settings.AllowTcpLoopback)
+            AllowTcpLoopback     = settings.AllowTcpLoopback,
+            SetupExecutablePath  = resolved.Setup.CandidatePath!,
+            RunnerExecutablePath = resolved.Runner.CandidatePath!,
+            SandboxHome          = WindowsSandboxComponents.ResolveSandboxHome(settings.SandboxHome, settings.AllowTcpLoopback)
         };
         // home 缺失时不可能有同 home 的门内写者，而门键控对缺失目录必抛（最终路径解析失败），
         // 先走既有无门 InspectAsync 路径，保住 "ready sandbox" 的失败语义。
