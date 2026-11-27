@@ -143,7 +143,7 @@ public sealed class ProcessSandboxSetupInvoker(WindowsSandboxComponents componen
 #endif
         SandboxDiagnosticLog.Event("helper",
                                    $"start path='{components.SetupExecutablePath}' cwd='{payload.CommandWorkingDirectory}' " +
-                                   $"home='{components.SandboxHome}' version={payload.Version} " +
+                                   $"home='{payload.SandboxHome}' version={payload.Version} " +
                                    $"channel={(base64Payload.Length <= PayloadArgumentCharacterLimit ? "argv" : "env-chunks")} " +
                                    $"payloadChars={base64Payload.Length} " +
 #if DEBUG
@@ -248,11 +248,15 @@ public sealed class ProcessSandboxSetupInvoker(WindowsSandboxComponents componen
             WorkspaceAclInheritanceDiagnostics.LogWriteRootAclComparison("after-helper-exit", aclBefore, payload);
 #endif
             if (process.ExitCode != 0)
+            {
+                var payloadSandboxDirectory = Path.Combine(payload.SandboxHome, ".sandbox");
+                var payloadSetupErrorPath   = Path.Combine(payloadSandboxDirectory, "setup_error.json");
                 throw new InvalidOperationException($"Sandbox ACL refresh failed with exit code {process.ExitCode}: " +
-                                                    $"{await SandboxSetupErrorReader.DescribeAsync(components.SetupErrorPath).ConfigureAwait(false)}; " +
+                                                    $"{await SandboxSetupErrorReader.DescribeAsync(payloadSetupErrorPath).ConfigureAwait(false)}; " +
                                                     $"command cwd: '{payload.CommandWorkingDirectory}'; helper: '{components.SetupExecutablePath}'; " +
-                                                    $"home: '{components.SandboxHome}'; see '{components.SandboxDirectory}\\sandbox.<UTC-date>.log'. " +
+                                                    $"home: '{payload.SandboxHome}'; see '{payloadSandboxDirectory}\\sandbox.<UTC-date>.log'. " +
                                                     "Refresh does not request UAC or retry provisioning; use /trust to inspect directory authorization.");
+            }
         }
         finally
         {
