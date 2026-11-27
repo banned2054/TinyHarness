@@ -269,7 +269,8 @@ public sealed partial class ProcessWorkspaceAclGrant(
             if (Workspace.IsInside(root, executable))
                 throw new InvalidDataException($"当前程序位于沙箱写根内：{executable}。请将完整程序发布到所有写根之外的独立目录，启动后再修复权限。");
         var provisionLeaseDirectory = SandboxProvisionLeaseStore.ResolveDefaultLeaseDirectory();
-        var paths                   = new List<string>(protectedPaths) { executable, provisionLeaseDirectory };
+        var authorizedStateDir      = AuthorizedReadDisableFile.DefaultSharedStateDirectory;
+        var paths = new List<string>(protectedPaths) { executable, provisionLeaseDirectory, authorizedStateDir };
         if (sandboxSettings is { } settings)
         {
             var resolved = WindowsSandboxComponentResolver.RequireValidPaths(settings, appBaseDirectory);
@@ -281,11 +282,16 @@ public sealed partial class ProcessWorkspaceAclGrant(
             paths.AddRange(SandboxProtectedPathsStore.ReadRegisteredPathsForHome(home));
         }
 
-        // 持久提权租约目录须按最终落点与全部待授权目标及有效写根双向互斥，防止经 junction 暴露给沙箱。
+        // 持久提权租约目录与共享 C2 禁用状态目录须按最终落点与全部待授权目标及有效写根双向互斥，防止经 junction 暴露给沙箱。
         foreach (var root in writeRoots.Prepend(identity.Path))
+        {
             if (WindowsSandboxComposer.OverlapsProtection(root, provisionLeaseDirectory))
                 throw new InvalidDataException(
                     $"Protected provisioning lease directory '{provisionLeaseDirectory}' overlaps sandbox write or authorization root '{root}'.");
+            if (WindowsSandboxComposer.OverlapsProtection(root, authorizedStateDir))
+                throw new InvalidDataException(
+                    $"Protected authorized-read disable state directory '{authorizedStateDir}' overlaps sandbox write or authorization root '{root}'.");
+        }
 
         ValidateProtectedPaths(identity, paths);
         foreach (var root in writeRoots)

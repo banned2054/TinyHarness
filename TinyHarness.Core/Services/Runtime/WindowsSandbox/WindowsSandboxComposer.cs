@@ -265,7 +265,8 @@ public static class WindowsSandboxComposer
                          Path.Combine(plan.SandboxHome, ".sandbox"),
                          Path.Combine(plan.SandboxHome, "cap_sid"),
                          Path.Combine(plan.SandboxHome, ".sandbox-bin"),
-                         SandboxProvisionLeaseStore.ResolveDefaultLeaseDirectory()
+                         SandboxProvisionLeaseStore.ResolveDefaultLeaseDirectory(),
+                         AuthorizedReadDisableFile.DefaultSharedStateDirectory
                      })
                 if (OverlapsProtection(configuredRoot, integrityPath))
                     throw new
@@ -1627,6 +1628,7 @@ public static class WindowsSandboxComposer
         };
         var registeredPaths         = SandboxProtectedPathsStore.ReadRegisteredPathsForHome(components.SandboxHome);
         var provisionLeaseDirectory = SandboxProvisionLeaseStore.ResolveDefaultLeaseDirectory();
+        var authorizedStateDir      = AuthorizedReadDisableFile.DefaultSharedStateDirectory;
         foreach (var root in writeRoots.Concat(metadataWrites))
         {
             var label = GrantRootLabel(root, readRoots, writeRoots, metadataWrites);
@@ -1641,6 +1643,12 @@ public static class WindowsSandboxComposer
                     InvalidOperationException($"The {label} '{root}' overlaps the sandbox provisioning lease directory " +
                                               $"'{provisionLeaseDirectory}'; sandboxed commands could remove active " +
                                               "cross-process provisioning leases, refusing the grant scope.");
+
+            if (OverlapsProtection(root, authorizedStateDir))
+                throw new
+                    InvalidOperationException($"The {label} '{root}' overlaps the shared authorized-read disable state directory " +
+                                              $"'{authorizedStateDir}'; sandboxed commands could tamper with C2 disable state, " +
+                                              "refusing the grant scope.");
 
             ValidateSingleWriteRootAgainstRegisteredProtectedPaths(root, components.SandboxHome, registeredPaths,
                                                                    label);
@@ -2064,14 +2072,21 @@ public static class WindowsSandboxComposer
     internal static void ValidateWriteRootsAgainstRegisteredProtectedPaths(
         IReadOnlyList<string> writeRoots, string sandboxHome, string rootLabel)
     {
-        // 无论共享清单是否已存在，持久化提权租约目录始终属于受保护路径，不得与任何有效写根重叠。
+        // 无论共享清单是否已存在，持久化提权租约目录与共享 C2 禁用状态目录始终属于受保护路径，不得与任何有效写根重叠。
         var provisionLeaseDirectory = SandboxProvisionLeaseStore.ResolveDefaultLeaseDirectory();
+        var authorizedStateDir      = AuthorizedReadDisableFile.DefaultSharedStateDirectory;
         foreach (var root in writeRoots)
+        {
             if (OverlapsProtection(root, provisionLeaseDirectory))
                 throw new InvalidOperationException(
                     $"The {rootLabel} '{root}' overlaps the sandbox provisioning lease directory " +
                     $"'{provisionLeaseDirectory}'; sandboxed commands could remove active cross-process " +
                     "provisioning leases, refusing the operation.");
+            if (OverlapsProtection(root, authorizedStateDir))
+                throw new InvalidOperationException(
+                    $"The {rootLabel} '{root}' overlaps the shared authorized-read disable state directory " +
+                    $"'{authorizedStateDir}'; sandboxed commands could tamper with C2 disable state, refusing the operation.");
+        }
 
         var registeredPaths = SandboxProtectedPathsStore.ReadRegisteredPathsForHome(sandboxHome);
         if (registeredPaths.Count == 0) return;

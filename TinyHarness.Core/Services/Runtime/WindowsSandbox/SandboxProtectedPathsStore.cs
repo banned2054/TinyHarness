@@ -110,7 +110,8 @@ public static class SandboxProtectedPathsStore
             components.SetupExecutablePath,
             components.RunnerExecutablePath,
             components.UsersFilePath,
-            SandboxProvisionLeaseStore.ResolveDefaultLeaseDirectory()
+            SandboxProvisionLeaseStore.ResolveDefaultLeaseDirectory(),
+            AuthorizedReadDisableFile.DefaultSharedStateDirectory
         };
         paths.AddRange(components.ProtectedHomeSubpaths);
         if (permissionSystemPaths is not null) paths.AddRange(permissionSystemPaths);

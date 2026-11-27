@@ -41,7 +41,8 @@ public sealed partial class WindowsSandboxComponentLocatorTests
         var authorizedExecution = new PreparedProcessExecution("cmd.exe", ["/c", "echo hi"], workspace.Root, 30, false,
                                                                null, GrantScope : grantScope);
 
-        var disableStore   = new AuthorizedReadDisableFile(composed.Components);
+        var disableStore   = new AuthorizedReadDisableFile(composed.Components,
+                                                           composed.Components.CredentialsDirectory);
         var restoreInvoker = new StubSetupInvoker();
         var innerBackend = new StubInnerBackend
         {
