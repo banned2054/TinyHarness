@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Security.Principal;
 using System.Text;
+using System.Text.Json;
 using TinyHarness.Core.Models.Runtime;
 using TinyHarness.Core.Models.Runtime.WindowsSandbox;
 
@@ -104,9 +105,10 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
     private readonly Action<SecurityIdentifier> _allowNullDeviceAccess;
     private readonly SandboxCapabilitySidStore  _capabilitySidStore;
 
-    private readonly WindowsSandboxComponents                            _components;
-    private readonly ISandboxCredentialSource                            _credentialSource;
-    private readonly ISandboxDenyReadRefreshGate                         _denyReadRefreshGate;
+    private readonly WindowsSandboxComponents                                   _components;
+    private readonly ISandboxCredentialSource                                   _credentialSource;
+    private readonly Func<WindowsSandboxComponents, ISandboxCredentialSource>?  _credentialSourceFactory;
+    private readonly ISandboxDenyReadRefreshGate                                _denyReadRefreshGate;
     private readonly ISandboxDesktopFactory                              _desktopFactory;
     private readonly Func<CancellationToken, Task<WindowsSandboxStatus>> _inspectOnlineAccount;
     private readonly IReadOnlyDictionary<string, string>                 _knownSecrets;
@@ -168,7 +170,8 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
         bool                                                 standingNetworkAccessEnabled,
         IReadOnlyDictionary<string, string>?                 proxyEnvironment,
         Func<CancellationToken, Task<WindowsSandboxStatus>>? inspectOnlineAccount,
-        ISandboxDenyReadRefreshGate?                         denyReadRefreshGate)
+        ISandboxDenyReadRefreshGate?                         denyReadRefreshGate,
+        Func<WindowsSandboxComponents, ISandboxCredentialSource>? credentialSourceFactory = null)
     {
         if (!OperatingSystem.IsWindows())
             throw new PlatformNotSupportedException("The Windows sandbox backend is available on Windows only.");
@@ -188,6 +191,7 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
         // 门按 home 键控串行化 [读簿记→合并→refresh→持久化]；不可用时拒绝本次 refresh（fail-closed）。
         _denyReadRefreshGate = denyReadRefreshGate ?? new GlobalDenyReadRefreshGate();
         _credentialSource = credentialSource ?? new SandboxCredentialReader(components);
+        _credentialSourceFactory = credentialSourceFactory;
         _capabilitySidStore = capabilitySidStore ?? new SandboxCapabilitySidStore(components);
         _desktopFactory = desktopFactory ?? new WindowsSandboxDesktopFactory();
         _runnerLauncher = runnerLauncher ?? new WindowsSandboxRunnerLauncher();
@@ -240,7 +244,15 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
                                                new
                                                    InvalidOperationException("Working directory escaped the frozen sandbox policy workspace root."));
 
-        await PreflightAsync(execution, networkAccessEnabled, cancellationToken).ConfigureAwait(false);
+        var authorizedReads = SandboxAuthorizedReads.Split(_policy.DenyReadPaths,
+                                                           execution.GrantScope?.ReadRoots ?? []);
+        var windowHome = authorizedReads.HasAuthorizedReads ? AuthorizedReadWindowContext.Current : null;
+        var effectiveComponents = windowHome is null
+            ? _components
+            : _components with { SandboxHome = windowHome.CanonicalPath };
+
+        await PreflightAsync(execution, networkAccessEnabled, windowHome, effectiveComponents, cancellationToken)
+           .ConfigureAwait(false);
 
         // 账户三态选择与 payload 构造共用同一份授权分流纯函数：获批读执行必须以专用授权账户
         // 启动 runner——其 token 的授权组 deny 面是“全量 deny − 获批路径”，获批读才真实可达；
@@ -257,14 +269,14 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
         // online), so an approved read never opens the network along the way. The pipe ACL and
         // the private desktop are built from the returned account's SID, giving the authorization
         // account the same isolation shape automatically.
-        var authorizedReads = SandboxAuthorizedReads.Split(_policy.DenyReadPaths,
-                                                           execution.GrantScope?.ReadRoots ?? []);
         var account = await LoadAccount(networkAccessEnabled, authorizedReads.HasAuthorizedReads,
-                                        cancellationToken).ConfigureAwait(false);
-        var       capabilitySids = await ResolveCapabilitySids(execution, cancellationToken).ConfigureAwait(false);
+                                        windowHome, effectiveComponents, cancellationToken)
+                         .ConfigureAwait(false);
+        var       capabilitySids = await ResolveCapabilitySids(execution, windowHome, effectiveComponents, cancellationToken)
+                                      .ConfigureAwait(false);
         using var desktop        = CreateDesktop(account);
 
-        var request = BuildSpawnRequest(execution, capabilitySids, desktop.Name,
+        var request = BuildSpawnRequest(execution, effectiveComponents, capabilitySids, desktop.Name,
                                         networkAccessEnabled);
         SandboxRunnerConnection connection;
         try
@@ -273,12 +285,16 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
             // （否则沙箱内 TLS 全部 SEC_E_NO_CREDENTIALS）；账户 profile 目录成为该
             // 独立账户的可写面属有意权衡。offline 保持不加载。
             connection = await _runnerLauncher
-                              .LaunchAsync(new RunnerLaunchRequest(_components.RunnerExecutablePath, account,
+                              .LaunchAsync(new RunnerLaunchRequest(effectiveComponents.RunnerExecutablePath, account,
                                                                    execution.WorkingDirectory, networkAccessEnabled),
                                            cancellationToken)
                               .ConfigureAwait(false);
         }
         catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (ToolExecutionUncertainException)
         {
             throw;
         }
@@ -291,19 +307,70 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
         using (var session = RunnerSession.Start(connection, stdoutCapture, stderrCapture))
         using (var writerGate = new SemaphoreSlim(1, 1))
         {
-            if (!await TrySendFrameAsync(connection, writerGate,
-                                         stream => RunnerFrameCodec.WriteFrameAsync(stream, "spawn_request", request,
-                                                  CancellationToken.None),
-                                         cancellationToken).ConfigureAwait(false))
+            if (cancellationToken.IsCancellationRequested)
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                await ReclaimRunnerAsync(connection).ConfigureAwait(false);
+                await ReclaimRunnerOrThrowUncertainAsync(connection, "after cancellation before sending spawn_request")
+                   .ConfigureAwait(false);
                 await AwaitReadLoopAsync(session).ConfigureAwait(false);
                 stdoutCapture.Discard();
                 stderrCapture.Discard();
-                throw new
-                    ProcessExecutionStartException("Failed to send the spawn_request frame to the sandbox runner.",
-                                                   new IOException("The spawn_request write did not complete."));
+                cancellationToken.ThrowIfCancellationRequested();
+            }
+
+            byte[] encodedSpawnRequest;
+            try
+            {
+                // 在写入流之前完成序列化与帧长校验：编码失败未向管道写入任何字节，但仍须先确认已启动的 runner 退出。
+                encodedSpawnRequest = RunnerFrameCodec.EncodeFrame("spawn_request", request);
+            }
+            catch (Exception ex) when (ex is InvalidDataException or JsonException or NotSupportedException
+                                          or InvalidOperationException)
+            {
+                await ReclaimRunnerOrThrowUncertainAsync(connection, "after failing to encode spawn_request")
+                   .ConfigureAwait(false);
+                await AwaitReadLoopAsync(session).ConfigureAwait(false);
+                stdoutCapture.Discard();
+                stderrCapture.Discard();
+                throw new ProcessExecutionStartException(
+                    $"Failed to encode the spawn_request frame for the sandbox runner: {ex.Message}", ex);
+            }
+
+            var spawnWriteStarted = false;
+            using var spawnWriteTimeout = new CancellationTokenSource(_limits.SpawnReadyTimeout);
+            using var spawnWriteLinked  =
+                CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, spawnWriteTimeout.Token);
+            if (!await TrySendFrameAsync(connection, writerGate,
+                                         stream =>
+                                         {
+                                             spawnWriteStarted = true;
+                                             return RunnerFrameCodec.WriteEncodedFrameAsync(
+                                                 stream, encodedSpawnRequest, spawnWriteLinked.Token);
+                                         },
+                                         spawnWriteLinked.Token).ConfigureAwait(false))
+            {
+                // 即使取消令牌已触发，也必须先确认已启动的 runner 退出，绝不能跳过回收或忽略回收失败。
+                await ReclaimRunnerOrThrowUncertainAsync(connection, "after failing to send spawn_request")
+                   .ConfigureAwait(false);
+                await AwaitReadLoopAsync(session).ConfigureAwait(false);
+                stdoutCapture.Discard();
+                stderrCapture.Discard();
+                if (!spawnWriteStarted)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    throw new ProcessExecutionStartException(
+                        $"Timed out waiting to send the spawn_request frame within {(int)_limits.SpawnReadyTimeout.TotalSeconds}s.",
+                        new TimeoutException("The spawn_request gate wait timed out."));
+                }
+
+                // 一旦已开始向管道写入 spawn_request，runner 可能已收到并启动子进程，执行结果必须按未知处理。
+                var sendDetail = spawnWriteTimeout.IsCancellationRequested
+                    ? $"sending the spawn_request frame timed out after {(int)_limits.SpawnReadyTimeout.TotalSeconds}s"
+                    : cancellationToken.IsCancellationRequested
+                        ? "sending the spawn_request frame was cancelled"
+                        : "the spawn_request write did not complete";
+                throw new ToolExecutionUncertainException(
+                    $"Failed while sending spawn_request to the sandbox runner ({sendDetail}); " +
+                    "whether the command was started is unknown.");
             }
 
             RunnerHandshake handshake;
@@ -312,54 +379,80 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
                 handshake = await session.HandshakeTask.WaitAsync(_limits.SpawnReadyTimeout, cancellationToken)
                                          .ConfigureAwait(false);
             }
-            catch (TimeoutException)
+            catch (TimeoutException ex)
             {
-                await ReclaimRunnerAsync(connection).ConfigureAwait(false);
+                await ReclaimRunnerOrThrowUncertainAsync(connection, "after spawn_ready timed out")
+                   .ConfigureAwait(false);
                 await AwaitReadLoopAsync(session).ConfigureAwait(false);
                 stdoutCapture.Discard();
                 stderrCapture.Discard();
-                throw new
-                    ProcessExecutionStartException($"The sandbox runner did not report spawn_ready within {(int)_limits.SpawnReadyTimeout.TotalSeconds}s.",
-                                                   new TimeoutException("The spawn_ready deadline elapsed."));
+                // Rust runner 先创建子进程再回写 spawn_ready：发出 spawn_request 后丢失握手即执行结果未知。
+                throw new ToolExecutionUncertainException(
+                    $"The sandbox runner did not report spawn_ready within {(int)_limits.SpawnReadyTimeout.TotalSeconds}s " +
+                    "after spawn_request was sent; whether the command was started is unknown.",
+                    ex);
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException ex)
             {
-                await ReclaimRunnerAsync(connection).ConfigureAwait(false);
+                await ReclaimRunnerOrThrowUncertainAsync(connection, "after handshake cancellation")
+                   .ConfigureAwait(false);
                 await AwaitReadLoopAsync(session).ConfigureAwait(false);
                 stdoutCapture.Discard();
                 stderrCapture.Discard();
-                throw;
+                throw new ToolExecutionUncertainException(
+                    "Execution was cancelled after spawn_request was sent and before spawn_ready was received; " +
+                    "whether the command was started is unknown.",
+                    ex);
             }
             catch (Exception ex)
             {
-                await ReclaimRunnerAsync(connection).ConfigureAwait(false);
+                await ReclaimRunnerOrThrowUncertainAsync(connection, "after a handshake failure")
+                   .ConfigureAwait(false);
                 await AwaitReadLoopAsync(session).ConfigureAwait(false);
                 stdoutCapture.Discard();
                 stderrCapture.Discard();
-                throw new
-                    ProcessExecutionStartException($"The sandbox runner session failed during handshake: {ex.Message}",
-                                                   ex);
+                throw new ToolExecutionUncertainException(
+                    $"The sandbox runner session failed during handshake after spawn_request was sent: {ex.Message}; " +
+                    "whether the command was started is unknown.",
+                    ex);
             }
 
             if (handshake.Error is not { } runnerError)
                 return await RunSessionToEndAsync(execution, connection, session, writerGate,
                                                   stdoutCapture, stderrCapture, cancellationToken)
                    .ConfigureAwait(false);
-            await ReclaimRunnerAsync(connection).ConfigureAwait(false);
+            await ReclaimRunnerOrThrowUncertainAsync(connection, $"after runner error at stage '{runnerError.Stage}'")
+               .ConfigureAwait(false);
             await AwaitReadLoopAsync(session).ConfigureAwait(false);
             stdoutCapture.Discard();
             stderrCapture.Discard();
             var windowsCode = runnerError.WindowsErrorCode is { } code ? $" (Win32 error {code})" : string.Empty;
-            throw new
-                ProcessExecutionStartException($"The sandbox runner failed at stage '{runnerError.Stage}'{windowsCode}: {runnerError.Message}",
-                                               new
-                                                   InvalidOperationException($"Runner error at stage '{runnerError.Stage}'."));
+            var errorCause  = new InvalidOperationException($"Runner error at stage '{runnerError.Stage}'.");
+            if (!IsPreSpawnRunnerErrorStage(runnerError.Stage))
+                // Rust runner 先创建子进程再写 spawn_ready：write_spawn_ready 等创建后阶段失败时子进程可能已产生副作用。
+                throw new ToolExecutionUncertainException(
+                    $"The sandbox runner failed at post-spawn stage '{runnerError.Stage}'{windowsCode}: " +
+                    $"{runnerError.Message}; whether the command was started is unknown.",
+                    errorCause);
+
+            throw new ProcessExecutionStartException(
+                $"The sandbox runner failed at stage '{runnerError.Stage}'{windowsCode}: {runnerError.Message}",
+                errorCause);
         }
     }
 
     private async Task PreflightAsync(
-        PreparedProcessExecution execution, bool networkAccessEnabled, CancellationToken cancellationToken)
+        PreparedProcessExecution execution,
+        bool                     networkAccessEnabled,
+        AuthorizedReadWindowHome? windowHome,
+        WindowsSandboxComponents effectiveComponents,
+        CancellationToken        cancellationToken)
     {
+        var effectiveHome = effectiveComponents.SandboxHome;
+        var stateInspector = windowHome is null
+            ? _stateInspector
+            : new WindowsSandboxStateInspector(effectiveComponents);
+
         SandboxDiagnosticLog.Event("preflight",
                                    $"network={(networkAccessEnabled ? "enabled" : "restricted")} " +
                                    $"proxyVariables={(networkAccessEnabled ? _proxyEnvironment.Count : 0)}");
@@ -367,9 +460,9 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
         // 正在进行的 refresh 误报成沙箱未就绪；因此就绪检查随 payload 构造与 refresh 一起移入门内
         // （纯读毫秒级）。home 缺失时不可能有同 home 的门内写者，而门键控对缺失目录必抛（最终路径
         // 解析失败），故先廉价预检走既有无门路径，保住 "not ready" 的失败语义。
-        if (!Directory.Exists(_components.SandboxHome))
+        if (!Directory.Exists(effectiveHome))
         {
-            var missingHomeStatus = await _stateInspector.InspectAsync(cancellationToken).ConfigureAwait(false);
+            var missingHomeStatus = await stateInspector.InspectAsync(cancellationToken).ConfigureAwait(false);
             SandboxDiagnosticLog.Event("readiness",
                                        $"blocked problems=[{string.Join(" | ", missingHomeStatus.Problems)}]");
             throw new ProcessExecutionStartException("The Windows sandbox is not ready; refusing to execute: " +
@@ -388,10 +481,10 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
             // refresh——否则后到的旧 payload 会撤销另一端刚同步的共享主体 deny。就绪检查与
             // payload 构造同入门内（见上），不改变任何检查语义。
             gate = await _denyReadRefreshGate
-                         .TryAcquireAsync(_components.SandboxHome, _limits.DenyReadRefreshGateTimeout,
+                         .TryAcquireAsync(effectiveHome, _limits.DenyReadRefreshGateTimeout,
                                           cancellationToken).ConfigureAwait(false)
                    ?? throw new
-                       ProcessExecutionStartException($"The deny-read refresh gate for sandbox home '{_components.SandboxHome}' " +
+                       ProcessExecutionStartException($"The deny-read refresh gate for sandbox home '{effectiveHome}' " +
                                                       $"was not acquired within {(int)_limits.DenyReadRefreshGateTimeout.TotalSeconds}s; " +
                                                       "the command was not started, so no stale refresh can revoke deny entries " +
                                                       "another side just persisted. Retry the command once the concurrent refresh completes.",
@@ -399,8 +492,22 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
             SandboxSetupPayload payload;
             try
             {
+                string? pinBlockReason = null;
+                using var pinnedHomeHandle = windowHome is not null && OperatingSystem.IsWindows()
+                    ? AuthorizedReadDisableFile.TryPinVerifiedWindowHome(
+                        windowHome, "authorized preflight", out pinBlockReason)
+                    : null;
+                if (windowHome is not null && OperatingSystem.IsWindows() && pinnedHomeHandle is null)
+                {
+                    phase = "pin-window-home";
+                    throw new ProcessExecutionStartException(
+                        pinBlockReason ??
+                        $"The pinned authorized sandbox home '{effectiveHome}' could not be verified before refresh.",
+                        new InvalidOperationException("Pinned window home verification failed."));
+                }
+
                 phase = "inspect";
-                var status = await _stateInspector.InspectAsync(cancellationToken).ConfigureAwait(false);
+                var status = await stateInspector.InspectAsync(cancellationToken).ConfigureAwait(false);
                 if (!status.Ready)
                 {
                     SandboxDiagnosticLog.Event("readiness", $"blocked problems=[{string.Join(" | ", status.Problems)}]");
@@ -412,7 +519,9 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
 
                 if (networkAccessEnabled)
                 {
-                    var onlineStatus = await _inspectOnlineAccount(cancellationToken).ConfigureAwait(false);
+                    var onlineStatus = windowHome is null
+                        ? await _inspectOnlineAccount(cancellationToken).ConfigureAwait(false)
+                        : await stateInspector.InspectOnlineAccountAsync(cancellationToken).ConfigureAwait(false);
                     if (!onlineStatus.Ready)
                     {
                         SandboxDiagnosticLog.Event("readiness",
@@ -431,13 +540,13 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
                 // 运行在按 home 键控的跨进程拒读刷新门内：后到的 refresh 必然重新读到先到者已持久化的
                 // 条目，撤销集不会收缩共享主体依赖的 deny；门等待本身 fail-closed（超时=命令未启动）。
                 phase   = "payload";
-                payload = _policy.CreateSetupPayload(_components, execution.WorkingDirectory, Environment.UserName, true,
-                                                     execution.GrantScope);
+                payload = _policy.CreateSetupPayload(effectiveComponents, execution.WorkingDirectory,
+                                                     Environment.UserName, true, execution.GrantScope);
                 // 门内复核最终写根（含基线写根、临时写根与 grant 写根）不得覆盖共享 home 下后来登记的另一端组件或 C1 路径：
                 // 本校验与组合期登记共用同一把按 home 键控的跨进程刷新门，消除跨端并发竞态。
                 phase = "protected-paths-check";
                 WindowsSandboxComposer.ValidateWriteRootsAgainstRegisteredProtectedPaths(payload.WriteRoots,
-                                                                                         _components.SandboxHome,
+                                                                                         effectiveHome,
                                                                                          "sandbox refresh write root");
 #if DEBUG
                 // run id 经 AsyncLocal 流入本轮 union/helper/validate 诊断事件；不新增参数，也不改变执行语义。
@@ -446,7 +555,7 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
                 // 门内重读簿记做只增并集：会话冻结期间另一端写入簿记的条目同样被并入，refresh
                 // 不撤销共享主体依赖的既有 deny；簿记不可读经瞬态重试后 fail-closed，命令保持未启动。
                 phase   = "deny-read-union";
-                payload = ApplyDenyReadBookkeepingUnion(payload);
+                payload = ApplyDenyReadBookkeepingUnion(payload, effectiveHome);
                 phase   = "refresh";
                 SandboxDiagnosticLog.Event("refresh",
                                            $"request workspace='{_policy.WorkspaceRoot}' cwd='{execution.WorkingDirectory}' " +
@@ -459,6 +568,19 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
                 await _setupInvoker
                      .RefreshAsync(payload, cancellationToken).ConfigureAwait(false);
                 SandboxDiagnosticLog.Event("refresh", $"helper-finished elapsedMs={stopwatch.ElapsedMilliseconds}");
+
+                if (windowHome is not null &&
+                    !AuthorizedReadDisableFile.VerifyPostRefreshWindowHome(
+                        windowHome, pinnedHomeHandle, payload,
+                        AuthorizedReadDisableFile.TryCaptureCanonicalHomeIdentity,
+                        "authorized preflight", out var postBlockReason))
+                {
+                    phase = "post-refresh-home-check";
+                    throw new ProcessExecutionStartException(
+                        postBlockReason ??
+                        $"The authorized refresh could not be confirmed on '{effectiveHome}'.",
+                        new InvalidOperationException("Post-refresh window home verification failed."));
+                }
             }
             catch (Exception ex) when (SandboxRefreshExitUncertainty.TryGetConfirmation(ex, out var confirmation))
             {
@@ -527,10 +649,11 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
     ///         [read → merge → refresh → persist] stays serialized across processes.
     ///     </para>
     /// </summary>
-    private SandboxSetupPayload ApplyDenyReadBookkeepingUnion(SandboxSetupPayload payload)
+    private SandboxSetupPayload ApplyDenyReadBookkeepingUnion(
+        SandboxSetupPayload payload, string sandboxHome)
     {
         var (denyPaths, bookkeepingEntries, bookkeepingMerged) = SandboxDenyReadBookkeeping.Merge(
-            "per-command refresh", payload.DenyReadPaths, payload.ReadRoots, _components.SandboxHome);
+            "per-command refresh", payload.DenyReadPaths, payload.ReadRoots, sandboxHome);
         var unioned = SandboxIsolationPolicy.Deduplicate(denyPaths);
         SandboxDiagnosticLog.Event("deny-read-union",
                                    $"bookkeepingEntries={bookkeepingEntries} bookkeepingMerged={bookkeepingMerged} " +
@@ -538,11 +661,23 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
         return payload with { DenyReadPaths = unioned };
     }
 
-    private async Task<WindowsSandboxAccount> LoadAccount(bool              networkAccessEnabled, bool authorizedReads,
-                                                          CancellationToken cancellationToken)
+    private async Task<WindowsSandboxAccount> LoadAccount(
+        bool                      networkAccessEnabled,
+        bool                      authorizedReads,
+        AuthorizedReadWindowHome? windowHome,
+        WindowsSandboxComponents  effectiveComponents,
+        CancellationToken         cancellationToken)
     {
         try
         {
+            var credentialSource = windowHome is null
+                ? _credentialSource
+                : _credentialSourceFactory is not null
+                    ? _credentialSourceFactory(effectiveComponents)
+                    : _credentialSource is SandboxCredentialReader
+                        ? new SandboxCredentialReader(effectiveComponents)
+                        : _credentialSource;
+
             // 生效在线时必须以在线账户启动 runner；任何失败都 fail closed，不降级离线账户。
             // 获批读执行切换到专用授权账户（离线↔AuthOff、在线↔AuthOn），凭据缺失或代际不足
             // 在凭据读取处明确失败，绝不回退普通沙箱账户。
@@ -553,11 +688,11 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
             // loading and never fall back to the ordinary sandbox accounts.
             return await (authorizedReads
                     ? networkAccessEnabled
-                        ? _credentialSource.LoadAuthorizedOnlineAccount(cancellationToken)
-                        : _credentialSource.LoadAuthorizedOfflineAccount(cancellationToken)
+                        ? credentialSource.LoadAuthorizedOnlineAccount(cancellationToken)
+                        : credentialSource.LoadAuthorizedOfflineAccount(cancellationToken)
                     : networkAccessEnabled
-                        ? _credentialSource.LoadOnlineAccount(cancellationToken)
-                        : _credentialSource.LoadOfflineAccount(cancellationToken))
+                        ? credentialSource.LoadOnlineAccount(cancellationToken)
+                        : credentialSource.LoadOfflineAccount(cancellationToken))
                .ConfigureAwait(false);
         }
         catch (OperationCanceledException)
@@ -589,11 +724,15 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
     ///     </para>
     /// </summary>
     private async Task<IReadOnlyList<string>> ResolveCapabilitySids(
-        PreparedProcessExecution execution, CancellationToken cancellationToken)
+        PreparedProcessExecution  execution,
+        AuthorizedReadWindowHome? windowHome,
+        WindowsSandboxComponents  effectiveComponents,
+        CancellationToken         cancellationToken)
     {
         if (!OperatingSystem.IsWindows())
             throw new PlatformNotSupportedException("The Windows sandbox backend is available on Windows only.");
 
+        var effectiveHome = effectiveComponents.SandboxHome;
         ISandboxDenyReadRefreshGateHandle? gate = null;
         try
         {
@@ -601,20 +740,35 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
             // 在门外进行，否则与另一端 host 解析及门内 helper 的表写并发时共享冲突或丢更新；
             // 超时即命令未启动，绝不无门写表。
             gate = await _denyReadRefreshGate
-                         .TryAcquireAsync(_components.SandboxHome, _limits.DenyReadRefreshGateTimeout,
+                         .TryAcquireAsync(effectiveHome, _limits.DenyReadRefreshGateTimeout,
                                           cancellationToken).ConfigureAwait(false)
                    ?? throw new
-                       ProcessExecutionStartException($"The deny-read refresh gate for sandbox home '{_components.SandboxHome}' " +
+                       ProcessExecutionStartException($"The deny-read refresh gate for sandbox home '{effectiveHome}' " +
                                                       $"was not acquired within {(int)_limits.DenyReadRefreshGateTimeout.TotalSeconds}s " +
                                                       "before resolving capability SIDs; the command was not started, so the shared " +
                                                       "capability SID table is never written without the gate. Retry the command once " +
                                                       "the concurrent refresh completes.",
                                                       new TimeoutException("The deny-read refresh gate acquisition timed out."));
+            string? pinBlockReason = null;
+            using var pinnedHomeHandle = windowHome is not null
+                ? AuthorizedReadDisableFile.TryPinVerifiedWindowHome(
+                    windowHome, "capability SID resolution", out pinBlockReason)
+                : null;
+            if (windowHome is not null && pinnedHomeHandle is null)
+                throw new ProcessExecutionStartException(
+                    pinBlockReason ??
+                    $"The pinned authorized sandbox home '{effectiveHome}' could not be verified before resolving capability SIDs.",
+                    new InvalidOperationException("Pinned window home verification failed."));
+
+            var capabilitySidStore = windowHome is null
+                ? _capabilitySidStore
+                : new SandboxCapabilitySidStore(effectiveComponents);
+
             // cwd 必须与 refresh 的 command_cwd 一致，使 spawn token 的工作区 SID 匹配目录 ACE。
             // 此约束与 Rust 的 workspace_write_cap_sid_for_root 保持一致。
             // grant 冻结写根一并并入 SID 解析：refresh payload 已含相同根（先 refresh 后解析，
             // 与基线写根共享 helper 写入的同一张 SID 表）。
-            var capabilitySids = await _capabilitySidStore
+            var capabilitySids = await capabilitySidStore
                                       .ResolveForPolicy(_policy, execution.GrantScope?.WriteRoots,
                                                         execution.WorkingDirectory, cancellationToken)
                                       .ConfigureAwait(false);
@@ -656,7 +810,10 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
     }
 
     private RunnerSpawnRequest BuildSpawnRequest(
-        PreparedProcessExecution execution, IReadOnlyList<string> capabilitySids, string desktopName,
+        PreparedProcessExecution execution,
+        WindowsSandboxComponents effectiveComponents,
+        IReadOnlyList<string>    capabilitySids,
+        string                   desktopName,
         bool                     networkAccessEnabled)
     {
         var timeoutMilliseconds = (ulong)execution.TimeoutSeconds * 1000;
@@ -675,8 +832,8 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
                                                                         : SandboxNetworkPolicy.Restricted)
             },
             WorkspaceRoots             = [_policy.WorkspaceRoot],
-            SandboxDirectory           = _components.SandboxDirectory,
-            RealSandboxHome            = _components.SandboxHome,
+            SandboxDirectory           = effectiveComponents.SandboxDirectory,
+            RealSandboxHome            = effectiveComponents.SandboxHome,
             CapabilitySids             = capabilitySids,
             NetworkProxyRestrictingSid = null,
             TimeoutMilliseconds        = timeoutMilliseconds,
@@ -863,20 +1020,46 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
     ///         an exit race during termination is resolved by the subsequent wait.
     ///     </para>
     /// </returns>
+    private async Task ReclaimRunnerOrThrowUncertainAsync(SandboxRunnerConnection connection, string phase)
+    {
+        if (!await ReclaimRunnerAsync(connection).ConfigureAwait(false))
+            throw new ToolExecutionUncertainException(
+                $"The sandbox runner did not exit {phase} within {(int)_limits.RunnerExitTimeout.TotalSeconds}s " +
+                $"(plus {(int)_limits.TerminationKillGrace.TotalSeconds}s kill grace) and could not be reclaimed.");
+    }
+
     private async Task<bool> ReclaimRunnerAsync(SandboxRunnerConnection connection)
     {
-        if (await connection.WaitForExitAsync(_limits.RunnerExitTimeout).ConfigureAwait(false)) return true;
+        Exception? firstWaitError = null;
+        try
+        {
+            if (await connection.WaitForExitAsync(_limits.RunnerExitTimeout).ConfigureAwait(false)) return true;
+        }
+        catch (Exception ex) when (ex is Win32Exception or ObjectDisposedException)
+        {
+            // 原生句柄等待失败（如 WAIT_FAILED）属于退出未知，仍先尽力终止再二次确认。
+            firstWaitError = ex;
+        }
 
         try
         {
             connection.Kill();
         }
-        catch (Exception ex) when (ex is InvalidOperationException or Win32Exception)
+        catch (Exception ex) when (ex is InvalidOperationException or Win32Exception or ObjectDisposedException)
         {
             // 可能与自然退出竞态；后续等待仍须确认退出。
         }
 
-        return await connection.WaitForExitAsync(_limits.TerminationKillGrace).ConfigureAwait(false);
+        try
+        {
+            return await connection.WaitForExitAsync(_limits.TerminationKillGrace).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is Win32Exception or ObjectDisposedException)
+        {
+            throw new ToolExecutionUncertainException(
+                $"Waiting for the sandbox runner process to exit failed ({ex.Message}); process exit is unconfirmed.",
+                firstWaitError is null ? ex : new AggregateException(firstWaitError, ex));
+        }
     }
 
     private async Task KillAndReclaimAsync(SandboxRunnerConnection connection)
@@ -885,12 +1068,24 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
         {
             connection.Kill();
         }
-        catch (Exception ex) when (ex is InvalidOperationException or Win32Exception)
+        catch (Exception ex) when (ex is InvalidOperationException or Win32Exception or ObjectDisposedException)
         {
             // 可能已经退出，但仍须由后续等待确认。
         }
 
-        if (!await connection.WaitForExitAsync(_limits.TerminationKillGrace).ConfigureAwait(false))
+        bool exited;
+        try
+        {
+            exited = await connection.WaitForExitAsync(_limits.TerminationKillGrace).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is Win32Exception or ObjectDisposedException)
+        {
+            throw new ToolExecutionUncertainException(
+                $"Waiting for the terminated sandbox runner process to exit failed ({ex.Message}); process exit is unconfirmed.",
+                ex);
+        }
+
+        if (!exited)
             throw new
                 ToolExecutionUncertainException($"Terminating the unresponsive sandbox runner did not complete within {(int)_limits.TerminationKillGrace.TotalSeconds}s.");
     }
@@ -954,7 +1149,8 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
             return true;
         }
         catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidOperationException
-                                      or TimeoutException or OperationCanceledException)
+                                      or TimeoutException or OperationCanceledException or InvalidDataException
+                                      or JsonException or NotSupportedException)
         {
             // terminate 写入期限取消按发送失败处理；spawn_request 路径由 ExecuteAsync 重新抛出用户取消。
             return false;
@@ -965,13 +1161,19 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
         }
     }
 
-    private Task<bool> TrySendTerminateAsync(SandboxRunnerConnection connection, SemaphoreSlim writerGate)
+    private static bool IsPreSpawnRunnerErrorStage(string? stage) =>
+        string.Equals(stage, "read_spawn_request", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(stage, "spawn_child", StringComparison.OrdinalIgnoreCase);
+
+    private async Task<bool> TrySendTerminateAsync(SandboxRunnerConnection connection, SemaphoreSlim writerGate)
     {
+        // 必须 await，确保 writeCancellation 在整个等锁与写帧期间保持有效而不提前释放。
         using var writeCancellation = new CancellationTokenSource(_limits.TerminateWriteTimeout);
-        return TrySendFrameAsync(connection, writerGate,
-                                 stream => RunnerFrameCodec.WriteControlFrameAsync(stream, "terminate",
-                                          writeCancellation.Token),
-                                 CancellationToken.None);
+        return await TrySendFrameAsync(connection, writerGate,
+                                       stream => RunnerFrameCodec.WriteControlFrameAsync(stream, "terminate",
+                                                writeCancellation.Token),
+                                       writeCancellation.Token)
+                  .ConfigureAwait(false);
     }
 
     /// <summary>
@@ -1144,7 +1346,7 @@ public sealed class WindowsSandboxBackend : IProcessExecutionBackend
             if (!_handshakeCompleted)
             {
                 _handshake.TrySetException(new
-                                               IOException("The runner closed the pipe before spawn_ready; no command was started."));
+                                               IOException("The runner closed the pipe before spawn_ready; command execution state is unknown."));
             }
             else if (!_exitCompleted)
             {

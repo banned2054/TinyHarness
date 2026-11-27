@@ -21,6 +21,44 @@ internal static class RunnerFrameCodec
     public const int IpcProtocolVersion = 6;
 
     /// <summary>
+    ///     <para>
+    ///         将带 payload 的消息编码为可发送的完整帧字节（4 字节长度前缀 + UTF-8 JSON 正文），不触碰任何流；
+    ///         payload 使用 source-generated metadata 序列化，帧体超限抛 <see cref="InvalidDataException" />。
+    ///     </para>
+    ///     <para>
+    ///         Encodes one framed message with a payload into complete frame bytes (4-byte length prefix plus
+    ///         UTF-8 JSON body) without touching any stream; the payload serializes through source-generated
+    ///         metadata, and frames exceeding the cap throw <see cref="InvalidDataException" />.
+    ///     </para>
+    /// </summary>
+    internal static byte[] EncodeFrame<T>(string type, T payload)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(type);
+        ArgumentNullException.ThrowIfNull(payload);
+
+        var typeInfo    = GetTypeInfo<T>();
+        var payloadJson = JsonSerializer.SerializeToUtf8Bytes(payload, typeInfo);
+        return EncodeEnvelope(type, payloadJson);
+    }
+
+    /// <summary>
+    ///     <para>将已编码的完整帧字节写入流并刷新；流写入失败、超时或取消均发生在实际发送阶段。</para>
+    ///     <para>
+    ///         Writes pre-encoded frame bytes to the stream and flushes; stream write failures, timeouts, or
+    ///         cancellations occur only during the actual send phase.
+    ///     </para>
+    /// </summary>
+    internal static async Task WriteEncodedFrameAsync(
+        Stream stream, byte[] frameBytes, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+        ArgumentNullException.ThrowIfNull(frameBytes);
+
+        await stream.WriteAsync(frameBytes, cancellationToken).ConfigureAwait(false);
+        await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
     ///     写一帧带 payload 的消息；payload 用 source-generated metadata 序列化。帧体超限抛
     ///     InvalidDataException。
     ///     Writes one framed message with a payload serialized through
@@ -33,9 +71,8 @@ internal static class RunnerFrameCodec
         ArgumentNullException.ThrowIfNull(stream);
         ArgumentNullException.ThrowIfNull(payload);
 
-        var typeInfo    = GetTypeInfo<T>();
-        var payloadJson = JsonSerializer.SerializeToUtf8Bytes(payload, typeInfo);
-        await WriteEnvelopeAsync(stream, type, payloadJson, cancellationToken).ConfigureAwait(false);
+        var frameBytes = EncodeFrame(type, payload);
+        await WriteEncodedFrameAsync(stream, frameBytes, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -43,8 +80,14 @@ internal static class RunnerFrameCodec
     ///     Writes one empty control frame (terminate/close_stdin); the payload
     ///     stays present as an empty object and is never omitted.
     /// </summary>
-    public static Task WriteControlFrameAsync(Stream stream, string type, CancellationToken cancellationToken) =>
-        WriteEnvelopeAsync(stream, type, "{}"u8.ToArray(), cancellationToken);
+    public static Task WriteControlFrameAsync(Stream stream, string type, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+        ArgumentException.ThrowIfNullOrWhiteSpace(type);
+
+        var frameBytes = EncodeEnvelope(type, "{}"u8.ToArray());
+        return WriteEncodedFrameAsync(stream, frameBytes, cancellationToken);
+    }
 
     /// <summary>
     ///     读一帧；干净 EOF（首字节前）返回 null，帧中间截断抛 EndOfStreamException，超长、
@@ -90,8 +133,7 @@ internal static class RunnerFrameCodec
      ?? throw new
             InvalidOperationException($"The Windows sandbox JSON context does not contain metadata for type '{typeof(T).FullName}'.");
 
-    private static async Task WriteEnvelopeAsync(
-        Stream stream, string type, byte[] payloadJson, CancellationToken cancellationToken)
+    private static byte[] EncodeEnvelope(string type, byte[] payloadJson)
     {
         using var body = new MemoryStream(payloadJson.Length + 64);
         using (var writer = new Utf8JsonWriter(body))
@@ -108,11 +150,10 @@ internal static class RunnerFrameCodec
         if (bodyBytes.Length > MaxFrameLength)
             throw new InvalidDataException($"Runner frame '{type}' exceeds the {MaxFrameLength} byte limit.");
 
-        var lengthPrefix = new byte[4];
-        BinaryPrimitives.WriteUInt32LittleEndian(lengthPrefix, (uint)bodyBytes.Length);
-        await stream.WriteAsync(lengthPrefix, cancellationToken).ConfigureAwait(false);
-        await stream.WriteAsync(bodyBytes, cancellationToken).ConfigureAwait(false);
-        await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
+        var frameBytes = new byte[4 + bodyBytes.Length];
+        BinaryPrimitives.WriteUInt32LittleEndian(frameBytes, (uint)bodyBytes.Length);
+        bodyBytes.CopyTo(frameBytes.AsSpan(4));
+        return frameBytes;
     }
 
     private static RunnerFrame ParseEnvelope(byte[] body)

@@ -352,23 +352,56 @@ public class WindowsSandboxBackendTests
     }
 
     [Test]
-    public async Task Execute_EofBeforeSpawnReadyThrowsStartException()
+    public async Task Execute_WriteSpawnReadyErrorThrowsUncertainExecution()
     {
         if (!OperatingSystem.IsWindows()) return;
 
         var (backend, _, _, _, home) = CreateBackend(async (downstream, upstream, end) =>
         {
             await RunnerFrameCodec.ReadFrameAsync(downstream, end);
-            await Task.Yield();
-            // 不发送帧即退出，模拟握手前 runner 终止。
+            await RunnerFrameCodec.WriteFrameAsync(upstream, "error",
+                                                   new RunnerErrorPayload
+                                                   {
+                                                       Message          = "WriteFile failed on pipe",
+                                                       Stage            = "write_spawn_ready",
+                                                       WindowsErrorCode = 232
+                                                   }, end);
+        });
+        using var homeScope = home;
+        var       stdout    = new RecordingOutputCapture();
+
+        // Rust runner 先启动子进程再回写 spawn_ready：write_spawn_ready 失败时子进程可能已产生副作用。
+        var exception = await TestAssert.ThrowsAsync<ToolExecutionUncertainException>(
+            () => backend.ExecuteAsync(Plan(home.Components.SandboxHome), stdout,
+                                       new RecordingOutputCapture(), CancellationToken.None));
+
+        Assert.Multiple(() =>
+        {
+            TestAssert.Contains("write_spawn_ready", exception.Message, StringComparison.Ordinal);
+            TestAssert.Contains("WriteFile failed on pipe", exception.Message, StringComparison.Ordinal);
+            TestAssert.Contains("Win32 error 232", exception.Message, StringComparison.Ordinal);
+            Assert.That(stdout.Discarded, Is.True);
+        });
+    }
+
+    [Test]
+    public async Task Execute_EofBeforeSpawnReadyThrowsUncertainExecution()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        var (backend, _, _, _, home) = CreateBackend(async (downstream, upstream, end) =>
+        {
+            await RunnerFrameCodec.ReadFrameAsync(downstream, end);
+            await upstream.DisposeAsync(); // spawn_request 已发出后不回写 spawn_ready 即关闭管道。
         });
         using var homeScope = home;
 
-        await TestAssert.ThrowsAsync<ProcessExecutionStartException>(() =>
+        var exception = await TestAssert.ThrowsAsync<ToolExecutionUncertainException>(() =>
         {
             return backend.ExecuteAsync(Plan(home.Components.SandboxHome), new RecordingOutputCapture(),
                                         new RecordingOutputCapture(), CancellationToken.None);
         });
+        Assert.That(exception.Message, Does.Contain("command execution state is unknown"));
     }
 
     [Test]
@@ -445,7 +478,7 @@ public class WindowsSandboxBackendTests
         var       stdout    = new RecordingOutputCapture();
 
         var exception =
-            await TestAssert.ThrowsAsync<ProcessExecutionStartException>(() =>
+            await TestAssert.ThrowsAsync<ToolExecutionUncertainException>(() =>
             {
                 return backend.ExecuteAsync(Plan(home.Components.SandboxHome), stdout,
                                             new RecordingOutputCapture(), CancellationToken.None);
@@ -810,7 +843,7 @@ public class WindowsSandboxBackendTests
         using var homeScope = home;
 
         var exception =
-            await TestAssert.ThrowsAsync<ProcessExecutionStartException>(() =>
+            await TestAssert.ThrowsAsync<ToolExecutionUncertainException>(() =>
             {
                 return backend.ExecuteAsync(Plan(home.Components.SandboxHome), new RecordingOutputCapture(),
                                             new RecordingOutputCapture(), CancellationToken.None);
@@ -1410,6 +1443,370 @@ public class WindowsSandboxBackendTests
             Assert.That(gate.Trace, Is.EqualTo(["deny-gate-acquire", "deny-gate-release", "deny-gate-acquire"]));
             Assert.That(gate.LastHandle!.DisposeCalls, Is.EqualTo(1));
         });
+    }
+
+    [Test]
+    public async Task Execute_LaunchThrowsUncertain_PropagatesToolExecutionUncertainExceptionUntouched()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        var (backend, _, _, _, home) = CreateBackend(
+            NormalRunner,
+            launchError : new ToolExecutionUncertainException(
+                "outer job could not confirm whole-tree exit after failed launch"));
+        using var homeScope = home;
+
+        var error = await TestAssert.ThrowsAsync<ToolExecutionUncertainException>(() =>
+            backend.ExecuteAsync(Plan(homeScope.Components.SandboxHome), new RecordingOutputCapture(),
+                                 new RecordingOutputCapture(), CancellationToken.None));
+
+        TestAssert.Contains("whole-tree exit", error!.Message, StringComparison.Ordinal);
+    }
+
+    [Test]
+    public async Task Execute_HandshakeTimeoutWithUnreclaimedRunner_ThrowsToolExecutionUncertainException()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        using var home = new SandboxTestHome();
+        var       connection = new ScriptedRunnerConnection(
+            waitForExit : _ => Task.FromResult(false));
+        var backend = CreateBackendWithCustomLauncher(
+            home, new SingleConnectionLauncher(connection),
+            TestLimits with
+            {
+                SpawnReadyTimeout    = TimeSpan.FromMilliseconds(100),
+                RunnerExitTimeout    = TimeSpan.FromMilliseconds(50),
+                TerminationKillGrace = TimeSpan.FromMilliseconds(50)
+            });
+
+        var error = await TestAssert.ThrowsAsync<ToolExecutionUncertainException>(() =>
+            backend.ExecuteAsync(Plan(home.Components.SandboxHome), new RecordingOutputCapture(),
+                                 new RecordingOutputCapture(), CancellationToken.None));
+
+        Assert.Multiple(() =>
+        {
+            TestAssert.Contains("spawn_ready timed out", error!.Message, StringComparison.Ordinal);
+            Assert.That(connection.KillCalls, Is.EqualTo(1));
+        });
+    }
+
+    [Test]
+    public async Task Execute_CancelBeforeSpawnRequestWrite_StillReclaimsRunnerAndThrowsUncertainIfUnreclaimed()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        using var home = new SandboxTestHome();
+        using var cts  = new CancellationTokenSource();
+        var       connection = new ScriptedRunnerConnection(waitForExit : _ => Task.FromResult(false));
+        var launcher = new SingleConnectionLauncher(connection, onLaunch : () => cts.Cancel());
+        var backend = CreateBackendWithCustomLauncher(
+            home, launcher,
+            TestLimits with
+            {
+                RunnerExitTimeout    = TimeSpan.FromMilliseconds(50),
+                TerminationKillGrace = TimeSpan.FromMilliseconds(50)
+            });
+
+        // LaunchAsync 返回前取消令牌已触发：TrySendFrameAsync 失败后仍必须先回收 runner，不可跳过回收直接抛取消。
+        var error = await TestAssert.ThrowsAsync<ToolExecutionUncertainException>(() =>
+            backend.ExecuteAsync(Plan(home.Components.SandboxHome), new RecordingOutputCapture(),
+                                 new RecordingOutputCapture(), cts.Token));
+
+        Assert.Multiple(() =>
+        {
+            TestAssert.Contains("spawn_request", error!.Message, StringComparison.Ordinal);
+            Assert.That(connection.KillCalls, Is.EqualTo(1));
+        });
+    }
+
+    [Test]
+    public async Task Execute_NativeWaitForExitFailure_ThrowsToolExecutionUncertainException()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        using var home = new SandboxTestHome();
+        var       connection = new ScriptedRunnerConnection(
+            waitForExit : _ => Task.FromException<bool>(new System.ComponentModel.Win32Exception(6, "WAIT_FAILED")));
+        var backend = CreateBackendWithCustomLauncher(
+            home, new SingleConnectionLauncher(connection),
+            TestLimits with
+            {
+                SpawnReadyTimeout    = TimeSpan.FromMilliseconds(100),
+                RunnerExitTimeout    = TimeSpan.FromMilliseconds(50),
+                TerminationKillGrace = TimeSpan.FromMilliseconds(50)
+            });
+
+        var error = await TestAssert.ThrowsAsync<ToolExecutionUncertainException>(() =>
+            backend.ExecuteAsync(Plan(home.Components.SandboxHome), new RecordingOutputCapture(),
+                                 new RecordingOutputCapture(), CancellationToken.None));
+
+        Assert.Multiple(() =>
+        {
+            TestAssert.Contains("process exit is unconfirmed", error!.Message, StringComparison.Ordinal);
+            Assert.That(connection.KillCalls, Is.EqualTo(1), "Wait failure on first check must still attempt Kill");
+        });
+    }
+
+    [Test]
+    public async Task Execute_SpawnRequestWriteTimeout_ReclaimsRunnerAndThrowsUncertainExecution()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        using var home          = new SandboxTestHome();
+        var       stalledStream = new ControllableStallStream(stallImmediately : true);
+        var       connection    = new ScriptedRunnerConnection(
+            waitForExit : _ => Task.FromResult(true),
+            downstreamOverride : stalledStream);
+        var backend = CreateBackendWithCustomLauncher(
+            home, new SingleConnectionLauncher(connection),
+            TestLimits with
+            {
+                SpawnReadyTimeout    = TimeSpan.FromMilliseconds(150),
+                RunnerExitTimeout    = TimeSpan.FromMilliseconds(100),
+                TerminationKillGrace = TimeSpan.FromMilliseconds(100)
+            });
+
+        var error = await TestAssert.ThrowsAsync<ToolExecutionUncertainException>(() =>
+            backend.ExecuteAsync(Plan(home.Components.SandboxHome), new RecordingOutputCapture(),
+                                 new RecordingOutputCapture(), CancellationToken.None));
+
+        Assert.Multiple(() =>
+        {
+            TestAssert.Contains("spawn_request", error!.Message, StringComparison.Ordinal);
+            TestAssert.Contains("timed out", error.Message, StringComparison.Ordinal);
+            Assert.That(stalledStream.StalledWriteObservedTokenCancelled, Is.True);
+        });
+    }
+
+    [Test]
+    public async Task Execute_OversizedSpawnRequest_ReclaimsRunnerAndThrowsStartException()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        using var home       = new SandboxTestHome();
+        var       waitCalls  = 0;
+        var       connection = new ScriptedRunnerConnection(waitForExit: _ =>
+        {
+            waitCalls++;
+            return Task.FromResult(true);
+        });
+        var backend = CreateBackendWithCustomLauncher(
+            home, new SingleConnectionLauncher(connection),
+            TestLimits with
+            {
+                RunnerExitTimeout    = TimeSpan.FromMilliseconds(100),
+                TerminationKillGrace = TimeSpan.FromMilliseconds(100)
+            });
+        var oversizedPlan = new PreparedProcessExecution(
+            "cmd.exe", [new string('a', RunnerFrameCodec.MaxFrameLength)],
+            home.Components.SandboxHome, 30, false, null);
+        var stdout = new RecordingOutputCapture();
+
+        var error = await TestAssert.ThrowsAsync<ProcessExecutionStartException>(
+            () => backend.ExecuteAsync(oversizedPlan, stdout, new RecordingOutputCapture(), CancellationToken.None));
+
+        Assert.Multiple(() =>
+        {
+            TestAssert.Contains("encode", error.Message, StringComparison.OrdinalIgnoreCase);
+            Assert.That(error.InnerException, Is.InstanceOf<InvalidDataException>());
+            Assert.That(waitCalls, Is.GreaterThanOrEqualTo(1));
+            Assert.That(connection.KillCalls, Is.Zero);
+            Assert.That(stdout.Discarded, Is.True);
+        });
+    }
+
+    [Test]
+    public async Task Execute_OversizedSpawnRequestWithUnreclaimedRunner_KillsRunnerAndThrowsUncertainException()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        using var home       = new SandboxTestHome();
+        var       connection = new ScriptedRunnerConnection(waitForExit: _ => Task.FromResult(false));
+        var backend = CreateBackendWithCustomLauncher(
+            home, new SingleConnectionLauncher(connection),
+            TestLimits with
+            {
+                RunnerExitTimeout    = TimeSpan.FromMilliseconds(50),
+                TerminationKillGrace = TimeSpan.FromMilliseconds(50)
+            });
+        var oversizedPlan = new PreparedProcessExecution(
+            "cmd.exe", [new string('a', RunnerFrameCodec.MaxFrameLength)],
+            home.Components.SandboxHome, 30, false, null);
+        var stdout = new RecordingOutputCapture();
+
+        var error = await TestAssert.ThrowsAsync<ToolExecutionUncertainException>(
+            () => backend.ExecuteAsync(oversizedPlan, stdout, new RecordingOutputCapture(), CancellationToken.None));
+
+        Assert.Multiple(() =>
+        {
+            TestAssert.Contains("encode spawn_request", error.Message, StringComparison.Ordinal);
+            Assert.That(connection.KillCalls, Is.EqualTo(1));
+        });
+    }
+
+    [Test]
+    public async Task Execute_UserCancelWithStalledDownstream_HonorsTerminateWriteTimeoutWithoutPrematureDispose()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        using var home          = new SandboxTestHome();
+        using var cts           = new CancellationTokenSource();
+        var       stalledStream = new ControllableStallStream(stallImmediately : false);
+        var       upstream      = new MemoryPipeStream();
+        var       connection    = new ScriptedRunnerConnection(
+            waitForExit : _ => Task.FromResult(true),
+            downstreamOverride : stalledStream,
+            upstreamOverride : upstream);
+        var launcher = new SingleConnectionLauncher(
+            connection,
+            onLaunch : () => _ = Task.Run(async () =>
+            {
+                // 放行 spawn_request 完整帧（4 字节长度前缀 + 正文），仅在随后的 terminate 控制帧写入时阻塞。
+                await stalledStream.WaitForFullFrameWrittenAsync().ConfigureAwait(false);
+                stalledStream.ArmStallOnNextWrite();
+                await RunnerFrameCodec.WriteFrameAsync(upstream, "spawn_ready",
+                                                       new RunnerSpawnReady { ProcessId = 55 }, CancellationToken.None)
+                                      .ConfigureAwait(false);
+                await Task.Delay(50).ConfigureAwait(false);
+                cts.Cancel();
+            }));
+        var backend = CreateBackendWithCustomLauncher(
+            home, launcher,
+            TestLimits with
+            {
+                TerminateWriteTimeout   = TimeSpan.FromMilliseconds(150),
+                TerminationDrainTimeout = TimeSpan.FromMilliseconds(100),
+                RunnerExitTimeout       = TimeSpan.FromMilliseconds(100),
+                TerminationKillGrace    = TimeSpan.FromMilliseconds(100)
+            });
+
+        await Assert.CatchAsync<OperationCanceledException>(() =>
+            backend.ExecuteAsync(Plan(home.Components.SandboxHome), new RecordingOutputCapture(),
+                                 new RecordingOutputCapture(), cts.Token));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(stalledStream.StalledWriteObservedTokenCancelled, Is.True,
+                        "terminate write must cancel via TerminateWriteTimeout instead of ObjectDisposedException");
+            Assert.That(stalledStream.StalledWriteSawObjectDisposed, Is.False);
+            Assert.That(stalledStream.StalledWriteElapsed, Is.GreaterThanOrEqualTo(TimeSpan.FromMilliseconds(80)));
+        });
+    }
+
+    private static WindowsSandboxBackend CreateBackendWithCustomLauncher(
+        SandboxTestHome home, ISandboxRunnerLauncher launcher, WindowsSandboxBackendLimits limits)
+    {
+        var sandboxHome       = home.Components.SandboxHome;
+        var targetEnvironment = new Dictionary<string, string> { ["TEMP"] = sandboxHome };
+        var policy            = SandboxPolicyResolver.Resolve(SandboxPolicyKind.WorkspaceWrite, sandboxHome,
+                                                              targetEnvironment);
+        return new WindowsSandboxBackend(home.Components, policy, targetEnvironment,
+                                         setupInvoker : new FakeSetupInvoker(),
+                                         credentialSource : new FakeCredentialSource(),
+                                         capabilitySidStore : new SandboxCapabilitySidStore(home.Components),
+                                         desktopFactory : new FakeDesktopFactory(),
+                                         runnerLauncher : launcher,
+                                         limits : limits,
+                                         allowNullDeviceAccess : _ => { },
+                                         validateWriteAcls : (_, _) => Task.CompletedTask,
+                                         validateReadRootReadiness : (_, _) => Task.CompletedTask,
+                                         denyReadRefreshGate : new ScriptedDenyReadGate());
+    }
+
+    private sealed class SingleConnectionLauncher(
+        SandboxRunnerConnection connection, Action? onLaunch = null) : ISandboxRunnerLauncher
+    {
+        public Task<SandboxRunnerConnection> LaunchAsync(RunnerLaunchRequest request, CancellationToken cancellationToken)
+        {
+            onLaunch?.Invoke();
+            return Task.FromResult(connection);
+        }
+    }
+
+    private sealed class ScriptedRunnerConnection(
+        Func<TimeSpan, Task<bool>> waitForExit,
+        Stream?                    downstreamOverride = null,
+        Stream?                    upstreamOverride   = null)
+        : SandboxRunnerConnection(downstreamOverride ?? new MemoryPipeStream(),
+                                  upstreamOverride   ?? new MemoryPipeStream())
+    {
+        public int KillCalls { get; private set; }
+
+        public override Task<bool> WaitForExitAsync(TimeSpan timeout) => waitForExit(timeout);
+
+        public override void Kill() => KillCalls++;
+
+        public override void Dispose()
+        {
+            Downstream.Dispose();
+            Upstream.Dispose();
+        }
+    }
+
+    private sealed class ControllableStallStream(bool stallImmediately) : Stream
+    {
+        private readonly TaskCompletionSource<bool> _firstFrameWritten =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        private int _expectedFrameBytes = -1;
+        private int _receivedBytes;
+        private int _stallArmed = stallImmediately ? 1 : 0;
+
+        public bool     StalledWriteObservedTokenCancelled { get; private set; }
+        public bool     StalledWriteSawObjectDisposed      { get; private set; }
+        public TimeSpan StalledWriteElapsed                { get; private set; }
+
+        public Task WaitForFullFrameWrittenAsync() => _firstFrameWritten.Task;
+
+        public void ArmStallOnNextWrite() => Volatile.Write(ref _stallArmed, 1);
+
+        public override bool CanRead  => false;
+        public override bool CanSeek  => false;
+        public override bool CanWrite => true;
+        public override long Length   => 0;
+        public override long Position { get => 0; set => throw new NotSupportedException(); }
+
+        public override async ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            if (Volatile.Read(ref _stallArmed) != 0)
+            {
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                try
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(5), cancellationToken).ConfigureAwait(false);
+                }
+                catch (ObjectDisposedException)
+                {
+                    StalledWriteSawObjectDisposed = true;
+                    throw;
+                }
+                catch (OperationCanceledException)
+                {
+                    StalledWriteElapsed                = sw.Elapsed;
+                    StalledWriteObservedTokenCancelled = cancellationToken.IsCancellationRequested;
+                    throw;
+                }
+
+                return;
+            }
+
+            if (_expectedFrameBytes < 0 && buffer.Length >= 4)
+                _expectedFrameBytes = 4 + (int)System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(buffer.Span);
+
+            _receivedBytes += buffer.Length;
+            if (_expectedFrameBytes > 0 && _receivedBytes >= _expectedFrameBytes)
+                _firstFrameWritten.TrySetResult(true);
+        }
+
+        public override void Write(byte[] buffer, int offset, int count) =>
+            WriteAsync(buffer.AsMemory(offset, count)).AsTask().GetAwaiter().GetResult();
+
+        public override Task FlushAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+        public override void Flush() { }
+        public override int  Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
     }
 
     /// <summary>把 launch 事件写入共享时序的转发启动器：其余行为委托内部 fake。 A forwarding launcher appending the launch event to the shared trace; everything else delegates to the inner fake.</summary>
