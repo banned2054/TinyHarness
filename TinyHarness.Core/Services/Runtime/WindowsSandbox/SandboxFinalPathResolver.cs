@@ -179,7 +179,7 @@ internal static partial class SandboxFinalPathResolver
 
     internal static bool IsPathMissingError(int win32Error) => win32Error is ErrorFileNotFound or ErrorPathNotFound;
 
-    private static string? TryReadFinalPath(SafeFileHandle handle)
+    internal static string? TryReadFinalPath(SafeFileHandle handle)
     {
         // 项目未禁用运行时封送，char 缓冲区经 IntPtr 传递（可 blit），不引入封送开关。
         var buffer = IntPtr.Zero;
@@ -193,16 +193,19 @@ internal static partial class SandboxFinalPathResolver
             if (written == 0 || written > required) return null;
 
             var final = Marshal.PtrToStringUni(buffer, (int)written);
-            if (final is null) return null;
-
-            // 去掉 \\?\ 扩展前缀，保持与词法比较同形；UNC 目标还原为 \\server\share。
-            if (final.StartsWith(@"\\?\UNC\", StringComparison.Ordinal)) return "\\" + final[8..];
-            return final.StartsWith(@"\\?\", StringComparison.Ordinal) ? final[4..] : final;
+            return final is null ? null : StripWin32ExtendedPrefix(final);
         }
         finally
         {
             if (buffer != IntPtr.Zero) Marshal.FreeHGlobal(buffer);
         }
+    }
+
+    internal static string StripWin32ExtendedPrefix(string final)
+    {
+        // 去掉 \\?\ 扩展前缀，保持与词法比较同形；UNC 目标保留双反斜杠前缀 \\server\share。
+        if (final.StartsWith(@"\\?\UNC\", StringComparison.Ordinal)) return @"\\" + final[8..];
+        return final.StartsWith(@"\\?\", StringComparison.Ordinal) ? final[4..] : final;
     }
 
     [StructLayout(LayoutKind.Sequential)]
