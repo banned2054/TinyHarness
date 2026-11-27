@@ -54,7 +54,21 @@ public sealed record RunnerLaunchRequest(
     string                RunnerExecutablePath,
     WindowsSandboxAccount Account,
     string                WorkingDirectory,
-    bool                  LoadUserProfile = false);
+    bool                  LoadUserProfile = false)
+{
+    /// <summary>
+    ///     <para>
+    ///         外层 Job 的进程树策略；默认 <see cref="SandboxProcessTreeMode.Disabled" /> 保持既有启动路径不变，
+    ///         由调用方按普通 Shell 与授权执行语义显式选择。
+    ///     </para>
+    ///     <para>
+    ///         The outer-job process-tree policy; the default <see cref="SandboxProcessTreeMode.Disabled" /> keeps
+    ///         the existing launch path unchanged, and callers select it explicitly for ordinary shell versus
+    ///         authorized execution semantics.
+    ///     </para>
+    /// </summary>
+    internal SandboxProcessTreeMode ProcessTreeMode { get; init; } = SandboxProcessTreeMode.Disabled;
+}
 
 /// <summary>
 ///     一条 runner 命令连接：Downstream 为父→runner（spawn/terminate），Upstream 为
@@ -88,6 +102,28 @@ public abstract class SandboxRunnerConnection(Stream downstream, Stream upstream
     ///     full descendant reclamation is not guaranteed.
     /// </summary>
     public abstract void Kill();
+
+    /// <summary>
+    ///     <para>
+    ///         外层 Job 追踪器；未启用外层 Job 时为 null。普通模式应在释放连接前调用
+    ///         <see cref="DetachProcessTree" />，让后台后代继续存活并由独立追踪器负责清空判定。
+    ///     </para>
+    ///     <para>
+    ///         The outer-job tracker, or null when no outer job is enabled. Ordinary mode should call
+    ///         <see cref="DetachProcessTree" /> before disposing the connection so background descendants keep
+    ///         running while a dedicated tracker owns the drain decision.
+    ///     </para>
+    /// </summary>
+    internal virtual SandboxProcessTreeJob? ProcessTree => null;
+
+    /// <summary>
+    ///     <para>移交外层 Job 的所有权并返回它；移交后连接不再释放该句柄。</para>
+    ///     <para>
+    ///         Transfers ownership of the outer job and returns it; after the transfer the connection no longer
+    ///         disposes that handle.
+    ///     </para>
+    /// </summary>
+    internal virtual SandboxProcessTreeJob? DetachProcessTree() => null;
 }
 
 /// <summary>
@@ -98,6 +134,7 @@ public abstract class SandboxRunnerConnection(Stream downstream, Stream upstream
 public sealed partial class WindowsSandboxRunnerLauncher(TimeSpan? connectTimeout = null) : ISandboxRunnerLauncher
 {
     private const uint CreateNoWindow              = 0x0800_0000;
+    private const uint CreateSuspended             = 0x0000_0004;
     private const uint CreateUnicodeEnvironment    = 0x0000_0400;
     private const uint LogonWithProfile            = 0x0000_0001; // LOGON_WITH_PROFILE
     private const uint StartfForceOffFeedback      = 0x0000_0020;
@@ -133,11 +170,14 @@ public sealed partial class WindowsSandboxRunnerLauncher(TimeSpan? connectTimeou
         pipeSecurity.AddAccessRule(new PipeAccessRule(request.Account.AccountSid,
                                                       PipeAccessRights.ReadWrite, AccessControlType.Allow));
 
-        NamedPipeServerStream?   downstream = null;
-        NamedPipeServerStream?   upstream   = null;
-        RunnerProcessConnection? connection = null;
+        NamedPipeServerStream?   downstream  = null;
+        NamedPipeServerStream?   upstream    = null;
+        RunnerProcessConnection? connection  = null;
+        SandboxProcessTreeJob?   processTree = null;
         try
         {
+            // 外层 Job 在启动前创建：挂载失败时 runner 仍在挂起态，不会留下未被跟踪的子进程。
+            if (request.ProcessTreeMode != SandboxProcessTreeMode.Disabled) processTree = SandboxProcessTreeJob.Create();
             // parent writes into -in (Out direction) and reads from -out (In).
             downstream = NamedPipeServerStreamAcl.Create(pipeInName, PipeDirection.Out, 1,
                                                          PipeTransmissionMode.Byte, PipeOptions.Asynchronous,
@@ -146,25 +186,31 @@ public sealed partial class WindowsSandboxRunnerLauncher(TimeSpan? connectTimeou
                                                        PipeTransmissionMode.Byte, PipeOptions.Asynchronous,
                                                        64 * 1024, 64 * 1024, pipeSecurity);
 
-            var process = StartRunnerProcess(request, pipeInName, pipeOutName);
+            var process = StartRunnerProcess(request, pipeInName, pipeOutName, processTree);
             try
             {
                 await WaitForConnectionAndVerifyAsync(downstream, upstream, process.ProcessId,
                                                       cancellationToken).ConfigureAwait(false);
             }
-            catch (Exception)
+            catch (Exception launchFailure)
             {
                 // The failed launch must not depend on the runner exiting on
                 // its own (it may hold the pipes); terminate it best-effort
                 // before dropping the handles.
                 process.Terminate();
                 process.Dispose();
+                if (processTree is not null)
+                    await ConfirmFailedLaunchTreeExitAsync(
+                            processTree, launchFailure, SandboxProcessTreeExit.DefaultTerminationGrace)
+                       .ConfigureAwait(false);
+
                 throw;
             }
 
-            connection = new RunnerProcessConnection(downstream, upstream, process);
-            downstream = null;
-            upstream   = null;
+            connection   = new RunnerProcessConnection(downstream, upstream, process, processTree);
+            processTree  = null;
+            downstream   = null;
+            upstream     = null;
             return connection;
         }
         catch (Exception)
@@ -172,12 +218,47 @@ public sealed partial class WindowsSandboxRunnerLauncher(TimeSpan? connectTimeou
             connection?.Dispose();
             downstream?.Dispose();
             upstream?.Dispose();
+            processTree?.Dispose();
             throw;
         }
     }
 
+    /// <summary>
+    ///     <para>
+    ///         启动失败收尾：runner 已恢复但管道握手或 PID 校验失败时，在释放不带 <c>KILL_ON_JOB_CLOSE</c> 的
+    ///         外层 Job 句柄前，以独立有界期限终止并确认 <c>ActiveProcesses == 0</c>；无法确认时抛出
+    ///         <see cref="ToolExecutionUncertainException" />，防止调用方把退出未知误当普通启动失败。
+    ///     </para>
+    ///     <para>
+    ///         Failed-launch teardown: when the runner was resumed yet pipe connection or PID verification fails,
+    ///         terminates and confirms <c>ActiveProcesses == 0</c> within an independent bounded deadline before
+    ///         releasing the outer job handle (which omits <c>KILL_ON_JOB_CLOSE</c>); throws
+    ///         <see cref="ToolExecutionUncertainException" /> if whole-tree exit cannot be confirmed so callers
+    ///         never mistake unknown exit for an ordinary launch failure.
+    ///     </para>
+    /// </summary>
+    internal static async Task ConfirmFailedLaunchTreeExitAsync(
+        SandboxProcessTreeJob processTree, Exception launchFailure, TimeSpan terminationGrace)
+    {
+        ArgumentNullException.ThrowIfNull(processTree);
+        ArgumentNullException.ThrowIfNull(launchFailure);
+        try
+        {
+            await SandboxProcessTreeExit
+                 .ConfirmWholeTreeExitAsync(processTree, TimeSpan.Zero, terminationGrace, CancellationToken.None)
+                 .ConfigureAwait(false);
+        }
+        catch (ToolExecutionUncertainException uncertain)
+        {
+            throw new ToolExecutionUncertainException(
+                $"Sandbox runner launch failed ({launchFailure.Message}), and whole-tree exit could not be " +
+                $"confirmed before releasing the outer job handle: {uncertain.Message}",
+                new AggregateException(launchFailure, uncertain));
+        }
+    }
+
     private static RunnerProcessHandle StartRunnerProcess(
-        RunnerLaunchRequest request, string pipeInName, string pipeOutName)
+        RunnerLaunchRequest request, string pipeInName, string pipeOutName, SandboxProcessTreeJob? processTree)
     {
         var commandLine = BuildRunnerCommandLine(request.RunnerExecutablePath,
                                                  $@"\\.\pipe\{pipeInName}", $@"\\.\pipe\{pipeOutName}");
@@ -196,6 +277,9 @@ public sealed partial class WindowsSandboxRunnerLauncher(TimeSpan? connectTimeou
             };
             var processInfo = default(ProcessInformation);
             var password    = request.Account.Password;
+            // 启用外层 Job 时以 CREATE_SUSPENDED 启动：先挂入 Job 再恢复主线程，runner 无法在被跟踪前派生逃逸子进程。
+            var creationFlags = CreateNoWindow | CreateUnicodeEnvironment |
+                                (processTree is null ? 0 : CreateSuspended);
             // LOGON_WITH_PROFILE 仅在请求加载 profile 时传入：登录会话须加载账户 profile
             // 才具备 schannel 客户端凭据；offline 路径保持不加载。
             var created = CreateProcessWithLogonW(request.Account.Username,
@@ -204,7 +288,7 @@ public sealed partial class WindowsSandboxRunnerLauncher(TimeSpan? connectTimeou
                                                   request.LoadUserProfile ? LogonWithProfile : 0,
                                                   null,
                                                   commandLine,
-                                                  CreateNoWindow | CreateUnicodeEnvironment,
+                                                  creationFlags,
                                                   IntPtr.Zero, // inherit the caller environment; runner reads none
                                                   request.WorkingDirectory,
                                                   ref startupInfo,
@@ -214,8 +298,15 @@ public sealed partial class WindowsSandboxRunnerLauncher(TimeSpan? connectTimeou
                                          $"Failed to launch the sandbox runner as '{request.Account.Username}' " +
                                          "(the sandbox account or its credentials may be stale; rerun provisioning from the management entry point).");
 
-            CloseHandle(processInfo.ThreadHandle);
-            return new RunnerProcessHandle(processInfo.ProcessHandle, processInfo.ProcessId);
+            var processHandle = new SafeProcessHandle(processInfo.ProcessHandle, ownsHandle: true);
+            var threadHandle  = new SafeFileHandle(processInfo.ThreadHandle, ownsHandle: true);
+            if (processTree is null)
+                threadHandle.Dispose();
+            else
+                // 挂入外层 Job 后恢复主线程；任一步失败都会终止挂起进程、释放两个句柄并抛出带上下文的异常。
+                SandboxProcessTreeJob.AttachSuspendedProcess(processHandle, threadHandle, processTree,
+                                                             processInfo.ProcessId, request.Account.Username);
+            return new RunnerProcessHandle(processHandle, processInfo.ProcessId);
         }
         finally
         {
@@ -317,28 +408,24 @@ public sealed partial class WindowsSandboxRunnerLauncher(TimeSpan? connectTimeou
                                                             out uint       clientProcessId);
 
     [LibraryImport("kernel32.dll", SetLastError = true)]
-    private static partial uint WaitForSingleObject(IntPtr handle, uint milliseconds);
+    private static partial uint WaitForSingleObject(SafeProcessHandle handle, uint milliseconds);
 
     [LibraryImport("kernel32.dll", SetLastError = true)]
     [return : MarshalAs(UnmanagedType.Bool)]
-    private static partial bool TerminateProcess(IntPtr handle, uint exitCode);
-
-    [LibraryImport("kernel32.dll")]
-    [return : MarshalAs(UnmanagedType.Bool)]
-    private static partial bool CloseHandle(IntPtr handle);
+    private static partial bool TerminateProcess(SafeProcessHandle process, uint exitCode);
 
     [LibraryImport("kernel32.dll", EntryPoint = "SetErrorMode")]
     private static partial uint SetErrorMode(uint mode);
 
-    private sealed class RunnerProcessHandle(IntPtr processHandle, uint processId) : IDisposable
+    private sealed class RunnerProcessHandle(SafeProcessHandle processHandle, uint processId) : IDisposable
     {
-        public IntPtr ProcessHandle { get; } = processHandle;
+        public SafeProcessHandle ProcessHandle { get; } = processHandle;
 
         public uint ProcessId { get; } = processId;
 
         public void Dispose()
         {
-            CloseHandle(ProcessHandle);
+            ProcessHandle.Dispose();
         }
 
         /// <summary>
@@ -353,11 +440,23 @@ public sealed partial class WindowsSandboxRunnerLauncher(TimeSpan? connectTimeou
     }
 
     private sealed class RunnerProcessConnection(
-        Stream              downstream,
-        Stream              upstream,
-        RunnerProcessHandle process) : SandboxRunnerConnection(downstream, upstream)
+        Stream                 downstream,
+        Stream                 upstream,
+        RunnerProcessHandle    process,
+        SandboxProcessTreeJob? processTree) : SandboxRunnerConnection(downstream, upstream)
     {
+        private SandboxProcessTreeJob? _processTree = processTree;
+
         public uint RunnerProcessId => process.ProcessId;
+
+        internal override SandboxProcessTreeJob? ProcessTree => _processTree;
+
+        internal override SandboxProcessTreeJob? DetachProcessTree()
+        {
+            var tree     = _processTree;
+            _processTree = null;
+            return tree;
+        }
 
         public override Task<bool> WaitForExitAsync(TimeSpan timeout)
         {
@@ -387,6 +486,8 @@ public sealed partial class WindowsSandboxRunnerLauncher(TimeSpan? connectTimeou
             Downstream.Dispose();
             Upstream.Dispose();
             process.Dispose();
+            _processTree?.Dispose();
+            _processTree = null;
         }
     }
 
